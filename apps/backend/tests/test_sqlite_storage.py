@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.events.types import RuntimeEvent
+from app.events.types import EventType, RuntimeEvent
 from app.storage.sqlite import SQLiteTaskStore
 
 
@@ -52,7 +52,7 @@ class SQLiteTaskStoreTests(unittest.TestCase):
             )
             first_store.append_event(
                 RuntimeEvent(
-                    event_type="run_finished",
+                    event_type=EventType.RUN_FINISHED,
                     task_id=task.task_id,
                     payload={"status": "completed"},
                 )

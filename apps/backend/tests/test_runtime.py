@@ -9,6 +9,7 @@ from typing import AsyncIterator, List
 
 from app.agents.profile import AgentProfile
 from app.config.settings import BackendSettings
+from app.events.types import EventType
 from app.context.builder import TextContextBuilder
 from app.models.base import ModelDelta, ModelToolDefinition, RuntimeMessage
 from app.models.echo import EchoStreamingModelAdapter
@@ -1524,7 +1525,7 @@ class CompletingWorkflow:
         self.was_called = True
         operations.update_task_status(task.task_id, "completed")
         yield operations.record_event(
-            "run_finished",
+            EventType.RUN_FINISHED,
             task.task_id,
             {"status": "completed", "workflow": "custom"},
         )

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from app.agents.profile import AgentProfile
-from app.events.types import RuntimeEvent
+from app.events.types import EventType, RuntimeEvent
 from app.storage.records import datetime_to_text, StepRecord, TaskRecord
 
 
@@ -153,10 +153,10 @@ def _extract_tool_history(events: List[RuntimeEvent]) -> List[Dict[str, Any]]:
     """
 
     tool_event_types = {
-        "tool_call_requested",
-        "tool_call_started",
-        "tool_call_finished",
-        "observation_added",
+        EventType.TOOL_CALL_REQUESTED,
+        EventType.TOOL_CALL_STARTED,
+        EventType.TOOL_CALL_FINISHED,
+        EventType.OBSERVATION_ADDED,
     }
     return [
         {

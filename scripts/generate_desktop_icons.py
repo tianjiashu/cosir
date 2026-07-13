@@ -42,6 +42,8 @@ ICNS_ICONSET_SIZES: Tuple[Tuple[str, int], ...] = (
 )
 
 ICO_SIZES: Tuple[int, ...] = (16, 24, 32, 48, 64, 128, 256)
+ICON_CONTENT_SCALE = 0.82
+ICON_BACKGROUND = (255, 255, 255, 255)
 
 
 def main() -> None:
@@ -204,8 +206,47 @@ def _resize_icon_png(source: Path, destination: Path, size: int) -> None:
         Writes a rounded PNG icon file.
     """
 
-    _resize_png(source, destination, size)
+    inner_size = max(1, int(round(size * ICON_CONTENT_SCALE)))
+    with tempfile.TemporaryDirectory() as temp_dir:
+        inner_path = Path(temp_dir) / "inner.png"
+        _resize_png(source, inner_path, inner_size)
+        _compose_centered_icon(inner_path, destination, size)
     _apply_rounded_border(destination)
+
+
+def _compose_centered_icon(source: Path, destination: Path, size: int) -> None:
+    """Center a resized source image on a square icon canvas.
+
+    Args:
+        source: Resized source PNG image path.
+        destination: Destination PNG path.
+        size: Output icon canvas size in pixels.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If the source PNG cannot be decoded.
+        OSError: If reading or writing files fails.
+
+    Side effects:
+        Writes a PNG file.
+    """
+
+    source_width, source_height, source_pixels = _read_png_rgba(source)
+    offset_x = (size - source_width) // 2
+    offset_y = (size - source_height) // 2
+    canvas = bytearray(ICON_BACKGROUND * (size * size))
+    for y in range(source_height):
+        for x in range(source_width):
+            source_offset = (y * source_width + x) * 4
+            target_x = offset_x + x
+            target_y = offset_y + y
+            target_offset = (target_y * size + target_x) * 4
+            canvas[target_offset : target_offset + 4] = source_pixels[
+                source_offset : source_offset + 4
+            ]
+    _write_png_rgba(destination, size, size, bytes(canvas))
 
 
 def _resize_png(source: Path, destination: Path, size: int) -> None:

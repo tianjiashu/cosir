@@ -107,10 +107,49 @@ coding-agent/
 - 客户端 UI 指南：`docs/ui-guidelines.md`
 - 第一阶段能力与生产级验收：`docs/production-acceptance.md`
 - 代码开发规范：`rules/Agent代码开发规范.md`
+- 客户端代码开发规范（Tauri/React/TS 派生附录）：`rules/Agent客户端代码开发规范.md`
 - 交互澄清规则：`rules/global-interaction-clarification.md`
 - 成熟机制复用规则：`rules/mature-mechanism-reuse.md`
 - 经验复用记录：`rules/agent-lessons.md`
 - coding-agent 原理文档：`coding-agent-docs`
+
+## CodeGraph 使用规则
+
+当前仓库根目录存在 `.codegraph/` 时，说明本项目已经有 CodeGraph 索引。凡是需要理解代码结构、定位符号、追踪调用关系、分析影响范围或查找实现位置，应先用 CodeGraph 缩小范围，再精读必要源码。
+
+使用顺序：
+
+1. **MCP 优先**：如果当前环境提供 `codegraph_explore`、`codegraph_node` 等 MCP 工具，优先使用 MCP 工具。
+2. **Shell 兜底**：如果 MCP 工具不可用，使用本机 `codegraph` CLI。
+3. **源码精读**：CodeGraph 用于定位和建立调用视角，最终判断仍以实际源码为准。
+4. **传统搜索兜底**：如果 `.codegraph/` 不存在、索引不可用、CodeGraph 命令失败，才回退到 `rg`、`find` 和直接读文件。
+
+常用命令：
+
+```bash
+codegraph status
+codegraph files
+codegraph explore "要理解的模块、符号、文件或问题"
+codegraph node "符号名或文件路径"
+codegraph callers "函数或方法名"
+codegraph callees "函数或方法名"
+codegraph impact "准备修改的符号名"
+codegraph affected <changed-file>
+codegraph sync
+```
+
+使用要求：
+
+- 查询必须具体，优先写清楚文件名、符号名、模块名或要解决的问题。
+- 修改代码前，如果改动涉及已有实现、跨模块调用、共享类型或公共工具，先用 `codegraph explore` 或 `codegraph impact` 判断影响范围。
+- 修改后如需要继续依赖索引，先运行 `codegraph sync` 更新索引，再做后续查询。
+- 不要在已有可用索引的仓库里一开始就大范围 grep 或逐文件扫描；先让 CodeGraph 给出候选范围。
+- 不要把 CodeGraph 输出当作唯一事实源；涉及行为、边界条件、配置和测试时，必须回到文件本身验证。
+
+环境限制：
+
+- CodeGraph 对 Node 25/26 存在已知拦截风险。若命令提示当前 Node 版本不支持，不要用 `CODEGRAPH_ALLOW_UNSAFE_NODE=1` 强行索引；应切换到 Node 22 LTS 后再执行 `codegraph index` 或 `codegraph sync`。
+- 如果只是当前任务需要继续推进、且无法立即切换 Node 版本，可以临时回退到 `rg` 和源码精读，但交付时应说明 CodeGraph 未能使用的原因。
 
 ## 进入代码开发后的铁律
 

@@ -70,3 +70,39 @@ still owns event streaming and tool/model orchestration; this is a controlled
 graph-backed insertion point, not a full migration of the workflow graph yet.
 
 FastAPI and httpx are imported lazily by API/model adapter paths where possible, so the core runtime can be tested before project dependencies are installed.
+
+## 启动方式
+
+### 后端（开发期）
+
+在 `apps/backend` 目录下使用约定的模块入口启动 uvicorn：
+
+```bash
+cd apps/backend
+.venv/bin/python -m app
+```
+
+可用环境变量覆盖运行参数：
+
+- `CODING_AGENT_HOST`（默认 `127.0.0.1`）
+- `CODING_AGENT_PORT`（默认 `8000`）
+- `CODING_AGENT_RELOAD`（默认 `true`，设为 `false` 关闭热重载）
+
+后端日志落盘位置：
+
+- `logs/app.log`：应用结构化日志（`configure_logging` 落盘）
+- `logs/backend.log`：uvicorn 进程输出（启动横幅、访问日志、异常栈），由 `scripts/dev.sh` 重定向
+
+### 前后端并行启动
+
+仓库根提供一键脚本，并行拉起后端 uvicorn 与前端 tauri dev，日志统一到 `logs/`：
+
+```bash
+# 方式一：直接运行脚本
+bash scripts/dev.sh
+
+# 方式二：通过 npm（仓库根 package.json 提供）
+npm run dev:all
+```
+
+按 `Ctrl+C` 会同时终止前后端及其子进程（cargo / vite）。

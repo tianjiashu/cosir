@@ -6,7 +6,7 @@ from typing import AsyncIterator, Optional
 from app.agents.profile import AgentProfile, default_developer_agent
 from app.config.settings import BackendSettings
 from app.context.builder import TextContextBuilder
-from app.events.types import RuntimeEvent
+from app.events.types import EventType, RuntimeEvent
 from app.models.base import StreamingModelAdapter
 from app.runtime.operations import RuntimeOperations
 from app.storage.records import CheckpointRecord, TaskRecord
@@ -107,7 +107,7 @@ class AgentRuntime:
         """
 
         task = self._task_store.update_status(task_id, "cancelled")
-        self._record("run_cancelled", task_id, {"status": "cancelled"})
+        self._record(EventType.RUN_CANCELLED, task_id, {"status": "cancelled"})
         self._logger.info("task_cancelled task_id=%s", task_id)
         return task
 
@@ -135,7 +135,7 @@ class AgentRuntime:
                     yield event
                 return
             yield self._record(
-                "run_failed",
+                EventType.RUN_FAILED,
                 task.task_id,
                 {"status": task.status, "error": "task is not pending"},
             )
@@ -151,7 +151,7 @@ class AgentRuntime:
                 self._agent_profile.agent_id,
             )
             yield self._record(
-                "run_failed",
+                EventType.RUN_FAILED,
                 task.task_id,
                 {
                     "status": "failed",
@@ -164,7 +164,7 @@ class AgentRuntime:
 
         self._task_store.update_status(task.task_id, "running")
         yield self._record(
-            "run_started",
+            EventType.RUN_STARTED,
             task.task_id,
             {"status": "running", "agent": agent_profile.to_dict()},
         )
@@ -195,7 +195,7 @@ class AgentRuntime:
             self._logger.exception("task_failed task_id=%s", task.task_id)
             yield operations.create_checkpoint(task.task_id, "run_failed")
             yield self._record(
-                "run_failed",
+                EventType.RUN_FAILED,
                 task.task_id,
                 {"status": "failed", "error": str(exc)},
             )
@@ -294,11 +294,11 @@ class AgentRuntime:
             return self._agent_profile
         return None
 
-    def _record(self, event_type: str, task_id: str, payload: dict) -> RuntimeEvent:
+    def _record(self, event_type: EventType, task_id: str, payload: dict) -> RuntimeEvent:
         """创建、存储并记录一个运行时事件。
 
         参数:
-            event_type: 稳定的事件类型字符串。
+            event_type: 稳定的事件类型枚举成员。
             task_id: 与该事件关联的任务标识符。
             payload: 可序列化为 JSON 的事件载荷。
 

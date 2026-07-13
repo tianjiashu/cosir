@@ -8,4 +8,19 @@ __pycache__/
 .mypy_cache/
 
 logs/*.log
+logs/*.pid
 storage/*.sqlite3
+storage/*.sqlite3-shm
+storage/*.sqlite3-wal
+
+# 本地 Agent 项目数据（非缓存，但属本地运行产物，不提交）
+.codebuddy/
+
+# CodeGraph 索引缓存
+.codegraph/
+
+# Tauri 生成产物
+apps/desktop/src-tauri/gen/
+
+# 临时调试脚本（环境可能重建为空文件，避免误提交）
+apps/backend/tests/_tmp_*.py

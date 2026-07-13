@@ -1,0 +1,20 @@
+[package]
+name = "coding-agent-desktop"
+version = "0.1.0"
+description = "Coding Agent - 本地桌面 AI 开发伙伴"
+authors = ["coding-agent"]
+edition = "2021"
+
+[lib]
+name = "coding_agent_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"

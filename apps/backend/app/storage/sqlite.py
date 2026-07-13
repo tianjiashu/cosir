@@ -1,13 +1,14 @@
 """基于 SQLite 的任务、步骤与事件存储。"""
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
-from app.events.types import RuntimeEvent
+from app.events.types import EventType, RuntimeEvent
 from app.storage.records import (
     CheckpointRecord,
     SessionRecord,
@@ -512,7 +513,7 @@ class SQLiteTaskStore:
             RuntimeEvent(
                 event_id=row["event_id"],
                 task_id=row["task_id"],
-                event_type=row["event_type"],
+                event_type=EventType(row["event_type"]),
                 payload=json.loads(row["payload_json"]),
                 created_at=_from_text(row["created_at"]),
             )
@@ -705,6 +706,15 @@ class SQLiteTaskStore:
 
         connection = sqlite3.connect(self._database_path)
         connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error as wal_error:
+            # WAL 不可用时回退到默认 rollback journal，不阻断正常连接。
+            logging.getLogger("coding_agent.backend").warning(
+                "sqlite_wal_unavailable path=%s error=%s",
+                self._database_path,
+                wal_error,
+            )
         return connection
 
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from typing import AsyncIterator, List, Optional
 
-from app.events.types import RuntimeEvent
+from app.events.types import EventType, RuntimeEvent
 from app.models.base import RuntimeMessage
 from app.runtime.operations import RuntimeOperations
 from app.storage.records import StepRecord, TaskRecord
@@ -103,7 +103,7 @@ class ReactLikeWorkflow:
                 input_summary=f"model step {state.step_count}",
             )
             yield operations.record_event(
-                "step_started",
+                EventType.STEP_STARTED,
                 task.task_id,
                 {"step_type": "model_call", "step_index": state.step_count},
             )
@@ -126,11 +126,16 @@ class ReactLikeWorkflow:
             yield operations.create_checkpoint(task.task_id, "invalid_model_output")
             raise RuntimeError("invalid_model_output")
 
+        operations.log_exception(
+            "task_failed task_id=%s reason=max_steps_reached max_steps=%s",
+            task.task_id,
+            operations.settings.max_steps,
+        )
         operations.update_task_status(task.task_id, "failed")
         operations.close_running_steps(task.task_id, "failed", "max_steps_reached")
         yield operations.create_checkpoint(task.task_id, "max_steps_reached")
         yield operations.record_event(
-            "run_failed",
+            EventType.RUN_FAILED,
             task.task_id,
             {"status": "failed", "error": "max_steps_reached"},
         )
@@ -167,7 +172,7 @@ class ReactLikeWorkflow:
             if operations.has_task_status(task.task_id, "cancelled"):
                 operations.close_running_steps(task.task_id, "cancelled", "run_cancelled")
                 yield operations.record_event(
-                    "run_cancelled",
+                    EventType.RUN_CANCELLED,
                     task.task_id,
                     {"status": "cancelled"},
                 )
@@ -176,7 +181,7 @@ class ReactLikeWorkflow:
 
             if delta.text:
                 yield operations.record_event(
-                    "model_output_delta",
+                    EventType.MODEL_OUTPUT_DELTA,
                     task.task_id,
                     {"delta": delta.text},
                 )
@@ -234,7 +239,7 @@ class ReactLikeWorkflow:
         )
         yield operations.create_checkpoint(task.task_id, "model_tool_call_requested")
         yield operations.record_event(
-            "tool_call_requested",
+            EventType.TOOL_CALL_REQUESTED,
             task.task_id,
             {"tool_name": tool_call.tool_name, "arguments": tool_call.arguments},
         )
@@ -246,7 +251,7 @@ class ReactLikeWorkflow:
             input_summary=tool_call.tool_name,
         )
         yield operations.record_event(
-            "tool_call_started",
+            EventType.TOOL_CALL_STARTED,
             task.task_id,
             {"tool_name": tool_call.tool_name},
         )
@@ -259,7 +264,7 @@ class ReactLikeWorkflow:
             error=observation.error or None,
         )
         yield operations.record_event(
-            "tool_call_finished",
+            EventType.TOOL_CALL_FINISHED,
             task.task_id,
             {
                 "tool_name": observation.tool_name,
@@ -271,7 +276,7 @@ class ReactLikeWorkflow:
 
         if observation.status == "approval_required":
             yield operations.record_event(
-                "tool_approval_required",
+                EventType.TOOL_APPROVAL_REQUIRED,
                 task.task_id,
                 {
                     "tool_name": observation.tool_name,
@@ -280,11 +285,17 @@ class ReactLikeWorkflow:
                     "reason": observation.error,
                 },
             )
+            operations.log_exception(
+                "task_failed task_id=%s reason=tool_approval_required tool=%s permission=%s",
+                task.task_id,
+                observation.tool_name,
+                observation.permission,
+            )
             operations.update_task_status(task.task_id, "failed")
             operations.close_running_steps(task.task_id, "failed", "tool_approval_required")
             yield operations.create_checkpoint(task.task_id, "tool_approval_required")
             yield operations.record_event(
-                "run_failed",
+                EventType.RUN_FAILED,
                 task.task_id,
                 {
                     "status": "failed",
@@ -297,11 +308,17 @@ class ReactLikeWorkflow:
             return
 
         if self._tool_error_limit_reached(observation, state, operations):
+            operations.log_exception(
+                "task_failed task_id=%s reason=tool_error_limit_reached tool=%s limit=%s",
+                task.task_id,
+                observation.tool_name,
+                operations.settings.tool_error_limit,
+            )
             operations.update_task_status(task.task_id, "failed")
             operations.close_running_steps(task.task_id, "failed", "tool_error_limit_reached")
             yield operations.create_checkpoint(task.task_id, "tool_error_limit_reached")
             yield operations.record_event(
-                "run_failed",
+                EventType.RUN_FAILED,
                 task.task_id,
                 {
                     "status": "failed",
@@ -314,7 +331,7 @@ class ReactLikeWorkflow:
 
         self._append_tool_exchange(state, model_step, tool_call, observation)
         yield operations.record_event(
-            "observation_added",
+            EventType.OBSERVATION_ADDED,
             task.task_id,
             {"tool_name": observation.tool_name, "status": observation.status},
         )
@@ -348,14 +365,14 @@ class ReactLikeWorkflow:
             output_summary="final_response",
         )
         yield operations.record_event(
-            "final_response",
+            EventType.FINAL_RESPONSE,
             task.task_id,
             {"status": "completed"},
         )
         operations.update_task_status(task.task_id, "completed")
         yield operations.create_checkpoint(task.task_id, "run_finished")
         yield operations.record_event(
-            "run_finished",
+            EventType.RUN_FINISHED,
             task.task_id,
             {"status": "completed"},
         )

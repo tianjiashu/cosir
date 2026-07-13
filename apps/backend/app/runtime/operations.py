@@ -8,7 +8,7 @@ from app.config.settings import BackendSettings
 from app.checkpoints.snapshot import build_checkpoint_snapshot
 from app.context.builder import TextContextBuilder
 from app.context.budget import validate_context_budget
-from app.events.types import RuntimeEvent
+from app.events.types import EventType, RuntimeEvent
 from app.models.base import ModelDelta, RuntimeMessage, StreamingModelAdapter
 from app.runtime.model_tools import build_model_tool_definitions
 from app.storage.records import StepRecord, TaskRecord, TurnRecord
@@ -28,7 +28,7 @@ class RuntimeOperations:
         tool_scheduler: ToolScheduler,
         logger: logging.Logger,
         agent_profile: AgentProfile,
-        record_event: Callable[[str, str, dict], RuntimeEvent],
+        record_event: Callable[[EventType, str, dict], RuntimeEvent],
     ) -> None:
         """初始化工作流操作门面。
 
@@ -322,11 +322,11 @@ class RuntimeOperations:
 
         return self._task_store.close_running_steps_for_task(task_id, status, error)
 
-    def record_event(self, event_type: str, task_id: str, payload: dict) -> RuntimeEvent:
+    def record_event(self, event_type: EventType, task_id: str, payload: dict) -> RuntimeEvent:
         """持久化并返回一个运行时事件。
 
         参数:
-            event_type: 稳定的运行时事件类型。
+            event_type: 稳定的运行时事件类型枚举成员。
             task_id: 与该事件关联的任务标识符。
             payload: 可序列化为 JSON 的事件载荷。
 
@@ -393,7 +393,7 @@ class RuntimeOperations:
             stage,
         )
         return self.record_event(
-            "checkpoint_created",
+            EventType.CHECKPOINT_CREATED,
             task_id,
             {
                 "checkpoint_id": checkpoint.checkpoint_id,
@@ -428,7 +428,7 @@ class RuntimeOperations:
 
         payload = {"stage": stage, "error": str(checkpoint_error), "event_persisted": True}
         try:
-            return self.record_event("checkpoint_failed", task_id, payload)
+            return self.record_event(EventType.CHECKPOINT_FAILED, task_id, payload)
         except Exception as event_error:
             self._logger.exception(
                 "checkpoint_failed_event_unpersisted task_id=%s stage=%s",
@@ -436,7 +436,7 @@ class RuntimeOperations:
                 stage,
             )
             return RuntimeEvent(
-                event_type="checkpoint_failed",
+                event_type=EventType.CHECKPOINT_FAILED,
                 task_id=task_id,
                 payload={
                     "stage": stage,

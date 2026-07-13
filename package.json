@@ -1,0 +1,9 @@
+{
+  "name": "coding-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "本地桌面 coding-agent 仓库根脚本集合",
+  "scripts": {
+    "dev:all": "bash scripts/dev.sh"
+  }
+}
