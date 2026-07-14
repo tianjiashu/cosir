@@ -15,7 +15,7 @@ from app.config.settings import BackendSettings
 from app.context.builder import TextContextBuilder
 from app.logging.configuration import configure_logging
 from app.models.echo import EchoStreamingModelAdapter
-from app.runtime.runner import AgentRuntime
+from app.core.runtime.runner import AgentRuntime
 from app.storage.sqlite import SQLiteTaskStore
 from app.tools.registry import ToolRegistry
 from app.tools.safe_read import SafeReadTools

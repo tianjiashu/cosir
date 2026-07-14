@@ -7,17 +7,17 @@ import tempfile
 import time
 import unittest
 
-from app.approvals.service import ApprovalService
-from app.approvals.store import ApprovalStore
-from app.artifacts.files import ArtifactFileStore
-from app.artifacts.service import ArtifactService
-from app.artifacts.store import ArtifactStore
-from app.runs.resume import ResumeDispatcher
-from app.runs.store import DurableRunStore
-from app.tool_execution.policy import ToolExecutionPolicy
-from app.tool_execution.policy_provider import PermissionPolicyProvider
-from app.tool_execution.service import ToolExecutionService
-from app.tool_execution.store import ToolExecutionStore
+from app.domain.approvals.service import ApprovalService
+from app.domain.approvals.store import ApprovalStore
+from app.domain.artifacts.files import ArtifactFileStore
+from app.domain.artifacts.service import ArtifactService
+from app.domain.artifacts.store import ArtifactStore
+from app.core.runs.resume import ResumeDispatcher
+from app.core.runs.store import DurableRunStore
+from app.tools.execution.policy import ToolExecutionPolicy
+from app.tools.execution.policy_provider import PermissionPolicyProvider
+from app.tools.execution.service import ToolExecutionService
+from app.tools.execution.store import ToolExecutionStore
 from app.tools.concurrent import ToolConcurrentScheduler
 from app.tools.executor import ToolCallExecutor
 from app.tools.locks import ToolResourceLockManager

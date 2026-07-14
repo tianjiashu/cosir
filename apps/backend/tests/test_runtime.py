@@ -7,22 +7,22 @@ import unittest
 from pathlib import Path
 from typing import AsyncIterator, List
 
-from app.agents.profile import AgentProfile
+from app.core.agents.profile import AgentProfile
 from app.config.settings import BackendSettings
 from app.events.types import EventType
 from app.context.builder import TextContextBuilder
 from app.models.base import ModelDelta, ModelToolDefinition, RuntimeMessage
 from app.models.echo import EchoStreamingModelAdapter
-from app.runtime.operations import RuntimeOperations
-from app.runtime.runner import AgentRuntime
+from app.core.runtime.operations import RuntimeOperations
+from app.core.runtime.runner import AgentRuntime
 from app.storage.sqlite import SQLiteTaskStore
 from app.storage.records import TaskRecord
 from app.tools.registry import ToolRegistry
 from app.tools.safe_read import SafeReadTools
 from app.tools.scheduler import ToolScheduler
 from app.tools.types import ToolCall, ToolDefinition
-from app.workflows.react_like import ReactLikeWorkflow
-from app.workflows.step_controller import StepDecision
+from app.core.workflows.react_like import ReactLikeWorkflow
+from app.core.workflows.step_controller import StepDecision
 
 
 def _write_test_handler(path: str) -> str:

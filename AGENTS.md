@@ -47,15 +47,25 @@ coding-agent/
   apps/
     backend/
       app/
-        api/
-        config/
-        context/
-        events/
-        logging/
-        models/
-        runtime/
-        storage/
-        tools/
+        api/                 # FastAPI 路由与 SSE
+        core/                # 运行底座
+          runtime/           # Agent Runtime 控制与编排
+          runs/              # LangGraph 持久化运行
+          workflows/         # Agent 执行策略
+          agents/            # Agent 角色与配置
+        tools/               # 工具系统
+          catalog/           # 工具目录索引
+          execution/         # 工具执行服务层
+        domain/              # 领域服务
+          approvals/         # 工具权限审批
+          artifacts/         # 产物存储
+          human_input/       # 人工输入
+        models/              # 模型适配器
+        context/             # 文本上下文构建
+        config/              # 运行配置
+        events/              # 运行事件
+        logging/             # 日志落盘
+        storage/             # SQLite 持久化与 checkpoint 快照
       tests/
     desktop/
   packages/
@@ -74,14 +84,25 @@ coding-agent/
 - `apps/backend/`：本地 Python 后端应用，承载 FastAPI、LangGraph、Agent Runtime、工具系统、存储、日志等后端能力。
 - `apps/backend/app/`：后端应用源码根目录，按已进入实现的能力边界拆分模块。
 - `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装。
-- `apps/backend/app/config/`：后端运行配置，例如项目根目录、日志文件、SQLite 文件和运行限制。
+- `apps/backend/app/core/`：运行底座，聚合运行态相关模块。
+  - `runtime/`：Agent Runtime，负责任务状态推进、模型流消费、工具调度、事件记录、取消和终止保护。
+  - `runs/`：LangGraph 持久化运行，包含 checkpointer、状态机、恢复、resume 与 graph 构建。
+  - `workflows/`：Agent 执行策略，例如 ReAct-like、Plan-and-Execute、StepController 等，可扩展替换。
+  - `agents/`：Agent 角色定义与默认配置（AgentProfile）。
+- `apps/backend/app/tools/`：工具系统统一收口。
+  - `catalog/`：工具目录索引，登记可用工具的元信息。
+  - `execution/`：工具执行服务层，负责策略判定、执行记录、生命周期、幂等与并发控制。
+  - 其余模块：Tool Registry、Tool Scheduler、safe_read 内置工具、参数校验、选择器等。
+- `apps/backend/app/domain/`：领域服务，聚合与业务状态相关的 service/store/records 三件套。
+  - `approvals/`：工具权限审批服务。
+  - `artifacts/`：产物存储服务。
+  - `human_input/`：人工输入服务。
+- `apps/backend/app/models/`：模型适配器接口、本地流式测试适配器、OpenAI-compatible / DeepSeek streaming adapter 和流式响应解析。
 - `apps/backend/app/context/`：构建模型无关的文本上下文。
+- `apps/backend/app/config/`：后端运行配置，例如项目根目录、日志文件、SQLite 文件和运行限制。
 - `apps/backend/app/events/`：Runtime 事件定义和事件序列化。
 - `apps/backend/app/logging/`：日志落盘配置。
-- `apps/backend/app/models/`：模型适配器接口、本地流式测试适配器、OpenAI-compatible / DeepSeek streaming adapter 和流式响应解析。
-- `apps/backend/app/runtime/`：Agent Runtime，负责任务状态推进、模型流消费、工具调度、事件记录、取消和终止保护。
-- `apps/backend/app/storage/`：SQLite 持久化存储，保存 Session / Task / Turn / Step / Event。
-- `apps/backend/app/tools/`：Tool Registry、Tool Scheduler 和 safe_read 内置工具。
+- `apps/backend/app/storage/`：SQLite 持久化存储，保存 Session / Task / Turn / Step / Event 以及 checkpoint 快照。
 - `apps/backend/tests/`：后端测试目录。
 - `apps/desktop/`：Tauri 2 + React + TypeScript 桌面客户端，承载会话、任务、审批、工具调用、变更展示、日志入口等 UI。
 - `packages/shared/`：前后端共享协议、schema、类型和事件契约。涉及 HTTP/SSE、工具调用、审批、checkpoint、运行事件等跨端数据结构时优先放在这里。

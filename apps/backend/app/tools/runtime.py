@@ -5,11 +5,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from app.approvals.service import ApprovalService
-from app.tool_execution.concurrency import ToolConcurrencyPlanner
-from app.tool_execution.idempotency import ToolIdempotencyKeyBuilder
-from app.tool_execution.records import ToolPolicyDecision
-from app.tool_execution.service import ToolExecutionService
+from app.domain.approvals.service import ApprovalService
+from app.tools.execution.concurrency import ToolConcurrencyPlanner
+from app.tools.execution.idempotency import ToolIdempotencyKeyBuilder
+from app.tools.execution.records import ToolPolicyDecision
+from app.tools.execution.service import ToolExecutionService
 from app.tools.concurrent import ToolConcurrentScheduler
 from app.tools.executor import PreparedToolCall, ToolCallExecutor
 from app.tools.registry import ToolRegistry

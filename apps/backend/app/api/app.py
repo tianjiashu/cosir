@@ -5,7 +5,7 @@ from typing import AsyncIterator
 
 from app.api.dependencies import build_runtime
 from app.api.sse import format_sse_event
-from app.runtime.runner import AgentRuntime
+from app.core.runtime.runner import AgentRuntime
 
 
 def create_app(runtime: AgentRuntime = None):

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import Callable, Sequence
 
-from app.tool_execution.concurrency import ToolConcurrencyPlan
+from app.tools.execution.concurrency import ToolConcurrencyPlan
 from app.tools.executor import PreparedToolCall
 from app.tools.locks import ToolResourceLockManager
 from app.tools.results import ToolRuntimeResult

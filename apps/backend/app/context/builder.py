@@ -2,7 +2,7 @@
 
 from typing import List
 
-from app.agents.profile import AgentProfile, default_developer_agent
+from app.core.agents.profile import AgentProfile, default_developer_agent
 from app.models.base import RuntimeMessage
 from app.storage.records import TaskRecord
 

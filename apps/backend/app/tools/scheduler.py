@@ -3,7 +3,7 @@
 import logging
 from typing import Iterable, List
 
-from app.tool_execution.records import ToolPolicyDecision
+from app.tools.execution.records import ToolPolicyDecision
 from app.tools.approval import ToolApprovalPolicy
 from app.tools.executor import ToolCallExecutor
 from app.tools.registry import ToolRegistry

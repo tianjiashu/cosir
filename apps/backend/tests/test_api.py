@@ -6,15 +6,15 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from app.approvals.service import ApprovalService
-from app.approvals.store import ApprovalStore
+from app.domain.approvals.service import ApprovalService
+from app.domain.approvals.store import ApprovalStore
 from app.config.settings import BackendSettings
 from app.context.builder import TextContextBuilder
 from app.models.echo import EchoStreamingModelAdapter
-from app.runs.recovery import RecoveryManager
-from app.runs.resume import ResumeDispatcher
-from app.runs.store import DurableRunStore
-from app.runtime.runner import AgentRuntime
+from app.core.runs.recovery import RecoveryManager
+from app.core.runs.resume import ResumeDispatcher
+from app.core.runs.store import DurableRunStore
+from app.core.runtime.runner import AgentRuntime
 from app.storage.sqlite import SQLiteTaskStore
 from app.tools.registry import ToolRegistry
 from app.tools.safe_read import SafeReadTools

@@ -3,7 +3,7 @@
 > 本文档是 `apps/desktop/` 桌面客户端的开发规格与实施清单。
 > 后续开发严格以此文档为准；审查 Agent 依据本文档的 checklist 检查是否遗漏。
 > 关联文档：`docs/ui-guidelines.md`、`docs/tech-stack.md`、`AGENTS.md`。
-> 后端契约事实源：`apps/backend/app/api/app.py`、`apps/backend/app/api/sse.py`、`apps/backend/app/events/types.py`、`apps/backend/app/workflows/react_like.py`、`apps/backend/app/runtime/runner.py`、`apps/backend/app/runtime/operations.py`。
+> 后端契约事实源：`apps/backend/app/api/app.py`、`apps/backend/app/api/sse.py`、`apps/backend/app/events/types.py`、`apps/backend/app/core/workflows/react_like.py`、`apps/backend/app/core/runtime/runner.py`、`apps/backend/app/core/runtime/operations.py`。
 
 ---
 

@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Mapping, Optional
 
-from app.artifacts.service import ArtifactService
-from app.tool_execution.service import ToolExecutionService
-from app.tools.execution import execute_tool_handler
+from app.domain.artifacts.service import ArtifactService
+from app.tools.execution.service import ToolExecutionService
+from app.tools.execute import execute_tool_handler
 from app.tools.results import ToolObservationBuilder, ToolRuntimeResult
 from app.tools.types import ArtifactRequest, ToolDefinition
 

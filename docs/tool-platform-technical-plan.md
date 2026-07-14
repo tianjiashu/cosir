@@ -66,8 +66,8 @@ Tool Platform 是模型调用工具的工程底座，不是某一个具体工具
 - `apps/backend/app/tools/schema.py` 已有参数校验，继续保留；完整 JSON Schema 校验继续优先用 `jsonschema`。
 - `apps/backend/app/tools/execution.py` 已有进程隔离执行，作为 Python handler 工具的基础执行器，但命令执行需要独立 PTY/process 层。
 - `apps/backend/app/tools/safe_read.py` 已有只读文件工具，后续迁入 `tools/file_read/` 或保留为兼容入口，不能复制第二套 read_file。
-- `apps/backend/app/tool_execution/` 已有持久化和策略基础，继续扩展，不把记录表迁回 `tools/`。
-- `apps/backend/app/approvals/`、`runs/`、`artifacts/` 已经提供审批、恢复和产物基础，危险工具必须接这些能力。
+- `apps/backend/app/tools/execution/` 已有持久化和策略基础，继续扩展，不把记录表迁回 `tools/`。
+- `apps/backend/app/domain/approvals/`、`runs/`、`artifacts/` 已经提供审批、恢复和产物基础，危险工具必须接这些能力。
 
 ## 4. 重写与迁移决议
 
@@ -177,7 +177,7 @@ apps/backend/app/tools/verification/
   build_runner.py
   result_parser.py
 
-apps/backend/app/tool_execution/
+apps/backend/app/tools/execution/
   records.py
   store.py
   policy.py
@@ -187,7 +187,7 @@ apps/backend/app/tool_execution/
   lifecycle.py
   concurrency.py
 
-apps/backend/app/artifacts/
+apps/backend/app/domain/artifacts/
   service.py
   store.py
   files.py
@@ -255,7 +255,7 @@ packages/shared/ts/artifacts.ts
 | `apps/backend/app/tools/schema.py` | 保留 | 继续负责参数 schema 校验 | 已有 jsonschema fallback，直接复用 |
 | `apps/backend/app/tools/execution.py` | 保留 | Python handler 隔离执行器 | 命令执行另建 `tools/command/`，不混用 |
 | `apps/backend/app/tools/safe_read.py` | 迁移或兼容保留 | 迁到 `tools/file_read/` 后保留导入兼容层 | 避免 read/list/search 双实现 |
-| `apps/backend/app/tool_execution/service.py` | 扩展 | 工具调用事实和生命周期服务 | 不能把记录能力搬到 `tools/runtime.py` |
+| `apps/backend/app/tools/execution/service.py` | 扩展 | 工具调用事实和生命周期服务 | 不能把记录能力搬到 `tools/runtime.py` |
 | `apps/desktop/src/components/chat/ToolCallCard.tsx` | 扩展 | 聊天流工具调用摘要 | 不新增 `components/tools/ToolCallCard.tsx` 平行组件 |
 | `apps/desktop/src/hooks/useApprovals.ts` | 扩展 | 继续编排审批 service 和 store | 审批 hook 已存在，不能重复 |
 | `apps/desktop/src/services/approvals.ts` | 扩展 | 继续承载审批 HTTP 通信 | 审批 service 已存在，不能重复 |
@@ -603,7 +603,7 @@ packages/shared/ts/artifacts.ts
 
 - 错误类型集中，避免散落字符串判断。
 
-### 7.14 `apps/backend/app/artifacts/service.py`
+### 7.14 `apps/backend/app/domain/artifacts/service.py`
 
 写入能力：
 
@@ -631,7 +631,7 @@ packages/shared/ts/artifacts.ts
 
 ## 8. `tool_execution/` 代码落点
 
-### 8.1 `apps/backend/app/tool_execution/idempotency.py`
+### 8.1 `apps/backend/app/tools/execution/idempotency.py`
 
 写入能力：
 
@@ -653,7 +653,7 @@ packages/shared/ts/artifacts.ts
 
 - 幂等键是危险副作用安全的基础，不能在各工具族里手写。
 
-### 8.2 `apps/backend/app/tool_execution/lifecycle.py`
+### 8.2 `apps/backend/app/tools/execution/lifecycle.py`
 
 写入能力：
 
@@ -681,7 +681,7 @@ packages/shared/ts/artifacts.ts
 - 状态机独立，避免 store 层承担业务规则。
 - 现有 `ToolExecutionService.plan_tool_call()` 会直接写入 policy status，后续必须通过 lifecycle 映射迁移，避免持久化状态混用。
 
-### 8.3 `apps/backend/app/tool_execution/service.py`
+### 8.3 `apps/backend/app/tools/execution/service.py`
 
 写入能力：
 
@@ -710,7 +710,7 @@ packages/shared/ts/artifacts.ts
 
 - Service 是业务层，承接 Runtime 与 Store 之间的工具执行事实管理。
 
-### 8.4 `apps/backend/app/tool_execution/concurrency.py`
+### 8.4 `apps/backend/app/tools/execution/concurrency.py`
 
 写入能力：
 
@@ -1406,7 +1406,7 @@ packages/shared/ts/artifacts.ts
 
 - 依赖构建器只做 wiring，保证运行时可测试。
 
-### 14.6 `apps/backend/app/runtime/runner.py`
+### 14.6 `apps/backend/app/core/runtime/runner.py`
 
 写入能力：
 

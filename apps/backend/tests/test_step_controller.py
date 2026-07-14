@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from app.workflows.step_controller import (
+from app.core.workflows.step_controller import (
     LangGraphStepController,
     MIN_SAFE_LANGGRAPH_VERSION,
     _version_at_least,
@@ -57,7 +57,7 @@ class LangGraphStepControllerTests(unittest.TestCase):
         """
 
         with patch(
-            "app.workflows.step_controller._installed_langgraph_version",
+            "app.core.workflows.step_controller._installed_langgraph_version",
             return_value=None,
         ):
             controller = LangGraphStepController()
@@ -83,7 +83,7 @@ class LangGraphStepControllerTests(unittest.TestCase):
         """
 
         with patch(
-            "app.workflows.step_controller._installed_langgraph_version",
+            "app.core.workflows.step_controller._installed_langgraph_version",
             return_value=(0, 6, 11),
         ):
             controller = LangGraphStepController()

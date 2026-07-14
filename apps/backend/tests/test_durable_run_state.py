@@ -7,20 +7,20 @@ import sqlite3
 import tempfile
 import unittest
 
-from app.approvals.service import ApprovalService
-from app.approvals.store import ApprovalStore
-from app.artifacts.files import ArtifactFileStore
-from app.artifacts.store import ArtifactStore
-from app.human_input.service import HumanInputService
-from app.human_input.store import HumanInputStore
-from app.runs.recovery import RecoveryManager
-from app.runs.checkpointer import ManagedSqliteCheckpointer
-from app.runs.resume import ResumeDispatcher
-from app.runs.state_machine import InvalidRunTransition, RunStateMachine
-from app.runs.store import DurableRunStore
-from app.tool_execution.policy import ToolExecutionPolicy
-from app.tool_execution.service import ToolExecutionService
-from app.tool_execution.store import ToolExecutionStore
+from app.domain.approvals.service import ApprovalService
+from app.domain.approvals.store import ApprovalStore
+from app.domain.artifacts.files import ArtifactFileStore
+from app.domain.artifacts.store import ArtifactStore
+from app.domain.human_input.service import HumanInputService
+from app.domain.human_input.store import HumanInputStore
+from app.core.runs.recovery import RecoveryManager
+from app.core.runs.checkpointer import ManagedSqliteCheckpointer
+from app.core.runs.resume import ResumeDispatcher
+from app.core.runs.state_machine import InvalidRunTransition, RunStateMachine
+from app.core.runs.store import DurableRunStore
+from app.tools.execution.policy import ToolExecutionPolicy
+from app.tools.execution.service import ToolExecutionService
+from app.tools.execution.store import ToolExecutionStore
 
 
 class DurableRunStateTests(unittest.TestCase):

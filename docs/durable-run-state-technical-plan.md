@@ -53,7 +53,7 @@
 后端新增目录：
 
 ```text
-apps/backend/app/runs/
+apps/backend/app/core/runs/
   __init__.py
   records.py
   store.py
@@ -65,19 +65,19 @@ apps/backend/app/runs/
   resume.py
   langgraph_runtime.py
 
-apps/backend/app/approvals/
+apps/backend/app/domain/approvals/
   __init__.py
   records.py
   store.py
   service.py
 
-apps/backend/app/human_input/
+apps/backend/app/domain/human_input/
   __init__.py
   records.py
   store.py
   service.py
 
-apps/backend/app/tool_execution/
+apps/backend/app/tools/execution/
   __init__.py
   records.py
   store.py
@@ -85,7 +85,7 @@ apps/backend/app/tool_execution/
   policy_provider.py
   service.py
 
-apps/backend/app/artifacts/
+apps/backend/app/domain/artifacts/
   __init__.py
   records.py
   store.py
@@ -150,7 +150,7 @@ packages/shared/ts/toolExecution.ts
 
 ## 4. 后端代码落点
 
-### 4.1 `apps/backend/app/runs/records.py`
+### 4.1 `apps/backend/app/core/runs/records.py`
 
 写入能力：
 
@@ -175,7 +175,7 @@ packages/shared/ts/toolExecution.ts
 
 - 状态对象是跨 storage、runtime、API、测试共享的领域模型，独立文件能避免 `storage/records.py` 继续扩张成所有记录的容器。
 
-### 4.2 `apps/backend/app/runs/store.py`
+### 4.2 `apps/backend/app/core/runs/store.py`
 
 写入能力：
 
@@ -199,7 +199,7 @@ packages/shared/ts/toolExecution.ts
 
 - 数据层只做增删改查和数据映射，符合分层规范。
 
-### 4.3 `apps/backend/app/runs/state_machine.py`
+### 4.3 `apps/backend/app/core/runs/state_machine.py`
 
 写入能力：
 
@@ -221,7 +221,7 @@ packages/shared/ts/toolExecution.ts
 
 - 状态流转是业务规则，不应散落在 API、workflow 或 storage 中。
 
-### 4.4 `apps/backend/app/runs/graph_builder.py`
+### 4.4 `apps/backend/app/core/runs/graph_builder.py`
 
 写入能力：
 
@@ -246,7 +246,7 @@ packages/shared/ts/toolExecution.ts
 
 - graph 构建会随 workflow 演进而变化，必须独立于持久化和调用恢复。
 
-### 4.5 `apps/backend/app/runs/checkpointer.py`
+### 4.5 `apps/backend/app/core/runs/checkpointer.py`
 
 写入能力：
 
@@ -271,7 +271,7 @@ packages/shared/ts/toolExecution.ts
 
 - checkpointer 是成熟机制的持久化适配层。如果不独立，初始化、schema 和 thread 配置很容易散落到 `storage/sqlite.py` 或 `langgraph_runtime.py`。
 
-### 4.6 `apps/backend/app/runs/invoke.py`
+### 4.6 `apps/backend/app/core/runs/invoke.py`
 
 写入能力：
 
@@ -296,7 +296,7 @@ packages/shared/ts/toolExecution.ts
 
 - 调用恢复是运行时边界，独立后可以避免 API、审批服务或工具服务直接调用 LangGraph 原语。
 
-### 4.7 `apps/backend/app/runs/langgraph_runtime.py`
+### 4.7 `apps/backend/app/core/runs/langgraph_runtime.py`
 
 写入能力：
 
@@ -318,7 +318,7 @@ packages/shared/ts/toolExecution.ts
 
 - 保留一个 facade 便于现有 Runtime 迁移，但必须把具体职责拆到子模块，避免形成新的核心屎山。
 
-### 4.8 `apps/backend/app/runs/resume.py`
+### 4.8 `apps/backend/app/core/runs/resume.py`
 
 写入能力：
 
@@ -342,7 +342,7 @@ packages/shared/ts/toolExecution.ts
 
 - 恢复是 Runtime 编排能力，必须独立于审批和具体工具。
 
-### 4.9 `apps/backend/app/runs/recovery.py`
+### 4.9 `apps/backend/app/core/runs/recovery.py`
 
 写入能力：
 
@@ -366,7 +366,7 @@ packages/shared/ts/toolExecution.ts
 
 ## 5. 审批代码落点
 
-### 5.1 `apps/backend/app/approvals/records.py`
+### 5.1 `apps/backend/app/domain/approvals/records.py`
 
 写入能力：
 
@@ -383,7 +383,7 @@ packages/shared/ts/toolExecution.ts
 
 - 审批是 human-in-loop 的一种具体业务形态，不能继续只作为 `ToolObservation.status = approval_required`。
 
-### 5.2 `apps/backend/app/approvals/store.py`
+### 5.2 `apps/backend/app/domain/approvals/store.py`
 
 写入能力：
 
@@ -400,7 +400,7 @@ packages/shared/ts/toolExecution.ts
 
 - 前端重启后恢复审批卡片必须以数据库为事实源，SSE 不能是唯一事实源。
 
-### 5.3 `apps/backend/app/approvals/service.py`
+### 5.3 `apps/backend/app/domain/approvals/service.py`
 
 写入能力：
 
@@ -423,7 +423,7 @@ packages/shared/ts/toolExecution.ts
 
 ## 6. Human-in-loop 代码落点
 
-### 6.1 `apps/backend/app/human_input/records.py`
+### 6.1 `apps/backend/app/domain/human_input/records.py`
 
 写入能力：
 
@@ -439,7 +439,7 @@ packages/shared/ts/toolExecution.ts
 
 - 审批不是唯一 human-in-loop。提前抽出 `human_input/`，避免未来把所有人工交互都堆到 `approvals/`。
 
-### 6.2 `apps/backend/app/human_input/store.py`
+### 6.2 `apps/backend/app/domain/human_input/store.py`
 
 写入能力：
 
@@ -463,7 +463,7 @@ packages/shared/ts/toolExecution.ts
 
 - human-in-loop 是核心恢复场景。独立 store 可以避免后续把人工输入持久化混进 `approvals/` 或 `runs/`。
 
-### 6.3 `apps/backend/app/human_input/service.py`
+### 6.3 `apps/backend/app/domain/human_input/service.py`
 
 写入能力：
 
@@ -486,7 +486,7 @@ packages/shared/ts/toolExecution.ts
 
 ## 7. Tool Execution 代码落点
 
-### 7.1 `apps/backend/app/tool_execution/records.py`
+### 7.1 `apps/backend/app/tools/execution/records.py`
 
 写入能力：
 
@@ -503,7 +503,7 @@ packages/shared/ts/toolExecution.ts
 
 - 当前 `ToolCall` 和 `ToolObservation` 是内存值对象，无法支撑恢复和审计。持久化工具执行记录必须独立建模。
 
-### 7.2 `apps/backend/app/tool_execution/policy.py`
+### 7.2 `apps/backend/app/tools/execution/policy.py`
 
 写入能力：
 
@@ -528,7 +528,7 @@ packages/shared/ts/toolExecution.ts
 - 现有 `app/tools/approval.py` 只有 permission 字符串判断，生产级工具执行需要更细的策略边界。
 - 通用策略层只做编排，避免和具体工具族重复实现命令、路径、diff 等风险判断。
 
-### 7.3 `apps/backend/app/tool_execution/policy_provider.py`
+### 7.3 `apps/backend/app/tools/execution/policy_provider.py`
 
 写入能力：
 
@@ -551,7 +551,7 @@ packages/shared/ts/toolExecution.ts
 
 - 这是避免重复造轮子的关键边界。命令工具和文件工具只写自己的 provider，通用工具执行层只消费 provider 结果。
 
-### 7.4 `apps/backend/app/tool_execution/service.py`
+### 7.4 `apps/backend/app/tools/execution/service.py`
 
 写入能力：
 
@@ -575,7 +575,7 @@ packages/shared/ts/toolExecution.ts
 
 ## 8. Artifact 代码落点
 
-### 8.1 `apps/backend/app/artifacts/records.py`
+### 8.1 `apps/backend/app/domain/artifacts/records.py`
 
 写入能力：
 
@@ -592,7 +592,7 @@ packages/shared/ts/toolExecution.ts
 
 - 大 diff、命令 stdout/stderr、工具结果摘要不能长期塞进事件 payload 或 tool execution 表。
 
-### 8.2 `apps/backend/app/artifacts/store.py`
+### 8.2 `apps/backend/app/domain/artifacts/store.py`
 
 写入能力：
 
@@ -613,7 +613,7 @@ packages/shared/ts/toolExecution.ts
 
 - 元数据和物理文件写入分离，避免 store 变成基础设施和业务混合层。
 
-### 8.3 `apps/backend/app/artifacts/files.py`
+### 8.3 `apps/backend/app/domain/artifacts/files.py`
 
 写入能力：
 
@@ -630,7 +630,7 @@ packages/shared/ts/toolExecution.ts
 
 - 命令输出和 diff 预览可能很大，必须有统一落盘位置和大小保护。
 
-### 8.4 `apps/backend/app/artifacts/retention.py`
+### 8.4 `apps/backend/app/domain/artifacts/retention.py`
 
 写入能力：
 
@@ -923,7 +923,7 @@ apps/backend/app/storage/migrations.py
 
 ## 14. Runtime 和 Workflow 改造落点
 
-### 14.1 `apps/backend/app/runtime/runner.py`
+### 14.1 `apps/backend/app/core/runtime/runner.py`
 
 调整方向：
 
@@ -935,7 +935,7 @@ apps/backend/app/storage/migrations.py
 
 - runner 是协调入口，不应成为所有状态机、审批和工具执行细节的容器。
 
-### 14.2 `apps/backend/app/runtime/operations.py`
+### 14.2 `apps/backend/app/core/runtime/operations.py`
 
 调整方向：
 
@@ -946,7 +946,7 @@ apps/backend/app/storage/migrations.py
 
 - 该文件当前已经承担较多职责，后续不能继续把审批和命令执行堆进去。
 
-### 14.3 `apps/backend/app/workflows/react_like.py`
+### 14.3 `apps/backend/app/core/workflows/react_like.py`
 
 调整方向：
 
