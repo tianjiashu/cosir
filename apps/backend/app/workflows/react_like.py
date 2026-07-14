@@ -167,6 +167,7 @@ class ReactLikeWorkflow:
 
         state.requested_tool = False
         state.final_response = False
+        tool_calls: List[ToolCall] = []
 
         async for delta in operations.stream_model(state.messages):
             if operations.has_task_status(task.task_id, "cancelled"):
@@ -188,22 +189,82 @@ class ReactLikeWorkflow:
 
             if delta.tool_call is not None:
                 state.requested_tool = True
-                async for event in self._handle_tool_call(
-                    task,
-                    operations,
-                    model_step,
-                    delta.tool_call,
-                    state,
-                ):
-                    yield event
-                return
+                tool_calls.append(delta.tool_call)
+                continue
 
             if delta.is_final:
+                if tool_calls:
+                    async for event in self._handle_tool_calls(
+                        task, operations, model_step, tool_calls, state
+                    ):
+                        yield event
+                    return
                 state.final_response = True
                 async for event in self._handle_final_response(task, operations, model_step):
                     yield event
                 state.terminal = True
                 return
+
+        if tool_calls:
+            async for event in self._handle_tool_calls(
+                task, operations, model_step, tool_calls, state
+            ):
+                yield event
+
+    async def _handle_tool_calls(
+        self,
+        task: TaskRecord,
+        operations: RuntimeOperations,
+        model_step: StepRecord,
+        tool_calls: List[ToolCall],
+        state: ReactLikeState,
+    ) -> AsyncIterator[RuntimeEvent]:
+        """执行同一模型响应中的一组工具调用并保留其输入顺序。
+
+        参数:
+            task: 正在运行的任务。
+            operations: Runtime 工具执行门面。
+            model_step: 产生本组调用的模型步骤。
+            tool_calls: 已聚合的模型工具调用。
+            state: 需要回填观测消息的工作流状态。
+
+        生成:
+            工具请求、开始、完成、审批和观测事件。
+
+        异常:
+            无。单调用错误由 Tool Runtime 归一化。
+
+        副作用:
+            创建工具步骤、调用并发工具执行链并更新任务状态。
+        """
+
+        operations.update_step(model_step.step_id, "completed", output_summary="tool_calls")
+        yield operations.create_checkpoint(task.task_id, "model_tool_calls_requested")
+        for call in tool_calls:
+            yield operations.record_event(EventType.TOOL_CALL_REQUESTED, task.task_id, {"tool_name": call.tool_name, "arguments": call.arguments})
+            yield operations.record_event(EventType.TOOL_CALL_STARTED, task.task_id, {"tool_name": call.tool_name})
+        observations = operations.execute_tools(tool_calls, model_step.step_id)
+        for call, observation in zip(tool_calls, observations):
+            yield operations.record_event(EventType.TOOL_CALL_FINISHED, task.task_id, {"tool_name": observation.tool_name, "status": observation.status, "error": observation.error})
+            if observation.status == "approval_required":
+                yield operations.record_event(EventType.TOOL_APPROVAL_REQUIRED, task.task_id, {"tool_name": observation.tool_name, "permission": observation.permission, "approval_status": observation.approval_status, "reason": observation.error})
+                operations.update_task_status(task.task_id, "waiting")
+                yield operations.create_checkpoint(task.task_id, "tool_approval_required")
+                state.terminal = True
+                return
+            if self._tool_error_limit_reached(observation, state, operations):
+                operations.update_task_status(task.task_id, "failed")
+                operations.close_running_steps(task.task_id, "failed", "tool_error_limit_reached")
+                yield operations.create_checkpoint(task.task_id, "tool_error_limit_reached")
+                yield operations.record_event(
+                    EventType.RUN_FAILED,
+                    task.task_id,
+                    {"status": "failed", "error": "tool_error_limit_reached", "tool_name": observation.tool_name},
+                )
+                state.terminal = True
+                return
+            self._append_tool_exchange(state, model_step, call, observation)
+            yield operations.record_event(EventType.OBSERVATION_ADDED, task.task_id, {"tool_name": observation.tool_name, "status": observation.status})
 
     async def _handle_tool_call(
         self,
@@ -256,7 +317,7 @@ class ReactLikeWorkflow:
             {"tool_name": tool_call.tool_name},
         )
 
-        observation = operations.execute_tool(tool_call)
+        observation = operations.execute_tool(tool_call, tool_step.step_id)
         operations.update_step(
             tool_step.step_id,
             "completed" if observation.status == "success" else "failed",

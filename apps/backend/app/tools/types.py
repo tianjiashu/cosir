@@ -1,7 +1,7 @@
 """共享的工具值对象。"""
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 
 @dataclass(frozen=True)
@@ -31,9 +31,12 @@ class ToolDefinition:
     description: str
     permission: str
     required_params: Iterable[str]
-    handler: Callable[..., str]
+    handler: Callable[..., Any]
     parameters_schema: Mapping[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 10.0
+    risk_level: str = "low"
+    visible_by_default: bool = True
+    resource_keys: Sequence[str] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,32 @@ class ToolCall:
     tool_name: str
     arguments: Any = field(default_factory=dict)
     call_id: str = ""
+
+
+@dataclass(frozen=True)
+class ArtifactRequest:
+    """描述需要由工具执行链统一落盘的文本产物。
+
+    参数:
+        kind: 产物类型。
+        content: 需要写入的 UTF-8 文本。
+        summary: 用于模型和 UI 的简短摘要。
+        mime_type: 产物 MIME 类型。
+
+    返回:
+        不可变的产物创建请求。
+
+    异常:
+        无。
+
+    副作用:
+        无。实际写入只能由 ArtifactService 完成。
+    """
+
+    kind: str
+    content: str
+    summary: str
+    mime_type: str = "text/plain"
 
 
 @dataclass(frozen=True)
@@ -88,3 +117,5 @@ class ToolObservation:
     error: str = ""
     permission: str = ""
     approval_status: str = ""
+    tool_call_id: str = ""
+    artifact_id: Optional[str] = None

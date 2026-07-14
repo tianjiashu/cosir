@@ -13,6 +13,7 @@ from app.models.base import ModelDelta, RuntimeMessage, StreamingModelAdapter
 from app.runtime.model_tools import build_model_tool_definitions
 from app.storage.records import StepRecord, TaskRecord, TurnRecord
 from app.tools.scheduler import ToolScheduler
+from app.tools.runtime import ToolExecutionContext, ToolRuntime
 from app.tools.types import ToolCall, ToolDefinition, ToolObservation
 
 
@@ -29,6 +30,8 @@ class RuntimeOperations:
         logger: logging.Logger,
         agent_profile: AgentProfile,
         record_event: Callable[[EventType, str, dict], RuntimeEvent],
+        tool_runtime: Optional[ToolRuntime] = None,
+        tool_run_id: str = "",
     ) -> None:
         """初始化工作流操作门面。
 
@@ -41,6 +44,8 @@ class RuntimeOperations:
             logger: 用于运行时自有诊断信息的日志记录器。
             agent_profile: 本次运行时执行使用的 Agent 档案。
             record_event: 持久化并记录事件的运行时回调。
+            tool_runtime: 可选的 Tool v2 唯一执行入口。
+            tool_run_id: 当前任务关联的 Durable Run 标识。
 
         返回:
             无。
@@ -60,6 +65,8 @@ class RuntimeOperations:
         self._logger = logger
         self._agent_profile = agent_profile
         self._record_event = record_event
+        self._tool_runtime = tool_runtime
+        self._tool_run_id = tool_run_id
 
     def get_turn_for_task(self, task_id: str) -> TurnRecord:
         """返回任务的持久化轮次。
@@ -183,11 +190,12 @@ class RuntimeOperations:
         async for delta in self._model_adapter.stream(messages, model_tools):
             yield delta
 
-    def execute_tool(self, call: ToolCall) -> ToolObservation:
+    def execute_tool(self, call: ToolCall, step_id: Optional[str] = None) -> ToolObservation:
         """通过调度器执行一个模型请求的工具调用。
 
         参数:
             call: 模型请求的工具调用。
+            step_id: 可选工具步骤标识，用于持久化关联。
 
         返回:
             归一化的工具观测结果。
@@ -196,7 +204,7 @@ class RuntimeOperations:
             无。调度器错误会作为观测结果返回。
 
         副作用:
-            可能通过调度器执行工具副作用。
+            可能通过 Tool v2 Runtime 或兼容调度器执行工具副作用。
         """
 
         denied_tool = self._find_agent_denied_model_visible_tool(call.tool_name)
@@ -215,7 +223,37 @@ class RuntimeOperations:
                 permission=denied_tool.permission,
                 approval_status="agent_denied",
             )
+        if self._tool_runtime is not None:
+            return self._tool_runtime.execute_single_tool_call(
+                call,
+                ToolExecutionContext(run_id=self._tool_run_id, step_id=step_id),
+            )
         return self._tool_scheduler.execute(call)
+
+    def execute_tools(self, calls: List[ToolCall], step_id: Optional[str] = None) -> List[ToolObservation]:
+        """通过 Tool v2 Runtime 执行同一模型响应中的多个工具调用。
+
+        参数:
+            calls: 同一模型响应请求的工具调用。
+            step_id: 关联模型步骤标识。
+
+        返回:
+            与输入调用顺序一致的观测结果。
+
+        异常:
+            RuntimeError: 当旧兼容调度器收到多个调用时抛出。
+
+        副作用:
+            可能并发执行工具副作用。
+        """
+
+        if self._tool_runtime is not None:
+            return self._tool_runtime.execute_tool_calls(
+                calls, ToolExecutionContext(run_id=self._tool_run_id, step_id=step_id)
+            )
+        if len(calls) != 1:
+            raise RuntimeError("multiple tool calls require ToolRuntime")
+        return [self.execute_tool(calls[0], step_id)]
 
     def _list_agent_visible_tools(self) -> List[ToolDefinition]:
         """返回当前 Agent 档案允许的对模型可见的工具。
@@ -235,7 +273,7 @@ class RuntimeOperations:
 
         return [
             tool
-            for tool in self._tool_scheduler.list_model_visible_tools()
+            for tool in self._list_platform_visible_tools()
             if self._agent_profile.allows_tool(tool.name, tool.permission)
         ]
 
@@ -256,13 +294,33 @@ class RuntimeOperations:
             无。
         """
 
-        for tool in self._tool_scheduler.list_model_visible_tools():
+        for tool in self._list_platform_visible_tools():
             if tool.name == tool_name and not self._agent_profile.allows_tool(
                 tool.name,
                 tool.permission,
             ):
                 return tool
         return None
+
+    def _list_platform_visible_tools(self) -> List[ToolDefinition]:
+        """返回当前工具执行入口允许模型看到的工具定义。
+
+        参数:
+            无。
+
+        返回:
+            配置 Tool v2 Runtime 时返回其可见工具，否则返回兼容调度器结果。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        if self._tool_runtime is not None:
+            return self._tool_runtime.list_model_visible_tools()
+        return self._tool_scheduler.list_model_visible_tools()
 
     def has_task_status(self, task_id: str, status: str) -> bool:
         """返回任务当前是否具有某状态。

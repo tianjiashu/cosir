@@ -188,7 +188,7 @@ def _build_request_payload(
     if tools:
         payload["tools"] = [_to_provider_tool(tool) for tool in tools]
         payload["tool_choice"] = "auto"
-        payload["parallel_tool_calls"] = False
+        payload["parallel_tool_calls"] = True
     return payload
 
 

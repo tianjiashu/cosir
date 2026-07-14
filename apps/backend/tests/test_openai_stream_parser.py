@@ -273,7 +273,7 @@ class OpenAIStreamParserTests(unittest.TestCase):
         self.assertEqual(payload["model"], "test-model")
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["tool_choice"], "auto")
-        self.assertFalse(payload["parallel_tool_calls"])
+        self.assertTrue(payload["parallel_tool_calls"])
         self.assertEqual(payload["tools"][0]["function"]["name"], "read_file")
 
     def test_request_payload_disables_deepseek_thinking_by_default(self) -> None:
@@ -380,8 +380,9 @@ class OpenAIStreamParserTests(unittest.TestCase):
             )
         ]
 
-        with self.assertRaisesRegex(ValueError, "parallel tool calls"):
-            list(parse_openai_sse_lines(lines))
+        deltas = list(parse_openai_sse_lines(lines))
+
+        self.assertEqual([item.tool_call.call_id for item in deltas], ["call_1", "call_2"])
 
     def test_request_payload_serializes_tool_exchange_messages(self) -> None:
         """校验助手工具调用与工具观测会保留匹配的 id。

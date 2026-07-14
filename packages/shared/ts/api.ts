@@ -26,6 +26,12 @@ export const API_PATHS = {
   TASK_STREAM: (taskId: string) => `/tasks/${taskId}/stream`,
   /** POST — 取消任务 */
   TASK_CANCEL: (taskId: string) => `/tasks/${taskId}/cancel`,
+  /** GET — 可恢复运行列表 */
+  RUNS_RECOVERABLE: "/runs/recoverable",
+  /** GET — 任务待处理审批 */
+  TASK_APPROVALS: (taskId: string) => `/tasks/${taskId}/approvals`,
+  /** POST — 提交审批决策 */
+  APPROVAL_DECISION: (approvalId: string) => `/approvals/${approvalId}/decision`,
 } as const;
 
 // ---------- 请求类型 ----------
@@ -36,6 +42,16 @@ export interface CreateTaskRequest {
   text: string;
   /** 可选的会话标识符。 */
   session_id?: string;
+}
+
+/** 审批决策请求体。 */
+export interface ApprovalDecisionRequest {
+  /** 审批决策，必须是 approved 或 denied。 */
+  decision: "approved" | "denied";
+  /** 可选的人类可读原因。 */
+  reason?: string;
+  /** 前端生成的幂等键。 */
+  idempotency_key: string;
 }
 
 // ---------- 响应类型 ----------
@@ -66,3 +82,12 @@ export type EventsResponse = import("./events").RuntimeEvent[];
 
 /** checkpoint 列表的响应体。 */
 export type CheckpointsResponse = import("./task").CheckpointRecord[];
+
+/** 可恢复运行列表响应体。 */
+export type RecoverableRunsResponse = import("./runs").RunRecord[];
+
+/** 审批列表响应体。 */
+export type ApprovalsResponse = import("./approvals").ApprovalRequestRecord[];
+
+/** 审批决策响应体。 */
+export type ApprovalDecisionResponse = import("./approvals").ApprovalDecisionRecord;

@@ -164,8 +164,6 @@ def _flush_tool_calls(state: OpenAIStreamState) -> Iterator[ModelDelta]:
         state.tool_calls[index] for index in sorted(state.tool_calls)
     ]
     state.tool_calls.clear()
-    if len(completed) > 1:
-        raise ValueError("parallel tool calls are not supported")
     for accumulator in completed:
         arguments = json.loads(accumulator.arguments or "{}")
         if not isinstance(arguments, dict):

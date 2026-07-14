@@ -1,12 +1,32 @@
 """FastAPI 层的依赖构建器。"""
 
+from app.approvals.service import ApprovalService
+from app.approvals.store import ApprovalStore
+from app.artifacts.files import ArtifactFileStore
+from app.artifacts.service import ArtifactService
+from app.artifacts.store import ArtifactStore
 from app.config.settings import default_settings
 from app.context.builder import TextContextBuilder
 from app.logging.configuration import configure_logging
 from app.models.factory import build_model_adapter
+from app.runs.checkpointer import LangGraphCheckpointerUnavailable
+from app.runs.langgraph_runtime import LangGraphRuntime
+from app.runs.lifecycle_graph import build_run_lifecycle_graph
+from app.runs.recovery import RecoveryManager
+from app.runs.resume import ResumeDispatcher
+from app.runs.store import DurableRunStore
 from app.runtime.runner import AgentRuntime
 from app.storage.sqlite import SQLiteTaskStore
+from app.tool_execution.policy import ToolExecutionPolicy
+from app.tool_execution.policy_provider import PermissionPolicyProvider
+from app.tool_execution.service import ToolExecutionService
+from app.tool_execution.store import ToolExecutionStore
+from app.tools.concurrent import ToolConcurrentScheduler
+from app.tools.executor import ToolCallExecutor
+from app.tools.locks import ToolResourceLockManager
 from app.tools.registry import ToolRegistry
+from app.tools.results import ToolObservationBuilder
+from app.tools.runtime import ToolRuntime
 from app.tools.safe_read import SafeReadTools
 from app.tools.scheduler import ToolScheduler
 
@@ -32,6 +52,54 @@ def build_runtime() -> AgentRuntime:
     logger = configure_logging(settings.log_file)
     safe_tools = SafeReadTools(settings.project_root)
     registry = ToolRegistry(safe_tools.definitions())
+    run_store = DurableRunStore(settings.database_file, logger)
+    resume_dispatcher = ResumeDispatcher(run_store, logger)
+    langgraph_runtime = None
+    try:
+        langgraph_runtime = LangGraphRuntime(
+            database_path=settings.database_file.with_name("langgraph.sqlite3"),
+            graph_factory=build_run_lifecycle_graph,
+        )
+    except (LangGraphCheckpointerUnavailable, RuntimeError, OSError) as exc:
+        logger.warning("langgraph_runtime_unavailable error=%s", exc)
+    approval_service = ApprovalService(
+        approval_store=ApprovalStore(settings.database_file),
+        run_store=run_store,
+        resume_dispatcher=resume_dispatcher,
+        logger=logger,
+        langgraph_runtime=langgraph_runtime,
+    )
+    observation_builder = ToolObservationBuilder()
+    execution_service = ToolExecutionService(
+        store=ToolExecutionStore(settings.database_file),
+        policy=ToolExecutionPolicy(
+            (
+                PermissionPolicyProvider(
+                    auto_approved_permissions=("safe_read",),
+                    approval_required_permissions=("write_file", "command", "git_write"),
+                ),
+            )
+        ),
+        logger=logger,
+    )
+    artifact_service = ArtifactService(
+        store=ArtifactStore(settings.database_file),
+        files=ArtifactFileStore(settings.project_root / "storage" / "artifacts"),
+    )
+    tool_runtime = ToolRuntime(
+        registry=registry,
+        executor=ToolCallExecutor(
+            observation_builder=observation_builder,
+            logger=logger,
+            artifact_service=artifact_service,
+            execution_service=execution_service,
+        ),
+        observation_builder=observation_builder,
+        logger=logger,
+        execution_service=execution_service,
+        approval_service=approval_service,
+        concurrent_scheduler=ToolConcurrentScheduler(ToolResourceLockManager(), logger),
+    )
     return AgentRuntime(
         settings=settings,
         task_store=SQLiteTaskStore(settings.database_file),
@@ -43,4 +111,9 @@ def build_runtime() -> AgentRuntime:
             logger=logger,
         ),
         logger=logger,
+        run_store=run_store,
+        approval_service=approval_service,
+        recovery_manager=RecoveryManager(run_store, logger),
+        langgraph_runtime=langgraph_runtime,
+        tool_runtime=tool_runtime,
     )

@@ -1,5 +1,6 @@
 """用于任务与 SSE 端点的 FastAPI 应用工厂。"""
 
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from app.api.dependencies import build_runtime
@@ -32,8 +33,31 @@ def create_app(runtime: AgentRuntime = None):
             "FastAPI is required to run the backend API. Install project dependencies first."
         ) from exc
 
-    app = FastAPI(title="coding-agent backend")
     runtime = runtime or build_runtime()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        """管理 FastAPI 应用生命周期并在关闭时释放运行时资源。
+
+        参数:
+            _app: FastAPI 应用实例，当前只用于满足 lifespan 协议。
+
+        生成:
+            应用运行期间的控制权。
+
+        异常:
+            无。Runtime 内部会记录关闭失败。
+
+        副作用:
+            关闭 Runtime 持有的 LangGraph checkpointer 等资源。
+        """
+
+        try:
+            yield
+        finally:
+            runtime.close()
+
+    app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
     class CreateTaskRequest(BaseModel):
         """校验任务创建请求体。
@@ -75,6 +99,72 @@ def create_app(runtime: AgentRuntime = None):
 
             if not value.strip():
                 raise ValueError("text must not be blank")
+            return value
+
+    class ApprovalDecisionRequest(BaseModel):
+        """校验审批决策请求体。
+
+        参数:
+            decision: 审批决策，必须是 approved 或 denied。
+            reason: 可选的人类可读原因。
+            idempotency_key: 前端生成的幂等键。
+
+        返回:
+            Pydantic 请求模型。
+
+        异常:
+            ValueError: 当 decision 或 idempotency_key 非法时抛出。
+
+        副作用:
+            无。
+        """
+
+        decision: str
+        reason: str = None
+        idempotency_key: str
+
+        @field_validator("decision")
+        @classmethod
+        def decision_must_be_supported(cls, value: str) -> str:
+            """校验审批决策值。
+
+            参数:
+                value: 从请求体解析出的审批决策。
+
+            返回:
+                校验通过的审批决策。
+
+            异常:
+                ValueError: 如果决策不是 approved 或 denied。
+
+            副作用:
+                无。
+            """
+
+            if value not in {"approved", "denied"}:
+                raise ValueError("decision must be approved or denied")
+            return value
+
+        @field_validator("idempotency_key")
+        @classmethod
+        def idempotency_key_must_not_be_blank(cls, value: str) -> str:
+            """校验幂等键不为空。
+
+            参数:
+                value: 从请求体解析出的幂等键。
+
+            返回:
+                校验通过的幂等键。
+
+            异常:
+                ValueError: 如果幂等键为空白。
+
+            副作用:
+                无。
+            """
+
+            if not value.strip():
+                raise ValueError("idempotency_key must not be blank")
             return value
 
     @app.post("/tasks")
@@ -187,6 +277,108 @@ def create_app(runtime: AgentRuntime = None):
             return [checkpoint.to_dict() for checkpoint in runtime.list_checkpoints(task_id)]
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="task not found") from exc
+
+    @app.get("/runs/recoverable")
+    async def list_recoverable_runs() -> list:
+        """返回可恢复或需要用户处理的运行记录。
+
+        参数:
+            无。
+
+        返回:
+            可恢复运行记录列表。
+
+        异常:
+            HTTPException: 当 Durable Run State 未配置时抛出。
+
+        副作用:
+            无。该接口只读取可恢复运行，不消费恢复命令。
+        """
+
+        try:
+            return runtime.list_recoverable_runs()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/runs/{run_id}/resume")
+    async def resume_run(run_id: str) -> dict:
+        """显式恢复指定 Durable Run。
+
+        参数:
+            run_id: 来自路由的运行标识。
+
+        返回:
+            恢复后的运行记录。
+
+        异常:
+            HTTPException: 当运行不存在或恢复能力未配置时抛出。
+
+        副作用:
+            重新排队该 run 遗留命令，消费恢复命令，并同步任务与运行状态。
+        """
+
+        try:
+            return runtime.resume_run(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/tasks/{task_id}/approvals")
+    async def list_task_approvals(task_id: str) -> list:
+        """返回任务关联的待处理审批请求。
+
+        参数:
+            task_id: 来自路由的任务标识。
+
+        返回:
+            待处理审批请求列表。
+
+        异常:
+            HTTPException: 当任务不存在或审批服务不可用时抛出。
+
+        副作用:
+            无。
+        """
+
+        try:
+            return runtime.list_pending_approvals(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/approvals/{approval_id}/decision")
+    async def decide_approval(approval_id: str, payload: ApprovalDecisionRequest) -> dict:
+        """处理用户审批决策。
+
+        参数:
+            approval_id: 来自路由的审批请求标识。
+            payload: 审批决策请求体。
+
+        返回:
+            审批决策摘要。
+
+        异常:
+            HTTPException: 当审批不存在、请求非法或服务不可用时抛出。
+
+        副作用:
+            写入审批决策并创建恢复命令。
+        """
+
+        try:
+            return runtime.decide_approval(
+                approval_id=approval_id,
+                decision=payload.decision,
+                reason=payload.reason,
+                idempotency_key=payload.idempotency_key,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="approval not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/tasks/{task_id}/stream")
     async def stream_task(task_id: str):

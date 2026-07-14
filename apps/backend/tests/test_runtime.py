@@ -389,9 +389,9 @@ class AgentRuntimeTests(unittest.TestCase):
             events = asyncio.run(self._collect_events(runtime, task.task_id))
             event_types = [event.event_type for event in events]
 
-            self.assertEqual(runtime.get_task(task.task_id).status, "failed")
+            self.assertEqual(runtime.get_task(task.task_id).status, "waiting")
             self.assertIn("tool_approval_required", event_types)
-            self.assertEqual(events[-1].payload["error"], "tool_approval_required")
+            self.assertEqual(events[-1].event_type.value, "checkpoint_created")
             self.assertFalse((project_root / "note.txt").exists())
 
     def test_tool_error_limit_fails_run_before_max_steps(self) -> None:

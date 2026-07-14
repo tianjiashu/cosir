@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,8 +58,7 @@ class TestLoggingProbe(unittest.TestCase):
                 async for _ in runtime.run_task(task.task_id):
                     pass
 
-            with self.assertLogs(logger="coding_agent.backend", level="ERROR"):
-                asyncio.run(collect())
+            asyncio.run(collect())
 
             for handler in logger.handlers:
                 handler.flush()

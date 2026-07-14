@@ -6,9 +6,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from app.approvals.service import ApprovalService
+from app.approvals.store import ApprovalStore
 from app.config.settings import BackendSettings
 from app.context.builder import TextContextBuilder
 from app.models.echo import EchoStreamingModelAdapter
+from app.runs.recovery import RecoveryManager
+from app.runs.resume import ResumeDispatcher
+from app.runs.store import DurableRunStore
 from app.runtime.runner import AgentRuntime
 from app.storage.sqlite import SQLiteTaskStore
 from app.tools.registry import ToolRegistry
@@ -142,6 +147,297 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(len(events_response.json()), first_stream.text.count("event: "))
         self.assertGreaterEqual(len(checkpoints_response.json()), 2)
 
+    def test_approval_decision_endpoint_returns_serializable_payload(self) -> None:
+        """校验审批决策 API 返回可序列化决策并触发恢复命令消费。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果审批决策出口返回错误或恢复命令未完成消费。
+
+        副作用:
+            创建一个带 Durable Run State 的进程内 FastAPI 测试客户端。
+        """
+
+        from fastapi.testclient import TestClient
+
+        from app.api.app import create_app
+
+        runtime, run_store, approval_service = self._build_runtime_with_approvals()
+        task = runtime.create_task("approval api")
+        run = run_store.get_by_task(task.task_id)
+        self.assertIsNotNone(run)
+        approval = approval_service.request_approval(
+            run_id=run.run_id,
+            tool_name="write_marker",
+            permission="write_file",
+            risk_level="high",
+            payload={"arguments": {"path": "marker.txt"}},
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(
+            f"/approvals/{approval.approval_id}/decision",
+            json={"decision": "approved", "reason": "ok", "idempotency_key": "api-decision-key"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["approval_id"], approval.approval_id)
+        self.assertEqual(payload["decision"], "approved")
+        command = run_store.get_resume_command_by_key("resume:api-decision-key")
+        self.assertIsNotNone(command)
+        self.assertEqual(command.status, "applied")
+        self.assertEqual(runtime.get_task(task.task_id).status, "completed")
+        self.assertEqual(run_store.get(run.run_id).status, "completed")
+
+    def test_recoverable_runs_endpoint_is_strictly_read_only(self) -> None:
+        """校验恢复查询接口不会消费或重排恢复命令。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果只读查询领取、重排或应用了恢复命令。
+
+        副作用:
+            创建带 processing resume command 的临时运行记录并调用 API。
+        """
+
+        from fastapi.testclient import TestClient
+
+        from app.api.app import create_app
+
+        runtime, run_store, _approval_service = self._build_runtime_with_approvals()
+        task = runtime.create_task("recoverable api")
+        run = run_store.get_by_task(task.task_id)
+        self.assertIsNotNone(run)
+        run_store.mark_status(run.run_id, "waiting", wait_reason="approval")
+        created = run_store.create_resume_command(
+            run.run_id,
+            "approve_tool",
+            {"approval_id": "approval-pending"},
+            "recoverable-query-key",
+        )
+        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("approve_tool",))
+        self.assertEqual([command.command_id for command in claimed], [created.command_id])
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.get("/runs/recoverable")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_store.get_resume_command_by_key(created.idempotency_key).status, "processing")
+
+    def test_resume_run_endpoint_consumes_processing_approved_command(self) -> None:
+        """校验显式恢复接口会恢复 processing 状态的 approved 命令。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果恢复命令未重排应用或任务运行状态仍悬挂。
+
+        副作用:
+            创建审批决策和恢复命令，并通过 API 显式恢复运行。
+        """
+
+        from fastapi.testclient import TestClient
+
+        from app.api.app import create_app
+
+        runtime, run_store, approval_service = self._build_runtime_with_approvals()
+        task = runtime.create_task("resume api")
+        run = run_store.get_by_task(task.task_id)
+        self.assertIsNotNone(run)
+        approval = approval_service.request_approval(
+            run_id=run.run_id,
+            tool_name="write_marker",
+            permission="write_file",
+            risk_level="high",
+            payload={"arguments": {"path": "marker.txt"}},
+        )
+        approval_service.decide(approval.approval_id, "approved", "ok", "crash-window-key")
+        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("approve_tool",))
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(run_store.get(run.run_id).status, "resuming")
+        self.assertEqual(run_store.get_resume_command_by_key("resume:crash-window-key").status, "processing")
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(f"/runs/{run.run_id}/resume")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_store.get_resume_command_by_key("resume:crash-window-key").status, "applied")
+        self.assertEqual(runtime.get_task(task.task_id).status, "completed")
+        self.assertEqual(run_store.get(run.run_id).status, "completed")
+
+    def test_resume_run_endpoint_consumes_processing_denied_command(self) -> None:
+        """校验显式恢复接口会恢复 processing 状态的 denied 命令。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果 denied 恢复命令未应用或任务运行未失败收束。
+
+        副作用:
+            创建 denied 审批决策，将恢复命令模拟为 processing，并通过 API 显式恢复运行。
+        """
+
+        from fastapi.testclient import TestClient
+
+        from app.api.app import create_app
+
+        runtime, run_store, approval_service = self._build_runtime_with_approvals()
+        task = runtime.create_task("denied resume api")
+        run = run_store.get_by_task(task.task_id)
+        self.assertIsNotNone(run)
+        approval = approval_service.request_approval(
+            run_id=run.run_id,
+            tool_name="write_marker",
+            permission="write_file",
+            risk_level="high",
+            payload={"arguments": {"path": "marker.txt"}},
+        )
+        approval_service.decide(approval.approval_id, "denied", "no", "crash-denied-key")
+        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("deny_tool",))
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(run_store.get(run.run_id).status, "resuming")
+        self.assertEqual(run_store.get_resume_command_by_key("resume:crash-denied-key").status, "processing")
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(f"/runs/{run.run_id}/resume")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_store.get_resume_command_by_key("resume:crash-denied-key").status, "applied")
+        self.assertEqual(runtime.get_task(task.task_id).status, "failed")
+        self.assertEqual(run_store.get(run.run_id).status, "failed")
+
+    def test_approval_denial_endpoint_marks_task_and_run_failed(self) -> None:
+        """校验拒绝审批会收束任务和运行到失败态。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果拒绝审批后状态仍悬挂或恢复命令未应用。
+
+        副作用:
+            创建审批请求，并通过 API 写入 denied 决策。
+        """
+
+        from fastapi.testclient import TestClient
+
+        from app.api.app import create_app
+
+        runtime, run_store, approval_service = self._build_runtime_with_approvals()
+        task = runtime.create_task("denied approval api")
+        run = run_store.get_by_task(task.task_id)
+        self.assertIsNotNone(run)
+        approval = approval_service.request_approval(
+            run_id=run.run_id,
+            tool_name="write_marker",
+            permission="write_file",
+            risk_level="high",
+            payload={"arguments": {"path": "marker.txt"}},
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(
+            f"/approvals/{approval.approval_id}/decision",
+            json={"decision": "denied", "reason": "no", "idempotency_key": "api-denied-key"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_store.get_resume_command_by_key("resume:api-denied-key").status, "applied")
+        self.assertEqual(runtime.get_task(task.task_id).status, "failed")
+        self.assertEqual(run_store.get(run.run_id).status, "failed")
+
+    def test_resume_command_not_applied_when_finalize_fails(self) -> None:
+        """校验状态收束失败时恢复命令不会提前标记为 applied。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果 finalize 失败后命令被标记为 applied 或状态被错误推进。
+
+        副作用:
+            创建审批恢复命令，并临时注入一次 run 状态更新失败。
+        """
+
+        runtime, run_store, approval_service = self._build_runtime_with_approvals()
+        task = runtime.create_task("finalize failure api")
+        run = run_store.get_by_task(task.task_id)
+        self.assertIsNotNone(run)
+        approval = approval_service.request_approval(
+            run_id=run.run_id,
+            tool_name="write_marker",
+            permission="write_file",
+            risk_level="high",
+            payload={"arguments": {"path": "marker.txt"}},
+        )
+        approval_service.decide(approval.approval_id, "approved", "ok", "finalize-fail-key")
+        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("approve_tool",))
+        self.assertEqual(len(claimed), 1)
+        original_mark_status = run_store.mark_status
+
+        def fail_terminal_once(run_id, status, **kwargs):
+            """在终态收束时模拟一次数据库写入失败。
+
+            参数:
+                run_id: 被更新的运行标识符。
+                status: 目标运行状态。
+                kwargs: 透传给原始 mark_status 的可选状态参数。
+
+            返回:
+                原始 mark_status 的返回值。
+
+            异常:
+                RuntimeError: 当首次进入 terminal 状态时抛出。
+
+            副作用:
+                首次 terminal 更新失败；其他状态更新走原始实现。
+            """
+
+            if status in {"completed", "failed", "cancelled"}:
+                raise RuntimeError("injected finalize failure")
+            return original_mark_status(run_id, status, **kwargs)
+
+        run_store.mark_status = fail_terminal_once
+        try:
+            runtime.resume_run(run.run_id)
+        finally:
+            run_store.mark_status = original_mark_status
+
+        self.assertEqual(run_store.get_resume_command_by_key("resume:finalize-fail-key").status, "pending")
+        self.assertEqual(runtime.get_task(task.task_id).status, "pending")
+        self.assertEqual(run_store.get(run.run_id).status, "resuming")
+
+        runtime.resume_run(run.run_id)
+
+        self.assertEqual(run_store.get_resume_command_by_key("resume:finalize-fail-key").status, "applied")
+        self.assertEqual(runtime.get_task(task.task_id).status, "completed")
+        self.assertEqual(run_store.get(run.run_id).status, "completed")
+
     def _build_client(self):
         """为后端应用构建 FastAPI TestClient。
 
@@ -204,6 +500,59 @@ class BackendApiTests(unittest.TestCase):
             ),
             logger=logger,
         )
+
+    def _build_runtime_with_approvals(self) -> tuple[AgentRuntime, DurableRunStore, ApprovalService]:
+        """为 API 审批测试构建带 Durable Run State 的运行时。
+
+        参数:
+            无。
+
+        返回:
+            AgentRuntime、DurableRunStore 和 ApprovalService。
+
+        异常:
+            无。
+
+        副作用:
+            创建临时目录、SQLite 数据库和进程内运行时依赖。
+        """
+
+        temp_dir = tempfile.TemporaryDirectory()
+        self._temp_dirs.append(temp_dir)
+        project_root = Path(temp_dir.name)
+        database = project_root / "app.sqlite3"
+        logger = logging.getLogger(f"test-api-approval-{id(temp_dir)}")
+        logger.handlers = []
+        logger.addHandler(logging.NullHandler())
+        safe_tools = SafeReadTools(project_root)
+        registry = ToolRegistry(safe_tools.definitions())
+        run_store = DurableRunStore(database, logger)
+        approval_service = ApprovalService(
+            approval_store=ApprovalStore(database),
+            run_store=run_store,
+            resume_dispatcher=ResumeDispatcher(run_store, logger),
+            logger=logger,
+        )
+        runtime = AgentRuntime(
+            settings=BackendSettings(
+                project_root=project_root,
+                log_file=project_root / "app.log",
+                database_file=database,
+            ),
+            task_store=SQLiteTaskStore(database),
+            context_builder=TextContextBuilder(),
+            model_adapter=EchoStreamingModelAdapter(),
+            tool_scheduler=ToolScheduler(
+                registry=registry,
+                allowed_permissions=("safe_read",),
+                logger=logger,
+            ),
+            logger=logger,
+            run_store=run_store,
+            approval_service=approval_service,
+            recovery_manager=RecoveryManager(run_store, logger),
+        )
+        return runtime, run_store, approval_service
 
 
 if __name__ == "__main__":

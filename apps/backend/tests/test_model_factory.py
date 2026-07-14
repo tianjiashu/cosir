@@ -30,7 +30,9 @@ class ModelFactoryTests(unittest.TestCase):
             临时清除模型服务商的环境变量覆盖。
         """
 
-        with patch.dict("os.environ", {}, clear=True):
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "app.config.settings.dotenv_values", return_value={}
+        ):
             settings = default_settings()
 
         self.assertEqual(settings.model_provider, "echo")
