@@ -11,7 +11,7 @@ class EventType(str, Enum):
     """运行时事件类型枚举。
 
     枚举成员的值即为 SSE ``event:`` 字段与持久化存储中的字符串，
-    因此可直接当作 ``str`` 使用，避免散落的字符串字面量产生拼写漂移。
+    ``str(event_type)`` 会返回该稳定值，避免散落的字符串字面量产生拼写漂移。
     """
 
     RUN_STARTED = "run_started"
@@ -28,6 +28,24 @@ class EventType(str, Enum):
     CHECKPOINT_CREATED = "checkpoint_created"
     CHECKPOINT_FAILED = "checkpoint_failed"
     FINAL_RESPONSE = "final_response"
+
+    def __str__(self) -> str:
+        """返回事件类型的稳定字符串值。
+
+        参数:
+            无。
+
+        返回:
+            可用于 SSE、日志与持久化边界的事件类型字面量。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return self.value
 
 
 @dataclass(frozen=True)

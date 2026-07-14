@@ -1,50 +1,186 @@
 /**
- * 后端进程状态 Hook（第一版占位）。
+ * 本地后端托管 Hook。
  *
- * 第一版 Python 后端需手动启动，此 Hook 预留接口，
- * 后续对接 Tauri sidecar / commands.rs 的进程管理命令。
+ * 负责编排桌面端对 Tauri 后端托管命令的调用，
+ * 并把结构化状态回写到 Zustand Store。
  *
  * @module hooks/useBackend
  */
 
-import { useState, useCallback } from "react";
-import { logInfo } from "../lib/logger";
+import { useCallback } from "react";
+import type { BackendLogsTailResponse, BackendStatusResponse } from "@shared/backend";
+import {
+  getBackendStatus,
+  restartBackend,
+  startBackend,
+  stopBackend,
+  tailBackendLogs,
+} from "../services/backend";
+import { logError, logInfo } from "../lib/logger";
+import { useBackendStore } from "../stores/backendStore";
 
-/** 后端进程状态枚举。 */
-export type BackendStatus = "unknown" | "running" | "stopped" | "error";
-
-/**
- * 后端进程状态 Hook 返回值。
- */
+/** 本地后端托管 Hook 返回值。 */
 interface UseBackendReturn {
-  /** 当前后端进程状态。 */
-  status: BackendStatus;
-  /** 探活后端（预留）。 */
-  checkHealth: () => Promise<void>;
+  /** 当前后端生命周期状态。 */
+  status: ReturnType<typeof useBackendStore.getState>["status"];
+  /** 最近一次完整状态快照。 */
+  snapshot: BackendStatusResponse | null;
+  /** 当前是否有命令执行中。 */
+  isBusy: boolean;
+  /** 最近一次 IPC transport 错误。 */
+  transportError: string | null;
+  /** 刷新当前后端状态。 */
+  refreshStatus: () => Promise<BackendStatusResponse>;
+  /** 确保本地后端处于运行状态。 */
+  ensureRunning: () => Promise<BackendStatusResponse>;
+  /** 主动启动本地后端。 */
+  start: () => Promise<BackendStatusResponse>;
+  /** 主动停止本地后端。 */
+  stop: () => Promise<BackendStatusResponse>;
+  /** 主动重启本地后端。 */
+  restart: () => Promise<BackendStatusResponse>;
+  /** 读取本地后端日志尾部。 */
+  tailLogs: (maxLines?: number) => Promise<BackendLogsTailResponse>;
 }
 
 /**
- * 后端进程状态 Hook。
+ * 本地后端托管 Hook。
  *
- * 第一版返回 "unknown" 状态，不执行实际探活。
- * 后续接入 Tauri IPC 命令实现真实的启动/停止/探活。
- *
- * @returns 后端状态和操作方法。
+ * @returns 当前后端状态和操作方法。
  */
 export function useBackend(): UseBackendReturn {
-  const [status, setStatus] = useState<BackendStatus>("unknown");
+  const status = useBackendStore((state) => state.status);
+  const snapshot = useBackendStore((state) => state.snapshot);
+  const isBusy = useBackendStore((state) => state.isBusy);
+  const transportError = useBackendStore((state) => state.transportError);
+  const applySnapshot = useBackendStore((state) => state.applySnapshot);
+  const setBusy = useBackendStore((state) => state.setBusy);
+  const setStatus = useBackendStore((state) => state.setStatus);
+  const setTransportError = useBackendStore((state) => state.setTransportError);
 
   /**
-   * 探活后端进程（占位实现）。
+   * 执行一次标准化命令调用并同步 Store。
    *
-   * TODO: 对接 commands.rs::check_backend_health
-   * TODO: 经 Tauri invoke 调用 Rust 侧探活逻辑
+   * @param nextStatus - 命令开始前预设的过渡状态。
+   * @param commandName - 仅用于日志的命令名。
+   * @param action - 实际命令调用。
+   * @returns 命令返回的最新快照。
+   * @throws 命令调用失败时继续向上抛出。
    */
-  const checkHealth = useCallback(async (): Promise<void> => {
-    // 第一版占位：手动确认后端已启动
-    logInfo("checkHealth: 第一版为占位实现", { module: "useBackend" });
-    setStatus("unknown");
+  const runCommand = useCallback(
+    async (
+      nextStatus: BackendStatusResponse["status"],
+      commandName: string,
+      action: () => Promise<BackendStatusResponse>,
+    ): Promise<BackendStatusResponse> => {
+      setBusy(true);
+      setTransportError(null);
+      setStatus(nextStatus);
+
+      try {
+        const result = await action();
+        applySnapshot(result);
+        logInfo(`本地后端命令执行完成: ${commandName}`, {
+          module: "useBackend",
+          commandName,
+          status: result.status,
+          managed: result.managed,
+          pid: result.pid,
+        });
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setTransportError(message);
+        setStatus("failed");
+        logError(`本地后端命令执行失败: ${commandName}`, error, {
+          module: "useBackend",
+          commandName,
+        });
+        throw error;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [applySnapshot, setBusy, setStatus, setTransportError],
+  );
+
+  /**
+   * 刷新当前后端状态。
+   *
+   * @returns 最新状态快照。
+   */
+  const refreshStatus = useCallback(async (): Promise<BackendStatusResponse> => {
+    return runCommand(status === "running" ? "running" : "starting", "backend_status", getBackendStatus);
+  }, [runCommand, status]);
+
+  /**
+   * 主动启动本地后端。
+   *
+   * @returns 启动后的状态快照。
+   */
+  const start = useCallback(async (): Promise<BackendStatusResponse> => {
+    return runCommand("starting", "backend_start", startBackend);
+  }, [runCommand]);
+
+  /**
+   * 主动停止本地后端。
+   *
+   * @returns 停止后的状态快照。
+   */
+  const stop = useCallback(async (): Promise<BackendStatusResponse> => {
+    return runCommand("stopping", "backend_stop", stopBackend);
+  }, [runCommand]);
+
+  /**
+   * 主动重启本地后端。
+   *
+   * @returns 重启后的状态快照。
+   */
+  const restart = useCallback(async (): Promise<BackendStatusResponse> => {
+    return runCommand("restarting", "backend_restart", restartBackend);
+  }, [runCommand]);
+
+  /**
+   * 确保后端处于运行状态。
+   *
+   * @returns 运行中或启动后的状态快照。
+   */
+  const ensureRunning = useCallback(async (): Promise<BackendStatusResponse> => {
+    const current = await refreshStatus();
+    if (current.status === "running") {
+      return current;
+    }
+    return start();
+  }, [refreshStatus, start]);
+
+  /**
+   * 读取本地后端日志尾部。
+   *
+   * @param maxLines - 每个日志文件最多返回的尾部行数。
+   * @returns 日志尾部片段。
+   */
+  const tailLogs = useCallback(async (maxLines = 80): Promise<BackendLogsTailResponse> => {
+    try {
+      return await tailBackendLogs(maxLines);
+    } catch (error) {
+      logError("读取本地后端日志尾部失败", error, {
+        module: "useBackend",
+        maxLines,
+      });
+      throw error;
+    }
   }, []);
 
-  return { status, checkHealth };
+  return {
+    status,
+    snapshot,
+    isBusy,
+    transportError,
+    refreshStatus,
+    ensureRunning,
+    start,
+    stop,
+    restart,
+    tailLogs,
+  };
 }

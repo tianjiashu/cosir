@@ -45,17 +45,49 @@ fi
 # 清理可能残留的 PID 文件
 rm -f "${BACKEND_PID_FILE}" "${FRONTEND_PID_FILE}"
 
-# 启动前检查端口占用，避免后端/前端启动即退出却无提示
-check_port() {
+# 启动前检查并清理端口占用：若端口被占用，自动结束占用进程并打印，
+# 避免后端/前端启动即退出却无提示，也省去手动排查的麻烦。
+free_port() {
   local port="$1"
+  local pids
+  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN -n -P 2>/dev/null)"
+  if [ -z "${pids}" ]; then
+    return 0
+  fi
+  echo "[dev] 端口 ${port} 已被占用，占用进程如下，正在清理:"
+  # 打印占用进程详情，便于排查误杀
+  lsof -iTCP:"${port}" -sTCP:LISTEN -n -P 2>/dev/null | sed 's/^/[dev]   /'
+  # 先逐个发送 SIGTERM 优雅终止
+  for pid in ${pids}; do
+    echo "[dev]   终止进程 PID=${pid}"
+    kill "${pid}" 2>/dev/null || true
+  done
+  # 等待端口释放（最多 5 秒）
+  local waited=0
+  while lsof -iTCP:"${port}" -sTCP:LISTEN -n -P >/dev/null 2>&1; do
+    [ "${waited}" -ge 5 ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  # 仍未释放则强制 SIGKILL
+  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN -n -P 2>/dev/null)"
+  if [ -n "${pids}" ]; then
+    echo "[dev] 端口 ${port} 5 秒内未释放，尝试强制终止..."
+    for pid in ${pids}; do
+      echo "[dev]   强制终止 PID=${pid} (SIGKILL)"
+      kill -9 "${pid}" 2>/dev/null || true
+    done
+    sleep 1
+  fi
   if lsof -iTCP:"${port}" -sTCP:LISTEN -n -P >/dev/null 2>&1; then
-    echo "[dev] 错误: 端口 ${port} 已被占用，请先停止占用进程。" >&2
-    echo "[dev] 排查: lsof -iTCP:${port} -sTCP:LISTEN" >&2
+    echo "[dev] 错误: 端口 ${port} 仍被占用，无法清理，请手动处理:" >&2
+    echo "[dev]   lsof -iTCP:${port} -sTCP:LISTEN" >&2
     return 1
   fi
+  echo "[dev] 端口 ${port} 已清理，可继续启动。"
   return 0
 }
-if ! check_port 8000 || ! check_port 1420; then
+if ! free_port 8000 || ! free_port 1420; then
   exit 1
 fi
 

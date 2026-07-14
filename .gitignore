@@ -15,6 +15,8 @@ storage/*.sqlite3-wal
 
 # 本地 Agent 项目数据（非缓存，但属本地运行产物，不提交）
 .codebuddy/
+apps/backend/.env
+apps/backend/.env.local
 
 # CodeGraph 索引缓存
 .codegraph/

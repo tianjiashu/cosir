@@ -255,7 +255,11 @@ class OpenAIStreamParserTests(unittest.TestCase):
         """
 
         payload = _build_request_payload(
-            "test-model",
+            OpenAICompatibleModelConfig(
+                base_url="https://example.invalid/v1",
+                api_key_env="TEST_KEY",
+                model="test-model",
+            ),
             [RuntimeMessage(role="user", content_text="read note")],
             [
                 ModelToolDefinition(
@@ -271,6 +275,62 @@ class OpenAIStreamParserTests(unittest.TestCase):
         self.assertEqual(payload["tool_choice"], "auto")
         self.assertFalse(payload["parallel_tool_calls"])
         self.assertEqual(payload["tools"][0]["function"]["name"], "read_file")
+
+    def test_request_payload_disables_deepseek_thinking_by_default(self) -> None:
+        """校验 DeepSeek 请求会显式关闭 thinking 模式。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果 payload 未带 thinking=disabled。
+
+        副作用:
+            无。
+        """
+
+        payload = _build_request_payload(
+            OpenAICompatibleModelConfig(
+                base_url="https://api.deepseek.com",
+                api_key_env="TEST_KEY",
+                model="deepseek-v4-flash",
+            ),
+            [RuntimeMessage(role="user", content_text="hello")],
+            None,
+        )
+
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+
+    def test_request_payload_omits_thinking_for_non_deepseek_provider(self) -> None:
+        """校验非 DeepSeek 端点不会收到供应商私有的 thinking 字段。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果 payload 为通用兼容端点错误地附带了 thinking。
+
+        副作用:
+            无。
+        """
+
+        payload = _build_request_payload(
+            OpenAICompatibleModelConfig(
+                base_url="https://example.invalid/v1",
+                api_key_env="TEST_KEY",
+                model="test-model",
+            ),
+            [RuntimeMessage(role="user", content_text="hello")],
+            None,
+        )
+
+        self.assertNotIn("thinking", payload)
 
     def test_parallel_tool_calls_are_rejected(self) -> None:
         """校验第一版解析器会拒绝并发的服务商工具调用。
@@ -340,7 +400,11 @@ class OpenAIStreamParserTests(unittest.TestCase):
         """
 
         payload = _build_request_payload(
-            "test-model",
+            OpenAICompatibleModelConfig(
+                base_url="https://example.invalid/v1",
+                api_key_env="TEST_KEY",
+                model="test-model",
+            ),
             [
                 RuntimeMessage(role="user", content_text="read note"),
                 RuntimeMessage(
@@ -391,7 +455,11 @@ class OpenAIStreamParserTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "tool_call_id"):
             _build_request_payload(
-                "test-model",
+                OpenAICompatibleModelConfig(
+                    base_url="https://example.invalid/v1",
+                    api_key_env="TEST_KEY",
+                    model="test-model",
+                ),
                 [RuntimeMessage(role="tool", content_text="orphan observation")],
                 [],
             )

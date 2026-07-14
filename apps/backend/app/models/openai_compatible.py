@@ -17,6 +17,7 @@ class OpenAICompatibleModelConfig:
         base_url: 基础 API 地址，例如 ``https://api.deepseek.com``。
         api_key_env: 存放 API Key 的环境变量名。
         model: 服务商模型标识符。
+        thinking_mode: DeepSeek thinking 模式开关，当前为 ``enabled`` 或 ``disabled``。
         timeout_seconds: 模型请求的 HTTP 超时时间。
 
     返回:
@@ -32,6 +33,7 @@ class OpenAICompatibleModelConfig:
     base_url: str
     api_key_env: str
     model: str
+    thinking_mode: str = "disabled"
     timeout_seconds: float = 60.0
 
 
@@ -89,7 +91,7 @@ class OpenAICompatibleStreamingAdapter:
             raise RuntimeError("httpx is required for OpenAI-compatible streaming") from exc
 
         url = f"{self._config.base_url.rstrip('/')}/chat/completions"
-        request_payload = _build_request_payload(self._config.model, messages, tools)
+        request_payload = _build_request_payload(self._config, messages, tools)
         headers = {"Authorization": f"Bearer {api_key}"}
         state = OpenAIStreamState()
 
@@ -154,14 +156,14 @@ def _to_provider_message(message: RuntimeMessage) -> Dict[str, Any]:
 
 
 def _build_request_payload(
-    model: str,
+    config: OpenAICompatibleModelConfig,
     messages: List[RuntimeMessage],
     tools: Optional[List[ModelToolDefinition]],
 ) -> dict:
     """构建 OpenAI 兼容的聊天补全请求载荷。
 
     参数:
-        model: 服务商模型标识符。
+        config: 服务商模型配置。
         messages: 发送给服务商的运行时消息。
         tools: 模型可用的、可选的面向模型的工具定义。
 
@@ -176,15 +178,42 @@ def _build_request_payload(
     """
 
     payload = {
-        "model": model,
+        "model": config.model,
         "messages": [_to_provider_message(message) for message in messages],
         "stream": True,
     }
+    thinking_payload = _build_deepseek_thinking_payload(config)
+    if thinking_payload is not None:
+        payload["thinking"] = thinking_payload
     if tools:
         payload["tools"] = [_to_provider_tool(tool) for tool in tools]
         payload["tool_choice"] = "auto"
         payload["parallel_tool_calls"] = False
     return payload
+
+
+def _build_deepseek_thinking_payload(
+    config: OpenAICompatibleModelConfig,
+) -> Optional[Dict[str, str]]:
+    """为 DeepSeek 兼容端点构建 thinking 控制参数。
+
+    参数:
+        config: 当前模型服务商配置。
+
+    返回:
+        当目标端点属于 DeepSeek 时返回 ``{"type": ...}``；
+        其他 OpenAI 兼容端点返回 ``None``，避免发送供应商私有字段。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if "deepseek.com" not in config.base_url:
+        return None
+    return {"type": config.thinking_mode}
 
 
 def _to_provider_tool(tool: ModelToolDefinition) -> Dict[str, dict]:

@@ -55,5 +55,6 @@ def build_openai_compatible_adapter(
             base_url=settings.model_base_url,
             api_key_env=settings.model_api_key_env,
             model=settings.model_name,
+            thinking_mode=settings.model_thinking_mode,
         )
     )

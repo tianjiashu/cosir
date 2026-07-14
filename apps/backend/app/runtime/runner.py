@@ -1,6 +1,7 @@
 """协调任务生命周期与工作流执行。"""
 
 import logging
+import os
 from typing import AsyncIterator, Optional
 
 from app.agents.profile import AgentProfile, default_developer_agent
@@ -272,6 +273,33 @@ class AgentRuntime:
         """
 
         return self._task_store.get_task(task_id)
+
+    def backend_health(self) -> dict:
+        """返回后端模型配置与可用性摘要。
+
+        参数:
+            无。
+
+        返回:
+            不含 secret 原文的后端健康状态字典，包含 provider、model、base_url、
+            API Key 是否已配置等信息。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return {
+            "status": "ok",
+            "model_provider": self._settings.model_provider,
+            "model_base_url": self._settings.model_base_url,
+            "model_name": self._settings.model_name,
+            "model_thinking_mode": self._settings.model_thinking_mode,
+            "model_api_key_env": self._settings.model_api_key_env,
+            "has_model_api_key": bool(os.environ.get(self._settings.model_api_key_env)),
+        }
 
     def _resolve_task_agent_profile(self, task: TaskRecord) -> Optional[AgentProfile]:
         """返回被允许执行该任务的 Agent 档案。

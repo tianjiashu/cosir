@@ -12,6 +12,8 @@ export const API_BASE = "/api";
 
 /** 任务相关 API 路径常量，与后端路由一一对应。 */
 export const API_PATHS = {
+  /** GET — 后端健康状态与当前模型配置 */
+  HEALTH: "/health",
   /** POST — 创建任务 */
   TASKS: "/tasks",
   /** GET — 查询任务状态（含 task_id 参数） */
@@ -37,6 +39,24 @@ export interface CreateTaskRequest {
 }
 
 // ---------- 响应类型 ----------
+
+/** 后端健康状态响应。 */
+export interface BackendHealthResponse {
+  /** 后端服务状态。 */
+  status: string;
+  /** 当前有效的模型服务商。 */
+  model_provider: string;
+  /** 当前模型 API base URL。 */
+  model_base_url: string;
+  /** 当前模型名。 */
+  model_name: string;
+  /** 当前 thinking 模式。 */
+  model_thinking_mode: string;
+  /** 当前读取 API Key 的环境变量名。 */
+  model_api_key_env: string;
+  /** 当前进程里是否已经拿到 API Key。 */
+  has_model_api_key: boolean;
+}
 
 /** 创建任务 / 查询任务 的响应体（即 TaskRecord）。 */
 export type TaskResponse = import("./task").TaskRecord;

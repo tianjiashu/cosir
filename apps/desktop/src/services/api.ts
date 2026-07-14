@@ -15,7 +15,7 @@
 
 import type { RuntimeEvent } from "@shared/events";
 import type { TaskRecord, CheckpointRecord } from "@shared/task";
-import type { CreateTaskRequest } from "@shared/api";
+import type { BackendHealthResponse, CreateTaskRequest } from "@shared/api";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
 import { logError, logWarn } from "../lib/logger";
@@ -194,4 +194,14 @@ export async function getTaskCheckpoints(taskId: string): Promise<CheckpointReco
  */
 export async function cancelTask(taskId: string): Promise<TaskRecord> {
   return post<TaskRecord>(API_PATHS.TASK_CANCEL(taskId), {}, taskId);
+}
+
+/**
+ * 获取后端健康状态与当前模型配置。
+ *
+ * @returns 后端健康状态摘要。
+ * @throws {ServiceError} 当后端不可达或返回异常状态时抛出。
+ */
+export async function getBackendHealth(): Promise<BackendHealthResponse> {
+  return get<BackendHealthResponse>(API_PATHS.HEALTH);
 }

@@ -103,6 +103,25 @@ def create_app(runtime: AgentRuntime = None):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return task.to_dict()
 
+    @app.get("/health")
+    async def get_health() -> dict:
+        """返回后端健康状态与当前模型配置摘要。
+
+        参数:
+            无。
+
+        返回:
+            不含 secret 原文的健康状态字典。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return runtime.backend_health()
+
     @app.get("/tasks/{task_id}")
     async def get_task(task_id: str) -> dict:
         """返回任务状态。

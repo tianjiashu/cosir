@@ -34,6 +34,29 @@ class ModelFactoryTests(unittest.TestCase):
             settings = default_settings()
 
         self.assertEqual(settings.model_provider, "echo")
+        self.assertEqual(settings.model_base_url, "https://api.deepseek.com")
+
+    def test_default_settings_switch_to_openai_provider_when_key_exists(self) -> None:
+        """校验只要存在 API Key，默认服务商会切到 OpenAI 兼容模型。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果有 Key 时默认仍停留在 echo。
+
+        副作用:
+            临时打补丁修改进程环境变量。
+        """
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}, clear=True):
+            settings = default_settings()
+
+        self.assertEqual(settings.model_provider, "openai-compatible")
+        self.assertEqual(settings.model_thinking_mode, "disabled")
 
     def test_environment_can_select_openai_compatible_provider(self) -> None:
         """校验环境变量覆盖可以选择 OpenAI 兼容模型。
@@ -70,6 +93,7 @@ class ModelFactoryTests(unittest.TestCase):
         self.assertEqual(settings.model_name, "custom-model")
         self.assertEqual(settings.model_base_url, "https://example.test/v1")
         self.assertEqual(settings.model_api_key_env, "CUSTOM_KEY")
+        self.assertEqual(settings.model_thinking_mode, "disabled")
         self.assertEqual(settings.max_steps, 5)
         self.assertEqual(settings.tool_error_limit, 2)
         self.assertEqual(settings.max_context_chars, 1234)

@@ -18,6 +18,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { ChatPanel } from "@/components/layout/ChatPanel";
 import { RightPanel } from "@/components/layout/RightPanel";
 import { InputBar } from "@/components/layout/InputBar";
+import { useBackendBootstrap } from "@/hooks/useBackendBootstrap";
 
 /**
  * App 根组件。
@@ -32,6 +33,8 @@ import { InputBar } from "@/components/layout/InputBar";
  * - 左侧 ~240px，右侧 ~280px，中央弹性
  */
 export default function App() {
+  useBackendBootstrap();
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       {/* 顶部任务栏 */}

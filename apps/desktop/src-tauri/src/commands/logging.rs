@@ -1,20 +1,10 @@
-//! IPC 命令定义。
-//!
-//! 包含：
-//! - greet：示例命令（开发期验证 IPC 通道用）
-//! - log_write：前端统一日志出口（经此写入应用日志目录下的 desktop.log）
+//! 前端日志落盘命令。
 
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use tauri::Manager;
-
-/// 示例问候命令（开发期验证 IPC 通道用）。
-#[tauri::command]
-pub fn greet(name: &str) -> String {
-    format!("你好, {}! 欢迎使用 Coding Agent。", name)
-}
 
 /// 日志条目结构（从前端传入）。
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -34,30 +24,35 @@ pub struct LogEntry {
     pub stack: Option<String>,
 }
 
-/**
- * 将前端日志条目追加写入 logs/desktop.log。
- *
- * 每次调用以 append 模式打开文件，写入格式化后的日志行。
- * 文件不存在时自动创建；目录不存在时创建目录树。
- */
+/// 将前端日志条目追加写入 `desktop.log`。
+///
+/// 参数:
+///     app: Tauri 应用句柄，用于解析平台日志目录。
+///     entry: 由前端传入的结构化日志条目。
+///
+/// 返回:
+///     成功时返回 `Ok(())`。
+///
+/// 异常:
+///     当日志目录解析、文件打开或写入失败时，返回错误字符串。
+///
+/// 副作用:
+///     创建日志目录并向 `desktop.log` 追加写入一条或多条日志。
 #[tauri::command]
 pub fn log_write(app: tauri::AppHandle, entry: LogEntry) -> Result<(), String> {
     let app_dir = get_log_dir(&app)?;
     let log_path = app_dir.join("desktop.log");
 
-    // 确保父目录存在
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("无法创建日志目录: {e}"))?;
     }
 
-    // 防止超大消息撑爆日志文件（截断到 8KB；调用方须确保不传入 secret）
     let message = if entry.message.len() > 8192 {
         format!("{}…(已截断)", &entry.message[..8192])
     } else {
         entry.message.clone()
     };
 
-    // 格式化日志行：[timestamp] [LEVEL] message
     let line = format!(
         "[{}] [{}] {}\n",
         entry.timestamp,
@@ -65,7 +60,6 @@ pub fn log_write(app: tauri::AppHandle, entry: LogEntry) -> Result<(), String> {
         message
     );
 
-    // 追加写入
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -75,7 +69,6 @@ pub fn log_write(app: tauri::AppHandle, entry: LogEntry) -> Result<(), String> {
     file.write_all(line.as_bytes())
         .map_err(|e| format!("写入日志失败: {e}"))?;
 
-    // 如果有堆栈信息，额外缩进写入
     if let Some(ref stack) = entry.stack {
         let stack_line = format!("  堆栈:\n{}\n", stack);
         file.write_all(stack_line.as_bytes())
@@ -85,14 +78,19 @@ pub fn log_write(app: tauri::AppHandle, entry: LogEntry) -> Result<(), String> {
     Ok(())
 }
 
-/**
- * 获取应用日志目录路径。
- *
- * 使用 Tauri 提供的 `app.path().app_log_dir()` 解析系统级应用日志目录
- * （例如 macOS 的 `~/Library/Logs/<bundle_id>`）。路径由 Tauri 依据打包
- * 信息与平台规则确定，开发与生产环境一致、可预测，且不依赖当前工作目录，
- * 避免在 `src-tauri` 内写入触发 dev 重新编译。
- */
+/// 获取应用日志目录路径。
+///
+/// 参数:
+///     app: Tauri 应用句柄。
+///
+/// 返回:
+///     平台规范下的应用日志目录路径。
+///
+/// 异常:
+///     当 Tauri 无法解析日志目录时，返回错误字符串。
+///
+/// 副作用:
+///     无。
 pub(crate) fn get_log_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_log_dir()

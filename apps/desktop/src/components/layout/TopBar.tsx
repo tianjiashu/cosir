@@ -12,6 +12,7 @@
 
 import type { ComponentType } from "react";
 import { useTaskStore, selectActiveTask, selectActiveTaskStatus } from "@/stores/taskStore";
+import { useBackendStore, selectBackendSnapshot, selectBackendStatus } from "@/stores/backendStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,9 +43,19 @@ const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secon
 export function TopBar() {
   const activeTask = useTaskStore(selectActiveTask);
   const status = useTaskStore(selectActiveTaskStatus);
+  const backendStatus = useBackendStore(selectBackendStatus);
+  const backendSnapshot = useBackendStore(selectBackendSnapshot);
 
   const config = status ? STATUS_CONFIG[status] ?? STATUS_CONFIG.pending : null;
   const StatusIcon = config?.Icon ?? GitBranch;
+  const backendBadge = {
+    running: { label: "后端运行中", variant: "success" as const },
+    starting: { label: "后端启动中", variant: "warning" as const },
+    stopping: { label: "后端停止中", variant: "secondary" as const },
+    restarting: { label: "后端重启中", variant: "warning" as const },
+    failed: { label: "后端异常", variant: "destructive" as const },
+    stopped: { label: "后端未启动", variant: "outline" as const },
+  }[backendStatus];
 
   return (
     <header className="flex h-12 items-center gap-3 border-b border-border bg-background px-4">
@@ -57,12 +68,22 @@ export function TopBar() {
       </div>
 
       {/* 运行状态标签 */}
-      {config && (
-        <Badge variant={config.variant} className="gap-1 shrink-0">
-          <StatusIcon className={config.label === "处理中" ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
-          {config.label}
+      <div className="flex items-center gap-2 shrink-0">
+        {config && (
+          <Badge variant={config.variant} className="gap-1 shrink-0">
+            <StatusIcon className={config.label === "处理中" ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
+            {config.label}
+          </Badge>
+        )}
+        <Badge variant={backendBadge.variant} className="shrink-0">
+          {backendBadge.label}
         </Badge>
-      )}
+        {backendSnapshot?.health?.modelName ? (
+          <span className="hidden text-xs text-muted-foreground md:inline">
+            {backendSnapshot.health.modelProvider} / {backendSnapshot.health.modelName}
+          </span>
+        ) : null}
+      </div>
 
       {/* 右侧操作区（占位） */}
       <div className="flex items-center gap-1 shrink-0">

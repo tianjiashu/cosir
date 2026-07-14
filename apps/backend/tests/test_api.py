@@ -81,6 +81,31 @@ class BackendApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_health_reports_backend_model_configuration(self) -> None:
+        """校验健康检查端点会暴露当前模型配置摘要。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果健康状态缺少 provider 或 Key 配置摘要。
+
+        副作用:
+            创建一个进程内的 FastAPI 测试客户端。
+        """
+
+        client = self._build_client()
+        response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["model_provider"], "echo")
+        self.assertFalse(payload["has_model_api_key"])
+
     def test_task_stream_emits_sse_and_does_not_rerun_completed_task(self) -> None:
         """校验任务流会发出 SSE，且重复读取流会重放事件。
 
