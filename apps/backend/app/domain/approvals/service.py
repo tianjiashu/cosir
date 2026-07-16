@@ -92,15 +92,20 @@ class ApprovalService:
             step_id=step_id,
             tool_call_id=tool_call_id,
         )
-        token = merge_log_context(
-            run_id=run_id,
-            approval_id=approval.approval_id,
-            tool_call_id=approval.tool_call_id,
-        )
+        token = merge_log_context(run_id=run_id)
         try:
             self._logger.info(
                 "approval_requested",
-                extra={"tool_name": tool_name, "permission": permission, "risk_level": risk_level},
+                extra={
+                    "msg": f"审批请求已创建，run_id={run_id}，tool={tool_name}",
+                    "data": {
+                        "tool_name": tool_name,
+                        "permission": permission,
+                        "risk_level": risk_level,
+                        "approval_id": approval.approval_id,
+                        "tool_call_id": approval.tool_call_id,
+                    },
+                },
             )
             self._record_approval_event(
                 approval,
@@ -153,9 +158,11 @@ class ApprovalService:
             self._logger.exception(
                 "langgraph_approval_interrupt_failed",
                 extra={
-                    "run_id": approval.run_id,
-                    "approval_id": approval.approval_id,
-                    "error": str(exc),
+                    "msg": f"为审批创建 LangGraph 等待点失败，run_id={approval.run_id}",
+                    "data": {
+                        "run_id": approval.run_id,
+                        "approval_id": approval.approval_id,
+                    },
                 },
             )
 
@@ -251,15 +258,19 @@ class ApprovalService:
             action=action,
             payload={"approval_id": approval_id, "decision": decision, "reason": reason},
         )
-        token = merge_log_context(
-            run_id=approval.run_id,
-            approval_id=approval_id,
-            tool_call_id=approval.tool_call_id,
-        )
+        token = merge_log_context(run_id=approval.run_id)
         try:
             self._logger.info(
                 "approval_decided",
-                extra={"decision": decision, "resume_command_id": command.command_id},
+                extra={
+                    "msg": f"审批决策已记录，decision={decision}，approval_id={approval_id}",
+                    "data": {
+                        "decision": decision,
+                        "approval_id": approval_id,
+                        "tool_call_id": approval.tool_call_id,
+                        "resume_command_id": command.command_id,
+                    },
+                },
             )
             self._record_approval_event(
                 approval,

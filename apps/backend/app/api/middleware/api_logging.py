@@ -1,5 +1,6 @@
 """FastAPI 请求日志 middleware。"""
 
+import json
 import logging
 import time
 
@@ -48,23 +49,18 @@ def install_request_logging(app, logger: logging.Logger) -> None:
 
         trace_id = _request_trace_id(request.headers.get("x-trace-id", ""))
         started_at = time.perf_counter()
-        path_ids = _extract_path_ids(request.url.path)
-        token = merge_log_context(
-            trace_id=trace_id,
-            task_id=path_ids["task_id"],
-            run_id=path_ids["run_id"],
-            approval_id=path_ids["approval_id"],
-        )
-        extra = await _request_log_extra(request, trace_id)
+        # 入口层仅绑定 trace_id（日志层唯一链路键）；实体 ID 经 extra 落入 data。
+        token = merge_log_context(trace_id=trace_id)
+        extra = await _request_log_extra(request)
         try:
             try:
-                logger.info("http_request_started", extra=extra)
+                logger.info("http_request_started", extra={**extra, "msg": "HTTP 请求开始"})
                 response = await call_next(request)
             except Exception:
                 duration_ms = _duration_ms(started_at)
                 logger.exception(
                     "http_unhandled_exception",
-                    extra={**extra, "duration_ms": duration_ms, "status_code": 500},
+                    extra={**extra, "duration_ms": duration_ms, "status_code": 500, "msg": "HTTP 请求处理未捕获异常"},
                 )
                 raise
             duration_ms = _duration_ms(started_at)
@@ -74,11 +70,11 @@ def install_request_logging(app, logger: logging.Logger) -> None:
             already_logged = getattr(request.state, "exception_logged", False)
             if not already_logged and response.status_code >= 400:
                 if response.status_code >= 500:
-                    logger.error("http_request_failed", extra=completed_extra)
+                    logger.error("http_request_failed", extra={**completed_extra, "msg": "HTTP 请求失败"})
                 else:
-                    logger.warning("http_request_failed", extra=completed_extra)
+                    logger.warning("http_request_failed", extra={**completed_extra, "msg": "HTTP 请求失败"})
             elif response.status_code < 400:
-                logger.info("http_request_finished", extra=completed_extra)
+                logger.info("http_request_finished", extra={**completed_extra, "msg": "HTTP 请求完成"})
             return response
         finally:
             reset_log_context(token)
@@ -117,9 +113,9 @@ def install_http_exception_logging(app, logger: logging.Logger) -> None:
             "detail": exc.detail,
         }
         if exc.status_code >= 500:
-            logger.error("http_exception", extra=extra)
+            logger.error("http_exception", extra={**extra, "msg": "HTTP 异常响应"})
         else:
-            logger.warning("http_exception", extra=extra)
+            logger.warning("http_exception", extra={**extra, "msg": "HTTP 异常响应"})
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
@@ -127,7 +123,7 @@ def install_http_exception_logging(app, logger: logging.Logger) -> None:
         )
 
 
-async def _request_log_extra(request, trace_id: str) -> dict:
+async def _request_log_extra(request) -> dict:
     """构造 HTTP 请求日志上下文字段。
 
     参数:
@@ -147,53 +143,65 @@ async def _request_log_extra(request, trace_id: str) -> dict:
 
     client = request.client.host if request.client is not None else ""
     path_ids = _extract_path_ids(request.url.path)
+    # 入口层仅绑定 trace_id（由 merge_log_context(trace_id=...) 完成，D4）；
+    # 从 path 提取的业务实体 ID 收敛进 data，不再作为独立链路键。
+    data: dict[str, object] = {}
+    if path_ids["task_id"]:
+        data["task_id"] = path_ids["task_id"]
+    if path_ids["run_id"]:
+        data["run_id"] = path_ids["run_id"]
+    if path_ids["approval_id"]:
+        data["approval_id"] = path_ids["approval_id"]
     extra = {
         "method": request.method,
         "path": request.url.path,
         "client_host": client,
-        "trace_id": trace_id,
-        "task_id": path_ids["task_id"],
-        "run_id": path_ids["run_id"],
-        "approval_id": path_ids["approval_id"],
+        "data": data,
     }
     query = request.url.query
     if query:
         extra["query"] = query
     if request.method != "GET":
-        body_text = await _request_body_text(request)
-        if body_text:
-            extra["body"] = body_text
+        body_value = await _request_body_value(request)
+        if body_value is not None:
+            # 解析为 dict 后写入 data.body，使脱敏能按 key 名递归遮蔽
+            # api_key/token/secret 等敏感字段（redact_value 对字符串只截断不扫描）。
+            data["body"] = body_value
     return extra
 
 
-async def _request_body_text(request) -> str:
-    """读取并记录 JSON 请求体的原始文本。
+async def _request_body_value(request) -> object | None:
+    """读取并解析 JSON 请求体，供结构化日志脱敏。
 
     仅处理 ``application/json`` 请求体；其他类型（表单、上传、流）不记录，
-    避免消耗大文件流或二进制内容。读取失败时返回空字符串。
+    避免消耗大文件流或二进制内容。读取或解析失败时返回 ``None``，
+    不记录原始文本，防止 body 内明文 secret 绕过脱敏落盘。
 
     参数:
         request: Starlette 请求对象。
 
     返回:
-        JSON 请求体文本；无 body 或读取失败时返回空字符串。
+        解析后的 JSON 值（通常为 dict）；无 body、读取失败或 JSON 解析失败时返回 ``None``。
 
     异常:
-        无。任何读取异常都会被静默吞掉。
+        无。任何读取或解析异常都会降级为返回 ``None``，不影响请求处理。
 
     副作用:
         读取并缓存请求体（Starlette 会缓存，下游仍可正常解析）。
     """
 
     if "application/json" not in request.headers.get("content-type", ""):
-        return ""
+        return None
     try:
         raw = await request.body()
     except Exception:
-        return ""
+        return None
     if not raw:
-        return ""
-    return raw.decode("utf-8", errors="replace")
+        return None
+    try:
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 def _duration_ms(started_at: float) -> int:

@@ -20,7 +20,7 @@ from app.core.runs.recovery import RecoveryManager
 from app.core.runs.resume import ResumeDispatcher
 from app.core.runs.store import DurableRunStore
 from app.core.runtime.runner import AgentRuntime
-from app.storage.sqlite import SQLiteTaskStore
+from app.storage.task_store import SQLiteTaskStore
 from app.storage.log_store import LogStore
 from app.storage.trace_store import TraceStore
 from app.tools.execution.policy import ToolExecutionPolicy
@@ -123,7 +123,13 @@ def build_runtime() -> AgentRuntime:
             graph_factory=build_run_lifecycle_graph,
         )
     except (LangGraphCheckpointerUnavailable, RuntimeError, OSError) as exc:
-        logger.warning("langgraph_runtime_unavailable", extra={"error": str(exc)})
+        logger.warning(
+            "langgraph_runtime_unavailable",
+            extra={
+                "msg": "LangGraph 运行时不可用，已降级为无 checkpoint 模式",
+                "data": {"error": str(exc)},
+            },
+        )
     approval_service = ApprovalService(
         approval_store=ApprovalStore(settings.database_file),
         run_store=run_store,
@@ -207,6 +213,12 @@ def _build_log_query_service(settings, logger):
     try:
         log_store = LogStore(settings.log_database_file)
     except Exception as exc:
-        logger.warning("log_query_service_unavailable", extra={"error": str(exc)})
+        logger.warning(
+            "log_query_service_unavailable",
+            extra={
+                "msg": "日志 SQLite 不可用，日志查询服务降级为空实现",
+                "data": {"error": str(exc)},
+            },
+        )
         return None
     return LogQueryService(log_store, max_limit=settings.log_query_limit_max)

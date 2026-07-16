@@ -712,7 +712,10 @@ class SQLiteTaskStore:
             # WAL 不可用时回退到默认 rollback journal，不阻断正常连接。
             logging.getLogger("coding_agent.backend").warning(
                 "sqlite_wal_unavailable",
-                extra={"path": str(self._database_path), "error": str(wal_error)},
+                extra={
+                    "msg": "SQLite WAL 模式不可用，已回退到默认 rollback journal",
+                    "data": {"path": str(self._database_path), "error": str(wal_error)},
+                },
             )
         return connection
 

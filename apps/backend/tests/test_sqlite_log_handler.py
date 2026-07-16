@@ -16,8 +16,8 @@ from app.storage.log_store import LogStore
 class SQLiteLogHandlerTests(unittest.TestCase):
     """校验 SQLite 日志 handler 非阻塞落库行为。"""
 
-    def test_entry_from_log_record_maps_event_and_display_message(self) -> None:
-        """校验 LogRecord mapper 拆分 event_name 和 message。
+    def test_entry_from_log_record_maps_event_and_msg(self) -> None:
+        """校验 LogRecord mapper 拆分 event 和 msg。
 
         参数:
             无。
@@ -40,11 +40,11 @@ class SQLiteLogHandlerTests(unittest.TestCase):
             msg="tool_call_finished",
             args=(),
             exc_info=None,
-            extra={"display_message": "工具执行完成", "trace_id": "trace-1"},
+            extra={"msg": "工具执行完成", "trace_id": "trace-1"},
         )
         entry = entry_from_log_record(record)
-        self.assertEqual(entry.event_name, "tool_call_finished")
-        self.assertEqual(entry.message, "工具执行完成")
+        self.assertEqual(entry.event, "tool_call_finished")
+        self.assertEqual(entry.msg, "工具执行完成")
         self.assertEqual(entry.trace_id, "trace-1")
 
     def test_handler_writes_info_to_sqlite(self) -> None:
@@ -71,13 +71,13 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 handler.flush()
                 time.sleep(0.05)
                 entries = store.query(LogQuery(trace_id="trace-1", limit=10))
-                self.assertEqual([entry.event_name for entry in entries], ["log_handler_test"])
+                self.assertEqual([entry.event for entry in entries], ["log_handler_test"])
             finally:
                 logger.removeHandler(handler)
                 handler.close()
 
     def test_exception_log_persists_error_fields_and_stack(self) -> None:
-        """校验异常日志会写入错误类型、消息和栈。
+        """校验异常日志会写入嵌套错误块。
 
         参数:
             无。
@@ -102,9 +102,9 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                     logger.exception("tool_call_failed", extra={"trace_id": "trace-error"})
                 handler.flush()
                 entries = store.query(LogQuery(trace_id="trace-error", limit=10))
-                self.assertEqual(entries[0].error_type, "RuntimeError")
-                self.assertEqual(entries[0].error_message, "boom")
-                self.assertIn("Traceback", entries[0].stack)
+                self.assertEqual(entries[0].error["type"], "RuntimeError")
+                self.assertEqual(entries[0].error["message"], "boom")
+                self.assertIn("Traceback", entries[0].error["stack"])
             finally:
                 logger.removeHandler(handler)
                 handler.close()
@@ -124,7 +124,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
         副作用:
             启动并关闭临时 handler。
         """
-
         with tempfile.TemporaryDirectory() as temp_dir:
             store = LogStore(Path(temp_dir) / "logs.sqlite3")
             handler = SQLiteLogHandler(store, queue_size=1, batch_size=10, flush_interval_seconds=10)
@@ -154,7 +153,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
         副作用:
             创建并关闭临时 handler。
         """
-
         with tempfile.TemporaryDirectory() as temp_dir:
             store = LogStore(Path(temp_dir) / "logs.sqlite3")
             handler = SQLiteLogHandler(store, queue_size=2, batch_size=10, flush_interval_seconds=10)
@@ -167,7 +165,7 @@ class SQLiteLogHandlerTests(unittest.TestCase):
 
             queued = []
             while not handler._queue.empty():
-                queued.append(handler._queue.get_nowait().event_name)
+                queued.append(handler._queue.get_nowait().event)
             self.assertIn("important_error", queued)
             self.assertEqual(len(queued), 2)
             self.assertNotIn("low_first", queued)
@@ -206,7 +204,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 副作用:
                     无。
                 """
-
                 self.batch_sizes: list[int] = []
 
             def insert_many(self, entries):
@@ -224,7 +221,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 副作用:
                     保存批量大小。
                 """
-
                 self.batch_sizes.append(len(entries))
 
         store = CapturingStore()
@@ -258,7 +254,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
         副作用:
             写入临时 SQLite 数据库。
         """
-
         with tempfile.TemporaryDirectory() as temp_dir:
             store = LogStore(Path(temp_dir) / "logs.sqlite3")
             handler = SQLiteLogHandler(store, queue_size=10, batch_size=10, flush_interval_seconds=0.05)
@@ -270,7 +265,7 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 logger.info("low_volume_log", extra={"trace_id": "trace-flush"})
                 handler.flush()
                 entries = store.query(LogQuery(trace_id="trace-flush", limit=10))
-                self.assertEqual([entry.event_name for entry in entries], ["low_volume_log"])
+                self.assertEqual([entry.event for entry in entries], ["low_volume_log"])
             finally:
                 logger.removeHandler(handler)
                 handler.close()
@@ -309,7 +304,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 副作用:
                     无。
                 """
-
                 raise sqlite3.OperationalError("database is locked")
 
         handler = SQLiteLogHandler(FailingStore(), queue_size=10, batch_size=1, flush_interval_seconds=0.01)
@@ -358,7 +352,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 副作用:
                     无。
                 """
-
                 raise sqlite3.OperationalError("database is locked")
 
         class CapturingHandler(logging.Handler):
@@ -379,7 +372,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 副作用:
                     无。
                 """
-
                 super().__init__()
                 self.records: list[logging.LogRecord] = []
 
@@ -398,7 +390,6 @@ class SQLiteLogHandlerTests(unittest.TestCase):
                 副作用:
                     追加到 records。
                 """
-
                 self.records.append(record)
 
         fallback = CapturingHandler()
@@ -423,11 +414,11 @@ class SQLiteLogHandlerTests(unittest.TestCase):
             handler.close()
 
 
-def _entry(event_name: str, level: str) -> LogEntryRecord:
+def _entry(event: str, level: str) -> LogEntryRecord:
     """构造 handler 队列测试日志。
 
     参数:
-        event_name: 稳定事件名。
+        event: 稳定事件名。
         level: 日志级别。
 
     返回:
@@ -439,13 +430,14 @@ def _entry(event_name: str, level: str) -> LogEntryRecord:
     副作用:
         无。
     """
-
     return LogEntryRecord(
         ts="2026-07-15T10:00:00.000Z",
         level=level,
-        logger_name="coding_agent.backend",
-        event_name=event_name,
-        message=event_name,
+        logger="coding_agent.backend",
+        trace_id="",
+        caller="",
+        event=event,
+        msg=event,
     )
 
 
@@ -464,7 +456,6 @@ def _logger_with_handler(store: LogStore) -> tuple[logging.Logger, SQLiteLogHand
     副作用:
         启动 SQLite handler 后台线程。
     """
-
     handler = SQLiteLogHandler(store, queue_size=100, batch_size=1, flush_interval_seconds=0.05)
     logger = logging.getLogger("sqlite-handler-test")
     logger.setLevel(logging.INFO)

@@ -100,7 +100,10 @@ class DurableRunStore:
             )
         self._logger.info(
             "durable_run_created",
-            extra={"run_id": run.run_id, "task_id": task_id},
+            extra={
+                "msg": f"Durable Run 已创建，task_id={task_id}，run_id={run.run_id}",
+                "data": {"run_id": run.run_id, "task_id": task_id},
+            },
         )
         return run
 
@@ -206,7 +209,10 @@ class DurableRunStore:
             )
         self._logger.info(
             "durable_run_status",
-            extra={"run_id": run_id, "status": status},
+            extra={
+                "msg": f"Durable Run 状态已更新为 {status}，run_id={run_id}",
+                "data": {"run_id": run_id, "status": status},
+            },
         )
         return self.get(run_id)
 
@@ -267,7 +273,10 @@ class DurableRunStore:
         if existing is not None:
             self._logger.info(
                 "resume_command_idempotent",
-                extra={"run_id": run_id, "action": action},
+                extra={
+                    "msg": f"恢复命令幂等复用，run_id={run_id}，action={action}",
+                    "data": {"run_id": run_id, "action": action},
+                },
             )
             return existing
 
@@ -309,16 +318,22 @@ class DurableRunStore:
                 self._logger.info(
                     "resume_command_idempotent",
                     extra={
-                        "run_id": concurrent.run_id,
-                        "resume_command_id": concurrent.command_id,
-                        "action": concurrent.action,
+                        "msg": f"恢复命令幂等复用，run_id={concurrent.run_id}，action={concurrent.action}",
+                        "data": {
+                            "run_id": concurrent.run_id,
+                            "resume_command_id": concurrent.command_id,
+                            "action": concurrent.action,
+                        },
                     },
                 )
                 return concurrent
             raise
         self._logger.info(
             "resume_command_created",
-            extra={"run_id": run_id, "action": action},
+            extra={
+                "msg": f"恢复命令已创建，run_id={run_id}，action={action}",
+                "data": {"run_id": run_id, "action": action},
+            },
         )
         return command
 
@@ -391,9 +406,12 @@ class DurableRunStore:
             self._logger.info(
                 "resume_command_claimed",
                 extra={
-                    "run_id": command.run_id,
-                    "resume_command_id": command.command_id,
-                    "action": command.action,
+                    "msg": f"恢复命令已领取，run_id={command.run_id}，action={command.action}",
+                    "data": {
+                        "run_id": command.run_id,
+                        "resume_command_id": command.command_id,
+                        "action": command.action,
+                    },
                 },
             )
         return claimed
@@ -424,7 +442,10 @@ class DurableRunStore:
         if updated.rowcount:
             self._logger.warning(
                 "resume_commands_requeued",
-                extra={"run_id": run_id or "*", "count": updated.rowcount},
+                extra={
+                    "msg": f"遗留的恢复命令已重新排队，run_id={run_id or '*'}，count={updated.rowcount}",
+                    "data": {"run_id": run_id or "*", "count": updated.rowcount},
+                },
             )
         return updated.rowcount
 
@@ -457,9 +478,12 @@ class DurableRunStore:
         self._logger.info(
             "resume_command_applied",
             extra={
-                "run_id": command.run_id,
-                "resume_command_id": command.command_id,
-                "action": command.action,
+                "msg": f"恢复命令已应用，run_id={command.run_id}，action={command.action}",
+                "data": {
+                    "run_id": command.run_id,
+                    "resume_command_id": command.command_id,
+                    "action": command.action,
+                },
             },
         )
         return command
@@ -492,9 +516,12 @@ class DurableRunStore:
         self._logger.warning(
             "resume_command_released",
             extra={
-                "run_id": row["run_id"] if row is not None else None,
-                "resume_command_id": command_id,
-                "action": row["action"] if row is not None else None,
+                "msg": "消费失败的恢复命令已释放，等待后续重试",
+                "data": {
+                    "run_id": row["run_id"] if row is not None else None,
+                    "resume_command_id": command_id,
+                    "action": row["action"] if row is not None else None,
+                },
             },
         )
 

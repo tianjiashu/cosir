@@ -203,16 +203,16 @@ export function LogsPage({ onBack }: LogsPageProps) {
               </div>
               <div className="divide-y divide-border">
                 {logs.entries.map((entry, index) => (
-                  <div key={`${entry.ts}-${entry.event_name}-${index}`} className="grid gap-1 px-3 py-2 text-xs">
+                  <div key={`${entry.ts}-${entry.event}-${index}`} className="grid gap-1 px-3 py-2 text-xs">
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="font-mono text-muted-foreground">{entry.ts}</span>
                       <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{entry.level}</span>
-                      <span className="truncate font-mono font-medium">{entry.event_name}</span>
+                      <span className="truncate font-mono font-medium">{entry.event}</span>
                     </div>
-                    <div className="truncate text-muted-foreground">{entry.message}</div>
-                    {entry.stack ? (
+                    <div className="truncate text-muted-foreground">{entry.msg}</div>
+                    {entry.error?.stack ? (
                       <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono text-[11px]">
-                        {entry.stack}
+                        {entry.error.stack}
                       </pre>
                     ) : null}
                   </div>

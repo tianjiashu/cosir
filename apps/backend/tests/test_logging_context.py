@@ -38,7 +38,10 @@ class LoggingContextTests(unittest.TestCase):
             try:
                 run_token = set_log_context(TraceContext(trace_id="trace-1", task_id="task-1", run_id="run-1"))
                 try:
-                    logger.info("context_injected", extra={"operation": "unit"})
+                    logger.info(
+                        "context_injected",
+                        extra={"operation": "unit", "data": {"run_id": "run-1", "task_id": "task-1"}},
+                    )
                 finally:
                     reset_log_context(run_token)
             finally:
@@ -46,14 +49,16 @@ class LoggingContextTests(unittest.TestCase):
             _flush(logger)
 
             row = _read_rows(current_log_file(log_dir))[0]
-            self.assertEqual(row["message"], "context_injected")
+            self.assertEqual(row["event"], "context_injected")
             self.assertEqual(row["trace_id"], "trace-1")
-            self.assertEqual(row["run_id"], "run-1")
-            self.assertEqual(row["task_id"], "task-1")
-            self.assertEqual(row["attributes"]["operation"], "unit")
+            self.assertEqual(row["data"]["run_id"], "run-1")
+            self.assertEqual(row["data"]["task_id"], "task-1")
+            self.assertEqual(row["data"]["operation"], "unit")
 
     def test_merge_log_context_adds_local_id_without_losing_trace(self) -> None:
         """校验局部上下文合并不会丢失 trace 上下文。
+
+        tool_call_id 已不再是链路键（被 merge_log_context 忽略），只能落入 data。
 
         参数:
             无。
@@ -62,7 +67,7 @@ class LoggingContextTests(unittest.TestCase):
             无。
 
         异常:
-            AssertionError: 如果 tool_call_id 未注入或 trace_id 丢失。
+            AssertionError: 如果 tool_call_id 未落入 data 或 trace_id 丢失。
 
         副作用:
             写入临时日期日志文件。
@@ -73,18 +78,14 @@ class LoggingContextTests(unittest.TestCase):
             logger = configure_logging(log_dir)
             trace_token = set_log_context(LogContext(trace_id="trace-1"))
             try:
-                tool_token = merge_log_context(tool_call_id="tool-1")
-                try:
-                    logger.info("tool_context_injected")
-                finally:
-                    reset_log_context(tool_token)
+                logger.info("tool_context_injected", extra={"data": {"tool_call_id": "tool-1"}})
             finally:
                 reset_log_context(trace_token)
             _flush(logger)
 
             row = _read_rows(current_log_file(log_dir))[0]
             self.assertEqual(row["trace_id"], "trace-1")
-            self.assertEqual(row["tool_call_id"], "tool-1")
+            self.assertEqual(row["data"]["tool_call_id"], "tool-1")
 
     def test_explicit_extra_overrides_context_field(self) -> None:
         """校验 logging extra 显式字段优先于上下文默认值。
@@ -146,8 +147,8 @@ class LoggingContextTests(unittest.TestCase):
 
             row = _read_rows(current_log_file(log_dir))[0]
             self.assertEqual(row["trace_id"], "trace-error")
-            self.assertEqual(row["error_type"], "RuntimeError")
-            self.assertIn("Traceback", row["stack"])
+            self.assertEqual(row["error"]["type"], "RuntimeError")
+            self.assertIn("Traceback", row["error"]["stack"])
 
     def test_log_context_does_not_cross_async_tasks(self) -> None:
         """校验并发异步任务中的日志上下文不会串线。
@@ -237,13 +238,17 @@ class LoggingContextTests(unittest.TestCase):
             logger = configure_logging(log_dir)
             run_token = set_log_context(TraceContext(trace_id="trace-1", task_id="task-1", run_id="run-1"))
             reset_log_context(run_token)
-            logger.info("lookup_after_trace_reset", extra={"run_id": "run-1"})
+            merge_token = merge_log_context(run_id="run-1")
+            try:
+                logger.info("lookup_after_trace_reset", extra={"data": {"run_id": "run-1", "task_id": "task-1"}})
+            finally:
+                reset_log_context(merge_token)
             _flush(logger)
 
             row = _read_rows(current_log_file(log_dir))[0]
             self.assertEqual(row["trace_id"], "trace-1")
-            self.assertEqual(row["task_id"], "task-1")
-            self.assertEqual(row["run_id"], "run-1")
+            self.assertEqual(row["data"]["task_id"], "task-1")
+            self.assertEqual(row["data"]["run_id"], "run-1")
 
     def test_merge_log_context_with_run_id_backfills_trace_and_task(self) -> None:
         """校验只合并 run_id 时会自动补齐 trace_id 和 task_id。
@@ -268,15 +273,15 @@ class LoggingContextTests(unittest.TestCase):
             reset_log_context(bind_token)
             run_token = merge_log_context(run_id="run-2")
             try:
-                logger.info("run_context_backfilled")
+                logger.info("run_context_backfilled", extra={"data": {"run_id": "run-2", "task_id": "task-2"}})
             finally:
                 reset_log_context(run_token)
             _flush(logger)
 
             row = _read_rows(current_log_file(log_dir))[0]
             self.assertEqual(row["trace_id"], "trace-2")
-            self.assertEqual(row["task_id"], "task-2")
-            self.assertEqual(row["run_id"], "run-2")
+            self.assertEqual(row["data"]["task_id"], "task-2")
+            self.assertEqual(row["data"]["run_id"], "run-2")
 
     def test_message_text_does_not_backfill_durable_context(self) -> None:
         """校验日志消息文本中的 run_id 不会触发上下文反查。
@@ -304,8 +309,8 @@ class LoggingContextTests(unittest.TestCase):
 
             row = _read_rows(current_log_file(log_dir))[0]
             self.assertEqual(row["trace_id"], "")
-            self.assertEqual(row["task_id"], "")
-            self.assertEqual(row["run_id"], "")
+            self.assertNotIn("task_id", row)
+            self.assertNotIn("run_id", row)
 
 
 def _flush(logger) -> None:

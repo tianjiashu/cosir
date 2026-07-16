@@ -16,8 +16,6 @@ async def query_logs(
     trace_id: str,
     runtime: AgentRuntime = Depends(get_runtime),
     level: str = Query(default=""),
-    task_id: str = Query(default=""),
-    run_id: str = Query(default=""),
     start_time: str = Query(default=""),
     end_time: str = Query(default=""),
     limit: int = Query(default=200, ge=1, le=1000),
@@ -26,10 +24,8 @@ async def query_logs(
 
     参数:
         runtime: 通过依赖注入的运行时单例。
-        trace_id: 必填 trace 标识。
+        trace_id: 必填 trace 标识（日志层唯一链路键）。
         level: 可选日志级别。
-        task_id: 可选任务标识。
-        run_id: 可选 run 标识。
         start_time: 可选起始 UTC RFC3339 时间。
         end_time: 可选结束 UTC RFC3339 时间。
         limit: 最大返回数量。
@@ -48,8 +44,6 @@ async def query_logs(
         return runtime.log_query_service().query_by_trace(
             trace_id=trace_id,
             level=level,
-            task_id=task_id,
-            run_id=run_id,
             start_time=start_time,
             end_time=end_time,
             limit=limit,

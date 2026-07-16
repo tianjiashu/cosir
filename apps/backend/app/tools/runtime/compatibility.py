@@ -92,7 +92,10 @@ class ToolScheduler:
 
         self._logger.info(
             "tool_scheduler_execute_started",
-            extra={"tool_name": call.tool_name, "tool_call_id": call.call_id},
+            extra={
+                "msg": f"兼容调度器开始执行工具调用，tool={call.tool_name}",
+                "data": {"tool_name": call.tool_name, "tool_call_id": call.call_id},
+            },
         )
         return self._runtime.execute_single_tool_call(call)
 

@@ -85,7 +85,10 @@ def execute_tool_handler(
     except Exception as exc:
         logger.exception(
             "tool_subprocess_start_failed",
-            extra={"timeout_seconds": timeout_seconds, "error": str(exc)},
+            extra={
+                "msg": "启动工具子进程失败",
+                "data": {"timeout_seconds": timeout_seconds},
+            },
         )
         _remove_result_file(result_path)
         return ToolExecutionResult(status="error", error=str(exc))
@@ -151,7 +154,13 @@ def _run_handler(
     try:
         result = handler(**arguments)
     except Exception as exc:
-        logger.exception("tool_handler_failed", extra={"run_id": run_id})
+        logger.exception(
+            "tool_handler_failed",
+            extra={
+                "msg": f"工具处理函数执行失败，run_id={run_id}",
+                "data": {"run_id": run_id},
+            },
+        )
         _write_result_file(result_path, ("error", "", f"{exc}\n{traceback.format_exc()}"))
         return
     _write_result_file(result_path, ("success", result, ""))
@@ -224,7 +233,10 @@ def _read_result_file(result_path: str) -> Optional[tuple]:
         with open(result_path, "rb") as result_file:
             return pickle.load(result_file)
     except Exception as exc:
-        logger.exception("tool_result_read_failed", extra={"error": str(exc)})
+        logger.exception(
+            "tool_result_read_failed",
+            extra={"msg": "读取工具结果文件失败"},
+        )
         return ("error", "", f"failed to read tool result: {exc}")
 
 

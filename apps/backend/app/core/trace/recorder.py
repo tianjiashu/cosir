@@ -100,7 +100,14 @@ class TraceRecorder:
         except Exception as exc:
             self._logger.warning(
                 "trace_event_write_failed",
-                extra={"task_id": context.task_id, "event_type": event_type, "error": str(exc)},
+                extra={
+                    "msg": f"Trace 事件写入失败，event_type={event_type}",
+                    "data": {
+                        "task_id": context.task_id,
+                        "event_type": event_type,
+                        "error": str(exc),
+                    },
+                },
             )
             return None
 
@@ -153,7 +160,15 @@ class TraceRecorder:
         except Exception as exc:
             self._logger.warning(
                 "trace_span_write_failed",
-                extra={"task_id": context.task_id, "span_name": name, "operation": "start", "error": str(exc)},
+                extra={
+                    "msg": f"Trace span 开始写入失败，span_name={name}",
+                    "data": {
+                        "task_id": context.task_id,
+                        "span_name": name,
+                        "operation": "start",
+                        "error": str(exc),
+                    },
+                },
             )
         return span_context
 
@@ -187,5 +202,13 @@ class TraceRecorder:
         except Exception as exc:
             self._logger.warning(
                 "trace_span_write_failed",
-                extra={"span_id": span_id, "span_status": status, "operation": "finish", "error": str(exc)},
+                extra={
+                    "msg": f"Trace span 结束写入失败，span_id={span_id}，status={status}",
+                    "data": {
+                        "span_id": span_id,
+                        "span_status": status,
+                        "operation": "finish",
+                        "error": str(exc),
+                    },
+                },
             )

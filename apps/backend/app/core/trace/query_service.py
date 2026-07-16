@@ -117,7 +117,6 @@ class TraceQueryService:
     def list_logs(
         self,
         trace_id: str = "",
-        run_id: str = "",
         level: str = "",
         log_date: date | None = None,
         start_time: str = "",
@@ -127,8 +126,7 @@ class TraceQueryService:
         """查询 JSONL 日志文件。
 
         参数:
-            trace_id: 可选 trace 过滤条件。
-            run_id: 可选 run 过滤条件。
+            trace_id: 可选 trace 过滤条件（唯一链路键，D4）。
             level: 可选日志级别过滤条件。
             log_date: 可选精确日期过滤条件。
             start_time: 可选起始 ISO 时间。
@@ -154,7 +152,6 @@ class TraceQueryService:
         return query_log_files(
             log_files,
             trace_id=trace_id,
-            run_id=run_id,
             level=level,
             start_time=start_time,
             end_time=end_time,
@@ -186,5 +183,5 @@ class TraceQueryService:
             "trace_id": trace_id,
             "events": events,
             "spans": self.list_spans(run_id=run_id),
-            "logs": self.list_logs(run_id=run_id),
+            "logs": self.list_logs(trace_id=trace_id),
         }

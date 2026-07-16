@@ -129,9 +129,12 @@ class ReactLikeWorkflow:
         operations.log_exception(
             "task_failed",
             extra={
-                "task_id": task.task_id,
-                "reason": "max_steps_reached",
-                "max_steps": operations.settings.max_steps,
+                "msg": f"达到最大步数上限，任务执行失败，task_id={task.task_id}",
+                "data": {
+                    "task_id": task.task_id,
+                    "reason": "max_steps_reached",
+                    "max_steps": operations.settings.max_steps,
+                },
             },
         )
         operations.update_task_status(task.task_id, "failed")
@@ -433,10 +436,13 @@ class ReactLikeWorkflow:
             operations.log_exception(
                 "task_failed",
                 extra={
-                    "task_id": task.task_id,
-                    "reason": "tool_approval_required",
-                    "tool_name": observation.tool_name,
-                    "permission": observation.permission,
+                    "msg": f"工具 {observation.tool_name} 需要审批，当前工作流不支持等待，任务失败，task_id={task.task_id}",
+                    "data": {
+                        "task_id": task.task_id,
+                        "reason": "tool_approval_required",
+                        "tool_name": observation.tool_name,
+                        "permission": observation.permission,
+                    },
                 },
             )
             operations.update_task_status(task.task_id, "failed")
@@ -459,10 +465,13 @@ class ReactLikeWorkflow:
             operations.log_exception(
                 "task_failed",
                 extra={
-                    "task_id": task.task_id,
-                    "reason": "tool_error_limit_reached",
-                    "tool_name": observation.tool_name,
-                    "limit": operations.settings.tool_error_limit,
+                    "msg": f"连续工具错误达到上限，任务失败，task_id={task.task_id}，tool_name={observation.tool_name}",
+                    "data": {
+                        "task_id": task.task_id,
+                        "reason": "tool_error_limit_reached",
+                        "tool_name": observation.tool_name,
+                        "limit": operations.settings.tool_error_limit,
+                    },
                 },
             )
             operations.update_task_status(task.task_id, "failed")

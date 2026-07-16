@@ -212,9 +212,12 @@ class RuntimeOperations:
             self._logger.warning(
                 "agent_tool_denied",
                 extra={
-                    "agent_id": self._agent_profile.agent_id,
-                    "tool_name": denied_tool.name,
-                    "permission": denied_tool.permission,
+                    "msg": f"Agent 档案不允许调用工具 {denied_tool.name}，已拒绝",
+                    "data": {
+                        "agent_id": self._agent_profile.agent_id,
+                        "tool_name": denied_tool.name,
+                        "permission": denied_tool.permission,
+                    },
                 },
             )
             return ToolObservation(
@@ -441,16 +444,22 @@ class RuntimeOperations:
         except Exception as exc:
             self._logger.exception(
                 "checkpoint_failed",
-                extra={"task_id": task_id, "stage": stage},
+                extra={
+                    "msg": f"创建状态检查点失败，task_id={task_id}，stage={stage}",
+                    "data": {"task_id": task_id, "stage": stage},
+                },
             )
             return self._record_checkpoint_failure(task_id, stage, exc)
 
         self._logger.info(
             "checkpoint_created",
             extra={
-                "task_id": task_id,
-                "checkpoint_id": checkpoint.checkpoint_id,
-                "stage": stage,
+                "msg": f"状态检查点已创建，task_id={task_id}，stage={stage}",
+                "data": {
+                    "task_id": task_id,
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "stage": stage,
+                },
             },
         )
         return self.record_event(
@@ -493,7 +502,10 @@ class RuntimeOperations:
         except Exception as event_error:
             self._logger.exception(
                 "checkpoint_failed_event_unpersisted",
-                extra={"task_id": task_id, "stage": stage},
+                extra={
+                    "msg": f"检查点失败事件也未能持久化，task_id={task_id}，stage={stage}",
+                    "data": {"task_id": task_id, "stage": stage},
+                },
             )
             return RuntimeEvent(
                 event_type=EventType.CHECKPOINT_FAILED,
@@ -511,7 +523,7 @@ class RuntimeOperations:
 
         参数:
             event_name: 稳定日志事件名。
-            extra: 需要写入 attributes 的结构化字段。
+            extra: 需要写入日志的字段，应遵循规范用 ``msg``/``data`` 组织。
 
         返回:
             无。

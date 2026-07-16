@@ -93,10 +93,13 @@ class ToolExecutionService:
             self._logger.info(
                 "tool_policy_reused",
                 extra={
-                    "run_id": run_id,
-                    "tool_call_id": existing.tool_call_id,
-                    "tool_name": tool_name,
-                    "status": existing.status,
+                    "msg": f"工具策略复用已有调用，tool={tool_name}，status={existing.status}",
+                    "data": {
+                        "run_id": run_id,
+                        "tool_call_id": existing.tool_call_id,
+                        "tool_name": tool_name,
+                        "status": existing.status,
+                    },
                 },
             )
             return existing, decision
@@ -105,11 +108,14 @@ class ToolExecutionService:
         self._logger.info(
             "tool_policy_decided",
             extra={
-                "run_id": run_id,
-                "tool_call_id": call.tool_call_id,
-                "tool_name": tool_name,
-                "status": decision.status,
-                "risk_level": decision.risk_level,
+                "msg": f"工具策略决策完成，tool={tool_name}，decision={decision.status}",
+                "data": {
+                    "run_id": run_id,
+                    "tool_call_id": call.tool_call_id,
+                    "tool_name": tool_name,
+                    "status": decision.status,
+                    "risk_level": decision.risk_level,
+                },
             },
         )
         return call, decision

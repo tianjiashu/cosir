@@ -74,7 +74,13 @@ class ResumeDispatcher:
         self._run_store.mark_status(run_id, "resuming")
         token = merge_log_context(run_id=run_id)
         try:
-            self._logger.info("resume_dispatched", extra={"action": action, "resume_command_id": command.command_id})
+            self._logger.info(
+                "resume_dispatched",
+                extra={
+                    "msg": f"恢复命令已分发，run_id={run_id}，action={action}",
+                    "data": {"action": action, "resume_command_id": command.command_id},
+                },
+            )
         finally:
             reset_log_context(token)
         return command

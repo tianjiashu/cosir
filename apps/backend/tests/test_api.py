@@ -26,7 +26,7 @@ from app.core.runs.recovery import RecoveryManager
 from app.core.runs.resume import ResumeDispatcher
 from app.core.runs.store import DurableRunStore
 from app.core.runtime.runner import AgentRuntime
-from app.storage.sqlite import SQLiteTaskStore
+from app.storage.task_store import SQLiteTaskStore
 from app.storage.trace_store import TraceStore
 from app.tools.types import ArtifactRequest, ToolCall, ToolDefinition
 from app.tools.registry.memory import ToolRegistry
@@ -192,7 +192,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["run_id"], run_id)
         self.assertTrue(payload["trace_id"])
         self.assertTrue(any(event["event_type"] == "run_started" for event in payload["events"]))
-        self.assertTrue(any(row["run_id"] == run_id for row in payload["logs"]))
+        self.assertTrue(any(row.get("data", {}).get("run_id") == run_id for row in payload["logs"]))
         self.assertTrue(any(row["trace_id"] == payload["trace_id"] for row in payload["logs"]))
         self.assertEqual(
             [event["sequence_no"] for event in payload["events"]],
@@ -504,8 +504,8 @@ class BackendApiTests(unittest.TestCase):
         runtime_rows = runtime_logs_response.json()
         self.assertTrue(runtime_rows)
         self.assertTrue(all(row["trace_id"] == trace_id for row in runtime_rows))
-        self.assertTrue(all(row["run_id"] == run_id for row in runtime_rows if row["message"].startswith("runtime_event")))
-        self.assertTrue(all(row["task_id"] == task_id for row in runtime_rows if row["message"].startswith("runtime_event")))
+        self.assertTrue(all(row["data"]["run_id"] == run_id for row in runtime_rows if row["event"] == "runtime_event"))
+        self.assertTrue(all(row["data"]["task_id"] == task_id for row in runtime_rows if row["event"] == "runtime_event"))
         log_file = current_log_file(client.app.state.project_root_for_tests / "logs")
         with log_file.open("a", encoding="utf-8") as file:
             file.write(
@@ -513,19 +513,13 @@ class BackendApiTests(unittest.TestCase):
                     {
                         "ts": "2026-07-14T00:00:00+00:00",
                         "level": "INFO",
-                        "logger_name": "test",
-                        "message": "manually injected trace log",
+                        "logger": "coding_agent.backend",
                         "trace_id": trace_id,
-                        "run_id": run_id,
-                        "task_id": task_id,
-                        "span_id": "",
-                        "event_id": "",
-                        "step_id": "",
-                        "tool_call_id": "",
-                        "approval_id": "",
-                        "error_type": "",
-                        "error_message": "",
-                        "attributes": {"token": "[REDACTED]"},
+                        "caller": "",
+                        "event": "manually_injected_log",
+                        "msg": "manually injected trace log",
+                        "data": {"run_id": run_id, "task_id": task_id, "token": "[REDACTED]"},
+                        "error": None,
                         "truncated": False,
                     },
                     ensure_ascii=False,
@@ -540,7 +534,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(rows)
         self.assertTrue(all(row["trace_id"] == trace_id for row in rows))
         self.assertTrue(all(row["level"] == "INFO" for row in rows))
-        self.assertTrue(any(row["message"] == "manually injected trace log" for row in rows))
+        self.assertTrue(any(row["msg"] == "manually injected trace log" for row in rows))
         self.assertFalse(_sqlite_table_exists(client.app.state.project_root_for_tests / "app.sqlite3", "trace_logs"))
 
     def test_http_request_failure_logs_are_mutually_exclusive(self) -> None:
@@ -710,11 +704,14 @@ class BackendApiTests(unittest.TestCase):
                     {
                         "ts": "2026-07-15T00:30:00+08:00",
                         "level": "INFO",
-                        "logger_name": "test",
-                        "message": "api local date selected",
+                        "logger": "coding_agent.backend",
                         "trace_id": "trace-api-local-date",
-                        "run_id": "run-api-local-date",
-                        "attributes": {},
+                        "caller": "",
+                        "event": "api_local_date_selected",
+                        "msg": "api local date selected",
+                        "data": {"run_id": "run-api-local-date"},
+                        "error": None,
+                        "truncated": False,
                     }
                 )
                 + "\n",
@@ -730,7 +727,7 @@ class BackendApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([row["message"] for row in response.json()], ["api local date selected"])
+        self.assertEqual([row["msg"] for row in response.json()], ["api local date selected"])
 
     def test_approval_decision_endpoint_returns_serializable_payload(self) -> None:
         """校验审批决策 API 返回可序列化决策并触发恢复命令消费。
@@ -1253,7 +1250,7 @@ def _messages_for_trace(rows: list[dict], trace_id: str) -> list[str]:
         trace_id: 前端用户操作 trace ID。
 
     返回:
-        匹配请求 ID 的 message 列表。
+        匹配请求 ID 的 event 列表。
 
     异常:
         无。
@@ -1262,7 +1259,7 @@ def _messages_for_trace(rows: list[dict], trace_id: str) -> list[str]:
         无。
     """
 
-    return [row["message"] for row in rows if row.get("trace_id") == trace_id]
+    return [row["event"] for row in rows if row.get("trace_id") == trace_id]
 
 
 @contextmanager

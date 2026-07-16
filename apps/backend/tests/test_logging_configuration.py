@@ -63,7 +63,7 @@ class LoggingConfigurationTests(unittest.TestCase):
             log_dir = Path(temp_dir) / "logs"
             log_file = current_log_file(log_dir)
             with patch(
-                "app.logging.configuration.LogStore",
+                "app.config.logging.configuration.LogStore",
                 side_effect=OSError("database is locked"),
             ):
                 logger = configure_logging(

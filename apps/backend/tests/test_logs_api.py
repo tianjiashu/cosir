@@ -41,7 +41,7 @@ class LogsApiTests(unittest.TestCase):
         response = client.get("/logs/query?trace_id=trace-1")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["entries"][0]["event_name"], "tool_call_failed")
+        self.assertEqual(payload["entries"][0]["event"], "tool_call_failed")
         self.assertEqual(payload["text"], "rendered logs")
 
     def test_recent_logs_does_not_require_trace(self) -> None:
@@ -63,7 +63,7 @@ class LogsApiTests(unittest.TestCase):
         client = _client(_Runtime(_LogQueryService()))
         response = client.get("/logs/recent?limit=1")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["entries"][0]["event_name"], "tool_call_failed")
+        self.assertEqual(response.json()["entries"][0]["event"], "tool_call_failed")
 
     def test_invalid_trace_query_returns_400(self) -> None:
         """校验非法 trace 查询返回 400。
@@ -421,13 +421,12 @@ def _result() -> LogQueryResult:
             LogEntryRecord(
                 ts="2026-07-15T10:00:00.000Z",
                 level="ERROR",
-                logger_name="coding_agent.backend",
-                event_name="tool_call_failed",
-                message="工具失败",
+                logger="coding_agent.backend",
                 trace_id="trace-1",
-                error_type="RuntimeError",
-                error_message="boom",
-                stack="Traceback",
+                caller="",
+                event="tool_call_failed",
+                msg="工具失败",
+                error={"type": "RuntimeError", "message": "boom", "stack": "Traceback"},
             )
         ],
         text="rendered logs",

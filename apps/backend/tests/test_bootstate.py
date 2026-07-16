@@ -191,7 +191,7 @@ class RedactSensitiveTests(unittest.TestCase):
         """traceback 中的 ``sk-`` 密钥不得明文落盘。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "boot.json"
-            secret = "REDACTED_DEEPSEEK_KEY"
+            secret = "sk-DEEPSEEKKEY1234567890abcdef"
             write_bootstate(
                 path,
                 BOOT_PHASE_FAILED,

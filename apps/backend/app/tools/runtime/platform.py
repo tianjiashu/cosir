@@ -230,7 +230,10 @@ class ToolRuntime:
         except KeyError:
             self._logger.warning(
                 "tool_missing",
-                extra={"run_id": context.run_id, "tool_name": call.tool_name},
+                extra={
+                    "msg": f"未注册工具，run_id={context.run_id}，tool={call.tool_name}",
+                    "data": {"run_id": context.run_id, "tool_name": call.tool_name},
+                },
             )
             return self._observation_builder.error(call.tool_name, f"unknown tool: {call.tool_name}")
         arguments = self._validate_arguments(tool, call)
@@ -245,10 +248,13 @@ class ToolRuntime:
             self._logger.info(
                 "tool_approval_resume_reused",
                 extra={
-                    "run_id": context.run_id,
-                    "step_id": context.step_id,
-                    "tool_call_id": existing.tool_call_id,
-                    "approval_id": approval_id,
+                    "msg": f"审批恢复复用已完成调用，tool_call_id={existing.tool_call_id}",
+                    "data": {
+                        "run_id": context.run_id,
+                        "step_id": context.step_id,
+                        "tool_call_id": existing.tool_call_id,
+                        "approval_id": approval_id,
+                    },
                 },
             )
             return self._observation_builder.success(
@@ -294,7 +300,10 @@ class ToolRuntime:
         except KeyError:
             self._logger.warning(
                 "tool_missing",
-                extra={"run_id": context.run_id, "tool_name": call.tool_name},
+                extra={
+                    "msg": f"未注册工具，run_id={context.run_id}，tool={call.tool_name}",
+                    "data": {"run_id": context.run_id, "tool_name": call.tool_name},
+                },
             )
             return self._observation_builder.error(call.tool_name, f"unknown tool: {call.tool_name}")
         arguments = self._validate_arguments(tool, call)
@@ -328,11 +337,14 @@ class ToolRuntime:
                 self._logger.info(
                     "tool_idempotency_reused",
                     extra={
-                        "run_id": context.run_id,
-                        "step_id": context.step_id,
-                        "tool_call_id": tool_call_id,
-                        "tool_name": tool.name,
-                        "idempotency_key": idempotency_key,
+                        "msg": f"工具调用幂等复用已完成结果，tool={tool.name}",
+                        "data": {
+                            "run_id": context.run_id,
+                            "step_id": context.step_id,
+                            "tool_call_id": tool_call_id,
+                            "tool_name": tool.name,
+                            "idempotency_key": idempotency_key,
+                        },
                     },
                 )
                 return self._observation_builder.success(
@@ -345,11 +357,14 @@ class ToolRuntime:
             self._logger.warning(
                 "tool_policy_denied",
                 extra={
-                    "run_id": context.run_id,
-                    "step_id": context.step_id,
-                    "tool_call_id": tool_call_id,
-                    "tool_name": tool.name,
-                    "idempotency_key": idempotency_key,
+                    "msg": f"工具调用被策略拒绝，tool={tool.name}，reason={decision.reason}",
+                    "data": {
+                        "run_id": context.run_id,
+                        "step_id": context.step_id,
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool.name,
+                        "idempotency_key": idempotency_key,
+                    },
                 },
             )
             return self._observation_builder.error(tool.name, decision.reason, tool.permission, "deny", tool_call_id)
@@ -453,11 +468,14 @@ class ToolRuntime:
         self._logger.info(
             "tool_approval_requested",
             extra={
-                "run_id": context.run_id,
-                "step_id": context.step_id,
-                "tool_call_id": tool_call_id,
-                "approval_id": approval.approval_id,
-                "tool_name": tool.name,
+                "msg": f"工具调用需要审批，已创建审批请求，tool={tool.name}",
+                "data": {
+                    "run_id": context.run_id,
+                    "step_id": context.step_id,
+                    "tool_call_id": tool_call_id,
+                    "approval_id": approval.approval_id,
+                    "tool_name": tool.name,
+                },
             },
         )
         return ToolObservation(tool.name, "approval_required", "", decision.reason, tool.permission, "approval_required", tool_call_id)

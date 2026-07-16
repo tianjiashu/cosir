@@ -33,7 +33,7 @@ class LogQueryServiceTests(unittest.TestCase):
             start_time="2026-07-15T10:00:00Z",
             limit=5,
         )
-        self.assertIn('event=test_event message="rendered"', result.text)
+        self.assertIn('event=test_event msg="rendered"', result.text)
         self.assertEqual(store.last_query.trace_id, "trace-1")
         self.assertEqual(store.last_query.level, "WARNING")
         self.assertEqual(store.last_query.start_time, "2026-07-15T10:00:00.000Z")
@@ -103,7 +103,6 @@ class _Store:
         副作用:
             无。
         """
-
         self.last_query = None
 
     def query(self, query):
@@ -121,15 +120,16 @@ class _Store:
         副作用:
             保存最近一次查询参数。
         """
-
         self.last_query = query
         return [
             LogEntryRecord(
                 ts="2026-07-15T10:00:00.000Z",
                 level="INFO",
-                logger_name="coding_agent.backend",
-                event_name="test_event",
-                message="rendered",
+                logger="coding_agent.backend",
+                trace_id="",
+                caller="",
+                event="test_event",
+                msg="rendered",
             )
         ]
 

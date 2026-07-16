@@ -9,7 +9,7 @@ import time
 from typing import Deque
 
 from app.core.trace.redaction import redact_value
-from app.config.logging.record_mapper import map_log_record
+from app.config.logging.record_mapper import LogError, map_log_record
 from app.storage.log_records import LogEntryRecord
 from app.storage.log_store import LogStore
 
@@ -103,7 +103,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             等待后台线程短暂退出并关闭 handler。
         """
-
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=max(1.0, self._flush_interval_seconds * 2))
@@ -124,7 +123,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             最多等待短暂时间让后台线程刷盘。
         """
-
         deadline = time.monotonic() + max(1.0, self._flush_interval_seconds * 3)
         while self._queue.unfinished_tasks > 0 and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -144,7 +142,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             修改内存队列；可能丢弃日志入库副本。
         """
-
         try:
             self._queue.put_nowait(entry)
             return
@@ -174,7 +171,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             重排内存队列。
         """
-
         drained: Deque[LogEntryRecord] = deque()
         dropped = False
         while True:
@@ -211,7 +207,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             持续消费队列并写入日志数据库。
         """
-
         batch: list[LogEntryRecord] = []
         while not self._stop_event.is_set() or not self._queue.empty():
             try:
@@ -242,7 +237,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             写入 SQLite；失败时写限频告警。
         """
-
         try:
             self._store.insert_many(batch)
         except Exception as exc:
@@ -267,7 +261,6 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             可能向文件 handler 或 stderr 写入告警。
         """
-
         now = time.monotonic()
         if now - self._last_warning_at < 5:
             return
@@ -303,31 +296,23 @@ def entry_from_log_record(record: logging.LogRecord) -> LogEntryRecord:
         可写入 SQLite 的 LogEntryRecord。
 
     异常:
-        TypeError: 如果 attributes 无法脱敏或 JSON 化。
+        TypeError: 如果 data 无法脱敏或 JSON 化。
 
     副作用:
         无。
     """
-
     mapped = map_log_record(record)
-    attributes = redact_value(mapped.attributes)
+    data = redact_value(mapped.data)
+    error: LogError | None = mapped.error
     return LogEntryRecord(
         ts=mapped.ts,
         level=mapped.level,
-        logger_name=mapped.logger_name,
-        event_name=mapped.event_name,
-        message=mapped.message,
+        logger=mapped.logger,
         trace_id=mapped.trace_id,
-        task_id=mapped.task_id,
-        run_id=mapped.run_id,
-        span_id=mapped.span_id,
-        event_id=mapped.event_id,
-        step_id=mapped.step_id,
-        tool_call_id=mapped.tool_call_id,
-        approval_id=mapped.approval_id,
-        error_type=mapped.error_type,
-        error_message=mapped.error_message,
-        attributes=attributes if isinstance(attributes, dict) else {},
-        stack=mapped.stack,
+        caller=mapped.caller,
+        event=mapped.event,
+        msg=mapped.msg,
+        data=data,
+        error=error.__dict__ if error is not None else None,
         truncated=mapped.truncated,
     )

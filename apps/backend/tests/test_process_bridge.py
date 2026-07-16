@@ -106,7 +106,7 @@ class ProcessBridgeTests(unittest.TestCase):
             无。
 
         异常:
-            AssertionError: 如果 SQLite 未入库或 run_id/异常类型不匹配。
+            AssertionError: 如果 SQLite 未入库或 data.run_id/异常类型不匹配。
 
         副作用:
             创建临时日志目录与 SQLite 日志库，并启动一次 spawn 子进程。
@@ -136,12 +136,13 @@ class ProcessBridgeTests(unittest.TestCase):
                 if isinstance(handler, SQLiteLogHandler):
                     handler.flush()
 
-            entries = LogStore(db_file).query(LogQuery(run_id="run-bridge-sqlite"))
-            events = [entry.event_name for entry in entries]
+            # D4：日志查询 API 仅保留 trace_id 作为关联键，run_id 归入 data。
+            entries = LogStore(db_file).query(LogQuery(event_name="tool_handler_failed"))
+            events = [entry.event for entry in entries]
             self.assertIn("tool_handler_failed", events)
-            failed = [entry for entry in entries if entry.event_name == "tool_handler_failed"][0]
-            self.assertEqual(failed.run_id, "run-bridge-sqlite")
-            self.assertEqual(failed.error_type, "RuntimeError")
+            failed = [entry for entry in entries if entry.event == "tool_handler_failed"][0]
+            self.assertEqual(failed.data.get("run_id"), "run-bridge-sqlite")
+            self.assertEqual(failed.error["type"], "RuntimeError")
 
     def tearDown(self) -> None:
         stop_queue_listener()

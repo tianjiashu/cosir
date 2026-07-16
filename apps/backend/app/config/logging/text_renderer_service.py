@@ -18,7 +18,6 @@ def render_log_entries(entries: list[LogEntryRecord]) -> str:
     副作用:
         无。
     """
-
     return "\n".join(_render_entry(entry) for entry in entries)
 
 
@@ -37,26 +36,19 @@ def _render_entry(entry: LogEntryRecord) -> str:
     副作用:
         无。
     """
-
     parts = [
         entry.ts,
         entry.level,
-        entry.logger_name,
-        f"event={entry.event_name}",
+        entry.logger,
+        f"event={entry.event}",
     ]
-    for key, value in (
-        ("trace_id", entry.trace_id),
-        ("task_id", entry.task_id),
-        ("run_id", entry.run_id),
-        ("step_id", entry.step_id),
-        ("tool_call_id", entry.tool_call_id),
-        ("approval_id", entry.approval_id),
-    ):
-        if value:
-            parts.append(f"{key}={value}")
-    parts.append(f'message="{entry.message}"')
-    if entry.error_type:
-        parts.append(f"error_type={entry.error_type}")
-    if entry.error_message:
-        parts.append(f'error_message="{entry.error_message}"')
+    if entry.trace_id:
+        parts.append(f"trace_id={entry.trace_id}")
+    if entry.caller:
+        parts.append(f"caller={entry.caller}")
+    parts.append(f'msg="{entry.msg}"')
+    if entry.data:
+        parts.append(f"data={entry.data}")
+    if entry.error:
+        parts.append(f"error={entry.error}")
     return " ".join(parts)

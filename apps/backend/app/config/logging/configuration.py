@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+from app.config.logging.caller import CallerFilter
 from app.config.logging.log_context import LogContextFilter
 from app.config.logging.log_files_dir_service import current_log_file
 from app.config.logging.save.jsonl import JsonlFormatter
@@ -67,10 +68,12 @@ def configure_logging(
         handler.close()
 
     context_filter = LogContextFilter()
+    caller_filter = CallerFilter()
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(JsonlFormatter())
     file_handler.addFilter(context_filter)
+    file_handler.addFilter(caller_filter)
     logger.addHandler(file_handler)
 
     if sqlite_logging_enabled and log_database_file is not None:
@@ -78,6 +81,7 @@ def configure_logging(
             logger=logger,
             file_handler=file_handler,
             context_filter=context_filter,
+            caller_filter=caller_filter,
             log_database_file=log_database_file,
             queue_size=queue_size,
             batch_size=batch_size,
@@ -140,6 +144,7 @@ def _add_sqlite_handler_or_warn(
     logger: logging.Logger,
     file_handler: logging.Handler,
     context_filter: LogContextFilter,
+    caller_filter: CallerFilter,
     log_database_file: Path,
     queue_size: int,
     batch_size: int,
@@ -175,10 +180,17 @@ def _add_sqlite_handler_or_warn(
             fallback_handler=file_handler,
         )
     except Exception as exc:
-        logger.warning("sqlite_log_handler_unavailable", extra={"error": str(exc)})
+        logger.warning(
+            "sqlite_log_handler_unavailable",
+            extra={
+                "msg": "SQLite 日志 handler 初始化失败，日志仅落文件",
+                "data": {"error": str(exc)},
+            },
+        )
         return
     sqlite_handler.setLevel(logging.DEBUG)
     sqlite_handler.addFilter(context_filter)
+    sqlite_handler.addFilter(caller_filter)
     logger.addHandler(sqlite_handler)
 
 

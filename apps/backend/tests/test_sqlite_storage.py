@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from app.events.types import EventType, RuntimeEvent
-from app.storage.sqlite import SQLiteTaskStore
+from app.storage.task_store import SQLiteTaskStore
 
 
 class SQLiteTaskStoreTests(unittest.TestCase):

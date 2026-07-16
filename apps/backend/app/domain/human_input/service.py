@@ -83,7 +83,10 @@ class HumanInputService:
         )
         self._logger.info(
             "human_input_requested",
-            extra={"run_id": run_id, "request_id": request.request_id},
+            extra={
+                "msg": f"人工输入请求已创建，run_id={run_id}，request_id={request.request_id}",
+                "data": {"run_id": run_id, "request_id": request.request_id},
+            },
         )
         return request
 
@@ -120,6 +123,9 @@ class HumanInputService:
         )
         self._logger.info(
             "human_input_received",
-            extra={"run_id": request.run_id, "request_id": request_id},
+            extra={
+                "msg": f"人工输入已收到，run_id={request.run_id}，request_id={request_id}",
+                "data": {"run_id": request.run_id, "request_id": request_id},
+            },
         )
         return record

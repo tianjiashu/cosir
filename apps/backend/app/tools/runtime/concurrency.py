@@ -67,9 +67,12 @@ class ToolConcurrentScheduler:
             self._logger.info(
                 "tool_concurrency_group_started",
                 extra={
-                    "parallel": group.parallel,
-                    "reason": group.reason,
-                    "size": len(prepared_calls),
+                    "msg": f"并发分组开始执行，parallel={group.parallel}，size={len(prepared_calls)}",
+                    "data": {
+                        "parallel": group.parallel,
+                        "reason": group.reason,
+                        "size": len(prepared_calls),
+                    },
                 },
             )
             if group.parallel and len(prepared_calls) > 1:
@@ -81,9 +84,12 @@ class ToolConcurrentScheduler:
             self._logger.info(
                 "tool_concurrency_group_finished",
                 extra={
-                    "parallel": group.parallel,
-                    "reason": group.reason,
-                    "size": len(prepared_calls),
+                    "msg": f"并发分组执行完成，parallel={group.parallel}，size={len(prepared_calls)}",
+                    "data": {
+                        "parallel": group.parallel,
+                        "reason": group.reason,
+                        "size": len(prepared_calls),
+                    },
                 },
             )
         return results

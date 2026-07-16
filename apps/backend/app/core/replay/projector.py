@@ -59,10 +59,13 @@ class ReplayProjector:
             logger.exception(
                 "replay_project_failed",
                 extra={
-                    "trace_id": first.trace_id if first else "",
-                    "run_id": first.run_id if first else "",
-                    "task_id": first.task_id if first else "",
-                    "event_count": len(ordered),
+                    "msg": "Trace 事件投影为 replay timeline 失败",
+                    "data": {
+                        "trace_id": first.trace_id if first else "",
+                        "run_id": first.run_id if first else "",
+                        "task_id": first.task_id if first else "",
+                        "event_count": len(ordered),
+                    },
                 },
             )
             raise

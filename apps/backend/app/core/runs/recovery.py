@@ -58,14 +58,20 @@ class RecoveryManager:
         runs = self._run_store.list_recoverable()
         self._logger.info(
             "run_recovery_commands_requeued",
-            extra={"run_id": "*", "count": requeued},
+            extra={
+                "msg": f"启动恢复对账：遗留恢复命令已重新排队，count={requeued}",
+                "data": {"run_id": "*", "count": requeued},
+            },
         )
         self._logger.info(
             "run_recovery_reconciled",
             extra={
-                "run_id": "*",
-                "count": len(runs),
-                "recoverable_run_ids": [run.run_id for run in runs],
+                "msg": f"启动恢复对账完成，可恢复运行数={len(runs)}",
+                "data": {
+                    "run_id": "*",
+                    "count": len(runs),
+                    "recoverable_run_ids": [run.run_id for run in runs],
+                },
             },
         )
         for run in runs:
@@ -100,7 +106,10 @@ class RecoveryManager:
         run = self._run_store.get(run_id)
         self._logger.info(
             "run_recovery_commands_requeued",
-            extra={"run_id": run_id, "count": requeued},
+            extra={
+                "msg": f"指定运行恢复对账：遗留恢复命令已重新排队，run_id={run_id}，count={requeued}",
+                "data": {"run_id": run_id, "count": requeued},
+            },
         )
         self._record_recovery_event(
             run,

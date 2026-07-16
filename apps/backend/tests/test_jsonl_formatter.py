@@ -14,8 +14,8 @@ from app.config.logging import entry_from_log_record
 class JsonlFormatterTests(unittest.TestCase):
     """校验 JSONL 文件日志字段契约。"""
 
-    def test_formatter_outputs_event_name_message_and_stack(self) -> None:
-        """校验异常日志输出 event_name、message 和 stack 顶层字段。
+    def test_formatter_outputs_event_msg_data_and_nested_error(self) -> None:
+        """校验异常日志输出 event、msg、data 与嵌套 error 块。
 
         参数:
             无。
@@ -43,14 +43,14 @@ class JsonlFormatterTests(unittest.TestCase):
                 msg="tool_call_failed",
                 args=(),
                 exc_info=exc_info,
-                extra={"display_message": "工具执行失败", "tool_name": "read_file"},
+                extra={"msg": "工具执行失败", "tool_name": "read_file"},
             )
         payload = json.loads(formatter.format(record))
-        self.assertEqual(payload["event_name"], "tool_call_failed")
-        self.assertEqual(payload["message"], "工具执行失败")
-        self.assertEqual(payload["attributes"]["tool_name"], "read_file")
-        self.assertEqual(payload["error_type"], "RuntimeError")
-        self.assertIn("Traceback", payload["stack"])
+        self.assertEqual(payload["event"], "tool_call_failed")
+        self.assertEqual(payload["msg"], "工具执行失败")
+        self.assertEqual(payload["data"]["tool_name"], "read_file")
+        self.assertEqual(payload["error"]["type"], "RuntimeError")
+        self.assertIn("Traceback", payload["error"]["stack"])
 
     def test_formatter_matches_sqlite_mapping_for_context_and_fallback_event(self) -> None:
         """校验 JSONL 与 SQLite 映射语义保持一致。
@@ -81,25 +81,26 @@ class JsonlFormatterTests(unittest.TestCase):
                 "trace_id": "trace-1",
                 "task_id": "task-1",
                 "run_id": "run-1",
-                "display_message": "x" * (MAX_LOG_TEXT_LENGTH + 1),
+                "msg": "x" * (MAX_LOG_TEXT_LENGTH + 1),
             },
         )
 
         payload = json.loads(formatter.format(record))
         entry = entry_from_log_record(record)
 
-        self.assertEqual(payload["event_name"], "log_event")
-        self.assertEqual(entry.event_name, "log_event")
-        self.assertEqual(payload["message"], entry.message)
+        self.assertEqual(payload["event"], "log_event")
+        self.assertEqual(entry.event, "log_event")
+        self.assertEqual(payload["msg"], entry.msg)
         self.assertTrue(payload["truncated"])
         self.assertTrue(entry.truncated)
         self.assertEqual(payload["trace_id"], "trace-1")
-        self.assertEqual(payload["task_id"], "task-1")
-        self.assertEqual(payload["run_id"], "run-1")
+        # 非保留链路键落入 data（Phase 1 兼容噪音，Phase 2 清理）。
+        self.assertEqual(payload["data"]["task_id"], "task-1")
+        self.assertEqual(payload["data"]["run_id"], "run-1")
         self.assertRegex(payload["ts"], re.compile(r"^\d{4}-\d{2}-\d{2}T.*\.\d{3}Z$"))
 
-    def test_message_defaults_to_event_name_without_display_message(self) -> None:
-        """校验没有 display_message 时消息文本使用原始事件名。
+    def test_message_defaults_to_event_name_without_msg(self) -> None:
+        """校验没有 msg 时消息文本使用原始事件名。
 
         参数:
             无。
@@ -124,8 +125,8 @@ class JsonlFormatterTests(unittest.TestCase):
             exc_info=None,
         )
         payload = json.loads(JsonlFormatter().format(record))
-        self.assertEqual(payload["event_name"], "http_request_finished")
-        self.assertEqual(payload["message"], "http_request_finished")
+        self.assertEqual(payload["event"], "http_request_finished")
+        self.assertEqual(payload["msg"], "http_request_finished")
 
     def test_message_defaults_to_fallback_event_name_for_dynamic_text(self) -> None:
         """校验动态文本不会进入默认 message 字段。
@@ -153,8 +154,8 @@ class JsonlFormatterTests(unittest.TestCase):
             exc_info=None,
         )
         payload = json.loads(JsonlFormatter().format(record))
-        self.assertEqual(payload["event_name"], "log_event")
-        self.assertEqual(payload["message"], "log_event")
+        self.assertEqual(payload["event"], "log_event")
+        self.assertEqual(payload["msg"], "log_event")
 
 
 if __name__ == "__main__":

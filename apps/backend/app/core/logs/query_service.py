@@ -36,8 +36,6 @@ class LogQueryService:
         self,
         trace_id: str,
         level: str = "",
-        task_id: str = "",
-        run_id: str = "",
         start_time: str = "",
         end_time: str = "",
         limit: int = 200,
@@ -45,10 +43,8 @@ class LogQueryService:
         """按 trace_id 查询完整链路日志。
 
         参数:
-            trace_id: 必填 trace 标识。
+            trace_id: 必填 trace 标识（日志层唯一链路键）。
             level: 可选日志级别。
-            task_id: 可选任务标识。
-            run_id: 可选 run 标识。
             start_time: 可选 UTC RFC3339 起始时间。
             end_time: 可选 UTC RFC3339 结束时间。
             limit: 最大返回数量。
@@ -68,8 +64,6 @@ class LogQueryService:
         query = LogQuery(
             trace_id=trace_id.strip(),
             level=_normalize_level(level),
-            task_id=task_id.strip(),
-            run_id=run_id.strip(),
             start_time=_normalize_time(start_time),
             end_time=_normalize_time(end_time),
             limit=self._normalize_limit(limit),

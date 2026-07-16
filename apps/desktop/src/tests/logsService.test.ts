@@ -39,7 +39,7 @@ describe("logs.ts — 后端日志查询服务", () => {
     const fetchImpl = mockFetch({
       ok: true,
       status: 200,
-      json: async () => ({ entries: [{ event_name: "x" }], text: "line" }),
+      json: async () => ({ entries: [{ event: "x" }], text: "line" }),
     } as unknown as Response);
 
     const result = await fetchLogsByTrace({ trace_id: "trace-1", level: "INFO" });

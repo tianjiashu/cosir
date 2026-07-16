@@ -4,6 +4,15 @@
 对外公开的名称，供 ``app`` 其余模块直接通过 ``app.config.logging`` 引用。
 """
 
+import logging
+
+from app.config.logging.caller import CallerFilter, compute_caller
+from app.config.logging.logger import install_msg_relocation
+
+# 全局允许 coding_agent.backend 及子进程 logger 使用规范约定的 extra["msg"] 键。
+# setLoggerClass 对既有 logger（如已创建的 coding_agent.backend）与子进程 logger 不可靠，
+# 因此改为在 makeRecord 阶段重定位，导入本包即生效（幂等）。
+install_msg_relocation()
 from app.config.logging.configuration import (
     configure_logging,
     install_logging_for_current_process,
@@ -45,6 +54,9 @@ __all__ = [
     "configure_logging",
     "install_logging_for_current_process",
     "shutdown_logging",
+    "CallerFilter",
+    "compute_caller",
+    "install_msg_relocation",
     "LogContext",
     "LogContextFilter",
     "TraceLogContextFilter",

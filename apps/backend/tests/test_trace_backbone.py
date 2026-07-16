@@ -203,20 +203,20 @@ class TraceBackboneTests(unittest.TestCase):
             self.assertNotIn("secret-value", content)
             self.assertNotIn("secret-token", content)
 
-            rows = query_log_file(log_file, trace_id="trace-a", run_id="run-a", level="info")
+            rows = query_log_file(log_file, trace_id="trace-a", level="info")
 
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["message"], "trace filtered message")
-            self.assertEqual(rows[0]["event_name"], "trace_filtered_message")
+            self.assertEqual(rows[0]["msg"], "trace filtered message")
+            self.assertEqual(rows[0]["event"], "trace_filtered_message")
             self.assertEqual(rows[0]["trace_id"], "trace-a")
-            self.assertEqual(rows[0]["run_id"], "run-a")
+            self.assertEqual(rows[0]["data"]["run_id"], "run-a")
             self.assertEqual(rows[0]["level"], "INFO")
-            self.assertEqual(rows[0]["attributes"]["api_key"], "[REDACTED]")
-            self.assertEqual(rows[0]["attributes"]["nested"]["token"], "[REDACTED]")
+            self.assertEqual(rows[0]["data"]["api_key"], "[REDACTED]")
+            self.assertEqual(rows[0]["data"]["nested"]["token"], "[REDACTED]")
 
             raw_rows = [json.loads(line) for line in content.splitlines() if line.strip()]
             self.assertEqual(len(raw_rows), 3)
-            self.assertEqual(query_log_file(log_file, trace_id="trace-a", level="warning")[0]["message"], "warn_message")
+            self.assertEqual(query_log_file(log_file, trace_id="trace-a", level="warning")[0]["msg"], "warn_message")
 
     def test_jsonl_logging_supports_trace_filter_for_user_operation(self) -> None:
         """校验 JSONL 日志支持按 trace_id 查询一次用户操作链路。
@@ -246,8 +246,49 @@ class TraceBackboneTests(unittest.TestCase):
             rows = query_log_file(log_file, trace_id="trace-1")
 
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["message"], "client_operation_one")
+            self.assertEqual(rows[0]["msg"], "client_operation_one")
             self.assertEqual(rows[0]["trace_id"], "trace-1")
+
+    def test_get_run_trace_queries_logs_by_trace_id(self) -> None:
+        """校验 get_run_trace 按 trace_id（非 run_id）聚合日志（D4）。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果日志未按 trace_id 过滤。
+
+        副作用:
+            写入临时 JSONL 日志与 trace 事件。
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            log_dir = root / "logs"
+            log_file = current_log_file(log_dir)
+            logger = configure_logging(log_dir)
+            logger.info("run_x_log", extra={"trace_id": "trace-run-x", "run_id": "run-x"})
+            logger.info("other_trace_log", extra={"trace_id": "trace-other"})
+            for handler in logger.handlers:
+                handler.flush()
+
+            store = TraceStore(root / "app.sqlite3")
+            recorder_logger = logging.getLogger("trace-recorder-test")
+            recorder_logger.handlers = [logging.NullHandler()]
+            recorder = TraceRecorder(store, recorder_logger)
+            context = TraceContext(trace_id="trace-run-x", task_id="task-x", run_id="run-x")
+            recorder.record_event(context, "run_started", {"status": "running"}, source="test")
+
+            service = TraceQueryService(store, log_dir)
+            result = service.get_run_trace("run-x")
+
+            self.assertEqual(result["run_id"], "run-x")
+            self.assertEqual(result["trace_id"], "trace-run-x")
+            log_events = [row["event"] for row in result["logs"]]
+            self.assertIn("run_x_log", log_events)
+            self.assertNotIn("other_trace_log", log_events)
 
     def test_jsonl_logging_marks_truncated_and_filters_time_range(self) -> None:
         """校验 JSONL 日志会标记截断并支持时间范围过滤。
@@ -282,7 +323,7 @@ class TraceBackboneTests(unittest.TestCase):
 
             self.assertEqual(len(rows), 1)
             self.assertTrue(rows[0]["truncated"])
-            self.assertIn("[TRUNCATED:", rows[0]["message"])
+            self.assertIn("[TRUNCATED:", rows[0]["msg"])
             self.assertEqual(query_log_file(log_file, trace_id="trace-truncated", end_time="2000-01-01T00:00:00+00:00"), [])
 
     def test_jsonl_time_filter_compares_real_instant_across_offsets(self) -> None:
@@ -308,11 +349,14 @@ class TraceBackboneTests(unittest.TestCase):
                     {
                         "ts": "2026-07-15T09:00:00+08:00",
                         "level": "INFO",
-                        "logger_name": "test",
-                        "message": "offset instant",
+                        "logger": "test",
                         "trace_id": "trace-offset",
-                        "run_id": "run-offset",
-                        "attributes": {},
+                        "caller": "",
+                        "event": "offset_instant",
+                        "msg": "offset instant",
+                        "data": {},
+                        "error": None,
+                        "truncated": False,
                     }
                 )
                 + "\n",
@@ -326,7 +370,7 @@ class TraceBackboneTests(unittest.TestCase):
                 end_time="2026-07-15T01:00:00+00:00",
             )
 
-            self.assertEqual([row["message"] for row in rows], ["offset instant"])
+            self.assertEqual([row["msg"] for row in rows], ["offset instant"])
 
     def test_configure_logging_replaces_previous_file_handler(self) -> None:
         """校验重复配置日志文件不会串写旧文件。
@@ -428,7 +472,7 @@ class TraceBackboneTests(unittest.TestCase):
                 end_time="2026-07-15T02:00:00+00:00",
             )
 
-            self.assertEqual([row["message"] for row in rows], ["first day", "second day"])
+            self.assertEqual([row["msg"] for row in rows], ["first day", "second day"])
 
     def test_trace_query_service_uses_local_date_for_offset_file_selection(self) -> None:
         """校验查询时间按本地日期选择日志文件。
@@ -465,7 +509,7 @@ class TraceBackboneTests(unittest.TestCase):
                 end_time="2026-07-14T17:00:00+00:00",
             )
 
-            self.assertEqual([row["message"] for row in rows], ["local date selected"])
+            self.assertEqual([row["msg"] for row in rows], ["local date selected"])
 
 
 def _sqlite_table_exists(database: Path, table_name: str) -> bool:
@@ -496,11 +540,11 @@ def _sqlite_table_exists(database: Path, table_name: str) -> bool:
 
 
 def _json_log_line(ts: str, message: str) -> str:
-    """构造测试用 JSONL 日志行。
+    """构造测试用 JSONL 日志行（9 字段 schema）。
 
     参数:
         ts: ISO 时间文本。
-        message: 日志消息。
+        message: 日志消息（映射到 9 字段的 msg）。
 
     返回:
         JSON 字符串。
@@ -516,11 +560,14 @@ def _json_log_line(ts: str, message: str) -> str:
         {
             "ts": ts,
             "level": "INFO",
-            "logger_name": "test",
-            "message": message,
+            "logger": "test",
             "trace_id": "trace-cross",
-            "run_id": "run-cross",
-            "attributes": {},
+            "caller": "",
+            "event": "cross_date_log",
+            "msg": message,
+            "data": {},
+            "error": None,
+            "truncated": False,
         }
     )
 

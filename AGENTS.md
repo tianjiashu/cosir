@@ -124,16 +124,13 @@ coding-agent/
 根据任务类型读取对应文档，不要把所有文档一次性塞进上下文。
 
 - 项目想法和讨论事实源：`docs/idea-requirements.md`
-- 技术栈与运行形态：`docs/tech-stack.md`
-- Agent Runtime 与 Agent Loop 定位：`docs/agent-runtime-loop.md`
-- 客户端 UI 指南：`docs/ui-guidelines.md`
-- 第一阶段能力与生产级验收：`docs/production-acceptance.md`
 - 代码开发规范：`rules/Agent代码开发规范.md`
 - 客户端代码开发规范（Tauri/React/TS 派生附录）：`rules/Agent客户端代码开发规范.md`
 - 交互澄清规则：`rules/global-interaction-clarification.md`
 - 成熟机制复用规则：`rules/mature-mechanism-reuse.md`
 - 经验复用记录：`rules/agent-lessons.md`
 - coding-agent 原理文档：`coding-agent-docs`
+- 日志规范：`rules/Agent日志开发规范.md`
 
 ## CodeGraph 使用规则
 

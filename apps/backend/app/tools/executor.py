@@ -93,14 +93,17 @@ class ToolCallExecutor:
         """
 
         started_at = monotonic()
-        token = merge_log_context(run_id=prepared.run_id, tool_call_id=prepared.tool_call_id)
+        token = merge_log_context(run_id=prepared.run_id)
         try:
             self._logger.info(
                 "tool_executor_started",
                 extra={
-                    "step_id": prepared.step_id,
-                    "tool_name": prepared.tool.name,
-                    "idempotency_key": prepared.idempotency_key,
+                    "msg": f"开始执行工具调用，tool={prepared.tool.name}",
+                    "data": {
+                        "step_id": prepared.step_id,
+                        "tool_name": prepared.tool.name,
+                        "idempotency_key": prepared.idempotency_key,
+                    },
                 },
             )
             self._mark_running(prepared)
@@ -178,11 +181,14 @@ class ToolCallExecutor:
         self._logger.info(
             "tool_executor_finished",
             extra={
-                "step_id": prepared.step_id,
-                "tool_name": prepared.tool.name,
-                "idempotency_key": prepared.idempotency_key,
-                "duration_ms": elapsed_ms,
-                "artifact_id": artifact_id,
+                "msg": f"工具调用执行完成，tool={prepared.tool.name}，耗时 {elapsed_ms}ms",
+                "data": {
+                    "step_id": prepared.step_id,
+                    "tool_name": prepared.tool.name,
+                    "idempotency_key": prepared.idempotency_key,
+                    "duration_ms": elapsed_ms,
+                    "artifact_id": artifact_id,
+                },
             },
         )
         return ToolRuntimeResult(
@@ -230,11 +236,14 @@ class ToolCallExecutor:
         self._logger.error(
             "tool_executor_failed",
             extra={
-                "step_id": prepared.step_id,
-                "tool_name": prepared.tool.name,
-                "idempotency_key": prepared.idempotency_key,
-                "duration_ms": elapsed_ms,
-                "error": error,
+                "msg": f"工具调用执行失败，tool={prepared.tool.name}",
+                "data": {
+                    "step_id": prepared.step_id,
+                    "tool_name": prepared.tool.name,
+                    "idempotency_key": prepared.idempotency_key,
+                    "duration_ms": elapsed_ms,
+                    "error": error,
+                },
             },
         )
         return ToolRuntimeResult(

@@ -17,7 +17,7 @@ from app.config.logging import configure_logging
 from app.config.logging import current_log_file
 from app.models.echo import EchoStreamingModelAdapter
 from app.core.runtime.runner import AgentRuntime
-from app.storage.sqlite import SQLiteTaskStore
+from app.storage.task_store import SQLiteTaskStore
 from app.tools.registry.memory import ToolRegistry
 from app.tools.builtin.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
