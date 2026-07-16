@@ -27,3 +27,7 @@ apps/desktop/src-tauri/gen/
 
 # 临时调试脚本（环境可能重建为空文件，避免误提交）
 apps/backend/tests/_tmp_*.py
+apps/backend/_trace_dbg.py
+
+# 前端依赖（不应提交）
+node_modules/
