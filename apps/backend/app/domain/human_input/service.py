@@ -81,7 +81,10 @@ class HumanInputService:
             active_step_id=step_id,
             active_wait_id=request.request_id,
         )
-        self._logger.info("human_input_requested run_id=%s request_id=%s", run_id, request.request_id)
+        self._logger.info(
+            "human_input_requested",
+            extra={"run_id": run_id, "request_id": request.request_id},
+        )
         return request
 
     def respond(
@@ -115,5 +118,8 @@ class HumanInputService:
             payload={"request_id": request_id, "response": response},
             idempotency_key=f"resume:{idempotency_key}",
         )
-        self._logger.info("human_input_received run_id=%s request_id=%s", request.run_id, request_id)
+        self._logger.info(
+            "human_input_received",
+            extra={"run_id": request.run_id, "request_id": request_id},
+        )
         return record

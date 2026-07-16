@@ -21,10 +21,10 @@ import { logError } from "../lib/logger";
  */
 interface UseSSEReturn {
   /**
-   * 建立 SSE 连接并开始接收指定任务的事件流。
+   * 建立 SSE 连接并开始后台接收指定任务的事件流。
    *
    * @param taskId - 要监听的任务 ID。
-   * @returns Promise<void>，连接结束时 resolve，错误时 reject。
+   * @returns Promise<void>，连接启动后 resolve；后续流错误通过日志和状态回调处理。
    */
   connect: (taskId: string) => Promise<void>;
 
@@ -65,7 +65,7 @@ export function useSSE(): UseSSEReturn {
    * 建立到指定任务的 SSE 连接。
    *
    * @param taskId - 要监听的任务标识符。
-   * @returns Promise<void>，连接正常结束时 resolve。
+   * @returns Promise<void>，连接启动后 resolve；流式消费在后台继续。
    */
   const connect = useCallback(
     async (taskId: string): Promise<void> => {
@@ -86,7 +86,9 @@ export function useSSE(): UseSSEReturn {
       });
 
       connectionRef.current = connection;
-      await connection.connect();
+      void connection.connect().catch(() => {
+        // SSEConnection 已通过 onError 和内部日志记录错误，这里只负责避免未处理 Promise。
+      });
     },
     [appendEvent, setConnectionState],
   );

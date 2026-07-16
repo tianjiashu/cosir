@@ -127,9 +127,12 @@ class ReactLikeWorkflow:
             raise RuntimeError("invalid_model_output")
 
         operations.log_exception(
-            "task_failed task_id=%s reason=max_steps_reached max_steps=%s",
-            task.task_id,
-            operations.settings.max_steps,
+            "task_failed",
+            extra={
+                "task_id": task.task_id,
+                "reason": "max_steps_reached",
+                "max_steps": operations.settings.max_steps,
+            },
         )
         operations.update_task_status(task.task_id, "failed")
         operations.close_running_steps(task.task_id, "failed", "max_steps_reached")
@@ -168,6 +171,11 @@ class ReactLikeWorkflow:
         state.requested_tool = False
         state.final_response = False
         tool_calls: List[ToolCall] = []
+        yield operations.record_event(
+            EventType.MODEL_REQUESTED,
+            task.task_id,
+            {"step_id": model_step.step_id, "step_index": state.step_count},
+        )
 
         async for delta in operations.stream_model(state.messages):
             if operations.has_task_status(task.task_id, "cancelled"):
@@ -193,6 +201,11 @@ class ReactLikeWorkflow:
                 continue
 
             if delta.is_final:
+                yield operations.record_event(
+                    EventType.MODEL_COMPLETED,
+                    task.task_id,
+                    {"step_id": model_step.step_id, "step_index": state.step_count},
+                )
                 if tool_calls:
                     async for event in self._handle_tool_calls(
                         task, operations, model_step, tool_calls, state
@@ -206,6 +219,11 @@ class ReactLikeWorkflow:
                 return
 
         if tool_calls:
+            yield operations.record_event(
+                EventType.MODEL_COMPLETED,
+                task.task_id,
+                {"step_id": model_step.step_id, "step_index": state.step_count},
+            )
             async for event in self._handle_tool_calls(
                 task, operations, model_step, tool_calls, state
             ):
@@ -240,14 +258,60 @@ class ReactLikeWorkflow:
 
         operations.update_step(model_step.step_id, "completed", output_summary="tool_calls")
         yield operations.create_checkpoint(task.task_id, "model_tool_calls_requested")
-        for call in tool_calls:
-            yield operations.record_event(EventType.TOOL_CALL_REQUESTED, task.task_id, {"tool_name": call.tool_name, "arguments": call.arguments})
-            yield operations.record_event(EventType.TOOL_CALL_STARTED, task.task_id, {"tool_name": call.tool_name})
         observations = operations.execute_tools(tool_calls, model_step.step_id)
-        for call, observation in zip(tool_calls, observations):
-            yield operations.record_event(EventType.TOOL_CALL_FINISHED, task.task_id, {"tool_name": observation.tool_name, "status": observation.status, "error": observation.error})
+        tool_group_id = f"{model_step.step_id}:tools"
+        for index, (call, observation) in enumerate(zip(tool_calls, observations)):
+            tool_call_id = observation.tool_call_id or call.call_id
+            yield operations.record_event(
+                EventType.TOOL_CALL_REQUESTED,
+                task.task_id,
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": call.tool_name,
+                    "arguments": call.arguments,
+                    "tool_group_id": tool_group_id,
+                    "tool_call_index": index,
+                },
+            )
+            yield operations.record_event(
+                EventType.TOOL_CALL_STARTED,
+                task.task_id,
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": call.tool_name,
+                    "tool_group_id": tool_group_id,
+                    "tool_call_index": index,
+                },
+            )
+        for index, (call, observation) in enumerate(zip(tool_calls, observations)):
+            tool_call_id = observation.tool_call_id or call.call_id
+            yield operations.record_event(
+                EventType.TOOL_CALL_FINISHED,
+                task.task_id,
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": observation.tool_name,
+                    "status": observation.status,
+                    "error": observation.error,
+                    "artifact_id": observation.artifact_id,
+                    "tool_group_id": tool_group_id,
+                    "tool_call_index": index,
+                },
+            )
             if observation.status == "approval_required":
-                yield operations.record_event(EventType.TOOL_APPROVAL_REQUIRED, task.task_id, {"tool_name": observation.tool_name, "permission": observation.permission, "approval_status": observation.approval_status, "reason": observation.error})
+                yield operations.record_event(
+                    EventType.TOOL_APPROVAL_REQUIRED,
+                    task.task_id,
+                    {
+                        "tool_call_id": tool_call_id,
+                        "tool_name": observation.tool_name,
+                        "permission": observation.permission,
+                        "approval_status": observation.approval_status,
+                        "reason": observation.error,
+                        "tool_group_id": tool_group_id,
+                        "tool_call_index": index,
+                    },
+                )
                 operations.update_task_status(task.task_id, "waiting")
                 yield operations.create_checkpoint(task.task_id, "tool_approval_required")
                 state.terminal = True
@@ -299,11 +363,6 @@ class ReactLikeWorkflow:
             output_summary=f"tool_call:{tool_call.tool_name}",
         )
         yield operations.create_checkpoint(task.task_id, "model_tool_call_requested")
-        yield operations.record_event(
-            EventType.TOOL_CALL_REQUESTED,
-            task.task_id,
-            {"tool_name": tool_call.tool_name, "arguments": tool_call.arguments},
-        )
 
         tool_step = operations.create_step(
             turn_id=model_step.turn_id,
@@ -311,13 +370,31 @@ class ReactLikeWorkflow:
             status="running",
             input_summary=tool_call.tool_name,
         )
+
+        observation = operations.execute_tool(tool_call, tool_step.step_id)
+        tool_call_id = observation.tool_call_id or tool_call.call_id
+        tool_group_id = f"{model_step.step_id}:tools"
+        yield operations.record_event(
+            EventType.TOOL_CALL_REQUESTED,
+            task.task_id,
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_call.tool_name,
+                "arguments": tool_call.arguments,
+                "tool_group_id": tool_group_id,
+                "tool_call_index": 0,
+            },
+        )
         yield operations.record_event(
             EventType.TOOL_CALL_STARTED,
             task.task_id,
-            {"tool_name": tool_call.tool_name},
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_call.tool_name,
+                "tool_group_id": tool_group_id,
+                "tool_call_index": 0,
+            },
         )
-
-        observation = operations.execute_tool(tool_call, tool_step.step_id)
         operations.update_step(
             tool_step.step_id,
             "completed" if observation.status == "success" else "failed",
@@ -329,8 +406,12 @@ class ReactLikeWorkflow:
             task.task_id,
             {
                 "tool_name": observation.tool_name,
+                "tool_call_id": tool_call_id,
                 "status": observation.status,
                 "error": observation.error,
+                "artifact_id": observation.artifact_id,
+                "tool_group_id": tool_group_id,
+                "tool_call_index": 0,
             },
         )
         yield operations.create_checkpoint(task.task_id, "tool_call_finished")
@@ -341,16 +422,22 @@ class ReactLikeWorkflow:
                 task.task_id,
                 {
                     "tool_name": observation.tool_name,
+                    "tool_call_id": tool_call_id,
                     "permission": observation.permission,
                     "approval_status": observation.approval_status,
                     "reason": observation.error,
+                    "tool_group_id": tool_group_id,
+                    "tool_call_index": 0,
                 },
             )
             operations.log_exception(
-                "task_failed task_id=%s reason=tool_approval_required tool=%s permission=%s",
-                task.task_id,
-                observation.tool_name,
-                observation.permission,
+                "task_failed",
+                extra={
+                    "task_id": task.task_id,
+                    "reason": "tool_approval_required",
+                    "tool_name": observation.tool_name,
+                    "permission": observation.permission,
+                },
             )
             operations.update_task_status(task.task_id, "failed")
             operations.close_running_steps(task.task_id, "failed", "tool_approval_required")
@@ -370,10 +457,13 @@ class ReactLikeWorkflow:
 
         if self._tool_error_limit_reached(observation, state, operations):
             operations.log_exception(
-                "task_failed task_id=%s reason=tool_error_limit_reached tool=%s limit=%s",
-                task.task_id,
-                observation.tool_name,
-                operations.settings.tool_error_limit,
+                "task_failed",
+                extra={
+                    "task_id": task.task_id,
+                    "reason": "tool_error_limit_reached",
+                    "tool_name": observation.tool_name,
+                    "limit": operations.settings.tool_error_limit,
+                },
             )
             operations.update_task_status(task.task_id, "failed")
             operations.close_running_steps(task.task_id, "failed", "tool_error_limit_reached")

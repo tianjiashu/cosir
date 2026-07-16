@@ -25,6 +25,30 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      "/logs": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/runs": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/approvals": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/health": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/traces": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/replay": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
   // 环境变量前缀安全限制

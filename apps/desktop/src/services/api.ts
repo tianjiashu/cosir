@@ -19,9 +19,35 @@ import type { BackendHealthResponse, CreateTaskRequest } from "@shared/api";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
 import { logError, logWarn } from "../lib/logger";
+import {
+  buildTraceHeaders,
+  readBackendTraceHeaders,
+  recordBackendTrace,
+} from "./tracePropagation";
+import { useConversationTraceStore, type ConversationTraceOperation } from "@/stores/conversationTraceStore";
 
 /** 后端基础 URL，开发环境走 Vite 代理。 */
 const BASE_URL = "";
+
+/** HTTP 请求使用的 trace 元数据。 */
+interface RequestTraceMetadata {
+  /** 客户端请求 trace 标识。 */
+  traceId: string;
+  /** HTTP 方法。 */
+  method: string;
+  /** 请求路径。 */
+  path: string;
+  /** 可选任务标识。 */
+  taskId?: string;
+}
+
+/** 带请求 trace 元数据的 JSON 响应。 */
+interface TracedJsonResponse<T> {
+  /** 解析后的响应体。 */
+  data: T;
+  /** 该请求使用的 trace 元数据。 */
+  trace: RequestTraceMetadata;
+}
 
 /**
  * 构建带错误上下文的 ServiceError。
@@ -69,30 +95,53 @@ async function buildError(
  * @returns 解析后的 JSON 响应。
  * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
-async function post<T>(path: string, data: unknown, taskId?: string): Promise<T> {
+async function post<T>(path: string, data: unknown, taskId?: string): Promise<TracedJsonResponse<T>> {
   let response: Response;
+  const requestTrace = buildTraceHeaders({ taskId });
+  const requestContext = {
+    module: "api",
+    task_id: taskId,
+    method: "POST",
+    path,
+    trace_id: requestTrace.trace.traceId,
+  };
   try {
     response = await fetch(`${BASE_URL}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...requestTrace.headers },
       body: JSON.stringify(data),
     });
   } catch (err) {
-    logError(`网络请求失败: ${path}`, err, { module: "api", taskId, method: "POST" });
+    logError(`网络请求失败: ${path}`, err, requestContext);
     throw new ServiceError(`网络请求失败: ${path}`, {
       taskId,
       cause: err,
     });
   }
 
+  recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
+
   if (!response.ok) {
-    throw await buildError(`POST ${path} 失败 (${response.status})`, path, response, taskId);
+    const error = await buildError(`POST ${path} 失败 (${response.status})`, path, response, taskId);
+    logError(`HTTP 请求失败: POST ${path}`, error, {
+      ...requestContext,
+      status_code: response.status,
+    });
+    throw error;
   }
 
   try {
-    return await response.json();
+    return {
+      data: await response.json(),
+      trace: {
+        traceId: requestTrace.trace.traceId,
+        method: "POST",
+        path,
+        taskId,
+      },
+    };
   } catch (err) {
-    logError(`解析响应 JSON 失败: ${path}`, err, { module: "api", taskId, method: "POST" });
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
     throw new ServiceError(`解析响应 JSON 失败: ${path}`, {
       taskId,
       cause: err,
@@ -108,26 +157,51 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<T>
  * @returns 解析后的 JSON 响应。
  * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
-async function get<T>(path: string, taskId?: string): Promise<T> {
+async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse<T>> {
   let response: Response;
+  const requestTrace = buildTraceHeaders({ taskId });
+  const requestContext = {
+    module: "api",
+    task_id: taskId,
+    method: "GET",
+    path,
+    trace_id: requestTrace.trace.traceId,
+  };
   try {
-    response = await fetch(`${BASE_URL}${path}`);
+    response = await fetch(`${BASE_URL}${path}`, {
+      headers: { ...requestTrace.headers },
+    });
   } catch (err) {
-    logError(`网络请求失败: ${path}`, err, { module: "api", taskId, method: "GET" });
+    logError(`网络请求失败: ${path}`, err, requestContext);
     throw new ServiceError(`网络请求失败: ${path}`, {
       taskId,
       cause: err,
     });
   }
 
+  recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
+
   if (!response.ok) {
-    throw await buildError(`GET ${path} 失败 (${response.status})`, path, response, taskId);
+    const error = await buildError(`GET ${path} 失败 (${response.status})`, path, response, taskId);
+    logError(`HTTP 请求失败: GET ${path}`, error, {
+      ...requestContext,
+      status_code: response.status,
+    });
+    throw error;
   }
 
   try {
-    return await response.json();
+    return {
+      data: await response.json(),
+      trace: {
+        traceId: requestTrace.trace.traceId,
+        method: "GET",
+        path,
+        taskId,
+      },
+    };
   } catch (err) {
-    logError(`解析响应 JSON 失败: ${path}`, err, { module: "api", taskId, method: "GET" });
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
     throw new ServiceError(`解析响应 JSON 失败: ${path}`, {
       taskId,
       cause: err,
@@ -147,7 +221,9 @@ async function get<T>(path: string, taskId?: string): Promise<T> {
  * @sideeffect 向后端 POST /tasks 写入一条新的任务记录。
  */
 export async function createTask(request: CreateTaskRequest): Promise<TaskRecord> {
-  return post<TaskRecord>(API_PATHS.TASKS, request);
+  const response = await post<TaskRecord>(API_PATHS.TASKS, request);
+  recordConversationTrace(response.trace, "task_create", response.data.task_id);
+  return response.data;
 }
 
 /**
@@ -158,7 +234,9 @@ export async function createTask(request: CreateTaskRequest): Promise<TaskRecord
  * @throws {ServiceError} 当任务不存在或网络错误时抛出。
  */
 export async function getTask(taskId: string): Promise<TaskRecord> {
-  return get<TaskRecord>(API_PATHS.TASK_DETAIL(taskId), taskId);
+  const response = await get<TaskRecord>(API_PATHS.TASK_DETAIL(taskId), taskId);
+  recordConversationTrace(response.trace, "task_get", taskId);
+  return response.data;
 }
 
 /**
@@ -169,7 +247,9 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
  * @throws {ServiceError} 当任务不存在或网络错误时抛出。
  */
 export async function getTaskEvents(taskId: string): Promise<RuntimeEvent[]> {
-  return get<RuntimeEvent[]>(API_PATHS.TASK_EVENTS(taskId), taskId);
+  const response = await get<RuntimeEvent[]>(API_PATHS.TASK_EVENTS(taskId), taskId);
+  recordConversationTrace(response.trace, "task_events", taskId);
+  return response.data;
 }
 
 /**
@@ -180,7 +260,9 @@ export async function getTaskEvents(taskId: string): Promise<RuntimeEvent[]> {
  * @throws {ServiceError} 当任务不存在或网络错误时抛出。
  */
 export async function getTaskCheckpoints(taskId: string): Promise<CheckpointRecord[]> {
-  return get<CheckpointRecord[]>(API_PATHS.TASK_CHECKPOINTS(taskId), taskId);
+  const response = await get<CheckpointRecord[]>(API_PATHS.TASK_CHECKPOINTS(taskId), taskId);
+  recordConversationTrace(response.trace, "task_checkpoints", taskId);
+  return response.data;
 }
 
 /**
@@ -193,7 +275,9 @@ export async function getTaskCheckpoints(taskId: string): Promise<CheckpointReco
  * @sideeffect 向后端 POST /tasks/{id}/cancel 更新任务状态为 cancelled。
  */
 export async function cancelTask(taskId: string): Promise<TaskRecord> {
-  return post<TaskRecord>(API_PATHS.TASK_CANCEL(taskId), {}, taskId);
+  const response = await post<TaskRecord>(API_PATHS.TASK_CANCEL(taskId), {}, taskId);
+  recordConversationTrace(response.trace, "task_cancel", taskId);
+  return response.data;
 }
 
 /**
@@ -203,5 +287,30 @@ export async function cancelTask(taskId: string): Promise<TaskRecord> {
  * @throws {ServiceError} 当后端不可达或返回异常状态时抛出。
  */
 export async function getBackendHealth(): Promise<BackendHealthResponse> {
-  return get<BackendHealthResponse>(API_PATHS.HEALTH);
+  return (await get<BackendHealthResponse>(API_PATHS.HEALTH)).data;
+}
+
+/**
+ * 记录对话任务 API 请求使用的 trace。
+ *
+ * @param trace - HTTP helper 返回的请求 trace 元数据。
+ * @param operation - 对话请求类型。
+ * @param taskId - 该请求归属的任务标识。
+ * @returns 无。
+ *
+ * @sideeffect 写入 conversationTraceStore 内存状态。
+ */
+function recordConversationTrace(
+  trace: RequestTraceMetadata,
+  operation: ConversationTraceOperation,
+  taskId: string,
+): void {
+  useConversationTraceStore.getState().recordTrace({
+    traceId: trace.traceId,
+    taskId,
+    approvalId: "",
+    operation,
+    method: trace.method,
+    path: trace.path,
+  });
 }

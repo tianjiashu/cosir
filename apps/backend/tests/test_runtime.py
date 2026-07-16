@@ -17,9 +17,9 @@ from app.core.runtime.operations import RuntimeOperations
 from app.core.runtime.runner import AgentRuntime
 from app.storage.sqlite import SQLiteTaskStore
 from app.storage.records import TaskRecord
-from app.tools.registry import ToolRegistry
-from app.tools.safe_read import SafeReadTools
-from app.tools.scheduler import ToolScheduler
+from app.tools.registry.memory import ToolRegistry
+from app.tools.builtin.safe_read import SafeReadTools
+from app.tools.runtime.compatibility import ToolScheduler
 from app.tools.types import ToolCall, ToolDefinition
 from app.core.workflows.react_like import ReactLikeWorkflow
 from app.core.workflows.step_controller import StepDecision
@@ -919,7 +919,7 @@ class AgentRuntimeTests(unittest.TestCase):
         return AgentRuntime(
             settings=BackendSettings(
                 project_root=temp_dir,
-                log_file=temp_dir / "app.log",
+                log_dir=temp_dir / "logs",
                 database_file=temp_dir / "app.sqlite3",
                 max_steps=max_steps,
                 tool_error_limit=tool_error_limit,

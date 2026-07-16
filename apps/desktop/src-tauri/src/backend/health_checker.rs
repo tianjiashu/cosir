@@ -3,7 +3,7 @@
 use crate::backend::types::{BackendHealthSnapshot, BackendLaunchConfig};
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// 后端 `/health` 端点响应体。
 #[derive(Debug, Deserialize)]
@@ -67,35 +67,32 @@ pub fn fetch_backend_health(
     }))
 }
 
-/// 轮询等待后端健康可用。
-///
-/// 参数:
-///     config: 后端监听配置。
-///     timeout: 最大等待时长。
-///
-/// 返回:
-///     超时前探测到健康响应时返回摘要。
-///
-/// 异常:
-///     当超时或健康响应格式错误时返回错误字符串。
-///
-/// 副作用:
-///     在等待窗口内重复访问本地 `/health` 端点。
-pub fn wait_for_backend_health(
-    config: &BackendLaunchConfig,
-    timeout: Duration,
-) -> Result<BackendHealthSnapshot, String> {
-    let started_at = Instant::now();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::types::BackendLaunchConfig;
+    use std::path::PathBuf;
 
-    while started_at.elapsed() < timeout {
-        if let Some(snapshot) = fetch_backend_health(config)? {
-            return Ok(snapshot);
+    fn unreachable_config() -> BackendLaunchConfig {
+        BackendLaunchConfig {
+            repo_root: PathBuf::from("/tmp"),
+            backend_dir: PathBuf::from("/tmp/backend"),
+            python_binary: PathBuf::from("/tmp/backend/.venv/bin/python"),
+            host: "127.0.0.1".to_string(),
+            // 使用一个几乎不可能有服务监听的端口，触发连接失败分支。
+            port: 1,
+            app_log_file: PathBuf::from("/tmp/app.log"),
+            stdout_log_file: PathBuf::from("/tmp/stdout.log"),
+            stderr_log_file: PathBuf::from("/tmp/stderr.log"),
+            boot_state_file: PathBuf::from("/tmp/boot.json"),
         }
-        std::thread::sleep(Duration::from_millis(250));
     }
 
-    Err(format!(
-        "等待本地后端健康检查超时（{} 秒）",
-        timeout.as_secs()
-    ))
+    #[test]
+    fn test_fetch_health_unreachable_returns_none() {
+        // 后端不可达时不应返回 Err，而应返回 Ok(None)（静默降级到状态轮询）。
+        let result = fetch_backend_health(&unreachable_config());
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
 }

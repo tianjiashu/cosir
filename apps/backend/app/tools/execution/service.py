@@ -91,22 +91,26 @@ class ToolExecutionService:
         )
         if existing is not None:
             self._logger.info(
-                "tool_policy_reused run_id=%s tool_call_id=%s tool=%s status=%s",
-                run_id,
-                existing.tool_call_id,
-                tool_name,
-                existing.status,
+                "tool_policy_reused",
+                extra={
+                    "run_id": run_id,
+                    "tool_call_id": existing.tool_call_id,
+                    "tool_name": tool_name,
+                    "status": existing.status,
+                },
             )
             return existing, decision
         planned_status = self._lifecycle.status_for_policy(decision)
         call = self._update_status(call, planned_status)
         self._logger.info(
-            "tool_policy_decided run_id=%s tool_call_id=%s tool=%s status=%s risk=%s",
-            run_id,
-            call.tool_call_id,
-            tool_name,
-            decision.status,
-            decision.risk_level,
+            "tool_policy_decided",
+            extra={
+                "run_id": run_id,
+                "tool_call_id": call.tool_call_id,
+                "tool_name": tool_name,
+                "status": decision.status,
+                "risk_level": decision.risk_level,
+            },
         )
         return call, decision
 

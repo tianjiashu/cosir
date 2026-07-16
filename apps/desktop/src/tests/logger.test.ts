@@ -6,9 +6,11 @@ import {
   logDebug,
   LogLevel,
 } from "@/lib/logger";
+import { useClientTraceStore } from "@/stores/clientTraceStore";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useClientTraceStore.getState().reset();
 });
 
 describe("logger 统一出口", () => {
@@ -113,8 +115,8 @@ describe("logger 统一出口", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     logWarn("大小写", { APIKey: "sk-x", Password: "p", normal: "n" });
     const ctx = spy.mock.calls[0][1] as Record<string, unknown>;
-    expect(ctx.APIKey).toBe("[REDACTED]");
-    expect(ctx.Password).toBe("[REDACTED]");
+    expect(ctx.api_key).toBe("[REDACTED]");
+    expect(ctx.password).toBe("[REDACTED]");
     expect(ctx.normal).toBe("n");
   });
 
@@ -122,7 +124,39 @@ describe("logger 统一出口", () => {
     const spy = vi.spyOn(console, "debug").mockImplementation(() => {});
     logDebug("调试", { apiKey: "sk-x", keep: "ok" });
     const ctx = spy.mock.calls[0][1] as Record<string, unknown>;
-    expect(ctx.apiKey).toBe("[REDACTED]");
+    expect(ctx.api_key).toBe("[REDACTED]");
     expect(ctx.keep).toBe("ok");
+  });
+
+  it("logInfo 自动合并当前客户端 trace 上下文且不覆盖显式字段", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    useClientTraceStore.getState().setCurrentTrace({
+      traceId: "1234567890abcdef1234567890abcdef",
+      startedAt: new Date().toISOString(),
+      taskId: "task-from-store",
+    });
+
+    logInfo("带 trace", { module: "unit", task_id: "task-explicit" });
+
+    const ctx = spy.mock.calls[0][1] as Record<string, unknown>;
+    expect(ctx.trace_id).toBe("1234567890abcdef1234567890abcdef");
+    expect(ctx.task_id).toBe("task-explicit");
+  });
+
+  it("切换 trace 后不复用上一 trace 上下文", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    useClientTraceStore.getState().setCurrentTrace({
+      traceId: "11111111111111111111111111111111",
+      startedAt: new Date().toISOString(),
+    });
+    useClientTraceStore.getState().setCurrentTrace({
+      traceId: "22222222222222222222222222222222",
+      startedAt: new Date().toISOString(),
+    });
+
+    logInfo("新操作开始", { module: "unit" });
+
+    const ctx = spy.mock.calls[0][1] as Record<string, unknown>;
+    expect(ctx.trace_id).toBe("22222222222222222222222222222222");
   });
 });

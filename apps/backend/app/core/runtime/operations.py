@@ -12,8 +12,8 @@ from app.events.types import EventType, RuntimeEvent
 from app.models.base import ModelDelta, RuntimeMessage, StreamingModelAdapter
 from app.core.runtime.model_tools import build_model_tool_definitions
 from app.storage.records import StepRecord, TaskRecord, TurnRecord
-from app.tools.scheduler import ToolScheduler
-from app.tools.runtime import ToolExecutionContext, ToolRuntime
+from app.tools.runtime.compatibility import ToolScheduler
+from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
 from app.tools.types import ToolCall, ToolDefinition, ToolObservation
 
 
@@ -210,10 +210,12 @@ class RuntimeOperations:
         denied_tool = self._find_agent_denied_model_visible_tool(call.tool_name)
         if denied_tool is not None:
             self._logger.warning(
-                "agent_tool_denied agent_id=%s tool=%s permission=%s",
-                self._agent_profile.agent_id,
-                denied_tool.name,
-                denied_tool.permission,
+                "agent_tool_denied",
+                extra={
+                    "agent_id": self._agent_profile.agent_id,
+                    "tool_name": denied_tool.name,
+                    "permission": denied_tool.permission,
+                },
             )
             return ToolObservation(
                 tool_name=denied_tool.name,
@@ -438,17 +440,18 @@ class RuntimeOperations:
             )
         except Exception as exc:
             self._logger.exception(
-                "checkpoint_failed task_id=%s stage=%s",
-                task_id,
-                stage,
+                "checkpoint_failed",
+                extra={"task_id": task_id, "stage": stage},
             )
             return self._record_checkpoint_failure(task_id, stage, exc)
 
         self._logger.info(
-            "checkpoint_created task_id=%s checkpoint_id=%s stage=%s",
-            task_id,
-            checkpoint.checkpoint_id,
-            stage,
+            "checkpoint_created",
+            extra={
+                "task_id": task_id,
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "stage": stage,
+            },
         )
         return self.record_event(
             EventType.CHECKPOINT_CREATED,
@@ -489,9 +492,8 @@ class RuntimeOperations:
             return self.record_event(EventType.CHECKPOINT_FAILED, task_id, payload)
         except Exception as event_error:
             self._logger.exception(
-                "checkpoint_failed_event_unpersisted task_id=%s stage=%s",
-                task_id,
-                stage,
+                "checkpoint_failed_event_unpersisted",
+                extra={"task_id": task_id, "stage": stage},
             )
             return RuntimeEvent(
                 event_type=EventType.CHECKPOINT_FAILED,
@@ -504,12 +506,12 @@ class RuntimeOperations:
                 },
             )
 
-    def log_exception(self, message: str, *args) -> None:
+    def log_exception(self, event_name: str, extra: dict | None = None) -> None:
         """通过运行时日志记录器写入异常诊断信息。
 
         参数:
-            message: 日志消息模板。
-            args: 位置参数形式的日志参数。
+            event_name: 稳定日志事件名。
+            extra: 需要写入 attributes 的结构化字段。
 
         返回:
             无。
@@ -521,4 +523,4 @@ class RuntimeOperations:
             使用配置好的日志记录器写入一条异常日志。
         """
 
-        self._logger.exception(message, *args)
+        self._logger.exception(event_name, extra=extra or {})

@@ -6,6 +6,7 @@
  * - SourcesTab：Sources 列表（引用文档、上下文片段、规则文件）
  * - CheckpointBlock：Checkpoint 区块占位
  * - ContextBlock：上下文引用占位
+ * - ConversationTraceBlock：当前对话 trace 诊断入口
  * - McpBlock：MCP 入口占位
  * - SubagentBlock：Subagent 分组占位
  *
@@ -21,6 +22,7 @@ import { OutputsTab, type OutputItem } from "@/components/right-panel/OutputsTab
 import { SourcesTab, type SourceItem } from "@/components/right-panel/SourcesTab";
 import { CheckpointBlock } from "@/components/right-panel/CheckpointBlock";
 import { ContextBlock } from "@/components/right-panel/ContextBlock";
+import { ConversationTraceBlock } from "@/components/right-panel/ConversationTraceBlock";
 import { McpBlock } from "@/components/right-panel/McpBlock";
 import { SubagentBlock } from "@/components/right-panel/SubagentBlock";
 
@@ -58,12 +60,23 @@ const MOCK_SOURCES: SourceItem[] = [
 ];
 
 /**
+ * RightPanel 组件属性。
+ */
+interface RightPanelProps {
+  /** 打开日志页面。 */
+  onOpenLogs: () => void;
+}
+
+/**
  * 右侧信息面板组件。
  *
  * 固定宽度 ~280px，通过 Tabs 切换 Outputs/Sources，
  * 底部展示预留扩展区块。
+ *
+ * @param props - 组件属性。
+ * @returns 右侧信息面板。
  */
-export function RightPanel() {
+export function RightPanel({ onOpenLogs }: RightPanelProps) {
   return (
     <aside className="flex h-full w-72 flex-col border-l border-border bg-background">
       <Tabs defaultValue="outputs" className="flex h-full flex-col">
@@ -84,6 +97,10 @@ export function RightPanel() {
             <ScrollArea className="h-full scrollbar-thin">
               <div className="space-y-1 p-3">
                 <OutputsTab items={MOCK_OUTPUTS} />
+
+                <Separator className="my-3" />
+
+                <ConversationTraceBlock onOpenLogs={onOpenLogs} />
 
                 <Separator className="my-3" />
 

@@ -14,3 +14,6 @@ export * from "./backend";
 export * from "./runs";
 export * from "./approvals";
 export * from "./toolExecution";
+export * from "./replay";
+export * from "./tracePropagation";
+export * from "./logs";

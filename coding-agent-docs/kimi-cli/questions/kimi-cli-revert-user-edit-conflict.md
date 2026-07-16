@@ -453,7 +453,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:80-92
+# kimi-cli/src/kimi_cli/soul/log_context.py:80-92
 async def revert_to(self, checkpoint_id: int):
     """
     Revert the context to the specified checkpoint.
@@ -482,7 +482,7 @@ async def revert_to(self, checkpoint_id: int):
 #### revert_to 实现（仅上下文操作）
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:94-132
+# kimi-cli/src/kimi_cli/soul/log_context.py:94-132
 async def revert_to(self, checkpoint_id: int):
     logger.debug("Reverting checkpoint, ID: {id}", id=checkpoint_id)
     if checkpoint_id >= self._next_checkpoint_id:

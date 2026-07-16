@@ -6,6 +6,7 @@ from time import monotonic
 from typing import Mapping, Optional
 
 from app.domain.artifacts.service import ArtifactService
+from app.config.logging import merge_log_context, reset_log_context
 from app.tools.execution.service import ToolExecutionService
 from app.tools.execute import execute_tool_handler
 from app.tools.results import ToolObservationBuilder, ToolRuntimeResult
@@ -92,24 +93,29 @@ class ToolCallExecutor:
         """
 
         started_at = monotonic()
-        self._logger.info(
-            "tool_executor_started run_id=%s step_id=%s tool_call_id=%s tool=%s idempotency_key=%s",
-            prepared.run_id,
-            prepared.step_id,
-            prepared.tool_call_id,
-            prepared.tool.name,
-            prepared.idempotency_key,
-        )
-        self._mark_running(prepared)
-        execution = execute_tool_handler(
-            handler=prepared.tool.handler,
-            arguments=prepared.arguments,
-            timeout_seconds=prepared.tool.timeout_seconds,
-        )
-        elapsed_ms = int((monotonic() - started_at) * 1000)
-        if execution.status == "error":
-            return self._handle_failure(prepared, execution.error, elapsed_ms)
-        return self._handle_success(prepared, execution.content, elapsed_ms)
+        token = merge_log_context(run_id=prepared.run_id, tool_call_id=prepared.tool_call_id)
+        try:
+            self._logger.info(
+                "tool_executor_started",
+                extra={
+                    "step_id": prepared.step_id,
+                    "tool_name": prepared.tool.name,
+                    "idempotency_key": prepared.idempotency_key,
+                },
+            )
+            self._mark_running(prepared)
+            execution = execute_tool_handler(
+                handler=prepared.tool.handler,
+                arguments=prepared.arguments,
+                timeout_seconds=prepared.tool.timeout_seconds,
+                run_id=prepared.run_id,
+            )
+            elapsed_ms = int((monotonic() - started_at) * 1000)
+            if execution.status == "error":
+                return self._handle_failure(prepared, execution.error, elapsed_ms)
+            return self._handle_success(prepared, execution.content, elapsed_ms)
+        finally:
+            reset_log_context(token)
 
     def _mark_running(self, prepared: PreparedToolCall) -> None:
         """在存在持久化记录时推进调用状态。
@@ -170,14 +176,14 @@ class ToolCallExecutor:
                 artifact_id=artifact_id,
             )
         self._logger.info(
-            "tool_executor_finished run_id=%s step_id=%s tool_call_id=%s tool=%s idempotency_key=%s elapsed_ms=%s artifact_id=%s",
-            prepared.run_id,
-            prepared.step_id,
-            prepared.tool_call_id,
-            prepared.tool.name,
-            prepared.idempotency_key,
-            elapsed_ms,
-            artifact_id,
+            "tool_executor_finished",
+            extra={
+                "step_id": prepared.step_id,
+                "tool_name": prepared.tool.name,
+                "idempotency_key": prepared.idempotency_key,
+                "duration_ms": elapsed_ms,
+                "artifact_id": artifact_id,
+            },
         )
         return ToolRuntimeResult(
             observation=self._observation_builder.success(
@@ -222,14 +228,14 @@ class ToolCallExecutor:
                 error=error,
             )
         self._logger.error(
-            "tool_executor_failed run_id=%s step_id=%s tool_call_id=%s tool=%s idempotency_key=%s elapsed_ms=%s error=%s",
-            prepared.run_id,
-            prepared.step_id,
-            prepared.tool_call_id,
-            prepared.tool.name,
-            prepared.idempotency_key,
-            elapsed_ms,
-            error,
+            "tool_executor_failed",
+            extra={
+                "step_id": prepared.step_id,
+                "tool_name": prepared.tool.name,
+                "idempotency_key": prepared.idempotency_key,
+                "duration_ms": elapsed_ms,
+                "error": error,
+            },
         )
         return ToolRuntimeResult(
             observation=self._observation_builder.error(

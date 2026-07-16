@@ -1,0 +1,232 @@
+"""Trace 查询 API 路由。
+
+端点以模块级 ``@app.get`` 直接注册到 ``app.api.app.app`` 单例上，
+运行时通过 ``Depends(get_runtime)`` 注入，不再由注册函数包裹。
+"""
+
+from datetime import date
+
+from fastapi import Depends, HTTPException, Query
+
+from app.api.app import app
+from app.api.dependencies import get_runtime
+from app.core.runtime.runner import AgentRuntime
+
+
+@app.get("/traces")
+async def list_traces(
+    runtime: AgentRuntime = Depends(get_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> list:
+    """返回 trace 摘要列表。
+
+    参数:
+        runtime: 通过依赖注入的运行时单例。
+        limit: 最大返回数量。
+
+    返回:
+        trace 摘要列表。
+
+    异常:
+        HTTPException: Trace 服务不可用或查询参数非法时抛出。
+
+    副作用:
+        无。
+    """
+
+    try:
+        return runtime.trace_query_service().list_traces(limit=limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/traces/{trace_id}")
+async def get_trace(
+    trace_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+) -> dict:
+    """返回 trace 摘要与详情。
+
+    参数:
+        trace_id: 路由中的 trace 标识。
+        runtime: 通过依赖注入的运行时单例。
+
+    返回:
+        trace summary、events、spans 和 logs。
+
+    异常:
+        HTTPException: Trace 服务不可用或 trace 不存在时抛出。
+
+    副作用:
+        读取 SQLite 与 JSONL 日志文件。
+    """
+
+    try:
+        return runtime.trace_query_service().get_trace_summary(trace_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="trace not found") from exc
+
+
+@app.get("/traces/{trace_id}/events")
+async def list_trace_events(
+    trace_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list:
+    """返回指定 trace 的 ledger events。
+
+    参数:
+        trace_id: 路由中的 trace 标识。
+        runtime: 通过依赖注入的运行时单例。
+        limit: 最大返回数量。
+
+    返回:
+        trace event 字典列表。
+
+    异常:
+        HTTPException: Trace 服务不可用或查询参数非法时抛出。
+
+    副作用:
+        无。
+    """
+
+    try:
+        return runtime.trace_query_service().list_events(trace_id=trace_id, limit=limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/traces/{trace_id}/spans")
+async def list_trace_spans(
+    trace_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list:
+    """返回指定 trace 的 spans。
+
+    参数:
+        trace_id: 路由中的 trace 标识。
+        runtime: 通过依赖注入的运行时单例。
+        limit: 最大返回数量。
+
+    返回:
+        trace span 字典列表。
+
+    异常:
+        HTTPException: Trace 服务不可用或查询参数非法时抛出。
+
+    副作用:
+        无。
+    """
+
+    try:
+        return runtime.trace_query_service().list_spans(trace_id=trace_id, limit=limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/traces/{trace_id}/logs")
+async def list_trace_logs(
+    trace_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    date: str = Query(default=""),
+    level: str = Query(default=""),
+    start_time: str = Query(default=""),
+    end_time: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list:
+    """从 JSONL 文件返回指定 trace 的日志。
+
+    参数:
+        trace_id: 路由中的 trace 标识。
+        runtime: 通过依赖注入的运行时单例。
+        date: 可选日志日期，格式为 YYYY-MM-DD。
+        level: 可选日志级别过滤条件。
+        start_time: 可选起始 ISO 时间。
+        end_time: 可选结束 ISO 时间。
+        limit: 最大返回数量。
+
+    返回:
+        JSONL 日志行列表。
+
+    异常:
+        HTTPException: Trace 服务不可用或查询参数非法时抛出。
+
+    副作用:
+        读取日志文件。
+    """
+
+    try:
+        log_date = _parse_log_date(date)
+        return runtime.trace_query_service().list_logs(
+            trace_id=trace_id,
+            log_date=log_date,
+            level=level,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/trace")
+async def get_run_trace(
+    run_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+) -> dict:
+    """返回 run 的 trace 摘要。
+
+    参数:
+        run_id: 路由中的 run 标识。
+        runtime: 通过依赖注入的运行时单例。
+
+    返回:
+        包含 events、spans、logs 的 trace 摘要。
+
+    异常:
+        HTTPException: Trace 服务不可用或 run_id 非法时抛出。
+
+    副作用:
+        读取 SQLite 与 JSONL 日志文件。
+    """
+
+    try:
+        return runtime.trace_query_service().get_run_trace(run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _parse_log_date(value: str) -> date | None:
+    """解析日志查询日期参数。
+
+    参数:
+        value: API 查询参数中的日期文本，允许为空。
+
+    返回:
+        日期对象；空字符串返回 None。
+
+    异常:
+        ValueError: 如果非空文本不是 YYYY-MM-DD 日期。
+
+    副作用:
+        无。
+    """
+
+    if not value:
+        return None
+    return date.fromisoformat(value)

@@ -6,7 +6,7 @@ from typing import Callable, Sequence
 
 from app.tools.execution.concurrency import ToolConcurrencyPlan
 from app.tools.executor import PreparedToolCall
-from app.tools.locks import ToolResourceLockManager
+from app.tools.runtime.locks import ToolResourceLockManager
 from app.tools.results import ToolRuntimeResult
 
 
@@ -64,7 +64,14 @@ class ToolConcurrentScheduler:
             raise ValueError("plan and prepared groups must have equal length")
         results: list[ToolRuntimeResult] = []
         for group, prepared_calls in zip(plan.groups, prepared_groups):
-            self._logger.info("tool_concurrency_group_started parallel=%s reason=%s size=%s", group.parallel, group.reason, len(prepared_calls))
+            self._logger.info(
+                "tool_concurrency_group_started",
+                extra={
+                    "parallel": group.parallel,
+                    "reason": group.reason,
+                    "size": len(prepared_calls),
+                },
+            )
             if group.parallel and len(prepared_calls) > 1:
                 with ThreadPoolExecutor(max_workers=min(self._max_workers, len(prepared_calls))) as executor:
                     futures = [executor.submit(self._execute_with_lock, call, single_call_executor) for call in prepared_calls]
@@ -72,10 +79,12 @@ class ToolConcurrentScheduler:
             else:
                 results.extend(self._execute_with_lock(call, single_call_executor) for call in prepared_calls)
             self._logger.info(
-                "tool_concurrency_group_finished parallel=%s reason=%s size=%s",
-                group.parallel,
-                group.reason,
-                len(prepared_calls),
+                "tool_concurrency_group_finished",
+                extra={
+                    "parallel": group.parallel,
+                    "reason": group.reason,
+                    "size": len(prepared_calls),
+                },
             )
         return results
 

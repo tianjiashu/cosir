@@ -8,6 +8,7 @@ import { useCallback } from "react";
 import { fetchRecoverableRuns, cancelRunTask } from "@/services/runs";
 import { useRunStore } from "@/stores/runStore";
 import { logError, logInfo } from "@/lib/logger";
+import { beginClientTrace, endClientTrace, hasClientTrace } from "@/services/tracePropagation";
 
 /**
  * 提供可恢复运行查询与取消编排。
@@ -27,6 +28,10 @@ export function useRunRecovery() {
   const refreshRecoverableRuns = useCallback(async () => {
     setLoadingRecoverableRuns(true);
     setRecoveryError(null);
+    const ownsOperation = !hasClientTrace();
+    if (ownsOperation) {
+      beginClientTrace();
+    }
     try {
       const runs = await fetchRecoverableRuns();
       setRecoverableRuns(runs);
@@ -36,17 +41,28 @@ export function useRunRecovery() {
       logError("恢复运行状态刷新失败", err, { module: "useRunRecovery" });
     } finally {
       setLoadingRecoverableRuns(false);
+      if (ownsOperation) {
+        endClientTrace();
+      }
     }
   }, [setLoadingRecoverableRuns, setRecoveryError, setRecoverableRuns]);
 
   const cancelRecoverableRun = useCallback(
     async (taskId: string) => {
+      const ownsOperation = !hasClientTrace();
+      if (ownsOperation) {
+        beginClientTrace({ taskId });
+      }
       try {
         await cancelRunTask(taskId);
         await refreshRecoverableRuns();
       } catch (err) {
         setRecoveryError(err instanceof Error ? err.message : String(err));
-        logError("取消可恢复运行失败", err, { module: "useRunRecovery", taskId });
+        logError("取消可恢复运行失败", err, { module: "useRunRecovery", task_id: taskId });
+      } finally {
+        if (ownsOperation) {
+          endClientTrace();
+        }
       }
     },
     [refreshRecoverableRuns, setRecoveryError],

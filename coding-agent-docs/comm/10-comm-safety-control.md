@@ -477,7 +477,7 @@ class DMail(BaseModel):
     checkpoint_id: int = Field(description="The checkpoint to send the message back to.", ge=0)
     # TODO: allow restoring filesystem state to the checkpoint
 
-# kimi-cli/src/kimi_cli/soul/context.py:80-99
+# kimi-cli/src/kimi_cli/soul/log_context.py:80-99
 async def revert_to(self, checkpoint_id: int):
     """Revert the context to the specified checkpoint."""
     if checkpoint_id >= self._next_checkpoint_id:
@@ -837,7 +837,7 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Rules
 **Kimi CLI 回滚实现：**
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:80-99
+# kimi-cli/src/kimi_cli/soul/log_context.py:80-99
 async def revert_to(self, checkpoint_id: int):
     """Revert the context to the specified checkpoint."""
     if checkpoint_id >= self._next_checkpoint_id:

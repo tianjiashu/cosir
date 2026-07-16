@@ -58,6 +58,8 @@ pub struct BackendLaunchConfig {
     pub stdout_log_file: PathBuf,
     /// 后端标准错误日志路径。
     pub stderr_log_file: PathBuf,
+    /// 后端启动状态文件路径（结构化启动就绪 / 失败契约）。
+    pub boot_state_file: PathBuf,
 }
 
 /// 后端错误摘要。
@@ -70,6 +72,8 @@ pub struct BackendErrorSummary {
     pub message: String,
     /// 更详细的错误描述。
     pub detail: String,
+    /// 可选的原始错误堆栈（如后端启动崩溃的 traceback）。
+    pub traceback: Option<String>,
     /// 错误发生时间。
     pub occurred_at: String,
 }

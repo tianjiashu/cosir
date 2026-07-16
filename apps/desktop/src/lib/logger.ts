@@ -10,6 +10,8 @@
  * @module lib/logger
  */
 
+import { selectClientLogContext } from "@/stores/clientTraceStore";
+
 /** 日志级别枚举。 */
 export enum LogLevel {
   DEBUG = "debug",
@@ -71,12 +73,15 @@ async function writeToDisk(entry: LogEntry): Promise<void> {
 /** 需要脱敏的敏感字段名（键名匹配，大小写不敏感）。 */
 const SENSITIVE_KEYS = [
   "apikey",
+  "api_key",
   "password",
   "token",
   "secret",
   "authorization",
   "accesskey",
+  "access_key",
   "privatekey",
+  "private_key",
   "credential",
   "cookie",
 ];
@@ -92,12 +97,75 @@ const SENSITIVE_KEYS = [
  * @returns 脱敏后的上下文副本；原值为空时直接返回。
  */
 function redactContext(context?: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (!context) return context;
+  const merged = mergeTraceContext(context);
+  if (!merged) return merged;
+  const normalized = normalizeContextKeys(merged);
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(context)) {
+  for (const [key, value] of Object.entries(normalized)) {
     result[key] = redactValue(key, value);
   }
   return result;
+}
+
+/**
+ * 将当前客户端 trace 上下文合并进日志上下文。
+ *
+ * 调用方显式传入的字段优先，避免 logger 覆盖更精确的业务上下文。
+ *
+ * @param context - 调用方传入的日志上下文。
+ * @returns 合并后的日志上下文；没有任何字段时返回 undefined。
+ */
+function mergeTraceContext(context?: Record<string, unknown>): Record<string, unknown> | undefined {
+  const traceContext = selectClientLogContext();
+  const merged = { ...traceContext, ...(context ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * 将日志上下文字段统一转换为 snake_case。
+ *
+ * 前端调用方可能传入 camelCase 字段；统一出口在落盘和 console 前转换，
+ * 保持客户端诊断字段与后端 JSONL 查询契约一致。
+ *
+ * @param context - 原始上下文字典。
+ * @returns 字段名已规范化的新对象。
+ */
+function normalizeContextKeys(context: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(context)) {
+    result[toSnakeCase(key)] = normalizeContextValue(value);
+  }
+  return result;
+}
+
+/**
+ * 递归规范化日志上下文值。
+ *
+ * @param value - 原始字段值。
+ * @returns 对象字段名规范化后的值，标量值原样返回。
+ */
+function normalizeContextValue(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeContextValue(item));
+  }
+  return normalizeContextKeys(value as Record<string, unknown>);
+}
+
+/**
+ * 将 camelCase / PascalCase / acronym 字段转换为 snake_case。
+ *
+ * @param key - 原始字段名。
+ * @returns snake_case 字段名。
+ */
+function toSnakeCase(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toLowerCase();
 }
 
 /**

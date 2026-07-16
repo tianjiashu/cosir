@@ -4,11 +4,11 @@ import logging
 from typing import Iterable, List
 
 from app.tools.execution.records import ToolPolicyDecision
-from app.tools.approval import ToolApprovalPolicy
+from app.tools.execution.approval import ToolApprovalPolicy
 from app.tools.executor import ToolCallExecutor
-from app.tools.registry import ToolRegistry
+from app.tools.registry.memory import ToolRegistry
 from app.tools.results import ToolObservationBuilder
-from app.tools.runtime import ToolRuntime
+from app.tools.runtime.platform import ToolRuntime
 from app.tools.types import ToolCall, ToolDefinition, ToolObservation
 
 
@@ -41,6 +41,7 @@ class ToolScheduler:
         """
 
         self._registry = registry
+        self._logger = logger
         self._approval_policy = ToolApprovalPolicy(
             auto_approved_permissions=allowed_permissions,
             approval_required_permissions=approval_required_permissions,
@@ -89,6 +90,10 @@ class ToolScheduler:
             可能执行 handler 副作用并写入兼容模式日志。
         """
 
+        self._logger.info(
+            "tool_scheduler_execute_started",
+            extra={"tool_name": call.tool_name, "tool_call_id": call.call_id},
+        )
         return self._runtime.execute_single_tool_call(call)
 
     def _compatibility_decision(self, tool: ToolDefinition) -> ToolPolicyDecision:

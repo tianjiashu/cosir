@@ -596,7 +596,7 @@ class Session:
 ```
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:16-22
+# kimi-cli/src/kimi_cli/soul/log_context.py:16-22
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
@@ -677,7 +677,7 @@ async def _run(session_id: str | None) -> tuple[Session, bool]:
 ```
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:24-50
+# kimi-cli/src/kimi_cli/soul/log_context.py:24-50
 async def restore(self) -> bool:
     """Restore context from file."""
     logger.debug("Restoring context from file: {file_backend}", file_backend=self._file_backend)
@@ -853,7 +853,7 @@ gitGraph
 ### 7.2 资源限制
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:99-104
+# kimi-cli/src/kimi_cli/soul/log_context.py:99-104
 rotated_file_path = await next_available_rotation(self._file_backend)
 if rotated_file_path is None:
     logger.error("No available rotation path found")

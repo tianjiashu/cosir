@@ -14,7 +14,13 @@
 
 import type { RuntimeEvent } from "@shared/events";
 import { API_PATHS } from "@shared/api";
-import { logWarn } from "../lib/logger";
+import { logError, logInfo, logWarn } from "../lib/logger";
+import {
+  buildTraceHeaders,
+  readBackendTraceHeaders,
+  recordBackendTrace,
+} from "./tracePropagation";
+import { useConversationTraceStore } from "@/stores/conversationTraceStore";
 
 /** 后端基础 URL，开发环境走 Vite 代理。 */
 const BASE_URL = "";
@@ -37,6 +43,15 @@ export type SSEEventHandler = (event: RuntimeEvent) => void;
 export type SSEErrorHandler = (error: Error) => void;
 /** SSE 状态变更回调类型定义。 */
 export type SSEStateChangeHandler = (state: SSEConnectionState) => void;
+/**
+ * SSE 请求 trace 暴露回调。
+ *
+ * @param traceId - 本次 `/tasks/{task_id}/stream` 请求写入 `x-trace-id` 的客户端 trace。
+ * @returns 无。
+ *
+ * @sideeffect 由调用方决定是否把 traceId 写入 UI 状态；SSE service 自身同时会记录到 conversationTraceStore。
+ */
+export type SSETraceHandler = (traceId: string) => void;
 
 /**
  * SSE 连接管理器配置选项。
@@ -50,6 +65,8 @@ export interface SSEConnectionOptions {
   onError?: SSEErrorHandler;
   /** 连接状态变更时的回调（可选）。 */
   onStateChange?: SSEStateChangeHandler;
+  /** SSE 请求建立前暴露本次请求 trace_id 的回调（可选）。 */
+  onTrace?: SSETraceHandler;
   /** 任务 ID（用于日志和错误追踪）。 */
   taskId: string;
 }
@@ -107,13 +124,33 @@ export class SSEConnection {
 
     this._abortController = new AbortController();
     this._setState(SSEConnectionState.CONNECTING);
+    const path = API_PATHS.TASK_STREAM(this.options.taskId);
+    const requestTrace = buildTraceHeaders({ taskId: this.options.taskId });
+    this.options.onTrace?.(requestTrace.trace.traceId);
+    useConversationTraceStore.getState().recordTrace({
+      traceId: requestTrace.trace.traceId,
+      taskId: this.options.taskId,
+      approvalId: "",
+      operation: "task_stream",
+      method: "GET",
+      path,
+    });
+    const requestContext = {
+      module: "sse",
+      task_id: this.options.taskId,
+      method: "GET",
+      path,
+      trace_id: requestTrace.trace.traceId,
+    };
 
     try {
-      const url = `${BASE_URL}${API_PATHS.TASK_STREAM(this.options.taskId)}`;
+      const url = `${BASE_URL}${path}`;
       const response = await fetch(url, {
         signal: this._abortController.signal,
-        headers: { Accept: "text/event-stream" },
+        headers: { Accept: "text/event-stream", ...requestTrace.headers },
       });
+
+      recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
 
       if (!response.ok) {
         throw new Error(`SSE 请求失败: HTTP ${response.status} ${response.statusText}`);
@@ -160,11 +197,14 @@ export class SSEConnection {
       }
 
       this._setState(SSEConnectionState.CLOSED);
+      logInfo("SSE 流正常结束", requestContext);
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         // 主动取消，不是错误
         this._setState(SSEConnectionState.CLOSED);
+        logInfo("SSE 连接已取消", requestContext);
       } else {
+        logError("SSE 连接失败", err, requestContext);
         this.options.onError?.(err as Error);
         this._setState(SSEConnectionState.CLOSED);
         throw err;
@@ -222,9 +262,9 @@ export class SSEConnection {
     } catch (parseErr) {
       logWarn("SSE 事件 JSON 解析失败", {
         module: "sse",
-        taskId: this.options.taskId,
-        eventType: eventType || "(unknown)",
-        dataPreview: dataStr.slice(0, 200),
+        task_id: this.options.taskId,
+        event_type: eventType || "(unknown)",
+        data_preview: dataStr.slice(0, 200),
         error: parseErr instanceof Error ? parseErr.message : String(parseErr),
       });
       return null;

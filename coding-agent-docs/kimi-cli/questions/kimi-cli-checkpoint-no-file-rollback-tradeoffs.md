@@ -438,7 +438,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:16-22
+# kimi-cli/src/kimi_cli/soul/log_context.py:16-22
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
@@ -461,7 +461,7 @@ class Context:
 **Checkpoint 创建**：
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:68-78
+# kimi-cli/src/kimi_cli/soul/log_context.py:68-78
 async def checkpoint(self, add_user_message: bool):
     checkpoint_id = self._next_checkpoint_id
     self._next_checkpoint_id += 1
@@ -478,7 +478,7 @@ async def checkpoint(self, add_user_message: bool):
 **Revert 实现**：
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:80-107
+# kimi-cli/src/kimi_cli/soul/log_context.py:80-107
 async def revert_to(self, checkpoint_id: int):
     logger.debug("Reverting checkpoint, ID: {id}", id=checkpoint_id)
     if checkpoint_id >= self._next_checkpoint_id:
@@ -614,7 +614,7 @@ gitGraph
 ### 7.2 资源限制
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:99-104
+# kimi-cli/src/kimi_cli/soul/log_context.py:99-104
 rotated_file_path = await next_available_rotation(self._file_backend)
 if rotated_file_path is None:
     logger.error("No available rotation path found")

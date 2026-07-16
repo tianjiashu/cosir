@@ -18,13 +18,13 @@ from app.tools.execution.policy import ToolExecutionPolicy
 from app.tools.execution.policy_provider import PermissionPolicyProvider
 from app.tools.execution.service import ToolExecutionService
 from app.tools.execution.store import ToolExecutionStore
-from app.tools.concurrent import ToolConcurrentScheduler
+from app.tools.runtime.concurrency import ToolConcurrentScheduler
 from app.tools.executor import ToolCallExecutor
-from app.tools.locks import ToolResourceLockManager
-from app.tools.registry import ToolRegistry
+from app.tools.runtime.locks import ToolResourceLockManager
+from app.tools.registry.memory import ToolRegistry
 from app.tools.results import ToolObservationBuilder
-from app.tools.runtime import ToolExecutionContext, ToolRuntime
-from app.tools.selector import ToolSelectionContext, ToolSelector
+from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
+from app.tools.catalog.selector import ToolSelectionContext, ToolSelector
 from app.tools.catalog.records import ToolCatalogRecord
 from app.tools.types import ArtifactRequest, ToolCall, ToolDefinition
 

@@ -288,7 +288,7 @@ Checkpoint 机制允许用户在对话的任意点创建标记，并在需要时
 #### 关键算法逻辑
 
 ```python
-# src/kimi_cli/soul/context.py:68-78
+# src/kimi_cli/soul/log_context.py:68-78
 async def checkpoint(self, add_user_message: bool):
     checkpoint_id = self._next_checkpoint_id
     self._next_checkpoint_id += 1
@@ -312,7 +312,7 @@ async def checkpoint(self, add_user_message: bool):
 #### 回滚算法
 
 ```python
-# src/kimi_cli/soul/context.py:80-132 (简化)
+# src/kimi_cli/soul/log_context.py:80-132 (简化)
 async def revert_to(self, checkpoint_id: int):
     # 1. 验证 checkpoint 存在
     if checkpoint_id >= self._next_checkpoint_id:
@@ -690,7 +690,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# src/kimi_cli/soul/context.py:16-22
+# src/kimi_cli/soul/log_context.py:16-22
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
@@ -712,7 +712,7 @@ class Context:
 ### 5.2 主链路代码
 
 ```python
-# src/kimi_cli/soul/context.py:24-50
+# src/kimi_cli/soul/log_context.py:24-50
 async def restore(self) -> bool:
     """从文件恢复上下文"""
     if self._history:

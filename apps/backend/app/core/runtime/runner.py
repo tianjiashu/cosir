@@ -8,18 +8,26 @@ from app.core.agents.profile import AgentProfile, default_developer_agent
 from app.domain.approvals.service import ApprovalService
 from app.config.settings import BackendSettings
 from app.context.builder import TextContextBuilder
+from app.core.logs.query_service import LogQueryService
+from app.core.replay.service import ReplayService
+from app.core.trace.event_names import runtime_trace_event_name
+from app.core.trace.query_service import TraceQueryService
+from app.core.trace.recorder import TraceRecorder
 from app.events.types import EventType, RuntimeEvent
+from app.config.logging import bind_log_context, reset_log_context, set_log_context, trace_log_extra
 from app.core.runs.langgraph_runtime import LangGraphRuntime
 from app.core.runs.recovery import RecoveryManager
+from app.core.runs.resume import ResumeDispatcher
 from app.core.runs.store import DurableRunStore
 from app.models.base import StreamingModelAdapter
 from app.core.runtime.operations import RuntimeOperations
 from app.storage.records import CheckpointRecord, TaskRecord
-from app.tools.scheduler import ToolScheduler
-from app.tools.runtime import ToolExecutionContext, ToolRuntime
+from app.tools.runtime.compatibility import ToolScheduler
+from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
 from app.tools.types import ToolCall
 from app.core.workflows.react_like import ReactLikeWorkflow
 from app.core.workflows.types import AgentWorkflow
+
 
 
 class AgentRuntime:
@@ -38,8 +46,13 @@ class AgentRuntime:
         run_store: Optional[DurableRunStore] = None,
         approval_service: Optional[ApprovalService] = None,
         recovery_manager: Optional[RecoveryManager] = None,
+        resume_dispatcher: Optional[ResumeDispatcher] = None,
         langgraph_runtime: Optional[LangGraphRuntime] = None,
         tool_runtime: Optional[ToolRuntime] = None,
+        trace_recorder: Optional[TraceRecorder] = None,
+        trace_query_service: Optional[TraceQueryService] = None,
+        replay_service: Optional[ReplayService] = None,
+        log_query_service: Optional[LogQueryService] = None,
     ) -> None:
         """初始化运行时依赖项。
 
@@ -55,8 +68,13 @@ class AgentRuntime:
             run_store: 可选的 Durable Run State 仓储。
             approval_service: 可选的工具审批服务。
             recovery_manager: 可选的启动恢复对账管理器。
+            resume_dispatcher: 可选的恢复命令分发器，用于记录恢复消费 trace。
             langgraph_runtime: 可选的 LangGraph 生命周期持久化运行时。
             tool_runtime: 可选 Tool v2 工具执行入口。
+            trace_recorder: 可选 Trace Backbone 写入器。
+            trace_query_service: 可选 Trace 查询服务。
+            replay_service: 可选 Agent Replay 查询服务。
+            log_query_service: 可选日志查询服务。
 
         返回:
             无。
@@ -79,8 +97,13 @@ class AgentRuntime:
         self._run_store = run_store
         self._approval_service = approval_service
         self._recovery_manager = recovery_manager
+        self._resume_dispatcher = resume_dispatcher
         self._langgraph_runtime = langgraph_runtime
         self._tool_runtime = tool_runtime
+        self._trace_recorder = trace_recorder
+        self._trace_query_service = trace_query_service
+        self._replay_service = replay_service
+        self._log_query_service = log_query_service
 
     def close(self) -> None:
         """关闭运行时持有的外部资源。
@@ -103,7 +126,7 @@ class AgentRuntime:
         try:
             self._langgraph_runtime.close()
         except Exception as exc:
-            self._logger.exception("runtime_close_failed error=%s", exc)
+            self._logger.exception("runtime_close_failed", extra={"error": str(exc)})
 
     def create_task(self, input_text: str, session_id: Optional[str] = None) -> TaskRecord:
         """创建一个待执行的任务，留待后续执行。
@@ -127,19 +150,41 @@ class AgentRuntime:
             session_id=session_id,
             agent_id=self._agent_profile.agent_id,
         )
-        self._logger.info(
-            "task_created task_id=%s session_id=%s agent_id=%s",
-            task.task_id,
-            session_id,
-            self._agent_profile.agent_id,
-        )
-        if self._run_store is not None:
-            run = self._run_store.create_for_task(task.task_id)
+        context = self._trace_context_for_task(task.task_id)
+        token = set_log_context(context)
+        try:
             self._logger.info(
-                "durable_run_bound task_id=%s run_id=%s thread_id=%s",
-                task.task_id,
-                run.run_id,
-                run.thread_id,
+                "task_created",
+                extra={
+                    "task_id": task.task_id,
+                    "session_id": session_id,
+                    "agent_id": self._agent_profile.agent_id,
+                },
+            )
+        finally:
+            reset_log_context(token)
+        if self._run_store is not None:
+            token = set_log_context(context)
+            try:
+                run = self._run_store.create_for_task(task.task_id)
+            finally:
+                reset_log_context(token)
+            context = self._trace_context_for_task(task.task_id, run.run_id)
+            if self._trace_recorder is not None:
+                self._trace_recorder.record_event(
+                    context,
+                    "run_created",
+                    {"status": run.status, "thread_id": run.thread_id},
+                    source="runtime",
+                )
+            self._logger.info(
+                "durable_run_bound",
+                extra={
+                    **trace_log_extra(context),
+                    "task_id": task.task_id,
+                    "run_id": run.run_id,
+                    "thread_id": run.thread_id,
+                },
             )
         return task
 
@@ -159,11 +204,16 @@ class AgentRuntime:
             修改任务状态并写入一条可审计的日志记录。
         """
 
-        task = self._task_store.update_status(task_id, "cancelled")
-        self._mark_run_for_task(task_id, "cancelled", interruption_reason="task_cancelled")
-        self._record(EventType.RUN_CANCELLED, task_id, {"status": "cancelled"})
-        self._logger.info("task_cancelled task_id=%s", task_id)
-        return task
+        run = self._run_store.get_by_task(task_id) if self._run_store is not None else None
+        token = set_log_context(self._trace_context_for_task(task_id, run.run_id if run is not None else ""))
+        try:
+            task = self._task_store.update_status(task_id, "cancelled")
+            self._mark_run_for_task(task_id, "cancelled", interruption_reason="task_cancelled")
+            self._record(EventType.RUN_CANCELLED, task_id, {"status": "cancelled"})
+            self._logger.info("task_cancelled", extra={"task_id": task_id})
+            return task
+        finally:
+            reset_log_context(token)
 
     def list_recoverable_runs(self) -> list:
         """列出可恢复或需要人工处理的运行记录。
@@ -204,10 +254,17 @@ class AgentRuntime:
 
         if self._run_store is None:
             raise RuntimeError("durable run recovery is not configured")
-        self._run_store.get(run_id)
-        self._run_store.requeue_processing_resume_commands(run_id)
-        self._consume_pending_resume_commands(run_id)
-        return self._run_store.get(run_id).to_dict()
+        run = self._run_store.get(run_id)
+        token = set_log_context(self._trace_context_for_task(run.task_id, run.run_id))
+        try:
+            if self._recovery_manager is not None:
+                self._recovery_manager.requeue_processing_resume_commands(run_id)
+            else:
+                self._run_store.requeue_processing_resume_commands(run_id)
+            self._consume_pending_resume_commands(run_id)
+            return self._run_store.get(run_id).to_dict()
+        finally:
+            reset_log_context(token)
 
     def list_pending_approvals(self, task_id: Optional[str] = None) -> list:
         """列出待处理审批请求。
@@ -267,15 +324,20 @@ class AgentRuntime:
 
         if self._approval_service is None:
             raise RuntimeError("approval service is not configured")
-        record = self._approval_service.decide(
-            approval_id=approval_id,
-            decision=decision,
-            reason=reason,
-            idempotency_key=idempotency_key,
-        )
         approval = self._approval_service.get_request(approval_id)
-        self._consume_pending_resume_commands(approval.run_id)
-        return record.to_dict()
+        run = self._run_store.get(approval.run_id) if self._run_store is not None else None
+        token = set_log_context(self._trace_context_for_task(run.task_id if run is not None else "", approval.run_id))
+        try:
+            record = self._approval_service.decide(
+                approval_id=approval_id,
+                decision=decision,
+                reason=reason,
+                idempotency_key=idempotency_key,
+            )
+            self._consume_pending_resume_commands(approval.run_id)
+            return record.to_dict()
+        finally:
+            reset_log_context(token)
 
     def _consume_pending_resume_commands(self, run_id: Optional[str] = None) -> None:
         """领取并执行已持久化的审批恢复命令。
@@ -302,14 +364,20 @@ class AgentRuntime:
             approval_id = command.payload.get("approval_id")
             if command.action not in {"approve_tool", "deny_tool"} or not isinstance(approval_id, str):
                 self._logger.error(
-                    "resume_command_unsupported run_id=%s command_id=%s action=%s",
-                    command.run_id,
-                    command.command_id,
-                    command.action,
+                    "resume_command_unsupported",
+                    extra={
+                        "run_id": command.run_id,
+                        "resume_command_id": command.command_id,
+                        "action": command.action,
+                    },
                 )
+                if self._resume_dispatcher is not None:
+                    self._resume_dispatcher.record_failed(command, "unsupported_resume_command")
                 self._run_store.release_resume_command(command.command_id)
                 continue
             try:
+                if self._resume_dispatcher is not None:
+                    self._resume_dispatcher.record_started(command)
                 approval = self._approval_service.get_request(approval_id)
                 self._resume_approved_tool_call(approval, command.payload.get("decision", ""))
                 decision = self._approval_service.get_decision(approval_id)
@@ -318,13 +386,19 @@ class AgentRuntime:
                 self._resume_langgraph_for_approval(approval_id, decision.to_dict())
                 self._finalize_approval_resume(command.run_id, decision.decision)
                 self._run_store.mark_resume_command_applied(command.command_id)
+                if self._resume_dispatcher is not None:
+                    self._resume_dispatcher.record_completed(command, decision.decision)
             except Exception:
                 self._logger.exception(
-                    "resume_command_consume_failed run_id=%s command_id=%s action=%s",
-                    command.run_id,
-                    command.command_id,
-                    command.action,
+                    "resume_command_consume_failed",
+                    extra={
+                        "run_id": command.run_id,
+                        "resume_command_id": command.command_id,
+                        "action": command.action,
+                    },
                 )
+                if self._resume_dispatcher is not None:
+                    self._resume_dispatcher.record_failed(command, "resume_command_consume_failed")
                 self._run_store.release_resume_command(command.command_id)
 
     def _resume_approved_tool_call(self, approval, decision: str) -> None:
@@ -349,7 +423,10 @@ class AgentRuntime:
             return
         arguments = approval.payload.get("arguments")
         if not isinstance(arguments, dict):
-            self._logger.error("tool_resume_payload_invalid run_id=%s approval_id=%s", approval.run_id, approval.approval_id)
+            self._logger.error(
+                "tool_resume_payload_invalid",
+                extra={"run_id": approval.run_id, "approval_id": approval.approval_id},
+            )
             raise ValueError("approval payload must include tool arguments")
         observation = self._tool_runtime.resume_approved_tool_call(
             ToolCall(approval.tool_name, arguments),
@@ -361,7 +438,13 @@ class AgentRuntime:
             self._record(
                 EventType.TOOL_CALL_FINISHED,
                 run.task_id,
-                {"tool_name": observation.tool_name, "status": observation.status, "error": observation.error},
+                {
+                    "tool_name": observation.tool_name,
+                    "tool_call_id": observation.tool_call_id or approval.tool_call_id,
+                    "status": observation.status,
+                    "error": observation.error,
+                    "artifact_id": observation.artifact_id,
+                },
             )
 
     def _finalize_approval_resume(self, run_id: str, decision: str) -> None:
@@ -408,10 +491,8 @@ class AgentRuntime:
                 )
         except Exception as exc:
             self._logger.exception(
-                "approval_resume_finalize_failed run_id=%s decision=%s error=%s",
-                run_id,
-                decision,
-                exc,
+                "approval_resume_finalize_failed",
+                extra={"run_id": run_id, "decision": decision, "error": str(exc)},
             )
             raise
 
@@ -454,10 +535,12 @@ class AgentRuntime:
                 interruption_reason="agent_profile_unavailable",
             )
             self._logger.error(
-                "agent_profile_unavailable task_id=%s task_agent_id=%s runtime_agent_id=%s",
-                task.task_id,
-                task.agent_id,
-                self._agent_profile.agent_id,
+                "agent_profile_unavailable",
+                extra={
+                    "task_id": task.task_id,
+                    "task_agent_id": task.agent_id,
+                    "runtime_agent_id": self._agent_profile.agent_id,
+                },
             )
             yield self._record(
                 EventType.RUN_FAILED,
@@ -509,7 +592,7 @@ class AgentRuntime:
                 "failed",
                 str(exc),
             )
-            self._logger.exception("task_failed task_id=%s", task.task_id)
+            self._logger.exception("task_failed", extra={"task_id": task.task_id})
             yield operations.create_checkpoint(task.task_id, "run_failed")
             yield self._record(
                 EventType.RUN_FAILED,
@@ -572,9 +655,8 @@ class AgentRuntime:
             run = self._run_store.get_by_task(task_id)
             if run is None:
                 self._logger.warning(
-                    "durable_run_missing task_id=%s target_status=%s",
-                    task_id,
-                    status,
+                    "durable_run_missing",
+                    extra={"task_id": task_id, "target_status": status},
                 )
                 return
             self._run_store.mark_status(
@@ -587,10 +669,8 @@ class AgentRuntime:
             )
         except Exception as exc:
             self._logger.exception(
-                "durable_run_status_sync_failed task_id=%s target_status=%s error=%s",
-                task_id,
-                status,
-                exc,
+                "durable_run_status_sync_failed",
+                extra={"task_id": task_id, "target_status": status, "error": str(exc)},
             )
 
     def _record_langgraph_lifecycle(self, task_id: str, phase: str, task_status: str) -> None:
@@ -629,10 +709,8 @@ class AgentRuntime:
             )
         except Exception as exc:
             self._logger.exception(
-                "langgraph_lifecycle_record_failed task_id=%s phase=%s error=%s",
-                task_id,
-                phase,
-                exc,
+                "langgraph_lifecycle_record_failed",
+                extra={"task_id": task_id, "phase": phase, "error": str(exc)},
             )
 
     def _resume_langgraph_for_approval(self, approval_id: str, decision_payload: dict) -> None:
@@ -670,9 +748,8 @@ class AgentRuntime:
             )
         except Exception as exc:
             self._logger.exception(
-                "langgraph_approval_resume_failed approval_id=%s error=%s",
-                approval_id,
-                exc,
+                "langgraph_approval_resume_failed",
+                extra={"approval_id": approval_id, "error": str(exc)},
             )
 
     def list_events(self, task_id: str) -> list:
@@ -775,6 +852,109 @@ class AgentRuntime:
             "has_model_api_key": bool(os.environ.get(self._settings.model_api_key_env)),
         }
 
+    def trace_query_service(self) -> TraceQueryService:
+        """返回 Trace 查询服务。
+
+        参数:
+            无。
+
+        返回:
+            配置好的 TraceQueryService。
+
+        异常:
+            RuntimeError: 如果当前运行时未配置 Trace Backbone。
+
+        副作用:
+            无。
+        """
+
+        if self._trace_query_service is None:
+            raise RuntimeError("trace query service is not configured")
+        return self._trace_query_service
+
+    def log_query_service(self) -> LogQueryService:
+        """返回日志查询服务。
+
+        参数:
+            无。
+
+        返回:
+            配置好的 LogQueryService。
+
+        异常:
+            RuntimeError: 如果当前运行时未配置日志查询服务。
+
+        副作用:
+            无。
+        """
+
+        if self._log_query_service is None:
+            raise RuntimeError("log query service is not configured")
+        return self._log_query_service
+
+    def logger(self) -> logging.Logger:
+        """返回运行时使用的后端 logger。
+
+        参数:
+            无。
+
+        返回:
+            后端 logger。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return self._logger
+
+    def replay_service(self) -> ReplayService:
+        """返回 Agent Replay 查询服务。
+
+        参数:
+            无。
+
+        返回:
+            配置好的 ReplayService。
+
+        异常:
+            RuntimeError: 如果当前运行时未配置 Agent Replay。
+
+        副作用:
+            无。
+        """
+
+        if self._replay_service is None:
+            raise RuntimeError("replay service is not configured")
+        return self._replay_service
+
+    def _trace_context_for_task(self, task_id: str, run_id: str = ""):
+        """返回任务对应的 trace 上下文。
+
+        参数:
+            task_id: 任务标识。
+            run_id: 可选 Durable Run 标识。
+
+        返回:
+            TraceRecorder 提供的稳定上下文；未配置 TraceRecorder 时返回空 trace_id 上下文。
+
+        异常:
+            无。
+
+        副作用:
+            配置 TraceRecorder 时可能首次生成 trace_id。
+        """
+
+        if self._trace_recorder is not None:
+            context = self._trace_recorder.context_for_task(task_id, run_id)
+            bind_log_context(context)
+            return context
+        from app.core.trace.context import TraceContext
+
+        return TraceContext(trace_id="", task_id=task_id, run_id=run_id)
+
     def _resolve_task_agent_profile(self, task: TaskRecord) -> Optional[AgentProfile]:
         """返回被允许执行该任务的 Agent 档案。
 
@@ -816,5 +996,49 @@ class AgentRuntime:
 
         event = RuntimeEvent(event_type=event_type, task_id=task_id, payload=payload)
         self._task_store.append_event(event)
-        self._logger.info("runtime_event task_id=%s type=%s", task_id, event_type)
+        run = self._run_store.get_by_task(task_id) if self._run_store is not None else None
+        if self._trace_recorder is not None:
+            context = self._trace_context_for_task(task_id, run.run_id if run is not None else "")
+            trace_event_name = runtime_trace_event_name(str(event_type), payload)
+            if trace_event_name:
+                self._trace_recorder.record_event(
+                    context,
+                    trace_event_name,
+                    {"runtime_event_id": event.event_id, **payload},
+                    source="runtime",
+                    level=_trace_level_for_runtime_event(event_type, payload),
+                )
+        self._logger.info(
+            "runtime_event",
+            extra={
+                **trace_log_extra(
+                    self._trace_context_for_task(task_id, run.run_id if run is not None else ""),
+                ),
+                "task_id": task_id,
+                "event_type": str(event_type),
+                "event_id": event.event_id,
+            },
+        )
         return event
+def _trace_level_for_runtime_event(event_type: EventType, payload: dict) -> str:
+    """返回运行时事件写入 trace 时使用的日志级别。
+
+    参数:
+        event_type: RuntimeEvent 类型。
+        payload: RuntimeEvent 载荷。
+
+    返回:
+        error 或 info。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if event_type == EventType.RUN_FAILED:
+        return "error"
+    if event_type == EventType.TOOL_CALL_FINISHED and str(payload.get("status") or "") == "error":
+        return "error"
+    return "info"

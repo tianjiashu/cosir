@@ -121,7 +121,7 @@ class ModelFactoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 BackendSettings(
                     project_root=root,
-                    log_file=root / "app.log",
+                    log_dir=root / "logs",
                     database_file=root / "app.sqlite3",
                     model_provider="unknown",
                 )
@@ -147,7 +147,7 @@ class ModelFactoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 BackendSettings(
                     project_root=root,
-                    log_file=root / "app.log",
+                    log_dir=root / "logs",
                     database_file=root / "app.sqlite3",
                     max_context_chars=0,
                 )
@@ -172,7 +172,7 @@ class ModelFactoryTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = BackendSettings(
                 project_root=root,
-                log_file=root / "app.log",
+                log_dir=root / "logs",
                 database_file=root / "app.sqlite3",
             )
 
@@ -200,7 +200,7 @@ class ModelFactoryTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = BackendSettings(
                 project_root=root,
-                log_file=root / "app.log",
+                log_dir=root / "logs",
                 database_file=root / "app.sqlite3",
                 model_provider="openai-compatible",
             )
@@ -229,7 +229,7 @@ class ModelFactoryTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = BackendSettings(
                 project_root=root,
-                log_file=root / "app.log",
+                log_dir=root / "logs",
                 database_file=root / "app.sqlite3",
             )
 

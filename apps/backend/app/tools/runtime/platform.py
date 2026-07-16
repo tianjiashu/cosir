@@ -10,11 +10,11 @@ from app.tools.execution.concurrency import ToolConcurrencyPlanner
 from app.tools.execution.idempotency import ToolIdempotencyKeyBuilder
 from app.tools.execution.records import ToolPolicyDecision
 from app.tools.execution.service import ToolExecutionService
-from app.tools.concurrent import ToolConcurrentScheduler
+from app.tools.runtime.concurrency import ToolConcurrentScheduler
 from app.tools.executor import PreparedToolCall, ToolCallExecutor
-from app.tools.registry import ToolRegistry
+from app.tools.registry.memory import ToolRegistry
 from app.tools.results import ToolObservationBuilder, ToolRuntimeResult
-from app.tools.schema import validate_tool_arguments
+from app.tools.schema.validation import validate_tool_arguments
 from app.tools.types import ToolCall, ToolDefinition, ToolObservation
 
 
@@ -228,6 +228,10 @@ class ToolRuntime:
         try:
             tool = self._registry.get(call.tool_name)
         except KeyError:
+            self._logger.warning(
+                "tool_missing",
+                extra={"run_id": context.run_id, "tool_name": call.tool_name},
+            )
             return self._observation_builder.error(call.tool_name, f"unknown tool: {call.tool_name}")
         arguments = self._validate_arguments(tool, call)
         if isinstance(arguments, ToolObservation):
@@ -239,11 +243,13 @@ class ToolRuntime:
         )
         if existing is not None and existing.status == "completed":
             self._logger.info(
-                "tool_approval_resume_reused run_id=%s step_id=%s tool_call_id=%s approval_id=%s",
-                context.run_id,
-                context.step_id,
-                existing.tool_call_id,
-                approval_id,
+                "tool_approval_resume_reused",
+                extra={
+                    "run_id": context.run_id,
+                    "step_id": context.step_id,
+                    "tool_call_id": existing.tool_call_id,
+                    "approval_id": approval_id,
+                },
             )
             return self._observation_builder.success(
                 tool.name,
@@ -286,7 +292,10 @@ class ToolRuntime:
         try:
             tool = self._registry.get(call.tool_name)
         except KeyError:
-            self._logger.warning("tool_missing run_id=%s tool=%s", context.run_id, call.tool_name)
+            self._logger.warning(
+                "tool_missing",
+                extra={"run_id": context.run_id, "tool_name": call.tool_name},
+            )
             return self._observation_builder.error(call.tool_name, f"unknown tool: {call.tool_name}")
         arguments = self._validate_arguments(tool, call)
         if isinstance(arguments, ToolObservation):
@@ -317,12 +326,14 @@ class ToolRuntime:
                 )
             if record.status == "completed":
                 self._logger.info(
-                    "tool_idempotency_reused run_id=%s step_id=%s tool_call_id=%s tool=%s idempotency_key=%s",
-                    context.run_id,
-                    context.step_id,
-                    tool_call_id,
-                    tool.name,
-                    idempotency_key,
+                    "tool_idempotency_reused",
+                    extra={
+                        "run_id": context.run_id,
+                        "step_id": context.step_id,
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool.name,
+                        "idempotency_key": idempotency_key,
+                    },
                 )
                 return self._observation_builder.success(
                     tool.name,
@@ -331,7 +342,16 @@ class ToolRuntime:
                     tool_call_id,
                 )
         if decision.status == "deny":
-            self._logger.warning("tool_policy_denied run_id=%s step_id=%s tool_call_id=%s tool=%s idempotency_key=%s", context.run_id, context.step_id, tool_call_id, tool.name, idempotency_key)
+            self._logger.warning(
+                "tool_policy_denied",
+                extra={
+                    "run_id": context.run_id,
+                    "step_id": context.step_id,
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool.name,
+                    "idempotency_key": idempotency_key,
+                },
+            )
             return self._observation_builder.error(tool.name, decision.reason, tool.permission, "deny", tool_call_id)
         if decision.status == "approval_required":
             return self._request_approval(tool, arguments, context, tool_call_id, decision)
@@ -430,7 +450,16 @@ class ToolRuntime:
             step_id=context.step_id,
             tool_call_id=tool_call_id,
         )
-        self._logger.info("tool_approval_requested run_id=%s step_id=%s tool_call_id=%s approval_id=%s tool=%s", context.run_id, context.step_id, tool_call_id, approval.approval_id, tool.name)
+        self._logger.info(
+            "tool_approval_requested",
+            extra={
+                "run_id": context.run_id,
+                "step_id": context.step_id,
+                "tool_call_id": tool_call_id,
+                "approval_id": approval.approval_id,
+                "tool_name": tool.name,
+            },
+        )
         return ToolObservation(tool.name, "approval_required", "", decision.reason, tool.permission, "approval_required", tool_call_id)
 
     def _prepared_groups(self, plan, prepared: Sequence[PreparedToolCall]) -> list[list[PreparedToolCall]]:

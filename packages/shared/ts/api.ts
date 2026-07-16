@@ -32,6 +32,10 @@ export const API_PATHS = {
   TASK_APPROVALS: (taskId: string) => `/tasks/${taskId}/approvals`,
   /** POST — 提交审批决策 */
   APPROVAL_DECISION: (approvalId: string) => `/approvals/${approvalId}/decision`,
+  /** GET — 按 trace 查询日志 */
+  LOGS_QUERY: "/logs/query",
+  /** GET — 查询最近日志 */
+  LOGS_RECENT: "/logs/recent",
 } as const;
 
 // ---------- 请求类型 ----------
@@ -91,3 +95,6 @@ export type ApprovalsResponse = import("./approvals").ApprovalRequestRecord[];
 
 /** 审批决策响应体。 */
 export type ApprovalDecisionResponse = import("./approvals").ApprovalDecisionRecord;
+
+/** 日志查询响应体。 */
+export type LogQueryResponse = import("./logs").LogQueryResponse;

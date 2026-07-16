@@ -492,7 +492,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# kimi-cli/src/kimi_cli/utils/logging.py:15-24
+# kimi-cli/src/kimi_cli/utils/api_logging.py:15-24
 class StderrRedirector:
     def __init__(self, level: str = "ERROR") -> None:
         self._level = level
@@ -562,7 +562,7 @@ logger.add(sys.stderr, level=LOG_LEVEL)
 **关键代码**（核心逻辑）：
 
 ```python
-# kimi-cli/src/kimi_cli/utils/logging.py:25-46
+# kimi-cli/src/kimi_cli/utils/api_logging.py:25-46
 def install(self) -> None:
     with self._lock:
         if self._installed:
@@ -712,7 +712,7 @@ gitGraph
 ### 7.2 超时/资源限制
 
 ```python
-# kimi-cli/src/kimi_cli/utils/logging.py:56
+# kimi-cli/src/kimi_cli/utils/api_logging.py:56
 # uninstall 时等待 drain 线程结束，超时 2 秒
 self._thread.join(timeout=2.0)
 

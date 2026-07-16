@@ -13,6 +13,7 @@ import { useEventStore } from "../stores/eventStore";
 import { useSSE } from "./useSSE";
 import * as api from "../services/api";
 import { logError } from "../lib/logger";
+import { beginClientTrace, endClientTrace, hasClientTrace } from "../services/tracePropagation";
 
 /** 任务操作的加载状态。 */
 interface TaskOperationState {
@@ -79,6 +80,10 @@ export function useTask(): UseTaskReturn {
   const createTask = useCallback(
     async (text: string, sessionId?: string): Promise<void> => {
       setOperation({ loading: true, error: null });
+      const ownsOperation = !hasClientTrace();
+      if (ownsOperation) {
+        beginClientTrace();
+      }
 
       try {
         // 断开旧的 SSE 连接
@@ -100,6 +105,10 @@ export function useTask(): UseTaskReturn {
         const message = err instanceof Error ? err.message : "创建任务失败";
         logError("createTask 失败", err, { module: "useTask" });
         setOperation({ loading: false, error: message });
+      } finally {
+        if (ownsOperation) {
+          endClientTrace();
+        }
       }
     },
     [addTask, setActiveTask, clearEvents, connect, disconnect],
@@ -114,6 +123,10 @@ export function useTask(): UseTaskReturn {
     if (!activeTaskId) return;
 
     setOperation({ loading: true, error: null });
+    const ownsOperation = !hasClientTrace();
+    if (ownsOperation) {
+      beginClientTrace({ taskId: activeTaskId });
+    }
 
     try {
       const updated = await api.cancelTask(activeTaskId);
@@ -125,8 +138,12 @@ export function useTask(): UseTaskReturn {
       setOperation({ loading: false, error: null });
     } catch (err) {
       const message = err instanceof Error ? err.message : "取消任务失败";
-      logError("cancelTask 失败", err, { module: "useTask", taskId: activeTaskId });
+      logError("cancelTask 失败", err, { module: "useTask", task_id: activeTaskId });
       setOperation({ loading: false, error: message });
+    } finally {
+      if (ownsOperation) {
+        endClientTrace();
+      }
     }
   }, [activeTaskId, updateTask, disconnect]);
 
@@ -135,12 +152,20 @@ export function useTask(): UseTaskReturn {
    */
   const refreshTask = useCallback(async (): Promise<void> => {
     if (!activeTaskId) return;
+    const ownsOperation = !hasClientTrace();
+    if (ownsOperation) {
+      beginClientTrace({ taskId: activeTaskId });
+    }
 
     try {
       const task = await api.getTask(activeTaskId);
       updateTask(activeTaskId, { status: task.status, updated_at: task.updated_at });
     } catch (err) {
-      logError("refreshTask 失败", err, { module: "useTask", taskId: activeTaskId });
+      logError("refreshTask 失败", err, { module: "useTask", task_id: activeTaskId });
+    } finally {
+      if (ownsOperation) {
+        endClientTrace();
+      }
     }
   }, [activeTaskId, updateTask]);
 

@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import {
+  FileText,
   Settings,
   User,
   Plus,
@@ -42,13 +43,23 @@ const MOCK_TASKS: TaskItem[] = [
   { id: "task-4", title: "帮我将 buji-main 部署到 netlify", status: "pending" },
 ];
 
+/** Sidebar 组件属性。 */
+interface SidebarProps {
+  /** 当前主视图，用于展示导航选中态。 */
+  activeView: "chat" | "logs";
+  /** 打开日志页面。 */
+  onOpenLogs: () => void;
+  /** 返回会话页面。 */
+  onOpenChat: () => void;
+}
+
 /**
  * Sidebar 左侧导航栏组件。
  *
  * 固定宽度 ~240px，通过组合子组件实现各区域功能，
  * 自身只负责整体布局、新建按钮和底部设置区。
  */
-export function Sidebar() {
+export function Sidebar({ activeView, onOpenLogs, onOpenChat }: SidebarProps) {
   const [activeProjectId, setActiveProjectId] = useState("proj-1");
   const [activeTaskId, setActiveTaskId] = useState("task-2");
 
@@ -66,9 +77,25 @@ export function Sidebar() {
       <ScrollArea className="flex-1 scrollbar-thin">
         {/* 新建任务按钮 */}
         <div className="p-2">
-          <Button variant="outline" className="w-full justify-start gap-2 text-sm">
+          <Button
+            variant="outline"
+            className="w-full justify-start gap-2 text-sm"
+            onClick={activeView === "logs" ? onOpenChat : undefined}
+            disabled={activeView === "chat"}
+          >
             <Plus className="h-4 w-4" />
-            新建任务
+            {activeView === "logs" ? "返回会话" : "新建任务"}
+          </Button>
+        </div>
+
+        <div className="px-2 pb-2">
+          <Button
+            variant={activeView === "logs" ? "secondary" : "ghost"}
+            className="w-full justify-start gap-2 text-sm"
+            onClick={onOpenLogs}
+          >
+            <FileText className="h-4 w-4" />
+            日志
           </Button>
         </div>
 

@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { logInfo, logError } from "@/lib/logger";
 import { useTask } from "@/hooks/useTask";
+import { beginClientTrace, endClientTrace } from "@/services/tracePropagation";
 
 /**
  * InputBar 底部输入区组件。
@@ -37,7 +38,8 @@ export function InputBar() {
     if (!inputValue.trim() || operation.loading) return;
 
     const text = inputValue.trim();
-    logInfo("用户提交任务输入", { module: "InputBar", inputPreview: text.slice(0, 100) });
+    beginClientTrace();
+    logInfo("用户提交任务输入", { module: "InputBar", input_preview: text.slice(0, 100) });
 
     try {
       await createTask(text);
@@ -47,8 +49,10 @@ export function InputBar() {
       // 此处仅做防御性日志，避免吞掉异常上下文。
       logError("handleSend: createTask 抛出未捕获异常", err instanceof Error ? err : new Error(String(err)), {
         module: "InputBar",
-        inputPreview: text.slice(0, 100),
+        input_preview: text.slice(0, 100),
       });
+    } finally {
+      endClientTrace();
     }
   }, [inputValue, operation.loading, createTask]);
 

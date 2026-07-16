@@ -34,12 +34,14 @@ export interface BackendHealthSnapshot {
 
 /** 本地后端错误摘要。 */
 export interface BackendErrorSummary {
-  /** 错误发生阶段，例如 `launch`、`health_check`。 */
+  /** 错误发生阶段，例如 `launch`、`health_check`、`bootstrap`。 */
   stage: string;
   /** 面向用户的摘要消息。 */
   message: string;
   /** 详细错误文本。 */
   detail: string;
+  /** 可选的原始错误堆栈（如后端启动崩溃的 traceback）。 */
+  traceback?: string | null;
   /** 错误发生时间（ISO-8601）。 */
   occurredAt: string;
 }

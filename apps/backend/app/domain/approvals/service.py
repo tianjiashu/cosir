@@ -8,6 +8,8 @@ from app.domain.approvals.store import ApprovalStore
 from app.core.runs.langgraph_runtime import LangGraphRuntime
 from app.core.runs.resume import ResumeDispatcher
 from app.core.runs.store import DurableRunStore
+from app.core.trace.recorder import TraceRecorder
+from app.config.logging import merge_log_context, reset_log_context
 
 
 class ApprovalService:
@@ -20,6 +22,7 @@ class ApprovalService:
         resume_dispatcher: ResumeDispatcher,
         logger: logging.Logger,
         langgraph_runtime: Optional[LangGraphRuntime] = None,
+        trace_recorder: Optional[TraceRecorder] = None,
     ) -> None:
         """初始化审批服务。
 
@@ -29,6 +32,7 @@ class ApprovalService:
             resume_dispatcher: 恢复命令分发器。
             logger: 日志器。
             langgraph_runtime: 可选的 LangGraph 生命周期运行时。
+            trace_recorder: 可选 Trace Backbone 写入器。
 
         返回:
             无。
@@ -45,6 +49,7 @@ class ApprovalService:
         self._resume_dispatcher = resume_dispatcher
         self._logger = logger
         self._langgraph_runtime = langgraph_runtime
+        self._trace_recorder = trace_recorder
 
     def request_approval(
         self,
@@ -87,14 +92,31 @@ class ApprovalService:
             step_id=step_id,
             tool_call_id=tool_call_id,
         )
-        self._logger.info(
-            "approval_requested run_id=%s approval_id=%s tool=%s permission=%s",
-            run_id,
-            approval.approval_id,
-            tool_name,
-            permission,
+        token = merge_log_context(
+            run_id=run_id,
+            approval_id=approval.approval_id,
+            tool_call_id=approval.tool_call_id,
         )
-        self._interrupt_langgraph_for_approval(approval)
+        try:
+            self._logger.info(
+                "approval_requested",
+                extra={"tool_name": tool_name, "permission": permission, "risk_level": risk_level},
+            )
+            self._record_approval_event(
+                approval,
+                "approval_requested",
+                {
+                    "approval_id": approval.approval_id,
+                    "tool_call_id": approval.tool_call_id,
+                    "tool_name": approval.tool_name,
+                    "permission": approval.permission,
+                    "risk_level": approval.risk_level,
+                    "step_id": approval.step_id,
+                },
+            )
+            self._interrupt_langgraph_for_approval(approval)
+        finally:
+            reset_log_context(token)
         return approval
 
     def _interrupt_langgraph_for_approval(self, approval: ApprovalRequestRecord) -> None:
@@ -129,10 +151,12 @@ class ApprovalService:
             )
         except Exception as exc:
             self._logger.exception(
-                "langgraph_approval_interrupt_failed run_id=%s approval_id=%s error=%s",
-                approval.run_id,
-                approval.approval_id,
-                exc,
+                "langgraph_approval_interrupt_failed",
+                extra={
+                    "run_id": approval.run_id,
+                    "approval_id": approval.approval_id,
+                    "error": str(exc),
+                },
             )
 
     def list_pending(self, run_id: Optional[str] = None) -> list[ApprovalRequestRecord]:
@@ -227,11 +251,57 @@ class ApprovalService:
             action=action,
             payload={"approval_id": approval_id, "decision": decision, "reason": reason},
         )
-        self._logger.info(
-            "approval_decided run_id=%s approval_id=%s decision=%s command_id=%s",
-            approval.run_id,
-            approval_id,
-            decision,
-            command.command_id,
+        token = merge_log_context(
+            run_id=approval.run_id,
+            approval_id=approval_id,
+            tool_call_id=approval.tool_call_id,
         )
+        try:
+            self._logger.info(
+                "approval_decided",
+                extra={"decision": decision, "resume_command_id": command.command_id},
+            )
+            self._record_approval_event(
+                approval,
+                "approval_decided",
+                {
+                    "approval_id": approval_id,
+                    "tool_call_id": approval.tool_call_id,
+                    "decision": decision,
+                    "reason": reason,
+                    "resume_command_id": command.command_id,
+                    "idempotency_key": idempotency_key,
+                },
+            )
+        finally:
+            reset_log_context(token)
         return record
+
+    def _record_approval_event(
+        self,
+        approval: ApprovalRequestRecord,
+        event_name: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """向 Trace Backbone 写入审批领域事件。
+
+        参数:
+            approval: 审批请求记录。
+            event_name: canonical trace event 名称。
+            payload: 事件载荷。
+
+        返回:
+            无。
+
+        异常:
+            KeyError: 如果审批关联的 run 不存在。
+
+        副作用:
+            配置 TraceRecorder 时追加 trace event；trace 写入失败由 TraceRecorder 自行记录。
+        """
+
+        if self._trace_recorder is None:
+            return
+        run = self._run_store.get(approval.run_id)
+        context = self._trace_recorder.context_for_task(run.task_id, approval.run_id)
+        self._trace_recorder.record_event(context, event_name, payload, source="approval")

@@ -2,7 +2,7 @@
 
 use crate::backend::types::BackendLaunchConfig;
 use chrono::Utc;
-use std::fs::{create_dir_all, OpenOptions};
+use std::fs::{create_dir_all, remove_file, OpenOptions};
 use std::process::{Child, Command, Stdio};
 
 /// 已拉起的后端进程信息。
@@ -56,6 +56,12 @@ pub fn launch_backend_process(
             )
         })?;
 
+    // 清理上一次运行的启动状态文件，避免 supervisor 读到陈旧失败信息。
+    // 后端进程启动后会立即重写为 booting，因此不会误判当前运行。
+    if config.boot_state_file.exists() {
+        let _ = remove_file(&config.boot_state_file);
+    }
+
     let child = Command::new(&config.python_binary)
         .arg("-m")
         .arg("app")
@@ -64,6 +70,10 @@ pub fn launch_backend_process(
         .env("CODING_AGENT_PORT", config.port.to_string())
         .env("CODING_AGENT_RELOAD", "false")
         .env("PYTHONUNBUFFERED", "1")
+        .env(
+            "CODING_AGENT_BOOT_STATE_FILE",
+            config.boot_state_file.to_string_lossy().to_string(),
+        )
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
         .spawn()

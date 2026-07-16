@@ -387,7 +387,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:16
+# kimi-cli/src/kimi_cli/soul/log_context.py:16
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
@@ -410,7 +410,7 @@ class Context:
 **Kimi CLI Checkpoint 实现**：
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:68
+# kimi-cli/src/kimi_cli/soul/log_context.py:68
 async def checkpoint(self, add_user_message: bool):
     checkpoint_id = self._next_checkpoint_id
     self._next_checkpoint_id += 1
@@ -423,7 +423,7 @@ async def checkpoint(self, add_user_message: bool):
             Message(role="user", content=[system(f"CHECKPOINT {checkpoint_id}")])
         )
 
-# kimi-cli/src/kimi_cli/soul/context.py:80
+# kimi-cli/src/kimi_cli/soul/log_context.py:80
 async def revert_to(self, checkpoint_id: int):
     logger.debug("Reverting checkpoint, ID: {id}", id=checkpoint_id)
     if checkpoint_id >= self._next_checkpoint_id:
@@ -441,7 +441,7 @@ async def revert_to(self, checkpoint_id: int):
 <summary>📋 查看完整 Checkpoint 实现</summary>
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:68-100
+# kimi-cli/src/kimi_cli/soul/log_context.py:68-100
 async def checkpoint(self, add_user_message: bool):
     """Create a new checkpoint and optionally notify LLM."""
     checkpoint_id = self._next_checkpoint_id
@@ -636,7 +636,7 @@ export const PRUNE_PROTECT = 40_000  // 保护最近 40K
 **Kimi CLI Checkpoint 错误处理**：
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:95
+# kimi-cli/src/kimi_cli/soul/log_context.py:95
 if checkpoint_id >= self._next_checkpoint_id:
     logger.error("Checkpoint {checkpoint_id} does not exist", checkpoint_id=checkpoint_id)
     raise ValueError(f"Checkpoint {checkpoint_id} does not exist")

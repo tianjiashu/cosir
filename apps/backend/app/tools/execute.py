@@ -1,12 +1,20 @@
 """工具处理函数的进程隔离执行。"""
 
+import logging
 from dataclasses import dataclass
 from multiprocessing import get_context
+from multiprocessing.queues import Queue
 import os
 import pickle
+import sys
 import tempfile
 import traceback
 from typing import Any, Callable, Dict, Optional
+
+from app.config.logging import install_logging_for_current_process
+from app.config.logging import get_log_queue
+
+logger = logging.getLogger("coding_agent.backend")
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,8 @@ def execute_tool_handler(
     handler: Callable[..., str],
     arguments: Dict[str, Any],
     timeout_seconds: float,
+    log_queue: "Optional[Queue]" = None,
+    run_id: str = "",
 ) -> ToolExecutionResult:
     """在带有硬超时的子进程中执行工具处理函数。
 
@@ -44,6 +54,8 @@ def execute_tool_handler(
         handler: 执行工具操作、可 pickle 的可调用对象。
         arguments: 传给处理函数的关键字参数。
         timeout_seconds: 在终止进程前等待的最大秒数。
+        log_queue: 可选父进程日志队列，用于把子进程日志回传统一管线。
+        run_id: 当前工具调用的 run 标识，写入子进程日志以便关联。
 
     返回:
         描述成功、处理函数失败或超时的 ToolExecutionResult。
@@ -59,14 +71,22 @@ def execute_tool_handler(
     result_path = result_file.name
     result_file.close()
 
+    # 父进程侧自动解析日志队列；未配置日志时退化为 None，子进程日志退回 stderr。
+    if log_queue is None:
+        log_queue = get_log_queue()
+
     try:
         context = get_context("spawn")
         process = context.Process(
             target=_run_handler,
-            args=(handler, dict(arguments), result_path),
+            args=(handler, dict(arguments), result_path, log_queue, run_id),
         )
         process.start()
     except Exception as exc:
+        logger.exception(
+            "tool_subprocess_start_failed",
+            extra={"timeout_seconds": timeout_seconds, "error": str(exc)},
+        )
         _remove_result_file(result_path)
         return ToolExecutionResult(status="error", error=str(exc))
 
@@ -94,13 +114,21 @@ def execute_tool_handler(
         _remove_result_file(result_path)
 
 
-def _run_handler(handler: Callable[..., str], arguments: Dict[str, Any], result_path: str) -> None:
+def _run_handler(
+    handler: Callable[..., str],
+    arguments: Dict[str, Any],
+    result_path: str,
+    log_queue: "Optional[Queue]" = None,
+    run_id: str = "",
+) -> None:
     """运行处理函数并将其归一化结果写入文件。
 
     参数:
         handler: 执行工具操作的可调用对象。
         arguments: 传给处理函数的关键字参数。
         result_path: 用于把结果返回给父进程的临时文件路径。
+        log_queue: 父进程日志队列，用于把子进程日志回传统一管线。
+        run_id: 当前工具调用的 run 标识，写入日志以便关联。
 
     返回:
         无。
@@ -109,12 +137,21 @@ def _run_handler(handler: Callable[..., str], arguments: Dict[str, Any], result_
         无。处理函数的异常会被捕获并通过结果文件返回。
 
     副作用:
-        执行处理函数并向 ``result_path`` 写入一个 pickle 的结果元组。
+        执行处理函数并向 ``result_path`` 写入一个 pickle 的结果元组；
+        若提供 log_queue，子进程日志经队列回传父进程统一管线。
     """
-
+    if log_queue is not None:
+        try:
+            install_logging_for_current_process(log_queue=log_queue)
+        except Exception as exc:
+            # 队列安装失败不影响工具执行；退回 stderr 并明确标记桥接失效，便于排查
+            sys.stderr.write(
+                "subprocess_log_bridge_failed run_id=%s error=%s\n" % (run_id, exc)
+            )
     try:
         result = handler(**arguments)
     except Exception as exc:
+        logger.exception("tool_handler_failed", extra={"run_id": run_id})
         _write_result_file(result_path, ("error", "", f"{exc}\n{traceback.format_exc()}"))
         return
     _write_result_file(result_path, ("success", result, ""))
@@ -187,6 +224,7 @@ def _read_result_file(result_path: str) -> Optional[tuple]:
         with open(result_path, "rb") as result_file:
             return pickle.load(result_file)
     except Exception as exc:
+        logger.exception("tool_result_read_failed", extra={"error": str(exc)})
         return ("error", "", f"failed to read tool result: {exc}")
 
 

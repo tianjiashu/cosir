@@ -4,7 +4,6 @@
 
 当前项目尚未进入代码开发阶段。现阶段重点是愿景、边界、技术栈、架构方向和可持续协作规则。
 
-deepseek apikey:REDACTED_DEEPSEEK_KEY
 
 ## 项目愿景
 

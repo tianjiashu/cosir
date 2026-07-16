@@ -548,7 +548,7 @@ class Session:
 ```
 
 ```python
-# src/kimi_cli/soul/context.py:16-22
+# src/kimi_cli/soul/log_context.py:16-22
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
@@ -579,7 +579,7 @@ class DMail(BaseModel):
 **Checkpoint 创建**：
 
 ```python
-# src/kimi_cli/soul/context.py:68-78
+# src/kimi_cli/soul/log_context.py:68-78
 async def checkpoint(self, add_user_message: bool):
     checkpoint_id = self._next_checkpoint_id
     self._next_checkpoint_id += 1
@@ -596,7 +596,7 @@ async def checkpoint(self, add_user_message: bool):
 **Revert 回滚**：
 
 ```python
-# src/kimi_cli/soul/context.py:80-133 (核心逻辑)
+# src/kimi_cli/soul/log_context.py:80-133 (核心逻辑)
 async def revert_to(self, checkpoint_id: int):
     logger.debug("Reverting checkpoint, ID: {id}", id=checkpoint_id)
     if checkpoint_id >= self._next_checkpoint_id:

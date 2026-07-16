@@ -415,7 +415,7 @@ from loguru import logger
 logger.disable("kimi_cli")
 # 应用入口点启用: logger.enable("kimi_cli")
 
-# kimi-cli/src/kimi_cli/utils/logging.py:25-45
+# kimi-cli/src/kimi_cli/utils/api_logging.py:25-45
 class StderrRedirector:
     def install(self) -> None:
         self._original_fd = os.dup(2)
@@ -959,7 +959,7 @@ pub fn init_logging(
 **关键代码**（核心逻辑）：
 
 ```python
-# kimi-cli/src/kimi_cli/utils/logging.py:25-45
+# kimi-cli/src/kimi_cli/utils/api_logging.py:25-45
 class StderrRedirector:
     def install(self) -> None:
         self._original_fd = os.dup(2)

@@ -308,7 +308,7 @@ stateDiagram-v2
 #### 关键数据结构
 
 ```python
-# kimi-cli/src/kimi_cli/soul/context.py:16-23
+# kimi-cli/src/kimi_cli/soul/log_context.py:16-23
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend    # 持久化文件路径

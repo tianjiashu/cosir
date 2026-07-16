@@ -7,6 +7,12 @@
 import { API_PATHS, type RecoverableRunsResponse } from "@shared/api";
 import { logError, logInfo } from "../lib/logger";
 import { ServiceError } from "./types";
+import {
+  buildTraceHeaders,
+  readBackendTraceHeaders,
+  recordBackendTrace,
+} from "./tracePropagation";
+import { useConversationTraceStore } from "@/stores/conversationTraceStore";
 
 /** 后端基础 URL，开发环境走 Vite 代理。 */
 const BASE_URL = "";
@@ -21,8 +27,27 @@ const BASE_URL = "";
  */
 export async function fetchRecoverableRuns(): Promise<RecoverableRunsResponse> {
   const startedAt = performance.now();
+  const path = API_PATHS.RUNS_RECOVERABLE;
+  const requestTrace = buildTraceHeaders();
+  useConversationTraceStore.getState().recordTrace({
+    traceId: requestTrace.trace.traceId,
+    taskId: requestTrace.trace.taskId ?? "",
+    approvalId: "",
+    operation: "recoverable_runs",
+    method: "GET",
+    path,
+  });
+  const requestContext = {
+    module: "runs",
+    method: "GET",
+    path,
+    trace_id: requestTrace.trace.traceId,
+  };
   try {
-    const response = await fetch(`${BASE_URL}${API_PATHS.RUNS_RECOVERABLE}`);
+    const response = await fetch(`${BASE_URL}${path}`, {
+      headers: { ...requestTrace.headers },
+    });
+    recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
     if (!response.ok) {
       throw new ServiceError(`查询可恢复运行失败: HTTP ${response.status}`, {
         statusCode: response.status,
@@ -30,13 +55,13 @@ export async function fetchRecoverableRuns(): Promise<RecoverableRunsResponse> {
     }
     const runs = (await response.json()) as RecoverableRunsResponse;
     logInfo("查询可恢复运行完成", {
-      module: "runs",
+      ...requestContext,
       count: runs.length,
-      durationMs: Math.round(performance.now() - startedAt),
+      duration_ms: Math.round(performance.now() - startedAt),
     });
     return runs;
   } catch (err) {
-    logError("查询可恢复运行失败", err, { module: "runs" });
+    logError("查询可恢复运行失败", err, requestContext);
     throw err;
   }
 }
@@ -51,22 +76,40 @@ export async function fetchRecoverableRuns(): Promise<RecoverableRunsResponse> {
  * @sideeffect 发起 POST /tasks/{id}/cancel 请求并记录日志。
  */
 export async function cancelRunTask(taskId: string): Promise<unknown> {
+  const path = API_PATHS.TASK_CANCEL(taskId);
+  const requestTrace = buildTraceHeaders({ taskId });
+  useConversationTraceStore.getState().recordTrace({
+    traceId: requestTrace.trace.traceId,
+    taskId,
+    approvalId: "",
+    operation: "task_cancel",
+    method: "POST",
+    path,
+  });
+  const requestContext = {
+    module: "runs",
+    task_id: taskId,
+    method: "POST",
+    path,
+    trace_id: requestTrace.trace.traceId,
+  };
   try {
-    const response = await fetch(`${BASE_URL}${API_PATHS.TASK_CANCEL(taskId)}`, {
+    const response = await fetch(`${BASE_URL}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...requestTrace.headers },
       body: JSON.stringify({}),
     });
+    recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
     if (!response.ok) {
       throw new ServiceError(`取消运行失败: HTTP ${response.status}`, {
         statusCode: response.status,
         taskId,
       });
     }
-    logInfo("取消运行完成", { module: "runs", taskId });
+    logInfo("取消运行完成", requestContext);
     return response.json();
   } catch (err) {
-    logError("取消运行失败", err, { module: "runs", taskId });
+    logError("取消运行失败", err, requestContext);
     throw err;
   }
 }

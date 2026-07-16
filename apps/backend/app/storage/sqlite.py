@@ -11,12 +11,12 @@ from uuid import uuid4
 from app.events.types import EventType, RuntimeEvent
 from app.storage.records import (
     CheckpointRecord,
-    SessionRecord,
     StepRecord,
     TaskRecord,
     TurnRecord,
 )
 
+logger = logging.getLogger("coding_agent.backend")
 
 class SQLiteTaskStore:
     """在 SQLite 中持久化会话、任务、轮次、步骤与事件状态。"""
@@ -711,9 +711,8 @@ class SQLiteTaskStore:
         except sqlite3.Error as wal_error:
             # WAL 不可用时回退到默认 rollback journal，不阻断正常连接。
             logging.getLogger("coding_agent.backend").warning(
-                "sqlite_wal_unavailable path=%s error=%s",
-                self._database_path,
-                wal_error,
+                "sqlite_wal_unavailable",
+                extra={"path": str(self._database_path), "error": str(wal_error)},
             )
         return connection
 

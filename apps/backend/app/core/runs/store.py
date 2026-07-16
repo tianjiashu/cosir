@@ -98,7 +98,10 @@ class DurableRunStore:
                     _to_text(run.updated_at),
                 ),
             )
-        self._logger.info("durable_run_created run_id=%s task_id=%s", run.run_id, task_id)
+        self._logger.info(
+            "durable_run_created",
+            extra={"run_id": run.run_id, "task_id": task_id},
+        )
         return run
 
     def get(self, run_id: str) -> RunRecord:
@@ -201,7 +204,10 @@ class DurableRunStore:
                     run_id,
                 ),
             )
-        self._logger.info("durable_run_status run_id=%s status=%s", run_id, status)
+        self._logger.info(
+            "durable_run_status",
+            extra={"run_id": run_id, "status": status},
+        )
         return self.get(run_id)
 
     def list_recoverable(self) -> List[RunRecord]:
@@ -259,7 +265,10 @@ class DurableRunStore:
         self.get(run_id)
         existing = self.get_resume_command_by_key(idempotency_key)
         if existing is not None:
-            self._logger.info("resume_command_idempotent run_id=%s action=%s", run_id, action)
+            self._logger.info(
+                "resume_command_idempotent",
+                extra={"run_id": run_id, "action": action},
+            )
             return existing
 
         now = _utc_now()
@@ -298,14 +307,19 @@ class DurableRunStore:
             concurrent = self.get_resume_command_by_key(idempotency_key)
             if concurrent is not None:
                 self._logger.info(
-                    "resume_command_idempotent run_id=%s command_id=%s action=%s",
-                    concurrent.run_id,
-                    concurrent.command_id,
-                    concurrent.action,
+                    "resume_command_idempotent",
+                    extra={
+                        "run_id": concurrent.run_id,
+                        "resume_command_id": concurrent.command_id,
+                        "action": concurrent.action,
+                    },
                 )
                 return concurrent
             raise
-        self._logger.info("resume_command_created run_id=%s action=%s", run_id, action)
+        self._logger.info(
+            "resume_command_created",
+            extra={"run_id": run_id, "action": action},
+        )
         return command
 
     def get_resume_command_by_key(self, idempotency_key: str) -> Optional[ResumeCommandRecord]:
@@ -375,10 +389,12 @@ class DurableRunStore:
                     claimed.append(_resume_command_from_row(row))
         for command in claimed:
             self._logger.info(
-                "resume_command_claimed run_id=%s command_id=%s action=%s",
-                command.run_id,
-                command.command_id,
-                command.action,
+                "resume_command_claimed",
+                extra={
+                    "run_id": command.run_id,
+                    "resume_command_id": command.command_id,
+                    "action": command.action,
+                },
             )
         return claimed
 
@@ -407,9 +423,8 @@ class DurableRunStore:
             updated = connection.execute(query, parameters)
         if updated.rowcount:
             self._logger.warning(
-                "resume_commands_requeued run_id=%s count=%s",
-                run_id or "*",
-                updated.rowcount,
+                "resume_commands_requeued",
+                extra={"run_id": run_id or "*", "count": updated.rowcount},
             )
         return updated.rowcount
 
@@ -440,10 +455,12 @@ class DurableRunStore:
             raise KeyError(command_id)
         command = self._get_resume_command(command_id)
         self._logger.info(
-            "resume_command_applied run_id=%s command_id=%s action=%s",
-            command.run_id,
-            command.command_id,
-            command.action,
+            "resume_command_applied",
+            extra={
+                "run_id": command.run_id,
+                "resume_command_id": command.command_id,
+                "action": command.action,
+            },
         )
         return command
 
@@ -473,10 +490,12 @@ class DurableRunStore:
                 (command_id,),
             )
         self._logger.warning(
-            "resume_command_released run_id=%s command_id=%s action=%s",
-            row["run_id"] if row is not None else None,
-            command_id,
-            row["action"] if row is not None else None,
+            "resume_command_released",
+            extra={
+                "run_id": row["run_id"] if row is not None else None,
+                "resume_command_id": command_id,
+                "action": row["action"] if row is not None else None,
+            },
         )
 
     def _get_resume_command(self, command_id: str) -> ResumeCommandRecord:
