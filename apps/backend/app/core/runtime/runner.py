@@ -689,11 +689,13 @@ class AgentRuntime:
         async for event in self.run_turn(turn.turn_id):
             yield event
 
-    async def run_turn(self, turn_id: str) -> AsyncIterator[RuntimeEvent]:
+    async def run_turn(self, turn_id: str, turn: Optional[TurnRecord] = None) -> AsyncIterator[RuntimeEvent]:
         """运行一个轮次并流式产出运行时事件。
 
         参数:
             turn_id: 待执行或回放的轮次标识符。
+            turn: 可选，调用方已取出的轮次记录。传入可避免重复查询存储；
+                为 ``None`` 时本方法会自行按 ``turn_id`` 取库。
 
         生成:
             表示模型增量、工具活动与终态变化的 RuntimeEvent 值。
@@ -705,7 +707,8 @@ class AgentRuntime:
             根据 turn 状态启动运行、接入既有事件回放，或回放终态事件。
         """
 
-        turn = self._task_store.get_turn(turn_id)
+        if turn is None:
+            turn = self._task_store.get_turn(turn_id)
         task_id = turn.task_id
         task = self._task_store.get_task(task_id)
         if task.status == "cancelled":
@@ -1083,7 +1086,7 @@ class AgentRuntime:
             task_id: 需要获取的任务标识符。
 
         返回:
-            匹配的任务记录。
+            匹配的任务记录。获取任务列表
 
         异常:
             KeyError: 如果任务不存在。
