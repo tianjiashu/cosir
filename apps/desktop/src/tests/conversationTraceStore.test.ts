@@ -50,17 +50,4 @@ describe("conversationTraceStore", () => {
     expect(state.streamTraceByTaskId["task-1"].traceId).toBe("11111111111111111111111111111111");
   });
 
-  it("does not index global traces by task", () => {
-    useConversationTraceStore.getState().recordTrace({
-      traceId: "abcdef1234567890abcdef1234567890",
-      taskId: "",
-      approvalId: "",
-      operation: "recoverable_runs",
-      method: "GET",
-      path: "/runs/recoverable",
-    });
-
-    expect(useConversationTraceStore.getState().latestTrace?.operation).toBe("recoverable_runs");
-    expect(getConversationTraceForTask("task-1")).toBeNull();
-  });
 });

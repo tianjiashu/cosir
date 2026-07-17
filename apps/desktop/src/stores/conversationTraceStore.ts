@@ -30,8 +30,7 @@ export type ConversationTraceOperation =
   | "task_cancel"
   | "task_stream"
   | "task_approvals"
-  | "approval_decision"
-  | "recoverable_runs";
+  | "approval_decision";
 
 /**
  * 一次对话相关请求使用的 trace 记录。

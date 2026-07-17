@@ -124,7 +124,6 @@ function operationLabel(operation: ConversationTraceRecord["operation"]): string
     task_stream: "SSE",
     task_approvals: "审批",
     approval_decision: "决策",
-    recoverable_runs: "恢复",
   };
   return labels[operation];
 }

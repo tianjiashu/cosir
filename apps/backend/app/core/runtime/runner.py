@@ -19,7 +19,6 @@ from app.events.types import EventType, RuntimeEvent
 from app.config.logging import bind_log_context, reset_log_context, set_log_context, trace_log_extra
 from app.core.runs.langgraph_runtime import LangGraphRuntime
 from app.core.runs.recovery import RecoveryManager
-from app.core.runs.recovery import RECOVERABLE_RUN_STATUSES
 from app.core.runs.resume import ResumeDispatcher
 from app.storage.crud.durable import DurableRunStore
 from app.models.base import StreamingModelAdapter
@@ -423,57 +422,6 @@ class AgentRuntime:
                 },
             )
             return task
-        finally:
-            reset_log_context(token)
-
-    def list_recoverable_runs(self) -> list:
-        """列出可恢复或需要人工处理的运行记录。
-
-        参数:
-            无。
-
-        返回:
-            可序列化的运行记录列表。
-
-        异常:
-            RuntimeError: 如果运行时未配置 Durable Run State。
-
-        副作用:
-            可能执行恢复对账并写入日志。
-        """
-
-        if self._run_store is None:
-            raise RuntimeError("durable run recovery is not configured")
-        return [run.to_dict() for run in self._run_store.list_runs_by_statuses(RECOVERABLE_RUN_STATUSES)]
-
-    def resume_run(self, run_id: str) -> dict:
-        """显式恢复指定运行并消费其待处理恢复命令。
-
-        参数:
-            run_id: 需要恢复的 Durable Run 标识符。
-
-        返回:
-            恢复动作完成后的运行记录字典。
-
-        异常:
-            RuntimeError: 如果运行时未配置 Durable Run State。
-            KeyError: 如果运行记录不存在。
-
-        副作用:
-            重新排队该 run 的中断命令，消费 pending 恢复命令，并写入状态与事件。
-        """
-
-        if self._run_store is None:
-            raise RuntimeError("durable run recovery is not configured")
-        run = self._run_store.get(run_id)
-        token = set_log_context(self._trace_context_for_task(run.task_id, run.run_id))
-        try:
-            if self._recovery_manager is not None:
-                self._recovery_manager.requeue_processing_resume_commands(run_id)
-            else:
-                self._run_store.update_resume_commands_status("processing", "pending", run_id=run_id, only_unapplied=True)
-            self._consume_pending_resume_commands(run_id)
-            return self._run_store.get(run_id).to_dict()
         finally:
             reset_log_context(token)
 
