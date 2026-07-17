@@ -3,7 +3,7 @@
 from typing import Iterable, List
 
 from app.models.base import ModelToolDefinition
-from app.tools.types import ToolDefinition
+from app.tools.schemas import ToolDefinition
 
 
 def build_model_tool_definitions(

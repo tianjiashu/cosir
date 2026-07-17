@@ -33,7 +33,7 @@ from app.tools.runtime.locks import ToolResourceLockManager
 from app.tools.registry.memory import ToolRegistry
 from app.tools.results import ToolObservationBuilder
 from app.tools.runtime.platform import ToolRuntime
-from app.tools.builtin.safe_read import SafeReadTools
+from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
 
 

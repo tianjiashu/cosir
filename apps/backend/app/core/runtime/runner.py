@@ -26,7 +26,7 @@ from app.core.runtime.operations import RuntimeOperations
 from app.storage.records import CheckpointRecord, TaskRecord, TurnRecord, WorkspaceRecord
 from app.tools.runtime.compatibility import ToolScheduler
 from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
-from app.tools.types import ToolCall
+from app.tools.schemas import ToolCall
 from app.core.workflows.react_like import ReactLikeWorkflow
 from app.core.workflows.types import AgentWorkflow
 

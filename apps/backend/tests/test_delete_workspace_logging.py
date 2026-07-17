@@ -22,7 +22,7 @@ from app.core.trace.recorder import TraceRecorder
 from app.core.runs.resume import ResumeDispatcher
 from app.domain.approvals.service import ApprovalService
 from app.tools.registry.memory import ToolRegistry
-from app.tools.builtin.safe_read import SafeReadTools
+from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
 
 

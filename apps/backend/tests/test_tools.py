@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Iterable
 
 from app.tools.registry.memory import ToolRegistry
-from app.tools.builtin.safe_read import SafeReadTools
+from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
-from app.tools.types import ToolCall, ToolDefinition
+from app.tools.schemas import ToolCall, ToolDefinition
 
 
 def _empty_test_handler() -> str:

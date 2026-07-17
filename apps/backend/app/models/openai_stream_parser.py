@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List
 
 from app.models.base import ModelDelta
-from app.tools.types import ToolCall
+from app.tools.schemas import ToolCall
 
 
 @dataclass

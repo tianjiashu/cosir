@@ -6,7 +6,7 @@ from typing import Optional
 from app.domain.artifacts.files import ArtifactFileStore
 from app.domain.artifacts.records import ArtifactRecord
 from app.storage.crud.artifact import ArtifactStore
-from app.tools.types import ArtifactRequest
+from app.tools.schemas import ArtifactRequest
 
 
 class ArtifactService:

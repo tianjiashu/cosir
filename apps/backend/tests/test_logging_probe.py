@@ -19,7 +19,7 @@ from app.models.echo import EchoStreamingModelAdapter
 from app.core.runtime.runner import AgentRuntime
 from app.storage.crud.task import SQLiteTaskStore
 from app.tools.registry.memory import ToolRegistry
-from app.tools.builtin.safe_read import SafeReadTools
+from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
 
 

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from app.tools.types import ToolObservation
+from app.tools.schemas import ToolObservation
 
 
 @dataclass(frozen=True)

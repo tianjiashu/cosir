@@ -10,7 +10,7 @@ from app.config.logging import merge_log_context, reset_log_context
 from app.tools.execution.service import ToolExecutionService
 from app.tools.execute import execute_tool_handler
 from app.tools.results import ToolObservationBuilder, ToolRuntimeResult
-from app.tools.types import ArtifactRequest, ToolDefinition
+from app.tools.schemas import ArtifactRequest, ToolDefinition
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Protocol
 
-from app.tools.types import ToolCall
+from app.tools.schemas import ToolCall
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ from app.events.types import EventType, RuntimeEvent
 from app.models.base import RuntimeMessage
 from app.core.runtime.operations import RuntimeOperations
 from app.storage.records import StepRecord, TaskRecord
-from app.tools.types import ToolCall, ToolObservation
+from app.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.step_controller import LangGraphStepController
 
 

@@ -18,9 +18,9 @@ from app.core.runtime.runner import AgentRuntime
 from app.storage.crud.task import SQLiteTaskStore
 from app.storage.records import TaskRecord
 from app.tools.registry.memory import ToolRegistry
-from app.tools.builtin.safe_read import SafeReadTools
+from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
-from app.tools.types import ToolCall, ToolDefinition
+from app.tools.schemas import ToolCall, ToolDefinition
 from app.core.workflows.react_like import ReactLikeWorkflow
 from app.core.workflows.step_controller import StepDecision
 

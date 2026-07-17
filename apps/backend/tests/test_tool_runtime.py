@@ -26,7 +26,7 @@ from app.tools.results import ToolObservationBuilder
 from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
 from app.tools.catalog.selector import ToolSelectionContext, ToolSelector
 from app.tools.catalog.records import ToolCatalogRecord
-from app.tools.types import ArtifactRequest, ToolCall, ToolDefinition
+from app.tools.schemas import ArtifactRequest, ToolCall, ToolDefinition
 
 
 class ToolRuntimeTests(unittest.TestCase):

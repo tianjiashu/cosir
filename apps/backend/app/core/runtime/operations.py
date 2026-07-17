@@ -14,7 +14,7 @@ from app.core.runtime.model_tools import build_model_tool_definitions
 from app.storage.records import StepRecord, TaskRecord, TurnRecord
 from app.tools.runtime.compatibility import ToolScheduler
 from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
-from app.tools.types import ToolCall, ToolDefinition, ToolObservation
+from app.tools.schemas import ToolCall, ToolDefinition, ToolObservation
 
 
 class RuntimeOperations:
