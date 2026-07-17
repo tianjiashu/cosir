@@ -67,7 +67,6 @@ def build_checkpoint_snapshot(
             "snapshot_version": 1,
             "agent_stage": stage,
             "agent": agent_profile.to_dict(),
-            "session_id": task.session_id,
             "task": task.to_dict(),
             "context_summary": _build_context_summary(task, steps, events),
             "steps": [_step_to_dict(step) for step in steps],

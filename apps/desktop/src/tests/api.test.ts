@@ -27,7 +27,7 @@ describe("api.ts — post/get 网络失败分支", () => {
   it("POST fetch 抛错 → 抛出 ServiceError 且经 logError（含 path/method）", async () => {
     const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchImpl = mockFetch(new Error("network down"));
-    await expect(createTask({ text: "x" })).rejects.toBeInstanceOf(ServiceError);
+    await expect(createTask({ text: "x", workspace_id: "workspace-1" })).rejects.toBeInstanceOf(ServiceError);
     const init = fetchImpl.mock.calls[0][1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers["x-trace-id"]).toMatch(/^[0-9a-f]{32}$/);
@@ -123,7 +123,6 @@ describe("api.ts — post/get 网络失败分支", () => {
         status: 200,
         json: async () => ({
           task_id: "t1",
-          session_id: "s1",
           agent_id: "a1",
           input_text: "x",
           status: "running",
@@ -176,7 +175,6 @@ describe("api.ts — post/get 网络失败分支", () => {
   it("正常 2xx POST → 返回解析后的数据", async () => {
     const taskRecord = {
       task_id: "t-1",
-      session_id: "s-1",
       agent_id: "a-1",
       input_text: "x",
       status: "pending",
@@ -191,7 +189,7 @@ describe("api.ts — post/get 网络失败分支", () => {
       }),
       json: async () => taskRecord,
     } as unknown as Response);
-    const result = await createTask({ text: "x" });
+    const result = await createTask({ text: "x", workspace_id: "workspace-1" });
     expect(result.task_id).toBe("t-1");
     const lastTrace = useClientTraceStore.getState().lastTrace;
     expect(lastTrace?.traceId).toBe("1234567890abcdef1234567890abcdef");
@@ -200,7 +198,7 @@ describe("api.ts — post/get 网络失败分支", () => {
       taskId: "t-1",
       operation: "task_create",
       method: "POST",
-      path: API_PATHS.TASKS,
+      path: API_PATHS.WORKSPACE_TASKS("workspace-1"),
     });
   });
 

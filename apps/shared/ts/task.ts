@@ -1,5 +1,5 @@
 /**
- * 任务与会话状态类型定义。
+ * 任务状态类型定义。
  *
  * 与后端 `app/storage/records.py` 保持字段一致，
  * 作为前后端共享的任务状态契约事实源。
@@ -14,29 +14,23 @@ export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cance
 export interface TaskRecord {
   /** 唯一的任务标识符（UUID）。 */
   task_id: string;
-  /** 关联的会话标识符。 */
-  session_id: string;
+  /** 关联的工作区标识符。 */
+  workspace_id?: string;
   /** 负责执行任务的 Agent 标识符。 */
   agent_id: string;
   /** 原始的纯文本用户任务输入。 */
   input_text: string;
+  /** 任务容器标题。 */
+  title?: string;
+  /** 最近用户输入摘要。 */
+  last_message_preview?: string;
+  /** 最近一次轮次标识符。 */
+  latest_turn_id?: string | null;
   /** 当前任务状态。 */
   status: TaskStatus;
   /** 任务创建时的 UTC 时间戳（ISO-8601）。 */
   created_at: string;
   /** 任务最近更新时的 UTC 时间戳（ISO-8601）。 */
-  updated_at: string;
-}
-
-/** 会话记录接口，对应后端 `SessionRecord`。 */
-export interface SessionRecord {
-  /** 唯一的会话标识符。 */
-  session_id: string;
-  /** 与会话关联的项目路径。 */
-  project_path: string | null;
-  /** 会话创建时间戳。 */
-  created_at: string;
-  /** 会话最近更新时间戳。 */
   updated_at: string;
 }
 

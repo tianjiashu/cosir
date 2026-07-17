@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@shared": resolve(__dirname, "../../packages/shared/ts"),
+      "@shared": resolve(__dirname, "../../apps/shared/ts"),
       "@": resolve(__dirname, "src"),
     },
   },
@@ -22,6 +22,14 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/tasks": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/turns": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/workspaces": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },

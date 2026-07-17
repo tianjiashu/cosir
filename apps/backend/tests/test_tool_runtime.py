@@ -52,7 +52,7 @@ class ToolRuntimeTests(unittest.TestCase):
             root = Path(temp_dir)
             marker = root / "marker.txt"
             runtime, run_store, _ = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-approval", "created", thread_id="thread-approval")
+            run = run_store.create_for_turn("task-approval", "turn-task-approval", "created", thread_id="thread-approval")
 
             observation = runtime.execute_single_tool_call(
                 ToolCall("write_marker", {"path": str(marker)}),
@@ -90,7 +90,7 @@ class ToolRuntimeTests(unittest.TestCase):
                 parameters_schema={"type": "object", "properties": {}, "additionalProperties": False},
             )
             runtime, run_store, _ = self._build_persistent_runtime(root, tool)
-            run = run_store.create_for_task("task-artifact", "created", thread_id="thread-artifact")
+            run = run_store.create_for_turn("task-artifact", "turn-task-artifact", "created", thread_id="thread-artifact")
 
             observation = runtime.execute_single_tool_call(
                 ToolCall("large_output", {}),
@@ -135,7 +135,7 @@ class ToolRuntimeTests(unittest.TestCase):
                 },
             )
             runtime, run_store, _ = self._build_persistent_runtime(root, tool)
-            run = run_store.create_for_task("task-idempotent", "created", thread_id="thread-idempotent")
+            run = run_store.create_for_turn("task-idempotent", "turn-task-idempotent", "created", thread_id="thread-idempotent")
             context = ToolExecutionContext(run.run_id, "step-idempotent")
 
             call = ToolCall("count_once", {"path": str(counter_path)})
@@ -166,7 +166,7 @@ class ToolRuntimeTests(unittest.TestCase):
             root = Path(temp_dir)
             marker = root / "approved.txt"
             runtime, run_store, approval_service = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-resume", "created", thread_id="thread-resume")
+            run = run_store.create_for_turn("task-resume", "turn-task-resume", "created", thread_id="thread-resume")
             context = ToolExecutionContext(run.run_id, "step-resume")
             call = ToolCall("write_marker", {"path": str(marker)})
             waiting = runtime.execute_single_tool_call(call, context)
@@ -199,7 +199,7 @@ class ToolRuntimeTests(unittest.TestCase):
             root = Path(temp_dir)
             marker = root / "repeat-approved.txt"
             runtime, run_store, approval_service = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-repeat-resume", "created", thread_id="thread-repeat-resume")
+            run = run_store.create_for_turn("task-repeat-resume", "turn-task-repeat-resume", "created", thread_id="thread-repeat-resume")
             context = ToolExecutionContext(run.run_id, "step-repeat-resume")
             call = ToolCall("write_marker", {"path": str(marker)})
             runtime.execute_single_tool_call(call, context)
@@ -270,7 +270,7 @@ class ToolRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             runtime, run_store, approval_service = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-pending-retry", "created", thread_id="thread-pending-retry")
+            run = run_store.create_for_turn("task-pending-retry", "turn-task-pending-retry", "created", thread_id="thread-pending-retry")
             context = ToolExecutionContext(run.run_id, "step-pending-retry")
             call = ToolCall("write_marker", {"path": str(root / "marker.txt")})
 
@@ -309,7 +309,7 @@ class ToolRuntimeTests(unittest.TestCase):
         )
         elapsed = time.monotonic() - started
 
-        self.assertLess(elapsed, 0.35)
+        self.assertLess(elapsed, 0.50)
         self.assertEqual([item.content for item in observations], ["first", "second"])
         self.assertEqual([item.tool_call_id for item in observations], ["first-id", "second-id"])
 

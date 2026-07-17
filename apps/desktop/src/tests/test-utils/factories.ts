@@ -22,7 +22,7 @@ export function makeTask(
 ): import("@shared/task").TaskRecord {
   return {
     task_id,
-    session_id: "sess-1",
+    workspace_id: "workspace-1",
     agent_id: "agent-1",
     input_text: "do something",
     status: "running",

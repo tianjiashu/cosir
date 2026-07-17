@@ -46,7 +46,7 @@ export type SSEStateChangeHandler = (state: SSEConnectionState) => void;
 /**
  * SSE 请求 trace 暴露回调。
  *
- * @param traceId - 本次 `/tasks/{task_id}/stream` 请求写入 `x-trace-id` 的客户端 trace。
+ * @param traceId - 本次 `/turns/{turn_id}/stream` 请求写入 `x-trace-id` 的客户端 trace。
  * @returns 无。
  *
  * @sideeffect 由调用方决定是否把 traceId 写入 UI 状态；SSE service 自身同时会记录到 conversationTraceStore。
@@ -69,6 +69,8 @@ export interface SSEConnectionOptions {
   onTrace?: SSETraceHandler;
   /** 任务 ID（用于日志和错误追踪）。 */
   taskId: string;
+  /** 轮次 ID（用于建立 turn 级 SSE 流）。 */
+  turnId: string;
 }
 
 /**
@@ -80,7 +82,8 @@ export interface SSEConnectionOptions {
  * @example
  * ```ts
  * const conn = new SSEConnection({
- *   taskId: "uuid",
+ *   taskId: "task-uuid",
+ *   turnId: "turn-uuid",
  *   onEvent: (event) => onEventReceived(event),
  *   onStateChange: (state) => onStateChanged(state),
  * });
@@ -106,7 +109,7 @@ export class SSEConnection {
   /**
    * 建立 SSE 连接并开始接收事件流。
    *
-   * 向 GET /tasks/{id}/stream 发起 fetch 请求，
+   * 向 GET /turns/{id}/stream 发起 fetch 请求，
    * 通过 ReadableStream 逐行解析 SSE 格式数据，
    * 每收到一个完整事件即调用 onEvent 回调。
    *
@@ -124,20 +127,21 @@ export class SSEConnection {
 
     this._abortController = new AbortController();
     this._setState(SSEConnectionState.CONNECTING);
-    const path = API_PATHS.TASK_STREAM(this.options.taskId);
+    const path = API_PATHS.TURN_STREAM(this.options.turnId);
     const requestTrace = buildTraceHeaders({ taskId: this.options.taskId });
     this.options.onTrace?.(requestTrace.trace.traceId);
     useConversationTraceStore.getState().recordTrace({
       traceId: requestTrace.trace.traceId,
       taskId: this.options.taskId,
       approvalId: "",
-      operation: "task_stream",
+      operation: "turn_stream",
       method: "GET",
       path,
     });
     const requestContext = {
       module: "sse",
       task_id: this.options.taskId,
+      turn_id: this.options.turnId,
       method: "GET",
       path,
       trace_id: requestTrace.trace.traceId,
@@ -263,6 +267,7 @@ export class SSEConnection {
       logWarn("SSE 事件 JSON 解析失败", {
         module: "sse",
         task_id: this.options.taskId,
+        turn_id: this.options.turnId,
         event_type: eventType || "(unknown)",
         data_preview: dataStr.slice(0, 200),
         error: parseErr instanceof Error ? parseErr.message : String(parseErr),

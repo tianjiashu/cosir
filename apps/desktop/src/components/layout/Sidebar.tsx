@@ -1,14 +1,8 @@
 /**
  * 左侧导航栏（Sidebar）。
  *
- * 组合以下子组件：
- * - ProjectList：项目列表
- * - TaskList：任务列表
- * - HistoryList：历史会话入口（占位）
- * - PluginList：插件/能力入口（占位）
- *
- * 底部保留用户/设置入口占位。
- * 第一版使用 mock 数据，选中态通过内部 state 控制。
+ * 展示工作区、任务树、日志入口和底部辅助入口。
+ * 工作区与任务数据来自 Zustand store，选中任务通过 useTask 打开并加载 turn/event。
  *
  * @module components/layout/Sidebar
  */
@@ -19,49 +13,83 @@ import {
   Settings,
   User,
   Plus,
+  ChevronRight,
+  FolderOpen,
+  Trash2,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { ProjectList, type ProjectItem } from "@/components/sidebar/ProjectList";
-import { TaskList, type TaskItem } from "@/components/sidebar/TaskList";
 import { HistoryList } from "@/components/sidebar/HistoryList";
 import { PluginList } from "@/components/sidebar/PluginList";
-
-/** Mock 项目数据（第一版静态数据）。 */
-const MOCK_PROJECTS: ProjectItem[] = [
-  { id: "proj-1", name: "coding-agent", path: "~/Documents/coding-agent" },
-  { id: "proj-2", name: "deepseek-coding-agent", path: "~/Projects/deepseek" },
-  { id: "proj-3", name: "框架 coding agent 能力", path: "~/Projects/framework" },
-];
-
-/** Mock 任务数据（第一版静态数据）。 */
-const MOCK_TASKS: TaskItem[] = [
-  { id: "task-1", title: "调研项目定位", status: "completed" },
-  { id: "task-2", title: "写一篇\"比较粗糙\"的文章", status: "running" },
-  { id: "task-3", title: "重写博客第二版", status: "pending" },
-  { id: "task-4", title: "帮我将 buji-main 部署到 netlify", status: "pending" },
-];
+import { cn } from "@/lib/utils";
+import { useWorkspaceStore } from "@/stores/workspaceStore";
+import { useTaskStore } from "@/stores/taskStore";
+import { useTask } from "@/hooks/useTask";
+import * as api from "@/services/api";
+import { logError } from "@/lib/logger";
+import type { WorkspaceRecord } from "@shared/workspace";
 
 /** Sidebar 组件属性。 */
 interface SidebarProps {
   /** 当前主视图，用于展示导航选中态。 */
-  activeView: "chat" | "logs";
+  activeView: "chat" | "new-task" | "logs";
   /** 打开日志页面。 */
   onOpenLogs: () => void;
   /** 返回会话页面。 */
   onOpenChat: () => void;
+  /** 打开新建任务页面。 */
+  onNewTask: () => void;
 }
 
 /**
  * Sidebar 左侧导航栏组件。
  *
- * 固定宽度 ~240px，通过组合子组件实现各区域功能，
- * 自身只负责整体布局、新建按钮和底部设置区。
+ * 固定宽度 240px，负责工作区任务树导航、新建任务入口、日志入口和工作区删除。
  */
-export function Sidebar({ activeView, onOpenLogs, onOpenChat }: SidebarProps) {
-  const [activeProjectId, setActiveProjectId] = useState("proj-1");
-  const [activeTaskId, setActiveTaskId] = useState("task-2");
+export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: SidebarProps) {
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const collapsedWorkspaceIds = useWorkspaceStore((s) => s.collapsedWorkspaceIds);
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
+  const toggleWorkspaceCollapsed = useWorkspaceStore((s) => s.toggleWorkspaceCollapsed);
+  const removeWorkspace = useWorkspaceStore((s) => s.removeWorkspace);
+  const tasks = useTaskStore((s) => s.tasks);
+  const setTasks = useTaskStore((s) => s.setTasks);
+  const activeTaskId = useTaskStore((s) => s.activeTaskId);
+  const { openTask } = useTask();
+
+  // 待删除的工作区（非空时展示应用内确认弹窗）。
+  const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
+  // 删除请求进行中标记，用于禁用按钮并展示 loading 文案。
+  const [deleting, setDeleting] = useState(false);
+  // 删除失败提示，展示在确认弹窗内。
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  /**
+   * 执行工作区删除。
+   *
+   * 调用后端删除接口，成功后同步移除本地工作区与其任务并关闭弹窗；
+   * 失败时保留弹窗并在其中展示错误信息。
+   */
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteWorkspace(pendingDelete.workspace_id);
+      removeWorkspace(pendingDelete.workspace_id);
+      setTasks(tasks.filter((task) => task.workspace_id !== pendingDelete.workspace_id));
+      setPendingDelete(null);
+    } catch (err) {
+      logError("删除工作区失败", err, { module: "Sidebar", workspace_id: pendingDelete.workspace_id });
+      setDeleteError(err instanceof Error ? err.message : "删除工作区失败，请检查后端日志");
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <aside className="flex h-full w-60 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
@@ -80,8 +108,8 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat }: SidebarProps) {
           <Button
             variant="outline"
             className="w-full justify-start gap-2 text-sm"
-            onClick={activeView === "logs" ? onOpenChat : undefined}
-            disabled={activeView === "chat"}
+            onClick={activeView === "logs" ? onOpenChat : onNewTask}
+            disabled={activeView === "new-task"}
           >
             <Plus className="h-4 w-4" />
             {activeView === "logs" ? "返回会话" : "新建任务"}
@@ -99,19 +127,74 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat }: SidebarProps) {
           </Button>
         </div>
 
-        {/* 项目列表 — 使用独立子组件 */}
-        <ProjectList
-          projects={MOCK_PROJECTS}
-          activeId={activeProjectId}
-          onSelect={setActiveProjectId}
-        />
-
-        {/* 任务列表 — 使用独立子组件 */}
-        <TaskList
-          tasks={MOCK_TASKS}
-          activeId={activeTaskId}
-          onSelect={setActiveTaskId}
-        />
+        <div className="px-2 py-1">
+          <div className="mb-1 flex items-center gap-1 px-2 py-1.5 text-xs font-medium uppercase text-muted-foreground">
+            <FolderOpen className="h-3.5 w-3.5" />
+            工作区
+          </div>
+          {workspaces.map((workspace) => {
+            const collapsed = collapsedWorkspaceIds.has(workspace.workspace_id);
+            const workspaceTasks = tasks.filter((task) => task.workspace_id === workspace.workspace_id);
+            return (
+              <div key={workspace.workspace_id}>
+                <div
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                    activeWorkspaceId === workspace.workspace_id
+                      ? "bg-accent text-accent-foreground"
+                      : "text-muted-foreground hover:bg-accent/50",
+                  )}
+                >
+                  <button
+                    onClick={() => {
+                      setActiveWorkspace(workspace.workspace_id);
+                      toggleWorkspaceCollapsed(workspace.workspace_id);
+                    }}
+                    title={`${workspace.name} (${workspace.root_path})`}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  >
+                    <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} />
+                    <span className="truncate">{workspace.name}</span>
+                  </button>
+                  <button
+                    title="删除工作区"
+                    className="ml-auto rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDeleteError(null);
+                      setPendingDelete(workspace);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {!collapsed && (
+                  <div className="ml-5 mt-1 space-y-1">
+                    {workspaceTasks.map((task) => (
+                      <button
+                        key={task.task_id}
+                        onClick={() => {
+                          onOpenChat();
+                          void openTask(task.task_id);
+                        }}
+                        title={task.title}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                          activeTaskId === task.task_id
+                            ? "bg-accent text-accent-foreground"
+                            : "text-muted-foreground hover:bg-accent/50",
+                        )}
+                      >
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+                        <span className="truncate">{task.title || task.last_message_preview}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
         <Separator className="my-2" />
 
@@ -134,6 +217,47 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat }: SidebarProps) {
           <Settings className="h-4 w-4" />
         </Button>
       </div>
+
+      {/* 删除工作区确认弹窗（应用内实现，不依赖系统 dialog） */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => {
+            if (!deleting) {
+              setPendingDelete(null);
+            }
+          }}
+        >
+          <div
+            className="w-80 rounded-lg border border-border bg-background p-4 shadow-lg"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-foreground">删除工作区</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              确定删除工作区「{pendingDelete.name}」及其任务记录？此操作不可恢复。
+            </p>
+            {deleteError && <p className="mt-2 text-xs text-destructive">{deleteError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={deleting}
+                onClick={() => setPendingDelete(null)}
+              >
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={deleting}
+                onClick={() => void handleConfirmDelete()}
+              >
+                {deleting ? "删除中…" : "删除"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

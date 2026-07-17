@@ -9,7 +9,7 @@
  * - 语音入口占位
  * - "+" 附件入口（占位，点击提示"即将上线"）
  *
- * 第一版仅支持纯文本输入。发送时通过 useTask hook 创建任务并启动 SSE 流。
+ * 第一版仅支持纯文本输入。发送时通过 useTask hook 追加 turn 并启动 SSE 流。
  *
  * @module components/layout/InputBar
  */
@@ -31,9 +31,9 @@ import { beginClientTrace, endClientTrace } from "@/services/tracePropagation";
  */
 export function InputBar() {
   const [inputValue, setInputValue] = useState("");
-  const { createTask, operation } = useTask();
+  const { createTurn, operation } = useTask();
 
-  /** 处理发送操作：通过 useTask hook 创建后端任务并启动 SSE 监听。 */
+  /** 处理发送操作：通过 useTask hook 创建后端 turn 并启动 SSE 监听。 */
   const handleSend = useCallback(async () => {
     if (!inputValue.trim() || operation.loading) return;
 
@@ -42,19 +42,19 @@ export function InputBar() {
     logInfo("用户提交任务输入", { module: "InputBar", input_preview: text.slice(0, 100) });
 
     try {
-      await createTask(text);
+      await createTurn(text);
       setInputValue("");
     } catch (err) {
-      // createTask 内部已通过 logError 记录详细错误并更新 operation.error，
+      // createTurn 内部已通过 logError 记录详细错误并更新 operation.error，
       // 此处仅做防御性日志，避免吞掉异常上下文。
-      logError("handleSend: createTask 抛出未捕获异常", err instanceof Error ? err : new Error(String(err)), {
+      logError("handleSend: createTurn 抛出未捕获异常", err instanceof Error ? err : new Error(String(err)), {
         module: "InputBar",
         input_preview: text.slice(0, 100),
       });
     } finally {
       endClientTrace();
     }
-  }, [inputValue, operation.loading, createTask]);
+  }, [inputValue, operation.loading, createTurn]);
 
   /** 处理键盘事件：Enter 发送，Shift+Enter 换行。 */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

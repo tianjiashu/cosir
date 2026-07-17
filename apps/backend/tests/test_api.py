@@ -78,6 +78,54 @@ class BackendApiTests(unittest.TestCase):
         for temp_dir in self._temp_dirs:
             temp_dir.cleanup()
 
+    def _stream_task_latest_turn(self, client, task_id: str):
+        """通过最新 turn 的 SSE 端点运行或回放任务。
+
+        参数:
+            client: FastAPI 测试客户端。
+            task_id: 待读取最新轮次的任务标识。
+
+        返回:
+            `/turns/{turn_id}/stream` 的测试响应。
+
+        异常:
+            AssertionError: 如果任务没有任何 turn。
+
+        副作用:
+            可能触发最新 pending turn 的运行。
+        """
+
+        turns_response = client.get(f"/tasks/{task_id}/turns")
+        self.assertEqual(turns_response.status_code, 200)
+        turns = turns_response.json()
+        self.assertTrue(turns)
+        return client.get(f"/turns/{turns[-1]['turn_id']}/stream")
+
+    def _create_workspace_task(self, client, text: str):
+        """通过 workspace task 主协议创建任务。
+
+        参数:
+            client: FastAPI 测试客户端。
+            text: 任务输入文本。
+
+        返回:
+            创建任务响应。
+
+        异常:
+            AssertionError: 如果工作区创建失败。
+
+        副作用:
+            创建一个临时测试工作区与任务。
+        """
+
+        workspace_response = client.post(
+            "/workspaces",
+            json={"name": f"workspace-{time.time_ns()}", "root_path": "/tmp/coding-agent-test"},
+        )
+        self.assertEqual(workspace_response.status_code, 200)
+        workspace_id = workspace_response.json()["workspace_id"]
+        return client.post(f"/workspaces/{workspace_id}/tasks", json={"text": text, "workspace_id": workspace_id})
+
     def test_task_creation_rejects_null_text(self) -> None:
         """校验 API 校验会拒绝空任务文本。
 
@@ -95,7 +143,9 @@ class BackendApiTests(unittest.TestCase):
         """
 
         client = self._build_client()
-        response = client.post("/tasks", json={"text": None})
+        workspace_response = client.post("/workspaces", json={"name": "validation", "root_path": "/tmp/validation"})
+        self.assertEqual(workspace_response.status_code, 200)
+        response = client.post(f"/workspaces/{workspace_response.json()['workspace_id']}/tasks", json={"text": None, "workspace_id": workspace_response.json()["workspace_id"]})
 
         self.assertEqual(response.status_code, 422)
 
@@ -141,13 +191,13 @@ class BackendApiTests(unittest.TestCase):
         """
 
         client = self._build_client()
-        create_response = client.post("/tasks", json={"text": "hello api"})
+        create_response = self._create_workspace_task(client, "hello api")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
         self.assertEqual(create_response.json()["agent_id"], "developer")
 
-        first_stream = client.get(f"/tasks/{task_id}/stream")
-        second_stream = client.get(f"/tasks/{task_id}/stream")
+        first_stream = self._stream_task_latest_turn(client, task_id)
+        second_stream = self._stream_task_latest_turn(client, task_id)
         events_response = client.get(f"/tasks/{task_id}/events")
         checkpoints_response = client.get(f"/tasks/{task_id}/checkpoints")
 
@@ -159,6 +209,65 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(checkpoints_response.status_code, 200)
         self.assertEqual(len(events_response.json()), first_stream.text.count("event: "))
         self.assertGreaterEqual(len(checkpoints_response.json()), 2)
+
+    def test_workspace_task_turn_stream_contract(self) -> None:
+        """校验 workspace/task/turn 新主协议可以创建、运行和回放。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果新协议端点没有形成可运行闭环。
+
+        副作用:
+            创建工作区、任务、追加轮次并运行 SSE。
+        """
+
+        client = self._build_client()
+        workspace_response = client.post(
+            "/workspaces",
+            json={"name": "coding-agent", "root_path": "/tmp/coding-agent"},
+        )
+        self.assertEqual(workspace_response.status_code, 200)
+        workspace_id = workspace_response.json()["workspace_id"]
+
+        task_response = client.post(
+            f"/workspaces/{workspace_id}/tasks",
+            json={"text": "first turn", "workspace_id": workspace_id},
+        )
+        self.assertEqual(task_response.status_code, 200)
+        task_payload = task_response.json()
+        self.assertEqual(task_payload["workspace_id"], workspace_id)
+        task_id = task_payload["task_id"]
+        first_turn_id = task_payload["latest_turn_id"]
+
+        first_stream = client.get(f"/turns/{first_turn_id}/stream")
+        self.assertEqual(first_stream.status_code, 200)
+        self.assertIn("event: run_started", first_stream.text)
+        self.assertIn(f'"turn_id": "{first_turn_id}"', first_stream.text)
+
+        turn_response = client.post(
+            f"/tasks/{task_id}/turns",
+            json={"input_text": "second turn"},
+        )
+        self.assertEqual(turn_response.status_code, 200)
+        second_turn_id = turn_response.json()["turn_id"]
+        turns_response = client.get(f"/tasks/{task_id}/turns")
+        second_stream = client.get(f"/turns/{second_turn_id}/stream")
+        replay_response = client.get(f"/turns/{second_turn_id}/stream")
+        events_response = client.get(f"/tasks/{task_id}/events")
+
+        self.assertEqual(turns_response.status_code, 200)
+        self.assertEqual(len(turns_response.json()), 2)
+        self.assertEqual(second_stream.status_code, 200)
+        self.assertEqual(replay_response.status_code, 200)
+        self.assertEqual(second_stream.text, replay_response.text)
+        events = events_response.json()
+        self.assertTrue(all("sequence" in event for event in events))
+        self.assertEqual([event["sequence"] for event in events], sorted(event["sequence"] for event in events))
 
     def test_run_trace_endpoint_reads_trace_events_and_jsonl_logs(self) -> None:
         """校验 run trace API 返回 ledger 事件并解析 JSONL 文件日志。
@@ -177,13 +286,13 @@ class BackendApiTests(unittest.TestCase):
         """
 
         client = self._build_client()
-        create_response = client.post("/tasks", json={"text": "trace api"})
+        create_response = self._create_workspace_task(client, "trace api")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
 
-        stream_response = client.get(f"/tasks/{task_id}/stream")
+        stream_response = self._stream_task_latest_turn(client, task_id)
         self.assertEqual(stream_response.status_code, 200)
-        run_id = client.app.state.runtime_for_tests._run_store.get_by_task(task_id).run_id
+        run_id = client.app.state.runtime_for_tests._run_store.list_by_task(task_id)[-1].run_id
 
         response = client.get(f"/runs/{run_id}/trace")
 
@@ -225,11 +334,11 @@ class BackendApiTests(unittest.TestCase):
         """
 
         client = self._build_client()
-        create_response = client.post("/tasks", json={"text": "replay api"})
+        create_response = self._create_workspace_task(client, "replay api")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
-        self.assertEqual(client.get(f"/tasks/{task_id}/stream").status_code, 200)
-        run_id = client.app.state.runtime_for_tests._run_store.get_by_task(task_id).run_id
+        self.assertEqual(self._stream_task_latest_turn(client, task_id).status_code, 200)
+        run_id = client.app.state.runtime_for_tests._run_store.list_by_task(task_id)[-1].run_id
 
         run_response = client.get(f"/runs/{run_id}/replay")
 
@@ -283,7 +392,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, _approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("replay read only")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         run_store.mark_status(run.run_id, "waiting", wait_reason="approval")
         created = run_store.create_resume_command(
@@ -327,7 +436,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("approval replay")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         approval = approval_service.request_approval(
             run_id=run.run_id,
@@ -370,12 +479,12 @@ class BackendApiTests(unittest.TestCase):
         client = self._build_tool_runtime_client()
         project_root = client.app.state.project_root_for_tests
         (project_root / "note.txt").write_text("real tool content", encoding="utf-8")
-        create_response = client.post("/tasks", json={"text": "read note"})
+        create_response = self._create_workspace_task(client, "read note")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
 
-        stream_response = client.get(f"/tasks/{task_id}/stream")
-        run_id = client.app.state.runtime_for_tests._run_store.get_by_task(task_id).run_id
+        stream_response = self._stream_task_latest_turn(client, task_id)
+        run_id = client.app.state.runtime_for_tests._run_store.list_by_task(task_id)[-1].run_id
         replay_response = client.get(f"/runs/{run_id}/replay")
         persisted_tool_call_ids = _sqlite_tool_call_ids(project_root / "app.sqlite3")
 
@@ -407,12 +516,12 @@ class BackendApiTests(unittest.TestCase):
         project_root = client.app.state.project_root_for_tests
         (project_root / "note-a.txt").write_text("a", encoding="utf-8")
         (project_root / "note-b.txt").write_text("b", encoding="utf-8")
-        create_response = client.post("/tasks", json={"text": "read two notes"})
+        create_response = self._create_workspace_task(client, "read two notes")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
 
-        stream_response = client.get(f"/tasks/{task_id}/stream")
-        run_id = client.app.state.runtime_for_tests._run_store.get_by_task(task_id).run_id
+        stream_response = self._stream_task_latest_turn(client, task_id)
+        run_id = client.app.state.runtime_for_tests._run_store.list_by_task(task_id)[-1].run_id
         replay_response = client.get(f"/runs/{run_id}/replay")
         persisted_tool_call_ids = _sqlite_tool_call_ids(project_root / "app.sqlite3")
 
@@ -457,12 +566,12 @@ class BackendApiTests(unittest.TestCase):
             model_adapter=ArtifactReplayToolModel(),
             extra_tools=(artifact_tool,),
         )
-        create_response = client.post("/tasks", json={"text": "capture output"})
+        create_response = self._create_workspace_task(client, "capture output")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
 
-        stream_response = client.get(f"/tasks/{task_id}/stream")
-        run_id = client.app.state.runtime_for_tests._run_store.get_by_task(task_id).run_id
+        stream_response = self._stream_task_latest_turn(client, task_id)
+        run_id = client.app.state.runtime_for_tests._run_store.list_by_task(task_id)[-1].run_id
         replay_response = client.get(f"/runs/{run_id}/replay")
 
         self.assertEqual(stream_response.status_code, 200)
@@ -490,13 +599,13 @@ class BackendApiTests(unittest.TestCase):
         """
 
         client = self._build_client()
-        create_response = client.post("/tasks", json={"text": "trace logs api"})
+        create_response = self._create_workspace_task(client, "trace logs api")
         self.assertEqual(create_response.status_code, 200)
         task_id = create_response.json()["task_id"]
 
-        stream_response = client.get(f"/tasks/{task_id}/stream")
+        stream_response = self._stream_task_latest_turn(client, task_id)
         self.assertEqual(stream_response.status_code, 200)
-        run_id = client.app.state.runtime_for_tests._run_store.get_by_task(task_id).run_id
+        run_id = client.app.state.runtime_for_tests._run_store.list_by_task(task_id)[-1].run_id
         trace_response = client.get(f"/runs/{run_id}/trace")
         self.assertEqual(trace_response.status_code, 200)
         trace_id = trace_response.json()["trace_id"]
@@ -752,7 +861,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("approval api")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         approval = approval_service.request_approval(
             run_id=run.run_id,
@@ -800,7 +909,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, _approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("recoverable api")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         run_store.mark_status(run.run_id, "waiting", wait_reason="approval")
         created = run_store.create_resume_command(
@@ -841,7 +950,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("resume api")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         approval = approval_service.request_approval(
             run_id=run.run_id,
@@ -892,7 +1001,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("denied resume api")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         approval = approval_service.request_approval(
             run_id=run.run_id,
@@ -937,7 +1046,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("denied approval api")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         approval = approval_service.request_approval(
             run_id=run.run_id,
@@ -976,7 +1085,7 @@ class BackendApiTests(unittest.TestCase):
 
         runtime, run_store, approval_service = self._build_runtime_with_approvals()
         task = runtime.create_task("finalize failure api")
-        run = run_store.get_by_task(task.task_id)
+        run = run_store.list_by_task(task.task_id)[-1]
         self.assertIsNotNone(run)
         approval = approval_service.request_approval(
             run_id=run.run_id,

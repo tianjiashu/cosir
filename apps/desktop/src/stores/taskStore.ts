@@ -1,8 +1,7 @@
 /**
- * 任务与会话状态管理（Zustand）。
+ * 任务容器状态管理（Zustand）。
  *
  * 管理：
- * - 当前会话信息
  * - 任务列表
  * - 当前活跃任务
  * - 任务状态变更动作
@@ -18,24 +17,30 @@ import type { TaskStatus } from "@shared/task";
 
 /** 任务 Store 的状态接口。 */
 interface TaskState {
-  /** 当前会话 ID（如有）。 */
-  currentSessionId: string | null;
   /** 已加载的任务列表。 */
   tasks: TaskRecord[];
   /** 当前正在查看/交互的任务 ID（不一定在运行中）。 */
   activeTaskId: string | null;
+  /** 当前活跃轮次 ID。 */
+  activeTurnId: string | null;
 }
 
 /** 任务 Store 的动作接口。 */
 interface TaskActions {
-  /** 设置当前会话 ID。 */
-  setCurrentSession: (sessionId: string) => void;
+  /** 批量替换任务列表。 */
+  setTasks: (tasks: TaskRecord[]) => void;
   /** 添加一个新任务到列表。 */
   addTask: (task: TaskRecord) => void;
+  /** 用正式任务替换临时任务。 */
+  replaceTask: (temporaryTaskId: string, task: TaskRecord) => void;
+  /** 删除一个任务。 */
+  removeTask: (taskId: string) => void;
   /** 更新任务状态（根据 task_id 匹配并替换）。 */
   updateTask: (taskId: string, updates: Partial<TaskRecord>) => void;
   /** 设置当前活跃任务。 */
-  setActiveTask: (taskId: string | null) => void;
+  setActiveTask: (taskId: string | null, turnId?: string | null) => void;
+  /** 设置当前活跃轮次。 */
+  setActiveTurn: (turnId: string | null) => void;
   /** 清空所有任务数据。 */
   clearTasks: () => void;
   /**
@@ -54,20 +59,37 @@ interface TaskActions {
  */
 export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   // --- 初始状态 ---
-  currentSessionId: null,
   tasks: [],
   activeTaskId: null,
+  activeTurnId: null,
 
   // --- 动作 ---
 
-  setCurrentSession: (sessionId: string) => {
-    set({ currentSessionId: sessionId });
+  setTasks: (tasks: TaskRecord[]) => {
+    set({ tasks });
   },
 
   addTask: (task: TaskRecord) => {
     set((state) => ({
-      tasks: [task, ...state.tasks],
+      tasks: [task, ...state.tasks.filter((item) => item.task_id !== task.task_id)],
       activeTaskId: state.activeTaskId ?? task.task_id,
+      activeTurnId: state.activeTurnId ?? task.latest_turn_id,
+    }));
+  },
+
+  replaceTask: (temporaryTaskId: string, task: TaskRecord) => {
+    set((state) => ({
+      tasks: [task, ...state.tasks.filter((item) => item.task_id !== temporaryTaskId && item.task_id !== task.task_id)],
+      activeTaskId: state.activeTaskId === temporaryTaskId ? task.task_id : state.activeTaskId,
+      activeTurnId: state.activeTaskId === temporaryTaskId ? task.latest_turn_id ?? null : state.activeTurnId,
+    }));
+  },
+
+  removeTask: (taskId: string) => {
+    set((state) => ({
+      tasks: state.tasks.filter((item) => item.task_id !== taskId),
+      activeTaskId: state.activeTaskId === taskId ? null : state.activeTaskId,
+      activeTurnId: state.activeTaskId === taskId ? null : state.activeTurnId,
     }));
   },
 
@@ -79,12 +101,17 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
     }));
   },
 
-  setActiveTask: (taskId: string | null) => {
-    set({ activeTaskId: taskId });
+  setActiveTask: (taskId: string | null, turnId?: string | null) => {
+    const task = taskId ? get().tasks.find((item) => item.task_id === taskId) : undefined;
+    set({ activeTaskId: taskId, activeTurnId: turnId ?? task?.latest_turn_id ?? null });
+  },
+
+  setActiveTurn: (turnId: string | null) => {
+    set({ activeTurnId: turnId });
   },
 
   clearTasks: () => {
-    set({ tasks: [], activeTaskId: null });
+    set({ tasks: [], activeTaskId: null, activeTurnId: null });
   },
 
   getTaskById: (taskId: string) => {

@@ -39,7 +39,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
   });
 
   it("初始状态为 IDLE", () => {
-    const conn = new SSEConnection({ taskId: "t1", onEvent: () => {} });
+    const conn = new SSEConnection({ taskId: "t1", turnId: "turn-1", onEvent: () => {} });
     expect(conn.state).toBe(SSEConnectionState.IDLE);
   });
 
@@ -48,6 +48,10 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
       event_id: "e1",
       event_type: "step_started",
       task_id: "t1",
+      turn_id: "turn-1",
+      sequence: 1,
+      message_id: null,
+      tool_call_id: null,
       created_at: new Date().toISOString(),
       payload: { step_type: "x", step_index: 0 },
     };
@@ -62,6 +66,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
     const onTrace = vi.fn();
     const conn = new SSEConnection({
       taskId: "t1",
+      turnId: "turn-1",
       onEvent,
       onStateChange,
       onTrace,
@@ -79,9 +84,9 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
     expect(useConversationTraceStore.getState().latestTraceByTaskId.t1).toMatchObject({
       traceId: headers["x-trace-id"],
       taskId: "t1",
-      operation: "task_stream",
+      operation: "turn_stream",
       method: "GET",
-      path: "/tasks/t1/stream",
+      path: "/turns/turn-1/stream",
     });
     // 状态变更顺序包含 CONNECTING、STREAMING、CLOSED
     const states = onStateChange.mock.calls.map((c) => c[0]);
@@ -111,7 +116,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
         } as unknown as Response;
       }),
     );
-    const conn = new SSEConnection({ taskId: "t1", onEvent: () => {} });
+    const conn = new SSEConnection({ taskId: "t1", turnId: "turn-1", onEvent: () => {} });
     const p = conn.connect(); // 进入 CONNECTING → STREAMING，卡在 reader.read()
     // 给事件循环一个 tick，确保 connect 的同步部分（_setState(CONNECTING)）已执行
     await new Promise((r) => setTimeout(r, 10));
@@ -136,6 +141,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
     );
     const conn = new SSEConnection({
       taskId: "t1",
+      turnId: "turn-1",
       onEvent: () => {},
       onError,
       onStateChange,
@@ -156,6 +162,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
     const onError = vi.fn();
     const conn = new SSEConnection({
       taskId: "t1",
+      turnId: "turn-1",
       onEvent: () => {},
       onError,
     });
@@ -186,6 +193,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
     const onStateChange = vi.fn();
     const conn = new SSEConnection({
       taskId: "t1",
+      turnId: "turn-1",
       onEvent: () => {},
       onStateChange,
     });

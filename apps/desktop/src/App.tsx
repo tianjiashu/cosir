@@ -15,7 +15,7 @@
  * @module App
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { ChatPanel } from "@/components/layout/ChatPanel";
@@ -24,9 +24,14 @@ import { InputBar } from "@/components/layout/InputBar";
 import { BackendErrorBanner } from "@/components/backend/BackendErrorBanner";
 import { useBackendBootstrap } from "@/hooks/useBackendBootstrap";
 import { LogsPage } from "@/pages/logs/LogsPage";
+import { NewTaskPage } from "@/pages/chat/NewTaskPage";
+import * as api from "@/services/api";
+import { useWorkspaceStore } from "@/stores/workspaceStore";
+import { useTaskStore } from "@/stores/taskStore";
+import { logError } from "@/lib/logger";
 
 /** 工作台主视图。 */
-type WorkspaceView = "chat" | "logs";
+type WorkspaceView = "chat" | "new-task" | "logs";
 
 /**
  * App 根组件。
@@ -44,6 +49,53 @@ type WorkspaceView = "chat" | "logs";
 export default function App() {
   useBackendBootstrap();
   const [activeView, setActiveView] = useState<WorkspaceView>("chat");
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const setTasks = useTaskStore((s) => s.setTasks);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadWorkspaceState() {
+      try {
+        let workspaces = await api.listWorkspaces();
+        if (workspaces.length === 0) {
+          const workspace = await api.createWorkspace({ name: "coding-agent", root_path: "." });
+          workspaces = [workspace];
+        }
+        if (!cancelled) {
+          setWorkspaces(workspaces);
+        }
+      } catch (err) {
+        logError("加载工作区失败", err, { module: "App" });
+      }
+    }
+    void loadWorkspaceState();
+    return () => {
+      cancelled = true;
+    };
+  }, [setWorkspaces]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTasks() {
+      if (!activeWorkspaceId) {
+        setTasks([]);
+        return;
+      }
+      try {
+        const tasks = await api.listWorkspaceTasks(activeWorkspaceId);
+        if (!cancelled) {
+          setTasks(tasks);
+        }
+      } catch (err) {
+        logError("加载工作区任务失败", err, { module: "App", workspace_id: activeWorkspaceId });
+      }
+    }
+    void loadTasks();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, setTasks]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -56,10 +108,12 @@ export default function App() {
       {/* 三栏主体 */}
       <div className="flex flex-1 overflow-hidden">
         {/* 左侧导航栏：固定宽度 ~240px */}
-        <Sidebar activeView={activeView} onOpenLogs={() => setActiveView("logs")} onOpenChat={() => setActiveView("chat")} />
+        <Sidebar activeView={activeView} onOpenLogs={() => setActiveView("logs")} onOpenChat={() => setActiveView("chat")} onNewTask={() => setActiveView("new-task")} />
 
         {activeView === "logs" ? (
           <LogsPage onBack={() => setActiveView("chat")} />
+        ) : activeView === "new-task" ? (
+          <NewTaskPage onCreated={() => setActiveView("chat")} />
         ) : (
           <>
             {/* 中央主会话区 + 底部输入区：弹性宽度 */}

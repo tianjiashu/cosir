@@ -12,6 +12,7 @@ class RunRecord:
     参数:
         run_id: 运行记录标识符。
         task_id: 关联的任务标识符。
+        turn_id: 关联的轮次标识符。
         thread_id: LangGraph checkpointer 使用的线程标识符。
         status: 当前运行状态。
         wait_reason: 等待状态的原因，例如 approval 或 human_input。
@@ -34,6 +35,7 @@ class RunRecord:
 
     run_id: str
     task_id: str
+    turn_id: str
     thread_id: str
     status: str
     wait_reason: Optional[str]
@@ -63,6 +65,7 @@ class RunRecord:
         return {
             "run_id": self.run_id,
             "task_id": self.task_id,
+            "turn_id": self.turn_id,
             "thread_id": self.thread_id,
             "status": self.status,
             "wait_reason": self.wait_reason,

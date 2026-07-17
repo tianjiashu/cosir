@@ -2,7 +2,7 @@
  * HTTP API 封装层。
  *
  * 封装所有与后端 FastAPI 的 HTTP 通信：
- * - POST /tasks — 创建任务
+ * - POST /workspaces/{workspace_id}/tasks — 创建任务
  * - GET /tasks/{id} — 查询任务状态
  * - GET /tasks/{id}/events — 历史事件列表
  * - GET /tasks/{id}/checkpoints — checkpoint 列表
@@ -15,7 +15,9 @@
 
 import type { RuntimeEvent } from "@shared/events";
 import type { TaskRecord, CheckpointRecord } from "@shared/task";
-import type { BackendHealthResponse, CreateTaskRequest } from "@shared/api";
+import type { TurnRecord } from "@shared/turn";
+import type { WorkspaceRecord } from "@shared/workspace";
+import type { BackendHealthResponse, CreateTaskRequest, CreateTurnRequest, CreateWorkspaceRequest } from "@shared/api";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
 import { logError, logWarn } from "../lib/logger";
@@ -209,20 +211,169 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
   }
 }
 
+/**
+ * 发送 DELETE 请求。
+ *
+ * @param path - API 路径。
+ * @returns 解析后的 JSON 响应。
+ * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
+ */
+async function del<T>(path: string): Promise<TracedJsonResponse<T>> {
+  let response: Response;
+  const requestTrace = buildTraceHeaders();
+  const requestContext = {
+    module: "api",
+    method: "DELETE",
+    path,
+    trace_id: requestTrace.trace.traceId,
+  };
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      method: "DELETE",
+      headers: { ...requestTrace.headers },
+    });
+  } catch (err) {
+    logError(`网络请求失败: ${path}`, err, requestContext);
+    throw new ServiceError(`网络请求失败: ${path}`, { cause: err });
+  }
+
+  recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
+
+  if (!response.ok) {
+    const error = await buildError(`DELETE ${path} 失败 (${response.status})`, path, response);
+    logError(`HTTP 请求失败: DELETE ${path}`, error, {
+      ...requestContext,
+      status_code: response.status,
+    });
+    throw error;
+  }
+
+  try {
+    return {
+      data: await response.json(),
+      trace: {
+        traceId: requestTrace.trace.traceId,
+        method: "DELETE",
+        path,
+      },
+    };
+  } catch (err) {
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
+    throw new ServiceError(`解析响应 JSON 失败: ${path}`, { cause: err });
+  }
+}
+
 // ---------- 公开 API 函数 ----------
 
 /**
  * 创建一个新任务。
  *
- * @param request - 创建任务的请求体（text + 可选 session_id）。
+ * @param request - 创建任务的请求体（text + workspace_id）。
  * @returns 创建后的任务记录。
  * @throws {ServiceError} 当创建失败时抛出（如 text 为空、网络错误等）。
  *
- * @sideeffect 向后端 POST /tasks 写入一条新的任务记录。
+ * @sideeffect 向后端 POST /workspaces/{workspace_id}/tasks 写入一条新的任务记录。
  */
 export async function createTask(request: CreateTaskRequest): Promise<TaskRecord> {
-  const response = await post<TaskRecord>(API_PATHS.TASKS, request);
+  const path = API_PATHS.WORKSPACE_TASKS(request.workspace_id);
+  const response = await post<TaskRecord>(path, request);
   recordConversationTrace(response.trace, "task_create", response.data.task_id);
+  return response.data;
+}
+
+/**
+ * 获取工作区列表。
+ *
+ * @returns 后端登记的工作区记录列表。
+ * @throws {ServiceError} 当后端不可达或响应异常时抛出。
+ */
+export async function listWorkspaces(): Promise<WorkspaceRecord[]> {
+  return (await get<WorkspaceRecord[]>(API_PATHS.WORKSPACES)).data;
+}
+
+/**
+ * 创建本地工作区。
+ *
+ * @param request - 工作区创建请求体。
+ * @returns 创建后的工作区记录。
+ * @throws {ServiceError} 当创建失败时抛出。
+ */
+export async function createWorkspace(request: CreateWorkspaceRequest): Promise<WorkspaceRecord> {
+  const response = await post<WorkspaceRecord>(API_PATHS.WORKSPACES, request);
+  useConversationTraceStore.getState().recordTrace({
+    traceId: response.trace.traceId,
+    taskId: "",
+    approvalId: "",
+    operation: "workspace_create",
+    method: response.trace.method,
+    path: response.trace.path,
+  });
+  return response.data;
+}
+
+/**
+ * 删除工作区及其任务记录。
+ *
+ * @param workspaceId - 待删除的工作区标识。
+ * @returns 无。
+ * @throws {ServiceError} 当工作区不存在或删除失败时抛出。
+ */
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  const response = await del<{ deleted: boolean }>(API_PATHS.WORKSPACE_DETAIL(workspaceId));
+  useConversationTraceStore.getState().recordTrace({
+    traceId: response.trace.traceId,
+    taskId: "",
+    approvalId: "",
+    operation: "workspace_delete",
+    method: "DELETE",
+    path: API_PATHS.WORKSPACE_DETAIL(workspaceId),
+  });
+}
+
+/**
+ * 获取工作区下的任务列表。
+ *
+ * @param workspaceId - 工作区标识。
+ * @returns 任务记录列表。
+ * @throws {ServiceError} 当工作区不存在或请求失败时抛出。
+ */
+export async function listWorkspaceTasks(workspaceId: string): Promise<TaskRecord[]> {
+  const response = await get<TaskRecord[]>(API_PATHS.WORKSPACE_TASKS(workspaceId));
+  useConversationTraceStore.getState().recordTrace({
+    traceId: response.trace.traceId,
+    taskId: "",
+    approvalId: "",
+    operation: "workspace_tasks",
+    method: response.trace.method,
+    path: response.trace.path,
+  });
+  return response.data;
+}
+
+/**
+ * 为已有任务追加一个 pending 轮次。
+ *
+ * @param taskId - 任务容器标识。
+ * @param request - 轮次创建请求体。
+ * @returns 创建后的轮次记录。
+ * @throws {ServiceError} 当任务不存在或输入非法时抛出。
+ */
+export async function createTaskTurn(taskId: string, request: CreateTurnRequest): Promise<TurnRecord> {
+  const response = await post<TurnRecord>(API_PATHS.TASK_TURNS(taskId), request, taskId);
+  recordConversationTrace(response.trace, "turn_create", taskId);
+  return response.data;
+}
+
+/**
+ * 获取任务下的轮次列表。
+ *
+ * @param taskId - 任务容器标识。
+ * @returns 轮次记录列表。
+ * @throws {ServiceError} 当任务不存在或请求失败时抛出。
+ */
+export async function listTaskTurns(taskId: string): Promise<TurnRecord[]> {
+  const response = await get<TurnRecord[]>(API_PATHS.TASK_TURNS(taskId), taskId);
+  recordConversationTrace(response.trace, "task_turns", taskId);
   return response.data;
 }
 

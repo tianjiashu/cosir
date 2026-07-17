@@ -55,6 +55,45 @@ class TraceRecorder:
         trace_id = self._task_trace_ids.setdefault(task_id, new_trace_id())
         return TraceContext(trace_id=trace_id, task_id=task_id, run_id=run_id)
 
+    def delete_task_traces(self, task_ids: list[str]) -> None:
+        """删除任务集合下的 trace 记录并清理内存 trace 映射。
+
+        参数:
+            task_ids: 需要删除的任务标识符列表。
+
+        返回:
+            无。
+
+        异常:
+            无。底层删除失败会向调用方抛出，保持删除操作可审计。
+
+        副作用:
+            删除 trace store 中的关联记录，并移除内存缓存。
+        """
+
+        if not task_ids:
+            return
+        try:
+            self._store.delete_by_task_ids(task_ids)
+        except Exception:
+            self._logger.exception(
+                "task_traces_delete_failed",
+                extra={
+                    "msg": f"删除任务集合下的 trace 记录失败",
+                    "data": {"task_count": len(task_ids), "operation": "delete_task_traces"},
+                },
+            )
+            raise
+        for task_id in task_ids:
+            self._task_trace_ids.pop(task_id, None)
+        self._logger.info(
+            "task_traces_deleted",
+            extra={
+                "msg": f"任务集合下的 trace 记录已删除",
+                "data": {"task_count": len(task_ids)},
+            },
+        )
+
     def record_event(
         self,
         context: TraceContext,

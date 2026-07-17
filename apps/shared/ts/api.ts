@@ -14,16 +14,22 @@ export const API_BASE = "/api";
 export const API_PATHS = {
   /** GET — 后端健康状态与当前模型配置 */
   HEALTH: "/health",
-  /** POST — 创建任务 */
-  TASKS: "/tasks",
+  /** GET — 工作区列表 */
+  WORKSPACES: "/workspaces",
+  /** DELETE — 删除工作区 */
+  WORKSPACE_DETAIL: (workspaceId: string) => `/workspaces/${workspaceId}`,
+  /** GET/POST — 工作区下任务列表与创建 */
+  WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,
   /** GET — 查询任务状态（含 task_id 参数） */
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
+  /** GET/POST — 任务下轮次列表与追加 */
+  TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
   /** GET — 历史事件列表 */
   TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
   /** GET — checkpoint 列表 */
   TASK_CHECKPOINTS: (taskId: string) => `/tasks/${taskId}/checkpoints`,
-  /** GET — SSE 事件流（同时触发任务运行） */
-  TASK_STREAM: (taskId: string) => `/tasks/${taskId}/stream`,
+  /** GET — turn 级 SSE 事件流 */
+  TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
   /** POST — 取消任务 */
   TASK_CANCEL: (taskId: string) => `/tasks/${taskId}/cancel`,
   /** GET — 可恢复运行列表 */
@@ -44,8 +50,22 @@ export const API_PATHS = {
 export interface CreateTaskRequest {
   /** 非空的纯文本任务输入。 */
   text: string;
-  /** 可选的会话标识符。 */
-  session_id?: string;
+  /** 工作区标识符。 */
+  workspace_id: string;
+}
+
+/** 创建工作区的请求体，对应后端 `CreateWorkspaceRequest`。 */
+export interface CreateWorkspaceRequest {
+  /** 非空的工作区名称。 */
+  name: string;
+  /** 非空的工作区本地路径。 */
+  root_path: string;
+}
+
+/** 创建轮次的请求体，对应后端 `CreateTurnRequest`。 */
+export interface CreateTurnRequest {
+  /** 非空的本轮用户输入。 */
+  input_text: string;
 }
 
 /** 审批决策请求体。 */
@@ -80,6 +100,12 @@ export interface BackendHealthResponse {
 
 /** 创建任务 / 查询任务 的响应体（即 TaskRecord）。 */
 export type TaskResponse = import("./task").TaskRecord;
+
+/** 创建工作区 / 查询工作区 的响应体。 */
+export type WorkspaceResponse = import("./workspace").WorkspaceRecord;
+
+/** 创建轮次 / 查询轮次 的响应体。 */
+export type TurnResponse = import("./turn").TurnRecord;
 
 /** 事件列表的响应体。 */
 export type EventsResponse = import("./events").RuntimeEvent[];

@@ -53,6 +53,43 @@ class ApprovalService:
         self._trace_recorder = trace_recorder
         self._run_state_machine = RunStateMachine()
 
+    def delete_run_data(self, run_ids: list[str]) -> None:
+        """删除运行集合下的审批请求与决策。
+
+        参数:
+            run_ids: 需要清理的 Durable Run 标识符列表。
+
+        返回:
+            无。
+
+        异常:
+            无。底层数据库异常会向调用方抛出。
+
+        副作用:
+            删除审批请求和审批决策记录。
+        """
+
+        if not run_ids:
+            return
+        try:
+            self._approval_store.delete_by_run_ids(run_ids)
+        except Exception:
+            self._logger.exception(
+                "approval_data_delete_failed",
+                extra={
+                    "msg": f"删除运行集合下的审批请求与决策失败",
+                    "data": {"run_count": len(run_ids), "operation": "delete_run_data"},
+                },
+            )
+            raise
+        self._logger.info(
+            "approval_data_deleted",
+            extra={
+                "msg": f"运行集合下的审批请求与决策已删除",
+                "data": {"run_count": len(run_ids)},
+            },
+        )
+
     def request_approval(
         self,
         run_id: str,

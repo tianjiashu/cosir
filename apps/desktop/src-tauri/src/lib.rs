@@ -18,6 +18,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(backend::supervisor::BackendSupervisorState::new())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::logging::log_write,
             commands::backend::backend_start,

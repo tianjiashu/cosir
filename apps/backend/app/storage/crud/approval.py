@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from sqlalchemy import asc, select, update
+from sqlalchemy import asc, delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.domain.approvals.records import ApprovalDecisionRecord, ApprovalRequestRecord
@@ -41,6 +41,22 @@ class ApprovalStore:
         with self._session_factory() as session:
             rows = session.execute(statement.order_by(asc(ApprovalRequestModel.created_at))).scalars().all()
         return [_approval_from_model(row) for row in rows]
+
+    def delete_by_run_ids(self, run_ids: List[str]) -> None:
+        """删除运行集合下的审批请求与决策。"""
+
+        if not run_ids:
+            return
+        with self._session_factory.begin() as session:
+            approval_ids = [
+                row[0]
+                for row in session.execute(
+                    select(ApprovalRequestModel.approval_id).where(ApprovalRequestModel.run_id.in_(tuple(run_ids)))
+                ).all()
+            ]
+            if approval_ids:
+                session.execute(delete(ApprovalDecisionModel).where(ApprovalDecisionModel.approval_id.in_(approval_ids)))
+                session.execute(delete(ApprovalRequestModel).where(ApprovalRequestModel.approval_id.in_(approval_ids)))
 
     def get_request(self, approval_id: str) -> ApprovalRequestRecord:
         """按标识符返回审批请求。"""

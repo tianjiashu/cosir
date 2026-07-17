@@ -74,7 +74,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=dispatcher,
                 logger=logger,
             )
-            run = run_store.create_for_task("task-1", "created", thread_id="thread-1")
+            run = run_store.create_for_turn("task-1", "turn-task-1", "created", thread_id="thread-1")
 
             approval = service.request_approval(
                 run_id=run.run_id,
@@ -117,7 +117,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=ResumeDispatcher(run_store, logger),
                 logger=logger,
             )
-            run = run_store.create_for_task("task-orphan", "created", thread_id="thread-orphan")
+            run = run_store.create_for_turn("task-orphan", "turn-task-orphan", "created", thread_id="thread-orphan")
             run_store.mark_status(run.run_id, "running")
             run_store.mark_status(run.run_id, "completed")
 
@@ -159,7 +159,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=dispatcher,
                 logger=logger,
             )
-            run = run_store.create_for_task("task-retry", "created", thread_id="thread-retry")
+            run = run_store.create_for_turn("task-retry", "turn-task-retry", "created", thread_id="thread-retry")
             approval = service.request_approval(
                 run_id=run.run_id,
                 tool_name="write_file",
@@ -201,7 +201,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=ResumeDispatcher(run_store, logger),
                 logger=logger,
             )
-            run = run_store.create_for_task("task-concurrent-approval", "created", thread_id="thread-concurrent-approval")
+            run = run_store.create_for_turn("task-concurrent-approval", "turn-task-concurrent-approval", "created", thread_id="thread-concurrent-approval")
             approval = service.request_approval(
                 run_id=run.run_id,
                 tool_name="write_file",
@@ -241,7 +241,7 @@ class DurableRunStateTests(unittest.TestCase):
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("resume-concurrent")
             run_store = DurableRunStore(database_path)
-            run = run_store.create_for_task("task-concurrent-resume", "created", thread_id="thread-concurrent-resume")
+            run = run_store.create_for_turn("task-concurrent-resume", "turn-task-concurrent-resume", "created", thread_id="thread-concurrent-resume")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 commands = list(
@@ -279,7 +279,7 @@ class DurableRunStateTests(unittest.TestCase):
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("resume-claim")
             run_store = DurableRunStore(database_path)
-            run = run_store.create_for_task("task-claim", "created", thread_id="thread-claim")
+            run = run_store.create_for_turn("task-claim", "turn-task-claim", "created", thread_id="thread-claim")
             command = run_store.create_resume_command(
                 run.run_id,
                 "approve_tool",
@@ -350,7 +350,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=dispatcher,
                 logger=logger,
             )
-            run = run_store.create_for_task("task-2", "created", thread_id="thread-2")
+            run = run_store.create_for_turn("task-2", "turn-task-2", "created", thread_id="thread-2")
 
             request = service.request_input(run.run_id, "继续吗？", {"type": "object"})
             response = service.respond(request.request_id, {"answer": "yes"}, "human-key")
@@ -450,7 +450,7 @@ class DurableRunStateTests(unittest.TestCase):
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("recovery")
             run_store = DurableRunStore(database_path)
-            run = run_store.create_for_task("task-3", "created", thread_id="thread-3")
+            run = run_store.create_for_turn("task-3", "turn-task-3", "created", thread_id="thread-3")
             run_store.mark_status(run.run_id, "waiting", wait_reason="approval")
 
             runs = RecoveryManager(run_store, logger).reconcile()

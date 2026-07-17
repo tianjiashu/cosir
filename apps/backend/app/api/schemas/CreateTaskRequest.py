@@ -6,7 +6,7 @@ class CreateTaskRequest(BaseModel):
 
     参数:
         text: 非空的纯文本任务输入。
-        session_id: 可选的会话标识。
+        workspace_id: 工作区标识。
 
     返回:
         Pydantic 请求模型。
@@ -19,7 +19,7 @@ class CreateTaskRequest(BaseModel):
     """
 
     text: str
-    session_id: str = None
+    workspace_id: str
 
     @field_validator("text")
     @classmethod

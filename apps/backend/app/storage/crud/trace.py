@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from sqlalchemy import asc, desc, func, select
+from sqlalchemy import asc, delete, desc, func, select
 
 from app.core.trace.records import TraceEventRecord, TraceSpanRecord
 from app.storage.database import create_session_factory
@@ -134,6 +134,28 @@ class TraceStore:
         with self._session_factory() as session:
             rows = session.execute(statement.order_by(asc(TraceSpanModel.started_at)).limit(limit)).scalars().all()
         return [_span_from_model(row) for row in rows]
+
+    def delete_by_task_ids(self, task_ids: list[str]) -> None:
+        """删除任务集合下的 trace events 与 spans。
+
+        参数:
+            task_ids: 需要删除的任务标识符列表。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            删除 trace_events 与 trace_spans 中的关联记录。
+        """
+
+        if not task_ids:
+            return
+        with self._session_factory.begin() as session:
+            session.execute(delete(TraceEventModel).where(TraceEventModel.task_id.in_(tuple(task_ids))))
+            session.execute(delete(TraceSpanModel).where(TraceSpanModel.task_id.in_(tuple(task_ids))))
 
     @classmethod
     def _lock_for_database(cls, database_path: Path) -> Lock:

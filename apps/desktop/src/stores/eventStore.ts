@@ -20,6 +20,10 @@ import { SSEConnectionState } from "../services/sse";
 interface EventState {
   /** 当前正在查看的任务事件流（按时间排序）。 */
   events: RuntimeEvent[];
+  /** 按 task_id 聚合的事件事实。 */
+  eventsByTaskId: Record<string, RuntimeEvent[]>;
+  /** 按 turn_id 聚合的事件事实。 */
+  eventsByTurnId: Record<string, RuntimeEvent[]>;
   /** SSE 连接的当前状态。 */
   connectionState: SSEConnectionState;
   /** 已处理的 event_id 集合（用于回放去重）。 */
@@ -39,7 +43,7 @@ interface EventActions {
   appendEvent: (event: RuntimeEvent) => void;
 
   /** 批量设置事件列表（用于从 API 加载历史事件时替换整个列表）。 */
-  setEvents: (events: RuntimeEvent[]) => void;
+  setEvents: (events: RuntimeEvent[], taskId?: string) => void;
 
   /** 更新 SSE 连接状态。 */
   setConnectionState: (state: SSEConnectionState) => void;
@@ -58,6 +62,8 @@ interface EventActions {
 export const useEventStore = create<EventState & EventActions>((set) => ({
   // --- 初始状态 ---
   events: [],
+  eventsByTaskId: {},
+  eventsByTurnId: {},
   connectionState: SSEConnectionState.IDLE,
   processedEventIds: new Set<string>(),
 
@@ -70,17 +76,35 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
         return state;
       }
 
+      const events = [...state.events, event].sort(compareRuntimeEvents);
+      const taskEvents = [...(state.eventsByTaskId[event.task_id] ?? []), event].sort(compareRuntimeEvents);
+      const turnEvents = event.turn_id
+        ? [...(state.eventsByTurnId[event.turn_id] ?? []), event].sort(compareRuntimeEvents)
+        : [];
       return {
-        events: [...state.events, event],
+        events,
+        eventsByTaskId: { ...state.eventsByTaskId, [event.task_id]: taskEvents },
+        eventsByTurnId: event.turn_id
+          ? { ...state.eventsByTurnId, [event.turn_id]: turnEvents }
+          : state.eventsByTurnId,
         processedEventIds: new Set([...state.processedEventIds, event.event_id]),
       };
     });
   },
 
-  setEvents: (events: RuntimeEvent[]) => {
+  setEvents: (events: RuntimeEvent[], taskId?: string) => {
     const ids = new Set(events.map((e) => e.event_id));
+    const sortedEvents = [...events].sort(compareRuntimeEvents);
+    const nextByTurn = sortedEvents.reduce<Record<string, RuntimeEvent[]>>((acc, event) => {
+      if (event.turn_id) {
+        acc[event.turn_id] = [...(acc[event.turn_id] ?? []), event];
+      }
+      return acc;
+    }, {});
     set({
-      events,
+      events: sortedEvents,
+      eventsByTaskId: taskId ? { [taskId]: sortedEvents } : groupEventsByTask(sortedEvents),
+      eventsByTurnId: nextByTurn,
       processedEventIds: ids,
     });
   },
@@ -92,6 +116,8 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
   clearEvents: () => {
     set({
       events: [],
+      eventsByTaskId: {},
+      eventsByTurnId: {},
       processedEventIds: new Set(),
       connectionState: SSEConnectionState.IDLE,
     });
@@ -115,3 +141,44 @@ export const selectLatestEvent = (state: EventState): RuntimeEvent | undefined =
 export const selectEventCount = (state: EventState): number => {
   return state.events.length;
 };
+
+/**
+ * 读取指定任务的事件。
+ *
+ * @param state - 事件 store 状态。
+ * @param taskId - 任务标识。
+ * @returns 指定任务下按 sequence 排序的事件列表。
+ */
+export function selectEventsForTask(state: EventState, taskId: string | null): RuntimeEvent[] {
+  if (!taskId) return [];
+  return state.eventsByTaskId[taskId] ?? [];
+}
+
+/**
+ * 按后端稳定 sequence 排序运行时事件。
+ *
+ * @param left - 左侧事件。
+ * @param right - 右侧事件。
+ * @returns 负数表示 left 在前，正数表示 right 在前。
+ */
+function compareRuntimeEvents(left: RuntimeEvent, right: RuntimeEvent): number {
+  const leftSequence = Number(left.sequence || 0);
+  const rightSequence = Number(right.sequence || 0);
+  if (leftSequence !== rightSequence) {
+    return leftSequence - rightSequence;
+  }
+  return left.created_at.localeCompare(right.created_at);
+}
+
+/**
+ * 按 task_id 聚合事件列表。
+ *
+ * @param events - 已排序或未排序的运行时事件。
+ * @returns 以 task_id 为 key 的事件数组映射。
+ */
+function groupEventsByTask(events: RuntimeEvent[]): Record<string, RuntimeEvent[]> {
+  return events.reduce<Record<string, RuntimeEvent[]>>((acc, event) => {
+    acc[event.task_id] = [...(acc[event.task_id] ?? []), event].sort(compareRuntimeEvents);
+    return acc;
+  }, {});
+}

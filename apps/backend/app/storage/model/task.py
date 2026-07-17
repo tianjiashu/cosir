@@ -6,13 +6,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.storage.model.base import StorageBase
 
 
-class SessionModel(StorageBase):
-    """`sessions` 表模型。"""
+class WorkspaceModel(StorageBase):
+    """`workspaces` 表模型。"""
 
-    __tablename__ = "sessions"
+    __tablename__ = "workspaces"
 
-    session_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    project_path: Mapped[str | None] = mapped_column(Text)
+    workspace_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    root_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -23,9 +24,12 @@ class TaskModel(StorageBase):
     __tablename__ = "tasks"
 
     task_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.session_id"), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(Text, ForeignKey("workspaces.workspace_id"), nullable=False)
     agent_id: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'developer'"))
     input_text: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    last_message_preview: Mapped[str] = mapped_column(Text, nullable=False)
+    latest_turn_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
@@ -67,6 +71,10 @@ class EventModel(StorageBase):
 
     event_id: Mapped[str] = mapped_column(Text, primary_key=True)
     task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.task_id"), nullable=False)
+    turn_id: Mapped[str | None] = mapped_column(Text, ForeignKey("turns.turn_id"))
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    tool_call_id: Mapped[str | None] = mapped_column(Text)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)

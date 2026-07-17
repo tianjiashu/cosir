@@ -70,6 +70,8 @@ install_http_exception_logging(app, logging.getLogger("coding_agent.backend"))
 # 必须使用 importlib.import_module 而非 ``import app.api.xxx``：后者会把顶层包名
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
+importlib.import_module("app.api.workspaces_api")
+importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.runs_api")
 importlib.import_module("app.api.approvals_api")
 importlib.import_module("app.api.logs_api")

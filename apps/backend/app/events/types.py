@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 
@@ -58,6 +58,10 @@ class RuntimeEvent:
     参数:
         event_type: 稳定的、机器可读的事件类型枚举成员。
         task_id: 与该事件关联的任务标识符。
+        turn_id: 与该事件关联的轮次标识符。
+        sequence: 由存储层按 task 分配的稳定排序号。
+        message_id: 可选的用户可读消息标识符。
+        tool_call_id: 可选的工具调用标识符。
         payload: 可序列化为 JSON 的事件载荷。
         event_id: 唯一的事件标识符。
         created_at: 事件创建时的 UTC 时间戳。
@@ -74,6 +78,10 @@ class RuntimeEvent:
 
     event_type: EventType
     task_id: str
+    turn_id: Optional[str] = None
+    sequence: int = 0
+    message_id: Optional[str] = None
+    tool_call_id: Optional[str] = None
     payload: Dict[str, Any] = field(default_factory=dict)
     event_id: str = field(default_factory=lambda: str(uuid4()))
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -98,6 +106,10 @@ class RuntimeEvent:
             "event_id": self.event_id,
             "event_type": self.event_type,
             "task_id": self.task_id,
+            "turn_id": self.turn_id,
+            "sequence": self.sequence,
+            "message_id": self.message_id,
+            "tool_call_id": self.tool_call_id,
             "created_at": self.created_at.isoformat(),
             "payload": self.payload,
         }

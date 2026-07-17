@@ -32,6 +32,14 @@ export interface RuntimeEvent {
   event_type: RuntimeEventType;
   /** 关联的任务标识符。 */
   task_id: string;
+  /** 关联的轮次标识符。 */
+  turn_id?: string | null;
+  /** 同一 task 下稳定递增的排序号。 */
+  sequence?: number;
+  /** 可选的用户可读消息标识符。 */
+  message_id?: string | null;
+  /** 可选的工具调用标识符。 */
+  tool_call_id?: string | null;
   /** 事件创建时的 UTC 时间戳（ISO-8601）。 */
   created_at: string;
   /** 因 event_type 而异的载荷字典。 */

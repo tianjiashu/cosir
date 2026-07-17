@@ -9,6 +9,8 @@
 
 export * from "./events";
 export * from "./task";
+export * from "./turn";
+export * from "./workspace";
 export * from "./api";
 export * from "./backend";
 export * from "./runs";

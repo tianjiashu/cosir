@@ -25,17 +25,18 @@ def datetime_to_text(value: datetime) -> str:
 
 
 @dataclass
-class SessionRecord:
-    """表示一个持久化的会话。
+class WorkspaceRecord:
+    """表示一个本地工作区。
 
     参数:
-        session_id: 唯一的会话标识符。
-        project_path: 与会话关联的可选项目路径。
-        created_at: 会话创建时的时间戳。
-        updated_at: 会话最近更新时的时间戳。
+        workspace_id: 唯一的工作区标识符。
+        name: 用户可读的工作区名称。
+        root_path: 工作区的本地文件系统路径。
+        created_at: 工作区创建时的时间戳。
+        updated_at: 工作区最近更新时的时间戳。
 
     返回:
-        一个会话状态记录。
+        一个工作区状态记录。
 
     异常:
         无。
@@ -44,10 +45,35 @@ class SessionRecord:
         无。
     """
 
-    session_id: str
-    project_path: Optional[str]
+    workspace_id: str
+    name: str
+    root_path: str
     created_at: datetime
     updated_at: datetime
+
+    def to_dict(self) -> Dict[str, str]:
+        """将工作区状态转换为可序列化为 JSON 的字典。
+
+        参数:
+            无。
+
+        返回:
+            工作区状态的字典表示。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return {
+            "workspace_id": self.workspace_id,
+            "name": self.name,
+            "root_path": self.root_path,
+            "created_at": datetime_to_text(self.created_at),
+            "updated_at": datetime_to_text(self.updated_at),
+        }
 
 
 @dataclass
@@ -56,9 +82,12 @@ class TaskRecord:
 
     参数:
         task_id: 唯一的任务标识符。
-        session_id: 与任务关联的会话标识符。
+        workspace_id: 与任务关联的工作区标识符。
         agent_id: 负责执行任务的 Agent 标识符。
         input_text: 原始的纯文本用户任务。
+        title: 任务容器标题。
+        last_message_preview: 最近用户输入摘要。
+        latest_turn_id: 最近一次轮次标识符。
         status: 当前任务状态。
         created_at: 任务创建时的 UTC 时间戳。
         updated_at: 任务最近更新时的 UTC 时间戳。
@@ -74,9 +103,12 @@ class TaskRecord:
     """
 
     task_id: str
-    session_id: str
+    workspace_id: str
     agent_id: str
     input_text: str
+    title: str
+    last_message_preview: str
+    latest_turn_id: Optional[str]
     status: str
     created_at: datetime
     updated_at: datetime
@@ -99,9 +131,12 @@ class TaskRecord:
 
         return {
             "task_id": self.task_id,
-            "session_id": self.session_id,
+            "workspace_id": self.workspace_id,
             "agent_id": self.agent_id,
             "input_text": self.input_text,
+            "title": self.title,
+            "last_message_preview": self.last_message_preview,
+            "latest_turn_id": self.latest_turn_id,
             "status": self.status,
             "created_at": datetime_to_text(self.created_at),
             "updated_at": datetime_to_text(self.updated_at),
@@ -136,6 +171,31 @@ class TurnRecord:
     status: str
     created_at: datetime
     updated_at: datetime
+
+    def to_dict(self) -> Dict[str, str]:
+        """将轮次状态转换为可序列化为 JSON 的字典。
+
+        参数:
+            无。
+
+        返回:
+            轮次状态的字典表示。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return {
+            "turn_id": self.turn_id,
+            "task_id": self.task_id,
+            "input_text": self.input_text,
+            "status": self.status,
+            "created_at": datetime_to_text(self.created_at),
+            "updated_at": datetime_to_text(self.updated_at),
+        }
 
 
 @dataclass

@@ -82,11 +82,6 @@ describe("taskStore — selectors 与动作", () => {
     expect(st.activeTaskId).toBeNull();
   });
 
-  it("setCurrentSession 设置会话 ID", () => {
-    useTaskStore.getState().setCurrentSession("sess-x");
-    expect(useTaskStore.getState().currentSessionId).toBe("sess-x");
-  });
-
   it("空集合时 selectors 不抛错", () => {
     expect(() => selectActiveTask(useTaskStore.getState())).not.toThrow();
     expect(() => selectActiveTaskStatus(useTaskStore.getState())).not.toThrow();

@@ -111,6 +111,12 @@ function TraceMeta({ label, value }: TraceFieldProps) {
 function operationLabel(operation: ConversationTraceRecord["operation"]): string {
   const labels: Record<ConversationTraceRecord["operation"], string> = {
     task_create: "创建",
+    workspace_create: "工作区",
+    workspace_tasks: "任务列表",
+    workspace_delete: "删工作区",
+    turn_create: "新轮次",
+    task_turns: "轮次",
+    turn_stream: "轮次 SSE",
     task_get: "查询",
     task_events: "事件",
     task_checkpoints: "检查点",

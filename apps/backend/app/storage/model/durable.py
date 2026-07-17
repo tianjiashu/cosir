@@ -12,7 +12,8 @@ class DurableRunModel(StorageBase):
     __tablename__ = "durable_runs"
 
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    task_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     thread_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     wait_reason: Mapped[str | None] = mapped_column(Text)

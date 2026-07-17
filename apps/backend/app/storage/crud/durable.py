@@ -1,18 +1,21 @@
 """Durable run CRUD。"""
 
+import logging
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
-from sqlalchemy import asc, select, update
+from sqlalchemy import asc, delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.runs.records import ResumeCommandRecord, RunRecord
 from app.storage.database import create_session_factory
 from app.storage.model.durable import DurableRunModel, ResumeCommandModel
 from app.storage.schema import initialize_app_schema
+
+_LOGGER = logging.getLogger("coding_agent.backend")
 
 
 class DurableRunStore:
@@ -37,14 +40,20 @@ class DurableRunStore:
         self._engine = initialize_app_schema(database_path)
         self._session_factory = create_session_factory(self._engine)
 
-    def create_for_task(self, task_id: str, status: str, thread_id: Optional[str] = None) -> RunRecord:
-        """为任务创建或返回已有运行记录。"""
+    def create_for_turn(
+        self,
+        task_id: str,
+        turn_id: str,
+        status: str,
+        thread_id: Optional[str] = None,
+    ) -> RunRecord:
+        """为轮次创建或返回已有运行记录。"""
 
-        existing = self.get_by_task(task_id)
+        existing = self.get_by_turn(turn_id)
         if existing is not None:
             return existing
         now = _utc_now()
-        run = RunRecord(str(uuid4()), task_id, thread_id or str(uuid4()), status, None, None, None, None, None, now, now)
+        run = RunRecord(str(uuid4()), task_id, turn_id, thread_id or str(uuid4()), status, None, None, None, None, None, now, now)
         with self._session_factory.begin() as session:
             session.add(_run_model(run))
         return run
@@ -58,12 +67,71 @@ class DurableRunStore:
             raise KeyError(run_id)
         return _run_from_model(row)
 
-    def get_by_task(self, task_id: str) -> Optional[RunRecord]:
-        """按 task_id 返回运行记录。"""
+    def get_by_turn(self, turn_id: str) -> Optional[RunRecord]:
+        """按 turn_id 返回运行记录。"""
 
         with self._session_factory() as session:
-            row = session.execute(select(DurableRunModel).where(DurableRunModel.task_id == task_id)).scalar_one_or_none()
+            row = session.execute(select(DurableRunModel).where(DurableRunModel.turn_id == turn_id)).scalar_one_or_none()
         return _run_from_model(row) if row is not None else None
+
+    def list_by_task(self, task_id: str) -> List[RunRecord]:
+        """按 task_id 返回该任务下所有轮次运行记录。"""
+
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(DurableRunModel)
+                .where(DurableRunModel.task_id == task_id)
+                .order_by(asc(DurableRunModel.created_at), asc(DurableRunModel.run_id))
+            ).scalars().all()
+        return [_run_from_model(row) for row in rows]
+
+    def delete_by_task_ids(self, task_ids: Sequence[str]) -> list[str]:
+        """删除任务集合下的 durable run 和恢复命令。
+
+        参数:
+            task_ids: 需要删除的任务标识符集合。
+
+        返回:
+            被删除的 run_id 列表。
+
+        异常:
+            无。
+
+        副作用:
+            删除 durable_runs 与 resume_commands 中的关联记录。
+        """
+
+        if not task_ids:
+            return []
+        run_ids: list[str] = []
+        try:
+            with self._session_factory.begin() as session:
+                run_ids = [
+                    row[0]
+                    for row in session.execute(
+                        select(DurableRunModel.run_id).where(DurableRunModel.task_id.in_(tuple(task_ids)))
+                    ).all()
+                ]
+                if run_ids:
+                    session.execute(delete(ResumeCommandModel).where(ResumeCommandModel.run_id.in_(run_ids)))
+                    session.execute(delete(DurableRunModel).where(DurableRunModel.run_id.in_(run_ids)))
+        except Exception:
+            _LOGGER.exception(
+                "durable_runs_delete_failed",
+                extra={
+                    "msg": f"删除任务集合下的 durable run 与恢复命令写入数据库失败",
+                    "data": {"task_count": len(task_ids), "operation": "delete_by_task_ids"},
+                },
+            )
+            raise
+        _LOGGER.info(
+            "durable_runs_deleted",
+            extra={
+                "msg": f"任务集合下的 durable run 与恢复命令已删除",
+                "data": {"task_count": len(task_ids), "run_count": len(run_ids)},
+            },
+        )
+        return run_ids
 
     def mark_status(
         self,
@@ -227,6 +295,7 @@ def _run_model(run: RunRecord) -> DurableRunModel:
     return DurableRunModel(
         run_id=run.run_id,
         task_id=run.task_id,
+        turn_id=run.turn_id,
         thread_id=run.thread_id,
         status=run.status,
         wait_reason=run.wait_reason,
@@ -242,7 +311,7 @@ def _run_model(run: RunRecord) -> DurableRunModel:
 def _run_from_model(row: DurableRunModel) -> RunRecord:
     """将运行 model 转换为记录。"""
 
-    return RunRecord(row.run_id, row.task_id, row.thread_id, row.status, row.wait_reason, row.active_step_id, row.active_wait_id, row.last_checkpoint_id, row.interruption_reason, _from_text(row.created_at), _from_text(row.updated_at))
+    return RunRecord(row.run_id, row.task_id, row.turn_id, row.thread_id, row.status, row.wait_reason, row.active_step_id, row.active_wait_id, row.last_checkpoint_id, row.interruption_reason, _from_text(row.created_at), _from_text(row.updated_at))
 
 
 def _resume_model(command: ResumeCommandRecord) -> ResumeCommandModel:

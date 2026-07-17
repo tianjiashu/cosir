@@ -6,7 +6,7 @@
  * - 事件分发到 eventStore（含回放去重）
  * - 错误处理与状态管理
  *
- * 组件只需调用 connect(taskId) 即可开始接收事件流。
+ * 组件只需调用 connect(taskId, turnId) 即可开始接收事件流。
  *
  * @module hooks/useSSE
  */
@@ -24,9 +24,10 @@ interface UseSSEReturn {
    * 建立 SSE 连接并开始后台接收指定任务的事件流。
    *
    * @param taskId - 要监听的任务 ID。
+   * @param turnId - 要监听的轮次 ID。
    * @returns Promise<void>，连接启动后 resolve；后续流错误通过日志和状态回调处理。
    */
-  connect: (taskId: string) => Promise<void>;
+  connect: (taskId: string, turnId: string) => Promise<void>;
 
   /** 断开当前 SSE 连接。 */
   disconnect: () => void;
@@ -62,13 +63,14 @@ export function useSSE(): UseSSEReturn {
   const connectionRef = useRef<SSEConnection | null>(null);
 
   /**
-   * 建立到指定任务的 SSE 连接。
+   * 建立到指定任务轮次的 SSE 连接。
    *
    * @param taskId - 要监听的任务标识符。
+   * @param turnId - 要监听的轮次标识符。
    * @returns Promise<void>，连接启动后 resolve；流式消费在后台继续。
    */
   const connect = useCallback(
-    async (taskId: string): Promise<void> => {
+    async (taskId: string, turnId: string): Promise<void> => {
       // 先断开已有连接
       if (connectionRef.current) {
         connectionRef.current.disconnect();
@@ -80,6 +82,7 @@ export function useSSE(): UseSSEReturn {
 
       const connection = new SSEConnection({
         taskId,
+        turnId,
         onEvent: appendEvent,
         onError,
         onStateChange: setConnectionState,

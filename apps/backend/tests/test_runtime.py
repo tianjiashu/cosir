@@ -154,6 +154,34 @@ class AgentRuntimeTests(unittest.TestCase):
             self.assertIn("safe_read", system_message.content_text)
             self.assertIn("text_only_review", system_message.content_text)
 
+    def test_second_turn_context_includes_previous_turn_inputs(self) -> None:
+        """校验后续轮次运行时会带上同一任务的历史用户输入。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            AssertionError: 如果二轮模型上下文缺少一轮输入或顺序错误。
+
+        副作用:
+            创建一个任务、追加轮次并运行第二个轮次。
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model = RecordingContextModel()
+            runtime = self._build_runtime(Path(temp_dir), model_adapter=model)
+            task = runtime.create_task("first turn")
+            turn = runtime.create_turn(task.task_id, "second turn")
+
+            events = asyncio.run(self._collect_turn_events(runtime, turn.turn_id))
+
+            user_messages = [message.content_text for message in model.messages if message.role == "user"]
+            self.assertIn("run_finished", [event.event_type for event in events])
+            self.assertEqual(user_messages, ["first turn", "second turn"])
+
     def test_checkpoint_failure_is_logged_and_emitted(self) -> None:
         """校验检查点写入失败会被记录并流式发出。
 
@@ -855,6 +883,25 @@ class AgentRuntimeTests(unittest.TestCase):
         """
 
         return [event async for event in runtime.run_task(task_id)]
+
+    async def _collect_turn_events(self, runtime: AgentRuntime, turn_id: str) -> list:
+        """收集一个运行时轮次发出的所有事件。
+
+        参数:
+            runtime: 被测的 Agent 运行时。
+            turn_id: 待执行的轮次标识符。
+
+        返回:
+            已发出的运行时事件的有序列表。
+
+        异常:
+            KeyError: 如果轮次不存在。
+
+        副作用:
+            通过运行时执行该轮次。
+        """
+
+        return [event async for event in runtime.run_turn(turn_id)]
 
     def assert_no_running_steps(self, runtime: AgentRuntime, task_id: str) -> None:
         """断言一个任务没有持久化的运行中步骤。

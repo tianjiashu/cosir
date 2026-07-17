@@ -30,6 +30,7 @@ class RuntimeOperations:
         logger: logging.Logger,
         agent_profile: AgentProfile,
         record_event: Callable[[EventType, str, dict], RuntimeEvent],
+        current_turn_id: str = "",
         tool_runtime: Optional[ToolRuntime] = None,
         tool_run_id: str = "",
     ) -> None:
@@ -44,6 +45,7 @@ class RuntimeOperations:
             logger: 用于运行时自有诊断信息的日志记录器。
             agent_profile: 本次运行时执行使用的 Agent 档案。
             record_event: 持久化并记录事件的运行时回调。
+            current_turn_id: 本次运行绑定的轮次标识。
             tool_runtime: 可选的 Tool v2 唯一执行入口。
             tool_run_id: 当前任务关联的 Durable Run 标识。
 
@@ -65,6 +67,7 @@ class RuntimeOperations:
         self._logger = logger
         self._agent_profile = agent_profile
         self._record_event = record_event
+        self._current_turn_id = current_turn_id
         self._tool_runtime = tool_runtime
         self._tool_run_id = tool_run_id
 
@@ -84,6 +87,11 @@ class RuntimeOperations:
             无。
         """
 
+        if self._current_turn_id:
+            turn = self._task_store.get_turn(self._current_turn_id)
+            if turn.task_id != task_id:
+                raise KeyError(task_id)
+            return turn
         return self._task_store.get_turn_for_task(task_id)
 
     def build_messages(self, task: TaskRecord) -> List[RuntimeMessage]:
@@ -102,7 +110,9 @@ class RuntimeOperations:
             无。
         """
 
-        return self._context_builder.build_messages(task, self._agent_profile)
+        turn = self.get_turn_for_task(task.task_id)
+        turn_history = self._task_store.list_turns_for_task(task.task_id)
+        return self._context_builder.build_messages(task, self._agent_profile, turn, turn_history)
 
     def create_step(
         self,
@@ -403,7 +413,7 @@ class RuntimeOperations:
             追加一个事件并写入一条运行时日志。
         """
 
-        return self._record_event(event_type, task_id, payload)
+        return self._record_event(event_type, task_id, {**payload, "_turn_id": self._current_turn_id})
 
     def create_checkpoint(self, task_id: str, stage: str) -> RuntimeEvent:
         """创建一个状态级检查点并返回其运行时事件。
@@ -510,6 +520,7 @@ class RuntimeOperations:
             return RuntimeEvent(
                 event_type=EventType.CHECKPOINT_FAILED,
                 task_id=task_id,
+                turn_id=self._current_turn_id or None,
                 payload={
                     "stage": stage,
                     "error": str(checkpoint_error),

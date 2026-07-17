@@ -18,6 +18,12 @@ import { create } from "zustand";
  */
 export type ConversationTraceOperation =
   | "task_create"
+  | "workspace_create"
+  | "workspace_tasks"
+  | "workspace_delete"
+  | "turn_create"
+  | "task_turns"
+  | "turn_stream"
   | "task_get"
   | "task_events"
   | "task_checkpoints"
@@ -95,7 +101,7 @@ export const useConversationTraceStore = create<ConversationTraceState & Convers
         ? { ...state.latestTraceByTaskId, [nextRecord.taskId]: nextRecord }
         : state.latestTraceByTaskId;
       const streamTraceByTaskId =
-        nextRecord.taskId && nextRecord.operation === "task_stream"
+        nextRecord.taskId && (nextRecord.operation === "task_stream" || nextRecord.operation === "turn_stream")
           ? { ...state.streamTraceByTaskId, [nextRecord.taskId]: nextRecord }
           : state.streamTraceByTaskId;
       const latestTraceByTaskIdAndOperation = nextRecord.taskId
