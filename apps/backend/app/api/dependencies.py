@@ -1,10 +1,10 @@
 """FastAPI 层的依赖构建器。"""
 
 from app.domain.approvals.service import ApprovalService
-from app.domain.approvals.store import ApprovalStore
+from app.storage.crud.approval import ApprovalStore
 from app.domain.artifacts.files import ArtifactFileStore
 from app.domain.artifacts.service import ArtifactService
-from app.domain.artifacts.store import ArtifactStore
+from app.storage.crud.artifact import ArtifactStore
 from app.config.settings import default_settings
 from app.context.builder import TextContextBuilder
 from app.core.logs.query_service import LogQueryService
@@ -18,15 +18,15 @@ from app.core.runs.langgraph_runtime import LangGraphRuntime
 from app.core.runs.lifecycle_graph import build_run_lifecycle_graph
 from app.core.runs.recovery import RecoveryManager
 from app.core.runs.resume import ResumeDispatcher
-from app.core.runs.store import DurableRunStore
+from app.storage.crud.durable import DurableRunStore
 from app.core.runtime.runner import AgentRuntime
-from app.storage.task_store import SQLiteTaskStore
-from app.storage.log_store import LogStore
-from app.storage.trace_store import TraceStore
+from app.storage.crud.task import SQLiteTaskStore
+from app.storage.crud.log import LogStore
+from app.storage.crud.trace import TraceStore
 from app.tools.execution.policy import ToolExecutionPolicy
 from app.tools.execution.policy_provider import PermissionPolicyProvider
 from app.tools.execution.service import ToolExecutionService
-from app.tools.execution.store import ToolExecutionStore
+from app.storage.crud.tool_execution import ToolExecutionStore
 from app.tools.runtime.concurrency import ToolConcurrentScheduler
 from app.tools.executor import ToolCallExecutor
 from app.tools.runtime.locks import ToolResourceLockManager
@@ -114,7 +114,7 @@ def build_runtime() -> AgentRuntime:
     replay_service = ReplayService(trace_store)
     safe_tools = SafeReadTools(settings.project_root)
     registry = ToolRegistry(safe_tools.definitions())
-    run_store = DurableRunStore(settings.database_file, logger)
+    run_store = DurableRunStore(settings.database_file)
     resume_dispatcher = ResumeDispatcher(run_store, logger, trace_recorder=trace_recorder)
     langgraph_runtime = None
     try:

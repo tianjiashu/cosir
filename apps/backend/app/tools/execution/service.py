@@ -1,5 +1,6 @@
 """工具执行持久化和策略服务。"""
 
+from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional
 
@@ -7,7 +8,7 @@ from app.tools.execution.policy import ToolExecutionPolicy
 from app.tools.execution.policy_provider import ToolPolicyContext
 from app.tools.execution.lifecycle import ToolExecutionLifecycle
 from app.tools.execution.records import ToolCallRecord, ToolPolicyDecision
-from app.tools.execution.store import ToolExecutionStore
+from app.storage.crud.tool_execution import ToolExecutionStore
 
 
 class ToolExecutionService:
@@ -66,7 +67,7 @@ class ToolExecutionService:
             工具调用记录和策略决策。
 
         异常:
-            sqlite3.Error: 如果持久化失败。
+            Exception: 如果底层存储持久化失败。
 
         副作用:
             写入工具调用记录并记录策略日志。
@@ -78,6 +79,7 @@ class ToolExecutionService:
             tool_name=tool_name,
             arguments=arguments,
             permission=permission,
+            status="requested",
             idempotency_key=idempotency_key,
             step_id=step_id,
         )
@@ -130,7 +132,7 @@ class ToolExecutionService:
             存在时返回工具调用记录，否则返回 None。
 
         异常:
-            sqlite3.Error: 如果查询失败。
+            Exception: 如果底层存储查询失败。
 
         副作用:
             无。
@@ -255,16 +257,18 @@ class ToolExecutionService:
 
         异常:
             KeyError: 如果关联工具调用不存在。
-            sqlite3.Error: 如果记录无法写入。
+            Exception: 如果底层存储记录无法写入。
 
         副作用:
             写入 tool_executions 表。
         """
 
+        completed_at = datetime.now(timezone.utc) if status in {"succeeded", "failed", "cancelled", "timed_out"} else None
         return self._store.create_execution(
             tool_call_id=tool_call_id,
             status=status,
             effect_status=effect_status,
+            completed_at=completed_at,
             artifact_id=artifact_id,
             error=error,
         )
@@ -281,7 +285,7 @@ class ToolExecutionService:
 
         异常:
             ValueError: 如果状态迁移非法。
-            sqlite3.Error: 如果状态无法写入。
+            Exception: 如果底层存储状态无法写入。
 
         副作用:
             更新 tool_calls 表。

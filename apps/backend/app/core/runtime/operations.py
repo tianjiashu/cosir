@@ -383,7 +383,7 @@ class RuntimeOperations:
             修改存储中运行中的步骤状态。
         """
 
-        return self._task_store.close_running_steps_for_task(task_id, status, error)
+        return self._task_store.update_steps_status_for_task(task_id, "running", status, error)
 
     def record_event(self, event_type: EventType, task_id: str, payload: dict) -> RuntimeEvent:
         """持久化并返回一个运行时事件。

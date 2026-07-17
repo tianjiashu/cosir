@@ -13,7 +13,7 @@ import time
 import unittest
 
 from app.domain.approvals.service import ApprovalService
-from app.domain.approvals.store import ApprovalStore
+from app.storage.crud.approval import ApprovalStore
 from app.config.settings import BackendSettings
 from app.context.builder import TextContextBuilder
 from app.core.replay.service import ReplayService
@@ -24,10 +24,10 @@ from app.models.base import ModelDelta, ModelToolDefinition, RuntimeMessage
 from app.models.echo import EchoStreamingModelAdapter
 from app.core.runs.recovery import RecoveryManager
 from app.core.runs.resume import ResumeDispatcher
-from app.core.runs.store import DurableRunStore
+from app.storage.crud.durable import DurableRunStore
 from app.core.runtime.runner import AgentRuntime
-from app.storage.task_store import SQLiteTaskStore
-from app.storage.trace_store import TraceStore
+from app.storage.crud.task import SQLiteTaskStore
+from app.storage.crud.trace import TraceStore
 from app.tools.types import ArtifactRequest, ToolCall, ToolDefinition
 from app.tools.registry.memory import ToolRegistry
 from app.tools.builtin.safe_read import SafeReadTools
@@ -291,6 +291,7 @@ class BackendApiTests(unittest.TestCase):
             "approve_tool",
             {"approval_id": "approval-pending"},
             "replay-query-key",
+            "pending",
         )
         client = TestClient(create_app(runtime=runtime))
 
@@ -807,8 +808,9 @@ class BackendApiTests(unittest.TestCase):
             "approve_tool",
             {"approval_id": "approval-pending"},
             "recoverable-query-key",
+            "pending",
         )
-        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("approve_tool",))
+        claimed = run_store.claim_resume_commands("pending", "processing", run.run_id, actions=("approve_tool",))
         self.assertEqual([command.command_id for command in claimed], [created.command_id])
         client = TestClient(create_app(runtime=runtime))
 
@@ -849,7 +851,7 @@ class BackendApiTests(unittest.TestCase):
             payload={"arguments": {"path": "marker.txt"}},
         )
         approval_service.decide(approval.approval_id, "approved", "ok", "crash-window-key")
-        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("approve_tool",))
+        claimed = run_store.claim_resume_commands("pending", "processing", run.run_id, actions=("approve_tool",))
         self.assertEqual(len(claimed), 1)
         self.assertEqual(run_store.get(run.run_id).status, "resuming")
         self.assertEqual(run_store.get_resume_command_by_key("resume:crash-window-key").status, "processing")
@@ -900,7 +902,7 @@ class BackendApiTests(unittest.TestCase):
             payload={"arguments": {"path": "marker.txt"}},
         )
         approval_service.decide(approval.approval_id, "denied", "no", "crash-denied-key")
-        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("deny_tool",))
+        claimed = run_store.claim_resume_commands("pending", "processing", run.run_id, actions=("deny_tool",))
         self.assertEqual(len(claimed), 1)
         self.assertEqual(run_store.get(run.run_id).status, "resuming")
         self.assertEqual(run_store.get_resume_command_by_key("resume:crash-denied-key").status, "processing")
@@ -984,7 +986,7 @@ class BackendApiTests(unittest.TestCase):
             payload={"arguments": {"path": "marker.txt"}},
         )
         approval_service.decide(approval.approval_id, "approved", "ok", "finalize-fail-key")
-        claimed = run_store.claim_pending_resume_commands(run.run_id, actions=("approve_tool",))
+        claimed = run_store.claim_resume_commands("pending", "processing", run.run_id, actions=("approve_tool",))
         self.assertEqual(len(claimed), 1)
         original_mark_status = run_store.mark_status
 
@@ -1142,7 +1144,7 @@ class BackendApiTests(unittest.TestCase):
                 logger=logger,
             ),
             logger=logger,
-            run_store=DurableRunStore(project_root / "app.sqlite3", logger),
+            run_store=DurableRunStore(project_root / "app.sqlite3"),
             trace_recorder=trace_recorder,
             trace_query_service=trace_query_service,
             replay_service=replay_service,
@@ -1176,7 +1178,7 @@ class BackendApiTests(unittest.TestCase):
         logger.addHandler(logging.NullHandler())
         safe_tools = SafeReadTools(project_root)
         registry = ToolRegistry(safe_tools.definitions())
-        run_store = DurableRunStore(database, logger)
+        run_store = DurableRunStore(database)
         trace_store = TraceStore(database)
         trace_recorder = TraceRecorder(trace_store, logger)
         replay_service = ReplayService(trace_store)
@@ -1336,12 +1338,12 @@ def _build_test_tool_runtime(project_root: Path, database: Path, registry: ToolR
 
     from app.domain.artifacts.files import ArtifactFileStore
     from app.domain.artifacts.service import ArtifactService
-    from app.domain.artifacts.store import ArtifactStore
+    from app.storage.crud.artifact import ArtifactStore
     from app.tools.runtime.concurrency import ToolConcurrentScheduler
     from app.tools.execution.policy import ToolExecutionPolicy
     from app.tools.execution.policy_provider import PermissionPolicyProvider
     from app.tools.execution.service import ToolExecutionService
-    from app.tools.execution.store import ToolExecutionStore
+    from app.storage.crud.tool_execution import ToolExecutionStore
     from app.tools.executor import ToolCallExecutor
     from app.tools.runtime.locks import ToolResourceLockManager
     from app.tools.results import ToolObservationBuilder

@@ -11,7 +11,7 @@ from typing import Deque
 from app.core.trace.redaction import redact_value
 from app.config.logging.record_mapper import LogError, map_log_record
 from app.storage.log_records import LogEntryRecord
-from app.storage.log_store import LogStore
+from app.storage.crud.log import LogStore
 
 
 HIGH_PRIORITY_LEVELS = {"WARNING", "ERROR", "CRITICAL"}

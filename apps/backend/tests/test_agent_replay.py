@@ -8,7 +8,7 @@ import unittest
 from app.core.replay.projector import ReplayProjector
 from app.core.replay.service import ReplayService
 from app.core.trace.records import TraceEventRecord
-from app.storage.trace_store import TraceStore
+from app.storage.crud.trace import TraceStore
 
 
 class AgentReplayTests(unittest.TestCase):

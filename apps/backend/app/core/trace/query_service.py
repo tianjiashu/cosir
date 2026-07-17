@@ -6,7 +6,7 @@ from typing import Any
 
 from app.config.logging import list_log_files
 from app.config.logging import query_log_files
-from app.storage.trace_store import TraceStore
+from app.storage.crud.trace import TraceStore
 
 
 class TraceQueryService:

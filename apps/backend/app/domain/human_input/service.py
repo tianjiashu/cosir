@@ -4,9 +4,10 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.domain.human_input.records import HumanInputRequestRecord, HumanInputResponseRecord
-from app.domain.human_input.store import HumanInputStore
+from app.storage.crud.human_input import HumanInputStore
 from app.core.runs.resume import ResumeDispatcher
-from app.core.runs.store import DurableRunStore
+from app.core.runs.state_machine import RunStateMachine
+from app.storage.crud.durable import DurableRunStore
 
 
 class HumanInputService:
@@ -41,6 +42,7 @@ class HumanInputService:
         self._run_store = run_store
         self._resume_dispatcher = resume_dispatcher
         self._logger = logger
+        self._run_state_machine = RunStateMachine()
 
     def request_input(
         self,
@@ -68,10 +70,15 @@ class HumanInputService:
             写入请求、更新运行状态并记录日志。
         """
 
+        if not prompt.strip():
+            raise ValueError("prompt must not be blank")
+        run = self._run_store.get(run_id)
+        self._run_state_machine.ensure_transition(run.status, "waiting")
         request = self._human_input_store.create_request(
             run_id=run_id,
             prompt=prompt,
             schema=schema,
+            status="pending",
             step_id=step_id,
         )
         self._run_store.mark_status(
@@ -114,13 +121,16 @@ class HumanInputService:
         """
 
         request = self._human_input_store.get_request(request_id)
-        record = self._human_input_store.record_response(request_id, response, idempotency_key)
+        run = self._run_store.get(request.run_id)
+        self._run_state_machine.ensure_transition(run.status, "resuming")
+        record = self._human_input_store.create_response(request_id, response, idempotency_key)
         self._resume_dispatcher.dispatch(
             run_id=request.run_id,
             action="provide_human_input",
             payload={"request_id": request_id, "response": response},
             idempotency_key=f"resume:{idempotency_key}",
         )
+        self._human_input_store.update_request_status(request_id, "responded", record.created_at)
         self._logger.info(
             "human_input_received",
             extra={

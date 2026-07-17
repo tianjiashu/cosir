@@ -8,7 +8,7 @@ from app.core.trace.event_names import canonical_event_name
 from app.core.trace.ids import new_span_id, new_trace_id
 from app.core.trace.records import TraceEventRecord, TraceSpanRecord
 from app.core.trace.redaction import redact_value
-from app.storage.trace_store import TraceStore
+from app.storage.crud.trace import TraceStore
 
 
 class TraceRecorder:

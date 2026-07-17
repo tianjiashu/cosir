@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.config.logging import SQLiteLogHandler, entry_from_log_record
 from app.storage.log_records import LogEntryRecord, LogQuery
-from app.storage.log_store import LogStore
+from app.storage.crud.log import LogStore
 
 
 class SQLiteLogHandlerTests(unittest.TestCase):

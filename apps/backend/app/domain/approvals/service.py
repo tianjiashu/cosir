@@ -4,10 +4,11 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.domain.approvals.records import ApprovalDecisionRecord, ApprovalRequestRecord
-from app.domain.approvals.store import ApprovalStore
+from app.storage.crud.approval import ApprovalStore
 from app.core.runs.langgraph_runtime import LangGraphRuntime
 from app.core.runs.resume import ResumeDispatcher
-from app.core.runs.store import DurableRunStore
+from app.core.runs.state_machine import RunStateMachine
+from app.storage.crud.durable import DurableRunStore
 from app.core.trace.recorder import TraceRecorder
 from app.config.logging import merge_log_context, reset_log_context
 
@@ -50,6 +51,7 @@ class ApprovalService:
         self._logger = logger
         self._langgraph_runtime = langgraph_runtime
         self._trace_recorder = trace_recorder
+        self._run_state_machine = RunStateMachine()
 
     def request_approval(
         self,
@@ -83,14 +85,24 @@ class ApprovalService:
             写入审批请求、更新运行等待状态并记录日志。
         """
 
-        approval = self._approval_store.create_request_and_wait_run(
+        run = self._run_store.get(run_id)
+        self._run_state_machine.ensure_transition(run.status, "waiting")
+        approval = self._approval_store.create_request(
             run_id=run_id,
             tool_name=tool_name,
             permission=permission,
             risk_level=risk_level,
             payload=payload,
+            status="pending",
             step_id=step_id,
             tool_call_id=tool_call_id,
+        )
+        self._run_store.mark_status(
+            run_id,
+            "waiting",
+            wait_reason="approval",
+            active_step_id=step_id,
+            active_wait_id=approval.approval_id,
         )
         token = merge_log_context(run_id=run_id)
         try:
@@ -176,13 +188,13 @@ class ApprovalService:
             待处理审批请求列表。
 
         异常:
-            sqlite3.Error: 如果查询失败。
+            Exception: 如果底层存储查询失败。
 
         副作用:
             无。
         """
 
-        return self._approval_store.list_pending(run_id)
+        return self._approval_store.list_by_status("pending", run_id)
 
     def get_request(self, approval_id: str) -> ApprovalRequestRecord:
         """按审批标识返回审批请求。
@@ -212,7 +224,7 @@ class ApprovalService:
             存在时返回审批决策，否则返回 None。
 
         异常:
-            sqlite3.Error: 如果查询失败。
+            Exception: 如果底层存储查询失败。
 
         副作用:
             无。
@@ -250,14 +262,25 @@ class ApprovalService:
             raise ValueError("decision must be approved or denied")
         approval = self._approval_store.get_request(approval_id)
         action = "approve_tool" if decision == "approved" else "deny_tool"
-        record, command = self._approval_store.record_decision_and_enqueue_resume(
+        run = self._run_store.get(approval.run_id)
+        self._run_state_machine.ensure_transition(run.status, "resuming")
+        record = self._approval_store.create_decision(
             approval_id=approval_id,
             decision=decision,
             reason=reason,
             idempotency_key=idempotency_key,
+        )
+        if record.approval_id != approval_id:
+            raise ValueError("idempotency key is already used by a different approval")
+        if record.decision != decision:
+            raise ValueError("approval already decided with a different decision")
+        command = self._resume_dispatcher.dispatch(
+            run_id=approval.run_id,
             action=action,
             payload={"approval_id": approval_id, "decision": decision, "reason": reason},
+            idempotency_key=f"resume:{record.idempotency_key}",
         )
+        self._approval_store.update_request_status(approval_id, decision, record.decided_at)
         token = merge_log_context(run_id=approval.run_id)
         try:
             self._logger.info(

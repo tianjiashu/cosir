@@ -5,7 +5,7 @@ from typing import Optional
 
 from app.domain.artifacts.files import ArtifactFileStore
 from app.domain.artifacts.records import ArtifactRecord
-from app.domain.artifacts.store import ArtifactStore
+from app.storage.crud.artifact import ArtifactStore
 from app.tools.types import ArtifactRequest
 
 
@@ -50,7 +50,7 @@ class ArtifactService:
 
         异常:
             OSError: 当 artifact 文件无法写入时抛出。
-            sqlite3.Error: 当 artifact 元数据无法写入时抛出。
+            Exception: 当 artifact 元数据无法写入时抛出。
 
         副作用:
             写入 artifact 文件与 SQLite 元数据。

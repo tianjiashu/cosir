@@ -21,7 +21,7 @@ def _module_dotted_path(pathname: str) -> str:
         pathname: ``LogRecord.pathname`` 绝对路径。
 
     返回:
-        形如 ``app.core.runs.store`` 的模块路径；无法相对后端根时原样返回。
+        形如 ``app.storage.crud.durable`` 的模块路径；无法相对后端根时原样返回。
 
     异常:
         无。
@@ -101,7 +101,7 @@ def compute_caller(record: logging.LogRecord) -> str:
         record: Python logging 传入的日志记录。
 
     返回:
-        形如 ``app.core.runs.store:DurableRunStore.save:101`` 的调用位置；
+        形如 ``app.storage.crud.durable:DurableRunStore.save:101`` 的调用位置；
         无法解析类名时退化为 ``模块:方法:行号``。
 
     异常:

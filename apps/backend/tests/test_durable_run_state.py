@@ -8,19 +8,19 @@ import tempfile
 import unittest
 
 from app.domain.approvals.service import ApprovalService
-from app.domain.approvals.store import ApprovalStore
+from app.storage.crud.approval import ApprovalStore
 from app.domain.artifacts.files import ArtifactFileStore
-from app.domain.artifacts.store import ArtifactStore
+from app.storage.crud.artifact import ArtifactStore
 from app.domain.human_input.service import HumanInputService
-from app.domain.human_input.store import HumanInputStore
+from app.storage.crud.human_input import HumanInputStore
 from app.core.runs.recovery import RecoveryManager
 from app.core.runs.checkpointer import ManagedSqliteCheckpointer
 from app.core.runs.resume import ResumeDispatcher
 from app.core.runs.state_machine import InvalidRunTransition, RunStateMachine
-from app.core.runs.store import DurableRunStore
+from app.storage.crud.durable import DurableRunStore
 from app.tools.execution.policy import ToolExecutionPolicy
 from app.tools.execution.service import ToolExecutionService
-from app.tools.execution.store import ToolExecutionStore
+from app.storage.crud.tool_execution import ToolExecutionStore
 
 
 class DurableRunStateTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("approval")
-            run_store = DurableRunStore(database_path, logger)
+            run_store = DurableRunStore(database_path)
             dispatcher = ResumeDispatcher(run_store, logger)
             service = ApprovalService(
                 approval_store=ApprovalStore(database_path),
@@ -74,7 +74,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=dispatcher,
                 logger=logger,
             )
-            run = run_store.create_for_task("task-1", thread_id="thread-1")
+            run = run_store.create_for_task("task-1", "created", thread_id="thread-1")
 
             approval = service.request_approval(
                 run_id=run.run_id,
@@ -110,14 +110,14 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("approval-orphan")
-            run_store = DurableRunStore(database_path, logger)
+            run_store = DurableRunStore(database_path)
             service = ApprovalService(
                 approval_store=ApprovalStore(database_path),
                 run_store=run_store,
                 resume_dispatcher=ResumeDispatcher(run_store, logger),
                 logger=logger,
             )
-            run = run_store.create_for_task("task-orphan", thread_id="thread-orphan")
+            run = run_store.create_for_task("task-orphan", "created", thread_id="thread-orphan")
             run_store.mark_status(run.run_id, "running")
             run_store.mark_status(run.run_id, "completed")
 
@@ -151,7 +151,7 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("approval-retry")
-            run_store = DurableRunStore(database_path, logger)
+            run_store = DurableRunStore(database_path)
             dispatcher = ResumeDispatcher(run_store, logger)
             service = ApprovalService(
                 approval_store=ApprovalStore(database_path),
@@ -159,7 +159,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=dispatcher,
                 logger=logger,
             )
-            run = run_store.create_for_task("task-retry", thread_id="thread-retry")
+            run = run_store.create_for_task("task-retry", "created", thread_id="thread-retry")
             approval = service.request_approval(
                 run_id=run.run_id,
                 tool_name="write_file",
@@ -194,14 +194,14 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("approval-concurrent")
-            run_store = DurableRunStore(database_path, logger)
+            run_store = DurableRunStore(database_path)
             service = ApprovalService(
                 approval_store=ApprovalStore(database_path),
                 run_store=run_store,
                 resume_dispatcher=ResumeDispatcher(run_store, logger),
                 logger=logger,
             )
-            run = run_store.create_for_task("task-concurrent-approval", thread_id="thread-concurrent-approval")
+            run = run_store.create_for_task("task-concurrent-approval", "created", thread_id="thread-concurrent-approval")
             approval = service.request_approval(
                 run_id=run.run_id,
                 tool_name="write_file",
@@ -240,8 +240,8 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("resume-concurrent")
-            run_store = DurableRunStore(database_path, logger)
-            run = run_store.create_for_task("task-concurrent-resume", thread_id="thread-concurrent-resume")
+            run_store = DurableRunStore(database_path)
+            run = run_store.create_for_task("task-concurrent-resume", "created", thread_id="thread-concurrent-resume")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 commands = list(
@@ -251,6 +251,7 @@ class DurableRunStateTests(unittest.TestCase):
                             "approve_tool",
                             {"approval_id": "approval-concurrent"},
                             "resume-concurrent-key",
+                            "pending",
                         ),
                         range(2),
                     )
@@ -277,19 +278,20 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("resume-claim")
-            run_store = DurableRunStore(database_path, logger)
-            run = run_store.create_for_task("task-claim", thread_id="thread-claim")
+            run_store = DurableRunStore(database_path)
+            run = run_store.create_for_task("task-claim", "created", thread_id="thread-claim")
             command = run_store.create_resume_command(
                 run.run_id,
                 "approve_tool",
                 {"approval_id": "approval-claim"},
                 "claim-key",
+                "pending",
             )
 
-            first_claim = run_store.claim_pending_resume_commands(actions=("approve_tool",))
-            second_claim = run_store.claim_pending_resume_commands(actions=("approve_tool",))
-            requeued = run_store.requeue_processing_resume_commands()
-            recovered_claim = run_store.claim_pending_resume_commands(actions=("approve_tool",))
+            first_claim = run_store.claim_resume_commands("pending", "processing", actions=("approve_tool",))
+            second_claim = run_store.claim_resume_commands("pending", "processing", actions=("approve_tool",))
+            requeued = run_store.update_resume_commands_status("processing", "pending", only_unapplied=True)
+            recovered_claim = run_store.claim_resume_commands("pending", "processing", actions=("approve_tool",))
 
             self.assertEqual([item.command_id for item in first_claim], [command.command_id])
             self.assertEqual(second_claim, [])
@@ -340,7 +342,7 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("human")
-            run_store = DurableRunStore(database_path, logger)
+            run_store = DurableRunStore(database_path)
             dispatcher = ResumeDispatcher(run_store, logger)
             service = HumanInputService(
                 human_input_store=HumanInputStore(database_path),
@@ -348,7 +350,7 @@ class DurableRunStateTests(unittest.TestCase):
                 resume_dispatcher=dispatcher,
                 logger=logger,
             )
-            run = run_store.create_for_task("task-2", thread_id="thread-2")
+            run = run_store.create_for_task("task-2", "created", thread_id="thread-2")
 
             request = service.request_input(run.run_id, "继续吗？", {"type": "object"})
             response = service.respond(request.request_id, {"answer": "yes"}, "human-key")
@@ -447,8 +449,8 @@ class DurableRunStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             logger = _null_logger("recovery")
-            run_store = DurableRunStore(database_path, logger)
-            run = run_store.create_for_task("task-3", thread_id="thread-3")
+            run_store = DurableRunStore(database_path)
+            run = run_store.create_for_task("task-3", "created", thread_id="thread-3")
             run_store.mark_status(run.run_id, "waiting", wait_reason="approval")
 
             runs = RecoveryManager(run_store, logger).reconcile()

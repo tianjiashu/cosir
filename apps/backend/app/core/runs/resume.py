@@ -4,7 +4,8 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.core.runs.records import ResumeCommandRecord
-from app.core.runs.store import DurableRunStore
+from app.core.runs.state_machine import RunStateMachine
+from app.storage.crud.durable import DurableRunStore
 from app.core.trace.recorder import TraceRecorder
 from app.config.logging import merge_log_context, reset_log_context
 
@@ -38,6 +39,7 @@ class ResumeDispatcher:
         self._run_store = run_store
         self._logger = logger
         self._trace_recorder = trace_recorder
+        self._state_machine = RunStateMachine()
 
     def dispatch(
         self,
@@ -65,11 +67,14 @@ class ResumeDispatcher:
             写入恢复命令、更新运行状态并记录日志。
         """
 
+        run = self._run_store.get(run_id)
+        self._state_machine.ensure_transition(run.status, "resuming")
         command = self._run_store.create_resume_command(
             run_id=run_id,
             action=action,
             payload=payload,
             idempotency_key=idempotency_key,
+            status="pending",
         )
         self._run_store.mark_status(run_id, "resuming")
         token = merge_log_context(run_id=run_id)

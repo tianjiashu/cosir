@@ -19,7 +19,7 @@ from app.core.trace.redaction import redact_value
 from app.config.logging import configure_logging
 from app.config.logging import current_log_file, dated_log_file, list_log_files
 from app.config.logging import query_log_file
-from app.storage.trace_store import TraceStore
+from app.storage.crud.trace import TraceStore
 
 
 class TraceBackboneTests(unittest.TestCase):

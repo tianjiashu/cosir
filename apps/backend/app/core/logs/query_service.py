@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from app.config.logging import render_log_entries
 from app.storage.log_records import LogQuery, LogQueryResult
-from app.storage.log_store import LogStore
+from app.storage.crud.log import LogStore
 
 
 class LogQueryService:
@@ -115,7 +115,7 @@ class LogQueryService:
             查询结果。
 
         异常:
-            sqlite3.Error: 如果底层 SQLite 查询失败。
+            Exception: 如果底层日志存储查询失败。
 
         副作用:
             读取日志 SQLite。

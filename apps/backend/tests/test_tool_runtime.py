@@ -8,16 +8,16 @@ import time
 import unittest
 
 from app.domain.approvals.service import ApprovalService
-from app.domain.approvals.store import ApprovalStore
+from app.storage.crud.approval import ApprovalStore
 from app.domain.artifacts.files import ArtifactFileStore
 from app.domain.artifacts.service import ArtifactService
-from app.domain.artifacts.store import ArtifactStore
+from app.storage.crud.artifact import ArtifactStore
 from app.core.runs.resume import ResumeDispatcher
-from app.core.runs.store import DurableRunStore
+from app.storage.crud.durable import DurableRunStore
 from app.tools.execution.policy import ToolExecutionPolicy
 from app.tools.execution.policy_provider import PermissionPolicyProvider
 from app.tools.execution.service import ToolExecutionService
-from app.tools.execution.store import ToolExecutionStore
+from app.storage.crud.tool_execution import ToolExecutionStore
 from app.tools.runtime.concurrency import ToolConcurrentScheduler
 from app.tools.executor import ToolCallExecutor
 from app.tools.runtime.locks import ToolResourceLockManager
@@ -52,7 +52,7 @@ class ToolRuntimeTests(unittest.TestCase):
             root = Path(temp_dir)
             marker = root / "marker.txt"
             runtime, run_store, _ = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-approval", thread_id="thread-approval")
+            run = run_store.create_for_task("task-approval", "created", thread_id="thread-approval")
 
             observation = runtime.execute_single_tool_call(
                 ToolCall("write_marker", {"path": str(marker)}),
@@ -90,7 +90,7 @@ class ToolRuntimeTests(unittest.TestCase):
                 parameters_schema={"type": "object", "properties": {}, "additionalProperties": False},
             )
             runtime, run_store, _ = self._build_persistent_runtime(root, tool)
-            run = run_store.create_for_task("task-artifact", thread_id="thread-artifact")
+            run = run_store.create_for_task("task-artifact", "created", thread_id="thread-artifact")
 
             observation = runtime.execute_single_tool_call(
                 ToolCall("large_output", {}),
@@ -135,7 +135,7 @@ class ToolRuntimeTests(unittest.TestCase):
                 },
             )
             runtime, run_store, _ = self._build_persistent_runtime(root, tool)
-            run = run_store.create_for_task("task-idempotent", thread_id="thread-idempotent")
+            run = run_store.create_for_task("task-idempotent", "created", thread_id="thread-idempotent")
             context = ToolExecutionContext(run.run_id, "step-idempotent")
 
             call = ToolCall("count_once", {"path": str(counter_path)})
@@ -166,7 +166,7 @@ class ToolRuntimeTests(unittest.TestCase):
             root = Path(temp_dir)
             marker = root / "approved.txt"
             runtime, run_store, approval_service = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-resume", thread_id="thread-resume")
+            run = run_store.create_for_task("task-resume", "created", thread_id="thread-resume")
             context = ToolExecutionContext(run.run_id, "step-resume")
             call = ToolCall("write_marker", {"path": str(marker)})
             waiting = runtime.execute_single_tool_call(call, context)
@@ -199,7 +199,7 @@ class ToolRuntimeTests(unittest.TestCase):
             root = Path(temp_dir)
             marker = root / "repeat-approved.txt"
             runtime, run_store, approval_service = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-repeat-resume", thread_id="thread-repeat-resume")
+            run = run_store.create_for_task("task-repeat-resume", "created", thread_id="thread-repeat-resume")
             context = ToolExecutionContext(run.run_id, "step-repeat-resume")
             call = ToolCall("write_marker", {"path": str(marker)})
             runtime.execute_single_tool_call(call, context)
@@ -242,6 +242,7 @@ class ToolRuntimeTests(unittest.TestCase):
                             tool_name="safe_read",
                             arguments={"path": "README.md"},
                             permission="safe_read",
+                            status="requested",
                             idempotency_key="tool-concurrent-key",
                         ),
                         range(2),
@@ -269,7 +270,7 @@ class ToolRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             runtime, run_store, approval_service = self._build_persistent_runtime(root, self._write_tool())
-            run = run_store.create_for_task("task-pending-retry", thread_id="thread-pending-retry")
+            run = run_store.create_for_task("task-pending-retry", "created", thread_id="thread-pending-retry")
             context = ToolExecutionContext(run.run_id, "step-pending-retry")
             call = ToolCall("write_marker", {"path": str(root / "marker.txt")})
 
@@ -362,7 +363,7 @@ class ToolRuntimeTests(unittest.TestCase):
 
         logger = _null_logger("persistent")
         database = root / "app.sqlite3"
-        run_store = DurableRunStore(database, logger)
+        run_store = DurableRunStore(database)
         approval_service = ApprovalService(
             ApprovalStore(database), run_store, ResumeDispatcher(run_store, logger), logger
         )

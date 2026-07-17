@@ -1,12 +1,11 @@
 """针对 SQLite 运行时状态持久化的测试。"""
 
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from app.events.types import EventType, RuntimeEvent
-from app.storage.task_store import SQLiteTaskStore
+from app.storage.crud.task import SQLiteTaskStore
 
 
 class SQLiteTaskStoreTests(unittest.TestCase):
@@ -31,7 +30,7 @@ class SQLiteTaskStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "app.sqlite3"
             first_store = SQLiteTaskStore(database_path)
-            task = first_store.create_task("persist me", agent_id="developer")
+            task = first_store.create_task("persist me", "pending", agent_id="developer")
             turn = first_store.get_turn_for_task(task.task_id)
             step = first_store.create_step(
                 turn_id=turn.turn_id,
@@ -94,74 +93,6 @@ class SQLiteTaskStoreTests(unittest.TestCase):
 
             with self.assertRaises(KeyError):
                 store.update_step_status("missing-step", "failed")
-
-    def test_initialization_adds_agent_id_to_legacy_tasks_table(self) -> None:
-        """校验旧任务表会被迁移，并带有默认的 Agent id。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            AssertionError: 如果迁移未添加或回填 agent_id。
-
-        副作用:
-            创建一个临时的遗留 SQLite 数据库并初始化存储。
-        """
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            database_path = Path(temp_dir) / "legacy.sqlite3"
-            now = "2026-07-13T00:00:00+00:00"
-            with sqlite3.connect(database_path) as connection:
-                connection.executescript(
-                    """
-                    CREATE TABLE sessions (
-                        session_id TEXT PRIMARY KEY,
-                        project_path TEXT,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
-                    );
-                    CREATE TABLE tasks (
-                        task_id TEXT PRIMARY KEY,
-                        session_id TEXT NOT NULL,
-                        input_text TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY(session_id) REFERENCES sessions(session_id)
-                    );
-                    """
-                )
-                connection.execute(
-                    """
-                    INSERT INTO sessions(session_id, project_path, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    ("legacy-session", None, now, now),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO tasks(
-                        task_id, session_id, input_text, status, created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    ("legacy-task", "legacy-session", "old task", "pending", now, now),
-                )
-
-            store = SQLiteTaskStore(database_path)
-            legacy_task = store.get_task("legacy-task")
-            new_task = store.create_task("new task", agent_id="developer")
-
-            with sqlite3.connect(database_path) as connection:
-                column_rows = connection.execute("PRAGMA table_info(tasks)").fetchall()
-            column_names = {row[1] for row in column_rows}
-
-            self.assertIn("agent_id", column_names)
-            self.assertEqual(legacy_task.agent_id, "developer")
-            self.assertEqual(new_task.agent_id, "developer")
 
 
 if __name__ == "__main__":

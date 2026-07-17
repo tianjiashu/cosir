@@ -13,7 +13,7 @@ from app.config.logging.process_bridge import (
     stop_queue_listener,
 )
 from app.config.logging.save.sqlite_handler import SQLiteLogHandler
-from app.storage.log_store import LogStore
+from app.storage.crud.log import LogStore
 
 
 def configure_logging(

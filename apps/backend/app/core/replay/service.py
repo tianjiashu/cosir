@@ -3,7 +3,7 @@
 from app.core.replay.compaction import ReplayCompactor
 from app.core.replay.projector import ReplayProjector
 from app.core.replay.records import ReplayNode, ReplayNodeDetail, ReplayTimeline
-from app.storage.trace_store import TraceStore
+from app.storage.crud.trace import TraceStore
 
 
 class ReplayService:

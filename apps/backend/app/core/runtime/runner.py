@@ -1,5 +1,6 @@
 """协调任务生命周期与工作流执行。"""
 
+from datetime import datetime, timezone
 import logging
 import os
 from typing import AsyncIterator, Optional
@@ -17,8 +18,9 @@ from app.events.types import EventType, RuntimeEvent
 from app.config.logging import bind_log_context, reset_log_context, set_log_context, trace_log_extra
 from app.core.runs.langgraph_runtime import LangGraphRuntime
 from app.core.runs.recovery import RecoveryManager
+from app.core.runs.recovery import RECOVERABLE_RUN_STATUSES
 from app.core.runs.resume import ResumeDispatcher
-from app.core.runs.store import DurableRunStore
+from app.storage.crud.durable import DurableRunStore
 from app.models.base import StreamingModelAdapter
 from app.core.runtime.operations import RuntimeOperations
 from app.storage.records import CheckpointRecord, TaskRecord
@@ -148,8 +150,11 @@ class AgentRuntime:
             在配置好的任务存储中持久化任务状态，并写入一条 info 日志。
         """
 
+        if not isinstance(input_text, str) or not input_text.strip():
+            raise ValueError("input_text must be a non-empty string")
         task = self._task_store.create_task(
             input_text=input_text,
+            status="pending",
             session_id=session_id,
             agent_id=self._agent_profile.agent_id,
         )
@@ -172,7 +177,7 @@ class AgentRuntime:
         if self._run_store is not None:
             token = set_log_context(context)
             try:
-                run = self._run_store.create_for_task(task.task_id)
+                run = self._run_store.create_for_task(task.task_id, "created")
             finally:
                 reset_log_context(token)
             context = self._trace_context_for_task(task.task_id, run.run_id)
@@ -248,7 +253,7 @@ class AgentRuntime:
 
         if self._run_store is None:
             raise RuntimeError("durable run recovery is not configured")
-        return [run.to_dict() for run in self._run_store.list_recoverable()]
+        return [run.to_dict() for run in self._run_store.list_runs_by_statuses(RECOVERABLE_RUN_STATUSES)]
 
     def resume_run(self, run_id: str) -> dict:
         """显式恢复指定运行并消费其待处理恢复命令。
@@ -275,7 +280,7 @@ class AgentRuntime:
             if self._recovery_manager is not None:
                 self._recovery_manager.requeue_processing_resume_commands(run_id)
             else:
-                self._run_store.requeue_processing_resume_commands(run_id)
+                self._run_store.update_resume_commands_status("processing", "pending", run_id=run_id, only_unapplied=True)
             self._consume_pending_resume_commands(run_id)
             return self._run_store.get(run_id).to_dict()
         finally:
@@ -372,7 +377,9 @@ class AgentRuntime:
 
         if self._run_store is None or self._approval_service is None:
             return
-        for command in self._run_store.claim_pending_resume_commands(
+        for command in self._run_store.claim_resume_commands(
+            "pending",
+            "processing",
             run_id,
             actions=("approve_tool", "deny_tool"),
         ):
@@ -391,7 +398,7 @@ class AgentRuntime:
                 )
                 if self._resume_dispatcher is not None:
                     self._resume_dispatcher.record_failed(command, "unsupported_resume_command")
-                self._run_store.release_resume_command(command.command_id)
+                self._run_store.update_resume_command_status(command.command_id, "processing", "pending")
                 continue
             try:
                 if self._resume_dispatcher is not None:
@@ -403,7 +410,7 @@ class AgentRuntime:
                     raise RuntimeError("approval decision is missing for resume command")
                 self._resume_langgraph_for_approval(approval_id, decision.to_dict())
                 self._finalize_approval_resume(command.run_id, decision.decision)
-                self._run_store.mark_resume_command_applied(command.command_id)
+                self._run_store.update_resume_command_status(command.command_id, "processing", "applied", applied_at=datetime.now(timezone.utc))
                 if self._resume_dispatcher is not None:
                     self._resume_dispatcher.record_completed(command, decision.decision)
             except Exception:
@@ -420,7 +427,7 @@ class AgentRuntime:
                 )
                 if self._resume_dispatcher is not None:
                     self._resume_dispatcher.record_failed(command, "resume_command_consume_failed")
-                self._run_store.release_resume_command(command.command_id)
+                self._run_store.update_resume_command_status(command.command_id, "processing", "pending")
 
     def _resume_approved_tool_call(self, approval, decision: str) -> None:
         """消费审批决策并恢复或取消原始持久化工具调用。
@@ -618,8 +625,9 @@ class AgentRuntime:
         except Exception as exc:
             self._task_store.update_status(task.task_id, "failed")
             self._mark_run_for_task(task.task_id, "failed", interruption_reason=str(exc))
-            self._task_store.close_running_steps_for_task(
+            self._task_store.update_steps_status_for_task(
                 task.task_id,
+                "running",
                 "failed",
                 str(exc),
             )

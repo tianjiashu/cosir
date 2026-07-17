@@ -4,8 +4,13 @@ import logging
 from typing import List, Optional
 
 from app.core.runs.records import RunRecord
-from app.core.runs.store import DurableRunStore
+from app.storage.crud.durable import DurableRunStore
 from app.core.trace.recorder import TraceRecorder
+
+
+RECOVERABLE_RUN_STATUSES = ("waiting", "interrupted", "needs_review", "resuming")
+RESUME_COMMAND_PROCESSING_STATUS = "processing"
+RESUME_COMMAND_PENDING_STATUS = "pending"
 
 
 class RecoveryManager:
@@ -48,14 +53,18 @@ class RecoveryManager:
             等待、恢复中、中断或需要复核的运行记录列表。
 
         异常:
-            sqlite3.Error: 如果查询运行状态失败。
+            Exception: 如果底层存储查询运行状态失败。
 
         副作用:
             写入恢复对账日志。
         """
 
-        requeued = self._run_store.requeue_processing_resume_commands()
-        runs = self._run_store.list_recoverable()
+        requeued = self._run_store.update_resume_commands_status(
+            RESUME_COMMAND_PROCESSING_STATUS,
+            RESUME_COMMAND_PENDING_STATUS,
+            only_unapplied=True,
+        )
+        runs = self._run_store.list_runs_by_statuses(RECOVERABLE_RUN_STATUSES)
         self._logger.info(
             "run_recovery_commands_requeued",
             extra={
@@ -96,13 +105,18 @@ class RecoveryManager:
 
         异常:
             KeyError: 如果 run_id 不存在。
-            sqlite3.Error: 如果状态更新失败。
+            Exception: 如果底层存储状态更新失败。
 
         副作用:
             更新恢复命令状态、写入日志，并在配置 TraceRecorder 时追加 recovery_reconciled 事件。
         """
 
-        requeued = self._run_store.requeue_processing_resume_commands(run_id)
+        requeued = self._run_store.update_resume_commands_status(
+            RESUME_COMMAND_PROCESSING_STATUS,
+            RESUME_COMMAND_PENDING_STATUS,
+            run_id=run_id,
+            only_unapplied=True,
+        )
         run = self._run_store.get(run_id)
         self._logger.info(
             "run_recovery_commands_requeued",

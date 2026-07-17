@@ -10,7 +10,7 @@ from app.config.logging import current_log_file
 from app.config.logging import get_log_queue, stop_queue_listener
 from app.config.logging import SQLiteLogHandler
 from app.storage.log_records import LogQuery
-from app.storage.log_store import LogStore
+from app.storage.crud.log import LogStore
 from app.tools.execute import execute_tool_handler
 
 

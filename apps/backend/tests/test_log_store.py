@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from app.storage.log_records import LogEntryRecord, LogQuery
-from app.storage.log_store import LogStore
+from app.storage.crud.log import LogStore
 
 
 class LogStoreTests(unittest.TestCase):
@@ -33,14 +33,26 @@ class LogStoreTests(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                columns = {
+                    row[1]: row[4]
+                    for row in connection.execute(
+                        "PRAGMA table_info(log_entries)"
+                    ).fetchall()
+                }
                 indexes = {
                     row[1]
                     for row in connection.execute(
                         "PRAGMA index_list(log_entries)"
                     ).fetchall()
                 }
+                ddl = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'log_entries'"
+                ).fetchone()[0]
             self.assertEqual(version, 2)
             self.assertEqual(journal_mode, "wal")
+            self.assertIn("AUTOINCREMENT", ddl)
+            self.assertEqual(columns["data_json"], "'{}'")
+            self.assertEqual(columns["truncated"], "0")
             self.assertIn("idx_log_entries_ts", indexes)
             self.assertIn("idx_log_entries_event_ts", indexes)
             self.assertIn("idx_log_entries_trace_ts", indexes)

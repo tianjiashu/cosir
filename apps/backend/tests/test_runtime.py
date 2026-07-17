@@ -15,7 +15,7 @@ from app.models.base import ModelDelta, ModelToolDefinition, RuntimeMessage
 from app.models.echo import EchoStreamingModelAdapter
 from app.core.runtime.operations import RuntimeOperations
 from app.core.runtime.runner import AgentRuntime
-from app.storage.task_store import SQLiteTaskStore
+from app.storage.crud.task import SQLiteTaskStore
 from app.storage.records import TaskRecord
 from app.tools.registry.memory import ToolRegistry
 from app.tools.builtin.safe_read import SafeReadTools
