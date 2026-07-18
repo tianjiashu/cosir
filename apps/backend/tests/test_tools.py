@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from typing import Iterable
 
-from app.tools.registry.memory import ToolRegistry
+from app.tools.registry.tool_registry import ToolRegistry
 from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
 from app.tools.schemas import ToolCall, ToolDefinition

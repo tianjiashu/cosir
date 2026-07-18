@@ -29,7 +29,7 @@ from app.core.runtime.runner import AgentRuntime
 from app.storage.crud.task import SQLiteTaskStore
 from app.storage.crud.trace import TraceStore
 from app.tools.schemas import ArtifactRequest, ToolCall, ToolDefinition
-from app.tools.registry.memory import ToolRegistry
+from app.tools.registry.tool_registry import ToolRegistry
 from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
 

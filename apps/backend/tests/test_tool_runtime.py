@@ -21,7 +21,7 @@ from app.storage.crud.tool_execution import ToolExecutionStore
 from app.tools.runtime.concurrency import ToolConcurrentScheduler
 from app.tools.executor import ToolCallExecutor
 from app.tools.runtime.locks import ToolResourceLockManager
-from app.tools.registry.memory import ToolRegistry
+from app.tools.registry.tool_registry import ToolRegistry
 from app.tools.results import ToolObservationBuilder
 from app.tools.runtime.platform import ToolExecutionContext, ToolRuntime
 from app.tools.catalog.selector import ToolSelectionContext, ToolSelector

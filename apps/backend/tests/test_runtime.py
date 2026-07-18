@@ -17,7 +17,7 @@ from app.core.runtime.operations import RuntimeOperations
 from app.core.runtime.runner import AgentRuntime
 from app.storage.crud.task import SQLiteTaskStore
 from app.storage.records import TaskRecord
-from app.tools.registry.memory import ToolRegistry
+from app.tools.registry.tool_registry import ToolRegistry
 from app.tools.tool_handler.safe_read import SafeReadTools
 from app.tools.runtime.compatibility import ToolScheduler
 from app.tools.schemas import ToolCall, ToolDefinition

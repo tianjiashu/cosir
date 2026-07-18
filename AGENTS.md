@@ -19,13 +19,15 @@
 - 不做 CLI，桌面客户端是主要入口。
 - 前后端作为同一个本地桌面应用交付，不部署在服务器。
 - 桌面客户端兼容 Windows 和 Mac。
-- 技术底座：Tauri 2 + React + TypeScript + Vite + Python + FastAPI + LangGraph + SQLite。
+- 技术底座：Tauri 2 + React + TypeScript + Vite + Python + FastAPI + LangGraph（强依赖编排底座）+ SQLite。
 - 模型接入：第一阶段优先支持 OpenAI 协议，优先适配 DeepSeek，后续陆续接入其他大模型。
 - UI 风格：参考 Codex 桌面客户端，使用 shadcn/ui + Radix UI + Tailwind CSS + lucide-react。
 - 第一阶段必须覆盖 MCP、工具权限审批、checkpoint、subagent、context compaction、工具系统、任务执行闭环、审查与测试闭环。
 - MCP、checkpoint、subagent、context compaction 等核心能力第一版必须按生产级深度设计和验收。
 - 第一版必须预留 Agent Workflow、context compaction、subagent、tool 的扩展能力，不能锁死为单一 ReAct 流程。
-- ReAct 只能作为第一版默认 ReAct-like Workflow 的候选形式；底层必须是可扩展 Agent Runtime，支持后续替换或新增 Workflow。
+- ReAct 只能作为第一版默认 ReAct-like Workflow 的候选形式；Workflow 编排层强依赖 LangGraph（`StateGraph` + `SqliteSaver` checkpoint + `interrupt()` 审批中断 + `Command(resume=)` 恢复 + subgraph/`Send` subagent），底层仍是可扩展 Agent Runtime，支持后续替换或新增 Workflow。
+- 工具注册与执行保持自定义，不绑定 LangGraph `Tool`：`ToolDefinition` 是工具契约的单一事实来源，LangGraph graph 的 node 调用自定义 `ToolRuntime`，工具定义不被编排框架绑架。
+- LangGraph 为硬依赖，不再保留「缺失即降级为无 checkpoint 模式」的回退分支；最低运行环境要求 Python 3.10+（与 `requirements.txt` 中 `langgraph` 的版本门控一致）。
 
 ## Agent 协作原则
 
@@ -196,5 +198,5 @@ codegraph sync
 ## 当前开放问题
 
 - DeepSeek 之后的大模型接入顺序。
-- LangGraph 的使用深度：如何承载 workflow 扩展、checkpoint、interrupts、streaming、subgraphs 等能力。
+- （已决议）LangGraph 使用深度：作为强依赖编排底座，承载 workflow 扩展、checkpoint、interrupts、streaming、subgraphs；工具执行层仍自定义。若未来 LangGraph 无法满足特定需求（如极致自定义调度、客户端体积），再评估抽离 graph 层接口。
 - 第一阶段各能力的验收标准和优先级排序。
