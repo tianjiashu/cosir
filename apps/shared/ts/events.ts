@@ -15,10 +15,7 @@ export type RuntimeEventType =
   | "tool_call_requested"
   | "tool_call_started"
   | "tool_call_finished"
-  | "tool_approval_required"
   | "observation_added"
-  | "checkpoint_created"
-  | "checkpoint_failed"
   | "final_response"
   | "run_finished"
   | "run_failed"
@@ -83,32 +80,10 @@ export interface ToolCallFinishedPayload {
   error?: string;
 }
 
-/** `tool_approval_required` 载荷：工具需用户授权（审批）。MVP 至少只读渲染。 */
-export interface ToolApprovalRequiredPayload {
-  tool_name: string;
-  permission: string;
-  approval_status: string;
-  reason: string;
-}
-
 /** `observation_added` 载荷：观察/结果回填。 */
 export interface ObservationAddedPayload {
   tool_name: string;
   status: string;
-}
-
-/** `checkpoint_created` 载荷：checkpoint 创建成功。 */
-export interface CheckpointCreatedPayload {
-  checkpoint_id: string;
-  stage: string;
-  summary: string;
-}
-
-/** `checkpoint_failed` 载荷：checkpoint 创建失败。 */
-export interface CheckpointFailedPayload {
-  stage: string;
-  error: string;
-  event_persisted?: boolean;
 }
 
 /** `final_response` 载荷：模型最终响应产出。 */
@@ -121,7 +96,7 @@ export interface RunFinishedPayload {
   status: "completed";
 }
 
-/** `run_failed` 载荷：任务失败。当 error === "tool_approval_required" 时需关联审批卡片。 */
+/** `run_failed` 载荷：任务失败。 */
 export interface RunFailedPayload {
   status: "failed";
   error: string;

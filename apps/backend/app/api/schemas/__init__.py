@@ -6,13 +6,11 @@
 FastAPI/Pydantic 把模块当作类型注解从而报错）。
 """
 
-from app.api.schemas.ApprovalDecisionRequest import ApprovalDecisionRequest
 from app.api.schemas.CreateTaskRequest import CreateTaskRequest
 from app.api.schemas.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.CreateWorkspaceRequest import CreateWorkspaceRequest
 
 __all__ = [
-    "ApprovalDecisionRequest",
     "CreateTaskRequest",
     "CreateTurnRequest",
     "CreateWorkspaceRequest",

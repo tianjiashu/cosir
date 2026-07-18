@@ -1,4 +1,4 @@
-"""SQLAlchemy schema 初始化入口。"""
+"""SQLAlchemy schema initialization."""
 
 import sys
 from pathlib import Path
@@ -6,15 +6,12 @@ from pathlib import Path
 from sqlalchemy import Engine, inspect, text
 
 from app.storage.database import create_sqlite_engine
-from app.storage.model.approval import ApprovalDecisionModel, ApprovalRequestModel
 from app.storage.model.artifact import ArtifactModel
-from app.storage.model.durable import DurableRunModel, ResumeCommandModel
-from app.storage.model.human_input import HumanInputRequestModel, HumanInputResponseModel
+from app.storage.model.durable import DurableRunModel
 from app.storage.model.log import LogEntryModel
-from app.storage.model.task import CheckpointModel, EventModel, StepModel, TaskModel, TurnModel, WorkspaceModel
+from app.storage.model.task import EventModel, StepModel, TaskModel, TurnModel, WorkspaceModel
 from app.storage.model.tool_execution import ToolCallModel, ToolExecutionModel
 from app.storage.model.trace import TraceEventModel, TraceSpanModel
-
 
 APP_MODELS = (
     WorkspaceModel,
@@ -22,13 +19,7 @@ APP_MODELS = (
     TurnModel,
     StepModel,
     EventModel,
-    CheckpointModel,
     DurableRunModel,
-    ResumeCommandModel,
-    ApprovalRequestModel,
-    ApprovalDecisionModel,
-    HumanInputRequestModel,
-    HumanInputResponseModel,
     ToolCallModel,
     ToolExecutionModel,
     ArtifactModel,
@@ -40,20 +31,19 @@ LOG_SCHEMA_VERSION = 2
 
 
 def initialize_app_schema(database_path: Path) -> Engine:
-    """初始化主应用 SQLite schema。
+    """Initialize the main application SQLite schema.
 
-    参数:
-        database_path: 主应用数据库文件。
+    Parameters:
+        database_path: Main application database file.
 
-    返回:
-        已初始化 schema 的 SQLAlchemy Engine。
+    Returns:
+        Initialized SQLAlchemy engine.
 
-    异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果建表或迁移失败。
+    Raises:
+        sqlalchemy.exc.SQLAlchemyError: If table creation or migration fails.
 
-    副作用:
-        创建主库目录、数据库文件和项目自有业务表；
-        对已存在但缺少模型列的表执行就地 ALTER 补齐（schema 漂移自愈）。
+    Side effects:
+        Creates the database file and missing application tables/columns.
     """
 
     engine = create_sqlite_engine(database_path)
@@ -65,13 +55,19 @@ def initialize_app_schema(database_path: Path) -> Engine:
 
 
 def _default_literal_for_type(column_type) -> str:
-    """为缺失的 NOT NULL 列推导 SQLite 默认值字面量。
+    """Return a SQLite literal default for a missing NOT NULL column.
 
-    参数:
-        column_type: SQLAlchemy 列类型。
+    Parameters:
+        column_type: SQLAlchemy column type.
 
-    返回:
-        可直接拼接到 DDL 的默认值字面量（含引号或数字）。
+    Returns:
+        SQL literal suitable for an ``ALTER TABLE`` default.
+
+    Raises:
+        None.
+
+    Side effects:
+        None.
     """
 
     type_name = str(column_type).upper()
@@ -83,18 +79,20 @@ def _default_literal_for_type(column_type) -> str:
 
 
 def _ensure_model_columns(connection, engine) -> None:
-    """就地补齐已存在表中缺失于模型的列，缓解 schema 漂移。
+    """Add missing model columns to existing application tables.
 
-    仅对缺失列执行 ALTER TABLE ADD COLUMN；已存在的列与多余列均不动。
-    可空列直接添加；NOT NULL 列在缺少 server_default 时按类型推导默认值，
-    以保证存量行可通过约束。
+    Parameters:
+        connection: Active SQLAlchemy connection.
+        engine: SQLAlchemy engine used for dialect compilation.
 
-    参数:
-        connection: 当前事务连接。
-        engine: SQLAlchemy Engine，用于获取方言以编译列类型。
+    Returns:
+        None.
 
-    副作用:
-        可能修改表结构（新增列）。
+    Raises:
+        sqlalchemy.exc.SQLAlchemyError: If migration fails.
+
+    Side effects:
+        May alter existing tables by adding missing columns.
     """
 
     inspector = inspect(connection)
@@ -115,23 +113,23 @@ def _ensure_model_columns(connection, engine) -> None:
                 default = _default_literal_for_type(column.type)
                 column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default}"
             connection.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {column_ddl}"))
-            sys.stderr.write(f"[storage.schema] 为 {table.name} 补齐缺失列 {column.name}\n")
+            sys.stderr.write(f"[storage.schema] added missing column {table.name}.{column.name}\n")
 
 
 def initialize_log_schema(database_path: Path) -> Engine:
-    """初始化日志 SQLite schema。
+    """Initialize the log SQLite schema.
 
-    参数:
-        database_path: 日志数据库文件。
+    Parameters:
+        database_path: Log database file.
 
-    返回:
-        已初始化 schema 的 SQLAlchemy Engine。
+    Returns:
+        Initialized SQLAlchemy engine.
 
-    异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果建表失败。
+    Raises:
+        sqlalchemy.exc.SQLAlchemyError: If table creation fails.
 
-    副作用:
-        创建日志库目录、数据库文件和日志表。
+    Side effects:
+        Creates or rebuilds the log table schema.
     """
 
     engine = create_sqlite_engine(database_path)
@@ -148,13 +146,13 @@ def initialize_log_schema(database_path: Path) -> Engine:
 
 
 def _has_table(connection, table_name: str) -> bool:
-    """返回目标连接中是否存在指定表。"""
+    """Return whether a table exists in the current connection."""
 
     return inspect(connection).has_table(table_name)
 
 
 def _create_log_schema(connection) -> None:
-    """创建日志数据库 schema。"""
+    """Create log schema tables and indexes."""
 
     for model in LOG_MODELS:
         model.__table__.create(bind=connection, checkfirst=True)
@@ -163,7 +161,7 @@ def _create_log_schema(connection) -> None:
 
 
 def _rebuild_log_schema(connection, current_version: int, target_version: int) -> None:
-    """重建日志数据库 schema。"""
+    """Rebuild the log schema."""
 
     for model in LOG_MODELS:
         model.__table__.drop(bind=connection, checkfirst=True)

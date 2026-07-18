@@ -1,44 +1,60 @@
-"""Durable run CRUD。"""
+"""SQLite CRUD for durable run state."""
 
 import logging
 from datetime import datetime, timezone
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 from uuid import uuid4
 
 from sqlalchemy import asc, delete, select, update
-from sqlalchemy.exc import IntegrityError
 
-from app.core.runs.records import ResumeCommandRecord, RunRecord
+from app.core.runs.records import RunRecord
 from app.storage.database import create_session_factory
-from app.storage.model.durable import DurableRunModel, ResumeCommandModel
+from app.storage.model.durable import DurableRunModel
 from app.storage.schema import initialize_app_schema
 
 _LOGGER = logging.getLogger("coding_agent.backend")
 
 
 class DurableRunStore:
-    """读写可恢复运行状态和恢复命令。"""
+    """Read and write durable run state."""
 
     def __init__(self, database_path: Path) -> None:
-        """初始化运行状态仓储。
+        """Initialize the durable run store.
 
-        参数:
-            database_path: SQLite 数据库路径。
+        Parameters:
+            database_path: SQLite database path.
 
-        返回:
-            无。
+        Returns:
+            None.
 
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果 schema 初始化失败。
+        Raises:
+            sqlalchemy.exc.SQLAlchemyError: If schema initialization fails.
 
-        副作用:
-            初始化主库 schema。
+        Side effects:
+            Initializes the application SQLite schema.
         """
 
         self._engine = initialize_app_schema(database_path)
         self._session_factory = create_session_factory(self._engine)
+
+    def close(self) -> None:
+        """Dispose the SQLite engine held by this store.
+
+        Parameters:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+
+        Side effects:
+            Closes pooled SQLite connections.
+        """
+
+        self._engine.dispose()
 
     def create_for_turn(
         self,
@@ -47,19 +63,60 @@ class DurableRunStore:
         status: str,
         thread_id: Optional[str] = None,
     ) -> RunRecord:
-        """为轮次创建或返回已有运行记录。"""
+        """Create a run for a turn, or return the existing run.
+
+        Parameters:
+            task_id: Owning task identifier.
+            turn_id: Owning turn identifier.
+            status: Initial run status.
+            thread_id: Optional stable runtime thread identifier.
+
+        Returns:
+            Created or existing run record.
+
+        Raises:
+            sqlalchemy.exc.SQLAlchemyError: If persistence fails.
+
+        Side effects:
+            May insert one row into ``durable_runs``.
+        """
 
         existing = self.get_by_turn(turn_id)
         if existing is not None:
             return existing
         now = _utc_now()
-        run = RunRecord(str(uuid4()), task_id, turn_id, thread_id or str(uuid4()), status, None, None, None, None, None, now, now)
+        run = RunRecord(
+            str(uuid4()),
+            task_id,
+            turn_id,
+            thread_id or str(uuid4()),
+            status,
+            None,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
         with self._session_factory.begin() as session:
             session.add(_run_model(run))
         return run
 
     def get(self, run_id: str) -> RunRecord:
-        """按 run_id 返回运行记录。"""
+        """Return a run by id.
+
+        Parameters:
+            run_id: Run identifier.
+
+        Returns:
+            Matching run record.
+
+        Raises:
+            KeyError: If the run does not exist.
+
+        Side effects:
+            Opens a SQLite session.
+        """
 
         with self._session_factory() as session:
             row = session.get(DurableRunModel, run_id)
@@ -68,14 +125,42 @@ class DurableRunStore:
         return _run_from_model(row)
 
     def get_by_turn(self, turn_id: str) -> Optional[RunRecord]:
-        """按 turn_id 返回运行记录。"""
+        """Return the run for a turn when one exists.
+
+        Parameters:
+            turn_id: Turn identifier.
+
+        Returns:
+            Matching run record or None.
+
+        Raises:
+            sqlalchemy.exc.SQLAlchemyError: If querying fails.
+
+        Side effects:
+            Opens a SQLite session.
+        """
 
         with self._session_factory() as session:
-            row = session.execute(select(DurableRunModel).where(DurableRunModel.turn_id == turn_id)).scalar_one_or_none()
+            row = session.execute(
+                select(DurableRunModel).where(DurableRunModel.turn_id == turn_id)
+            ).scalar_one_or_none()
         return _run_from_model(row) if row is not None else None
 
     def list_by_task(self, task_id: str) -> List[RunRecord]:
-        """按 task_id 返回该任务下所有轮次运行记录。"""
+        """Return all runs for a task.
+
+        Parameters:
+            task_id: Task identifier.
+
+        Returns:
+            Runs ordered by creation time and run id.
+
+        Raises:
+            sqlalchemy.exc.SQLAlchemyError: If querying fails.
+
+        Side effects:
+            Opens a SQLite session.
+        """
 
         with self._session_factory() as session:
             rows = session.execute(
@@ -86,19 +171,19 @@ class DurableRunStore:
         return [_run_from_model(row) for row in rows]
 
     def delete_by_task_ids(self, task_ids: Sequence[str]) -> list[str]:
-        """删除任务集合下的 durable run 和恢复命令。
+        """Delete durable runs for a set of tasks.
 
-        参数:
-            task_ids: 需要删除的任务标识符集合。
+        Parameters:
+            task_ids: Task identifiers to delete.
 
-        返回:
-            被删除的 run_id 列表。
+        Returns:
+            Deleted run identifiers.
 
-        异常:
-            无。
+        Raises:
+            sqlalchemy.exc.SQLAlchemyError: If deletion fails.
 
-        副作用:
-            删除 durable_runs 与 resume_commands 中的关联记录。
+        Side effects:
+            Deletes matching rows from ``durable_runs``.
         """
 
         if not task_ids:
@@ -113,13 +198,12 @@ class DurableRunStore:
                     ).all()
                 ]
                 if run_ids:
-                    session.execute(delete(ResumeCommandModel).where(ResumeCommandModel.run_id.in_(run_ids)))
                     session.execute(delete(DurableRunModel).where(DurableRunModel.run_id.in_(run_ids)))
         except Exception:
             _LOGGER.exception(
                 "durable_runs_delete_failed",
                 extra={
-                    "msg": f"删除任务集合下的 durable run 与恢复命令写入数据库失败",
+                    "msg": "durable runs delete failed",
                     "data": {"task_count": len(task_ids), "operation": "delete_by_task_ids"},
                 },
             )
@@ -127,7 +211,7 @@ class DurableRunStore:
         _LOGGER.info(
             "durable_runs_deleted",
             extra={
-                "msg": f"任务集合下的 durable run 与恢复命令已删除",
+                "msg": "durable runs deleted",
                 "data": {"task_count": len(task_ids), "run_count": len(run_ids)},
             },
         )
@@ -142,7 +226,25 @@ class DurableRunStore:
         active_wait_id: Optional[str] = None,
         interruption_reason: Optional[str] = None,
     ) -> RunRecord:
-        """更新运行状态。"""
+        """Update run status fields.
+
+        Parameters:
+            run_id: Run identifier.
+            status: New run status.
+            wait_reason: Optional wait reason.
+            active_step_id: Optional active step identifier.
+            active_wait_id: Optional active wait identifier.
+            interruption_reason: Optional interruption reason.
+
+        Returns:
+            Updated run record.
+
+        Raises:
+            KeyError: If the run does not exist.
+
+        Side effects:
+            Updates one ``durable_runs`` row.
+        """
 
         with self._session_factory.begin() as session:
             result = session.execute(
@@ -161,136 +263,27 @@ class DurableRunStore:
             raise KeyError(run_id)
         return self.get(run_id)
 
-    def list_runs_by_statuses(self, statuses: Sequence[str]) -> List[RunRecord]:
-        """按状态集合列出运行记录。"""
-
-        with self._session_factory() as session:
-            rows = session.execute(
-                select(DurableRunModel)
-                .where(DurableRunModel.status.in_(tuple(statuses)))
-                .order_by(asc(DurableRunModel.updated_at))
-            ).scalars().all()
-        return [_run_from_model(row) for row in rows]
-
-    def create_resume_command(self, run_id: str, action: str, payload: Dict[str, Any], idempotency_key: str, status: str) -> ResumeCommandRecord:
-        """创建幂等恢复命令。"""
-
-        self.get(run_id)
-        existing = self.get_resume_command_by_key(idempotency_key)
-        if existing is not None:
-            return existing
-        command = ResumeCommandRecord(str(uuid4()), run_id, action, payload, idempotency_key, status, _utc_now(), None)
-        try:
-            with self._session_factory.begin() as session:
-                session.add(_resume_model(command))
-        except IntegrityError:
-            concurrent = self.get_resume_command_by_key(idempotency_key)
-            if concurrent is not None:
-                return concurrent
-            raise
-        return command
-
-    def get_resume_command_by_key(self, idempotency_key: str) -> Optional[ResumeCommandRecord]:
-        """按幂等键查询恢复命令。"""
-
-        with self._session_factory() as session:
-            row = session.execute(select(ResumeCommandModel).where(ResumeCommandModel.idempotency_key == idempotency_key)).scalar_one_or_none()
-        return _resume_from_model(row) if row is not None else None
-
-    def claim_resume_commands(
-        self,
-        current_status: str,
-        next_status: str,
-        run_id: Optional[str] = None,
-        actions: Optional[Sequence[str]] = None,
-    ) -> List[ResumeCommandRecord]:
-        """原子领取匹配状态的恢复命令。"""
-
-        with self._session_factory.begin() as session:
-            statement = select(ResumeCommandModel).where(ResumeCommandModel.status == current_status)
-            if run_id is not None:
-                statement = statement.where(ResumeCommandModel.run_id == run_id)
-            if actions:
-                statement = statement.where(ResumeCommandModel.action.in_(actions))
-            rows = session.execute(statement.order_by(asc(ResumeCommandModel.created_at))).scalars().all()
-            claimed: list[ResumeCommandRecord] = []
-            for row in rows:
-                result = session.execute(
-                    update(ResumeCommandModel)
-                    .where(ResumeCommandModel.command_id == row.command_id, ResumeCommandModel.status == current_status)
-                    .values(status=next_status)
-                )
-                if result.rowcount == 1:
-                    claimed.append(_resume_from_model(row))
-        return claimed
-
-    def update_resume_commands_status(
-        self,
-        current_status: str,
-        next_status: str,
-        run_id: Optional[str] = None,
-        only_unapplied: bool = False,
-    ) -> int:
-        """批量更新匹配状态的恢复命令。"""
-
-        statement = update(ResumeCommandModel).where(ResumeCommandModel.status == current_status).values(status=next_status)
-        if only_unapplied:
-            statement = statement.where(ResumeCommandModel.applied_at.is_(None))
-        if run_id is not None:
-            statement = statement.where(ResumeCommandModel.run_id == run_id)
-        with self._session_factory.begin() as session:
-            result = session.execute(statement)
-        return result.rowcount or 0
-
-    def update_resume_command_status(
-        self,
-        command_id: str,
-        current_status: str,
-        next_status: str,
-        applied_at: Optional[datetime] = None,
-    ) -> ResumeCommandRecord:
-        """更新单条恢复命令状态。"""
-
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                update(ResumeCommandModel)
-                .where(ResumeCommandModel.command_id == command_id, ResumeCommandModel.status == current_status)
-                .values(status=next_status, applied_at=_to_text(applied_at) if applied_at else None)
-            )
-        if result.rowcount != 1:
-            raise KeyError(command_id)
-        return self._get_resume_command(command_id)
-
-    def _get_resume_command(self, command_id: str) -> ResumeCommandRecord:
-        """按主键读取恢复命令内部实现。"""
-
-        with self._session_factory() as session:
-            row = session.get(ResumeCommandModel, command_id)
-        if row is None:
-            raise KeyError(command_id)
-        return _resume_from_model(row)
-
 
 def _utc_now() -> datetime:
-    """返回当前 UTC 时间。"""
+    """Return the current UTC time."""
 
     return datetime.now(timezone.utc)
 
 
 def _to_text(value: datetime) -> str:
-    """将 datetime 序列化为 ISO-8601 字符串。"""
+    """Serialize a datetime to ISO-8601 text."""
 
     return value.isoformat()
 
 
 def _from_text(value: str) -> datetime:
-    """从 ISO-8601 字符串解析 datetime。"""
+    """Parse ISO-8601 datetime text."""
 
     return datetime.fromisoformat(value)
 
 
 def _run_model(run: RunRecord) -> DurableRunModel:
-    """将运行记录转换为 model。"""
+    """Convert a run record to a SQLAlchemy model."""
 
     return DurableRunModel(
         run_id=run.run_id,
@@ -301,7 +294,6 @@ def _run_model(run: RunRecord) -> DurableRunModel:
         wait_reason=run.wait_reason,
         active_step_id=run.active_step_id,
         active_wait_id=run.active_wait_id,
-        last_checkpoint_id=run.last_checkpoint_id,
         interruption_reason=run.interruption_reason,
         created_at=_to_text(run.created_at),
         updated_at=_to_text(run.updated_at),
@@ -309,18 +301,18 @@ def _run_model(run: RunRecord) -> DurableRunModel:
 
 
 def _run_from_model(row: DurableRunModel) -> RunRecord:
-    """将运行 model 转换为记录。"""
+    """Convert a SQLAlchemy model to a run record."""
 
-    return RunRecord(row.run_id, row.task_id, row.turn_id, row.thread_id, row.status, row.wait_reason, row.active_step_id, row.active_wait_id, row.last_checkpoint_id, row.interruption_reason, _from_text(row.created_at), _from_text(row.updated_at))
-
-
-def _resume_model(command: ResumeCommandRecord) -> ResumeCommandModel:
-    """将恢复命令记录转换为 model。"""
-
-    return ResumeCommandModel(command_id=command.command_id, run_id=command.run_id, action=command.action, payload_json=json.dumps(command.payload, ensure_ascii=False, sort_keys=True), idempotency_key=command.idempotency_key, status=command.status, created_at=_to_text(command.created_at), applied_at=_to_text(command.applied_at) if command.applied_at else None)
-
-
-def _resume_from_model(row: ResumeCommandModel) -> ResumeCommandRecord:
-    """将恢复命令 model 转换为记录。"""
-
-    return ResumeCommandRecord(row.command_id, row.run_id, row.action, json.loads(row.payload_json), row.idempotency_key, row.status, _from_text(row.created_at), _from_text(row.applied_at) if row.applied_at else None)
+    return RunRecord(
+        row.run_id,
+        row.task_id,
+        row.turn_id,
+        row.thread_id,
+        row.status,
+        row.wait_reason,
+        row.active_step_id,
+        row.active_wait_id,
+        row.interruption_reason,
+        _from_text(row.created_at),
+        _from_text(row.updated_at),
+    )

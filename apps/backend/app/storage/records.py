@@ -1,4 +1,4 @@
-"""存储后端使用的持久化记录值对象。"""
+"""瀛樺偍鍚庣浣跨敤鐨勬寔涔呭寲璁板綍鍊煎璞°€?"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -6,19 +6,19 @@ from typing import Any, Dict, Optional
 
 
 def datetime_to_text(value: datetime) -> str:
-    """将 datetime 值转换为 ISO-8601 文本。
+    """灏?datetime 鍊艰浆鎹负 ISO-8601 鏂囨湰銆?
 
-    参数:
-        value: 待序列化的 datetime 值。
+    鍙傛暟:
+        value: 寰呭簭鍒楀寲鐨?datetime 鍊笺€?
 
-    返回:
-        ISO-8601 datetime 字符串。
+    杩斿洖:
+        ISO-8601 datetime 瀛楃涓层€?
 
-    异常:
-        无。
+    寮傚父:
+        鏃犮€?
 
-    副作用:
-        无。
+    鍓綔鐢?
+        鏃犮€?
     """
 
     return value.isoformat()
@@ -26,23 +26,23 @@ def datetime_to_text(value: datetime) -> str:
 
 @dataclass
 class WorkspaceRecord:
-    """表示一个本地工作区。
+    """琛ㄧず涓€涓湰鍦板伐浣滃尯銆?
 
-    参数:
-        workspace_id: 唯一的工作区标识符。
-        name: 用户可读的工作区名称。
-        root_path: 工作区的本地文件系统路径。
-        created_at: 工作区创建时的时间戳。
-        updated_at: 工作区最近更新时的时间戳。
+    鍙傛暟:
+        workspace_id: 鍞竴鐨勫伐浣滃尯鏍囪瘑绗︺€?
+        name: 鐢ㄦ埛鍙鐨勫伐浣滃尯鍚嶇О銆?
+        root_path: 宸ヤ綔鍖虹殑鏈湴鏂囦欢绯荤粺璺緞銆?
+        created_at: 宸ヤ綔鍖哄垱寤烘椂鐨勬椂闂存埑銆?
+        updated_at: 宸ヤ綔鍖烘渶杩戞洿鏂版椂鐨勬椂闂存埑銆?
 
-    返回:
-        一个工作区状态记录。
+    杩斿洖:
+        涓€涓伐浣滃尯鐘舵€佽褰曘€?
 
-    异常:
-        无。
+    寮傚父:
+        鏃犮€?
 
-    副作用:
-        无。
+    鍓綔鐢?
+        鏃犮€?
     """
 
     workspace_id: str
@@ -52,19 +52,19 @@ class WorkspaceRecord:
     updated_at: datetime
 
     def to_dict(self) -> Dict[str, str]:
-        """将工作区状态转换为可序列化为 JSON 的字典。
+        """灏嗗伐浣滃尯鐘舵€佽浆鎹负鍙簭鍒楀寲涓?JSON 鐨勫瓧鍏搞€?
 
-        参数:
-            无。
+        鍙傛暟:
+            鏃犮€?
 
-        返回:
-            工作区状态的字典表示。
+        杩斿洖:
+            宸ヤ綔鍖虹姸鎬佺殑瀛楀吀琛ㄧず銆?
 
-        异常:
-            无。
+        寮傚父:
+            鏃犮€?
 
-        副作用:
-            无。
+        鍓綔鐢?
+            鏃犮€?
         """
 
         return {
@@ -78,28 +78,28 @@ class WorkspaceRecord:
 
 @dataclass
 class TaskRecord:
-    """表示一个 Agent 任务的持久化状态。
+    """琛ㄧず涓€涓?Agent 浠诲姟鐨勬寔涔呭寲鐘舵€併€?
 
-    参数:
-        task_id: 唯一的任务标识符。
-        workspace_id: 与任务关联的工作区标识符。
-        agent_id: 负责执行任务的 Agent 标识符。
-        input_text: 原始的纯文本用户任务。
-        title: 任务容器标题。
-        last_message_preview: 最近用户输入摘要。
-        latest_turn_id: 最近一次轮次标识符。
-        status: 当前任务状态。
-        created_at: 任务创建时的 UTC 时间戳。
-        updated_at: 任务最近更新时的 UTC 时间戳。
+    鍙傛暟:
+        task_id: 鍞竴鐨勪换鍔℃爣璇嗙銆?
+        workspace_id: 涓庝换鍔″叧鑱旂殑宸ヤ綔鍖烘爣璇嗙銆?
+        agent_id: 璐熻矗鎵ц浠诲姟鐨?Agent 鏍囪瘑绗︺€?
+        input_text: 鍘熷鐨勭函鏂囨湰鐢ㄦ埛浠诲姟銆?
+        title: 浠诲姟瀹瑰櫒鏍囬銆?
+        last_message_preview: 鏈€杩戠敤鎴疯緭鍏ユ憳瑕併€?
+        latest_turn_id: 鏈€杩戜竴娆¤疆娆℃爣璇嗙銆?
+        status: 褰撳墠浠诲姟鐘舵€併€?
+        created_at: 浠诲姟鍒涘缓鏃剁殑 UTC 鏃堕棿鎴炽€?
+        updated_at: 浠诲姟鏈€杩戞洿鏂版椂鐨?UTC 鏃堕棿鎴炽€?
 
-    返回:
-        一个可变的任务状态记录。
+    杩斿洖:
+        涓€涓彲鍙樼殑浠诲姟鐘舵€佽褰曘€?
 
-    异常:
-        无。
+    寮傚父:
+        鏃犮€?
 
-    副作用:
-        无。
+    鍓綔鐢?
+        鏃犮€?
     """
 
     task_id: str
@@ -114,19 +114,19 @@ class TaskRecord:
     updated_at: datetime
 
     def to_dict(self) -> Dict[str, Optional[str]]:
-        """将任务状态转换为可序列化为 JSON 的字典。
+        """灏嗕换鍔＄姸鎬佽浆鎹负鍙簭鍒楀寲涓?JSON 鐨勫瓧鍏搞€?
 
-        参数:
-            无。
+        鍙傛暟:
+            鏃犮€?
 
-        返回:
-            任务状态的字典表示。
+        杩斿洖:
+            浠诲姟鐘舵€佺殑瀛楀吀琛ㄧず銆?
 
-        异常:
-            无。
+        寮傚父:
+            鏃犮€?
 
-        副作用:
-            无。
+        鍓綔鐢?
+            鏃犮€?
         """
 
         return {
@@ -145,24 +145,24 @@ class TaskRecord:
 
 @dataclass
 class TurnRecord:
-    """表示一次用户与 Agent 的轮次。
+    """琛ㄧず涓€娆＄敤鎴蜂笌 Agent 鐨勮疆娆°€?
 
-    参数:
-        turn_id: 唯一的轮次标识符。
-        task_id: 与该轮次关联的任务标识符。
-        input_text: 该轮次的用户文本。
-        status: 当前轮次状态。
-        created_at: 轮次创建时的时间戳。
-        updated_at: 轮次最近更新时的时间戳。
+    鍙傛暟:
+        turn_id: 鍞竴鐨勮疆娆℃爣璇嗙銆?
+        task_id: 涓庤杞鍏宠仈鐨勪换鍔℃爣璇嗙銆?
+        input_text: 璇ヨ疆娆＄殑鐢ㄦ埛鏂囨湰銆?
+        status: 褰撳墠杞鐘舵€併€?
+        created_at: 杞鍒涘缓鏃剁殑鏃堕棿鎴炽€?
+        updated_at: 杞鏈€杩戞洿鏂版椂鐨勬椂闂存埑銆?
 
-    返回:
-        一个轮次状态记录。
+    杩斿洖:
+        涓€涓疆娆＄姸鎬佽褰曘€?
 
-    异常:
-        无。
+    寮傚父:
+        鏃犮€?
 
-    副作用:
-        无。
+    鍓綔鐢?
+        鏃犮€?
     """
 
     turn_id: str
@@ -173,19 +173,19 @@ class TurnRecord:
     updated_at: datetime
 
     def to_dict(self) -> Dict[str, str]:
-        """将轮次状态转换为可序列化为 JSON 的字典。
+        """灏嗚疆娆＄姸鎬佽浆鎹负鍙簭鍒楀寲涓?JSON 鐨勫瓧鍏搞€?
 
-        参数:
-            无。
+        鍙傛暟:
+            鏃犮€?
 
-        返回:
-            轮次状态的字典表示。
+        杩斿洖:
+            杞鐘舵€佺殑瀛楀吀琛ㄧず銆?
 
-        异常:
-            无。
+        寮傚父:
+            鏃犮€?
 
-        副作用:
-            无。
+        鍓綔鐢?
+            鏃犮€?
         """
 
         return {
@@ -200,27 +200,27 @@ class TurnRecord:
 
 @dataclass
 class StepRecord:
-    """表示一个持久化的运行时步骤。
+    """琛ㄧず涓€涓寔涔呭寲鐨勮繍琛屾椂姝ラ銆?
 
-    参数:
-        step_id: 唯一的步骤标识符。
-        turn_id: 与该步骤关联的轮次标识符。
-        step_type: 运行时步骤类型。
-        status: 当前步骤状态。
-        input_summary: 用于诊断的简短输入摘要。
-        output_summary: 用于诊断的简短输出摘要。
-        error: 可选的错误消息。
-        created_at: 步骤创建时的时间戳。
-        updated_at: 步骤最近更新时的时间戳。
+    鍙傛暟:
+        step_id: 鍞竴鐨勬楠ゆ爣璇嗙銆?
+        turn_id: 涓庤姝ラ鍏宠仈鐨勮疆娆℃爣璇嗙銆?
+        step_type: 杩愯鏃舵楠ょ被鍨嬨€?
+        status: 褰撳墠姝ラ鐘舵€併€?
+        input_summary: 鐢ㄤ簬璇婃柇鐨勭畝鐭緭鍏ユ憳瑕併€?
+        output_summary: 鐢ㄤ簬璇婃柇鐨勭畝鐭緭鍑烘憳瑕併€?
+        error: 鍙€夌殑閿欒娑堟伅銆?
+        created_at: 姝ラ鍒涘缓鏃剁殑鏃堕棿鎴炽€?
+        updated_at: 姝ラ鏈€杩戞洿鏂版椂鐨勬椂闂存埑銆?
 
-    返回:
-        一个步骤状态记录。
+    杩斿洖:
+        涓€涓楠ょ姸鎬佽褰曘€?
 
-    异常:
-        无。
+    寮傚父:
+        鏃犮€?
 
-    副作用:
-        无。
+    鍓綔鐢?
+        鏃犮€?
     """
 
     step_id: str
@@ -232,58 +232,3 @@ class StepRecord:
     error: Optional[str]
     created_at: datetime
     updated_at: datetime
-
-
-@dataclass
-class CheckpointRecord:
-    """表示一个持久化的运行时状态检查点。
-
-    参数:
-        checkpoint_id: 唯一的检查点标识符。
-        task_id: 与该检查点关联的任务标识符。
-        stage: 产出该检查点的运行时阶段。
-        summary: 简短的、人类可读的检查点摘要。
-        snapshot: 可序列化为 JSON 的运行时状态快照。
-        created_at: 检查点创建时的时间戳。
-
-    返回:
-        一个检查点状态记录。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    checkpoint_id: str
-    task_id: str
-    stage: str
-    summary: str
-    snapshot: Dict[str, Any]
-    created_at: datetime
-
-    def to_dict(self) -> Dict[str, Any]:
-        """将检查点状态转换为可序列化为 JSON 的字典。
-
-        参数:
-            无。
-
-        返回:
-            检查点记录的字典表示。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return {
-            "checkpoint_id": self.checkpoint_id,
-            "task_id": self.task_id,
-            "stage": self.stage,
-            "summary": self.summary,
-            "snapshot": self.snapshot,
-            "created_at": datetime_to_text(self.created_at),
-        }

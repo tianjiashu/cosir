@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+﻿import { beforeEach, describe, expect, it } from "vitest";
 import { getConversationTraceForTask, useConversationTraceStore } from "@/stores/conversationTraceStore";
 
 beforeEach(() => {
@@ -10,7 +10,6 @@ describe("conversationTraceStore", () => {
     useConversationTraceStore.getState().recordTrace({
       traceId: "1234567890abcdef1234567890abcdef",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_stream",
       method: "GET",
       path: "/tasks/task-1/stream",
@@ -31,7 +30,6 @@ describe("conversationTraceStore", () => {
     store.recordTrace({
       traceId: "11111111111111111111111111111111",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_stream",
       method: "GET",
       path: "/tasks/task-1/stream",
@@ -39,7 +37,6 @@ describe("conversationTraceStore", () => {
     store.recordTrace({
       traceId: "22222222222222222222222222222222",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_events",
       method: "GET",
       path: "/tasks/task-1/events",

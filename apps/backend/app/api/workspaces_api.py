@@ -68,7 +68,7 @@ async def delete_workspace(workspace_id: str, runtime: AgentRuntime = Depends(ge
         HTTPException: 当工作区不存在时抛出。
 
     副作用:
-        级联删除工作区下的任务、轮次、事件、步骤与 checkpoint。
+        级联删除工作区下的任务、轮次、事件与步骤。
     """
 
     try:

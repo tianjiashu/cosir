@@ -31,9 +31,6 @@ const FINAL_STATUS_CONFIG: Record<string, { label: string; variant: "success" | 
  *
  * 当收到终态事件（run_finished / run_failed / run_cancelled）时，
  * 在消息流底部渲染醒目的状态标签，帮助用户快速了解任务结果。
- *
- * 对于 `run_failed` 且 error === "tool_approval_required"` 的场景，
- * 额外提示关联审批卡片信息。
  */
 export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
   const config = FINAL_STATUS_CONFIG[eventType];
@@ -42,7 +39,6 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
 
   const { label, variant, Icon } = config;
   const error = payload.error as string | undefined;
-  const isApprovalError = error === "tool_approval_required";
 
   return (
     <div className="flex justify-center py-2">
@@ -56,15 +52,7 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
         {/* 错误详情（如有） */}
         {error && (
           <p className="max-w-md text-center text-xs text-muted-foreground">
-            {isApprovalError ? (
-              <>
-                任务因工具权限审批被终止。
-                <br />
-                请查看上方的审批请求卡片了解详情。
-              </>
-            ) : (
-              error
-            )}
+            {error}
           </p>
         )}
 

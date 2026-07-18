@@ -7,7 +7,7 @@
 /** 工具策略决策。 */
 export interface ToolPolicyDecision {
   /** 决策状态。 */
-  status: "allow" | "approval_required" | "deny";
+  status: "allow" | "deny";
   /** 风险等级。 */
   risk_level: string;
   /** 决策原因。 */

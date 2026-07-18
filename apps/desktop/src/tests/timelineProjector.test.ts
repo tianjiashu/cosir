@@ -51,18 +51,6 @@ function makeToolRequested(eventId: string, toolName: string, sequence = 1): Run
   };
 }
 
-function makeToolApprovalRequired(eventId: string, toolName: string, sequence = 1): RuntimeEvent {
-  return {
-    event_id: eventId,
-    event_type: "tool_approval_required",
-    task_id: "task-1",
-    turn_id: "turn-1",
-    sequence,
-    created_at: new Date().toISOString(),
-    payload: { tool_name: toolName, permission: "write", approval_status: "pending", reason: "needs approval" },
-  };
-}
-
 function makeToolCallFinished(eventId: string, toolName: string, status: string, sequence = 1): RuntimeEvent {
   return {
     event_id: eventId,
@@ -259,27 +247,16 @@ describe("timeline projector", () => {
     });
   });
 
-  it("tool_approval_required 和 tool_call_finished 投影为 tool 条目", () => {
+  it("tool_call_finished 投影为 tool 条目", () => {
     const turn = makeTurn("turn-1", "hello");
     const events = [
-      makeToolApprovalRequired("e-1", "write_file"),
       makeToolCallFinished("e-2", "read_file", "completed"),
       makeToolCallFinished("e-3", "shell", "error"),
     ];
     const timeline = projectTurnTimeline([turn], events);
 
-    expect(timeline[0].entries).toHaveLength(3);
+    expect(timeline[0].entries).toHaveLength(2);
     expect(timeline[0].entries[0]).toEqual({
-      kind: "tool",
-      item: {
-        eventId: "e-1",
-        toolName: "write_file",
-        permission: "write",
-        reason: "needs approval",
-        status: "approval-required",
-      },
-    });
-    expect(timeline[0].entries[1]).toEqual({
       kind: "tool",
       item: {
         eventId: "e-2",
@@ -287,7 +264,7 @@ describe("timeline projector", () => {
         status: "completed",
       },
     });
-    expect(timeline[0].entries[2]).toEqual({
+    expect(timeline[0].entries[1]).toEqual({
       kind: "tool",
       item: {
         eventId: "e-3",

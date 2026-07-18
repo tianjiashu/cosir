@@ -6,7 +6,6 @@ CRUD responsibilities live in focused mixins under `app.storage.crud`.
 
 from pathlib import Path
 
-from app.storage.crud.checkpoint_store import CheckpointStoreMixin
 from app.storage.crud.event_store import EventStoreMixin
 from app.storage.crud.step_store import StepStoreMixin
 from app.storage.crud.task_store import TaskStoreMixin
@@ -22,9 +21,8 @@ class SQLiteTaskStore(
     TurnStoreMixin,
     StepStoreMixin,
     EventStoreMixin,
-    CheckpointStoreMixin,
 ):
-    """组合工作区、任务、轮次、步骤、事件和 checkpoint 存储能力。"""
+    """组合工作区、任务、轮次、步骤和事件存储能力。"""
 
     def __init__(self, database_path: Path) -> None:
         """初始化任务存储并确保 schema 存在。
@@ -45,3 +43,21 @@ class SQLiteTaskStore(
 
         self._engine = initialize_app_schema(database_path)
         self._session_factory = create_session_factory(self._engine)
+
+    def close(self) -> None:
+        """Dispose the SQLite engine held by this store.
+
+        Parameters:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+
+        Side effects:
+            Closes pooled SQLite connections so the database file can be removed on Windows.
+        """
+
+        self._engine.dispose()

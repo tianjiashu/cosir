@@ -64,9 +64,7 @@ class TraceBackboneTests(unittest.TestCase):
         self.assertEqual(canonical_event_name("tool_call_finished"), "tool_execution_completed")
         self.assertEqual(canonical_event_name("run_finished"), "run_completed")
         self.assertEqual(canonical_event_name("tool_call_requested"), "tool_call_created")
-        self.assertEqual(canonical_event_name("checkpoint_failed"), "checkpoint_failed")
         self.assertEqual(runtime_trace_event_name("tool_call_finished", {"status": "error"}), "tool_execution_failed")
-        self.assertEqual(runtime_trace_event_name("tool_approval_required", {}), "")
         self.assertEqual(canonical_event_name("recovery_reconciled"), "recovery_reconciled")
 
     def test_redaction_removes_secret_values_and_truncates_text(self) -> None:

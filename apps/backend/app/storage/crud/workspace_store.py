@@ -1,4 +1,4 @@
-"""WorkspaceStoreMixin implementation for SQLiteTaskStore."""
+﻿"""WorkspaceStoreMixin implementation for SQLiteTaskStore."""
 
 import logging
 
@@ -11,19 +11,19 @@ class WorkspaceStoreMixin:
     """SQLiteTaskStore WorkspaceStoreMixin responsibilities."""
 
     def _ensure_default_workspace(self, now: datetime) -> str:
-        """确保兼容旧任务入口的默认工作区存在。
+        """纭繚鍏煎鏃т换鍔″叆鍙ｇ殑榛樿宸ヤ綔鍖哄瓨鍦ㄣ€?
 
-        参数:
-            now: 用于写入创建与更新时间的 UTC 时间。
+        鍙傛暟:
+            now: 鐢ㄤ簬鍐欏叆鍒涘缓涓庢洿鏂版椂闂寸殑 UTC 鏃堕棿銆?
 
-        返回:
-            默认工作区标识符。
+        杩斿洖:
+            榛樿宸ヤ綔鍖烘爣璇嗙銆?
 
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果数据库写入失败。
+        寮傚父:
+            sqlalchemy.exc.SQLAlchemyError: 濡傛灉鏁版嵁搴撳啓鍏ュけ璐ャ€?
 
-        副作用:
-            在缺失时写入一条默认 workspace 记录。
+        鍓綔鐢?
+            鍦ㄧ己澶辨椂鍐欏叆涓€鏉￠粯璁?workspace 璁板綍銆?
         """
 
         workspace_id = "default-workspace"
@@ -41,21 +41,21 @@ class WorkspaceStoreMixin:
         return workspace_id
 
     def create_workspace(self, name: str, root_path: str) -> WorkspaceRecord:
-        """创建一个本地工作区记录。
+        """鍒涘缓涓€涓湰鍦板伐浣滃尯璁板綍銆?
 
-        参数:
-            name: 用户可读的工作区名称。
-            root_path: 工作区的本地文件系统路径。
+        鍙傛暟:
+            name: 鐢ㄦ埛鍙鐨勫伐浣滃尯鍚嶇О銆?
+            root_path: 宸ヤ綔鍖虹殑鏈湴鏂囦欢绯荤粺璺緞銆?
 
-        返回:
-            已创建的工作区记录。
+        杩斿洖:
+            宸插垱寤虹殑宸ヤ綔鍖鸿褰曘€?
 
-        异常:
-            ValueError: 如果名称或路径为空白。
-            sqlalchemy.exc.SQLAlchemyError: 如果数据库写入失败。
+        寮傚父:
+            ValueError: 濡傛灉鍚嶇О鎴栬矾寰勪负绌虹櫧銆?
+            sqlalchemy.exc.SQLAlchemyError: 濡傛灉鏁版嵁搴撳啓鍏ュけ璐ャ€?
 
-        副作用:
-            向主库写入一行工作区记录。
+        鍓綔鐢?
+            鍚戜富搴撳啓鍏ヤ竴琛屽伐浣滃尯璁板綍銆?
         """
 
         if not name.strip():
@@ -77,19 +77,19 @@ class WorkspaceStoreMixin:
         return workspace
 
     def list_workspaces(self) -> List[WorkspaceRecord]:
-        """按创建时间列出所有工作区。
+        """鎸夊垱寤烘椂闂村垪鍑烘墍鏈夊伐浣滃尯銆?
 
-        参数:
-            无。
+        鍙傛暟:
+            鏃犮€?
 
-        返回:
-            工作区记录列表。
+        杩斿洖:
+            宸ヤ綔鍖鸿褰曞垪琛ㄣ€?
 
-        异常:
-            无。
+        寮傚父:
+            鏃犮€?
 
-        副作用:
-            无。
+        鍓綔鐢?
+            鏃犮€?
         """
 
         with self._session_factory() as session:
@@ -99,19 +99,19 @@ class WorkspaceStoreMixin:
         return [_workspace_from_model(row) for row in rows]
 
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
-        """按标识符返回一个工作区。
+        """鎸夋爣璇嗙杩斿洖涓€涓伐浣滃尯銆?
 
-        参数:
-            workspace_id: 待获取的工作区标识符。
+        鍙傛暟:
+            workspace_id: 寰呰幏鍙栫殑宸ヤ綔鍖烘爣璇嗙銆?
 
-        返回:
-            匹配的工作区记录。
+        杩斿洖:
+            鍖归厤鐨勫伐浣滃尯璁板綍銆?
 
-        异常:
-            KeyError: 如果工作区不存在。
+        寮傚父:
+            KeyError: 濡傛灉宸ヤ綔鍖轰笉瀛樺湪銆?
 
-        副作用:
-            无。
+        鍓綔鐢?
+            鏃犮€?
         """
 
         with self._session_factory() as session:
@@ -121,19 +121,19 @@ class WorkspaceStoreMixin:
         return _workspace_from_model(row)
 
     def delete_workspace(self, workspace_id: str) -> None:
-        """删除工作区并级联删除其下任务运行记录。
+        """鍒犻櫎宸ヤ綔鍖哄苟绾ц仈鍒犻櫎鍏朵笅浠诲姟杩愯璁板綍銆?
 
-        参数:
-            workspace_id: 待删除的工作区标识符。
+        鍙傛暟:
+            workspace_id: 寰呭垹闄ょ殑宸ヤ綔鍖烘爣璇嗙銆?
 
-        返回:
-            无。
+        杩斿洖:
+            鏃犮€?
 
-        异常:
-            KeyError: 如果工作区不存在。
+        寮傚父:
+            KeyError: 濡傛灉宸ヤ綔鍖轰笉瀛樺湪銆?
 
-        副作用:
-            删除 workspace、tasks、turns、steps、events 和 checkpoints 表中的关联记录。
+        鍓綔鐢?
+            鍒犻櫎 workspace銆乼asks銆乼urns銆乻teps 鍜 events 琛ㄤ腑鐨勫叧鑱旇褰曘€?
         """
 
         self.get_workspace(workspace_id)
@@ -150,10 +150,9 @@ class WorkspaceStoreMixin:
                         row[0]
                         for row in session.execute(select(TurnModel.turn_id).where(TurnModel.task_id.in_(task_ids))).all()
                     ]
-                    # 注意：events / steps 外键指向 turns，必须先删除；turns 外键指向 tasks，所以
-                    # events / checkpoints / steps 都要在 turns 之前删除，否则 foreign_keys=ON 会触发冲突。
+                    # 娉ㄦ剰锛歟vents / steps 澶栭敭鎸囧悜 turns锛屽繀椤诲厛鍒犻櫎锛泃urns 澶栭敭鎸囧悜 tasks锛屾墍浠?
+                    # events / steps 閮借鍦?turns 涔嬪墠鍒犻櫎锛屽惁鍒?foreign_keys=ON 浼氳Е鍙戝啿绐併€?
                     session.execute(delete(EventModel).where(EventModel.task_id.in_(task_ids)))
-                    session.execute(delete(CheckpointModel).where(CheckpointModel.task_id.in_(task_ids)))
                     if turn_ids:
                         session.execute(delete(StepModel).where(StepModel.turn_id.in_(turn_ids)))
                         session.execute(delete(TurnModel).where(TurnModel.turn_id.in_(turn_ids)))
@@ -163,7 +162,7 @@ class WorkspaceStoreMixin:
             _LOGGER.exception(
                 "workspace_delete_failed",
                 extra={
-                    "msg": f"删除工作区及下游记录写入数据库失败，workspace_id={workspace_id}",
+                    "msg": f"鍒犻櫎宸ヤ綔鍖哄強涓嬫父璁板綍鍐欏叆鏁版嵁搴撳け璐ワ紝workspace_id={workspace_id}",
                     "data": {"workspace_id": workspace_id, "operation": "delete_workspace"},
                 },
             )
@@ -171,7 +170,7 @@ class WorkspaceStoreMixin:
         _LOGGER.info(
             "workspace_cascade_deleted",
             extra={
-                "msg": f"工作区及下游任务运行记录已删除，workspace_id={workspace_id}",
+                "msg": f"宸ヤ綔鍖哄強涓嬫父浠诲姟杩愯璁板綍宸插垹闄わ紝workspace_id={workspace_id}",
                 "data": {"workspace_id": workspace_id, "task_count": len(task_ids), "turn_count": len(turn_ids)},
             },
         )

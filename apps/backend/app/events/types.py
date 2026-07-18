@@ -26,10 +26,7 @@ class EventType(str, Enum):
     TOOL_CALL_REQUESTED = "tool_call_requested"
     TOOL_CALL_STARTED = "tool_call_started"
     TOOL_CALL_FINISHED = "tool_call_finished"
-    TOOL_APPROVAL_REQUIRED = "tool_approval_required"
     OBSERVATION_ADDED = "observation_added"
-    CHECKPOINT_CREATED = "checkpoint_created"
-    CHECKPOINT_FAILED = "checkpoint_failed"
     FINAL_RESPONSE = "final_response"
 
     def __str__(self) -> str:

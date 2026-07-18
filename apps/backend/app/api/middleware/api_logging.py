@@ -150,8 +150,6 @@ async def _request_log_extra(request) -> dict:
         data["task_id"] = path_ids["task_id"]
     if path_ids["run_id"]:
         data["run_id"] = path_ids["run_id"]
-    if path_ids["approval_id"]:
-        data["approval_id"] = path_ids["approval_id"]
     extra = {
         "method": request.method,
         "path": request.url.path,
@@ -252,7 +250,7 @@ def _extract_path_ids(path: str) -> dict[str, str]:
         path: 请求路径。
 
     返回:
-        包含 task_id、run_id 和 approval_id 的字典；无法解析时值为空字符串。
+        包含 task_id 和 run_id 的字典；无法解析时值为空字符串。
 
     异常:
         无。
@@ -262,13 +260,11 @@ def _extract_path_ids(path: str) -> dict[str, str]:
     """
 
     segments = [segment for segment in path.split("/") if segment]
-    values = {"task_id": "", "run_id": "", "approval_id": ""}
+    values = {"task_id": "", "run_id": ""}
     for index, segment in enumerate(segments[:-1]):
         next_value = segments[index + 1]
         if segment == "tasks":
             values["task_id"] = next_value
         elif segment == "runs":
             values["run_id"] = next_value
-        elif segment == "approvals":
-            values["approval_id"] = next_value
     return values

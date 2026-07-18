@@ -26,16 +26,10 @@ export const API_PATHS = {
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
   /** GET — 历史事件列表 */
   TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
-  /** GET — checkpoint 列表 */
-  TASK_CHECKPOINTS: (taskId: string) => `/tasks/${taskId}/checkpoints`,
   /** GET — turn 级 SSE 事件流 */
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
   /** POST — 取消任务 */
   TASK_CANCEL: (taskId: string) => `/tasks/${taskId}/cancel`,
-  /** GET — 任务待处理审批 */
-  TASK_APPROVALS: (taskId: string) => `/tasks/${taskId}/approvals`,
-  /** POST — 提交审批决策 */
-  APPROVAL_DECISION: (approvalId: string) => `/approvals/${approvalId}/decision`,
   /** GET — 按 trace 查询日志 */
   LOGS_QUERY: "/logs/query",
   /** GET — 查询最近日志 */
@@ -64,16 +58,6 @@ export interface CreateWorkspaceRequest {
 export interface CreateTurnRequest {
   /** 非空的本轮用户输入。 */
   input_text: string;
-}
-
-/** 审批决策请求体。 */
-export interface ApprovalDecisionRequest {
-  /** 审批决策，必须是 approved 或 denied。 */
-  decision: "approved" | "denied";
-  /** 可选的人类可读原因。 */
-  reason?: string;
-  /** 前端生成的幂等键。 */
-  idempotency_key: string;
 }
 
 // ---------- 响应类型 ----------
@@ -107,15 +91,6 @@ export type TurnResponse = import("./turn").TurnRecord;
 
 /** 事件列表的响应体。 */
 export type EventsResponse = import("./events").RuntimeEvent[];
-
-/** checkpoint 列表的响应体。 */
-export type CheckpointsResponse = import("./task").CheckpointRecord[];
-
-/** 审批列表响应体。 */
-export type ApprovalsResponse = import("./approvals").ApprovalRequestRecord[];
-
-/** 审批决策响应体。 */
-export type ApprovalDecisionResponse = import("./approvals").ApprovalDecisionRecord;
 
 /** 日志查询响应体。 */
 export type LogQueryResponse = import("./logs").LogQueryResponse;

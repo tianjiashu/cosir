@@ -140,7 +140,7 @@ def merge_log_context(**fields: str | None) -> Token:
 
     仅识别 ``trace_id`` / ``run_id`` / ``task_id`` 三个键：``trace_id`` 直接使用；
     否则用 ``run_id`` / ``task_id`` 经反查表解析 ``trace_id``；再否则沿用当前
-    上下文的 ``trace_id``。其余键（如 ``tool_call_id`` / ``approval_id``）不再作为
+    上下文的 ``trace_id``。其余键（如 ``tool_call_id``）不再作为
     链路键，忽略即可（其值应由调用方写入日志 ``data``）。
 
     参数:

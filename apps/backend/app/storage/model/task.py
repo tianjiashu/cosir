@@ -1,4 +1,4 @@
-"""任务运行切片 SQLAlchemy model。"""
+"""浠诲姟杩愯鍒囩墖 SQLAlchemy model銆?"""
 
 from sqlalchemy import ForeignKey, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -7,7 +7,7 @@ from app.storage.model.base import StorageBase
 
 
 class WorkspaceModel(StorageBase):
-    """`workspaces` 表模型。"""
+    """`workspaces` 琛ㄦā鍨嬨€?"""
 
     __tablename__ = "workspaces"
 
@@ -19,7 +19,7 @@ class WorkspaceModel(StorageBase):
 
 
 class TaskModel(StorageBase):
-    """`tasks` 表模型。"""
+    """`tasks` 琛ㄦā鍨嬨€?"""
 
     __tablename__ = "tasks"
 
@@ -36,7 +36,7 @@ class TaskModel(StorageBase):
 
 
 class TurnModel(StorageBase):
-    """`turns` 表模型。"""
+    """`turns` 琛ㄦā鍨嬨€?"""
 
     __tablename__ = "turns"
 
@@ -49,7 +49,7 @@ class TurnModel(StorageBase):
 
 
 class StepModel(StorageBase):
-    """`steps` 表模型。"""
+    """`steps` 琛ㄦā鍨嬨€?"""
 
     __tablename__ = "steps"
 
@@ -65,7 +65,7 @@ class StepModel(StorageBase):
 
 
 class EventModel(StorageBase):
-    """`events` 表模型。"""
+    """`events` 琛ㄦā鍨嬨€?"""
 
     __tablename__ = "events"
 
@@ -77,17 +77,4 @@ class EventModel(StorageBase):
     tool_call_id: Mapped[str | None] = mapped_column(Text)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-class CheckpointModel(StorageBase):
-    """`checkpoints` 表模型。"""
-
-    __tablename__ = "checkpoints"
-
-    checkpoint_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.task_id"), nullable=False)
-    stage: Mapped[str] = mapped_column(Text, nullable=False)
-    summary: Mapped[str] = mapped_column(Text, nullable=False)
-    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)

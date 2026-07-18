@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+﻿// @vitest-environment happy-dom
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -42,7 +42,6 @@ describe("ConversationTraceBlock", () => {
     useConversationTraceStore.getState().recordTrace({
       traceId: "11111111111111111111111111111111",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_stream",
       method: "GET",
       path: "/tasks/task-1/stream",
@@ -50,7 +49,6 @@ describe("ConversationTraceBlock", () => {
     useConversationTraceStore.getState().recordTrace({
       traceId: "22222222222222222222222222222222",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_events",
       method: "GET",
       path: "/tasks/task-1/events",

@@ -104,14 +104,7 @@ export function ChatPanel() {
                   const tool = entry.item;
                   return (
                     <div key={tool.eventId}>
-                      {tool.status === "approval-required" ? (
-                        <ToolCallCard
-                          toolName={tool.toolName}
-                          permission={tool.permission ?? "未知权限"}
-                          reason={tool.reason ?? ""}
-                          status="approval-required"
-                        />
-                      ) : tool.status === "running" ? (
+                      {tool.status === "running" ? (
                         <ToolCallCard
                           toolName={tool.toolName}
                           status="running"

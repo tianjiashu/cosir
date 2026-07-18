@@ -43,12 +43,6 @@ class SQLiteTaskStoreTests(unittest.TestCase):
                 "completed",
                 "done",
             )
-            checkpoint = first_store.create_checkpoint(
-                task_id=task.task_id,
-                stage="test_stage",
-                summary="test checkpoint",
-                snapshot={"task_id": task.task_id, "stage": "test_stage"},
-            )
             first_store.append_event(
                 RuntimeEvent(
                     event_type=EventType.RUN_FINISHED,
@@ -61,7 +55,6 @@ class SQLiteTaskStoreTests(unittest.TestCase):
             reopened_task = second_store.get_task(task.task_id)
             reopened_turn = second_store.get_turn_for_task(task.task_id)
             reopened_events = second_store.list_events(task.task_id)
-            reopened_checkpoints = second_store.list_checkpoints(task.task_id)
 
             self.assertEqual(reopened_task.input_text, "persist me")
             self.assertEqual(reopened_task.agent_id, "developer")
@@ -69,8 +62,6 @@ class SQLiteTaskStoreTests(unittest.TestCase):
             self.assertEqual(updated_step.status, "completed")
             self.assertEqual(updated_step.output_summary, "done")
             self.assertEqual(reopened_events[0].event_type, "run_finished")
-            self.assertEqual(reopened_checkpoints[0].checkpoint_id, checkpoint.checkpoint_id)
-            self.assertEqual(reopened_checkpoints[0].snapshot["stage"], "test_stage")
 
     def test_update_missing_step_raises_key_error(self) -> None:
         """校验当步骤不存在时步骤更新会清晰地失败。

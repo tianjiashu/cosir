@@ -16,11 +16,7 @@ export interface TimelineToolItem {
   /** 工具名称。 */
   toolName: string;
   /** 工具显示状态。 */
-  status: "running" | "completed" | "error" | "approval-required";
-  /** 可选权限。 */
-  permission?: string;
-  /** 可选原因。 */
-  reason?: string;
+  status: "running" | "completed" | "error";
   /** 可选错误。 */
   error?: string;
 }
@@ -133,15 +129,6 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
  * @sideeffect 无。
  */
 function projectTool(event: RuntimeEvent): TimelineToolItem | null {
-  if (event.event_type === "tool_approval_required") {
-    return {
-        eventId: event.event_id,
-        toolName: String(event.payload.tool_name ?? "未知工具"),
-        permission: String(event.payload.permission ?? "未知权限"),
-        reason: String(event.payload.reason ?? ""),
-        status: "approval-required" as const,
-      };
-  }
   if (event.event_type === "tool_call_requested" || event.event_type === "tool_call_started") {
     return {
         eventId: event.event_id,

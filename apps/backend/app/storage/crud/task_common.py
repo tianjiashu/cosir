@@ -8,13 +8,11 @@ from uuid import uuid4
 from sqlalchemy import Select, asc, delete, func, select, update
 
 from app.events.types import EventType, RuntimeEvent
-from app.storage.model.task import CheckpointModel, EventModel, StepModel, TaskModel, TurnModel, WorkspaceModel
-from app.storage.records import CheckpointRecord, StepRecord, TaskRecord, TurnRecord, WorkspaceRecord
+from app.storage.model.task import EventModel, StepModel, TaskModel, TurnModel, WorkspaceModel
+from app.storage.records import StepRecord, TaskRecord, TurnRecord, WorkspaceRecord
 
 
 __all__ = [
-    "CheckpointModel",
-    "CheckpointRecord",
     "EventModel",
     "EventType",
     "List",
@@ -29,7 +27,6 @@ __all__ = [
     "TurnRecord",
     "WorkspaceModel",
     "WorkspaceRecord",
-    "_checkpoint_from_model",
     "_events_for_task",
     "_from_text",
     "_preview",
@@ -52,37 +49,37 @@ __all__ = [
 
 
 def _utc_now() -> datetime:
-    """返回当前 UTC datetime。"""
+    """杩斿洖褰撳墠 UTC datetime銆?"""
 
     return datetime.now(timezone.utc)
 
 
 def _to_text(value: datetime) -> str:
-    """将 datetime 值序列化为 ISO-8601 文本。"""
+    """灏?datetime 鍊煎簭鍒楀寲涓?ISO-8601 鏂囨湰銆?"""
 
     return value.isoformat()
 
 
 def _from_text(value: str) -> datetime:
-    """解析 ISO-8601 datetime 字符串。"""
+    """瑙ｆ瀽 ISO-8601 datetime 瀛楃涓层€?"""
 
     return datetime.fromisoformat(value)
 
 
 def _events_for_task(task_id: str) -> Select[tuple[EventModel]]:
-    """构造任务事件查询语句。"""
+    """鏋勯€犱换鍔′簨浠舵煡璇㈣鍙ャ€?"""
 
     return select(EventModel).where(EventModel.task_id == task_id).order_by(asc(EventModel.sequence), asc(EventModel.created_at), asc(EventModel.event_id))
 
 
 def _workspace_from_model(row: WorkspaceModel) -> WorkspaceRecord:
-    """将工作区 model 转换为记录。"""
+    """灏嗗伐浣滃尯 model 杞崲涓鸿褰曘€?"""
 
     return WorkspaceRecord(row.workspace_id, row.name, row.root_path, _from_text(row.created_at), _from_text(row.updated_at))
 
 
 def _task_from_model(row: TaskModel) -> TaskRecord:
-    """将任务 model 转换为记录。"""
+    """灏嗕换鍔?model 杞崲涓鸿褰曘€?"""
 
     return TaskRecord(
         task_id=row.task_id,
@@ -99,13 +96,13 @@ def _task_from_model(row: TaskModel) -> TaskRecord:
 
 
 def _turn_from_model(row: TurnModel) -> TurnRecord:
-    """将轮次 model 转换为记录。"""
+    """灏嗚疆娆?model 杞崲涓鸿褰曘€?"""
 
     return TurnRecord(row.turn_id, row.task_id, row.input_text, row.status, _from_text(row.created_at), _from_text(row.updated_at))
 
 
 def _step_model(step: StepRecord) -> StepModel:
-    """将步骤记录转换为 model。"""
+    """灏嗘楠よ褰曡浆鎹负 model銆?"""
 
     return StepModel(
         step_id=step.step_id,
@@ -121,35 +118,29 @@ def _step_model(step: StepRecord) -> StepModel:
 
 
 def _step_from_model(row: StepModel) -> StepRecord:
-    """将步骤 model 转换为记录。"""
+    """灏嗘楠?model 杞崲涓鸿褰曘€?"""
 
     return StepRecord(row.step_id, row.turn_id, row.step_type, row.status, row.input_summary, row.output_summary, row.error, _from_text(row.created_at), _from_text(row.updated_at))
 
 
-def _checkpoint_from_model(row: CheckpointModel) -> CheckpointRecord:
-    """将 checkpoint model 转换为记录。"""
-
-    return CheckpointRecord(row.checkpoint_id, row.task_id, row.stage, row.summary, json.loads(row.snapshot_json), _from_text(row.created_at))
-
-
 def _preview(value: str, limit: int = 80) -> str:
-    """返回适合标题和侧栏展示的单行摘要。
+    """杩斿洖閫傚悎鏍囬鍜屼晶鏍忓睍绀虹殑鍗曡鎽樿銆?
 
-    参数:
-        value: 原始用户输入文本。
-        limit: 摘要最大字符数。
+    鍙傛暟:
+        value: 鍘熷鐢ㄦ埛杈撳叆鏂囨湰銆?
+        limit: 鎽樿鏈€澶у瓧绗︽暟銆?
 
-    返回:
-        去除多余空白后的摘要文本，超长时追加省略号。
+    杩斿洖:
+        鍘婚櫎澶氫綑绌虹櫧鍚庣殑鎽樿鏂囨湰锛岃秴闀挎椂杩藉姞鐪佺暐鍙枫€?
 
-    异常:
-        无。
+    寮傚父:
+        鏃犮€?
 
-    副作用:
-        无。
+    鍓綔鐢?
+        鏃犮€?
     """
 
     normalized = " ".join(value.strip().split())
     if len(normalized) <= limit:
         return normalized
-    return f"{normalized[: limit - 1]}…"
+    return f"{normalized[: limit - 1]}..."

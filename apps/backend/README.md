@@ -11,26 +11,24 @@ The first implementation slice focuses on a text-only Agent runtime skeleton:
 - streaming model adapter boundary
 - OpenAI-compatible streaming response parsing
 - model-facing tool schema injection for model-visible tools
-- tool approval policy boundary
 - context budget guard before model provider calls
-- state-level checkpoint persistence
 - SSE API boundary
+- trace/log query boundary
 - file logging boundary
 
 `app/agents/` owns Agent execution profiles. The default runtime uses the
 built-in `developer` profile, persists its `agent_id` on each task, injects the
 profile into the system prompt, emits it in `run_started`, and stores it in
-state-level checkpoints. The profile also filters model-visible tools and
-blocks tool calls outside the Agent boundary before they reach execution. This
-keeps Agent, Workflow, and Runtime separate before subagent or alternate role
-support exists.
+runtime records. The profile also filters model-visible tools and blocks tool
+calls outside the Agent boundary before they reach execution. This keeps Agent,
+Workflow, and Runtime separate before alternate role support exists.
 
 Model provider streams and client SSE are separate boundaries. The model
 adapter consumes provider streaming chunks and emits internal runtime deltas;
 the API layer formats stored runtime events as SSE for the desktop client.
 
-`app/runtime/` owns task lifecycle boundaries, replay behavior, event
-persistence, and the controlled operation facade exposed to workflows.
+`app/runtime/` owns task lifecycle boundaries, event persistence, and the
+controlled operation facade exposed to workflows.
 `app/workflows/` owns replaceable Agent execution strategies; a workflow decides
 which runtime operations to call while the runtime keeps storage, model, tool,
 and event side effects behind that facade.
@@ -45,21 +43,10 @@ protocol-compatible. The first version explicitly requests serial tool calls
 with `parallel_tool_calls=false` and rejects multiple tool calls if a provider
 returns them anyway. Denied tools are not exposed to the model.
 
-Tool permissions pass through `ToolApprovalPolicy`. The default runtime
-auto-approves `safe_read`; permissions configured as approval-required are
-model-visible but are not executed until a future UI approval flow exists. For
-now they emit `tool_approval_required` and fail the run cleanly.
-
 Context size is guarded at the runtime/model-call boundary. The first version
 uses `CODING_AGENT_MAX_CONTEXT_CHARS` as a character-count proxy and fails with a
 clear `context_window_exceeded` error before provider I/O. Future tokenizer-based
 budgeting or context compaction should reuse this boundary.
-
-State-level checkpoints are persisted in SQLite at key runtime stages. A
-checkpoint records task state, step summaries, tool event history, context
-summary, file-change metadata placeholders, and the current Agent stage.
-Successful writes emit `checkpoint_created`; failures are logged and surfaced as
-`checkpoint_failed`. File diff rollback is not implemented in this slice.
 
 The first LangGraph integration is intentionally narrow and version-gated:
 `app/workflows/step_controller.py` uses a LangGraph `StateGraph` for workflow

@@ -75,39 +75,6 @@ class AgentRuntimeTests(unittest.TestCase):
             self.assertIn("model_output_delta", [event.event_type for event in events])
             self.assertEqual(events[-1].event_type, "run_finished")
 
-    def test_runtime_creates_state_checkpoints(self) -> None:
-        """校验运行时检查点会被持久化并作为事件发出。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            AssertionError: 如果检查点记录或事件缺失。
-
-        副作用:
-            创建一个临时运行时并执行一个任务。
-        """
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            runtime = self._build_runtime(Path(temp_dir))
-            task = runtime.create_task("checkpoint me")
-
-            events = asyncio.run(self._collect_events(runtime, task.task_id))
-            checkpoints = runtime.list_checkpoints(task.task_id)
-            checkpoint_events = [
-                event for event in events if event.event_type == "checkpoint_created"
-            ]
-
-            self.assertGreaterEqual(len(checkpoints), 2)
-            self.assertEqual(len(checkpoints), len(checkpoint_events))
-            self.assertEqual(checkpoints[0].stage, "run_started")
-            self.assertEqual(checkpoints[-1].stage, "run_finished")
-            self.assertEqual(checkpoints[-1].snapshot["task"]["status"], "completed")
-            self.assertEqual(checkpoints[-1].snapshot["file_change_metadata"], [])
-
     def test_runtime_uses_agent_profile_for_task_events_and_context(self) -> None:
         """校验 Agent 档案会被持久化、发出、检查点化并进入提示词。
 
@@ -141,14 +108,11 @@ class AgentRuntimeTests(unittest.TestCase):
             task = runtime.create_task("review this")
 
             events = asyncio.run(self._collect_events(runtime, task.task_id))
-            checkpoints = runtime.list_checkpoints(task.task_id)
             system_message = model.messages[0]
 
             self.assertEqual(task.agent_id, "reviewer")
             self.assertEqual(runtime.get_task(task.task_id).agent_id, "reviewer")
             self.assertEqual(events[0].payload["agent"]["agent_id"], "reviewer")
-            self.assertEqual(checkpoints[-1].snapshot["agent"]["role"], "reviewer")
-            self.assertEqual(checkpoints[-1].snapshot["task"]["agent_id"], "reviewer")
             self.assertEqual(system_message.role, "system")
             self.assertIn("reviewer", system_message.content_text)
             self.assertIn("safe_read", system_message.content_text)
@@ -181,70 +145,6 @@ class AgentRuntimeTests(unittest.TestCase):
             user_messages = [message.content_text for message in model.messages if message.role == "user"]
             self.assertIn("run_finished", [event.event_type for event in events])
             self.assertEqual(user_messages, ["first turn", "second turn"])
-
-    def test_checkpoint_failure_is_logged_and_emitted(self) -> None:
-        """校验检查点写入失败会被记录并流式发出。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            AssertionError: 如果检查点失败缺少诊断信息或流事件。
-
-        副作用:
-            使用一个拒绝检查点写入的存储运行一个任务。
-        """
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project_root = Path(temp_dir)
-            store = FailingCheckpointStore(project_root / "app.sqlite3")
-            runtime = self._build_runtime(project_root, task_store=store)
-            task = runtime.create_task("checkpoint failure")
-
-            with self.assertLogs(level="ERROR") as logs:
-                events = asyncio.run(self._collect_events(runtime, task.task_id))
-
-            checkpoint_events = [
-                event for event in events if event.event_type == "checkpoint_failed"
-            ]
-            self.assertGreaterEqual(len(checkpoint_events), 1)
-            self.assertTrue(checkpoint_events[0].payload["event_persisted"])
-            self.assertIn("checkpoint_failed", "\n".join(logs.output))
-
-    def test_checkpoint_failure_event_falls_back_when_event_persistence_fails(self) -> None:
-        """校验当事件持久化失败时检查点失败仍会到达活动流。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            AssertionError: 如果没有发出未持久化的检查点失败事件。
-
-        副作用:
-            使用一个拒绝检查点与失败事件写入的存储运行一个任务。
-        """
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project_root = Path(temp_dir)
-            store = FailingCheckpointAndFailureEventStore(project_root / "app.sqlite3")
-            runtime = self._build_runtime(project_root, task_store=store)
-            task = runtime.create_task("checkpoint failure fallback")
-
-            with self.assertLogs(level="ERROR"):
-                events = asyncio.run(self._collect_events(runtime, task.task_id))
-
-            checkpoint_events = [
-                event for event in events if event.event_type == "checkpoint_failed"
-            ]
-            self.assertGreaterEqual(len(checkpoint_events), 1)
-            self.assertFalse(checkpoint_events[0].payload["event_persisted"])
-            self.assertIn("event_error", checkpoint_events[0].payload)
 
     def test_blank_task_is_rejected(self) -> None:
         """校验空白文本输入会在运行时执行前被拒绝。
@@ -351,77 +251,6 @@ class AgentRuntimeTests(unittest.TestCase):
             self.assertIn("tool_call_finished", event_types)
             self.assertIn("observation_added", event_types)
             self.assertEqual(events[-1].event_type, "run_finished")
-            self.assertTrue(
-                any(
-                    checkpoint.snapshot["tool_call_history"]
-                    for checkpoint in runtime.list_checkpoints(task.task_id)
-                )
-            )
-
-    def test_approval_required_tool_emits_event_and_fails_task(self) -> None:
-        """校验需要审批的工具在未经 UI 审批时不会执行。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            AssertionError: 如果需审批的工具在静默中继续执行。
-
-        副作用:
-            通过一个带有需审批写工具的调度器运行一个任务。
-        """
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project_root = Path(temp_dir)
-            logger = logging.getLogger("test-approval-runtime")
-            logger.handlers = []
-            logger.addHandler(logging.NullHandler())
-            scheduler = self._build_tool_scheduler(
-                project_root,
-                logger,
-                extra_tools=(
-                    ToolDefinition(
-                        name="write_file",
-                        description="Write test file.",
-                        permission="write_file",
-                        required_params=("path",),
-                        handler=_write_test_handler,
-                        parameters_schema={
-                            "type": "object",
-                            "properties": {"path": {"type": "string"}},
-                            "required": ["path"],
-                            "additionalProperties": False,
-                        },
-                    ),
-                ),
-                approval_required_permissions=("write_file",),
-            )
-            agent_profile = AgentProfile(
-                agent_id="developer",
-                role="developer",
-                goal="Use write tools only after approval.",
-                allowed_tools=("safe_read", "write_file"),
-                context_policy="text_only_v1",
-            )
-            runtime = self._build_runtime(
-                project_root,
-                model_adapter=ApprovalRequiredToolModel(str(project_root / "note.txt")),
-                tool_scheduler=scheduler,
-                agent_profile=agent_profile,
-            )
-            task = runtime.create_task("write note")
-
-            events = asyncio.run(self._collect_events(runtime, task.task_id))
-            event_types = [event.event_type for event in events]
-
-            self.assertEqual(runtime.get_task(task.task_id).status, "waiting")
-            self.assertIn("tool_approval_required", event_types)
-            self.assertEqual(events[-1].event_type.value, "checkpoint_created")
-            self.assertFalse((project_root / "note.txt").exists())
-
     def test_tool_error_limit_fails_run_before_max_steps(self) -> None:
         """校验重复的工具错误会以特定的终态原因失败。
 
@@ -986,7 +815,6 @@ class AgentRuntimeTests(unittest.TestCase):
         project_root: Path,
         logger: logging.Logger,
         extra_tools: tuple = (),
-        approval_required_permissions: tuple = (),
     ) -> ToolScheduler:
         """为运行时测试构建一个安全只读工具调度器。
 
@@ -994,7 +822,6 @@ class AgentRuntimeTests(unittest.TestCase):
             project_root: 安全只读工具使用的临时根目录。
             logger: 与运行时共享的日志记录器。
             extra_tools: 需要注册的额外测试工具定义。
-            approval_required_permissions: 需要审批的权限级别。
 
         返回:
             配置了安全只读工具的 ToolScheduler。
@@ -1012,7 +839,6 @@ class AgentRuntimeTests(unittest.TestCase):
             registry=registry,
             allowed_permissions=("safe_read",),
             logger=logger,
-            approval_required_permissions=approval_required_permissions,
         )
 
 
@@ -1204,58 +1030,6 @@ class ToolExchangeRecordingModel:
             return
         self.second_call_messages = list(messages)
         yield ModelDelta(text="read complete", is_final=True)
-
-
-class ApprovalRequiredToolModel:
-    """脚本化一个需要用户审批的写工具调用。"""
-
-    def __init__(self, path: str) -> None:
-        """初始化被请求的写路径。
-
-        参数:
-            path: 模型将请求工具去写的文件系统路径。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            为脚本化工具调用保存该路径。
-        """
-
-        self._path = path
-
-    async def stream(
-        self,
-        messages: List[RuntimeMessage],
-        tools: List[ModelToolDefinition] = None,
-    ) -> AsyncIterator[ModelDelta]:
-        """发出一个 write_file 工具调用。
-
-        参数:
-            messages: 运行时累积的运行时消息。
-            tools: 本次模型调用可用的、面向模型的工具定义。
-
-        生成:
-            一个包含写工具请求的模型增量。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        yield ModelDelta(
-            text="",
-            tool_call=ToolCall(
-                tool_name="write_file",
-                arguments={"path": self._path},
-                call_id="call_write_1",
-            ),
-        )
 
 
 class ScriptedFailingToolModel:
@@ -1576,61 +1350,6 @@ class CompletingWorkflow:
             task.task_id,
             {"status": "completed", "workflow": "custom"},
         )
-
-
-class FailingCheckpointStore(SQLiteTaskStore):
-    """拒绝检查点写入的 SQLite 存储变体，用于测试。"""
-
-    def create_checkpoint(
-        self,
-        task_id: str,
-        stage: str,
-        summary: str,
-        snapshot: dict,
-    ):
-        """抛出一个检查点持久化失败。
-
-        参数:
-            task_id: 与检查点关联的任务标识符。
-            stage: 产出该检查点的运行时阶段。
-            summary: 检查点摘要。
-            snapshot: 检查点快照。
-
-        返回:
-            从不返回。
-
-        异常:
-            RuntimeError: 始终抛出以模拟检查点存储失败。
-
-        副作用:
-            无。
-        """
-
-        raise RuntimeError("checkpoint storage unavailable")
-
-
-class FailingCheckpointAndFailureEventStore(FailingCheckpointStore):
-    """同时拒绝持久化检查点失败事件的存储变体。"""
-
-    def append_event(self, event) -> None:
-        """追加事件，但检查点失败事件除外。
-
-        参数:
-            event: 待持久化的运行时事件。
-
-        返回:
-            无。
-
-        异常:
-            RuntimeError: 如果事件是 ``checkpoint_failed``。
-
-        副作用:
-            通过基类存储持久化非检查点失败事件。
-        """
-
-        if event.event_type == "checkpoint_failed":
-            raise RuntimeError("event storage unavailable")
-        super().append_event(event)
 
 
 if __name__ == "__main__":

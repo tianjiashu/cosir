@@ -2,8 +2,7 @@
 
 本模块只负责应用装配：创建 ``app`` 单例、定义 ``lifespan``、安装请求日志中间件、
 触发各域路由模块级装饰器注册，以及暴露 ``create_app`` 工厂。所有端点逻辑都拆分到
-同目录下的域路由文件（``tasks_api`` / ``approvals_api`` /
-``logs_api`` / ``traces_api`` / ``replay_api``），不在本文件内定义。
+同目录下的域路由文件（``tasks_api`` / ``logs_api`` / ``traces_api`` /
 
 ``app`` 是模块级单例，各域路由文件通过 ``from app.api.app import app`` 复用同一实例，
 因此必须在 ``app`` 定义之后再导入这些模块，否则会产生未初始化引用。
@@ -28,7 +27,6 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
-from app.config.logging import shutdown_logging
 
 
 @asynccontextmanager
@@ -45,7 +43,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         无。Runtime 内部会记录关闭失败。
 
     副作用:
-        关闭 Runtime 持有的 LangGraph checkpointer 等资源。
+        关闭 Runtime 持有的运行时资源。
     """
 
     try:
@@ -53,7 +51,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         runtime = get_runtime()
         runtime.close()
-        shutdown_logging()
         _mark_boot_stopped()
 
 
@@ -72,10 +69,8 @@ install_http_exception_logging(app, logging.getLogger("coding_agent.backend"))
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.turns_api")
-importlib.import_module("app.api.approvals_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.traces_api")
-importlib.import_module("app.api.replay_api")
 
 
 def create_app(runtime=None) -> FastAPI:

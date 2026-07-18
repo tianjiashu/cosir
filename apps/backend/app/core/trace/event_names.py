@@ -1,10 +1,10 @@
-"""Trace ledger 事件名治理。"""
+"""Canonical trace event names."""
 
 from enum import StrEnum
 
 
 class TraceEventName(StrEnum):
-    """Trace ledger 使用的 canonical 事件名。"""
+    """Canonical event names used by the trace ledger."""
 
     RUN_CREATED = "run_created"
     RUN_STARTED = "run_started"
@@ -23,14 +23,6 @@ class TraceEventName(StrEnum):
     TOOL_EXECUTION_FAILED = "tool_execution_failed"
     TOOL_EXECUTION_CANCELLED = "tool_execution_cancelled"
     TOOL_EXECUTION_TIMED_OUT = "tool_execution_timed_out"
-    APPROVAL_REQUESTED = "approval_requested"
-    APPROVAL_DECIDED = "approval_decided"
-    CHECKPOINT_CREATED = "checkpoint_created"
-    CHECKPOINT_FAILED = "checkpoint_failed"
-    RESUME_STARTED = "resume_started"
-    RESUME_COMPLETED = "resume_completed"
-    RESUME_FAILED = "resume_failed"
-    RECOVERY_RECONCILED = "recovery_reconciled"
 
 
 TRACE_EVENT_NAME_ALIASES = {
@@ -41,69 +33,64 @@ TRACE_EVENT_NAME_ALIASES = {
     "tool_call_finished": TraceEventName.TOOL_EXECUTION_COMPLETED.value,
     "tool_call_started": TraceEventName.TOOL_EXECUTION_STARTED.value,
     "tool_call_requested": TraceEventName.TOOL_CALL_CREATED.value,
-    "tool_approval_required": TraceEventName.APPROVAL_REQUESTED.value,
-    "checkpoint_created": TraceEventName.CHECKPOINT_CREATED.value,
-    "checkpoint_failed": TraceEventName.CHECKPOINT_FAILED.value,
 }
 
 
 def canonical_event_name(event_name: str) -> str:
-    """返回 trace ledger canonical 事件名。
+    """Return the canonical trace event name.
 
-    参数:
-        event_name: Runtime、Tool Platform 或 Trace 层传入的事件名。
+    Parameters:
+        event_name: Runtime, tool platform, or trace-layer event name.
 
-    返回:
-        canonical trace ledger 事件名；未知事件保持原样返回，便于扩展事件落账。
+    Returns:
+        Canonical trace event name, or the original value if no alias exists.
 
-    异常:
-        无。
+    Raises:
+        None.
 
-    副作用:
-        无。
+    Side effects:
+        None.
     """
 
     return TRACE_EVENT_NAME_ALIASES.get(event_name, event_name)
 
 
 def runtime_trace_event_name(event_name: str, payload: dict) -> str:
-    """返回运行时事件对应的 canonical trace event 名称。
+    """Return the canonical trace event name for a runtime event.
 
-    参数:
-        event_name: RuntimeEvent、Tool Platform 或 Trace 层传入的事件名。
-        payload: 运行时事件载荷，用于区分工具完成状态。
+    Parameters:
+        event_name: Runtime, tool platform, or trace-layer event name.
+        payload: Runtime event payload used to classify tool completion status.
 
-    返回:
-        canonical trace event 名称；空字符串表示该事件由领域服务负责落账。
+    Returns:
+        Canonical trace event name.
 
-    异常:
-        无。
+    Raises:
+        None.
 
-    副作用:
-        无。
+    Side effects:
+        None.
     """
 
-    if event_name == "tool_approval_required":
-        return ""
     if event_name == "tool_call_finished":
         return _tool_finish_event_name(str(payload.get("status") or ""))
     return canonical_event_name(event_name)
 
 
 def _tool_finish_event_name(status: str) -> str:
-    """根据工具完成状态返回 canonical trace event 名称。
+    """Map a tool completion status to a canonical trace event name.
 
-    参数:
-        status: 工具观测状态。
+    Parameters:
+        status: Tool observation status.
 
-    返回:
-        tool_execution_* 事件名。
+    Returns:
+        ``tool_execution_*`` event name.
 
-    异常:
-        无。
+    Raises:
+        None.
 
-    副作用:
-        无。
+    Side effects:
+        None.
     """
 
     if status in {"success", "completed", "succeeded"}:
@@ -112,6 +99,4 @@ def _tool_finish_event_name(status: str) -> str:
         return TraceEventName.TOOL_EXECUTION_CANCELLED.value
     if status in {"timed_out", "timeout"}:
         return TraceEventName.TOOL_EXECUTION_TIMED_OUT.value
-    if status == "approval_required":
-        return TraceEventName.TOOL_EXECUTION_PLANNED.value
     return TraceEventName.TOOL_EXECUTION_FAILED.value

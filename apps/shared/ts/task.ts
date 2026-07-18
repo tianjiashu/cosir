@@ -1,51 +1,35 @@
-/**
- * 任务状态类型定义。
+﻿/**
+ * 浠诲姟鐘舵€佺被鍨嬪畾涔夈€?
  *
- * 与后端 `app/storage/records.py` 保持字段一致，
- * 作为前后端共享的任务状态契约事实源。
+ * 涓庡悗绔?`app/storage/records.py` 淇濇寔瀛楁涓€鑷达紝
+ * 浣滀负鍓嶅悗绔叡浜殑浠诲姟鐘舵€佸绾︿簨瀹炴簮銆?
  *
  * @module shared/task
  */
 
-/** 任务状态枚举，与后端 TaskRecord.status 可能值对齐。注意：后端完成态为 "completed" 而非 "finished"。 */
+/** 浠诲姟鐘舵€佹灇涓撅紝涓庡悗绔?TaskRecord.status 鍙兘鍊煎榻愩€傛敞鎰忥細鍚庣瀹屾垚鎬佷负 "completed" 鑰岄潪 "finished"銆?*/
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
-/** 任务记录接口，对应后端 `TaskRecord.to_dict()` 输出。 */
+/** 浠诲姟璁板綍鎺ュ彛锛屽搴斿悗绔?`TaskRecord.to_dict()` 杈撳嚭銆?*/
 export interface TaskRecord {
-  /** 唯一的任务标识符（UUID）。 */
+  /** 鍞竴鐨勪换鍔℃爣璇嗙锛圲UID锛夈€?*/
   task_id: string;
-  /** 关联的工作区标识符。 */
+  /** 鍏宠仈鐨勫伐浣滃尯鏍囪瘑绗︺€?*/
   workspace_id?: string;
-  /** 负责执行任务的 Agent 标识符。 */
+  /** 璐熻矗鎵ц浠诲姟鐨?Agent 鏍囪瘑绗︺€?*/
   agent_id: string;
-  /** 原始的纯文本用户任务输入。 */
+  /** 鍘熷鐨勭函鏂囨湰鐢ㄦ埛浠诲姟杈撳叆銆?*/
   input_text: string;
-  /** 任务容器标题。 */
+  /** 浠诲姟瀹瑰櫒鏍囬銆?*/
   title?: string;
-  /** 最近用户输入摘要。 */
+  /** 鏈€杩戠敤鎴疯緭鍏ユ憳瑕併€?*/
   last_message_preview?: string;
-  /** 最近一次轮次标识符。 */
+  /** 鏈€杩戜竴娆¤疆娆℃爣璇嗙銆?*/
   latest_turn_id?: string | null;
-  /** 当前任务状态。 */
+  /** 褰撳墠浠诲姟鐘舵€併€?*/
   status: TaskStatus;
-  /** 任务创建时的 UTC 时间戳（ISO-8601）。 */
+  /** 浠诲姟鍒涘缓鏃剁殑 UTC 鏃堕棿鎴筹紙ISO-8601锛夈€?*/
   created_at: string;
-  /** 任务最近更新时的 UTC 时间戳（ISO-8601）。 */
+  /** 浠诲姟鏈€杩戞洿鏂版椂鐨?UTC 鏃堕棿鎴筹紙ISO-8601锛夈€?*/
   updated_at: string;
-}
-
-/** 检查点记录接口，对应后端 `CheckpointRecord.to_dict()` 输出。 */
-export interface CheckpointRecord {
-  /** 唯一的检查点标识符。 */
-  checkpoint_id: string;
-  /** 关联的任务标识符。 */
-  task_id: string;
-  /** 产出该检查点的运行时阶段。 */
-  stage: string;
-  /** 简短的、人类可读的检查点摘要。 */
-  summary: string;
-  /** 可序列化为 JSON 的运行时状态快照。 */
-  snapshot: Record<string, unknown>;
-  /** 检查点创建时间戳。 */
-  created_at: string;
 }

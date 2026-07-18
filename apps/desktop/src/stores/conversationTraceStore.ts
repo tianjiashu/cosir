@@ -1,8 +1,8 @@
-/**
- * 对话相关请求 trace 状态。
+﻿/**
+ * 瀵硅瘽鐩稿叧璇锋眰 trace 鐘舵€併€?
  *
- * 记录客户端发起的任务、SSE、审批、恢复等对话链路请求所使用的 trace_id，
- * 供日志页和右侧诊断面板展示与查询。
+ * 璁板綍瀹㈡埛绔彂璧风殑浠诲姟銆丼SE銆佸鎵广€佹仮澶嶇瓑瀵硅瘽閾捐矾璇锋眰鎵€浣跨敤鐨?trace_id锛?
+ * 渚涙棩蹇楅〉鍜屽彸渚ц瘖鏂潰鏉垮睍绀轰笌鏌ヨ銆?
  *
  * @module stores/conversationTraceStore
  */
@@ -10,11 +10,11 @@
 import { create } from "zustand";
 
 /**
- * 对话相关请求类型。
+ * 瀵硅瘽鐩稿叧璇锋眰绫诲瀷銆?
  *
- * 表示客户端在一次对话生命周期中会发起的 HTTP/SSE 请求类别。
- * 这些值只用于前端诊断展示和日志查询入口选择，不参与后端协议持久化。
- * 类型本身没有运行时副作用；未知端点应先扩展该联合类型再记录。
+ * 琛ㄧず瀹㈡埛绔湪涓€娆″璇濈敓鍛藉懆鏈熶腑浼氬彂璧风殑 HTTP/SSE 璇锋眰绫诲埆銆?
+ * 杩欎簺鍊煎彧鐢ㄤ簬鍓嶇璇婃柇灞曠ず鍜屾棩蹇楁煡璇㈠叆鍙ｉ€夋嫨锛屼笉鍙備笌鍚庣鍗忚鎸佷箙鍖栥€?
+ * 绫诲瀷鏈韩娌℃湁杩愯鏃跺壇浣滅敤锛涙湭鐭ョ鐐瑰簲鍏堟墿灞曡鑱斿悎绫诲瀷鍐嶈褰曘€?
  */
 export type ConversationTraceOperation =
   | "task_create"
@@ -26,62 +26,57 @@ export type ConversationTraceOperation =
   | "turn_stream"
   | "task_get"
   | "task_events"
-  | "task_checkpoints"
   | "task_cancel"
-  | "task_stream"
-  | "task_approvals"
-  | "approval_decision";
+  | "task_stream";
 
 /**
- * 一次对话相关请求使用的 trace 记录。
+ * 涓€娆″璇濈浉鍏宠姹備娇鐢ㄧ殑 trace 璁板綍銆?
  *
- * 记录由 tracePropagation 生成并注入请求头的 trace_id，以及它所属的
- * task、approval、HTTP 方法和路径。该记录是前端内存诊断状态，不保证应用
- * 重启后仍可恢复；后端持久 trace 绑定应作为单独能力实现。
+ * 璁板綍鐢?tracePropagation 鐢熸垚骞舵敞鍏ヨ姹傚ご鐨?trace_id锛屼互鍙婂畠鎵€灞炵殑
+ * task銆乤pproval銆丠TTP 鏂规硶鍜岃矾寰勩€傝璁板綍鏄墠绔唴瀛樿瘖鏂姸鎬侊紝涓嶄繚璇佸簲鐢?
+ * 閲嶅惎鍚庝粛鍙仮澶嶏紱鍚庣鎸佷箙 trace 缁戝畾搴斾綔涓哄崟鐙兘鍔涘疄鐜般€?
  */
 export interface ConversationTraceRecord {
-  /** 客户端请求使用的 trace 标识。 */
+  /** 瀹㈡埛绔姹備娇鐢ㄧ殑 trace 鏍囪瘑銆?*/
   traceId: string;
-  /** 请求所属任务；全局请求或无法归属任务时为空。 */
+  /** 璇锋眰鎵€灞炰换鍔★紱鍏ㄥ眬璇锋眰鎴栨棤娉曞綊灞炰换鍔℃椂涓虹┖銆?*/
   taskId: string;
-  /** 关联审批标识；非审批请求时为空。 */
-  approvalId: string;
-  /** 对话请求类型。 */
+  /** 瀵硅瘽璇锋眰绫诲瀷銆?*/
   operation: ConversationTraceOperation;
-  /** HTTP 方法。 */
+  /** HTTP 鏂规硶銆?*/
   method: string;
-  /** 后端 API 路径。 */
+  /** 鍚庣 API 璺緞銆?*/
   path: string;
-  /** 前端记录该 trace 的时间。 */
+  /** 鍓嶇璁板綍璇?trace 鐨勬椂闂淬€?*/
   recordedAt: string;
 }
 
-/** Trace store 状态。 */
+/** Trace store 鐘舵€併€?*/
 interface ConversationTraceState {
-  /** 所有已记录的对话请求 trace，按记录顺序追加。 */
+  /** 鎵€鏈夊凡璁板綍鐨勫璇濊姹?trace锛屾寜璁板綍椤哄簭杩藉姞銆?*/
   traces: ConversationTraceRecord[];
-  /** 最近一次对话相关请求 trace。 */
+  /** 鏈€杩戜竴娆″璇濈浉鍏宠姹?trace銆?*/
   latestTrace: ConversationTraceRecord | null;
-  /** 按 task_id 索引的最近 trace。 */
+  /** 鎸?task_id 绱㈠紩鐨勬渶杩?trace銆?*/
   latestTraceByTaskId: Record<string, ConversationTraceRecord>;
-  /** 按 task_id 索引的 SSE stream trace。 */
+  /** 鎸?task_id 绱㈠紩鐨?SSE stream trace銆?*/
   streamTraceByTaskId: Record<string, ConversationTraceRecord>;
-  /** 按 task_id 和 operation 索引的最近 trace。 */
+  /** 鎸?task_id 鍜?operation 绱㈠紩鐨勬渶杩?trace銆?*/
   latestTraceByTaskIdAndOperation: Record<string, Partial<Record<ConversationTraceOperation, ConversationTraceRecord>>>;
 }
 
-/** Trace store 动作。 */
+/** Trace store 鍔ㄤ綔銆?*/
 interface ConversationTraceActions {
-  /** 记录一次对话相关请求 trace。 */
+  /** 璁板綍涓€娆″璇濈浉鍏宠姹?trace銆?*/
   recordTrace: (record: Omit<ConversationTraceRecord, "recordedAt">) => void;
-  /** 清空全部 trace 状态，主要用于测试。 */
+  /** 娓呯┖鍏ㄩ儴 trace 鐘舵€侊紝涓昏鐢ㄤ簬娴嬭瘯銆?*/
   resetConversationTraces: () => void;
 }
 
 /**
- * 对话 trace Zustand Store。
+ * 瀵硅瘽 trace Zustand Store銆?
  *
- * 只保存内存状态，不发起 HTTP/SSE/IPC，不写日志。
+ * 鍙繚瀛樺唴瀛樼姸鎬侊紝涓嶅彂璧?HTTP/SSE/IPC锛屼笉鍐欐棩蹇椼€?
  */
 export const useConversationTraceStore = create<ConversationTraceState & ConversationTraceActions>((set) => ({
   traces: [],
@@ -135,10 +130,10 @@ export const useConversationTraceStore = create<ConversationTraceState & Convers
 }));
 
 /**
- * 获取指定任务最近一次对话请求 trace。
+ * 鑾峰彇鎸囧畾浠诲姟鏈€杩戜竴娆″璇濊姹?trace銆?
  *
- * @param taskId - 任务标识，空值返回 null。
- * @returns 匹配任务的最近 trace；不存在时返回 null。
+ * @param taskId - 浠诲姟鏍囪瘑锛岀┖鍊艰繑鍥?null銆?
+ * @returns 鍖归厤浠诲姟鐨勬渶杩?trace锛涗笉瀛樺湪鏃惰繑鍥?null銆?
  */
 export function getConversationTraceForTask(taskId: string | null): ConversationTraceRecord | null {
   if (!taskId) {
@@ -148,10 +143,10 @@ export function getConversationTraceForTask(taskId: string | null): Conversation
 }
 
 /**
- * 获取指定任务的 SSE stream trace。
+ * 鑾峰彇鎸囧畾浠诲姟鐨?SSE stream trace銆?
  *
- * @param taskId - 任务标识，空值返回 null。
- * @returns 匹配任务的 stream trace；不存在时返回 null。
+ * @param taskId - 浠诲姟鏍囪瘑锛岀┖鍊艰繑鍥?null銆?
+ * @returns 鍖归厤浠诲姟鐨?stream trace锛涗笉瀛樺湪鏃惰繑鍥?null銆?
  */
 export function getStreamTraceForTask(taskId: string | null): ConversationTraceRecord | null {
   if (!taskId) {

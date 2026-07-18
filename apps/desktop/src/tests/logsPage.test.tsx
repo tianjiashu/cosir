@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+﻿// @vitest-environment happy-dom
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -43,8 +43,8 @@ afterEach(() => {
   container.remove();
 });
 
-describe("LogsPage — 日志页面", () => {
-  it("首次进入页面会查询最近日志并渲染纯文本、结构化字段和 stack", async () => {
+describe("LogsPage 鈥?鏃ュ織椤甸潰", () => {
+  it("棣栨杩涘叆椤甸潰浼氭煡璇㈡渶杩戞棩蹇楀苟娓叉煋绾枃鏈€佺粨鏋勫寲瀛楁鍜?stack", async () => {
     mockedFetchRecentLogs.mockResolvedValue({
       text: "2026-07-15 ERROR tool_call_failed",
       entries: [
@@ -55,7 +55,7 @@ describe("LogsPage — 日志页面", () => {
           trace_id: "trace-1",
           caller: "app.tools:Tool.run:42",
           event: "tool_call_failed",
-          msg: "工具失败",
+          msg: "宸ュ叿澶辫触",
           data: {},
           error: { type: "RuntimeError", message: "boom", stack: "Traceback" },
           truncated: false,
@@ -68,11 +68,11 @@ describe("LogsPage — 日志页面", () => {
     expect(mockedFetchRecentLogs).toHaveBeenCalledWith({ level: undefined, limit: 200 });
     expect(container.textContent).toContain("2026-07-15 ERROR tool_call_failed");
     expect(container.textContent).toContain("tool_call_failed");
-    expect(container.textContent).toContain("工具失败");
+    expect(container.textContent).toContain("宸ュ叿澶辫触");
     expect(container.textContent).toContain("Traceback");
   });
 
-  it("输入 trace_id 后点击查询会调用 trace 查询接口", async () => {
+  it("杈撳叆 trace_id 鍚庣偣鍑绘煡璇細璋冪敤 trace 鏌ヨ鎺ュ彛", async () => {
     mockedFetchRecentLogs.mockResolvedValue({ entries: [], text: "" });
     mockedFetchLogsByTrace.mockResolvedValue({
       entries: [],
@@ -100,12 +100,11 @@ describe("LogsPage — 日志页面", () => {
     expect(container.textContent).toContain("trace logs");
   });
 
-  it("当前任务存在对话 trace 时首次进入会直接查询该 trace", async () => {
+  it("褰撳墠浠诲姟瀛樺湪瀵硅瘽 trace 鏃堕娆¤繘鍏ヤ細鐩存帴鏌ヨ璇?trace", async () => {
     useTaskStore.getState().addTask(makeTask("task-1"));
     useConversationTraceStore.getState().recordTrace({
       traceId: "1234567890abcdef1234567890abcdef",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_stream",
       method: "GET",
       path: "/tasks/task-1/stream",
@@ -123,7 +122,7 @@ describe("LogsPage — 日志页面", () => {
     expect(container.textContent).toContain("current trace logs");
   });
 
-  it("日志页打开后当前任务产生 trace 时会自动查询该 trace", async () => {
+  it("鏃ュ織椤垫墦寮€鍚庡綋鍓嶄换鍔′骇鐢?trace 鏃朵細鑷姩鏌ヨ璇?trace", async () => {
     useTaskStore.getState().addTask(makeTask("task-1"));
     mockedFetchRecentLogs.mockResolvedValue({ entries: [], text: "recent logs" });
     mockedFetchLogsByTrace.mockResolvedValue({ entries: [], text: "late trace logs" });
@@ -133,7 +132,6 @@ describe("LogsPage — 日志页面", () => {
       useConversationTraceStore.getState().recordTrace({
         traceId: "abcdef1234567890abcdef1234567890",
         taskId: "task-1",
-        approvalId: "",
         operation: "task_stream",
         method: "GET",
         path: "/tasks/task-1/stream",
@@ -151,12 +149,11 @@ describe("LogsPage — 日志页面", () => {
     expect(container.textContent).toContain("late trace logs");
   });
 
-  it("后到的 stream trace 会替换自动填入的普通端点 trace", async () => {
+  it("鍚庡埌鐨?stream trace 浼氭浛鎹㈣嚜鍔ㄥ～鍏ョ殑鏅€氱鐐?trace", async () => {
     useTaskStore.getState().addTask(makeTask("task-1"));
     useConversationTraceStore.getState().recordTrace({
       traceId: "11111111111111111111111111111111",
       taskId: "task-1",
-      approvalId: "",
       operation: "task_create",
       method: "POST",
       path: "/tasks",
@@ -169,7 +166,6 @@ describe("LogsPage — 日志页面", () => {
       useConversationTraceStore.getState().recordTrace({
         traceId: "22222222222222222222222222222222",
         taskId: "task-1",
-        approvalId: "",
         operation: "task_stream",
         method: "GET",
         path: "/tasks/task-1/stream",
@@ -190,15 +186,15 @@ describe("LogsPage — 日志页面", () => {
     expect(container.textContent).toContain("stream trace logs");
   });
 
-  it("查询失败时展示后端错误文案", async () => {
-    mockedFetchRecentLogs.mockRejectedValue(new Error("日志查询失败: invalid level"));
+  it("shows backend error text when query fails", async () => {
+    mockedFetchRecentLogs.mockRejectedValue(new Error("鏃ュ織鏌ヨ澶辫触: invalid level"));
 
     await renderLogsPage();
 
-    expect(container.textContent).toContain("日志查询失败: invalid level");
+    expect(container.textContent).toContain("鏃ュ織鏌ヨ澶辫触: invalid level");
   });
 
-  it("空结果时展示空态", async () => {
+  it("shows empty state for empty results", async () => {
     mockedFetchRecentLogs.mockResolvedValue({ entries: [], text: "" });
 
     await renderLogsPage();

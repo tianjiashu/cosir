@@ -29,6 +29,24 @@ class TraceStore:
         self._session_factory = create_session_factory(self._engine)
         self._sequence_lock = self._lock_for_database(self._database_path)
 
+    def close(self) -> None:
+        """Dispose the SQLite engine held by this store.
+
+        Parameters:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+
+        Side effects:
+            Closes pooled SQLite connections so the database file can be removed on Windows.
+        """
+
+        self._engine.dispose()
+
     def next_sequence(self, run_id: str) -> int:
         """返回同一 run 内下一个 trace event 序号。"""
 

@@ -1,16 +1,15 @@
-/**
- * 右侧信息面板（RightPanel）。
+﻿/**
+ * 鍙充晶淇℃伅闈㈡澘锛圧ightPanel锛夈€?
  *
- * 组合以下子组件：
- * - OutputsTab：Outputs 列表（任务产生/修改的文件、文档）
- * - SourcesTab：Sources 列表（引用文档、上下文片段、规则文件）
- * - CheckpointBlock：Checkpoint 区块占位
- * - ContextBlock：上下文引用占位
- * - ConversationTraceBlock：当前对话 trace 诊断入口
- * - McpBlock：MCP 入口占位
- * - SubagentBlock：Subagent 分组占位
+ * 缁勫悎浠ヤ笅瀛愮粍浠讹細
+ * - OutputsTab锛歄utputs 鍒楄〃锛堜换鍔′骇鐢?淇敼鐨勬枃浠躲€佹枃妗ｏ級
+ * - SourcesTab锛歋ources 鍒楄〃锛堝紩鐢ㄦ枃妗ｃ€佷笂涓嬫枃鐗囨銆佽鍒欐枃浠讹級
+ * - ContextBlock锛氫笂涓嬫枃寮曠敤鍗犱綅
+ * - ConversationTraceBlock锛氬綋鍓嶅璇?trace 璇婃柇鍏ュ彛
+ * - McpBlock锛歁CP 鍏ュ彛鍗犱綅
+ * - SubagentBlock锛歋ubagent 鍒嗙粍鍗犱綅
  *
- * 第一版使用静态 mock 数据。
+ * 绗竴鐗堜娇鐢ㄩ潤鎬?mock 鏁版嵁銆?
  *
  * @module components/layout/RightPanel
  */
@@ -20,79 +19,78 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { OutputsTab, type OutputItem } from "@/components/right-panel/OutputsTab";
 import { SourcesTab, type SourceItem } from "@/components/right-panel/SourcesTab";
-import { CheckpointBlock } from "@/components/right-panel/CheckpointBlock";
 import { ContextBlock } from "@/components/right-panel/ContextBlock";
 import { ConversationTraceBlock } from "@/components/right-panel/ConversationTraceBlock";
 import { McpBlock } from "@/components/right-panel/McpBlock";
 import { SubagentBlock } from "@/components/right-panel/SubagentBlock";
 
-/** Mock Outputs 数据（第一版静态数据）。 */
+/** Mock Outputs 鏁版嵁锛堢涓€鐗堥潤鎬佹暟鎹級銆?*/
 const MOCK_OUTPUTS: OutputItem[] = [
   {
     id: "out-1",
-    name: "rules/Agent客户端代码开发规范.md",
-    description: "客户端代码开发规范文档（新建）",
+    name: "rules/Agent-client-code-guide.md",
+    description: "Client code development guide.",
   },
   {
     id: "out-2",
     name: "AGENTS.md",
-    description: "更新路由表，补充客户端规范入口",
+    description: "Updated project routing guide.",
   },
 ];
 
-/** Mock Sources 数据（第一版静态数据）。 */
+/** Mock Sources 鏁版嵁锛堢涓€鐗堥潤鎬佹暟鎹級銆?*/
 const MOCK_SOURCES: SourceItem[] = [
   {
     id: "src-1",
     name: "docs/desktop-client-development-plan.md",
-    description: "桌面客户端开发规格与实施清单",
+    description: "妗岄潰瀹㈡埛绔紑鍙戣鏍间笌瀹炴柦娓呭崟",
   },
   {
     id: "src-2",
-    name: "rules/Agent代码开发规范.md",
-    description: "后端代码开发规范（技术栈无关）",
+    name: "rules/Agent-code-guide.md",
+    description: "Backend code development guide.",
   },
   {
     id: "src-3",
     name: "docs/ui-guidelines.md",
-    description: "UI 视觉与组件实现指南",
+    description: "UI visual and component guide.",
   },
 ];
 
 /**
- * RightPanel 组件属性。
+ * RightPanel 缁勪欢灞炴€с€?
  */
 interface RightPanelProps {
-  /** 打开日志页面。 */
+  /** 鎵撳紑鏃ュ織椤甸潰銆?*/
   onOpenLogs: () => void;
 }
 
 /**
- * 右侧信息面板组件。
+ * 鍙充晶淇℃伅闈㈡澘缁勪欢銆?
  *
- * 固定宽度 ~280px，通过 Tabs 切换 Outputs/Sources，
- * 底部展示预留扩展区块。
+ * 鍥哄畾瀹藉害 ~280px锛岄€氳繃 Tabs 鍒囨崲 Outputs/Sources锛?
+ * 搴曢儴灞曠ず棰勭暀鎵╁睍鍖哄潡銆?
  *
- * @param props - 组件属性。
- * @returns 右侧信息面板。
+ * @param props - 缁勪欢灞炴€с€?
+ * @returns 鍙充晶淇℃伅闈㈡澘銆?
  */
 export function RightPanel({ onOpenLogs }: RightPanelProps) {
   return (
     <aside className="flex h-full w-72 flex-col border-l border-border bg-background">
       <Tabs defaultValue="outputs" className="flex h-full flex-col">
-        {/* Tab 切换栏 */}
+        {/* Tab 鍒囨崲鏍?*/}
         <TabsList className="mx-2 mt-2 w-[calc(100%-1rem)]">
           <TabsTrigger value="outputs" className="gap-1.5 text-xs">
-            📄 Outputs
+            馃搫 Outputs
           </TabsTrigger>
           <TabsTrigger value="sources" className="gap-1.5 text-xs">
-            🔗 Sources
+            馃敆 Sources
           </TabsTrigger>
         </TabsList>
 
-        {/* 内容区：可滚动 */}
+        {/* 鍐呭鍖猴細鍙粴鍔?*/}
         <div className="flex-1 overflow-hidden">
-          {/* Outputs Tab — 使用独立子组件 */}
+          {/* Outputs Tab 鈥?浣跨敤鐙珛瀛愮粍浠?*/}
           <TabsContent value="outputs" className="mt-0 h-full">
             <ScrollArea className="h-full scrollbar-thin">
               <div className="space-y-1 p-3">
@@ -104,13 +102,12 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
 
                 <Separator className="my-3" />
 
-                {/* 预留扩展区块 — 使用独立子组件 */}
-                <CheckpointBlock />
+                {/* 棰勭暀鎵╁睍鍖哄潡 鈥?浣跨敤鐙珛瀛愮粍浠?*/}
               </div>
             </ScrollArea>
           </TabsContent>
 
-          {/* Sources Tab — 使用独立子组件 */}
+          {/* Sources Tab 鈥?浣跨敤鐙珛瀛愮粍浠?*/}
           <TabsContent value="sources" className="mt-0 h-full">
             <ScrollArea className="h-full scrollbar-thin">
               <div className="space-y-1 p-3">
@@ -118,7 +115,7 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
 
                 <Separator className="my-3" />
 
-                {/* 预留扩展区块 — 使用独立子组件 */}
+                {/* 棰勭暀鎵╁睍鍖哄潡 鈥?浣跨敤鐙珛瀛愮粍浠?*/}
                 <ContextBlock />
                 <McpBlock />
                 <SubagentBlock />

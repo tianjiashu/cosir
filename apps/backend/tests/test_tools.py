@@ -194,55 +194,6 @@ class ToolSchedulerTests(unittest.TestCase):
 
         self.assertEqual([tool.name for tool in visible_tools], ["safe_tool"])
 
-    def test_approval_required_tool_is_visible_but_not_executed(self) -> None:
-        """校验需要审批的工具会被暴露但不会被执。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            AssertionError: 如果需审批的工具在未审批的情况下被执行。
-
-        副作用:
-            创建一个内存中的调度器。
-        """
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            marker_path = Path(temp_dir) / "marker.txt"
-            tool = ToolDefinition(
-                name="write_tool",
-                description="Write test tool.",
-                permission="write_file",
-                required_params=("path",),
-                handler=_write_marker_test_handler,
-                parameters_schema={
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            )
-            scheduler = self._build_scheduler_with_tools(
-                (tool,),
-                allowed_permissions=(),
-                approval_required_permissions=("write_file",),
-            )
-
-            visible_tools = scheduler.list_model_visible_tools()
-            observation = scheduler.execute(
-                ToolCall(tool_name="write_tool", arguments={"path": str(marker_path)})
-            )
-
-            self.assertEqual([visible_tool.name for visible_tool in visible_tools], ["write_tool"])
-            self.assertEqual(observation.status, "approval_required")
-            self.assertEqual(observation.permission, "write_file")
-            self.assertEqual(observation.approval_status, "approval_required")
-            self.assertIn("approval", observation.error)
-            self.assertFalse(marker_path.exists())
-
     def test_path_escape_returns_error_observation(self) -> None:
         """校验安全只读工具无法逃逸出项目根目录。
 
@@ -480,14 +431,12 @@ class ToolSchedulerTests(unittest.TestCase):
         self,
         tools: Iterable[ToolDefinition],
         allowed_permissions: tuple,
-        approval_required_permissions: tuple = (),
     ) -> ToolScheduler:
         """为测试构建一个带有显式工具定义的调度器。
 
         参数:
             tools: 待注册的工具定义。
             allowed_permissions: 调度器允许的权限级别。
-            approval_required_permissions: 需要审批的权限级别。
 
         返回:
             配置了所提供工具定义的 ToolScheduler。
@@ -507,7 +456,6 @@ class ToolSchedulerTests(unittest.TestCase):
             registry,
             allowed_permissions,
             logger,
-            approval_required_permissions=approval_required_permissions,
         )
 
 
