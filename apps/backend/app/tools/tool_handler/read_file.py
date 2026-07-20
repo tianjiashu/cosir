@@ -5,17 +5,16 @@
 ``ReadFileTool`` 内部。
 
 设计边界：
-- 参数校验模型放在 ``app.tools.tool_schemas.ReadFileArgs``，由 Pydantic 负责。
+- 参数校验模型放在 ``app.tools.tool_models.ReadFileArgs``，由 Pydantic 负责。
 - 对外注册仍通过 ``build_read_file_definition`` 返回 ``ToolDefinition``，暂不改变注册逻辑。
 - 工具执行只读文件系统，不写入任何文件，不执行 shell 命令。
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from app.tools.schemas import ToolDefinition, ToolObservation
-from app.tools.tool_schemas import ReadFileArgs
-from app.tools.tool_schemas.text_read_result import TextReadResult
+from app.tools.tool_models import ReadFileArgs
+from app.tools.tool_models.text_read_result import TextReadResult
 
 
 class ReadFileTool:
@@ -409,7 +408,7 @@ class ReadFileTool:
 
                     line = raw_line.rstrip("\r\n")
                     if line_number == 1 and line.startswith(self.utf8_bom):
-                        line = line[len(self.utf8_bom):]
+                        line = line[len(self.utf8_bom) :]
 
                     rendered = self._render_line(line_number, line)
                     addition = len(rendered) + (1 if selected else 0)

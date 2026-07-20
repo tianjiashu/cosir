@@ -1,12 +1,13 @@
 """Tool argument validation."""
 
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-from pydantic import BaseModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,9 @@ def validate_tool_arguments(
         if isinstance(arguments, Mapping):
             missing = [param for param in required_params if param not in arguments]
             if missing:
-                return ToolArgumentValidation(ok=False, error=f"missing required argument: {missing[0]}")
+                return ToolArgumentValidation(
+                    ok=False, error=f"missing required argument: {missing[0]}"
+                )
             return ToolArgumentValidation(ok=True, arguments=dict(arguments))
         return ToolArgumentValidation(ok=False, error="expected object")
 

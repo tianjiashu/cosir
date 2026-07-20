@@ -1,9 +1,10 @@
 """Application-level tool system container."""
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
+
 from app.config.settings import BackendSettings
-from app.tools.tool_execute.scheduler import ToolScheduler
+from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_registry import ToolRegistry
 
@@ -31,9 +32,8 @@ class ToolSystem:
     registry: ToolRegistry
     scheduler: ToolScheduler
 
-
     @classmethod
-    def build_tool_system(self,settings: BackendSettings, logger: logging.Logger):
+    def build_tool_system(self, settings: BackendSettings, logger: logging.Logger):
         """Build and register the process-wide tool system.
 
         Parameters:

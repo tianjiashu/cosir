@@ -55,8 +55,13 @@ coding-agent/
           workflows/         # Agent 执行策略
           agents/            # Agent 角色与配置
         tools/               # 工具系统
-          catalog/           # 工具目录索引
-          execution/         # 工具执行服务层
+          tool_registry.py   # 工具注册/查询/导出
+          tool_system.py     # 工具容器与装配
+          schemas/           # 核心契约值对象
+          tool_models/       # 各工具 pydantic 参数/结果模型
+          validation/        # 参数校验
+          tool_handler/      # 具体工具实现
+          tool_execute/      # 工具执行服务层
         domain/              # 领域服务
           approvals/         # 工具权限审批
           artifacts/         # 产物存储
@@ -91,10 +96,14 @@ coding-agent/
   - `workflows/`：Agent 执行策略，例如 ReAct-like、Plan-and-Execute、StepController 等，可扩展替换。
   - `agents/`：Agent 角色定义与默认配置（AgentProfile）。
 - `apps/backend/app/tools/`：工具系统统一收口。
-  - `catalog/`：工具目录索引，登记可用工具的元信息。
-  - `execution/`：工具执行服务层，负责策略判定、执行记录、生命周期、幂等与并发控制。
-  - 其余模块：Tool Registry、Tool Scheduler、safe_read 内置工具、参数校验、选择器等。
-- `apps/backend/app/domain/`：领域服务，聚合与业务状态相关的 service/store/records 三件套。
+  - `tool_registry.py`：工具注册、查询与导出。
+  - `tool_system.py`：工具容器，装配内置工具为可运行系统。
+  - `schemas/`：核心契约值对象（ToolDefinition / ToolCall / ToolObservation / ModelToolDefinition）。
+  - `tool_models/`：各工具的 pydantic 参数与结果模型（如 ReadFileArgs / TextReadResult）。
+  - `validation/`：工具参数校验（pydantic + jsonschema 双路）。
+  - `tool_handler/`：具体工具实现，每个工具独立文件，承载执行逻辑与 ToolDefinition 组装。
+  - `tool_execute/`：工具执行层，负责权限校验、参数校验、子进程隔离执行与超时强杀（tool_scheduler / tool_executor / tool_error / tool_success）。
+- `apps/backend/app/service/tool_execution/`：工具执行编排层，负责 agent 级可见性策略、生命周期事件记录、模型消息编解码（service / codec / run_result）。
   - `approvals/`：工具权限审批服务。
   - `artifacts/`：产物存储服务。
   - `human_input/`：人工输入服务。
@@ -127,6 +136,7 @@ coding-agent/
 
 - 项目想法和讨论事实源：`docs/idea-requirements.md`
 - 代码开发规范：`rules/Agent代码开发规范.md`
+- Python 代码开发规范（后端工具链/Ruff/mypy/uv 补充）：`rules/Python代码开发规范.md`
 - 客户端代码开发规范（Tauri/React/TS 派生附录）：`rules/Agent客户端代码开发规范.md`
 - 交互澄清规则：`rules/global-interaction-clarification.md`
 - 成熟机制复用规则：`rules/mature-mechanism-reuse.md`

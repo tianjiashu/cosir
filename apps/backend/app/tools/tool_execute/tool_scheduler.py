@@ -1,12 +1,12 @@
 """Tool scheduler."""
 
 import logging
-from typing import Iterable, List
+from collections.abc import Iterable
 
-from app.tools.tool_registry import ToolRegistry
-from app.tools.tool_execute.executor import ToolExecutor
-from app.tools.tool_execute.results import tool_error
 from app.tools.schemas import ToolCall, ToolDefinition, ToolObservation
+from app.tools.tool_execute.tool_error import tool_error
+from app.tools.tool_execute.tool_executor import ToolExecutor
+from app.tools.tool_registry import ToolRegistry
 from app.tools.validation.arguments import validate_tool_arguments
 
 
@@ -27,7 +27,7 @@ class ToolScheduler:
         self._logger = logger
         self._executor = executor or ToolExecutor(logger)
 
-    def list_model_visible_tools(self) -> List[ToolDefinition]:
+    def list_model_visible_tools(self) -> list[ToolDefinition]:
         """Return tools visible to the model under the scheduler policy."""
 
         return [
@@ -35,6 +35,11 @@ class ToolScheduler:
             for tool in self._registry.get_all_definitions()
             if tool.visible_by_default and tool.permission in self._allowed_permissions
         ]
+
+    def get_tool_definition(self, tool_name: str) -> ToolDefinition | None:
+        """Return a registered tool definition by name."""
+
+        return self._registry.get_tool_definition(tool_name)
 
     def execute(self, call: ToolCall) -> ToolObservation:
         """Execute one tool call and return a normalized observation."""

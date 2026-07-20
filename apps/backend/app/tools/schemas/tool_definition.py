@@ -1,9 +1,12 @@
 """Tool definition value object."""
 
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any
 
 from pydantic import BaseModel
+
+from app.tools.schemas import ModelToolDefinition
 
 
 @dataclass(frozen=True)
@@ -40,3 +43,12 @@ class ToolDefinition:
             visible_by_default=self.visible_by_default,
             resource_keys=self.resource_keys,
         )
+
+    def to_model_tool_definition(self) -> dict[str, Any]:
+        """Return a model-facing tool definition."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters_schema": self.parameters_schema,
+        }
+
