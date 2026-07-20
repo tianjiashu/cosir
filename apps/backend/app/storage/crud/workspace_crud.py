@@ -14,7 +14,7 @@ from sqlalchemy import asc, select
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.model.workspace_model import WorkspaceModel
-from app.service.task.records import WorkspaceRecord
+from app.models import WorkspaceRecord
 from app.utils.datetime_utils import from_text, to_text
 
 

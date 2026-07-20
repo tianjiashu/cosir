@@ -10,7 +10,8 @@ from typing import Any
 from sqlalchemy import asc, delete, desc, func, select
 from sqlalchemy.orm import sessionmaker
 
-from app.service.trace.records import TraceEventRecord, TraceSpanRecord
+from app.models import TraceEventRecord
+from app.models import TraceSpanRecord
 from app.storage.model.trace_model import TraceEventModel, TraceSpanModel
 from app.utils.datetime_utils import from_text as _from_text
 
@@ -21,29 +22,51 @@ class TraceStore:
     _sequence_locks: dict[Path, Lock] = {}
     _sequence_locks_guard = Lock()
 
-    def __init__(self, session_factory: sessionmaker) -> None:
-        """Initialize the trace store."""
+    def __init__(self, session_factory: sessionmaker, database_path: Path) -> None:
+        """初始化 trace store。
+
+        参数:
+            session_factory: 主库 session 工厂（由 ``StorageContext`` 提供，engine
+                与连接池的生命周期由 ``StorageContext`` 统一管理，本 store 不持有、
+                不 dispose 共享 engine）。
+            database_path: 主库 SQLite 文件路径（由 ``StorageContext`` 注入），仅用于
+                为同一物理数据库选取进程内共享的序列锁；本 store 不反查共享 engine。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            为该数据库路径登记/复用进程内共享序列锁。
+        """
 
         self._session_factory = session_factory
+        self._database_path = database_path
         self._sequence_lock = self._lock_for_database(self._database_path)
 
     def close(self) -> None:
-        """Dispose the SQLite engine held by this store.
+        """释放本 store 持有的进程内资源。
 
-        Parameters:
-            None.
+        TraceStore 共享 ``StorageContext`` 的主库 engine 与连接池，不自行 dispose
+        共享引擎（否则会关闭其他 Crud 共用的连接池）；共享 engine 的生命周期由
+        ``StorageContext.close()`` 统一负责。本方法保留仅为兼容既有调用。
 
-        Returns:
-            None.
+        参数:
+            无。
 
-        Raises:
-            None.
+        返回:
+            无。
 
-        Side effects:
-            Closes pooled SQLite connections so the database file can be removed on Windows.
+        异常:
+            无。
+
+        副作用:
+            无（不释放共享资源）。
         """
 
-        self._engine.dispose()
+        return
 
     def next_sequence(self, run_id: str) -> int:
         """返回同一 run 内下一个 trace event 序号。"""

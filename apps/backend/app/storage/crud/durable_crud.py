@@ -7,9 +7,9 @@ from uuid import uuid4
 from sqlalchemy import asc, delete, select, update
 from sqlalchemy.orm import sessionmaker
 
-from app.core.runs.records import RunRecord
+from app.models import RunRecord
 from app.storage.model.durable_model import DurableRunModel
-from app.utils.datetime_utils import from_text, to_text, utc_now
+from app.utils.datetime_utils import utc_now, to_text, from_text
 
 _LOGGER = logging.getLogger("coding_agent.backend")
 
@@ -27,11 +27,11 @@ class DurableRunStore:
         self._session_factory = session_factory
 
     def create_for_turn(
-        self,
-        task_id: str,
-        turn_id: str,
-        status: str,
-        thread_id: str | None = None,
+            self,
+            task_id: str,
+            turn_id: str,
+            status: str,
+            thread_id: str | None = None,
     ) -> RunRecord:
         """Create a run for a turn, or return the existing run.
 
@@ -54,9 +54,8 @@ class DurableRunStore:
         existing = self.get_by_turn(turn_id)
         if existing is not None:
             return existing
-        now = _utc_now()
+        now = utc_now()
         run = RunRecord(
-            str(uuid4()),
             task_id,
             turn_id,
             thread_id or str(uuid4()),
@@ -69,7 +68,7 @@ class DurableRunStore:
             now,
         )
         with self._session_factory.begin() as session:
-            session.add(_run_model(run))
+            session.add(self._run_model(run))
         return run
 
     def get(self, run_id: str) -> RunRecord:
@@ -92,7 +91,7 @@ class DurableRunStore:
             row = session.get(DurableRunModel, run_id)
         if row is None:
             raise KeyError(run_id)
-        return _run_from_model(row)
+        return self._run_from_model(row)
 
     def get_by_turn(self, turn_id: str) -> RunRecord | None:
         """Return the run for a turn when one exists.
@@ -114,7 +113,7 @@ class DurableRunStore:
             row = session.execute(
                 select(DurableRunModel).where(DurableRunModel.turn_id == turn_id)
             ).scalar_one_or_none()
-        return _run_from_model(row) if row is not None else None
+        return self._run_from_model(row) if row is not None else None
 
     def list_by_task(self, task_id: str) -> list[RunRecord]:
         """Return all runs for a task.
@@ -142,7 +141,7 @@ class DurableRunStore:
                 .scalars()
                 .all()
             )
-        return [_run_from_model(row) for row in rows]
+        return [self._run_from_model(row) for row in rows]
 
     def delete_by_task_ids(self, task_ids: Sequence[str]) -> list[str]:
         """Delete durable runs for a set of tasks.
@@ -196,13 +195,13 @@ class DurableRunStore:
         return run_ids
 
     def mark_status(
-        self,
-        run_id: str,
-        status: str,
-        wait_reason: str | None = None,
-        active_step_id: str | None = None,
-        active_wait_id: str | None = None,
-        interruption_reason: str | None = None,
+            self,
+            run_id: str,
+            status: str,
+            wait_reason: str | None = None,
+            active_step_id: str | None = None,
+            active_wait_id: str | None = None,
+            interruption_reason: str | None = None,
     ) -> RunRecord:
         """Update run status fields.
 
@@ -234,45 +233,41 @@ class DurableRunStore:
                     active_step_id=active_step_id,
                     active_wait_id=active_wait_id,
                     interruption_reason=interruption_reason,
-                    updated_at=_to_text(_utc_now()),
+                    updated_at=to_text(utc_now()),
                 )
             )
         if result.rowcount != 1:
             raise KeyError(run_id)
         return self.get(run_id)
 
+    def _run_from_model(self, row: DurableRunModel) -> RunRecord:
+        """Convert a SQLAlchemy model to a run record."""
 
-def _run_model(run: RunRecord) -> DurableRunModel:
-    """Convert a run record to a SQLAlchemy model."""
+        return RunRecord(
+            row.task_id,
+            row.turn_id,
+            row.thread_id,
+            row.status,
+            row.wait_reason,
+            row.active_step_id,
+            row.active_wait_id,
+            row.interruption_reason,
+            from_text(row.created_at),
+            from_text(row.updated_at),
+        )
 
-    return DurableRunModel(
-        run_id=run.run_id,
-        task_id=run.task_id,
-        turn_id=run.turn_id,
-        thread_id=run.thread_id,
-        status=run.status,
-        wait_reason=run.wait_reason,
-        active_step_id=run.active_step_id,
-        active_wait_id=run.active_wait_id,
-        interruption_reason=run.interruption_reason,
-        created_at=_to_text(run.created_at),
-        updated_at=_to_text(run.updated_at),
-    )
+    def _run_model(self, run: RunRecord) -> DurableRunModel:
+        """Convert a run record to a SQLAlchemy model."""
 
-
-def _run_from_model(row: DurableRunModel) -> RunRecord:
-    """Convert a SQLAlchemy model to a run record."""
-
-    return RunRecord(
-        row.run_id,
-        row.task_id,
-        row.turn_id,
-        row.thread_id,
-        row.status,
-        row.wait_reason,
-        row.active_step_id,
-        row.active_wait_id,
-        row.interruption_reason,
-        _from_text(row.created_at),
-        _from_text(row.updated_at),
-    )
+        return DurableRunModel(
+            task_id=run.task_id,
+            turn_id=run.turn_id,
+            thread_id=run.thread_id,
+            status=run.status,
+            wait_reason=run.wait_reason,
+            active_step_id=run.active_step_id,
+            active_wait_id=run.active_wait_id,
+            interruption_reason=run.interruption_reason,
+            created_at=to_text(run.created_at),
+            updated_at=to_text(run.updated_at),
+        )

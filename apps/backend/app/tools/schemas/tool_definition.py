@@ -3,11 +3,7 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
-
 from pydantic import BaseModel
-
-from app.tools.schemas import ModelToolDefinition
-
 
 @dataclass(frozen=True)
 class ToolDefinition:

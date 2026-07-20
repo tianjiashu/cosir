@@ -2,16 +2,12 @@
 
 单一职责：提供 ``tasks`` 表的纯单表 CRUD 操作。
 """
-
-from pathlib import Path
-from typing import List, Optional
-from uuid import uuid4
-
+from typing import List
 from sqlalchemy import select, update
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.model.task_model import TaskModel
-from app.service.task.records import TaskRecord
+from app.models import TaskRecord
 from app.utils.datetime_utils import from_text, to_text, utc_now
 
 

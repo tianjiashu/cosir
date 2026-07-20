@@ -4,8 +4,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from app.config.logging import list_log_files
-from app.config.logging import query_log_files
+from app.config.logging import list_log_files, query_log_files
 from app.storage.crud.trace import TraceStore
 
 
@@ -32,7 +31,9 @@ class TraceQueryService:
         self._store = store
         self._log_dir = log_dir
 
-    def list_events(self, trace_id: str = "", run_id: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    def list_events(
+        self, trace_id: str = "", run_id: str = "", limit: int = 200
+    ) -> list[dict[str, Any]]:
         """查询 trace event。
 
         参数:
@@ -50,7 +51,10 @@ class TraceQueryService:
             读取 SQLite。
         """
 
-        return [event.to_dict() for event in self._store.list_events(trace_id=trace_id, run_id=run_id, limit=limit)]
+        return [
+            event.to_dict()
+            for event in self._store.list_events(trace_id=trace_id, run_id=run_id, limit=limit)
+        ]
 
     def list_traces(self, limit: int = 100) -> list[dict[str, Any]]:
         """返回 trace 摘要列表。
@@ -94,7 +98,9 @@ class TraceQueryService:
             "logs": self.list_logs(trace_id=trace_id),
         }
 
-    def list_spans(self, trace_id: str = "", run_id: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    def list_spans(
+        self, trace_id: str = "", run_id: str = "", limit: int = 200
+    ) -> list[dict[str, Any]]:
         """查询 trace span。
 
         参数:
@@ -112,7 +118,10 @@ class TraceQueryService:
             读取 SQLite。
         """
 
-        return [span.to_dict() for span in self._store.list_spans(trace_id=trace_id, run_id=run_id, limit=limit)]
+        return [
+            span.to_dict()
+            for span in self._store.list_spans(trace_id=trace_id, run_id=run_id, limit=limit)
+        ]
 
     def list_logs(
         self,

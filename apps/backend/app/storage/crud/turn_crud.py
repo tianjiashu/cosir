@@ -14,20 +14,8 @@ from sqlalchemy import asc, select, update
 from sqlalchemy.orm import sessionmaker
 
 from app.storage.model.turn_model import TurnModel
-from app.service.task.records import TurnRecord
+from app.models import TurnRecord
 from app.utils.datetime_utils import from_text, to_text, utc_now
-
-
-def _turn_from_model(row: TurnModel) -> TurnRecord:
-    """Convert a turn ORM model to a domain record."""
-    return TurnRecord(
-        row.turn_id,
-        row.task_id,
-        row.input_text,
-        row.status,
-        from_text(row.created_at),
-        from_text(row.updated_at),
-    )
 
 
 class TurnCrud:
@@ -64,7 +52,7 @@ class TurnCrud:
             row = session.get(TurnModel, turn_id)
         if row is None:
             raise KeyError(turn_id)
-        return _turn_from_model(row)
+        return self._turn_from_model(row)
 
     def list_by_task(self, task_id: str) -> List[TurnRecord]:
         """List all turns for a task."""
@@ -79,7 +67,7 @@ class TurnCrud:
                 .scalars()
                 .all()
             )
-        return [_turn_from_model(row) for row in rows]
+        return [self._turn_from_model(row) for row in rows]
 
     def update_status(self, turn_id: str, status: str) -> TurnRecord:
         """Update turn status."""
@@ -118,7 +106,7 @@ class TurnCrud:
             ).scalar_one_or_none()
         if row is None:
             raise KeyError(task_id)
-        return _turn_from_model(row)
+        return self._turn_from_model(row)
 
     def list_ids_by_task_ids(self, task_ids: list[str]) -> list[str]:
         """Return turn IDs for a set of task IDs."""
@@ -144,3 +132,14 @@ class TurnCrud:
             return
         with self._session_factory.begin() as session:
             session.execute(delete(TurnModel).where(TurnModel.turn_id.in_(turn_ids)))
+
+    def _turn_from_model(self, row: TurnModel) -> TurnRecord:
+        """Convert a turn ORM model to a domain record."""
+        return TurnRecord(
+            row.turn_id,
+            row.task_id,
+            row.input_text,
+            row.status,
+            from_text(row.created_at),
+            from_text(row.updated_at),
+        )

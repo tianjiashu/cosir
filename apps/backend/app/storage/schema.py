@@ -6,8 +6,10 @@ from sqlalchemy import Engine, inspect, text
 
 from app.storage.model.durable_model import DurableRunModel
 from app.storage.model.log_model import LogEntryModel
-from app.storage.model.task_model import TaskModel, TurnModel, WorkspaceModel
+from app.storage.model.task_model import TaskModel
 from app.storage.model.trace_model import TraceEventModel, TraceSpanModel
+from app.storage.model.turn_model import TurnModel
+from app.storage.model.workspace_model import WorkspaceModel
 
 APP_MODELS = (
     WorkspaceModel,

@@ -35,6 +35,7 @@ class StorageContext:
             database_path: Path to the application SQLite database file.
         """
 
+        self.database_path = database_path
         self._engine = create_sqlite_engine(database_path)
         initialize_app_schema(self._engine)
         self.session_factory: sessionmaker = create_session_factory(self._engine)

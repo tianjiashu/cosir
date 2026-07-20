@@ -79,7 +79,7 @@ class TraceRecorder:
             self._logger.exception(
                 "task_traces_delete_failed",
                 extra={
-                    "msg": f"删除任务集合下的 trace 记录失败",
+                    "msg": "删除任务集合下的 trace 记录失败",
                     "data": {"task_count": len(task_ids), "operation": "delete_task_traces"},
                 },
             )
@@ -89,7 +89,7 @@ class TraceRecorder:
         self._logger.info(
             "task_traces_deleted",
             extra={
-                "msg": f"任务集合下的 trace 记录已删除",
+                "msg": "任务集合下的 trace 记录已删除",
                 "data": {"task_count": len(task_ids)},
             },
         )
@@ -237,7 +237,9 @@ class TraceRecorder:
         if not span_id:
             return
         try:
-            self._store.finish_span(span_id, status=status, error=redact_value(error or {}) if error else None)
+            self._store.finish_span(
+                span_id, status=status, error=redact_value(error or {}) if error else None
+            )
         except Exception as exc:
             self._logger.warning(
                 "trace_span_write_failed",
