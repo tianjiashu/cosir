@@ -1,17 +1,15 @@
 """SQLite CRUD for durable run state."""
 
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import List, Optional, Sequence
+from collections.abc import Sequence
 from uuid import uuid4
 
 from sqlalchemy import asc, delete, select, update
+from sqlalchemy.orm import sessionmaker
 
 from app.core.runs.records import RunRecord
-from app.storage.database import create_session_factory
-from app.storage.model.durable import DurableRunModel
-from app.storage.schema import initialize_app_schema
+from app.storage.model.durable_model import DurableRunModel
+from app.utils.datetime_utils import from_text, to_text, utc_now
 
 _LOGGER = logging.getLogger("coding_agent.backend")
 
@@ -19,49 +17,21 @@ _LOGGER = logging.getLogger("coding_agent.backend")
 class DurableRunStore:
     """Read and write durable run state."""
 
-    def __init__(self, database_path: Path) -> None:
+    def __init__(self, session_factory: sessionmaker) -> None:
         """Initialize the durable run store.
 
         Parameters:
-            database_path: SQLite database path.
-
-        Returns:
-            None.
-
-        Raises:
-            sqlalchemy.exc.SQLAlchemyError: If schema initialization fails.
-
-        Side effects:
-            Initializes the application SQLite schema.
+            session_factory: SQLAlchemy session factory (from ``StorageContext``).
         """
 
-        self._engine = initialize_app_schema(database_path)
-        self._session_factory = create_session_factory(self._engine)
-
-    def close(self) -> None:
-        """Dispose the SQLite engine held by this store.
-
-        Parameters:
-            None.
-
-        Returns:
-            None.
-
-        Raises:
-            None.
-
-        Side effects:
-            Closes pooled SQLite connections.
-        """
-
-        self._engine.dispose()
+        self._session_factory = session_factory
 
     def create_for_turn(
         self,
         task_id: str,
         turn_id: str,
         status: str,
-        thread_id: Optional[str] = None,
+        thread_id: str | None = None,
     ) -> RunRecord:
         """Create a run for a turn, or return the existing run.
 
@@ -69,7 +39,7 @@ class DurableRunStore:
             task_id: Owning task identifier.
             turn_id: Owning turn identifier.
             status: Initial run status.
-            thread_id: Optional stable runtime thread identifier.
+            thread_id: Optional stable tool_execute thread identifier.
 
         Returns:
             Created or existing run record.
@@ -124,7 +94,7 @@ class DurableRunStore:
             raise KeyError(run_id)
         return _run_from_model(row)
 
-    def get_by_turn(self, turn_id: str) -> Optional[RunRecord]:
+    def get_by_turn(self, turn_id: str) -> RunRecord | None:
         """Return the run for a turn when one exists.
 
         Parameters:
@@ -146,7 +116,7 @@ class DurableRunStore:
             ).scalar_one_or_none()
         return _run_from_model(row) if row is not None else None
 
-    def list_by_task(self, task_id: str) -> List[RunRecord]:
+    def list_by_task(self, task_id: str) -> list[RunRecord]:
         """Return all runs for a task.
 
         Parameters:
@@ -163,11 +133,15 @@ class DurableRunStore:
         """
 
         with self._session_factory() as session:
-            rows = session.execute(
-                select(DurableRunModel)
-                .where(DurableRunModel.task_id == task_id)
-                .order_by(asc(DurableRunModel.created_at), asc(DurableRunModel.run_id))
-            ).scalars().all()
+            rows = (
+                session.execute(
+                    select(DurableRunModel)
+                    .where(DurableRunModel.task_id == task_id)
+                    .order_by(asc(DurableRunModel.created_at), asc(DurableRunModel.run_id))
+                )
+                .scalars()
+                .all()
+            )
         return [_run_from_model(row) for row in rows]
 
     def delete_by_task_ids(self, task_ids: Sequence[str]) -> list[str]:
@@ -194,11 +168,15 @@ class DurableRunStore:
                 run_ids = [
                     row[0]
                     for row in session.execute(
-                        select(DurableRunModel.run_id).where(DurableRunModel.task_id.in_(tuple(task_ids)))
+                        select(DurableRunModel.run_id).where(
+                            DurableRunModel.task_id.in_(tuple(task_ids))
+                        )
                     ).all()
                 ]
                 if run_ids:
-                    session.execute(delete(DurableRunModel).where(DurableRunModel.run_id.in_(run_ids)))
+                    session.execute(
+                        delete(DurableRunModel).where(DurableRunModel.run_id.in_(run_ids))
+                    )
         except Exception:
             _LOGGER.exception(
                 "durable_runs_delete_failed",
@@ -221,10 +199,10 @@ class DurableRunStore:
         self,
         run_id: str,
         status: str,
-        wait_reason: Optional[str] = None,
-        active_step_id: Optional[str] = None,
-        active_wait_id: Optional[str] = None,
-        interruption_reason: Optional[str] = None,
+        wait_reason: str | None = None,
+        active_step_id: str | None = None,
+        active_wait_id: str | None = None,
+        interruption_reason: str | None = None,
     ) -> RunRecord:
         """Update run status fields.
 
@@ -262,24 +240,6 @@ class DurableRunStore:
         if result.rowcount != 1:
             raise KeyError(run_id)
         return self.get(run_id)
-
-
-def _utc_now() -> datetime:
-    """Return the current UTC time."""
-
-    return datetime.now(timezone.utc)
-
-
-def _to_text(value: datetime) -> str:
-    """Serialize a datetime to ISO-8601 text."""
-
-    return value.isoformat()
-
-
-def _from_text(value: str) -> datetime:
-    """Parse ISO-8601 datetime text."""
-
-    return datetime.fromisoformat(value)
 
 
 def _run_model(run: RunRecord) -> DurableRunModel:

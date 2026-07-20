@@ -1,28 +1,19 @@
 """SQLAlchemy schema initialization."""
 
 import sys
-from pathlib import Path
 
 from sqlalchemy import Engine, inspect, text
 
-from app.storage.database import create_sqlite_engine
-from app.storage.model.artifact import ArtifactModel
-from app.storage.model.durable import DurableRunModel
-from app.storage.model.log import LogEntryModel
-from app.storage.model.task import EventModel, StepModel, TaskModel, TurnModel, WorkspaceModel
-from app.storage.model.tool_execution import ToolCallModel, ToolExecutionModel
-from app.storage.model.trace import TraceEventModel, TraceSpanModel
+from app.storage.model.durable_model import DurableRunModel
+from app.storage.model.log_model import LogEntryModel
+from app.storage.model.task_model import TaskModel, TurnModel, WorkspaceModel
+from app.storage.model.trace_model import TraceEventModel, TraceSpanModel
 
 APP_MODELS = (
     WorkspaceModel,
     TaskModel,
     TurnModel,
-    StepModel,
-    EventModel,
     DurableRunModel,
-    ToolCallModel,
-    ToolExecutionModel,
-    ArtifactModel,
     TraceEventModel,
     TraceSpanModel,
 )
@@ -30,28 +21,23 @@ LOG_MODELS = (LogEntryModel,)
 LOG_SCHEMA_VERSION = 2
 
 
-def initialize_app_schema(database_path: Path) -> Engine:
+def initialize_app_schema(engine: Engine) -> None:
     """Initialize the main application SQLite schema.
 
     Parameters:
-        database_path: Main application database file.
-
-    Returns:
-        Initialized SQLAlchemy engine.
+        engine: Initialized SQLAlchemy engine (from ``create_sqlite_engine``).
 
     Raises:
         sqlalchemy.exc.SQLAlchemyError: If table creation or migration fails.
 
     Side effects:
-        Creates the database file and missing application tables/columns.
+        Creates missing application tables/columns.
     """
 
-    engine = create_sqlite_engine(database_path)
     with engine.begin() as connection:
         for model in APP_MODELS:
             model.__table__.create(bind=connection, checkfirst=True)
         _ensure_model_columns(connection, engine)
-    return engine
 
 
 def _default_literal_for_type(column_type) -> str:
@@ -108,7 +94,9 @@ def _ensure_model_columns(connection, engine) -> None:
             if column.nullable:
                 column_ddl = f"{column.name} {ddl_type}"
             elif column.server_default is not None:
-                column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {column.server_default.arg}"
+                column_ddl = (
+                    f"{column.name} {ddl_type} NOT NULL DEFAULT {column.server_default.arg}"
+                )
             else:
                 default = _default_literal_for_type(column.type)
                 column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default}"
@@ -116,14 +104,11 @@ def _ensure_model_columns(connection, engine) -> None:
             sys.stderr.write(f"[storage.schema] added missing column {table.name}.{column.name}\n")
 
 
-def initialize_log_schema(database_path: Path) -> Engine:
+def initialize_log_schema(engine: Engine) -> None:
     """Initialize the log SQLite schema.
 
     Parameters:
-        database_path: Log database file.
-
-    Returns:
-        Initialized SQLAlchemy engine.
+        engine: Initialized SQLAlchemy engine (from ``create_sqlite_engine``).
 
     Raises:
         sqlalchemy.exc.SQLAlchemyError: If table creation fails.
@@ -132,7 +117,6 @@ def initialize_log_schema(database_path: Path) -> Engine:
         Creates or rebuilds the log table schema.
     """
 
-    engine = create_sqlite_engine(database_path)
     with engine.begin() as connection:
         current_version = int(connection.execute(text("PRAGMA user_version")).scalar_one())
         if current_version == 0 and _has_table(connection, "log_entries"):
@@ -142,7 +126,6 @@ def initialize_log_schema(database_path: Path) -> Engine:
             connection.execute(text(f"PRAGMA user_version = {LOG_SCHEMA_VERSION}"))
         elif current_version < LOG_SCHEMA_VERSION:
             _rebuild_log_schema(connection, current_version, LOG_SCHEMA_VERSION)
-    return engine
 
 
 def _has_table(connection, table_name: str) -> bool:

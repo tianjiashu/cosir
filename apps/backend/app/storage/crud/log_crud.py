@@ -7,9 +7,9 @@ from typing import Any
 from sqlalchemy import Engine, Select, asc, desc, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.storage.database import create_session_factory
-from app.storage.log_records import LogEntryRecord, LogQuery
-from app.storage.model.log import LogEntryModel
+from app.storage.database import create_session_factory, create_sqlite_engine
+from app.service.logging.log_records import LogEntryRecord, LogQuery
+from app.storage.model.log_model import LogEntryModel
 from app.storage.schema import initialize_log_schema
 
 
@@ -34,7 +34,8 @@ class LogStore:
         """
 
         self._database_path = database_path
-        self._engine = initialize_log_schema(database_path)
+        self._engine = create_sqlite_engine(database_path)
+        initialize_log_schema(self._engine)
         self._session_factory = create_session_factory(self._engine)
 
     def insert_many(self, entries: list[LogEntryRecord]) -> None:

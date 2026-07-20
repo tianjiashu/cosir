@@ -1,11 +1,10 @@
 """SQLAlchemy 数据库基础设施。"""
 
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from sqlalchemy import Engine, create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import NullPool
 
 
 def create_sqlite_engine(database_path: Path) -> Engine:
@@ -29,7 +28,7 @@ def create_sqlite_engine(database_path: Path) -> Engine:
     engine = create_engine(
         f"sqlite:///{database_path}",
         future=True,
-        pool_pre_ping=True,
+        poolclass=NullPool,
         connect_args={"timeout": 3},
     )
 
@@ -79,31 +78,3 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     """
 
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
-
-
-@contextmanager
-def session_scope(session_factory: sessionmaker[Session]) -> Iterator[Session]:
-    """提供事务型 Session 上下文生成器。
-
-    参数:
-        session_factory: SQLAlchemy Session 工厂。
-
-    返回:
-        可 yield 一个 Session 的生成器。
-
-    异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果事务执行失败。
-
-    副作用:
-        成功时提交事务，失败时回滚，并最终关闭 Session。
-    """
-
-    session = session_factory()
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
