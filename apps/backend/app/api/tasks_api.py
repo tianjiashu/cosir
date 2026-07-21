@@ -1,7 +1,7 @@
-"""浠诲姟鍩熺鐐广€?
+"""任务领域端点。
 
-鍖呭惈浠诲姟鏌ヨ銆佷簨浠躲€乧heckpoint 涓庡彇娑堢鐐广€傛墍鏈夌鐐归€氳繃
-妯″潡绾?``@app.*`` 瑁呴グ鍣ㄧ洿鎺ユ敞鍐屽埌 ``app.api.app.app`` 鍗曚緥涓娿€?
+包含任务查询、事件与 checkpoint 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
+直接注册到 ``app.api.app.app`` 单例中。
 """
 
 from fastapi import Depends, HTTPException
@@ -13,19 +13,19 @@ from app.core.runtime.runner import AgentRuntime
 
 @app.get("/health")
 async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
-    """杩斿洖鍚庣鍋ュ悍鐘舵€佷笌褰撳墠妯″瀷閰嶇疆鎽樿銆?
+    """返回后端健康状态与当前模型配置摘要。
 
-    鍙傛暟:
-        runtime: 閫氳繃渚濊禆娉ㄥ叆鐨勮繍琛屾椂鍗曚緥銆?
+    参数:
+        runtime: 通过依赖注入的运行时单例。
 
-    杩斿洖:
-        涓嶅惈 secret 鍘熸枃鐨勫仴搴风姸鎬佸瓧鍏搞€?
+    返回:
+        不含 secret 原文的健康状态字典。
 
-    寮傚父:
-        鏃犮€?
+    异常:
+        无。
 
-    鍓綔鐢?
-        鏃犮€?
+    副作用:
+        无。
     """
 
     return runtime.backend_health()
@@ -33,20 +33,20 @@ async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
 
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> dict:
-    """杩斿洖浠诲姟鐘舵€併€?
+    """返回任务状态。
 
-    鍙傛暟:
-        task_id: 鏉ヨ嚜璺敱鐨勪换鍔℃爣璇嗐€?
-        runtime: 閫氳繃渚濊禆娉ㄥ叆鐨勮繍琛屾椂鍗曚緥銆?
+    参数:
+        task_id: 来自路由的任务标识。
+        runtime: 通过依赖注入的运行时单例。
 
-    杩斿洖:
-        宸插瓨鍌ㄧ殑浠诲姟鐘舵€併€?
+    返回:
+        已存储的任务状态。
 
-    寮傚父:
-        HTTPException: 褰撲换鍔′笉瀛樺湪鏃舵姏鍑恒€?
+    异常:
+        HTTPException: 当任务不存在时抛出。
 
-    鍓綔鐢?
-        鏃犮€?
+    副作用:
+        无。
     """
 
     try:
@@ -57,44 +57,44 @@ async def get_task(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -
 
 @app.get("/tasks/{task_id}/events")
 async def list_events(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> list:
-    """杩斿洖浠诲姟鐨勮繍琛屾椂浜嬩欢銆?
+    """返回任务的运行时事件。
 
-    鍙傛暟:
-        task_id: 鏉ヨ嚜璺敱鐨勪换鍔℃爣璇嗐€?
-        runtime: 閫氳繃渚濊禆娉ㄥ叆鐨勮繍琛屾椂鍗曚緥銆?
+    参数:
+        task_id: 来自路由的任务标识。
+        runtime: 通过依赖注入的运行时单例。
 
-    杩斿洖:
-        璇ヤ换鍔＄殑鏈夊簭浜嬩欢鍒楄〃銆?
+    返回:
+        该任务的有序事件列表。
 
-    寮傚父:
-        HTTPException: 褰撲换鍔′笉瀛樺湪鏃舵姏鍑恒€?
+    异常:
+        HTTPException: 当任务不存在时抛出。
 
-    鍓綔鐢?
-        鏃犮€?
+    副作用:
+        无。
     """
 
     try:
-        return [event.to_dict() for event in runtime.list_events(task_id)]
+        return [event.to_dict() for event in await runtime.list_events(task_id)]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
 
 
 @app.get("/tasks/{task_id}/turns")
 async def list_turns(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> list:
-    """杩斿洖浠诲姟涓嬬殑杞鍒楄〃銆?
+    """返回任务下的轮次列表。
 
-    鍙傛暟:
-        task_id: 鏉ヨ嚜璺敱鐨勪换鍔℃爣璇嗐€?
-        runtime: 閫氳繃渚濊禆娉ㄥ叆鐨勮繍琛屾椂鍗曚緥銆?
+    参数:
+        task_id: 来自路由的任务标识。
+        runtime: 通过依赖注入的运行时单例。
 
-    杩斿洖:
-        璇ヤ换鍔′笅鐨勬湁搴忚疆娆″垪琛ㄣ€?
+    返回:
+        该任务下的有序轮次列表。
 
-    寮傚父:
-        HTTPException: 褰撲换鍔′笉瀛樺湪鏃舵姏鍑恒€?
+    异常:
+        HTTPException: 当任务不存在时抛出。
 
-    鍓綔鐢?
-        鏃犮€?
+    副作用:
+        无。
     """
 
     try:
@@ -103,23 +103,22 @@ async def list_turns(task_id: str, runtime: AgentRuntime = Depends(get_runtime))
         raise HTTPException(status_code=404, detail="task not found") from exc
 
 
-
 @app.post("/tasks/{task_id}/cancel")
 async def cancel_task(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> dict:
-    """灏嗕换鍔℃爣璁颁负宸插彇娑堛€?
+    """将任务标记为已取消。
 
-    鍙傛暟:
-        task_id: 鏉ヨ嚜璺敱鐨勪换鍔℃爣璇嗐€?
-        runtime: 閫氳繃渚濊禆娉ㄥ叆鐨勮繍琛屾椂鍗曚緥銆?
+    参数:
+        task_id: 来自路由的任务标识。
+        runtime: 通过依赖注入的运行时单例。
 
-    杩斿洖:
-        鏇存柊鍚庣殑浠诲姟鐘舵€併€?
+    返回:
+        更新后的任务状态。
 
-    寮傚父:
-        HTTPException: 褰撲换鍔′笉瀛樺湪鏃舵姏鍑恒€?
+    异常:
+        HTTPException: 当任务不存在时抛出。
 
-    鍓綔鐢?
-        鍦ㄨ繍琛屾椂瀛樺偍涓洿鏂颁换鍔＄姸鎬併€?
+    副作用:
+        在运行时存储中更新任务状态。
     """
 
     try:
