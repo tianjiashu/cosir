@@ -2,13 +2,17 @@
 
 包含任务查询、事件与 checkpoint 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
 直接注册到 ``app.api.app.app`` 单例中。
+
+分层约定：任务查询与轮次列表直接依赖 ``TaskService``；事件回放、取消与健康检查
+属于运行时执行 / 生命周期职责，仍依赖 ``AgentRuntime``。
 """
 
 from fastapi import Depends, HTTPException
 
 from app.api.app import app
-from app.api.dependencies import get_runtime
+from app.api.dependencies import get_runtime, get_task_service
 from app.core.runtime.runner import AgentRuntime
+from app.service.task.task_service import TaskService
 
 
 @app.get("/health")
@@ -32,12 +36,15 @@ async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
 
 
 @app.get("/tasks/{task_id}")
-async def get_task(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> dict:
+async def get_task(
+    task_id: str,
+    task_service: TaskService = Depends(get_task_service),
+) -> dict:
     """返回任务状态。
 
     参数:
         task_id: 来自路由的任务标识。
-        runtime: 通过依赖注入的运行时单例。
+        task_service: 通过依赖注入的任务 service。
 
     返回:
         已存储的任务状态。
@@ -50,79 +57,6 @@ async def get_task(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -
     """
 
     try:
-        return runtime.get_task(task_id).to_dict()
+        return task_service.get_task(task_id).to_dict()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-
-
-@app.get("/tasks/{task_id}/events")
-async def list_events(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> list:
-    """返回任务的运行时事件。
-
-    参数:
-        task_id: 来自路由的任务标识。
-        runtime: 通过依赖注入的运行时单例。
-
-    返回:
-        该任务的有序事件列表。
-
-    异常:
-        HTTPException: 当任务不存在时抛出。
-
-    副作用:
-        无。
-    """
-
-    try:
-        return [event.to_dict() for event in await runtime.list_events(task_id)]
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
-
-
-@app.get("/tasks/{task_id}/turns")
-async def list_turns(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> list:
-    """返回任务下的轮次列表。
-
-    参数:
-        task_id: 来自路由的任务标识。
-        runtime: 通过依赖注入的运行时单例。
-
-    返回:
-        该任务下的有序轮次列表。
-
-    异常:
-        HTTPException: 当任务不存在时抛出。
-
-    副作用:
-        无。
-    """
-
-    try:
-        return [turn.to_dict() for turn in runtime.list_turns(task_id)]
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
-
-
-@app.post("/tasks/{task_id}/cancel")
-async def cancel_task(task_id: str, runtime: AgentRuntime = Depends(get_runtime)) -> dict:
-    """将任务标记为已取消。
-
-    参数:
-        task_id: 来自路由的任务标识。
-        runtime: 通过依赖注入的运行时单例。
-
-    返回:
-        更新后的任务状态。
-
-    异常:
-        HTTPException: 当任务不存在时抛出。
-
-    副作用:
-        在运行时存储中更新任务状态。
-    """
-
-    try:
-        task = runtime.cancel_task(task_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
-    return task.to_dict()

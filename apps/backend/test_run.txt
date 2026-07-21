@@ -1,0 +1,38 @@
+H:\coding-agent\apps\backend\.venv\Lib\site-packages\pytest_asyncio\plugin.py:207: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts =============================
+platform win32 -- Python 3.11.15, pytest-8.3.4, pluggy-1.6.0 -- h:\coding-agent\apps\backend\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: h:\coding-agent\apps\backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, langsmith-0.10.6, asyncio-0.25.2
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None
+collecting ... collected 23 items
+
+test/refactor_service_facade_test.py::test_delete_workspace_cascades_durable_runs_when_run_store_present PASSED [  4%]
+test/refactor_service_facade_test.py::test_delete_workspace_works_without_run_store PASSED [  8%]
+test/refactor_service_facade_test.py::test_delete_workspace_empty_workspace_no_cascade PASSED [ 13%]
+test/refactor_service_facade_test.py::test_delete_workspace_tasks_without_turns PASSED [ 17%]
+test/refactor_service_facade_test.py::test_delete_workspace_run_store_returns_deleted_ids PASSED [ 21%]
+test/refactor_service_facade_test.py::test_create_task_rejects_empty_string PASSED [ 26%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[None] PASSED [ 30%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[123] PASSED [ 34%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[bad_input2] PASSED [ 39%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[bad_input3] PASSED [ 43%]
+test/refactor_service_facade_test.py::test_create_task_creates_task_and_first_turn_with_default_workspace PASSED [ 47%]
+test/refactor_service_facade_test.py::test_create_task_uses_explicit_workspace_id PASSED [ 52%]
+test/refactor_service_facade_test.py::test_create_task_title_preview_from_input PASSED [ 56%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_empty_string PASSED [ 60%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[None] PASSED [ 65%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[42] PASSED [ 69%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[bad_input2] PASSED [ 73%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[] PASSED [ 78%]
+test/refactor_service_facade_test.py::test_create_turn_updates_parent_task_latest_turn PASSED [ 82%]
+test/refactor_service_facade_test.py::test_create_turn_default_status_is_pending PASSED [ 86%]
+test/refactor_service_facade_test.py::test_workspace_service_run_store_default_none PASSED [ 91%]
+test/refactor_service_facade_test.py::test_workspace_service_run_store_bound_when_passed PASSED [ 95%]
+test/refactor_service_facade_test.py::test_service_dependency_binding PASSED [100%]
+
+============================= 23 passed in 0.34s ==============================

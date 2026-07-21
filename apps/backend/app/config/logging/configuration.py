@@ -2,16 +2,17 @@
 
 import logging
 from pathlib import Path
+from queue import Queue
 
 from app.config.logging.caller import CallerFilter
 from app.config.logging.log_context import LogContextFilter
 from app.config.logging.log_files_dir_service import current_log_file
-from app.config.logging.save.jsonl import JsonlFormatter
 from app.config.logging.process_bridge import (
     install_log_queue_bridge,
     install_queue_handler,
     stop_queue_listener,
 )
+from app.config.logging.save.jsonl import JsonlFormatter
 from app.config.logging.save.sqlite_handler import SQLiteLogHandler
 from app.storage.crud.log import LogStore
 
@@ -49,15 +50,14 @@ def configure_logging(
 
     # 日志文件路径 logs-YYYY-MM-DD.log
     log_file = current_log_file(log_dir)
-    #返回一个以 name 为标识的 logger 对象。相同名字多次调用拿到的是同一个 logger 实例（单例）
+    # 返回一个以 name 为标识的 logger 对象。相同名字多次调用拿到的是同一个 logger 实例（单例）
     logger = logging.getLogger("coding_agent.backend")
-    #定一个最低记录级别（threshold）。logging.DEBUG 是 Python logging 级别体系里最低的一档
+    # 定一个最低记录级别（threshold）。logging.DEBUG 是 Python logging 级别体系里最低的一档
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-
-    #幂等性保护：保证无论 configure_logging 被调几次，logger 身上的 handler 都是"干净的一份"
-    #configure_logging 这个函数可能被调用多次（比如开发期 uvicorn 开了 reload=True，代码改动后进程重载会重新执行；或者测试里反复 setup/teardown）
+    # 幂等性保护：保证无论 configure_logging 被调几次，logger 身上的 handler 都是"干净的一份"
+    # configure_logging 这个函数可能被调用多次（比如开发期 uvicorn 开了 reload=True，代码改动后进程重载会重新执行；或者测试里反复 setup/teardown）
     existing_handlers = [
         handler
         for handler in logger.handlers
@@ -173,7 +173,7 @@ def _add_sqlite_handler_or_warn(
 
     try:
         sqlite_handler = SQLiteLogHandler(
-            store=LogStore(log_database_file),
+            store=LogStore(),
             queue_size=queue_size,
             batch_size=batch_size,
             flush_interval_seconds=flush_interval_ms / 1000,

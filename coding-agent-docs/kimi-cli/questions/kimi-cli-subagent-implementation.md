@@ -729,7 +729,7 @@ class LaborMarket:
 ### 5.2 SubagentEvent 定义
 
 ```python
-# kimi-cli/src/kimi_cli/wire/types.py:105-139
+# kimi-cli/src/kimi_cli/wire/agent_workflow.py:105-139
 class SubagentEvent(BaseModel):
     """
     An event from a subagent.

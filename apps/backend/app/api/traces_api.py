@@ -1,7 +1,7 @@
 """Trace 查询 API 路由。
 
 端点以模块级 ``@app.get`` 直接注册到 ``app.api.app.app`` 单例上，
-运行时通过 ``Depends(get_runtime)`` 注入，不再由注册函数包裹。
+运行时通过 ``Depends(get_trace_query_service)`` 注入，不再由注册函数包裹。
 """
 
 from datetime import date
@@ -9,19 +9,19 @@ from datetime import date
 from fastapi import Depends, HTTPException, Query
 
 from app.api.app import app
-from app.api.dependencies import get_runtime
-from app.core.runtime.runner import AgentRuntime
+from app.api.dependencies import get_trace_query_service
+from app.service.trace.trace_query_service import TraceQueryService
 
 
 @app.get("/traces")
 async def list_traces(
-    runtime: AgentRuntime = Depends(get_runtime),
+    trace_service: TraceQueryService = Depends(get_trace_query_service),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> list:
     """返回 trace 摘要列表。
 
     参数:
-        runtime: 通过依赖注入的运行时单例。
+        trace_service: 通过依赖注入的 trace 查询服务。
         limit: 最大返回数量。
 
     返回:
@@ -35,7 +35,7 @@ async def list_traces(
     """
 
     try:
-        return runtime.trace_query_service().list_traces(limit=limit)
+        return trace_service.list_traces(limit=limit)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -45,13 +45,13 @@ async def list_traces(
 @app.get("/traces/{trace_id}")
 async def get_trace(
     trace_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
+    trace_service: TraceQueryService = Depends(get_trace_query_service),
 ) -> dict:
     """返回 trace 摘要与详情。
 
     参数:
         trace_id: 路由中的 trace 标识。
-        runtime: 通过依赖注入的运行时单例。
+        trace_service: 通过依赖注入的 trace 查询服务。
 
     返回:
         trace summary、events、spans 和 logs。
@@ -64,7 +64,7 @@ async def get_trace(
     """
 
     try:
-        return runtime.trace_query_service().get_trace_summary(trace_id)
+        return trace_service.get_trace_summary(trace_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -76,14 +76,14 @@ async def get_trace(
 @app.get("/traces/{trace_id}/events")
 async def list_trace_events(
     trace_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
+    trace_service: TraceQueryService = Depends(get_trace_query_service),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> list:
     """返回指定 trace 的 ledger events。
 
     参数:
         trace_id: 路由中的 trace 标识。
-        runtime: 通过依赖注入的运行时单例。
+        trace_service: 通过依赖注入的 trace 查询服务。
         limit: 最大返回数量。
 
     返回:
@@ -97,7 +97,7 @@ async def list_trace_events(
     """
 
     try:
-        return runtime.trace_query_service().list_events(trace_id=trace_id, limit=limit)
+        return trace_service.list_events(trace_id=trace_id, limit=limit)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -107,14 +107,14 @@ async def list_trace_events(
 @app.get("/traces/{trace_id}/spans")
 async def list_trace_spans(
     trace_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
+    trace_service: TraceQueryService = Depends(get_trace_query_service),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> list:
     """返回指定 trace 的 spans。
 
     参数:
         trace_id: 路由中的 trace 标识。
-        runtime: 通过依赖注入的运行时单例。
+        trace_service: 通过依赖注入的 trace 查询服务。
         limit: 最大返回数量。
 
     返回:
@@ -128,7 +128,7 @@ async def list_trace_spans(
     """
 
     try:
-        return runtime.trace_query_service().list_spans(trace_id=trace_id, limit=limit)
+        return trace_service.list_spans(trace_id=trace_id, limit=limit)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -138,7 +138,7 @@ async def list_trace_spans(
 @app.get("/traces/{trace_id}/logs")
 async def list_trace_logs(
     trace_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
+    trace_service: TraceQueryService = Depends(get_trace_query_service),
     date: str = Query(default=""),
     level: str = Query(default=""),
     start_time: str = Query(default=""),
@@ -149,7 +149,7 @@ async def list_trace_logs(
 
     参数:
         trace_id: 路由中的 trace 标识。
-        runtime: 通过依赖注入的运行时单例。
+        trace_service: 通过依赖注入的 trace 查询服务。
         date: 可选日志日期，格式为 YYYY-MM-DD。
         level: 可选日志级别过滤条件。
         start_time: 可选起始 ISO 时间。
@@ -168,7 +168,7 @@ async def list_trace_logs(
 
     try:
         log_date = _parse_log_date(date)
-        return runtime.trace_query_service().list_logs(
+        return trace_service.list_logs(
             trace_id=trace_id,
             log_date=log_date,
             level=level,
@@ -185,13 +185,13 @@ async def list_trace_logs(
 @app.get("/runs/{run_id}/trace")
 async def get_run_trace(
     run_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
+    trace_service: TraceQueryService = Depends(get_trace_query_service),
 ) -> dict:
     """返回 run 的 trace 摘要。
 
     参数:
         run_id: 路由中的 run 标识。
-        runtime: 通过依赖注入的运行时单例。
+        trace_service: 通过依赖注入的 trace 查询服务。
 
     返回:
         包含 events、spans、logs 的 trace 摘要。
@@ -204,7 +204,7 @@ async def get_run_trace(
     """
 
     try:
-        return runtime.trace_query_service().get_run_trace(run_id)
+        return trace_service.get_run_trace(run_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

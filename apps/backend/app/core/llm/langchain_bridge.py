@@ -1,0 +1,149 @@
+"""RuntimeMessage ↔ LangChain 消息 与 工具 schema 的边界转换。
+
+本模块是 ``context/`` 模型无关层与 LangGraph 之间的唯一转换点：把运行时
+``RuntimeMessage`` 转为 LangChain ``BaseMessage``、把 ``ToolDefinition`` 统一经 ``to_model_tool_definition()`` 投影后转为
+``bind_tools`` 接受的 OpenAI 函数 schema、把 LangChain 的 ``tool_calls`` 还原为
+内部 ``ToolCall``。除本模块外，graph 节点内部一律使用 LangChain 类型，不在
+节点逻辑里散落转换代码。
+"""
+
+from typing import Any, TypedDict
+
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.messages.tool import ToolCall as LangChainToolCall
+
+from app.models.runtime_message import RuntimeMessage
+from app.tools.schemas import ToolCall, ToolDefinition
+
+
+class StreamEvent(TypedDict):
+    """``get_stream_writer`` 写入的事件信封（LangGraph 外部契约）。"""
+
+    event_type: str
+    payload: dict[str, Any]
+
+
+class OpenAIFunctionToolSchema(TypedDict):
+    """``bind_tools`` 接受的 OpenAI 函数 schema 形状（LangGraph 外部契约）。"""
+
+    type: str
+    function: dict[str, Any]
+
+
+def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
+    """将运行时消息转换为 LangChain 消息。
+
+    参数:
+        messages: 与模型无关的运行时消息列表。
+
+    返回:
+        可直接交给 LangChain chat model 的 ``BaseMessage`` 列表。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    converted: list[BaseMessage] = []
+    for message in messages:
+        if message.role == "system":
+            converted.append(SystemMessage(content=message.content_text))
+        elif message.role == "user":
+            converted.append(HumanMessage(content=message.content_text))
+        elif message.role == "assistant":
+            tool_calls_meta = message.metadata.get("tool_calls") or []
+            langchain_tool_calls = [
+                {
+                    "name": call["name"],
+                    "args": call.get("arguments")
+                    if isinstance(call.get("arguments"), dict)
+                    else {},
+                    "id": call.get("id") or call.get("tool_call_id") or "",
+                }
+                for call in tool_calls_meta
+            ]
+            converted.append(
+                AIMessage(
+                    content=message.content_text,
+                    tool_calls=langchain_tool_calls,
+                )
+            )
+        elif message.role == "tool":
+            converted.append(
+                ToolMessage(
+                    content=message.content_text,
+                    tool_call_id=message.metadata.get("tool_call_id", ""),
+                )
+            )
+        else:
+            converted.append(HumanMessage(content=message.content_text))
+    return converted
+
+
+def model_tools_to_langchain(
+    tools: list[ToolDefinition],
+) -> list[OpenAIFunctionToolSchema]:
+    """将面向模型的工具定义转换为 ``bind_tools`` 接受的 OpenAI 函数 schema。
+
+    统一经 ``ToolDefinition.to_model_tool_definition()`` 投影为模型可见结构，
+    再包装为 OpenAI 函数 schema。
+
+    参数:
+        tools: 内部工具定义列表。
+
+    返回:
+        ``bind_tools`` 可直接消费的 OpenAI 函数 schema 列表。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    model_tools = [tool.to_model_tool_definition() for tool in tools]
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": model_tool["name"],
+                "description": model_tool["description"],
+                "parameters": dict(model_tool["parameters_schema"]),
+            },
+        }
+        for model_tool in model_tools
+    ]
+
+
+def tool_calls_from_langchain(calls: list[LangChainToolCall]) -> list[ToolCall]:
+    """将 LangChain 的 ``tool_calls`` 还原为内部 ``ToolCall``。
+
+    参数:
+        calls: LangChain chat model 产出的 ``tool_calls`` 列表（每个含 name/args/id）。
+
+    返回:
+        内部工具调用列表，供工具执行层消费。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return [
+        ToolCall(
+            tool_name=call["name"],
+            arguments=call.get("args") or {},
+            call_id=call.get("id") or "",
+        )
+        for call in calls
+    ]

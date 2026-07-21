@@ -38,7 +38,7 @@ VENV_PY="${BACKEND_DIR}/.venv/bin/python"
 if [ ! -x "${VENV_PY}" ]; then
   echo "[dev] 未找到后端虚拟环境: ${VENV_PY}" >&2
   echo "[dev] 请先创建虚拟环境并安装依赖:" >&2
-  echo "[dev]   cd apps/backend && python -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+  echo "[dev]   cd apps/backend && uv sync --group dev" >&2
   exit 1
 fi
 

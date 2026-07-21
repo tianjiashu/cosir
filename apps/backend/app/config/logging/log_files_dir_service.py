@@ -3,7 +3,6 @@
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-
 LOG_FILE_PREFIX = "logs-"
 LOG_FILE_SUFFIX = ".log"
 RECENT_LOG_SCAN_DAYS = 7

@@ -1,7 +1,6 @@
 """供运行时任务使用的 Agent profile 值对象。"""
 
 from dataclasses import dataclass
-from typing import Tuple
 
 
 @dataclass(frozen=True)
@@ -28,7 +27,7 @@ class AgentProfile:
     agent_id: str
     role: str
     goal: str
-    allowed_tools: Tuple[str, ...]
+    allowed_tools: tuple[str, ...]
     context_policy: str
 
     def allows_tool(self, tool_name: str, permission: str) -> bool:

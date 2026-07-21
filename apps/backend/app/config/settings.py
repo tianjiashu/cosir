@@ -1,9 +1,8 @@
 """后端应用的运行时配置。"""
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
 
 from dotenv import dotenv_values
 
@@ -17,6 +16,8 @@ class BackendSettings:
         log_dir: 后端日志目录的绝对路径。
         database_file: 后端 SQLite 数据库文件的绝对路径。
         log_database_file: 独立日志 SQLite 数据库文件的绝对路径；省略时从 database_file 派生。
+        checkpoint_file: LangGraph checkpoint 异步 SQLite 数据库文件的绝对路径；省略时从
+            database_file 同目录派生 ``langgraph_checkpoints.sqlite``。
         sqlite_logging_enabled: 是否启用 SQLite 日志落库。
         log_queue_size: SQLite 日志内存队列容量。
         log_batch_size: SQLite 日志批量写入大小。
@@ -45,6 +46,7 @@ class BackendSettings:
     log_dir: Path
     database_file: Path
     log_database_file: Path | None = None
+    checkpoint_file: Path | None = None
     sqlite_logging_enabled: bool = True
     log_queue_size: int = 1000
     log_batch_size: int = 50
@@ -82,7 +84,15 @@ class BackendSettings:
         if self.max_context_chars < 1:
             raise ValueError("max_context_chars must be greater than zero")
         if self.log_database_file is None:
-            object.__setattr__(self, "log_database_file", self.database_file.with_name("logs.sqlite3"))
+            object.__setattr__(
+                self, "log_database_file", self.database_file.with_name("logs.sqlite3")
+            )
+        if self.checkpoint_file is None:
+            object.__setattr__(
+                self,
+                "checkpoint_file",
+                self.database_file.parent / "langgraph_checkpoints.sqlite",
+            )
         if self.log_queue_size < 1:
             raise ValueError("log_queue_size must be greater than zero")
         if self.log_batch_size < 1:
@@ -135,7 +145,7 @@ def _load_local_env(repository_root: Path) -> None:
     """
 
     backend_root = repository_root / "apps" / "backend"
-    merged_values: Dict[str, str] = {}
+    merged_values: dict[str, str] = {}
     for env_file in (
         repository_root / ".env",
         backend_root / ".env",
@@ -204,6 +214,12 @@ def default_settings() -> BackendSettings:
             os.environ.get(
                 "CODING_AGENT_LOG_DATABASE_FILE",
                 str(repository_root / "storage" / "logs.sqlite3"),
+            )
+        ),
+        checkpoint_file=Path(
+            os.environ.get(
+                "CODING_AGENT_CHECKPOINT_FILE",
+                str(repository_root / "storage" / "langgraph_checkpoints.sqlite"),
             )
         ),
         sqlite_logging_enabled=_env_bool("CODING_AGENT_SQLITE_LOGGING_ENABLED", True),

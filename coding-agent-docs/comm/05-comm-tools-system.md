@@ -836,7 +836,7 @@ export const BashTool = Tool.define("bash", async () => ({
 Kimi CLI 采用 Python 类定义方式，与 Checkpoint 机制深度集成：
 
 ```python
-# kimi-cli/kimi/tools/base.py（推测结构）⚠️
+# kimi-cli/kimi/tools/runtime_message.py（推测结构）⚠️
 class Tool:
     """工具基类"""
     name: str

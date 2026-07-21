@@ -1,11 +1,11 @@
 """结构化 JSONL 文件日志格式与查询。"""
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from app.config.logging.record_mapper import LogError, map_log_record
 
@@ -44,7 +44,7 @@ class JsonlLogLine:
     msg: str
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     data: dict[str, Any] = field(default_factory=dict)
-    error: Optional[LogError] = None
+    error: LogError | None = None
     truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,7 +63,9 @@ class JsonlLogLine:
             无。
         """
         return {
-            "ts": self.ts.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "ts": self.ts.astimezone(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z"),
             "level": self.level,
             "logger": self.logger,
             "trace_id": self.trace_id,

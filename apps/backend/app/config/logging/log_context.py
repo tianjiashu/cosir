@@ -15,7 +15,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.trace.context import TraceContext
+from app.models import TraceContext
 
 
 @dataclass(frozen=True)

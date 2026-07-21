@@ -111,13 +111,13 @@ _LOGGER = logging.getLogger("your.app.backend")
 {"ts":"2026-07-16T10:02:45.902Z","level":"WARNING","trace_id":"2a543a9d1f8c4b2e","logger":"your.app.backend","caller":"app.tools.executor:ToolExecutor.run:88","event":"tool_call_timeout","msg":"调用 read_file 工具超时，已触发熔断，tool_call_id=9c1a","data":{"tool":"read_file","duration_ms":30500,"threshold_ms":30000},"error":null}
 
 // 3. 数据写入失败（ERROR，带 error 块）
-{"ts":"2026-07-16T10:03:02.117Z","level":"ERROR","trace_id":"2a543a9d1f8c4b2e","logger":"your.app.backend","caller":"app.storage.task_store:TaskStore.update_status:64","event":"db_write_failed","msg":"更新任务状态写入数据库失败，task_id=t-7781","data":{"task_id":"t-7781","operation":"update_status"},"error":{"type":"OperationalError","message":"database is locked","stack":"Traceback (most recent call last):\n  File \"app/storage/task_store.py\", line 64, in update_status\n    ..."}}
+{"ts":"2026-07-16T10:03:02.117Z","level":"ERROR","trace_id":"2a543a9d1f8c4b2e","logger":"your.app.backend","caller":"app.storage.task_store:TaskStore.update_status:64","event":"db_write_failed","msg":"更新任务状态写入数据库失败，task_id=t-7781","data":{"task_id":"t-7781","operation":"update_status"},"error":{"type":"OperationalError","message":"database is locked","stack":"Traceback (most recent call last):\n  File \"app/storage/task_crud.py\", line 64, in update_status\n    ..."}}
 
 // 4. 审批通过（INFO，业务字段在 data）
-{"ts":"2026-07-16T10:03:30.441Z","level":"INFO","trace_id":"7b0e2c5a9d3f1a64","logger":"your.app.backend","caller":"app.domain.approval:ApprovalService.resolve:142","event":"approval_resolved","msg":"用户已批准工具调用，审批通过","data":{"approval_id":"ap-22","tool":"write_file","decision":"allow"},"error":null}
+{"ts":"2026-07-16T10:03:30.441Z","level":"INFO","trace_id":"7b0e2c5a9d3f1a64","logger":"your.app.backend","caller":"app.service.approval:ApprovalService.resolve:142","event":"approval_resolved","msg":"用户已批准工具调用，审批通过","data":{"approval_id":"ap-22","tool":"write_file","decision":"allow"},"error":null}
 
 // 5. 步骤开始（DEBUG，参数摘要在 data）
-{"ts":"2026-07-16T10:03:31.009Z","level":"DEBUG","trace_id":"7b0e2c5a9d3f1a64","logger":"your.app.backend","caller":"app.runtime.engine:Engine.step:455","event":"step_start","msg":"开始执行第 3 步，准备调用模型","data":{"step_index":3,"prompt_tokens":1820},"error":null}
+{"ts":"2026-07-16T10:03:31.009Z","level":"DEBUG","trace_id":"7b0e2c5a9d3f1a64","logger":"your.app.backend","caller":"app.tool_execute.engine:Engine.step:455","event":"step_start","msg":"开始执行第 3 步，准备调用模型","data":{"step_index":3,"prompt_tokens":1820},"error":null}
 ```
 
 ### 打印写法

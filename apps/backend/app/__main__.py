@@ -11,17 +11,18 @@
 """
 
 import os
-import sys
 import traceback
+
 import uvicorn
-from app.config.settings import default_settings
-from app.config.logging import install_logging_for_current_process
+
 from app.bootstate import (
     BOOT_PHASE_BOOTING,
     BOOT_PHASE_FAILED,
     boot_state_file_from_env,
     write_bootstate,
 )
+from app.config.logging import install_logging_for_current_process
+from app.config.settings import default_settings
 
 
 def main() -> None:

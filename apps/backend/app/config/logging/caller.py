@@ -1,8 +1,8 @@
 """计算日志 ``caller`` 字段（模块路径:类.方法:行号）。"""
 
-from functools import lru_cache
 import logging
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 # app/config/logging/<file>.py -> parents[3] = apps/backend

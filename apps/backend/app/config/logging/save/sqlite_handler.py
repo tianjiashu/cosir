@@ -1,18 +1,16 @@
 """异步 SQLite 日志 handler。"""
 
-from collections import deque
 import logging
 import queue
 import sys
 import threading
 import time
-from typing import Deque
+from collections import deque
 
-from app.core.trace.redaction import redact_value
 from app.config.logging.record_mapper import LogError, map_log_record
-from app.storage.log_records import LogEntryRecord
+from app.trace_infra.redaction import redact_value
 from app.storage.crud.log import LogStore
-
+from app.models import LogEntryRecord
 
 HIGH_PRIORITY_LEVELS = {"WARNING", "ERROR", "CRITICAL"}
 
@@ -150,7 +148,9 @@ class SQLiteLogHandler(logging.Handler):
         if entry.level in HIGH_PRIORITY_LEVELS and self._drop_low_priority():
             try:
                 self._queue.put_nowait(entry)
-                self._warn_once("sqlite_log_queue_overflow", RuntimeError("dropped low priority log entry"))
+                self._warn_once(
+                    "sqlite_log_queue_overflow", RuntimeError("dropped low priority log entry")
+                )
                 return
             except queue.Full:
                 pass
@@ -171,7 +171,7 @@ class SQLiteLogHandler(logging.Handler):
         副作用:
             重排内存队列。
         """
-        drained: Deque[LogEntryRecord] = deque()
+        drained: deque[LogEntryRecord] = deque()
         dropped = False
         while True:
             try:

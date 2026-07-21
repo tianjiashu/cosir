@@ -22,7 +22,6 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 BOOT_PHASE_BOOTING = "booting"
 BOOT_PHASE_READY = "ready"
@@ -58,7 +57,7 @@ _ASSIGN_PATTERN = re.compile(
 )
 
 
-def _redact_assignment(match: "re.Match[str]") -> str:
+def _redact_assignment(match: re.Match[str]) -> str:
     """构造敏感键赋值的脱敏替换文本，保留原始引号形态。
 
     参数:
@@ -81,7 +80,7 @@ def _redact_assignment(match: "re.Match[str]") -> str:
     return f"{key}{sep}[REDACTED]"
 
 
-def _redact_sensitive(text: Optional[str]) -> Optional[str]:
+def _redact_sensitive(text: str | None) -> str | None:
     """对可能含敏感信息的自由文本（如 traceback / 错误消息）做脱敏。
 
     屏蔽两类高风险内容：``sk-`` 前缀 API Key，以及
@@ -115,10 +114,10 @@ def write_bootstate(
     path: Path,
     phase: str,
     *,
-    step: Optional[str] = None,
-    error_type: Optional[str] = None,
-    error_message: Optional[str] = None,
-    traceback_text: Optional[str] = None,
+    step: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    traceback_text: str | None = None,
 ) -> None:
     """原子写入后端启动状态文件。
 
@@ -140,7 +139,7 @@ def write_bootstate(
         原子覆盖写入 ``path`` 指向的 JSON 文件（每次写入使用独立临时文件再 ``os.replace``）；
         ``error_message`` / ``traceback`` 中的敏感信息（API Key、Token 等）在写入前被脱敏。
     """
-    payload: dict[str, Optional[str]] = {
+    payload: dict[str, str | None] = {
         "phase": phase,
         "step": step,
         "error_type": error_type,
@@ -217,7 +216,7 @@ def _record_write_failure(path: Path, exc: OSError) -> None:
     print(message, file=sys.stderr)
 
 
-def boot_state_file_from_env() -> Optional[Path]:
+def boot_state_file_from_env() -> Path | None:
     """从环境变量解析启动状态文件路径；未设置时返回 ``None``。
 
     参数:

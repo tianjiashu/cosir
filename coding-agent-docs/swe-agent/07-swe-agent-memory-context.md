@@ -208,7 +208,7 @@ HistoryItem {
 #### 核心实现
 
 ```python
-# sweagent/types.py:44-77
+# sweagent/agent_workflow.py:44-77
 class _HistoryItem(TypedDict):
     """必需字段"""
     role: str                          # user | assistant | system | tool
@@ -536,7 +536,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/types.py:44-77
+# sweagent/agent_workflow.py:44-77
 class HistoryItem(TypedDict):
     """对话历史项"""
     role: str                          # system/user/assistant/tool

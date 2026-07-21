@@ -1,0 +1,55 @@
+H:\coding-agent\apps\backend\.venv\Lib\site-packages\pytest_asyncio\plugin.py:207: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts =============================
+platform win32 -- Python 3.11.15, pytest-8.3.4, pluggy-1.6.0 -- h:\coding-agent\apps\backend\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: h:\coding-agent\apps\backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, langsmith-0.10.6, asyncio-0.25.2, cov-7.1.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None
+collecting ... collected 29 items
+
+test/refactor_service_facade_test.py::test_delete_workspace_cascades_durable_runs_when_run_store_present PASSED [  3%]
+test/refactor_service_facade_test.py::test_delete_workspace_works_without_run_store PASSED [  6%]
+test/refactor_service_facade_test.py::test_delete_workspace_empty_workspace_no_cascade PASSED [ 10%]
+test/refactor_service_facade_test.py::test_delete_workspace_tasks_without_turns PASSED [ 13%]
+test/refactor_service_facade_test.py::test_delete_workspace_run_store_returns_deleted_ids PASSED [ 17%]
+test/refactor_service_facade_test.py::test_create_task_rejects_empty_string PASSED [ 20%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[None] PASSED [ 24%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[123] PASSED [ 27%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[bad_input2] PASSED [ 31%]
+test/refactor_service_facade_test.py::test_create_task_rejects_non_string[bad_input3] PASSED [ 34%]
+test/refactor_service_facade_test.py::test_create_task_creates_task_and_first_turn_with_default_workspace PASSED [ 37%]
+test/refactor_service_facade_test.py::test_create_task_uses_explicit_workspace_id PASSED [ 41%]
+test/refactor_service_facade_test.py::test_create_task_title_preview_from_input PASSED [ 44%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_empty_string PASSED [ 48%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[None] PASSED [ 51%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[42] PASSED [ 55%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[bad_input2] PASSED [ 58%]
+test/refactor_service_facade_test.py::test_create_turn_rejects_non_string[] PASSED [ 62%]
+test/refactor_service_facade_test.py::test_create_turn_updates_parent_task_latest_turn PASSED [ 65%]
+test/refactor_service_facade_test.py::test_create_turn_default_status_is_pending PASSED [ 68%]
+test/refactor_service_facade_test.py::test_workspace_service_run_store_default_none PASSED [ 72%]
+test/refactor_service_facade_test.py::test_workspace_service_run_store_bound_when_passed PASSED [ 75%]
+test/refactor_service_facade_test.py::test_service_dependency_binding PASSED [ 79%]
+test/refactor_service_facade_test.py::test_create_task_default_agent_id PASSED [ 82%]
+test/refactor_service_facade_test.py::test_create_task_explicit_agent_id PASSED [ 86%]
+test/refactor_service_facade_test.py::test_create_turn_explicit_status_passthrough PASSED [ 89%]
+test/refactor_service_facade_test.py::test_workspace_service_delegations PASSED [ 93%]
+test/refactor_service_facade_test.py::test_task_service_read_delegations PASSED [ 96%]
+test/refactor_service_facade_test.py::test_turn_service_read_delegations PASSED [100%]
+
+=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.11.15-final-0 _______________
+
+Name                                    Stmts   Miss  Cover   Missing
+---------------------------------------------------------------------
+app\service\task\__init__.py                0      0   100%
+app\service\task\task_service.py           30      0   100%
+app\service\task\turn_service.py           25      0   100%
+app\service\task\workspace_service.py      32      0   100%
+---------------------------------------------------------------------
+TOTAL                                      87      0   100%
+============================= 29 passed in 0.64s ==============================

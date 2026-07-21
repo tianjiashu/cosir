@@ -637,7 +637,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# kimi-cli/src/kimi_cli/wire/types.py
+# kimi-cli/src/kimi_cli/wire/agent_workflow.py
 # Wire 消息类型层次
 class WireMessage(BaseModel): ...
 

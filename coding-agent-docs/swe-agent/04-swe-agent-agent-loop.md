@@ -573,7 +573,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/types.py
+# sweagent/agent_workflow.py
 class StepOutput(BaseModel):
     """单步输出"""
     thought: str

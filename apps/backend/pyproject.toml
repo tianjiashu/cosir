@@ -1,0 +1,95 @@
+[project]
+name = "coding-agent-backend"
+version = "0.1.0"
+description = "Local desktop coding-agent backend (FastAPI + LangGraph)."
+requires-python = ">=3.11"
+# 单一依赖来源：迁移自 requirements.txt，由 uv.lock 锁定。
+dependencies = [
+    "fastapi==0.115.6",
+    "httpx==0.28.1",
+    "jsonschema==4.23.0",
+    "langchain-openai==1.2.2 ; python_version >= '3.11'",
+    "langgraph==1.2.0 ; python_version >= '3.11'",
+    "langgraph-checkpoint-sqlite==3.1.0 ; python_version >= '3.11'",
+    "pydantic==2.10.4",
+    "python-dotenv==1.0.1",
+    "SQLAlchemy==2.0.36",
+    "uvicorn[standard]==0.34.0",
+]
+
+[dependency-groups]
+# 开发依赖：工具链与测试，不参与运行时分发。
+dev = [
+    "ruff==0.8.6",
+    "mypy==1.14.1",
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.2",
+    "pre-commit==4.1.0",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.uv]
+# 本项目是应用而非可安装库，禁止 uv 尝试构建本地包。
+package = false
+
+[tool.ruff]
+# 行宽 100：后端 FastAPI 长类型注解较多，比 black 默认 88 更贴合。
+line-length = 100
+target-version = "py311"
+src = ["."]
+# 排除一次性探针/草稿脚本，避免污染首次 lint 结果（应逐步清理）。
+extend-exclude = [
+    "_orig_react.py",
+    "_probe_astream.py",
+    "_probe_interrupt.py",
+    "_probe_real.py",
+    "_probe_subclass.py",
+    "_probe_tool.py",
+    "_runtests.py",
+]
+
+[tool.ruff.lint]
+# 基础 + 现代化 + 防 bug + 安全：实用组合，不追求最严。
+select = [
+    "E",    # pycodestyle 错误
+    "F",    # pyflakes（未定义/未使用）
+    "I",    # isort import 排序
+    "W",    # pycodestyle 警告
+    "UP",   # pyupgrade 现代化语法
+    "B",    # flake8-bugbear 防 bug
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "ASYNC", # flake8-async 异步陷阱
+    "PYI",  # 类型存根一致性
+    "RUF",  # Ruff 专属规则
+    "S",    # flake8-bandit 安全（后端 API Key 场景有意义）
+]
+ignore = [
+    "S101",   # assert 在测试/脚本中允许
+    "RUF002", # 中文文档串中的“歧义 unicode”多为中文标点误报
+    "RUF003", # 中文注释同上
+    "RUF001", # 中文普通字符串中的“歧义 unicode”多为中文标点误报
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试目录允许 assert 与子进程调用类安全规则。
+"tests/**" = ["S101", "S603", "S607"]
+# FastAPI 路由用 Depends() 作默认参数是惯用法，B008 在此为误报。
+"app/api/**" = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"  # 与现有代码双引号约定一致
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+# 渐进式：不卡存量（disallow_untyped_defs=false），新代码约定必须注解且通过。
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

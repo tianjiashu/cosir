@@ -215,7 +215,7 @@ stateDiagram-v2
 #### 关键数据结构
 
 ```python
-# sweagent/types.py:44-52
+# sweagent/agent_workflow.py:44-52
 class TrajectoryStep(TypedDict):
     """单个 step 的完整记录"""
     action: str
@@ -327,7 +327,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/types.py:44-78
+# sweagent/agent_workflow.py:44-78
 Trajectory = list[TrajectoryStep]
 
 class TrajectoryStep(TypedDict):

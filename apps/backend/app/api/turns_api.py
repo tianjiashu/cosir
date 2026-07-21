@@ -38,19 +38,24 @@ SSE 文本帧；它不直接处理 HTTP，仅做格式适配。
 """
 
 import json
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.api.app import app
-from app.api.dependencies import get_runtime
+from app.api.dependencies import get_runtime, get_turn_service
 from app.api.schemas import CreateTurnRequest
 from app.core.runtime.runner import AgentRuntime
+from app.service.task.turn_service import TurnService
 
 
 @app.post("/tasks/{task_id}/turns")
-async def create_turn(task_id: str, payload: CreateTurnRequest, runtime: AgentRuntime = Depends(get_runtime)) -> dict:
+async def create_turn(
+    task_id: str,
+    payload: CreateTurnRequest,
+    turn_service: TurnService = Depends(get_turn_service),
+) -> dict:
     """为已有任务追加一个 pending 轮次。
 
     该端点只负责把用户本轮输入持久化为一个新的、处于 ``pending`` 状态的
@@ -61,7 +66,7 @@ async def create_turn(task_id: str, payload: CreateTurnRequest, runtime: AgentRu
     参数:
         task_id: 来自路由的任务标识。
         payload: 包含本轮用户输入文本的请求体（``input_text``）。
-        runtime: 通过依赖注入的运行时单例。
+        turn_service: 通过依赖注入的轮次 service。
 
     返回:
         创建后的轮次状态字典，包含 ``turn_id``、所属 ``task_id``、状态与
@@ -71,11 +76,11 @@ async def create_turn(task_id: str, payload: CreateTurnRequest, runtime: AgentRu
         HTTPException: 当任务不存在（404）或输入为空/非法（400）时抛出。
 
     副作用:
-        在运行时存储中创建 turn 记录，但不启动运行、不产生运行时事件。
+        在存储中创建 turn 记录，但不启动运行、不产生运行时事件。
     """
 
     try:
-        turn = runtime.create_turn(task_id, payload.input_text)
+        turn = turn_service.create_turn(task_id, payload.input_text)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except ValueError as exc:
@@ -84,7 +89,11 @@ async def create_turn(task_id: str, payload: CreateTurnRequest, runtime: AgentRu
 
 
 @app.get("/turns/{turn_id}/stream")
-async def stream_turn(turn_id: str, runtime: AgentRuntime = Depends(get_runtime)):
+async def stream_turn(
+    turn_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    turn_service: TurnService = Depends(get_turn_service),
+):
     """通过 SSE 流式返回轮次的运行时事件。
 
     对 ``pending`` 状态的轮次会启动 Agent 运行并实时推送事件；对已运行过
@@ -103,7 +112,8 @@ async def stream_turn(turn_id: str, runtime: AgentRuntime = Depends(get_runtime)
 
     参数:
         turn_id: 来自路由的轮次标识。
-        runtime: 通过依赖注入的运行时单例。
+        runtime: 通过依赖注入的运行时（仅用于执行）。
+        turn_service: 通过依赖注入的轮次 service（用于取轮次记录）。
 
     返回:
         发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到
@@ -118,17 +128,21 @@ async def stream_turn(turn_id: str, runtime: AgentRuntime = Depends(get_runtime)
     """
 
     try:
-        turn = runtime.get_turn(turn_id)
+        turn = turn_service.get_turn(turn_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="turn not found") from exc
-    return StreamingResponse(_sse_turn_events(runtime, turn_id, turn), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_turn_events(runtime, turn_id, turn), media_type="text/event-stream"
+    )
 
 
-async def _sse_turn_events(runtime: AgentRuntime, turn_id: str, turn: object | None = None) -> AsyncIterator[str]:
+async def _sse_turn_events(
+    runtime: AgentRuntime, turn_id: str, turn: object | None = None
+) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
 
     参数:
-        runtime: 产生轮次事件的运行时。
+        runtime: 产生轮次事件的运行时（执行引擎）。
         turn_id: 待运行或回放的轮次标识。
         turn: 可选，调用方已取出的轮次记录，透传给 ``runtime.run_turn``
             以避免重复查询存储。

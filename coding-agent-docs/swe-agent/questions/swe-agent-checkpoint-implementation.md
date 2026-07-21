@@ -295,7 +295,7 @@ flowchart TD
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/sweagent/types.py:42-102
+# sweagent/sweagent/agent_workflow.py:42-102
 class TrajectoryStep(TypedDict):
     """轨迹步骤数据结构"""
     action: str                        # 执行的动作

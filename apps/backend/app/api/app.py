@@ -13,13 +13,14 @@
 ``from app.api.app import app`` 取到的是包模块而非 FastAPI 实例。
 """
 
-import importlib,logging
+import importlib
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from app.api.dependencies import build_runtime, get_runtime, set_runtime
+from app.api.dependencies import build_runtime, set_runtime, set_tool_system
 from app.api.middleware.api_logging import install_http_exception_logging, install_request_logging
 from app.bootstate import (
     BOOT_PHASE_READY,
@@ -27,6 +28,10 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
+from app.config.logging import install_logging_for_current_process
+from app.config.settings import default_settings
+from app.storage.store_engines import close_storage
+from app.tools.tool_system import ToolSystem
 
 
 @asynccontextmanager
@@ -46,11 +51,34 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         关闭 Runtime 持有的运行时资源。
     """
 
+    runtime = getattr(_app.state, "runtime_override", None)
+    tool_system = getattr(_app.state, "tool_system_override", None)
+
+    if runtime is None:
+        settings = default_settings()
+        logger = install_logging_for_current_process(
+            log_dir=settings.log_dir,
+            log_database_file=settings.log_database_file,
+            sqlite_logging_enabled=settings.sqlite_logging_enabled,
+            queue_size=settings.log_queue_size,
+            batch_size=settings.log_batch_size,
+            flush_interval_ms=settings.log_flush_interval_ms,
+        )
+        tool_system = tool_system or ToolSystem.build_tool_system(settings, logger)
+        set_tool_system(tool_system)
+        runtime = build_runtime(tool_system=tool_system, settings=settings, logger=logger)
+        set_runtime(runtime)
+    else:
+        if tool_system is not None:
+            set_tool_system(tool_system)
+        set_runtime(runtime)
+
+    _mark_boot_ready()
     try:
         yield
     finally:
-        runtime = get_runtime()
         runtime.close()
+        close_storage()
         _mark_boot_stopped()
 
 
@@ -73,11 +101,12 @@ importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.traces_api")
 
 
-def create_app(runtime=None) -> FastAPI:
-    """返回模块级 FastAPI 应用单例并设置运行时依赖。
+def create_app(runtime=None, tool_system=None) -> FastAPI:
+    """Return the module-level FastAPI app and store optional overrides.
 
     参数:
         runtime: 可选的运行时依赖。省略时会构建默认的本地运行时。
+        tool_system: 可选的工具系统。省略且 runtime 为空时，会在应用装配阶段构建。
 
     返回:
         模块级 FastAPI 应用单例。
@@ -89,9 +118,12 @@ def create_app(runtime=None) -> FastAPI:
         构建（或接收）运行时并写入模块级单例，供依赖注入使用。
     """
 
-    runtime = runtime or build_runtime()
-    set_runtime(runtime)
-    _mark_boot_ready()
+    app.state.runtime_override = runtime
+    app.state.tool_system_override = tool_system
+    if runtime is not None:
+        set_runtime(runtime)
+    if tool_system is not None:
+        set_tool_system(tool_system)
     return app
 
 

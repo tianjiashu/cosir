@@ -384,7 +384,7 @@ flowchart LR
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/types.py
+# sweagent/agent_workflow.py
 class HistoryItem(BaseModel):
     """历史记录项，包含推理内容"""
     thought: str = ""
@@ -429,7 +429,7 @@ def forward_with_handling(self, history: list[dict[str, str]]) -> StepOutput:
 <summary>查看完整实现</summary>
 
 ```python
-# sweagent/types.py
+# sweagent/agent_workflow.py
 class HistoryItem(BaseModel):
     """A single item in the history."""
     thought: str = ""

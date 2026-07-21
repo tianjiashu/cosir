@@ -49,29 +49,31 @@ coding-agent/
     backend/
       app/
         api/                 # FastAPI 路由与 SSE
+        bootstate.py         # 启动状态初始化
+        config/              # 运行配置
         core/                # 运行底座
-          runtime/           # Agent Runtime 控制与编排
-          runs/              # LangGraph 持久化运行
-          workflows/         # Agent 执行策略
           agents/            # Agent 角色与配置
+          context/           # 文本上下文构建
+          events/            # 运行时事件定义
+          logs/              # 日志查询服务
+          runs/              # LangGraph 持久化运行
+          runtime/           # Agent Runtime 控制与编排
+          workflows/         # Agent 执行策略
+        models/              # 业务层 model 定义（一文件一 model，平铺）
+        service/             # 领域服务（编排层，仅 xxx_service）
+          tool_execution/    # 工具执行编排
+          trace/             # 运行追踪服务（仅 xxx_service）
+        trace_infra/         # 新建顶层包：trace 基础设施原语（ids/event_names/redaction）
+        llm/                 # 新建顶层包：LLM 适配与桥接（factory/langchain_bridge）
+        storage/             # SQLite 持久化与 checkpoint 快照
         tools/               # 工具系统
+          schemas/           # 核心契约值对象
+          tool_execute/      # 工具执行层
+          tool_handler/      # 具体工具实现
+          tool_models/       # 各工具 pydantic 参数/结果模型
           tool_registry.py   # 工具注册/查询/导出
           tool_system.py     # 工具容器与装配
-          schemas/           # 核心契约值对象
-          tool_models/       # 各工具 pydantic 参数/结果模型
           validation/        # 参数校验
-          tool_handler/      # 具体工具实现
-          tool_execute/      # 工具执行服务层
-        domain/              # 领域服务
-          approvals/         # 工具权限审批
-          artifacts/         # 产物存储
-          human_input/       # 人工输入
-        models/              # 模型适配器
-        context/             # 文本上下文构建
-        config/              # 运行配置
-        events/              # 运行事件
-        logging/             # 日志落盘
-        storage/             # SQLite 持久化与 checkpoint 快照
       tests/
     desktop/
   packages/
@@ -90,29 +92,31 @@ coding-agent/
 - `apps/backend/`：本地 Python 后端应用，承载 FastAPI、LangGraph、Agent Runtime、工具系统、存储、日志等后端能力。
 - `apps/backend/app/`：后端应用源码根目录，按已进入实现的能力边界拆分模块。
 - `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装。
+- `apps/backend/app/bootstate.py`：后端启动状态初始化（配置、存储、工具系统）。
+- `apps/backend/app/config/`：后端运行配置，例如项目根目录、日志文件、SQLite 文件和运行限制。
 - `apps/backend/app/core/`：运行底座，聚合运行态相关模块。
-  - `runtime/`：Agent Runtime，负责任务状态推进、模型流消费、工具调度、事件记录、取消和终止保护。
-  - `runs/`：LangGraph 持久化运行，包含 checkpointer、状态机、恢复、resume 与 graph 构建。
-  - `workflows/`：Agent 执行策略，例如 ReAct-like、Plan-and-Execute、StepController 等，可扩展替换。
   - `agents/`：Agent 角色定义与默认配置（AgentProfile）。
+  - `context/`：构建模型无关的文本上下文。
+  - `events/`：Runtime 事件定义和事件序列化。
+  - `logs/`：日志查询服务。
+  - `runs/`：LangGraph 持久化运行，包含 checkpointer、状态机、恢复、resume 与 graph 构建。
+  - `runtime/`：Agent Runtime，负责任务状态推进、模型流消费、工具调度、事件记录、取消和终止保护。
+  - `workflows/`：Agent 执行策略，例如 ReAct-like、Plan-and-Execute、StepController 等，可扩展替换。
+- `apps/backend/app/models/`：业务层 model 定义（dataclass / 枚举值对象），一个文件一个 model，文件名与 model 相关，平铺组织。不承载服务、适配或 helper 逻辑。
+- `apps/backend/app/service/`：领域服务（编排层），只放服务编排类，文件名与类名必须为 `xxx_service.py` / `XxxService`。不承载 model、常量或 helper。
+  - `tool_execution/`：工具执行编排，负责 agent 级可见性策略、生命周期事件记录、模型消息编解码（service / codec / run_result）。
+  - `trace/`：运行追踪服务（仅 `trace_query_service` / `trace_recorder`）。
+- `apps/backend/app/trace_infra/`：trace 基础设施原语（ID 生成/校验、事件名规范化、payload 脱敏）。不依赖 `app.models` 与 `app.service`，避免循环依赖。
+- `apps/backend/app/llm/`：LLM 适配与桥接（chat model 构建、运行时消息/工具 schema 边界转换）。只依赖 `app.models.runtime_message` 与 `app.tools.schemas`，不依赖 service 编排层。
+- `apps/backend/app/storage/`：SQLite 持久化存储，保存 Session / Task / Turn / Step / Event 以及 checkpoint 快照。
 - `apps/backend/app/tools/`：工具系统统一收口。
+  - `schemas/`：核心契约值对象（ToolDefinition / ToolCall / ToolObservation / ModelToolDefinition）。
+  - `tool_execute/`：工具执行层，负责权限校验、参数校验、子进程隔离执行与超时强杀（tool_scheduler / tool_executor / tool_error / tool_success）。
+  - `tool_handler/`：具体工具实现，每个工具独立文件，承载执行逻辑与 ToolDefinition 组装。
+  - `tool_models/`：各工具的 pydantic 参数与结果模型（如 ReadFileArgs / TextReadResult）。
   - `tool_registry.py`：工具注册、查询与导出。
   - `tool_system.py`：工具容器，装配内置工具为可运行系统。
-  - `schemas/`：核心契约值对象（ToolDefinition / ToolCall / ToolObservation / ModelToolDefinition）。
-  - `tool_models/`：各工具的 pydantic 参数与结果模型（如 ReadFileArgs / TextReadResult）。
   - `validation/`：工具参数校验（pydantic + jsonschema 双路）。
-  - `tool_handler/`：具体工具实现，每个工具独立文件，承载执行逻辑与 ToolDefinition 组装。
-  - `tool_execute/`：工具执行层，负责权限校验、参数校验、子进程隔离执行与超时强杀（tool_scheduler / tool_executor / tool_error / tool_success）。
-- `apps/backend/app/service/tool_execution/`：工具执行编排层，负责 agent 级可见性策略、生命周期事件记录、模型消息编解码（service / codec / run_result）。
-  - `approvals/`：工具权限审批服务。
-  - `artifacts/`：产物存储服务。
-  - `human_input/`：人工输入服务。
-- `apps/backend/app/models/`：模型适配器接口、本地流式测试适配器、OpenAI-compatible / DeepSeek streaming adapter 和流式响应解析。
-- `apps/backend/app/context/`：构建模型无关的文本上下文。
-- `apps/backend/app/config/`：后端运行配置，例如项目根目录、日志文件、SQLite 文件和运行限制。
-- `apps/backend/app/events/`：Runtime 事件定义和事件序列化。
-- `apps/backend/app/logging/`：日志落盘配置。
-- `apps/backend/app/storage/`：SQLite 持久化存储，保存 Session / Task / Turn / Step / Event 以及 checkpoint 快照。
 - `apps/backend/tests/`：后端测试目录。
 - `apps/desktop/`：Tauri 2 + React + TypeScript 桌面客户端，承载会话、任务、审批、工具调用、变更展示、日志入口等 UI。
 - `packages/shared/`：前后端共享协议、schema、类型和事件契约。涉及 HTTP/SSE、工具调用、审批、checkpoint、运行事件等跨端数据结构时优先放在这里。

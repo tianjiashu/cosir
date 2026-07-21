@@ -14,17 +14,15 @@
 """
 
 import logging
+import multiprocessing
 import traceback
 from logging.handlers import QueueHandler, QueueListener
-import multiprocessing
 from multiprocessing.queues import Queue
-from typing import List, Optional
 
 from app.config.logging.record_mapper import MAX_LOG_TEXT_LENGTH
 
-
-_LOG_QUEUE: Optional[Queue] = None
-_QUEUE_LISTENER: Optional[QueueListener] = None
+_LOG_QUEUE: Queue | None = None
+_QUEUE_LISTENER: QueueListener | None = None
 
 
 def create_log_queue() -> Queue:
@@ -91,7 +89,7 @@ def install_log_queue_bridge(logger: logging.Logger) -> None:
     _QUEUE_LISTENER = listener
 
 
-def start_queue_listener(queue: Queue, handlers: List[logging.Handler]) -> QueueListener:
+def start_queue_listener(queue: Queue, handlers: list[logging.Handler]) -> QueueListener:
     """启动队列监听器。
 
     参数:
@@ -136,7 +134,7 @@ def stop_queue_listener() -> None:
     _LOG_QUEUE = None
 
 
-def get_log_queue() -> Optional[Queue]:
+def get_log_queue() -> Queue | None:
     """返回当前父进程日志队列，供子进程入口使用。
 
     参数:

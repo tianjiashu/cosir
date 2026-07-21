@@ -696,7 +696,7 @@ flowchart TD
 以 Kimi CLI 为例，展示 Agent Loop 涉及的核心数据结构：
 
 ```python
-# kimi-cli/packages/kosong/src/kosong/types.py
+# kimi-cli/packages/kosong/src/kosong/agent_workflow.py
 class StepResult:
     """单步执行结果"""
     tool_calls: List[ToolCall]      # 需要执行的工具调用

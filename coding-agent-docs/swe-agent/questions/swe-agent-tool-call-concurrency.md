@@ -343,7 +343,7 @@ flowchart LR
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/types.py
+# sweagent/agent_workflow.py
 class StepOutput(BaseModel):
     thought: str = ""
     action: str = ""

@@ -7,8 +7,8 @@ import time
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.core.trace.ids import is_trace_id, new_trace_id
 from app.config.logging import merge_log_context, reset_log_context
+from app.trace_infra import is_trace_id, new_trace_id
 
 
 def install_request_logging(app, logger: logging.Logger) -> None:
@@ -60,21 +60,36 @@ def install_request_logging(app, logger: logging.Logger) -> None:
                 duration_ms = _duration_ms(started_at)
                 logger.exception(
                     "http_unhandled_exception",
-                    extra={**extra, "duration_ms": duration_ms, "status_code": 500, "msg": "HTTP 请求处理未捕获异常"},
+                    extra={
+                        **extra,
+                        "duration_ms": duration_ms,
+                        "status_code": 500,
+                        "msg": "HTTP 请求处理未捕获异常",
+                    },
                 )
                 raise
             duration_ms = _duration_ms(started_at)
             response.headers.setdefault("x-trace-id", trace_id)
-            completed_extra = {**extra, "status_code": response.status_code, "duration_ms": duration_ms}
+            completed_extra = {
+                **extra,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            }
             # 已由全局 HTTPException 处理器记录 detail 时，避免重复打印失败日志。
             already_logged = getattr(request.state, "exception_logged", False)
             if not already_logged and response.status_code >= 400:
                 if response.status_code >= 500:
-                    logger.error("http_request_failed", extra={**completed_extra, "msg": "HTTP 请求失败"})
+                    logger.error(
+                        "http_request_failed", extra={**completed_extra, "msg": "HTTP 请求失败"}
+                    )
                 else:
-                    logger.warning("http_request_failed", extra={**completed_extra, "msg": "HTTP 请求失败"})
+                    logger.warning(
+                        "http_request_failed", extra={**completed_extra, "msg": "HTTP 请求失败"}
+                    )
             elif response.status_code < 400:
-                logger.info("http_request_finished", extra={**completed_extra, "msg": "HTTP 请求完成"})
+                logger.info(
+                    "http_request_finished", extra={**completed_extra, "msg": "HTTP 请求完成"}
+                )
             return response
         finally:
             reset_log_context(token)

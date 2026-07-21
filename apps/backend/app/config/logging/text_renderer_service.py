@@ -1,6 +1,6 @@
 """日志查询结果的纯文本渲染。"""
 
-from app.storage.log_records import LogEntryRecord
+from app.models import LogEntryRecord
 
 
 def render_log_entries(entries: list[LogEntryRecord]) -> str:

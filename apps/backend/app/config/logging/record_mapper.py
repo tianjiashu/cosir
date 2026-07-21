@@ -1,15 +1,14 @@
 """将 Python LogRecord 映射为统一 9 字段日志结构。"""
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import logging
 import re
 import traceback
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
 
-from app.core.trace.redaction import redact_value
 from app.config.logging.caller import compute_caller
-
+from app.trace_infra.redaction import redact_value
 
 MAX_LOG_TEXT_LENGTH = 2000
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -73,7 +72,7 @@ class MappedLogRecord:
     event: str
     msg: str
     data: dict[str, Any] = field(default_factory=dict)
-    error: Optional[LogError] = None
+    error: LogError | None = None
     truncated: bool = False
 
 
@@ -125,7 +124,11 @@ def _format_record_time(created: float) -> str:
     副作用:
         无。
     """
-    return datetime.fromtimestamp(created, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(created, timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _extract_event(record: logging.LogRecord) -> str:
@@ -216,7 +219,7 @@ def _extract_data(record: logging.LogRecord) -> dict[str, Any]:
     return redact_value(data)
 
 
-def _extract_error(record: logging.LogRecord) -> Optional[LogError]:
+def _extract_error(record: logging.LogRecord) -> LogError | None:
     """提取嵌套错误块。
 
     参数:
