@@ -1,43 +1,40 @@
 """日志数据库 CRUD。"""
 
 import json
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine, Select, asc, desc, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.storage.database import create_session_factory, create_sqlite_engine
 from app.models import LogEntryRecord
 from app.models import LogQuery
 from app.storage.model.log_model import LogEntryModel
-from app.storage.schema import initialize_log_schema
+from app.storage.store_engines import log_engine, log_session_factory
 
 
 class LogStore:
     """读写独立日志 SQLite 数据库。"""
 
-    def __init__(self, database_path: Path) -> None:
-        """初始化日志数据库并确保 schema 存在。
+    def __init__(self) -> None:
+        """初始化日志数据库访问层。
+
+        引擎、连接池与 session 工厂由 ``app.storage.engines`` 统一创建与释放；日志库
+        schema 由 ``init_storage`` 在进程启动时一次性初始化，本 store 仅复用，不重复
+        初始化。
 
         参数:
-            database_path: 独立日志 SQLite 数据库路径。
+            无。
 
         返回:
             无。
 
         异常:
-            OSError: 如果数据库目录无法创建。
-            sqlalchemy.exc.SQLAlchemyError: 如果初始化 schema 失败。
+            RuntimeError: 如果 ``init_storage`` 尚未调用（日志库引擎不可用）。
 
         副作用:
-            创建数据库目录与日志表。
+            无（仅复用已由 ``init_storage`` 初始化好的日志库引擎与 schema）。
         """
-
-        self._database_path = database_path
-        self._engine = create_sqlite_engine(database_path)
-        initialize_log_schema(self._engine)
-        self._session_factory = create_session_factory(self._engine)
+        self._session_factory = log_session_factory()
 
     def insert_many(self, entries: list[LogEntryRecord]) -> None:
         """批量写入日志记录。

@@ -1,0 +1,249 @@
+"""SQLAlchemy 引擎统一工厂。
+
+单一职责：集中创建、缓存、释放全部 3 个 SQLAlchemy 引擎（主库同步 / 日志库同步 /
+LangGraph checkpoint 异步），路径全部来自 ``BackendSettings``。CRUD 不再接收引擎或路径
+参数，统一通过本模块的访问器取得 session 工厂或引擎。
+
+用法::
+
+    from app.config.settings import default_settings
+    from app.storage.engines import init_storage, main_session_factory, close_storage
+
+    init_storage(default_settings())
+    task_crud = TaskCrud()          # 内部调用 main_session_factory()
+    ...
+    close_storage()                 # 进程退出或测试拆卸时释放
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from threading import Lock
+
+from sqlalchemy import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config.settings import BackendSettings, default_settings
+from app.storage.engine_cache import _engine_cache, create_session_factory
+from app.storage.init_schema import initialize_app_schema, initialize_log_schema
+
+_LOGGER = logging.getLogger("coding_agent.backend")
+
+_INIT_LOCK = Lock()
+
+
+@dataclass
+class _StorageState:
+    """进程级存储引擎状态。
+
+    由 ``init_storage`` 填充、``close_storage`` 清空；所有访问器通过 ``_require`` 在状态
+    缺失时抛出一致的未初始化错误，避免散落的模块级全局变量与 ``global`` 声明。
+    """
+
+    main_engine: Engine | None = None
+    main_session_factory: sessionmaker[Session] | None = None
+    log_engine: Engine | None = None
+    log_session_factory: sessionmaker[Session] | None = None
+    checkpoint_engine: AsyncEngine | None = None
+    settings: BackendSettings | None = None
+
+
+_state = _StorageState()
+
+
+def _require(value, what: str):
+    """返回已初始化的存储状态值，未初始化则抛出一致的 RuntimeError。
+
+    参数:
+        value: 待返回的存储状态值（可能为 None 表示未初始化）。
+        what: 状态项名称，用于错误提示。
+
+    返回:
+        非 None 的存储状态值。
+
+    异常:
+        RuntimeError: 如果 value 为 None（``init_storage`` 尚未调用）。
+
+    副作用:
+        无。
+    """
+
+    if value is None:
+        raise RuntimeError(
+            f"storage not initialized; call init_storage(settings) first ({what})"
+        )
+    return value
+
+
+def init_storage(settings: BackendSettings | None = None) -> None:
+    """按 settings 初始化并缓存全部引擎与 session 工厂（幂等）。
+
+    参数:
+        settings: 后端配置；省略时回退到已初始化的 settings，再否则使用
+            ``default_settings()``。
+
+    返回:
+        无。
+
+    异常:
+        OSError: 如果数据库父目录无法创建。
+        sqlalchemy.exc.SQLAlchemyError: 如果引擎或 schema 初始化失败。
+
+    副作用:
+        首次调用时创建主库、日志库、LangGraph checkpoint 三个引擎并初始化 schema；
+        已初始化且 settings 不同则先 ``close_storage`` 再重建。
+    """
+
+    settings = settings or _state.settings or default_settings()
+    with _INIT_LOCK:
+        if (
+            _state.settings is not None
+            and _state.settings == settings
+            and _state.main_engine is not None
+        ):
+            return
+        if _state.main_engine is not None:
+            close_storage()
+        _state.settings = settings
+
+        _state.main_engine = _engine_cache.get(settings.database_file)
+        initialize_app_schema(_state.main_engine)
+        _state.main_session_factory = create_session_factory(_state.main_engine)
+
+        _state.log_engine = _engine_cache.get(settings.log_database_file)
+        initialize_log_schema(_state.log_engine)
+        _state.log_session_factory = create_session_factory(_state.log_engine)
+
+        settings.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_url = f"sqlite+aiosqlite:///{settings.checkpoint_file}"
+        _state.checkpoint_engine = create_async_engine(checkpoint_url, future=True)
+
+
+def main_session_factory() -> sessionmaker[Session]:
+    """返回主库 session 工厂（进程级单例）。
+
+    参数:
+        无。
+
+    返回:
+        主库 session 工厂。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+
+    副作用:
+        无。
+    """
+
+    return _require(_state.main_session_factory, "main_session_factory")
+
+
+def log_engine() -> Engine:
+    """返回日志库引擎（进程级单例）。
+
+    参数:
+        无。
+
+    返回:
+        日志库 SQLAlchemy 引擎。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+
+    副作用:
+        无。
+    """
+
+    return _require(_state.log_engine, "log_engine")
+
+
+def log_session_factory() -> sessionmaker[Session]:
+    """返回日志库 session 工厂（进程级单例）。
+
+    参数:
+        无。
+
+    返回:
+        日志库 session 工厂。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+
+    副作用:
+        无。
+    """
+
+    return _require(_state.log_session_factory, "log_session_factory")
+
+
+def checkpoint_async_engine() -> AsyncEngine:
+    """返回 LangGraph checkpoint 异步引擎（进程级单例）。
+
+    参数:
+        无。
+
+    返回:
+        LangGraph checkpoint 使用的 SQLAlchemy 异步引擎。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+
+    副作用:
+        无。
+    """
+
+    return _require(_state.checkpoint_engine, "checkpoint_async_engine")
+
+
+def checkpoint_path() -> str:
+    """返回 checkpoint sqlite 文件路径字符串（来自 ``BackendSettings.checkpoint_file``）。
+
+    参数:
+        无。
+
+    返回:
+        checkpoint 数据库文件绝对路径字符串。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+
+    副作用:
+        无。
+    """
+
+    return str(_require(_state.settings, "settings").checkpoint_file)
+
+
+def close_storage() -> None:
+    """释放全部引擎与连接池并清空缓存。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        关闭主库、日志库、checkpoint 三个引擎持有的连接，并清空进程级缓存；
+        用于进程退出或测试拆卸。
+    """
+
+    with _INIT_LOCK:
+        if _state.main_engine is not None and _state.settings is not None:
+            _engine_cache.dispose_path(_state.settings.database_file)
+        if _state.log_engine is not None and _state.settings is not None:
+            _engine_cache.dispose_path(_state.settings.log_database_file)
+        if _state.checkpoint_engine is not None:
+            # AsyncEngine.dispose() 是协程，同步上下文下通过底层 sync_engine 释放连接池。
+            _state.checkpoint_engine.sync_engine.dispose()
+        _state.main_engine = None
+        _state.main_session_factory = None
+        _state.log_engine = None
+        _state.log_session_factory = None
+        _state.checkpoint_engine = None
+        _state.settings = None

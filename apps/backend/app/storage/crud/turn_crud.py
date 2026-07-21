@@ -11,19 +11,19 @@ from typing import List
 from uuid import uuid4
 
 from sqlalchemy import asc, select, update
-from sqlalchemy.orm import sessionmaker
 
 from app.storage.model.turn_model import TurnModel
 from app.models import TurnRecord
+from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text, utc_now
 
 
 class TurnCrud:
     """Pure CRUD for the ``turns`` table."""
 
-    def __init__(self, session_factory: sessionmaker) -> None:
-        """Initialize with a session factory."""
-        self._session_factory = session_factory
+    def __init__(self) -> None:
+        """Initialize with the shared main-database session factory."""
+        self._session_factory = main_session_factory()
 
     def create(self, task_id: str, input_text: str, status: str = "pending") -> TurnRecord:
         """Create a turn record."""

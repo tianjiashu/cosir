@@ -1,6 +1,6 @@
 """SQLAlchemy schema initialization."""
 
-import sys
+import logging
 
 from sqlalchemy import Engine, inspect, text
 
@@ -10,6 +10,8 @@ from app.storage.model.task_model import TaskModel
 from app.storage.model.trace_model import TraceEventModel, TraceSpanModel
 from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
+
+_LOGGER = logging.getLogger("coding_agent.backend")
 
 APP_MODELS = (
     WorkspaceModel,
@@ -103,7 +105,7 @@ def _ensure_model_columns(connection, engine) -> None:
                 default = _default_literal_for_type(column.type)
                 column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default}"
             connection.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {column_ddl}"))
-            sys.stderr.write(f"[storage.schema] added missing column {table.name}.{column.name}\n")
+            _LOGGER.info("added missing column %s.%s", table.name, column.name)
 
 
 def initialize_log_schema(engine: Engine) -> None:
@@ -152,7 +154,8 @@ def _rebuild_log_schema(connection, current_version: int, target_version: int) -
         model.__table__.drop(bind=connection, checkfirst=True)
     _create_log_schema(connection)
     connection.execute(text(f"PRAGMA user_version = {target_version}"))
-    sys.stderr.write(
-        "[storage.schema] log schema rebuilt; "
-        f"old_version={current_version}, new_version={target_version}\n"
+    _LOGGER.info(
+        "log schema rebuilt; old_version=%s, new_version=%s",
+        current_version,
+        target_version,
     )

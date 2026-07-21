@@ -4,18 +4,18 @@
 """
 from typing import List
 from sqlalchemy import select, update
-from sqlalchemy.orm import sessionmaker
 
 from app.storage.model.task_model import TaskModel
 from app.models import TaskRecord
+from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text, utc_now
 
 
 class TaskCrud:
     """Pure CRUD for the ``tasks`` table."""
 
-    def __init__(self, session_factory: sessionmaker) -> None:
-        self._session_factory = session_factory
+    def __init__(self) -> None:
+        self._session_factory = main_session_factory()
 
     def create(
         self,

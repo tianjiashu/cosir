@@ -5,10 +5,10 @@ from collections.abc import Sequence
 from uuid import uuid4
 
 from sqlalchemy import asc, delete, select, update
-from sqlalchemy.orm import sessionmaker
 
 from app.models import RunRecord
 from app.storage.model.durable_model import DurableRunModel
+from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import utc_now, to_text, from_text
 
 _LOGGER = logging.getLogger("coding_agent.backend")
@@ -17,14 +17,17 @@ _LOGGER = logging.getLogger("coding_agent.backend")
 class DurableRunStore:
     """Read and write durable run state."""
 
-    def __init__(self, session_factory: sessionmaker) -> None:
+    def __init__(self) -> None:
         """Initialize the durable run store.
 
-        Parameters:
-            session_factory: SQLAlchemy session factory (from ``StorageContext``).
+        The main-database session factory is provided by ``app.storage.engines``;
+        this store does not create or dispose the shared engine.
+
+        Raises:
+            RuntimeError: If ``init_storage`` has not been called.
         """
 
-        self._session_factory = session_factory
+        self._session_factory = main_session_factory()
 
     def create_for_turn(
             self,

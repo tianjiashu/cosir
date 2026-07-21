@@ -11,10 +11,10 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import asc, select
-from sqlalchemy.orm import sessionmaker
 
 from app.storage.model.workspace_model import WorkspaceModel
 from app.models import WorkspaceRecord
+from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text
 
 
@@ -22,9 +22,9 @@ from app.utils.datetime_utils import from_text, to_text
 class WorkspaceCrud:
     """Pure CRUD for the ``workspaces`` table."""
 
-    def __init__(self, session_factory: sessionmaker) -> None:
-        """Initialize with a session factory."""
-        self._session_factory = session_factory
+    def __init__(self) -> None:
+        """Initialize with the shared main-database session factory."""
+        self._session_factory = main_session_factory()
 
     def ensure_default(self, now: datetime) -> str:
         """Ensure the default workspace exists."""

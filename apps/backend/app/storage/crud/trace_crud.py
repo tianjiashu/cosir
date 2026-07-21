@@ -3,7 +3,6 @@
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
 from threading import Lock
 from typing import Any
 
@@ -13,45 +12,45 @@ from sqlalchemy.orm import sessionmaker
 from app.models import TraceEventRecord
 from app.models import TraceSpanRecord
 from app.storage.model.trace_model import TraceEventModel, TraceSpanModel
+from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text as _from_text
 
 
 class TraceStore:
     """读写 trace_events 与 trace_spans。"""
 
-    _sequence_locks: dict[Path, Lock] = {}
+    _sequence_locks: dict[sessionmaker, Lock] = {}
     _sequence_locks_guard = Lock()
 
-    def __init__(self, session_factory: sessionmaker, database_path: Path) -> None:
+    def __init__(self) -> None:
         """初始化 trace store。
 
+        主库 session 工厂由 ``app.storage.engines`` 统一创建与释放；本 store 直接复用，
+        不持有、不 dispose 共享 engine。session_factory 同时作为进程内共享序列锁的定位键：
+        同一物理数据库共享的 session_factory 会复用同一把锁。
+
         参数:
-            session_factory: 主库 session 工厂（由 ``StorageContext`` 提供，engine
-                与连接池的生命周期由 ``StorageContext`` 统一管理，本 store 不持有、
-                不 dispose 共享 engine）。
-            database_path: 主库 SQLite 文件路径（由 ``StorageContext`` 注入），仅用于
-                为同一物理数据库选取进程内共享的序列锁；本 store 不反查共享 engine。
+            无。
 
         返回:
             无。
 
         异常:
-            无。
+            RuntimeError: 如果 ``init_storage`` 尚未调用。
 
         副作用:
-            为该数据库路径登记/复用进程内共享序列锁。
+            为该 session_factory 登记/复用进程内共享序列锁。
         """
 
-        self._session_factory = session_factory
-        self._database_path = database_path
-        self._sequence_lock = self._lock_for_database(self._database_path)
+        self._session_factory = main_session_factory()
+        self._sequence_lock = self._lock_for_session_factory(self._session_factory)
 
     def close(self) -> None:
         """释放本 store 持有的进程内资源。
 
-        TraceStore 共享 ``StorageContext`` 的主库 engine 与连接池，不自行 dispose
+        TraceStore 共享 ``app.storage.engines`` 的主库 engine 与连接池，不自行 dispose
         共享引擎（否则会关闭其他 Crud 共用的连接池）；共享 engine 的生命周期由
-        ``StorageContext.close()`` 统一负责。本方法保留仅为兼容既有调用。
+        ``close_storage()`` 统一负责。本方法保留仅为兼容既有调用。
 
         参数:
             无。
@@ -243,13 +242,28 @@ class TraceStore:
             )
 
     @classmethod
-    def _lock_for_database(cls, database_path: Path) -> Lock:
-        """返回同一 SQLite 文件共享的 trace sequence 分配锁。"""
+    def _lock_for_session_factory(cls, session_factory: sessionmaker) -> Lock:
+        """返回同一 session_factory 共享的 trace sequence 分配锁。
+
+        参数:
+            session_factory: 主库 session 工厂；同一物理数据库对应的 session_factory
+                实例会复用同一把进程内锁，从而保证跨 store 实例的序列号分配互斥。
+
+        返回:
+            进程内共享锁。
+
+        异常:
+            无。
+
+        副作用:
+            首次访问某 session_factory 时创建并登记一把锁。以 session_factory 对象
+            本身作为字典键，可避免 id 复用风险，并在对象存活期间保持引用。
+        """
 
         with cls._sequence_locks_guard:
-            if database_path not in cls._sequence_locks:
-                cls._sequence_locks[database_path] = Lock()
-            return cls._sequence_locks[database_path]
+            if session_factory not in cls._sequence_locks:
+                cls._sequence_locks[session_factory] = Lock()
+            return cls._sequence_locks[session_factory]
 
 
 def _to_text(value: datetime) -> str:
