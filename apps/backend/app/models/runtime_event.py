@@ -1,51 +1,9 @@
-"""Agent 运行期间发出的、带有类型的运行时事件。"""
-
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-
-class EventType(str, Enum):
-    """运行时事件类型枚举。
-
-    枚举成员的值即为 SSE ``event:`` 字段与持久化存储中的字符串，
-    ``str(event_type)`` 会返回该稳定值，避免散落的字符串字面量产生拼写漂移。
-    """
-
-    RUN_STARTED = "run_started"
-    RUN_FAILED = "run_failed"
-    RUN_CANCELLED = "run_cancelled"
-    RUN_FINISHED = "run_finished"
-    STEP_STARTED = "step_started"
-    MODEL_REQUESTED = "model_requested"
-    MODEL_OUTPUT_DELTA = "model_output_delta"
-    MODEL_COMPLETED = "model_completed"
-    MODEL_FAILED = "model_failed"
-    TOOL_CALL_REQUESTED = "tool_call_requested"
-    TOOL_CALL_STARTED = "tool_call_started"
-    TOOL_CALL_FINISHED = "tool_call_finished"
-    OBSERVATION_ADDED = "observation_added"
-    FINAL_RESPONSE = "final_response"
-
-    def __str__(self) -> str:
-        """返回事件类型的稳定字符串值。
-
-        参数:
-            无。
-
-        返回:
-            可用于 SSE、日志与持久化边界的事件类型字面量。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return self.value
+from app.models.enums.event_type import EventType
 
 
 @dataclass(frozen=True)
@@ -71,6 +29,17 @@ class RuntimeEvent:
 
     副作用:
         在缺省值被使用时生成 UUID 和时间戳。
+
+    ``payload`` 信封约定（回放 / 多元展示兼容，本轮全 ``text``，不接线 UI）：
+        - ``display_format``: ``"text"`` | ``"component"``，展示形态。
+        - ``component_type``: ``"chart"`` | ``"diff"`` | ``"code"`` | ``"table"``
+          | ``"approval_prompt"`` | ``None``，组件渲染类型。
+        - ``title`` / ``summary``: 人读标题 / 一句话摘要（降级展示用）。
+        - ``details``: 结构化、机器可读明细（如工具特定数据）。
+        - ``arguments``: 工具入参展示。
+        - ``_ext``: 各事件类型自由扩展字段的兜底命名空间。
+        工具事件须容忍 ``tool_name`` / ``result`` 缺失（降级时为空），可读内容来自
+        ``summary`` + ``details``。``to_dict`` 行为不变，仅固化上述约定。
     """
 
     event_type: EventType
@@ -81,7 +50,7 @@ class RuntimeEvent:
     tool_call_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
     event_id: str = field(default_factory=lambda: str(uuid4()))
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict[str, Any]:
         """将事件转换为可序列化为 JSON 的字典。

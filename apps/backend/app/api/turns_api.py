@@ -20,8 +20,9 @@
   ``GET /turns/{turn_id}/stream`` 触发，便于客户端先拿到 ``turn_id`` 再
   建立 SSE 连接，避免竞态。
 - ``GET /turns/{turn_id}/stream``：以 SSE 流式返回该轮次的运行时事件。
-  对 ``pending`` 轮次会启动运行；对已经运行过的轮次则回放其已落盘的事件，
-  因此天然支持断线重连与历史回看。事件帧格式为
+  **只负责执行** ``pending`` 轮次（pending → 认领 → 实时流）；非 pending 轮次直接 409。
+  历史回看与刷新后重连不属于本端点职责，由 ``GET /tasks/{task_id}/turns`` 提供
+  完整历史对话（含 Agent 回复文本）。事件帧格式为
   ``event: <event_type>\\ndata: <json>\\n\\n``。
 
 客户端协作流程
@@ -38,6 +39,7 @@ SSE 文本帧；它不直接处理 HTTP，仅做格式适配。
 """
 
 import json
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi import Depends, HTTPException
@@ -96,10 +98,10 @@ async def stream_turn(
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
-    对 ``pending`` 状态的轮次会启动 Agent 运行并实时推送事件；对已运行过
-    的轮次则按落盘顺序回放其历史事件。因此该端点同时承担「实时执行」与
-    「历史回看 / 断线重连」两种职责——客户端只需用同一个 ``turn_id`` 建立
-    连接即可，无需区分首次运行还是重连。
+    仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending
+    轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。
+    本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由 finally
+    兜底标 failed）。
 
     事件以标准 SSE 帧推送，每帧格式为::
 
@@ -112,38 +114,81 @@ async def stream_turn(
 
     参数:
         turn_id: 来自路由的轮次标识。
-        runtime: 通过依赖注入的运行时（仅用于执行）。
-        turn_service: 通过依赖注入的轮次 service（用于取轮次记录）。
+        runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。
+        turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。
 
     返回:
         发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到
-        轮次运行结束或客户端断开。
+        轮次运行结束或客户端断开（断开即本轮结束，由 finally 兜底标 failed）。
 
     异常:
-        HTTPException: 当轮次不存在（404）时抛出。
+        HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走
+            ``GET /tasks/{task_id}/turns``）时抛出。
 
     副作用:
-        对 pending turn 调用 ``runtime.run_turn`` 启动运行；对非 pending
-        turn 回放已落盘事件。事件产出由 ``_sse_turn_events`` 转换为 SSE 帧。
+        仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由
+        ``_sse_turn_events`` 转换为 SSE 帧。不回放历史事件。
     """
 
     try:
         turn = turn_service.get_turn(turn_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="turn not found") from exc
+    if turn.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
+        )
     return StreamingResponse(
-        _sse_turn_events(runtime, turn_id, turn), media_type="text/event-stream"
+        _sse_turn_events(runtime, turn_id, turn_service, turn), media_type="text/event-stream"
     )
 
 
+@app.post("/turns/{turn_id}/cancel")
+async def cancel_turn(
+    turn_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    turn_service: TurnService = Depends(get_turn_service),
+) -> dict:
+    """取消指定轮次并中止其运行。
+
+    置 turn 为 ``cancelled``，模型节点在下一轮循环检查到取消状态后停止派发工具，从而中止运行。
+
+    参数:
+        turn_id: 来自路由的轮次标识。
+        runtime: 通过依赖注入的运行时（负责取消与状态推进）。
+        turn_service: 通过依赖注入的轮次 service（用于校验 turn 存在）。
+
+    返回:
+        取消后的轮次状态字典。
+
+    异常:
+        HTTPException: 当轮次不存在（404）时抛出。
+
+    副作用:
+        置 turn 为 cancelled 并 emit 取消事件。
+    """
+
+    try:
+        turn_service.get_turn(turn_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="turn not found") from exc
+    turn = runtime.cancel_turn(turn_id)
+    return turn.to_dict()
+
+
 async def _sse_turn_events(
-    runtime: AgentRuntime, turn_id: str, turn: object | None = None
+    runtime: AgentRuntime,
+    turn_id: str,
+    turn_service: TurnService,
+    turn: object | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
 
     参数:
         runtime: 产生轮次事件的运行时（执行引擎）。
-        turn_id: 待运行或回放的轮次标识。
+        turn_id: 待运行的轮次标识（仅 pending 轮次会由 ``runtime.run_turn`` 实际执行）。
+        turn_service: 轮次 service，用于在客户端断开时把孤儿轮落终态。
         turn: 可选，调用方已取出的轮次记录，透传给 ``runtime.run_turn``
             以避免重复查询存储。
 
@@ -154,8 +199,26 @@ async def _sse_turn_events(
         KeyError: 当轮次在流式开始前消失时抛出。
 
     副作用:
-        执行或回放轮次事件。
+        执行轮次事件（仅 pending 轮次由 ``runtime.run_turn`` 启动）；客户端断开且本轮仍在运行时，
+        将轮次标记为 ``failed``（``end_reason="client_disconnected"``），避免孤儿 ``running``。
     """
 
-    async for event in runtime.run_turn(turn_id, turn=turn):
-        yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
+    try:
+        async for event in runtime.run_turn(turn_id, turn=turn):
+            yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
+    finally:
+        # 客户端断开：若本轮仍在运行，说明 run 已随连接中止，标记断开避免孤儿 running。
+        # 窄异常保护：轮次可能已被清理，避免 teardown 抛异常掩盖主流程结果。
+        try:
+            if turn_service.has_turn_status(turn_id, "running"):
+                turn_service.update_turn_status(
+                    turn_id, "failed", end_reason="client_disconnected"
+                )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "turn_disconnect_mark_failed_failed",
+                extra={
+                    "msg": "failed to mark disconnected turn as failed",
+                    "data": {"turn_id": turn_id},
+                },
+            )

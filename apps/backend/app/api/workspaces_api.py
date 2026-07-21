@@ -3,11 +3,30 @@
 from fastapi import Depends, HTTPException
 
 from app.api.app import app
-from app.api.dependencies import get_task_service, get_workspace_service
+from app.api.dependencies import get_task_service, get_workspace_service, get_runtime
 from app.api.schemas import CreateTaskRequest, CreateWorkspaceRequest
+from app.core.runtime.runner import AgentRuntime
 from app.service.task.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 
+@app.get("/health")
+async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
+    """返回后端健康状态与当前模型配置摘要。
+
+    参数:
+        runtime: 通过依赖注入的运行时单例。
+
+    返回:
+        不含 secret 原文的健康状态字典。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return runtime.backend_health()
 
 @app.get("/workspaces")
 async def list_workspaces(

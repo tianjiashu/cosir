@@ -62,7 +62,6 @@ async def query_logs(
 
 @app.get("/logs/recent")
 async def recent_logs(
-    runtime: AgentRuntime = Depends(get_runtime),
     level: str = Query(default=""),
     start_time: str = Query(default=""),
     end_time: str = Query(default=""),

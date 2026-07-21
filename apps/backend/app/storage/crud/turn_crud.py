@@ -10,13 +10,12 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from typing import List
 from uuid import uuid4
 
 from sqlalchemy import asc, select, update
 
-from app.storage.model.turn_model import TurnModel
 from app.models import TurnRecord
+from app.storage.model.turn_model import TurnModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text, utc_now
 
@@ -24,7 +23,8 @@ from app.utils.datetime_utils import from_text, to_text, utc_now
 class TurnCrud:
     """``turns`` 表的纯 CRUD。
 
-    仅负责单表读写与 model↔record 转换，不承担跨表编排；所有方法通过共享主库 session 工厂访问数据库。
+    仅负责单表读写与 model↔record 转换，不承担跨表编排；所有方法通过共享主库
+    session 工厂访问数据库。
     """
 
     def __init__(self) -> None:
@@ -68,7 +68,7 @@ class TurnCrud:
         if not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
         now = utc_now()
-        turn = TurnRecord(str(uuid4()), task_id, input_text, status, now, now)
+        turn = TurnRecord(str(uuid4()), task_id, input_text, status, now, now, response_text=None)
         with self._session_factory.begin() as session:
             session.add(
                 TurnModel(
@@ -76,6 +76,8 @@ class TurnCrud:
                     task_id=turn.task_id,
                     input_text=turn.input_text,
                     status=turn.status,
+                    end_reason=turn.end_reason,
+                    response_text=turn.response_text,
                     created_at=to_text(turn.created_at),
                     updated_at=to_text(turn.updated_at),
                 )
@@ -105,7 +107,7 @@ class TurnCrud:
             raise KeyError(turn_id)
         return self._turn_from_model(row)
 
-    def list_by_task(self, task_id: str) -> List[TurnRecord]:
+    def list_by_task(self, task_id: str) -> list[TurnRecord]:
         """列出某任务下的全部 turn，按创建时间升序。
 
         参数:
@@ -133,14 +135,17 @@ class TurnCrud:
             )
         return [self._turn_from_model(row) for row in rows]
 
-    def update_status(self, turn_id: str, status: str) -> TurnRecord:
+    def update_status(self, turn_id: str, status: str, end_reason: str | None = None) -> TurnRecord:
         """更新 turn 状态并刷新更新时间。
 
-        先校验 turn 存在（不存在则抛出），再更新状态与 ``updated_at``。
+        先校验 turn 存在（不存在则抛出），再更新状态与 ``updated_at``；``end_reason``
+        用于承载终态（cancelled / failed）的原因，缺省时保持原值（仅当新值非空才覆盖，
+        避免把已有原因清空为 None）。
 
         参数:
             turn_id: turn 标识。
             status: 新状态值。
+            end_reason: 可选的终态原因；传入非 None 时覆盖，否则保留原值。
 
         返回:
             更新后的 ``TurnRecord``。
@@ -150,7 +155,40 @@ class TurnCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
 
         副作用:
-            更新 ``turns`` 表中对应行的 status 与 updated_at。
+            更新 ``turns`` 表中对应行的 status / end_reason 与 updated_at。
+        """
+
+        self.get(turn_id)
+        with self._session_factory.begin() as session:
+            values = {"status": status, "updated_at": to_text(utc_now())}
+            if end_reason is not None:
+                values["end_reason"] = end_reason
+            session.execute(
+                update(TurnModel)
+                .where(TurnModel.turn_id == turn_id)
+                .values(**values)
+            )
+        return self.get(turn_id)
+
+    def update_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
+        """更新轮次的 Agent 回复文本并刷新更新时间。
+
+        在轮次进入 ``completed`` 终态时调用，把本轮 Agent 的最终回复落库，供历史对话接口
+        （``GET /tasks/{task_id}/turns``）直接返回，避免回放 checkpoint。
+
+        参数:
+            turn_id: turn 标识。
+            response_text: Agent 的最终回复文本；为 None 时清空（极少用）。
+
+        返回:
+            更新后的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            更新 ``turns`` 表中对应行的 response_text 与 updated_at。
         """
 
         self.get(turn_id)
@@ -158,7 +196,7 @@ class TurnCrud:
             session.execute(
                 update(TurnModel)
                 .where(TurnModel.turn_id == turn_id)
-                .values(status=status, updated_at=to_text(utc_now()))
+                .values(response_text=response_text, updated_at=to_text(utc_now()))
             )
         return self.get(turn_id)
 
@@ -215,6 +253,34 @@ class TurnCrud:
                 select(TurnModel)
                 .where(TurnModel.task_id == task_id)
                 .order_by(asc(TurnModel.created_at))
+                .limit(1)
+            ).scalar_one_or_none()
+        if row is None:
+            raise KeyError(task_id)
+        return self._turn_from_model(row)
+
+    def get_latest_turn(self, task_id: str) -> TurnRecord:
+        """返回某任务下创建时间最新的 turn（跨轮继续对话的当前轮）。
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            该任务最新创建的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果该任务下没有任何 turn。
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+
+        with self._session_factory() as session:
+            row = session.execute(
+                select(TurnModel)
+                .where(TurnModel.task_id == task_id)
+                .order_by(TurnModel.created_at.desc(), TurnModel.turn_id.desc())
                 .limit(1)
             ).scalar_one_or_none()
         if row is None:
@@ -298,4 +364,6 @@ class TurnCrud:
             row.status,
             from_text(row.created_at),
             from_text(row.updated_at),
+            row.end_reason,
+            row.response_text,
         )

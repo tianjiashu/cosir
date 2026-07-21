@@ -9,19 +9,22 @@
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from app.core.context import validate_context_budget
-from app.core.runtime.runs.checkpointer import build_checkpointer
-from app.core.events.types import EventType, RuntimeEvent
 from app.core.llm.factory import build_chat_model
 from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_langchain
+from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.models import TaskRecord
+from app.models.enums.event_type import EventType
+from app.models.runtime_event import RuntimeEvent
 from app.tools.schemas import ToolCall
 
 from .edges import _should_continue
@@ -106,26 +109,36 @@ class ReactLikeWorkflow:
         Args:
             task: 当前需要执行的任务记录。
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
-            model: 可选注入的 LangChain chat model（用于测试）；缺省时由 ``build_chat_model`` 构建。
+            model: 可选注入的 LangChain chat model（用于测试）；缺省时由
+                ``build_chat_model(settings.model_name, settings)`` 按配置模型名构建。
 
         Yields:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
         """
 
-        turn = operations.get_turn_for_task(task.task_id)
+        turn = operations.get_current_turn()
         thread_id = turn.turn_id
         turn_id = turn.turn_id
 
         settings = operations.settings
-        base_model = model if model is not None else build_chat_model(settings)
+        base_model = model or build_chat_model(settings.model_name, settings)
         tool_schemas = model_tools_to_langchain(operations.model_tools())
-        bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
+        try:
+            bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
+        except NotImplementedError:
+            logger.warning(
+                "model %s does not support bind_tools; running without tools "
+                "(expected when no real API key is configured)",
+                type(base_model).__name__,
+            )
+            bound_model = base_model
 
         config = {
             "configurable": {
                 "thread_id": thread_id,
                 "operations": operations,
                 "task": task,
+                "turn": turn,
                 "model": bound_model,
                 "approval_resolver": self._approval_resolver,
             }
@@ -133,8 +146,7 @@ class ReactLikeWorkflow:
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
-            runtime_messages = operations.build_messages(task)
-            validate_context_budget(runtime_messages, settings.max_context_chars)
+            runtime_messages = operations.build_messages()
             input_state: Any = {
                 "messages": runtime_to_langchain(runtime_messages),
                 "step_count": 0,
@@ -196,7 +208,10 @@ class ReactLikeWorkflow:
                     raise
 
                 state_snap = await graph.aget_state(config)
-                interrupts = state_snap.tasks[0].interrupts if state_snap.tasks else ()
+                tasks = state_snap.tasks
+                if not tasks:
+                    break
+                interrupts = list(tasks[0].interrupts)
                 if not interrupts:
                     break
                 interrupt_value = interrupts[0].value

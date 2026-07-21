@@ -20,8 +20,10 @@ class TurnRecord:
     status: str
     created_at: datetime
     updated_at: datetime
+    end_reason: str | None = None
+    response_text: str | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         """将轮次状态转换为可序列化为 JSON 的字典。
 
         参数:
@@ -42,6 +44,8 @@ class TurnRecord:
             "task_id": self.task_id,
             "input_text": self.input_text,
             "status": self.status,
+            "end_reason": self.end_reason,
+            "response_text": self.response_text,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

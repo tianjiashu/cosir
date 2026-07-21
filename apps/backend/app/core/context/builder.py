@@ -1,9 +1,7 @@
 """为第一个纯文本 Agent 工作流构建运行时消息。"""
 
 from app.core.agents.profile import AgentProfile, default_developer_agent
-from app.models import RuntimeMessage
-from app.models import TaskRecord
-from app.models import TurnRecord
+from app.models import RuntimeMessage, TurnRecord
 
 
 class TextContextBuilder:
@@ -11,18 +9,21 @@ class TextContextBuilder:
 
     def build_messages(
         self,
-        task: TaskRecord,
-        agent_profile: AgentProfile = None,
-        turn: TurnRecord = None,
-        turn_history: list[TurnRecord] | None = None,
+        agent_profile: AgentProfile,
+        current_turn: TurnRecord,
+        turn_history: list[TurnRecord] | None,
+        message_store,
     ) -> list[RuntimeMessage]:
-        """为一个任务构建与模型无关的运行时消息。
+        """为当前轮构建与模型无关的运行时消息。
+
+        完全基于 turn：system 提示词 + 前置轮的消息轨迹（来自 ``message_store``）+ 当前轮
+        用户输入。不再依赖 task 执行态或构造假 turn 兜底。
 
         参数:
-            task: 包含用户输入文本的任务记录。
             agent_profile: 定义执行主体的 Agent 档案。
-            turn: 可选的当前运行轮次；提供时使用该轮次输入作为用户消息。
-            turn_history: 可选的任务轮次历史；提供时按轮次顺序构建用户消息。
+            current_turn: 当前运行轮次；其 ``input_text`` 作为本轮用户消息。
+            turn_history: 当前任务的轮次历史（含当前轮），用于拼接前置轮轨迹。
+            message_store: 消息轨迹存储（提供 ``load_messages(turn_id)``）。
 
         返回:
             交给模型适配器的、有序的运行时消息。
@@ -41,8 +42,18 @@ class TextContextBuilder:
                 content_text=_build_system_prompt(profile),
             )
         ]
-        turns = _select_turns(task, turn, turn_history)
-        messages.extend(RuntimeMessage(role="user", content_text=item.input_text) for item in turns)
+        prior_turns = [
+            turn
+            for turn in (turn_history or [])
+            if current_turn is None or turn.turn_id != current_turn.turn_id
+        ]
+        for turn in prior_turns:
+            for message in message_store.load_messages(turn.turn_id):
+                messages.append(message)
+        if current_turn is not None:
+            messages.append(
+                RuntimeMessage(role="user", content_text=current_turn.input_text)
+            )
         return messages
 
 
@@ -70,47 +81,3 @@ def _build_system_prompt(agent_profile: AgentProfile) -> str:
         f"上下文策略：{agent_profile.context_policy}。"
         "第一版只处理纯文本输入，并以清晰、可执行的方式回复用户。"
     )
-
-
-def _select_turns(
-    task: TaskRecord,
-    turn: TurnRecord | None,
-    turn_history: list[TurnRecord] | None,
-) -> list[TurnRecord]:
-    """选择应进入模型上下文的轮次输入。
-
-    参数:
-        task: 当前任务记录，用于兼容没有 turn 记录的旧任务输入。
-        turn: 当前运行轮次。
-        turn_history: 当前任务的轮次历史。
-
-    返回:
-        按模型上下文顺序排列的轮次列表。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    if turn_history:
-        if turn is None:
-            return turn_history
-        selected = []
-        for item in turn_history:
-            selected.append(item)
-            if item.turn_id == turn.turn_id:
-                return selected
-        return [*turn_history, turn]
-    if turn is not None:
-        return [turn]
-    fallback_turn = TurnRecord(
-        turn_id=task.latest_turn_id or task.task_id,
-        task_id=task.task_id,
-        input_text=task.input_text,
-        status=task.status,
-        created_at=task.created_at,
-        updated_at=task.updated_at,
-    )
-    return [fallback_turn]

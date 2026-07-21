@@ -22,10 +22,10 @@ import logging
 
 from sqlalchemy import Engine, inspect, text
 
-from app.storage.model.durable_model import DurableRunModel
 from app.storage.model.log_model import LogEntryModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.trace_model import TraceEventModel, TraceSpanModel
+from app.storage.model.turn_message_model import TurnMessageModel
 from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
 
@@ -35,7 +35,7 @@ APP_MODELS = (
     WorkspaceModel,
     TaskModel,
     TurnModel,
-    DurableRunModel,
+    TurnMessageModel,
     TraceEventModel,
     TraceSpanModel,
 )
@@ -47,8 +47,9 @@ def initialize_app_schema(engine: Engine) -> None:
     """初始化主库（业务数据库）schema，并对已存在的表补齐缺失列。
 
     对 ``APP_MODELS`` 中的每个 model 执行“存在则跳过、不存在则建表”，随后逐表比对模型定义
-    与实际列，缺失的列以 ``ALTER TABLE ADD COLUMN`` 补齐（保守迁移，不删列、不改列）。整个
-    过程在单个事务中完成，失败会整体回滚。
+    与实际列，缺失的列以 ``ALTER TABLE ADD COLUMN`` 补齐（保守迁移，不删列、不改列）；最后
+    对已被移除的 ``durable_runs`` 表执行一次性 ``DROP TABLE IF EXISTS``，清理存量库孤儿表。
+    整个过程在单个事务中完成，失败会整体回滚。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
@@ -60,13 +61,40 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 如果建表或列迁移执行失败。
 
     副作用:
-        创建缺失的业务表；对已存在的表追加缺失列。已有数据原样保留。
+        创建缺失的业务表；对已存在的表追加缺失列；清理 ``durable_runs`` 孤儿表。已有
+        业务数据原样保留。
     """
 
     with engine.begin() as connection:
         for model in APP_MODELS:
             model.__table__.create(bind=connection, checkfirst=True)
         _ensure_model_columns(connection, engine)
+        _drop_orphan_durable_runs(connection)
+
+
+def _drop_orphan_durable_runs(connection) -> None:
+    """清理已被移除的 ``durable_runs`` 孤儿表。
+
+    ``DurableRunModel`` 已从 ``APP_MODELS`` 中移除，因此不会被重建；但存量库升级时该表可能
+    仍物理存在（保守迁移策略不删列、不删表）。此处一次性 ``DROP TABLE IF EXISTS`` 清理它，
+    使存量库升级后无无人引用的孤儿表。该操作幂等、无业务数据损失（运行产物）。
+
+    参数:
+        connection: 当前处于事务中的 SQLAlchemy 连接。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果 DROP 执行失败。
+
+    副作用:
+        当 ``durable_runs`` 表存在时删除它。
+    """
+
+    if inspect(connection).has_table("durable_runs"):
+        connection.execute(text("DROP TABLE IF EXISTS durable_runs"))
+        _LOGGER.info("dropped orphan table durable_runs")
 
 
 def _default_literal_for_type(column_type) -> str:

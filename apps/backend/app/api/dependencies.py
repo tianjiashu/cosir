@@ -5,19 +5,19 @@ import logging
 from app.config.logging import install_logging_for_current_process
 from app.config.settings import default_settings
 from app.core.context import TextContextBuilder
-from app.service.log_query_service import LogQueryService
 from app.core.runtime.runner import AgentRuntime
+from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.trace.trace_query_service import TraceQueryService
-from app.storage.store_engines import init_storage
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
-from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.crud.log_crud import LogStore
-from app.storage.crud.durable_crud import DurableRunStore
+from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.trace_crud import TraceStore
+from app.storage.crud.turn_crud import TurnCrud
+from app.storage.crud.turn_message_crud import TurnMessageCrud
+from app.storage.crud.workspace_crud import WorkspaceCrud
+from app.storage.store_engines import init_storage
 from app.tools.tool_system import ToolSystem
 
 _RUNTIME: AgentRuntime | None = None
@@ -154,7 +154,6 @@ def build_runtime(
         context_builder=TextContextBuilder(),
         tool_scheduler=tool_system.scheduler,
         logger=logger,
-        run_store=services["run_store"],
         log_query_service=log_query_service,
     )
 
@@ -166,7 +165,7 @@ def _build_services(settings) -> dict:
         settings: 后端运行配置。
 
     返回:
-        含 ``task_service`` / ``turn_service`` / ``workspace_service`` / ``run_store`` 的字典。
+        含 ``task_service`` / ``turn_service`` / ``workspace_service`` 的字典。
 
     异常:
         无。
@@ -181,13 +180,12 @@ def _build_services(settings) -> dict:
     init_storage(settings)
     task_crud = TaskCrud()
     turn_crud = TurnCrud()
+    turn_message_crud = TurnMessageCrud()
     workspace_crud = WorkspaceCrud()
-    run_store = DurableRunStore()
     _SERVICES = {
         "task_service": TaskService(task_crud, turn_crud, workspace_crud),
-        "turn_service": TurnService(task_crud, turn_crud),
-        "workspace_service": WorkspaceService(task_crud, turn_crud, workspace_crud, run_store),
-        "run_store": run_store,
+        "turn_service": TurnService(task_crud, turn_crud, turn_message_crud),
+        "workspace_service": WorkspaceService(task_crud, turn_crud, workspace_crud),
     }
     return _SERVICES
 

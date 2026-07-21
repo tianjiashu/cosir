@@ -23,11 +23,13 @@ class BackendSettings:
         log_batch_size: SQLite 日志批量写入大小。
         log_flush_interval_ms: SQLite 日志最大 flush 间隔毫秒数。
         log_query_limit_max: 日志查询允许的最大 limit。
-        model_provider: 模型服务商选择器，当前为 ``echo`` 或 ``openai-compatible``。
+        model_provider: 遗留字段，仅用于 ``backend_health`` 健康态展示，已不参与模型构建
+            （模型选择现由 ``app.core.llm.factory`` 的模型注册表按 ``model_name`` 决定）。
         model_base_url: OpenAI 兼容服务商的基础 URL。
         model_api_key_env: 包含服务商 API Key 的环境变量。
-        model_name: 发送给服务商的模型名。
-        model_thinking_mode: DeepSeek thinking 模式开关，当前为 ``enabled`` 或 ``disabled``。
+        model_name: 发送给服务商的模型名；同时作为工厂查表键决定 thinking 等差异。
+        model_thinking_mode: 遗留字段，仅用于 ``backend_health`` 健康态展示，已不参与模型构建
+            （thinking 现由工厂注册表 ``ModelSpec.thinking`` 按模型名决定，flash=disabled / pro=enabled）。
         max_steps: 一次任务在运行失败前允许的最大运行时步骤数。
         tool_error_limit: 运行失败前允许的最大工具错误数。
         max_context_chars: 模型调用前允许的最大字符数代理预算。

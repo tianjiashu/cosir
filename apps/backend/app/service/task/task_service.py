@@ -1,24 +1,25 @@
 """Task orchestration service.
 
-单一职责：编排任务创建（含初始轮次创建）、状态查询与更新。
+单一职责：编排任务创建（含初始轮次创建）、生命周期管理（open/archived）与执行态派生。
 
 职责边界：
-- 负责：任务创建（同时创建首个轮次）、状态管理。
-- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``TurnCrud``/``WorkspaceCrud``）。
+- 负责：任务创建（同时创建首个轮次）、用户驱动的生命周期状态、从最新 turn 派生执行态。
+- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``TurnCrud``/``WorkspaceCrud``）；
+  不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）。
 """
 
-from typing import Optional
+from dataclasses import replace
 from uuid import uuid4
 
+from app.models import TaskRecord
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.models import TaskRecord
 from app.utils.datetime_utils import preview, utc_now
 
 
 class TaskService:
-    """Orchestrate task creation, status management, and queries."""
+    """Orchestrate task creation, lifecycle management, and execution-status derivation."""
 
     def __init__(
         self,
@@ -35,9 +36,14 @@ class TaskService:
         input_text: str,
         status: str,
         agent_id: str = "developer",
-        workspace_id: Optional[str] = None,
+        workspace_id: str | None = None,
     ) -> TaskRecord:
-        """Create a task and its first turn (atomic)."""
+        """Create a task and its first turn (atomic).
+
+        ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离；
+        首个轮次固定为 ``pending`` 执行态。
+        """
+
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
         now = utc_now()
@@ -54,14 +60,48 @@ class TaskService:
             latest_turn_id=turn_id,
             status=status,
         )
-        self._turn.create(task_id=task.task_id, input_text=input_text, status=status)
+        self._turn.create(task_id=task.task_id, input_text=input_text, status="pending")
         return task
 
     def get_task(self, task_id: str) -> TaskRecord:
-        return self._task.get(task_id)
+        """Return the task with its derived ``execution_status`` attached."""
+
+        record = self._task.get(task_id)
+        return replace(record, execution_status=self.task_display_status(task_id))
 
     def update_status(self, task_id: str, status: str) -> TaskRecord:
+        """Update the task lifecycle status (open/archived)."""
+
         return self._task.update_status(task_id, status)
+
+    def set_lifecycle_status(self, task_id: str, status: str) -> TaskRecord:
+        """Set the user-driven lifecycle status (open/archived) only.
+
+        参数:
+            task_id: 任务标识。
+            status: ``"open"`` 或 ``"archived"``。
+
+        返回:
+            更新后的任务记录。
+        """
+
+        if status not in ("open", "archived"):
+            raise ValueError("lifecycle status must be 'open' or 'archived'")
+        return self._task.update_status(task_id, status)
+
+    def task_display_status(self, task_id: str) -> str:
+        """Derive the execution status from the latest turn.
+
+        running -> "active"；completed/failed/cancelled -> 对应；无 turn -> "empty"。
+        """
+
+        turns = self._turn.list_by_task(task_id)
+        if not turns:
+            return "empty"
+        latest = turns[-1]
+        if latest.status == "running":
+            return "active"
+        return latest.status
 
     def has_status(self, task_id: str, status: str) -> bool:
         return self._task.has_status(task_id, status)

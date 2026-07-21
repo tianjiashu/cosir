@@ -24,6 +24,7 @@ class TaskRecord:
     status: str
     created_at: datetime
     updated_at: datetime
+    execution_status: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         """将任务状态转换为可序列化为 JSON 的字典。
@@ -32,7 +33,7 @@ class TaskRecord:
             无。
 
         返回:
-            包含任务字段的字典，``latest_turn_id`` 可能为 None。
+            包含任务字段的字典，``latest_turn_id`` / ``execution_status`` 可能为 None。
 
         异常:
             无。
@@ -50,6 +51,7 @@ class TaskRecord:
             "last_message_preview": self.last_message_preview,
             "latest_turn_id": self.latest_turn_id,
             "status": self.status,
+            "execution_status": self.execution_status,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

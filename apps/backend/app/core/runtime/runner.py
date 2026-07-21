@@ -3,8 +3,10 @@
 import logging
 import os
 from collections.abc import AsyncIterator
+from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 
 from app.config.logging import (
     shutdown_logging,
@@ -16,14 +18,15 @@ from app.core.context import TextContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.core.workflows.agent_workflow import AgentWorkflow
-from app.core.workflows.react.react_like import ReactLikeWorkflow
-from app.core.events.types import EventType, RuntimeEvent
+from app.core.workflows.react.workflow import ReactLikeWorkflow
+from app.models import TaskRecord, TurnRecord
+from app.models.enums.event_type import EventType
+from app.models.runtime_event import RuntimeEvent
+from app.models.runtime_message import RuntimeMessage
+from app.models.trace_context import TraceContext
 from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
-from app.models import TaskRecord
-from app.models import TurnRecord
-from app.storage.crud.durable_crud import DurableRunStore
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 
@@ -33,10 +36,14 @@ class AgentRuntime:
     单一职责：作为执行 / 生命周期引擎，负责任务状态推进、模型流消费、工具调度、
     运行时事件记录、取消与终止保护，以及从 LangGraph checkpoint 派生事件。
 
+    状态单一事实来源是 ``Turn``：本引擎只写 turn 执行态，task 执行态由最新 turn 派生；
+    取消作用于 turn 并中止该 turn 的运行循环（模型节点检查 turn 取消状态后停止派发工具）。
+
     职责边界：
-    - 负责：任务执行编排、运行时事件、checkpoint 回放、取消。
-    - 不负责：工作区 / 任务 / 轮次的 CRUD 与查询（委托给对应 service 层）；
-      不对外暴露 service 访问器，service 仅作为本引擎的私有协作者。
+    - 负责：任务执行编排、运行时事件、取消。
+    - 不负责：checkpoint 回放与历史事件回看（已移除；历史由 ``GET /tasks/{task_id}/turns``
+      提供，事件由 LangGraph checkpoint 承载）、工作区 / 任务 / 轮次的 CRUD 与查询
+      （委托给对应 service 层）；不对外暴露 service 访问器，service 仅作为本引擎的私有协作者。
     """
 
     def __init__(
@@ -49,7 +56,6 @@ class AgentRuntime:
         logger: logging.Logger,
         agent_profile: AgentProfile | None = None,
         workflow: AgentWorkflow | None = None,
-        run_store: DurableRunStore | None = None,
         log_query_service: LogQueryService | None = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
@@ -63,7 +69,6 @@ class AgentRuntime:
             logger: 运行时日志器。
             agent_profile: 可选 Agent 角色配置。
             workflow: 可选执行策略。
-            run_store: 可选持久化运行存储。
             log_query_service: 可选日志查询服务。
         """
 
@@ -75,51 +80,48 @@ class AgentRuntime:
         self._logger = logger
         self._agent_profile = agent_profile or default_developer_agent()
         self._workflow = workflow or ReactLikeWorkflow()
-        self._run_store = run_store
+        self._log_query_service = log_query_service
 
     def close(self) -> None:
         """Close external resources held by the runtime."""
-        close_errors: list[Exception] = []
-        for store in (self._run_store,):
-            close = getattr(store, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except Exception as exc:
-                    close_errors.append(exc)
-        for exc in close_errors:
-            self._logger.warning(
-                "runtime_resource_close_failed",
-                extra={"msg": "runtime resource close failed", "data": {"error": str(exc)}},
-            )
+
         shutdown_logging(self._logger.name)
 
-    def cancel_task(self, task_id: str) -> TaskRecord:
-        """Cancel a task and mark associated runs as cancelled."""
+    def cancel_turn(self, turn_id: str) -> TurnRecord:
+        """Cancel a turn and mark it cancelled.
 
-        runs = self._run_store.list_by_task(task_id) if self._run_store is not None else []
-        try:
-            task = self._task_service.update_status(task_id, "cancelled")
-            for item in runs:
-                self._mark_run_for_turn(
-                    item.turn_id, "cancelled", interruption_reason="task_cancelled"
-                )
-            self._record(EventType.RUN_CANCELLED, task_id, {"status": "cancelled"})
-            self._logger.info(
-                "task_cancelled",
-                extra={
-                    "msg": "task cancelled",
-                    "data": {"task_id": task_id},
-                },
-            )
-            return task
-        finally:
-            pass
+        置该 turn 为 ``cancelled``（带终态原因），并 emit ``RUN_CANCELLED`` 事件。模型节点在
+        下一轮循环检查到 turn 已取消会停止派发工具，从而中止该 turn 的运行（满足「取消要中止
+        工具运行」的编排层语义）。
+
+        参数:
+            turn_id: 待取消的轮次标识。
+
+        返回:
+            取消后的 ``TurnRecord``。
+        """
+
+        turn = self._turn_service.update_turn_status(
+            turn_id, "cancelled", end_reason="user_cancelled"
+        )
+        self._record(
+            EventType.RUN_CANCELLED,
+            turn.task_id,
+            {"status": "cancelled", "_turn_id": turn_id},
+        )
+        self._logger.info(
+            "turn_cancelled",
+            extra={
+                "msg": "turn cancelled",
+                "data": {"turn_id": turn_id, "task_id": turn.task_id},
+            },
+        )
+        return turn
 
     async def run_task(self, task_id: str) -> AsyncIterator[RuntimeEvent]:
         """Run the latest turn for a task."""
 
-        turn = self._turn_service.get_turn_for_task(task_id)
+        turn = self._turn_service.get_latest_turn(task_id)
         async for event in self.run_turn(turn.turn_id):
             yield event
 
@@ -129,7 +131,12 @@ class AgentRuntime:
         turn: TurnRecord | None = None,
         model: BaseChatModel | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
-        """Run or replay a specific turn.
+        """执行单个 pending 轮次并实时流式产出运行时事件。
+
+        只负责「pending → 认领 → 执行 → 流式事件」。历史回看与断线重连不属于本方法职责：
+        客户端在打开任务时通过 ``GET /tasks/{task_id}/turns`` 拉取完整历史对话，SSE 通过
+        断开兜底（finally 标记 failed）判定本轮是否中断。非 pending 轮次不应进入本方法，
+        调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
 
         参数:
             turn_id: 需要运行的轮次标识符。
@@ -143,40 +150,29 @@ class AgentRuntime:
         model = model or getattr(self, "_default_test_model", None)
         task_id = turn.task_id
         task = self._task_service.get_task(task_id)
-        if task.status == "cancelled":
-            if turn.status != "cancelled":
-                self._turn_service.update_turn_status(turn.turn_id, "cancelled")
-            yield self._record(
-                EventType.RUN_CANCELLED,
-                task.task_id,
-                {"status": "cancelled", "_turn_id": turn.turn_id},
-            )
-            return
-        if turn.status == "running":
-            async for event in self._replay_events_from_checkpoint(turn.turn_id, task.task_id):
-                yield event
-            return
+
         if turn.status != "pending":
-            async for event in self._replay_events_from_checkpoint(turn.turn_id, task.task_id):
-                yield event
+            self._logger.warning(
+                "run_turn_non_pending",
+                extra={
+                    "msg": "run_turn called for non-pending turn; refusing to execute",
+                    "data": {"turn_id": turn_id, "status": turn.status},
+                },
+            )
             return
 
         agent_profile = self._resolve_task_agent_profile(task)
         if agent_profile is None:
-            self._task_service.update_status(task.task_id, "failed")
-            self._turn_service.update_turn_status(turn.turn_id, "failed")
-            self._mark_run_for_turn(
-                turn.turn_id,
-                "failed",
-                interruption_reason="agent_profile_unavailable",
+            self._turn_service.update_turn_status(
+                turn.turn_id, "failed", end_reason="agent_profile_unavailable"
             )
             self._logger.error(
                 "agent_profile_unavailable",
                 extra=trace_log_extra(
-                    self._trace_context_for_task(task.task_id),
+                    TraceContext(trace_id=str(uuid4()), task_id=task_id),
                     msg="agent profile unavailable for task",
                     data={
-                        "task_id": task.task_id,
+                        "task_id": task_id,
                         "task_agent_id": task.agent_id,
                         "runtime_agent_id": self._agent_profile.agent_id,
                     },
@@ -184,7 +180,7 @@ class AgentRuntime:
             )
             yield self._record(
                 EventType.RUN_FAILED,
-                task.task_id,
+                task_id,
                 {
                     "status": "failed",
                     "error": "agent_profile_unavailable",
@@ -196,22 +192,25 @@ class AgentRuntime:
             return
 
         if not self._turn_service.claim_pending_turn(turn.turn_id):
-            async for event in self._stream_running_turn_events(turn.turn_id):
-                yield event
+            # 已被其它连接抢占（极小概率的竞态）：本轮不再重复驱动，直接退出。
+            self._logger.warning(
+                "turn_claim_lost",
+                extra={
+                    "msg": "turn already claimed by another connection",
+                    "data": {"turn_id": turn.turn_id},
+                },
+            )
             return
-        self._task_service.update_status(task.task_id, "running")
-        if self._run_store is not None:
-            self._run_store.create_for_turn(task.task_id, turn.turn_id, "running")
-        self._mark_run_for_turn(turn.turn_id, "running")
+
         yield self._record(
             EventType.RUN_STARTED,
-            task.task_id,
+            task_id,
             {"status": "running", "agent": agent_profile.to_dict(), "_turn_id": turn.turn_id},
         )
 
         operations = RuntimeOperations(
             settings=self._settings,
-            task_store=self._task_store,
+            turn_store=self._turn_service,
             context_builder=self._context_builder,
             tool_scheduler=self._tool_scheduler,
             logger=self._logger,
@@ -222,168 +221,61 @@ class AgentRuntime:
         try:
             async for event in self._workflow.run(task, operations, model=model):
                 yield event
-            final_task = self._task_service.get_task(task.task_id)
-            if final_task.status in {"completed", "failed", "cancelled"}:
-                self._turn_service.update_turn_status(turn.turn_id, final_task.status)
-            self._sync_run_with_turn_status(turn.turn_id, final_task)
+            await self._persist_turn_trajectory(turn.turn_id)
             return
         except Exception as exc:
-            self._task_service.update_status(task.task_id, "failed")
-            self._turn_service.update_turn_status(turn.turn_id, "failed")
-            self._mark_run_for_turn(turn.turn_id, "failed", interruption_reason=str(exc))
+            self._turn_service.update_turn_status(
+                turn.turn_id, "failed", end_reason=str(exc)
+            )
             self._logger.exception(
                 "task_failed",
                 extra={
                     "msg": "task execution failed",
-                    "data": {"task_id": task.task_id},
+                    "data": {"task_id": task_id},
                 },
             )
             event = RuntimeEvent(
                 event_type=EventType.RUN_FAILED,
-                task_id=task.task_id,
+                task_id=task_id,
                 turn_id=turn.turn_id,
                 payload={"status": "failed", "error": str(exc)},
             )
             yield event
 
-    async def _stream_running_turn_events(self, turn_id: str) -> AsyncIterator[RuntimeEvent]:
-        """从 checkpoint 重放一个正在运行轮次的事件（尽力而为）。"""
+    async def _persist_turn_trajectory(self, turn_id: str) -> None:
+        """Persist the turn's message trajectory for cross-turn memory.
 
-        turn = self._turn_service.get_turn(turn_id)
-        async for event in self._replay_events_from_checkpoint(turn_id, turn.task_id):
-            yield event
-
-    async def _replay_events_from_checkpoint(
-        self, turn_id: str, task_id: str
-    ) -> AsyncIterator[RuntimeEvent]:
-        """从 LangGraph checkpoint 派生一个轮次的事件（替代自研 EventModel 重放）。
-
-        自研运行时事件持久化已移除，事件由 LangGraph checkpoint 承载。这里读取该轮次
-        （thread_id = turn_id）的最终 graph state，合成为前端可用的业务事件。仅覆盖最新
-        一轮，且为尽力而为的近似重放。
+        读取该 turn（thread_id = turn_id）checkpoint 的最终 ``messages``，转换为模型无关的
+        ``RuntimeMessage`` 列表并落库，供下一轮构建上下文时拼回。
 
         参数:
-            turn_id: 需要重放的轮次标识符（同时作为 checkpoint thread_id）。
-            task_id: 事件关联的任务标识符。
+            turn_id: 待持久化轨迹的轮次标识（同时作为 checkpoint thread_id）。
 
-        生成:
-            由 checkpoint 最终状态合成的业务事件。
+        返回:
+            无。
+
+        异常:
+            读取或转换失败时仅记日志，不向上抛出（轨迹持久化失败不应中断运行）。
         """
 
         try:
             async with build_checkpointer() as checkpointer:
-                state = await checkpointer.aget_state({"configurable": {"thread_id": turn_id}})
-        except Exception:
-            self._logger.exception(
-                "checkpoint_replay_failed",
-                extra={
-                    "msg": "failed to read checkpoint for event replay",
-                    "data": {"task_id": task_id, "turn_id": turn_id},
-                },
-            )
-            return
-        if state is None or not state.values:
-            return
-        values = state.values
-        final_text = values.get("final_text") or ""
-        if values.get("final_response") and final_text:
-            yield RuntimeEvent(
-                event_type=EventType.FINAL_RESPONSE,
-                task_id=task_id,
-                turn_id=turn_id,
-                payload={"text": final_text},
-            )
-            yield RuntimeEvent(
-                event_type=EventType.RUN_FINISHED,
-                task_id=task_id,
-                turn_id=turn_id,
-                payload={"status": "completed"},
-            )
-        elif values.get("terminal"):
-            yield RuntimeEvent(
-                event_type=EventType.RUN_FAILED,
-                task_id=task_id,
-                turn_id=turn_id,
-                payload={"status": "failed", "error": "task_terminal_without_final_response"},
-            )
-        else:
-            yield RuntimeEvent(
-                event_type=EventType.RUN_FAILED,
-                task_id=task_id,
-                turn_id=turn_id,
-                payload={"status": "incomplete", "error": "no_final_response"},
-            )
-
-    def _sync_run_with_turn_status(self, turn_id: str, task: TaskRecord) -> None:
-        """Synchronize durable run status from final task state."""
-
-        if task.status in {"completed", "failed", "cancelled"}:
-            self._mark_run_for_turn(turn_id, task.status)
-
-    def _mark_run_for_turn(
-        self,
-        turn_id: str,
-        status: str,
-        wait_reason: str | None = None,
-        active_step_id: str | None = None,
-        active_wait_id: str | None = None,
-        interruption_reason: str | None = None,
-    ) -> None:
-        """Synchronize durable run status for a turn."""
-
-        if self._run_store is None:
-            return
-        try:
-            run = self._run_store.get_by_turn(turn_id)
-            if run is None:
-                self._logger.warning(
-                    "durable_run_missing",
-                    extra={
-                        "msg": "durable run is missing for turn",
-                        "data": {"turn_id": turn_id, "target_status": status},
-                    },
+                state = await checkpointer.aget_state(
+                    {"configurable": {"thread_id": turn_id}}
                 )
+            if state is None or not state.values:
                 return
-            self._run_store.mark_status(
-                run.run_id,
-                status,
-                wait_reason=wait_reason,
-                active_step_id=active_step_id,
-                active_wait_id=active_wait_id,
-                interruption_reason=interruption_reason,
-            )
+            messages = state.values.get("messages") or []
+            runtime_messages = _langchain_messages_to_runtime(messages)
+            self._turn_service.save_turn_messages(turn_id, runtime_messages)
         except Exception:
             self._logger.exception(
-                "durable_run_status_sync_failed",
+                "turn_trajectory_persist_failed",
                 extra={
-                    "msg": "durable run status sync failed",
-                    "data": {
-                        "turn_id": turn_id,
-                        "target_status": status,
-                        "interruption_reason": interruption_reason,
-                    },
+                    "msg": "failed to persist turn message trajectory",
+                    "data": {"turn_id": turn_id},
                 },
             )
-
-    async def list_events(self, task_id: str) -> list:
-        """从 LangGraph checkpoint 派生任务的运行时事件（替代自研 EventModel 查询）。
-
-        参数:
-            task_id: 任务标识符。
-
-        返回:
-            由 checkpoint 最终状态合成的业务事件列表。
-
-        异常:
-            KeyError: 如果任务不存在（由 API 层转换为 404）。
-        """
-
-        self._task_service.get_task(task_id)
-        turn = self._turn_service.get_turn_for_task(task_id)
-        events = []
-        async for event in self._replay_events_from_checkpoint(turn.turn_id, task_id):
-            events.append(event)
-        return events
 
     def backend_health(self) -> dict:
         """Return backend model configuration and availability summary."""
@@ -439,3 +331,76 @@ class AgentRuntime:
             },
         )
         return event
+
+
+def _langchain_messages_to_runtime(messages: list[BaseMessage]) -> list[RuntimeMessage]:
+    """把 LangChain checkpoint 消息转换为模型无关的 ``RuntimeMessage`` 列表。
+
+    仅用于把 checkpoint 轨迹落库为跨轮记忆；与 ``runtime_to_langchain`` 方向相反，但作为
+    存储侧私有映射存在，不进入 ``core/llm/langchain_bridge`` 的公共桥接 API（避免凭空造
+    反向转换）。
+
+    参数:
+        messages: LangGraph checkpoint 的 ``messages`` 通道内容。
+
+    返回:
+        可落库、模型无关的运行时消息列表。
+    """
+
+    runtime_messages: list[RuntimeMessage] = []
+    for message in messages:
+        role = _langchain_role(message)
+        content_text = _extract_message_content(message.content)
+        metadata: dict[str, str] = {}
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls:
+            metadata["tool_calls"] = _safe_json(tool_calls)
+        tool_call_id = getattr(message, "tool_call_id", None)
+        if tool_call_id:
+            metadata["tool_call_id"] = str(tool_call_id)
+        runtime_messages.append(
+            RuntimeMessage(role=role, content_text=content_text, metadata=metadata)
+        )
+    return runtime_messages
+
+
+def _langchain_role(message: BaseMessage) -> str:
+    """把 LangChain 消息类型映射为运行时 role 字符串。"""
+
+    name = type(message).__name__
+    if name == "HumanMessage":
+        return "user"
+    if name == "AIMessage":
+        return "assistant"
+    if name == "ToolMessage":
+        return "tool"
+    if name == "SystemMessage":
+        return "system"
+    return "user"
+
+
+def _extract_message_content(content) -> str:
+    """从 LangChain 消息 content 提取纯文本。"""
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        return "".join(parts)
+    return str(content)
+
+
+def _safe_json(value) -> str:
+    """把任意可序列化对象转为 JSON 字符串（失败则转 str）。"""
+
+    import json
+
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(value)

@@ -2,9 +2,11 @@
 
 本模块只承载节点逻辑，不负责 graph 构建、运行编排或事件翻译。两个节点 ``model`` 与
 ``tools`` 均为 LangGraph 原生 callable，通过 ``get_config()`` 从运行上下文取出
-``operations`` / ``task`` / ``model``；节点业务事件通过 ``get_stream_writer()`` 写入
+``operations`` / ``task`` / ``turn`` / ``model``；节点业务事件通过 ``get_stream_writer()`` 写入
 （在 ``astream(stream_mode=["custom","messages"])`` 中表现为 ``custom`` 事件），token 由
 ``model.astream()`` 产出、由编排层从 ``messages`` 流中捕获，二者同走一条原生事件流。
+
+状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
 """
 
 from dataclasses import asdict
@@ -13,8 +15,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.config import get_config, get_stream_writer
 from langgraph.types import interrupt
 
-from app.core.events.types import EventType
 from app.core.llm.langchain_bridge import runtime_to_langchain, tool_calls_from_langchain
+from app.models.enums.event_type import EventType
 from app.tools.schemas import ToolCall
 
 from .state import ReactGraphState
@@ -68,10 +70,10 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
-    节点从运行上下文取出 ``operations`` / ``task`` / ``model``，通过 ``get_stream_writer()``
-    把业务生命周期事件写入自定义事件流；用 ``model.astream()`` 累积 ``AIMessage``，
-    token 增量由编排层从 ``messages`` 流捕获。根据模型最终输出决定进入工具分支、
-    最终回答分支，还是因无效输出 / 超过最大步数而终止。
+    节点从运行上下文取出 ``operations`` / ``task`` / ``turn`` / ``model``，通过
+    ``get_stream_writer()`` 把业务生命周期事件写入自定义事件流；用 ``model.astream()`` 累积
+    ``AIMessage``，token 增量由编排层从 ``messages`` 流捕获。根据模型最终输出决定进入工具分支、
+    最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **turn**。
 
     参数:
         state: 当前 graph state。
@@ -82,7 +84,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     cfg = get_config()["configurable"]
     operations = cfg["operations"]
-    task = cfg["task"]
+    turn = cfg["turn"]
     model = cfg["model"]
     writer = get_stream_writer()
 
@@ -101,7 +103,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     terminal = False
 
     async for chunk in model.astream(state.messages):
-        if operations.has_task_status(task.task_id, "cancelled"):
+        if operations.has_turn_status(turn.turn_id, "cancelled"):
             write_event(
                 EventType.RUN_CANCELLED,
                 {"step_id": step_id, "status": "cancelled", "error": "cancelled"},
@@ -114,7 +116,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         chunks.append(chunk)
 
     if terminal:
-        operations.update_task_status(task.task_id, "cancelled")
+        operations.update_turn_status(turn.turn_id, "cancelled")
         return {
             "step_count": step_count,
             "requested_tool": False,
@@ -141,7 +143,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     if requested_tool:
         if step_count >= state.max_steps:
             write_event(EventType.RUN_FAILED, {"status": "failed", "error": "max_steps_reached"})
-            operations.update_task_status(task.task_id, "failed")
+            operations.update_turn_status(turn.turn_id, "failed")
             return {
                 "step_count": step_count,
                 "requested_tool": False,
@@ -164,7 +166,8 @@ async def _model_node(state: ReactGraphState) -> dict:
             EventType.FINAL_RESPONSE,
             {"text": output_text, "step_id": step_id, "status": "completed"},
         )
-        operations.update_task_status(task.task_id, "completed")
+        operations.update_turn_status(turn.turn_id, "completed")
+        operations.update_turn_response(turn.turn_id, output_text)
         write_event(EventType.RUN_FINISHED, {"status": "completed", "step_id": step_id})
         return {
             "step_count": step_count,
@@ -183,7 +186,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "message": "Model did not return tool call or final text.",
         },
     )
-    operations.update_task_status(task.task_id, "failed")
+    operations.update_turn_status(turn.turn_id, "failed")
     return {
         "step_count": step_count,
         "requested_tool": False,
@@ -200,6 +203,7 @@ def _tools_node(state: ReactGraphState) -> dict:
     节点先用 ``interrupt()`` 暂停 graph 等待审批，审批结果（批准的工具调用列表）通过
     ``Command(resume=)`` 恢复；随后通过 ``RuntimeOperations`` 执行工具，工具生命周期事件
     经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。
+    状态写入 **turn**。
 
     参数:
         state: 当前 graph state，含待执行工具调用。
@@ -211,6 +215,7 @@ def _tools_node(state: ReactGraphState) -> dict:
     cfg = get_config()["configurable"]
     operations = cfg["operations"]
     task = cfg["task"]
+    turn = cfg["turn"]
     writer = get_stream_writer()
 
     def write_event(event_type: EventType, payload: dict) -> None:
@@ -220,10 +225,7 @@ def _tools_node(state: ReactGraphState) -> dict:
     step_id = f"step-{state.step_count}"
 
     approved = interrupt({"tool_calls": tool_calls})
-    if not isinstance(approved, list):
-        approved_dicts = tool_calls
-    else:
-        approved_dicts = approved
+    approved_dicts = tool_calls if not isinstance(approved, list) else approved
     approved_calls = [
         ToolCall(
             tool_name=item["tool_name"],
@@ -258,7 +260,7 @@ def _tools_node(state: ReactGraphState) -> dict:
                 "tool_name": observations[0].tool_name if observations else "",
             },
         )
-        operations.update_task_status(task.task_id, "failed")
+        operations.update_turn_status(turn.turn_id, "failed")
         return {
             "pending_tool_calls": [],
             "tool_error_count": tool_error_count,

@@ -10,29 +10,9 @@
 from fastapi import Depends, HTTPException
 
 from app.api.app import app
-from app.api.dependencies import get_runtime, get_task_service
-from app.core.runtime.runner import AgentRuntime
+from app.api.dependencies import get_task_service, get_turn_service
 from app.service.task.task_service import TaskService
-
-
-@app.get("/health")
-async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
-    """返回后端健康状态与当前模型配置摘要。
-
-    参数:
-        runtime: 通过依赖注入的运行时单例。
-
-    返回:
-        不含 secret 原文的健康状态字典。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return runtime.backend_health()
+from app.service.task.turn_service import TurnService
 
 
 @app.get("/tasks/{task_id}")
@@ -40,14 +20,14 @@ async def get_task(
     task_id: str,
     task_service: TaskService = Depends(get_task_service),
 ) -> dict:
-    """返回任务状态。
+    """返回任务状态（含生命周期 status 与派生 execution_status）。
 
     参数:
         task_id: 来自路由的任务标识。
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        已存储的任务状态。
+        已存储的任务状态字典（含 ``status`` 与 ``execution_status``）。
 
     异常:
         HTTPException: 当任务不存在时抛出。
@@ -60,3 +40,31 @@ async def get_task(
         return task_service.get_task(task_id).to_dict()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
+
+
+@app.get("/tasks/{task_id}/turns")
+async def list_turns(
+    task_id: str,
+    turn_service: TurnService = Depends(get_turn_service),
+) -> list[dict]:
+    """列出某任务下的全部 turn（支撑多轮历史展示）。
+
+    参数:
+        task_id: 来自路由的任务标识。
+        turn_service: 通过依赖注入的轮次 service。
+
+    返回:
+        该任务下按创建时间升序的 turn 状态字典列表。
+
+    异常:
+        HTTPException: 当任务不存在（级联 KeyError）时抛出。
+
+    副作用:
+        无。
+    """
+
+    try:
+        turns = turn_service.list_turns_for_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    return [turn.to_dict() for turn in turns]

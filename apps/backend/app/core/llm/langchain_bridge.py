@@ -7,7 +7,9 @@
 节点逻辑里散落转换代码。
 """
 
-from typing import Any, TypedDict
+import json
+
+from typing import Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -20,20 +22,6 @@ from langchain_core.messages.tool import ToolCall as LangChainToolCall
 
 from app.models.runtime_message import RuntimeMessage
 from app.tools.schemas import ToolCall, ToolDefinition
-
-
-class StreamEvent(TypedDict):
-    """``get_stream_writer`` 写入的事件信封（LangGraph 外部契约）。"""
-
-    event_type: str
-    payload: dict[str, Any]
-
-
-class OpenAIFunctionToolSchema(TypedDict):
-    """``bind_tools`` 接受的 OpenAI 函数 schema 形状（LangGraph 外部契约）。"""
-
-    type: str
-    function: dict[str, Any]
 
 
 def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
@@ -59,14 +47,14 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
         elif message.role == "user":
             converted.append(HumanMessage(content=message.content_text))
         elif message.role == "assistant":
-            tool_calls_meta = message.metadata.get("tool_calls") or []
+            tool_calls_meta = _tool_calls_from_metadata(message.metadata.get("tool_calls"))
             langchain_tool_calls = [
                 {
                     "name": call["name"],
-                    "args": call.get("arguments")
-                    if isinstance(call.get("arguments"), dict)
+                    "args": call.get("args")
+                    if isinstance(call.get("args"), dict)
                     else {},
-                    "id": call.get("id") or call.get("tool_call_id") or "",
+                    "id": call.get("id") or "",
                 }
                 for call in tool_calls_meta
             ]
@@ -90,17 +78,19 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
 
 def model_tools_to_langchain(
     tools: list[ToolDefinition],
-) -> list[OpenAIFunctionToolSchema]:
+) -> list[dict[str, Any]]:
     """将面向模型的工具定义转换为 ``bind_tools`` 接受的 OpenAI 函数 schema。
 
-    统一经 ``ToolDefinition.to_model_tool_definition()`` 投影为模型可见结构，
-    再包装为 OpenAI 函数 schema。
+    统一经 ``ToolDefinition.to_model_tool_definition()`` 投影为模型可见结构，再投影为
+    OpenAI 函数 schema（``{"name", "description", "parameters"}``）。直接返回内部函数 schema，
+    由 LangChain 的 ``bind_tools`` 负责包装为 ``{"type": "function", "function": {...}}``，
+    避免对具体包装格式的依赖，跨 langchain 版本更稳健。
 
     参数:
         tools: 内部工具定义列表。
 
     返回:
-        ``bind_tools`` 可直接消费的 OpenAI 函数 schema 列表。
+        ``bind_tools`` 可直接消费的 OpenAI 函数 schema 列表（``list[dict[str, Any]]``）。
 
     异常:
         无。
@@ -112,12 +102,9 @@ def model_tools_to_langchain(
     model_tools = [tool.to_model_tool_definition() for tool in tools]
     return [
         {
-            "type": "function",
-            "function": {
-                "name": model_tool["name"],
-                "description": model_tool["description"],
-                "parameters": dict(model_tool["parameters_schema"]),
-            },
+            "name": model_tool["name"],
+            "description": model_tool["description"],
+            "parameters": dict(model_tool["parameters_schema"]),
         }
         for model_tool in model_tools
     ]
@@ -147,3 +134,31 @@ def tool_calls_from_langchain(calls: list[LangChainToolCall]) -> list[ToolCall]:
         )
         for call in calls
     ]
+
+
+def _tool_calls_from_metadata(raw: str | None) -> list[dict[str, Any]]:
+    """从 ``RuntimeMessage.metadata`` 的 JSON 字符串还原 assistant 的 tool_calls。
+
+    ``runner`` 侧把 langchain ``tool_calls`` 序列化为 JSON 字符串存入 ``metadata``，
+    此处反序列化回 ``list[dict]`` 供 ``AIMessage`` 重建使用。
+
+    参数:
+        raw: ``metadata.get("tool_calls")`` 的 JSON 字符串，可能为空或非法。
+
+    返回:
+        tool_calls 字典列表；空串、非法 JSON 或非列表时返回空列表。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []

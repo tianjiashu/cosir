@@ -1,11 +1,11 @@
 """Workspace orchestration service.
 
 单一职责：编排工作区的创建与级联删除——删除工作区时级联清理
-其下的所有任务、轮次与持久化运行记录。
+其下的所有任务与轮次（执行态已收敛到 Turn，不再有 durable run 级联）。
 
 职责边界：
-- 负责：工作区创建、列表查询、级联删除（含 durable run 清理）。
-- 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``/``TurnCrud``/``DurableRunStore``）。
+- 负责：工作区创建、列表查询、级联删除（task + turn）。
+- 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``/``TurnCrud``）。
 """
 
 import logging
@@ -14,7 +14,6 @@ from app.models import WorkspaceRecord
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.storage.crud.durable_crud import DurableRunStore
 
 _LOGGER = logging.getLogger("coding_agent.backend")
 
@@ -27,12 +26,10 @@ class WorkspaceService:
         task_crud: TaskCrud,
         turn_crud: TurnCrud,
         workspace_crud: WorkspaceCrud,
-        run_store: DurableRunStore | None = None,
     ) -> None:
         self._task = task_crud
         self._turn = turn_crud
         self._workspace = workspace_crud
-        self._run_store = run_store
 
     def create_workspace(self, name: str, root_path: str) -> WorkspaceRecord:
         return self._workspace.create(name, root_path)
@@ -44,15 +41,13 @@ class WorkspaceService:
         return self._workspace.get(workspace_id)
 
     def delete_workspace(self, workspace_id: str) -> None:
-        """Delete a workspace and cascade its tasks, turns and runs.
+        """Delete a workspace and cascade its tasks and turns.
 
-        级联删除前先清理 ``durable_runs`` 中属于该工作区任务的运行记录，避免
-        孤儿 run 残留在主库；删除是高风险操作，保留 start / complete 审计日志。
+        级联删除前先收集该工作区下的任务与轮次标识，按 turn -> task -> workspace 顺序清理。
+        删除是高风险操作，保留 start / complete 审计日志。
         """
+
         task_ids = self._task.list_ids_by_workspace(workspace_id)
-        run_ids: list[str] = []
-        if task_ids:
-            run_ids = self._run_store.delete_by_task_ids(task_ids)
         _LOGGER.info(
             "workspace_delete_start",
             extra={
@@ -70,6 +65,6 @@ class WorkspaceService:
             "workspace_deleted",
             extra={
                 "msg": "workspace deleted",
-                "data": {"workspace_id": workspace_id, "task_ids": task_ids, "run_ids": run_ids},
+                "data": {"workspace_id": workspace_id, "task_ids": task_ids},
             },
         )

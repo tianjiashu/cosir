@@ -3,23 +3,26 @@
 import logging
 
 from app.config.settings import BackendSettings
-from app.core.context import TextContextBuilder
 from app.core.agents.profile import AgentProfile
-from app.models import RuntimeMessage
-from app.models import TaskRecord
-from app.models import TurnRecord
-from app.tools.schemas import ToolCall
+from app.core.context import TextContextBuilder
+from app.models import RuntimeMessage, TurnRecord
 from app.service.tool_execution.run_result import ToolRunResult
+from app.service.tool_execution.tool_execution_service import ToolExecutionService
+from app.tools.schemas import ToolCall
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 
 class RuntimeOperations:
-    """Expose runtime-owned side effects through a narrow workflow boundary."""
+    """Expose runtime-owned side effects through a narrow workflow boundary.
+
+    状态单一事实来源是 ``Turn``：本门面暴露的 ``has_turn_status`` / ``update_turn_status``
+    / ``get_current_turn`` 全部作用于 turn，不再写 task 执行态（task 执行态由最新 turn 派生）。
+    """
 
     def __init__(
         self,
         settings: BackendSettings,
-        task_store,
+        turn_store,
         context_builder: TextContextBuilder,
         tool_scheduler: ToolScheduler,
         logger: logging.Logger,
@@ -29,37 +32,72 @@ class RuntimeOperations:
         """Initialize runtime dependencies."""
 
         self.settings = settings
-        self._task_store = task_store
+        self._turn_store = turn_store
         self._context_builder = context_builder
         self._logger = logger
         self._agent_profile = agent_profile
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
-            allows_tool=lambda tool: agent_profile.allows_tool(
-                tool.name,
-                tool.permission,
-            ),
             agent_id=agent_profile.agent_id,
             logger=logger,
         )
         self._current_turn_id = current_turn_id
 
+    def get_current_turn(self) -> TurnRecord:
+        """Return the turn identified by ``current_turn_id``.
+
+        用于工作流取「当前要跑的轮」，避免 ``get_turn_for_task`` 总是返回第一轮的历史 bug。
+        """
+
+        if not self._current_turn_id:
+            raise KeyError("no current turn id bound to runtime operations")
+        return self._turn_store.get_turn(self._current_turn_id)
+
     def get_turn_for_task(self, task_id: str) -> TurnRecord:
-        """Return the active or latest turn for a task."""
+        """Return the latest turn for a task (kept for compatibility)."""
 
-        if self._current_turn_id:
-            turn = self._task_store.get_turn(self._current_turn_id)
-            if turn.task_id != task_id:
-                raise KeyError(task_id)
-            return turn
-        return self._task_store.get_turn_for_task(task_id)
+        return self._turn_store.get_latest_turn(task_id)
 
-    def build_messages(self, task: TaskRecord) -> list[RuntimeMessage]:
-        """Build model-independent runtime messages for a task."""
+    def get_latest_turn(self, task_id: str) -> TurnRecord:
+        """Return the latest turn for a task."""
 
-        turn = self.get_turn_for_task(task.task_id)
-        turn_history = self._task_store.list_turns_for_task(task.task_id)
-        return self._context_builder.build_messages(task, self._agent_profile, turn, turn_history)
+        return self._turn_store.get_latest_turn(task_id)
+
+    def list_turns_for_task(self, task_id: str) -> list[TurnRecord]:
+        """List all turns of a task in creation order."""
+
+        return self._turn_store.list_turns_for_task(task_id)
+
+    def build_messages(self) -> list[RuntimeMessage]:
+        """Build model-independent runtime messages for the current turn.
+
+        完全基于 turn（当前轮 + 前置轮轨迹），不再依赖 task 执行态。
+        """
+
+        turn = self.get_current_turn()
+        turn_history = self._turn_store.list_turns_for_task(turn.task_id)
+        return self._context_builder.build_messages(
+            self._agent_profile, turn, turn_history, self._turn_store
+        )
+
+    def has_turn_status(self, turn_id: str, status: str) -> bool:
+        """Return whether a turn currently has the requested status."""
+
+        return self._turn_store.has_turn_status(turn_id, status)
+
+    def update_turn_status(
+        self, turn_id: str, status: str, end_reason: str | None = None
+    ) -> TurnRecord:
+        """Update turn status (and optional end reason) through the turn store."""
+
+        return self._turn_store.update_turn_status(turn_id, status, end_reason)
+
+    def update_turn_response(
+        self, turn_id: str, response_text: str | None
+    ) -> TurnRecord:
+        """Persist the turn's agent reply text through the turn store."""
+
+        return self._turn_store.update_turn_response(turn_id, response_text)
 
     def run_tool_calls(
         self,
@@ -90,23 +128,17 @@ class RuntimeOperations:
             write_event=write_event or _noop_write_event,
         )
 
-    def has_task_status(self, task_id: str, status: str) -> bool:
-        """Return whether a task currently has the requested status."""
-
-        return self._task_store.has_status(task_id, status)
-
-    def update_task_status(self, task_id: str, status: str) -> TaskRecord:
-        """Update task status through the runtime task store."""
-
-        return self._task_store.update_status(task_id, status)
-
     def log_exception(self, event_name: str, extra: dict | None = None) -> None:
         """Write runtime exception diagnostics."""
 
         self._logger.exception(event_name, extra=extra or {})
 
 
-def _noop_write_event(event_type, task_id: str, payload: dict) -> None:
-    """默认事件写入回调：静默丢弃（无副作用）。"""
+def _noop_write_event(event_type, payload: dict) -> None:
+    """默认事件写入回调：静默丢弃（无副作用）。
+
+    签名与运行时实际回调 ``write_event(event_type, payload)`` 保持一致，确保未提供
+    ``write_event`` 时作为默认回调传入不会因参数数量不匹配而抛 ``TypeError``。
+    """
 
     return None

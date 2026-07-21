@@ -4,11 +4,11 @@
 model，文件名与 model 相关。不承载服务、适配或 helper 逻辑。
 """
 
+from app.models.enums.turn_status import TurnStatus
 from app.models.log_entry_record import LogEntryRecord
 from app.models.log_query import LogQuery, LogSortOrder
 from app.models.log_query_result import LogQueryResult
 from app.models.runtime_message import RuntimeMessage
-from app.models.run_record import RunRecord
 from app.models.task_record import TaskRecord
 from app.models.trace_context import TraceContext
 from app.models.trace_event_record import TraceEventRecord
@@ -19,14 +19,14 @@ from app.models.workspace_record import WorkspaceRecord
 __all__ = [
     "LogEntryRecord",
     "LogQuery",
-    "LogSortOrder",
     "LogQueryResult",
+    "LogSortOrder",
     "RuntimeMessage",
-    "RunRecord",
     "TaskRecord",
     "TraceContext",
     "TraceEventRecord",
     "TraceSpanRecord",
     "TurnRecord",
+    "TurnStatus",
     "WorkspaceRecord",
 ]
