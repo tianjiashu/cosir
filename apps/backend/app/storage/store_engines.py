@@ -4,10 +4,21 @@
 LangGraph checkpoint 异步），路径全部来自 ``BackendSettings``。CRUD 不再接收引擎或路径
 参数，统一通过本模块的访问器取得 session 工厂或引擎。
 
+职责边界：
+    - 负责：三大引擎的按需创建、进程级缓存复用（委托 ``engine_cache``）、schema 初始化
+      触发（委托 ``init_schema``）、统一释放。
+    - 不负责：引擎底层 PRAGMA 与连接池细节（见 ``engine_cache``）、建表与迁移 SQL
+      （见 ``init_schema``）、任何业务读写（见 ``crud/``）。
+
+生命周期约定：进程启动时调用一次 ``init_storage(settings)``；各 CRUD 在其 ``__init__``
+里通过访问器（如 ``main_session_factory()``）取得 session 工厂或引擎，因此必须在
+``init_storage`` 之后构造；进程退出或测试拆卸时调用 ``close_storage()`` 释放全部连接池。
+未初始化即调用访问器会抛出统一的 ``RuntimeError``。
+
 用法::
 
     from app.config.settings import default_settings
-    from app.storage.engines import init_storage, main_session_factory, close_storage
+    from app.storage.store_engines import init_storage, main_session_factory, close_storage
 
     init_storage(default_settings())
     task_crud = TaskCrud()          # 内部调用 main_session_factory()

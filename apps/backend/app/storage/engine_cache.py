@@ -1,4 +1,24 @@
-"""SQLAlchemy 数据库基础设施。"""
+"""SQLAlchemy 引擎与连接池基础设施（进程级缓存）。
+
+单一职责：负责“如何创建一个配置正确的 SQLite 引擎”以及“如何按文件路径缓存 / 复用 /
+释放引擎”，是整个 storage 层最底层的引擎工厂与缓存。
+
+本模块为什么存在：
+    - SQLite 在多线程 / 连接池场景下需要一批固定 PRAGMA（WAL、busy_timeout、
+      foreign_keys）才能稳定工作，这些配置集中在 ``create_sqlite_engine`` 一处，避免各处
+      重复且不一致。
+    - 同一个数据库文件在整个进程内必须只对应一个 ``Engine``（连接池唯一），否则多个连接
+      池并发写同一 SQLite 文件会加剧锁竞争。``EngineCache`` 用“解析后的绝对路径”作为键
+      保证单例。
+
+职责边界：
+    - 负责：引擎创建、连接池配置、按路径缓存与释放。
+    - 不负责：schema 建表 / 迁移（见 ``init_schema``）、三大引擎的编排与生命周期
+      （见 ``store_engines``）、任何业务读写（见 ``crud/``）。
+
+对外入口：模块级单例 ``_engine_cache``；上层（``store_engines``）通过它取得引擎，不直接
+持有引擎字典。
+"""
 
 from pathlib import Path
 from threading import Lock
@@ -93,6 +113,22 @@ class EngineCache:
     """
 
     def __init__(self) -> None:
+        """初始化空的引擎缓存。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            创建内部路径→引擎字典与一把保护并发访问的线程锁；此时不创建任何引擎，
+            引擎在首次 ``get`` 某路径时才惰性创建。
+        """
+
         self._engines: dict[Path, Engine] = {}
         self._lock = Lock()
 

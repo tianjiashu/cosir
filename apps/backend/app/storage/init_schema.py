@@ -1,4 +1,22 @@
-"""SQLAlchemy schema initialization."""
+"""SQLite schema 初始化与轻量迁移。
+
+单一职责：负责“建表”与“把已存在的旧表演进到当前模型定义”，即主库 schema 的创建 + 列级
+补齐，以及日志库 schema 的创建 + 版本化重建。所有表结构以 ``app.storage.model`` 下的
+SQLAlchemy model 为单一事实来源，本模块只做“让数据库结构追上 model 定义”的动作。
+
+为什么主库和日志库迁移策略不同：
+    - 主库（业务数据）不能丢数据，因此采用“加列不删列”的保守策略：只对缺失列执行
+      ``ALTER TABLE ADD COLUMN``，历史数据原样保留。
+    - 日志库是可重建的运行产物，历史日志不具备长期价值，因此采用 ``user_version``
+      版本号驱动的“整表重建”策略：版本落后时直接 drop 后重建，简单且无历史包袱。
+
+职责边界：
+    - 负责：建表、缺失列补齐、日志库版本重建。
+    - 不负责：引擎创建与连接池（见 ``engine_cache``）、引擎编排与生命周期
+      （见 ``store_engines``）、业务读写（见 ``crud/``）。
+
+调用时机：由 ``store_engines.init_storage`` 在进程启动时对主库、日志库各调用一次。
+"""
 
 import logging
 
@@ -26,16 +44,23 @@ LOG_SCHEMA_VERSION = 2
 
 
 def initialize_app_schema(engine: Engine) -> None:
-    """Initialize the main application SQLite schema.
+    """初始化主库（业务数据库）schema，并对已存在的表补齐缺失列。
 
-    Parameters:
-        engine: Initialized SQLAlchemy engine (from ``create_sqlite_engine``).
+    对 ``APP_MODELS`` 中的每个 model 执行“存在则跳过、不存在则建表”，随后逐表比对模型定义
+    与实际列，缺失的列以 ``ALTER TABLE ADD COLUMN`` 补齐（保守迁移，不删列、不改列）。整个
+    过程在单个事务中完成，失败会整体回滚。
 
-    Raises:
-        sqlalchemy.exc.SQLAlchemyError: If table creation or migration fails.
+    参数:
+        engine: 已初始化的主库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
 
-    Side effects:
-        Creates missing application tables/columns.
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果建表或列迁移执行失败。
+
+    副作用:
+        创建缺失的业务表；对已存在的表追加缺失列。已有数据原样保留。
     """
 
     with engine.begin() as connection:
@@ -45,19 +70,23 @@ def initialize_app_schema(engine: Engine) -> None:
 
 
 def _default_literal_for_type(column_type) -> str:
-    """Return a SQLite literal default for a missing NOT NULL column.
+    """为“新增的 NOT NULL 列”推导一个 SQLite 默认值字面量。
 
-    Parameters:
-        column_type: SQLAlchemy column type.
+    SQLite 对已存在数据的表新增 NOT NULL 列时必须提供 DEFAULT，否则历史行无法满足非空约束。
+    本函数按列类型给出安全的零值：整型 / 布尔为 ``0``，浮点 / 数值为 ``0.0``，其余（文本等）
+    为空字符串 ``''``。
 
-    Returns:
-        SQL literal suitable for an ``ALTER TABLE`` default.
+    参数:
+        column_type: SQLAlchemy 列类型对象。
 
-    Raises:
-        None.
+    返回:
+        可直接拼进 ``ALTER TABLE ... DEFAULT`` 的 SQL 字面量字符串。
 
-    Side effects:
-        None.
+    异常:
+        无。
+
+    副作用:
+        无。
     """
 
     type_name = str(column_type).upper()
@@ -69,20 +98,26 @@ def _default_literal_for_type(column_type) -> str:
 
 
 def _ensure_model_columns(connection, engine) -> None:
-    """Add missing model columns to existing application tables.
+    """把 model 中新增、但数据库表里尚缺的列补齐到已存在的主库表。
 
-    Parameters:
-        connection: Active SQLAlchemy connection.
-        engine: SQLAlchemy engine used for dialect compilation.
+    逐个遍历 ``APP_MODELS``：表不存在则跳过（建表逻辑由 ``initialize_app_schema`` 负责）；
+    表存在则比对实际列与模型列，对每个缺失列拼装 DDL 并执行 ``ALTER TABLE ADD COLUMN``。
+    列是否可空 / 是否有 server_default 决定 DDL 形态：可空列直接加；带 server_default 的
+    NOT NULL 列使用其默认值；无默认值的 NOT NULL 列回退到 ``_default_literal_for_type``
+    推导的零值默认。
 
-    Returns:
-        None.
+    参数:
+        connection: 当前处于事务中的 SQLAlchemy 连接。
+        engine: 用于按方言编译列类型 DDL 的 SQLAlchemy 引擎。
 
-    Raises:
-        sqlalchemy.exc.SQLAlchemyError: If migration fails.
+    返回:
+        无。
 
-    Side effects:
-        May alter existing tables by adding missing columns.
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果 ALTER TABLE 执行失败。
+
+    副作用:
+        可能对已存在的表追加列；每追加一列写一条 info 日志。
     """
 
     inspector = inspect(connection)
@@ -109,16 +144,26 @@ def _ensure_model_columns(connection, engine) -> None:
 
 
 def initialize_log_schema(engine: Engine) -> None:
-    """Initialize the log SQLite schema.
+    """初始化日志库 schema，必要时按版本号重建。
 
-    Parameters:
-        engine: Initialized SQLAlchemy engine (from ``create_sqlite_engine``).
+    使用 SQLite 内置的 ``PRAGMA user_version`` 作为日志库结构版本号，按三种情况处理：
+    1. 版本为 0 且已存在旧的 ``log_entries`` 表：视为“无版本号的历史结构”，直接重建到当前版本；
+    2. 版本为 0 且无旧表：首次初始化，建表并写入当前版本号；
+    3. 版本号小于当前目标版本：结构落后，重建到当前版本。
+    日志库允许整表重建是因为历史日志属可丢弃的运行产物（见模块 docstring）。整个过程在单个
+    事务中完成。
 
-    Raises:
-        sqlalchemy.exc.SQLAlchemyError: If table creation fails.
+    参数:
+        engine: 已初始化的日志库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
 
-    Side effects:
-        Creates or rebuilds the log table schema.
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果建表或重建执行失败。
+
+    副作用:
+        创建或重建日志表及其索引，并更新 ``PRAGMA user_version``；重建会丢弃旧日志数据。
     """
 
     with engine.begin() as connection:
@@ -133,13 +178,42 @@ def initialize_log_schema(engine: Engine) -> None:
 
 
 def _has_table(connection, table_name: str) -> bool:
-    """Return whether a table exists in the current connection."""
+    """判断当前连接对应的数据库中是否存在指定表。
+
+    参数:
+        connection: 活动的 SQLAlchemy 连接。
+        table_name: 待检查的表名。
+
+    返回:
+        表存在返回 True，否则返回 False。
+
+    异常:
+        无。
+
+    副作用:
+        无（仅读取库结构元数据）。
+    """
 
     return inspect(connection).has_table(table_name)
 
 
 def _create_log_schema(connection) -> None:
-    """Create log schema tables and indexes."""
+    """创建日志库的表与索引。
+
+    对 ``LOG_MODELS`` 中的每个 model 建表（存在则跳过），并逐个创建其声明的索引。
+
+    参数:
+        connection: 处于事务中的 SQLAlchemy 连接。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果建表或建索引失败。
+
+    副作用:
+        在日志库中创建缺失的日志表与索引。
+    """
 
     for model in LOG_MODELS:
         model.__table__.create(bind=connection, checkfirst=True)
@@ -148,7 +222,25 @@ def _create_log_schema(connection) -> None:
 
 
 def _rebuild_log_schema(connection, current_version: int, target_version: int) -> None:
-    """Rebuild the log schema."""
+    """重建日志库 schema：先删旧表再建新表，并写入目标版本号。
+
+    用于日志库结构落后（或无版本号）时的整表演进。历史日志会被丢弃，这是日志库的既定策略
+    （见模块 docstring）。
+
+    参数:
+        connection: 处于事务中的 SQLAlchemy 连接。
+        current_version: 重建前的 ``user_version``，仅用于日志记录。
+        target_version: 重建后写入的目标 ``user_version``。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果删表 / 建表 / 版本写入失败。
+
+    副作用:
+        删除并重建日志表与索引，更新 ``PRAGMA user_version``，并写一条 info 日志；旧日志数据丢失。
+    """
 
     for model in LOG_MODELS:
         model.__table__.drop(bind=connection, checkfirst=True)

@@ -1,10 +1,13 @@
-"""SQLite turn CRUD — pure data access for the ``turns`` table.
+"""``turns`` 表的纯 CRUD 数据访问层。
 
-单一职责：提供 ``turns`` 表的纯 CRUD 操作。
+单一职责：只提供 ``turns`` 单表的增删改查与 model↔record 转换。
 
 职责边界：
-- 负责：turn 单表读写、model↔record 转换。
-- 不负责：跨表操作（由 ``service/task/`` 编排）。
+- 负责：turn 单表读写、``TurnModel``↔``TurnRecord`` 转换。
+- 不负责：跨表操作与任务编排（由 ``service/task/`` 负责）、业务规则。
+
+依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
+``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
 from typing import List
@@ -19,14 +22,48 @@ from app.utils.datetime_utils import from_text, to_text, utc_now
 
 
 class TurnCrud:
-    """Pure CRUD for the ``turns`` table."""
+    """``turns`` 表的纯 CRUD。
+
+    仅负责单表读写与 model↔record 转换，不承担跨表编排；所有方法通过共享主库 session 工厂访问数据库。
+    """
 
     def __init__(self) -> None:
-        """Initialize with the shared main-database session factory."""
+        """绑定主库共享 session 工厂。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 如果 ``init_storage`` 尚未调用（主库 session 工厂不可用）。
+
+        副作用:
+            无（仅复用已初始化的主库 session 工厂）。
+        """
         self._session_factory = main_session_factory()
 
     def create(self, task_id: str, input_text: str, status: str = "pending") -> TurnRecord:
-        """Create a turn record."""
+        """新建一条 turn 记录并落库。
+
+        ``turn_id`` 由本方法生成（UUID4），创建 / 更新时间以当前 UTC 时间统一填充。
+
+        参数:
+            task_id: 所属任务标识。
+            input_text: 本轮输入文本；不能为空白。
+            status: 初始状态，默认 ``"pending"``。
+
+        返回:
+            落库成功的 ``TurnRecord``。
+
+        异常:
+            ValueError: 如果 input_text 去除首尾空白后为空。
+            sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
+
+        副作用:
+            向 ``turns`` 表插入一行。
+        """
 
         if not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
@@ -46,7 +83,21 @@ class TurnCrud:
         return turn
 
     def get(self, turn_id: str) -> TurnRecord:
-        """Return a turn by identifier."""
+        """按标识返回单个 turn。
+
+        参数:
+            turn_id: turn 标识。
+
+        返回:
+            匹配的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
 
         with self._session_factory() as session:
             row = session.get(TurnModel, turn_id)
@@ -55,7 +106,20 @@ class TurnCrud:
         return self._turn_from_model(row)
 
     def list_by_task(self, task_id: str) -> List[TurnRecord]:
-        """List all turns for a task."""
+        """列出某任务下的全部 turn，按创建时间升序。
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            该任务的 turn 列表，按 ``created_at`` 再 ``turn_id`` 升序；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
 
         with self._session_factory() as session:
             rows = (
@@ -70,7 +134,24 @@ class TurnCrud:
         return [self._turn_from_model(row) for row in rows]
 
     def update_status(self, turn_id: str, status: str) -> TurnRecord:
-        """Update turn status."""
+        """更新 turn 状态并刷新更新时间。
+
+        先校验 turn 存在（不存在则抛出），再更新状态与 ``updated_at``。
+
+        参数:
+            turn_id: turn 标识。
+            status: 新状态值。
+
+        返回:
+            更新后的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            更新 ``turns`` 表中对应行的 status 与 updated_at。
+        """
 
         self.get(turn_id)
         with self._session_factory.begin() as session:
@@ -82,7 +163,25 @@ class TurnCrud:
         return self.get(turn_id)
 
     def claim_pending(self, turn_id: str) -> bool:
-        """Atomically advance a pending turn to running."""
+        """以原子方式把处于 ``pending`` 的 turn 抢占为 ``running``。
+
+        利用 ``WHERE status='pending'`` 的条件更新实现乐观并发抢占：仅当该 turn 仍为 pending
+        时才更新成功，用于避免多个消费者重复执行同一 turn。
+
+        参数:
+            turn_id: turn 标识。
+
+        返回:
+            抢占成功（本次确实把 pending 更新为 running）返回 True；turn 已被他人抢占或非
+            pending 状态返回 False。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            条件满足时更新 ``turns`` 表中对应行的 status 与 updated_at。
+        """
 
         self.get(turn_id)
         now_text = to_text(utc_now())
@@ -95,7 +194,21 @@ class TurnCrud:
         return bool(result.rowcount)
 
     def get_first_for_task(self, task_id: str) -> TurnRecord:
-        """Return the first turn associated with a task."""
+        """返回某任务下创建时间最早的 turn。
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            该任务最早创建的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果该任务下没有任何 turn。
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
 
         with self._session_factory() as session:
             row = session.execute(
@@ -109,7 +222,22 @@ class TurnCrud:
         return self._turn_from_model(row)
 
     def list_ids_by_task_ids(self, task_ids: list[str]) -> list[str]:
-        """Return turn IDs for a set of task IDs."""
+        """返回一批任务下全部 turn 的标识列表。
+
+        只查 ``turn_id`` 一列，用于跨表级联删除等只需 id 的场景。
+
+        参数:
+            task_ids: 任务标识列表；为空时直接返回空列表。
+
+        返回:
+            匹配的 turn_id 列表；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            task_ids 非空时打开一次主库只读 session。
+        """
 
         from sqlalchemy import select
 
@@ -124,7 +252,20 @@ class TurnCrud:
             ]
 
     def delete_by_ids(self, turn_ids: list[str]) -> None:
-        """Delete turns by IDs."""
+        """按标识批量删除 turn。
+
+        参数:
+            turn_ids: 待删除的 turn 标识列表；为空时不执行任何操作。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            turn_ids 非空时从 ``turns`` 表删除匹配的行。
+        """
 
         from sqlalchemy import delete
 
@@ -134,7 +275,22 @@ class TurnCrud:
             session.execute(delete(TurnModel).where(TurnModel.turn_id.in_(turn_ids)))
 
     def _turn_from_model(self, row: TurnModel) -> TurnRecord:
-        """Convert a turn ORM model to a domain record."""
+        """把 ``TurnModel`` ORM 行转换为业务 ``TurnRecord``。
+
+        转换过程把库中存储的文本时间戳还原为 datetime。
+
+        参数:
+            row: 查询得到的 ``TurnModel`` 行。
+
+        返回:
+            对应的 ``TurnRecord``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
         return TurnRecord(
             row.turn_id,
             row.task_id,
