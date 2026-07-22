@@ -9,7 +9,7 @@
 
 import json
 
-from typing import Any
+from typing import Any, Set, List
 
 from langchain_core.messages import (
     AIMessage,
@@ -77,17 +77,19 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
 
 
 def model_tools_to_langchain(
-    tools: list[ToolDefinition],
+    tools: List[ToolDefinition],
+    allowed_tools: Set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """将面向模型的工具定义转换为 ``bind_tools`` 接受的 OpenAI 函数 schema。
 
-    统一经 ``ToolDefinition.to_model_tool_definition()`` 投影为模型可见结构，再投影为
-    OpenAI 函数 schema（``{"name", "description", "parameters"}``）。直接返回内部函数 schema，
-    由 LangChain 的 ``bind_tools`` 负责包装为 ``{"type": "function", "function": {...}}``，
-    避免对具体包装格式的依赖，跨 langchain 版本更稳健。
+    统一经 ``ToolDefinition.to_model_tool_definition()`` 投影为模型可见结构（``{"name",
+    "description", "parameters"}``），并仅保留 ``allowed_tools`` 中允许的工具。直接返回
+    内部函数 schema 列表，由 LangChain 的 ``bind_tools`` 负责包装为 ``{"type": "function",
+    "function": {...}}``，避免对具体包装格式的依赖，跨 langchain 版本更稳健。
 
     参数:
         tools: 内部工具定义列表。
+        allowed_tools: 允许暴露给模型的工具名集合；传入 ``None`` 表示不过滤（保留全部工具）。
 
     返回:
         ``bind_tools`` 可直接消费的 OpenAI 函数 schema 列表（``list[dict[str, Any]]``）。
@@ -99,14 +101,10 @@ def model_tools_to_langchain(
         无。
     """
 
-    model_tools = [tool.to_model_tool_definition() for tool in tools]
     return [
-        {
-            "name": model_tool["name"],
-            "description": model_tool["description"],
-            "parameters": dict(model_tool["parameters_schema"]),
-        }
-        for model_tool in model_tools
+        tool.to_model_tool_definition()
+        for tool in tools
+        if allowed_tools is None or tool.name in allowed_tools
     ]
 
 

@@ -7,11 +7,12 @@
  * @module shared/events
  */
 
-/** 后端发出的 14 种运行时事件类型，与 `docs/desktop-client-development-plan.md` §5.3 一一对应。 */
+/** 后端发出的运行时事件类型，与 `docs/desktop-client-development-plan.md` §5.3 一一对应。 */
 export type RuntimeEventType =
   | "run_started"
   | "step_started"
   | "model_output_delta"
+  | "model_thinking_delta"
   | "tool_call_requested"
   | "tool_call_started"
   | "tool_call_finished"
@@ -59,7 +60,12 @@ export interface StepStartedPayload {
 
 /** `model_output_delta` 载荷：模型增量输出。 */
 export interface ModelOutputDeltaPayload {
-  delta: string;
+  text: string;
+}
+
+/** `model_thinking_delta` 载荷：模型思考过程增量（DeepSeek thinking）。 */
+export interface ModelThinkingDeltaPayload {
+  text: string;
 }
 
 /** `tool_call_requested` 载荷：模型请求调用工具（待执行）。 */

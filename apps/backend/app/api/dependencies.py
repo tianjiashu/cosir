@@ -146,7 +146,6 @@ def build_runtime(
         )
     tool_system = tool_system or get_tool_system()
     services = _build_services(settings)
-    log_query_service = _build_log_query_service(settings, logger)
     return AgentRuntime(
         settings=settings,
         task_service=services["task_service"],
@@ -154,7 +153,6 @@ def build_runtime(
         context_builder=TextContextBuilder(),
         tool_scheduler=tool_system.scheduler,
         logger=logger,
-        log_query_service=log_query_service,
     )
 
 

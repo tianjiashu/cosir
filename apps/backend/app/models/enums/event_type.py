@@ -17,6 +17,7 @@ class EventType(str, Enum):
     STEP_STARTED = "step_started"
     MODEL_REQUESTED = "model_requested"
     MODEL_OUTPUT_DELTA = "model_output_delta"
+    MODEL_THINKING_DELTA = "model_thinking_delta"
     MODEL_COMPLETED = "model_completed"
     MODEL_FAILED = "model_failed"
     TOOL_CALL_REQUESTED = "tool_call_requested"

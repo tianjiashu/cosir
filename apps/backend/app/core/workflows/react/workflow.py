@@ -13,9 +13,10 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from ..agent_workflow import AgentWorkflow
+from ...runtime.runtime_operations import RuntimeOperations
 logger = logging.getLogger(__name__)
 
-from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
@@ -28,27 +29,12 @@ from app.models.runtime_event import RuntimeEvent
 from app.tools.schemas import ToolCall
 
 from .edges import _should_continue
-from .nodes import _model_node, _tools_node
+from .nodes import _extract_text, _model_node, _tools_node
+from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
 
 
-def _extract_token_text(content) -> str:
-    """从 LangChain 消息 content 中提取纯文本分片。"""
-
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
-        return "".join(parts)
-    return ""
-
-
-class ReactLikeWorkflow:
+class ReactLikeWorkflow(AgentWorkflow):
     """基于“模型推理 -> 工具调用 -> 继续推理/最终回答”的默认工作流，由 LangGraph 编排。
 
     该类只承担执行策略职责，不直接创建模型、工具或数据库连接。所有外部能力都通过
@@ -57,8 +43,8 @@ class ReactLikeWorkflow:
     """
 
     def __init__(
-        self,
-        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+            self,
+            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化 ReAct-like 工作流。
 
@@ -92,10 +78,9 @@ class ReactLikeWorkflow:
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-        self,
-        task: TaskRecord,
-        operations: "Any",
-        model: BaseChatModel | None = None,
+            self,
+            task: TaskRecord,
+            operations: RuntimeOperations,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -109,8 +94,6 @@ class ReactLikeWorkflow:
         Args:
             task: 当前需要执行的任务记录。
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
-            model: 可选注入的 LangChain chat model（用于测试）；缺省时由
-                ``build_chat_model(settings.model_name, settings)`` 按配置模型名构建。
 
         Yields:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
@@ -120,9 +103,15 @@ class ReactLikeWorkflow:
         thread_id = turn.turn_id
         turn_id = turn.turn_id
 
-        settings = operations.settings
-        base_model = model or build_chat_model(settings.model_name, settings)
-        tool_schemas = model_tools_to_langchain(operations.model_tools())
+        # Agent 执行主体
+        agent_profile = operations.agent_profile
+        # 构建模型
+        base_model = build_chat_model(
+            agent_profile.model_name,
+            model_settings=agent_profile.model_settings,
+        )
+        # 构建工具
+        tool_schemas = model_tools_to_langchain(operations.model_tools, agent_profile.allowed_tools)
         try:
             bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
         except NotImplementedError:
@@ -136,41 +125,43 @@ class ReactLikeWorkflow:
         config = {
             "configurable": {
                 "thread_id": thread_id,
-                "operations": operations,
-                "task": task,
-                "turn": turn,
-                "model": bound_model,
-                "approval_resolver": self._approval_resolver,
+                "runtime_config": RuntimeConfig(
+                    operations=operations,
+                    task=task,
+                    turn=turn,
+                    model=bound_model,
+                    approval_resolver=self._approval_resolver,
+                ),
             }
         }
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
             runtime_messages = operations.build_messages()
-            input_state: Any = {
-                "messages": runtime_to_langchain(runtime_messages),
-                "step_count": 0,
-                "tool_error_count": 0,
-                "requested_tool": False,
-                "final_response": False,
-                "terminal": False,
-                "pending_tool_calls": [],
-                "max_steps": settings.max_steps,
-                "final_text": "",
-            }
+            input_state: ReactGraphState | Command = ReactGraphState(
+                messages=runtime_to_langchain(runtime_messages),
+                step_count=0,
+                tool_error_count=0,
+                requested_tool=False,
+                final_response=False,
+                terminal=False,
+                pending_tool_calls=[],
+                max_steps=agent_profile.max_steps,
+                final_text="",
+            )
 
             current_step_id: str | None = None
             sequence = 0
             while True:
                 try:
                     async for mode, data in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["custom", "messages"],
+                            input_state,
+                            config,
+                            stream_mode=["custom", "messages"],
                     ):
                         if mode == "messages":
                             chunk, _metadata = data
-                            text = _extract_token_text(chunk.content)
+                            text = _extract_text(chunk.content)
                             if text and current_step_id is not None:
                                 yield RuntimeEvent(
                                     event_type=EventType.MODEL_OUTPUT_DELTA,
@@ -220,6 +211,6 @@ class ReactLikeWorkflow:
                     if isinstance(interrupt_value, dict)
                     else []
                 )
-                resolver = config["configurable"]["approval_resolver"]
+                resolver = config["configurable"]["runtime_config"].approval_resolver
                 approved = resolver(pending) if resolver is not None else pending
                 input_state = Command(resume=approved)

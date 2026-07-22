@@ -93,6 +93,17 @@ export function ChatPanel() {
                 <UserMessage content={turn.userText} />
 
                 {turn.entries.map((entry) => {
+                  if (entry.kind === "thinking") {
+                    return entry.content.length > 0 ? (
+                      <div
+                        key={entry.eventId}
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                      >
+                        <div className="mb-1 font-medium opacity-80">思考过程</div>
+                        <div className="whitespace-pre-wrap">{entry.content}</div>
+                      </div>
+                    ) : null;
+                  }
                   if (entry.kind === "assistant") {
                     return entry.content.length > 0 ? (
                       <AgentMessage key={entry.eventId} content={entry.content} />

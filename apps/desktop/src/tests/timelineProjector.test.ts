@@ -15,7 +15,7 @@ function makeTurn(turnId: string, inputText: string): TurnRecord {
   } as TurnRecord;
 }
 
-function makeDelta(eventId: string, delta: string, sequence = 1): RuntimeEvent {
+function makeDelta(eventId: string, text: string, sequence = 1): RuntimeEvent {
   return {
     event_id: eventId,
     event_type: "model_output_delta",
@@ -23,7 +23,19 @@ function makeDelta(eventId: string, delta: string, sequence = 1): RuntimeEvent {
     turn_id: "turn-1",
     sequence,
     created_at: new Date().toISOString(),
-    payload: { delta },
+    payload: { text },
+  };
+}
+
+function makeThinking(eventId: string, text: string, sequence = 1): RuntimeEvent {
+  return {
+    event_id: eventId,
+    event_type: "model_thinking_delta",
+    task_id: "task-1",
+    turn_id: "turn-1",
+    sequence,
+    created_at: new Date().toISOString(),
+    payload: { text },
   };
 }
 
@@ -164,8 +176,8 @@ describe("timeline projector", () => {
   it("delta payload 为 null/undefined 时按空字符串聚合", () => {
     const turn = makeTurn("turn-1", "hello");
     const events = [
-      makeDeltaWithPayload("e-1", { delta: null }),
-      makeDeltaWithPayload("e-2", { delta: undefined }),
+      makeDeltaWithPayload("e-1", { text: null }),
+      makeDeltaWithPayload("e-2", { text: undefined }),
       makeDelta("e-3", "后续"),
     ];
     const timeline = projectTurnTimeline([turn], events);
@@ -195,6 +207,20 @@ describe("timeline projector", () => {
     expect(timeline[0].entries[1]).toEqual({ kind: "assistant", eventId: "e-4", content: "后缀" });
   });
 
+  it("相邻 model_thinking_delta 聚合为一条 thinking 条目，且显示在回答之前", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [
+      makeThinking("t-1", "先分析"),
+      makeThinking("t-2", "需求"),
+      makeDelta("e-1", "我来帮你"),
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+
+    expect(timeline[0].entries).toHaveLength(2);
+    expect(timeline[0].entries[0]).toEqual({ kind: "thinking", eventId: "t-1", content: "先分析需求" });
+    expect(timeline[0].entries[1]).toEqual({ kind: "assistant", eventId: "e-1", content: "我来帮你" });
+  });
+
   it("按 turn_id 隔离事件，不同 turn 互不干扰", () => {
     const turnA = makeTurn("turn-a", "hello A");
     const turnB = makeTurn("turn-b", "hello B");
@@ -206,7 +232,7 @@ describe("timeline projector", () => {
         turn_id: "turn-a",
         sequence: 1,
         created_at: new Date().toISOString(),
-        payload: { delta: "A 的内容" },
+        payload: { text: "A 的内容" },
       },
       {
         event_id: "e-2",
@@ -215,7 +241,7 @@ describe("timeline projector", () => {
         turn_id: "turn-b",
         sequence: 2,
         created_at: new Date().toISOString(),
-        payload: { delta: "B 的内容" },
+        payload: { text: "B 的内容" },
       },
     ];
     const timeline = projectTurnTimeline([turnA, turnB], events);

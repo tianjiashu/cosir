@@ -1,6 +1,40 @@
 """供运行时任务使用的 Agent profile 值对象。"""
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Set
+
+from app.core.llm.model_settings import ModelSettings
+from app.core.workflows.agent_workflow import AgentWorkflow
+
+if TYPE_CHECKING:
+    from app.core.workflows.react import ReactLikeWorkflow
+
+
+def _default_workflow() -> AgentWorkflow:
+    """返回默认 ReAct-like 工作流实例（延迟导入，打破循环依赖）。
+
+    单一职责：仅在构造默认 ``AgentProfile`` 时提供工作流实例，把对具体 workflow 实现类的
+    导入推迟到运行时，避免 ``profile → react → runtime_operations → context → profile`` 的
+    模块级循环导入。
+
+    参数:
+        无。
+
+    返回:
+        一个 ``ReactLikeWorkflow`` 实例。
+
+    异常:
+        无。
+
+    副作用:
+        首次调用时导入 ``app.core.workflows.react``（仅一次）。
+    """
+
+    from app.core.workflows.react import ReactLikeWorkflow
+
+    return ReactLikeWorkflow()
 
 
 @dataclass(frozen=True)
@@ -13,6 +47,9 @@ class AgentProfile:
         goal: 注入到模型上下文中的运行目标。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         context_policy: 该 Agent 的上下文处理策略名称。
+        workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
+        model_name: 该 Agent 使用的模型名称。
+        model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
 
     返回:
         不可变的 Agent profile 值对象。
@@ -27,8 +64,12 @@ class AgentProfile:
     agent_id: str
     role: str
     goal: str
-    allowed_tools: tuple[str, ...]
+    allowed_tools: Set[str]
     context_policy: str
+    workflow: AgentWorkflow = field(default_factory=_default_workflow)
+    model_name: str = "deepseek-v4-flash"
+    model_settings: ModelSettings = field(default_factory=ModelSettings)
+    max_steps: int = 1000
 
     def allows_tool(self, tool_name: str, permission: str) -> bool:
         """返回该 Agent profile 是否允许某个工具。
@@ -70,8 +111,12 @@ class AgentProfile:
             "agent_id": self.agent_id,
             "role": self.role,
             "goal": self.goal,
-            "allowed_tools": list(self.allowed_tools),
+            "allowed_tools": set(self.allowed_tools),
             "context_policy": self.context_policy,
+            "workflow": self.workflow,
+            "model_name": self.model_name,
+            "model_settings": self.model_settings.to_dict(),
+            "max_turns": self.max_steps,
         }
 
 
@@ -100,4 +145,9 @@ def default_developer_agent() -> AgentProfile:
         ),
         allowed_tools=("safe_read",),
         context_policy="text_only_v1",
+        model_name="deepseek-v4-flash",
+        model_settings=ModelSettings(
+            base_url="https://api.deepseek.com",
+            api_key_env="sk-e920522a28a844c2be0d4581f4d9c650",
+        ),
     )

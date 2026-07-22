@@ -8,6 +8,7 @@ from uuid import uuid4
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
+from app.api.dependencies import get_tool_system
 from app.config.logging import (
     shutdown_logging,
     trace_log_extra,
@@ -17,14 +18,11 @@ from app.core.agents.profile import AgentProfile, default_developer_agent
 from app.core.context import TextContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.core.workflows.agent_workflow import AgentWorkflow
-from app.core.workflows.react.workflow import ReactLikeWorkflow
 from app.models import TaskRecord, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
-from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
@@ -55,8 +53,6 @@ class AgentRuntime:
         tool_scheduler: ToolScheduler,
         logger: logging.Logger,
         agent_profile: AgentProfile | None = None,
-        workflow: AgentWorkflow | None = None,
-        log_query_service: LogQueryService | None = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -79,8 +75,6 @@ class AgentRuntime:
         self._tool_scheduler = tool_scheduler
         self._logger = logger
         self._agent_profile = agent_profile or default_developer_agent()
-        self._workflow = workflow or ReactLikeWorkflow()
-        self._log_query_service = log_query_service
 
     def close(self) -> None:
         """Close external resources held by the runtime."""
@@ -117,13 +111,6 @@ class AgentRuntime:
             },
         )
         return turn
-
-    async def run_task(self, task_id: str) -> AsyncIterator[RuntimeEvent]:
-        """Run the latest turn for a task."""
-
-        turn = self._turn_service.get_latest_turn(task_id)
-        async for event in self.run_turn(turn.turn_id):
-            yield event
 
     async def run_turn(
         self,
@@ -216,10 +203,11 @@ class AgentRuntime:
             logger=self._logger,
             agent_profile=agent_profile,
             current_turn_id=turn.turn_id,
+            model_tools = get_tool_system().registry.get_all_definitions()
         )
 
         try:
-            async for event in self._workflow.run(task, operations, model=model):
+            async for event in agent_profile.workflow.run(task, operations):
                 yield event
             await self._persist_turn_trajectory(turn.turn_id)
             return

@@ -45,6 +45,6 @@ class ToolDefinition:
         return {
             "name": self.name,
             "description": self.description,
-            "parameters_schema": self.parameters_schema,
+            "parameters": dict(self.parameters_schema),
         }
 

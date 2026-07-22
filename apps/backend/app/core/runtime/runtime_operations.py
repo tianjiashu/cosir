@@ -1,15 +1,20 @@
 """Runtime operations exposed to workflow strategies."""
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING, List
 
 from app.config.settings import BackendSettings
-from app.core.agents.profile import AgentProfile
 from app.core.context import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
-from app.tools.schemas import ToolCall
+from app.tools.schemas import ToolCall, ToolDefinition
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
+
+if TYPE_CHECKING:
+    from app.core.agents.profile import AgentProfile
 
 
 class RuntimeOperations:
@@ -20,14 +25,15 @@ class RuntimeOperations:
     """
 
     def __init__(
-        self,
-        settings: BackendSettings,
-        turn_store,
-        context_builder: TextContextBuilder,
-        tool_scheduler: ToolScheduler,
-        logger: logging.Logger,
-        agent_profile: AgentProfile,
-        current_turn_id: str = "",
+            self,
+            settings: BackendSettings,
+            turn_store,
+            context_builder: TextContextBuilder,
+            tool_scheduler: ToolScheduler,
+            logger: logging.Logger,
+            agent_profile: AgentProfile,
+            current_turn_id: str = "",
+            model_tools: List[ToolDefinition] = [],
     ) -> None:
         """Initialize runtime dependencies."""
 
@@ -35,7 +41,8 @@ class RuntimeOperations:
         self._turn_store = turn_store
         self._context_builder = context_builder
         self._logger = logger
-        self._agent_profile = agent_profile
+        self.model_tools:List[ToolDefinition] = model_tools
+        self.agent_profile = agent_profile
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
@@ -77,7 +84,7 @@ class RuntimeOperations:
         turn = self.get_current_turn()
         turn_history = self._turn_store.list_turns_for_task(turn.task_id)
         return self._context_builder.build_messages(
-            self._agent_profile, turn, turn_history, self._turn_store
+            self.agent_profile, turn, turn_history, self._turn_store
         )
 
     def has_turn_status(self, turn_id: str, status: str) -> bool:
@@ -86,25 +93,25 @@ class RuntimeOperations:
         return self._turn_store.has_turn_status(turn_id, status)
 
     def update_turn_status(
-        self, turn_id: str, status: str, end_reason: str | None = None
+            self, turn_id: str, status: str, end_reason: str | None = None
     ) -> TurnRecord:
         """Update turn status (and optional end reason) through the turn store."""
 
         return self._turn_store.update_turn_status(turn_id, status, end_reason)
 
     def update_turn_response(
-        self, turn_id: str, response_text: str | None
+            self, turn_id: str, response_text: str | None
     ) -> TurnRecord:
         """Persist the turn's agent reply text through the turn store."""
 
         return self._turn_store.update_turn_response(turn_id, response_text)
 
     def run_tool_calls(
-        self,
-        task_id: str,
-        calls: list[ToolCall],
-        step_id: str | None = None,
-        write_event=None,
+            self,
+            task_id: str,
+            calls: list[ToolCall],
+            step_id: str | None = None,
+            write_event=None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 

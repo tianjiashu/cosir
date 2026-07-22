@@ -1,7 +1,9 @@
 """运行时与工作流策略共享的工作流协议。"""
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Protocol, Any
+
+from langchain_core.language_models import BaseChatModel
 
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TaskRecord
@@ -11,7 +13,7 @@ from app.models.runtime_event import RuntimeEvent
 class AgentWorkflow(Protocol):
     """定义面向运行时的、单个 Agent 工作流接口。"""
 
-    async def run(
+    def run(
         self,
         task: TaskRecord,
         operations: RuntimeOperations,
@@ -21,6 +23,8 @@ class AgentWorkflow(Protocol):
         参数:
             task: 由运行时选中的任务记录。
             operations: 暴露给工作流的、运行时拥有的操作。
+            model: 可选注入的 LangChain chat model（用于测试或显式覆盖）；缺省时由工作流
+                按 ``operations.agent_profile`` 的模型配置自行构建。
 
         生成:
             工作流运行期间产生的运行时事件。

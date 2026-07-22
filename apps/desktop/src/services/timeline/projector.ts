@@ -24,6 +24,7 @@ export interface TimelineToolItem {
 /** turn 内按事件顺序渲染的 timeline 条目。 */
 export type TurnTimelineEntry =
   | { kind: "assistant"; eventId: string; content: string }
+  | { kind: "thinking"; eventId: string; content: string }
   | { kind: "tool"; item: TimelineToolItem }
   | { kind: "status"; eventId: string; eventType: RuntimeEvent["event_type"]; payload: RuntimeEvent["payload"] };
 
@@ -79,22 +80,51 @@ export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[])
 function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
   const entries: TurnTimelineEntry[] = [];
   let pendingDelta: { eventId: string; content: string } | null = null;
+  let pendingThinking: { eventId: string; content: string } | null = null;
 
-  for (const event of events) {
-    if (event.event_type === "model_output_delta") {
-      const delta = String(event.payload.delta ?? "");
-      if (pendingDelta) {
-        pendingDelta.content += delta;
-      } else {
-        pendingDelta = { eventId: event.event_id, content: delta };
-      }
-      continue;
+  const flushPending = () => {
+    if (pendingThinking) {
+      entries.push({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
+      pendingThinking = null;
     }
-
     if (pendingDelta) {
       entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
       pendingDelta = null;
     }
+  };
+
+  for (const event of events) {
+    if (event.event_type === "model_thinking_delta") {
+      const thinking = String(event.payload.text ?? "");
+      // 思考与回答交错时，先把已累积的回答 flush，再开始新的思考块
+      if (pendingDelta) {
+        entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
+        pendingDelta = null;
+      }
+      if (pendingThinking) {
+        pendingThinking.content += thinking;
+      } else {
+        pendingThinking = { eventId: event.event_id, content: thinking };
+      }
+      continue;
+    }
+
+    if (event.event_type === "model_output_delta") {
+      const text = String(event.payload.text ?? "");
+      // 回答开始前先把思考块 flush，保证思考显示在前
+      if (pendingThinking) {
+        entries.push({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
+        pendingThinking = null;
+      }
+      if (pendingDelta) {
+        pendingDelta.content += text;
+      } else {
+        pendingDelta = { eventId: event.event_id, content: text };
+      }
+      continue;
+    }
+
+    flushPending();
 
     const tool = projectTool(event);
     if (tool) {
@@ -111,9 +141,7 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     }
   }
 
-  if (pendingDelta) {
-    entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
-  }
+  flushPending();
 
   return entries;
 }

@@ -19,7 +19,20 @@ from app.core.llm.langchain_bridge import runtime_to_langchain, tool_calls_from_
 from app.models.enums.event_type import EventType
 from app.tools.schemas import ToolCall
 
+from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
+
+
+def _runtime_config() -> RuntimeConfig:
+    """从 LangGraph 运行上下文取出 ReAct 工作流注入的运行时配置容器。
+
+    ``ReactLikeWorkflow.run()`` 把 ``RuntimeConfig`` 放入 ``config["configurable"]["runtime_config"]``；
+    节点统一经本函数取出，避免在各节点里用裸字符串 key 重复读取 ``config["configurable"]``。
+
+    返回:
+        当前 graph 执行注入的 ``RuntimeConfig`` 实例。
+    """
+    return get_config()["configurable"]["runtime_config"]
 
 
 def _extract_text(content) -> str:
@@ -45,8 +58,32 @@ def _extract_text(content) -> str:
     return ""
 
 
+def _extract_reasoning_content(chunk) -> str:
+    """从 LangChain 消息 chunk 的 additional_kwargs 提取 DeepSeek 思考过程分片。
+
+    ``DeepSeekChatOpenAI`` 已把流式分块中的 ``reasoning_content`` 写入
+    ``additional_kwargs["reasoning_content"]``；本函数在不支持 thinking 的模型（该字段缺失）
+    时安全返回空串。逐 token 流式场景下，每个 chunk 携带的只是思考片段，由调用方累加到客户端。
+
+    参数:
+        chunk: 模型 ``astream`` 产出的 LangChain 消息 chunk。
+
+    返回:
+        思考过程文本分片；无则空串。
+    """
+
+    additional = getattr(chunk, "additional_kwargs", None)
+    if not isinstance(additional, dict):
+        return ""
+    value = additional.get("reasoning_content")
+    return value if isinstance(value, str) else ""
+
+
 def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     """把累积的 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``。
+
+    合并时会保留 ``additional_kwargs``（如 DeepSeek 的 ``reasoning_content`` 思考过程），
+    否则思考内容会在落库 / 进入 graph state 时被丢弃，导致下游无法将其作为 thinking 事件推送。
 
     参数:
         chunks: 模型流式产出的分块列表（可能为空）。
@@ -63,6 +100,7 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     return AIMessage(
         content=merged.content,
         tool_calls=merged.tool_calls or [],
+        additional_kwargs=merged.additional_kwargs,
         id=getattr(merged, "id", None),
     )
 
@@ -82,10 +120,10 @@ async def _model_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）。
     """
 
-    cfg = get_config()["configurable"]
-    operations = cfg["operations"]
-    turn = cfg["turn"]
-    model = cfg["model"]
+    rc = _runtime_config()
+    operations = rc.operations
+    turn = rc.turn
+    model = rc.model
     writer = get_stream_writer()
 
     def write_event(event_type: EventType, payload: dict) -> None:
@@ -114,6 +152,12 @@ async def _model_node(state: ReactGraphState) -> dict:
         if text:
             collected_text.append(text)
         chunks.append(chunk)
+        reasoning = _extract_reasoning_content(chunk)
+        if reasoning:
+            write_event(
+                EventType.MODEL_THINKING_DELTA,
+                {"step_id": step_id, "text": reasoning},
+            )
 
     if terminal:
         operations.update_turn_status(turn.turn_id, "cancelled")
@@ -212,10 +256,10 @@ def _tools_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量（工具错误计数、新增观察消息等）。
     """
 
-    cfg = get_config()["configurable"]
-    operations = cfg["operations"]
-    task = cfg["task"]
-    turn = cfg["turn"]
+    rc = _runtime_config()
+    operations = rc.operations
+    task = rc.task
+    turn = rc.turn
     writer = get_stream_writer()
 
     def write_event(event_type: EventType, payload: dict) -> None:
