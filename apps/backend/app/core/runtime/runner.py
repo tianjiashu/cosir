@@ -116,7 +116,6 @@ class AgentRuntime:
         self,
         turn_id: str,
         turn: TurnRecord | None = None,
-        model: BaseChatModel | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行单个 pending 轮次并实时流式产出运行时事件。
 
@@ -134,7 +133,6 @@ class AgentRuntime:
         if turn is None:
             turn = self._turn_service.get_turn(turn_id)
         # 测试注入模型优先；否则由工作流按配置构建（echo/无 Key 时为离线模型）。
-        model = model or getattr(self, "_default_test_model", None)
         task_id = turn.task_id
         task = self._task_service.get_task(task_id)
 
@@ -279,7 +277,9 @@ class AgentRuntime:
         }
 
     def _resolve_task_agent_profile(self, task: TaskRecord) -> AgentProfile | None:
-        """Resolve the agent profile allowed to execute a task."""
+        """Resolve the agent profile allowed to execute a task.
+            TODO:后续需要改造,_agent_profile 要和谁绑定呢？应该是请求吧？请求使用哪个_agent_profile？
+        """
 
         if task.agent_id == self._agent_profile.agent_id:
             return self._agent_profile

@@ -26,12 +26,13 @@ from .state import ReactGraphState
 def _runtime_config() -> RuntimeConfig:
     """从 LangGraph 运行上下文取出 ReAct 工作流注入的运行时配置容器。
 
-    ``ReactLikeWorkflow.run()`` 把 ``RuntimeConfig`` 放入 ``config["configurable"]["runtime_config"]``；
+    ``ReactLikeWorkflow.run()`` 把 ``RuntimeConfig`` 放入 config 的 ``runtime_config``；
     节点统一经本函数取出，避免在各节点里用裸字符串 key 重复读取 ``config["configurable"]``。
 
     返回:
         当前 graph 执行注入的 ``RuntimeConfig`` 实例。
     """
+    # 从 LangGraph 注入的 config 中取出预先放好的 RuntimeConfig。
     return get_config()["configurable"]["runtime_config"]
 
 
@@ -46,16 +47,16 @@ def _extract_text(content) -> str:
     """
 
     if isinstance(content, str):
-        return content
+        return content  # 普通字符串直接返回
     if isinstance(content, list):
         parts = []
         for item in content:
             if isinstance(item, str):
-                parts.append(item)
+                parts.append(item)  # 列表里直接是字符串
             elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
-        return "".join(parts)
-    return ""
+                parts.append(item.get("text", ""))  # 多模态文本块 {"type":"text","text":...}
+        return "".join(parts)  # 拼接所有文本片段
+    return ""  # 其它类型（如图片）返回空
 
 
 def _extract_reasoning_content(chunk) -> str:
@@ -72,11 +73,11 @@ def _extract_reasoning_content(chunk) -> str:
         思考过程文本分片；无则空串。
     """
 
-    additional = getattr(chunk, "additional_kwargs", None)
+    additional = getattr(chunk, "additional_kwargs", None)  # 防止无该属性时报错
     if not isinstance(additional, dict):
-        return ""
-    value = additional.get("reasoning_content")
-    return value if isinstance(value, str) else ""
+        return ""  # 非 dict 直接返回空
+    value = additional.get("reasoning_content")  # 取思考字段
+    return value if isinstance(value, str) else ""  # 非字符串也返回空
 
 
 def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
@@ -94,14 +95,14 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
 
     merged: AIMessageChunk | None = None
     for chunk in chunks:
-        merged = chunk if merged is None else merged + chunk
+        merged = chunk if merged is None else merged + chunk  # LangChain chunk 支持 + 累加
     if merged is None:
-        return AIMessage(content="")
+        return AIMessage(content="")  # 空输入返回空消息
     return AIMessage(
-        content=merged.content,
-        tool_calls=merged.tool_calls or [],
-        additional_kwargs=merged.additional_kwargs,
-        id=getattr(merged, "id", None),
+        content=merged.content,  # 合并后的文本
+        tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
+        additional_kwargs=merged.additional_kwargs,  # 保留思考等额外字段
+        id=getattr(merged, "id", None),  # 消息 id 透传
     )
 
 
@@ -120,72 +121,80 @@ async def _model_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）。
     """
 
-    rc = _runtime_config()
-    operations = rc.operations
-    turn = rc.turn
-    model = rc.model
-    writer = get_stream_writer()
+    rc = _runtime_config()  # 取运行时配置
+    operations = rc.operations  # 领域操作（写 turn、跑工具、查状态）
+    turn = rc.turn  # 当前 turn 记录
+    model = rc.model  # 已构建好的 chat model
+    writer = get_stream_writer()  # 自定义事件写入器
 
+    # 内部封装：统一把 (EventType, payload) 写成 {"event_type":..., "payload":...} 结构。
     def write_event(event_type: EventType, payload: dict) -> None:
         writer({"event_type": str(event_type), "payload": dict(payload)})
 
-    step_count = state.step_count + 1
-    step_id = f"step-{step_count}"
+    step_count = state.step_count + 1  # 步数 +1（本轮模型步）
+    step_id = f"step-{step_count}"  # 步唯一 id
+    # 步开始
     write_event(EventType.STEP_STARTED, {"step_id": step_id, "kind": "model", "index": step_count})
     write_event(
+        # 请求模型，带上历史消息数
         EventType.MODEL_REQUESTED, {"step_id": step_id, "message_count": len(state.messages)}
     )
 
-    collected_text: list[str] = []
-    chunks: list[AIMessageChunk] = []
-    terminal = False
+    collected_text: list[str] = []  # 累积输出文本
+    chunks: list[AIMessageChunk] = []  # 累积流式分块
+    terminal = False  # 是否因取消而提前终止
 
+    # 真正流式调用模型，state.messages 为历史+系统上下文
     async for chunk in model.astream(state.messages):
+        # 每收到 chunk 都检查 turn 是否被取消
         if operations.has_turn_status(turn.turn_id, "cancelled"):
             write_event(
                 EventType.RUN_CANCELLED,
                 {"step_id": step_id, "status": "cancelled", "error": "cancelled"},
             )
-            terminal = True
-            break
-        text = _extract_text(chunk.content)
+            terminal = True  # 标记提前终止
+            break  # 跳出流式循环
+        text = _extract_text(chunk.content)  # 抽本 chunk 文本
         if text:
-            collected_text.append(text)
-        chunks.append(chunk)
-        reasoning = _extract_reasoning_content(chunk)
+            collected_text.append(text)  # 有文本才累积
+        chunks.append(chunk)  # 所有 chunk 都留着，后面合并成完整消息
+        reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
         if reasoning:
             write_event(
+                # 有思考内容就发思考增量事件，前端可实时渲染“思考中”
                 EventType.MODEL_THINKING_DELTA,
                 {"step_id": step_id, "text": reasoning},
             )
 
-    if terminal:
-        operations.update_turn_status(turn.turn_id, "cancelled")
+    if terminal:  # 因取消而终止
+        operations.update_turn_status(turn.turn_id, "cancelled")  # 更新 turn 状态为 cancelled
         return {
             "step_count": step_count,
             "requested_tool": False,
             "final_response": False,
-            "terminal": True,
-            "messages": [],
+            "terminal": True,  # 终态
+            "messages": [],  # 不写消息
             "pending_tool_calls": [],
         }
 
-    ai_message = _finalize_ai_message(chunks)
+    ai_message = _finalize_ai_message(chunks)  # 分块合并成完整 AIMessage
+    # 把 LangChain 的 tool_calls 转成内部 ToolCall 值对象
     tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
-    output_text = "".join(collected_text).strip()
-    requested_tool = bool(tool_calls)
+    output_text = "".join(collected_text).strip()  # 拼接文本并去首尾空白
+    requested_tool = bool(tool_calls)  # 是否要调工具
 
     write_event(
-        EventType.MODEL_COMPLETED,
+        EventType.MODEL_COMPLETED,  # 模型产出完成事件
         {
             "step_id": step_id,
             "text": output_text,
-            "tool_calls": [asdict(call) for call in tool_calls],
+            "tool_calls": [asdict(call) for call in tool_calls],  # 工具调用序列化进 payload
         },
     )
 
-    if requested_tool:
-        if step_count >= state.max_steps:
+    if requested_tool:  # 模型要求调用工具
+        if step_count >= state.max_steps:  # 步数已达上限
+            # 超限失败
             write_event(EventType.RUN_FAILED, {"status": "failed", "error": "max_steps_reached"})
             operations.update_turn_status(turn.turn_id, "failed")
             return {
@@ -193,37 +202,39 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "requested_tool": False,
                 "final_response": False,
                 "terminal": True,
-                "messages": [ai_message],
+                "messages": [ai_message],  # 把 ai_message 写回 state，checkpoint 可保留
                 "pending_tool_calls": [],
             }
         return {
             "step_count": step_count,
-            "requested_tool": True,
+            "requested_tool": True,  # 进入工具分支
             "final_response": False,
-            "terminal": False,
+            "terminal": False,  # 非终态，graph 会继续到 tools 节点
             "messages": [ai_message],
+            # 待执行工具调用交给 tools 节点
             "pending_tool_calls": [asdict(call) for call in tool_calls],
         }
 
-    if output_text:
+    if output_text:  # 没有工具调用但有文本 → 最终回答
         write_event(
             EventType.FINAL_RESPONSE,
             {"text": output_text, "step_id": step_id, "status": "completed"},
         )
-        operations.update_turn_status(turn.turn_id, "completed")
-        operations.update_turn_response(turn.turn_id, output_text)
+        operations.update_turn_status(turn.turn_id, "completed")  # turn 标完成
+        operations.update_turn_response(turn.turn_id, output_text)  # 回复文本落库（历史回看用）
+        # 整个 run 结束
         write_event(EventType.RUN_FINISHED, {"status": "completed", "step_id": step_id})
         return {
             "step_count": step_count,
             "requested_tool": False,
-            "final_response": True,
+            "final_response": True,  # 终态最终回复
             "terminal": True,
             "messages": [ai_message],
             "pending_tool_calls": [],
-            "final_text": output_text,
+            "final_text": output_text,  # 供上层取最终回复
         }
 
-    write_event(
+    write_event(  # 既没工具调用也没文本 → 模型输出非法
         EventType.RUN_FAILED,
         {
             "error": "invalid_model_output",
@@ -256,20 +267,25 @@ def _tools_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量（工具错误计数、新增观察消息等）。
     """
 
-    rc = _runtime_config()
-    operations = rc.operations
-    task = rc.task
-    turn = rc.turn
-    writer = get_stream_writer()
+    rc = _runtime_config()  # 取运行时配置
+    operations = rc.operations  # 领域操作
+    task = rc.task  # 任务（工具执行需要 task_id）
+    turn = rc.turn  # 当前 turn 记录
+    writer = get_stream_writer()  # 自定义事件写入器
 
+    # 内部封装：统一事件写入结构。
     def write_event(event_type: EventType, payload: dict) -> None:
         writer({"event_type": str(event_type), "payload": dict(payload)})
 
-    tool_calls = state.pending_tool_calls
-    step_id = f"step-{state.step_count}"
+    tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
+    step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
+    # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
+    # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
     approved = interrupt({"tool_calls": tool_calls})
+    # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
     approved_dicts = tool_calls if not isinstance(approved, list) else approved
+    # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
     approved_calls = [
         ToolCall(
             tool_name=item["tool_name"],
@@ -279,22 +295,23 @@ def _tools_node(state: ReactGraphState) -> dict:
         for item in approved_dicts
     ]
 
+    # 真正执行工具（内部会发工具生命周期事件，write_event 作为回调注入）。
     tool_run = operations.run_tool_calls(
         task.task_id,
         approved_calls,
         step_id,
         write_event=write_event,
     )
-    observations = tool_run.observations
+    observations = tool_run.observations  # 每个工具调用的观察结果
 
-    tool_error_count = state.tool_error_count
+    tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
     for observation in observations:
         if observation.status == "success":
-            tool_error_count = 0
+            tool_error_count = 0  # 成功则清零（连续失败才累计）
         else:
-            tool_error_count += 1
+            tool_error_count += 1  # 失败 +1
 
-    if tool_error_count >= operations.settings.tool_error_limit:
+    if tool_error_count >= operations.settings.tool_error_limit:  # 连续工具错误达上限
         write_event(
             EventType.RUN_FAILED,
             {
@@ -308,12 +325,13 @@ def _tools_node(state: ReactGraphState) -> dict:
         return {
             "pending_tool_calls": [],
             "tool_error_count": tool_error_count,
-            "terminal": True,
+            "terminal": True,  # 失败终态
             "messages": [],
         }
 
     return {
-        "pending_tool_calls": [],
+        "pending_tool_calls": [],  # 清空待执行工具调用
         "tool_error_count": tool_error_count,
+        # 观察消息转 LangChain 消息追加进 state
         "messages": runtime_to_langchain(tool_run.messages_for_model),
     }
