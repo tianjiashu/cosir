@@ -1,8 +1,9 @@
 """SQLAlchemy 引擎统一工厂。
 
-单一职责：集中创建、缓存、释放全部 3 个 SQLAlchemy 引擎（主库同步 / 日志库同步 /
-LangGraph checkpoint 异步），路径全部来自 ``BackendSettings``。CRUD 不再接收引擎或路径
-参数，统一通过本模块的访问器取得 session 工厂或引擎。
+单一职责：集中创建、缓存、释放两个业务所需的 SQLAlchemy 同步引擎（主库 / 日志库），
+路径全部来自 ``BackendSettings``。CRUD 不再接收引擎或路径参数，统一通过本模块的访问器
+取得 session 工厂。LangGraph checkpoint 由 ``app.core.runtime.runs.checkpointer`` 经
+aiosqlite 直连 ``BackendSettings.checkpoint_file``，不经过本模块引擎。
 
 职责边界：
     - 负责：三大引擎的按需创建、进程级缓存复用（委托 ``engine_cache``）、schema 初始化
@@ -33,7 +34,6 @@ from dataclasses import dataclass
 from threading import Lock
 
 from sqlalchemy import Engine
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config.settings import BackendSettings, default_settings
@@ -57,7 +57,6 @@ class _StorageState:
     main_session_factory: sessionmaker[Session] | None = None
     log_engine: Engine | None = None
     log_session_factory: sessionmaker[Session] | None = None
-    checkpoint_engine: AsyncEngine | None = None
     settings: BackendSettings | None = None
 
 
@@ -103,7 +102,8 @@ def init_storage(settings: BackendSettings | None = None) -> None:
         sqlalchemy.exc.SQLAlchemyError: 如果引擎或 schema 初始化失败。
 
     副作用:
-        首次调用时创建主库、日志库、LangGraph checkpoint 三个引擎并初始化 schema；
+        首次调用时创建主库、日志库两个引擎并初始化 schema；checkpoint 数据库父目录一并
+        预创建（供 ``app.core.runtime.runs.checkpointer`` 经 aiosqlite 直连）；
         已初始化且 settings 不同则先 ``close_storage`` 再重建。
     """
 
@@ -128,8 +128,6 @@ def init_storage(settings: BackendSettings | None = None) -> None:
         _state.log_session_factory = create_session_factory(_state.log_engine)
 
         settings.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
-        checkpoint_url = f"sqlite+aiosqlite:///{settings.checkpoint_file}"
-        _state.checkpoint_engine = create_async_engine(checkpoint_url, future=True)
 
 
 def main_session_factory() -> sessionmaker[Session]:
@@ -189,25 +187,6 @@ def log_session_factory() -> sessionmaker[Session]:
     return _require(_state.log_session_factory, "log_session_factory")
 
 
-def checkpoint_async_engine() -> AsyncEngine:
-    """返回 LangGraph checkpoint 异步引擎（进程级单例）。
-
-    参数:
-        无。
-
-    返回:
-        LangGraph checkpoint 使用的 SQLAlchemy 异步引擎。
-
-    异常:
-        RuntimeError: 如果 ``init_storage`` 尚未调用。
-
-    副作用:
-        无。
-    """
-
-    return _require(_state.checkpoint_engine, "checkpoint_async_engine")
-
-
 def checkpoint_path() -> str:
     """返回 checkpoint sqlite 文件路径字符串（来自 ``BackendSettings.checkpoint_file``）。
 
@@ -249,12 +228,8 @@ def close_storage() -> None:
             _engine_cache.dispose_path(_state.settings.database_file)
         if _state.log_engine is not None and _state.settings is not None:
             _engine_cache.dispose_path(_state.settings.log_database_file)
-        if _state.checkpoint_engine is not None:
-            # AsyncEngine.dispose() 是协程，同步上下文下通过底层 sync_engine 释放连接池。
-            _state.checkpoint_engine.sync_engine.dispose()
         _state.main_engine = None
         _state.main_session_factory = None
         _state.log_engine = None
         _state.log_session_factory = None
-        _state.checkpoint_engine = None
         _state.settings = None
