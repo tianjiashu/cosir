@@ -9,7 +9,6 @@
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
-import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -33,7 +32,6 @@ from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
 
 
-
 class ReactLikeWorkflow(AgentWorkflow):
     """基于“模型推理 -> 工具调用 -> 继续推理/最终回答”的默认工作流，由 LangGraph 编排。
 
@@ -45,8 +43,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     workflow_id = "react_like_v1"
 
     def __init__(
-            self,
-            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+        self,
+        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化 ReAct-like 工作流。
 
@@ -80,9 +78,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-            self,
-            task: TaskRecord,
-            operations: RuntimeOperations,
+        self,
+        task: TaskRecord,
+        operations: RuntimeOperations,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -113,7 +111,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             model_settings=agent_profile.model_settings,
         )
         # 构建工具
-        tool_schemas = model_tools_to_langchain(operations.model_tools, set(agent_profile.allowed_tools))
+        tool_schemas = model_tools_to_langchain(
+            operations.model_tools, set(agent_profile.allowed_tools)
+        )
         try:
             bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
         except NotImplementedError:
@@ -157,9 +157,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             while True:
                 try:
                     async for mode, data in graph.astream(
-                            input_state,
-                            config,
-                            stream_mode=["custom", "messages"],
+                        input_state,
+                        config,
+                        stream_mode=["custom", "messages"],
                     ):
                         if mode == "messages":
                             chunk, _metadata = data

@@ -10,15 +10,22 @@ repos:
       - id: ruff-format
       - id: ruff
         args: [--fix]
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
+  # mypy 用 local 包装（非 mirrors-mypy）：pre-commit 4.x 已移除 ``continue-on-error``
+  # 配置键，无法直接声明「失败不阻断」。改用 wrapper 脚本 ``mypy_nonblocking.sh`` 吞掉
+  # mypy 退出码（始终返回 0），并配合 ``verbose: true`` 仍把 mypy 结果展示出来，
+  # 从而既提示类型问题、又不阻断提交（符合 AGENTS.md 渐进式非阻塞约定）。
+  - repo: local
     hooks:
       - id: mypy
-        # 渐进式：mypy 先非阻塞（仅提示不报错），避免存量未注解代码堵死提交。
-        # 待存量逐步补全注解后，移除 continue-on-error 升级为强制。
-        continue-on-error: true
-        additional_dependencies: []
+        name: mypy (渐进式，非阻塞)
+        description: >-
+          渐进式类型检查，存量未注解代码不阻塞提交；输出由 verbose 展示。
+          待存量逐步补全注解后，移除 wrapper 直接强制 mypy 通过。
+        entry: bash apps/backend/scripts/mypy_nonblocking.sh
+        language: system
+        types: [python]
         files: ^apps/backend/app/
+        verbose: true
   # 后端 API 契约快照：当 app/ 下代码（路由、schema、模型、服务、运行时等）变更时，
   # 自动重新导出 docs/api/openapi.json，使前端离线查阅与 openapi-typescript 生成的
   # TS 类型始终与代码同步，避免契约漂移。生成物由本 hook 维护。

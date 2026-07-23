@@ -46,11 +46,11 @@
 
 ```text
 coding-agent/
+  .pre-commit-config.yaml # 提交前强制 ruff-format + ruff --fix + mypy + 自动导出 OpenAPI 文档（配置位于仓库根，不在 apps/backend）
   apps/
     backend/
       pyproject.toml          # 唯一依赖来源（uv）；Ruff/mypy/pytest 配置集中于此
       uv.lock                 # 锁文件，必须提交
-      .pre-commit-config.yaml # 提交前强制 ruff-format + ruff --fix + mypy
       .python-version         # 3.10
       app/
         __main__.py           # CLI 入口，触发 config.logging 与 default_settings

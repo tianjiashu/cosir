@@ -6,8 +6,6 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from app.config.logging.common import current_log_file
-
 
 @dataclass(frozen=True)
 class BackendSettings:
@@ -31,7 +29,8 @@ class BackendSettings:
         model_api_key_env: 包含服务商 API Key 的环境变量。
         model_name: 发送给服务商的模型名；同时作为工厂查表键决定 thinking 等差异。
         model_thinking_mode: 遗留字段，仅用于 ``backend_health`` 健康态展示，已不参与模型构建
-            （thinking 现由工厂注册表 ``ModelSpec.thinking`` 按模型名决定，flash=disabled / pro=enabled）。
+            （thinking 现由工厂注册表 ``ModelSpec.thinking`` 按模型名决定，
+            flash=disabled / pro=enabled）。
         max_steps: 一次任务在运行失败前允许的最大运行时步骤数。
         tool_error_limit: 运行失败前允许的最大工具错误数。
         max_context_chars: 模型调用前允许的最大字符数代理预算。
@@ -127,6 +126,11 @@ class BackendSettings:
             读取系统日期，但不创建目录或文件。
         """
 
+        # 延迟导入以避免模块级循环依赖：``settings`` 顶层若导入 ``logging.common``，
+        # 会触发 ``logging`` 包 ``__init__`` 经 ``configuration -> sqlite_handler ->
+        # store_engines -> settings`` 回引自身。改为函数内导入后，``settings`` 模块
+        # 顶层零 app 依赖，无论谁先 import 都能立即完成，循环被根治。
+        from app.config.logging.common import current_log_file
 
         return current_log_file(self.log_dir)
 

@@ -49,6 +49,7 @@ from app.api.depends.dependencies import get_runtime, get_turn_service
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
+from app.models import TurnRecord
 from app.service.task.turn_service import TurnService
 
 
@@ -82,9 +83,7 @@ async def create_turn(
     """
 
     try:
-        turn = turn_service.create_turn(
-            task_id, payload.input_text, agent_id=payload.agent_id
-        )
+        turn = turn_service.create_turn(task_id, payload.input_text, agent_id=payload.agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except ValueError as exc:
@@ -102,8 +101,9 @@ async def stream_turn(
 
     仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending
     轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。
-    本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由 finally
-    兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定（``turn.agent_id``），
+    本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由运行时
+    ``run_turn`` 的断开兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定
+    （``turn.agent_id``），
     运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。
 
     事件以标准 SSE 帧推送，每帧格式为::
@@ -122,7 +122,7 @@ async def stream_turn(
 
     返回:
         发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到
-        轮次运行结束或客户端断开（断开即本轮结束，由 finally 兜底标 failed）。
+        轮次运行结束或客户端断开（断开即本轮结束，由运行时 ``run_turn`` 的断开兜底标 failed）。
 
     异常:
         HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走
@@ -143,7 +143,7 @@ async def stream_turn(
             detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
         )
     return StreamingResponse(
-        _sse_turn_events(runtime, turn_id, turn_service, turn),
+        _sse_turn_events(runtime, turn_id, turn),
         media_type="text/event-stream",
     )
 
@@ -184,15 +184,18 @@ async def cancel_turn(
 async def _sse_turn_events(
     runtime: AgentRuntime,
     turn_id: str,
-    turn_service: TurnService,
-    turn: object | None = None,
+    turn: TurnRecord | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
+
+    断开兜底（把孤儿 ``running`` 落定为 ``failed``）已下沉到 ``runtime.run_turn`` 内部，
+    按「本连接是否成功认领本轮」精确判定，避免并发连接互相误标。本函数只负责：把事件
+    翻译为 SSE 帧、记录流式生命周期日志，并在 finally 中**确定性关闭**底层运行生成器，
+    从而在客户端断开时触发 ``run_turn`` 的断开兜底（而非依赖不确定的 GC 回收）。
 
     参数:
         runtime: 产生轮次事件的运行时（执行引擎）。
         turn_id: 待运行的轮次标识（仅 pending 轮次会由 ``runtime.run_turn`` 实际执行）。
-        turn_service: 轮次 service，用于在客户端断开时把孤儿轮落终态。
         turn: 可选，调用方已取出的轮次记录，透传给 ``runtime.run_turn``
             以避免重复查询存储。
 
@@ -200,11 +203,13 @@ async def _sse_turn_events(
         SSE 格式的事件字符串。
 
     异常:
-        KeyError: 当轮次在流式开始前消失时抛出。
+        不向上抛出：``KeyError``（轮次在流式开始前消失）与其它未预期异常均在此记录并终止流，
+        避免异常裸奔中断 HTTP 响应；轮次终态由 ``run_turn`` 兜底。
 
     副作用:
-        执行轮次事件（仅 pending 轮次由 ``runtime.run_turn`` 启动）；客户端断开且本轮仍在运行时，
-        将轮次标记为 ``failed``（``end_reason="client_disconnected"``），避免孤儿 ``running``。
+        执行轮次事件（仅 pending 轮次由 ``runtime.run_turn`` 启动）；在 finally 中关闭底层
+        运行生成器，触发 ``run_turn`` 的断开兜底（仅当本连接成功认领且轮次仍 ``running`` 时
+        标记 ``failed``），避免孤儿 ``running``。
     """
 
     log.info(
@@ -214,8 +219,9 @@ async def _sse_turn_events(
             "data": {"turn_id": turn_id},
         },
     )
+    events = runtime.run_turn(turn_id, turn=turn)
     try:
-        async for event in runtime.run_turn(turn_id, turn=turn):
+        async for event in events:
             yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
         log.info(
             "turn_stream_completed",
@@ -233,26 +239,16 @@ async def _sse_turn_events(
                 "data": {"turn_id": turn_id},
             },
         )
+    except Exception:
+        # 其它未预期异常：记录后终止流，避免异常裸奔中断响应；轮次终态由 run_turn 兜底。
+        log.exception(
+            "turn_stream_error",
+            extra={
+                "msg": f"轮次事件流式推送异常，turn_id={turn_id}",
+                "data": {"turn_id": turn_id},
+            },
+        )
     finally:
-        # 客户端断开：若本轮仍在运行，说明 run 已随连接中止，标记断开避免孤儿 running。
-        # 窄异常保护：轮次可能已被清理，避免 teardown 抛异常掩盖主流程结果。
-        try:
-            if turn_service.has_turn_status(turn_id, "running"):
-                turn_service.update_turn_status(
-                    turn_id, "failed", end_reason="client_disconnected"
-                )
-                log.info(
-                    "turn_marked_disconnected",
-                    extra={
-                        "msg": f"客户端断开，轮次已标记为 failed，turn_id={turn_id}",
-                        "data": {"turn_id": turn_id, "end_reason": "client_disconnected"},
-                    },
-                )
-        except Exception:
-            log.exception(
-                "turn_disconnect_mark_failed",
-                extra={
-                    "msg": f"客户端断开后标记轮次 failed 失败，turn_id={turn_id}",
-                    "data": {"turn_id": turn_id},
-                },
-            )
+        # 确定性关闭底层运行生成器：客户端断开时借此触发 run_turn 的 finally 断开兜底，
+        # 该兜底按「本连接是否成功认领」精确判定，避免误杀他连接驱动的 running turn。
+        await events.aclose()

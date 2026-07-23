@@ -16,7 +16,7 @@ from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.models import TaskRecord, TurnRecord
+from app.models import TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
@@ -194,6 +194,8 @@ class AgentRuntime:
 
         if not self._turn_service.claim_pending_turn(turn.turn_id):
             # 已被其它连接抢占（极小概率的竞态）：本轮不再重复驱动，直接退出。
+            # 关键：未成功认领即在进入下方 try/finally 之前 return，断开兜底只由真正
+            # 持有本轮的连接负责，避免落败连接误标他连接正在驱动的 running turn。
             log.warning(
                 "turn_claim_lost",
                 extra={
@@ -203,31 +205,35 @@ class AgentRuntime:
             )
             return
 
-        yield self._record(
-            EventType.RUN_STARTED,
-            task_id,
-            {"status": "running", "agent": agent_profile.to_dict(), "_turn_id": turn.turn_id},
-        )
-
-        operations = RuntimeOperations(
-            settings=self._settings,
-            turn_store=self._turn_service,
-            context_builder=self._context_builder,
-            tool_scheduler=self._tool_scheduler,
-            agent_profile=agent_profile,
-            current_turn_id=turn.turn_id,
-            model_tools=self._model_tools,
-        )
-
+        # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
+        # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorExit），终态都只由本连接决定。
         try:
+            yield self._record(
+                EventType.RUN_STARTED,
+                task_id,
+                {
+                    "status": "running",
+                    "agent": agent_profile.to_dict(),
+                    "_turn_id": turn.turn_id,
+                },
+            )
+
+            operations = RuntimeOperations(
+                settings=self._settings,
+                turn_store=self._turn_service,
+                context_builder=self._context_builder,
+                tool_scheduler=self._tool_scheduler,
+                agent_profile=agent_profile,
+                current_turn_id=turn.turn_id,
+                model_tools=self._model_tools,
+            )
+
             async for event in agent_profile.workflow.run(task, operations):
                 yield event
             await self._persist_turn_trajectory(turn.turn_id)
             return
         except Exception as exc:
-            self._turn_service.update_turn_status(
-                turn.turn_id, "failed", end_reason=str(exc)
-            )
+            self._turn_service.update_turn_status(turn.turn_id, "failed", end_reason=str(exc))
             log.exception(
                 "task_failed",
                 extra={
@@ -235,13 +241,60 @@ class AgentRuntime:
                     "data": {"task_id": task_id},
                 },
             )
-            event = RuntimeEvent(
+            yield RuntimeEvent(
                 event_type=EventType.RUN_FAILED,
                 task_id=task_id,
                 turn_id=turn.turn_id,
                 payload={"status": "failed", "error": str(exc)},
             )
-            yield event
+        finally:
+            # 本连接持有的清理收口：仅当本轮仍卡在 running（客户端断开导致运行被中止、
+            # 或落终态前异常逃逸）时置 failed；正常完成 / 已失败 / 已取消均为幂等空操作。
+            self._mark_turn_disconnected_if_running(turn.turn_id)
+
+    def _mark_turn_disconnected_if_running(self, turn_id: str) -> None:
+        """本连接持有的轮次若仍处于 ``running``，则落定为断开失败。
+
+        仅在本引擎成功认领（claim）本轮后进入的清理路径（``run_turn`` 的 finally）中调用：
+        正常完成 / 失败 / 取消时 turn 已落终态（非 ``running``），此处为幂等空操作；仅当
+        客户端断开导致运行被中止、或落终态前异常逃逸使 turn 卡在 ``running`` 时，才置为
+        ``failed``（``end_reason="client_disconnected"``），避免孤儿 ``running``。由于只有
+        持有认领的连接才会走到这里，不会误标他连接正在驱动的 ``running`` turn。
+
+        参数:
+            turn_id: 待检查并可能落终态的轮次标识。
+
+        返回:
+            无。
+
+        异常:
+            不向上抛出：轮次可能已被清理，内部窄异常保护，避免 teardown 抛异常掩盖主流程结果。
+
+        副作用:
+            可能把 turn 状态由 ``running`` 置为 ``failed`` 并写日志。
+        """
+
+        try:
+            if not self._turn_service.has_turn_status(turn_id, "running"):
+                return
+            self._turn_service.update_turn_status(
+                turn_id, "failed", end_reason="client_disconnected"
+            )
+            log.info(
+                "turn_marked_disconnected",
+                extra={
+                    "msg": f"客户端断开，轮次已标记为 failed，turn_id={turn_id}",
+                    "data": {"turn_id": turn_id, "end_reason": "client_disconnected"},
+                },
+            )
+        except Exception:
+            log.exception(
+                "turn_disconnect_mark_failed",
+                extra={
+                    "msg": f"客户端断开后标记轮次 failed 失败，turn_id={turn_id}",
+                    "data": {"turn_id": turn_id},
+                },
+            )
 
     async def _persist_turn_trajectory(self, turn_id: str) -> None:
         """Persist the turn's message trajectory for cross-turn memory.
@@ -261,9 +314,7 @@ class AgentRuntime:
 
         try:
             async with build_checkpointer() as checkpointer:
-                state = await checkpointer.aget_state(
-                    {"configurable": {"thread_id": turn_id}}
-                )
+                state = await checkpointer.aget_state({"configurable": {"thread_id": turn_id}})
             if state is None or not state.values:
                 return
             messages = state.values.get("messages") or []
