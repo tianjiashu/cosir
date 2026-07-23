@@ -35,6 +35,7 @@ from app.bootstate import (
 )
 from app.config.logging.logger import log
 from app.config.settings import default_settings
+from app.core.runtime.runner import AgentRuntime
 from app.storage.store_engines import close_storage
 from app.tools.tool_system import ToolSystem
 
@@ -64,7 +65,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         tool_system = tool_system or ToolSystem.build_tool_system(settings)
         set_tool_system(tool_system)
         set_agent_registry(build_agent_registry())
-        runtime = build_runtime(tool_system=tool_system, settings=settings)
+        runtime:AgentRuntime = build_runtime(tool_system=tool_system, settings=settings)
         set_runtime(runtime)
     else:
         if tool_system is not None:
