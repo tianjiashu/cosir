@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from app.config.logging.common import current_log_file
+
 
 @dataclass(frozen=True)
 class BackendSettings:
@@ -125,7 +127,6 @@ class BackendSettings:
             读取系统日期，但不创建目录或文件。
         """
 
-        from app.config.logging import current_log_file
 
         return current_log_file(self.log_dir)
 

@@ -7,17 +7,16 @@ LogRecord。业务实体 ID（``run_id`` / ``task_id`` …）不进日志顶层�
 
 为支持"只知道 run_id / task_id 也能定位 trace"的入口层绑定（如恢复、审批），
 本模块维护一张进程内 ``run_id/task_id -> trace_id`` 反查表：full trace 上下文
-绑定时登记，后续 :meth:`LogContextStore.merge` 可据此解析出 ``trace_id``。
+绑定时登记，后续 :func:`merge_log_context` 可据此解析出 ``trace_id``。
 该反查表仅用于入口层解析 ``trace_id``，不再写入任何日志字段。
 
-:class:`LogContextStore` 封装上下文的读取、绑定、合并、登记与恢复，并以模块级
-单例 :data:`_STORE` 暴露函数式 API，兼容 ``app.config.logging`` 的既有导出。
+链路上下文仅以 ``trace_id`` 字符串形式存于 ``ContextVar``，不再额外包装值对象；
+本模块以模块级单例 :data:`_STORE` 暴露函数式 API，兼容 ``app.config.logging`` 的既有导出。
 """
 
 from contextvars import ContextVar, Token
 from typing import Any
 
-from app.config.logging.log_context import LogContext
 from app.models import TraceContext
 
 
@@ -25,7 +24,7 @@ class LogContextStore:
     """进程内日志上下文存储与链路键解析。
 
     职责：
-    - 通过 ``ContextVar`` 维护当前执行链路的 ``LogContext``；
+    - 通过 ``ContextVar`` 维护当前执行链路的 ``trace_id``；
     - 维护 ``run_id`` / ``task_id`` 到 ``trace_id`` 的反查表，仅用于入口层解析；
     - 提供绑定、合并、登记、恢复与 extra 构造等入口层操作。
     """
@@ -46,7 +45,7 @@ class LogContextStore:
             创建进程内的 ``ContextVar`` 与两张反查映射。
         """
 
-        self._current: ContextVar[LogContext | None] = ContextVar(
+        self._current: ContextVar[str | None] = ContextVar(
             "coding_agent_log_context",
             default=None,
         )
@@ -54,14 +53,14 @@ class LogContextStore:
         self._trace_by_run: dict[str, str] = {}
         self._trace_by_task: dict[str, str] = {}
 
-    def current(self) -> LogContext:
-        """返回当前执行上下文中的日志上下文。
+    def current(self) -> str:
+        """返回当前执行上下文中的链路 ``trace_id``。
 
         参数:
             无。
 
         返回:
-            当前 LogContext；没有绑定时返回空上下文。
+            当前 trace_id；没有绑定时返回空串。
 
         异常:
             无。
@@ -70,20 +69,20 @@ class LogContextStore:
             无。
         """
 
-        return self._current.get() or LogContext()
+        return self._current.get() or ""
 
-    def set(self, context: LogContext | TraceContext) -> Token:
+    def set(self, context: TraceContext) -> Token:
         """设置当前执行上下文的链路 ``trace_id``。
 
         参数:
-            context: 新的 LogContext；为兼容入口层调用，也可传入 TraceContext
-                （会登记其 run_id/task_id -> trace_id 反查关系）。
+            context: 需要绑定的 TraceContext（会登记其 run_id/task_id -> trace_id
+                反查关系）。
 
         返回:
             可传给 :meth:`reset` 的 token。
 
         异常:
-            TypeError: 如果传入对象不是 LogContext 或 TraceContext。
+            无。
 
         副作用:
             修改当前 ContextVar 上下文，并登记 run/task -> trace 反查映射。
@@ -92,7 +91,7 @@ class LogContextStore:
         trace_id, run_id, task_id = self._extract_ids(context)
         self._register_trace(trace_id, run_id, task_id)
         resolved = trace_id or self._resolve_trace(run_id, task_id)
-        return self._current.set(LogContext(trace_id=resolved))
+        return self._current.set(resolved)
 
     def merge(self, **fields: str | None) -> Token:
         """在当前链路上下文基础上解析并绑定 ``trace_id``。
@@ -119,20 +118,20 @@ class LogContextStore:
         run_id = str(fields.get("run_id") or "")
         task_id = str(fields.get("task_id") or "")
         self._register_trace(trace_id, run_id, task_id)
-        resolved = trace_id or self._resolve_trace(run_id, task_id) or self.current().trace_id
-        return self._current.set(LogContext(trace_id=resolved))
+        resolved = trace_id or self._resolve_trace(run_id, task_id) or self.current()
+        return self._current.set(resolved)
 
-    def bind(self, context: LogContext | TraceContext) -> None:
+    def bind(self, context: TraceContext) -> None:
         """登记 run/task 与 trace_id 的反查关系。
 
         参数:
-            context: 需要登记的 LogContext 或 TraceContext。
+            context: 需要登记的 TraceContext。
 
         返回:
             无。
 
         异常:
-            TypeError: 如果传入对象不是 LogContext 或 TraceContext。
+            无。
 
         副作用:
             更新进程内 run/task -> trace 反查映射。
@@ -159,11 +158,11 @@ class LogContextStore:
 
         self._current.reset(token)
 
-    def extra_for(self, context: TraceContext | LogContext, **fields: Any) -> dict[str, Any]:
+    def extra_for(self, context: TraceContext, **fields: Any) -> dict[str, Any]:
         """根据上下文构造仅含 ``trace_id`` 的 logging extra 字段。
 
         参数:
-            context: 当前 trace 或日志上下文。
+            context: 当前 trace 上下文。
             fields: 额外需要写入 LogRecord 的字段（如 ``msg`` / ``data``）。
 
         返回:
@@ -181,27 +180,23 @@ class LogContextStore:
         extra.update(fields)
         return extra
 
-    def _extract_ids(self, context: LogContext | TraceContext) -> tuple[str, str, str]:
-        """从上下文对象提取 ``(trace_id, run_id, task_id)``。
+    def _extract_ids(self, context: TraceContext) -> tuple[str, str, str]:
+        """从 TraceContext 提取 ``(trace_id, run_id, task_id)``。
 
         参数:
-            context: LogContext 或 TraceContext。
+            context: TraceContext。
 
         返回:
             ``(trace_id, run_id, task_id)`` 三元组，缺失字段为空串。
 
         异常:
-            TypeError: 如果对象类型不受支持。
+            无。
 
         副作用:
             无。
         """
 
-        if isinstance(context, LogContext):
-            return context.trace_id, "", ""
-        if isinstance(context, TraceContext):
-            return context.trace_id, context.run_id, context.task_id
-        raise TypeError("context must be LogContext or TraceContext")
+        return context.trace_id, context.run_id, context.task_id
 
     def _register_trace(self, trace_id: str, run_id: str, task_id: str) -> None:
         """登记 run/task 到 trace_id 的反查关系。
@@ -256,14 +251,14 @@ class LogContextStore:
 _STORE = LogContextStore()
 
 
-def current_log_context() -> LogContext:
-    """返回当前执行上下文中的日志上下文（委托 :class:`LogContextStore`）。
+def current_log_context() -> str:
+    """返回当前执行上下文中的链路 ``trace_id``（委托 :class:`LogContextStore`）。
 
     参数:
         无。
 
     返回:
-        当前 LogContext；没有绑定时返回空上下文。
+        当前 trace_id；没有绑定时返回空串。
 
     异常:
         无。
@@ -275,17 +270,17 @@ def current_log_context() -> LogContext:
     return _STORE.current()
 
 
-def set_log_context(context: LogContext | TraceContext) -> Token:
+def set_log_context(context: TraceContext) -> Token:
     """设置当前执行上下文的链路 ``trace_id``（委托 :class:`LogContextStore`）。
 
     参数:
-        context: 新的 LogContext，或兼容入口层调用的 TraceContext。
+        context: 需要绑定的 TraceContext。
 
     返回:
         可传给 :func:`reset_log_context` 的 token。
 
     异常:
-        TypeError: 如果传入对象不是 LogContext 或 TraceContext。
+        无。
 
     副作用:
         修改当前 ContextVar 上下文，并登记 run/task -> trace 反查映射。
@@ -313,17 +308,17 @@ def merge_log_context(**fields: str | None) -> Token:
     return _STORE.merge(**fields)
 
 
-def bind_log_context(context: LogContext | TraceContext) -> None:
+def bind_log_context(context: TraceContext) -> None:
     """登记 run/task 与 trace_id 的反查关系（委托 :class:`LogContextStore`）。
 
     参数:
-        context: 需要登记的 LogContext 或 TraceContext。
+        context: 需要登记的 TraceContext。
 
     返回:
         无。
 
     异常:
-        TypeError: 如果传入对象不是 LogContext 或 TraceContext。
+        无。
 
     副作用:
         更新进程内 run/task -> trace 反查映射。
@@ -351,11 +346,11 @@ def reset_log_context(token: Token) -> None:
     _STORE.reset(token)
 
 
-def trace_log_extra(context: TraceContext | LogContext, **fields: Any) -> dict[str, Any]:
+def trace_log_extra(context: TraceContext, **fields: Any) -> dict[str, Any]:
     """根据上下文构造仅含 ``trace_id`` 的 logging extra 字段（委托 :class:`LogContextStore`）。
 
     参数:
-        context: 当前 trace 或日志上下文。
+        context: 当前 trace 上下文。
         fields: 额外需要写入 LogRecord 的字段（如 ``msg`` / ``data``）。
 
     返回:

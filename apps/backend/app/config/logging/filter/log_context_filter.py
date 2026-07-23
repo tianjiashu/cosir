@@ -5,7 +5,7 @@
 并回填到 :class:`logging.LogRecord`。
 """
 
-from app.config.logging.log_context_store import current_log_context
+from app.config.logging.context.log_context_store import current_log_context
 
 
 class LogContextFilter:
@@ -27,7 +27,7 @@ class LogContextFilter:
             当记录缺失 ``trace_id`` 时在其上补齐。
         """
 
-        trace_id = current_log_context().trace_id
+        trace_id = current_log_context()
         if trace_id and not getattr(record, "trace_id", ""):
             record.trace_id = trace_id
         return True

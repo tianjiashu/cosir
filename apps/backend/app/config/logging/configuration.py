@@ -3,10 +3,10 @@
 import logging
 from pathlib import Path
 
+from app.config.logging.common import current_log_file
 from app.config.logging.formatter.jsonl_formatter import JsonlFormatter
 from app.config.logging.filter.caller_filter import CallerFilter
 from app.config.logging.filter.log_context_filter import LogContextFilter
-from app.config.logging.log_files_dir_service import current_log_file
 from app.config.logging.process_bridge import (
     install_log_queue_bridge,
     install_queue_handler,

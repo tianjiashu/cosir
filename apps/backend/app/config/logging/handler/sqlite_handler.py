@@ -7,8 +7,7 @@ import threading
 import time
 from collections import deque
 
-from app.config.logging.record_mapper import LogError, map_log_record
-from app.trace_infra.redaction import redact_value
+from app.models.mapped_log_record import LogError, MappedLogRecord
 from app.storage.crud.log_crud import LogStore
 from app.models import LogEntryRecord
 
@@ -301,8 +300,8 @@ def entry_from_log_record(record: logging.LogRecord) -> LogEntryRecord:
     副作用:
         无。
     """
-    mapped = map_log_record(record)
-    data = redact_value(mapped.data)
+    mapped = MappedLogRecord.from_record(record)
+    data = mapped.data
     error: LogError | None = mapped.error
     return LogEntryRecord(
         ts=mapped.ts,

@@ -13,6 +13,7 @@ from dataclasses import replace
 from typing import Any
 
 from app.config.logging.logger import log
+from app.config.logging.process_bridge import get_log_queue
 from app.tools.schemas import ToolDefinition, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_success import tool_success
@@ -74,9 +75,12 @@ class ToolExecutor:
         )
         # 放弃等待 feeder 线程 flush：子进程已死或已 drain 后不阻塞父进程退出
         result_queue.cancel_join_thread()
+        # 取父进程已建好的跨进程日志队列；为 None 表示父进程未启用日志桥，
+        # 子进程退化为默认 logging（不接入统一管线），不影响工具执行本身。
+        log_queue = get_log_queue()
         process = multiprocessing.Process(
             target=ToolExecutor._execute_handler,
-            args=(tool.handler, dict(arguments), result_queue),
+            args=(tool.handler, dict(arguments), result_queue, log_queue),
             daemon=True,
         )
         with self._managed_subprocess(process):
@@ -228,13 +232,27 @@ class ToolExecutor:
         handler: Callable[..., Any],
         arguments: dict[str, Any],
         result_queue: multiprocessing.Queue,
+        log_queue: "multiprocessing.Queue | None" = None,
     ) -> None:
         """Run a tool handler inside an isolated child process.
 
         The child process inherits a copy of the parent address space;
         this function must remain a pure static method that only uses
-        its arguments — no instance/class state.
+        its arguments — no instance/class state. When ``log_queue`` is
+        provided (parent process logging bridge enabled), the child
+        re-attaches its ``coding_agent.backend`` logger to the cross-process
+        queue so its logs flow into the parent's unified pipeline.
         """
+
+        if log_queue is not None:
+            # spawn 子进程是全新解释器：导入 configuration 会触发
+            # ``app.config.logging`` 包的 ``install_msg_relocation()``，
+            # 使规范约定的 ``extra["msg"]`` 在子进程同样生效；随后将日志
+            # 导向父进程队列，复用父进程已配好的脱敏/截断/上下文关联。
+            from app.config.logging.configuration import (
+                install_logging_for_current_process,
+            )
+            install_logging_for_current_process(log_queue=log_queue)
 
         try:
             result_queue.put(("success", handler(**arguments)))

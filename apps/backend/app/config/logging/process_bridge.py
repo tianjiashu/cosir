@@ -19,7 +19,7 @@ import traceback
 from logging.handlers import QueueHandler, QueueListener
 from multiprocessing.queues import Queue
 
-from app.config.logging.record_mapper import MAX_LOG_TEXT_LENGTH
+from app.models.mapped_log_record import MappedLogRecord
 
 _LOG_QUEUE: Queue | None = None
 _QUEUE_LISTENER: QueueListener | None = None
@@ -209,4 +209,4 @@ def _set_log_field(record: logging.LogRecord, name: str, value: str) -> None:
         给 record 增加属性。
     """
     if value:
-        setattr(record, name, value[:MAX_LOG_TEXT_LENGTH])
+        setattr(record, name, MappedLogRecord._truncate_text(value))
