@@ -49,18 +49,36 @@
 
 ## 二、日志门面与 Logger 来源
 
-统一 **一个 logger 名**（如 `your.app.backend`），**不要**在业务代码里随意 `logging.getLogger()` 自建多个 logger（除模块级常量场景）。统一 logger 名便于全局级别控制与格式化。
+统一 **一个 logger 名**（`coding_agent.backend`），由 `app.config.logging.logger` 中的模块级单例 `log` 承载。**禁止**在业务代码中散落 `logging.getLogger("coding_agent.backend")` 自建引用——同类名永远返回同一对象，分散的 `getLogger` 只会造成「写法分裂」且在 name typo 时静默新建分裂 logger。
 
-按模块角色分两种拿法：
+Python 标准库 `logging.getLogger(name)` 按 name 缓存，同名即同一对象；`log` 只是给这个标准库单例起的便捷别名（facade）。进程内天然单例；spawn 子进程是全新解释器，会重新 import 得到**子进程自己的**单例，跨进程靠队列桥（`process_bridge`）汇入父进程统一管线，而非共享 logger 对象。
 
-| 模块角色 | 拿 logger 的方式 | 示例 |
-|---------|----------------|------|
-| 被注入 logger 的组件 | 用构造时注入的 `self._logger` | 业务服务类 |
-| 无注入的底层模块 | 文件顶部定义模块级常量 `_LOGGER = logging.getLogger("your.app.backend")` | 存储层类 |
+### 业务模块（消费方）：统一 import 单例
+
+所有业务/接入/存储/工具模块，**一律**从门面导入，禁止自行 `getLogger`：
 
 ```python
-# ✅ 模块级常量（每个文件只定义一次）
-_LOGGER = logging.getLogger("your.app.backend")
+# ✅ 业务模块唯一写法
+from app.config.logging.logger import log
+
+log.info("task_created", extra={"msg": "新任务已创建", "data": {...}})
+```
+
+只在以下 **三类日志子系统内部文件**保留 `getLogger` 装配职责（它们负责"生产/配置单例"，语义与"消费方调用"不同，混用 `import log` 会让装配器反向依赖 facade、模糊职责边界）：
+
+| 保留位置 | 职责 |
+|---------|------|
+| `app/config/logging/logger.py` | 单例定义源头（`log = logging.getLogger("coding_agent.backend")`） |
+| `app/config/logging/configuration.py` | 装配器：拿单例挂 handler、支持动态 name 关闭 |
+| `app/config/logging/process_bridge.py` | 桥接器：拿单例挂 `SubprocessQueueHandler` |
+
+> **铁律**：除了上述三类内部文件，任何 `logging.getLogger("coding_agent.backend")` 都视为违规，应改为 `from app.config.logging.logger import log`。
+
+### 历史写法（已弃用，勿新增）
+
+```python
+# ❌ 弃用：业务模块散落自建引用（易 typo 静默分裂、写法不统一）
+_LOGGER = logging.getLogger("coding_agent.backend")
 ```
 
 ---
@@ -123,14 +141,14 @@ _LOGGER = logging.getLogger("your.app.backend")
 ### 打印写法
 ```python
 # 普通结构化日志：event(英文聚合) + msg(中文人读) + data(业务字段)
-_LOGGER.info("task_created", extra={
+log.info("task_created", extra={
     "msg": "新任务已创建，等待调度",
     "data": {"agent_id": agent_id, "status": "pending"},
 })
 
 # 捕获异常必须带堆栈 —— 用 .exception()，不要 .error()
 except Exception as exc:
-    _LOGGER.exception("task_failed", extra={
+    log.exception("task_failed", extra={
         "msg": "模型流式接口中断，任务执行失败",
         "data": {"task_id": task_id},   # 实体 ID 值放 data，不作关联键
     })
@@ -140,16 +158,16 @@ except Exception as exc:
 ### 禁止
 ```python
 # ❌ f-string 拼 event：不可聚合、破坏检索
-_LOGGER.error(f"写任务 {task_id} 失败: {exc}")
+log.error(f"写任务 {task_id} 失败: {exc}")
 # ❌ print 当系统日志
 print("something failed")
 # ❌ 空 catch
 except Exception:
     pass
 # ❌ 在 extra 里塞 task_id / run_id 等独立关联键（应只留 trace_id，实体 ID 值放 data/msg）
-_LOGGER.info("task_created", extra={"task_id": task.task_id, ...})
+log.info("task_created", extra={"task_id": task.task_id, ...})
 # ❌ 把可读描述塞进 event（event 必须稳定英文，描述走 msg）
-_LOGGER.info("新任务已创建", extra={...})
+log.info("新任务已创建", extra={...})
 ```
 
 ---
@@ -167,13 +185,13 @@ _LOGGER.info("新任务已创建", extra={...})
 ### 写法
 ```python
 # ✅ event 英文（可聚合），msg 中文（可读），实体 ID 值混在 msg / data
-_LOGGER.exception("db_write_failed", extra={
+log.exception("db_write_failed", extra={
     "msg": f"更新任务状态写入数据库失败，task_id={task_id}",
     "data": {"operation": "update_status"},
 })
 
 # ✅ 中文 msg 里混英文专业词 / 函数名 / 实体 ID 值
-_LOGGER.warning("tool_call_timeout", extra={
+log.warning("tool_call_timeout", extra={
     "msg": f"调用 read_file 工具超时，tool_call_id={tool_call_id}，已触发熔断",
     "data": {"tool": "read_file"},
 })
@@ -181,13 +199,13 @@ _LOGGER.warning("tool_call_timeout", extra={
 
 ```python
 # ❌ 全英文 msg，中文开发者需脑内翻译
-_LOGGER.exception("db_write_failed", extra={"msg": "failed to write task status into db"})
+log.exception("db_write_failed", extra={"msg": "failed to write task status into db"})
 
 # ❌ 把中文塞进 event（破坏聚合）
-_LOGGER.info("任务创建成功", extra={...})  # event 必须是稳定英文键
+log.info("任务创建成功", extra={...})  # event 必须是稳定英文键
 
 # ❌ 把实体 ID 当日志顶层独立键（应只留 trace_id，值放 data/msg）
-_LOGGER.warning("tool_call_timeout", extra={"tool_call_id": tool_call_id, ...})
+log.warning("tool_call_timeout", extra={"tool_call_id": tool_call_id, ...})
 ```
 
 ---
@@ -252,7 +270,7 @@ _LOGGER.warning("tool_call_timeout", extra={"tool_call_id": tool_call_id, ...})
 ## 八、自检清单（交付前）
 
 ```
-□ 是否用统一 logger（注入的 self._logger 或模块级 _LOGGER），而非自建 / print？
+□ 是否用统一 logger（业务模块统一 `from app.config.logging.logger import log`，未散落 getLogger），而非自建 / print？
 □ event 是否稳定 snake_case、可聚合（非中文、非 f-string 拼动态）？
 □ 业务字段是否进 data，而非拼进 msg？
 □ 是否带中文 msg，让中文开发者一眼能懂（可混英文专业词 / 函数名 / 实体 ID 值）？
