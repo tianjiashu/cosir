@@ -29,7 +29,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 # 仓库根 = apps/backend 的上两级（apps -> coding-agent）。
 REPO_ROOT = BACKEND_ROOT.parents[1]
-DEFAULT_OUT = REPO_ROOT / "docs" / "api" / "openapi.json"
+DEFAULT_OUT = REPO_ROOT / "apps" / "shared" / "fastapi_docs.json"
 
 
 def export_openapi(out_path: Path) -> Path:

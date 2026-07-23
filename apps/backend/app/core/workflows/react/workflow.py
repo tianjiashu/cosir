@@ -10,8 +10,9 @@
 """
 
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast
 
+from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
@@ -124,16 +125,17 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
+        runtime_config = RuntimeConfig(
+            operations=operations,
+            task=task,
+            turn=turn,
+            model=cast(BaseChatModel, bound_model),
+            approval_resolver=self._approval_resolver,
+        )
         config = {
             "configurable": {
                 "thread_id": thread_id,
-                "runtime_config": RuntimeConfig(
-                    operations=operations,
-                    task=task,
-                    turn=turn,
-                    model=bound_model,
-                    approval_resolver=self._approval_resolver,
-                ),
+                "runtime_config": runtime_config,
             }
         }
 
@@ -213,6 +215,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                     if isinstance(interrupt_value, dict)
                     else []
                 )
-                resolver = config["configurable"]["runtime_config"].approval_resolver
+                resolver = runtime_config.approval_resolver
                 approved = resolver(pending) if resolver is not None else pending
                 input_state = Command(resume=approved)

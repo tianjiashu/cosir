@@ -88,7 +88,7 @@ async def create_turn(
         raise HTTPException(status_code=404, detail="task not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return TurnResponse(**turn.to_dict())
+    return TurnResponse.from_record(turn)
 
 
 @app.get("/turns/{turn_id}/stream")
@@ -178,7 +178,7 @@ async def cancel_turn(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="turn not found") from exc
     turn = runtime.cancel_turn(turn_id)
-    return TurnResponse(**turn.to_dict())
+    return TurnResponse.from_record(turn)
 
 
 async def _sse_turn_events(

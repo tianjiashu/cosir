@@ -1,7 +1,7 @@
 """Coordinate task lifecycle and workflow execution."""
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage
@@ -128,7 +128,7 @@ class AgentRuntime:
         self,
         turn_id: str,
         turn: TurnRecord | None = None,
-    ) -> AsyncIterator[RuntimeEvent]:
+    ) -> AsyncGenerator[RuntimeEvent, None]:
         """执行单个 pending 轮次并实时流式产出运行时事件。
 
         只负责「pending → 认领 → 执行 → 流式事件」。历史回看与断线重连不属于本方法职责：
@@ -314,10 +314,10 @@ class AgentRuntime:
 
         try:
             async with build_checkpointer() as checkpointer:
-                state = await checkpointer.aget_state({"configurable": {"thread_id": turn_id}})
-            if state is None or not state.values:
+                snapshot = await checkpointer.aget_tuple({"configurable": {"thread_id": turn_id}})
+            if snapshot is None or not snapshot.checkpoint.get("channel_values"):
                 return
-            messages = state.values.get("messages") or []
+            messages = snapshot.checkpoint["channel_values"].get("messages") or []
             runtime_messages = _langchain_messages_to_runtime(messages)
             self._turn_service.save_turn_messages(turn_id, runtime_messages)
         except Exception:

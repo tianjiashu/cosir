@@ -54,34 +54,36 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         无。Runtime 内部会记录关闭失败。
 
     副作用:
-        关闭 Runtime 持有的运行时资源。
+        关闭 SQLite 存储等运行时资源（经 ``close_storage``）；Runtime 本身不持有需显式
+        释放的资源，故无需对其调用 close。
     """
 
-    runtime = getattr(_app.state, "runtime_override", None)
+    runtime: AgentRuntime
+    runtime_override = getattr(_app.state, "runtime_override", None)
     tool_system = getattr(_app.state, "tool_system_override", None)
 
-    if runtime is None:
+    if runtime_override is None:
         settings = default_settings()
         tool_system = tool_system or ToolSystem.build_tool_system(settings)
         set_tool_system(tool_system)
         set_agent_registry(build_agent_registry())
-        runtime:AgentRuntime = build_runtime(tool_system=tool_system, settings=settings)
+        runtime = build_runtime(tool_system=tool_system, settings=settings)
         set_runtime(runtime)
     else:
         if tool_system is not None:
             set_tool_system(tool_system)
         # 覆写路径：从 runtime 取出其持有的 registry 同步到进程级单例，
         # 保证 GET /agents 与执行引擎共享同一份目录。
-        set_agent_registry(runtime.agent_registry)
-        set_runtime(runtime)
+        set_agent_registry(runtime_override.agent_registry)
+        set_runtime(runtime_override)
+        runtime = runtime_override
 
-    _mark_boot_ready()
-    try:
-        yield
-    finally:
-        runtime.close()
-        close_storage()
-        _mark_boot_stopped()
+        _mark_boot_ready()
+        try:
+            yield
+        finally:
+            close_storage()
+            _mark_boot_stopped()
 
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
