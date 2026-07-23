@@ -10,18 +10,16 @@ LangChain + ``core/llm/langchain_bridge`` + LangGraph，本类不重复实现。
   LangGraph astream）、缺 Key 回退（factory 统一处理）、工具绑定（workflow 中 bind_tools）。
 """
 
-import logging
-import os
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk
 from langchain_openai import ChatOpenAI
 
+from app.config.logging.logger import log
 from app.core.llm.llm_provider.base import LLMProvider
 from app.core.llm.model_settings import ModelSettings
 
-logger = logging.getLogger(__name__)
 
 
 class DeepSeekChatOpenAI(ChatOpenAI):
@@ -82,7 +80,7 @@ class DeepSeekProvider(LLMProvider):
             配置好 base_url / api_key / thinking / 采样参数的 ``DeepSeekChatOpenAI`` 实例。
         """
 
-        api_key = os.environ.get(model_settings.api_key_env, "")
+        api_key = model_settings.api_key_env
         extra: dict = {}
         if model_settings is not None:
             if model_settings.thinking:
@@ -93,10 +91,13 @@ class DeepSeekProvider(LLMProvider):
                 extra["top_p"] = model_settings.top_p
             if model_settings.max_tokens is not None:
                 extra["max_tokens"] = model_settings.max_tokens
-        logger.info(
-            "[llm:deepseek] 构建 chat model model=%s thinking=%s",
-            model_name,
-            model_settings.thinking,
+        thinking = model_settings.thinking if model_settings is not None else None
+        log.info(
+            "llm_deepseek_build",
+            extra={
+                "msg": f"构建 DeepSeek chat model，model={model_name}",
+                "data": {"model": model_name, "thinking": thinking},
+            },
         )
         return DeepSeekChatOpenAI(
             model=model_name,

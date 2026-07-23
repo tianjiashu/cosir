@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, List
 
+from app.config.logging.logger import log
 from app.config.settings import BackendSettings
 from app.core.context.builder import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
@@ -47,6 +47,16 @@ class RuntimeOperations:
         )
         self._current_turn_id = current_turn_id
 
+        log.info("runtime_ops_initialized", extra={
+            "msg": f"运行时操作门面已初始化，agent_id={agent_profile.agent_id}",
+            "data": {
+                "agent_id": agent_profile.agent_id,
+                "model_tools_count": len(model_tools),
+                "current_turn_id": current_turn_id,
+                "current_turn_bound": bool(current_turn_id),
+            },
+        })
+
     def get_current_turn(self) -> TurnRecord:
         """Return the turn identified by ``current_turn_id``.
 
@@ -54,7 +64,18 @@ class RuntimeOperations:
         """
 
         if not self._current_turn_id:
+            log.error("current_turn_id_missing", extra={
+                "msg": "runtime operations 未绑定 current_turn_id，无法解析当前轮",
+                "data": {"agent_id": self.agent_profile.agent_id},
+            })
             raise KeyError("no current turn id bound to runtime operations")
+        log.debug("current_turn_resolved", extra={
+            "msg": f"解析当前轮，turn_id={self._current_turn_id}",
+            "data": {
+                "agent_id": self.agent_profile.agent_id,
+                "turn_id": self._current_turn_id,
+            },
+        })
         return self._turn_store.get_turn(self._current_turn_id)
 
     def get_turn_for_task(self, task_id: str) -> TurnRecord:
@@ -77,23 +98,55 @@ class RuntimeOperations:
 
         完全基于 turn（当前轮 + 前置轮轨迹），不再依赖 task 执行态。
         """
-
-        turn = self.get_current_turn()
-        turn_history = self._turn_store.list_turns_for_task(turn.task_id)
-        return self._context_builder.build_messages(
-            self.agent_profile, turn, turn_history, self._turn_store
-        )
+        try:
+            turn = self.get_current_turn()
+            turn_history = self._turn_store.list_turns_for_task(turn.task_id)
+            messages = self._context_builder.build_messages(
+                self.agent_profile, turn, turn_history, self._turn_store
+            )
+            log.info("messages_built", extra={
+                "msg": (
+                    f"已为 turn_id={turn.turn_id} 构建模型消息，"
+                    f"共 {len(messages)} 条（含 {len(turn_history)} 轮历史）"
+                ),
+                "data": {
+                    "turn_id": turn.turn_id,
+                    "task_id": turn.task_id,
+                    "message_count": len(messages),
+                    "history_turn_count": len(turn_history),
+                },
+            })
+            return messages
+        except Exception as e:
+            log.exception("messages_build_failed", extra={
+                "msg": f"构建运行时消息失败，turn_id={self._current_turn_id}",
+                "data": {"turn_id": self._current_turn_id},
+            })
+            return []
 
     def has_turn_status(self, turn_id: str, status: str) -> bool:
         """Return whether a turn currently has the requested status."""
 
-        return self._turn_store.has_turn_status(turn_id, status)
+        has = self._turn_store.has_turn_status(turn_id, status)
+        log.debug("turn_status_checked", extra={
+            "msg": f"检查 turn_id={turn_id} 是否处于 {status} 状态：{has}",
+            "data": {"turn_id": turn_id, "status": status, "has_status": has},
+        })
+        return has
 
     def update_turn_status(
             self, turn_id: str, status: str, end_reason: str | None = None
     ) -> TurnRecord:
         """Update turn status (and optional end reason) through the turn store."""
 
+        log.info("turn_status_updated", extra={
+            "msg": f"更新 turn_id={turn_id} 状态为 {status}",
+            "data": {
+                "turn_id": turn_id,
+                "status": status,
+                "end_reason": end_reason,
+            },
+        })
         return self._turn_store.update_turn_status(turn_id, status, end_reason)
 
     def update_turn_response(
@@ -101,6 +154,14 @@ class RuntimeOperations:
     ) -> TurnRecord:
         """Persist the turn's agent reply text through the turn store."""
 
+        response_len = len(response_text) if response_text else 0
+        log.info("turn_response_updated", extra={
+            "msg": f"更新 turn_id={turn_id} 的 agent 回复文本，长度 {response_len}",
+            "data": {
+                "turn_id": turn_id,
+                "response_length": response_len,
+            },
+        })
         return self._turn_store.update_turn_response(turn_id, response_text)
 
     def run_tool_calls(
@@ -125,12 +186,45 @@ class RuntimeOperations:
             工具观察结果与供下一步模型使用的消息。
         """
 
-        return self._tool_service.run_calls_with_events(
+        tool_names = [call.tool_name for call in calls]
+        log.info("tool_calls_dispatched", extra={
+            "msg": f"派发 {len(calls)} 个工具调用，step_id={step_id}",
+            "data": {
+                "task_id": task_id,
+                "step_id": step_id,
+                "call_count": len(calls),
+                "tool_names": tool_names,
+            },
+        })
+
+        result = self._tool_service.run_calls_with_events(
             task_id=task_id,
             step_id=step_id or "",
             calls=calls,
             write_event=write_event or _noop_write_event,
         )
+
+        status_counts: dict[str, int] = {}
+        error_count = 0
+        for obs in result.observations:
+            status_counts[obs.status] = status_counts.get(obs.status, 0) + 1
+            if obs.status == "error":
+                error_count += 1
+        log.info("tool_calls_completed", extra={
+            "msg": (
+                f"工具批次执行完成：{len(result.observations)} 个观察，"
+                f"其中 {error_count} 个失败"
+            ),
+            "data": {
+                "task_id": task_id,
+                "step_id": step_id,
+                "observation_count": len(result.observations),
+                "messages_for_model_count": len(result.messages_for_model),
+                "status_counts": status_counts,
+                "error_count": error_count,
+            },
+        })
+        return result
 
 
 def _noop_write_event(event_type, payload: dict) -> None:

@@ -113,7 +113,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             model_settings=agent_profile.model_settings,
         )
         # 构建工具
-        tool_schemas = model_tools_to_langchain(operations.model_tools, agent_profile.allowed_tools)
+        tool_schemas = model_tools_to_langchain(operations.model_tools, set(agent_profile.allowed_tools))
         try:
             bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
         except NotImplementedError:

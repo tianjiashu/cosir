@@ -1,6 +1,5 @@
 """Coordinate task lifecycle and workflow execution."""
 
-import logging
 import os
 from collections.abc import AsyncIterator
 from uuid import uuid4
@@ -8,7 +7,6 @@ from uuid import uuid4
 from langchain_core.messages import BaseMessage
 
 from app.config.logging import (
-    shutdown_logging,
     trace_log_extra,
 )
 from app.config.logging.logger import log
@@ -75,11 +73,6 @@ class AgentRuntime:
         self._agent_profile = agent_profile or default_developer_agent()
         self._model_tools = list(model_tools or [])
 
-    def close(self) -> None:
-        """Close external resources held by the runtime."""
-
-        shutdown_logging(self._logger.name)
-
     def cancel_turn(self, turn_id: str) -> TurnRecord:
         """Cancel a turn and mark it cancelled.
 
@@ -102,7 +95,7 @@ class AgentRuntime:
             turn.task_id,
             {"status": "cancelled", "_turn_id": turn_id},
         )
-        self._logger.info(
+        log.info(
             "turn_cancelled",
             extra={
                 "msg": "turn cancelled",
@@ -253,7 +246,7 @@ class AgentRuntime:
             runtime_messages = _langchain_messages_to_runtime(messages)
             self._turn_service.save_turn_messages(turn_id, runtime_messages)
         except Exception:
-            self._logger.exception(
+            log.exception(
                 "turn_trajectory_persist_failed",
                 extra={
                     "msg": "failed to persist turn message trajectory",
@@ -305,7 +298,7 @@ class AgentRuntime:
             tool_call_id=tool_call_id if isinstance(tool_call_id, str) else None,
             payload=payload,
         )
-        self._logger.info(
+        log.info(
             "runtime_event",
             extra={
                 "msg": "runtime event recorded",

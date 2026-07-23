@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Set
+from typing import TYPE_CHECKING, List
 
 from app.core.llm.model_settings import ModelSettings
 
@@ -63,7 +63,7 @@ class AgentProfile:
     agent_id: str
     role: str
     goal: str
-    allowed_tools: Set[str]
+    allowed_tools: List[str]
     context_policy: str
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     model_name: str = "deepseek-v4-flash"
@@ -110,7 +110,7 @@ class AgentProfile:
             "agent_id": self.agent_id,
             "role": self.role,
             "goal": self.goal,
-            "allowed_tools": sorted(self.allowed_tools),
+            "allowed_tools": self.allowed_tools,
             "context_policy": self.context_policy,
             "workflow": getattr(self.workflow, "workflow_id", "custom"),
             "model_name": self.model_name,
@@ -141,7 +141,7 @@ def default_developer_agent() -> AgentProfile:
             "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
             "第一版只处理纯文本输入。"
         ),
-        allowed_tools=set("safe_read",),
+        allowed_tools=["read_file"],
         context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
