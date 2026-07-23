@@ -20,7 +20,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.dependencies import build_runtime, set_runtime, set_tool_system
+from app.api.depends.dependencies import (
+    build_agent_registry,
+    build_runtime,
+    set_agent_registry,
+    set_runtime,
+    set_tool_system,
+)
 from app.api.middleware.api_logging import install_http_exception_logging, install_request_logging
 from app.bootstate import (
     BOOT_PHASE_READY,
@@ -28,7 +34,6 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
-from app.config.logging import install_logging_for_current_process
 from app.config.settings import default_settings
 from app.storage.store_engines import close_storage
 from app.tools.tool_system import ToolSystem
@@ -58,11 +63,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         settings = default_settings()
         tool_system = tool_system or ToolSystem.build_tool_system(settings)
         set_tool_system(tool_system)
+        set_agent_registry(build_agent_registry())
         runtime = build_runtime(tool_system=tool_system, settings=settings)
         set_runtime(runtime)
     else:
         if tool_system is not None:
             set_tool_system(tool_system)
+        # 覆写路径：从 runtime 取出其持有的 registry 同步到进程级单例，
+        # 保证 GET /agents 与执行引擎共享同一份目录。
+        set_agent_registry(runtime.agent_registry)
         set_runtime(runtime)
 
     _mark_boot_ready()
@@ -91,6 +100,7 @@ importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.traces_api")
+importlib.import_module("app.api.agents_api")
 
 
 def create_app(runtime=None, tool_system=None) -> FastAPI:
@@ -113,6 +123,7 @@ def create_app(runtime=None, tool_system=None) -> FastAPI:
     app.state.runtime_override = runtime
     app.state.tool_system_override = tool_system
     if runtime is not None:
+        set_agent_registry(runtime.agent_registry)
         set_runtime(runtime)
     if tool_system is not None:
         set_tool_system(tool_system)

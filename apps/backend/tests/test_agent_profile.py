@@ -2,7 +2,7 @@
 
 import json
 
-from app.core.agents.profile import default_developer_agent
+from app.core.agents.agent_profile import default_developer_agent
 from app.models.enums.event_type import EventType
 from app.models.runtime_event import RuntimeEvent
 

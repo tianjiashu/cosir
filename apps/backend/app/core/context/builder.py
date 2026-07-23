@@ -1,6 +1,6 @@
 """为第一个纯文本 Agent 工作流构建运行时消息。"""
 
-from app.core.agents.profile import AgentProfile, default_developer_agent
+from app.core.agents.agent_profile import AgentProfile, default_developer_agent
 from app.models import RuntimeMessage, TurnRecord
 
 

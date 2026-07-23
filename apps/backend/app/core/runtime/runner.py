@@ -11,7 +11,8 @@ from app.config.logging import (
 )
 from app.config.logging.logger import log
 from app.config.settings import BackendSettings
-from app.core.agents.profile import AgentProfile, default_developer_agent
+from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
@@ -49,7 +50,7 @@ class AgentRuntime:
         turn_service: TurnService,
         context_builder: TextContextBuilder,
         tool_scheduler: ToolScheduler,
-        agent_profile: AgentProfile | None = None,
+        agent_registry: AgentProfileRegistry,
         model_tools: list[ToolDefinition] | None = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
@@ -60,8 +61,8 @@ class AgentRuntime:
             turn_service: 轮次编排服务（私有协作者，不对外暴露）。
             context_builder: 文本上下文构建器。
             tool_scheduler: 工具调度器。
-            logger: 运行时日志器。
-            agent_profile: 可选 Agent 角色配置。
+            agent_registry: 进程级 agent profile 目录；引擎按 ``agent_id`` 从中解析
+                本次执行由哪个 profile 驱动，自身不再绑定单一 agent。
             model_tools: 暴露给模型的工具定义列表。
         """
 
@@ -70,8 +71,27 @@ class AgentRuntime:
         self._turn_service = turn_service
         self._context_builder = context_builder
         self._tool_scheduler = tool_scheduler
-        self._agent_profile = agent_profile or default_developer_agent()
+        self._agent_registry = agent_registry
         self._model_tools = list(model_tools or [])
+
+    @property
+    def agent_registry(self) -> AgentProfileRegistry:
+        """返回驱动本引擎的进程级 agent profile 目录（只读）。
+
+        参数:
+            无。
+
+        返回:
+            注入的 ``AgentProfileRegistry`` 实例。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return self._agent_registry
 
     def cancel_turn(self, turn_id: str) -> TurnRecord:
         """Cancel a turn and mark it cancelled.
@@ -119,15 +139,16 @@ class AgentRuntime:
         参数:
             turn_id: 需要运行的轮次标识符。
             turn: 可选的预取轮次记录；缺省时按 ``turn_id`` 读取。
-            model: 可选注入的 LangChain chat model；缺省时由工作流按配置构建。
         """
 
+        # 预取轮次记录
         if turn is None:
             turn = self._turn_service.get_turn(turn_id)
-        # 测试注入模型优先；否则由工作流按配置构建（echo/无 Key 时为离线模型）。
         task_id = turn.task_id
+        # 预取任务记录
         task = self._task_service.get_task(task_id)
 
+        # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
         if turn.status != "pending":
             log.warning(
                 "run_turn_non_pending",
@@ -138,7 +159,10 @@ class AgentRuntime:
             )
             return
 
-        agent_profile = self._resolve_task_agent_profile(task)
+        # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
+        # 未绑定时回退到 task.agent_id 默认归属。
+        requested_agent_id = turn.agent_id or task.agent_id
+        agent_profile = self._resolve_agent_profile(requested_agent_id)
         if agent_profile is None:
             self._turn_service.update_turn_status(
                 turn.turn_id, "failed", end_reason="agent_profile_unavailable"
@@ -150,8 +174,8 @@ class AgentRuntime:
                     msg="agent profile unavailable for task",
                     data={
                         "task_id": task_id,
+                        "requested_agent_id": requested_agent_id,
                         "task_agent_id": task.agent_id,
-                        "runtime_agent_id": self._agent_profile.agent_id,
                     },
                 ),
             )
@@ -161,8 +185,8 @@ class AgentRuntime:
                 {
                     "status": "failed",
                     "error": "agent_profile_unavailable",
+                    "requested_agent_id": requested_agent_id,
                     "task_agent_id": task.agent_id,
-                    "runtime_agent_id": self._agent_profile.agent_id,
                     "_turn_id": turn.turn_id,
                 },
             )
@@ -267,14 +291,27 @@ class AgentRuntime:
             "has_model_api_key": bool(os.environ.get(self._settings.model_api_key_env)),
         }
 
-    def _resolve_task_agent_profile(self, task: TaskRecord) -> AgentProfile | None:
-        """Resolve the agent profile allowed to execute a task.
-            TODO:后续需要改造,_agent_profile 要和谁绑定呢？应该是请求吧？请求使用哪个_agent_profile？
+    def _resolve_agent_profile(self, agent_id: str) -> AgentProfile | None:
+        """按 ``agent_id`` 从目录解析出本次执行使用的 agent profile。
+
+        引擎不再绑定单一 agent：每次执行都通过 ``agent_id`` 在 ``AgentProfileRegistry``
+        中查找对应的 profile。未命中（目录中不存在该 id）返回 ``None``，由调用方走
+        ``agent_profile_unavailable`` 失败分支。
+
+        参数:
+            agent_id: 待解析的 agent 标识（通常来自请求覆盖或 ``task.agent_id`` 默认归属）。
+
+        返回:
+            命中时返回对应的 ``AgentProfile``；未命中返回 ``None``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
-        if task.agent_id == self._agent_profile.agent_id:
-            return self._agent_profile
-        return None
+        return self._agent_registry.resolve(agent_id)
 
     def _record(self, event_type: EventType, task_id: str, payload: dict) -> RuntimeEvent:
         """创建一条运行时事件。

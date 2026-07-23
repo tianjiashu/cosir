@@ -3,21 +3,29 @@
 from fastapi import Depends, HTTPException
 
 from app.api.app import app
-from app.api.dependencies import get_task_service, get_workspace_service, get_runtime
-from app.api.schemas import CreateTaskRequest, CreateWorkspaceRequest
+from app.api.depends.dependencies import get_runtime, get_task_service, get_workspace_service
+from app.api.schemas import (
+    CreateTaskRequest,
+    CreateWorkspaceRequest,
+    DeleteWorkspaceResponse,
+    HealthResponse,
+    TaskResponse,
+    WorkspaceResponse,
+)
 from app.core.runtime.runner import AgentRuntime
 from app.service.task.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 
+
 @app.get("/health")
-async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
+async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> HealthResponse:
     """返回后端健康状态与当前模型配置摘要。
 
     参数:
         runtime: 通过依赖注入的运行时单例。
 
     返回:
-        不含 secret 原文的健康状态字典。
+        不含 secret 原文的 ``HealthResponse``。
 
     异常:
         无。
@@ -26,19 +34,19 @@ async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> dict:
         无。
     """
 
-    return runtime.backend_health()
+    return HealthResponse(**runtime.backend_health())
 
 @app.get("/workspaces")
 async def list_workspaces(
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-) -> list:
+) -> list[WorkspaceResponse]:
     """返回已登记的工作区列表。
 
     参数:
         workspace_service: 通过依赖注入的工作区 service。
 
     返回:
-        工作区状态字典列表。
+        ``WorkspaceResponse`` 列表。
 
     异常:
         无。
@@ -47,14 +55,17 @@ async def list_workspaces(
         无。
     """
 
-    return [workspace.to_dict() for workspace in workspace_service.list_workspaces()]
+    return [
+        WorkspaceResponse(**workspace.to_dict())
+        for workspace in workspace_service.list_workspaces()
+    ]
 
 
 @app.post("/workspaces")
 async def create_workspace(
     payload: CreateWorkspaceRequest,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-) -> dict:
+) -> WorkspaceResponse:
     """创建一个本地工作区。
 
     参数:
@@ -62,7 +73,7 @@ async def create_workspace(
         workspace_service: 通过依赖注入的工作区 service。
 
     返回:
-        创建后的工作区状态。
+        创建后的 ``WorkspaceResponse``。
 
     异常:
         HTTPException: 当输入非法时抛出。
@@ -75,14 +86,14 @@ async def create_workspace(
         workspace = workspace_service.create_workspace(payload.name, payload.root_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return workspace.to_dict()
+    return WorkspaceResponse(**workspace.to_dict())
 
 
 @app.delete("/workspaces/{workspace_id}")
 async def delete_workspace(
     workspace_id: str,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-) -> dict:
+) -> DeleteWorkspaceResponse:
     """删除工作区及其下游任务、轮次与运行记录。
 
     参数:
@@ -90,7 +101,7 @@ async def delete_workspace(
         workspace_service: 通过依赖注入的工作区 service。
 
     返回:
-        删除结果。
+        删除结果 ``DeleteWorkspaceResponse``。
 
     异常:
         HTTPException: 当工作区不存在时抛出。
@@ -103,14 +114,14 @@ async def delete_workspace(
         workspace_service.delete_workspace(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
-    return {"workspace_id": workspace_id, "deleted": True}
+    return DeleteWorkspaceResponse(workspace_id=workspace_id, deleted=True)
 
 
 @app.get("/workspaces/{workspace_id}/tasks")
 async def list_workspace_tasks(
     workspace_id: str,
     task_service: TaskService = Depends(get_task_service),
-) -> list:
+) -> list[TaskResponse]:
     """返回工作区下的任务列表。
 
     参数:
@@ -118,7 +129,7 @@ async def list_workspace_tasks(
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        任务状态字典列表。
+        ``TaskResponse`` 列表。
 
     异常:
         HTTPException: 当工作区不存在时抛出。
@@ -128,7 +139,10 @@ async def list_workspace_tasks(
     """
 
     try:
-        return [task.to_dict() for task in task_service.list_tasks_for_workspace(workspace_id)]
+        return [
+            TaskResponse(**task.to_dict())
+            for task in task_service.list_tasks_for_workspace(workspace_id)
+        ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
 
@@ -138,7 +152,7 @@ async def create_workspace_task(
     workspace_id: str,
     payload: CreateTaskRequest,
     task_service: TaskService = Depends(get_task_service),
-) -> dict:
+) -> TaskResponse:
     """在工作区下创建任务容器和首个 pending turn。
 
     参数:
@@ -147,7 +161,7 @@ async def create_workspace_task(
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        创建后的任务状态。
+        创建后的 ``TaskResponse``。
 
     异常:
         HTTPException: 当工作区不存在或输入非法时抛出。
@@ -166,4 +180,4 @@ async def create_workspace_task(
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return task.to_dict()
+    return TaskResponse(**task.to_dict())

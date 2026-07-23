@@ -44,7 +44,13 @@ class TurnCrud:
         """
         self._session_factory = main_session_factory()
 
-    def create(self, task_id: str, input_text: str, status: str = "pending") -> TurnRecord:
+    def create(
+        self,
+        task_id: str,
+        input_text: str,
+        status: str = "pending",
+        agent_id: str | None = None,
+    ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
         ``turn_id`` 由本方法生成（UUID4），创建 / 更新时间以当前 UTC 时间统一填充。
@@ -53,6 +59,8 @@ class TurnCrud:
             task_id: 所属任务标识。
             input_text: 本轮输入文本；不能为空白。
             status: 初始状态，默认 ``"pending"``。
+            agent_id: 可选，本次轮次绑定的 agent 标识；为 None 时表示回退到
+                所属任务的 ``agent_id`` 默认归属（由运行时解析）。
 
         返回:
             落库成功的 ``TurnRecord``。
@@ -68,7 +76,16 @@ class TurnCrud:
         if not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
         now = utc_now()
-        turn = TurnRecord(str(uuid4()), task_id, input_text, status, now, now, response_text=None)
+        turn = TurnRecord(
+            str(uuid4()),
+            task_id,
+            input_text,
+            status,
+            now,
+            now,
+            response_text=None,
+            agent_id=agent_id,
+        )
         with self._session_factory.begin() as session:
             session.add(
                 TurnModel(
@@ -78,6 +95,7 @@ class TurnCrud:
                     status=turn.status,
                     end_reason=turn.end_reason,
                     response_text=turn.response_text,
+                    agent_id=turn.agent_id,
                     created_at=to_text(turn.created_at),
                     updated_at=to_text(turn.updated_at),
                 )
@@ -366,4 +384,5 @@ class TurnCrud:
             from_text(row.updated_at),
             row.end_reason,
             row.response_text,
+            row.agent_id,
         )

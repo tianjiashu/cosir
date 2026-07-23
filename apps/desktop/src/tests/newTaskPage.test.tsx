@@ -22,7 +22,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceRecord } from "@shared/workspace";
 
-const createTaskMock = vi.fn().mockResolvedValue(undefined);
+const createTaskMock = vi.fn().mockResolvedValue(true);
 const createWorkspaceMock = vi.fn().mockResolvedValue(undefined);
 const logErrorMock = vi.fn();
 const openMock = vi.fn();
@@ -74,7 +74,7 @@ beforeEach(() => {
     collapsedWorkspaceIds: new Set<string>(),
   });
 
-  createTaskMock.mockReset().mockResolvedValue(undefined);
+  createTaskMock.mockReset().mockResolvedValue(true);
   createWorkspaceMock.mockReset().mockResolvedValue(makeWorkspace("new", "NewProj"));
   logErrorMock.mockReset();
   openMock.mockReset();

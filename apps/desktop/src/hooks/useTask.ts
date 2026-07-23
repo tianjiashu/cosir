@@ -29,9 +29,9 @@ interface TaskOperationState {
  */
 interface UseTaskReturn {
   /** 在指定工作区创建新任务并自动监听首个 turn 的 SSE 流。 */
-  createTask: (text: string, workspaceId: string) => Promise<void>;
+  createTask: (text: string, workspaceId: string) => Promise<boolean>;
   /** 给当前任务追加一个新轮次并自动监听该轮次 SSE 流。 */
-  createTurn: (text: string) => Promise<void>;
+  createTurn: (text: string) => Promise<boolean>;
   /** 加载任务历史事件和轮次，并切换为活跃任务。 */
   openTask: (taskId: string) => Promise<void>;
   /** 取消当前活跃轮次。 */
@@ -89,7 +89,7 @@ export function useTask(): UseTaskReturn {
    * - 建立 `/turns/{turn_id}/stream` SSE 连接接收首个 turn 事件流
    */
   const createTask = useCallback(
-    async (text: string, workspaceId: string): Promise<void> => {
+    async (text: string, workspaceId: string): Promise<boolean> => {
       setOperation({ loading: true, error: null });
       const ownsOperation = !hasClientTrace();
       if (ownsOperation) {
@@ -141,6 +141,7 @@ export function useTask(): UseTaskReturn {
         }
 
         setOperation({ loading: false, error: null });
+        return true;
       } catch (err) {
         const message = err instanceof Error ? err.message : "创建任务失败";
         logError("createTask 失败", err, { module: "useTask" });
@@ -149,6 +150,7 @@ export function useTask(): UseTaskReturn {
           removeTask(temporaryTask.task_id);
         }
         setOperation({ loading: false, error: message });
+        return false;
       } finally {
         if (ownsOperation) {
           endClientTrace();
@@ -169,10 +171,10 @@ export function useTask(): UseTaskReturn {
    * - 连接 /turns/{turn_id}/stream
    */
   const createTurn = useCallback(
-    async (text: string): Promise<void> => {
+    async (text: string): Promise<boolean> => {
       if (!activeTaskId) {
         setOperation({ loading: false, error: "未选择任务" });
-        return;
+        return false;
       }
       setOperation({ loading: true, error: null });
       const ownsOperation = !hasClientTrace();
@@ -193,10 +195,12 @@ export function useTask(): UseTaskReturn {
         setStreamingTurn(turn.turn_id);
         await connect(activeTaskId, turn.turn_id);
         setOperation({ loading: false, error: null });
+        return true;
       } catch (err) {
         const message = err instanceof Error ? err.message : "创建轮次失败";
         logError("createTurn 失败", err, { module: "useTask", task_id: activeTaskId });
         setOperation({ loading: false, error: message });
+        return false;
       } finally {
         if (ownsOperation) {
           endClientTrace();

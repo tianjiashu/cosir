@@ -60,7 +60,12 @@ class TaskService:
             latest_turn_id=turn_id,
             status=status,
         )
-        self._turn.create(task_id=task.task_id, input_text=input_text, status="pending")
+        self._turn.create(
+            task_id=task.task_id,
+            input_text=input_text,
+            status="pending",
+            agent_id=task.agent_id,
+        )
         return task
 
     def get_task(self, task_id: str) -> TaskRecord:

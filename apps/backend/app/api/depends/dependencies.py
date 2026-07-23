@@ -2,8 +2,11 @@
 
 import logging
 
-from app.config.logging import install_logging_for_current_process
 from app.config.settings import default_settings
+from app.core.agents.agent_profile import (
+    default_developer_agent,
+)
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
 from app.core.runtime.runner import AgentRuntime
 from app.service.log_query_service import LogQueryService
@@ -22,6 +25,7 @@ from app.tools.tool_system import ToolSystem
 
 _RUNTIME: AgentRuntime | None = None
 _TOOL_SYSTEM: ToolSystem | None = None
+_AGENT_REGISTRY: AgentProfileRegistry | None = None
 _SERVICES: dict | None = None
 _TRACE_QUERY_SERVICE_UNSET = object()
 _TRACE_QUERY_SERVICE: TraceQueryService | None = _TRACE_QUERY_SERVICE_UNSET
@@ -109,6 +113,72 @@ def get_runtime() -> AgentRuntime:
     return _RUNTIME
 
 
+def set_agent_registry(registry: AgentProfileRegistry) -> None:
+    """Set the process-wide agent profile registry singleton.
+
+    Parameters:
+        registry: Initialized agent profile registry built during startup.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+
+    Side effects:
+        Replaces the module-level agent registry singleton.
+    """
+
+    global _AGENT_REGISTRY
+    _AGENT_REGISTRY = registry
+
+
+def get_agent_registry() -> AgentProfileRegistry:
+    """Return the process-wide agent profile registry singleton.
+
+    Parameters:
+        None.
+
+    Returns:
+        Initialized AgentProfileRegistry.
+
+    Raises:
+        RuntimeError: If the agent registry has not been initialized.
+
+    Side effects:
+        None.
+    """
+
+    if _AGENT_REGISTRY is None:
+        raise RuntimeError("agent registry has not been initialized")
+    return _AGENT_REGISTRY
+
+
+def build_agent_registry() -> AgentProfileRegistry:
+    """构建并播种进程级 agent profile 目录。
+
+    集中注册所有内置 agent；新增 agent 仅需在此多 ``register`` 一行。
+    该函数是「启动时注册所有 agent」的单一落点，与 ``_RUNTIME`` / ``_TOOL_SYSTEM`` 同构。
+
+    参数:
+        无。
+
+    返回:
+        已播种完成的 ``AgentProfileRegistry``。
+
+    异常:
+        无。
+
+    副作用:
+        构造并填充进程级 registry 单例所依赖的 registry 实例。
+    """
+
+    registry = AgentProfileRegistry()
+    registry.register(default_developer_agent())
+    # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
+    return registry
+
+
 def build_runtime(
     tool_system: ToolSystem | None = None,
     settings=None,
@@ -126,7 +196,8 @@ def build_runtime(
         Configured AgentRuntime instance.
 
     Raises:
-        RuntimeError: If no tool system has been initialized or supplied.
+        RuntimeError: If no tool system has been initialized or supplied, or if
+            the agent registry has not been initialized.
         OSError: If logs or SQLite storage cannot be created.
 
     Side effects:
@@ -136,12 +207,16 @@ def build_runtime(
     settings = settings or default_settings()
     tool_system = tool_system or get_tool_system()
     services = _build_services(settings)
+    # agent registry 由进程级单例提供（启动时经 set_agent_registry 注入），
+    # 与 GET /agents 端点共享同一份目录。
+    agent_registry = get_agent_registry()
     return AgentRuntime(
         settings=settings,
         task_service=services["task_service"],
         turn_service=services["turn_service"],
         context_builder=TextContextBuilder(),
         tool_scheduler=tool_system.scheduler,
+        agent_registry=agent_registry,
         model_tools=tool_system.registry.get_all_definitions(),
     )
 

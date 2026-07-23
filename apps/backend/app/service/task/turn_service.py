@@ -29,11 +29,25 @@ class TurnService:
         self._turn = turn_crud
         self._message = message_crud
 
-    def create_turn(self, task_id: str, input_text: str, status: str = "pending") -> TurnRecord:
-        """Create a turn and update the parent task's latest turn info."""
+    def create_turn(
+        self,
+        task_id: str,
+        input_text: str,
+        status: str = "pending",
+        agent_id: str | None = None,
+    ) -> TurnRecord:
+        """Create a turn and update the parent task's latest turn info.
+
+        参数:
+            task_id: 所属任务标识。
+            input_text: 本轮用户输入文本。
+            status: 初始状态，默认 ``"pending"``。
+            agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到任务默认归属。
+        """
+
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
-        turn = self._turn.create(task_id, input_text, status)
+        turn = self._turn.create(task_id, input_text, status, agent_id=agent_id)
         self._task.update_latest_turn(task_id, turn.turn_id, preview(input_text))
         return turn
 

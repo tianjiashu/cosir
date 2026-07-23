@@ -18,6 +18,7 @@ class CreateTurnRequest(BaseModel):
     """
 
     input_text: str
+    agent_id: str | None = None
 
     @field_validator("input_text")
     @classmethod

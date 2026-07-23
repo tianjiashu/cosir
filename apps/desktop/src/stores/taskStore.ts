@@ -66,7 +66,17 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   // --- 动作 ---
 
   setTasks: (tasks: TaskRecord[]) => {
-    set({ tasks });
+    set((state) => {
+      const activeTask = state.activeTaskId
+        ? tasks.find((task) => task.task_id === state.activeTaskId)
+        : undefined;
+      const fallbackTask = activeTask ?? tasks[0] ?? null;
+      return {
+        tasks,
+        activeTaskId: fallbackTask?.task_id ?? null,
+        activeTurnId: fallbackTask?.latest_turn_id ?? null,
+      };
+    });
   },
 
   addTask: (task: TaskRecord) => {

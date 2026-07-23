@@ -82,6 +82,42 @@ describe("taskStore — selectors 与动作", () => {
     expect(st.activeTaskId).toBeNull();
   });
 
+  it("setTasks 保留仍存在的 activeTaskId", () => {
+    const s = useTaskStore.getState();
+    s.addTask(makeTask("t1", { latest_turn_id: "turn-1" }));
+    s.setTasks([
+      makeTask("t2", { latest_turn_id: "turn-2" }),
+      makeTask("t1", { latest_turn_id: "turn-1" }),
+    ]);
+    expect(useTaskStore.getState().activeTaskId).toBe("t1");
+    expect(useTaskStore.getState().activeTurnId).toBe("turn-1");
+  });
+
+  it("setTasks 在同一 active task 更新时切到最新 turn", () => {
+    const s = useTaskStore.getState();
+    s.addTask(makeTask("t1", { latest_turn_id: "old-turn" }));
+    s.setActiveTurn("old-turn");
+    s.setTasks([makeTask("t1", { latest_turn_id: "new-turn" })]);
+    expect(useTaskStore.getState().activeTaskId).toBe("t1");
+    expect(useTaskStore.getState().activeTurnId).toBe("new-turn");
+  });
+
+  it("setTasks 修复已不存在的 activeTaskId", () => {
+    const s = useTaskStore.getState();
+    s.addTask(makeTask("removed", { latest_turn_id: "removed-turn" }));
+    s.setTasks([makeTask("next", { latest_turn_id: "next-turn" })]);
+    expect(useTaskStore.getState().activeTaskId).toBe("next");
+    expect(useTaskStore.getState().activeTurnId).toBe("next-turn");
+  });
+
+  it("setTasks 传入空列表时清空 activeTaskId 和 activeTurnId", () => {
+    const s = useTaskStore.getState();
+    s.addTask(makeTask("t1", { latest_turn_id: "turn-1" }));
+    s.setTasks([]);
+    expect(useTaskStore.getState().activeTaskId).toBeNull();
+    expect(useTaskStore.getState().activeTurnId).toBeNull();
+  });
+
   it("空集合时 selectors 不抛错", () => {
     expect(() => selectActiveTask(useTaskStore.getState())).not.toThrow();
     expect(() => selectActiveTaskStatus(useTaskStore.getState())).not.toThrow();

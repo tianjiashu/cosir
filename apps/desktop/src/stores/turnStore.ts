@@ -23,6 +23,8 @@ interface TurnActions {
   setTurnsForTask: (taskId: string, turns: TurnRecord[]) => void;
   /** 添加或替换一个轮次。 */
   upsertTurn: (turn: TurnRecord) => void;
+  /** 按 task_id/turn_id 局部更新一个轮次。 */
+  updateTurn: (taskId: string, turnId: string, updates: Partial<TurnRecord>) => void;
   /** 设置当前 streaming turn。 */
   setStreamingTurn: (turnId: string | null) => void;
 }
@@ -56,6 +58,17 @@ export const useTurnStore = create<TurnState & TurnActions>((set) => ({
         },
       };
     });
+  },
+
+  updateTurn: (taskId, turnId, updates) => {
+    set((state) => ({
+      turnsByTaskId: {
+        ...state.turnsByTaskId,
+        [taskId]: (state.turnsByTaskId[taskId] ?? []).map((turn) =>
+          turn.turn_id === turnId ? { ...turn, ...updates } : turn,
+        ),
+      },
+    }));
   },
 
   setStreamingTurn: (turnId) => {

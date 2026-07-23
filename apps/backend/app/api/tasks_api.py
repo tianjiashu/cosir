@@ -10,7 +10,8 @@
 from fastapi import Depends, HTTPException
 
 from app.api.app import app
-from app.api.dependencies import get_task_service, get_turn_service
+from app.api.depends.dependencies import get_task_service, get_turn_service
+from app.api.schemas import TaskResponse, TurnResponse
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 
@@ -19,7 +20,7 @@ from app.service.task.turn_service import TurnService
 async def get_task(
     task_id: str,
     task_service: TaskService = Depends(get_task_service),
-) -> dict:
+) -> TaskResponse:
     """返回任务状态（含生命周期 status 与派生 execution_status）。
 
     参数:
@@ -27,7 +28,7 @@ async def get_task(
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        已存储的任务状态字典（含 ``status`` 与 ``execution_status``）。
+        ``TaskResponse``：已存储的任务状态（含 ``status`` 与 ``execution_status``）。
 
     异常:
         HTTPException: 当任务不存在时抛出。
@@ -37,7 +38,7 @@ async def get_task(
     """
 
     try:
-        return task_service.get_task(task_id).to_dict()
+        return TaskResponse(**task_service.get_task(task_id).to_dict())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
 
@@ -46,7 +47,7 @@ async def get_task(
 async def list_turns(
     task_id: str,
     turn_service: TurnService = Depends(get_turn_service),
-) -> list[dict]:
+) -> list[TurnResponse]:
     """列出某任务下的全部 turn（支撑多轮历史展示）。
 
     参数:
@@ -54,7 +55,7 @@ async def list_turns(
         turn_service: 通过依赖注入的轮次 service。
 
     返回:
-        该任务下按创建时间升序的 turn 状态字典列表。
+        该任务下按创建时间升序的 ``TurnResponse`` 列表。
 
     异常:
         HTTPException: 当任务不存在（级联 KeyError）时抛出。
@@ -67,4 +68,4 @@ async def list_turns(
         turns = turn_service.list_turns_for_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    return [turn.to_dict() for turn in turns]
+    return [TurnResponse(**turn.to_dict()) for turn in turns]

@@ -14,7 +14,7 @@ from app.tools.schemas import ToolCall, ToolDefinition
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 if TYPE_CHECKING:
-    from app.core.agents.profile import AgentProfile
+    from app.core.agents.agent_profile import AgentProfile
 
 
 class RuntimeOperations:

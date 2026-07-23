@@ -22,6 +22,7 @@ class TurnRecord:
     updated_at: datetime
     end_reason: str | None = None
     response_text: str | None = None
+    agent_id: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         """将轮次状态转换为可序列化为 JSON 的字典。
@@ -46,6 +47,7 @@ class TurnRecord:
             "status": self.status,
             "end_reason": self.end_reason,
             "response_text": self.response_text,
+            "agent_id": self.agent_id,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

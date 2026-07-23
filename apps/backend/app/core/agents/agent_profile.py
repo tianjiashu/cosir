@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+# 默认 Agent 标识：前端未显式选择 agent 时回落到该内置 developer。
+DEFAULT_AGENT_ID = "developer"
+
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List
 
@@ -135,7 +138,7 @@ def default_developer_agent() -> AgentProfile:
     """
 
     return AgentProfile(
-        agent_id="developer",
+        agent_id=DEFAULT_AGENT_ID,
         role="developer",
         goal=(
             "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"

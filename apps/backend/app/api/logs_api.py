@@ -5,10 +5,10 @@
 """
 import logging
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException
+
 from app.api.app import app
-from app.api.dependencies import get_runtime
-from app.core.runtime.runner import AgentRuntime
+from app.api.schemas import LogQueryResponse, QueryLogsRequest, RecentLogsRequest
 from app.service.log_query_service import LogQueryService
 from app.storage.crud.log_crud import LogStore
 
@@ -17,23 +17,15 @@ _LOGGER = logging.getLogger("coding_agent.backend")
 
 @app.get("/logs/query")
 async def query_logs(
-    trace_id: str,
-    level: str = Query(default=""),
-    start_time: str = Query(default=""),
-    end_time: str = Query(default=""),
-    limit: int = Query(default=200, ge=1, le=1000),
-) -> dict:
+    req: QueryLogsRequest = Depends(),
+) -> LogQueryResponse:
     """按 trace_id 查询日志。
 
     参数:
-        trace_id: 必填 trace 标识（日志层唯一链路键）。
-        level: 可选日志级别。
-        start_time: 可选起始 UTC RFC3339 时间。
-        end_time: 可选结束 UTC RFC3339 时间。
-        limit: 最大返回数量。
+        req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。
 
     返回:
-        包含 entries 和 text 的日志查询响应。
+        ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。
 
     异常:
         HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。
@@ -45,13 +37,15 @@ async def query_logs(
     try:
 
         query_service = LogQueryService(store=LogStore())
-        return query_service.query_by_trace(
-            trace_id=trace_id,
-            level=level,
-            start_time=start_time,
-            end_time=end_time,
-            limit=limit,
-        ).to_dict()
+        return LogQueryResponse(
+            **query_service.query_by_trace(
+                trace_id=req.trace_id,
+                level=req.level,
+                start_time=req.start_time,
+                end_time=req.end_time,
+                limit=req.limit,
+            ).to_dict()
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -62,22 +56,15 @@ async def query_logs(
 
 @app.get("/logs/recent")
 async def recent_logs(
-    level: str = Query(default=""),
-    start_time: str = Query(default=""),
-    end_time: str = Query(default=""),
-    limit: int = Query(default=200, ge=1, le=1000),
-) -> dict:
+    req: RecentLogsRequest = Depends(),
+) -> LogQueryResponse:
     """查询最近日志。
 
     参数:
-        tool_execute: 通过依赖注入的运行时单例。
-        level: 可选日志级别。
-        start_time: 可选起始 UTC RFC3339 时间。
-        end_time: 可选结束 UTC RFC3339 时间。
-        limit: 最大返回数量。
+        req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。
 
     返回:
-        包含 entries 和 text 的日志查询响应。
+        ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。
 
     异常:
         HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。
@@ -88,12 +75,14 @@ async def recent_logs(
 
     try:
         query_service = LogQueryService(store=LogStore())
-        return query_service.recent(
-            level=level,
-            start_time=start_time,
-            end_time=end_time,
-            limit=limit,
-        ).to_dict()
+        return LogQueryResponse(
+            **query_service.recent(
+                level=req.level,
+                start_time=req.start_time,
+                end_time=req.end_time,
+                limit=req.limit,
+            ).to_dict()
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

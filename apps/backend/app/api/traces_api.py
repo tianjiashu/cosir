@@ -5,11 +5,20 @@
 """
 
 from datetime import date
+from typing import Any
 
 from fastapi import Depends, HTTPException, Query
 
 from app.api.app import app
-from app.api.dependencies import get_trace_query_service
+from app.api.depends.dependencies import get_trace_query_service
+from app.api.schemas import (
+    ListTraceLogsRequest,
+    RunTraceResponse,
+    TraceDetailResponse,
+    TraceEventResponse,
+    TraceSpanResponse,
+    TraceSummaryResponse,
+)
 from app.service.trace.trace_query_service import TraceQueryService
 
 
@@ -17,7 +26,7 @@ from app.service.trace.trace_query_service import TraceQueryService
 async def list_traces(
     trace_service: TraceQueryService = Depends(get_trace_query_service),
     limit: int = Query(default=100, ge=1, le=1000),
-) -> list:
+) -> list[TraceSummaryResponse]:
     """返回 trace 摘要列表。
 
     参数:
@@ -25,7 +34,7 @@ async def list_traces(
         limit: 最大返回数量。
 
     返回:
-        trace 摘要列表。
+        ``TraceSummaryResponse`` 列表。
 
     异常:
         HTTPException: Trace 服务不可用或查询参数非法时抛出。
@@ -46,7 +55,7 @@ async def list_traces(
 async def get_trace(
     trace_id: str,
     trace_service: TraceQueryService = Depends(get_trace_query_service),
-) -> dict:
+) -> TraceDetailResponse:
     """返回 trace 摘要与详情。
 
     参数:
@@ -54,7 +63,7 @@ async def get_trace(
         trace_service: 通过依赖注入的 trace 查询服务。
 
     返回:
-        trace summary、events、spans 和 logs。
+        ``TraceDetailResponse``：含 trace summary、events、spans 和 logs。
 
     异常:
         HTTPException: Trace 服务不可用或 trace 不存在时抛出。
@@ -64,7 +73,7 @@ async def get_trace(
     """
 
     try:
-        return trace_service.get_trace_summary(trace_id)
+        return TraceDetailResponse(**trace_service.get_trace_summary(trace_id))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -78,7 +87,7 @@ async def list_trace_events(
     trace_id: str,
     trace_service: TraceQueryService = Depends(get_trace_query_service),
     limit: int = Query(default=200, ge=1, le=1000),
-) -> list:
+) -> list[TraceEventResponse]:
     """返回指定 trace 的 ledger events。
 
     参数:
@@ -87,7 +96,7 @@ async def list_trace_events(
         limit: 最大返回数量。
 
     返回:
-        trace event 字典列表。
+        ``TraceEventResponse`` 列表。
 
     异常:
         HTTPException: Trace 服务不可用或查询参数非法时抛出。
@@ -109,7 +118,7 @@ async def list_trace_spans(
     trace_id: str,
     trace_service: TraceQueryService = Depends(get_trace_query_service),
     limit: int = Query(default=200, ge=1, le=1000),
-) -> list:
+) -> list[TraceSpanResponse]:
     """返回指定 trace 的 spans。
 
     参数:
@@ -118,7 +127,7 @@ async def list_trace_spans(
         limit: 最大返回数量。
 
     返回:
-        trace span 字典列表。
+        ``TraceSpanResponse`` 列表。
 
     异常:
         HTTPException: Trace 服务不可用或查询参数非法时抛出。
@@ -139,25 +148,17 @@ async def list_trace_spans(
 async def list_trace_logs(
     trace_id: str,
     trace_service: TraceQueryService = Depends(get_trace_query_service),
-    date: str = Query(default=""),
-    level: str = Query(default=""),
-    start_time: str = Query(default=""),
-    end_time: str = Query(default=""),
-    limit: int = Query(default=200, ge=1, le=1000),
-) -> list:
+    req: ListTraceLogsRequest = Depends(),
+) -> list[dict[str, Any]]:
     """从 JSONL 文件返回指定 trace 的日志。
 
     参数:
         trace_id: 路由中的 trace 标识。
         trace_service: 通过依赖注入的 trace 查询服务。
-        date: 可选日志日期，格式为 YYYY-MM-DD。
-        level: 可选日志级别过滤条件。
-        start_time: 可选起始 ISO 时间。
-        end_time: 可选结束 ISO 时间。
-        limit: 最大返回数量。
+        req: 经依赖注入的查询参数（``date`` / ``level`` / 时间区间 / ``limit``）。
 
     返回:
-        JSONL 日志行列表。
+        JSONL 日志行列表（动态结构，保留为 ``dict``）。
 
     异常:
         HTTPException: Trace 服务不可用或查询参数非法时抛出。
@@ -167,14 +168,14 @@ async def list_trace_logs(
     """
 
     try:
-        log_date = _parse_log_date(date)
+        log_date = _parse_log_date(req.date)
         return trace_service.list_logs(
             trace_id=trace_id,
             log_date=log_date,
-            level=level,
-            start_time=start_time,
-            end_time=end_time,
-            limit=limit,
+            level=req.level,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            limit=req.limit,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -186,7 +187,7 @@ async def list_trace_logs(
 async def get_run_trace(
     run_id: str,
     trace_service: TraceQueryService = Depends(get_trace_query_service),
-) -> dict:
+) -> RunTraceResponse:
     """返回 run 的 trace 摘要。
 
     参数:
@@ -194,7 +195,7 @@ async def get_run_trace(
         trace_service: 通过依赖注入的 trace 查询服务。
 
     返回:
-        包含 events、spans、logs 的 trace 摘要。
+        ``RunTraceResponse``：含 events、spans、logs 的摘要。
 
     异常:
         HTTPException: Trace 服务不可用或 run_id 非法时抛出。
@@ -204,7 +205,7 @@ async def get_run_trace(
     """
 
     try:
-        return trace_service.get_run_trace(run_id)
+        return RunTraceResponse(**trace_service.get_run_trace(run_id))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

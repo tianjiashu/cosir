@@ -45,18 +45,19 @@ from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.api.app import app
-from app.api.dependencies import get_runtime, get_turn_service
-from app.api.schemas import CreateTurnRequest
+from app.api.depends.dependencies import get_runtime, get_turn_service
+from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.service.task.turn_service import TurnService
+
 
 @app.post("/tasks/{task_id}/turns")
 async def create_turn(
     task_id: str,
     payload: CreateTurnRequest,
     turn_service: TurnService = Depends(get_turn_service),
-) -> dict:
+) -> TurnResponse:
     """为已有任务追加一个 pending 轮次。
 
     该端点只负责把用户本轮输入持久化为一个新的、处于 ``pending`` 状态的
@@ -70,7 +71,7 @@ async def create_turn(
         turn_service: 通过依赖注入的轮次 service。
 
     返回:
-        创建后的轮次状态字典，包含 ``turn_id``、所属 ``task_id``、状态与
+        创建后的 ``TurnResponse``，包含 ``turn_id``、所属 ``task_id``、状态与
         创建时间等字段，供客户端建立后续 SSE 流使用。
 
     异常:
@@ -81,12 +82,14 @@ async def create_turn(
     """
 
     try:
-        turn = turn_service.create_turn(task_id, payload.input_text)
+        turn = turn_service.create_turn(
+            task_id, payload.input_text, agent_id=payload.agent_id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return turn.to_dict()
+    return TurnResponse(**turn.to_dict())
 
 
 @app.get("/turns/{turn_id}/stream")
@@ -100,7 +103,8 @@ async def stream_turn(
     仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending
     轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。
     本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由 finally
-    兜底标 failed）。
+    兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定（``turn.agent_id``），
+    运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。
 
     事件以标准 SSE 帧推送，每帧格式为::
 
@@ -139,7 +143,8 @@ async def stream_turn(
             detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
         )
     return StreamingResponse(
-        _sse_turn_events(runtime, turn_id, turn_service, turn), media_type="text/event-stream"
+        _sse_turn_events(runtime, turn_id, turn_service, turn),
+        media_type="text/event-stream",
     )
 
 
@@ -148,7 +153,7 @@ async def cancel_turn(
     turn_id: str,
     runtime: AgentRuntime = Depends(get_runtime),
     turn_service: TurnService = Depends(get_turn_service),
-) -> dict:
+) -> TurnResponse:
     """取消指定轮次并中止其运行。
 
     置 turn 为 ``cancelled``，模型节点在下一轮循环检查到取消状态后停止派发工具，从而中止运行。
@@ -159,7 +164,7 @@ async def cancel_turn(
         turn_service: 通过依赖注入的轮次 service（用于校验 turn 存在）。
 
     返回:
-        取消后的轮次状态字典。
+        取消后的 ``TurnResponse``。
 
     异常:
         HTTPException: 当轮次不存在（404）时抛出。
@@ -173,7 +178,7 @@ async def cancel_turn(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="turn not found") from exc
     turn = runtime.cancel_turn(turn_id)
-    return turn.to_dict()
+    return TurnResponse(**turn.to_dict())
 
 
 async def _sse_turn_events(
@@ -219,7 +224,7 @@ async def _sse_turn_events(
                 "data": {"turn_id": turn_id},
             },
         )
-    except KeyError as exc:
+    except KeyError:
         # run_turn 在流式开始前发现轮次消失（如已被清理），无法继续推送。
         log.exception(
             "turn_stream_aborted",

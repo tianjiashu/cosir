@@ -91,9 +91,11 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
     if (!text || !activeWorkspaceId || operation.loading) {
       return;
     }
-    await createTask(text, activeWorkspaceId);
-    setInputValue("");
-    onCreated();
+    const succeeded = await createTask(text, activeWorkspaceId);
+    if (succeeded) {
+      setInputValue("");
+      onCreated();
+    }
   };
 
   /** 点击快捷入口卡片：填充输入并直接创建任务。 */
@@ -102,9 +104,11 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
       return;
     }
     setInputValue(label);
-    await createTask(label, activeWorkspaceId);
-    setInputValue("");
-    onCreated();
+    const succeeded = await createTask(label, activeWorkspaceId);
+    if (succeeded) {
+      setInputValue("");
+      onCreated();
+    }
   };
 
   /**
