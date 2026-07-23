@@ -1,0 +1,35 @@
+# 强制规范：提交前自动格式化 + lint + 类型检查 + 导出 OpenAPI 文档。
+# 安装：在仓库根执行 ``uv run pre-commit install``。
+#
+# 注意：本仓库为统一 git 仓库（.git 在仓库根），pre-commit 按 git 根定位配置，
+# 因此配置文件必须放在仓库根，不能放在 apps/backend 子目录（否则 pre-commit 找不到）。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        # 渐进式：mypy 先非阻塞（仅提示不报错），避免存量未注解代码堵死提交。
+        # 待存量逐步补全注解后，移除 continue-on-error 升级为强制。
+        continue-on-error: true
+        additional_dependencies: []
+        files: ^apps/backend/app/
+  # 后端 API 契约快照：当 app/ 下代码（路由、schema、模型、服务、运行时等）变更时，
+  # 自动重新导出 docs/api/openapi.json，使前端离线查阅与 openapi-typescript 生成的
+  # TS 类型始终与代码同步，避免契约漂移。生成物由本 hook 维护。
+  - repo: local
+    hooks:
+      - id: generate-openapi
+        name: 生成 OpenAPI 文档 (docs/api/openapi.json)
+        description: >-
+          后端 API 契约变更后，从 app.api.app 重新导出 OpenAPI schema 到
+          docs/api/openapi.json，供前端离线查阅与生成 TS 类型。
+        entry: uv run --project apps/backend python apps/backend/scripts/generate_openapi.py
+        language: system
+        pass_filenames: false
+        files: ^apps/backend/app/
