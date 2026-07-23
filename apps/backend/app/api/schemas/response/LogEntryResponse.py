@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class LogEntryResponse(BaseModel):
@@ -28,6 +28,8 @@ class LogEntryResponse(BaseModel):
         无。
     """
 
+    model_config = ConfigDict(extra="allow")
+
     ts: str
     level: str
     logger: str
@@ -36,5 +38,5 @@ class LogEntryResponse(BaseModel):
     event: str
     msg: str
     data: dict[str, Any] = {}
-    error: dict[str, str] | None = None
+    error: dict[str, Any] | None = None
     truncated: bool = False

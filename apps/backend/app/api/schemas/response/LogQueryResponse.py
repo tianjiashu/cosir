@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.api.schemas.response.LogEntryResponse import LogEntryResponse
 
@@ -19,6 +19,8 @@ class LogQueryResponse(BaseModel):
     副作用:
         无。
     """
+
+    model_config = ConfigDict(extra="allow")
 
     entries: list[LogEntryResponse]
     text: str

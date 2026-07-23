@@ -6,6 +6,7 @@
 import logging
 
 from fastapi import Depends, HTTPException
+from pydantic import ValidationError
 
 from app.api.app import app
 from app.api.schemas import LogQueryResponse, QueryLogsRequest, RecentLogsRequest
@@ -26,6 +27,7 @@ async def query_logs(
 
     返回:
         ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。
+        前端直接使用text渲染即可
 
     异常:
         HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。
@@ -35,16 +37,13 @@ async def query_logs(
     """
 
     try:
-
         query_service = LogQueryService(store=LogStore())
-        return LogQueryResponse(
-            **query_service.query_by_trace(
-                trace_id=req.trace_id,
-                level=req.level,
-                start_time=req.start_time,
-                end_time=req.end_time,
-                limit=req.limit,
-            ).to_dict()
+        result = query_service.query_by_trace(
+            trace_id=req.trace_id,
+            level=req.level,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            limit=req.limit,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -52,6 +51,13 @@ async def query_logs(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="log query failed") from exc
+
+    try:
+        return LogQueryResponse(**result.to_dict())
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"response schema mismatch: {exc}"
+        ) from exc
 
 
 @app.get("/logs/recent")
@@ -75,13 +81,11 @@ async def recent_logs(
 
     try:
         query_service = LogQueryService(store=LogStore())
-        return LogQueryResponse(
-            **query_service.recent(
-                level=req.level,
-                start_time=req.start_time,
-                end_time=req.end_time,
-                limit=req.limit,
-            ).to_dict()
+        result = query_service.recent(
+            level=req.level,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            limit=req.limit,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -89,3 +93,10 @@ async def recent_logs(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="log query failed") from exc
+
+    try:
+        return LogQueryResponse(**result.to_dict())
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"response schema mismatch: {exc}"
+        ) from exc
