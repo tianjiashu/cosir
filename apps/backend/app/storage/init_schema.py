@@ -18,17 +18,14 @@ SQLAlchemy model 为单一事实来源，本模块只做“让数据库结构追
 调用时机：由 ``store_engines.init_storage`` 在进程启动时对主库、日志库各调用一次。
 """
 
-import logging
-
 from sqlalchemy import Engine, inspect, text
 
+from app.config.logging.logger import log
 from app.storage.model.log_model import LogEntryModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.turn_message_model import TurnMessageModel
 from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
-
-_LOGGER = logging.getLogger("coding_agent.backend")
 
 APP_MODELS = (
     WorkspaceModel,
@@ -91,7 +88,7 @@ def _drop_orphan_durable_runs(connection) -> None:
 
     if inspect(connection).has_table("durable_runs"):
         connection.execute(text("DROP TABLE IF EXISTS durable_runs"))
-        _LOGGER.info("dropped orphan table durable_runs")
+        log.info("dropped orphan table durable_runs")
 
 
 def _default_literal_for_type(column_type) -> str:
@@ -165,7 +162,7 @@ def _ensure_model_columns(connection, engine) -> None:
                 default = _default_literal_for_type(column.type)
                 column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default}"
             connection.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {column_ddl}"))
-            _LOGGER.info("added missing column %s.%s", table.name, column.name)
+            log.info("added missing column %s.%s", table.name, column.name)
 
 
 def initialize_log_schema(engine: Engine) -> None:
@@ -271,7 +268,7 @@ def _rebuild_log_schema(connection, current_version: int, target_version: int) -
         model.__table__.drop(bind=connection, checkfirst=True)
     _create_log_schema(connection)
     connection.execute(text(f"PRAGMA user_version = {target_version}"))
-    _LOGGER.info(
+    log.info(
         "log schema rebuilt; old_version=%s, new_version=%s",
         current_version,
         target_version,

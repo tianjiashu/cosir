@@ -14,7 +14,6 @@
 """
 
 import importlib
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -34,6 +33,7 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
+from app.config.logging.logger import log
 from app.config.settings import default_settings
 from app.storage.store_engines import close_storage
 from app.tools.tool_system import ToolSystem
@@ -85,8 +85,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
-install_request_logging(app, logging.getLogger("coding_agent.backend"))
-install_http_exception_logging(app, logging.getLogger("coding_agent.backend"))
+install_request_logging(app, log)
+install_http_exception_logging(app, log)
 
 
 # 触发各域路由的模块级装饰器注册到真实 app 上。

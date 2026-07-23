@@ -1,13 +1,11 @@
 """In-memory registry for tool definitions."""
 
-import logging
 import threading
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from app.config.logging.logger import log
 from app.tools.schemas.tool_definition import ToolDefinition
-
-logger = logging.getLogger("coding_agent.backend")
 
 
 class ToolRegistry:
@@ -30,7 +28,7 @@ class ToolRegistry:
         normalized = definition.normalized()
         with self._lock:
             if normalized.name in self._tool_definitions:
-                logger.warning(
+                log.warning(
                     "tool_already_registered",
                     extra={"data": {"name": normalized.name}},
                 )

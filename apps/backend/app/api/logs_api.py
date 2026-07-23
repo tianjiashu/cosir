@@ -3,8 +3,6 @@
 端点以模块级 ``@app.get`` 直接注册到 ``app.api.app.app`` 单例上，
 运行时通过 ``Depends(get_runtime)`` 注入，不再由注册函数包裹。
 """
-import logging
-
 from fastapi import Depends, HTTPException
 from pydantic import ValidationError
 
@@ -12,8 +10,6 @@ from app.api.app import app
 from app.api.schemas import LogQueryResponse, QueryLogsRequest, RecentLogsRequest
 from app.service.log_query_service import LogQueryService
 from app.storage.crud.log_crud import LogStore
-
-_LOGGER = logging.getLogger("coding_agent.backend")
 
 
 @app.get("/logs/query")

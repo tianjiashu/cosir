@@ -29,7 +29,6 @@ aiosqlite 直连 ``BackendSettings.checkpoint_file``，不经过本模块引擎�
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from threading import Lock
 
@@ -39,8 +38,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config.settings import BackendSettings, default_settings
 from app.storage.engine_cache import _engine_cache, create_session_factory
 from app.storage.init_schema import initialize_app_schema, initialize_log_schema
-
-_LOGGER = logging.getLogger("coding_agent.backend")
 
 _INIT_LOCK = Lock()
 

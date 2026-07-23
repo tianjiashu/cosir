@@ -8,14 +8,11 @@
 - 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``/``TurnCrud``）。
 """
 
-import logging
-
+from app.config.logging.logger import log
 from app.models import WorkspaceRecord
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-
-_LOGGER = logging.getLogger("coding_agent.backend")
 
 
 class WorkspaceService:
@@ -48,7 +45,7 @@ class WorkspaceService:
         """
 
         task_ids = self._task.list_ids_by_workspace(workspace_id)
-        _LOGGER.info(
+        log.info(
             "workspace_delete_start",
             extra={
                 "msg": "workspace delete started",
@@ -61,7 +58,7 @@ class WorkspaceService:
                 self._turn.delete_by_ids(turn_ids)
             self._task.delete_by_ids(task_ids)
         self._workspace.delete(workspace_id)
-        _LOGGER.info(
+        log.info(
             "workspace_deleted",
             extra={
                 "msg": "workspace deleted",
