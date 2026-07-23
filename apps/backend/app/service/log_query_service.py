@@ -34,12 +34,12 @@ class LogQueryService:
         self._max_limit = max_limit
 
     def query_by_trace(
-        self,
-        trace_id: str,
-        level: str = "",
-        start_time: str = "",
-        end_time: str = "",
-        limit: int = 200,
+            self,
+            trace_id: str,
+            level: str = "",
+            start_time: str = "",
+            end_time: str = "",
+            limit: int = 200,
     ) -> LogQueryResult:
         """按 trace_id 查询完整链路日志。
 
@@ -64,20 +64,20 @@ class LogQueryService:
             raise ValueError("trace_id must not be blank")
         query = LogQuery(
             trace_id=trace_id.strip(),
-            level=_normalize_level(level),
-            start_time=_normalize_time(start_time),
-            end_time=_normalize_time(end_time),
+            level=self._normalize_level(level),
+            start_time=self._normalize_time(start_time),
+            end_time=self._normalize_time(end_time),
             limit=self._normalize_limit(limit),
             order="asc",
         )
         return self._query(query)
 
     def recent(
-        self,
-        level: str = "",
-        start_time: str = "",
-        end_time: str = "",
-        limit: int = 200,
+            self,
+            level: str = "",
+            start_time: str = "",
+            end_time: str = "",
+            limit: int = 200,
     ) -> LogQueryResult:
         """查询最近日志。
 
@@ -98,9 +98,9 @@ class LogQueryService:
         """
 
         query = LogQuery(
-            level=_normalize_level(level),
-            start_time=_normalize_time(start_time),
-            end_time=_normalize_time(end_time),
+            level=self._normalize_level(level),
+            start_time=self._normalize_time(start_time),
+            end_time=self._normalize_time(end_time),
             limit=self._normalize_limit(limit),
             order="desc",
         )
@@ -147,52 +147,52 @@ class LogQueryService:
             raise ValueError(f"limit must be less than or equal to {self._max_limit}")
         return limit
 
+    @staticmethod
+    def _normalize_level(level: str) -> str:
+        """归一化日志级别查询参数。
 
-def _normalize_level(level: str) -> str:
-    """归一化日志级别查询参数。
+        参数:
+            level: 原始级别文本。
 
-    参数:
-        level: 原始级别文本。
+        返回:
+            大写后的 Python 标准日志级别；空字符串表示不筛选。
 
-    返回:
-        大写后的 Python 标准日志级别；空字符串表示不筛选。
+        异常:
+            ValueError: 如果级别不受支持。
 
-    异常:
-        ValueError: 如果级别不受支持。
+        副作用:
+            无。
+        """
 
-    副作用:
-        无。
-    """
+        normalized = level.strip().upper()
+        if not normalized:
+            return ""
+        if normalized == "WARN":
+            normalized = "WARNING"
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
 
-    normalized = level.strip().upper()
-    if not normalized:
-        return ""
-    if normalized == "WARN":
-        normalized = "WARNING"
-    if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
-        raise ValueError("level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
-    return normalized
+    @staticmethod
+    def _normalize_time(value: str) -> str:
+        """校验并归一化 UTC RFC3339 时间。
 
+        参数:
+            value: 原始时间文本，允许为空。
 
-def _normalize_time(value: str) -> str:
-    """校验并归一化 UTC RFC3339 时间。
+        返回:
+            空字符串或毫秒精度 UTC RFC3339 文本。
 
-    参数:
-        value: 原始时间文本，允许为空。
+        异常:
+            ValueError: 如果时间文本非法。
 
-    返回:
-        空字符串或毫秒精度 UTC RFC3339 文本。
+        副作用:
+            无。
+        """
 
-    异常:
-        ValueError: 如果时间文本非法。
-
-    副作用:
-        无。
-    """
-
-    if not value.strip():
-        return ""
-    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        if not value.strip():
+            return ""
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")

@@ -13,10 +13,8 @@ from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
-from app.service.trace.trace_query_service import TraceQueryService
 from app.storage.crud.log_crud import LogStore
 from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.trace_crud import TraceStore
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.turn_message_crud import TurnMessageCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
@@ -27,8 +25,6 @@ _RUNTIME: AgentRuntime | None = None
 _TOOL_SYSTEM: ToolSystem | None = None
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _SERVICES: dict | None = None
-_TRACE_QUERY_SERVICE_UNSET = object()
-_TRACE_QUERY_SERVICE: TraceQueryService | None = _TRACE_QUERY_SERVICE_UNSET
 
 
 def set_runtime(runtime: AgentRuntime) -> None:
@@ -308,46 +304,6 @@ def get_turn_service() -> TurnService:
     """
 
     return _build_services(default_settings())["turn_service"]
-
-
-def get_trace_query_service() -> TraceQueryService:
-    """返回进程级 trace 查询 service 单例。
-
-    参数:
-        无。
-
-    返回:
-        TraceQueryService。
-
-    异常:
-        RuntimeError: 若 trace SQLite 不可用（例如首次构建失败，之后每次调用都抛）。
-
-    副作用:
-        首次调用时构建并缓存 service；失败则缓存 ``None`` 并抛 ``RuntimeError``。
-    """
-
-    global _TRACE_QUERY_SERVICE
-    if _TRACE_QUERY_SERVICE is not _TRACE_QUERY_SERVICE_UNSET:
-        if _TRACE_QUERY_SERVICE is None:
-            raise RuntimeError("trace query service unavailable")
-        return _TRACE_QUERY_SERVICE
-    settings = default_settings()
-    init_storage(settings)
-    logger = logging.getLogger("coding_agent.backend")
-    try:
-        store = TraceStore()
-    except Exception as exc:
-        logger.warning(
-            "trace_query_service_unavailable",
-            extra={
-                "msg": "trace SQLite is unavailable; trace query service disabled",
-                "data": {"error": str(exc)},
-            },
-        )
-        _TRACE_QUERY_SERVICE = None
-        raise RuntimeError("trace query service unavailable") from exc
-    _TRACE_QUERY_SERVICE = TraceQueryService(store, settings.log_dir)
-    return _TRACE_QUERY_SERVICE
 
 
 def _build_log_query_service(settings, logger):

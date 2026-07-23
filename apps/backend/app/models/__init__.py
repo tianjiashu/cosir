@@ -11,8 +11,6 @@ from app.models.log_query_result import LogQueryResult
 from app.models.runtime_message import RuntimeMessage
 from app.models.task_record import TaskRecord
 from app.models.trace_context import TraceContext
-from app.models.trace_event_record import TraceEventRecord
-from app.models.trace_span_record import TraceSpanRecord
 from app.models.turn_record import TurnRecord
 from app.models.workspace_record import WorkspaceRecord
 
@@ -24,8 +22,6 @@ __all__ = [
     "RuntimeMessage",
     "TaskRecord",
     "TraceContext",
-    "TraceEventRecord",
-    "TraceSpanRecord",
     "TurnRecord",
     "TurnStatus",
     "WorkspaceRecord",

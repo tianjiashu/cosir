@@ -9,7 +9,6 @@ FastAPI/Pydantic 把模块当作类型注解从而报错）。
 from app.api.schemas.request.CreateTaskRequest import CreateTaskRequest
 from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
-from app.api.schemas.request.ListTraceLogsRequest import ListTraceLogsRequest
 from app.api.schemas.request.QueryLogsRequest import QueryLogsRequest
 from app.api.schemas.request.RecentLogsRequest import RecentLogsRequest
 from app.api.schemas.response.AgentProfileResponse import AgentProfileResponse
@@ -18,12 +17,7 @@ from app.api.schemas.response.HealthResponse import HealthResponse
 from app.api.schemas.response.ListAgentsResponse import ListAgentsResponse
 from app.api.schemas.response.LogEntryResponse import LogEntryResponse
 from app.api.schemas.response.LogQueryResponse import LogQueryResponse
-from app.api.schemas.response.RunTraceResponse import RunTraceResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
-from app.api.schemas.response.TraceDetailResponse import TraceDetailResponse
-from app.api.schemas.response.TraceEventResponse import TraceEventResponse
-from app.api.schemas.response.TraceSpanResponse import TraceSpanResponse
-from app.api.schemas.response.TraceSummaryResponse import TraceSummaryResponse
 from app.api.schemas.response.TurnResponse import TurnResponse
 from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 
@@ -35,17 +29,11 @@ __all__ = [
     "DeleteWorkspaceResponse",
     "HealthResponse",
     "ListAgentsResponse",
-    "ListTraceLogsRequest",
     "LogEntryResponse",
     "LogQueryResponse",
     "QueryLogsRequest",
     "RecentLogsRequest",
-    "RunTraceResponse",
     "TaskResponse",
-    "TraceDetailResponse",
-    "TraceEventResponse",
-    "TraceSpanResponse",
-    "TraceSummaryResponse",
     "TurnResponse",
     "WorkspaceResponse",
 ]

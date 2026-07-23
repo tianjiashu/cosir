@@ -2,7 +2,7 @@
 
 本模块只负责应用装配：创建 ``app`` 单例、定义 ``lifespan``、安装请求日志中间件、
 触发各域路由模块级装饰器注册，以及暴露 ``create_app`` 工厂。所有端点逻辑都拆分到
-同目录下的域路由文件（``tasks_api`` / ``logs_api`` / ``traces_api`` /
+同目录下的域路由文件（``tasks_api`` / ``logs_api`` /
 
 ``app`` 是模块级单例，各域路由文件通过 ``from app.api.app import app`` 复用同一实例，
 因此必须在 ``app`` 定义之后再导入这些模块，否则会产生未初始化引用。
@@ -99,7 +99,6 @@ importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.logs_api")
-importlib.import_module("app.api.traces_api")
 importlib.import_module("app.api.agents_api")
 
 

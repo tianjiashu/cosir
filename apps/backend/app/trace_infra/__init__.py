@@ -5,11 +5,6 @@
 以避免循环依赖；服务层与模型层按需从这里导入。
 """
 
-from app.trace_infra.event_names import (
-    TraceEventName,
-    canonical_event_name,
-    runtime_trace_event_name,
-)
 from app.trace_infra.ids import (
     is_span_id,
     is_trace_id,
@@ -20,9 +15,6 @@ from app.trace_infra.ids import (
 from app.trace_infra.redaction import redact_value
 
 __all__ = [
-    "TraceEventName",
-    "canonical_event_name",
-    "runtime_trace_event_name",
     "is_span_id",
     "is_trace_id",
     "new_event_id",
