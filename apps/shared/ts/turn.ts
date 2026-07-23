@@ -1,31 +1,26 @@
 /**
- * 轮次共享类型定义。
+ * 后端 API 共享类型定义。
  *
- * 与后端 `TurnRecord.to_dict()` 输出保持一致，
- * 作为前后端共享的 turn 契约事实源。
+ * 本文件由 `scripts/generate_api_ts.py` 从后端 Pydantic API schema 生成。
+ * 不要手动修改；请先更新 `apps/backend/app/api/schemas/` 后重新生成。
  *
  * @module shared/turn
  */
+export type TurnStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
-/** 轮次状态枚举，与后端 TurnRecord.status 可能值对齐。 */
-export type TurnStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-
-/** 轮次记录接口，对应后端 `TurnRecord.to_dict()` 输出。 */
 export interface TurnRecord {
-  /** 唯一的轮次标识符。 */
   turn_id: string;
-  /** 关联的任务标识符。 */
   task_id: string;
-  /** 本轮用户输入文本。 */
   input_text: string;
-  /** 当前轮次状态。 */
   status: TurnStatus;
-  /** 终态原因，例如客户端断开或用户取消；无原因时为 null。 */
-  end_reason: string | null;
-  /** 后端落库的本轮 Agent 最终回复文本；尚无回复时为 null。 */
-  response_text: string | null;
-  /** 轮次创建时间戳。 */
+  end_reason?: string | null;
+  response_text?: string | null;
+  agent_id?: string | null;
   created_at: string;
-  /** 轮次最近更新时间戳。 */
   updated_at: string;
 }

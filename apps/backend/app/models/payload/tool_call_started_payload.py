@@ -1,0 +1,11 @@
+"""Payload model for reserved tool_call_started events."""
+
+from app.models.payload.runtime_event_payload import RuntimeEventPayload
+
+
+class ToolCallStartedPayload(RuntimeEventPayload):
+    """工具调用开始事件 payload。"""
+
+    tool_name: str
+    step_id: str | None = None
+    tool_call_id: str | None = None

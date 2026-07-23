@@ -47,7 +47,7 @@ apps/backend/app/models/runtime_event.py
 | `event_type` | `string` | 稳定事件类型，来自后端 `EventType` 枚举。 |
 | `task_id` | `string` | 事件所属 task。 |
 | `turn_id` | `string | null` | 事件所属 turn；正常 turn 级 SSE 事件应带值。 |
-| `sequence` | `number` | 当前运行流内递增排序号；部分 runtime 外层事件默认为 `0`。 |
+| `sequence` | `number` | 当前单次运行流内递增排序号；部分 runtime 外层事件默认为 `0`。 |
 | `message_id` | `string | null` | 预留消息 ID，目前未见真实写入。 |
 | `tool_call_id` | `string | null` | 工具调用 ID；`runner._record()` 会从 payload 的 `tool_call_id` 提升到顶层。 |
 | `created_at` | `string` | UTC ISO 时间戳。 |
@@ -56,7 +56,8 @@ apps/backend/app/models/runtime_event.py
 补充约定：
 
 - `event_id` 是前端去重的事实键。
-- `sequence` 用于同一 task / turn 内排序，但当前外层 `runner._record()` 事件未显式分配递增序号。
+- `sequence` 目前由 workflow 在单次运行流内递增，不是后端存储层分配的 task 全局持久序号；当前外层 `runner._record()` 事件未显式分配递增序号。
+- 当前后端不持久化、不回放 runtime events。刷新或打开历史任务时，客户端依赖 `GET /tasks/{task_id}/turns` 返回的 turn 历史与 `response_text` 恢复可见对话。
 - 后端 `RuntimeEvent` docstring 里已有通用展示信封字段建议：`display_format`、`component_type`、`title`、`summary`、`details`、`arguments`、`_ext`。当前真实 emit 大多未使用这些字段。
 
 ## 3. 后端事件类型定义
@@ -91,17 +92,17 @@ apps/backend/app/models/enums/event_type.py
 
 ## 4. 后端 emit 点总览
 
-CodeGraph 与精确搜索确认，当前后端真实 emit 点集中在四处：
+CodeGraph 与精确搜索确认，当前后端真实构造或 emit `RuntimeEvent` 的位置集中在五处：
 
 | 文件 | 位置 | 责任 |
 | --- | --- | --- |
-| `apps/backend/app/core/runtime/runner.py` | `cancel_turn()` | 主动取消 turn，创建 `run_cancelled`。 |
+| `apps/backend/app/core/runtime/runner.py` | `cancel_turn()` | 主动取消 turn，创建 `run_cancelled`；当前取消接口返回 `TurnResponse`，该事件不会由取消接口直接作为 SSE 帧推送。 |
 | `apps/backend/app/core/runtime/runner.py` | `run_turn()` | 外层运行生命周期：`run_started`、部分 `run_failed`。 |
 | `apps/backend/app/core/workflows/react/workflow.py` | `ReactLikeWorkflow.run()` | 将 LangGraph `custom/messages` 流转换为 `RuntimeEvent`。 |
 | `apps/backend/app/core/workflows/react/nodes.py` | `_model_node()` / `_tools_node()` | 写入 ReAct 节点内的业务事件。 |
 | `apps/backend/app/service/tool_execution/tool_execution_service.py` | `run_calls_with_events()` | 工具调用完成事件。 |
 
-当前未发现其他后端业务代码直接构造或 emit `RuntimeEvent`。
+当前未发现其他后端业务代码直接构造或 emit `RuntimeEvent`。也未发现 runtime event 对应的后端存储 model / CRUD / 历史回放 API。
 
 ## 5. 事件生命周期
 
@@ -143,13 +144,15 @@ run_started
   -> run_failed
 ```
 
-取消路径：
+取消路径一：客户端调用取消接口。
 
 ```text
 run_cancelled
 ```
 
-或运行中由模型节点检测到取消：
+该路径中 `AgentRuntime.cancel_turn()` 会创建 `run_cancelled` 值对象，但当前 `POST /turns/{turn_id}/cancel` 响应是 `TurnResponse`，不会把这个事件直接作为当前 SSE 帧推送给前端。前端取消 UI 主要由取消接口返回的 turn 状态推进。
+
+取消路径二：运行中由模型节点检测到取消，并通过 workflow SSE 流发出：
 
 ```text
 run_started
@@ -478,6 +481,8 @@ payload：
 }
 ```
 
+注意：来源一当前只在取消接口内部创建事件值对象，取消接口实际返回 `TurnResponse`，不是 SSE 事件帧。前端主动取消后的状态更新主要来自取消接口响应。
+
 来源二：`_model_node()` 流式模型过程中检测到 turn 已取消。
 
 ```json
@@ -490,7 +495,8 @@ payload：
 
 前端消费：
 
-- `useSSE.runtimeStatusFromEvent()` 同步 task/turn 为 cancelled，`end_reason` 固定为 `run_cancelled`。
+- 当 `run_cancelled` 通过 SSE 到达时，`useSSE.runtimeStatusFromEvent()` 同步 task/turn 为 cancelled，`end_reason` 固定为 `run_cancelled`。
+- 主动取消按钮链路通过 `POST /turns/{turn_id}/cancel` 返回的 `TurnResponse` 更新 task/turn，并断开 SSE。
 - `timelineProjector` 渲染终态 status badge。
 
 当前漂移：
@@ -560,7 +566,7 @@ payload：
 | --- | --- | --- |
 | `apps/desktop/src/services/sse.ts` | SSE 解析 | `JSON.parse(data)` 后直接断言为 `RuntimeEvent`，不做运行时 schema 校验。 |
 | `apps/desktop/src/hooks/useSSE.ts` | 事件接入与状态同步 | 所有事件进入 `eventStore`；仅 `run_started`、`final_response`、`run_finished`、`run_failed`、`run_cancelled` 同步 task/turn 状态。 |
-| `apps/desktop/src/stores/eventStore.ts` | 事件事实存储 | 按 `event_id` 去重，按 task/turn 聚合，按 `sequence` 和 `created_at` 排序。 |
+| `apps/desktop/src/stores/eventStore.ts` | 客户端内存事件缓存 | 按 `event_id` 去重，按 task/turn 聚合，按 `sequence` 和 `created_at` 排序；当前不是后端持久化事件事实源。 |
 | `apps/desktop/src/services/timeline/projector.ts` | 对话流投影 | 渲染 `model_output_delta`、`model_thinking_delta`、`tool_call_*`、`run_finished`、`run_failed`、`run_cancelled`。 |
 | `apps/desktop/src/components/chat/StatusBadge.tsx` | 终态标签 | 只展示 `run_finished`、`run_failed`、`run_cancelled`。 |
 | `apps/shared/ts/events.ts` | 前端共享类型 | 当前手写，已与后端枚举和 payload 发生漂移。 |
@@ -603,7 +609,7 @@ payload：
 
 ### 9.5 `sequence` 语义不完全统一
 
-`ReactLikeWorkflow.run()` 内部递增 `sequence`。`runner._record()` 创建的外层事件当前使用默认 `sequence=0`。这会影响前端排序稳定性，尤其是 `run_started` 与其他 `sequence=0` 事件同时存在时。
+`ReactLikeWorkflow.run()` 内部递增 `sequence`。`runner._record()` 创建的外层事件当前使用默认 `sequence=0`。这不是后端存储层分配的 task 全局持久序号，也不能支撑历史事件回放排序。这会影响前端排序稳定性，尤其是 `run_started` 与其他 `sequence=0` 事件同时存在时。
 
 ## 10. 建议的事件分类
 
@@ -668,16 +674,34 @@ payload：
 
 - 用户审批、确认、澄清、恢复中断。
 
-## 11. 后续 Schema 化建议
+## 11. Schema 化现状与建议
 
-### 11.1 第一阶段：修正文档与 shared TS
+### 11.1 已落地：后端 payload 模型生成 shared TS
 
-先将 `apps/shared/ts/events.ts` 修成与后端当前事实一致：
+当前已经补齐后端 payload 模型：
 
-- `RuntimeEventType` 补齐后端枚举。
-- 增加 `RuntimeEventPayloadMap`。
-- 将 `RuntimeEvent` 改成按 `event_type` 判别的 union。
-- 对已定义未 emit 的事件，也要显式建 payload 类型，但标注为预留。
+```text
+apps/backend/app/models/payload/
+```
+
+生成脚本：
+
+```text
+scripts/generate_runtime_event_ts.py
+```
+
+生成目标：
+
+```text
+apps/shared/ts/events.ts
+```
+
+当前生成内容：
+
+- `RuntimeEventType` 补齐后端 `EventType` 的 17 个枚举。
+- `RuntimeEventPayloadMap` 由 `EVENT_PAYLOAD_MODELS` 生成。
+- `RuntimeEvent` 是按 `event_type` 区分的联合类型。
+- 真实 emit 与预留事件都有 payload 模型；预留事件仍需在真正接线时复核语义。
 
 目标：
 
@@ -705,16 +729,17 @@ export interface RuntimeEventPayloadMap {
 export type RuntimeEventType = keyof RuntimeEventPayloadMap;
 ```
 
-### 11.2 第二阶段：后端 Pydantic 事件响应模型
+### 11.2 下一阶段：在 API 边界校验事件响应
 
-新增后端响应 schema：
+当前 `RuntimeEvent` 内部值对象仍是 dataclass，`turns_api.py` 通过
+`event.to_dict()` 直接序列化 SSE。下一阶段可以新增后端响应 schema：
 
 ```text
 apps/backend/app/api/schemas/response/runtime_event_response.py
-apps/backend/app/api/schemas/response/runtime_event_payload/*.py
 ```
 
-将当前 dataclass `RuntimeEvent` 的 HTTP/SSE 输出映射到 Pydantic response model。
+将当前 dataclass `RuntimeEvent` 的 HTTP/SSE 输出映射到 Pydantic response model，
+并用 `apps/backend/app/models/payload/` 中的 payload 模型做 `event_type` 判别校验。
 
 注意：
 
@@ -722,13 +747,12 @@ apps/backend/app/api/schemas/response/runtime_event_payload/*.py
 - 可以先在 API 边界做 response schema。
 - payload 应按 `event_type` 做判别联合。
 
-### 11.3 第三阶段：生成 JSON Schema 和 TS 类型
+### 11.3 后续：生成 JSON Schema
 
 建议产物：
 
 ```text
-packages/shared/schema/runtime-events.schema.json
-packages/shared/ts/generated/runtime-events.ts
+apps/shared/schema/runtime-events.schema.json
 ```
 
 建议脚本：
@@ -740,28 +764,26 @@ scripts/generate_runtime_event_schema.py
 建议检查：
 
 ```bash
-python scripts/generate_runtime_event_schema.py
-git diff --exit-code packages/shared/schema packages/shared/ts/generated
+apps/backend/.venv/bin/python scripts/generate_runtime_event_schema.py
+git diff --exit-code apps/shared/schema
 ```
 
 目标：
 
-- 后端 Pydantic 是机器事实源。
-- 前端 TS 类型由 Schema 生成。
+- 后端 payload Pydantic 模型是机器事实源。
+- 前端 TS 类型由脚本生成。
 - 人类文档解释语义与消费行为。
 
 ## 12. 短期修复清单
 
 建议按顺序处理：
 
-1. 修正 `apps/shared/ts/events.ts` 与后端真实枚举/payload 对齐。
-2. 给 `model_requested`、`model_completed` 增加前端类型，即使暂时不渲染。
-3. 修正 `step_started` payload 类型。
-4. 修正 `final_response` / `run_finished` / `run_cancelled` payload 类型。
-5. 明确 `run_failed.status` 是否必填；如果要求必填，后端 `invalid_model_output` 分支需要补 `status: "failed"`。
-6. 明确 `tool_call_id` 应该稳定在顶层、payload，还是两处都保留。
-7. 明确是否要真实 emit `tool_call_requested` / `tool_call_started` / `observation_added`。
-8. 明确 `sequence` 是否应由 runtime 外层统一分配，而不是 workflow 局部分配。
+1. 在 CI / 本地检查中加入 `apps/backend/.venv/bin/python scripts/generate_runtime_event_ts.py` 后 `git diff --exit-code apps/shared/ts/events.ts`。
+2. 明确 `run_failed.status` 是否必填；如果要求必填，后端 `invalid_model_output` 分支需要补 `status: "failed"`。
+3. 明确 `tool_call_id` 应该稳定在顶层、payload，还是两处都保留。
+4. 明确是否要真实 emit `tool_call_requested` / `tool_call_started` / `observation_added`。
+5. 明确 `sequence` 是否应由 runtime 外层统一分配，而不是 workflow 局部分配。
+6. 明确是否要增加后端 runtime event 持久化与历史回放；如果暂不做，应保持文档和前端注释不使用“回放已持久化事件”的表述。
 
 ## 13. 调研方法记录
 

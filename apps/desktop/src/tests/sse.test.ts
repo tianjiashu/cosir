@@ -53,7 +53,7 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
       message_id: null,
       tool_call_id: null,
       created_at: new Date().toISOString(),
-      payload: { step_type: "x", step_index: 0 },
+      payload: { step_id: "step-1", kind: "model", index: 0 },
     };
     const body = `event: step_started\ndata: ${JSON.stringify(event)}\n\n`;
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => makeStreamResponse(body));

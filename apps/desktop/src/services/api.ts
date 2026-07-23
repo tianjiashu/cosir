@@ -26,37 +26,37 @@ import {
 } from "./tracePropagation";
 import { useConversationTraceStore, type ConversationTraceOperation } from "@/stores/conversationTraceStore";
 
-/** 鍚庣鍩虹 URL锛屽紑鍙戠幆澧冭蛋 Vite 浠ｇ悊銆?*/
+/** 后端基础 URL，开发环境走 Vite 代理。 */
 const BASE_URL = "";
 
-/** HTTP 璇锋眰浣跨敤鐨?trace 鍏冩暟鎹€?*/
+/** HTTP 请求使用的 trace 元数据。 */
 interface RequestTraceMetadata {
-  /** 瀹㈡埛绔姹?trace 鏍囪瘑銆?*/
+  /** 客户端请求 trace 标识。 */
   traceId: string;
-  /** HTTP 鏂规硶銆?*/
+  /** HTTP 方法。 */
   method: string;
-  /** 璇锋眰璺緞銆?*/
+  /** 请求路径。 */
   path: string;
-  /** 鍙€変换鍔℃爣璇嗐€?*/
+  /** 可选任务标识。 */
   taskId?: string;
 }
 
-/** 甯﹁姹?trace 鍏冩暟鎹殑 JSON 鍝嶅簲銆?*/
+/** 带请求 trace 元数据的 JSON 响应。 */
 interface TracedJsonResponse<T> {
-  /** 瑙ｆ瀽鍚庣殑鍝嶅簲浣撱€?*/
+  /** 解析后的响应体。 */
   data: T;
-  /** 璇ヨ姹備娇鐢ㄧ殑 trace 鍏冩暟鎹€?*/
+  /** 该请求使用的 trace 元数据。 */
   trace: RequestTraceMetadata;
 }
 
 /**
- * 鏋勫缓甯﹂敊璇笂涓嬫枃鐨?ServiceError銆?
+ * 构建带错误上下文的 ServiceError。
  *
- * @param message - 浜虹被鍙鐨勯敊璇弿杩般€?
- * @param path - 瀵艰嚧閿欒鐨?API 璺緞銆?
- * @param response - 鍙€夌殑 fetch Response 瀵硅薄銆?
- * @param taskId - 鍙€夌殑鍏宠仈浠诲姟 ID銆?
- * @returns 鏋勫缓濂界殑 ServiceError 瀹炰緥銆?
+ * @param message - 人类可读的错误描述。
+ * @param path - 导致错误的 API 路径。
+ * @param response - 可选的 fetch Response 对象。
+ * @param taskId - 可选的关联任务 ID。
+ * @returns 构建好的 ServiceError 实例。
  */
 async function buildError(
   message: string,
@@ -75,25 +75,25 @@ async function buildError(
     }
   } catch (err) {
     void err;
-    logWarn("瑙ｆ瀽閿欒鍝嶅簲浣?JSON 澶辫触", {
+    logWarn("解析错误响应体 JSON 失败", {
       module: "api",
       path,
       statusCode: response?.status,
     });
-    // 闈?JSON 鍝嶅簲浣擄紝浣跨敤鍘熷娑堟伅
+    // 非 JSON 响应体，使用原始消息。
   }
 
   return new ServiceError(detail, { statusCode, taskId });
 }
 
 /**
- * 鍙戦€佸甫 JSON body 鐨?POST 璇锋眰銆?
+ * 发送带 JSON body 的 POST 请求。
  *
- * @param path - API 璺緞銆?
- * @param data - 璇锋眰浣撴暟鎹€?
- * @param taskId - 鍙€夌殑鍏宠仈浠诲姟 ID锛堢敤浜庨敊璇拷韪級銆?
- * @returns 瑙ｆ瀽鍚庣殑 JSON 鍝嶅簲銆?
- * @throws {ServiceError} 褰撶綉缁滆姹傚け璐ユ垨杩斿洖闈?2xx 鐘舵€佺爜鏃舵姏鍑恒€?
+ * @param path - API 路径。
+ * @param data - 请求体数据。
+ * @param taskId - 可选的关联任务 ID，用于错误追踪。
+ * @returns 解析后的 JSON 响应。
+ * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
 async function post<T>(path: string, data: unknown, taskId?: string): Promise<TracedJsonResponse<T>> {
   let response: Response;
@@ -112,8 +112,8 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<Tr
       body: JSON.stringify(data),
     });
   } catch (err) {
-    logError(`缃戠粶璇锋眰澶辫触: ${path}`, err, requestContext);
-    throw new ServiceError(`缃戠粶璇锋眰澶辫触: ${path}`, {
+    logError(`网络请求失败: ${path}`, err, requestContext);
+    throw new ServiceError(`网络请求失败: ${path}`, {
       taskId,
       cause: err,
     });
@@ -122,8 +122,8 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<Tr
   recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
 
   if (!response.ok) {
-    const error = await buildError(`POST ${path} 澶辫触 (${response.status})`, path, response, taskId);
-    logError(`HTTP 璇锋眰澶辫触: POST ${path}`, error, {
+    const error = await buildError(`POST ${path} 失败 (${response.status})`, path, response, taskId);
+    logError(`HTTP 请求失败: POST ${path}`, error, {
       ...requestContext,
       status_code: response.status,
     });
@@ -141,8 +141,8 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<Tr
       },
     };
   } catch (err) {
-    logError(`瑙ｆ瀽鍝嶅簲 JSON 澶辫触: ${path}`, err, requestContext);
-    throw new ServiceError(`瑙ｆ瀽鍝嶅簲 JSON 澶辫触: ${path}`, {
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
+    throw new ServiceError(`解析响应 JSON 失败: ${path}`, {
       taskId,
       cause: err,
     });
@@ -150,12 +150,12 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<Tr
 }
 
 /**
- * 鍙戦€?GET 璇锋眰銆?
+ * 发送 GET 请求。
  *
- * @param path - API 璺緞銆?
- * @param taskId - 鍙€夌殑鍏宠仈浠诲姟 ID锛堢敤浜庨敊璇拷韪級銆?
- * @returns 瑙ｆ瀽鍚庣殑 JSON 鍝嶅簲銆?
- * @throws {ServiceError} 褰撶綉缁滆姹傚け璐ユ垨杩斿洖闈?2xx 鐘舵€佺爜鏃舵姏鍑恒€?
+ * @param path - API 路径。
+ * @param taskId - 可选的关联任务 ID，用于错误追踪。
+ * @returns 解析后的 JSON 响应。
+ * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
 async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse<T>> {
   let response: Response;
@@ -172,8 +172,8 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
       headers: { ...requestTrace.headers },
     });
   } catch (err) {
-    logError(`缃戠粶璇锋眰澶辫触: ${path}`, err, requestContext);
-    throw new ServiceError(`缃戠粶璇锋眰澶辫触: ${path}`, {
+    logError(`网络请求失败: ${path}`, err, requestContext);
+    throw new ServiceError(`网络请求失败: ${path}`, {
       taskId,
       cause: err,
     });
@@ -182,8 +182,8 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
   recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
 
   if (!response.ok) {
-    const error = await buildError(`GET ${path} 澶辫触 (${response.status})`, path, response, taskId);
-    logError(`HTTP 璇锋眰澶辫触: GET ${path}`, error, {
+    const error = await buildError(`GET ${path} 失败 (${response.status})`, path, response, taskId);
+    logError(`HTTP 请求失败: GET ${path}`, error, {
       ...requestContext,
       status_code: response.status,
     });
@@ -201,8 +201,8 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
       },
     };
   } catch (err) {
-    logError(`瑙ｆ瀽鍝嶅簲 JSON 澶辫触: ${path}`, err, requestContext);
-    throw new ServiceError(`瑙ｆ瀽鍝嶅簲 JSON 澶辫触: ${path}`, {
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
+    throw new ServiceError(`解析响应 JSON 失败: ${path}`, {
       taskId,
       cause: err,
     });
@@ -210,11 +210,11 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
 }
 
 /**
- * 鍙戦€?DELETE 璇锋眰銆?
+ * 发送 DELETE 请求。
  *
- * @param path - API 璺緞銆?
- * @returns 瑙ｆ瀽鍚庣殑 JSON 鍝嶅簲銆?
- * @throws {ServiceError} 褰撶綉缁滆姹傚け璐ユ垨杩斿洖闈?2xx 鐘舵€佺爜鏃舵姏鍑恒€?
+ * @param path - API 路径。
+ * @returns 解析后的 JSON 响应。
+ * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
 async function del<T>(path: string): Promise<TracedJsonResponse<T>> {
   let response: Response;
@@ -231,15 +231,15 @@ async function del<T>(path: string): Promise<TracedJsonResponse<T>> {
       headers: { ...requestTrace.headers },
     });
   } catch (err) {
-    logError(`缃戠粶璇锋眰澶辫触: ${path}`, err, requestContext);
-    throw new ServiceError(`缃戠粶璇锋眰澶辫触: ${path}`, { cause: err });
+    logError(`网络请求失败: ${path}`, err, requestContext);
+    throw new ServiceError(`网络请求失败: ${path}`, { cause: err });
   }
 
   recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
 
   if (!response.ok) {
-    const error = await buildError(`DELETE ${path} 澶辫触 (${response.status})`, path, response);
-    logError(`HTTP 璇锋眰澶辫触: DELETE ${path}`, error, {
+    const error = await buildError(`DELETE ${path} 失败 (${response.status})`, path, response);
+    logError(`HTTP 请求失败: DELETE ${path}`, error, {
       ...requestContext,
       status_code: response.status,
     });
@@ -256,21 +256,21 @@ async function del<T>(path: string): Promise<TracedJsonResponse<T>> {
       },
     };
   } catch (err) {
-    logError(`瑙ｆ瀽鍝嶅簲 JSON 澶辫触: ${path}`, err, requestContext);
-    throw new ServiceError(`瑙ｆ瀽鍝嶅簲 JSON 澶辫触: ${path}`, { cause: err });
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
+    throw new ServiceError(`解析响应 JSON 失败: ${path}`, { cause: err });
   }
 }
 
-// ---------- 鍏紑 API 鍑芥暟 ----------
+// ---------- 公开 API 函数 ----------
 
 /**
- * 鍒涘缓涓€涓柊浠诲姟銆?
+ * 创建一个新任务。
  *
- * @param request - 鍒涘缓浠诲姟鐨勮姹備綋锛坱ext + workspace_id锛夈€?
- * @returns 鍒涘缓鍚庣殑浠诲姟璁板綍銆?
- * @throws {ServiceError} 褰撳垱寤哄け璐ユ椂鎶涘嚭锛堝 text 涓虹┖銆佺綉缁滈敊璇瓑锛夈€?
+ * @param request - 创建任务的请求体，包含 text 与 workspace_id。
+ * @returns 创建后的任务记录。
+ * @throws {ServiceError} 当创建失败时抛出，例如 text 为空或网络错误。
  *
- * @sideeffect 鍚戝悗绔?POST /workspaces/{workspace_id}/tasks 鍐欏叆涓€鏉℃柊鐨勪换鍔¤褰曘€?
+ * @sideeffect 向后端 POST /workspaces/{workspace_id}/tasks 写入一条新的任务记录。
  */
 export async function createTask(request: CreateTaskRequest): Promise<TaskRecord> {
   const path = API_PATHS.WORKSPACE_TASKS(request.workspace_id);
@@ -280,21 +280,21 @@ export async function createTask(request: CreateTaskRequest): Promise<TaskRecord
 }
 
 /**
- * 鑾峰彇宸ヤ綔鍖哄垪琛ㄣ€?
+ * 获取工作区列表。
  *
- * @returns 鍚庣鐧昏鐨勫伐浣滃尯璁板綍鍒楄〃銆?
- * @throws {ServiceError} 褰撳悗绔笉鍙揪鎴栧搷搴斿紓甯告椂鎶涘嚭銆?
+ * @returns 后端登记的工作区记录列表。
+ * @throws {ServiceError} 当后端不可达或响应异常时抛出。
  */
 export async function listWorkspaces(): Promise<WorkspaceRecord[]> {
   return (await get<WorkspaceRecord[]>(API_PATHS.WORKSPACES)).data;
 }
 
 /**
- * 鍒涘缓鏈湴宸ヤ綔鍖恒€?
+ * 创建本地工作区。
  *
- * @param request - 宸ヤ綔鍖哄垱寤鸿姹備綋銆?
- * @returns 鍒涘缓鍚庣殑宸ヤ綔鍖鸿褰曘€?
- * @throws {ServiceError} 褰撳垱寤哄け璐ユ椂鎶涘嚭銆?
+ * @param request - 工作区创建请求体。
+ * @returns 创建后的工作区记录。
+ * @throws {ServiceError} 当创建失败时抛出。
  */
 export async function createWorkspace(request: CreateWorkspaceRequest): Promise<WorkspaceRecord> {
   const response = await post<WorkspaceRecord>(API_PATHS.WORKSPACES, request);
@@ -309,11 +309,11 @@ export async function createWorkspace(request: CreateWorkspaceRequest): Promise<
 }
 
 /**
- * 鍒犻櫎宸ヤ綔鍖哄強鍏朵换鍔¤褰曘€?
+ * 删除工作区及其任务记录。
  *
- * @param workspaceId - 寰呭垹闄ょ殑宸ヤ綔鍖烘爣璇嗐€?
- * @returns 鏃犮€?
- * @throws {ServiceError} 褰撳伐浣滃尯涓嶅瓨鍦ㄦ垨鍒犻櫎澶辫触鏃舵姏鍑恒€?
+ * @param workspaceId - 待删除的工作区标识。
+ * @returns 无。
+ * @throws {ServiceError} 当工作区不存在或删除失败时抛出。
  */
 export async function deleteWorkspace(workspaceId: string): Promise<void> {
   const response = await del<{ deleted: boolean }>(API_PATHS.WORKSPACE_DETAIL(workspaceId));
@@ -327,11 +327,11 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
 }
 
 /**
- * 鑾峰彇宸ヤ綔鍖轰笅鐨勪换鍔″垪琛ㄣ€?
+ * 获取工作区下的任务列表。
  *
- * @param workspaceId - 宸ヤ綔鍖烘爣璇嗐€?
- * @returns 浠诲姟璁板綍鍒楄〃銆?
- * @throws {ServiceError} 褰撳伐浣滃尯涓嶅瓨鍦ㄦ垨璇锋眰澶辫触鏃舵姏鍑恒€?
+ * @param workspaceId - 工作区标识。
+ * @returns 任务记录列表。
+ * @throws {ServiceError} 当工作区不存在或请求失败时抛出。
  */
 export async function listWorkspaceTasks(workspaceId: string): Promise<TaskRecord[]> {
   const response = await get<TaskRecord[]>(API_PATHS.WORKSPACE_TASKS(workspaceId));
@@ -346,12 +346,12 @@ export async function listWorkspaceTasks(workspaceId: string): Promise<TaskRecor
 }
 
 /**
- * 涓哄凡鏈変换鍔¤拷鍔犱竴涓?pending 杞銆?
+ * 为已有任务追加一个 pending 轮次。
  *
- * @param taskId - 浠诲姟瀹瑰櫒鏍囪瘑銆?
- * @param request - 杞鍒涘缓璇锋眰浣撱€?
- * @returns 鍒涘缓鍚庣殑杞璁板綍銆?
- * @throws {ServiceError} 褰撲换鍔′笉瀛樺湪鎴栬緭鍏ラ潪娉曟椂鎶涘嚭銆?
+ * @param taskId - 任务容器标识。
+ * @param request - 轮次创建请求体。
+ * @returns 创建后的轮次记录。
+ * @throws {ServiceError} 当任务不存在或输入非法时抛出。
  */
 export async function createTaskTurn(taskId: string, request: CreateTurnRequest): Promise<TurnRecord> {
   const response = await post<TurnRecord>(API_PATHS.TASK_TURNS(taskId), request, taskId);
@@ -360,11 +360,11 @@ export async function createTaskTurn(taskId: string, request: CreateTurnRequest)
 }
 
 /**
- * 鑾峰彇浠诲姟涓嬬殑杞鍒楄〃銆?
+ * 获取任务下的轮次列表。
  *
- * @param taskId - 浠诲姟瀹瑰櫒鏍囪瘑銆?
- * @returns 杞璁板綍鍒楄〃銆?
- * @throws {ServiceError} 褰撲换鍔′笉瀛樺湪鎴栬姹傚け璐ユ椂鎶涘嚭銆?
+ * @param taskId - 任务容器标识。
+ * @returns 轮次记录列表。
+ * @throws {ServiceError} 当任务不存在或请求失败时抛出。
  */
 export async function listTaskTurns(taskId: string): Promise<TurnRecord[]> {
   const response = await get<TurnRecord[]>(API_PATHS.TASK_TURNS(taskId), taskId);
@@ -373,11 +373,11 @@ export async function listTaskTurns(taskId: string): Promise<TurnRecord[]> {
 }
 
 /**
- * 鏌ヨ鎸囧畾浠诲姟鐨勭姸鎬併€?
+ * 查询指定任务的状态。
  *
- * @param taskId - 浠诲姟鏍囪瘑绗︺€?
- * @returns 浠诲姟鐨勬渶鏂扮姸鎬佽褰曘€?
- * @throws {ServiceError} 褰撲换鍔′笉瀛樺湪鎴栫綉缁滈敊璇椂鎶涘嚭銆?
+ * @param taskId - 任务标识符。
+ * @returns 任务的最新状态记录。
+ * @throws {ServiceError} 当任务不存在或网络错误时抛出。
  */
 export async function getTask(taskId: string): Promise<TaskRecord> {
   const response = await get<TaskRecord>(API_PATHS.TASK_DETAIL(taskId), taskId);
@@ -386,14 +386,14 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
 }
 
 /**
- * 鍙栨秷涓€涓鍦ㄨ繍琛岀殑杞銆?
+ * 取消一个正在运行的轮次。
  *
- * @param turnId - 寰呭彇娑堢殑杞鏍囪瘑绗︺€?
- * @param taskId - 鍙€夌殑褰掑睘浠诲姟 ID锛岀敤浜?trace 鍜屾棩蹇椾笂涓嬫枃銆?
- * @returns 鍙栨秷鍚庣殑杞璁板綍锛坰tatus 搴斾负 "cancelled"锛夈€?
- * @throws {ServiceError} 褰撹疆娆′笉瀛樺湪鎴栧彇娑堝け璐ユ椂鎶涘嚭銆?
+ * @param turnId - 待取消的轮次标识符。
+ * @param taskId - 可选的归属任务 ID，用于 trace 和日志上下文。
+ * @returns 取消后的轮次记录，status 应为 "cancelled"。
+ * @throws {ServiceError} 当轮次不存在或取消失败时抛出。
  *
- * @sideeffect 鍚戝悗绔?POST /turns/{id}/cancel 鏇存柊杞鐘舵€佷负 cancelled銆?
+ * @sideeffect 向后端 POST /turns/{id}/cancel，更新轮次状态为 cancelled。
  */
 export async function cancelTurn(turnId: string, taskId?: string): Promise<TurnRecord> {
   const response = await post<TurnRecord>(API_PATHS.TURN_CANCEL(turnId), {}, taskId);
@@ -402,24 +402,24 @@ export async function cancelTurn(turnId: string, taskId?: string): Promise<TurnR
 }
 
 /**
- * 鑾峰彇鍚庣鍋ュ悍鐘舵€佷笌褰撳墠妯″瀷閰嶇疆銆?
+ * 获取后端健康状态与当前模型配置。
  *
- * @returns 鍚庣鍋ュ悍鐘舵€佹憳瑕併€?
- * @throws {ServiceError} 褰撳悗绔笉鍙揪鎴栬繑鍥炲紓甯哥姸鎬佹椂鎶涘嚭銆?
+ * @returns 后端健康状态摘要。
+ * @throws {ServiceError} 当后端不可达或返回异常状态时抛出。
  */
 export async function getBackendHealth(): Promise<BackendHealthResponse> {
   return (await get<BackendHealthResponse>(API_PATHS.HEALTH)).data;
 }
 
 /**
- * 璁板綍瀵硅瘽浠诲姟 API 璇锋眰浣跨敤鐨?trace銆?
+ * 记录对话任务 API 请求使用的 trace。
  *
- * @param trace - HTTP helper 杩斿洖鐨勮姹?trace 鍏冩暟鎹€?
- * @param operation - 瀵硅瘽璇锋眰绫诲瀷銆?
- * @param taskId - 璇ヨ姹傚綊灞炵殑浠诲姟鏍囪瘑銆?
- * @returns 鏃犮€?
+ * @param trace - HTTP helper 返回的请求 trace 元数据。
+ * @param operation - 对话请求类型。
+ * @param taskId - 该请求归属的任务标识。
+ * @returns 无。
  *
- * @sideeffect 鍐欏叆 conversationTraceStore 鍐呭瓨鐘舵€併€?
+ * @sideeffect 写入 conversationTraceStore 内存状态。
  */
 function recordConversationTrace(
   trace: RequestTraceMetadata,

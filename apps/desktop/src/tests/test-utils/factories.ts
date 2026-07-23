@@ -10,9 +10,9 @@ export function makeEvent(
     event_type: "step_started",
     task_id: "task-1",
     created_at: new Date().toISOString(),
-    payload: { step_type: "test", step_index: 0 },
+    payload: { step_id: "step-1", kind: "model", index: 0 },
     ...overrides,
-  };
+  } as RuntimeEvent;
 }
 
 /** 构造一条测试用 TaskRecord。 */

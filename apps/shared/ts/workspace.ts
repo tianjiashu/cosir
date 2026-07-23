@@ -1,22 +1,18 @@
 /**
- * 工作区共享类型定义。
+ * 后端 API 共享类型定义。
  *
- * 与后端 `WorkspaceRecord.to_dict()` 输出保持一致，
- * 作为前后端共享的 workspace 契约事实源。
+ * 本文件由 `scripts/generate_api_ts.py` 从后端 Pydantic API schema 生成。
+ * 不要手动修改；请先更新 `apps/backend/app/api/schemas/` 后重新生成。
  *
  * @module shared/workspace
  */
 
-/** 工作区记录接口，对应后端 `WorkspaceRecord.to_dict()` 输出。 */
-export interface WorkspaceRecord {
-  /** 唯一的工作区标识符。 */
+export interface WorkspaceResponse {
   workspace_id: string;
-  /** 用户可读的工作区名称。 */
   name: string;
-  /** 工作区本地文件系统路径。 */
   root_path: string;
-  /** 工作区创建时间戳。 */
   created_at: string;
-  /** 工作区最近更新时间戳。 */
   updated_at: string;
 }
+
+export type WorkspaceRecord = WorkspaceResponse;

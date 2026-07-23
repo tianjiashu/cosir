@@ -11,9 +11,17 @@ export * from "./events";
 export * from "./task";
 export * from "./turn";
 export * from "./workspace";
-export * from "./api";
+export * from "./agents";
+export {
+  API_BASE,
+  API_PATHS,
+  type BackendHealthResponse,
+  type CreateTaskRequest,
+  type CreateTurnRequest,
+  type CreateWorkspaceRequest,
+  type DeleteWorkspaceResponse,
+} from "./api";
 export * from "./backend";
-export * from "./runs";
 export * from "./toolExecution";
 export * from "./tracePropagation";
 export * from "./logs";

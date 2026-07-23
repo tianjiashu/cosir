@@ -1,38 +1,179 @@
 /**
  * 后端运行时事件类型定义。
  *
- * 与后端 `app/events/types.py::RuntimeEvent.to_dict()` 输出保持一致，
- * 作为前后端共享的 SSE 事件契约事实源。
+ * 本文件由 `scripts/generate_runtime_event_ts.py` 从后端 Pydantic payload 模型生成。
+ * 不要手动修改；请先更新 `apps/backend/app/models/payload/` 后重新生成。
  *
  * @module shared/events
  */
 
-/** 后端发出的运行时事件类型，与 `docs/desktop-client-development-plan.md` §5.3 一一对应。 */
+/** 后端发出的运行时事件类型。 */
 export type RuntimeEventType =
   | "run_started"
+  | "run_failed"
+  | "run_cancelled"
+  | "run_finished"
   | "step_started"
+  | "model_requested"
   | "model_output_delta"
   | "model_thinking_delta"
+  | "model_completed"
+  | "model_failed"
   | "tool_call_requested"
   | "tool_call_started"
   | "tool_call_finished"
   | "observation_added"
   | "final_response"
-  | "run_finished"
-  | "run_failed"
-  | "run_cancelled";
+  | "human_input_requested"
+  | "human_input_received";
 
-/** SSE 传输的完整运行时事件结构，对应后端 `RuntimeEvent.to_dict()`。 */
-export interface RuntimeEvent {
+/** 所有运行时事件 payload 都是 JSON object。 */
+export type RuntimeEventPayloadObject = Record<string, unknown>;
+
+export interface ModelToolCallPayload extends RuntimeEventPayloadObject {
+  tool_name: string;
+  arguments?: Record<string, unknown>;
+  call_id?: string;
+}
+
+export interface RunStartedPayload extends RuntimeEventPayloadObject {
+  status: "running";
+  agent: Record<string, unknown>;
+}
+
+export interface RunFailedPayload extends RuntimeEventPayloadObject {
+  error: string;
+  status?: "failed" | null;
+  message?: string | null;
+  step_id?: string | null;
+  requested_agent_id?: string | null;
+  task_agent_id?: string | null;
+  tool_name?: string | null;
+}
+
+export interface RunCancelledPayload extends RuntimeEventPayloadObject {
+  status: "cancelled";
+  step_id?: string | null;
+  error?: string | null;
+}
+
+export interface RunFinishedPayload extends RuntimeEventPayloadObject {
+  status: "completed";
+  step_id?: string | null;
+}
+
+export interface StepStartedPayload extends RuntimeEventPayloadObject {
+  step_id: string;
+  kind: string;
+  index: number;
+}
+
+export interface ModelRequestedPayload extends RuntimeEventPayloadObject {
+  step_id: string;
+  message_count: number;
+}
+
+export interface ModelOutputDeltaPayload extends RuntimeEventPayloadObject {
+  step_id: string;
+  text: string;
+}
+
+export interface ModelThinkingDeltaPayload extends RuntimeEventPayloadObject {
+  step_id: string;
+  text: string;
+}
+
+export interface ModelCompletedPayload extends RuntimeEventPayloadObject {
+  step_id: string;
+  text: string;
+  tool_calls: ModelToolCallPayload[];
+}
+
+export interface ModelFailedPayload extends RuntimeEventPayloadObject {
+  error: string;
+  step_id?: string | null;
+  status?: "failed" | null;
+}
+
+export interface ToolCallRequestedPayload extends RuntimeEventPayloadObject {
+  tool_name: string;
+  arguments?: Record<string, unknown>;
+  step_id?: string | null;
+  tool_call_id?: string | null;
+}
+
+export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {
+  tool_name: string;
+  step_id?: string | null;
+  tool_call_id?: string | null;
+}
+
+export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
+  step_id: string;
+  tool_name: string;
+  status: "success" | "error";
+  tool_call_id: string;
+}
+
+export interface ObservationAddedPayload extends RuntimeEventPayloadObject {
+  tool_name: string;
+  status: "success" | "error";
+  step_id?: string | null;
+  tool_call_id?: string | null;
+  summary?: string | null;
+  details?: Record<string, unknown>;
+}
+
+export interface FinalResponsePayload extends RuntimeEventPayloadObject {
+  text: string;
+  step_id: string;
+  status: "completed";
+}
+
+export interface HumanInputRequestedPayload extends RuntimeEventPayloadObject {
+  prompt: string;
+  request_id?: string | null;
+  details?: Record<string, unknown>;
+}
+
+export interface HumanInputReceivedPayload extends RuntimeEventPayloadObject {
+  request_id?: string | null;
+  response?: string | null;
+  details?: Record<string, unknown>;
+}
+
+/** event_type 到 payload 类型的映射。 */
+export interface RuntimeEventPayloadMap {
+  run_started: RunStartedPayload;
+  run_failed: RunFailedPayload;
+  run_cancelled: RunCancelledPayload;
+  run_finished: RunFinishedPayload;
+  step_started: StepStartedPayload;
+  model_requested: ModelRequestedPayload;
+  model_output_delta: ModelOutputDeltaPayload;
+  model_thinking_delta: ModelThinkingDeltaPayload;
+  model_completed: ModelCompletedPayload;
+  model_failed: ModelFailedPayload;
+  tool_call_requested: ToolCallRequestedPayload;
+  tool_call_started: ToolCallStartedPayload;
+  tool_call_finished: ToolCallFinishedPayload;
+  observation_added: ObservationAddedPayload;
+  final_response: FinalResponsePayload;
+  human_input_requested: HumanInputRequestedPayload;
+  human_input_received: HumanInputReceivedPayload;
+}
+
+/** SSE 传输的运行时事件信封，对应后端 `RuntimeEvent.to_dict()`。 */
+export interface RuntimeEventEnvelope<T extends RuntimeEventType = RuntimeEventType> {
   /** 唯一的事件标识符（UUID）。 */
   event_id: string;
-  /** 稳定的、机器可读的事件类型（14 种之一）。 */
-  event_type: RuntimeEventType;
+  /** 稳定的、机器可读的事件类型。 */
+  event_type: T;
   /** 关联的任务标识符。 */
   task_id: string;
   /** 关联的轮次标识符。 */
   turn_id?: string | null;
-  /** 同一 task 下稳定递增的排序号。 */
+  /** 当前单次运行流内的排序号；不是 task 级持久序号。 */
   sequence?: number;
   /** 可选的用户可读消息标识符。 */
   message_id?: string | null;
@@ -41,74 +182,10 @@ export interface RuntimeEvent {
   /** 事件创建时的 UTC 时间戳（ISO-8601）。 */
   created_at: string;
   /** 因 event_type 而异的载荷字典。 */
-  payload: Record<string, unknown>;
+  payload: RuntimeEventPayloadMap[T];
 }
 
-// ---------- 各事件载荷子类型 ----------
-
-/** `run_started` 载荷：任务开始运行。 */
-export interface RunStartedPayload {
-  status: "running";
-  agent: Record<string, unknown>;
-}
-
-/** `step_started` 载荷：步骤开始。 */
-export interface StepStartedPayload {
-  step_type: string;
-  step_index: number;
-}
-
-/** `model_output_delta` 载荷：模型增量输出。 */
-export interface ModelOutputDeltaPayload {
-  text: string;
-}
-
-/** `model_thinking_delta` 载荷：模型思考过程增量（DeepSeek thinking）。 */
-export interface ModelThinkingDeltaPayload {
-  text: string;
-}
-
-/** `tool_call_requested` 载荷：模型请求调用工具（待执行）。 */
-export interface ToolCallRequestedPayload {
-  tool_name: string;
-  arguments: Record<string, unknown>;
-}
-
-/** `tool_call_started` 载荷：工具调用开始执行。 */
-export interface ToolCallStartedPayload {
-  tool_name: string;
-}
-
-/** `tool_call_finished` 载荷：工具调用执行完成。 */
-export interface ToolCallFinishedPayload {
-  tool_name: string;
-  status: string;
-  error?: string;
-}
-
-/** `observation_added` 载荷：观察/结果回填。 */
-export interface ObservationAddedPayload {
-  tool_name: string;
-  status: string;
-}
-
-/** `final_response` 载荷：模型最终响应产出。 */
-export interface FinalResponsePayload {
-  status: "completed";
-}
-
-/** `run_finished` 载荷：任务正常完成。 */
-export interface RunFinishedPayload {
-  status: "completed";
-}
-
-/** `run_failed` 载荷：任务失败。 */
-export interface RunFailedPayload {
-  status: "failed";
-  error: string;
-}
-
-/** `run_cancelled` 载荷：任务被取消。 */
-export interface RunCancelledPayload {
-  status: "cancelled";
-}
+/** 后端 SSE 运行时事件联合类型。 */
+export type RuntimeEvent = {
+  [T in RuntimeEventType]: RuntimeEventEnvelope<T>;
+}[RuntimeEventType];

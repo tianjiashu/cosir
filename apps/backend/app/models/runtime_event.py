@@ -14,7 +14,8 @@ class RuntimeEvent:
         event_type: 稳定的、机器可读的事件类型枚举成员。
         task_id: 与该事件关联的任务标识符。
         turn_id: 与该事件关联的轮次标识符。
-        sequence: 由存储层按 task 分配的稳定排序号。
+        sequence: 事件在当前单次运行流内的排序号。当前尚未由存储层分配 task 级持久序号，
+            外层 runtime 生命周期事件也可能保留默认值。
         message_id: 可选的用户可读消息标识符。
         tool_call_id: 可选的工具调用标识符。
         payload: 可序列化为 JSON 的事件载荷。
@@ -30,7 +31,7 @@ class RuntimeEvent:
     副作用:
         在缺省值被使用时生成 UUID 和时间戳。
 
-    ``payload`` 信封约定（回放 / 多元展示兼容，本轮全 ``text``，不接线 UI）：
+    ``payload`` 信封约定（多元展示兼容，当前真实 emit 多数尚未使用这些展示字段）：
         - ``display_format``: ``"text"`` | ``"component"``，展示形态。
         - ``component_type``: ``"chart"`` | ``"diff"`` | ``"code"`` | ``"table"``
           | ``"approval_prompt"`` | ``None``，组件渲染类型。

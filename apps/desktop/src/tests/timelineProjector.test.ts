@@ -25,7 +25,7 @@ function makeDelta(eventId: string, text: string, sequence = 1): RuntimeEvent {
     turn_id: "turn-1",
     sequence,
     created_at: new Date().toISOString(),
-    payload: { text },
+    payload: { step_id: "step-1", text },
   };
 }
 
@@ -37,7 +37,7 @@ function makeThinking(eventId: string, text: string, sequence = 1): RuntimeEvent
     turn_id: "turn-1",
     sequence,
     created_at: new Date().toISOString(),
-    payload: { text },
+    payload: { step_id: "step-1", text },
   };
 }
 
@@ -50,7 +50,7 @@ function makeDeltaWithPayload(eventId: string, payload: Record<string, unknown>,
     sequence,
     created_at: new Date().toISOString(),
     payload,
-  };
+  } as RuntimeEvent;
 }
 
 function makeToolRequested(eventId: string, toolName: string, sequence = 1): RuntimeEvent {
@@ -65,7 +65,12 @@ function makeToolRequested(eventId: string, toolName: string, sequence = 1): Run
   };
 }
 
-function makeToolCallFinished(eventId: string, toolName: string, status: string, sequence = 1): RuntimeEvent {
+function makeToolCallFinished(
+  eventId: string,
+  toolName: string,
+  status: "success" | "error",
+  sequence = 1,
+): RuntimeEvent {
   return {
     event_id: eventId,
     event_type: "tool_call_finished",
@@ -73,7 +78,7 @@ function makeToolCallFinished(eventId: string, toolName: string, status: string,
     turn_id: "turn-1",
     sequence,
     created_at: new Date().toISOString(),
-    payload: { tool_name: toolName, status },
+    payload: { step_id: "step-1", tool_name: toolName, status, tool_call_id: "call-1" },
   };
 }
 
@@ -122,7 +127,7 @@ function makeUnknownEvent(eventId: string, eventType: RuntimeEvent["event_type"]
     sequence,
     created_at: new Date().toISOString(),
     payload: {},
-  };
+  } as RuntimeEvent;
 }
 
 describe("timeline projector", () => {
@@ -251,7 +256,7 @@ describe("timeline projector", () => {
         turn_id: "turn-a",
         sequence: 1,
         created_at: new Date().toISOString(),
-        payload: { text: "A 的内容" },
+        payload: { step_id: "step-1", text: "A 的内容" },
       },
       {
         event_id: "e-2",
@@ -260,7 +265,7 @@ describe("timeline projector", () => {
         turn_id: "turn-b",
         sequence: 2,
         created_at: new Date().toISOString(),
-        payload: { text: "B 的内容" },
+        payload: { step_id: "step-1", text: "B 的内容" },
       },
     ];
     const timeline = projectTurnTimeline([turnA, turnB], events);
@@ -295,7 +300,7 @@ describe("timeline projector", () => {
   it("tool_call_finished 投影为 tool 条目", () => {
     const turn = makeTurn("turn-1", "hello");
     const events = [
-      makeToolCallFinished("e-2", "read_file", "completed"),
+      makeToolCallFinished("e-2", "read_file", "success"),
       makeToolCallFinished("e-3", "shell", "error"),
     ];
     const timeline = projectTurnTimeline([turn], events);
