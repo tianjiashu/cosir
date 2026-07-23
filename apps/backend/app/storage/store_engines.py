@@ -78,9 +78,7 @@ def _require(value, what: str):
     """
 
     if value is None:
-        raise RuntimeError(
-            f"storage not initialized; call init_storage(settings) first ({what})"
-        )
+        raise RuntimeError(f"storage not initialized; call init_storage(settings) first ({what})")
     return value
 
 
@@ -120,11 +118,15 @@ def init_storage(settings: BackendSettings | None = None) -> None:
         initialize_app_schema(_state.main_engine)
         _state.main_session_factory = create_session_factory(_state.main_engine)
 
-        _state.log_engine = _engine_cache.get(settings.log_database_file)
+        # __post_init__ 保证以下派生路径在实例构造后必非 None（缺省时从 database_file 派生）
+        log_database_file = _require(settings.log_database_file, "log_database_file")
+        checkpoint_file = _require(settings.checkpoint_file, "checkpoint_file")
+
+        _state.log_engine = _engine_cache.get(log_database_file)
         initialize_log_schema(_state.log_engine)
         _state.log_session_factory = create_session_factory(_state.log_engine)
 
-        settings.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
 
 
 def main_session_factory() -> sessionmaker[Session]:
@@ -224,7 +226,9 @@ def close_storage() -> None:
         if _state.main_engine is not None and _state.settings is not None:
             _engine_cache.dispose_path(_state.settings.database_file)
         if _state.log_engine is not None and _state.settings is not None:
-            _engine_cache.dispose_path(_state.settings.log_database_file)
+            _engine_cache.dispose_path(
+                _require(_state.settings.log_database_file, "log_database_file")
+            )
         _state.main_engine = None
         _state.main_session_factory = None
         _state.log_engine = None

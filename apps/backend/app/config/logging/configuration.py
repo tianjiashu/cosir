@@ -1,18 +1,19 @@
 """配置后端文件日志。"""
 
 import logging
+from multiprocessing.queues import Queue
 from pathlib import Path
 
 from app.config.logging.common import current_log_file
-from app.config.logging.formatter.jsonl_formatter import JsonlFormatter
 from app.config.logging.filter.caller_filter import CallerFilter
 from app.config.logging.filter.log_context_filter import LogContextFilter
+from app.config.logging.formatter.jsonl_formatter import JsonlFormatter
+from app.config.logging.handler.sqlite_handler import SQLiteLogHandler
 from app.config.logging.process_bridge import (
     install_log_queue_bridge,
     install_queue_handler,
     stop_queue_listener,
 )
-from app.config.logging.handler.sqlite_handler import SQLiteLogHandler
 from app.storage.crud.log_crud import LogStore
 
 
@@ -55,12 +56,13 @@ def configure_logging(
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    # 幂等性保护：保证无论 configure_logging 被调几次，logger 身上的 handler 都是"干净的一份"
-    # configure_logging 这个函数可能被调用多次（比如开发期 uvicorn 开了 reload=True，代码改动后进程重载会重新执行；或者测试里反复 setup/teardown）
+    # 幂等性保护：保证无论 configure_logging 被调几次，logger 身上的 handler 都是"干净的一份"。
+    # 该函数可能被多次调用：开发期 uvicorn 开启 reload=True 后进程重载会重新执行，
+    # 或测试里反复 setup/teardown，需避免重复挂载处理器。
     existing_handlers = [
         handler
         for handler in logger.handlers
-        if isinstance(handler, (logging.FileHandler, SQLiteLogHandler))
+        if isinstance(handler, logging.FileHandler | SQLiteLogHandler)
     ]
     for handler in existing_handlers:
         logger.removeHandler(handler)

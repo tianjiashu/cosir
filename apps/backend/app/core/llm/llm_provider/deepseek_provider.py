@@ -15,11 +15,11 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from app.config.logging.logger import log
 from app.core.llm.llm_provider.base import LLMProvider
 from app.core.llm.model_settings import ModelSettings
-
 
 
 class DeepSeekChatOpenAI(ChatOpenAI):
@@ -66,9 +66,7 @@ class DeepSeekProvider(LLMProvider):
     模型对象由 LangChain/LangGraph 负责流式输出、工具调用累积与 thinking 内容处理，本类只做构造。
     """
 
-    def build(
-        self, model_name: str, model_settings: ModelSettings | None = None
-    ) -> BaseChatModel:
+    def build(self, model_name: str, model_settings: ModelSettings | None = None) -> BaseChatModel:
         """构建面向 DeepSeek 的 LangChain chat model。
 
         参数:
@@ -80,7 +78,8 @@ class DeepSeekProvider(LLMProvider):
             配置好 base_url / api_key / thinking / 采样参数的 ``DeepSeekChatOpenAI`` 实例。
         """
 
-        api_key = model_settings.api_key_env
+        api_key = model_settings.api_key_env if model_settings is not None else None
+        base_url = model_settings.base_url if model_settings is not None else None
         extra: dict = {}
         if model_settings is not None:
             if model_settings.thinking:
@@ -101,8 +100,8 @@ class DeepSeekProvider(LLMProvider):
         )
         return DeepSeekChatOpenAI(
             model=model_name,
-            base_url=model_settings.base_url,
-            api_key=api_key,
+            base_url=base_url,
+            api_key=SecretStr(api_key) if api_key else None,
             streaming=True,
             **extra,
         )

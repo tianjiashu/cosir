@@ -9,8 +9,6 @@
 缺 API Key 时回退到 ``GenericFakeChatModel``，保证默认本地无 Key 启动与单测可跑。
 """
 
-import os
-
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
@@ -49,7 +47,7 @@ def build_chat_model(
         读取进程环境变量中的 API Key。
     """
 
-    api_key = model_settings.api_key_env
+    api_key = model_settings.api_key_env if model_settings is not None else None
     if not api_key:
         return GenericFakeChatModel(
             messages=iter([AIMessage(content="收到任务，已记录并开始处理。")])

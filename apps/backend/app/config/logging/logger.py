@@ -1,6 +1,12 @@
 """让标准 logging 支持规范约定的 ``extra["msg"]`` 键。"""
 
 import logging
+from collections.abc import Mapping
+from types import TracebackType
+
+_SysExcInfoType = (
+    tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None] | None
+)
 
 
 def install_msg_relocation() -> None:
@@ -28,16 +34,16 @@ def install_msg_relocation() -> None:
     original = logging.Logger.makeRecord
 
     def _make_record(
-        self,
+        self: logging.Logger,
         name: str,
         level: int,
         fn: str,
         lno: int,
         msg: object,
-        args: tuple,
-        exc_info: object,
+        args: tuple[object, ...] | Mapping[str, object],
+        exc_info: _SysExcInfoType,
         func: str | None = None,
-        extra: dict | None = None,
+        extra: Mapping[str, object] | None = None,
         sinfo: str | None = None,
     ) -> logging.LogRecord:
         clean_extra = dict(extra) if extra else None
@@ -50,7 +56,7 @@ def install_msg_relocation() -> None:
         return record
 
     _make_record._coding_agent_relocated = True  # type: ignore[attr-defined]
-    logging.Logger.makeRecord = _make_record
+    logging.Logger.makeRecord = _make_record  # type: ignore[method-assign]
 
 
 log = logging.getLogger("coding_agent.backend")

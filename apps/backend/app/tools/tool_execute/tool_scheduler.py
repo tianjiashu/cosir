@@ -1,6 +1,5 @@
 """Tool scheduler."""
 
-import logging
 from collections.abc import Iterable
 
 from app.tools.schemas import ToolCall, ToolDefinition, ToolObservation
@@ -63,7 +62,7 @@ class ToolScheduler:
             call.arguments,
             tool.parameters_schema,
             tool.args_model,
-            tool.required_params,
+            tuple(tool.required_params),
         )
         if not validation.ok:
             return tool_error(

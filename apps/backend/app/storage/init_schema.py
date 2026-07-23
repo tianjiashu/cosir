@@ -18,7 +18,10 @@ SQLAlchemy model 为单一事实来源，本模块只做“让数据库结构追
 调用时机：由 ``store_engines.init_storage`` 在进程启动时对主库、日志库各调用一次。
 """
 
-from sqlalchemy import Engine, inspect, text
+from typing import cast
+
+from sqlalchemy import Engine, Table, inspect, text
+from sqlalchemy.sql.schema import DefaultClause
 
 from app.config.logging.logger import log
 from app.storage.model.log_model import LogEntryModel
@@ -61,7 +64,7 @@ def initialize_app_schema(engine: Engine) -> None:
 
     with engine.begin() as connection:
         for model in APP_MODELS:
-            model.__table__.create(bind=connection, checkfirst=True)
+            cast(Table, model.__table__).create(bind=connection, checkfirst=True)
         _ensure_model_columns(connection, engine)
         _drop_orphan_durable_runs(connection)
 
@@ -144,7 +147,7 @@ def _ensure_model_columns(connection, engine) -> None:
 
     inspector = inspect(connection)
     for model in APP_MODELS:
-        table = model.__table__
+        table = cast(Table, model.__table__)
         if not inspector.has_table(table.name):
             continue
         existing = {col["name"] for col in inspector.get_columns(table.name)}
@@ -155,9 +158,8 @@ def _ensure_model_columns(connection, engine) -> None:
             if column.nullable:
                 column_ddl = f"{column.name} {ddl_type}"
             elif column.server_default is not None:
-                column_ddl = (
-                    f"{column.name} {ddl_type} NOT NULL DEFAULT {column.server_default.arg}"
-                )
+                default_arg = cast(DefaultClause, column.server_default).arg
+                column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default_arg}"
             else:
                 default = _default_literal_for_type(column.type)
                 column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default}"
@@ -238,8 +240,9 @@ def _create_log_schema(connection) -> None:
     """
 
     for model in LOG_MODELS:
-        model.__table__.create(bind=connection, checkfirst=True)
-        for index in model.__table__.indexes:
+        table = cast(Table, model.__table__)
+        table.create(bind=connection, checkfirst=True)
+        for index in table.indexes:
             index.create(bind=connection, checkfirst=True)
 
 
@@ -265,7 +268,7 @@ def _rebuild_log_schema(connection, current_version: int, target_version: int) -
     """
 
     for model in LOG_MODELS:
-        model.__table__.drop(bind=connection, checkfirst=True)
+        cast(Table, model.__table__).drop(bind=connection, checkfirst=True)
     _create_log_schema(connection)
     connection.execute(text(f"PRAGMA user_version = {target_version}"))
     log.info(

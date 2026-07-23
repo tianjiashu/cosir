@@ -31,9 +31,9 @@ def validate_tool_arguments(
         try:
             model = args_model.model_validate(arguments)
         except PydanticValidationError as exc:
-            first_error = exc.errors()[0] if exc.errors() else {}
-            message = first_error.get("msg") or str(exc)
-            return ToolArgumentValidation(ok=False, error=str(message))
+            errors = exc.errors()
+            message = errors[0].get("msg") if errors else None
+            return ToolArgumentValidation(ok=False, error=str(message or exc))
         return ToolArgumentValidation(ok=True, arguments=model.model_dump())
 
     if not schema:

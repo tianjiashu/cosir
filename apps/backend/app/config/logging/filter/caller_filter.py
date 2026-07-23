@@ -4,6 +4,7 @@ import logging
 import sys
 from functools import lru_cache
 from pathlib import Path
+from types import FrameType
 
 # app/config/logging/<file>.py -> parents[3] = apps/backend
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -62,7 +63,7 @@ class CallerFilter(logging.Filter):
             rel_str = rel_str[: -len("__init__")]
         return rel_str.replace("/", ".").replace("\\", ".")
 
-    def _resolve_class_name(self, frame) -> str:
+    def _resolve_class_name(self, frame: FrameType) -> str:
         """从调用帧的局部变量推断类名。
 
         参数:
@@ -104,7 +105,7 @@ class CallerFilter(logging.Filter):
         cached = self._class_cache.get((pathname, func_name))
         if cached is not None:
             return cached
-        frame = sys._getframe(1)
+        frame: FrameType | None = sys._getframe(1)
         while frame is not None:
             code = frame.f_code
             if code.co_filename == pathname and code.co_name == func_name:
