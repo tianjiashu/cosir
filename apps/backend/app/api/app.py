@@ -78,12 +78,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         set_runtime(runtime_override)
         runtime = runtime_override
 
-        _mark_boot_ready()
-        try:
-            yield
-        finally:
-            close_storage()
-            _mark_boot_stopped()
+    _mark_boot_ready()
+    try:
+        yield
+    finally:
+        close_storage()
+        _mark_boot_stopped()
 
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)

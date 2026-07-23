@@ -31,4 +31,3 @@ class LogContextFilter:
         if trace_id and not getattr(record, "trace_id", ""):
             record.trace_id = trace_id
         return True
-

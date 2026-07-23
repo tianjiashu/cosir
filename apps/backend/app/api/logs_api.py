@@ -3,6 +3,7 @@
 端点以模块级 ``@app.get`` 直接注册到 ``app.api.app.app`` 单例上，
 运行时通过 ``Depends(get_runtime)`` 注入，不再由注册函数包裹。
 """
+
 from fastapi import Depends, HTTPException
 from pydantic import ValidationError
 
@@ -51,9 +52,7 @@ async def query_logs(
     try:
         return LogQueryResponse(**result.to_dict())
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=422, detail=f"response schema mismatch: {exc}"
-        ) from exc
+        raise HTTPException(status_code=422, detail=f"response schema mismatch: {exc}") from exc
 
 
 @app.get("/logs/recent")
@@ -93,6 +92,4 @@ async def recent_logs(
     try:
         return LogQueryResponse(**result.to_dict())
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=422, detail=f"response schema mismatch: {exc}"
-        ) from exc
+        raise HTTPException(status_code=422, detail=f"response schema mismatch: {exc}") from exc

@@ -181,11 +181,7 @@ class TurnCrud:
             values = {"status": status, "updated_at": to_text(utc_now())}
             if end_reason is not None:
                 values["end_reason"] = end_reason
-            session.execute(
-                update(TurnModel)
-                .where(TurnModel.turn_id == turn_id)
-                .values(**values)
-            )
+            session.execute(update(TurnModel).where(TurnModel.turn_id == turn_id).values(**values))
         return self.get(turn_id)
 
     def update_response(self, turn_id: str, response_text: str | None) -> TurnRecord:

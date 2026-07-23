@@ -45,6 +45,10 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      "/agents": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
       "/traces": {
         target: "http://localhost:8000",
         changeOrigin: true,

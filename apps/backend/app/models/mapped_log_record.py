@@ -9,7 +9,7 @@ import logging
 import re
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.config.logging.filter.caller_filter import compute_caller
@@ -137,7 +137,7 @@ class MappedLogRecord:
         """
 
         return (
-            datetime.fromtimestamp(created, timezone.utc)
+            datetime.fromtimestamp(created, UTC)
             .isoformat(timespec="milliseconds")
             .replace("+00:00", "Z")
         )
@@ -263,7 +263,9 @@ class MappedLogRecord:
         if error_type:
             return LogError(
                 type=error_type,
-                message=MappedLogRecord._truncate_text(str(getattr(record, "error_message", "") or "")),
+                message=MappedLogRecord._truncate_text(
+                    str(getattr(record, "error_message", "") or "")
+                ),
                 stack=MappedLogRecord._truncate_text(str(getattr(record, "stack", "") or "")),
             )
         return None
@@ -335,7 +337,7 @@ class MappedLogRecord:
             return "[TRUNCATED:" in value
         if isinstance(value, dict):
             return any(MappedLogRecord._contains_truncation(item) for item in value.values())
-        if isinstance(value, (list, tuple, set)):
+        if isinstance(value, list | tuple | set):
             return any(MappedLogRecord._contains_truncation(item) for item in value)
         if hasattr(value, "__dict__"):
             return MappedLogRecord._contains_truncation(vars(value))

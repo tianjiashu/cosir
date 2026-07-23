@@ -9,11 +9,13 @@
 - 不负责：工具注册、参数校验细节、子进程隔离（均由 ``ToolScheduler`` / ``ToolExecutor`` 负责）。
 """
 
-import logging
 from collections.abc import Callable
+from typing import Literal
 
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
+from app.models.payload import ToolCallFinishedPayload
+from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.tools.schemas import ToolCall
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
@@ -48,7 +50,7 @@ class ToolExecutionService:
         task_id: str,
         step_id: str,
         calls: list[ToolCall],
-        write_event: Callable | None = None,
+        write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
     ) -> ToolRunResult:
         """执行一批工具调用并发出生命周期事件。
 
@@ -77,15 +79,18 @@ class ToolExecutionService:
         for call in calls:
             observation = self._scheduler.execute(call)
             observations.append(observation)
+            status: Literal["success", "error"] = (
+                "success" if observation.status == "success" else "error"
+            )
             if write_event is not None:
                 write_event(
                     EventType.TOOL_CALL_FINISHED,
-                    {
-                        "step_id": step_id,
-                        "tool_name": observation.tool_name,
-                        "status": observation.status,
-                        "tool_call_id": observation.tool_call_id,
-                    },
+                    ToolCallFinishedPayload(
+                        step_id=step_id,
+                        tool_name=observation.tool_name,
+                        status=status,
+                        tool_call_id=observation.tool_call_id,
+                    ),
                 )
             messages.append(
                 RuntimeMessage(

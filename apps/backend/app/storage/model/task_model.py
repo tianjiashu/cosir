@@ -6,7 +6,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.storage.model.base import StorageBase
 
 
-
 class TaskModel(StorageBase):
     """`tasks` 表模型。"""
 
@@ -24,5 +23,3 @@ class TaskModel(StorageBase):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
-
-

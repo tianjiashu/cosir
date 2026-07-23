@@ -22,6 +22,8 @@ from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_l
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.models import TaskRecord
 from app.models.enums.event_type import EventType
+from app.models.payload import ModelOutputDeltaPayload, StepStartedPayload
+from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.tools.schemas import ToolCall
 
@@ -172,15 +174,24 @@ class ReactLikeWorkflow(AgentWorkflow):
                                     task_id=task.task_id,
                                     turn_id=turn_id,
                                     sequence=sequence,
-                                    payload={"step_id": current_step_id, "text": text},
+                                    payload=ModelOutputDeltaPayload(
+                                        step_id=current_step_id,
+                                        text=text,
+                                    ),
                                 )
                                 sequence += 1
                         elif mode == "custom":
                             raw = data
                             event_type = EventType(raw["event_type"])
-                            payload = raw.get("payload", {})
-                            if event_type == EventType.STEP_STARTED:
-                                current_step_id = payload.get("step_id")
+                            payload = raw["payload"]
+                            if not isinstance(payload, RuntimeEventPayload):
+                                raise TypeError(
+                                    "custom runtime event payload must be a payload entity"
+                                )
+                            if event_type == EventType.STEP_STARTED and isinstance(
+                                payload, StepStartedPayload
+                            ):
+                                current_step_id = payload.step_id
                             yield RuntimeEvent(
                                 event_type=event_type,
                                 task_id=task.task_id,

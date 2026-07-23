@@ -66,9 +66,7 @@ class TurnMessageCrud:
         """
 
         with self._session_factory.begin() as session:
-            session.execute(
-                delete(TurnMessageModel).where(TurnMessageModel.turn_id == turn_id)
-            )
+            session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id == turn_id))
             for sequence, message in enumerate(messages):
                 session.add(
                     TurnMessageModel(

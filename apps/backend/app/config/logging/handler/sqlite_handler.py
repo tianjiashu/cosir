@@ -7,9 +7,9 @@ import threading
 import time
 from collections import deque
 
+from app.models import LogEntryRecord
 from app.models.mapped_log_record import LogError, MappedLogRecord
 from app.storage.crud.log_crud import LogStore
-from app.models import LogEntryRecord
 
 HIGH_PRIORITY_LEVELS = {"WARNING", "ERROR", "CRITICAL"}
 

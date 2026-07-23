@@ -1,7 +1,5 @@
 """FastAPI dependency wiring."""
 
-import logging
-
 from app.config.settings import default_settings
 from app.core.agents.agent_profile import (
     default_developer_agent,

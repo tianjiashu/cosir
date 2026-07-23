@@ -18,8 +18,7 @@ from typing import Any
 from sqlalchemy import Engine, Select, asc, desc, insert, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import LogEntryRecord
-from app.models import LogQuery
+from app.models import LogEntryRecord, LogQuery
 from app.storage.model.log_model import LogEntryModel
 from app.storage.store_engines import log_engine, log_session_factory
 

@@ -15,7 +15,13 @@
 import type { TaskRecord } from "@shared/task";
 import type { TurnRecord } from "@shared/turn";
 import type { WorkspaceRecord } from "@shared/workspace";
-import type { BackendHealthResponse, CreateTaskRequest, CreateTurnRequest, CreateWorkspaceRequest } from "@shared/api";
+import type {
+  BackendHealthResponse,
+  CreateTaskRequest,
+  CreateTurnRequest,
+  CreateWorkspaceRequest,
+  ListAgentsResponse,
+} from "@shared/api";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
 import { logError, logWarn } from "../lib/logger";
@@ -409,6 +415,16 @@ export async function cancelTurn(turnId: string, taskId?: string): Promise<TurnR
  */
 export async function getBackendHealth(): Promise<BackendHealthResponse> {
   return (await get<BackendHealthResponse>(API_PATHS.HEALTH)).data;
+}
+
+/**
+ * 获取后端已注册的 Agent profile 列表。
+ *
+ * @returns Agent profile 列表与默认 agent 标识。
+ * @throws {ServiceError} 当后端不可达或返回异常状态时抛出。
+ */
+export async function listAgents(): Promise<ListAgentsResponse> {
+  return (await get<ListAgentsResponse>(API_PATHS.AGENTS)).data;
 }
 
 /**

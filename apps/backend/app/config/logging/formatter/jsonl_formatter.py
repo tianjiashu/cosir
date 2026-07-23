@@ -1,10 +1,10 @@
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from app.models.mapped_log_record import MappedLogRecord, LogError
+from app.models.mapped_log_record import LogError, MappedLogRecord
 
 
 class JsonlFormatter(logging.Formatter):
@@ -73,7 +73,7 @@ class JsonlLogLine:
     caller: str
     event: str
     msg: str
-    ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    ts: datetime = field(default_factory=lambda: datetime.now(UTC))
     data: dict[str, Any] = field(default_factory=dict)
     error: LogError | None = None
     truncated: bool = False
@@ -94,9 +94,7 @@ class JsonlLogLine:
             无。
         """
         return {
-            "ts": self.ts.astimezone(timezone.utc)
-            .isoformat(timespec="milliseconds")
-            .replace("+00:00", "Z"),
+            "ts": self.ts.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             "level": self.level,
             "logger": self.logger,
             "trace_id": self.trace_id,

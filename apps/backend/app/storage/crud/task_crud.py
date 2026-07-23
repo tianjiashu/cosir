@@ -10,11 +10,11 @@
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，因此必须在
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
-from typing import List
+
 from sqlalchemy import select, update
 
-from app.storage.model.task_model import TaskModel
 from app.models import TaskRecord
+from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text, utc_now
 
@@ -108,7 +108,7 @@ class TaskCrud:
             )
         return task
 
-    def list_by_workspace(self, workspace_id: str) -> List[TaskRecord]:
+    def list_by_workspace(self, workspace_id: str) -> list[TaskRecord]:
         """列出某工作区下的全部 task，按更新时间倒序。
 
         参数:
@@ -204,7 +204,9 @@ class TaskCrud:
         """
         return self.get(task_id).status == status
 
-    def update_latest_turn(self, task_id: str, latest_turn_id: str, last_message_preview: str) -> None:
+    def update_latest_turn(
+        self, task_id: str, latest_turn_id: str, last_message_preview: str
+    ) -> None:
         """更新 task 的最新 turn 指针与消息预览。
 
         参数:
@@ -252,6 +254,7 @@ class TaskCrud:
             打开一次主库只读 session。
         """
         from sqlalchemy import select
+
         with self._session_factory() as session:
             return [
                 row[0]
@@ -277,10 +280,11 @@ class TaskCrud:
             （级联由上层 service 编排）。
         """
         from sqlalchemy import delete
+
         with self._session_factory.begin() as session:
             session.execute(delete(TaskModel).where(TaskModel.task_id.in_(task_ids)))
 
-    def _task_from_model(self,row: TaskModel) -> TaskRecord:
+    def _task_from_model(self, row: TaskModel) -> TaskRecord:
         """把 ``TaskModel`` ORM 行转换为业务 ``TaskRecord``。
 
         转换过程把库中存储的文本时间戳还原为 datetime。

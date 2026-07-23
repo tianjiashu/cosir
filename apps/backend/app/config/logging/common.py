@@ -7,7 +7,6 @@ LOG_FILE_PREFIX = "logs-"
 LOG_FILE_SUFFIX = ".log"
 
 
-
 def current_log_file(log_dir: Path) -> Path:
     """返回当前本地日期对应的日志文件路径。
 
@@ -24,6 +23,3 @@ def current_log_file(log_dir: Path) -> Path:
         读取系统本地日期，不创建目录或文件。
     """
     return log_dir / f"{LOG_FILE_PREFIX}{date.today().isoformat()}{LOG_FILE_SUFFIX}"
-
-
-

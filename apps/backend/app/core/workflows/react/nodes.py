@@ -9,14 +9,24 @@
 状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
 """
 
-from dataclasses import asdict
-
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.config import get_config, get_stream_writer
 from langgraph.types import interrupt
 
 from app.core.llm.langchain_bridge import runtime_to_langchain, tool_calls_from_langchain
 from app.models.enums.event_type import EventType
+from app.models.payload import (
+    FinalResponsePayload,
+    ModelCompletedPayload,
+    ModelRequestedPayload,
+    ModelThinkingDeltaPayload,
+    ModelToolCallPayload,
+    RunCancelledPayload,
+    RunFailedPayload,
+    RunFinishedPayload,
+    StepStartedPayload,
+)
+from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.tools.schemas import ToolCall
 
 from .runtime_config import RuntimeConfig
@@ -127,17 +137,21 @@ async def _model_node(state: ReactGraphState) -> dict:
     model = rc.model  # 已构建好的 chat model
     writer = get_stream_writer()  # 自定义事件写入器
 
-    # 内部封装：统一把 (EventType, payload) 写成 {"event_type":..., "payload":...} 结构。
-    def write_event(event_type: EventType, payload: dict) -> None:
-        writer({"event_type": str(event_type), "payload": dict(payload)})
+    # 内部封装：统一把 (EventType, Payload实体) 写成 custom event 结构。
+    def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
+        writer({"event_type": str(event_type), "payload": payload})
 
     step_count = state.step_count + 1  # 步数 +1（本轮模型步）
     step_id = f"step-{step_count}"  # 步唯一 id
     # 步开始
-    write_event(EventType.STEP_STARTED, {"step_id": step_id, "kind": "model", "index": step_count})
+    write_event(
+        EventType.STEP_STARTED,
+        StepStartedPayload(step_id=step_id, kind="model", index=step_count),
+    )
     write_event(
         # 请求模型，带上历史消息数
-        EventType.MODEL_REQUESTED, {"step_id": step_id, "message_count": len(state.messages)}
+        EventType.MODEL_REQUESTED,
+        ModelRequestedPayload(step_id=step_id, message_count=len(state.messages)),
     )
 
     collected_text: list[str] = []  # 累积输出文本
@@ -150,7 +164,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         if operations.has_turn_status(turn.turn_id, "cancelled"):
             write_event(
                 EventType.RUN_CANCELLED,
-                {"step_id": step_id, "status": "cancelled", "error": "cancelled"},
+                RunCancelledPayload(step_id=step_id, status="cancelled", error="cancelled"),
             )
             terminal = True  # 标记提前终止
             break  # 跳出流式循环
@@ -163,7 +177,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             write_event(
                 # 有思考内容就发思考增量事件，前端可实时渲染“思考中”
                 EventType.MODEL_THINKING_DELTA,
-                {"step_id": step_id, "text": reasoning},
+                ModelThinkingDeltaPayload(step_id=step_id, text=reasoning),
             )
 
     if terminal:  # 因取消而终止
@@ -185,17 +199,27 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     write_event(
         EventType.MODEL_COMPLETED,  # 模型产出完成事件
-        {
-            "step_id": step_id,
-            "text": output_text,
-            "tool_calls": [asdict(call) for call in tool_calls],  # 工具调用序列化进 payload
-        },
+        ModelCompletedPayload(
+            step_id=step_id,
+            text=output_text,
+            tool_calls=[
+                ModelToolCallPayload(
+                    tool_name=call.tool_name,
+                    arguments=call.arguments if isinstance(call.arguments, dict) else {},
+                    call_id=call.call_id,
+                )
+                for call in tool_calls
+            ],
+        ),
     )
 
     if requested_tool:  # 模型要求调用工具
         if step_count >= state.max_steps:  # 步数已达上限
             # 超限失败
-            write_event(EventType.RUN_FAILED, {"status": "failed", "error": "max_steps_reached"})
+            write_event(
+                EventType.RUN_FAILED,
+                RunFailedPayload(status="failed", error="max_steps_reached"),
+            )
             operations.update_turn_status(turn.turn_id, "failed")
             return {
                 "step_count": step_count,
@@ -212,18 +236,28 @@ async def _model_node(state: ReactGraphState) -> dict:
             "terminal": False,  # 非终态，graph 会继续到 tools 节点
             "messages": [ai_message],
             # 待执行工具调用交给 tools 节点
-            "pending_tool_calls": [asdict(call) for call in tool_calls],
+            "pending_tool_calls": [
+                {
+                    "tool_name": call.tool_name,
+                    "arguments": call.arguments if isinstance(call.arguments, dict) else {},
+                    "call_id": call.call_id,
+                }
+                for call in tool_calls
+            ],
         }
 
     if output_text:  # 没有工具调用但有文本 → 最终回答
         write_event(
             EventType.FINAL_RESPONSE,
-            {"text": output_text, "step_id": step_id, "status": "completed"},
+            FinalResponsePayload(text=output_text, step_id=step_id, status="completed"),
         )
         operations.update_turn_status(turn.turn_id, "completed")  # turn 标完成
         operations.update_turn_response(turn.turn_id, output_text)  # 回复文本落库（历史回看用）
         # 整个 run 结束
-        write_event(EventType.RUN_FINISHED, {"status": "completed", "step_id": step_id})
+        write_event(
+            EventType.RUN_FINISHED,
+            RunFinishedPayload(status="completed", step_id=step_id),
+        )
         return {
             "step_count": step_count,
             "requested_tool": False,
@@ -236,10 +270,10 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     write_event(  # 既没工具调用也没文本 → 模型输出非法
         EventType.RUN_FAILED,
-        {
-            "error": "invalid_model_output",
-            "message": "Model did not return tool call or final text.",
-        },
+        RunFailedPayload(
+            error="invalid_model_output",
+            message="Model did not return tool call or final text.",
+        ),
     )
     operations.update_turn_status(turn.turn_id, "failed")
     return {
@@ -274,8 +308,8 @@ def _tools_node(state: ReactGraphState) -> dict:
     writer = get_stream_writer()  # 自定义事件写入器
 
     # 内部封装：统一事件写入结构。
-    def write_event(event_type: EventType, payload: dict) -> None:
-        writer({"event_type": str(event_type), "payload": dict(payload)})
+    def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
+        writer({"event_type": str(event_type), "payload": payload})
 
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
@@ -314,12 +348,12 @@ def _tools_node(state: ReactGraphState) -> dict:
     if tool_error_count >= operations.settings.tool_error_limit:  # 连续工具错误达上限
         write_event(
             EventType.RUN_FAILED,
-            {
-                "step_id": step_id,
-                "status": "failed",
-                "error": "tool_error_limit_reached",
-                "tool_name": observations[0].tool_name if observations else "",
-            },
+            RunFailedPayload(
+                step_id=step_id,
+                status="failed",
+                error="tool_error_limit_reached",
+                tool_name=observations[0].tool_name if observations else "",
+            ),
         )
         operations.update_turn_status(turn.turn_id, "failed")
         return {

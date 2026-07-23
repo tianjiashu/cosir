@@ -20,6 +20,7 @@ export {
   type CreateTurnRequest,
   type CreateWorkspaceRequest,
   type DeleteWorkspaceResponse,
+  type ListAgentsResponse,
 } from "./api";
 export * from "./backend";
 export * from "./toolExecution";

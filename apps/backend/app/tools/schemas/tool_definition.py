@@ -3,7 +3,9 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
 from pydantic import BaseModel
+
 
 @dataclass(frozen=True)
 class ToolDefinition:
@@ -47,4 +49,3 @@ class ToolDefinition:
             "description": self.description,
             "parameters": dict(self.parameters_schema),
         }
-

@@ -16,17 +16,17 @@ from uuid import uuid4
 
 from sqlalchemy import asc, select
 
-from app.storage.model.workspace_model import WorkspaceModel
 from app.models import WorkspaceRecord
+from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text
-
 
 
 class WorkspaceCrud:
     """``workspaces`` 表的纯 CRUD。
 
-    仅负责单表读写与 model↔record 转换，不承担跨表级联；所有方法通过共享主库 session 工厂访问数据库。
+    仅负责单表读写与 model↔record 转换，不承担跨表级联；所有方法通过共享主库
+    session 工厂访问数据库。
     """
 
     def __init__(self) -> None:
@@ -194,7 +194,7 @@ class WorkspaceCrud:
                 delete(WorkspaceModel).where(WorkspaceModel.workspace_id == workspace_id)
             )
 
-    def _workspace_from_model(self,row: WorkspaceModel) -> WorkspaceRecord:
+    def _workspace_from_model(self, row: WorkspaceModel) -> WorkspaceRecord:
         """把 ``WorkspaceModel`` ORM 行转换为业务 ``WorkspaceRecord``。
 
         转换过程把库中存储的文本时间戳还原为 datetime。

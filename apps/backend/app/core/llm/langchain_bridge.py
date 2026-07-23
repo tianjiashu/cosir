@@ -1,15 +1,14 @@
 """RuntimeMessage ↔ LangChain 消息 与 工具 schema 的边界转换。
 
 本模块是 ``context/`` 模型无关层与 LangGraph 之间的唯一转换点：把运行时
-``RuntimeMessage`` 转为 LangChain ``BaseMessage``、把 ``ToolDefinition`` 统一经 ``to_model_tool_definition()`` 投影后转为
-``bind_tools`` 接受的 OpenAI 函数 schema、把 LangChain 的 ``tool_calls`` 还原为
-内部 ``ToolCall``。除本模块外，graph 节点内部一律使用 LangChain 类型，不在
-节点逻辑里散落转换代码。
+``RuntimeMessage`` 转为 LangChain ``BaseMessage``、把 ``ToolDefinition`` 统一经
+``to_model_tool_definition()`` 投影后转为 ``bind_tools`` 接受的 OpenAI 函数 schema、
+把 LangChain 的 ``tool_calls`` 还原为内部 ``ToolCall``。除本模块外，graph 节点内部
+一律使用 LangChain 类型，不在节点逻辑里散落转换代码。
 """
 
 import json
-
-from typing import Any, Set, List
+from typing import Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -51,9 +50,7 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
             langchain_tool_calls = [
                 {
                     "name": call["name"],
-                    "args": call.get("args")
-                    if isinstance(call.get("args"), dict)
-                    else {},
+                    "args": call.get("args") if isinstance(call.get("args"), dict) else {},
                     "id": call.get("id") or "",
                 }
                 for call in tool_calls_meta
@@ -77,8 +74,8 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
 
 
 def model_tools_to_langchain(
-    tools: List[ToolDefinition],
-    allowed_tools: Set[str] | None = None,
+    tools: list[ToolDefinition],
+    allowed_tools: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """将面向模型的工具定义转换为 ``bind_tools`` 接受的 OpenAI 函数 schema。
 

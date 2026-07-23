@@ -1149,10 +1149,10 @@ mod tests {
     #[test]
     fn test_redact_sensitive_text_masks_uppercase_api_key() {
         // 大写 SK- 前缀密钥同样需要脱敏。
-        let input = "connect with SK-e920522a28a844c2be0d4581f4d9c650 done";
+        let input = "connect with SK-f4k3r3d4ct3d0000000000000000 done";
         let out = redact_sensitive_text(input);
-        assert!(!out.contains("SK-e920522a28a844c2be0d4581f4d9c650"));
-        assert!(!out.contains("e920522a28a844c2be0d4581f4d9c650"));
+        assert!(!out.contains("SK-f4k3r3d4ct3d0000000000000000"));
+        assert!(!out.contains("f4k3r3d4ct3d0000000000000000"));
         assert!(out.contains("sk-[REDACTED]"));
     }
 

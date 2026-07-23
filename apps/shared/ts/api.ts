@@ -10,6 +10,7 @@ export const API_BASE = "/api";
 
 export const API_PATHS = {
   HEALTH: "/health",
+  AGENTS: "/agents",
   WORKSPACES: "/workspaces",
   WORKSPACE_DETAIL: (workspaceId: string) => `/workspaces/${workspaceId}`,
   WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,

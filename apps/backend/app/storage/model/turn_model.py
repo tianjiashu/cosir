@@ -1,4 +1,3 @@
-
 """任务运行切片 SQLAlchemy model。"""
 
 from sqlalchemy import ForeignKey, Text

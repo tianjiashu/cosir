@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 from uuid import uuid4
 
 from app.models.enums.event_type import EventType
+from app.models.payload.runtime_event_payload import RuntimeEventPayload
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class RuntimeEvent:
             外层 runtime 生命周期事件也可能保留默认值。
         message_id: 可选的用户可读消息标识符。
         tool_call_id: 可选的工具调用标识符。
-        payload: 可序列化为 JSON 的事件载荷。
+        payload: 与 ``event_type`` 匹配的 payload 实体。
         event_id: 唯一的事件标识符。
         created_at: 事件创建时的 UTC 时间戳。
 
@@ -26,34 +26,54 @@ class RuntimeEvent:
         一个运行时事件值对象。
 
     异常:
-        无。
+        pydantic.ValidationError: 当 ``payload`` 不符合 ``event_type`` 对应的 payload
+            模型时抛出。
+        KeyError: 当 ``event_type`` 尚未登记 payload 模型时抛出。
 
     副作用:
         在缺省值被使用时生成 UUID 和时间戳。
 
-    ``payload`` 信封约定（多元展示兼容，当前真实 emit 多数尚未使用这些展示字段）：
-        - ``display_format``: ``"text"`` | ``"component"``，展示形态。
-        - ``component_type``: ``"chart"`` | ``"diff"`` | ``"code"`` | ``"table"``
-          | ``"approval_prompt"`` | ``None``，组件渲染类型。
-        - ``title`` / ``summary``: 人读标题 / 一句话摘要（降级展示用）。
-        - ``details``: 结构化、机器可读明细（如工具特定数据）。
-        - ``arguments``: 工具入参展示。
-        - ``_ext``: 各事件类型自由扩展字段的兜底命名空间。
-        工具事件须容忍 ``tool_name`` / ``result`` 缺失（降级时为空），可读内容来自
-        ``summary`` + ``details``。``to_dict`` 行为不变，仅固化上述约定。
+    ``payload`` 契约:
+        ``payload`` 必须是 ``app.models.payload`` 下的 Pydantic payload 实体，且会按
+        ``event_type`` 校验是否匹配对应模型。当前 payload 模型禁止契约外字段；如需新增展示字段
+        （例如 ``display_format``、``component_type``、``summary``、``details``），
+        必须先补对应 payload model，再重新生成前端 TypeScript 类型。
     """
 
     event_type: EventType
     task_id: str
+    payload: RuntimeEventPayload
     turn_id: str | None = None
     sequence: int = 0
     message_id: str | None = None
     tool_call_id: str | None = None
-    payload: dict[str, Any] = field(default_factory=dict)
     event_id: str = field(default_factory=lambda: str(uuid4()))
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
-    def to_dict(self) -> dict[str, Any]:
+    def __post_init__(self) -> None:
+        """校验运行时事件 payload 实体。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            TypeError: 当 ``payload`` 不是 ``event_type`` 对应的 payload 实体时抛出。
+            KeyError: 当 ``event_type`` 尚未登记 payload 模型时抛出。
+
+        副作用:
+            无。
+        """
+
+        from app.models.payload.registry import EVENT_PAYLOAD_MODELS
+
+        payload_model = EVENT_PAYLOAD_MODELS[self.event_type]
+        if not isinstance(self.payload, payload_model):
+            raise TypeError(f"payload for {self.event_type.value} must be {payload_model.__name__}")
+
+    def to_dict(self) -> dict[str, object]:
         """将事件转换为可序列化为 JSON 的字典。
 
         参数:
@@ -78,5 +98,5 @@ class RuntimeEvent:
             "message_id": self.message_id,
             "tool_call_id": self.tool_call_id,
             "created_at": self.created_at.isoformat(),
-            "payload": self.payload,
+            "payload": self.payload.model_dump(mode="json", exclude_none=True),
         }

@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Text, text
+from sqlalchemy import Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase

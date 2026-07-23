@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -12,7 +13,22 @@ from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "apps" / "backend"
+OPENAPI_DOC_PATH = REPO_ROOT / "apps" / "shared" / "fastapi_docs.json"
 SHARED_TS_ROOT = REPO_ROOT / "apps" / "shared" / "ts"
+
+API_PATH_TEMPLATES: Mapping[str, str] = {
+    "/health": "/health",
+    "/agents": "/agents",
+    "/workspaces": "/workspaces",
+    "/workspaces/{workspace_id}": "/workspaces/${workspaceId}",
+    "/workspaces/{workspace_id}/tasks": "/workspaces/${workspaceId}/tasks",
+    "/tasks/{task_id}": "/tasks/${taskId}",
+    "/tasks/{task_id}/turns": "/tasks/${taskId}/turns",
+    "/turns/{turn_id}/stream": "/turns/${turnId}/stream",
+    "/turns/{turn_id}/cancel": "/turns/${turnId}/cancel",
+    "/logs/query": "/logs/query",
+    "/logs/recent": "/logs/recent",
+}
 
 sys.path.insert(0, str(BACKEND_ROOT))
 
@@ -226,7 +242,7 @@ def render_logs_types() -> str:
 
 
 def render_api_paths() -> str:
-    """渲染手工维护的 API 路径常量。
+    """渲染 API 路径常量，并校验 OpenAPI 路径覆盖。
 
     参数:
         无。
@@ -241,10 +257,12 @@ def render_api_paths() -> str:
         无。
     """
 
+    validate_openapi_paths_are_declared()
     return """export const API_BASE = "/api";
 
 export const API_PATHS = {
   HEALTH: "/health",
+  AGENTS: "/agents",
   WORKSPACES: "/workspaces",
   WORKSPACE_DETAIL: (workspaceId: string) => `/workspaces/${workspaceId}`,
   WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,
@@ -255,6 +273,37 @@ export const API_PATHS = {
   LOGS_QUERY: "/logs/query",
   LOGS_RECENT: "/logs/recent",
 } as const;"""
+
+
+def validate_openapi_paths_are_declared() -> None:
+    """校验 OpenAPI 快照里的路径都已声明到前端路径表。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        RuntimeError: 当 OpenAPI 快照不存在、格式异常或存在未声明路径时抛出。
+
+    副作用:
+        读取 ``apps/shared/fastapi_docs.json``。
+    """
+
+    try:
+        raw_doc = json.loads(OPENAPI_DOC_PATH.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(
+            f"OpenAPI 快照不存在，无法校验 API 路径：{OPENAPI_DOC_PATH}"
+        ) from exc
+    paths = raw_doc.get("paths")
+    if not isinstance(paths, dict):
+        raise RuntimeError("OpenAPI 快照缺少 paths 字典，无法校验 API 路径")
+
+    missing = sorted(set(paths) - set(API_PATH_TEMPLATES))
+    if missing:
+        raise RuntimeError(f"API_PATHS 缺少 OpenAPI 路径声明：{', '.join(missing)}")
 
 
 def render_module(

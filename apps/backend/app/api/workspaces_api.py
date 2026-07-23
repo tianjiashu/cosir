@@ -36,6 +36,7 @@ async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> HealthResp
 
     return HealthResponse(**runtime.backend_health())
 
+
 @app.get("/workspaces")
 async def list_workspaces(
     workspace_service: WorkspaceService = Depends(get_workspace_service),

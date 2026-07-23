@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-# 默认 Agent 标识：前端未显式选择 agent 时回落到该内置 developer。
-DEFAULT_AGENT_ID = "developer"
-
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 from app.core.llm.model_settings import ModelSettings
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
+
+
+# 默认 Agent 标识：前端未显式选择 agent 时回落到该内置 developer。
+DEFAULT_AGENT_ID = "developer"
 
 
 def _default_workflow() -> AgentWorkflow:
@@ -66,7 +67,7 @@ class AgentProfile:
     agent_id: str
     role: str
     goal: str
-    allowed_tools: List[str]
+    allowed_tools: list[str]
     context_policy: str
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     model_name: str = "deepseek-v4-flash"
@@ -149,6 +150,5 @@ def default_developer_agent() -> AgentProfile:
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
-            api_key_env="sk-e920522a28a844c2be0d4581f4d9c650",
         ),
     )

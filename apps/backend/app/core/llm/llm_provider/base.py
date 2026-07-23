@@ -19,9 +19,7 @@ class LLMProvider(ABC):
     """
 
     @abstractmethod
-    def build(
-        self, model_name: str, model_settings: ModelSettings | None = None
-    ) -> BaseChatModel:
+    def build(self, model_name: str, model_settings: ModelSettings | None = None) -> BaseChatModel:
         """按规格构建 LangChain chat model。
 
         参数:

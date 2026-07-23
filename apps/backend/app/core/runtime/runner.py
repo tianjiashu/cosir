@@ -18,6 +18,8 @@ from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TurnRecord
 from app.models.enums.event_type import EventType
+from app.models.payload import RunCancelledPayload, RunFailedPayload, RunStartedPayload
+from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
@@ -113,7 +115,8 @@ class AgentRuntime:
         self._record(
             EventType.RUN_CANCELLED,
             turn.task_id,
-            {"status": "cancelled", "_turn_id": turn_id},
+            RunCancelledPayload(status="cancelled"),
+            turn_id=turn_id,
         )
         log.info(
             "turn_cancelled",
@@ -182,13 +185,13 @@ class AgentRuntime:
             yield self._record(
                 EventType.RUN_FAILED,
                 task_id,
-                {
-                    "status": "failed",
-                    "error": "agent_profile_unavailable",
-                    "requested_agent_id": requested_agent_id,
-                    "task_agent_id": task.agent_id,
-                    "_turn_id": turn.turn_id,
-                },
+                RunFailedPayload(
+                    status="failed",
+                    error="agent_profile_unavailable",
+                    requested_agent_id=requested_agent_id,
+                    task_agent_id=task.agent_id,
+                ),
+                turn_id=turn.turn_id,
             )
             return
 
@@ -211,11 +214,8 @@ class AgentRuntime:
             yield self._record(
                 EventType.RUN_STARTED,
                 task_id,
-                {
-                    "status": "running",
-                    "agent": agent_profile.to_dict(),
-                    "_turn_id": turn.turn_id,
-                },
+                RunStartedPayload(status="running", agent=agent_profile.to_dict()),
+                turn_id=turn.turn_id,
             )
 
             operations = RuntimeOperations(
@@ -245,7 +245,7 @@ class AgentRuntime:
                 event_type=EventType.RUN_FAILED,
                 task_id=task_id,
                 turn_id=turn.turn_id,
-                payload={"status": "failed", "error": str(exc)},
+                payload=RunFailedPayload(status="failed", error=str(exc)),
             )
         finally:
             # 本连接持有的清理收口：仅当本轮仍卡在 running（客户端断开导致运行被中止、
@@ -364,21 +364,26 @@ class AgentRuntime:
 
         return self._agent_registry.resolve(agent_id)
 
-    def _record(self, event_type: EventType, task_id: str, payload: dict) -> RuntimeEvent:
+    def _record(
+        self,
+        event_type: EventType,
+        task_id: str,
+        payload: RuntimeEventPayload,
+        turn_id: str | None = None,
+    ) -> RuntimeEvent:
         """创建一条运行时事件。
 
         参数:
             event_type: 稳定的、机器可读的事件类型。
             task_id: 事件关联的任务标识符。
-            payload: 可序列化为 JSON 的事件载荷（可含 ``_turn_id`` 键，会被提取为 turn_id）。
+            payload: 与 ``event_type`` 匹配的 payload 实体。
+            turn_id: 事件关联的轮次标识符。
 
         返回:
             构造好的 RuntimeEvent。
         """
 
-        payload = dict(payload)
-        turn_id = payload.pop("_turn_id", None)
-        tool_call_id = payload.get("tool_call_id")
+        tool_call_id = getattr(payload, "tool_call_id", None)
         event = RuntimeEvent(
             event_type=event_type,
             task_id=task_id,

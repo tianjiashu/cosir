@@ -1,10 +1,9 @@
 """日志查询业务服务。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from app.models import LogQuery, LogEntryRecord
-from app.models import LogQueryResult
+from app.models import LogEntryRecord, LogQuery, LogQueryResult
 from app.storage.crud.log_crud import LogStore
 
 
@@ -34,12 +33,12 @@ class LogQueryService:
         self._max_limit = max_limit
 
     def query_by_trace(
-            self,
-            trace_id: str,
-            level: str = "",
-            start_time: str = "",
-            end_time: str = "",
-            limit: int = 200,
+        self,
+        trace_id: str,
+        level: str = "",
+        start_time: str = "",
+        end_time: str = "",
+        limit: int = 200,
     ) -> LogQueryResult:
         """按 trace_id 查询完整链路日志。
 
@@ -73,11 +72,11 @@ class LogQueryService:
         return self._query(query)
 
     def recent(
-            self,
-            level: str = "",
-            start_time: str = "",
-            end_time: str = "",
-            limit: int = 200,
+        self,
+        level: str = "",
+        start_time: str = "",
+        end_time: str = "",
+        limit: int = 200,
     ) -> LogQueryResult:
         """查询最近日志。
 
@@ -194,8 +193,8 @@ class LogQueryService:
             return ""
         parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     @staticmethod
     def render_log_entries(entries: list[LogEntryRecord]) -> str:
@@ -214,7 +213,6 @@ class LogQueryService:
             无。
         """
         return "\n".join(LogQueryService._render_entry(entry) for entry in entries)
-
 
     @staticmethod
     def _render_entry(entry: LogEntryRecord) -> str:

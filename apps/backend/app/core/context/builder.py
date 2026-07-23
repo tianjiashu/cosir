@@ -51,9 +51,7 @@ class TextContextBuilder:
             for message in message_store.load_messages(turn.turn_id):
                 messages.append(message)
         if current_turn is not None:
-            messages.append(
-                RuntimeMessage(role="user", content_text=current_turn.input_text)
-            )
+            messages.append(RuntimeMessage(role="user", content_text=current_turn.input_text))
         return messages
 
 

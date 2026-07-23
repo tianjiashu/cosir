@@ -1,9 +1,7 @@
 """运行时与工作流策略共享的工作流协议。"""
 
 from collections.abc import AsyncIterator
-from typing import Protocol, Any
-
-from langchain_core.language_models import BaseChatModel
+from typing import Protocol
 
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TaskRecord

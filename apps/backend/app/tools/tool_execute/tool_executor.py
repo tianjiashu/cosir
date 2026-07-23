@@ -1,7 +1,6 @@
 """Tool handler executor."""
 
 import json
-import logging
 import multiprocessing
 import os
 import queue
@@ -63,16 +62,12 @@ class ToolExecutor:
         # --- 1. 防御性地归一化超时参数 ---
         timeout = tool.timeout_seconds
         if timeout is None:
-            raise ValueError(
-                f"tool {tool.name} has timeout_seconds=None; infinite wait disallowed"
-            )
+            raise ValueError(f"tool {tool.name} has timeout_seconds=None; infinite wait disallowed")
         if timeout <= 0:
             timeout = 0.0
 
         # --- 2. 启动隔离子进程 ---
-        result_queue: multiprocessing.Queue = (
-            multiprocessing.Queue(maxsize=1)
-        )
+        result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
         # 放弃等待 feeder 线程 flush：子进程已死或已 drain 后不阻塞父进程退出
         result_queue.cancel_join_thread()
         # 取父进程已建好的跨进程日志队列；为 None 表示父进程未启用日志桥，
@@ -252,6 +247,7 @@ class ToolExecutor:
             from app.config.logging.configuration import (
                 install_logging_for_current_process,
             )
+
             install_logging_for_current_process(log_queue=log_queue)
 
         try:

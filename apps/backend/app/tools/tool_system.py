@@ -1,6 +1,5 @@
 """Application-level tool system container."""
 
-import logging
 from dataclasses import dataclass
 
 from app.config.settings import BackendSettings

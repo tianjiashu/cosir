@@ -3,12 +3,12 @@
 单一职责：提供不依赖任何项目类型/模型的纯工具函数。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def utc_now() -> datetime:
     """Return the current UTC datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def to_text(value: datetime) -> str:

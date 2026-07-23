@@ -11,9 +11,13 @@
 - 后端当前定义了哪些 `event_type`。
 - 后端当前真实 emit 了哪些事件，以及 payload 是什么。
 - 前端当前如何消费这些事件。
-- 当前契约漂移和后续 Schema 化应该怎么处理。
+- 当前机器契约事实源在哪里，以及后续 Schema 化应该怎么处理。
 
-本文不替代机器校验。长期目标是把后端事件模型升级为强类型 Schema，再生成 TypeScript 类型。
+本文是人类可读说明。机器事实源位于 `apps/backend/app/models/payload/`：
+
+- 后端 `RuntimeEvent` 构造时会按 `event_type` 从 payload registry 校验 `payload` 实体类型。
+- 后端 Python 内部的 `RuntimeEvent.payload` 必须是 `RuntimeEventPayload` 子类实体；只有 `RuntimeEvent.to_dict()`、SSE 与 HTTP JSON 边界会把它序列化为普通 JSON object。
+- 前端 `apps/shared/ts/events.ts` 由同一组 payload 模型生成，避免前后端各写一份事件结构后分叉。
 
 ## 2. 通用事件信封
 
@@ -210,9 +214,9 @@ payload：
 - `eventStore` 保存。
 - `timelineProjector` 不渲染，但会 flush 正在聚合的文本块。
 
-当前漂移：
+当前契约状态：
 
-- `apps/shared/ts/events.ts` 当前写的是 `step_type` / `step_index`，与后端真实字段 `step_id` / `kind` / `index` 不一致。
+- `apps/shared/ts/events.ts` 已由后端 payload model 生成，字段为 `step_id` / `kind` / `index`。
 
 ### 6.3 `model_requested`
 
@@ -232,12 +236,8 @@ payload：
 前端消费：
 
 - `eventStore` 保存。
-- 当前 `apps/shared/ts/events.ts` 未声明该事件类型。
+- `apps/shared/ts/events.ts` 已声明该事件类型。
 - `timelineProjector` 不渲染。
-
-当前漂移：
-
-- 后端真实 emit，前端共享类型缺失。
 
 ### 6.4 `model_output_delta`
 
@@ -258,9 +258,9 @@ payload：
 
 - `timelineProjector` 将相邻 `model_output_delta` 聚合为 assistant 消息。
 
-当前漂移：
+当前契约状态：
 
-- 前端 payload 类型只写 `text`，未写 `step_id`。
+- `apps/shared/ts/events.ts` 已声明 `step_id` / `text`。
 
 ### 6.5 `model_thinking_delta`
 
@@ -281,9 +281,9 @@ payload：
 
 - `timelineProjector` 将相邻 `model_thinking_delta` 聚合为 thinking 消息。
 
-当前漂移：
+当前契约状态：
 
-- 前端 payload 类型只写 `text`，未写 `step_id`。
+- `apps/shared/ts/events.ts` 已声明 `step_id` / `text`。
 
 ### 6.6 `model_completed`
 
@@ -314,12 +314,8 @@ payload：
 前端消费：
 
 - `eventStore` 保存。
-- 当前 `apps/shared/ts/events.ts` 未声明该事件类型。
+- `apps/shared/ts/events.ts` 已声明该事件类型。
 - `timelineProjector` 不渲染。
-
-当前漂移：
-
-- 后端真实 emit，前端共享类型缺失。
 
 ### 6.7 `tool_call_finished`
 
@@ -347,10 +343,10 @@ payload：
 - `timelineProjector.projectTool()` 渲染工具项。
 - 当前前端仅当 `payload.status === "error"` 时显示 error 状态，否则显示 completed。
 
-当前漂移：
+当前契约状态：
 
-- 前端 payload 类型未声明 `step_id` / `tool_call_id`。
-- 前端类型允许 `error`，但后端当前 emit 中未携带 `error` 字段；错误内容可能只在工具 observation 或日志中。
+- `apps/shared/ts/events.ts` 已声明 `step_id` / `tool_name` / `status` / `tool_call_id`。
+- 后端当前 emit 不携带 `error` 字段；错误内容可能只在工具 observation 或日志中。
 
 ### 6.8 `final_response`
 
@@ -378,9 +374,9 @@ payload：
 - `useSSE.runtimeStatusFromEvent()` 当前把 `final_response` 当作 completed 终态，同步 task/turn 状态，并清空 streaming turn。
 - `timelineProjector` 当前不直接渲染 `final_response`，主要依赖 `model_output_delta` 聚合展示回答，或历史 `turn.response_text` fallback。
 
-当前漂移：
+当前契约状态：
 
-- 前端 `FinalResponsePayload` 只声明 `status`，缺失 `text` / `step_id`。
+- `apps/shared/ts/events.ts` 已声明 `text` / `step_id` / `status`。
 
 ### 6.9 `run_finished`
 
@@ -402,9 +398,9 @@ payload：
 - `useSSE.runtimeStatusFromEvent()` 同步 task/turn 为 completed。
 - `timelineProjector` 渲染终态 status badge。
 
-当前漂移：
+当前契约状态：
 
-- 前端 `RunFinishedPayload` 只声明 `status`，缺失 `step_id`。
+- `apps/shared/ts/events.ts` 已声明 `status` / `step_id`。
 
 ### 6.10 `run_failed`
 
@@ -464,10 +460,10 @@ payload：
 - `useSSE.runtimeStatusFromEvent()` 同步 task/turn 为 failed，`end_reason` 取 `payload.error` 或默认 `run_failed`。
 - `timelineProjector` 渲染终态 status badge。
 
-当前漂移：
+当前契约状态：
 
-- 前端 `RunFailedPayload` 要求 `status: "failed"`，但后端 `invalid_model_output` 分支没有 `status`。
-- 不同失败来源 payload 字段不一致，应 Schema 化为公共失败字段 + 可选上下文字段。
+- `RunFailedPayload` 要求 `error`，`status` / `message` / `step_id` / `requested_agent_id` / `task_agent_id` / `tool_name` 均为可选字段。
+- 不同失败来源共享同一个 Pydantic payload model，并由 `RuntimeEvent` 构造时校验。
 
 ### 6.11 `run_cancelled`
 
@@ -499,9 +495,9 @@ payload：
 - 主动取消按钮链路通过 `POST /turns/{turn_id}/cancel` 返回的 `TurnResponse` 更新 task/turn，并断开 SSE。
 - `timelineProjector` 渲染终态 status badge。
 
-当前漂移：
+当前契约状态：
 
-- 前端 `RunCancelledPayload` 只声明 `status`，缺失可选 `step_id` / `error`。
+- `apps/shared/ts/events.ts` 已声明 `status` 以及可选 `step_id` / `error`。
 
 ## 7. 已定义但当前未真实 emit 的事件
 
@@ -569,47 +565,39 @@ payload：
 | `apps/desktop/src/stores/eventStore.ts` | 客户端内存事件缓存 | 按 `event_id` 去重，按 task/turn 聚合，按 `sequence` 和 `created_at` 排序；当前不是后端持久化事件事实源。 |
 | `apps/desktop/src/services/timeline/projector.ts` | 对话流投影 | 渲染 `model_output_delta`、`model_thinking_delta`、`tool_call_*`、`run_finished`、`run_failed`、`run_cancelled`。 |
 | `apps/desktop/src/components/chat/StatusBadge.tsx` | 终态标签 | 只展示 `run_finished`、`run_failed`、`run_cancelled`。 |
-| `apps/shared/ts/events.ts` | 前端共享类型 | 当前手写，已与后端枚举和 payload 发生漂移。 |
+| `apps/shared/ts/events.ts` | 前端共享类型 | 由后端 payload model 生成，不手写维护。 |
 
-## 9. 当前已发现的契约漂移
+## 9. 契约收敛状态与剩余注意点
 
-### 9.1 后端事件类型多于前端类型
+### 9.1 已收敛的历史漂移
 
-后端已定义但前端 `RuntimeEventType` 缺失：
+以下旧漂移已通过后端 payload model、`RuntimeEvent` 运行时校验与 TS 生成收敛：
 
-- `model_requested`
-- `model_completed`
-- `model_failed`
-- `human_input_requested`
-- `human_input_received`
+- 后端枚举与前端 `RuntimeEventType` 不一致。
+- 后端真实 emit 的 `model_requested` / `model_completed` 未进入前端共享类型。
+- `step_started`、`model_output_delta`、`model_thinking_delta`、`final_response`、
+  `run_finished`、`run_cancelled`、`tool_call_finished`、`run_failed` 的 payload 字段不一致。
 
-### 9.2 后端真实 emit 但前端类型缺失
+当前维护方式：
 
-- `model_requested`
-- `model_completed`
+- 新增或修改事件字段，先改 `apps/backend/app/models/payload/`。
+- 确认 `EVENT_PAYLOAD_MODELS` 覆盖所有 `EventType`。
+- 重新运行 `scripts/generate_runtime_event_ts.py` 生成 `apps/shared/ts/events.ts`。
+- 后端真实 emit 若带契约外字段，会在 `RuntimeEvent` 构造时被 Pydantic 拒绝。
 
-这两个事件目前会被 SSE parser 接收并进入 `eventStore`，但 TypeScript 类型不承认它们。
-
-### 9.3 payload 字段不一致
-
-| event_type | 后端真实 payload | 前端当前类型 |
-| --- | --- | --- |
-| `step_started` | `step_id` / `kind` / `index` | `step_type` / `step_index` |
-| `model_output_delta` | `step_id` / `text` | `text` |
-| `model_thinking_delta` | `step_id` / `text` | `text` |
-| `final_response` | `text` / `step_id` / `status` | `status` |
-| `run_finished` | `status` / `step_id` | `status` |
-| `run_cancelled` | `status`，有时含 `step_id` / `error` | `status` |
-| `tool_call_finished` | `step_id` / `tool_name` / `status` / `tool_call_id` | `tool_name` / `status` / 可选 `error` |
-| `run_failed` | 多分支 payload，部分无 `status` | `status` / `error` |
-
-### 9.4 顶层 `tool_call_id` 不稳定
+### 9.2 顶层 `tool_call_id` 不稳定
 
 `runner._record()` 会把 payload 里的 `tool_call_id` 提升到顶层。但 workflow custom event 转 `RuntimeEvent` 时没有做同样提升，所以 `tool_call_finished` 的顶层 `tool_call_id` 当前可能为 `null`，真实 ID 在 `payload.tool_call_id`。
 
-### 9.5 `sequence` 语义不完全统一
+### 9.3 `sequence` 语义不完全统一
 
 `ReactLikeWorkflow.run()` 内部递增 `sequence`。`runner._record()` 创建的外层事件当前使用默认 `sequence=0`。这不是后端存储层分配的 task 全局持久序号，也不能支撑历史事件回放排序。这会影响前端排序稳定性，尤其是 `run_started` 与其他 `sequence=0` 事件同时存在时。
+
+### 9.4 展示扩展字段必须显式建模
+
+当前 payload model 使用 `extra="forbid"`。如果后续要加入 `display_format`、
+`component_type`、`summary`、`details` 等展示扩展字段，必须先补对应 payload model，
+不能直接在 emit 点临时塞入字段。
 
 ## 10. 建议的事件分类
 

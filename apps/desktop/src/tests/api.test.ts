@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
-import { createTask, getTask, listTaskTurns, cancelTurn } from "@/services/api";
+import { cancelTurn, createTask, getTask, listAgents, listTaskTurns } from "@/services/api";
 import { ServiceError } from "@/services/types";
 import { API_PATHS } from "@shared/api";
 import { useClientTraceStore } from "@/stores/clientTraceStore";
@@ -204,5 +204,33 @@ describe("api.ts — post/get 网络失败分支", () => {
       method: "POST",
       path: API_PATHS.TURN_CANCEL("turn-1"),
     });
+  });
+
+  it("listAgents 走 GET /agents 并返回默认 agent", async () => {
+    const fetchImpl = mockFetch({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        agents: [
+          {
+            agent_id: "developer",
+            role: "developer",
+            goal: "coding",
+            allowed_tools: ["read_file"],
+            context_policy: "text_only_v1",
+            workflow: "react_like_v1",
+            model_name: "deepseek-v4-flash",
+            max_steps: 1000,
+          },
+        ],
+        default_agent_id: "developer",
+      }),
+    } as unknown as Response);
+
+    const result = await listAgents();
+
+    expect(fetchImpl.mock.calls[0][0]).toBe(API_PATHS.AGENTS);
+    expect(result.default_agent_id).toBe("developer");
+    expect(result.agents[0].agent_id).toBe("developer");
   });
 });
