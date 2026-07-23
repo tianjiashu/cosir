@@ -23,8 +23,7 @@ class ToolScheduler:
 
         self._registry = registry
         self._allowed_permissions = set(allowed_permissions)
-        self._logger = logger
-        self._executor = executor or ToolExecutor(logger)
+        self._executor = executor or ToolExecutor()
 
     def list_model_visible_tools(self) -> list[ToolDefinition]:
         """Return tools visible to the model under the scheduler policy."""

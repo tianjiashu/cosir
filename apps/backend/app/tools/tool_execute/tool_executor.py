@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
+from app.config.logging.logger import log
 from app.tools.schemas import ToolDefinition, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_success import tool_success
@@ -31,10 +32,9 @@ class ToolExecutor:
       模型可见性策略（``ToolExecutionService``）。
     """
 
-    def __init__(self, logger: logging.Logger) -> None:
+    def __init__(self) -> None:
         """Initialize the executor."""
 
-        self._logger = logger
         self._process_started = False
 
     # ------------------------------------------------------------------
@@ -96,7 +96,7 @@ class ToolExecutor:
             # --- 3. 等待 + 超时判断 ---
             process.join(timeout)
             if process.is_alive():
-                self._logger.warning(
+                log.warning(
                     "tool_execution_timed_out",
                     extra={
                         "message_text": "tool execution timed out",
@@ -129,7 +129,7 @@ class ToolExecutor:
 
             # --- 5. 归一化返回 ---
         if status == "error":
-            self._logger.error(
+            log.error(
                 "tool_handler_failed",
                 extra={
                     "message_text": "tool handler failed",
