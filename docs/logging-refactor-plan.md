@@ -25,7 +25,7 @@
 ```json
 {"ts":"2026-07-16T08:04:08.518Z","level":"INFO","trace_id":"2a543a9d1f8c4b2e",
  "logger":"coding_agent.backend",
- "caller":"app.core.runs.store:DurableRunStore.save:101",
+ "caller":"app.core.runs.store:DurableRunStore.handler:101",
  "event":"run_saved",
  "msg":"运行记录已持久化","data":{"run_id":"r-1","status":"ok"},"error":null}
 ```

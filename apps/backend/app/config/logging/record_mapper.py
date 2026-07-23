@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from app.config.logging.caller import compute_caller
+from app.config.logging.filter.caller_filter import compute_caller
 from app.trace_infra.redaction import redact_value
 
 MAX_LOG_TEXT_LENGTH = 2000

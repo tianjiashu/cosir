@@ -2,18 +2,17 @@
 
 import logging
 from pathlib import Path
-from queue import Queue
 
-from app.config.logging.caller import CallerFilter
-from app.config.logging.log_context import LogContextFilter
+from app.config.logging.formatter.jsonl_formatter import JsonlFormatter
+from app.config.logging.filter.caller_filter import CallerFilter
+from app.config.logging.filter.log_context_filter import LogContextFilter
 from app.config.logging.log_files_dir_service import current_log_file
 from app.config.logging.process_bridge import (
     install_log_queue_bridge,
     install_queue_handler,
     stop_queue_listener,
 )
-from app.config.logging.save.jsonl import JsonlFormatter
-from app.config.logging.save.sqlite_handler import SQLiteLogHandler
+from app.config.logging.handler.sqlite_handler import SQLiteLogHandler
 from app.storage.crud.log_crud import LogStore
 
 

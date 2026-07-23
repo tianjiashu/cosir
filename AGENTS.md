@@ -48,25 +48,24 @@ coding-agent/
   apps/
     backend/
       app/
-        api/                 # FastAPI 路由与 SSE
+        api/                 # FastAPI 路由、SSE 与依赖接线（接入层）
         bootstate.py         # 启动状态初始化
-        config/              # 运行配置
-        core/                # 运行底座
+        config/              # 运行配置（含 logging/ 日志子系统聚合包）
+        core/                # Agent 运行底座（全基于 LangGraph 体系）
           agents/            # Agent 角色与配置
           context/           # 文本上下文构建
-          events/            # 运行时事件定义
-          logs/              # 日志查询服务
-          runs/              # LangGraph 持久化运行
-          runtime/           # Agent Runtime 控制与编排
-          workflows/         # Agent 执行策略
-        models/              # 业务层 model 定义（一文件一 model，平铺）
-        service/             # 领域服务（编排层，仅 xxx_service）
-          tool_execution/    # 工具执行编排
-          trace/             # 运行追踪服务（仅 xxx_service）
-        trace_infra/         # 新建顶层包：trace 基础设施原语（ids/event_names/redaction）
-        llm/                 # 新建顶层包：LLM 适配与桥接（factory/langchain_bridge）
-        storage/             # SQLite 持久化与 checkpoint 快照
-        tools/               # 工具系统
+          llm/               # LLM 适配（LangChain 基座，服务 LangGraph）
+          runtime/           # Agent Runtime 控制与编排（含 runs/ checkpoint）
+          workflows/         # Agent 执行策略（ReAct-like 等）
+        models/              # 业务层 model（一文件一 model，含 enums/）
+        service/             # 领域服务编排层（仅 xxx_service / xxx_recorder）
+          task/              # 任务 / 轮次 / 工作区编排
+          tool_execution/    # 工具执行编排（依赖 tools）
+          trace/             # 运行追踪服务
+          log_query_service.py  # 日志查询业务服务
+        trace_infra/         # trace 基础设施原语（ids/event_names/redaction）
+        storage/             # SQLite 持久化与 checkpoint 快照（数据层）
+        tools/               # 工具系统（不基于 LangGraph）
           schemas/           # 核心契约值对象
           tool_execute/      # 工具执行层
           tool_handler/      # 具体工具实现
@@ -91,26 +90,26 @@ coding-agent/
 - `apps/`：可运行应用集合。
 - `apps/backend/`：本地 Python 后端应用，承载 FastAPI、LangGraph、Agent Runtime、工具系统、存储、日志等后端能力。
 - `apps/backend/app/`：后端应用源码根目录，按已进入实现的能力边界拆分模块。
-- `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装。
+- `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装（接入层）。
 - `apps/backend/app/bootstate.py`：后端启动状态初始化（配置、存储、工具系统）。
-- `apps/backend/app/config/`：后端运行配置，例如项目根目录、日志文件、SQLite 文件和运行限制。
-- `apps/backend/app/core/`：运行底座，聚合运行态相关模块。
-  - `agents/`：Agent 角色定义与默认配置（AgentProfile）。
-  - `context/`：构建模型无关的文本上下文。
-  - `events/`：Runtime 事件定义和事件序列化。
-  - `logs/`：日志查询服务。
-  - `runs/`：LangGraph 持久化运行，包含 checkpointer、状态机、恢复、resume 与 graph 构建。
-  - `runtime/`：Agent Runtime，负责任务状态推进、模型流消费、工具调度、事件记录、取消和终止保护。
-  - `workflows/`：Agent 执行策略，例如 ReAct-like、Plan-and-Execute、StepController 等，可扩展替换。
-- `apps/backend/app/models/`：业务层 model 定义（dataclass / 枚举值对象），一个文件一个 model，文件名与 model 相关，平铺组织。不承载服务、适配或 helper 逻辑。
-- `apps/backend/app/service/`：领域服务（编排层），只放服务编排类，文件名与类名必须为 `xxx_service.py` / `XxxService`。不承载 model、常量或 helper。
-  - `tool_execution/`：工具执行编排，负责 agent 级可见性策略、生命周期事件记录、模型消息编解码（service / codec / run_result）。
-  - `trace/`：运行追踪服务（仅 `trace_query_service` / `trace_recorder`）。
+- `apps/backend/app/config/`：后端运行配置，承载不可变 `BackendSettings` 值对象（项目根目录、日志目录、SQLite 文件、运行限制）。`config/logging/` 是**日志子系统聚合包**（配置 + 运行时 filter/formatter/handler/mapper/bridge/context/renderer），属配置层下的特例，明确允许依赖 `storage` / `trace_infra`，豁免通用 config 轻量约束；路径保持 `app.config.logging` 不拆分。
+- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。聚合运行态相关模块，是项目编排内核。
+  - `agents/`：Agent 角色定义与默认配置（`AgentProfile` / `agent_profile_registry`）。
+  - `context/`：构建模型无关的文本上下文（`TextContextBuilder` + 预算校验）。
+  - `llm/`：LLM 适配与桥接，基于 **LangChain**（`factory.build_chat_model` / `langchain_bridge` 边界转换 / `llm_provider` 接入 DeepSeek 等），为 LangGraph 节点提供 chat model 与工具 schema。
+  - `runtime/`：Agent Runtime，负责任务状态推进、模型流消费、工具调度、事件记录、取消和终止保护；`runtime/runs/` 承载 LangGraph 持久化运行（checkpointer、resume 与 graph 构建）。
+  - `workflows/`：Agent 执行策略（ReAct-like 等），基于 LangGraph `StateGraph` 编排，可扩展替换。
+  - 注：`core/logs/`、`core/events/` 不存在；运行时事件定义在 `models/runtime_event.py`，日志查询服务在 `service/log_query_service.py`。
+- `apps/backend/app/models/`：业务层 model 定义（dataclass / 枚举值对象），一文件一 model，文件名与 model 同名；主体平铺，枚举单独归入 `enums/` 子目录（如 `event_type.py` / `turn_status.py`）。不承载服务、适配或 helper 逻辑。
+- `apps/backend/app/service/`：领域服务（编排层），只放服务编排类，文件名与类名必须为 `xxx_service.py` / `XxxService`（或 `xxx_record_service` / `xxx_recorder`）。不承载 model、常量或 helper。
+  - `task/`：任务 / 轮次 / 工作区编排（创建、状态管理、级联删除）。
+  - `tool_execution/`：工具执行编排，负责 agent 级可见性策略、生命周期事件记录、模型消息编解码；依赖 `tools`（经 `ToolScheduler` 执行）。
+  - `trace/`：运行追踪服务（`trace_query_service` / `trace_record_service`）。
+  - `log_query_service.py`：日志查询业务服务（组合 SQLite 日志库与 JSONL 查询）。
 - `apps/backend/app/trace_infra/`：trace 基础设施原语（ID 生成/校验、事件名规范化、payload 脱敏）。不依赖 `app.models` 与 `app.service`，避免循环依赖。
-- `apps/backend/app/llm/`：LLM 适配与桥接（chat model 构建、运行时消息/工具 schema 边界转换）。只依赖 `app.models.runtime_message` 与 `app.tools.schemas`，不依赖 service 编排层。
-- `apps/backend/app/storage/`：SQLite 持久化存储，保存 Session / Task / Turn / Step / Event 以及 checkpoint 快照。
-- `apps/backend/app/tools/`：工具系统统一收口。
-  - `schemas/`：核心契约值对象（ToolDefinition / ToolCall / ToolObservation / ModelToolDefinition）。
+- `apps/backend/app/storage/`：SQLite 持久化存储，保存 Session / Task / Turn / Step / Event 以及 checkpoint 快照（数据层）。
+- `apps/backend/app/tools/`：工具系统统一收口，**不基于 LangGraph**；内置工具经 `core` 调度执行。
+  - `schemas/`：核心契约值对象（ToolDefinition / ToolCall / ToolObservation）。
   - `tool_execute/`：工具执行层，负责权限校验、参数校验、子进程隔离执行与超时强杀（tool_scheduler / tool_executor / tool_error / tool_success）。
   - `tool_handler/`：具体工具实现，每个工具独立文件，承载执行逻辑与 ToolDefinition 组装。
   - `tool_models/`：各工具的 pydantic 参数与结果模型（如 ReadFileArgs / TextReadResult）。
@@ -133,6 +132,7 @@ coding-agent/
 - `Workflow` 是执行策略，描述 Agent 如何完成任务，例如 ReAct-like、Plan-and-Execute、Review-Fix。
 - `Runtime` 是执行底座，负责状态管理、模型调用、工具调度、审批、checkpoint、context compaction、事件流、取消、恢复和终止保护。
 - `Subagent` 不应实现成一套平行系统；它应作为 child agent / child run 复用 Agent、Workflow 和 Runtime 能力。
+- `core` 是 LangGraph 编排内核，承载 Agent 运行底座（`agents` / `context` / `llm` / `runtime` / `workflows`）；`tools` 不基于 LangGraph，由 `core` 调度执行。
 
 ## 开发前必须路由
 
@@ -147,6 +147,7 @@ coding-agent/
 - 经验复用记录：`rules/agent-lessons.md`
 - coding-agent 原理文档：`coding-agent-docs`
 - 日志规范：`rules/Agent日志开发规范.md`
+- 目录组织规范：`rules/目录组织规范.md`
 
 ## CodeGraph 使用规则
 
