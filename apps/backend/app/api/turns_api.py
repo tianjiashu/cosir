@@ -39,7 +39,6 @@ SSE 文本帧；它不直接处理 HTTP，仅做格式适配。
 """
 
 import json
-import logging
 from collections.abc import AsyncIterator
 
 from fastapi import Depends, HTTPException
@@ -48,9 +47,9 @@ from fastapi.responses import StreamingResponse
 from app.api.app import app
 from app.api.dependencies import get_runtime, get_turn_service
 from app.api.schemas import CreateTurnRequest
+from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.service.task.turn_service import TurnService
-
 
 @app.post("/tasks/{task_id}/turns")
 async def create_turn(
@@ -203,9 +202,32 @@ async def _sse_turn_events(
         将轮次标记为 ``failed``（``end_reason="client_disconnected"``），避免孤儿 ``running``。
     """
 
+    log.info(
+        "turn_stream_started",
+        extra={
+            "msg": f"开始流式推送轮次事件，turn_id={turn_id}",
+            "data": {"turn_id": turn_id},
+        },
+    )
     try:
         async for event in runtime.run_turn(turn_id, turn=turn):
             yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
+        log.info(
+            "turn_stream_completed",
+            extra={
+                "msg": f"轮次事件流式推送完成，turn_id={turn_id}",
+                "data": {"turn_id": turn_id},
+            },
+        )
+    except KeyError as exc:
+        # run_turn 在流式开始前发现轮次消失（如已被清理），无法继续推送。
+        log.exception(
+            "turn_stream_aborted",
+            extra={
+                "msg": f"轮次在执行前消失，流式中止，turn_id={turn_id}",
+                "data": {"turn_id": turn_id},
+            },
+        )
     finally:
         # 客户端断开：若本轮仍在运行，说明 run 已随连接中止，标记断开避免孤儿 running。
         # 窄异常保护：轮次可能已被清理，避免 teardown 抛异常掩盖主流程结果。
@@ -214,11 +236,18 @@ async def _sse_turn_events(
                 turn_service.update_turn_status(
                     turn_id, "failed", end_reason="client_disconnected"
                 )
+                log.info(
+                    "turn_marked_disconnected",
+                    extra={
+                        "msg": f"客户端断开，轮次已标记为 failed，turn_id={turn_id}",
+                        "data": {"turn_id": turn_id, "end_reason": "client_disconnected"},
+                    },
+                )
         except Exception:
-            logging.getLogger(__name__).exception(
-                "turn_disconnect_mark_failed_failed",
+            log.exception(
+                "turn_disconnect_mark_failed",
                 extra={
-                    "msg": "failed to mark disconnected turn as failed",
+                    "msg": f"客户端断开后标记轮次 failed 失败，turn_id={turn_id}",
                     "data": {"turn_id": turn_id},
                 },
             )

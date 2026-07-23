@@ -56,17 +56,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     if runtime is None:
         settings = default_settings()
-        logger = install_logging_for_current_process(
-            log_dir=settings.log_dir,
-            log_database_file=settings.log_database_file,
-            sqlite_logging_enabled=settings.sqlite_logging_enabled,
-            queue_size=settings.log_queue_size,
-            batch_size=settings.log_batch_size,
-            flush_interval_ms=settings.log_flush_interval_ms,
-        )
-        tool_system = tool_system or ToolSystem.build_tool_system(settings, logger)
+        tool_system = tool_system or ToolSystem.build_tool_system(settings)
         set_tool_system(tool_system)
-        runtime = build_runtime(tool_system=tool_system, settings=settings, logger=logger)
+        runtime = build_runtime(tool_system=tool_system, settings=settings)
         set_runtime(runtime)
     else:
         if tool_system is not None:

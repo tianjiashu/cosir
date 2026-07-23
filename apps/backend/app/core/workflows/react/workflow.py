@@ -13,13 +13,10 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from ..agent_workflow import AgentWorkflow
-from ...runtime.runtime_operations import RuntimeOperations
-logger = logging.getLogger(__name__)
-
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+from app.config.logging.logger import log
 from app.core.llm.factory import build_chat_model
 from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_langchain
 from app.core.runtime.runs.checkpointer import build_checkpointer
@@ -28,10 +25,13 @@ from app.models.enums.event_type import EventType
 from app.models.runtime_event import RuntimeEvent
 from app.tools.schemas import ToolCall
 
+from ...runtime.runtime_operations import RuntimeOperations
+from ..agent_workflow import AgentWorkflow
 from .edges import _should_continue
 from .nodes import _extract_text, _model_node, _tools_node
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
+
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -41,6 +41,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     ``RuntimeOperations`` 注入；graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph
     负责状态持久化、断点续跑与 ``interrupt()`` 审批中断。
     """
+
+    workflow_id = "react_like_v1"
 
     def __init__(
             self,
@@ -115,7 +117,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         try:
             bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
         except NotImplementedError:
-            logger.warning(
+            log.warning(
                 "model %s does not support bind_tools; running without tools "
                 "(expected when no real API key is configured)",
                 type(base_model).__name__,
@@ -186,7 +188,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                             )
                             sequence += 1
                 except Exception:
-                    operations.log_exception(
+                    log.exception(
                         "workflow_graph_failed",
                         extra={
                             "msg": "langgraph execution failed during workflow run",

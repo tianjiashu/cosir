@@ -112,7 +112,6 @@ def get_runtime() -> AgentRuntime:
 def build_runtime(
     tool_system: ToolSystem | None = None,
     settings=None,
-    logger=None,
 ) -> AgentRuntime:
     """Build the default runtime dependency graph.
 
@@ -135,15 +134,6 @@ def build_runtime(
     """
 
     settings = settings or default_settings()
-    if logger is None:
-        logger = install_logging_for_current_process(
-            log_dir=settings.log_dir,
-            log_database_file=settings.log_database_file,
-            sqlite_logging_enabled=settings.sqlite_logging_enabled,
-            queue_size=settings.log_queue_size,
-            batch_size=settings.log_batch_size,
-            flush_interval_ms=settings.log_flush_interval_ms,
-        )
     tool_system = tool_system or get_tool_system()
     services = _build_services(settings)
     return AgentRuntime(
@@ -152,7 +142,7 @@ def build_runtime(
         turn_service=services["turn_service"],
         context_builder=TextContextBuilder(),
         tool_scheduler=tool_system.scheduler,
-        logger=logger,
+        model_tools=tool_system.registry.get_all_definitions(),
     )
 
 

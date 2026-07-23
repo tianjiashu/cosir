@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, List
 
 from app.config.settings import BackendSettings
-from app.core.context import TextContextBuilder
+from app.core.context.builder import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
@@ -30,7 +30,6 @@ class RuntimeOperations:
             turn_store,
             context_builder: TextContextBuilder,
             tool_scheduler: ToolScheduler,
-            logger: logging.Logger,
             agent_profile: AgentProfile,
             current_turn_id: str = "",
             model_tools: List[ToolDefinition] = [],
@@ -40,13 +39,11 @@ class RuntimeOperations:
         self.settings = settings
         self._turn_store = turn_store
         self._context_builder = context_builder
-        self._logger = logger
         self.model_tools:List[ToolDefinition] = model_tools
         self.agent_profile = agent_profile
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
-            logger=logger,
         )
         self._current_turn_id = current_turn_id
 
@@ -134,11 +131,6 @@ class RuntimeOperations:
             calls=calls,
             write_event=write_event or _noop_write_event,
         )
-
-    def log_exception(self, event_name: str, extra: dict | None = None) -> None:
-        """Write runtime exception diagnostics."""
-
-        self._logger.exception(event_name, extra=extra or {})
 
 
 def _noop_write_event(event_type, payload: dict) -> None:

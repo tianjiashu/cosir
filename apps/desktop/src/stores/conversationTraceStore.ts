@@ -25,8 +25,7 @@ export type ConversationTraceOperation =
   | "task_turns"
   | "turn_stream"
   | "task_get"
-  | "task_events"
-  | "task_cancel"
+  | "turn_cancel"
   | "task_stream";
 
 /**

@@ -136,5 +136,6 @@ export const selectActiveTask = (state: TaskState): TaskRecord | undefined => {
  */
 export const selectActiveTaskStatus = (state: TaskState): TaskStatus | null => {
   if (!state.activeTaskId) return null;
-  return state.tasks.find((t) => t.task_id === state.activeTaskId)?.status ?? null;
+  const task = state.tasks.find((t) => t.task_id === state.activeTaskId);
+  return task?.execution_status ?? task?.status ?? null;
 };

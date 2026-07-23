@@ -9,7 +9,7 @@ from collections import deque
 
 from app.config.logging.record_mapper import LogError, map_log_record
 from app.trace_infra.redaction import redact_value
-from app.storage.crud.log import LogStore
+from app.storage.crud.log_crud import LogStore
 from app.models import LogEntryRecord
 
 HIGH_PRIORITY_LEVELS = {"WARNING", "ERROR", "CRITICAL"}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
-import { createTask, getTask, getTaskEvents, cancelTask } from "@/services/api";
+import { createTask, getTask, listTaskTurns, cancelTurn } from "@/services/api";
 import { ServiceError } from "@/services/types";
 import { API_PATHS } from "@shared/api";
 import { useClientTraceStore } from "@/stores/clientTraceStore";
@@ -92,7 +92,7 @@ describe("api.ts — post/get 网络失败分支", () => {
       }),
     } as unknown as Response);
     try {
-      await getTaskEvents("t1");
+      await listTaskTurns("t1");
       throw new Error("should have thrown");
     } catch (e) {
       expect(e).toBeInstanceOf(ServiceError);
@@ -108,9 +108,9 @@ describe("api.ts — post/get 网络失败分支", () => {
     errorSpy.mockRestore();
   });
 
-  it("GET 任务详情和事件会记录各自对话 trace", async () => {
+  it("GET 任务详情和轮次列表会记录各自对话 trace", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
-      if (url.endsWith("/events")) {
+      if (url.endsWith("/turns")) {
         return { ok: true, status: 200, json: async () => [] } as unknown as Response;
       }
       return {
@@ -129,11 +129,11 @@ describe("api.ts — post/get 网络失败分支", () => {
     vi.stubGlobal("fetch", fetchImpl);
 
     await getTask("t1");
-    await getTaskEvents("t1");
+    await listTaskTurns("t1");
 
     const byOperation = useConversationTraceStore.getState().latestTraceByTaskIdAndOperation.t1;
     expect(byOperation?.task_get).toMatchObject({ operation: "task_get", path: API_PATHS.TASK_DETAIL("t1") });
-    expect(byOperation?.task_events).toMatchObject({ operation: "task_events", path: API_PATHS.TASK_EVENTS("t1") });
+    expect(byOperation?.task_turns).toMatchObject({ operation: "task_turns", path: API_PATHS.TASK_TURNS("t1") });
   });
 
   it("2xx 响应但 JSON 解析失败（response.json 抛错）→ 抛出 ServiceError 且经 logError 记录", async () => {
@@ -189,20 +189,20 @@ describe("api.ts — post/get 网络失败分支", () => {
     });
   });
 
-  it("cancelTask 走 POST 且路径正确", async () => {
+  it("cancelTurn 走 POST 且路径正确", async () => {
     const fetchImpl = mockFetch({
       ok: true,
       status: 200,
-      json: async () => ({ task_id: "t1", status: "cancelled" }),
+      json: async () => ({ turn_id: "turn-1", task_id: "t1", status: "cancelled" }),
     } as unknown as Response);
-    await cancelTask("t1");
+    await cancelTurn("turn-1", "t1");
     const calledUrl = fetchImpl.mock.calls[0][0] as string;
-    expect(calledUrl).toBe(API_PATHS.TASK_CANCEL("t1"));
+    expect(calledUrl).toBe(API_PATHS.TURN_CANCEL("turn-1"));
     expect(useConversationTraceStore.getState().latestTraceByTaskId.t1).toMatchObject({
       taskId: "t1",
-      operation: "task_cancel",
+      operation: "turn_cancel",
       method: "POST",
-      path: API_PATHS.TASK_CANCEL("t1"),
+      path: API_PATHS.TURN_CANCEL("turn-1"),
     });
   });
 });

@@ -27,6 +27,7 @@ import {
 
 /** 任务状态到视觉配置的映射。 */
 const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "warning" | "outline" | "success"; Icon: ComponentType<{ className?: string }> }> = {
+  active: { label: "处理中", variant: "warning", Icon: Loader2 },
   running: { label: "处理中", variant: "warning", Icon: Loader2 },
   completed: { label: "已完成", variant: "success", Icon: CheckCircle2 },
   failed: { label: "失败", variant: "destructive", Icon: XCircle },

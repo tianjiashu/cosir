@@ -14,7 +14,7 @@ from app.config.logging.process_bridge import (
 )
 from app.config.logging.save.jsonl import JsonlFormatter
 from app.config.logging.save.sqlite_handler import SQLiteLogHandler
-from app.storage.crud.log import LogStore
+from app.storage.crud.log_crud import LogStore
 
 
 def configure_logging(

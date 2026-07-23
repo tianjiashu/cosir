@@ -17,7 +17,6 @@ class ToolScheduler:
         self,
         registry: ToolRegistry,
         allowed_permissions: Iterable[str],
-        logger: logging.Logger,
         executor: ToolExecutor | None = None,
     ) -> None:
         """Initialize the scheduler."""

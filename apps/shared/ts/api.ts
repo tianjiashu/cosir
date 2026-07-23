@@ -24,12 +24,10 @@ export const API_PATHS = {
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   /** GET/POST — 任务下轮次列表与追加 */
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
-  /** GET — 历史事件列表 */
-  TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
   /** GET — turn 级 SSE 事件流 */
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
-  /** POST — 取消任务 */
-  TASK_CANCEL: (taskId: string) => `/tasks/${taskId}/cancel`,
+  /** POST — 取消轮次 */
+  TURN_CANCEL: (turnId: string) => `/turns/${turnId}/cancel`,
   /** GET — 按 trace 查询日志 */
   LOGS_QUERY: "/logs/query",
   /** GET — 查询最近日志 */
@@ -88,9 +86,6 @@ export type WorkspaceResponse = import("./workspace").WorkspaceRecord;
 
 /** 创建轮次 / 查询轮次 的响应体。 */
 export type TurnResponse = import("./turn").TurnRecord;
-
-/** 事件列表的响应体。 */
-export type EventsResponse = import("./events").RuntimeEvent[];
 
 /** 日志查询响应体。 */
 export type LogQueryResponse = import("./logs").LogQueryResponse;

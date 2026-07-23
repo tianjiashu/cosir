@@ -51,3 +51,6 @@ def install_msg_relocation() -> None:
 
     _make_record._coding_agent_relocated = True  # type: ignore[attr-defined]
     logging.Logger.makeRecord = _make_record
+
+
+log = logging.getLogger("coding_agent.backend")

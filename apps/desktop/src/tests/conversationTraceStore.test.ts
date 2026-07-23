@@ -37,9 +37,9 @@ describe("conversationTraceStore", () => {
     store.recordTrace({
       traceId: "22222222222222222222222222222222",
       taskId: "task-1",
-      operation: "task_events",
+      operation: "task_turns",
       method: "GET",
-      path: "/tasks/task-1/events",
+      path: "/tasks/task-1/turns",
     });
 
     const state = useConversationTraceStore.getState();

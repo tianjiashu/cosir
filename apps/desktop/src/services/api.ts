@@ -1,17 +1,17 @@
 ﻿/**
- * HTTP API 灏佽灞傘€?
+ * HTTP API 封装层。
  *
- * 灏佽鎵€鏈変笌鍚庣 FastAPI 鐨?HTTP 閫氫俊锛?
- * - POST /workspaces/{workspace_id}/tasks 鈥?鍒涘缓浠诲姟
- * - GET /tasks/{id} 鈥?鏌ヨ浠诲姟鐘舵€?
- * - GET /tasks/{id}/events 鈥?鍘嗗彶浜嬩欢鍒楄〃 * - POST /tasks/{id}/cancel 鈥?鍙栨秷浠诲姟
+ * 封装与后端 FastAPI 的 HTTP 通信：
+ * - POST /workspaces/{workspace_id}/tasks 创建任务容器和首个 turn
+ * - GET /tasks/{id} 查询任务状态
+ * - GET/POST /tasks/{id}/turns 读取或追加 turn
+ * - POST /turns/{id}/cancel 取消当前 turn
  *
- * 浣跨敤鍘熺敓 fetch锛屼笉寮曞叆 axios 绛夌涓夋柟 HTTP 搴擄紙瀵归綈鎶€鏈€夊瀷锛夈€?
+ * 使用原生 fetch，不引入 axios 等第三方 HTTP 库。
  *
  * @module services/api
  */
 
-import type { RuntimeEvent } from "@shared/events";
 import type { TaskRecord } from "@shared/task";
 import type { TurnRecord } from "@shared/turn";
 import type { WorkspaceRecord } from "@shared/workspace";
@@ -386,30 +386,18 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
 }
 
 /**
- * 鑾峰彇浠诲姟鐨勫巻鍙茶繍琛屾椂浜嬩欢鍒楄〃銆?
+ * 鍙栨秷涓€涓鍦ㄨ繍琛岀殑杞銆?
  *
- * @param taskId - 浠诲姟鏍囪瘑绗︺€?
- * @returns 璇ヤ换鍔＄殑鏈夊簭浜嬩欢鍒楄〃銆?
- * @throws {ServiceError} 褰撲换鍔′笉瀛樺湪鎴栫綉缁滈敊璇椂鎶涘嚭銆?
+ * @param turnId - 寰呭彇娑堢殑杞鏍囪瘑绗︺€?
+ * @param taskId - 鍙€夌殑褰掑睘浠诲姟 ID锛岀敤浜?trace 鍜屾棩蹇椾笂涓嬫枃銆?
+ * @returns 鍙栨秷鍚庣殑杞璁板綍锛坰tatus 搴斾负 "cancelled"锛夈€?
+ * @throws {ServiceError} 褰撹疆娆′笉瀛樺湪鎴栧彇娑堝け璐ユ椂鎶涘嚭銆?
+ *
+ * @sideeffect 鍚戝悗绔?POST /turns/{id}/cancel 鏇存柊杞鐘舵€佷负 cancelled銆?
  */
-export async function getTaskEvents(taskId: string): Promise<RuntimeEvent[]> {
-  const response = await get<RuntimeEvent[]>(API_PATHS.TASK_EVENTS(taskId), taskId);
-  recordConversationTrace(response.trace, "task_events", taskId);
-  return response.data;
-}
-
-/**
- * 鍙栨秷涓€涓鍦ㄨ繍琛岀殑浠诲姟銆?
- *
- * @param taskId - 寰呭彇娑堢殑浠诲姟鏍囪瘑绗︺€?
- * @returns 鍙栨秷鍚庣殑浠诲姟璁板綍锛坰tatus 搴斾负 "cancelled"锛夈€?
- * @throws {ServiceError} 褰撲换鍔′笉瀛樺湪鎴栧彇娑堝け璐ユ椂鎶涘嚭銆?
- *
- * @sideeffect 鍚戝悗绔?POST /tasks/{id}/cancel 鏇存柊浠诲姟鐘舵€佷负 cancelled銆?
- */
-export async function cancelTask(taskId: string): Promise<TaskRecord> {
-  const response = await post<TaskRecord>(API_PATHS.TASK_CANCEL(taskId), {}, taskId);
-  recordConversationTrace(response.trace, "task_cancel", taskId);
+export async function cancelTurn(turnId: string, taskId?: string): Promise<TurnRecord> {
+  const response = await post<TurnRecord>(API_PATHS.TURN_CANCEL(turnId), {}, taskId);
+  recordConversationTrace(response.trace, "turn_cancel", response.data.task_id || taskId || "");
   return response.data;
 }
 

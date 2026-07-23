@@ -9,7 +9,6 @@ from abc import ABC, abstractmethod
 from langchain_core.language_models import BaseChatModel
 
 from app.core.llm.model_settings import ModelSettings
-from app.core.llm.registry import ModelSpec
 
 
 class LLMProvider(ABC):
@@ -21,12 +20,12 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def build(
-        self, spec: ModelSpec, model_settings: ModelSettings | None = None
+        self, model_name: str, model_settings: ModelSettings | None = None
     ) -> BaseChatModel:
         """按规格构建 LangChain chat model。
 
         参数:
-            spec: 由模型注册表解析出的 ``ModelSpec``（含 base_url / api_key_env / thinking 等）。
+            model_name: 模型名称，例如 ``deepseek-v4-flash``。
             model_settings: 可选 Agent 级模型覆盖配置（生成参数）。
 
         返回:

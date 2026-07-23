@@ -22,7 +22,7 @@ from app.tools.tool_execute.tool_scheduler import ToolScheduler
 class ToolExecutionService:
     """Orchestrate a batch of tool calls requested by the model."""
 
-    def __init__(self, scheduler: ToolScheduler, agent_id: str, logger: logging.Logger) -> None:
+    def __init__(self, scheduler: ToolScheduler, agent_id: str) -> None:
         """Initialize the tool execution service.
 
         参数:
@@ -42,7 +42,6 @@ class ToolExecutionService:
 
         self._scheduler = scheduler
         self._agent_id = agent_id
-        self._logger = logger
 
     def run_calls_with_events(
         self,

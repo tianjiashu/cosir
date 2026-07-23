@@ -52,10 +52,18 @@ export interface TurnTimelineItem {
 export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[]): TurnTimelineItem[] {
   return turns.map((turn) => {
     const turnEvents = events.filter((event) => event.turn_id === turn.turn_id);
+    const entries = projectEntries(turnEvents);
+    if (entries.length === 0 && turn.response_text) {
+      entries.push({
+        kind: "assistant",
+        eventId: `turn-response-${turn.turn_id}`,
+        content: turn.response_text,
+      });
+    }
     return {
       turnId: turn.turn_id,
       userText: turn.input_text,
-      entries: projectEntries(turnEvents),
+      entries,
     };
   });
 }

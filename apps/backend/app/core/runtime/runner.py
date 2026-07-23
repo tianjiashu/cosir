@@ -5,14 +5,13 @@ import os
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
-from app.api.dependencies import get_tool_system
 from app.config.logging import (
     shutdown_logging,
     trace_log_extra,
 )
+from app.config.logging.logger import log
 from app.config.settings import BackendSettings
 from app.core.agents.profile import AgentProfile, default_developer_agent
 from app.core.context import TextContextBuilder
@@ -25,6 +24,7 @@ from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
+from app.tools.schemas import ToolDefinition
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 
@@ -51,8 +51,8 @@ class AgentRuntime:
         turn_service: TurnService,
         context_builder: TextContextBuilder,
         tool_scheduler: ToolScheduler,
-        logger: logging.Logger,
         agent_profile: AgentProfile | None = None,
+        model_tools: list[ToolDefinition] | None = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -64,8 +64,7 @@ class AgentRuntime:
             tool_scheduler: 工具调度器。
             logger: 运行时日志器。
             agent_profile: 可选 Agent 角色配置。
-            workflow: 可选执行策略。
-            log_query_service: 可选日志查询服务。
+            model_tools: 暴露给模型的工具定义列表。
         """
 
         self._settings = settings
@@ -73,8 +72,8 @@ class AgentRuntime:
         self._turn_service = turn_service
         self._context_builder = context_builder
         self._tool_scheduler = tool_scheduler
-        self._logger = logger
         self._agent_profile = agent_profile or default_developer_agent()
+        self._model_tools = list(model_tools or [])
 
     def close(self) -> None:
         """Close external resources held by the runtime."""
@@ -137,7 +136,7 @@ class AgentRuntime:
         task = self._task_service.get_task(task_id)
 
         if turn.status != "pending":
-            self._logger.warning(
+            log.warning(
                 "run_turn_non_pending",
                 extra={
                     "msg": "run_turn called for non-pending turn; refusing to execute",
@@ -151,7 +150,7 @@ class AgentRuntime:
             self._turn_service.update_turn_status(
                 turn.turn_id, "failed", end_reason="agent_profile_unavailable"
             )
-            self._logger.error(
+            log.error(
                 "agent_profile_unavailable",
                 extra=trace_log_extra(
                     TraceContext(trace_id=str(uuid4()), task_id=task_id),
@@ -178,7 +177,7 @@ class AgentRuntime:
 
         if not self._turn_service.claim_pending_turn(turn.turn_id):
             # 已被其它连接抢占（极小概率的竞态）：本轮不再重复驱动，直接退出。
-            self._logger.warning(
+            log.warning(
                 "turn_claim_lost",
                 extra={
                     "msg": "turn already claimed by another connection",
@@ -198,10 +197,9 @@ class AgentRuntime:
             turn_store=self._turn_service,
             context_builder=self._context_builder,
             tool_scheduler=self._tool_scheduler,
-            logger=self._logger,
             agent_profile=agent_profile,
             current_turn_id=turn.turn_id,
-            model_tools = get_tool_system().registry.get_all_definitions()
+            model_tools=self._model_tools,
         )
 
         try:
@@ -213,7 +211,7 @@ class AgentRuntime:
             self._turn_service.update_turn_status(
                 turn.turn_id, "failed", end_reason=str(exc)
             )
-            self._logger.exception(
+            log.exception(
                 "task_failed",
                 extra={
                     "msg": "task execution failed",

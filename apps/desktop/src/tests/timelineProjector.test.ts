@@ -10,9 +10,11 @@ function makeTurn(turnId: string, inputText: string): TurnRecord {
     task_id: "task-1",
     input_text: inputText,
     status: "running",
+    end_reason: null,
+    response_text: null,
     created_at: now,
     updated_at: now,
-  } as TurnRecord;
+  };
 }
 
 function makeDelta(eventId: string, text: string, sequence = 1): RuntimeEvent {
@@ -165,12 +167,29 @@ describe("timeline projector", () => {
     expect(timeline[0].entries[2]).toEqual({ kind: "assistant", eventId: "e-3", content: "第二部" });
   });
 
-  it("无事件时返回空 entries", () => {
+  it("无事件且无 response_text 时返回空 entries", () => {
     const turn = makeTurn("turn-1", "hello");
     const timeline = projectTurnTimeline([turn], []);
 
     expect(timeline[0].entries).toHaveLength(0);
     expect(timeline[0].userText).toBe("hello");
+  });
+
+  it("无事件但存在 response_text 时投影历史 assistant 消息", () => {
+    const turn = {
+      ...makeTurn("turn-1", "hello"),
+      status: "completed",
+      response_text: "历史回答",
+    } satisfies TurnRecord;
+    const timeline = projectTurnTimeline([turn], []);
+
+    expect(timeline[0].entries).toEqual([
+      {
+        kind: "assistant",
+        eventId: "turn-response-turn-1",
+        content: "历史回答",
+      },
+    ]);
   });
 
   it("delta payload 为 null/undefined 时按空字符串聚合", () => {

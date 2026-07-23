@@ -6,10 +6,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Set
 
 from app.core.llm.model_settings import ModelSettings
-from app.core.workflows.agent_workflow import AgentWorkflow
 
 if TYPE_CHECKING:
-    from app.core.workflows.react import ReactLikeWorkflow
+    from app.core.workflows.agent_workflow import AgentWorkflow
 
 
 def _default_workflow() -> AgentWorkflow:
@@ -111,12 +110,11 @@ class AgentProfile:
             "agent_id": self.agent_id,
             "role": self.role,
             "goal": self.goal,
-            "allowed_tools": set(self.allowed_tools),
+            "allowed_tools": sorted(self.allowed_tools),
             "context_policy": self.context_policy,
-            "workflow": self.workflow,
+            "workflow": getattr(self.workflow, "workflow_id", "custom"),
             "model_name": self.model_name,
-            "model_settings": self.model_settings.to_dict(),
-            "max_turns": self.max_steps,
+            "max_steps": self.max_steps,
         }
 
 
@@ -143,7 +141,7 @@ def default_developer_agent() -> AgentProfile:
             "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
             "第一版只处理纯文本输入。"
         ),
-        allowed_tools=("safe_read",),
+        allowed_tools=set("safe_read",),
         context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(

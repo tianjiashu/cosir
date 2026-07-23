@@ -34,8 +34,8 @@ interface UseTaskReturn {
   createTurn: (text: string) => Promise<void>;
   /** 加载任务历史事件和轮次，并切换为活跃任务。 */
   openTask: (taskId: string) => Promise<void>;
-  /** 取消当前活跃任务。 */
-  cancelTask: () => Promise<void>;
+  /** 取消当前活跃轮次。 */
+  cancelTurn: () => Promise<void>;
   /** 刷新当前活跃任务的最新状态。 */
   refreshTask: () => Promise<void>;
   /** 操作状态。 */
@@ -51,7 +51,7 @@ interface UseTaskReturn {
  *
  * @example
  * ```tsx
- * const { createTask, cancelTask, operation } = useTask();
+ * const { createTask, cancelTurn, operation } = useTask();
  *
  * await createTask("帮我写一个登录页面", activeWorkspaceId);
  * if (operation.loading) <Spinner />;
@@ -64,6 +64,7 @@ export function useTask(): UseTaskReturn {
   });
 
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
+  const activeTurnId = useTaskStore((s) => s.activeTurnId);
   const addTask = useTaskStore((s) => s.addTask);
   const replaceTask = useTaskStore((s) => s.replaceTask);
   const removeTask = useTaskStore((s) => s.removeTask);
@@ -110,6 +111,7 @@ export function useTask(): UseTaskReturn {
           last_message_preview: text.slice(0, 80),
           latest_turn_id: null,
           status: "pending",
+          execution_status: "pending",
           created_at: now,
           updated_at: now,
         });
@@ -117,15 +119,25 @@ export function useTask(): UseTaskReturn {
 
         // 调用 API 创建任务
         const task = await api.createTask({ text, workspace_id: workspaceId });
+        const turns = await api.listTaskTurns(task.task_id);
+        const firstTurn = turns[turns.length - 1] ?? null;
+        const taskWithResolvedTurn = firstTurn
+          ? {
+              ...task,
+              latest_turn_id: firstTurn.turn_id,
+              execution_status: firstTurn.status,
+            }
+          : task;
 
         // 同步到 store
-        replaceTask(temporaryTaskId, task);
-        setActiveTask(task.task_id, task.latest_turn_id);
+        replaceTask(temporaryTaskId, taskWithResolvedTurn);
+        setTurnsForTask(task.task_id, turns);
+        setActiveTask(task.task_id, taskWithResolvedTurn.latest_turn_id);
 
         // 建立 SSE 连接开始接收事件流
-        if (task.latest_turn_id) {
-          setStreamingTurn(task.latest_turn_id);
-          await connect(task.task_id, task.latest_turn_id);
+        if (taskWithResolvedTurn.latest_turn_id) {
+          setStreamingTurn(taskWithResolvedTurn.latest_turn_id);
+          await connect(task.task_id, taskWithResolvedTurn.latest_turn_id);
         }
 
         setOperation({ loading: false, error: null });
@@ -143,7 +155,7 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [addTask, replaceTask, removeTask, setActiveTask, connect, disconnect, setStreamingTurn],
+    [addTask, replaceTask, removeTask, setActiveTask, connect, disconnect, setStreamingTurn, setTurnsForTask],
   );
 
   /**
@@ -176,7 +188,7 @@ export function useTask(): UseTaskReturn {
         updateTask(activeTaskId, {
           latest_turn_id: turn.turn_id,
           last_message_preview: text.slice(0, 80),
-          status: "pending",
+          execution_status: turn.status,
         });
         setStreamingTurn(turn.turn_id);
         await connect(activeTaskId, turn.turn_id);
@@ -199,17 +211,22 @@ export function useTask(): UseTaskReturn {
    *
    * @param taskId - 待打开的任务标识。
    *
-   * @sideeffect 从后端读取 events/turns 并写入对应 store。
+   * @sideeffect 从后端读取 task/turns 并写入对应 store。
    */
   const openTask = useCallback(
     async (taskId: string): Promise<void> => {
       setOperation({ loading: true, error: null });
       try {
-        const [events, turns] = await Promise.all([
-          api.getTaskEvents(taskId),
+        const [task, turns] = await Promise.all([
+          api.getTask(taskId),
           api.listTaskTurns(taskId),
         ]);
-        setEvents(events, taskId);
+        if (useTaskStore.getState().getTaskById(taskId)) {
+          updateTask(taskId, task);
+        } else {
+          addTask(task);
+        }
+        setEvents([], taskId);
         setTurnsForTask(taskId, turns);
         setActiveTask(taskId, turns.length > 0 ? turns[turns.length - 1].turn_id : null);
         setOperation({ loading: false, error: null });
@@ -219,16 +236,21 @@ export function useTask(): UseTaskReturn {
         setOperation({ loading: false, error: message });
       }
     },
-    [setActiveTask, setEvents, setTurnsForTask],
+    [addTask, setActiveTask, setEvents, setTurnsForTask, updateTask],
   );
 
   /**
-   * 取消当前活跃任务。
+   * 取消当前活跃轮次。
    *
-   * @sideeffect POST /tasks/{id}/cancel + 更新 store 状态。
+   * @sideeffect POST /turns/{id}/cancel + 更新 store 状态。
    */
-  const cancelTask = useCallback(async (): Promise<void> => {
+  const cancelTurn = useCallback(async (): Promise<void> => {
     if (!activeTaskId) return;
+    const turnId = activeTurnId ?? useTaskStore.getState().activeTurnId;
+    if (!turnId) {
+      setOperation({ loading: false, error: "当前任务没有可取消的轮次" });
+      return;
+    }
 
     setOperation({ loading: true, error: null });
     const ownsOperation = !hasClientTrace();
@@ -237,23 +259,28 @@ export function useTask(): UseTaskReturn {
     }
 
     try {
-      const updated = await api.cancelTask(activeTaskId);
-      updateTask(activeTaskId, { status: updated.status });
+      const updated = await api.cancelTurn(turnId, activeTaskId);
+      upsertTurn(updated);
+      updateTask(activeTaskId, {
+        execution_status: updated.status,
+        updated_at: updated.updated_at,
+      });
 
       // 断开 SSE 连接（任务已取消）
       disconnect();
+      setStreamingTurn(null);
 
       setOperation({ loading: false, error: null });
     } catch (err) {
       const message = err instanceof Error ? err.message : "取消任务失败";
-      logError("cancelTask 失败", err, { module: "useTask", task_id: activeTaskId });
+      logError("cancelTurn 失败", err, { module: "useTask", task_id: activeTaskId, turn_id: turnId });
       setOperation({ loading: false, error: message });
     } finally {
       if (ownsOperation) {
         endClientTrace();
       }
     }
-  }, [activeTaskId, updateTask, disconnect]);
+  }, [activeTaskId, activeTurnId, updateTask, upsertTurn, disconnect, setStreamingTurn]);
 
   /**
    * 从后端刷新当前活跃任务的最新状态。
@@ -267,7 +294,11 @@ export function useTask(): UseTaskReturn {
 
     try {
       const task = await api.getTask(activeTaskId);
-      updateTask(activeTaskId, { status: task.status, updated_at: task.updated_at });
+      updateTask(activeTaskId, {
+        status: task.status,
+        execution_status: task.execution_status,
+        updated_at: task.updated_at,
+      });
     } catch (err) {
       logError("refreshTask 失败", err, { module: "useTask", task_id: activeTaskId });
     } finally {
@@ -277,5 +308,5 @@ export function useTask(): UseTaskReturn {
     }
   }, [activeTaskId, updateTask]);
 
-  return { createTask, createTurn, openTask, cancelTask, refreshTask, operation };
+  return { createTask, createTurn, openTask, cancelTurn, refreshTask, operation };
 }

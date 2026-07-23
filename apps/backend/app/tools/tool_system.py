@@ -33,7 +33,7 @@ class ToolSystem:
     scheduler: ToolScheduler
 
     @classmethod
-    def build_tool_system(self, settings: BackendSettings, logger: logging.Logger):
+    def build_tool_system(self, settings: BackendSettings):
         """Build and register the process-wide tool system.
 
         Parameters:
@@ -56,6 +56,5 @@ class ToolSystem:
         scheduler = ToolScheduler(
             registry=registry,
             allowed_permissions=("safe_read",),
-            logger=logger,
         )
         return ToolSystem(registry=registry, scheduler=scheduler)

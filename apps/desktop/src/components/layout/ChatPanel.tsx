@@ -18,6 +18,7 @@ import { AgentMessage } from "@/components/chat/AgentMessage";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { StatusBadge } from "@/components/chat/StatusBadge";
 import { projectTurnTimeline } from "@/services/timeline/projector";
+import type { TurnRecord } from "@shared/turn";
 
 /**
  * 判断当前是否处于"空会话"状态：无活跃任务或零事件且任务从未运行过。
@@ -52,14 +53,17 @@ export function ChatPanel() {
       return turns;
     }
     if (activeTask) {
-      return [{
+      const fallbackTurn: TurnRecord = {
         turn_id: activeTask.latest_turn_id ?? activeTask.task_id,
         task_id: activeTask.task_id,
         input_text: activeTask.input_text,
-        status: activeTask.status,
+        status: "pending",
+        end_reason: null,
+        response_text: null,
         created_at: activeTask.created_at,
         updated_at: activeTask.updated_at,
-      }];
+      };
+      return [fallbackTurn];
     }
     return [];
   }, [activeTask, turns]);

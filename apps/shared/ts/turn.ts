@@ -20,6 +20,10 @@ export interface TurnRecord {
   input_text: string;
   /** 当前轮次状态。 */
   status: TurnStatus;
+  /** 终态原因，例如客户端断开或用户取消；无原因时为 null。 */
+  end_reason: string | null;
+  /** 后端落库的本轮 Agent 最终回复文本；尚无回复时为 null。 */
+  response_text: string | null;
   /** 轮次创建时间戳。 */
   created_at: string;
   /** 轮次最近更新时间戳。 */
