@@ -23,10 +23,11 @@ from app.bootstate import (
 )
 from app.config.logging import install_logging_for_current_process
 from app.config.settings import default_settings
+from app.storage.store_engines import init_storage
 
 
 def main() -> None:
-    """解析配置、挂载文件日志并启动 uvicorn 开发服务器。
+    """解析配置、初始化存储与日志并启动 uvicorn 开发服务器。
 
     启动初期先写入 ``booting`` 启动状态，便于桌面端 supervisor 在进程崩溃瞬间
     拿到结构化失败原因；任何未捕获异常都会写入 ``failed`` 启动状态后再向上抛出，
@@ -39,12 +40,14 @@ def main() -> None:
         无。
 
     异常:
-        RuntimeError: 当无法解析仓库根目录或日志目录不可写时。
+        RuntimeError: 当无法解析仓库根目录、日志目录不可写或存储初始化失败时。
         其余启动期异常：捕获后写入 ``failed`` 启动状态并原样向上抛出。
 
     副作用:
-        向 ``logs/logs-YYYY-MM-DD.log`` 挂载文件日志处理器，并按需启动 uvicorn 进程；
-        按环境决定是否写入 ``storage/backend.bootstate.json`` 启动状态文件。
+        初始化 SQLite 存储引擎（含日志库 schema）；向 ``logs/logs-YYYY-MM-DD.log``
+        挂载文件日志处理器并向 SQLite 日志库挂载异步写入 handler；按需启动
+        uvicorn 进程；按环境决定是否写入 ``storage/backend.bootstate.json``
+        启动状态文件。
     """
     boot_state_file = boot_state_file_from_env()
     try:
@@ -52,7 +55,18 @@ def main() -> None:
             write_bootstate(boot_state_file, BOOT_PHASE_BOOTING, step="start")
 
         settings = default_settings()
-        install_logging_for_current_process(log_dir=settings.log_dir)
+        # 存储引擎（含日志库 session 工厂）必须在日志配置之前初始化，
+        # 否则 SQLiteLogHandler 内部构造 LogStore 时会因 log_session_factory()
+        # 不可用而抛 RuntimeError，导致日志仅落文件、SQLite 库永远为空。
+        init_storage(settings)
+        install_logging_for_current_process(
+            log_dir=settings.log_dir,
+            log_database_file=settings.log_database_file,
+            sqlite_logging_enabled=settings.sqlite_logging_enabled,
+            queue_size=settings.log_queue_size,
+            batch_size=settings.log_batch_size,
+            flush_interval_ms=settings.log_flush_interval_ms,
+        )
 
         host = os.environ.get("CODING_AGENT_HOST", "127.0.0.1")
         port = int(os.environ.get("CODING_AGENT_PORT", "8000"))

@@ -189,37 +189,10 @@ export function LogsPage({ onBack }: LogsPageProps) {
             </div>
           ) : null}
           <section className="overflow-hidden rounded-md border border-border bg-card">
-            <div className="border-b border-border bg-muted/40 px-3 py-2">
-              <div className="truncate text-xs font-medium">纯文本日志</div>
-            </div>
-            <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5 text-foreground">
+            <pre className="max-h-[600px] overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5 text-foreground">
               {logs.text || "(empty)"}
             </pre>
           </section>
-          {logs.entries.length > 0 ? (
-            <section className="overflow-hidden rounded-md border border-border bg-card">
-              <div className="border-b border-border bg-muted/40 px-3 py-2">
-                <div className="truncate text-xs font-medium">结构化字段</div>
-              </div>
-              <div className="divide-y divide-border">
-                {logs.entries.map((entry, index) => (
-                  <div key={`${entry.ts}-${entry.event}-${index}`} className="grid gap-1 px-3 py-2 text-xs">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="font-mono text-muted-foreground">{entry.ts}</span>
-                      <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{entry.level}</span>
-                      <span className="truncate font-mono font-medium">{entry.event}</span>
-                    </div>
-                    <div className="truncate text-muted-foreground">{entry.msg}</div>
-                    {entry.error?.stack ? (
-                      <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 font-mono text-[11px]">
-                        {entry.error.stack}
-                      </pre>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
         </div>
       </ScrollArea>
     </main>
