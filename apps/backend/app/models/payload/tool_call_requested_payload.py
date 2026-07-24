@@ -14,3 +14,4 @@ class ToolCallRequestedPayload(RuntimeEventPayload):
     arguments: dict[str, Any] = Field(default_factory=dict)
     step_id: str | None = None
     tool_call_id: str | None = None
+    display: dict[str, Any] | None = None

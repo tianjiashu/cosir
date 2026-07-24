@@ -11,8 +11,9 @@
 """
 
 from pathlib import Path
+from typing import ClassVar
 
-from app.tools.schemas import ToolDefinition, ToolObservation
+from app.tools.schemas import ToolDefinition, ToolDisplayHints, ToolObservation
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
 
@@ -54,7 +55,7 @@ class ReadFileTool:
     timeout_seconds = 10.0
     risk_level = "low"
 
-    windows_device_names = {
+    windows_device_names: ClassVar[set[str]] = {
         "CON",
         "PRN",
         "AUX",
@@ -86,7 +87,7 @@ class ReadFileTool:
         "LPT\u00b2",
         "LPT\u00b3",
     }
-    posix_blocked_device_paths = {
+    posix_blocked_device_paths: ClassVar[set[str]] = {
         "/dev/zero",
         "/dev/random",
         "/dev/urandom",
@@ -114,7 +115,7 @@ class ReadFileTool:
         "/auxv",
         "/pagemap",
     )
-    binary_extensions = {
+    binary_extensions: ClassVar[set[str]] = {
         ".7z",
         ".avi",
         ".bin",
@@ -238,6 +239,13 @@ class ReadFileTool:
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
+            display=ToolDisplayHints(
+                verb="读取",
+                icon="eye",
+                summary_template="{path} · L{start}-L{end}",
+                detail_keys=("path", "offset", "limit"),
+                click_action="open_file:{path}",
+            ),
         )
 
     def _resolve_project_path(self, path: str) -> tuple[Path | None, str]:

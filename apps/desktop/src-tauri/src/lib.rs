@@ -26,6 +26,7 @@ pub fn run() {
             commands::backend::backend_restart,
             commands::backend::backend_status,
             commands::backend::backend_logs_tail,
+            commands::fs::open_file_in_editor,
         ])
         .setup(|app| {
             let window = app

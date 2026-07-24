@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { UserMessage } from "@/components/chat/UserMessage";
 import { AgentMessage } from "@/components/chat/AgentMessage";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
+import { openFileInEditor } from "@/services/backend";
 import { StatusBadge } from "@/components/chat/StatusBadge";
 import { projectTurnTimeline } from "@/services/timeline/projector";
 import type { TurnRecord } from "@shared/turn";
@@ -123,12 +124,22 @@ export function ChatPanel() {
                         <ToolCallCard
                           toolName={tool.toolName}
                           status="running"
+                          args={tool.arguments}
+                          display={tool.display}
+                          onOpenFile={(path) => {
+                            void openFileInEditor(path);
+                          }}
                         />
                       ) : (
                         <ToolCallCard
                           toolName={tool.toolName}
                           status={tool.status}
                           error={tool.error}
+                          args={tool.arguments}
+                          display={tool.display}
+                          onOpenFile={(path) => {
+                            void openFileInEditor(path);
+                          }}
                         />
                       )}
                     </div>

@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.tools.schemas.tool_display import ToolDisplayHints
+
 
 @dataclass(frozen=True)
 class ToolDefinition:
@@ -22,6 +24,7 @@ class ToolDefinition:
     risk_level: str = "low"
     visible_by_default: bool = True
     resource_keys: Sequence[str] = field(default_factory=tuple)
+    display: ToolDisplayHints | None = None
 
     def normalized(self) -> "ToolDefinition":
         """Return a definition with a derived schema when args_model is provided."""
@@ -40,6 +43,7 @@ class ToolDefinition:
             risk_level=self.risk_level,
             visible_by_default=self.visible_by_default,
             resource_keys=self.resource_keys,
+            display=self.display,
         )
 
     def to_model_tool_definition(self) -> dict[str, Any]:

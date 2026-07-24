@@ -84,3 +84,18 @@ export async function getBackendStatus(): Promise<BackendStatusResponse> {
 export async function tailBackendLogs(maxLines = 80): Promise<BackendLogsTailResponse> {
   return invokeCommand<BackendLogsTailResponse>("backend_logs_tail", { maxLines });
 }
+
+/**
+ * 用系统默认应用打开一个文件（由工具卡片的「打开文件」动作触发）。
+ *
+ * 参数:
+ *   path - 待打开文件的路径（前端已结合工作区根解析为可直接打开的路径）。
+ *
+ * 返回:
+ *   无。
+ *
+ * @throws {ServiceError} 当 IPC 通道调用失败时抛出。
+ */
+export async function openFileInEditor(path: string): Promise<void> {
+  return invokeCommand<void>("open_file_in_editor", { path });
+}

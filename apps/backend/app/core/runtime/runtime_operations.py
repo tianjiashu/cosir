@@ -11,6 +11,7 @@ from app.core.context.text_context_builder import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
+from app.models.payload.tool_call_requested_payload import ToolCallRequestedPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.tools.schemas import ToolCall, ToolDefinition
@@ -256,6 +257,43 @@ class RuntimeOperations:
             },
         )
         return result
+
+    def build_tool_call_requested(
+        self, call: ToolCall, step_id: str | None
+    ) -> ToolCallRequestedPayload:
+        """构造 ``TOOL_CALL_REQUESTED`` 事件 payload，并附上工具展示元数据。
+
+        从 ``model_tools`` 中按 ``tool_name`` 查找 ``ToolDefinition``，若其声明了
+        ``display``，则调用 ``ToolDisplayHints.render`` 把本次调用的参数投影成前端
+        展示字段（verb / icon / summary / detail_keys / click_action），随事件一起
+        推送给前端；未声明或未知工具时 ``display`` 为 ``None``，前端降级为通用展示。
+
+        参数:
+            call: 模型请求的工具调用（含 ``tool_name`` / ``arguments`` / ``call_id``）。
+            step_id: 请求该工具调用的步骤标识符。
+
+        返回:
+            ``ToolCallRequestedPayload``，含来自 ``ToolDefinition.display`` 的渲染展示信息。
+
+        异常:
+            不向上抛出；``arguments`` 非字典时安全降级为空字典。
+
+        副作用:
+            无（只读 ``model_tools``，不触发工具执行）。
+        """
+
+        definition = next((tool for tool in self.model_tools if tool.name == call.tool_name), None)
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        display = None
+        if definition and definition.display is not None:
+            display = definition.display.render(arguments)
+        return ToolCallRequestedPayload(
+            tool_name=call.tool_name,
+            arguments=arguments,
+            step_id=step_id,
+            tool_call_id=call.call_id,
+            display=display,
+        )
 
 
 def _noop_write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:

@@ -38,7 +38,7 @@ export interface ModelToolCallPayload extends RuntimeEventPayloadObject {
 
 export interface RunStartedPayload extends RuntimeEventPayloadObject {
   status: "running";
-  agent: Record<string, unknown>;
+  agent_id: string;
 }
 
 export interface RunFailedPayload extends RuntimeEventPayloadObject {
@@ -100,6 +100,7 @@ export interface ToolCallRequestedPayload extends RuntimeEventPayloadObject {
   arguments?: Record<string, unknown>;
   step_id?: string | null;
   tool_call_id?: string | null;
+  display?: Record<string, unknown> | null;
 }
 
 export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {

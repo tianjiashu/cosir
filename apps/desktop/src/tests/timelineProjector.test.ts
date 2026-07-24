@@ -69,6 +69,7 @@ function makeToolCallFinished(
   eventId: string,
   toolName: string,
   status: "success" | "error",
+  callId = "call-1",
   sequence = 1,
 ): RuntimeEvent {
   return {
@@ -78,7 +79,7 @@ function makeToolCallFinished(
     turn_id: "turn-1",
     sequence,
     created_at: new Date().toISOString(),
-    payload: { step_id: "step-1", tool_name: toolName, status, tool_call_id: "call-1" },
+    payload: { step_id: "step-1", tool_name: toolName, status, tool_call_id: callId },
   };
 }
 
@@ -300,8 +301,8 @@ describe("timeline projector", () => {
   it("tool_call_finished 投影为 tool 条目", () => {
     const turn = makeTurn("turn-1", "hello");
     const events = [
-      makeToolCallFinished("e-2", "read_file", "success"),
-      makeToolCallFinished("e-3", "shell", "error"),
+      makeToolCallFinished("e-2", "read_file", "success", "call-1"),
+      makeToolCallFinished("e-3", "shell", "error", "call-2"),
     ];
     const timeline = projectTurnTimeline([turn], events);
 
@@ -312,6 +313,7 @@ describe("timeline projector", () => {
         eventId: "e-2",
         toolName: "read_file",
         status: "completed",
+        callId: "call-1",
       },
     });
     expect(timeline[0].entries[1]).toEqual({
@@ -320,7 +322,135 @@ describe("timeline projector", () => {
         eventId: "e-3",
         toolName: "shell",
         status: "error",
+        callId: "call-2",
       },
     });
+  });
+
+  it("tool_call_requested 与 tool_call_finished 按 callId 合并为单条且保留参数", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [
+      {
+        event_id: "e-1",
+        event_type: "tool_call_requested",
+        task_id: "task-1",
+        turn_id: "turn-1",
+        sequence: 1,
+        created_at: new Date().toISOString(),
+        payload: { tool_name: "read_file", arguments: { path: "a.txt", offset: 1, limit: 10 }, tool_call_id: "call-9" },
+      } as RuntimeEvent,
+      {
+        event_id: "e-2",
+        event_type: "tool_call_finished",
+        task_id: "task-1",
+        turn_id: "turn-1",
+        sequence: 2,
+        created_at: new Date().toISOString(),
+        payload: { step_id: "step-1", tool_name: "read_file", status: "success", tool_call_id: "call-9" },
+      } as RuntimeEvent,
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+
+    expect(timeline[0].entries).toHaveLength(1);
+    expect(timeline[0].entries[0]).toEqual({
+      kind: "tool",
+      item: {
+        eventId: "e-2",
+        toolName: "read_file",
+        status: "completed",
+        arguments: { path: "a.txt", offset: 1, limit: 10 },
+        callId: "call-9",
+      },
+    });
+  });
+
+  it("tool_call_requested 的 display 透传为 camelCase 的 ToolDisplayInfo", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [
+      {
+        event_id: "e-1",
+        event_type: "tool_call_requested",
+        task_id: "task-1",
+        turn_id: "turn-1",
+        sequence: 1,
+        created_at: new Date().toISOString(),
+        payload: {
+          tool_name: "read_file",
+          arguments: { path: "a.ts", offset: 1, limit: 20 },
+          tool_call_id: "call-1",
+          display: {
+            verb: "读取",
+            icon: "eye",
+            summary: "a.ts · L1-L20",
+            detail_keys: ["path", "offset", "limit"],
+            click_action: { action: "open_file", target: "a.ts" },
+          },
+        },
+      } as RuntimeEvent,
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+
+    expect(timeline[0].entries).toHaveLength(1);
+    const entry = timeline[0].entries[0];
+    expect(entry.kind).toBe("tool");
+    if (entry.kind === "tool") {
+      expect(entry.item.display).toEqual({
+        verb: "读取",
+        icon: "eye",
+        summary: "a.ts · L1-L20",
+        detailKeys: ["path", "offset", "limit"],
+        clickAction: { action: "open_file", target: "a.ts" },
+      });
+    }
+  });
+
+  it("tool_call_finished 合并时保留 requested 携带的 display", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [
+      {
+        event_id: "e-1",
+        event_type: "tool_call_requested",
+        task_id: "task-1",
+        turn_id: "turn-1",
+        sequence: 1,
+        created_at: new Date().toISOString(),
+        payload: {
+          tool_name: "read_file",
+          arguments: { path: "a.ts", offset: 1, limit: 20 },
+          tool_call_id: "call-9",
+          display: {
+            verb: "读取",
+            icon: "eye",
+            summary: "a.ts · L1-L20",
+            detail_keys: ["path", "offset", "limit"],
+            click_action: { action: "open_file", target: "a.ts" },
+          },
+        },
+      } as RuntimeEvent,
+      {
+        event_id: "e-2",
+        event_type: "tool_call_finished",
+        task_id: "task-1",
+        turn_id: "turn-1",
+        sequence: 2,
+        created_at: new Date().toISOString(),
+        payload: { step_id: "step-1", tool_name: "read_file", status: "success", tool_call_id: "call-9" },
+      } as RuntimeEvent,
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+
+    expect(timeline[0].entries).toHaveLength(1);
+    const entry = timeline[0].entries[0];
+    expect(entry.kind).toBe("tool");
+    if (entry.kind === "tool") {
+      expect(entry.item.status).toBe("completed");
+      expect(entry.item.display).toEqual({
+        verb: "读取",
+        icon: "eye",
+        summary: "a.ts · L1-L20",
+        detailKeys: ["path", "offset", "limit"],
+        clickAction: { action: "open_file", target: "a.ts" },
+      });
+    }
   });
 });

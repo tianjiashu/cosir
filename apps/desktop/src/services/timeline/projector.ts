@@ -9,6 +9,28 @@
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 
+/** 工具点击动作（来自后端 `ToolDefinition.display`，已投影）。 */
+export interface ToolDisplayClickAction {
+  /** 动作类型，如 `open_file`，前端据此分发行为。 */
+  action: string;
+  /** 动作目标，已结合本次调用参数渲染，如文件路径。 */
+  target: string;
+}
+
+/** 工具展示提示（来自后端 `ToolDefinition.display.render`，已投影为 camelCase）。 */
+export interface ToolDisplayInfo {
+  /** 动作名，如 “读取”。 */
+  verb: string;
+  /** lucide 图标名，如 “eye”。 */
+  icon: string;
+  /** 折叠态摘要文本（已含路径/行范围等）。 */
+  summary: string;
+  /** 展开态优先展示的参数 key 顺序。 */
+  detailKeys: string[];
+  /** 可选点击动作；为空表示不可点击。 */
+  clickAction: ToolDisplayClickAction | null;
+}
+
 /** timeline 工具项。 */
 export interface TimelineToolItem {
   /** 原始事件 ID。 */
@@ -19,6 +41,12 @@ export interface TimelineToolItem {
   status: "running" | "completed" | "error";
   /** 可选错误。 */
   error?: string;
+  /** 工具调用参数（来自 `tool_call_requested`，用于前端展示文件路径/行范围等）。 */
+  arguments?: Record<string, unknown>;
+  /** 工具调用唯一 ID，用于把 requested / finished 事件合并为同一条目。 */
+  callId?: string;
+  /** 工具展示提示；来自后端，未声明时缺省，前端降级为通用展示。 */
+  display?: ToolDisplayInfo;
 }
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
@@ -89,6 +117,9 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
   const entries: TurnTimelineEntry[] = [];
   let pendingDelta: { eventId: string; content: string } | null = null;
   let pendingThinking: { eventId: string; content: string } | null = null;
+  // 工具条目按 callId 合并：requested 携参数创建条目，finished 更新其状态，
+  // 避免同一工具调用产生「运行中 + 完成」两条碎片条目。
+  const toolByCallId = new Map<string, number>();
 
   const flushPending = () => {
     if (pendingThinking) {
@@ -136,7 +167,26 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
 
     const tool = projectTool(event);
     if (tool) {
-      entries.push({ kind: "tool", item: tool });
+      const callId = tool.callId;
+      if (callId && toolByCallId.has(callId)) {
+        // 同一工具调用已有 requested 条目，仅更新其状态/错误/id，保留参数
+        const idx = toolByCallId.get(callId)!;
+        const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
+        existing.item.status = tool.status;
+        existing.item.error = tool.error;
+        existing.item.eventId = tool.eventId;
+        if (tool.arguments) {
+          existing.item.arguments = tool.arguments;
+        }
+        if (tool.display) {
+          existing.item.display = tool.display;
+        }
+      } else {
+        if (callId) {
+          toolByCallId.set(callId, entries.length);
+        }
+        entries.push({ kind: "tool", item: tool });
+      }
       continue;
     }
 
@@ -166,19 +216,76 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
  */
 function projectTool(event: RuntimeEvent): TimelineToolItem | null {
   if (event.event_type === "tool_call_requested" || event.event_type === "tool_call_started") {
+    const payload = event.payload as {
+      tool_name?: string;
+      arguments?: Record<string, unknown>;
+      tool_call_id?: string | null;
+      display?: Record<string, unknown> | null;
+    };
     return {
         eventId: event.event_id,
-        toolName: String(event.payload.tool_name ?? "未知工具"),
+        toolName: String(payload.tool_name ?? "未知工具"),
         status: "running" as const,
+        arguments: payload.arguments ? (payload.arguments as Record<string, unknown>) : undefined,
+        callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
+        display: toolDisplayFromPayload(payload.display),
       };
   }
   if (event.event_type === "tool_call_finished") {
+    const payload = event.payload as {
+      tool_name?: string;
+      status?: string;
+      error?: string;
+      tool_call_id?: string | null;
+    };
     return {
         eventId: event.event_id,
-        toolName: String(event.payload.tool_name ?? "未知工具"),
-        status: String(event.payload.status) === "error" ? "error" as const : "completed" as const,
-        error: event.payload.error ? String(event.payload.error) : undefined,
+        toolName: String(payload.tool_name ?? "未知工具"),
+        status: String(payload.status) === "error" ? "error" as const : "completed" as const,
+        error: payload.error ? String(payload.error) : undefined,
+        callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
       };
   }
   return null;
+}
+
+/**
+ * 把后端透传的展示提示投影成前端使用的结构。
+ *
+ * 后端 `display` 为 snake_case 字典且字段可选；本函数做类型收窄与 camelCase
+ * 转换，缺字段时给出安全默认值，保证 `ToolCallCard` 可无分支消费。
+ *
+ * 参数:
+ *   raw - 事件 payload 中的 `display` 字段（可能为 undefined / null / 非对象）。
+ *
+ * 返回:
+ *   转换后的 `ToolDisplayInfo`；输入非法时返回 undefined。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无。
+ */
+function toolDisplayFromPayload(raw: unknown): ToolDisplayInfo | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const display = raw as Record<string, unknown>;
+  const clickActionRaw = display.click_action;
+  let clickAction: ToolDisplayClickAction | null = null;
+  if (clickActionRaw && typeof clickActionRaw === "object") {
+    const ca = clickActionRaw as Record<string, unknown>;
+    if (typeof ca.action === "string" && typeof ca.target === "string") {
+      clickAction = { action: ca.action, target: ca.target };
+    }
+  }
+  const detailKeys = Array.isArray(display.detail_keys)
+    ? (display.detail_keys as unknown[]).filter((key) => typeof key === "string") as string[]
+    : [];
+  return {
+    verb: typeof display.verb === "string" ? display.verb : "",
+    icon: typeof display.icon === "string" ? display.icon : "wrench",
+    summary: typeof display.summary === "string" ? display.summary : "",
+    detailKeys,
+    clickAction,
+  };
 }

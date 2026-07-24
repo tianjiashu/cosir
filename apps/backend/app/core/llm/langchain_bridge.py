@@ -120,6 +120,8 @@ def tool_calls_from_langchain(calls: list[LangChainToolCall]) -> list[ToolCall]:
     副作用:
         无。
     """
+    if not calls or len(calls) == 0:
+        return []
 
     return [
         ToolCall(
