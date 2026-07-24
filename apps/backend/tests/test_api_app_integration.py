@@ -95,7 +95,7 @@ class _FakeStreamRuntime:
             event_type=EventType.RUN_STARTED,
             task_id="task-1",
             turn_id=turn_id,
-            payload=RunStartedPayload(status="running", agent={}),
+            payload=RunStartedPayload(status="running", agent_id={}),
         )
 
 

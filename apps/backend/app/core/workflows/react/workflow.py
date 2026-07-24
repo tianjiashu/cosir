@@ -1,9 +1,9 @@
 """默认 ReAct-like 工作流编排，由 LangGraph StateGraph 驱动。
 
 本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` 节点 +
-``should_continue`` 条件边）、以 ``astream(stream_mode=["custom","messages"])`` 单循环
-驱动执行，把节点经 ``get_stream_writer()`` 写入的 ``custom`` 业务事件与 ``messages``
-流中的 token 分块统一翻译为 ``RuntimeEvent`` 对外流式 ``yield``；graph 编译时挂
+``should_continue`` 条件边）、以 ``astream(stream_mode=["custom"])`` 单循环
+驱动执行，把节点经 ``get_stream_writer()`` 写入的 ``custom`` 业务事件（含模型回复增量与思考增量）
+统一透传为 ``RuntimeEvent`` 对外流式 ``yield``；graph 编译时挂
 ``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状态持久化、断点续跑与审批中断。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
@@ -22,7 +22,6 @@ from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_l
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.models import TaskRecord
 from app.models.enums.event_type import EventType
-from app.models.payload import ModelOutputDeltaPayload, StepStartedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.tools.schemas import ToolCall
@@ -30,7 +29,7 @@ from app.tools.schemas import ToolCall
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
 from .edges import _should_continue
-from .nodes import _extract_text, _model_node, _tools_node
+from .nodes import _model_node, _tools_node
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
 
@@ -88,9 +87,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
         方法构建并编译 graph，挂 ``AsyncSqliteSaver`` checkpointer；以
-        ``astream(stream_mode=["custom","messages"])`` 单循环驱动 graph，把节点经
-        ``get_stream_writer()`` 写入的 ``custom`` 业务事件与 ``messages`` 流中的 token 分块
-        统一翻译为 ``RuntimeEvent`` 流式 ``yield``。当 ``tools`` 节点触发 ``interrupt()`` 时，
+        ``astream(stream_mode=["custom"])`` 单循环驱动 graph，把节点经 ``get_stream_writer()``
+        写入的 ``custom`` 业务事件（含 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA`` 等流式
+        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。当 ``tools`` 节点触发 ``interrupt()`` 时，
         方法用审批解析器解析出批准的工具调用，并通过 ``Command(resume=)`` 恢复 graph，直到
         工作流结束。
 
@@ -156,50 +155,34 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_text="",
             )
 
-            current_step_id: str | None = None
             sequence = 0
             while True:
                 try:
                     async for mode, data in graph.astream(
                         input_state,
                         config,
-                        stream_mode=["custom", "messages"],
+                        stream_mode=["custom"],
                     ):
-                        if mode == "messages":
-                            chunk, _metadata = data
-                            text = _extract_text(chunk.content)
-                            if text and current_step_id is not None:
-                                yield RuntimeEvent(
-                                    event_type=EventType.MODEL_OUTPUT_DELTA,
-                                    task_id=task.task_id,
-                                    turn_id=turn_id,
-                                    sequence=sequence,
-                                    payload=ModelOutputDeltaPayload(
-                                        step_id=current_step_id,
-                                        text=text,
-                                    ),
-                                )
-                                sequence += 1
-                        elif mode == "custom":
-                            raw = data
-                            event_type = EventType(raw["event_type"])
-                            payload = raw["payload"]
-                            if not isinstance(payload, RuntimeEventPayload):
-                                raise TypeError(
-                                    "custom runtime event payload must be a payload entity"
-                                )
-                            if event_type == EventType.STEP_STARTED and isinstance(
-                                payload, StepStartedPayload
-                            ):
-                                current_step_id = payload.step_id
-                            yield RuntimeEvent(
-                                event_type=event_type,
-                                task_id=task.task_id,
-                                turn_id=turn_id,
-                                sequence=sequence,
-                                payload=payload,
-                            )
-                            sequence += 1
+                        if mode != "custom":
+                            continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）
+                        raw = data
+                        event_type = EventType(raw["event_type"])
+                        payload = raw["payload"]
+                        if not isinstance(payload, RuntimeEventPayload):
+                            raise TypeError("custom runtime event payload must be a payload entity")
+                        event = RuntimeEvent(
+                            event_type=event_type,
+                            task_id=task.task_id,
+                            turn_id=turn_id,
+                            sequence=sequence,
+                            payload=payload,
+                        )
+                        log.info(
+                            "workflow_graph_event",
+                            extra={"msg": "workflow graph event", "data": event.to_dict()},
+                        )
+                        yield event
+                        sequence += 1
                 except Exception:
                     log.exception(
                         "workflow_graph_failed",

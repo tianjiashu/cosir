@@ -214,7 +214,7 @@ class AgentRuntime:
             yield self._record(
                 EventType.RUN_STARTED,
                 task_id,
-                RunStartedPayload(status="running", agent=agent_profile.to_dict()),
+                RunStartedPayload(status="running", agent_id=agent_profile.agent_id),
                 turn_id=turn.turn_id,
             )
 

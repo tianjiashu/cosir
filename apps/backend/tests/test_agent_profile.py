@@ -32,7 +32,7 @@ def test_agent_profile_to_dict_is_json_serializable() -> None:
         event_type=EventType.RUN_STARTED,
         task_id="task-1",
         turn_id="turn-1",
-        payload=RunStartedPayload(status="running", agent=profile),
+        payload=RunStartedPayload(status="running", agent_id=profile),
     )
 
     json.dumps(profile)
@@ -113,7 +113,7 @@ def test_runtime_event_rejects_mismatched_payload_entity() -> None:
         RuntimeEvent(
             event_type=EventType.RUN_FINISHED,
             task_id="task-1",
-            payload=RunStartedPayload(status="running", agent={}),
+            payload=RunStartedPayload(status="running", agent_id={}),
         )
 
 

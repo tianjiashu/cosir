@@ -2,9 +2,10 @@
 
 本模块只承载节点逻辑，不负责 graph 构建、运行编排或事件翻译。两个节点 ``model`` 与
 ``tools`` 均为 LangGraph 原生 callable，通过 ``get_config()`` 从运行上下文取出
-``operations`` / ``task`` / ``turn`` / ``model``；节点业务事件通过 ``get_stream_writer()`` 写入
-（在 ``astream(stream_mode=["custom","messages"])`` 中表现为 ``custom`` 事件），token 由
-``model.astream()`` 产出、由编排层从 ``messages`` 流中捕获，二者同走一条原生事件流。
+``operations`` / ``task`` / ``turn`` / ``model``；节点的全部运行时事件（含模型回复增量
+``MODEL_OUTPUT_DELTA`` 与思考增量 ``MODEL_THINKING_DELTA``）统一经 ``get_stream_writer()``
+写入 ``custom`` 事件流，由编排层 ``astream(stream_mode=["custom"])`` 透传为 ``RuntimeEvent``；
+token 由 ``model.astream()`` 产出并在节点内就地翻译为增量事件，不再依赖 ``messages`` 流通道。
 
 状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
 """
@@ -18,6 +19,7 @@ from app.models.enums.event_type import EventType
 from app.models.payload import (
     FinalResponsePayload,
     ModelCompletedPayload,
+    ModelOutputDeltaPayload,
     ModelRequestedPayload,
     ModelThinkingDeltaPayload,
     ModelToolCallPayload,
@@ -108,10 +110,14 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
         merged = chunk if merged is None else merged + chunk  # LangChain chunk 支持 + 累加
     if merged is None:
         return AIMessage(content="")  # 空输入返回空消息
+    # 剥离思考字段：思考内容已在流式阶段作为 MODEL_THINKING_DELTA 推送给前端，
+    # 不应随消息回灌给模型（推理模型回灌 reasoning_content 易引发重复思考或协议错误）。
+    additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
+    additional.pop("reasoning_content", None)
     return AIMessage(
         content=merged.content,  # 合并后的文本
         tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
-        additional_kwargs=merged.additional_kwargs,  # 保留思考等额外字段
+        additional_kwargs=additional,  # 仅保留非思考的额外字段
         id=getattr(merged, "id", None),  # 消息 id 透传
     )
 
@@ -120,8 +126,10 @@ async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
     节点从运行上下文取出 ``operations`` / ``task`` / ``turn`` / ``model``，通过
-    ``get_stream_writer()`` 把业务生命周期事件写入自定义事件流；用 ``model.astream()`` 累积
-    ``AIMessage``，token 增量由编排层从 ``messages`` 流捕获。根据模型最终输出决定进入工具分支、
+    ``get_stream_writer()`` 把业务生命周期事件与流式 token 增量写入自定义事件流；
+    用 ``model.astream()`` 累积 ``AIMessage``，回复 token 与思考 token 在节点内就地翻译为
+    ``MODEL_OUTPUT_DELTA`` /
+    ``MODEL_THINKING_DELTA`` 事件，由编排层统一透传。根据模型最终输出决定进入工具分支、
     最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **turn**。
 
     参数:
@@ -164,13 +172,19 @@ async def _model_node(state: ReactGraphState) -> dict:
         if operations.has_turn_status(turn.turn_id, "cancelled"):
             write_event(
                 EventType.RUN_CANCELLED,
-                RunCancelledPayload(step_id=step_id, status="cancelled", error="cancelled"),
+                RunCancelledPayload(step_id=step_id, status="cancelled"),
             )
             terminal = True  # 标记提前终止
             break  # 跳出流式循环
         text = _extract_text(chunk.content)  # 抽本 chunk 文本
         if text:
             collected_text.append(text)  # 有文本才累积
+            write_event(
+                # 回复 token 在节点内就地翻译为增量事件，避免依赖 messages 流
+                # 导致完整回复被重复推送
+                EventType.MODEL_OUTPUT_DELTA,
+                ModelOutputDeltaPayload(step_id=step_id, text=text),
+            )
         chunks.append(chunk)  # 所有 chunk 都留着，后面合并成完整消息
         reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
         if reasoning:

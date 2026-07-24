@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
 from app.config.settings import BackendSettings
-from app.core.context.builder import TextContextBuilder
+from app.core.context.text_context_builder import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
