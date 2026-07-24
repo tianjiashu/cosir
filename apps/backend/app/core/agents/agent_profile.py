@@ -66,7 +66,7 @@ class AgentProfile:
 
     agent_id: str
     role: str
-    goal: str
+    system_prompt: str
     allowed_tools: list[str]
     context_policy: str
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
@@ -113,7 +113,7 @@ class AgentProfile:
         return {
             "agent_id": self.agent_id,
             "role": self.role,
-            "goal": self.goal,
+            "goal": self.system_prompt,
             "allowed_tools": self.allowed_tools,
             "context_policy": self.context_policy,
             "workflow": getattr(self.workflow, "workflow_id", "custom"),
@@ -141,13 +141,46 @@ def default_developer_agent() -> AgentProfile:
     return AgentProfile(
         agent_id=DEFAULT_AGENT_ID,
         role="developer",
-        goal=(
+        system_prompt=(
             "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
             "第一版只处理纯文本输入。"
         ),
         allowed_tools=["read_file"],
         context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
+        model_settings=ModelSettings(
+            base_url="https://api.deepseek.com",
+            api_key_env="DEEPSEEK_API_KEY",
+        ),
+    )
+
+
+def developer_agent_pro() -> AgentProfile:
+    """构建开发者 Agent profile Pro。
+
+    参数:
+        无。
+
+    返回:
+        用于内置单 Agent 的 AgentProfile。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return AgentProfile(
+        agent_id="developer_pro",
+        role="developer_pro",
+        system_prompt=(
+            "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
+            "第一版只处理纯文本输入。"
+        ),
+        allowed_tools=["read_file"],
+        context_policy="text_only_v1",
+        model_name="deepseek-v4-pro",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",

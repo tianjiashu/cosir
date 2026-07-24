@@ -24,6 +24,8 @@ interface TaskState {
   activeTaskId: string | null;
   /** 当前活跃轮次 ID。 */
   activeTurnId: string | null;
+  /** 当前选中的 Agent 标识（用于创建任务/轮次时传入后端）。 */
+  selectedAgentId: string;
 }
 
 /** 任务 Store 的动作接口。 */
@@ -42,6 +44,8 @@ interface TaskActions {
   setActiveTask: (taskId: string | null, turnId?: string | null) => void;
   /** 设置当前活跃轮次。 */
   setActiveTurn: (turnId: string | null) => void;
+  /** 设置当前选中的 Agent 标识。 */
+  setSelectedAgentId: (agentId: string) => void;
   /** 清空所有任务数据。 */
   clearTasks: () => void;
   /**
@@ -63,6 +67,7 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   tasks: [],
   activeTaskId: null,
   activeTurnId: null,
+  selectedAgentId: "developer",
 
   // --- 动作 ---
 
@@ -121,6 +126,10 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
 
   setActiveTurn: (turnId: string | null) => {
     set({ activeTurnId: turnId });
+  },
+
+  setSelectedAgentId: (agentId: string) => {
+    set({ selectedAgentId: agentId });
   },
 
   clearTasks: () => {

@@ -136,7 +136,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     <aside className="flex h-full w-60 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
       {/* 应用标题 */}
       <div className="flex h-12 items-center gap-2 px-4 font-semibold tracking-tight">
-        <span className="text-lg">⚡</span>
+        <img src="../../src-tauri/icons/icon.png" alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />
         <span>Coding Agent</span>
       </div>
 

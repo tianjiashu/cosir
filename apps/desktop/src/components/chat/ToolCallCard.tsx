@@ -15,7 +15,7 @@ import { useState } from "react";
 import {
   ChevronRight,
   ExternalLink,
-  Wrench,
+  Eye,
   icons,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -68,7 +68,7 @@ function resolveIcon(iconName: string | undefined): ComponentType<{ className?: 
       return found;
     }
   }
-  return Wrench;
+  return Eye;
 }
 
 /**

@@ -74,7 +74,7 @@ def _build_system_prompt(agent_profile: AgentProfile) -> str:
     return (
         f"你是一个本地 coding-agent，当前 Agent ID 是 {agent_profile.agent_id}，"
         f"角色是 {agent_profile.role}。"
-        f"目标：{agent_profile.goal}"
+        f"目标：{agent_profile.system_prompt}"
         f"允许工具：{', '.join(agent_profile.allowed_tools) or 'none'}。"
         f"上下文策略：{agent_profile.context_policy}。"
         "第一版只处理纯文本输入，并以清晰、可执行的方式回复用户。"

@@ -65,6 +65,7 @@ export function useTask(): UseTaskReturn {
 
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const activeTurnId = useTaskStore((s) => s.activeTurnId);
+  const selectedAgentId = useTaskStore((s) => s.selectedAgentId);
   const addTask = useTaskStore((s) => s.addTask);
   const replaceTask = useTaskStore((s) => s.replaceTask);
   const removeTask = useTaskStore((s) => s.removeTask);
@@ -105,7 +106,7 @@ export function useTask(): UseTaskReturn {
         addTask({
           task_id: temporaryTaskId,
           workspace_id: workspaceId,
-          agent_id: "developer",
+          agent_id: selectedAgentId,
           input_text: text,
           title: text.slice(0, 80),
           last_message_preview: text.slice(0, 80),
@@ -157,7 +158,7 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [addTask, replaceTask, removeTask, setActiveTask, connect, disconnect, setStreamingTurn, setTurnsForTask],
+    [addTask, replaceTask, removeTask, setActiveTask, connect, disconnect, setStreamingTurn, setTurnsForTask, selectedAgentId],
   );
 
   /**
@@ -184,7 +185,7 @@ export function useTask(): UseTaskReturn {
 
       try {
         disconnect();
-        const turn = await api.createTaskTurn(activeTaskId, { input_text: text });
+        const turn = await api.createTaskTurn(activeTaskId, { input_text: text, agent_id: selectedAgentId });
         upsertTurn(turn);
         setActiveTurn(turn.turn_id);
         updateTask(activeTaskId, {

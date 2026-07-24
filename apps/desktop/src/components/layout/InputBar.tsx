@@ -15,10 +15,11 @@
  */
 
 import { useState, useCallback } from "react";
-import { Send, Mic, Plus, ShieldCheck } from "lucide-react";
+import { Send, Mic, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { AgentSelector } from "@/components/chat/AgentSelector";
 import { logInfo, logError } from "@/lib/logger";
 import { useTask } from "@/hooks/useTask";
 import { useTaskStore } from "@/stores/taskStore";
@@ -38,6 +39,8 @@ export function InputBar() {
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const streamingTurnId = useTurnStore((s) => s.streamingTurnId);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const selectedAgentId = useTaskStore((s) => s.selectedAgentId);
+  const setSelectedAgentId = useTaskStore((s) => s.setSelectedAgentId);
   const trimmedInput = inputValue.trim();
   const canSend = Boolean(trimmedInput) && !operation.loading && !streamingTurnId && Boolean(activeTaskId || activeWorkspaceId);
 
@@ -109,24 +112,12 @@ export function InputBar() {
 
           {/* 右侧内嵌按钮组 */}
           <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-            {/* 权限状态指示器（占位） */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-emerald-600">
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <p>完全访问</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            {/* 模型选择下拉（占位） */}
-            <span className="flex cursor-pointer items-center gap-0.5 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent transition-colors">
-              完全访问 ▼
-            </span>
+            {/* Agent 选择器 */}
+            <AgentSelector
+              value={selectedAgentId}
+              onChange={setSelectedAgentId}
+              className="h-7"
+            />
 
             {/* 语音入口（占位） */}
             <TooltipProvider>
@@ -156,23 +147,6 @@ export function InputBar() {
         </Button>
       </div>
 
-      {/* 底部提示文字（参考截图底部样式） */}
-      <p className="mx-auto mt-1.5 max-w-3xl text-center text-[11px] text-muted-foreground">
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button className="underline decoration-dotted">完全访问</button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              <p>当前权限级别：完全访问所有工具和能力</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        &nbsp;· 5.5 中 ·
-        <span className="ml-1 inline-flex items-center gap-0.5">
-          <span className="inline-block h-3.5 w-3.5 rounded-full bg-gray-300 dark:bg-gray-600" />
-        </span>
-      </p>
     </div>
   );
 }

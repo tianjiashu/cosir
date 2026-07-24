@@ -3,6 +3,7 @@
 from app.config.settings import default_settings
 from app.core.agents.agent_profile import (
     default_developer_agent,
+    developer_agent_pro,
 )
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
@@ -170,6 +171,7 @@ def build_agent_registry() -> AgentProfileRegistry:
 
     registry = AgentProfileRegistry()
     registry.register(default_developer_agent())
+    registry.register(developer_agent_pro())
     # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
     return registry
 
