@@ -16,6 +16,7 @@ export const API_PATHS = {
   WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
+  TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
   TURN_CANCEL: (turnId: string) => `/turns/${turnId}/cancel`,
   LOGS_QUERY: "/logs/query",
@@ -49,6 +50,11 @@ export interface BackendHealthResponse {
 
 export interface DeleteWorkspaceResponse {
   workspace_id: string;
+  deleted: boolean;
+}
+
+export interface DeleteTaskResponse {
+  task_id: string;
   deleted: boolean;
 }
 

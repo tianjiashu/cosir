@@ -25,6 +25,7 @@ from sqlalchemy.sql.schema import DefaultClause
 
 from app.config.logging.logger import log
 from app.storage.model.log_model import LogEntryModel
+from app.storage.model.runtime_event_model import RuntimeEventModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.turn_message_model import TurnMessageModel
 from app.storage.model.turn_model import TurnModel
@@ -35,6 +36,7 @@ APP_MODELS = (
     TaskModel,
     TurnModel,
     TurnMessageModel,
+    RuntimeEventModel,
 )
 LOG_MODELS = (LogEntryModel,)
 LOG_SCHEMA_VERSION = 2

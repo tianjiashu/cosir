@@ -215,22 +215,25 @@ export function useTask(): UseTaskReturn {
    *
    * @param taskId - 待打开的任务标识。
    *
-   * @sideeffect 从后端读取 task/turns 并写入对应 store。
+   * @sideeffect 从后端并行读取 task/turns/events 并写入对应 store；历史事件经
+   *   eventStore 缓存，跨任务切换不重复拉取（历史对话不可变）。
    */
   const openTask = useCallback(
     async (taskId: string): Promise<void> => {
       setOperation({ loading: true, error: null });
       try {
-        const [task, turns] = await Promise.all([
+        const [task, turns, events] = await Promise.all([
           api.getTask(taskId),
           api.listTaskTurns(taskId),
+          api.listTaskEvents(taskId),
         ]);
         if (useTaskStore.getState().getTaskById(taskId)) {
           updateTask(taskId, task);
         } else {
           addTask(task);
         }
-        setEvents([], taskId);
+        // 灌入历史事件（合并式：保留其他任务缓存，仅覆盖当前 task 分组）
+        setEvents(events, taskId);
         setTurnsForTask(taskId, turns);
         setActiveTask(taskId, turns.length > 0 ? turns[turns.length - 1].turn_id : null);
         setOperation({ loading: false, error: null });

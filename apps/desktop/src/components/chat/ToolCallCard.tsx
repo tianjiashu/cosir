@@ -1,10 +1,8 @@
 /**
- * 可折叠工具调用卡片组件。
+ * 工具调用展示组件。
  *
- * 展示：
- * - 工具展示提示（来自后端 `ToolDefinition.display`：动作名/图标/摘要）
- * - 当前状态（运行中 / 完成 / 失败）
- * - 可折叠详情区域
+ * 折叠态模仿 Codex 风格：紧凑单行 `> 图标 动作名 参数摘要`，无边框卡片；
+ * 展开态显示完整参数、错误信息等详情。
  *
  * 组件不按工具名写特化分支：所有展示差异都收敛在后端 `ToolDefinition.display`，
  * 这里只做数据驱动的通用渲染。未携带 `display` 的工具降级为「工具名 + 通用参数摘要」。
@@ -15,17 +13,12 @@
 import type { ComponentType } from "react";
 import { useState } from "react";
 import {
-  ChevronDown,
   ChevronRight,
   ExternalLink,
-  Loader2,
-  CheckCircle2,
-  XCircle,
   Wrench,
   icons,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import type { ToolDisplayInfo } from "@/services/timeline/projector";
 
 /** 工具调用状态枚举。 */
@@ -78,30 +71,15 @@ function resolveIcon(iconName: string | undefined): ComponentType<{ className?: 
   return Wrench;
 }
 
-/** 状态到视觉配置的映射。 */
-const STATUS_MAP: Record<
-  ToolCallStatus,
-  {
-    label: string;
-    variant: "default" | "secondary" | "destructive" | "warning" | "outline";
-    Icon: ComponentType<{ className?: string }>;
-  }
-> = {
-  running: { label: "运行中", variant: "warning", Icon: Loader2 },
-  completed: { label: "完成", variant: "secondary", Icon: CheckCircle2 },
-  error: { label: "失败", variant: "destructive", Icon: XCircle },
-};
-
 /**
- * ToolCallCard 可折叠工具调用卡片。
+ * ToolCallCard 工具调用组件（可折叠）。
  *
- * 避免低价值日志淹没主会话，默认折叠展示摘要，
- * 展开后显示完整信息。
+ * 折叠态：紧凑单行，模仿 Codex 风格 —— `> 图标 动作名 参数摘要`，
+ * 无边框无背景，与对话流融为一体。
+ * 展开态：显示完整参数、打开文件按钮、错误信息等。
  */
 export function ToolCallCard({ toolName, status, error, args, display, onOpenFile }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const config = STATUS_MAP[status];
-  const StatusIcon = config.Icon;
   const IconComponent = resolveIcon(display?.icon);
 
   // 折叠态主摘要：优先用后端语义摘要（verb + summary），否则降级为「工具名 + 通用摘要」。
@@ -111,96 +89,94 @@ export function ToolCallCard({ toolName, status, error, args, display, onOpenFil
 
   // 展开态参数：按 display.detailKeys 排序，再补其余参数。
   const argEntries = args ? Object.entries(args) : [];
-  const orderedEntries = display?.detailKeys?.length
-    ? [
-        ...display.detailKeys
-          .filter((key) => args && key in args)
-          .map((key) => [key, args[key]] as [string, unknown]),
-        ...argEntries.filter(([key]) => !display.detailKeys.includes(key)),
-      ]
-    : argEntries;
+  const orderedEntries =
+    display?.detailKeys?.length && args
+      ? [
+          ...display.detailKeys
+            .filter((key) => key in args)
+            .map((key) => [key, args[key]] as [string, unknown]),
+          ...argEntries.filter(([key]) => !display.detailKeys.includes(key)),
+        ]
+      : argEntries;
 
   const clickAction = display?.clickAction ?? null;
 
+  // 状态指示小圆点颜色
+  const statusColor =
+    status === "running"
+      ? "text-amber-500"
+      : status === "completed"
+        ? "text-green-500"
+        : "text-red-500";
+
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className="rounded-md border border-border bg-card">
-        {/* 折叠触发区（摘要行） */}
-        <CollapsibleTrigger asChild>
-          <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/30 transition-colors">
-            {isOpen ? (
-              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-            )}
+    <div className="w-full">
+      {/* 折叠触发区：紧凑单行，模仿 Codex > 图标 动作 参数 风格 */}
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-sm hover:text-foreground transition-colors"
+      >
+        <ChevronRight
+          className={cn(
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+            isOpen && "rotate-90",
+          )}
+        />
+        <IconComponent className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate font-mono text-xs text-muted-foreground">{summaryText}</span>
+        {/* 状态小圆点 */}
+        <span className={cn("ml-auto h-1.5 w-1.5 shrink-0 rounded-full", statusColor)} />
+      </button>
 
-            {/* 工具图标（来自后端 display.icon，回退扳手） */}
-            <IconComponent className="h-4 w-4 shrink-0 text-muted-foreground" />
-
-            {/* 摘要（来自后端 display，含动作名与路径/行范围） */}
-            <span className="truncate font-mono text-xs text-muted-foreground">{summaryText}</span>
-
-            {/* 状态标签 */}
-            <Badge variant={config.variant} className="ml-auto gap-1 shrink-0 text-[10px]">
-              {status === "running" ? (
-                <StatusIcon className="h-3 w-3 animate-spin" />
-              ) : (
-                <StatusIcon className="h-3 w-3" />
-              )}
-              {config.label}
-            </Badge>
-          </button>
-        </CollapsibleTrigger>
-
-        {/* 展开详情 */}
-        <CollapsibleContent>
-          <div className="border-t border-border px-3 py-2 space-y-1.5 text-xs">
-            {/* 工具名 */}
-            <div className="flex gap-2">
-              <span className="text-muted-foreground shrink-0">工具:</span>
-              <code className="font-mono">{toolName}</code>
-            </div>
-
-            {/* 参数（按 detailKeys 排序优先展示） */}
-            {orderedEntries.length > 0 && (
-              <div className="flex gap-2">
-                <span className="text-muted-foreground shrink-0">参数:</span>
-                <div className="space-y-0.5">
-                  {orderedEntries.map(([key, value]) => (
-                    <div key={key} className="font-mono text-[11px]">
-                      <span className="text-muted-foreground">{key}=</span>
-                      {String(JSON.stringify(value))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 打开文件动作（由后端 display.clickAction 驱动，数据驱动、无工具特化） */}
-            {clickAction?.action === "open_file" && (
-              <div className="flex gap-2">
-                <span className="text-muted-foreground shrink-0">操作:</span>
-                <button
-                  type="button"
-                  onClick={() => onOpenFile?.(clickAction.target)}
-                  className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent/40 transition-colors"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  打开文件 {clickAction.target}
-                </button>
-              </div>
-            )}
-
-            {/* 错误信息（失败场景） */}
-            {error && (
-              <div className="flex gap-2">
-                <span className="text-muted-foreground shrink-0">错误:</span>
-                <span className="text-destructive">{error}</span>
-              </div>
-            )}
+      {/* 展开详情 */}
+      {isOpen ? (
+        <div className="ml-6 mt-1 space-y-1.5 border-l border-border pl-3 py-1 text-xs">
+          {/* 工具名 */}
+          <div className="flex gap-2">
+            <span className="text-muted-foreground shrink-0">工具:</span>
+            <code className="font-mono">{toolName}</code>
           </div>
-        </CollapsibleContent>
-      </div>
-    </Collapsible>
+
+          {/* 参数（按 detailKeys 排序优先展示） */}
+          {orderedEntries.length > 0 && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground shrink-0">参数:</span>
+              <div className="space-y-0.5">
+                {orderedEntries.map(([key, value]) => (
+                  <div key={key} className="font-mono text-[11px]">
+                    <span className="text-muted-foreground">{key}=</span>
+                    {String(JSON.stringify(value))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 打开文件动作（由后端 display.clickAction 驱动，数据驱动、无工具特化） */}
+          {clickAction?.action === "open_file" && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground shrink-0">操作:</span>
+              <button
+                type="button"
+                onClick={() => onOpenFile?.(clickAction.target)}
+                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent/40 transition-colors"
+              >
+                <ExternalLink className="h-3 w-3" />
+                打开文件 {clickAction.target}
+              </button>
+            </div>
+          )}
+
+          {/* 错误信息（失败场景） */}
+          {error && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground shrink-0">错误:</span>
+              <span className="text-destructive">{error}</span>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }

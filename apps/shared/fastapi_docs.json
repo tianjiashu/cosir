@@ -43,6 +43,44 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Delete Task",
+        "description": "删除单个任务及其级联的轮次与运行时事件。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteTaskResponse``。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    级联删除该任务下的轮次、运行时事件与任务自身。",
+        "operationId": "delete_task_tasks__task_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteTaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/tasks/{task_id}/turns": {
@@ -120,6 +158,103 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TurnResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/events": {
+      "get": {
+        "summary": "Replay Task Events",
+        "description": "回放某任务下的完整运行时事件流（按 turn + sequence 升序）。\n\n用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史\n回看与刷新后重连重渲染；只读查询，不重新执行 Agent。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。\n    event_crud: 通过依赖注入的运行时事件 CRUD。\n\n返回:\n    按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。\n\n异常:\n    HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。\n\n副作用:\n    无（只读查询）。",
+        "operationId": "replay_task_events_tasks__task_id__events_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuntimeEventResponse"
+                  },
+                  "title": "Response Replay Task Events Tasks  Task Id  Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/turns/{turn_id}/events": {
+      "get": {
+        "summary": "Replay Turn Events",
+        "description": "回放某轮次下的运行时事件流（按 sequence 升序）。\n\n用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需\n隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。\n\n参数:\n    task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。\n    turn_id: 来自路由的轮次标识。\n    event_crud: 通过依赖注入的运行时事件 CRUD。\n\n返回:\n    按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。\n\n异常:\n    无。\n\n副作用:\n    无（只读查询）。",
+        "operationId": "replay_turn_events_tasks__task_id__turns__turn_id__events_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuntimeEventResponse"
+                  },
+                  "title": "Response Replay Turn Events Tasks  Task Id  Turns  Turn Id  Events Get"
                 }
               }
             }
@@ -718,6 +853,25 @@
         "title": "CreateWorkspaceRequest",
         "description": "校验工作区创建请求体。\n\n参数:\n    name: 非空的工作区名称。\n    root_path: 非空的工作区本地路径。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当名称或路径为空白时抛出。\n\n副作用:\n    无。"
       },
+      "DeleteTaskResponse": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "deleted"
+        ],
+        "title": "DeleteTaskResponse",
+        "description": "校验并序列化任务删除结果响应。\n\n参数:\n    task_id: 被删除的任务标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
       "DeleteWorkspaceResponse": {
         "properties": {
           "workspace_id": {
@@ -904,6 +1058,72 @@
         ],
         "title": "LogQueryResponse",
         "description": "校验并序列化日志查询结果响应（与 ``LogQueryResult.to_dict()`` 对齐）。\n\n参数:\n    entries: 结构化日志记录列表。\n    text: 可直接展示的纯文本日志。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "RuntimeEventResponse": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "payload": {
+            "type": "object",
+            "title": "Payload"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type",
+          "task_id",
+          "turn_id",
+          "sequence",
+          "payload",
+          "created_at"
+        ],
+        "title": "RuntimeEventResponse",
+        "description": "回放用运行时事件响应模型（与持久化事件字典对齐）。\n\n字段对齐 ``RuntimeEventCrud.list_by_task`` / ``list_by_turn`` 返回的事件字典，\n即可直接序列化回前端 ``RuntimeEvent``（思考 / 工具调用 / 状态变更）的回放帧。\n\n参数:\n    event_id: 唯一事件标识。\n    event_type: 稳定的机器可读事件类型字符串。\n    task_id: 关联任务标识。\n    turn_id: 关联轮次标识。\n    sequence: 事件在单次运行流内的排序号。\n    payload: 与 ``event_type`` 匹配的事件负载字典。\n    created_at: 事件创建时间的 UTC 文本。\n    message_id: 可选用户可读消息标识。\n    tool_call_id: 可选工具调用标识。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "TaskResponse": {
         "properties": {

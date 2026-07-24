@@ -44,22 +44,43 @@ def _make_operations(model_tools: list[ToolDefinition]) -> RuntimeOperations:
 
 
 def test_render_paginated_summary_derives_line_range() -> None:
-    """分页类工具应自动派生 ``L{start}-L{end}`` 并渲染 click_action。"""
+    """分页类工具应自动派生 ``L{start}-L{end}`` 并渲染 click_action。
+
+    摘要引用 ``{path_basename}`` 仅显示文件名，而 click_action 引用 ``{path}``
+    保留完整路径，供「打开文件」使用。
+    """
 
     hints = ToolDisplayHints(
         verb="读取",
         icon="eye",
-        summary_template="{path} · L{start}-L{end}",
+        summary_template="{path_basename} · L{start}-L{end}",
         detail_keys=("path", "offset", "limit"),
         click_action="open_file:{path}",
     )
-    out = hints.render({"path": "x.ts", "offset": 5, "limit": 10})
+    out = hints.render({"path": "a/b/x.ts", "offset": 5, "limit": 10})
 
     assert out["verb"] == "读取"
     assert out["icon"] == "eye"
+    # 摘要只显示文件名 basename，隐藏完整路径
     assert out["summary"] == "x.ts · L5-L14"
     assert out["detail_keys"] == ["path", "offset", "limit"]
-    assert out["click_action"] == {"action": "open_file", "target": "x.ts"}
+    # 打开文件仍使用完整路径
+    assert out["click_action"] == {"action": "open_file", "target": "a/b/x.ts"}
+
+
+def test_render_derives_path_basename() -> None:
+    """带 ``path`` 参数的工具应自动派生 ``path_basename``（仅文件名）。"""
+
+    hints = ToolDisplayHints(
+        verb="读取",
+        icon="eye",
+        summary_template="{path_basename}",
+        click_action="open_file:{path}",
+    )
+    out = hints.render({"path": "src/components/ChatPanel.tsx"})
+
+    assert out["summary"] == "ChatPanel.tsx"
+    assert out["click_action"] == {"action": "open_file", "target": "src/components/ChatPanel.tsx"}
 
 
 def test_render_without_template_falls_back_to_verb_and_primary() -> None:

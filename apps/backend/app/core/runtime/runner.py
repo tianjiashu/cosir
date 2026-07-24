@@ -1,5 +1,7 @@
 """Coordinate task lifecycle and workflow execution."""
 
+import asyncio
+import dataclasses
 import os
 from collections.abc import AsyncGenerator
 from uuid import uuid4
@@ -39,10 +41,11 @@ class AgentRuntime:
     取消作用于 turn 并中止该 turn 的运行循环（模型节点检查 turn 取消状态后停止派发工具）。
 
     职责边界：
-    - 负责：任务执行编排、运行时事件、取消。
-    - 不负责：checkpoint 回放与历史事件回看（已移除；历史由 ``GET /tasks/{task_id}/turns``
-      提供，事件由 LangGraph checkpoint 承载）、工作区 / 任务 / 轮次的 CRUD 与查询
-      （委托给对应 service 层）；不对外暴露 service 访问器，service 仅作为本引擎的私有协作者。
+    - 负责：任务执行编排、运行时事件（含持久化到 ``runtime_events`` 表以供回放）、取消。
+    - 不负责：checkpoint 回放与历史事件回看（历史对话由 ``GET /tasks/{task_id}/turns``
+      提供，细粒度事件 timeline 由 ``runtime_events`` 表 + 回放端点提供）、工作区 / 任务 /
+      轮次的 CRUD 与查询（委托给对应 service 层）；不对外暴露 service 访问器，
+      service 仅作为本引擎的私有协作者。
     """
 
     def __init__(
@@ -134,8 +137,9 @@ class AgentRuntime:
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """执行单个 pending 轮次并实时流式产出运行时事件。
 
-        只负责「pending → 认领 → 执行 → 流式事件」。历史回看与断线重连不属于本方法职责：
-        客户端在打开任务时通过 ``GET /tasks/{task_id}/turns`` 拉取完整历史对话，SSE 通过
+        只负责「pending → 认领 → 执行 → 流式事件」。逐条事件在 ``yield`` 前经 ``emit``
+        持久化到 ``runtime_events`` 表（带本轮自增 sequence），供刷新 / 重连后通过回放端点
+        重建细粒度 timeline；历史对话列表由 ``GET /tasks/{task_id}/turns`` 提供。SSE 通过
         断开兜底（finally 标记 failed）判定本轮是否中断。非 pending 轮次不应进入本方法，
         调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
 
@@ -150,6 +154,38 @@ class AgentRuntime:
         task_id = turn.task_id
         # 预取任务记录
         task = self._task_service.get_task(task_id)
+
+        # 本轮事件持久化的自增序号：``runtime_events`` 主键为 (turn_id, sequence)，
+        # 必须为每条事件分配唯一递增序号，否则同 turn 多事件主键冲突、后者静默丢失。
+        seq = 0
+
+        async def emit(event: RuntimeEvent) -> RuntimeEvent:
+            """落库并透传一条运行时事件（赋唯一递增 sequence）。
+
+            在 ``yield`` 前调用：把事件以独立线程写入 ``runtime_events`` 表（避免阻塞
+            SSE 事件循环），并为冻结的 ``RuntimeEvent`` 赋上本轮自增序号；持久化失败仅
+            由 ``RuntimeEventCrud.save_event`` 内部记日志，不会中断流式运行。
+
+            参数:
+                event: 待落库并透传的运行时事件。
+
+            返回:
+                已赋序号、可直接 ``yield`` 的事件（与原事件 payload 一致）。
+
+            异常:
+                不向上抛出：落库异常被 ``save_event`` 内部吞掉并记日志。
+
+            副作用:
+                向 ``runtime_events`` 表插入一行（失败仅记日志）；推进本轮 ``seq`` 计数器。
+            """
+
+            nonlocal seq
+            from app.storage.crud.runtime_event_crud import RuntimeEventCrud
+
+            stamped = dataclasses.replace(event, sequence=seq)
+            seq += 1
+            await asyncio.to_thread(RuntimeEventCrud().save_event, stamped.to_dict())
+            return stamped
 
         # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
         if turn.status != "pending":
@@ -182,16 +218,18 @@ class AgentRuntime:
                     },
                 ),
             )
-            yield self._record(
-                EventType.RUN_FAILED,
-                task_id,
-                RunFailedPayload(
-                    status="failed",
-                    error="agent_profile_unavailable",
-                    requested_agent_id=requested_agent_id,
-                    task_agent_id=task.agent_id,
-                ),
-                turn_id=turn.turn_id,
+            yield await emit(
+                self._record(
+                    EventType.RUN_FAILED,
+                    task_id,
+                    RunFailedPayload(
+                        status="failed",
+                        error="agent_profile_unavailable",
+                        requested_agent_id=requested_agent_id,
+                        task_agent_id=task.agent_id,
+                    ),
+                    turn_id=turn.turn_id,
+                )
             )
             return
 
@@ -211,11 +249,13 @@ class AgentRuntime:
         # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
         # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorExit），终态都只由本连接决定。
         try:
-            yield self._record(
-                EventType.RUN_STARTED,
-                task_id,
-                RunStartedPayload(status="running", agent_id=agent_profile.agent_id),
-                turn_id=turn.turn_id,
+            yield await emit(
+                self._record(
+                    EventType.RUN_STARTED,
+                    task_id,
+                    RunStartedPayload(status="running", agent_id=agent_profile.agent_id),
+                    turn_id=turn.turn_id,
+                )
             )
 
             operations = RuntimeOperations(
@@ -229,7 +269,7 @@ class AgentRuntime:
             )
 
             async for event in agent_profile.workflow.run(task, operations):
-                yield event
+                yield await emit(event)
             await self._persist_turn_trajectory(turn.turn_id)
             return
         except Exception as exc:
@@ -241,11 +281,13 @@ class AgentRuntime:
                     "data": {"task_id": task_id},
                 },
             )
-            yield RuntimeEvent(
-                event_type=EventType.RUN_FAILED,
-                task_id=task_id,
-                turn_id=turn.turn_id,
-                payload=RunFailedPayload(status="failed", error=str(exc)),
+            yield await emit(
+                RuntimeEvent(
+                    event_type=EventType.RUN_FAILED,
+                    task_id=task_id,
+                    turn_id=turn.turn_id,
+                    payload=RunFailedPayload(status="failed", error=str(exc)),
+                )
             )
         finally:
             # 本连接持有的清理收口：仅当本轮仍卡在 running（客户端断开导致运行被中止、

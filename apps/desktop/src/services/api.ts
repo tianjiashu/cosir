@@ -15,11 +15,13 @@
 import type { TaskRecord } from "@shared/task";
 import type { TurnRecord } from "@shared/turn";
 import type { WorkspaceRecord } from "@shared/workspace";
+import type { RuntimeEvent } from "@shared/events";
 import type {
   BackendHealthResponse,
   CreateTaskRequest,
   CreateTurnRequest,
   CreateWorkspaceRequest,
+  DeleteTaskResponse,
   ListAgentsResponse,
 } from "@shared/api";
 import { API_PATHS } from "@shared/api";
@@ -333,6 +335,24 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
 }
 
 /**
+ * 删除单个任务及其级联的轮次与事件记录。
+ *
+ * @param taskId - 待删除的任务标识。
+ * @returns 无。
+ * @throws {ServiceError} 当任务不存在或删除失败时抛出。
+ */
+export async function deleteTask(taskId: string): Promise<void> {
+  const response = await del<DeleteTaskResponse>(API_PATHS.TASK_DETAIL(taskId));
+  useConversationTraceStore.getState().recordTrace({
+    traceId: response.trace.traceId,
+    taskId,
+    operation: "task_delete",
+    method: "DELETE",
+    path: API_PATHS.TASK_DETAIL(taskId),
+  });
+}
+
+/**
  * 获取工作区下的任务列表。
  *
  * @param workspaceId - 工作区标识。
@@ -375,6 +395,21 @@ export async function createTaskTurn(taskId: string, request: CreateTurnRequest)
 export async function listTaskTurns(taskId: string): Promise<TurnRecord[]> {
   const response = await get<TurnRecord[]>(API_PATHS.TASK_TURNS(taskId), taskId);
   recordConversationTrace(response.trace, "task_turns", taskId);
+  return response.data;
+}
+
+/**
+ * 拉取某任务下完整运行时事件流（按 turn + sequence 升序），用于打开任务时重建细粒度 timeline。
+ *
+ * 只读历史回放，不重新执行 Agent；历史对话不可变，调用方可结合 eventStore 做内存缓存。
+ *
+ * @param taskId - 任务容器标识。
+ * @returns 按 (turn_id, sequence) 升序排列的历史事件列表。
+ * @throws {ServiceError} 当任务不存在或请求失败时抛出。
+ */
+export async function listTaskEvents(taskId: string): Promise<RuntimeEvent[]> {
+  const response = await get<RuntimeEvent[]>(API_PATHS.TASK_EVENTS(taskId), taskId);
+  recordConversationTrace(response.trace, "task_events", taskId);
   return response.data;
 }
 

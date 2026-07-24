@@ -15,6 +15,7 @@ import { useTurnStore } from "@/stores/turnStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { UserMessage } from "@/components/chat/UserMessage";
 import { AgentMessage } from "@/components/chat/AgentMessage";
+import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { openFileInEditor } from "@/services/backend";
 import { StatusBadge } from "@/components/chat/StatusBadge";
@@ -99,14 +100,10 @@ export function ChatPanel() {
 
                 {turn.entries.map((entry) => {
                   if (entry.kind === "thinking") {
-                    return entry.content.length > 0 ? (
-                      <div
-                        key={entry.eventId}
-                        className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                      >
-                        <div className="mb-1 font-medium opacity-80">思考过程</div>
-                        <div className="whitespace-pre-wrap">{entry.content}</div>
-                      </div>
+                    // 过滤纯空白与极短无意义内容（至少 2 个字符才值得展示折叠块）
+                    const trimmed = entry.content.trim();
+                    return trimmed.length >= 2 ? (
+                      <ThinkingBlock key={entry.eventId} content={entry.content} />
                     ) : null;
                   }
                   if (entry.kind === "assistant") {

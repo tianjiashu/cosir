@@ -6,8 +6,11 @@
  * - SSE 连接状态
  * - 增量事件追加（含重复事件幂等处理）
  *
- * 当前后端不持久化、不回放 runtime events。打开历史任务时，
- * 可见对话由 turn 历史恢复；本 store 只缓存当前客户端会话内收到的 SSE 事件。
+ * 后端已持久化并支持 runtime events 回放（GET /tasks/{task_id}/events 等）。
+ * 打开任务时由 useTask.openTask 拉取历史事件经 setEvents 灌入本 store；本 store
+ * 同时承担「跨任务切换的内存缓存」职责：按 task_id / turn_id 分组保留历史，
+ * 再次打开同一任务时无需重复请求（历史对话不可变），实时 SSE 事件经 appendEvent
+ * 增量合并（event_id 去重）。
  *
  * @module stores/eventStore
  */
@@ -45,18 +48,23 @@ interface EventActions {
   /** 批量设置事件列表（用于切换任务或重置当前客户端事件缓存）。 */
   setEvents: (events: RuntimeEvent[], taskId?: string) => void;
 
+
   /** 更新 SSE 连接状态。 */
   setConnectionState: (state: SSEConnectionState) => void;
 
   /** 清空当前事件流和去重集合（切换任务时调用）。 */
   clearEvents: () => void;
+
+  /** 使指定任务的历史事件缓存失效（删除任务 / 工作区时调用）。 */
+  invalidateTask: (taskId: string) => void;
 }
 
 /**
  * 事件 Zustand Store 实例。
  *
- * 核心设计：appendEvent 内置基于 event_id 的去重逻辑。
- * 这只保证当前客户端会话内的重复事件不会重复渲染，不代表后端已经提供事件回放。
+ * 核心设计：appendEvent 内置基于 event_id 的去重逻辑；setEvents 以合并方式写入，
+ * 保留其他任务 / 轮次的历史缓存（跨任务切换不重复拉取），实时 SSE 与历史回放经
+ * event_id 去重合并。
  */
 export const useEventStore = create<EventState & EventActions>((set) => ({
   // --- 初始状态 ---
@@ -92,19 +100,37 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
   },
 
   setEvents: (events: RuntimeEvent[], taskId?: string) => {
-    const ids = new Set(events.map((e) => e.event_id));
-    const sortedEvents = [...events].sort(compareRuntimeEvents);
-    const nextByTurn = sortedEvents.reduce<Record<string, RuntimeEvent[]>>((acc, event) => {
-      if (event.turn_id) {
-        acc[event.turn_id] = [...(acc[event.turn_id] ?? []), event];
+    set((state) => {
+      const sorted = [...events].sort(compareRuntimeEvents);
+      const incomingIds = new Set(events.map((e) => e.event_id));
+
+      // 合并 eventsByTaskId：保留其他任务缓存，当前任务用传入并集去重覆盖
+      const mergedByTask = { ...state.eventsByTaskId };
+      if (taskId) {
+        mergedByTask[taskId] = mergeByEventId(state.eventsByTaskId[taskId], sorted);
+      } else {
+        for (const e of sorted) {
+          mergedByTask[e.task_id] = mergeByEventId(mergedByTask[e.task_id], [e]);
+        }
       }
-      return acc;
-    }, {});
-    set({
-      events: sortedEvents,
-      eventsByTaskId: taskId ? { [taskId]: sortedEvents } : groupEventsByTask(sortedEvents),
-      eventsByTurnId: nextByTurn,
-      processedEventIds: ids,
+
+      // 合并 eventsByTurnId：保留其他轮次缓存
+      const mergedByTurn = { ...state.eventsByTurnId };
+      for (const e of sorted) {
+        if (e.turn_id) {
+          mergedByTurn[e.turn_id] = mergeByEventId(mergedByTurn[e.turn_id], [e]);
+        }
+      }
+
+      // 去重集合取并集（历史 + 实时 SSE 共同去重）
+      const mergedIds = new Set([...state.processedEventIds, ...incomingIds]);
+
+      return {
+        events: sorted,
+        eventsByTaskId: mergedByTask,
+        eventsByTurnId: mergedByTurn,
+        processedEventIds: mergedIds,
+      };
     });
   },
 
@@ -119,6 +145,33 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
       eventsByTurnId: {},
       processedEventIds: new Set(),
       connectionState: SSEConnectionState.IDLE,
+    });
+  },
+
+  invalidateTask: (taskId: string) => {
+    set((state) => {
+      const removedEvents = state.eventsByTaskId[taskId] ?? [];
+      if (removedEvents.length === 0) {
+        return state;
+      }
+      const removedTurnIds = new Set(
+        removedEvents.map((e) => e.turn_id).filter((id): id is string => Boolean(id)),
+      );
+      const removedIds = new Set(removedEvents.map((e) => e.event_id));
+      const eventsByTaskId = { ...state.eventsByTaskId };
+      delete eventsByTaskId[taskId];
+      const eventsByTurnId = { ...state.eventsByTurnId };
+      for (const turnId of removedTurnIds) {
+        delete eventsByTurnId[turnId];
+      }
+      return {
+        events: state.events.filter((e) => e.task_id !== taskId),
+        eventsByTaskId,
+        eventsByTurnId,
+        processedEventIds: new Set(
+          [...state.processedEventIds].filter((id) => !removedIds.has(id)),
+        ),
+      };
     });
   },
 }));
@@ -154,6 +207,28 @@ export function selectEventsForTask(state: EventState, taskId: string | null): R
 }
 
 /**
+ * 按 event_id 合并两组事件（后者优先），用于 setEvents 跨任务 / 轮次合并历史缓存。
+ *
+ * @param target - 已有的事件列表（可为 undefined）。
+ * @param incoming - 新拉取 / 传入的事件列表。
+ * @returns 去重并按客户端顺序排序后的合并事件列表。
+ */
+function mergeByEventId(
+  target: RuntimeEvent[] | undefined,
+  incoming: RuntimeEvent[],
+): RuntimeEvent[] {
+  const map = new Map<string, RuntimeEvent>();
+  for (const e of target ?? []) {
+    map.set(e.event_id, e);
+  }
+  // 传入事件优先（重新打开任务时后端回放为最新全量）
+  for (const e of incoming) {
+    map.set(e.event_id, e);
+  }
+  return [...map.values()].sort(compareRuntimeEvents);
+}
+
+/**
  * 按当前事件的 sequence + created_at 做客户端排序。
  *
  * @param left - 左侧事件。
@@ -169,15 +244,3 @@ function compareRuntimeEvents(left: RuntimeEvent, right: RuntimeEvent): number {
   return left.created_at.localeCompare(right.created_at);
 }
 
-/**
- * 按 task_id 聚合事件列表。
- *
- * @param events - 已排序或未排序的运行时事件。
- * @returns 以 task_id 为 key 的事件数组映射。
- */
-function groupEventsByTask(events: RuntimeEvent[]): Record<string, RuntimeEvent[]> {
-  return events.reduce<Record<string, RuntimeEvent[]>>((acc, event) => {
-    acc[event.task_id] = [...(acc[event.task_id] ?? []), event].sort(compareRuntimeEvents);
-    return acc;
-  }, {});
-}

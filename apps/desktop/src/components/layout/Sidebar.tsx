@@ -25,9 +25,12 @@ import { PluginList } from "@/components/sidebar/PluginList";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { useTaskStore } from "@/stores/taskStore";
+import { useEventStore } from "@/stores/eventStore";
 import { useTask } from "@/hooks/useTask";
 import * as api from "@/services/api";
+import { deleteTask as deleteTaskApi } from "@/services/api";
 import { logError } from "@/lib/logger";
+import type { TaskRecord } from "@shared/task";
 import type { WorkspaceRecord } from "@shared/workspace";
 
 /** Sidebar 组件属性。 */
@@ -56,6 +59,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   const removeWorkspace = useWorkspaceStore((s) => s.removeWorkspace);
   const tasks = useTaskStore((s) => s.tasks);
   const setTasks = useTaskStore((s) => s.setTasks);
+  const removeTask = useTaskStore((s) => s.removeTask);
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const { openTask } = useTask();
 
@@ -65,6 +69,12 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   const [deleting, setDeleting] = useState(false);
   // 删除失败提示，展示在确认弹窗内。
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // 待删除的任务（非空时展示确认弹窗）。
+  const [pendingDeleteTask, setPendingDeleteTask] = useState<TaskRecord | null>(null);
+  // 任务删除进行中标记。
+  const [deletingTask, setDeletingTask] = useState(false);
+  // 任务删除失败提示。
+  const [deleteTaskError, setDeleteTaskError] = useState<string | null>(null);
 
   /**
    * 执行工作区删除。
@@ -80,14 +90,45 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     setDeleteError(null);
     try {
       await api.deleteWorkspace(pendingDelete.workspace_id);
+      const removedTaskIds = tasks
+        .filter((task) => task.workspace_id === pendingDelete.workspace_id)
+        .map((task) => task.task_id);
       removeWorkspace(pendingDelete.workspace_id);
       setTasks(tasks.filter((task) => task.workspace_id !== pendingDelete.workspace_id));
+      // 同步使被删工作区下各任务的事件缓存失效，避免幽灵 timeline。
+      for (const taskId of removedTaskIds) {
+        useEventStore.getState().invalidateTask(taskId);
+      }
       setPendingDelete(null);
     } catch (err) {
       logError("删除工作区失败", err, { module: "Sidebar", workspace_id: pendingDelete.workspace_id });
       setDeleteError(err instanceof Error ? err.message : "删除工作区失败，请检查后端日志");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  /**
+   * 执行单个任务删除。
+   *
+   * 调用后端删除接口并级联清理其下轮次 / 事件；成功后同步移除本地任务与其事件缓存。
+   */
+  const handleConfirmDeleteTask = async () => {
+    if (!pendingDeleteTask) {
+      return;
+    }
+    setDeletingTask(true);
+    setDeleteTaskError(null);
+    try {
+      await deleteTaskApi(pendingDeleteTask.task_id);
+      // removeTask 内部已同步使该任务的事件缓存失效（见 taskStore）。
+      removeTask(pendingDeleteTask.task_id);
+      setPendingDeleteTask(null);
+    } catch (err) {
+      logError("删除任务失败", err, { module: "Sidebar", task_id: pendingDeleteTask.task_id });
+      setDeleteTaskError(err instanceof Error ? err.message : "删除任务失败，请检查后端日志");
+    } finally {
+      setDeletingTask(false);
     }
   };
 
@@ -171,23 +212,38 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                 {!collapsed && (
                   <div className="ml-5 mt-1 space-y-1">
                     {workspaceTasks.map((task) => (
-                      <button
+                      <div
                         key={task.task_id}
-                        onClick={() => {
-                          onOpenChat();
-                          void openTask(task.task_id);
-                        }}
-                        title={task.title}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-                          activeTaskId === task.task_id
-                            ? "bg-accent text-accent-foreground"
-                            : "text-muted-foreground hover:bg-accent/50",
-                        )}
+                        className="flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/50"
                       >
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
-                        <span className="truncate">{task.title || task.last_message_preview}</span>
-                      </button>
+                        <button
+                          onClick={() => {
+                            onOpenChat();
+                            void openTask(task.task_id);
+                          }}
+                          title={task.title}
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-2 text-left text-xs transition-colors",
+                            activeTaskId === task.task_id
+                              ? "bg-accent text-accent-foreground"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+                          <span className="truncate">{task.title || task.last_message_preview}</span>
+                        </button>
+                        <button
+                          title="删除任务"
+                          className="ml-auto rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDeleteTaskError(null);
+                            setPendingDeleteTask(task);
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -253,6 +309,47 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                 onClick={() => void handleConfirmDelete()}
               >
                 {deleting ? "删除中…" : "删除"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 删除任务确认弹窗（应用内实现，不依赖系统 dialog） */}
+      {pendingDeleteTask && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => {
+            if (!deletingTask) {
+              setPendingDeleteTask(null);
+            }
+          }}
+        >
+          <div
+            className="w-80 rounded-lg border border-border bg-background p-4 shadow-lg"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-foreground">删除任务</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              确定删除任务「{pendingDeleteTask.title || pendingDeleteTask.last_message_preview}」及其对话记录？此操作不可恢复。
+            </p>
+            {deleteTaskError && <p className="mt-2 text-xs text-destructive">{deleteTaskError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={deletingTask}
+                onClick={() => setPendingDeleteTask(null)}
+              >
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={deletingTask}
+                onClick={() => void handleConfirmDeleteTask()}
+              >
+                {deletingTask ? "删除中…" : "删除"}
               </Button>
             </div>
           </div>

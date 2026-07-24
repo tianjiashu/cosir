@@ -150,5 +150,6 @@ def default_developer_agent() -> AgentProfile:
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
+            api_key_env="DEEPSEEK_API_KEY",
         ),
     )

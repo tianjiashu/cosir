@@ -10,6 +10,7 @@ LangChain + ``core/llm/langchain_bridge`` + LangGraph，本类不重复实现。
   LangGraph astream）、缺 Key 回退（factory 统一处理）、工具绑定（workflow 中 bind_tools）。
 """
 
+from os import environ
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -78,7 +79,8 @@ class DeepSeekProvider(LLMProvider):
             配置好 base_url / api_key / thinking / 采样参数的 ``DeepSeekChatOpenAI`` 实例。
         """
 
-        api_key = model_settings.api_key_env if model_settings is not None else None
+        api_key_env = model_settings.api_key_env if model_settings is not None else None
+        api_key = environ.get(api_key_env) if api_key_env else None
         base_url = model_settings.base_url if model_settings is not None else None
         extra: dict = {}
         if model_settings is not None:

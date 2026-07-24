@@ -120,6 +120,8 @@ function operationLabel(operation: ConversationTraceRecord["operation"]): string
     task_get: "查询",
     turn_cancel: "取消轮次",
     task_stream: "SSE",
+    task_events: "事件回放",
+    task_delete: "删任务",
   };
   return labels[operation];
 }

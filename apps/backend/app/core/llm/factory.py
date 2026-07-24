@@ -9,10 +9,13 @@
 缺 API Key 时回退到 ``GenericFakeChatModel``，保证默认本地无 Key 启动与单测可跑。
 """
 
+from os import environ
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
+from app.config.logging.logger import log
 from app.core.llm.llm_provider.deepseek_provider import DeepSeekProvider
 from app.core.llm.model_settings import ModelSettings
 
@@ -47,9 +50,31 @@ def build_chat_model(
         读取进程环境变量中的 API Key。
     """
 
-    api_key = model_settings.api_key_env if model_settings is not None else None
+    api_key_env = model_settings.api_key_env if model_settings is not None else None
+    api_key = environ.get(api_key_env) if api_key_env else None
     if not api_key:
+        log.warning(
+            "llm_fallback_fake_model",
+            extra={
+                "msg": (
+                    f"未解析到 API Key，回退到 fake 模型，model={model_name}，"
+                    f"api_key_env={api_key_env or '(未配置)'}"
+                ),
+                "data": {
+                    "model": model_name,
+                    "api_key_env": api_key_env,
+                    "env_var_present": bool(api_key_env and environ.get(api_key_env) is not None),
+                },
+            },
+        )
         return GenericFakeChatModel(
             messages=iter([AIMessage(content="收到任务，已记录并开始处理。")])
         )
+    log.info(
+        "llm_model_selected",
+        extra={
+            "msg": f"选用真实模型，model={model_name}，api_key_env={api_key_env}",
+            "data": {"model": model_name, "api_key_env": api_key_env},
+        },
+    )
     return DeepSeekProvider().build(model_name, model_settings)

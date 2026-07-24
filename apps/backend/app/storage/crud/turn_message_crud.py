@@ -114,3 +114,24 @@ class TurnMessageCrud:
             )
             for row in rows
         ]
+
+    def delete_by_turn_ids(self, turn_ids: list[str]) -> None:
+        """按轮次标识批量删除消息轨迹（用于任务 / 工作区级联删除）。
+
+        参数:
+            turn_ids: 待清理消息的轮次标识列表；为空时不执行任何操作。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            turn_ids 非空时从 ``turn_messages`` 表删除匹配的行。
+        """
+
+        if not turn_ids:
+            return
+        with self._session_factory.begin() as session:
+            session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id.in_(turn_ids)))

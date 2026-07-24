@@ -12,6 +12,7 @@ from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
 from app.storage.crud.log_crud import LogStore
+from app.storage.crud.runtime_event_crud import RuntimeEventCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.turn_message_crud import TurnMessageCrud
@@ -239,10 +240,15 @@ def _build_services(settings) -> dict:
     turn_crud = TurnCrud()
     turn_message_crud = TurnMessageCrud()
     workspace_crud = WorkspaceCrud()
+    runtime_event_crud = RuntimeEventCrud()
     _SERVICES = {
-        "task_service": TaskService(task_crud, turn_crud, workspace_crud),
+        "task_service": TaskService(
+            task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
+        ),
         "turn_service": TurnService(task_crud, turn_crud, turn_message_crud),
-        "workspace_service": WorkspaceService(task_crud, turn_crud, workspace_crud),
+        "workspace_service": WorkspaceService(
+            task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
+        ),
     }
     return _SERVICES
 
@@ -302,6 +308,28 @@ def get_turn_service() -> TurnService:
     """
 
     return _build_services(default_settings())["turn_service"]
+
+
+def get_runtime_event_crud() -> RuntimeEventCrud:
+    """返回运行时事件 CRUD 实例（用于事件回放查询）。
+
+    事件回放属于只读历史重建，仅依赖 ``runtime_events`` 表；``RuntimeEventCrud``
+    为无状态封装，每次调用实例化避免跨请求复用 session（与 ``TaskCrud`` 等同构）。
+
+    参数:
+        无。
+
+    返回:
+        RuntimeEventCrud。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        无。
+    """
+
+    return RuntimeEventCrud()
 
 
 def _build_log_query_service(settings, logger):

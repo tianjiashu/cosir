@@ -11,9 +11,12 @@
 from dataclasses import replace
 from uuid import uuid4
 
+from app.config.logging.logger import log
 from app.models import TaskRecord
+from app.storage.crud.runtime_event_crud import RuntimeEventCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
+from app.storage.crud.turn_message_crud import TurnMessageCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.utils.datetime_utils import preview, utc_now
 
@@ -26,10 +29,14 @@ class TaskService:
         task_crud: TaskCrud,
         turn_crud: TurnCrud,
         workspace_crud: WorkspaceCrud,
+        runtime_event_crud: RuntimeEventCrud,
+        turn_message_crud: TurnMessageCrud,
     ) -> None:
         self._task = task_crud
         self._turn = turn_crud
         self._workspace = workspace_crud
+        self._runtime_event = runtime_event_crud
+        self._turn_message = turn_message_crud
 
     def create_task(
         self,
@@ -113,3 +120,42 @@ class TaskService:
 
     def list_tasks_for_workspace(self, workspace_id: str) -> list[TaskRecord]:
         return self._task.list_by_workspace(workspace_id)
+
+    def delete_task(self, task_id: str) -> None:
+        """删除单个任务并级联清理其下轮次、消息轨迹与运行时事件。
+
+        删除前先校验任务存在（不存在则抛 ``KeyError``），再按
+        ``runtime_events -> turn_messages -> turns -> task`` 顺序清理，
+        避免外键 / 孤儿数据。
+        删除是高风险操作，保留 start / complete 审计日志。
+
+        参数:
+            task_id: 待删除的任务标识。
+
+        返回:
+            无。
+
+        异常:
+            KeyError: 如果指定任务不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
+
+        副作用:
+            从 ``runtime_events`` / ``turn_messages`` / ``turns`` / ``tasks``
+            表删除该任务相关数据。
+        """
+
+        self._task.get(task_id)  # 存在性守卫，不存在抛 KeyError
+        log.info(
+            "task_delete_start",
+            extra={"msg": "task delete started", "data": {"task_id": task_id}},
+        )
+        turn_ids = self._turn.list_ids_by_task_ids([task_id])
+        if turn_ids:
+            self._runtime_event.delete_by_turn_ids(turn_ids)
+            self._turn_message.delete_by_turn_ids(turn_ids)
+            self._turn.delete_by_ids(turn_ids)
+        self._task.delete_by_ids([task_id])
+        log.info(
+            "task_deleted",
+            extra={"msg": "task deleted", "data": {"task_id": task_id, "turn_ids": turn_ids}},
+        )

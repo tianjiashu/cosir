@@ -15,6 +15,7 @@ from app.core.runtime.runner import AgentRuntime
 from app.models.enums.event_type import EventType
 from app.models.payload import RunStartedPayload
 from app.models.runtime_event import RuntimeEvent
+from app.storage.crud.runtime_event_crud import RuntimeEventCrud
 
 
 class _FakeRuntime:
@@ -95,7 +96,7 @@ class _FakeStreamRuntime:
             event_type=EventType.RUN_STARTED,
             task_id="task-1",
             turn_id=turn_id,
-            payload=RunStartedPayload(status="running", agent_id={}),
+            payload=RunStartedPayload(status="running", agent_id="developer"),
         )
 
 
@@ -160,4 +161,111 @@ async def test_sse_turn_events_serializes_payload_entity_for_client() -> None:
     data = json.loads(frames[0].split("data: ", maxsplit=1)[1])
     assert data["event_type"] == "run_started"
     assert data["turn_id"] == "turn-1"
-    assert data["payload"] == {"status": "running", "agent": {}}
+    assert data["payload"] == {"status": "running", "agent_id": "developer"}
+
+
+def test_delete_task_cascades_turns_and_returns_404() -> None:
+    """删除任务应级联清理其轮次，且删除后查询返回 404。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当删除级联或 404 守卫不符合预期时。
+
+    副作用:
+        在测试用存储中创建并清理一个工作区（净零残留）。
+    """
+
+    app = create_app(runtime=_FakeRuntime())
+
+    with TestClient(app) as client:
+        ws = client.post("/workspaces", json={"name": "del-ws", "root_path": "/tmp/del-ws"})  # noqa: S108
+        assert ws.status_code == 200
+        workspace_id = ws.json()["workspace_id"]
+        try:
+            task = client.post(
+                f"/workspaces/{workspace_id}/tasks",
+                json={"text": "del me", "workspace_id": workspace_id},
+            )
+            assert task.status_code == 200
+            task_id = task.json()["task_id"]
+
+            # 删除任务：应级联其下首个 turn
+            deleted = client.delete(f"/tasks/{task_id}")
+            assert deleted.status_code == 200
+            assert deleted.json()["deleted"] is True
+
+            # 任务已不可查（404 守卫），其下轮次级联清空（返回空列表）
+            assert client.get(f"/tasks/{task_id}").status_code == 404
+            turns_after = client.get(f"/tasks/{task_id}/turns")
+            assert turns_after.status_code == 200
+            assert turns_after.json() == []
+
+            # 不存在的任务删除返回 404
+            assert client.delete("/tasks/ghost-task").status_code == 404
+        finally:
+            client.delete(f"/workspaces/{workspace_id}")
+
+
+def test_delete_workspace_cascades_runtime_events() -> None:
+    """删除工作区应级联清理其下任务的运行时事件。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当级联清理 runtime_events 不符合预期时。
+
+    副作用:
+        在测试用存储中创建并清理一个工作区（净零残留）。
+    """
+
+    app = create_app(runtime=_FakeRuntime())
+
+    with TestClient(app) as client:
+        ws = client.post("/workspaces", json={"name": "ws-events", "root_path": "/tmp/ws-events"})  # noqa: S108
+        assert ws.status_code == 200
+        workspace_id = ws.json()["workspace_id"]
+        try:
+            task = client.post(
+                f"/workspaces/{workspace_id}/tasks",
+                json={"text": "del me", "workspace_id": workspace_id},
+            )
+            assert task.status_code == 200
+            task_id = task.json()["task_id"]
+
+            # 为该任务创建轮次，模拟一次真实执行单元
+            turn = client.post(f"/tasks/{task_id}/turns", json={"input_text": "run something"})
+            assert turn.status_code == 200
+            turn_id = turn.json()["turn_id"]
+
+            # 手动落库一条运行时事件（真实事件由 SSE 流写入，测试里直接构造）
+            RuntimeEventCrud().save_event(
+                {
+                    "event_id": "ev-cascade-1",
+                    "event_type": "run_started",
+                    "task_id": task_id,
+                    "turn_id": turn_id,
+                    "sequence": 0,
+                    "payload": {"status": "running", "agent_id": "developer"},
+                    "created_at": "2026-07-24T00:00:00+00:00",
+                }
+            )
+            assert len(RuntimeEventCrud().list_by_turn(turn_id)) == 1
+
+            # 删除工作区：应级联清理其下轮次与运行时事件
+            deleted = client.delete(f"/workspaces/{workspace_id}")
+            assert deleted.status_code == 200
+
+            # 运行时事件随工作区级联删除而被清空
+            assert RuntimeEventCrud().list_by_turn(turn_id) == []
+            assert RuntimeEventCrud().list_by_task(task_id) == []
+        finally:
+            client.delete(f"/workspaces/{workspace_id}")

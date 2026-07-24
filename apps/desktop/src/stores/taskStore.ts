@@ -14,6 +14,7 @@
 import { create } from "zustand";
 import type { TaskRecord } from "@shared/task";
 import type { TaskStatus } from "@shared/task";
+import { useEventStore } from "@/stores/eventStore";
 
 /** 任务 Store 的状态接口。 */
 interface TaskState {
@@ -101,6 +102,8 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
       activeTaskId: state.activeTaskId === taskId ? null : state.activeTaskId,
       activeTurnId: state.activeTaskId === taskId ? null : state.activeTurnId,
     }));
+    // 任务移除即意味着其历史事件缓存失效，同步清除以避免幽灵 timeline。
+    useEventStore.getState().invalidateTask(taskId);
   },
 
   updateTask: (taskId: string, updates: Partial<TaskRecord>) => {

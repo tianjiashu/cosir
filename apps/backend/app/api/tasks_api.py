@@ -3,17 +3,29 @@
 包含任务查询、事件与 checkpoint 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
 直接注册到 ``app.api.app.app`` 单例中。
 
-分层约定：任务查询与轮次列表直接依赖 ``TaskService``；事件回放、取消与健康检查
-属于运行时执行 / 生命周期职责，仍依赖 ``AgentRuntime``。
+分层约定：任务查询与轮次列表直接依赖 ``TaskService`` / ``TurnService``；事件回放
+属于只读历史重建，直接查询 ``runtime_events`` 表（``RuntimeEventCrud``），不依赖
+运行中的 ``AgentRuntime``；取消与健康检查属于运行时执行 / 生命周期职责，仍依赖
+``AgentRuntime``。
 """
 
 from fastapi import Depends, HTTPException
 
 from app.api.app import app
-from app.api.depends.dependencies import get_task_service, get_turn_service
-from app.api.schemas import TaskResponse, TurnResponse
+from app.api.depends.dependencies import (
+    get_runtime_event_crud,
+    get_task_service,
+    get_turn_service,
+)
+from app.api.schemas import (
+    DeleteTaskResponse,
+    RuntimeEventResponse,
+    TaskResponse,
+    TurnResponse,
+)
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
+from app.storage.crud.runtime_event_crud import RuntimeEventCrud
 
 
 @app.get("/tasks/{task_id}")
@@ -69,3 +81,95 @@ async def list_turns(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     return [TurnResponse(**turn.to_dict()) for turn in turns]
+
+
+@app.get("/tasks/{task_id}/events")
+async def replay_task_events(
+    task_id: str,
+    task_service: TaskService = Depends(get_task_service),
+    event_crud: RuntimeEventCrud = Depends(get_runtime_event_crud),
+) -> list[RuntimeEventResponse]:
+    """回放某任务下的完整运行时事件流（按 turn + sequence 升序）。
+
+    用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史
+    回看与刷新后重连重渲染；只读查询，不重新执行 Agent。
+
+    参数:
+        task_id: 来自路由的任务标识。
+        task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。
+        event_crud: 通过依赖注入的运行时事件 CRUD。
+
+    返回:
+        按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。
+
+    异常:
+        HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。
+
+    副作用:
+        无（只读查询）。
+    """
+
+    try:
+        task_service.get_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    events = event_crud.list_by_task(task_id)
+    return [RuntimeEventResponse.from_event_dict(e) for e in events]
+
+
+@app.delete("/tasks/{task_id}")
+async def delete_task(
+    task_id: str,
+    task_service: TaskService = Depends(get_task_service),
+) -> DeleteTaskResponse:
+    """删除单个任务及其级联的轮次与运行时事件。
+
+    参数:
+        task_id: 来自路由的任务标识。
+        task_service: 通过依赖注入的任务 service（负责级联清理）。
+
+    返回:
+        删除结果 ``DeleteTaskResponse``。
+
+    异常:
+        HTTPException: 当任务不存在时抛出。
+
+    副作用:
+        级联删除该任务下的轮次、运行时事件与任务自身。
+    """
+
+    try:
+        task_service.delete_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    return DeleteTaskResponse(task_id=task_id, deleted=True)
+
+
+@app.get("/tasks/{task_id}/turns/{turn_id}/events")
+async def replay_turn_events(
+    task_id: str,
+    turn_id: str,
+    event_crud: RuntimeEventCrud = Depends(get_runtime_event_crud),
+) -> list[RuntimeEventResponse]:
+    """回放某轮次下的运行时事件流（按 sequence 升序）。
+
+    用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需
+    隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。
+
+    参数:
+        task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。
+        turn_id: 来自路由的轮次标识。
+        event_crud: 通过依赖注入的运行时事件 CRUD。
+
+    返回:
+        按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。
+
+    异常:
+        无。
+
+    副作用:
+        无（只读查询）。
+    """
+
+    events = event_crud.list_by_turn(turn_id)
+    return [RuntimeEventResponse.from_event_dict(e) for e in events]

@@ -26,7 +26,9 @@ export type ConversationTraceOperation =
   | "turn_stream"
   | "task_get"
   | "turn_cancel"
-  | "task_stream";
+  | "task_stream"
+  | "task_events"
+  | "task_delete";
 
 /**
  * 涓€娆″璇濈浉鍏宠姹備娇鐢ㄧ殑 trace 璁板綍銆?

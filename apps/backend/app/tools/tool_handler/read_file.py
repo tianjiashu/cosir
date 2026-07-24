@@ -242,7 +242,7 @@ class ReadFileTool:
             display=ToolDisplayHints(
                 verb="读取",
                 icon="eye",
-                summary_template="{path} · L{start}-L{end}",
+                summary_template="{path_basename} · L{start}-L{end}",
                 detail_keys=("path", "offset", "limit"),
                 click_action="open_file:{path}",
             ),

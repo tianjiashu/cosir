@@ -13,6 +13,7 @@
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -67,12 +68,19 @@ class ToolDisplayHints:
         """
 
         # 派生一份可渲染字典：分页类工具自动补 start/end 行号。
+        # 始终派生（使用默认值），确保摘要模板始终能渲染出行号范围，
+        # 避免 LLM 不传 offset/limit 时模板 KeyError 降级为无行号摘要。
         derived: dict[str, Any] = dict(arguments)
-        if "offset" in arguments or "limit" in arguments:
-            start = int(arguments.get("offset", 1))
-            limit = int(arguments.get("limit", 500))
-            derived["start"] = start
-            derived["end"] = start + limit - 1 if limit > 0 else start
+        _has_pagination = "offset" in arguments or "limit" in arguments
+        start = int(arguments.get("offset", 1))
+        limit = int(arguments.get("limit", 500))
+        derived["start"] = start
+        derived["end"] = start + limit - 1 if limit > 0 else start
+
+        # 路径类工具自动派生文件名（basename），供摘要精简展示，
+        # 而 click_action 仍可引用完整 {path} 用于打开文件等动作。
+        if "path" in arguments and isinstance(arguments["path"], str):
+            derived["path_basename"] = Path(arguments["path"]).name
 
         summary = self._render_summary(derived)
 
