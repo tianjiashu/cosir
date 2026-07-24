@@ -1,4 +1,4 @@
-"""Tool handler executor."""
+"""工具 handler 隔离执行器：在守护子进程中运行单个工具 handler 并提供硬超时强杀保护。"""
 
 import json
 import multiprocessing
@@ -33,7 +33,21 @@ class ToolExecutor:
     """
 
     def __init__(self) -> None:
-        """Initialize the executor."""
+        """初始化工具执行器。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            创建执行器实例，初始化子进程启动标记 ``_process_started`` 为 False；
+            不在此处创建任何子进程或持有外部资源。
+        """
 
         self._process_started = False
 
@@ -47,16 +61,25 @@ class ToolExecutor:
         arguments: Mapping[str, Any],
         tool_call_id: str = "",
     ) -> ToolObservation:
-        """Execute one tool handler with a timeout.
+        """在隔离子进程中执行单个工具 handler 并返回归一化结果。
 
-        Args:
-            tool:        The tool definition containing handler, timeout, etc.
-            arguments:   Validated keyword arguments for the handler.
-            tool_call_id:Optional ID to correlate this execution with a model
-                         tool call.
+        参数:
+            tool: 工具定义，提供 handler、权限、超时等执行契约。
+            arguments: 已通过参数校验的关键字参数字典。
+            tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
 
-        Raises:
-            ValueError: If ``tool.timeout_seconds`` is ``None`` (disallowed).
+        返回:
+            归一化后的 :class:`ToolObservation`：成功为 status="success"，
+            失败/超时/异常/启动失败为 status="error"（含 reason 与 retryable）。
+
+        异常:
+            ValueError: 当 ``tool.timeout_seconds`` 为 None 时抛出，禁止无限等待；
+                此外 ``timeout_seconds<=0`` 会被当作 0（立即超时）处理。
+
+        副作用:
+            启动一个守护子进程执行 handler；按 ``timeout_seconds`` 软超时后
+            强制 terminate/kill 并清理进程；以 INFO/WARNING/ERROR 级别写入
+            执行、超时、失败日志；不修改 ``tool`` 或 ``arguments``。
         """
 
         # --- 1. 防御性地归一化超时参数 ---
@@ -98,7 +121,7 @@ class ToolExecutor:
                 log.warning(
                     "tool_execution_timed_out",
                     extra={
-                        "message_text": "tool execution timed out",
+                        "msg": "工具执行超时，已返回超时错误",
                         "data": {
                             "tool_name": tool.name,
                             "timeout_seconds": tool.timeout_seconds,
@@ -131,7 +154,7 @@ class ToolExecutor:
             log.error(
                 "tool_handler_failed",
                 extra={
-                    "message_text": "tool handler failed",
+                    "msg": "工具 handler 执行抛异常",
                     "data": {
                         "tool_name": tool.name,
                         "traceback": payload.get("traceback", ""),
@@ -155,11 +178,21 @@ class ToolExecutor:
 
     @contextmanager
     def _managed_subprocess(self, process: multiprocessing.Process) -> Any:
-        """Ensure the subprocess is cleaned up on exit.
+        """管理子进程生命周期，确保退出时清理残留进程。
 
-        The ``finally`` block handles process cleanup when the caller exits
-        the ``with`` block — either normally (process already exited, no-op)
-        or via timeout / exception (process still alive → force kill).
+        参数:
+            process: 待托管的子进程对象（已由调用方创建，尚未 start）。
+
+        返回:
+            上下文管理器，yield 期间调用方可 start/await 该进程。
+
+        异常:
+            透传调用方在 with 块内抛出的异常。
+
+        副作用:
+            无论 with 块正常退出还是因超时/异常退出，``finally`` 中若进程
+            仍存活则调用 :meth:`_force_kill` 强杀并 join(2) 等待回收；
+            ``_process_started`` 标记用于判断是否需要清理。
         """
 
         try:
@@ -170,7 +203,24 @@ class ToolExecutor:
                 process.join(2)
 
     def _force_kill(self, process: multiprocessing.Process) -> None:
-        """Kill a subprocess and its process group."""
+        """三轮强杀子进程及其可能的孙进程。
+
+        参数:
+            process: 需要终止的子进程对象。
+
+        返回:
+            无。
+
+        异常:
+            不抛出：底层 ``OSError``/``ValueError``（含 PID 已回收、
+            ``ProcessLookupError``）均被静默吞掉。
+
+        副作用:
+            先 ``terminate()`` 礼貌退出并等待 1s；仍存活则 ``kill()`` 强杀
+            再等待 1s；在 POSIX 系统进一步 ``os.killpg(pid, SIGKILL)``
+            清理孙进程（子进程已在入口 ``os.setsid()`` 自立为进程组组长，
+            故此处能可靠杀掉 handler fork 出的孙进程）。
+        """
 
         pid = process.pid
         if pid is None:
@@ -199,12 +249,24 @@ class ToolExecutor:
         payload: Any,
         tool_call_id: str,
     ) -> ToolObservation:
-        """Normalize arbitrary handler return into ``ToolObservation``.
+        """把 handler 的任意返回值归一化为 :class:`ToolObservation`。
 
-        - If the handler returns a ``ToolObservation`` directly, pass through
-          (injecting ``tool_call_id`` if missing).
-        - Otherwise wrap with ``tool_success``, using ``json.dumps`` for
-          structured results (dict / list) and ``str()`` for scalars.
+        参数:
+            tool: 工具定义，提供名称与权限，用于构造成功观察。
+            payload: handler 实际返回值。
+            tool_call_id: 关联模型工具调用的 id。
+
+        返回:
+            若 ``payload`` 已是 :class:`ToolObservation` 则透传（缺
+            ``tool_call_id`` 时注入），否则用 :func:`tool_success` 包装：
+            结构化数据（dict/list）经 ``json.dumps`` 序列化，标量经 ``str()``。
+
+        异常:
+            无。
+
+        副作用:
+            不修改入参；仅在需要时通过 ``dataclasses.replace`` 生成带
+            ``tool_call_id`` 的新 :class:`ToolObservation`。
         """
 
         if isinstance(payload, ToolObservation):
@@ -229,15 +291,34 @@ class ToolExecutor:
         result_queue: multiprocessing.Queue,
         log_queue: "multiprocessing.Queue | None" = None,
     ) -> None:
-        """Run a tool handler inside an isolated child process.
+        """子进程入口：执行 handler 并把结果/异常放入结果队列。
 
-        The child process inherits a copy of the parent address space;
-        this function must remain a pure static method that only uses
-        its arguments — no instance/class state. When ``log_queue`` is
-        provided (parent process logging bridge enabled), the child
-        re-attaches its ``coding_agent.backend`` logger to the cross-process
-        queue so its logs flow into the parent's unified pipeline.
+        参数:
+            handler: 待执行的可调用对象。
+            arguments: handler 的关键字参数（已 dict 化以便跨进程序列化）。
+            result_queue: 与父进程共享的结果队列，承载
+                ``("success"|"error", payload)`` 元组。
+            log_queue: 父进程跨进程日志队列；为 None 时子进程退化为默认 logging。
+
+        返回:
+            无（结果通过 ``result_queue`` 回传）。
+
+        异常:
+            不向上抛出：handler 抛出的任意异常会被捕获并包装为
+            ``("error", {"message", "traceback"})`` 放入队列。
+
+        副作用:
+            纯静态方法，不访问实例/类状态；POSIX 下进入时调用 ``os.setsid()``
+            自立为进程组组长（Windows 跳过），使 :meth:`_force_kill` 的
+            ``os.killpg`` 能可靠清理 handler fork 出的孙进程；当 ``log_queue``
+            非空时通过 ``install_logging_for_current_process`` 将子进程日志重新接入
+            父进程统一管线；执行结束前把成功结果或异常现场写入 ``result_queue``。
         """
+
+        # POSIX 下让子进程自立为进程组组长，使 _force_kill 的 os.killpg
+        # 能真正杀掉 handler 可能 fork 出的孙进程；Windows 无 setsid，跳过。
+        if os.name == "posix":
+            os.setsid()
 
         if log_queue is not None:
             # spawn 子进程是全新解释器：导入 configuration 会触发

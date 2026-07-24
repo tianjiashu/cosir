@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.config import get_config, get_stream_writer
 from langgraph.types import interrupt
 
+from app.config.logging.logger import log
 from app.core.llm.langchain_bridge import runtime_to_langchain, tool_calls_from_langchain
 from app.models.enums.event_type import EventType
 from app.models.payload import (
@@ -33,6 +34,12 @@ from app.tools.schemas import ToolCall
 
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
+
+
+# 内部封装：统一事件写入结构。
+def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
+    writer = get_stream_writer()  # 自定义事件写入器
+    writer({"event_type": str(event_type), "payload": payload})
 
 
 def _runtime_config() -> RuntimeConfig:
@@ -143,14 +150,20 @@ async def _model_node(state: ReactGraphState) -> dict:
     operations = rc.operations  # 领域操作（写 turn、跑工具、查状态）
     turn = rc.turn  # 当前 turn 记录
     model = rc.model  # 已构建好的 chat model
-    writer = get_stream_writer()  # 自定义事件写入器
-
-    # 内部封装：统一把 (EventType, Payload实体) 写成 custom event 结构。
-    def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
-        writer({"event_type": str(event_type), "payload": payload})
 
     step_count = state.step_count + 1  # 步数 +1（本轮模型步）
     step_id = f"step-{step_count}"  # 步唯一 id
+    log.info(
+        "model_node_started",
+        extra={
+            "msg": f"模型节点开始执行，step_id={step_id}",
+            "data": {
+                "step_id": step_id,
+                "step_count": step_count,
+                "message_count": len(state.messages),
+            },
+        },
+    )
     # 步开始
     write_event(
         EventType.STEP_STARTED,
@@ -162,6 +175,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         ModelRequestedPayload(step_id=step_id, message_count=len(state.messages)),
     )
 
+    # 后端在循环结束后需要"完整文本"来做判断和落库，不是为了发给前端
     collected_text: list[str] = []  # 累积输出文本
     chunks: list[AIMessageChunk] = []  # 累积流式分块
     terminal = False  # 是否因取消而提前终止
@@ -175,6 +189,13 @@ async def _model_node(state: ReactGraphState) -> dict:
                 RunCancelledPayload(step_id=step_id, status="cancelled"),
             )
             terminal = True  # 标记提前终止
+            log.info(
+                "model_node_cancelled",
+                extra={
+                    "msg": f"模型流式输出期间检测到 turn 已取消，提前终止，step_id={step_id}",
+                    "data": {"step_id": step_id},
+                },
+            )
             break  # 跳出流式循环
         text = _extract_text(chunk.content)  # 抽本 chunk 文本
         if text:
@@ -210,6 +231,18 @@ async def _model_node(state: ReactGraphState) -> dict:
     tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
     output_text = "".join(collected_text).strip()  # 拼接文本并去首尾空白
     requested_tool = bool(tool_calls)  # 是否要调工具
+    log.info(
+        "model_node_completed",
+        extra={
+            "msg": f"模型产出完成，step_id={step_id}",
+            "data": {
+                "step_id": step_id,
+                "has_tool_calls": requested_tool,
+                "tool_count": len(tool_calls),
+                "output_text_length": len(output_text),
+            },
+        },
+    )
 
     write_event(
         EventType.MODEL_COMPLETED,  # 模型产出完成事件
@@ -227,8 +260,29 @@ async def _model_node(state: ReactGraphState) -> dict:
         ),
     )
 
+    # 为每个被请求的工具调用 emit TOOL_CALL_REQUESTED，携参数与 call_id，
+    # 供前端实时展示工具名/参数（如 read_file 的文件与行范围），并作为
+    # 后续 TOOL_CALL_FINISHED 的关联锚点（按 tool_call_id）。展示元数据由
+    # RuntimeOperations 门面统一投影（来自 ToolDefinition.display）。
+    for call in tool_calls:
+        write_event(
+            EventType.TOOL_CALL_REQUESTED,
+            operations.build_tool_call_requested(call, step_id),
+        )
+
     if requested_tool:  # 模型要求调用工具
         if step_count >= state.max_steps:  # 步数已达上限
+            log.warning(
+                "model_node_max_steps",
+                extra={
+                    "msg": f"已达到最大步数上限，停止调用工具，step_id={step_id}",
+                    "data": {
+                        "step_id": step_id,
+                        "step_count": step_count,
+                        "max_steps": state.max_steps,
+                    },
+                },
+            )
             # 超限失败
             write_event(
                 EventType.RUN_FAILED,
@@ -243,6 +297,13 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "messages": [ai_message],  # 把 ai_message 写回 state，checkpoint 可保留
                 "pending_tool_calls": [],
             }
+        log.info(
+            "model_node_tool_branch",
+            extra={
+                "msg": f"模型请求调用 {len(tool_calls)} 个工具，进入工具节点，step_id={step_id}",
+                "data": {"step_id": step_id, "tool_count": len(tool_calls)},
+            },
+        )
         return {
             "step_count": step_count,
             "requested_tool": True,  # 进入工具分支
@@ -261,6 +322,13 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if output_text:  # 没有工具调用但有文本 → 最终回答
+        log.info(
+            "model_node_final_response",
+            extra={
+                "msg": f"模型给出最终回复，已落库，step_id={step_id}",
+                "data": {"step_id": step_id, "output_text_length": len(output_text)},
+            },
+        )
         write_event(
             EventType.FINAL_RESPONSE,
             FinalResponsePayload(text=output_text, step_id=step_id, status="completed"),
@@ -282,6 +350,13 @@ async def _model_node(state: ReactGraphState) -> dict:
             "final_text": output_text,  # 供上层取最终回复
         }
 
+    log.warning(
+        "model_node_invalid_output",
+        extra={
+            "msg": f"模型既未返回工具调用也无有效文本，判定为非法输出，step_id={step_id}",
+            "data": {"step_id": step_id, "output_text_length": len(output_text)},
+        },
+    )
     write_event(  # 既没工具调用也没文本 → 模型输出非法
         EventType.RUN_FAILED,
         RunFailedPayload(
@@ -319,14 +394,16 @@ def _tools_node(state: ReactGraphState) -> dict:
     operations = rc.operations  # 领域操作
     task = rc.task  # 任务（工具执行需要 task_id）
     turn = rc.turn  # 当前 turn 记录
-    writer = get_stream_writer()  # 自定义事件写入器
-
-    # 内部封装：统一事件写入结构。
-    def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
-        writer({"event_type": str(event_type), "payload": payload})
 
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
+    log.info(
+        "tools_node_started",
+        extra={
+            "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
+            "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
+        },
+    )
 
     # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
     # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
@@ -344,6 +421,13 @@ def _tools_node(state: ReactGraphState) -> dict:
     ]
 
     # 真正执行工具（内部会发工具生命周期事件，write_event 作为回调注入）。
+    log.info(
+        "tools_node_resumed",
+        extra={
+            "msg": f"审批已恢复，准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
+            "data": {"step_id": step_id, "approved_count": len(approved_calls)},
+        },
+    )
     tool_run = operations.run_tool_calls(
         task.task_id,
         approved_calls,
@@ -359,7 +443,33 @@ def _tools_node(state: ReactGraphState) -> dict:
         else:
             tool_error_count += 1  # 失败 +1
 
+    success_count = sum(1 for o in observations if o.status == "success")
+    log.info(
+        "tools_node_completed",
+        extra={
+            "msg": f"工具执行完成，step_id={step_id}",
+            "data": {
+                "step_id": step_id,
+                "tool_count": len(observations),
+                "success_count": success_count,
+                "error_count": len(observations) - success_count,
+                "tool_error_count": tool_error_count,
+            },
+        },
+    )
+
     if tool_error_count >= operations.settings.tool_error_limit:  # 连续工具错误达上限
+        log.warning(
+            "tools_node_error_limit",
+            extra={
+                "msg": f"连续工具错误达到上限，停止执行，step_id={step_id}",
+                "data": {
+                    "step_id": step_id,
+                    "tool_error_count": tool_error_count,
+                    "limit": operations.settings.tool_error_limit,
+                },
+            },
+        )
         write_event(
             EventType.RUN_FAILED,
             RunFailedPayload(
