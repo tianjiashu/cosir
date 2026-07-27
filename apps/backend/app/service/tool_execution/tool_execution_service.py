@@ -9,7 +9,9 @@
 - 不负责：工具注册、参数校验细节、子进程隔离（均由 ``ToolScheduler`` / ``ToolExecutor`` 负责）。
 """
 
-from collections.abc import Callable
+import dataclasses
+import json
+from collections.abc import Callable, Iterable
 from typing import Literal
 
 from app.models import RuntimeMessage
@@ -17,20 +19,26 @@ from app.models.enums.event_type import EventType
 from app.models.payload import ToolCallFinishedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.tool_execution.run_result import ToolRunResult
-from app.tools.schemas import ToolCall
+from app.tools.schemas import ToolCall, ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.trace_infra.redaction import redact_terminal_output
 
 
 class ToolExecutionService:
     """Orchestrate a batch of tool calls requested by the model."""
 
-    def __init__(self, scheduler: ToolScheduler, agent_id: str) -> None:
+    def __init__(
+        self,
+        scheduler: ToolScheduler,
+        agent_id: str,
+        allowed_tool_names: Iterable[str] | None = None,
+    ) -> None:
         """Initialize the tool execution service.
 
         参数:
             scheduler: 底层工具调度器（负责校验与执行）。
             agent_id: 执行主体标识（用于日志关联）。
-            logger: 运行时日志器。
+            allowed_tool_names: 当前 Agent profile 允许执行的工具名。
 
         返回:
             无。
@@ -44,12 +52,16 @@ class ToolExecutionService:
 
         self._scheduler = scheduler
         self._agent_id = agent_id
+        self._allowed_tool_names = (
+            frozenset(allowed_tool_names) if allowed_tool_names is not None else None
+        )
 
     def run_calls_with_events(
         self,
         task_id: str,
         step_id: str,
         calls: list[ToolCall],
+        execution_context: ToolExecutionContext | None = None,
         write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
     ) -> ToolRunResult:
         """执行一批工具调用并发出生命周期事件。
@@ -62,6 +74,8 @@ class ToolExecutionService:
             task_id: 当前任务标识（用于日志关联）。
             step_id: 请求这些工具调用的步骤标识。
             calls: 模型请求的工具调用列表。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
+                透传给 ``ToolScheduler.execute``，最终在执行期注入 handler。
             write_event: 可选的工具生命周期事件写入回调。
 
         返回:
@@ -77,7 +91,11 @@ class ToolExecutionService:
         observations = []
         messages: list[RuntimeMessage] = []
         for call in calls:
-            observation = self._scheduler.execute(call)
+            observation = self._scheduler.execute(
+                call,
+                execution_context=execution_context,
+                allowed_tool_names=self._allowed_tool_names,
+            )
             observations.append(observation)
             status: Literal["success", "error"] = (
                 "success" if observation.status == "success" else "error"
@@ -92,10 +110,15 @@ class ToolExecutionService:
                         tool_call_id=observation.tool_call_id,
                     ),
                 )
+            serialized = dataclasses.asdict(observation)
+            serialized["content"] = redact_terminal_output(observation.content)
             messages.append(
                 RuntimeMessage(
                     role="tool",
-                    content_text=observation.content,
+                    content_text=json.dumps(
+                        {k: v for k, v in serialized.items() if v is not None},
+                        ensure_ascii=False,
+                    ),
                     metadata={"tool_call_id": observation.tool_call_id},
                 )
             )
