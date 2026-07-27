@@ -1,71 +1,141 @@
-"""后端应用的运行时配置。"""
+"""后端应用的运行时配置（类级静态命名空间）。
+
+这些运行期配置作为 ``Settings`` 类的类级静态属性存在，由 ``Settings.load`` 在进程启动时
+填充一次，之后所有模块通过 ``from app.config.settings import Settings`` 后静态读取
+（如 ``Settings.LOG_DIR``），配置对象不再被到处传递。
+
+设计边界：
+- 本模块只承载进程级运行配置（日志路径、SQLite 路径、各类数值上限）。模型相关配置不在
+  此处，统一收敛到 ``app.core.llm.model_settings``。
+- 数值上限类配置（如 ``Settings.MAX_STEPS`` / ``Settings.TOOL_ERROR_LIMIT``）为全进程共享的
+  静态值，运行时不确、不可变；需要按环境覆盖时经环境变量或 ``Settings.override``（测试）注入。
+- 路径类配置（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）由仓库根目录推导，受
+  ``.env`` 覆盖；测试可将临时目录经 ``Settings.override`` 注入以隔离副作用。
+"""
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, ClassVar
 
 from dotenv import dotenv_values
 
 
-@dataclass(frozen=True)
-class BackendSettings:
-    """存储运行时服务使用的后端配置。
+class Settings:
+    """后端运行时配置（类级静态属性，进程级单例命名空间）。
 
-    参数:
-        project_root: 用于安全文件访问的项目根目录绝对路径。
-        log_dir: 后端日志目录的绝对路径。
-        database_file: 后端 SQLite 数据库文件的绝对路径。
-        log_database_file: 独立日志 SQLite 数据库文件的绝对路径；省略时从 database_file 派生。
-        checkpoint_file: LangGraph checkpoint 异步 SQLite 数据库文件的绝对路径；省略时从
-            database_file 同目录派生 ``langgraph_checkpoints.sqlite``。
-        sqlite_logging_enabled: 是否启用 SQLite 日志落库。
-        log_queue_size: SQLite 日志内存队列容量。
-        log_batch_size: SQLite 日志批量写入大小。
-        log_flush_interval_ms: SQLite 日志最大 flush 间隔毫秒数。
-        log_query_limit_max: 日志查询允许的最大 limit。
-        model_provider: 遗留字段，仅用于 ``backend_health`` 健康态展示，已不参与模型构建
-            （模型选择现由 ``app.core.llm.factory`` 的模型注册表按 ``model_name`` 决定）。
-        model_base_url: OpenAI 兼容服务商的基础 URL。
-        model_api_key_env: 包含服务商 API Key 的环境变量。
-        model_name: 发送给服务商的模型名；同时作为工厂查表键决定 thinking 等差异。
-        model_thinking_mode: 遗留字段，仅用于 ``backend_health`` 健康态展示，已不参与模型构建
-            （thinking 现由工厂注册表 ``ModelSpec.thinking`` 按模型名决定，
-            flash=disabled / pro=enabled）。
-        max_steps: 一次任务在运行失败前允许的最大运行时步骤数。
-        tool_error_limit: 运行失败前允许的最大工具错误数。
-        max_context_chars: 模型调用前允许的最大字符数代理预算。
+    配置作为类级静态属性存在，由 ``Settings.load`` 在进程启动时填充一次，之后所有模块通过
+    ``Settings.LOG_DIR`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
 
-    返回:
-        一个不可变的配置值对象。
-
-    异常:
-        ValueError: 如果数值限制小于 1，或服务商不受支持。
-
-    副作用:
-        无。
+    职责边界：
+        - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）、校验与按测试注入。
+        - 不负责：模型相关配置（见 ``app.core.llm.model_settings``）、任何业务读写。
     """
 
-    project_root: Path
-    log_dir: Path
-    database_file: Path
-    log_database_file: Path | None = None
-    checkpoint_file: Path | None = None
-    sqlite_logging_enabled: bool = True
-    log_queue_size: int = 1000
-    log_batch_size: int = 50
-    log_flush_interval_ms: int = 1000
-    log_query_limit_max: int = 1000
-    model_provider: str = "echo"
-    model_base_url: str = "https://api.deepseek.com/v1"
-    model_api_key_env: str = "DEEPSEEK_API_KEY"
-    model_name: str = "deepseek-v4-flash"
-    model_thinking_mode: str = "disabled"
-    max_steps: int = 100
-    tool_error_limit: int = 3
-    max_context_chars: int = 20000
+    # --- 类级静态配置（进程启动后由 ``Settings.load`` 填充，之后只读） ---
+    LOG_DIR: ClassVar[Path] = Path("logs")
+    DATABASE_FILE: ClassVar[Path] = Path("storage/app.sqlite3")
+    LOG_DATABASE_FILE: ClassVar[Path | None] = None
+    CHECKPOINT_FILE: ClassVar[Path | None] = None
+    SQLITE_LOGGING_ENABLED: ClassVar[bool] = True
+    LOG_QUEUE_SIZE: ClassVar[int] = 1000
+    LOG_BATCH_SIZE: ClassVar[int] = 50
+    LOG_FLUSH_INTERVAL_MS: ClassVar[int] = 1000
+    LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
+    MAX_STEPS: ClassVar[int] = 10000
+    TOOL_ERROR_LIMIT: ClassVar[int] = 3
+    MAX_CONTEXT_CHARS: ClassVar[int] = 20000
+    MAX_TOOL_OUTPUT_CHARS: ClassVar[int] = 20000
 
-    def __post_init__(self) -> None:
-        """在 dataclass 初始化之后校验配置。
+    # 允许被 ``override`` 覆盖的字段名集合；实际值在 ``Settings`` 类定义结束后由
+    # ``_finalize_overridable`` 经 ``Settings.__annotations__`` 推导注入，规避类体内裸
+    # ``__annotations__`` 的 IDE 静态解析告警；占位为空集，置位见 ``_finalize_overridable``。
+    _OVERRIDABLE: ClassVar[frozenset[str]] = frozenset()
+
+    @staticmethod
+    def _resolve_repository_root() -> Path:
+        """从本文件位置推导仓库根目录绝对路径。
+
+        参数:
+            无。
+
+        返回:
+            仓库根目录绝对路径（本文件位于 ``<repo>/apps/backend/app/config/settings.py``，
+            上溯四级即仓库根）。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return Path(__file__).resolve().parents[4]
+
+    @staticmethod
+    def _load_local_env(repository_root: Path) -> None:
+        """从约定的本地 env 文件加载未显式设置的环境变量。
+
+        参数:
+            repository_root: 仓库根目录绝对路径。
+
+        返回:
+            无。
+
+        异常:
+            OSError: 当 env 文件存在但无法读取时抛出。
+
+        副作用:
+            将 `.env` / `.env.local` 中的键值对写入当前进程环境，但不会覆盖已存在的环境变量。
+        """
+
+        backend_root = repository_root / "apps" / "backend"
+        merged_values: dict[str, str] = {}
+        for env_file in (
+            repository_root / ".env",
+            backend_root / ".env",
+            repository_root / ".env.local",
+            backend_root / ".env.local",
+        ):
+            if not env_file.exists():
+                continue
+            file_values = dotenv_values(env_file)
+            for key, value in file_values.items():
+                if value is not None:
+                    merged_values[key] = value
+        for key, value in merged_values.items():
+            os.environ.setdefault(key, value)
+
+    @staticmethod
+    def _env_bool(name: str, default: bool) -> bool:
+        """读取布尔环境变量。
+
+        参数:
+            name: 环境变量名。
+            default: 未设置时使用的默认值。
+
+        返回:
+            解析后的布尔值。
+
+        异常:
+            ValueError: 如果变量值不是受支持的布尔文本。
+
+        副作用:
+            读取进程环境变量。
+        """
+
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"{name} must be a boolean value")
+
+    @classmethod
+    def _validate(cls) -> None:
+        """校验数值上限类配置是否合法。
 
         参数:
             无。
@@ -74,50 +144,139 @@ class BackendSettings:
             无。
 
         异常:
-            ValueError: 如果数值限制小于 1，或服务商不受支持。
+            ValueError: 如果任一数值上限小于 1。
 
         副作用:
             无。
         """
 
-        if self.max_steps < 1:
-            raise ValueError("max_steps must be greater than zero")
-        if self.tool_error_limit < 1:
-            raise ValueError("tool_error_limit must be greater than zero")
-        if self.max_context_chars < 1:
-            raise ValueError("max_context_chars must be greater than zero")
-        if self.log_database_file is None:
-            object.__setattr__(
-                self, "log_database_file", self.database_file.with_name("logs.sqlite3")
-            )
-        if self.checkpoint_file is None:
-            object.__setattr__(
-                self,
-                "checkpoint_file",
-                self.database_file.parent / "langgraph_checkpoints.sqlite",
-            )
-        if self.log_queue_size < 1:
-            raise ValueError("log_queue_size must be greater than zero")
-        if self.log_batch_size < 1:
-            raise ValueError("log_batch_size must be greater than zero")
-        if self.log_flush_interval_ms < 1:
-            raise ValueError("log_flush_interval_ms must be greater than zero")
-        if self.log_query_limit_max < 1:
-            raise ValueError("log_query_limit_max must be greater than zero")
-        if self.model_provider not in {"echo", "openai-compatible"}:
-            raise ValueError("model_provider must be 'echo' or 'openai-compatible'")
-        if self.model_thinking_mode not in {"enabled", "disabled"}:
-            raise ValueError("model_thinking_mode must be 'enabled' or 'disabled'")
+        if cls.MAX_STEPS < 1:
+            raise ValueError("MAX_STEPS must be greater than zero")
+        if cls.TOOL_ERROR_LIMIT < 1:
+            raise ValueError("TOOL_ERROR_LIMIT must be greater than zero")
+        if cls.MAX_CONTEXT_CHARS < 1:
+            raise ValueError("MAX_CONTEXT_CHARS must be greater than zero")
+        if cls.MAX_TOOL_OUTPUT_CHARS < 1:
+            raise ValueError("MAX_TOOL_OUTPUT_CHARS must be greater than zero")
+        if cls.LOG_QUEUE_SIZE < 1:
+            raise ValueError("LOG_QUEUE_SIZE must be greater than zero")
+        if cls.LOG_BATCH_SIZE < 1:
+            raise ValueError("LOG_BATCH_SIZE must be greater than zero")
+        if cls.LOG_FLUSH_INTERVAL_MS < 1:
+            raise ValueError("LOG_FLUSH_INTERVAL_MS must be greater than zero")
+        if cls.LOG_QUERY_LIMIT_MAX < 1:
+            raise ValueError("LOG_QUERY_LIMIT_MAX must be greater than zero")
 
-    @property
-    def log_file(self) -> Path:
+    @classmethod
+    def load(cls, repository_root: Path | None = None) -> None:
+        """加载默认配置与本地 env 覆盖，填充类级静态属性。
+
+        进程启动时调用一次（``__main__.py`` 与 ``app.py`` 的 lifespan 均会调用）；模块导入时
+        亦会调用一次，使未显式启动的单元测试也能拿到仓库根推导出的默认路径。
+
+        参数:
+            repository_root: 仓库根目录绝对路径；省略时从本文件路径推导。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: 如果数值上限小于 1。
+
+        副作用:
+            加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性。
+        """
+
+        root = repository_root or cls._resolve_repository_root()
+        cls._load_local_env(root)
+
+        cls.LOG_DIR = root / "logs"
+        cls.DATABASE_FILE = root / "storage" / "app.sqlite3"
+        cls.LOG_DATABASE_FILE = Path(
+            os.environ.get(
+                "CODING_AGENT_LOG_DATABASE_FILE",
+                str(root / "storage" / "logs.sqlite3"),
+            )
+        )
+        cls.CHECKPOINT_FILE = Path(
+            os.environ.get(
+                "CODING_AGENT_CHECKPOINT_FILE",
+                str(root / "storage" / "langgraph_checkpoints.sqlite"),
+            )
+        )
+        cls.SQLITE_LOGGING_ENABLED = cls._env_bool("CODING_AGENT_SQLITE_LOGGING_ENABLED", True)
+        cls.LOG_QUEUE_SIZE = int(os.environ.get("CODING_AGENT_LOG_QUEUE_SIZE", "1000"))
+        cls.LOG_BATCH_SIZE = int(os.environ.get("CODING_AGENT_LOG_BATCH_SIZE", "50"))
+        cls.LOG_FLUSH_INTERVAL_MS = int(
+            os.environ.get("CODING_AGENT_LOG_FLUSH_INTERVAL_MS", "1000")
+        )
+        cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
+        cls.MAX_STEPS = int(os.environ.get("CODING_AGENT_MAX_STEPS", "8"))
+        cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
+        cls.MAX_CONTEXT_CHARS = int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000"))
+        cls.MAX_TOOL_OUTPUT_CHARS = int(
+            os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")
+        )
+
+        cls._validate()
+
+    @classmethod
+    def override(cls, **kwargs: Any) -> None:
+        """覆盖个别类级静态属性，用于测试或特殊场景注入临时配置。
+
+        参数:
+            kwargs: 待覆盖的类级静态属性名与值（键必须是本类已定义的静态属性名）。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: 如果传入了本类不存在的属性名。
+
+        副作用:
+            修改本类的全局静态属性；该修改跨测试持续，调用方应自行保证隔离（必要时用
+            ``Settings.load()`` 复位）。
+        """
+
+        invalid = set(kwargs) - cls._OVERRIDABLE
+        if invalid:
+            raise ValueError(f"unknown settings to override: {sorted(invalid)}")
+        for name, value in kwargs.items():
+            setattr(cls, name, value)
+
+    @classmethod
+    def _finalize_overridable(cls) -> None:
+        """类定义结束后推导 ``_OVERRIDABLE``，固化允许被 ``override`` 覆盖的字段名集合。
+
+        在类体执行完毕后调用，经 ``cls.__annotations__``（属性访问，规避类体内裸
+        ``__annotations__`` 的 IDE 静态解析告警）取得全部类级静态属性注解，剔除
+        ``_OVERRIDABLE`` 自身后固化为不可变集合，使可覆盖字段与类注解单一事实来源一致，
+        不手抄、不漂移。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            将派生结果写入 ``cls._OVERRIDABLE``（类级静态属性）。
+        """
+
+        cls._OVERRIDABLE = frozenset(cls.__annotations__) - {"_OVERRIDABLE"}
+
+    @classmethod
+    def log_file(cls) -> Path:
         """返回当前日期日志文件路径。
 
         参数:
             无。
 
         返回:
-            根据 ``log_dir`` 和当前日期派生出的 ``logs-YYYY-MM-DD.log`` 路径。
+            根据 ``Settings.LOG_DIR`` 和当前日期派生出的 ``logs-YYYY-MM-DD.log`` 路径。
 
         异常:
             无。
@@ -132,148 +291,10 @@ class BackendSettings:
         # 顶层零 app 依赖，无论谁先 import 都能立即完成，循环被根治。
         from app.config.logging.common import current_log_file
 
-        return current_log_file(self.log_dir)
+        return current_log_file(cls.LOG_DIR)
 
 
-def _load_local_env(repository_root: Path) -> None:
-    """从约定的本地 env 文件加载未显式设置的环境变量。
-
-    参数:
-        repository_root: 仓库根目录绝对路径。
-
-    返回:
-        无。
-
-    异常:
-        OSError: 当 env 文件存在但无法读取时抛出。
-
-    副作用:
-        将 `.env` / `.env.local` 中的键值对写入当前进程环境，但不会覆盖已存在的环境变量。
-    """
-
-    backend_root = repository_root / "apps" / "backend"
-    merged_values: dict[str, str] = {}
-    for env_file in (
-        repository_root / ".env",
-        backend_root / ".env",
-        repository_root / ".env.local",
-        backend_root / ".env.local",
-    ):
-        if not env_file.exists():
-            continue
-        file_values = dotenv_values(env_file)
-        for key, value in file_values.items():
-            if value is not None:
-                merged_values[key] = value
-    for key, value in merged_values.items():
-        os.environ.setdefault(key, value)
-
-
-def _resolve_default_model_provider() -> str:
-    """根据当前环境推导模型服务商默认值。
-
-    参数:
-        无。
-
-    返回:
-        显式设置的模型服务商；若未显式设置且存在 API Key，则返回 ``openai-compatible``，
-        否则回退到 ``echo``。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    explicit_provider = os.environ.get("CODING_AGENT_MODEL_PROVIDER")
-    if explicit_provider:
-        return explicit_provider
-    api_key_env = os.environ.get("CODING_AGENT_MODEL_API_KEY_ENV", "DEEPSEEK_API_KEY")
-    if os.environ.get(api_key_env):
-        return "openai-compatible"
-    return "echo"
-
-
-def default_settings() -> BackendSettings:
-    """为本地开发构建默认后端配置。
-
-    参数:
-        无。
-
-    返回:
-        使用本地路径与环境变量覆盖的 BackendSettings。
-
-    异常:
-        RuntimeError: 如果无法从本文件路径推导出仓库根目录。
-
-    副作用:
-        无。
-    """
-
-    repository_root = Path(__file__).resolve().parents[4]
-    _load_local_env(repository_root)
-    return BackendSettings(
-        project_root=repository_root,
-        log_dir=repository_root / "logs",
-        database_file=repository_root / "storage" / "app.sqlite3",
-        log_database_file=Path(
-            os.environ.get(
-                "CODING_AGENT_LOG_DATABASE_FILE",
-                str(repository_root / "storage" / "logs.sqlite3"),
-            )
-        ),
-        checkpoint_file=Path(
-            os.environ.get(
-                "CODING_AGENT_CHECKPOINT_FILE",
-                str(repository_root / "storage" / "langgraph_checkpoints.sqlite"),
-            )
-        ),
-        sqlite_logging_enabled=_env_bool("CODING_AGENT_SQLITE_LOGGING_ENABLED", True),
-        log_queue_size=int(os.environ.get("CODING_AGENT_LOG_QUEUE_SIZE", "1000")),
-        log_batch_size=int(os.environ.get("CODING_AGENT_LOG_BATCH_SIZE", "50")),
-        log_flush_interval_ms=int(os.environ.get("CODING_AGENT_LOG_FLUSH_INTERVAL_MS", "1000")),
-        log_query_limit_max=int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000")),
-        model_provider=_resolve_default_model_provider(),
-        model_base_url=os.environ.get(
-            "CODING_AGENT_MODEL_BASE_URL",
-            "https://api.deepseek.com",
-        ),
-        model_api_key_env=os.environ.get(
-            "CODING_AGENT_MODEL_API_KEY_ENV",
-            "DEEPSEEK_API_KEY",
-        ),
-        model_name=os.environ.get("CODING_AGENT_MODEL_NAME", "deepseek-v4-flash"),
-        model_thinking_mode=os.environ.get("CODING_AGENT_MODEL_THINKING_MODE", "disabled"),
-        max_steps=int(os.environ.get("CODING_AGENT_MAX_STEPS", "8")),
-        tool_error_limit=int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3")),
-        max_context_chars=int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000")),
-    )
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    """读取布尔环境变量。
-
-    参数:
-        name: 环境变量名。
-        default: 未设置时使用的默认值。
-
-    返回:
-        解析后的布尔值。
-
-    异常:
-        ValueError: 如果变量值不是受支持的布尔文本。
-
-    副作用:
-        读取进程环境变量。
-    """
-
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be a boolean value")
+# 类定义结束后推导可覆盖字段集合，再按仓库根推导默认配置，使未显式调用 ``Settings.load``
+# 的单元测试也能拿到合法绝对路径；生产启动时再次调用为幂等覆盖（含 env 覆盖与环境差异）。
+Settings._finalize_overridable()
+Settings.load()
