@@ -9,7 +9,16 @@ from app.tools.schemas.tool_definition import ToolDefinition
 
 
 class ToolRegistry:
-    """Register, query, and export project tool definitions."""
+    """线程安全的工具定义注册目录（纯读侧）。
+
+    职责边界：只负责工具定义的注册（register/deregister）、查询
+    （get_* 系列）与导出（schema/权限投影），即充当运行期的"工具
+    定义目录"。所有工具的实际执行统一由 ``ToolScheduler.execute``
+    编排，本类不调用、也不持有任何执行逻辑——职责严格止于"定义"。
+
+    线程安全：注册表的读写均经 ``RLock`` 保护，可在多 worker 场景下
+    并发查询；任何变更都会递增 ``generation`` 计数器，供调用方做缓存失效。
+    """
 
     def __init__(self, definitions: Iterable[ToolDefinition] = ()) -> None:
         """Initialize the registry with optional tool definitions."""
@@ -83,14 +92,6 @@ class ToolRegistry:
 
         with self._lock:
             return {definition.permission for definition in self._tool_definitions.values()}
-
-    def dispatch(self, name: str, arguments: Mapping[str, Any]) -> Any:
-        """Execute a registered tool handler by name."""
-
-        definition = self.get_tool_definition(name)
-        if definition is None:
-            raise KeyError(f"unknown tool: {name}")
-        return definition.handler(**arguments)
 
     @property
     def generation(self) -> int:
