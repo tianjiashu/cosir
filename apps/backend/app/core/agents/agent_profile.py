@@ -13,6 +13,14 @@ if TYPE_CHECKING:
 
 # 默认 Agent 标识：前端未显式选择 agent 时回落到该内置 developer。
 DEFAULT_AGENT_ID = "developer"
+DEFAULT_DEVELOPER_TOOLS = (
+    "read_file",
+    "list_directory",
+    "search_files",
+    "write_file",
+    "patch",
+    "delete",
+)
 
 
 def _default_workflow() -> AgentWorkflow:
@@ -145,7 +153,7 @@ def default_developer_agent() -> AgentProfile:
             "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
             "第一版只处理纯文本输入。"
         ),
-        allowed_tools=["read_file"],
+        allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
         context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
@@ -178,7 +186,7 @@ def developer_agent_pro() -> AgentProfile:
             "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
             "第一版只处理纯文本输入。"
         ),
-        allowed_tools=["read_file"],
+        allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
         context_policy="text_only_v1",
         model_name="deepseek-v4-pro",
         model_settings=ModelSettings(
