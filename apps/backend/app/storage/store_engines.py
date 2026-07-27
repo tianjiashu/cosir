@@ -1,9 +1,10 @@
 """SQLAlchemy 引擎统一工厂。
 
 单一职责：集中创建、缓存、释放两个业务所需的 SQLAlchemy 同步引擎（主库 / 日志库），
-路径全部来自 ``BackendSettings``。CRUD 不再接收引擎或路径参数，统一通过本模块的访问器
+路径全部来自 ``Settings`` 类级静态属性（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）；
+CRUD 不再接收引擎或路径参数，统一通过本模块的访问器取得 session 工厂。
 取得 session 工厂。LangGraph checkpoint 由 ``app.core.runtime.runs.checkpointer`` 经
-aiosqlite 直连 ``BackendSettings.checkpoint_file``，不经过本模块引擎。
+aiosqlite 直连 ``Settings.CHECKPOINT_FILE``，不经过本模块引擎。
 
 职责边界：
     - 负责：三大引擎的按需创建、进程级缓存复用（委托 ``engine_cache``）、schema 初始化
@@ -11,17 +12,16 @@ aiosqlite 直连 ``BackendSettings.checkpoint_file``，不经过本模块引擎�
     - 不负责：引擎底层 PRAGMA 与连接池细节（见 ``engine_cache``）、建表与迁移 SQL
       （见 ``init_schema``）、任何业务读写（见 ``crud/``）。
 
-生命周期约定：进程启动时调用一次 ``init_storage(settings)``；各 CRUD 在其 ``__init__``
+生命周期约定：进程启动时调用一次 ``init_storage()``；各 CRUD 在其 ``__init__``
 里通过访问器（如 ``main_session_factory()``）取得 session 工厂或引擎，因此必须在
 ``init_storage`` 之后构造；进程退出或测试拆卸时调用 ``close_storage()`` 释放全部连接池。
 未初始化即调用访问器会抛出统一的 ``RuntimeError``。
 
 用法::
 
-    from app.config.settings import default_settings
     from app.storage.store_engines import init_storage, main_session_factory, close_storage
 
-    init_storage(default_settings())
+    init_storage()
     task_crud = TaskCrud()          # 内部调用 main_session_factory()
     ...
     close_storage()                 # 进程退出或测试拆卸时释放
@@ -30,12 +30,13 @@ aiosqlite 直连 ``BackendSettings.checkpoint_file``，不经过本模块引擎�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
 
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config.settings import BackendSettings, default_settings
+from app.config.settings import Settings
 from app.storage.engine_cache import _engine_cache, create_session_factory
 from app.storage.init_schema import initialize_app_schema, initialize_log_schema
 
@@ -54,7 +55,9 @@ class _StorageState:
     main_session_factory: sessionmaker[Session] | None = None
     log_engine: Engine | None = None
     log_session_factory: sessionmaker[Session] | None = None
-    settings: BackendSettings | None = None
+    db_file: Path | None = None
+    log_db_file: Path | None = None
+    checkpoint_file: Path | None = None
 
 
 _state = _StorageState()
@@ -78,16 +81,15 @@ def _require(value, what: str):
     """
 
     if value is None:
-        raise RuntimeError(f"storage not initialized; call init_storage(settings) first ({what})")
+        raise RuntimeError(f"storage not initialized; call init_storage() first ({what})")
     return value
 
 
-def init_storage(settings: BackendSettings | None = None) -> None:
-    """按 settings 初始化并缓存全部引擎与 session 工厂（幂等）。
+def init_storage() -> None:
+    """按 ``Settings`` 类级静态配置初始化并缓存全部引擎与 session 工厂（幂等）。
 
     参数:
-        settings: 后端配置；省略时回退到已初始化的 settings，再否则使用
-            ``default_settings()``。
+        无。后端路径类配置由 ``app.config.settings.Settings`` 的类级静态属性提供。
 
     返回:
         无。
@@ -99,28 +101,28 @@ def init_storage(settings: BackendSettings | None = None) -> None:
     副作用:
         首次调用时创建主库、日志库两个引擎并初始化 schema；checkpoint 数据库父目录一并
         预创建（供 ``app.core.runtime.runs.checkpointer`` 经 aiosqlite 直连）；
-        已初始化且 settings 不同则先 ``close_storage`` 再重建。
+        已初始化且路径配置不同则先 ``close_storage`` 再重建。
     """
 
-    settings = settings or _state.settings or default_settings()
+    log_database_file = _require(Settings.LOG_DATABASE_FILE, "log_database_file")
+    checkpoint_file = _require(Settings.CHECKPOINT_FILE, "checkpoint_file")
     with _INIT_LOCK:
         if (
-            _state.settings is not None
-            and _state.settings == settings
-            and _state.main_engine is not None
+            _state.main_engine is not None
+            and _state.db_file == Settings.DATABASE_FILE
+            and _state.log_db_file == log_database_file
+            and _state.checkpoint_file == checkpoint_file
         ):
             return
         if _state.main_engine is not None:
             close_storage()
-        _state.settings = settings
+        _state.db_file = Settings.DATABASE_FILE
+        _state.log_db_file = log_database_file
+        _state.checkpoint_file = checkpoint_file
 
-        _state.main_engine = _engine_cache.get(settings.database_file)
+        _state.main_engine = _engine_cache.get(Settings.DATABASE_FILE)
         initialize_app_schema(_state.main_engine)
         _state.main_session_factory = create_session_factory(_state.main_engine)
-
-        # __post_init__ 保证以下派生路径在实例构造后必非 None（缺省时从 database_file 派生）
-        log_database_file = _require(settings.log_database_file, "log_database_file")
-        checkpoint_file = _require(settings.checkpoint_file, "checkpoint_file")
 
         _state.log_engine = _engine_cache.get(log_database_file)
         initialize_log_schema(_state.log_engine)
@@ -187,7 +189,7 @@ def log_session_factory() -> sessionmaker[Session]:
 
 
 def checkpoint_path() -> str:
-    """返回 checkpoint sqlite 文件路径字符串（来自 ``BackendSettings.checkpoint_file``）。
+    """返回 checkpoint sqlite 文件路径字符串（来自 ``Settings.CHECKPOINT_FILE``）。
 
     参数:
         无。
@@ -202,7 +204,7 @@ def checkpoint_path() -> str:
         无。
     """
 
-    return str(_require(_state.settings, "settings").checkpoint_file)
+    return str(_require(Settings.CHECKPOINT_FILE, "checkpoint_file"))
 
 
 def close_storage() -> None:
@@ -223,14 +225,14 @@ def close_storage() -> None:
     """
 
     with _INIT_LOCK:
-        if _state.main_engine is not None and _state.settings is not None:
-            _engine_cache.dispose_path(_state.settings.database_file)
-        if _state.log_engine is not None and _state.settings is not None:
-            _engine_cache.dispose_path(
-                _require(_state.settings.log_database_file, "log_database_file")
-            )
+        if _state.main_engine is not None and Settings.DATABASE_FILE is not None:
+            _engine_cache.dispose_path(Settings.DATABASE_FILE)
+        if _state.log_engine is not None and Settings.LOG_DATABASE_FILE is not None:
+            _engine_cache.dispose_path(Settings.LOG_DATABASE_FILE)
         _state.main_engine = None
         _state.main_session_factory = None
         _state.log_engine = None
         _state.log_session_factory = None
-        _state.settings = None
+        _state.db_file = None
+        _state.log_db_file = None
+        _state.checkpoint_file = None
