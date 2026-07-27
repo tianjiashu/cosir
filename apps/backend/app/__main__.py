@@ -22,7 +22,7 @@ from app.bootstate import (
     write_bootstate,
 )
 from app.config.logging import install_logging_for_current_process
-from app.config.settings import default_settings
+from app.config.settings import Settings
 from app.storage.store_engines import init_storage
 
 
@@ -54,18 +54,18 @@ def main() -> None:
         if boot_state_file is not None:
             write_bootstate(boot_state_file, BOOT_PHASE_BOOTING, step="start")
 
-        settings = default_settings()
         # 存储引擎（含日志库 session 工厂）必须在日志配置之前初始化，
         # 否则 SQLiteLogHandler 内部构造 LogStore 时会因 log_session_factory()
         # 不可用而抛 RuntimeError，导致日志仅落文件、SQLite 库永远为空。
-        init_storage(settings)
+        Settings.load()
+        init_storage()
         install_logging_for_current_process(
-            log_dir=settings.log_dir,
-            log_database_file=settings.log_database_file,
-            sqlite_logging_enabled=settings.sqlite_logging_enabled,
-            queue_size=settings.log_queue_size,
-            batch_size=settings.log_batch_size,
-            flush_interval_ms=settings.log_flush_interval_ms,
+            log_dir=Settings.LOG_DIR,
+            log_database_file=Settings.LOG_DATABASE_FILE,
+            sqlite_logging_enabled=Settings.SQLITE_LOGGING_ENABLED,
+            queue_size=Settings.LOG_QUEUE_SIZE,
+            batch_size=Settings.LOG_BATCH_SIZE,
+            flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
         )
 
         host = os.environ.get("CODING_AGENT_HOST", "127.0.0.1")
