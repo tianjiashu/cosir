@@ -22,7 +22,9 @@ def tool_error(
 
     参数:
         tool_name: 触发失败的工具名称。
-        error: 失败的错误描述（异常消息、堆栈摘要或人读说明）。
+        error: 失败的错误描述（异常消息、堆栈摘要或人读说明）。必须**用英文**撰写、
+            对模型友好——该值同时写入 ``error`` 与 ``content`` 字段并直接回传给模型，
+            模型据此判断失败原因并修正下一步动作；开发者向的中文 docstring/注释不在此限。
         reason: 失败分类短码，供上层区分失败性质并决定重试策略；常见取值包括
             ``unknown_tool`` / ``permission_denied`` / ``invalid_arguments`` /
             ``handler_exception`` / ``timeout`` / ``handler_start_failed`` /
@@ -34,8 +36,8 @@ def tool_error(
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
 
     返回:
-        不可变的 :class:`ToolObservation`：``status="error"``，``content`` 为空
-        字符串，其余诊断字段按入参填充，``data`` 为空字典。
+        不可变的 :class:`ToolObservation`：``status="error"``，``content`` 与
+        ``error`` 均包含人类可读错误，其余诊断字段按入参填充，``data`` 为空字典。
 
     异常:
         无。
@@ -47,7 +49,7 @@ def tool_error(
     return ToolObservation(
         tool_name=tool_name,
         status="error",
-        content="",
+        content=error,
         error=error,
         reason=reason,
         retryable=retryable,
