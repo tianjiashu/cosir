@@ -15,6 +15,7 @@ from langgraph.config import get_config, get_stream_writer
 from langgraph.types import interrupt
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.core.llm.langchain_bridge import runtime_to_langchain, tool_calls_from_langchain
 from app.models.enums.event_type import EventType
 from app.models.payload import (
@@ -458,15 +459,15 @@ def _tools_node(state: ReactGraphState) -> dict:
         },
     )
 
-    if tool_error_count >= operations.settings.tool_error_limit:  # 连续工具错误达上限
+    if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
         log.warning(
             "tools_node_error_limit",
             extra={
                 "msg": f"连续工具错误达到上限，停止执行，step_id={step_id}",
                 "data": {
                     "step_id": step_id,
-                    "tool_error_count": tool_error_count,
-                    "limit": operations.settings.tool_error_limit,
+                "tool_error_count": tool_error_count,
+                "limit": Settings.TOOL_ERROR_LIMIT,
                 },
             },
         )
