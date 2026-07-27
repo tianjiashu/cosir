@@ -2,7 +2,7 @@
 
 本文件是 `coding-agent` 项目的长期 Agent 入口指南。它保留项目愿景、不可变决议、协作原则、当前目录结构与职责，以及**已落地的项目约定**；详细规则放在 `docs/` 和 `rules/` 下。
 
-> 当前项目已**进入代码开发阶段**（后端 FastAPI + LangGraph 主体骨架与日志子系统已落地，桌面端 Tauri 2 框架已搭起）。本文件的目录结构与约定以**当前真实代码为准**；若与 `rules/目录组织规范.md` 的个别文件名描述冲突，以本文件为准（规范文档的部分文件名待同步清理，见文末「已知偏差」）。
+> 当前项目已**进入代码开发阶段**（后端 FastAPI + LangGraph 主体骨架与日志子系统已落地，桌面端 Tauri 2 框架已搭起）。本文件的目录结构与约定以**当前真实代码为准**；`rules/目录组织规范.md` 已于 2026-07-26 与真实代码全量对齐，两者应保持一致，冲突时以真实代码为准并同步修订两份文档。
 
 ---
 
@@ -28,7 +28,7 @@
 - 第一版必须预留 Agent Workflow、context compaction、subagent、tool 的扩展能力，不能锁死为单一 ReAct 流程。
 - ReAct 只能作为第一版默认 ReAct-like Workflow 的候选形式；Workflow 编排层强依赖 LangGraph（`StateGraph` + `SqliteSaver` checkpoint + `interrupt()` 审批中断 + `Command(resume=)` 恢复 + subgraph/`Send` subagent），底层仍是可扩展 Agent Runtime，支持后续替换或新增 Workflow。
 - 工具注册与执行保持自定义，不绑定 LangGraph `Tool`：`ToolDefinition` 是工具契约的单一事实来源，LangGraph graph 的 node 调用自定义 `ToolRuntime`，工具定义不被编排框架绑架。
-- LangGraph 为硬依赖，不再保留「缺失即降级为无 checkpoint 模式」的回退分支；最低运行环境要求 Python 3.10+（与 `pyproject.toml` 中 `langgraph` 的版本门控一致）。
+- LangGraph 为硬依赖，不再保留「缺失即降级为无 checkpoint 模式」的回退分支；最低运行环境要求 Python 3.11+（与 `pyproject.toml` 的 `requires-python>=3.11` 及 `.python-version` 一致）。
 
 ## 三、Agent 协作原则
 
@@ -51,7 +51,7 @@ coding-agent/
     backend/
       pyproject.toml          # 唯一依赖来源（uv）；Ruff/mypy/pytest 配置集中于此
       uv.lock                 # 锁文件，必须提交
-      .python-version         # 3.10
+      .python-version         # 3.11
       app/
         __main__.py           # CLI 入口，触发 config.logging 与 default_settings
         main.py               # 进程入口，create_app 装配 FastAPI
@@ -61,8 +61,8 @@ coding-agent/
           agents_api.py / tasks_api.py / turns_api.py / workspaces_api.py / logs_api.py
           depends/dependencies.py   # FastAPI 依赖接线（runtime/tool_system 单例）
           middleware/api_logging.py # 请求/异常日志中间件
-          schemas/request/         # API Pydantic 请求模型（一文件一模型）
-          schemas/response/        # API Pydantic 响应模型（一文件一模型）
+          schemas/request/         # API Pydantic 请求模型（一文件一模型；文件名 PascalCase，待确认，见 D12）
+          schemas/response/        # API Pydantic 响应模型（一文件一模型；同上）
         config/
           settings.py         # 不可变 BackendSettings 值对象 + default_settings()
           logging/            # 日志子系统聚合包（特例：允许依赖 storage/trace_infra）
@@ -77,35 +77,42 @@ coding-agent/
             handler/sqlite_handler.py     # 异步写入独立日志库
         core/                 # Agent 运行底座，全基于 LangGraph 体系
           agents/agent_profile.py / agent_profile_registry.py
-          context/budget.py（预算校验）/ builder.py（TextContextBuilder）
+          context/budget.py（预算校验）/ text_context_builder.py（TextContextBuilder）
           llm/factory.py（build_chat_model）/ langchain_bridge.py / model_settings.py
           llm/llm_provider/base.py / deepseek_provider.py  # OpenAI 协议接入 DeepSeek
           runtime/runner.py（AgentRuntime 总控）/ runtime_operations.py（窄边界门面）
           runtime/runs/checkpointer.py   # LangGraph AsyncSqliteSaver 持久化
-          workflows/agent_workflow.py（Protocol）/ workflows/react/（StateGraph 实现）
+          workflows/agent_workflow.py（Protocol）
+          workflows/react/    # StateGraph 实现：state / nodes / edges / workflow / runtime_config
         models/               # 业务层值对象（一文件一 model，文件名=类名）
           log_entry_record.py / log_query.py / log_query_result.py / mapped_log_record.py
           runtime_event.py / runtime_message.py / task_record.py / trace_context.py
           turn_record.py / workspace_record.py
           enums/event_type.py / enums/turn_status.py
-        service/              # 领域服务编排层（仅 xxx_service / xxx_recorder）
+          payload/            # 运行时事件 payload 值对象（一文件一 payload，共 19 个：run_* / step_started / model_* / tool_call_* / observation_added / human_input_* / final_response / runtime_event_payload 基类型）
+        service/              # 领域服务编排层（仅 xxx_service + 结果值对象）
           task/task_service.py / turn_service.py / workspace_service.py
           tool_execution/tool_execution_service.py / run_result.py
           log_query_service.py   # 日志查询业务服务（组合 SQLite 日志库与 JSONL）
         storage/              # SQLite 数据层
           engine_cache.py / init_schema.py / store_engines.py
-          crud/log_crud.py / task_crud.py / turn_crud.py / turn_message_crud.py / workspace_crud.py
-          model/base.py / log_model.py / task_model.py / turn_message_model.py / turn_model.py / workspace_model.py
+          crud/log_crud.py / runtime_event_crud.py / task_crud.py / turn_crud.py / turn_message_crud.py / workspace_crud.py
+          model/base.py / log_model.py / runtime_event_model.py / task_model.py / turn_message_model.py / turn_model.py / workspace_model.py
         tools/                # 工具系统（不基于 LangGraph）
-          schemas/tool_definition.py（契约单一事实来源）/ tool_call.py / tool_observation.py
+          schemas/tool_definition.py（契约单一事实来源）/ tool_call.py / tool_observation.py / tool_display.py / tool_execution_context.py
           tool_execute/tool_scheduler.py（执行固定入口）/ tool_executor.py（子进程隔离+超时强杀）
-          tool_execute/tool_error.py / tool_success.py（构造 ToolObservation 的纯工厂）
-          tool_handler/read_file.py   # 单工具实现（执行逻辑 + ToolDefinition 组装）
-          tool_models/                # 各工具 pydantic 参数/结果模型
+          tool_execute/tool_error.py / tool_success.py（构造 ToolObservation 的纯工厂）/ windows_job_object.py（Windows 子进程树强杀）
+          tool_handler/       # 7 个内置工具：read_file / write_file / patch_tool / search_files / list_directory / delete（文件目录统一）/ execute_terminal
+            file_io/atomic_write.py       # 原子写支撑
+            patch/            # 补丁解析/差异/应用/模糊匹配
+            search/           # 内容/文件名搜索与遍历
+            security/project_path.py      # ProjectPathResolver：路径边界唯一收口
+            terminal/         # 终端执行后端 + 危险命令 deny-list（删除类命令全面硬拒）
+          tool_models/        # 各工具 pydantic 参数/结果模型（一工具一 args 文件 + text_read_result.py）
           validation/arguments.py     # 参数校验唯一收口
           tool_registry.py / tool_system.py
         trace_infra/          # trace 基础设施原语（leaf：零 app.* 依赖）
-          ids.py / event_names.py / redaction.py
+          ids.py / redaction.py
       tests/                  # pytest 测试目录（test_*.py）
       temp/                   # 临时验证/调试脚本（已被 .gitignore 忽略，用完清理）
     desktop/                  # Tauri 2 + React + TS 桌面客户端
@@ -126,12 +133,12 @@ coding-agent/
 
 - `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装（接入层）。**网关约定**：`api/app.py` 必须用 `importlib.import_module("app.api.xxx")` 触发路由注册，不能用 `import app.api.xxx`，否则顶层包名 `app` 被覆盖为模块对象。
 - `apps/backend/app/config/logging/`：日志子系统聚合包（配置 + 运行时 filter/formatter/handler/bridge/context）。属配置层特例，明确允许依赖 `storage` / `trace_infra`，豁免通用 config 轻量约束；路径保持 `app.config.logging` 不拆分。
-- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。`core/logs/`、`core/events/` 不存在；运行时事件定义在 `models/runtime_event.py`，日志查询服务在 `service/log_query_service.py`。
-- `apps/backend/app/models/`：业务层值对象（dataclass / 枚举），一文件一 model，文件名与 model 同名；主体平铺，枚举归入 `enums/`。不承载服务、适配或 helper。
-- `apps/backend/app/service/`：领域服务编排层，只放 `xxx_service` / `xxx_recorder`（或结果值对象 `run_result.py`）；不直接写 SQL、不承载 model/原语。
-- `apps/backend/app/storage/`：SQLite 持久化存储，承载引擎、schema 初始化、ORM 模型与单实体 CRUD（数据层最底层）。
-- `apps/backend/app/tools/`：工具系统统一收口，**不基于 LangGraph**；内置工具经 `core` 调度执行。`ToolDefinition` 是契约单一事实来源，模型可见结构由 `ToolDefinition.to_model_tool_definition()` 投影，禁止平行类。
-- `apps/backend/app/trace_infra/`：trace 基础设施原语（ID 生成/校验、事件名规范化、payload 脱敏）。不依赖 `app.models` 与 `app.service`，避免循环依赖。
+- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。`core/logs/`、`core/events/` 不存在；运行时事件定义在 `models/runtime_event.py`（payload 在 `models/payload/`），日志查询服务在 `service/log_query_service.py`。
+- `apps/backend/app/models/`：业务层值对象（dataclass / 枚举），一文件一 model，文件名与 model 同名；主体平铺，枚举归入 `enums/`，运行时事件 payload 归入 `payload/`。不承载服务、适配或 helper。
+- `apps/backend/app/service/`：领域服务编排层，只放 `xxx_service`（及结果值对象 `run_result.py`）；不直接写 SQL、不承载 model/原语。
+- `apps/backend/app/storage/`：SQLite 持久化存储，承载引擎缓存、schema 初始化（含列迁移）、进程级引擎装配、ORM 模型与单实体 CRUD（数据层最底层）。
+- `apps/backend/app/tools/`：工具系统统一收口，**不基于 LangGraph**；内置 7 工具（read_file / write_file / patch / search_files / list_directory / delete / execute_terminal）经 `core` 调度执行。`ToolDefinition` 是契约单一事实来源，模型可见结构由 `ToolDefinition.to_model_tool_definition()` 投影，禁止平行类；文件类工具路径安全统一收口 `tool_handler/security/project_path.ProjectPathResolver`（workspace 外写/删被 path_escape 强制拒绝）。
+- `apps/backend/app/trace_infra/`：trace 基础设施原语（ID 生成/校验、payload 脱敏）。不依赖 `app.models` 与 `app.service`，避免循环依赖。
 
 当前已确认的概念边界：
 
@@ -249,12 +256,14 @@ codegraph sync
 
 ## 十、已知偏差与开放问题
 
-### 已知偏差（待修复，来自 `rules/目录组织规范.md`）
-- **D5（跳层，仍存在）**：`api/depends/dependencies.py` 与 `api/app.py` 直 import `app.storage.crud.*` / `app.tools.tool_system`，应经 core/service 内部封装。
-- **D8（职责越界，仍存在）**：`tools/tool_registry.py` 的 `dispatch()` 绕过 `ToolScheduler` 直连 `definition.handler(**arguments)`；建议委派给 `ToolScheduler` 或显式标注为注册表直查快捷路径。
+### 已知偏差（待修复，详见 `rules/目录组织规范.md` 1.4 节，2026-07-26 对齐）
+- **D5（跳层，仍存在且范围扩大）**：`api/depends/dependencies.py`、`api/app.py` 直 import `app.storage.*` / `app.tools.tool_system`（装配点）；`api/tasks_api.py` 直用 `RuntimeEventCrud`、`api/logs_api.py` 直用 `LogStore`（端点级跳层，应优先经 service 收口）。
+- **D10（空壳文件，待清理）**：`tools/tool_handler/delete_file.py` / `delete_directory.py`、`tools/tool_models/delete_file_args.py` / `delete_directory_args.py`、`models/tool_execution_context.py` 为 0 字节残留，应删除。
+- **D11（空目录，待清理）**：`config/logging/save/`、`service/trace/` 仅剩 `__pycache__`，应删除。
+- **D12（命名待确认）**：`api/schemas/request|response` 文件名用 PascalCase（如 `CreateTaskRequest.py`），与 snake_case 约定不一致，待确认豁免或改名。
 
 ### 文档待同步
-- `rules/目录组织规范.md` 的部分文件名描述滞后于真实代码（例如列出的 `logging/log_context.py`、`record_mapper.py`、`handler/jsonl.py`、`log_files_dir_service.py`、`text_renderer_service.py`、`storage/database.py`、`storage/schema.py`、`storage/storage_context.py`、`crud/trace_crud.py`、`crud/durable_crud.py`、`models/trace_event_record.py`、`models/trace_span_record.py`、`service/trace/` 等当前并不存在）。本文件第四章的目录结构以真实代码为准，规范文档后续应据实清理。
+- 无。`rules/目录组织规范.md` 已于 2026-07-26 与真实代码全量对齐（trace 服务层/`event_names.py`/`durable_crud` 等已移除项、storage 重构后文件名、tools 7 工具与支撑子包、models/payload 均已更新）。
 
 ### 开放问题
 - DeepSeek 之后的大模型接入顺序。
