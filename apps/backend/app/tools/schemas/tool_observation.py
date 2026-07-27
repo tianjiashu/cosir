@@ -29,8 +29,8 @@ class ToolObservation:
 
     content 与 data 的区别（易混，单独说明）:
         - ``content`` 是「人读文本」：给模型/用户看的故事（命令回显、文件
-          摘要等），类型恒为 ``str``；失败时恒为空字符串，诊断信息改用
-          ``error`` / ``reason``。
+          摘要、可恢复错误等），类型恒为 ``str``；失败时与 ``error`` 同时
+          携带可读诊断，``reason`` 提供稳定机器分类。
         - ``data`` 是「机读字典」：给上层程序逻辑消费的账本（``exit_code`` /
           ``type`` / ``recursive`` 等结构化字段），类型恒为 ``dict``。
         - 两者互不替代、可同时填充：例如删除文件时 ``content`` 写「已删除
@@ -40,8 +40,8 @@ class ToolObservation:
     字段:
         tool_name: 触发本次观察的工具名称（与 :class:`ToolDefinition.name` 对应）。
         status: 执行结果状态，仅取 ``"success"`` 或 ``"error"`` 两个值。
-        content: 面向模型/用户的可读正文。成功时为工具输出；失败时为空字符串，
-            诊断信息请改用 ``error`` / ``reason`` 字段。
+        content: 面向模型/用户的可读正文。成功时为工具输出；失败时为可恢复错误
+            说明，并同时通过 ``error`` / ``reason`` 提供结构化诊断。
         error: 失败时的机器/人读错误描述（如异常消息、堆栈摘要）；成功时为空。
         reason: 失败分类短码，用于上层区分失败性质，例如
             ``unknown_tool`` / ``permission_denied`` / ``invalid_arguments`` /
@@ -62,7 +62,7 @@ class ToolObservation:
     tool_name: str
     # 执行状态：仅可取 "success" 或 "error"，是上层分流的唯一依据。
     status: str
-    # 面向模型的可读正文：成功时为工具输出，失败时恒为空字符串。
+    # 面向模型的可读正文：成功时为工具输出，失败时为可恢复错误说明。
     content: str
     # 失败时的错误描述（异常消息/堆栈摘要），成功时恒为空字符串。
     error: str = ""

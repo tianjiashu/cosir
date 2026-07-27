@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -25,6 +25,10 @@ class ToolDefinition:
     visible_by_default: bool = True
     resource_keys: Sequence[str] = field(default_factory=tuple)
     display: ToolDisplayHints | None = None
+    # 隔离执行模式（仅 executor 读取，不进模型可见结构）："thread"=当前线程直跑
+    # handler，无子进程/Queue/pickle/日志桥、无硬超时强杀；"process"=子进程隔离 +
+    # 硬超时强杀（terminate→kill→进程组/Job Object 树杀）+ 跨进程日志桥。
+    execution_mode: Literal["thread", "process"] = "thread"
 
     def normalized(self) -> "ToolDefinition":
         """Return a definition with a derived schema when args_model is provided."""
@@ -44,6 +48,7 @@ class ToolDefinition:
             visible_by_default=self.visible_by_default,
             resource_keys=self.resource_keys,
             display=self.display,
+            execution_mode=self.execution_mode,
         )
 
     def to_model_tool_definition(self) -> dict[str, Any]:
