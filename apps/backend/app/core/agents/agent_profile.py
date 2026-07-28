@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,7 @@ from app.core.llm.model_settings import ModelSettings
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
+    from app.tools.schemas.tool_definition import ToolDefinition
 
 
 # 默认 Agent 标识：前端未显式选择 agent 时回落到该内置 developer。
@@ -82,25 +84,28 @@ class AgentProfile:
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     max_steps: int = 1000
 
-    def allows_tool(self, tool_name: str, permission: str) -> bool:
-        """返回该 Agent profile 是否允许某个工具。
+    def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
+        """从候选工具中筛选本 Agent 可运行的工具集合。
+
+        工具「能否运行」的最终决定由 Agent profile 全权负责，调用方（如运行底座）
+        只负责按 workspace 可见性给出候选，不再自行做权限门禁，避免职责分散。
 
         参数:
-            tool_name: 已注册的稳定工具名。
-            permission: 该工具所需的权限级别。
+            tools: 候选工具定义集合（通常为按 workspace 可见性预筛后的结果）。
 
         返回:
-            当 profile 允许该工具名或该权限名时返回 True。
+            仅保留名称或权限被 ``allowed_tools`` 覆盖的工具定义列表。
 
         异常:
             无。
 
         副作用:
-            无。
+            无（纯函数，不修改入参）。
         """
 
-        allowed = set(self.allowed_tools)
-        return tool_name in allowed or permission in allowed
+        return [tool for tool in tools if tool.name in self.allowed_tools]
+
+
 
     def to_dict(self) -> dict:
         """将 Agent profile 转换为可 JSON 序列化的字典。
