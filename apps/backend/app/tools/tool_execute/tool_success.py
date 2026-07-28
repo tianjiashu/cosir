@@ -46,7 +46,8 @@ def tool_success(
     content 与 data 的区别:
         - ``content`` 是「人读文本」：给模型/用户看的故事（命令回显、文件
           摘要等），类型恒为 ``str``；必须英文、对模型友好（见 :func:`tool_success`
-          的 ``content`` 参数约定）；失败时由 :func:`tool_error` 置为空。
+          的 ``content`` 参数约定）；失败时由 :func:`tool_error` 填入与 ``error``
+          相同的错误描述（并非置空），保证模型总能从 ``content`` 读到正文。
         - ``data`` 是「机读字典」：给上层程序逻辑消费的账本（退出码、对象
           类型等），类型恒为 ``dict``；例如删除文件时 ``content`` 写「已删除
           文件 xxx」、``data`` 写 ``{"type": "file", "path": "..."}``，上层

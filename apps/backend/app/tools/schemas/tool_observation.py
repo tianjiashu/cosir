@@ -42,12 +42,22 @@ class ToolObservation:
         status: 执行结果状态，仅取 ``"success"`` 或 ``"error"`` 两个值。
         content: 面向模型/用户的可读正文。成功时为工具输出；失败时为可恢复错误
             说明，并同时通过 ``error`` / ``reason`` 提供结构化诊断。
-        error: 失败时的机器/人读错误描述（如异常消息、堆栈摘要）；成功时为空。
-        reason: 失败分类短码，用于上层区分失败性质，例如
-            ``unknown_tool`` / ``permission_denied`` / ``invalid_arguments`` /
-            ``handler_exception`` / ``timeout`` 等；成功时为空。
-        retryable: 是否可安全重试。当前仅 ``timeout``、``handler_exception``
-            等瞬态失败可能被标记为 ``True``，供上层决定是否重放。
+        error: 失败时回答「发生了什么错误」：面向模型的英文描述，点明失败发生在
+            哪个动作及直接的人读原因（如 ``could not write the file: permission
+            denied``），**不是**原始异常噪声或堆栈摘要；成功时为空。与 ``reason``
+            的分工：``error`` 让模型立刻知道「错在哪一步、直接原因是什么」，
+            ``reason`` 进一步给出「为什么发生、该如何修正、是否值得重试」的充足信息。
+        reason: 失败时回答「为什么失败、该如何修正、是否值得重试」：面向模型的
+            **富文本**说明，**不是**稳定机器短码（``write_failed`` 这类分类码已
+            废弃，改在此处写人类可读解释）。内容应包含：①失败根因；②可操作的修正
+            建议（模型下一步做什么）；③与 ``retryable`` 一致的重试提示——瞬态失败
+            写「用相同参数重试可能成功」，确定性失败写「须先修正参数/路径再调用，
+            原样重试必然再次失败」。成功时为空。``retryable`` 是程序化布尔信号，
+            本字段是其自然语言补充，两者须保持一致。
+        retryable: 回答「原样重试是否可能成功」：``True`` 表示瞬态失败
+            （如 ``timeout``、临时文件占用），用相同参数重试有意义；``False``
+            表示确定性失败（如参数非法、路径越界），必须先按 ``error`` 中的
+            建议修正再调用，原样重试必然再次失败。
         permission: 触发工具所需的权限标识（透传自 :class:`ToolDefinition`），
             便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         tool_call_id: 与本次观察对应的模型工具调用 id（透传自 :class:`ToolCall`）；
@@ -64,12 +74,14 @@ class ToolObservation:
     status: str
     # 面向模型的可读正文：成功时为工具输出，失败时为可恢复错误说明。
     content: str
-    # 失败时的错误描述（异常消息/堆栈摘要），成功时恒为空字符串。
+    # 「发生了什么错误」：面向模型的英文错误描述（动作+直接原因），
+    # 非原始异常噪声；成功时恒为空字符串。
     error: str = ""
-    # 失败分类短码（unknown_tool/permission_denied/invalid_arguments/...），
-    # 供上层区分失败性质并决定重试策略；成功时为空。
+    # 「为什么失败、该如何修正」：面向模型的富文本说明（根因+建议+重试提示），
+    # 非稳定机器短码；成功时为空。
     reason: str = ""
-    # 是否可安全重试：瞬态失败（如 timeout）为 True，供上层重放决策。
+    # 「原样重试是否可能成功」：瞬态失败为 True；确定性失败为 False，
+    # 须先按 error 中的建议修正参数再调用。
     retryable: bool = False
     # 触发工具所需权限标识，透传自 ToolDefinition，便于审计与展示。
     permission: str = ""
