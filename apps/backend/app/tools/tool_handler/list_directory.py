@@ -8,6 +8,8 @@
 - 只列目录，不读文件内容、不写文件。
 """
 
+import fnmatch
+import os
 from datetime import UTC, datetime
 
 from app.tools.schemas import (
@@ -22,10 +24,7 @@ from app.tools.tool_models.list_directory_args import ListDirectoryArgs
 
 
 class ListDirectoryTool:
-    """列出项目内目录条目的工具类。
-
-    参数:
-        project_root: 允许列举的项目根目录。
+    """列出项目内目录条目的工具类（无状态）。
 
     返回:
         ``ListDirectoryTool`` 实例。
@@ -34,13 +33,16 @@ class ListDirectoryTool:
         初始化阶段不主动抛出业务异常。
 
     副作用:
-        仅保存项目根与解析器；不读取、不写入文件。
+        不持有文件系统状态，不读取、不写入文件；项目根在执行时从
+        ``execution_context.workspace_root`` 取得。
     """
 
     name = "list_directory"
     description = (
         "List entries of a directory: name, type (file|dir), size, mtime. Read-only: "
-        "relative paths resolve against the workspace root, and paths outside it are allowed."
+        "relative paths resolve against the workspace root, and paths outside it are allowed. "
+        "Hidden (dot) entries are skipped unless include_hidden is true; entries whose name "
+        "matches any ignore_globs pattern are also excluded."
     )
     permission = "file_search"
     args_model = ListDirectoryArgs
@@ -48,7 +50,7 @@ class ListDirectoryTool:
     risk_level = "low"
 
     def __init__(self) -> None:
-        """初始化 list_directory 工具实例。
+        """初始化 list_directory 工具实例（无状态）。
 
         参数:
             无。
@@ -60,7 +62,8 @@ class ListDirectoryTool:
             无。
 
         副作用:
-            仅保存 ``project_root``，不执行文件系统操作。
+            不保存任何状态、不执行文件系统操作；项目根在执行时从
+            ``execution_context.workspace_root`` 取得。
         """
 
     def execute(
@@ -68,6 +71,8 @@ class ListDirectoryTool:
         path: str,
         offset: int = 0,
         limit: int = 200,
+        include_hidden: bool = False,
+        ignore_globs: list[str] | None = None,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """列出项目内目录条目，返回结构化观察结果。
@@ -77,10 +82,14 @@ class ListDirectoryTool:
                 绝对路径（只读不受 workspace 边界限制）。
             offset: 跳过前 N 个排序后的条目。
             limit: 单页最多返回的条目数。
+            include_hidden: 为 true 时一并列出 dot 条目（名称以 ``.`` 开头），默认跳过
+                以保持目录清单紧凑。
+            ignore_globs: 匹配条目名即排除的 glob 模式列表；``None``/空列表表示不排除。
+                与 ``include_hidden`` 独立叠加（先按可见性过滤，再按本参数排除）。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
                 在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
-                ``ToolExecutor._execute_handler`` 调用约定；本工具只读且不受 workspace
-                边界限制，故不消费该值。
+                ``ToolExecutor._execute_handler`` 调用约定；本工具只读，但解析相对路径
+                仍需工作区根，故消费其 ``workspace_root``。
 
         返回:
             ``ToolObservation``；成功时 content 为紧凑的条目表，失败时 status 为
@@ -93,6 +102,19 @@ class ListDirectoryTool:
         副作用:
             只读目录结构，不修改文件系统。
         """
+        if execution_context is None or execution_context.workspace_root is None:
+            return tool_error(
+                self.name,
+                "list_directory requires a workspace execution context",
+                reason=(
+                    "list_directory was invoked without an execution context (the workspace "
+                    "boundary). This is a tool-runtime wiring issue rather than a problem "
+                    "with your arguments, so retrying or changing the path will not help; "
+                    "report it to the host application."
+                ),
+                permission=self.permission,
+            )
+
         root = execution_context.workspace_root
         resolver = ProjectPathResolver(root)
         device_error = resolver.blocked_device_reason(path)
@@ -148,19 +170,31 @@ class ListDirectoryTool:
                 permission=self.permission,
             )
 
-        children = sorted(resolved.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-        page = children[offset : offset + limit]
-        entries: list[str] = []
-        for child in page:
-            entry_type = "dir" if child.is_dir() else "file"
-            try:
-                stat = child.stat()
-                size = stat.st_size if child.is_file() else 0
-                modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
-            except OSError:
-                size = 0
-                modified = "unknown"
-            entries.append(f"{entry_type:4s} {size:>12}  {modified}  {child.name}")
+        with os.scandir(resolved) as scan:
+            raw_entries = [
+                entry
+                for entry in scan
+                if include_hidden or not entry.name.startswith(".")
+            ]
+            if ignore_globs:
+                raw_entries = [
+                    entry
+                    for entry in raw_entries
+                    if not any(fnmatch.fnmatch(entry.name, g) for g in ignore_globs)
+                ]
+            children = sorted(raw_entries, key=lambda e: (not e.is_dir(), e.name.lower()))
+            page = children[offset : offset + limit]
+            entries: list[str] = []
+            for entry in page:
+                entry_type = "dir" if entry.is_dir() else "file"
+                try:
+                    stat = entry.stat()
+                    size = stat.st_size if entry.is_file() else 0
+                    modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
+                except OSError:
+                    size = 0
+                    modified = "unknown"
+                entries.append(f"{entry_type:4s} {size:>12}  {modified}  {entry.name}")
         content = "\n".join(entries) if entries else "(empty directory)"
         next_offset = offset + len(page) if offset + len(page) < len(children) else None
         if next_offset is not None:
