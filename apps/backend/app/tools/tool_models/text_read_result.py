@@ -12,7 +12,8 @@ class TextReadResult:
         next_offset: 如果还有后续内容，下一次读取建议使用的 offset。
         hint: 面向模型的继续读取提示。
         error: 错误文本，非空表示读取失败。
-        reason: 稳定错误分类。
+        reason: 面向模型的失败说明富文本（根因 + 可操作修正建议），与
+            :class:`ToolObservation.reason` 同源语义；非空表示读取失败。
         retryable: 错误是否适合稍后重试。
     """
 
