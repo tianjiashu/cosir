@@ -9,13 +9,31 @@
 - 对外注册仍通过 ``build_read_file_definition`` 返回 ``ToolDefinition``，暂不改变注册逻辑。
 - 工具执行只读文件系统，不写入任何文件，不执行 shell 命令。
 """
-
+import dataclasses
+import json
 from pathlib import Path
 from typing import ClassVar
 
-from app.tools.schemas import ToolDefinition, ToolDisplayHints, ToolObservation
+from app.tools.schemas import (
+    ToolDefinition,
+    ToolDisplayHints,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.tools.tool_execute.tool_error import os_error_message, tool_error
+from app.tools.tool_execute.tool_success import tool_success
+from app.tools.tool_handler.security.project_path import ProjectPathResolver
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
+
+# 「为什么失败」富文本：路径指向系统设备/敏感伪文件，无法读取（read_file 两处
+# blocked_device 分支共用，避免重复长串）。与新契约一致：reason 不再是短码。
+_BLOCKED_DEVICE_REASON = (
+    "the requested path points to an OS device or sensitive pseudo-file "
+    "(e.g. NUL/CON/COM1 on Windows, /dev/* or /proc/* on POSIX) and cannot be read; "
+    "pass a regular text file path inside the project instead. The same path will "
+    "always be rejected, so choose a different file."
+)
 
 
 class ReadFileTool:
@@ -26,8 +44,9 @@ class ReadFileTool:
     继续扩展其它工具。
 
     参数:
-        project_root: 当前工具允许访问的项目根目录。所有读取请求都必须解析到该
-            目录内部，否则返回 ``path_escape`` 错误。
+        project_root: 相对路径的解析基准目录（workspace 根）。作为只读工具，
+            read_file 不强制 containment：相对路径以该目录为基准解析，绝对/越界
+            路径也允许读取（仅设备/伪文件路径被拦截）。
 
     返回:
         ``ReadFileTool`` 实例。注册阶段会通过 ``to_definition`` 转成
@@ -44,77 +63,16 @@ class ReadFileTool:
     name = "read_file"
     description = (
         "Read a text file with line numbers and pagination. Use this instead of "
-        "cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Use offset "
+        "cat/head/tail in terminal. Output format: 'LINE_NUM| CONTENT'. Use offset "
         "and limit for large files. Reads exceeding about 100K characters are "
         "truncated on a line boundary and return a next_offset; continue with "
         "offset to read the rest. NOTE: Cannot read images or other binary files."
     )
     permission = "safe_read"
-    required_params = ("path",)
     args_model = ReadFileArgs
     timeout_seconds = 10.0
     risk_level = "low"
 
-    windows_device_names: ClassVar[set[str]] = {
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        "CONIN$",
-        "CONOUT$",
-        "COM1",
-        "COM2",
-        "COM3",
-        "COM4",
-        "COM5",
-        "COM6",
-        "COM7",
-        "COM8",
-        "COM9",
-        "COM\u00b9",
-        "COM\u00b2",
-        "COM\u00b3",
-        "LPT1",
-        "LPT2",
-        "LPT3",
-        "LPT4",
-        "LPT5",
-        "LPT6",
-        "LPT7",
-        "LPT8",
-        "LPT9",
-        "LPT\u00b9",
-        "LPT\u00b2",
-        "LPT\u00b3",
-    }
-    posix_blocked_device_paths: ClassVar[set[str]] = {
-        "/dev/zero",
-        "/dev/random",
-        "/dev/urandom",
-        "/dev/full",
-        "/dev/stdin",
-        "/dev/tty",
-        "/dev/console",
-        "/dev/stdout",
-        "/dev/stderr",
-        "/dev/fd/0",
-        "/dev/fd/1",
-        "/dev/fd/2",
-    }
-    proc_blocked_suffixes = (
-        "/fd/0",
-        "/fd/1",
-        "/fd/2",
-        "/environ",
-        "/cmdline",
-        "/maps",
-        "/smaps",
-        "/smaps_rollup",
-        "/numa_maps",
-        "/mem",
-        "/auxv",
-        "/pagemap",
-    )
     binary_extensions: ClassVar[set[str]] = {
         ".7z",
         ".avi",
@@ -157,61 +115,93 @@ class ReadFileTool:
         """初始化 read_file 工具实例。
 
         参数:
-            project_root: read_file 允许访问的项目根目录。
-
+            project_root: 相对路径的解析基准目录。
         返回:
             无。
 
         异常:
             无。
-
-        副作用:
-            仅保存 ``project_root``，不执行文件系统读取。
         """
 
-        self.project_root = Path(project_root)
-
-    def execute(self, path: str, offset: int = 1, limit: int = 500) -> ToolObservation:
+    def execute(
+            self,
+            path: str,
+            offset: int = 1,
+            limit: int = 500,
+            execution_context: ToolExecutionContext | None = None,
+    ) -> ToolObservation:
         """读取项目目录内的文本文件，并返回适合模型消费的观测结果。
 
         参数:
-            path: 用户或模型请求读取的文件路径。可以是相对路径，也可以是解析后仍位于
-                ``project_root`` 内的绝对路径。
+            path: 用户或模型请求读取的文件路径。相对路径以 workspace 根为基准解析，
+                也接受项目根外的绝对路径（只读不受 workspace 边界限制）。
             offset: 从第几行开始读取，1 表示第一行。
             limit: 最多返回多少行。参数模型会限制最大值，内部也会再次归一化。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
+                在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
+                ``ToolExecutor._execute_handler`` 调用约定；本工具只读且不受 workspace
+                边界限制，故不消费该值。
 
         返回:
             ``ToolObservation``。成功时 ``content`` 包含 ``LINE_NUM|CONTENT`` 格式的
-            带行号文本；失败时 ``status`` 为 ``error``，并通过 ``reason`` 提供稳定分类。
+            带行号文本；失败时 ``status`` 为 ``error``，``error``/``reason`` 提供面向模型的
+            富文本诊断（``error``=发生了什么、``reason``=为什么失败+如何修正+是否重试）。
 
         异常:
-            不主动向上抛出异常。文件不存在、路径逃逸、二进制文件和读取失败都会被转换成
-            结构化 ``ToolObservation``。
+            不主动向上抛出异常。文件不存在、路径无法解析、二进制文件和读取失败都会被
+            转换成结构化 ``ToolObservation``。
 
         副作用:
             只读文件系统，不写入任何文件。
         """
-
-        device_error = self._blocked_device_reason(path)
+        root = execution_context.workspace_root
+        resolver = ProjectPathResolver(root)
+        ## 阶段1：对原始字符串做设备名/posix 禁止路径的 fail-fast 拦截
+        device_error = resolver.blocked_device_reason(path)
         if device_error:
-            return self._error(device_error, "blocked_device")
+            return tool_error(
+                self.name,
+                device_error,
+                reason=_BLOCKED_DEVICE_REASON,
+                permission=self.permission,
+            )
 
-        resolved, error = self._resolve_project_path(path)
+        # 解析路径、相对路径转绝对路径
+        resolved, error = resolver.resolve_unrestricted(path)
         if resolved is None:
-            return self._error(error, "path_escape")
+            return tool_error(
+                self.name,
+                f"could not read the file: {error}",
+                reason=(
+                    "the path argument could not be resolved to a readable file "
+                    "(common causes: empty value, NUL characters, or a malformed path). "
+                    "Provide a valid, non-empty file path -- absolute, or relative to the "
+                    "project root -- and retry; the same invalid value will always fail."
+                ),
+                permission=self.permission,
+            )
 
-        device_error = self._blocked_device_reason(path, resolved)
+        device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
-            return self._error(device_error, "blocked_device")
+            return tool_error(
+                self.name,
+                device_error,
+                reason=_BLOCKED_DEVICE_REASON,
+                permission=self.permission,
+            )
 
         result = self._read_text_page(resolved, offset, limit)
         if result.error:
-            return self._error(result.error, result.reason, result.retryable)
-        return ToolObservation(
-            tool_name=self.name,
-            status="success",
-            content=result.content,
-            permission=self.permission,
+            return tool_error(
+                self.name,
+                result.error,
+                reason=result.reason,
+                retryable=result.retryable,
+                permission=self.permission,
+            )
+        return tool_success(
+            tool=self.to_definition(),
+            content=json.dumps(dataclasses.asdict(result)),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -234,11 +224,11 @@ class ReadFileTool:
             name=self.name,
             description=self.description,
             permission=self.permission,
-            required_params=self.required_params,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
+            resource_keys=("filesystem",),
             display=ToolDisplayHints(
                 verb="读取",
                 icon="eye",
@@ -247,105 +237,6 @@ class ReadFileTool:
                 click_action="open_file:{path}",
             ),
         )
-
-    def _resolve_project_path(self, path: str) -> tuple[Path | None, str]:
-        """解析用户路径，并确认最终路径仍在项目根目录内。
-
-        参数:
-            path: 模型传入的路径字符串。
-
-        返回:
-            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径非法。
-
-        异常:
-            不向上抛出。解析失败会被转换成错误字符串。
-
-        副作用:
-            无。
-        """
-
-        if not isinstance(path, str) or not path.strip():
-            return None, "path must be a non-empty string"
-
-        root = self.project_root.resolve()
-        raw = Path(path)
-        target = raw if raw.is_absolute() else root / raw
-        try:
-            resolved = target.resolve()
-            resolved.relative_to(root)
-        except (OSError, ValueError) as exc:
-            return None, f"path escapes project root: {path} ({exc})"
-        return resolved, ""
-
-    def _blocked_device_reason(self, path: str, resolved: Path | None = None) -> str:
-        """判断路径是否指向应当禁止读取的系统设备或敏感伪文件。
-
-        参数:
-            path: 原始路径字符串。
-            resolved: 可选的归一化路径，用于二次检查符号链接解析后的目标。
-
-        返回:
-            空字符串表示允许继续；非空字符串表示命中禁止路径。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        if self._is_blocked_posix_path(path):
-            return f"blocked device path: {path}"
-        if resolved is not None and self._is_blocked_posix_path(resolved.as_posix()):
-            return f"blocked device path: {path}"
-
-        if self._windows_device_name(path):
-            return f"blocked device path: {path}"
-        if resolved is not None and self._windows_device_name(str(resolved)):
-            return f"blocked device path: {path}"
-        return ""
-
-    def _is_blocked_posix_path(self, path: str) -> bool:
-        """判断路径是否命中 POSIX 设备或 Linux procfs 敏感路径。
-
-        参数:
-            path: 待检查路径。
-
-        返回:
-            True 表示必须拒绝读取；False 表示未命中该类规则。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        normalized = str(path).replace("\\", "/").lower().rstrip("/")
-        if normalized in self.posix_blocked_device_paths:
-            return True
-        return normalized.startswith("/proc/") and normalized.endswith(self.proc_blocked_suffixes)
-
-    def _windows_device_name(self, path: str) -> str:
-        """返回命中的 Windows 设备名；没有命中时返回空字符串。
-
-        参数:
-            path: 待检查路径。
-
-        返回:
-            命中的设备名，例如 ``NUL``；未命中时返回空字符串。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        normalized = str(path).replace("\\", "/")
-        leaf = normalized.rsplit("/", 1)[-1].rstrip(" .")
-        stem = leaf.split(".", 1)[0].rstrip(" .").upper()
-        return stem if stem in self.windows_device_names else ""
 
     def _normalize_read_pagination(self, offset: int, limit: int) -> tuple[int, int]:
         """归一化分页参数，保证 offset/limit 落在安全范围内。
@@ -380,21 +271,43 @@ class ReadFileTool:
             ``TextReadResult``。成功时 ``content`` 包含带行号文本；失败时 ``error`` 非空。
 
         异常:
-            不主动向上抛出文件系统异常。读取失败会返回 ``reason='read_failed'``。
+            不主动向上抛出文件系统异常。读取失败会返回富文本 ``reason``（含根因与重试提示）。
 
         副作用:
             只读文件系统，不写入任何文件。
         """
 
         if not path.exists():
-            return TextReadResult(error=f"file not found: {path}", reason="not_found")
+            return TextReadResult(
+                error=f"could not read the file: no such file at '{path}'",
+                reason=(
+                    "the file does not exist at the given path. Check for a typo, confirm "
+                    "the file was not moved or deleted, or pass an absolute path. The same "
+                    "non-existent path will always fail, so retry only after the file "
+                    "exists or the path is corrected."
+                ),
+            )
         if path.is_dir():
-            return TextReadResult(error=f"path is a directory: {path}", reason="is_directory")
+            return TextReadResult(
+                error=f"could not read '{path}': it is a directory, not a file",
+                reason=(
+                    "the path resolves to a directory; read_file reads only files. Point "
+                    "to a specific file, or use a directory listing tool to inspect the "
+                    "directory's contents. Retrying the same directory path will always fail."
+                ),
+            )
         if self._is_likely_binary(path):
             return TextReadResult(
                 file_size=self._safe_file_size(path),
-                error="Binary file cannot be displayed as text.",
-                reason="binary_file",
+                error=(
+                    "Binary file cannot be displayed as text. Use a dedicated binary "
+                    "viewer or open it outside the agent to inspect its contents."
+                ),
+                reason=(
+                    "the target is a binary file (detected by extension or NUL bytes) and "
+                    "cannot be rendered as text. Use a dedicated binary viewer or open it "
+                    "outside the agent; reading it with read_file will always fail."
+                ),
             )
 
         offset, limit = self._normalize_read_pagination(offset, limit)
@@ -416,7 +329,7 @@ class ReadFileTool:
 
                     line = raw_line.rstrip("\r\n")
                     if line_number == 1 and line.startswith(self.utf8_bom):
-                        line = line[len(self.utf8_bom) :]
+                        line = line[len(self.utf8_bom):]
 
                     rendered = self._render_line(line_number, line)
                     addition = len(rendered) + (1 if selected else 0)
@@ -431,7 +344,15 @@ class ReadFileTool:
                     selected.append((line_number, line))
                     current_chars += addition
         except OSError as exc:
-            return TextReadResult(error=f"read failed: {exc}", reason="read_failed", retryable=True)
+            return TextReadResult(
+                error=os_error_message(exc, "read the file"),
+                reason=(
+                    "the read failed, usually because the file is locked by another process "
+                    "or the current user lacks read permission; close the program holding "
+                    "the file or adjust permissions, then retry the same read."
+                ),
+                retryable=True,
+            )
 
         content = self._line_numbered_content(selected)
         if hint:
@@ -530,40 +451,12 @@ class ReadFileTool:
         except OSError:
             return 0
 
-    def _error(self, error: str, reason: str, retryable: bool = False) -> ToolObservation:
-        """构造 read_file 的标准错误观测。
 
-        参数:
-            error: 面向开发者和模型的错误文本。
-            reason: 稳定错误分类，便于上层 runtime、测试和 UI 判断。
-            retryable: 该错误是否适合稍后重试。
-
-        返回:
-            ``status`` 为 ``error`` 的 ``ToolObservation``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return ToolObservation(
-            tool_name=self.name,
-            status="error",
-            content="",
-            error=error,
-            reason=reason,
-            retryable=retryable,
-            permission=self.permission,
-        )
-
-
-def build_read_file_definition(project_root: str | Path) -> ToolDefinition:
+def build_read_file_definition() -> ToolDefinition:
     """构造绑定到指定项目根目录的 read_file 工具定义。
 
     参数:
-        project_root: read_file 允许访问的项目根目录。
+        无。
 
     返回:
         ``ToolDefinition``，供 ``ToolRegistry`` 注册。
@@ -575,4 +468,4 @@ def build_read_file_definition(project_root: str | Path) -> ToolDefinition:
         创建 ``ReadFileTool`` 实例和定义对象，不执行文件读取。
     """
 
-    return ReadFileTool(project_root).to_definition()
+    return ReadFileTool().to_definition()
