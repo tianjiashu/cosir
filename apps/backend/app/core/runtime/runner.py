@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+import os
 from collections.abc import AsyncGenerator
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from app.config.logging import (
     trace_log_extra,
 )
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
@@ -364,8 +365,19 @@ class AgentRuntime:
     def backend_health(self) -> dict:
         """Return backend model configuration and availability summary."""
 
+        profile = self._agent_registry.resolve(DEFAULT_AGENT_ID)
+        model_settings = profile.model_settings if profile is not None else None
+        api_key_env = model_settings.api_key_env if model_settings is not None else ""
         return {
-            "status": "ok"
+            "status": "ok",
+            "model_provider": "deepseek",
+            "model_base_url": model_settings.base_url if model_settings is not None else "",
+            "model_name": profile.model_name if profile is not None else "",
+            "model_thinking_mode": (
+                "enabled" if model_settings is not None and model_settings.thinking else "disabled"
+            ),
+            "model_api_key_env": api_key_env,
+            "has_model_api_key": bool(api_key_env and os.environ.get(api_key_env)),
         }
 
     def _resolve_agent_profile(self, agent_id: str) -> AgentProfile | None:

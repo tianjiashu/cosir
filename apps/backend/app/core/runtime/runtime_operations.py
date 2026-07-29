@@ -10,7 +10,6 @@ from app.core.context.text_context_builder import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
-from app.models.payload.tool_call_requested_payload import ToolCallRequestedPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
@@ -28,14 +27,14 @@ class RuntimeOperations:
     """
 
     def __init__(
-        self,
-        turn_store,
-        context_builder: TextContextBuilder,
-        tool_scheduler: ToolScheduler,
-        agent_profile: AgentProfile,
-        current_turn_id: str = "",
-        model_tools: list[ToolDefinition] | None = None,
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            turn_store,
+            context_builder: TextContextBuilder,
+            tool_scheduler: ToolScheduler,
+            agent_profile: AgentProfile,
+            current_turn_id: str = "",
+            model_tools: list[ToolDefinition] | None = None,
+            execution_context: ToolExecutionContext | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -67,6 +66,7 @@ class RuntimeOperations:
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
             allowed_tool_names=(tool.name for tool in self.model_tools),
+            tool_definitions=self.model_tools,
         )
         self._current_turn_id = current_turn_id
         self._execution_context = execution_context
@@ -177,7 +177,7 @@ class RuntimeOperations:
         return has
 
     def update_turn_status(
-        self, turn_id: str, status: str, end_reason: str | None = None
+            self, turn_id: str, status: str, end_reason: str | None = None
     ) -> TurnRecord:
         """Update turn status (and optional end reason) through the turn store."""
 
@@ -211,11 +211,11 @@ class RuntimeOperations:
         return self._turn_store.update_turn_response(turn_id, response_text)
 
     def run_tool_calls(
-        self,
-        task_id: str,
-        calls: list[ToolCall],
-        step_id: str | None = None,
-        write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
+            self,
+            task_id: str,
+            calls: list[ToolCall],
+            step_id: str | None = None,
+            write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 
@@ -233,47 +233,50 @@ class RuntimeOperations:
             工具观察结果与供下一步模型使用的消息。
         """
 
-        tool_names = [call.tool_name for call in calls]
-        dispatched_data: dict[str, object] = {
-            "task_id": task_id,
-            "step_id": step_id,
-            "call_count": len(calls),
-            "tool_names": tool_names,
-        }
-        if self._execution_context is not None:
-            dispatched_data["workspace_id"] = self._execution_context.workspace_id
+        self._pre_process_turn(task_id=task_id, calls=calls, step_id=step_id)
+
+        result: ToolRunResult = self._tool_service.run_calls_with_events(
+            step_id=step_id or "",
+            calls=calls,
+            execution_context=self._execution_context,
+            write_event=write_event,
+        )
+
+        self._post_process_turn(task_id=task_id, step_id=step_id, result=result)
+
+        return result
+
+    def _pre_process_turn(self,
+                          task_id: str,
+                          calls: list[ToolCall],
+                          step_id: str | None = None, ):
+        """Pre-process a turn before it is used for model input."""
+
         log.info(
             "tool_calls_dispatched",
             extra={
                 "msg": f"派发 {len(calls)} 个工具调用，step_id={step_id}",
-                "data": dispatched_data,
+                "data": {
+                    "task_id": task_id,
+                    "step_id": step_id,
+                    "call_count": len(calls),
+                    "tool_names": [call.tool_name for call in calls],
+                    "workspace_id": self._execution_context.workspace_id
+                },
             },
         )
 
-        result = self._tool_service.run_calls_with_events(
-            task_id=task_id,
-            step_id=step_id or "",
-            calls=calls,
-            execution_context=self._execution_context,
-            write_event=write_event or _noop_write_event,
-        )
-
+    def _post_process_turn(self, task_id: str,
+                           step_id: str | None = None,
+                           result: ToolRunResult = None):
+        """Post-process a turn after it is used for model output."""
         status_counts: dict[str, int] = {}
         error_count = 0
         for obs in result.observations:
             status_counts[obs.status] = status_counts.get(obs.status, 0) + 1
             if obs.status == "error":
                 error_count += 1
-        completed_data: dict[str, object] = {
-            "task_id": task_id,
-            "step_id": step_id,
-            "observation_count": len(result.observations),
-            "messages_for_model_count": len(result.messages_for_model),
-            "status_counts": status_counts,
-            "error_count": error_count,
-        }
-        if self._execution_context is not None:
-            completed_data["workspace_id"] = self._execution_context.workspace_id
+
         log.info(
             "tool_calls_completed",
             extra={
@@ -281,54 +284,14 @@ class RuntimeOperations:
                     f"工具批次执行完成：{len(result.observations)} 个观察，"
                     f"其中 {error_count} 个失败"
                 ),
-                "data": completed_data,
+                "data": {
+                    "task_id": task_id,
+                    "step_id": step_id,
+                    "observation_count": len(result.observations),
+                    "messages_for_model_count": len(result.messages_for_model),
+                    "status_counts": status_counts,
+                    "error_count": error_count,
+                    "workspace_id": self._execution_context.workspace_id,
+                },
             },
         )
-        return result
-
-    def build_tool_call_requested(
-        self, call: ToolCall, step_id: str | None
-    ) -> ToolCallRequestedPayload:
-        """构造 ``TOOL_CALL_REQUESTED`` 事件 payload，并附上工具展示元数据。
-
-        从 ``model_tools`` 中按 ``tool_name`` 查找 ``ToolDefinition``，若其声明了
-        ``display``，则调用 ``ToolDisplayHints.render`` 把本次调用的参数投影成前端
-        展示字段（verb / icon / summary / detail_keys / click_action），随事件一起
-        推送给前端；未声明或未知工具时 ``display`` 为 ``None``，前端降级为通用展示。
-
-        参数:
-            call: 模型请求的工具调用（含 ``tool_name`` / ``arguments`` / ``call_id``）。
-            step_id: 请求该工具调用的步骤标识符。
-
-        返回:
-            ``ToolCallRequestedPayload``，含来自 ``ToolDefinition.display`` 的渲染展示信息。
-
-        异常:
-            不向上抛出；``arguments`` 非字典时安全降级为空字典。
-
-        副作用:
-            无（只读 ``model_tools``，不触发工具执行）。
-        """
-
-        definition = next((tool for tool in self.model_tools if tool.name == call.tool_name), None)
-        arguments = call.arguments if isinstance(call.arguments, dict) else {}
-        display = None
-        if definition and definition.display is not None:
-            display = definition.display.render(arguments)
-        return ToolCallRequestedPayload(
-            tool_name=call.tool_name,
-            arguments=arguments,
-            step_id=step_id,
-            tool_call_id=call.call_id,
-            display=display,
-        )
-
-
-def _noop_write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
-    """默认事件写入回调：静默丢弃（无副作用）。
-
-    签名与运行时实际回调 ``write_event(event_type, payload)`` 保持一致，确保未提供
-    ``write_event`` 时作为默认回调传入不会因参数数量不匹配而抛 ``TypeError``。
-    """
-
-    return None

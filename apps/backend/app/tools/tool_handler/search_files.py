@@ -11,6 +11,9 @@ output_mode=files_only / context / 分页续读提示）。
 - 成功/失败观察统一经 ``tool_execute.tool_success`` / ``tool_error`` 工厂构造。
 """
 
+from pathlib import Path
+from typing import Any
+
 from app.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -25,6 +28,7 @@ from app.tools.tool_handler.search.error_prefixes import (
     PATH_NOT_FOUND_PREFIX,
 )
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.search_files_args import SearchFilesArgs
 
 SEARCH_FILES_DESCRIPTION = (
@@ -37,7 +41,7 @@ SEARCH_FILES_DESCRIPTION = (
 )
 
 
-class SearchFilesTool:
+class SearchFilesTool(HandlerBase):
     """在项目内搜索文件内容或按文件名查找文件的合并工具类。
 
     参数:
@@ -75,16 +79,16 @@ class SearchFilesTool:
         """
 
     def execute(
-            self,
-            pattern: str,
-            target: str = "content",
-            path: str | None = None,
-            file_glob: str | None = None,
-            limit: int = 50,
-            offset: int = 0,
-            output_mode: str = "content",
-            context: int = 0,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        pattern: str,
+        target: str = "content",
+        path: str | None = None,
+        file_glob: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        output_mode: str = "content",
+        context: int = 0,
+        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """按 target 分流执行内容搜索或文件名查找，统一收口成功/失败观察。
 
@@ -149,7 +153,7 @@ class SearchFilesTool:
             )
         resolved_path_text = str(resolved_path)
         if target == "files":
-            result = search_filenames(
+            result, match_count, file_items = search_filenames(
                 workspace_root,
                 pattern,
                 path=resolved_path_text,
@@ -158,7 +162,7 @@ class SearchFilesTool:
             )
             empty_message = "No files found."
         else:
-            result = search_content(
+            result, match_count, hit_items = search_content(
                 workspace_root,
                 pattern,
                 path=resolved_path_text,
@@ -197,7 +201,21 @@ class SearchFilesTool:
             )
         if not result:
             result = empty_message
-        return tool_success(tool=self.to_definition(), content=result)
+        return tool_success(
+            tool_name=self.name,
+            permission=self.permission,
+            content=result
+        )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """
+        TODO:待实现
+        """
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """
+        TODO:待实现
+        """
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
@@ -225,10 +243,13 @@ class SearchFilesTool:
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="搜索",
+                verb="搜索文件",
                 icon="search",
-                summary_template="{pattern}",
-                detail_keys=("pattern", "target", "path"),
+                # 折叠态与结果摘要同形：渲染入口已补齐 path/file_glob 派生字段。
+                title_summary=self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=True,
+                expand_layout="list",
             ),
         )
 

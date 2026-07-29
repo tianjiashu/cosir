@@ -14,6 +14,7 @@
 
 import ast
 from pathlib import Path
+from typing import Any
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -41,6 +42,7 @@ from app.tools.tool_handler.patch import (
 )
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.patch_args import PatchArgs
 
 PATCH_DESCRIPTION = (
@@ -55,7 +57,7 @@ PATCH_DESCRIPTION = (
 )
 
 
-class PatchTool:
+class PatchTool(HandlerBase):
     """在文件内做查找替换或应用 V4A 补丁的合并工具。
 
     参数:
@@ -129,7 +131,6 @@ class PatchTool:
         副作用:
             命中时原子回写目标文件；patch 模式按操作逐文件修改文件系统。
         """
-
         resolver = ProjectPathResolver(execution_context.workspace_root)
         if mode == "replace":
             return self._execute_replace(path, old_string, new_string, replace_all, resolver)
@@ -299,9 +300,9 @@ class PatchTool:
                 warning = f"\n[warning] Python syntax error: {exc}"
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
         return tool_success(
-            self.to_definition(),
-            format_patch_diff([snapshot]) + warning,
-            data={"diff_stats": build_diff_stats([snapshot]), "mode": "replace", "count": count},
+            tool_name=self.name,
+            permission=self.permission,
+            content=format_patch_diff([snapshot]) + warning,
         )
 
     def _execute_patch(self, patch: str | None, resolver: ProjectPathResolver) -> ToolObservation:
@@ -405,22 +406,22 @@ class PatchTool:
                 retryable=True,
                 permission=self.permission,
             )
-        update_count = sum(1 for op in operations if op.operation == OperationType.UPDATE)
-        add_count = sum(1 for op in operations if op.operation == OperationType.ADD)
-        delete_count = sum(1 for op in operations if op.operation == OperationType.DELETE)
-        move_count = sum(1 for op in operations if op.operation == OperationType.MOVE)
         return tool_success(
-            self.to_definition(),
-            format_patch_diff(results),
-            data={
-                "diff_stats": build_diff_stats(results),
-                "mode": "patch",
-                "operations": len(operations),
-                "update": update_count,
-                "add": add_count,
-                "delete": delete_count,
-                "move": move_count,
-            },
+            tool_name=self.name,
+            permission=self.permission,
+            content=format_patch_diff(results),
+        )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """返回 patch 折叠态摘要；path 缺省时降级为 ``patch``。"""
+        return arguments.get("path_basename", "") or "patch"
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """返回 patch 执行后结果摘要。"""
+        return (
+            f"{display_data['path_basename']} (修改) "
+            f"+{display_data['diff_stats']['total_insertions']} "
+            f"-{display_data['diff_stats']['total_deletions']}"
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -449,11 +450,12 @@ class PatchTool:
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="编辑/补丁",
+                verb="",
                 icon="git-compare",
-                summary_template="{path_basename}",
-                detail_keys=("path", "patch"),
-                click_action="open_file:{path}",
+                title_summary=self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=True,
+                expand_layout="diff",
             ),
         )
 

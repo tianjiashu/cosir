@@ -37,3 +37,4 @@ node_modules/
 /.tmp/
 /.workbuddy/
 /.agents/
+/.npm-cache/

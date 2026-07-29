@@ -12,6 +12,7 @@
 
 import re
 from pathlib import Path
+from typing import Any
 
 from app.tools.tool_handler.search.error_prefixes import (
     INVALID_REGEX_PREFIX,
@@ -33,7 +34,7 @@ def search_content(
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
     budget: int = DEFAULT_BUDGET,
-) -> str:
+) -> tuple[str, int, list[dict[str, Any]]]:
     """在项目内递归搜索正则匹配的内容并以紧凑格式返回分页结果。
 
     参数:
@@ -49,9 +50,13 @@ def search_content(
         budget: 输出字符预算，超出截断并追加提示。
 
     返回:
-        格式化搜索结果字符串；结果被分页截断时追加 ``offset`` 续读提示；正则非法时
-        返回 ``invalid regex:`` 前缀错误，搜索路径不存在时返回 ``Path not found:``
-        前缀错误。
+        ``(output, total, items)`` 三元组：``output`` 为格式化搜索结果字符串（结果被分页
+        截断时追加 ``offset`` 续读提示；正则非法时为 ``invalid regex:`` 前缀错误，
+        搜索路径不存在时为 ``Path not found:`` 前缀错误）；``total`` 为分页前的
+        结果总行数（错误时为 0），供调用方回传结构化命中数；``items`` 为结构化命中列表
+        （content 模式为每行命中 ``{"file_path", "line_number", "content"}``，files_only
+        /count 模式为每文件 ``{"file_path", "line_number": 0, "content": ""}``），供前端
+        list 布局消费。
 
     异常:
         不向上抛出遍历/读取异常（跳过不可读文件）。
@@ -64,16 +69,17 @@ def search_content(
     if path:
         base = base / path
     if not base.exists() or not base.is_dir():
-        return f"{PATH_NOT_FOUND_PREFIX} {base}"
+        return f"{PATH_NOT_FOUND_PREFIX} {base}", 0, []
 
     try:
         regex = re.compile(pattern)
     except re.error as exc:
-        return f"{INVALID_REGEX_PREFIX} {exc}"
+        return f"{INVALID_REGEX_PREFIX} {exc}", 0, []
 
     files_mode = output_mode == "files_only"
     count_mode = output_mode == "count"
     output_lines: list[str] = []
+    item_lines: list[dict[str, Any]] = []
 
     for file_path in iter_files(base, file_glob):
         try:
@@ -84,21 +90,26 @@ def search_content(
         hits = [i for i, line in enumerate(lines, start=1) if regex.search(line)]
         if not hits:
             continue
+        rel = to_relative(base, file_path)
         if files_mode:
-            output_lines.append(to_relative(base, file_path))
+            output_lines.append(rel)
+            item_lines.append({"file_path": rel, "line_number": 0, "content": ""})
             continue
         if count_mode:
-            output_lines.append(f"{to_relative(base, file_path)}: {len(hits)}")
+            output_lines.append(f"{rel}: {len(hits)}")
+            item_lines.append({"file_path": rel, "line_number": 0, "content": ""})
             continue
         for i in hits:
             start = max(1, i - context)
             end = min(len(lines), i + context)
             for ln in range(start, end + 1):
                 marker = ">" if ln == i else " "
-                output_lines.append(f"{to_relative(base, file_path)}:{ln}:{marker}{lines[ln - 1]}")
+                output_lines.append(f"{rel}:{ln}:{marker}{lines[ln - 1]}")
+                item_lines.append({"file_path": rel, "line_number": ln, "content": lines[ln - 1]})
 
     total = len(output_lines)
     page = output_lines[offset : offset + limit]
+    page_items = item_lines[offset : offset + limit]
 
     output = "\n".join(page)
     if budget and len(output) > budget:
@@ -109,4 +120,4 @@ def search_content(
             f"Use offset={offset + limit} to see more, or narrow with a more "
             "specific pattern or file_glob.]"
         )
-    return output
+    return output, total, page_items

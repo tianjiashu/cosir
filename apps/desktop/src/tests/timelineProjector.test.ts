@@ -400,6 +400,8 @@ describe("timeline projector", () => {
         summary: "a.ts · L1-L20",
         detailKeys: ["path", "offset", "limit"],
         clickAction: { action: "open_file", target: "a.ts" },
+        expandable: true,
+        expandLayout: "details",
       });
     }
   });
@@ -450,6 +452,8 @@ describe("timeline projector", () => {
         summary: "a.ts · L1-L20",
         detailKeys: ["path", "offset", "limit"],
         clickAction: { action: "open_file", target: "a.ts" },
+        expandable: true,
+        expandLayout: "details",
       });
     }
   });

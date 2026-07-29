@@ -9,10 +9,11 @@
 - 对外注册仍通过 ``build_read_file_definition`` 返回 ``ToolDefinition``，暂不改变注册逻辑。
 - 工具执行只读文件系统，不写入任何文件，不执行 shell 命令。
 """
+
 import dataclasses
 import json
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -23,6 +24,7 @@ from app.tools.schemas import (
 from app.tools.tool_execute.tool_error import os_error_message, tool_error
 from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
 
@@ -36,7 +38,7 @@ _BLOCKED_DEVICE_REASON = (
 )
 
 
-class ReadFileTool:
+class ReadFileTool(HandlerBase):
     """读取项目内文本文件的工具类。
 
     这个类是 read_file 的唯一实现载体。它把工具元信息、执行入口、路径安全、
@@ -111,11 +113,11 @@ class ReadFileTool:
     binary_sample_bytes = 4_096
     utf8_bom = "\ufeff"
 
-    def __init__(self, project_root: str | Path) -> None:
+    def __init__(self) -> None:
         """初始化 read_file 工具实例。
 
         参数:
-            project_root: 相对路径的解析基准目录。
+            无
         返回:
             无。
 
@@ -199,10 +201,33 @@ class ReadFileTool:
                 retryable=result.retryable,
                 permission=self.permission,
             )
+
         return tool_success(
-            tool=self.to_definition(),
+            tool_name=self.name,
+            permission=self.permission,
             content=json.dumps(dataclasses.asdict(result)),
         )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str | None:
+        """返回 read_file 执行前参数摘要。"""
+        path = arguments.get("path", "")
+        offset = arguments.get("offset", None)
+        limit: int | None = arguments.get("limit", None)
+        start = max(1, int(offset if offset is not None else 1))
+        end_label = "End" if limit is None else str(start + int(limit) - 1)
+        return f"{path} L{start}-{end_label}"
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """返回 read_file 执行后结果摘要。
+        如果执行成功，则返回 None，不显示结果摘要。
+        如果执行失败，结果摘要为错误信息，
+        app.tools.schemas.tool_display.ToolDisplayHints.render_result_summary 会进行判断。
+        """
+        status = display_data.get("status", "success")
+        if status == "success":
+            return None
+
+        return display_data.get("error", "")
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成当前注册系统使用的 ``ToolDefinition``。
@@ -232,9 +257,10 @@ class ReadFileTool:
             display=ToolDisplayHints(
                 verb="读取",
                 icon="eye",
-                summary_template="{path_basename} · L{start}-L{end}",
-                detail_keys=("path", "offset", "limit"),
-                click_action="open_file:{path}",
+                title_summary=self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=False,
+                expand_layout="none",
             ),
         )
 

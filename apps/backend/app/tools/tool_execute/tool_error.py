@@ -8,8 +8,9 @@ handler 异常）以及各 handler（路径越界/无匹配等）的失败分支
 诊断字段（``error``/``reason``/``retryable``/``permission``）在整个代码库的填充方式
 保持一致。
 """
-
+import dataclasses
 import errno
+from typing import Any
 
 from app.tools.schemas import ToolObservation
 
@@ -105,12 +106,12 @@ def handler_exception_reason(header: str) -> str:
 
 
 def tool_error(
-    tool_name: str,
-    error: str,
-    reason: str,
-    retryable: bool = False,
-    permission: str = "",
-    tool_call_id: str = "",
+        tool_name: str,
+        error: str,
+        reason: str,
+        retryable: bool = False,
+        permission: str = "",
+        tool_call_id: str = "",
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
 
@@ -144,14 +145,7 @@ def tool_error(
     副作用:
         无（仅构造并返回新对象，不修改任何入参、不触发任何执行）。
     """
-
-    return ToolObservation(
-        tool_name=tool_name,
-        status="error",
-        content=error,
-        error=error,
-        reason=reason,
-        retryable=retryable,
-        permission=permission,
-        tool_call_id=tool_call_id,
-    )
+    observation = ToolObservation(tool_name=tool_name, status="error", content=error, error=error, reason=reason,
+                                  retryable=retryable, permission=permission, tool_call_id=tool_call_id)
+    observation.display_data = dataclasses.asdict(observation)
+    return observation

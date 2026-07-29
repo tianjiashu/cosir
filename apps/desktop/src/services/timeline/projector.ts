@@ -29,6 +29,10 @@ export interface ToolDisplayInfo {
   detailKeys: string[];
   /** 可选点击动作；为空表示不可点击。 */
   clickAction: ToolDisplayClickAction | null;
+  /** 是否可展开（默认 true）；read_file 等显式 false。 */
+  expandable: boolean;
+  /** 展开态布局：none/details/list/diff/write/terminal（默认 details）。 */
+  expandLayout: string;
 }
 
 /** timeline 工具项。 */
@@ -47,6 +51,16 @@ export interface TimelineToolItem {
   callId?: string;
   /** 工具展示提示；来自后端，未声明时缺省，前端降级为通用展示。 */
   display?: ToolDisplayInfo;
+  /** 执行后结果摘要（成功时，来自后端 result_summary_template 渲染）。 */
+  resultSummary?: string;
+  /** 执行后完整结果正文（模型所见，展开态渲染）。 */
+  result?: string;
+  /** 失败辅因：为什么失败 + 如何修正（error 为主因）。 */
+  reason?: string;
+  /** 失败是否可重试（瞬态错误 true / 需先修正参数 false）。 */
+  retryable?: boolean;
+  /** 执行后结构化载荷（通用透传）。 */
+  resultData?: Record<string, unknown>;
 }
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
@@ -169,12 +183,17 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     if (tool) {
       const callId = tool.callId;
       if (callId && toolByCallId.has(callId)) {
-        // 同一工具调用已有 requested 条目，仅更新其状态/错误/id，保留参数
+        // 同一工具调用已有 requested 条目，仅更新其状态/错误/结果字段/id，保留参数
         const idx = toolByCallId.get(callId)!;
         const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
         existing.item.status = tool.status;
         existing.item.error = tool.error;
         existing.item.eventId = tool.eventId;
+        existing.item.resultSummary = tool.resultSummary;
+        existing.item.result = tool.result;
+        existing.item.reason = tool.reason;
+        existing.item.retryable = tool.retryable;
+        existing.item.resultData = tool.resultData;
         if (tool.arguments) {
           existing.item.arguments = tool.arguments;
         }
@@ -237,6 +256,11 @@ function projectTool(event: RuntimeEvent): TimelineToolItem | null {
       status?: string;
       error?: string;
       tool_call_id?: string | null;
+      summary?: string | null;
+      content?: string | null;
+      reason?: string;
+      retryable?: boolean;
+      data?: Record<string, unknown>;
     };
     return {
         eventId: event.event_id,
@@ -244,6 +268,11 @@ function projectTool(event: RuntimeEvent): TimelineToolItem | null {
         status: String(payload.status) === "error" ? "error" as const : "completed" as const,
         error: payload.error ? String(payload.error) : undefined,
         callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
+        resultSummary: payload.summary ? String(payload.summary) : undefined,
+        result: payload.content ? String(payload.content) : undefined,
+        reason: payload.reason ? String(payload.reason) : undefined,
+        retryable: typeof payload.retryable === "boolean" ? payload.retryable : undefined,
+        resultData: payload.data && typeof payload.data === "object" ? payload.data : undefined,
       };
   }
   return null;
@@ -287,5 +316,7 @@ function toolDisplayFromPayload(raw: unknown): ToolDisplayInfo | undefined {
     summary: typeof display.summary === "string" ? display.summary : "",
     detailKeys,
     clickAction,
+    expandable: typeof display.expandable === "boolean" ? display.expandable : true,
+    expandLayout: typeof display.expand_layout === "string" ? display.expand_layout : "details",
   };
 }

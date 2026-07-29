@@ -386,5 +386,5 @@ class FileToolStateCoordinator:
             content=content,
             permission=tool.permission,
             tool_call_id=tool_call_id,
-            data=data,
+            display_data=data,
         )

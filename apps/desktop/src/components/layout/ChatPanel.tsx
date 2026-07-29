@@ -123,6 +123,7 @@ export function ChatPanel() {
                           status="running"
                           args={tool.arguments}
                           display={tool.display}
+                          resultData={tool.resultData}
                           onOpenFile={(path) => {
                             void openFileInEditor(path);
                           }}
@@ -134,6 +135,11 @@ export function ChatPanel() {
                           error={tool.error}
                           args={tool.arguments}
                           display={tool.display}
+                          resultSummary={tool.resultSummary}
+                          result={tool.result}
+                          reason={tool.reason}
+                          retryable={tool.retryable}
+                          resultData={tool.resultData}
                           onOpenFile={(path) => {
                             void openFileInEditor(path);
                           }}

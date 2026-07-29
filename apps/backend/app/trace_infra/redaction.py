@@ -92,30 +92,3 @@ _TOKEN_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bya29\.[A-Za-z0-9_-]{30,}\b"),
 )
-
-
-def redact_terminal_output(text: object, max_text_length: int = 0) -> str:
-    """对自由文本做凭据脱敏（正则匹配 token/JWT/密码/.env 等明文凭据）。
-
-    参数:
-        text: 待脱敏的自由文本（命令输出、命令 preview 等）。
-        max_text_length: 字符串最大保留长度；为 0 表示不截断。
-
-    返回:
-        脱敏后的文本；赋值类 ``key=value`` 保留 key 名、value 替换为
-        ``[REDACTED]``，独立 token/JWT 整体替换为 ``[REDACTED]``。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯函数）。
-    """
-    if not isinstance(text, str):
-        return str(text)
-    redacted = _ASSIGN_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)
-    for token_re in _TOKEN_RES:
-        redacted = token_re.sub("[REDACTED]", redacted)
-    if max_text_length and len(redacted) > max_text_length:
-        redacted = f"{redacted[:max_text_length]}...[TRUNCATED:{len(redacted)}]"
-    return redacted

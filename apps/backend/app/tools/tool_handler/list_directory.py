@@ -11,6 +11,7 @@
 import fnmatch
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -19,11 +20,13 @@ from app.tools.schemas import (
     ToolObservation,
 )
 from app.tools.tool_execute.tool_error import blocked_device_reason, tool_error
+from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.list_directory_args import ListDirectoryArgs
 
 
-class ListDirectoryTool:
+class ListDirectoryTool(HandlerBase):
     """列出项目内目录条目的工具类（无状态）。
 
     返回:
@@ -158,9 +161,7 @@ class ListDirectoryTool:
 
         with os.scandir(resolved) as scan:
             raw_entries = [
-                entry
-                for entry in scan
-                if include_hidden or not entry.name.startswith(".")
+                entry for entry in scan if include_hidden or not entry.name.startswith(".")
             ]
             if ignore_globs:
                 raw_entries = [
@@ -171,6 +172,7 @@ class ListDirectoryTool:
             children = sorted(raw_entries, key=lambda e: (not e.is_dir(), e.name.lower()))
             page = children[offset : offset + limit]
             entries: list[str] = []
+            entry_dicts: list[dict[str, str]] = []
             for entry in page:
                 entry_type = "dir" if entry.is_dir() else "file"
                 try:
@@ -181,6 +183,7 @@ class ListDirectoryTool:
                     size = 0
                     modified = "unknown"
                 entries.append(f"{entry_type:4s} {size:>12}  {modified}  {entry.name}")
+                entry_dicts.append({"name": entry.name, "type": entry_type, "path": path})
         content = "\n".join(entries) if entries else "(empty directory)"
         next_offset = offset + len(page) if offset + len(page) < len(children) else None
         if next_offset is not None:
@@ -188,18 +191,22 @@ class ListDirectoryTool:
                 f"\n\n[Hint: Results truncated ({len(children)} total). "
                 f"Use offset={next_offset} to continue.]"
             )
-        return ToolObservation(
+
+        return tool_success(
             tool_name=self.name,
-            status="success",
             content=content,
             permission=self.permission,
-            data={
-                "total": len(children),
-                "offset": offset,
-                "limit": limit,
-                "next_offset": next_offset,
-            },
         )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """
+        返回 list_directory 请求摘要。TODO: 待实现
+        """
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """
+        返回 list_directory 展开态摘要。TODO: 待实现
+        """
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
@@ -227,11 +234,12 @@ class ListDirectoryTool:
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="列目录",
+                verb="读取",
                 icon="folder",
-                summary_template="{path_basename}",
-                detail_keys=("path", "offset", "limit"),
-                click_action="open_file:{path}",
+                title_summary=self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=True,
+                expand_layout="list",
             ),
         )
 

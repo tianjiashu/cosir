@@ -18,7 +18,6 @@ from app.models.payload.run_started_payload import RunStartedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.payload.step_started_payload import StepStartedPayload
 from app.models.payload.tool_call_finished_payload import ToolCallFinishedPayload
-from app.models.payload.tool_call_requested_payload import ToolCallRequestedPayload
 from app.models.payload.tool_call_started_payload import ToolCallStartedPayload
 
 __all__ = [
@@ -40,6 +39,5 @@ __all__ = [
     "RuntimeEventPayload",
     "StepStartedPayload",
     "ToolCallFinishedPayload",
-    "ToolCallRequestedPayload",
     "ToolCallStartedPayload",
 ]

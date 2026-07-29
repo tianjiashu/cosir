@@ -47,7 +47,7 @@ def search_filenames(
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
     budget: int = DEFAULT_BUDGET,
-) -> str:
+) -> tuple[str, int, list[str]]:
     """在项目内按 glob 模式查找文件，按修改时间降序返回分页结果。
 
     参数:
@@ -61,8 +61,11 @@ def search_filenames(
         budget: 输出字符预算，超出截断并追加提示。
 
     返回:
-        换行分隔的匹配相对路径字符串（mtime 降序）；结果被分页截断时追加
-        ``offset`` 续读提示；搜索路径不存在时返回 ``Path not found:`` 前缀错误。
+        ``(output, total, items)`` 三元组：``output`` 为换行分隔的匹配相对路径字符串
+        （mtime 降序；结果被分页截断时追加 ``offset`` 续读提示；搜索路径不存在时
+        为 ``Path not found:`` 前缀错误）；``total`` 为分页前的匹配文件总数
+        （错误时为 0），供调用方回传结构化命中数；``items`` 为与 ``output`` 同序的
+        相对路径列表，供前端 list 布局消费。
 
     异常:
         不向上抛出遍历异常。
@@ -75,7 +78,7 @@ def search_filenames(
     if path:
         base = base / path
     if not base.exists() or not base.is_dir():
-        return f"{PATH_NOT_FOUND_PREFIX} {base}"
+        return f"{PATH_NOT_FOUND_PREFIX} {base}", 0, []
 
     wrap_bare_name = "/" not in pattern and not pattern.startswith("*")
     glob_pattern = f"*{pattern}" if wrap_bare_name else pattern
@@ -93,8 +96,9 @@ def search_filenames(
     matched.sort(key=_mtime_of, reverse=True)
     total = len(matched)
     page = matched[offset : offset + limit]
+    items = [to_relative(base, f) for f in page]
 
-    output = "\n".join(to_relative(base, f) for f in page)
+    output = "\n".join(items)
     if budget and len(output) > budget:
         output = output[:budget] + "\n... [output truncated by budget]"
     if total > offset + limit:
@@ -102,4 +106,4 @@ def search_filenames(
             f"\n\n[Hint: Results truncated ({total} total). "
             f"Use offset={offset + limit} to see more, or narrow the pattern.]"
         )
-    return output
+    return output, total, items

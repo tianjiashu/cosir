@@ -114,6 +114,12 @@ export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
   tool_name: string;
   status: "success" | "error";
   tool_call_id: string;
+  summary?: string | null;
+  content?: string | null;
+  error?: string;
+  reason?: string;
+  retryable?: boolean;
+  data?: Record<string, unknown>;
 }
 
 export interface ObservationAddedPayload extends RuntimeEventPayloadObject {

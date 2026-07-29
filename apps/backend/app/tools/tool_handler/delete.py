@@ -13,6 +13,7 @@
 
 import errno
 import shutil
+from typing import Any
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -25,14 +26,16 @@ from app.tools.tool_execute.tool_error import (
     os_error_message,
     tool_error,
 )
+from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
 from app.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.delete_args import DeleteArgs
 
 
-class DeleteTool:
+class DeleteTool(HandlerBase):
     """删除项目内文件或目录的工具类（workspace 作用域，不审批）。
 
     单工具覆盖文件与目录：运行时按目标类型分支，不暴露 delete_file /
@@ -107,7 +110,6 @@ class DeleteTool:
         副作用:
             成功时删除目标文件（或符号链接本身）或目录（recursive=True 时连同子树）。
         """
-
         root = execution_context.workspace_root
         root_resolved = root.resolve()
         resolver = ProjectPathResolver(root)
@@ -171,20 +173,20 @@ class DeleteTool:
                 return tool_error(
                     self.name,
                     os_error_message(exc, "delete the target"),
-                    reason="delete_failed",
+                    reason=(
+                        "the link entry could not be removed, usually because it is "
+                        "locked by another process, the current user lacks delete "
+                        "permission, or the target changed concurrently. Close the "
+                        "program holding it or adjust permissions, then retry the same "
+                        "delete."
+                    ),
                     retryable=True,
                     permission=self.permission,
                 )
-            return ToolObservation(
+            return tool_success(
                 tool_name=self.name,
-                status="success",
                 content=f"Deleted link entry: {entry}",
                 permission=self.permission,
-                data={
-                    "path": str(entry),
-                    "type": "junction" if is_junction else "symlink",
-                    "recursive": False,
-                },
             )
         if not entry.exists():
             return tool_error(
@@ -253,16 +255,19 @@ class DeleteTool:
                 return tool_error(
                     self.name,
                     os_error_message(exc, "delete the target"),
-                    reason="delete_failed",
+                    reason=(
+                        "the directory could not be removed, usually because it is locked "
+                        "by another process, the current user lacks delete permission, or "
+                        "its contents changed concurrently. Close the program holding it "
+                        "or adjust permissions, then retry the same delete."
+                    ),
                     retryable=True,
                     permission=self.permission,
                 )
-            return ToolObservation(
+            return tool_success(
                 tool_name=self.name,
-                status="success",
-                content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
                 permission=self.permission,
-                data={"path": str(resolved), "type": "dir", "recursive": recursive},
+                content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
             )
         try:
             current_resolved, current_error = resolver.resolve(path)
@@ -287,8 +292,20 @@ class DeleteTool:
             status="success",
             content=f"Deleted file: {resolved}",
             permission=self.permission,
-            data={"path": str(resolved), "type": "file"},
+            display_data={"path": str(resolved), "path_basename": resolved.name, "type": "file"},
         )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """返回 delete 折叠态摘要。"""
+        path = arguments.get("path", "")
+        recursive = arguments.get("recursive", False)
+        return f"删除 {path} {'（递归）' if recursive else ''}"
+
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """返回 delete 执行后结果摘要。"""
+        return f"已删除 {display_data.get('path_basename', '')}"
+
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
@@ -318,8 +335,10 @@ class DeleteTool:
             display=ToolDisplayHints(
                 verb="删除",
                 icon="trash-2",
-                summary_template="{path_basename}",
-                detail_keys=("path", "recursive", "type"),
+                title_summary = self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=False,
+                expand_layout="details",
             ),
         )
 

@@ -261,16 +261,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         ),
     )
 
-    # 为每个被请求的工具调用 emit TOOL_CALL_REQUESTED，携参数与 call_id，
-    # 供前端实时展示工具名/参数（如 read_file 的文件与行范围），并作为
-    # 后续 TOOL_CALL_FINISHED 的关联锚点（按 tool_call_id）。展示元数据由
-    # RuntimeOperations 门面统一投影（来自 ToolDefinition.display）。
-    for call in tool_calls:
-        write_event(
-            EventType.TOOL_CALL_REQUESTED,
-            operations.build_tool_call_requested(call, step_id),
-        )
-
     if requested_tool:  # 模型要求调用工具
         if step_count >= state.max_steps:  # 步数已达上限
             log.warning(

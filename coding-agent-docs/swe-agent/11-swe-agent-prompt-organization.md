@@ -248,7 +248,7 @@ prompt_context = {
     "file_context": get_relevant_files(),
 
     # 状态相关
-    "state_summary": agent.state.summary(),
+    "state_summary": agent.state.result_summary(),
     "history": conversation_history,
     "previous_actions": executed_actions,
 

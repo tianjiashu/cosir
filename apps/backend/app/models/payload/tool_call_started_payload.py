@@ -1,4 +1,5 @@
 """Payload model for reserved tool_call_started events."""
+from typing import Any
 
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 
@@ -9,3 +10,4 @@ class ToolCallStartedPayload(RuntimeEventPayload):
     tool_name: str
     step_id: str | None = None
     tool_call_id: str | None = None
+    request_summary: dict[str, Any]

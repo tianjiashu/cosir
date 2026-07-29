@@ -16,10 +16,10 @@ from typing import Literal
 
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
-from app.models.payload import ToolCallFinishedPayload
+from app.models.payload import ToolCallFinishedPayload, ToolCallStartedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.tool_execution.run_result import ToolRunResult
-from app.tools.schemas import ToolCall, ToolExecutionContext
+from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolDisplayHints
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.trace_infra.redaction import redact_terminal_output
 
@@ -28,10 +28,11 @@ class ToolExecutionService:
     """Orchestrate a batch of tool calls requested by the model."""
 
     def __init__(
-        self,
-        scheduler: ToolScheduler,
-        agent_id: str,
-        allowed_tool_names: Iterable[str] | None = None,
+            self,
+            scheduler: ToolScheduler,
+            agent_id: str,
+            allowed_tool_names: Iterable[str] | None = None,
+            tool_definitions: list[ToolDefinition] | None = None,
     ) -> None:
         """Initialize the tool execution service.
 
@@ -39,6 +40,9 @@ class ToolExecutionService:
             scheduler: 底层工具调度器（负责校验与执行）。
             agent_id: 执行主体标识（用于日志关联）。
             allowed_tool_names: 当前 Agent profile 允许执行的工具名。
+            tool_definitions: 本次运行暴露给模型的工具定义列表；用于按工具名取
+                ``ToolDisplayHints`` 渲染执行后结果摘要。``None``（旧调用者）时
+                ``TOOL_CALL_FINISHED`` 的 ``summary`` 恒为 ``None``，行为不变。
 
         返回:
             无。
@@ -55,14 +59,18 @@ class ToolExecutionService:
         self._allowed_tool_names = (
             frozenset(allowed_tool_names) if allowed_tool_names is not None else None
         )
+        self._display_by_name = {
+            definition.name: definition.display
+            for definition in (tool_definitions or [])
+            if definition.display is not None
+        }
 
     def run_calls_with_events(
-        self,
-        task_id: str,
-        step_id: str,
-        calls: list[ToolCall],
-        execution_context: ToolExecutionContext | None = None,
-        write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
+            self,
+            step_id: str,
+            calls: list[ToolCall],
+            execution_context: ToolExecutionContext | None = None,
+            write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
     ) -> ToolRunResult:
         """执行一批工具调用并发出生命周期事件。
 
@@ -88,30 +96,49 @@ class ToolExecutionService:
             可能通过 ``write_event`` 写入事件；可能记工具执行日志。
         """
 
+        if write_event is None:
+            raise RuntimeError("write_event is None")
+
         observations = []
         messages: list[RuntimeMessage] = []
         # 当前串行执行，后续可并行
         for call in calls:
+            display:ToolDisplayHints = self._display_by_name.get(call.tool_name)
+
+            #工具执行开始事件
+            write_event(
+                EventType.TOOL_CALL_STARTED,
+                ToolCallStartedPayload(
+                    tool_name=call.tool_name,
+                    step_id=step_id,
+                    tool_call_id=call.call_id,
+                    request_summary=display.render_request(call.arguments) if display is not None else None
+                )
+            )
+
+            # 执行工具调用
             observation = self._scheduler.execute(
                 call,
                 execution_context=execution_context,
                 allowed_tool_names=self._allowed_tool_names,
             )
+            # 记录观察结果
             observations.append(observation)
-            status: Literal["success", "error"] = (
-                "success" if observation.status == "success" else "error"
+
+            #工具执行结束事件
+            write_event(
+                EventType.TOOL_CALL_FINISHED,
+                ToolCallFinishedPayload(
+                    step_id=step_id,
+                    tool_name=observation.tool_name,
+                    status="success" if observation.status == "success" else "error",
+                    tool_call_id=observation.tool_call_id,
+                    result_summary=display.render_result_summary(observation.display_data) if display is not None else None,
+                ),
             )
-            if write_event is not None:
-                # TODO: 后续需要支持客户端显示工具调用结果，不一定在这改动
-                write_event(
-                    EventType.TOOL_CALL_FINISHED,
-                    ToolCallFinishedPayload(
-                        step_id=step_id,
-                        tool_name=observation.tool_name,
-                        status=status,
-                        tool_call_id=observation.tool_call_id,
-                    ),
-                )
+
+            # 转为模型消息,display_data 不可以给模型看。
+            observation.clear_display_data()
             serialized = dataclasses.asdict(observation)
             serialized["content"] = redact_terminal_output(observation.content)
             messages.append(

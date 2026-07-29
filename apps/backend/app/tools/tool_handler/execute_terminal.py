@@ -7,6 +7,7 @@
 
 import re
 from pathlib import Path
+from typing import Any
 
 from app.config.logging.logger import log
 from app.tools.schemas import (
@@ -16,19 +17,27 @@ from app.tools.schemas import (
     ToolObservation,
 )
 from app.tools.tool_execute.tool_error import tool_error
+from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_handler.terminal import (
     DangerousCommandVerdict,
     create_backend,
     detect_dangerous_command,
 )
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import ExecuteTerminalArgs
 from app.trace_infra.redaction import redact_terminal_output
 
 # workdir 字符白名单：挡住命令注入式 workdir（含 ;|&$() 等注入字符直接拒绝）。
 _WORKDIR_SAFE_RE = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
 
+_EXECUTE_TERMINAL_DESCRIPTION = (
+    "Execute a command in the local shell (foreground) and return its merged output "
+    "and exit code. Shell semantics depend on the runtime OS (Windows=cmd.exe, "
+    "POSIX=/bin/sh)."
+)
 
-class ExecuteTerminalTool:
+
+class ExecuteTerminalTool(HandlerBase):
     """在本机 shell 中同步执行一条终端命令的工具。
 
     严格对齐现状 7 个文件工具的既定范式：类属性契约 + ``execute`` 实例方法 +
@@ -50,6 +59,7 @@ class ExecuteTerminalTool:
     """
 
     name = "execute_terminal"
+    description = _EXECUTE_TERMINAL_DESCRIPTION
     permission = "execute_terminal"
     args_model = ExecuteTerminalArgs
     timeout_seconds = 120.0  # 外层 ToolExecutor 硬保险
@@ -74,11 +84,11 @@ class ExecuteTerminalTool:
         """
 
     def execute(
-        self,
-        command: str,
-        timeout: float | None = None,
-        workdir: str | None = None,
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            command: str,
+            timeout: float | None = None,
+            workdir: str | None = None,
+            execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """在本机 shell 同步执行一条命令并返回归一化观测。
 
@@ -113,6 +123,19 @@ class ExecuteTerminalTool:
             },
         )
 
+        if execution_context is None:
+            return tool_error(
+                self.name,
+                "could not run the command: execution context is missing",
+                reason=(
+                    "the runtime did not provide a workspace root for this command. This "
+                    "is an internal execution wiring error; retry after the runtime injects "
+                    "ToolExecutionContext."
+                ),
+                retryable=True,
+                permission=self.permission,
+            )
+
         verdict = detect_dangerous_command(command)
         if verdict.is_dangerous:
             log.warning(
@@ -140,16 +163,11 @@ class ExecuteTerminalTool:
                 },
             },
         )
-        return ToolObservation(
+
+        return tool_success(
             tool_name=self.name,
-            status="success",
             content=redact_terminal_output(result.output),
             permission=self.permission,
-            data={
-                "exit_code": result.exit_code,
-                "truncated": result.truncated,
-                "timed_out": result.timed_out,
-            },
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -169,10 +187,7 @@ class ExecuteTerminalTool:
         """
         return ToolDefinition(
             name=self.name,
-            description=(
-                "在本机 shell 中同步执行一条终端命令（foreground），返回合并输出与退出码。"
-                "当前平台的 shell 语义以运行时 OS 为准（Windows=cmd.exe，POSIX=/bin/sh）。"
-            ),
+            description=self.description,
             permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
@@ -183,10 +198,22 @@ class ExecuteTerminalTool:
             display=ToolDisplayHints(
                 verb="执行命令",
                 icon="terminal",
-                summary_template="{command}",
-                detail_keys=("command", "workdir"),
+                title_summary=self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=True,
+                expand_layout="terminal",
             ),
         )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """
+        返回 execute_terminal 请求摘要。TODO: 待实现
+        """
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """
+        返回 execute_terminal 展开态摘要。TODO: 待实现
+        """
 
     def _resolve_workdir(self, workdir: str | None, execution_root: str | Path) -> tuple[Path, str]:
         """解析工作目录并限制在执行根内。

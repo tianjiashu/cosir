@@ -193,6 +193,28 @@ export function LogsPage({ onBack }: LogsPageProps) {
               {logs.text || "(empty)"}
             </pre>
           </section>
+          {logs.entries.length > 0 ? (
+            <section className="overflow-hidden rounded-md border border-border bg-card">
+              <div className="divide-y divide-border">
+                {logs.entries.map((entry, index) => (
+                  <article
+                    key={`${entry.ts}-${entry.event}-${index}`}
+                    className="space-y-2 p-3 font-mono text-xs leading-5 text-foreground"
+                  >
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="text-muted-foreground">{entry.ts}</span>
+                      <span>{entry.level}</span>
+                      <span>{entry.event}</span>
+                    </div>
+                    {entry.msg ? <p className="whitespace-pre-wrap break-words">{entry.msg}</p> : null}
+                    {entry.error?.stack ? (
+                      <pre className="whitespace-pre-wrap break-words text-destructive">{entry.error.stack}</pre>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       </ScrollArea>
     </main>

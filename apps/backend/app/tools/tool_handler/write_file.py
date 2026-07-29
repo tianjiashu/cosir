@@ -10,6 +10,7 @@
 """
 
 import ast
+from typing import Any
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -25,10 +26,11 @@ from app.tools.tool_execute.tool_error import (
 from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_handler.file_io.atomic_write import atomic_write_text, looks_like_line_numbered
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.write_file_args import WriteFileArgs
 
 
-class WriteFileTool:
+class WriteFileTool(HandlerBase):
     """把文本内容原子写入项目内文件的工具类。
 
     参数:
@@ -95,8 +97,8 @@ class WriteFileTool:
         副作用:
             可能创建父目录并原子写入目标文件。
         """
-
-        resolver = ProjectPathResolver(execution_context.workspace_root)
+        workspace_root = execution_context.workspace_root
+        resolver = ProjectPathResolver(workspace_root)
         device_error = resolver.blocked_device_reason(path)
         if device_error:
             return tool_error(
@@ -147,7 +149,7 @@ class WriteFileTool:
             atomic_write_text(
                 resolved,
                 content,
-                containment_root=execution_context.workspace_root,
+                containment_root=workspace_root,
             )
         except OSError as exc:
             return tool_error(
@@ -162,17 +164,22 @@ class WriteFileTool:
                 retryable=True,
                 permission=self.permission,
             )
-        warning = ""
-        if str(resolved).endswith(".py"):
-            try:
-                ast.parse(content)
-            except SyntaxError as exc:
-                warning = f"\n[warning] Python syntax error: {exc}"
 
         return tool_success(
-            tool=self.to_definition(),
-            content=f"Wrote {len(content.encode('utf-8'))} bytes to {resolved}{warning}",
+            tool_name=self.name,
+            permission=self.permission,
+            content=content,
         )
+
+    def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """
+        返回 write_file 执行请求摘要。TODO: 待实现
+        """
+
+    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """
+        返回 write_file 执行结果摘要。TODO: 待实现
+        """
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
@@ -200,11 +207,12 @@ class WriteFileTool:
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="写入",
-                icon="file-plus",
-                summary_template="{path_basename}",
-                detail_keys=("path", "content"),
-                click_action="open_file:{path}",
+                verb="",
+                icon="git-compare",
+                title_summary=self.render_request_summary,
+                result_summary=self.render_result_summary,
+                expandable=True,
+                expand_layout="diff",
             ),
         )
 

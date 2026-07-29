@@ -6,31 +6,27 @@
 都应经此构造，确保成功观察的字段（``content``/``data``/``permission`` 等）
 填充方式在整个代码库一致。
 """
+import dataclasses
 
-from typing import Any
-
-from app.tools.schemas import ToolDefinition, ToolObservation
+from app.tools.schemas import ToolObservation
 
 
 def tool_success(
-        tool: ToolDefinition,
+        tool_name: str,
+        permission: str,
         content: str,
         tool_call_id: str = "",
-        data: dict[str, Any] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
     参数:
-        tool: 触发成功的工具定义，提供 ``tool_name`` 与 ``permission``
-            （权限透传用于审计/展示）。
+        tool_name: 触发本次成功的工具名称（与 :class:`ToolDefinition.name` 对应）。
+        permission: 触发工具所需的权限标识（透传自 :class:`ToolDefinition`），
+            便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         content: 面向模型/用户的可读成功正文（即工具输出文本）。
             必须**用英文**撰写、对模型友好（简洁、结构化、便于模型直接消费与纠正）；
             开发者向的中文 docstring/注释不在此限。
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
-        data: 结构化结果载荷（自由键字典），承载不适合塞进 ``content`` 的
-            机器可读字段（如 ``exit_code`` / ``type`` / ``recursive`` 等），
-            供上层程序逻辑消费；与 ``content`` 互不替代、可同时填充；缺省为
-            ``None``，构造时归一为空字典。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="success"``，
@@ -54,11 +50,7 @@ def tool_success(
           既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
     """
 
-    return ToolObservation(
-        tool_name=tool.name,
-        status="success",
-        content=content,
-        permission=tool.permission,
-        tool_call_id=tool_call_id,
-        data=data or {},
-    )
+    observation = ToolObservation(tool_name=tool_name, status="success", content=content, permission=permission,
+                                  tool_call_id=tool_call_id)
+    observation.display_data = dataclasses.asdict(observation)
+    return observation

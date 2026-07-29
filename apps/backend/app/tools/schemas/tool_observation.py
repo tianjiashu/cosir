@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ToolObservation:
     """工具调用产出的归一化观察结果。
 
@@ -62,10 +62,7 @@ class ToolObservation:
             便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         tool_call_id: 与本次观察对应的模型工具调用 id（透传自 :class:`ToolCall`）；
             用于把观察回绑到具体的模型请求，缺失时为空。
-        data: 结构化结果载荷（自由键字典），承载不适合塞进 ``content`` 的
-            机器可读字段，例如终端工具的 ``exit_code`` / ``truncated`` /
-            ``timed_out``、删除工具的 ``type`` / ``recursive`` 等；成功与失败
-            均可能填充。
+        data: 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据，其他一律由content、error、reason承载
     """
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。
@@ -87,6 +84,9 @@ class ToolObservation:
     permission: str = ""
     # 对应的模型工具调用 id，透传自 ToolCall，用于observation回绑；缺失为空。
     tool_call_id: str = ""
-    # 结构化结果载荷（exit_code/truncated/timed_out/type/recursive 等），
-    # 承载机器可读字段；成功与失败均可能填充。
-    data: dict[str, Any] = field(default_factory=dict)
+    # 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据，其他一律由content、error、reason承载
+    display_data: dict[str, Any] = field(default_factory=dict)
+
+    #display_data 不可以给模型看，用完后要清空
+    def clear_display_data(self):
+        self.display_data = None
