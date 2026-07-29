@@ -86,10 +86,9 @@ class ListDirectoryTool:
                 以保持目录清单紧凑。
             ignore_globs: 匹配条目名即排除的 glob 模式列表；``None``/空列表表示不排除。
                 与 ``include_hidden`` 独立叠加（先按可见性过滤，再按本参数排除）。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
-                在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
-                ``ToolExecutor._execute_handler`` 调用约定；本工具只读，但解析相对路径
-                仍需工作区根，故消费其 ``workspace_root``。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
+                由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
+                本工具只读，但解析相对路径仍需工作区根，故消费其 ``workspace_root``。
 
         返回:
             ``ToolObservation``；成功时 content 为紧凑的条目表，失败时 status 为
@@ -102,19 +101,6 @@ class ListDirectoryTool:
         副作用:
             只读目录结构，不修改文件系统。
         """
-        if execution_context is None or execution_context.workspace_root is None:
-            return tool_error(
-                self.name,
-                "list_directory requires a workspace execution context",
-                reason=(
-                    "list_directory was invoked without an execution context (the workspace "
-                    "boundary). This is a tool-runtime wiring issue rather than a problem "
-                    "with your arguments, so retrying or changing the path will not help; "
-                    "report it to the host application."
-                ),
-                permission=self.permission,
-            )
-
         root = execution_context.workspace_root
         resolver = ProjectPathResolver(root)
         device_error = resolver.blocked_device_reason(path)

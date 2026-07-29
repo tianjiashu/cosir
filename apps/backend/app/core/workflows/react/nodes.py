@@ -411,6 +411,27 @@ def _tools_node(state: ReactGraphState) -> dict:
     approved = interrupt({"tool_calls": tool_calls})
     # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
     approved_dicts = tool_calls if not isinstance(approved, list) else approved
+
+    # ★ 取消检查：审批恢复后、工具执行前，若 turn 已被取消则跳过工具执行
+    if operations.has_turn_status(turn.turn_id, "cancelled"):
+        log.info(
+            "tools_node_cancelled",
+            extra={
+                "msg": f"工具节点恢复后检测到 turn 已取消，跳过工具执行，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        write_event(
+            EventType.RUN_CANCELLED,
+            RunCancelledPayload(step_id=step_id, status="cancelled"),
+        )
+        return {
+            "pending_tool_calls": [],
+            "tool_error_count": state.tool_error_count,
+            "terminal": True,
+            "messages": [],
+        }
+
     # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
     approved_calls = [
         ToolCall(
@@ -466,8 +487,8 @@ def _tools_node(state: ReactGraphState) -> dict:
                 "msg": f"连续工具错误达到上限，停止执行，step_id={step_id}",
                 "data": {
                     "step_id": step_id,
-                "tool_error_count": tool_error_count,
-                "limit": Settings.TOOL_ERROR_LIMIT,
+                    "tool_error_count": tool_error_count,
+                    "limit": Settings.TOOL_ERROR_LIMIT,
                 },
             },
         )

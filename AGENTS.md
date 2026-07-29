@@ -110,6 +110,7 @@ coding-agent/
             terminal/         # 终端执行后端 + 危险命令 deny-list（删除类命令全面硬拒）
           tool_models/        # 各工具 pydantic 参数/结果模型（一工具一 args 文件 + text_read_result.py）
           validation/arguments.py     # 参数校验唯一收口
+          guard/             # 工具执行横切子层（语法检查守卫等跨工具共享横切能力，依赖白名单同 tools/）
           tool_registry.py / tool_system.py
         trace_infra/          # trace 基础设施原语（leaf：零 app.* 依赖）
           ids.py / redaction.py

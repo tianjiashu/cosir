@@ -13,10 +13,10 @@ from app.tools.schemas import ToolDefinition, ToolObservation
 
 
 def tool_success(
-    tool: ToolDefinition,
-    content: str,
-    tool_call_id: str = "",
-    data: dict[str, Any] | None = None,
+        tool: ToolDefinition,
+        content: str,
+        tool_call_id: str = "",
+        data: dict[str, Any] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 

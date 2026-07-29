@@ -22,6 +22,7 @@ from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_l
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.models import TaskRecord
 from app.models.enums.event_type import EventType
+from app.models.payload import RunCancelledPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.tools.schemas import ToolCall
@@ -203,6 +204,26 @@ class ReactLikeWorkflow(AgentWorkflow):
                 interrupts = list(tasks[0].interrupts)
                 if not interrupts:
                     break
+
+                # ★ 取消检查：graph 暂停在 interrupt()（等待审批），若 turn 已取消则不恢复
+                if operations.has_turn_status(turn_id, "cancelled"):
+                    log.info(
+                        "workflow_interrupt_cancelled",
+                        extra={
+                            "msg": f"interrupt 暂停时 turn 已取消，不再恢复，turn_id={turn_id}",
+                            "data": {"turn_id": turn_id},
+                        },
+                    )
+                    yield RuntimeEvent(
+                        event_type=EventType.RUN_CANCELLED,
+                        task_id=task.task_id,
+                        turn_id=turn_id,
+                        sequence=sequence,
+                        payload=RunCancelledPayload(status="cancelled"),
+                    )
+                    sequence += 1
+                    break
+
                 interrupt_value = interrupts[0].value
                 pending = (
                     interrupt_value.get("tool_calls", [])

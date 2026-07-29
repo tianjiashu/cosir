@@ -30,18 +30,15 @@ def validate_tool_arguments(
     arguments: Any,
     schema: Mapping[str, Any],
     args_model: type[BaseModel] | None = None,
-    required_params: tuple[str, ...] = (),
 ) -> ToolArgumentValidation:
     """校验模型下发的工具调用参数。
 
     三条路径：
-    1. 传入 ``args_model`` 时，用 pydantic 模型校验并归一化为字典；此时
-       ``required_params`` 不参与校验（必填字段由模型自身约束），二者互斥。
-    2. 未传 ``args_model`` 且 ``schema`` 为空时，仅做「入参须为对象」与
-       ``required_params`` 缺失检查。
-    3. 未传 ``args_model`` 且 ``schema`` 非空时，先用 JSON Schema（Draft 2020-12）
-       校验入参，再补做 ``required_params`` 缺失检查；schema 自身非法也会被
-       归一化为校验失败，不会向上抛异常。
+    1. 传入 ``args_model`` 时，用 pydantic 模型校验并归一化为字典（必填字段由
+       模型自身约束）。
+    2. 未传 ``args_model`` 且 ``schema`` 为空时，仅做「入参须为对象」检查。
+    3. 未传 ``args_model`` 且 ``schema`` 非空时，用 JSON Schema（Draft 2020-12）
+       校验入参；schema 自身非法也会被归一化为校验失败，不会向上抛异常。
 
     函数契约：无论参数非法还是 schema 自身非法，始终返回 ``ToolArgumentValidation``，
     绝不抛出，便于调度层统一转为错误观察。失败时的 ``error`` 为面向模型（Agent）的
@@ -50,8 +47,7 @@ def validate_tool_arguments(
     参数:
         arguments: 模型下发的原始参数（通常为 dict / Mapping）。
         schema: JSON Schema 定义；为空或缺失时走非 schema 校验路径。
-        args_model: 可选的 pydantic 模型；一旦传入即以前者为准，忽略 ``required_params``。
-        required_params: 工具级必填参数名；仅在 ``args_model`` 为 None 时生效。
+        args_model: 可选的 pydantic 模型；一旦传入即以前者为准校验并归一化入参。
 
     返回:
         ok=True 时 ``arguments`` 为归一化后的参数字典；ok=False 时 ``error`` 为聚合后的
@@ -80,30 +76,40 @@ def validate_tool_arguments(
 
     if not schema:
         if isinstance(arguments, Mapping):
-            missing = [param for param in required_params if param not in arguments]
-            if missing:
-                return ToolArgumentValidation(ok=False, error=f"Missing required parameter(s): {', '.join(missing)}")
             return ToolArgumentValidation(ok=True, arguments=dict(arguments))
         return ToolArgumentValidation(
             ok=False,
-            error=f"Arguments must be an object (key-value structure), but received {type(arguments).__name__}",
+            error=(
+                f"Arguments must be an object (key-value structure), "
+                f"but received {type(arguments).__name__}"
+            ),
         )
 
     if not isinstance(arguments, Mapping):
         return ToolArgumentValidation(
             ok=False,
-            error=f"Arguments must be an object (key-value structure), but received {type(arguments).__name__}",
+            error=(
+                f"Arguments must be an object (key-value structure), "
+                f"but received {type(arguments).__name__}"
+            ),
         )
 
     try:
         Draft202012Validator(schema).validate(dict(arguments))
     except SchemaError as exc:
-        return ToolArgumentValidation(ok=False, error=f"Tool argument schema definition is invalid: {exc.message}")
+        return ToolArgumentValidation(
+            ok=False,
+            error=(
+                f"Tool argument schema definition is invalid: {exc.message}"
+            ),
+        )
     except JsonSchemaValidationError as exc:
         path = getattr(exc, "json_path", "") or ""
         where = f" (at {path})" if path else ""
-        return ToolArgumentValidation(ok=False, error=f"Arguments do not match schema{where}: {exc.message}")
-    missing = [param for param in required_params if param not in arguments]
-    if missing:
-        return ToolArgumentValidation(ok=False, error=f"Missing required parameter(s): {', '.join(missing)}")
+        return ToolArgumentValidation(
+            ok=False,
+            error=(
+                f"Arguments do not match schema{where}: {exc.message}"
+            ),
+        )
     return ToolArgumentValidation(ok=True, arguments=dict(arguments))

@@ -90,6 +90,7 @@ class ToolExecutionService:
 
         observations = []
         messages: list[RuntimeMessage] = []
+        # 当前串行执行，后续可并行
         for call in calls:
             observation = self._scheduler.execute(
                 call,
@@ -101,6 +102,7 @@ class ToolExecutionService:
                 "success" if observation.status == "success" else "error"
             )
             if write_event is not None:
+                # TODO: 后续需要支持客户端显示工具调用结果，不一定在这改动
                 write_event(
                     EventType.TOOL_CALL_FINISHED,
                     ToolCallFinishedPayload(

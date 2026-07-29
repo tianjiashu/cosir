@@ -35,7 +35,7 @@ from app.bootstate import (
 )
 from app.config.logging import install_logging_for_current_process
 from app.config.logging.logger import log
-from app.config.settings import default_settings
+from app.config.settings import Settings
 from app.core.runtime.runner import AgentRuntime
 from app.storage.store_engines import close_storage, init_storage
 from app.tools.tool_system import ToolSystem
@@ -68,22 +68,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # 否则运行期日志既不落文件也不落 SQLite；同时必须先 init_storage 再挂载 SQLite 日志
     # handler，避免 LogStore 因 session 工厂未就绪而抛 RuntimeError 被降级为仅文件日志。
     # 此处重建 handler 也会在 fork 子进程里重新拉起 SQLite 写入线程，规避 fork 后写线程死亡的隐患。
-    settings = default_settings()
-    init_storage(settings)
+    Settings.load()
+    init_storage()
     install_logging_for_current_process(
-        log_dir=settings.log_dir,
-        log_database_file=settings.log_database_file,
-        sqlite_logging_enabled=settings.sqlite_logging_enabled,
-        queue_size=settings.log_queue_size,
-        batch_size=settings.log_batch_size,
-        flush_interval_ms=settings.log_flush_interval_ms,
+        log_dir=Settings.LOG_DIR,
+        log_database_file=Settings.LOG_DATABASE_FILE,
+        sqlite_logging_enabled=Settings.SQLITE_LOGGING_ENABLED,
+        queue_size=Settings.LOG_QUEUE_SIZE,
+        batch_size=Settings.LOG_BATCH_SIZE,
+        flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
     )
 
     if runtime_override is None:
-        tool_system = tool_system or ToolSystem.build_tool_system(settings)
+        tool_system = tool_system or ToolSystem.build_tool_system()
         set_tool_system(tool_system)
         set_agent_registry(build_agent_registry())
-        runtime = build_runtime(tool_system=tool_system, settings=settings)
+        runtime = build_runtime(tool_system=tool_system)
         set_runtime(runtime)
     else:
         if tool_system is not None:

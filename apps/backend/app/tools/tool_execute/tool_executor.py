@@ -14,7 +14,7 @@ from typing import Any
 from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
-from app.tools.tool_execute.tool_error import tool_error
+from app.tools.tool_execute.tool_error import handler_exception_reason, tool_error
 from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_execute.windows_job_object import (
     assign_current_process_to_kill_on_close_job,
@@ -43,11 +43,11 @@ class ToolExecutor:
     # ------------------------------------------------------------------
 
     def execute(
-            self,
-            tool: ToolDefinition,
-            arguments: Mapping[str, Any],
-            execution_context: ToolExecutionContext | None = None,
-            tool_call_id: str = "",
+        self,
+        tool: ToolDefinition,
+        arguments: Mapping[str, Any],
+        execution_context: ToolExecutionContext | None = None,
+        tool_call_id: str = "",
     ) -> ToolObservation:
         """在隔离子进程或当前线程中执行单个工具 handler 并返回归一化结果。
 
@@ -84,11 +84,11 @@ class ToolExecutor:
     # ------------------------------------------------------------------
 
     def _execute_in_process(
-            self,
-            tool: ToolDefinition,
-            arguments: Mapping[str, Any],
-            execution_context: ToolExecutionContext | None = None,
-            tool_call_id: str = "",
+        self,
+        tool: ToolDefinition,
+        arguments: Mapping[str, Any],
+        execution_context: ToolExecutionContext | None = None,
+        tool_call_id: str = "",
     ) -> ToolObservation:
         """在隔离子进程中执行单个工具 handler 并返回归一化结果。
 
@@ -105,8 +105,9 @@ class ToolExecutor:
 
         异常:
             不向上抛出：``timeout_seconds`` 为 None / <=0 时直接返回 ``status="error"``
-            的 :class:`ToolObservation`（reason="handler_start_failed"），**不抛**
-            ``ValueError``；其余执行异常亦在分支方法内归一化为 ``status="error"``。
+            的 :class:`ToolObservation`（``reason`` 为配置缺失的富文本提示），**不抛**
+            ``ValueError``；其余执行异常亦在分支方法内归一化为 ``status="error"``
+            （``reason`` 为面向模型的富文本，而非稳定机器短码）。
             调用方若需兜底，应判断返回的 :class:`ToolObservation` 状态，而非捕获异常。
 
         副作用:
@@ -121,7 +122,12 @@ class ToolExecutor:
             return tool_error(
                 tool.name,
                 "tool has timeout_seconds=None or timeout_seconds<=0; infinite wait disallowed ",
-                reason="handler_start_failed",
+                reason=(
+                    "the tool is misconfigured with timeout_seconds=None or <=0, "
+                    "which is not allowed; this is deterministic, so fix the tool's "
+                    "timeout configuration before calling it. The same call will "
+                    "always fail until the timeout is set."
+                ),
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
@@ -145,7 +151,13 @@ class ToolExecutor:
             return tool_error(
                 tool.name,
                 str(exc),
-                reason="handler_start_failed",
+                reason=(
+                    f"the tool process could not be started: {exc}; this indicates "
+                    f"an environment/runtime problem (e.g. cannot spawn a process), "
+                    f"not a problem with the arguments. Fix the execution environment "
+                    f"before retrying; the same call will keep failing until the "
+                    f"environment is repaired."
+                ),
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
@@ -175,7 +187,12 @@ class ToolExecutor:
             return tool_error(
                 tool.name,
                 f"tool timed out after {tool.timeout_seconds} seconds",
-                reason="timeout",
+                reason=(
+                    f"the tool timed out after {tool.timeout_seconds} seconds; this "
+                    f"may be transient (e.g. heavy load or a slow external call), so "
+                    f"retrying the same call may succeed. If it keeps timing out, "
+                    f"simplify the task or increase the tool's timeout_seconds."
+                ),
                 retryable=True,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
@@ -200,7 +217,9 @@ class ToolExecutor:
             return tool_error(
                 tool.name,
                 f"tool process communication failed: {exc}",
-                reason="handler_exception",
+                reason=handler_exception_reason(
+                    f"the tool process crashed or its communication pipe broke: {exc}"
+                ),
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
@@ -224,7 +243,10 @@ class ToolExecutor:
             return tool_error(
                 tool.name,
                 payload.get("message", "tool handler failed"),
-                reason="handler_exception",
+                reason=handler_exception_reason(
+                    f"the tool handler raised an exception: "
+                    f"{payload.get('message', 'tool handler failed')}"
+                ),
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
@@ -234,9 +256,9 @@ class ToolExecutor:
 
     @staticmethod
     def _wait_for_result(
-            process: multiprocessing.Process,
-            result_queue: multiprocessing.Queue,
-            timeout: float,
+        process: multiprocessing.Process,
+        result_queue: multiprocessing.Queue,
+        timeout: float,
     ) -> tuple[str, dict[str, Any]]:
         """阻塞轮询子进程回写的执行结果，超时或进程异常退出时给出明确结论。
 
@@ -252,7 +274,8 @@ class ToolExecutor:
 
         异常:
             TimeoutError: 超过 ``timeout`` 且子进程仍存活时抛出，交由调用方
-                归一为 ``reason="timeout"`` 并在 finally 中强杀清理。
+                归一为 ``status="error"``（``reason`` 为超时富文本提示）并在
+                finally 中强杀清理。
 
         副作用:
             以 0.05s 步长轮询 ``result_queue``；不修改 ``process`` 状态
@@ -283,11 +306,11 @@ class ToolExecutor:
     # ------------------------------------------------------------------
 
     def _execute_in_thread(
-            self,
-            tool: ToolDefinition,
-            arguments: Mapping[str, Any],
-            execution_context: ToolExecutionContext | None,
-            tool_call_id: str,
+        self,
+        tool: ToolDefinition,
+        arguments: Mapping[str, Any],
+        execution_context: ToolExecutionContext | None,
+        tool_call_id: str,
     ) -> ToolObservation:
         """在当前调用线程直接执行 handler 并归一化结果（无子进程隔离）。
 
@@ -303,7 +326,7 @@ class ToolExecutor:
 
         异常:
             不向上抛出：handler 抛出的任意异常被捕获并归一化为
-            ``status="error"``（``reason="handler_exception"``）。
+            ``status="error"``（``reason`` 为面向模型的富文本，而非稳定机器短码）。
 
         副作用:
             在调用方线程内同步执行 handler；直接用主进程 ``log`` 单例；**不启动
@@ -324,7 +347,7 @@ class ToolExecutor:
             return tool_error(
                 tool.name,
                 str(exc),
-                reason="handler_exception",
+                reason=handler_exception_reason(f"the tool handler raised an exception: {exc}"),
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
@@ -381,9 +404,9 @@ class ToolExecutor:
 
     @staticmethod
     def _normalize_result(
-            tool: ToolDefinition,
-            payload: Any,
-            tool_call_id: str,
+        tool: ToolDefinition,
+        payload: Any,
+        tool_call_id: str,
     ) -> ToolObservation:
         """把 handler 的任意返回值归一化为 :class:`ToolObservation`。
 
@@ -422,11 +445,11 @@ class ToolExecutor:
 
     @staticmethod
     def _execute_handler(
-            handler: Callable[..., Any],
-            arguments: dict[str, Any],
-            result_queue: multiprocessing.Queue,
-            log_queue: "multiprocessing.Queue | None" = None,
-            execution_context: ToolExecutionContext | None = None,
+        handler: Callable[..., Any],
+        arguments: dict[str, Any],
+        result_queue: multiprocessing.Queue,
+        log_queue: "multiprocessing.Queue | None" = None,
+        execution_context: ToolExecutionContext | None = None,
     ) -> None:
         """子进程入口：执行 handler 并把结果/异常放入结果队列。
 

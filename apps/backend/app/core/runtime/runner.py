@@ -2,7 +2,6 @@
 
 import asyncio
 import dataclasses
-import os
 from collections.abc import AsyncGenerator
 from uuid import uuid4
 
@@ -12,13 +11,12 @@ from app.config.logging import (
     trace_log_extra,
 )
 from app.config.logging.logger import log
-from app.config.settings import BackendSettings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.models import TurnRecord
+from app.models import TaskRecord, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload, RunFailedPayload, RunStartedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
@@ -27,7 +25,8 @@ from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
-from app.tools.schemas import ToolDefinition
+from app.service.task.workspace_service import WorkspaceService
+from app.tools.schemas import ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 
@@ -50,34 +49,33 @@ class AgentRuntime:
 
     def __init__(
         self,
-        settings: BackendSettings,
         task_service: TaskService,
         turn_service: TurnService,
         context_builder: TextContextBuilder,
         tool_scheduler: ToolScheduler,
         agent_registry: AgentProfileRegistry,
-        model_tools: list[ToolDefinition] | None = None,
+        workspace_service: WorkspaceService | None = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
         参数:
-            settings: 后端运行配置。
             task_service: 任务编排服务（私有协作者，不对外暴露）。
             turn_service: 轮次编排服务（私有协作者，不对外暴露）。
             context_builder: 文本上下文构建器。
-            tool_scheduler: 工具调度器。
+            tool_scheduler: 进程级兜底工具调度器（workspace 缺失时沿用）。
             agent_registry: 进程级 agent profile 目录；引擎按 ``agent_id`` 从中解析
                 本次执行由哪个 profile 驱动，自身不再绑定单一 agent。
-            model_tools: 暴露给模型的工具定义列表。
+            workspace_service: 工作区编排服务；提供 ``task → workspace → root_path``
+                解析，使破坏性工具以 workspace 根为路径边界。缺省 None 时只暴露
+                不要求 workspace context 的只读工具。
         """
 
-        self._settings = settings
         self._task_service = task_service
         self._turn_service = turn_service
         self._context_builder = context_builder
         self._tool_scheduler = tool_scheduler
         self._agent_registry = agent_registry
-        self._model_tools = list(model_tools or [])
+        self._workspace_service = workspace_service
 
     @property
     def agent_registry(self) -> AgentProfileRegistry:
@@ -258,15 +256,7 @@ class AgentRuntime:
                 )
             )
 
-            operations = RuntimeOperations(
-                settings=self._settings,
-                turn_store=self._turn_service,
-                context_builder=self._context_builder,
-                tool_scheduler=self._tool_scheduler,
-                agent_profile=agent_profile,
-                current_turn_id=turn.turn_id,
-                model_tools=self._model_tools,
-            )
+            operations = self._build_operations(task, turn, agent_profile)
 
             async for event in agent_profile.workflow.run(task, operations):
                 yield await emit(event)
@@ -375,13 +365,7 @@ class AgentRuntime:
         """Return backend model configuration and availability summary."""
 
         return {
-            "status": "ok",
-            "model_provider": self._settings.model_provider,
-            "model_base_url": self._settings.model_base_url,
-            "model_name": self._settings.model_name,
-            "model_thinking_mode": self._settings.model_thinking_mode,
-            "model_api_key_env": self._settings.model_api_key_env,
-            "has_model_api_key": bool(os.environ.get(self._settings.model_api_key_env)),
+            "status": "ok"
         }
 
     def _resolve_agent_profile(self, agent_id: str) -> AgentProfile | None:
@@ -405,6 +389,72 @@ class AgentRuntime:
         """
 
         return self._agent_registry.resolve(agent_id)
+
+    def _resolve_execution_context(self, task: TaskRecord) -> ToolExecutionContext | None:
+        """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
+
+        参数:
+            task: 当前执行的任务记录；提供 ``workspace_id`` 与 ``task_id``。
+
+        返回:
+            命中 workspace 时返回 ToolExecutionContext；workspace 缺失或
+            workspace_service 未注入时返回 None。
+
+        异常:
+            仅当 workspace 不存在（``KeyError``）时返回 None 并记 warning；
+            数据库层异常（如 SQLAlchemyError）按原样冒泡，由上层 ``run_turn`` 记为
+            task_failed，不做静默降级。
+
+        副作用:
+            workspace 不存在时记 warning 日志。
+        """
+
+        if self._workspace_service is None:
+            return None
+        try:
+            workspace = self._workspace_service.get_workspace(task.workspace_id)
+        except KeyError:
+            log.warning(
+                "workspace_not_found_for_task",
+                extra={
+                    "msg": "任务所属 workspace 不存在，破坏性工具将不可用",
+                    "data": {"task_id": task.task_id, "workspace_id": task.workspace_id},
+                },
+            )
+            return None
+        return ToolExecutionContext.from_workspace(task.task_id, workspace)
+
+    def _build_operations(
+        self, task: TaskRecord, turn: TurnRecord, agent_profile: AgentProfile
+    ) -> RuntimeOperations:
+        """为单个 turn 构建运行时操作门面，按 workspace 解析工具边界。
+
+        workspace 可见性（写、改、删是否开放）由 ``execution_context`` 决定；
+        最终「可运行工具集合」由 ``agent_profile.select_tools`` 在候选集上裁定，
+        运行底座不再自行做权限门禁。
+
+
+        参数:
+            task: 当前执行的任务记录（已预取，提供 ``workspace_id`` 与 ``task_id``）。
+            turn: 当前执行的轮次记录（提供 ``turn_id`` 作为门面绑定）。
+            agent_profile: 驱动本轮执行的 agent profile。
+
+        返回:
+            已注入正确 tool_scheduler / model_tools / execution_context 的
+            RuntimeOperations 实例。
+        """
+
+        execution_context = self._resolve_execution_context(task)
+        model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
+        return RuntimeOperations(
+            turn_store=self._turn_service,
+            context_builder=self._context_builder,
+            tool_scheduler=self._tool_scheduler,
+            agent_profile=agent_profile,
+            current_turn_id=turn.turn_id,
+            model_tools=model_tools,
+            execution_context=execution_context,
+        )
 
     def _record(
         self,

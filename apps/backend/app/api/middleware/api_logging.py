@@ -157,7 +157,7 @@ async def _request_log_extra(request) -> dict:
     """
 
     client = request.client.host if request.client is not None else ""
-    path_ids = _extract_path_ids(request.url.path)
+    path_ids = _extract_path_ids(request.url.target_directory)
     # 入口层仅绑定 trace_id（由 merge_log_context(trace_id=...) 完成，D4）；
     # 从 path 提取的业务实体 ID 收敛进 data，不再作为独立链路键。
     data: dict[str, object] = {}
@@ -167,7 +167,7 @@ async def _request_log_extra(request) -> dict:
         data["run_id"] = path_ids["run_id"]
     extra = {
         "method": request.method,
-        "path": request.url.path,
+        "path": request.url.target_directory,
         "client_host": client,
         "data": data,
     }

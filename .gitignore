@@ -34,3 +34,6 @@ apps/backend/temp/
 
 # 前端依赖（不应提交）
 node_modules/
+/.tmp/
+/.workbuddy/
+/.agents/

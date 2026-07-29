@@ -81,9 +81,8 @@ class WriteFileTool:
             path: 待写入的文件路径（相对项目根）。
             content: 待写入的内容。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
-                由执行链在执行期注入。破坏性操作以其 ``workspace_root`` 作为路径
-                containment 的唯一事实源；为 None 时返回富文本 ``reason``（含根因与
-                重试提示），而非稳定短码。
+                由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
+                破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
         返回:
             ``ToolObservation``；成功时 content 含写入字节数与可选语法告警，
@@ -96,19 +95,6 @@ class WriteFileTool:
         副作用:
             可能创建父目录并原子写入目标文件。
         """
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "write_file requires a workspace execution context",
-                reason=(
-                    "write_file was invoked without an execution context (the workspace "
-                    "boundary). This is a tool-runtime wiring issue rather than a problem "
-                    "with your arguments, so retrying or changing the path will not help; "
-                    "report it to the host application."
-                ),
-                permission=self.permission,
-            )
 
         resolver = ProjectPathResolver(execution_context.workspace_root)
         device_error = resolver.blocked_device_reason(path)

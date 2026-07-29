@@ -1,10 +1,12 @@
-"""失败工具观察的纯工厂。
+"""失败工具观察的纯工厂与共享文本助手。
 
-本模块只承载一个纯函数：:func:`tool_error`。它是工具系统构造失败观察的
-**唯一收口**：``ToolScheduler``（未知工具/权限拒绝/参数非法）、``ToolExecutor``
-（启动失败/超时/handler 异常）以及各 handler（路径越界/无匹配等）的失败分支全部
-经此构造，确保失败诊断字段（``error``/``reason``/``retryable``/``permission``）
-在整个代码库的填充方式保持一致。
+本模块承载失败观察的**唯一收口** :func:`tool_error`，以及工具层复用的若干
+共享文本助手（:func:`os_error_message`、:func:`blocked_device_reason`、
+:func:`handler_exception_reason`）。
+``ToolScheduler``（未知工具/权限拒绝/参数非法）、``ToolExecutor``（启动失败/超时/
+handler 异常）以及各 handler（路径越界/无匹配等）的失败分支全部经此构造，确保失败
+诊断字段（``error``/``reason``/``retryable``/``permission``）在整个代码库的填充方式
+保持一致。
 """
 
 import errno
@@ -41,6 +43,65 @@ def os_error_message(exc: OSError, action: str) -> str:
         fallback = errno.errorcode.get(code) if code is not None else None
         detail = fallback or "unknown OS error"
     return f"could not {action}: {detail}"
+
+
+def blocked_device_reason(action: str) -> str:
+    """构造「路径指向 OS 设备/敏感伪文件」的富文本 ``reason``（共享助手）。
+
+    文件类工具（read / write / search 等）命中 ``ProjectPathResolver`` 的 blocked
+    设备分支时共用这一模板，避免各 handler 重复长串；按 ``action`` 动名词定制提示，
+    与确定性失败的「same path will always be rejected」重试提示保持一致。
+
+    参数:
+        action: 受影响的动作英文动名词（如 ``"read"`` / ``"written"`` /
+            ``"searched recursively"``），用于定制说明。
+
+    返回:
+        面向模型的富文本说明（根因 + 修正建议 + 确定性失败的重试提示）。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+
+    return (
+        f"the requested path points to an OS device or sensitive pseudo-file "
+        f"(e.g. NUL/CON/COM1 on Windows, /dev/* or /proc/* on POSIX) and cannot be "
+        f"{action}; pass a regular file path inside the project instead. The same "
+        f"path will always be rejected, so choose a different target."
+    )
+
+
+def handler_exception_reason(header: str) -> str:
+    """构造「handler 抛异常 / 进程崩溃」类失败富文本 ``reason`` 的共享尾部。
+
+    该助手是 :class:`ToolExecutor` 各 ``handler_exception`` 失败分支（进程通信
+    断裂、子进程 handler 抛异常、线程内 handler 抛异常）复用的唯一收口：统一追加
+    「确定性失败 + 原样重试无效 + 先读 message 修正根因」的提示，确保三处语义一致，
+    且与 ``retryable=False`` 的重试信号保持一致。
+
+    参数:
+        header: 已点明失败动作与人读原因的英文短句（如 ``"the tool handler raised
+            an exception: ..."``），作为说明前缀。
+
+    返回:
+        面向模型的富文本说明（根因已由 ``header`` 给出 + 修正建议 + 确定性失败
+        的重试提示）。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+
+    return (
+        f"{header} this is a deterministic failure from the tool, so retrying with "
+        f"identical arguments will fail again; read the message to fix the underlying "
+        f"cause before calling the tool again."
+    )
 
 
 def tool_error(

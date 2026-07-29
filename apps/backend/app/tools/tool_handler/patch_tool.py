@@ -114,8 +114,8 @@ class PatchTool:
             replace_all: replace 模式是否替换所有命中。
             patch: patch 模式的 V4A 文本。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
-                由执行链在执行期注入。破坏性操作以其 ``workspace_root`` 作为路径
-                containment 的唯一事实源；为 None 时返回 ``workspace_required``。
+                由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
+                破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
         返回:
             ``ToolObservation``：成功时 ``content`` 为 unified diff 回显、
@@ -129,19 +129,6 @@ class PatchTool:
         副作用:
             命中时原子回写目标文件；patch 模式按操作逐文件修改文件系统。
         """
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "patch requires a workspace execution context",
-                reason=(
-                    "patch was invoked without an execution context (the workspace "
-                    "boundary). This is a tool-runtime wiring issue rather than a problem "
-                    "with your arguments, so retrying or changing the path will not help; "
-                    "report it to the host application."
-                ),
-                permission=self.permission,
-            )
 
         resolver = ProjectPathResolver(execution_context.workspace_root)
         if mode == "replace":

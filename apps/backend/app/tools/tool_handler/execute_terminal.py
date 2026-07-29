@@ -228,10 +228,13 @@ class ExecuteTerminalTool:
             f"use file tools (read_file / write_file / patch / delete) for filesystem changes.",
             reason=(
                 "the command matches the deny-list of destructive commands (rm / del / "
-                "rd / Remove-Item / etc.) that could irreversibly damage the filesystem or "
-                "system, so it is always rejected. Use the dedicated file tools (read_file "
-                "/ write_file / patch / delete) for filesystem changes instead; the same "
-                "command will always be blocked."
+                "rd / Remove-Item / irreversible git operations such as reset --hard, "
+                "push --force, clean -f, checkout --, branch -D, config --global, "
+                "commit --amend / etc.) that could irreversibly damage the repository, "
+                "filesystem, or system, so it is always rejected. Use the dedicated file "
+                "tools (read_file / write_file / patch / delete) for filesystem changes "
+                "and avoid destructive git commands; the same command will always be "
+                "blocked."
             ),
             permission=self.permission,
         )

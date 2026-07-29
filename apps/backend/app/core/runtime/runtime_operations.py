@@ -6,7 +6,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
-from app.config.settings import BackendSettings
 from app.core.context.text_context_builder import TextContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.models.enums.event_type import EventType
@@ -14,7 +13,7 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.payload.tool_call_requested_payload import ToolCallRequestedPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
-from app.tools.schemas import ToolCall, ToolDefinition
+from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 if TYPE_CHECKING:
@@ -30,17 +29,36 @@ class RuntimeOperations:
 
     def __init__(
         self,
-        settings: BackendSettings,
         turn_store,
         context_builder: TextContextBuilder,
         tool_scheduler: ToolScheduler,
         agent_profile: AgentProfile,
         current_turn_id: str = "",
         model_tools: list[ToolDefinition] | None = None,
+        execution_context: ToolExecutionContext | None = None,
     ) -> None:
-        """Initialize runtime dependencies."""
+        """初始化运行时操作门面及其私有协作者。
 
-        self.settings = settings
+        参数:
+            turn_store: 轮次存储（私有协作者，不对外暴露）。
+            context_builder: 文本上下文构建器。
+            tool_scheduler: 工具调度器（已按 workspace 边界解析或进程级兜底）。
+            agent_profile: 驱动本轮执行的 agent profile。
+            current_turn_id: 当前绑定的轮次标识；空串表示尚未绑定。
+            model_tools: 暴露给模型的工具定义列表。
+            execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
+                日志不注入 ``workspace_id``。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            构造 ``ToolExecutionService``、存储执行上下文、记初始化日志。
+        """
+
         self._turn_store = turn_store
         self._context_builder = context_builder
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
@@ -48,8 +66,10 @@ class RuntimeOperations:
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
+            allowed_tool_names=(tool.name for tool in self.model_tools),
         )
         self._current_turn_id = current_turn_id
+        self._execution_context = execution_context
 
         log.info(
             "runtime_ops_initialized",
@@ -200,7 +220,8 @@ class RuntimeOperations:
         """Execute model-requested tool calls through the tool system.
 
         工具生命周期事件通过 ``write_event`` 回调写入 LangGraph 自定义事件流；
-        若未提供回调，则静默跳过事件（仅执行工具）。
+        若未提供回调，则静默跳过事件（仅执行工具）。门面持有的 ``execution_context``
+        在内部透传给执行链，最终在执行期注入各 handler（便于后续扩展执行参数）。
 
         参数:
             task_id: 当前任务标识符。
@@ -213,16 +234,19 @@ class RuntimeOperations:
         """
 
         tool_names = [call.tool_name for call in calls]
+        dispatched_data: dict[str, object] = {
+            "task_id": task_id,
+            "step_id": step_id,
+            "call_count": len(calls),
+            "tool_names": tool_names,
+        }
+        if self._execution_context is not None:
+            dispatched_data["workspace_id"] = self._execution_context.workspace_id
         log.info(
             "tool_calls_dispatched",
             extra={
                 "msg": f"派发 {len(calls)} 个工具调用，step_id={step_id}",
-                "data": {
-                    "task_id": task_id,
-                    "step_id": step_id,
-                    "call_count": len(calls),
-                    "tool_names": tool_names,
-                },
+                "data": dispatched_data,
             },
         )
 
@@ -230,6 +254,7 @@ class RuntimeOperations:
             task_id=task_id,
             step_id=step_id or "",
             calls=calls,
+            execution_context=self._execution_context,
             write_event=write_event or _noop_write_event,
         )
 
@@ -239,6 +264,16 @@ class RuntimeOperations:
             status_counts[obs.status] = status_counts.get(obs.status, 0) + 1
             if obs.status == "error":
                 error_count += 1
+        completed_data: dict[str, object] = {
+            "task_id": task_id,
+            "step_id": step_id,
+            "observation_count": len(result.observations),
+            "messages_for_model_count": len(result.messages_for_model),
+            "status_counts": status_counts,
+            "error_count": error_count,
+        }
+        if self._execution_context is not None:
+            completed_data["workspace_id"] = self._execution_context.workspace_id
         log.info(
             "tool_calls_completed",
             extra={
@@ -246,14 +281,7 @@ class RuntimeOperations:
                     f"工具批次执行完成：{len(result.observations)} 个观察，"
                     f"其中 {error_count} 个失败"
                 ),
-                "data": {
-                    "task_id": task_id,
-                    "step_id": step_id,
-                    "observation_count": len(result.observations),
-                    "messages_for_model_count": len(result.messages_for_model),
-                    "status_counts": status_counts,
-                    "error_count": error_count,
-                },
+                "data": completed_data,
             },
         )
         return result

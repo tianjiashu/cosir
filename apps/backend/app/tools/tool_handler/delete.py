@@ -92,9 +92,8 @@ class DeleteTool:
             recursive: 是否递归删除目录树；``False`` 时仅删空目录，非空目录返回
                 not_empty 错误。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
-                由执行链在执行期注入。破坏性操作以其 ``workspace_root`` 作为路径
-                containment 的唯一事实源；为 None 时返回富文本 ``reason``（含根因与
-                重试提示），而非稳定短码。
+                由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
+                破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
         返回:
             ``ToolObservation``；成功时 content 为删除确认（删目录且 recursive 时
@@ -108,19 +107,6 @@ class DeleteTool:
         副作用:
             成功时删除目标文件（或符号链接本身）或目录（recursive=True 时连同子树）。
         """
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "delete requires a workspace execution context",
-                reason=(
-                    "delete was invoked without an execution context (the workspace "
-                    "boundary). This is a tool-runtime wiring issue rather than a problem "
-                    "with your arguments, so retrying or changing the path will not help; "
-                    "report it to the host application."
-                ),
-                permission=self.permission,
-            )
 
         root = execution_context.workspace_root
         root_resolved = root.resolve()

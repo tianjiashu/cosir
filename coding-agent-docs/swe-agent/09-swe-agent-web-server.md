@@ -454,8 +454,8 @@ run_from_cli()                     [SWE-agent/sweagent/inspector/server.py:344]
 
 ```python
 # 路径安全检查
-full_path = os.path.abspath(os.path.join(self.server.output_dir, file_path))
-if not full_path.startswith(os.path.abspath(self.server.output_dir)):
+full_path = os.target_directory.abspath(os.target_directory.join(self.server.output_dir, file_path))
+if not full_path.startswith(os.target_directory.abspath(self.server.output_dir)):
     self.send_error(403, "Access denied")
     return
 ```

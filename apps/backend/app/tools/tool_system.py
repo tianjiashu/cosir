@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from app.config.settings import Settings
-from app.tools.tool_execute.tool_output_budget import ToolOutputBudget
+from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_handler.delete import build_delete_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
@@ -44,7 +44,7 @@ class ToolSystem:
     def build_tool_system(cls) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册全部 7 个工具定义，并用 ``Settings.MAX_TOOL_OUTPUT_CHARS``
+        按内置清单注册全部 8 个工具定义，并用 ``Settings.MAX_TOOL_OUTPUT_CHARS``
         （类级静态配置，非传入的 settings 对象）构造输出预算上限，装配调度器。
 
         参数:

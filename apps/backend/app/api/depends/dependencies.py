@@ -1,6 +1,5 @@
 """FastAPI dependency wiring."""
 
-from app.config.settings import default_settings
 from app.core.agents.agent_profile import (
     default_developer_agent,
     developer_agent_pro,
@@ -8,11 +7,9 @@ from app.core.agents.agent_profile import (
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import TextContextBuilder
 from app.core.runtime.runner import AgentRuntime
-from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
-from app.storage.crud.log_crud import LogStore
 from app.storage.crud.runtime_event_crud import RuntimeEventCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
@@ -178,16 +175,11 @@ def build_agent_registry() -> AgentProfileRegistry:
 
 def build_runtime(
     tool_system: ToolSystem | None = None,
-    settings=None,
 ) -> AgentRuntime:
     """Build the default runtime dependency graph.
 
     Parameters:
         tool_system: Initialized tool system supplied by application startup.
-        settings: Optional backend settings. When omitted, default settings are
-            loaded.
-        logger: Optional application logger. When omitted, logging is installed
-            from settings.
 
     Returns:
         Configured AgentRuntime instance.
@@ -198,31 +190,31 @@ def build_runtime(
         OSError: If logs or SQLite storage cannot be created.
 
     Side effects:
-        Configures logging and initializes SQLite-backed stores.
+        Configures logging and initializes SQLite-backed stores. Backend runtime
+        limits are read from module-level static configuration instead of a
+        passed-in settings object.
     """
 
-    settings = settings or default_settings()
     tool_system = tool_system or get_tool_system()
-    services = _build_services(settings)
+    services = _build_services()
     # agent registry 由进程级单例提供（启动时经 set_agent_registry 注入），
     # 与 GET /agents 端点共享同一份目录。
     agent_registry = get_agent_registry()
     return AgentRuntime(
-        settings=settings,
         task_service=services["task_service"],
         turn_service=services["turn_service"],
         context_builder=TextContextBuilder(),
         tool_scheduler=tool_system.scheduler,
         agent_registry=agent_registry,
-        model_tools=tool_system.registry.get_all_definitions(),
+        workspace_service=services["workspace_service"],
     )
 
 
-def _build_services(settings) -> dict:
+def _build_services() -> dict:
     """Build and cache the process-wide domain service singletons.
 
     参数:
-        settings: 后端运行配置。
+        无。后端运行配置由 ``Settings`` 类级静态属性提供，不以对象传入。
 
     返回:
         含 ``task_service`` / ``turn_service`` / ``workspace_service`` 的字典。
@@ -237,7 +229,7 @@ def _build_services(settings) -> dict:
     global _SERVICES
     if _SERVICES is not None:
         return _SERVICES
-    init_storage(settings)
+    init_storage()
     task_crud = TaskCrud()
     turn_crud = TurnCrud()
     turn_message_crud = TurnMessageCrud()
@@ -271,7 +263,7 @@ def get_workspace_service() -> WorkspaceService:
         首次调用时构建并缓存 service。
     """
 
-    return _build_services(default_settings())["workspace_service"]
+    return _build_services()["workspace_service"]
 
 
 def get_task_service() -> TaskService:
@@ -290,7 +282,7 @@ def get_task_service() -> TaskService:
         首次调用时构建并缓存 service。
     """
 
-    return _build_services(default_settings())["task_service"]
+    return _build_services()["task_service"]
 
 
 def get_turn_service() -> TurnService:
@@ -309,7 +301,7 @@ def get_turn_service() -> TurnService:
         首次调用时构建并缓存 service。
     """
 
-    return _build_services(default_settings())["turn_service"]
+    return _build_services()["turn_service"]
 
 
 def get_runtime_event_crud() -> RuntimeEventCrud:
@@ -332,34 +324,3 @@ def get_runtime_event_crud() -> RuntimeEventCrud:
     """
 
     return RuntimeEventCrud()
-
-
-def _build_log_query_service(settings, logger):
-    """Build the log query service when its SQLite store is available.
-
-    Parameters:
-        settings: Backend runtime settings.
-        logger: Backend logger.
-
-    Returns:
-        LogQueryService or None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Initializes the log SQLite store when possible; logs a warning on failure.
-    """
-
-    try:
-        log_store = LogStore()
-    except Exception as exc:
-        logger.warning(
-            "log_query_service_unavailable",
-            extra={
-                "msg": "log SQLite is unavailable; log query service disabled",
-                "data": {"error": str(exc)},
-            },
-        )
-        return None
-    return LogQueryService(log_store, max_limit=settings.log_query_limit_max)

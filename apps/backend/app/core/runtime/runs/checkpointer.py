@@ -2,8 +2,9 @@
 
 Workflow 编排层强依赖 LangGraph（见 ``AGENTS.md`` 不可变决议）：``StateGraph`` 负责
 编排、``AsyncSqliteSaver`` 负责 checkpoint 真实落盘。checkpoint 数据库文件路径来自
-``BackendSettings.checkpoint_file``，本模块只负责产出 checkpointer；未来如需替换为其他
-后端（如 PostgreSQL），只需修改 ``build_checkpointer`` 与 ``settings.checkpoint_file`` 两处。
+类级静态属性 ``Settings.CHECKPOINT_FILE``（``app.config.settings``），本模块只负责产出
+checkpointer；未来如需替换为其他后端（如 PostgreSQL），只需修改 ``build_checkpointer``
+与 ``Settings.CHECKPOINT_FILE`` 两处。
 """
 
 from collections.abc import AsyncIterator
