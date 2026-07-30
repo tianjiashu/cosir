@@ -53,7 +53,7 @@ class Settings:
     LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
     LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
     # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
-    LANGFUSE_BASE_URL: ClassVar[str] = "https://langfuse.your-cloud.example.com"
+    LANGFUSE_BASE_URL: ClassVar[str] = "http://124.220.55.187"
 
     # 允许被 ``override`` 覆盖的字段名集合；实际值在 ``Settings`` 类定义结束后由
     # ``_finalize_overridable`` 经 ``Settings.__annotations__`` 推导注入，规避类体内裸
@@ -233,7 +233,7 @@ class Settings:
         cls.LANGFUSE_SECRET_KEY = os.environ.get("CODING_AGENT_LANGFUSE_SECRET_KEY")
         cls.LANGFUSE_BASE_URL = os.environ.get(
             "CODING_AGENT_LANGFUSE_BASE_URL",
-            "https://langfuse.your-cloud.example.com",
+            "http://124.220.55.187",
         )
 
         cls._validate()
