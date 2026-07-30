@@ -226,6 +226,8 @@ class ListDirectoryTool(HandlerBase):
             无。
         """
         path = arguments.get("path") or "."
+        if path.strip() == "/":
+            return "根目录"
         return str(path)
 
     def render_result_summary(

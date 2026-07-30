@@ -60,7 +60,7 @@ interface UseSSEReturn {
  * ```
  */
 export function useSSE(): UseSSEReturn {
-  const appendEvent = useEventStore((s) => s.appendEvent);
+  const appendEvents = useEventStore((s) => s.appendEvents);
   const setConnectionState = useEventStore((s) => s.setConnectionState);
   const connectionState = useEventStore((s) => s.connectionState);
   const updateTask = useTaskStore((s) => s.updateTask);
@@ -69,6 +69,12 @@ export function useSSE(): UseSSEReturn {
 
   // 保持对当前连接实例的引用，避免重复创建
   const connectionRef = useRef<SSEConnection | null>(null);
+  // 攒批缓冲：把同一动画帧内的多个 delta 合并成一次 appendEvents + 一次渲染，
+  // 将高频流式下的 set/投影/重渲染压力从「每 delta 一次」降到「每帧一次」，
+  // 对高 token 率与长会话（后续迭代常见场景）提供稳定的渲染节奏兜底。
+  const pendingEventsRef = useRef<RuntimeEvent[]>([]);
+  const rafRef = useRef<number | null>(null);
+  const flushRef = useRef<() => void>(() => {});
 
   /**
    * 建立到指定任务轮次的 SSE 连接。
@@ -79,10 +85,13 @@ export function useSSE(): UseSSEReturn {
    */
   const connect = useCallback(
     async (taskId: string, turnId: string): Promise<void> => {
-      // 先断开已有连接
+      // 先断开已有连接（disconnect 内部会兜底 flush 旧缓冲，确保残留事件落盘）
       if (connectionRef.current) {
         connectionRef.current.disconnect();
       }
+      // 旧连接已断开、不再产生事件；重置共享缓冲，避免新旧连接复用同一数组
+      // 造成的事件归属耦合或快速重连场景下的缓冲污染。
+      pendingEventsRef.current = [];
 
       const markFailed = (error: Error) => {
         const now = new Date().toISOString();
@@ -100,9 +109,47 @@ export function useSSE(): UseSSEReturn {
         markFailed(error);
       };
 
+      // 把缓冲事件一次性提交：单次 appendEvents（单次 set、单次渲染）+ 逐事件同步运行态。
+      const flush = () => {
+        if (rafRef.current != null) {
+          if (typeof cancelAnimationFrame === "function") {
+            cancelAnimationFrame(rafRef.current);
+          } else {
+            clearTimeout(rafRef.current);
+          }
+          rafRef.current = null;
+        }
+        const batch = pendingEventsRef.current;
+        if (batch.length === 0) {
+          return;
+        }
+        pendingEventsRef.current = [];
+        appendEvents(batch);
+        for (const event of batch) {
+          syncRuntimeStatus(event, updateTask, updateTurn, setStreamingTurn);
+        }
+      };
+      flushRef.current = flush;
+
+      // 安排下一帧 flush；若环境无 rAF 则退化为 setTimeout。
+      const scheduleFlush = () => {
+        if (rafRef.current != null) {
+          return;
+        }
+        const run = () => {
+          rafRef.current = null;
+          flushRef.current();
+        };
+        if (typeof requestAnimationFrame === "function") {
+          rafRef.current = requestAnimationFrame(run);
+        } else {
+          rafRef.current = setTimeout(run, 16) as unknown as number;
+        }
+      };
+
       const onEvent = (event: RuntimeEvent) => {
-        appendEvent(event);
-        syncRuntimeStatus(event, updateTask, updateTurn, setStreamingTurn);
+        pendingEventsRef.current.push(event);
+        scheduleFlush();
       };
 
       const connection = new SSEConnection({
@@ -110,19 +157,28 @@ export function useSSE(): UseSSEReturn {
         turnId,
         onEvent,
         onError,
-        onStateChange: setConnectionState,
+        onStateChange: (state) => {
+          // 仅当前活动连接可回写连接状态，避免被已断开的旧连接（竞态）误钉为 CLOSED
+          if (connectionRef.current === connection) {
+            setConnectionState(state);
+          }
+        },
       });
 
       connectionRef.current = connection;
-      void connection.connect().finally(() => {
-        if (connectionRef.current === connection) {
-          connectionRef.current = null;
-        }
-      }).catch(() => {
-        // SSEConnection 已通过 onError、状态回写和内部日志记录错误，这里只负责避免未处理 Promise。
-      });
+      void connection.connect()
+        .finally(() => {
+          if (connectionRef.current === connection) {
+            connectionRef.current = null;
+          }
+          // 流结束后兜底 flush 残留事件，避免最后若干 delta 不落盘 / 状态不更新
+          flushRef.current();
+        })
+        .catch(() => {
+          // SSEConnection 已通过 onError、状态回写和内部日志记录错误，这里只负责避免未处理 Promise。
+        });
     },
-    [appendEvent, setConnectionState, setStreamingTurn, updateTask, updateTurn],
+    [appendEvents, setConnectionState, setStreamingTurn, updateTask, updateTurn],
   );
 
   /**
@@ -133,6 +189,8 @@ export function useSSE(): UseSSEReturn {
       connectionRef.current.disconnect();
       connectionRef.current = null;
     }
+    // 主动断开时兜底 flush，保证 UI 与最终状态一致
+    flushRef.current();
   }, []);
 
   return { connect, disconnect, connectionState };

@@ -22,6 +22,7 @@ DEFAULT_DEVELOPER_TOOLS = (
     "write_file",
     "patch",
     "delete",
+    "execute_terminal",
 )
 
 
@@ -104,8 +105,6 @@ class AgentProfile:
         """
 
         return [tool for tool in tools if tool.name in self.allowed_tools]
-
-
 
     def to_dict(self) -> dict:
         """将 Agent profile 转换为可 JSON 序列化的字典。

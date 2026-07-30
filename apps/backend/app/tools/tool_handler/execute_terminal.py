@@ -84,11 +84,11 @@ class ExecuteTerminalTool(HandlerBase):
         """
 
     def execute(
-            self,
-            command: str,
-            timeout: float | None = None,
-            workdir: str | None = None,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        command: str,
+        timeout: float | None = None,
+        workdir: str | None = None,
+        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """在本机 shell 同步执行一条命令并返回归一化观测。
 
@@ -206,14 +206,38 @@ class ExecuteTerminalTool(HandlerBase):
         )
 
     def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """返回 execute_terminal 折叠态摘要（即待执行命令）。
+
+        参数:
+            arguments: 已通过 pydantic 校验的工具参数字典。
+
+        返回:
+            待执行命令文本；命令缺失或空白时返回占位文案，避免折叠行空摘要。
+
+        副作用:
+            无。
         """
-        返回 execute_terminal 请求摘要。TODO: 待实现
-        """
+        command = arguments.get("command")
+        if isinstance(command, str) and command.strip():
+            return command
+        return "（空命令）"
 
     def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        """返回 execute_terminal 折叠态结果摘要。
+
+        终端命令的完整输出在展开态独立输出块中展示，折叠态不需要单行结果摘要；
+        返回 ``None`` 使前端折叠行复用命令摘要（request summary），保持信息一致。
+
+        参数:
+            display_data: ``ToolObservation.display_data`` 结构化载荷。
+
+        返回:
+            始终返回 ``None``，折叠态降级为命令摘要。
+
+        副作用:
+            无。
         """
-        返回 execute_terminal 展开态摘要。TODO: 待实现
-        """
+        return None
 
     def _resolve_workdir(self, workdir: str | None, execution_root: str | Path) -> tuple[Path, str]:
         """解析工作目录并限制在执行根内。

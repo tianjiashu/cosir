@@ -458,3 +458,80 @@ describe("timeline projector", () => {
     }
   });
 });
+
+describe("projectTurnTimeline — final_response 投影为 assistant 条目", () => {
+  it("final_response 事件投影为 kind=assistant 的文本条目", () => {
+    const turn = makeTurn("t1", "你好");
+    const events: RuntimeEvent[] = [
+      {
+        event_id: "fr-1",
+        event_type: "final_response",
+        task_id: "task-1",
+        turn_id: "t1",
+        sequence: 100,
+        created_at: new Date().toISOString(),
+        payload: { text: "这是 Agent 的最终回复。", step_id: "step-final", status: "completed" },
+      },
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0].entries).toHaveLength(1);
+    const entry = timeline[0].entries[0];
+    expect(entry.kind).toBe("assistant");
+    if (entry.kind === "assistant") {
+      expect(entry.eventId).toBe("fr-1");
+      expect(entry.content).toBe("这是 Agent 的最终回复。");
+    }
+  });
+
+  it("final_response 空文本不产生条目（与 assistant delta 空内容行为一致）", () => {
+    const turn = makeTurn("t1", "你好");
+    const events: RuntimeEvent[] = [
+      {
+        event_id: "fr-empty",
+        event_type: "final_response",
+        task_id: "task-1",
+        turn_id: "t1",
+        sequence: 100,
+        created_at: new Date().toISOString(),
+        payload: { text: "", step_id: "step-final", status: "completed" },
+      },
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+    expect(timeline[0].entries).toHaveLength(0);
+  });
+
+  it("final_response 在流式 delta 之后被跳过（避免与 delta 聚合内容重复）", () => {
+    const turn = makeTurn("t1", "分析代码");
+    // delta 的 turn_id 必须与 turn.turn_id 一致（"t1"），否则被 filter 排除。
+    const events: RuntimeEvent[] = [
+      {
+        event_id: "d1",
+        event_type: "model_output_delta",
+        task_id: "task-1",
+        turn_id: "t1",
+        sequence: 1,
+        created_at: new Date().toISOString(),
+        payload: { step_id: "s1", text: "流式增量部分" },
+      },
+      {
+        event_id: "fr-2",
+        event_type: "final_response",
+        task_id: "task-1",
+        turn_id: "t1",
+        sequence: 200,
+        created_at: new Date().toISOString(),
+        payload: { text: "完整最终回复。", step_id: "step-final", status: "completed" },
+      },
+    ];
+    const timeline = projectTurnTimeline([turn], events);
+    // flushPending 先把 pendingDelta (d1) 推入 entries；final_response 因已有 pendingDelta 被跳过，仅 1 条。
+    expect(timeline[0].entries).toHaveLength(1);
+    const entry = timeline[0].entries[0];
+    expect(entry.kind).toBe("assistant");
+    if (entry.kind === "assistant") {
+      expect(entry.eventId).toBe("d1");
+      expect(entry.content).toBe("流式增量部分");
+    }
+  });
+});

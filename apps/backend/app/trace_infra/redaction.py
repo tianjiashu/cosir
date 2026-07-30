@@ -92,3 +92,34 @@ _TOKEN_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bya29\.[A-Za-z0-9_-]{30,}\b"),
 )
+
+
+def redact_terminal_output(text: str) -> str:
+    """对自由文本（命令输出、命令 preview）做凭据脱敏。
+
+    与 :func:`redact_value` 按 dict 的 key 名脱敏结构化字段不同，本函数处理任意
+    自由文本：先用赋值正则 ``_ASSIGN_RE`` 抹掉 ``key=value`` / ``key: value`` 形式的
+    明文凭据，再用 token 正则 ``_TOKEN_RES`` 抹掉独立出现的 JWT / GitHub token /
+    AWS key / OpenAI key 等模式。
+
+    参数:
+        text: 待脱敏的自由文本。
+
+    返回:
+        已脱敏的纯文本，敏感片段替换为 ``[REDACTED]``；入参为空时原样返回。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if not text:
+        return text
+    # 先处理 key=value / key: value 赋值形式，仅替换值部分保留字段名
+    redacted = _ASSIGN_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)
+    # 再处理独立 token 形式（JWT / ghp_ / sk- / AKIA 等）
+    for token_re in _TOKEN_RES:
+        redacted = token_re.sub("[REDACTED]", redacted)
+    return redacted

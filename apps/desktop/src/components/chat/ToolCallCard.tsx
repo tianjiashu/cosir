@@ -12,11 +12,13 @@
  * @module components/chat/ToolCallCard
  */
 
-import type { ComponentType } from "react";
-import { useState } from "react";
+import type { ComponentType, SyntheticEvent } from "react";
+import { useMemo, useState } from "react";
 import {
+  AlertCircle,
   ChevronRight,
   Code2,
+  Columns2,
   Copy,
   ExternalLink,
   Eye,
@@ -24,12 +26,19 @@ import {
   FilePlus,
   Folder,
   GitCompare,
+  Rows3,
   Search,
   Terminal,
   icons,
 } from "lucide-react";
+import { Diff, parseDiff } from "react-diff-view";
+import type { FileData } from "react-diff-view";
+import "react-diff-view/style/index.css";
 import { cn } from "@/lib/utils";
 import type { ToolDisplayInfo } from "@/services/timeline/projector";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** 工具调用状态枚举。 */
 type ToolCallStatus = "running" | "completed" | "error";
@@ -125,7 +134,11 @@ export function ToolCallCard({
   resultData,
 }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // diff/write 两态共享的视图模式；提升到这里避免两个分支重复声明 hook。
+  const [diffViewType, setDiffViewType] = useState<"unified" | "split">("unified");
   const IconComponent = resolveIcon(display?.icon);
+  // 错误态使用圆圈内叹号图标，与成功/运行态的工具图标做视觉区分。
+  const StatusIcon = status === "error" ? AlertCircle : IconComponent;
   // 展开态声明式信号：前端仅按布局字符串分发布局，不按工具名写特化分支。
   const expandable = display?.expandable ?? true;
   const expandLayout = display?.expandLayout ?? "details";
@@ -164,57 +177,88 @@ export function ToolCallCard({
   const isChangeLayout = expandLayout === "diff" || expandLayout === "write";
 
   if (isChangeLayout) {
+    // diff/write 布局共享的视图模式与解析结果；折叠态文件头需要和展开态一致。
+    const diffFiles = useMemo<FileData[]>(() => {
+      if (!result) return [];
+      try {
+        return parseDiff(result);
+      } catch {
+        return [];
+      }
+    }, [result]);
+    const firstFile = diffFiles[0];
+
     return (
-      <div className="w-full">
-        <button
-          type="button"
-          onClick={() => expandable && setIsOpen((prev) => !prev)}
-          className="flex w-full items-center gap-2 rounded border border-border bg-background px-3 py-1.5 text-left text-sm shadow-sm hover:bg-accent/30 transition-colors"
-        >
-          <IconComponent className="h-4 w-4 shrink-0 text-sky-600" />
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate font-mono text-xs",
-              status === "error" ? "text-destructive" : "text-foreground",
-            )}
+      <TooltipProvider>
+        <div className="w-full">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => expandable && setIsOpen((prev) => !prev)}
+            onKeyDown={(event) => {
+              if ((event.key === "Enter" || event.key === " ") && expandable) {
+                event.preventDefault();
+                setIsOpen((prev) => !prev);
+              }
+            }}
+            className="flex w-full cursor-pointer items-center gap-1.5 rounded px-1 py-1 text-left text-sm hover:bg-accent/30 focus-visible:bg-accent/30 hover:text-foreground transition-colors"
           >
-            {summaryText}
-          </span>
-          {clickAction?.action === "open_file" && (
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpenFile?.(clickAction.target);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpenFile?.(clickAction.target);
-                }
-              }}
-              className="shrink-0 text-xs text-sky-600 hover:underline"
-            >
-              查看文件
-            </span>
-          )}
-          {expandable && (
-            <ChevronRight
-              className={cn(
-                "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                isOpen && "rotate-90",
-              )}
-            />
-          )}
-        </button>
-        {isOpen && status === "completed" && hasResult && (
-          <div className="rounded-b border-x border-b border-border bg-background px-2 py-2">
-            <UnifiedDiffView content={result ?? ""} allAdded={expandLayout === "write"} />
+            {status === "completed" && firstFile ? (
+              <>
+                <DiffFileHeaderContent
+                  file={firstFile}
+                  content={result ?? ""}
+                  openPath={clickAction?.target}
+                  viewType={diffViewType}
+                  setViewType={setDiffViewType}
+                  onOpenFile={onOpenFile}
+                  stopPropagation
+                />
+                {expandable && (
+                  <ChevronRight
+                    className={cn(
+                      "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                      isOpen && "rotate-90",
+                    )}
+                  />
+                )}
+              </>
+            ) : (
+              <>
+                <StatusIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate font-mono text-xs",
+                        status === "error" ? "text-muted-foreground" : "text-foreground",
+                      )}
+                    >
+                      {shortenChangeSummary(summaryText)}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs break-all font-mono text-[11px]">
+                    {summaryText}
+                  </TooltipContent>
+                </Tooltip>
+                {expandable && status !== "error" && (
+                  <ChevronRight
+                    className={cn(
+                      "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                      isOpen && "rotate-90",
+                    )}
+                  />
+                )}
+              </>
+            )}
           </div>
-        )}
-      </div>
+          {isOpen && status === "completed" && hasResult && (
+            <div className="px-2 pb-2">
+              <FileDiffView content={result ?? ""} viewType={diffViewType} />
+            </div>
+          )}
+        </div>
+      </TooltipProvider>
     );
   }
 
@@ -224,9 +268,9 @@ export function ToolCallCard({
       <button
         type="button"
         onClick={() => expandable && setIsOpen((prev) => !prev)}
-        className="flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-sm hover:text-foreground transition-colors"
+        className="flex w-full cursor-pointer items-center gap-1.5 rounded px-1 py-1 text-left text-sm hover:bg-accent/30 focus-visible:bg-accent/30 hover:text-foreground transition-colors"
       >
-        {expandable && (
+        {expandable && status !== "error" && (
           <ChevronRight
             className={cn(
               "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
@@ -234,11 +278,11 @@ export function ToolCallCard({
             )}
           />
         )}
-        <IconComponent className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <StatusIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span
           className={cn(
             "truncate font-mono text-xs",
-            status === "error" ? "text-destructive" : "text-muted-foreground",
+            status === "error" ? "text-muted-foreground" : "text-muted-foreground",
           )}
         >
           {summaryText}
@@ -248,12 +292,6 @@ export function ToolCallCard({
       {/* 展开详情 */}
       {isOpen ? (
         <div className="ml-6 mt-1 space-y-1.5 border-l border-border pl-3 py-1 text-xs">
-          {/* 工具名 */}
-          <div className="flex gap-2">
-            <span className="text-muted-foreground shrink-0">工具:</span>
-            <code className="font-mono">{toolName}</code>
-          </div>
-
           {/* 参数（按 detailKeys 排序优先展示） */}
           {orderedEntries.length > 0 && (
             <div className="flex gap-2">
@@ -294,13 +332,10 @@ export function ToolCallCard({
             />
           )}
           {status === "completed" && hasResult && expandLayout === "diff" && (
-            <UnifiedDiffView content={result ?? ""} allAdded={false} />
+            <FileDiffView content={result ?? ""} viewType={diffViewType} />
           )}
           {status === "completed" && hasResult && expandLayout === "write" && (
-            <UnifiedDiffView content={result ?? ""} allAdded />
-          )}
-          {status === "completed" && hasResult && expandLayout === "terminal" && (
-            <TerminalBlock content={result ?? ""} />
+            <FileDiffView content={result ?? ""} viewType={diffViewType} />
           )}
           {status === "completed" && hasResult && expandLayout === "details" && (
             <div className="space-y-1">
@@ -424,18 +459,261 @@ function ListView({ entries, emptyLabel }: { entries: ListEntry[]; emptyLabel?: 
 }
 
 /**
- * diff / write 布局：按行前缀上色（+ 绿 / - 红 / @@ 蓝 / diff --git 加粗）。
- * allAdded=true（write 模式）时每行按新增绿色渲染文件全文。
+ * 基于 react-diff-view 的 GitHub 风格 diff 渲染。
+ *
+ * 直接消费后端生成的 unified diff 文本（parseDiff），无需反向解析为旧/新版；
+ * 每个文件独立渲染文件头（basename + 完整路径 tooltip + 变更统计 + 复制/打开/分栏切换），
+ * 主体由 react-diff-view 的 `Diff` 组件按行号列 + 红绿底色渲染。
+ * 解析失败（非标准 diff 文本）时回退到 `UnifiedDiffView` 纯文本渲染，避免空白块。
+ *
+ * 参数:
+ *   content - 后端生成的 unified diff 文本（diff --git a/... b/... 开头）。
+ *   onOpenFile - 点击「在编辑器打开」回调，传入归一化后的文件路径。
+ *   openPath - 优先使用的打开路径（通常来自 display.clickAction.target）。
+ *
+ * 返回:
+ *   React 渲染节点。
+ *
+ * @throws 不抛出异常；parseDiff 异常被捕获并降级为纯文本渲染。
+ *
+ * @sideeffect 无。
  */
-function UnifiedDiffView({ content, allAdded }: { content: string; allAdded?: boolean }) {
+function FileDiffView({
+  content,
+  viewType,
+}: {
+  content: string;
+  viewType: "unified" | "split";
+}) {
+  const files = useMemo<FileData[]>(() => {
+    try {
+      return parseDiff(content);
+    } catch {
+      return [];
+    }
+  }, [content]);
+
+  // 解析失败（纯文本 / 非标准 diff）回退到行染色的纯文本渲染，避免空白块。
+  if (files.length === 0) {
+    return <UnifiedDiffView content={content} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {files.map((file, fileIdx) => (
+        <div
+          key={`${file.newPath}-${fileIdx}`}
+          className="overflow-hidden rounded border border-border bg-background"
+        >
+          {/* diff 主体：react-diff-view 渲染，自带行号列与红绿底色；字体与折叠态对齐为 11px */}
+          <div className="max-h-[480px] overflow-auto text-[11px]">
+            <Diff diffType={file.type} hunks={file.hunks} viewType={viewType} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * diff 文件头：图标 + basename + 完整路径 tooltip + 变更统计 + 复制/打开/视图切换。
+ * 供折叠态与展开态共享，保证两态视觉一致。
+ *
+ * 参数:
+ *   file        - react-diff-view 解析出的文件数据。
+ *   content     - 原始 diff 文本，用于复制与路径兜底提取。
+ *   openPath    - 优先使用的打开路径（通常来自 display.clickAction.target）。
+ *   viewType    - 当前 diff 视图模式。
+ *   setViewType - 切换视图模式回调。
+ *   onOpenFile  - 点击「在编辑器打开」回调。
+ *   stopPropagation - 操作按钮是否阻止事件冒泡（折叠态使用，避免触发展开/折叠）。
+ *
+ * 返回:
+ *   React 渲染节点。
+ *
+ * @sideeffect 操作按钮可能写入剪贴板或调用 onOpenFile。
+ */
+function DiffFileHeaderContent({
+  file,
+  content,
+  openPath,
+  viewType,
+  setViewType,
+  onOpenFile,
+  stopPropagation = false,
+}: {
+  file: FileData;
+  content: string;
+  openPath?: string;
+  viewType: "unified" | "split";
+  setViewType: (value: "unified" | "split") => void;
+  onOpenFile?: (path: string) => void;
+  stopPropagation?: boolean;
+}) {
+  const rawPath =
+    file.newPath || file.oldPath || openPath || extractFallbackPath(content) || "未知文件";
+  const normalized = normalizeDiffPath(rawPath);
+  const isRename = file.type === "rename" && file.oldPath !== file.newPath;
+  const fullPath = isRename
+    ? `${normalizeDiffPath(file.oldPath)} → ${normalized}`
+    : normalized;
+  const { added, removed } = countDiffChanges(file);
+  const openTarget = openPath && openPath.length > 0 ? openPath : normalized;
+  const isNewFile = file.type === "add";
+
+  const wrapHandler =
+    <E extends SyntheticEvent>(handler?: (event: E) => void) =>
+    (event: E) => {
+      if (stopPropagation) {
+        event.stopPropagation();
+      }
+      handler?.(event);
+    };
+
+  return (
+    <div className="flex w-full flex-1 items-center gap-1.5">
+      <GitCompare className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+            {isNewFile ? "新建 " : ""}
+            {basenameOf(rawPath)}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs break-all font-mono text-[11px]">
+          {fullPath}
+        </TooltipContent>
+      </Tooltip>
+      {added > 0 && (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-green-200 px-1.5 py-0 text-[11px] font-medium tabular-nums text-green-700"
+        >
+          +{added}
+        </Badge>
+      )}
+      {removed > 0 && (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-red-200 px-1.5 py-0 text-[11px] font-medium tabular-nums text-red-700"
+        >
+          -{removed}
+        </Badge>
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          title="复制 diff"
+          onClick={wrapHandler(() => {
+            void navigator.clipboard.writeText(content);
+          })}
+        >
+          <Copy className="h-3.5 w-3.5" />
+        </Button>
+        {onOpenFile && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title="在编辑器打开"
+            onClick={wrapHandler(() => onOpenFile(openTarget))}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          title={viewType === "unified" ? "切换为分栏视图" : "切换为单栏视图"}
+          onClick={wrapHandler(() => setViewType(viewType === "unified" ? "split" : "unified"))}
+        >
+          {viewType === "unified" ? (
+            <Columns2 className="h-3.5 w-3.5" />
+          ) : (
+            <Rows3 className="h-3.5 w-3.5" />
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** 去掉 unified diff 路径前缀 a/ b/。 */
+function normalizeDiffPath(raw: string): string {
+  return raw.replace(/^[ab]\//, "");
+}
+
+/** 取路径最后一段作为文件名展示。 */
+function basenameOf(raw: string): string {
+  const normalized = normalizeDiffPath(raw);
+  const segments = normalized.split("/");
+  return segments[segments.length - 1] || normalized;
+}
+
+/** 把 diff/write 折叠态的长路径摘要截断为 basename；非路径文本原样保留。 */
+function shortenChangeSummary(text: string): string {
+  if (text.includes("/")) {
+    return basenameOf(text);
+  }
+  return text;
+}
+
+/**
+ * 从原始 diff 文本里兜底提取文件路径（parseDiff 未解析出路径时使用）。
+ * 依次尝试 `diff --git a/x b/y`、`+++ path`、`--- path` 三种行格式。
+ *
+ * 参数:
+ *   content - 原始 unified diff 文本。
+ *
+ * 返回:
+ *   提取到的路径字符串；未找到时返回 null。
+ */
+function extractFallbackPath(content: string): string | null {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const gitMatch = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (gitMatch) return gitMatch[2];
+    const plusMatch = line.match(/^\+\+\+ (.+)$/);
+    if (plusMatch) return plusMatch[1];
+    const minusMatch = line.match(/^--- (.+)$/);
+    if (minusMatch) return minusMatch[1];
+  }
+  return null;
+}
+
+/** 统计单文件新增 / 删除行数。 */
+function countDiffChanges(file: FileData): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const hunk of file.hunks) {
+    for (const change of hunk.changes) {
+      if (change.type === "insert") {
+        added += 1;
+      } else if (change.type === "delete") {
+        removed += 1;
+      }
+    }
+  }
+  return { added, removed };
+}
+
+/**
+ * diff / write 布局：按行前缀上色（+ 绿 / - 红 / @@ 蓝 / diff --git 加粗）。
+ * 作为 `FileDiffView` 解析失败时的纯文本回退渲染使用。
+ */
+function UnifiedDiffView({ content }: { content: string }) {
   const lines = content.split("\n");
   return (
-    <pre className="max-h-64 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+    <pre className="max-h-[480px] overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
       {lines.map((line, idx) => {
         let cls = "";
-        if (allAdded) {
-          cls = "text-green-600";
-        } else if (line.startsWith("+")) {
+        if (line.startsWith("+")) {
           cls = "text-green-600";
         } else if (line.startsWith("-")) {
           cls = "text-red-600";
@@ -451,29 +729,5 @@ function UnifiedDiffView({ content, allAdded }: { content: string; allAdded?: bo
         );
       })}
     </pre>
-  );
-}
-
-/** terminal 布局：深色等宽 pre，可滚动 + 复制。 */
-function TerminalBlock({ content }: { content: string }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-2">
-        <span className="text-muted-foreground shrink-0">输出:</span>
-        <button
-          type="button"
-          onClick={() => {
-            void navigator.clipboard.writeText(content);
-          }}
-          className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent/40 transition-colors"
-        >
-          <Copy className="h-3 w-3" />
-          复制
-        </button>
-      </div>
-      <pre className="max-h-64 overflow-auto rounded bg-zinc-900 p-2 font-mono text-[11px] text-zinc-100 whitespace-pre-wrap break-all">
-        {content}
-      </pre>
-    </div>
   );
 }

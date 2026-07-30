@@ -205,3 +205,114 @@ describe("sse.ts — SSEConnectionState 枚举", () => {
     expect(conn.state).toBe(SSEConnectionState.CLOSED);
   });
 });
+
+describe("sse.ts — 异常 EOF 与终态判定（#2 修复回归）", () => {
+  it("流以 done 结束但未收到终态且非主动取消 → 触发 onError（后端崩溃）", async () => {
+    const event: RuntimeEvent = {
+      event_id: "e1",
+      event_type: "step_started",
+      task_id: "t1",
+      turn_id: "turn-1",
+      sequence: 1,
+      message_id: null,
+      tool_call_id: null,
+      created_at: new Date().toISOString(),
+      payload: { step_id: "step-1", kind: "model", index: 0 },
+    };
+    const body = `event: step_started\ndata: ${JSON.stringify(event)}\n\n`;
+    vi.stubGlobal("fetch", vi.fn(async () => makeStreamResponse(body)));
+    const onError = vi.fn();
+    const conn = new SSEConnection({ taskId: "t1", turnId: "turn-1", onEvent: () => {}, onError });
+    await conn.connect();
+    expect(conn.state).toBe(SSEConnectionState.CLOSED);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0].message).toContain("without terminal event");
+  });
+
+  it("收到终态事件（run_finished）后 done 结束 → 不误报 onError", async () => {
+    const terminal: RuntimeEvent = {
+      event_id: "e2",
+      event_type: "run_finished",
+      task_id: "t1",
+      turn_id: "turn-1",
+      sequence: 2,
+      message_id: null,
+      tool_call_id: null,
+      created_at: new Date().toISOString(),
+      payload: { status: "completed" },
+    };
+    const body = `event: run_finished\ndata: ${JSON.stringify(terminal)}\n\n`;
+    vi.stubGlobal("fetch", vi.fn(async () => makeStreamResponse(body)));
+    const onError = vi.fn();
+    const conn = new SSEConnection({ taskId: "t1", turnId: "turn-1", onEvent: () => {}, onError });
+    await conn.connect();
+    expect(conn.state).toBe(SSEConnectionState.CLOSED);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("disconnect 主动取消后流结束 → 不误报 onError（避免误判失败）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_, init) => {
+        return new Promise<Response>((_, reject) => {
+          const timer = setTimeout(() => {}, 100000);
+          (init?.signal as AbortSignal)?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      }),
+    );
+    const onError = vi.fn();
+    const conn = new SSEConnection({ taskId: "t1", turnId: "turn-1", onEvent: () => {}, onError });
+    const p = conn.connect();
+    await new Promise((r) => setTimeout(r, 50));
+    conn.disconnect();
+    await p.catch(() => {});
+    expect(conn.state).toBe(SSEConnectionState.CLOSED);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("connect 重置实例级终态/取消标记，复用实例不会吞掉异常 EOF", async () => {
+    const nonTerminal: RuntimeEvent = {
+      event_id: "e1",
+      event_type: "step_started",
+      task_id: "t1",
+      turn_id: "turn-1",
+      sequence: 1,
+      message_id: null,
+      tool_call_id: null,
+      created_at: new Date().toISOString(),
+      payload: { step_id: "step-1", kind: "model", index: 0 },
+    };
+    const body = `event: step_started\ndata: ${JSON.stringify(nonTerminal)}\n\n`;
+    // 第一轮：使用可取消（永不主动关闭）的流，验证 disconnect 不误报
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_, init) => {
+        return new Promise<Response>((_, reject) => {
+          const timer = setTimeout(() => {}, 100000);
+          (init?.signal as AbortSignal)?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      }),
+    );
+    const onError = vi.fn();
+    const conn = new SSEConnection({ taskId: "t1", turnId: "turn-1", onEvent: () => {}, onError });
+    const p = conn.connect();
+    await new Promise((r) => setTimeout(r, 50));
+    conn.disconnect();
+    await p.catch(() => {});
+    expect(onError).not.toHaveBeenCalled();
+    // 第二轮：复用同一实例，流异常结束（非终态 + 非取消）应重新触发 onError（验证状态已重置）
+    vi.stubGlobal("fetch", vi.fn(async () => makeStreamResponse(body)));
+    await conn.connect();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+});

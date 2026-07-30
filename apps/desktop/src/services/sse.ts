@@ -95,6 +95,12 @@ export interface SSEConnectionOptions {
 export class SSEConnection {
   private _state: SSEConnectionState = SSEConnectionState.IDLE;
   private _abortController: AbortController | null = null;
+  /** 是否已收到终态运行事件（run_finished / final_response / run_failed / run_cancelled）。 */
+  private _terminalReceived = false;
+  /** 是否已通过 disconnect() 主动终止，用于区分"主动取消"与"后端崩溃"。 */
+  private _aborted = false;
+  /** 本连接生命周期内已见过的 event_id，用于检测单条 SSE 流内后端重复推送同一事件。 */
+  private _seenEventIds = new Set<string>();
   private readonly options: SSEConnectionOptions;
 
   constructor(options: SSEConnectionOptions) {
@@ -124,6 +130,12 @@ export class SSEConnection {
     if (this._state === SSEConnectionState.CONNECTING || this._state === SSEConnectionState.STREAMING) {
       throw new Error("SSE 连接已在进行中");
     }
+
+    // 重置单次连接生命周期内的判定状态，避免实例复用（或异常路径）残留上一轮的
+    // 终态/取消标记，导致真实异常 EOF 被误判为正常结束而吞掉报错。
+    this._terminalReceived = false;
+    this._aborted = false;
+    this._seenEventIds.clear();
 
     this._abortController = new AbortController();
     this._setState(SSEConnectionState.CONNECTING);
@@ -186,6 +198,21 @@ export class SSEConnection {
         for (const eventText of events) {
           const parsed = this.parseSSEEvent(eventText.trim());
           if (parsed) {
+            this._markTerminalIfNeeded(parsed);
+            // 调试：单条 SSE 流内若同一 event_id 重复出现，说明后端把同一事件推了两遍。
+            if (parsed.event_id) {
+              if (this._seenEventIds.has(parsed.event_id)) {
+                logWarn("sse_stream_dup_event", {
+                  module: "sse",
+                  event_id: parsed.event_id,
+                  event_type: parsed.event_type,
+                  task_id: this.options.taskId,
+                  turn_id: this.options.turnId,
+                });
+              } else {
+                this._seenEventIds.add(parsed.event_id);
+              }
+            }
             this.options.onEvent(parsed);
           }
         }
@@ -195,10 +222,12 @@ export class SSEConnection {
       if (buffer.trim()) {
         const parsed = this.parseSSEEvent(buffer.trim());
         if (parsed) {
+          this._markTerminalIfNeeded(parsed);
           this.options.onEvent(parsed);
         }
       }
 
+      this._reportStreamEndIfAbnormal(requestContext);
       this._setState(SSEConnectionState.CLOSED);
       logInfo("SSE stream closed", requestContext);
     } catch (err) {
@@ -225,6 +254,7 @@ export class SSEConnection {
    * @sideeffect 閫氳繃 AbortController 涓姝ｅ湪杩涜鐨?fetch 璇锋眰銆?
    */
   disconnect(): void {
+    this._aborted = true;
     if (this._abortController) {
       this._abortController.abort();
       this._abortController = null;
@@ -282,6 +312,22 @@ export class SSEConnection {
    *
    * @private
    */
+  private _markTerminalIfNeeded(event: RuntimeEvent): void {
+    const terminalTypes = ["run_finished", "final_response", "run_failed", "run_cancelled"];
+    if (terminalTypes.includes(event.event_type)) {
+      this._terminalReceived = true;
+    }
+  }
+
+  private _reportStreamEndIfAbnormal(context: Record<string, unknown>): void {
+    if (this._terminalReceived || this._aborted) {
+      return;
+    }
+    const err = new Error("SSE stream ended without terminal event");
+    logError("SSE 流异常结束：未收到终态事件，后端可能已崩溃", err, context);
+    this.options.onError?.(err);
+  }
+
   private _setState(newState: SSEConnectionState): void {
     if (this._state !== newState) {
       this._state = newState;

@@ -209,7 +209,11 @@ async def _model_node(state: ReactGraphState) -> dict:
             )
         chunks.append(chunk)  # 所有 chunk 都留着，后面合并成完整消息
         reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
-        if reasoning:
+        # 过滤纯空白分片：DeepSeek 推理流会在词间/段间推送单独的空格或换行 token
+        # （如 " "、"\n"、".\n\n"），Python 中非空即 truthy，若仅用 `if reasoning` 判断
+        # 会把纯空白分片当作有效思考发射，前端累积后产出空壳"深度思考"块。
+        # 仅当去空白后仍有内容才发射，避免无效增量与空壳渲染。
+        if reasoning and reasoning.strip():
             write_event(
                 # 有思考内容就发思考增量事件，前端可实时渲染“思考中”
                 EventType.MODEL_THINKING_DELTA,

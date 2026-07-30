@@ -8,6 +8,7 @@
 
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
+import { logInfo, logWarn } from "../../lib/logger";
 
 /** 工具点击动作（来自后端 `ToolDefinition.display`，已投影）。 */
 export interface ToolDisplayClickAction {
@@ -131,13 +132,36 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
   const entries: TurnTimelineEntry[] = [];
   let pendingDelta: { eventId: string; content: string } | null = null;
   let pendingThinking: { eventId: string; content: string } | null = null;
+  // 本 turn 是否出现过 model_output_delta。它不随 flushPending 重置，
+  // 用于判断 final_response 是否为冗余（delta 已聚合过同文本）从而跳过，避免重复渲染。
+  let hasDeltaStreamed = false;
   // 工具条目按 callId 合并：requested 携参数创建条目，finished 更新其状态，
   // 避免同一工具调用产生「运行中 + 完成」两条碎片条目。
   const toolByCallId = new Map<string, number>();
 
   const flushPending = () => {
     if (pendingThinking) {
-      entries.push({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
+      // 调试：思考块产出时记录内容长度，空白块（len=0）是"深度思考空白"的直接嫌疑点。
+      const thinkingLen = pendingThinking.content.length;
+      logInfo("thinking_block_flushed", {
+        module: "projector",
+        event_id: pendingThinking.eventId,
+        content_len: thinkingLen,
+        empty: thinkingLen === 0,
+      });
+      // 防御：跳过空白或纯空白字符的思考块，避免渲染空的"深度思考"壳。
+      // 上游可能发送仅含换行/空格的 thinking delta（如 DeepSeek reasoning 的分隔符），
+      // 累积后经 flushPending 产出无意义的空白块。
+      if (pendingThinking.content.trim().length > 0) {
+        entries.push({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
+      } else {
+        logWarn("thinking_block_skipped", {
+          module: "projector",
+          event_id: pendingThinking.eventId,
+          content_len: thinkingLen,
+          reason: "思考块内容为纯空白，跳过以避免渲染空壳",
+        });
+      }
       pendingThinking = null;
     }
     if (pendingDelta) {
@@ -174,6 +198,7 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
       } else {
         pendingDelta = { eventId: event.event_id, content: text };
       }
+      hasDeltaStreamed = true;
       continue;
     }
 
@@ -215,6 +240,17 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
       event.event_type === "run_cancelled"
     ) {
       entries.push({ kind: "status", eventId: event.event_id, eventType: event.event_type, payload: event.payload });
+    }
+
+    // final_response 携带 Agent 最终完整文本回复（后端 model 节点在流结束时发出）。
+    // 若本轮已有 delta 流式累积（hasDeltaStreamed），该文本与 delta 聚合内容一致，
+    // 为避免重复渲染，此处跳过；只有「无 delta 流、仅靠 final_response 携带文本」时才投影为 assistant 条目。
+    // 注意：判断依据是 hasDeltaStreamed（不随 flushPending 重置），而非 pendingDelta（flush 后恒为 null）。
+    if (event.event_type === "final_response") {
+      const text = String((event.payload as { text?: unknown }).text ?? "");
+      if (text.length > 0 && !hasDeltaStreamed) {
+        entries.push({ kind: "assistant", eventId: event.event_id, content: text });
+      }
     }
   }
 

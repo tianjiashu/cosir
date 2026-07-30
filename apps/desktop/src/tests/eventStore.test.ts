@@ -51,9 +51,9 @@ describe("eventStore — 回放去重与状态", () => {
     expect(st.connectionState).toBe("idle");
   });
 
-  it("selectLatestEvent 返回最后一条", () => {
+  it("selectLatestEvent 返回指定任务最后一条", () => {
     useEventStore.getState().setEvents([makeEvent("a"), makeEvent("b")]);
-    expect(selectLatestEvent(useEventStore.getState())?.event_id).toBe("b");
+    expect(selectLatestEvent(useEventStore.getState(), "task-1")?.event_id).toBe("b");
   });
 
   it("selectEventCount 返回数量", () => {
@@ -61,8 +61,8 @@ describe("eventStore — 回放去重与状态", () => {
     expect(selectEventCount(useEventStore.getState())).toBe(3);
   });
 
-  it("空集合时 selectLatestEvent 返回 undefined", () => {
-    expect(selectLatestEvent(useEventStore.getState())).toBeUndefined();
+  it("空集合或任务无缓存时 selectLatestEvent 返回 undefined", () => {
+    expect(selectLatestEvent(useEventStore.getState(), "task-1")).toBeUndefined();
   });
 
   it("setEvents 合并保留其他任务缓存（跨任务切换不重复拉取）", () => {
@@ -122,5 +122,38 @@ describe("eventStore — invalidateTask 缓存失效", () => {
   it("invalidateTask 对无缓存的任务为空操作（不报错）", () => {
     expect(() => useEventStore.getState().invalidateTask("ghost")).not.toThrow();
     expect(useEventStore.getState().events).toHaveLength(0);
+  });
+});
+
+describe("eventStore — appendEvents 批量提交", () => {
+  it("批量追加并按 event_id 去重，单次提交不重复", () => {
+    useEventStore.getState().clearEvents();
+    useEventStore.getState().appendEvents([
+      makeEvent("b1", { task_id: "A", turn_id: "t1" }),
+      makeEvent("b2", { task_id: "A", turn_id: "t1" }),
+      makeEvent("b1", { task_id: "A", turn_id: "t1" }), // 攒批内重复
+    ]);
+    const st = useEventStore.getState();
+    expect(st.events).toHaveLength(2);
+    expect(st.eventsByTurnId["t1"]).toHaveLength(2);
+    expect(st.processedEventIds.has("b1")).toBe(true);
+    expect(st.processedEventIds.has("b2")).toBe(true);
+  });
+
+  it("空批次为空操作（不报错、不新增）", () => {
+    useEventStore.getState().clearEvents();
+    useEventStore.getState().appendEvents([]);
+    expect(useEventStore.getState().events).toHaveLength(0);
+  });
+
+  it("appendEvents 保持按 turn 分片的引用隔离（其它 turn 不受影响）", () => {
+    useEventStore.getState().clearEvents();
+    useEventStore.getState().appendEvents([makeEvent("p1", { task_id: "A", turn_id: "t1" })]);
+    const before = useEventStore.getState().eventsByTurnId;
+    // 新批次只动 t2，t1 的数组引用应保持不变（支撑 TurnTimeline 的 memo 跳过）
+    useEventStore.getState().appendEvents([makeEvent("p2", { task_id: "A", turn_id: "t2" })]);
+    const after = useEventStore.getState().eventsByTurnId;
+    expect(after["t1"]).toBe(before["t1"]);
+    expect(after["t2"]).toHaveLength(1);
   });
 });

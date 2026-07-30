@@ -17,7 +17,14 @@
 
 import { create } from "zustand";
 import type { RuntimeEvent } from "@shared/events";
+
+/**
+ * 模块级空事件常量，复用同一引用，避免每次 `?? []` 产生新数组字面量
+ * 导致 useShallow 在任务无缓存时恒定判定为“变化”而触发多余重渲染。
+ */
+export const EMPTY_EVENTS: RuntimeEvent[] = [];
 import { SSEConnectionState } from "../services/sse";
+import { logWarn } from "../lib/logger";
 
 /** 事件 Store 的状态接口。 */
 interface EventState {
@@ -41,9 +48,24 @@ interface EventActions {
    * 通过 event_id 去重：如果 event_id 已存在于 processedEventIds 中，
    * 则跳过该事件。否则追加到数组末尾并记录 ID。
    *
+   * 性能约定：后端 sequence 全局单调，实时事件天然落在各分片数组末尾，
+   * 故直接 push（O(1) 摊还），不再对每个事件做三次全量 O(n log n) 排序，
+   * 避免高频 delta 下大量比较拖慢主线程。
+   *
    * @param event - 待追加的运行时事件。
    */
   appendEvent: (event: RuntimeEvent) => void;
+
+  /**
+   * 批量追加事件（单次 set，单次渲染）。
+   *
+   * 用于 SSE 消费层把同一动画帧内的多个 delta 攒批后一次性提交，
+   * 将「每 delta 一次 set + 投影 + 重渲染」降为「每帧一次」，
+   * 在不丢失实时性的前提下显著削减高频流式下的渲染压力。
+   *
+   * @param incoming - 待追加的事件列表（内部仍按 event_id 去重）。
+   */
+  appendEvents: (incoming: RuntimeEvent[]) => void;
 
   /** 批量设置事件列表（用于切换任务或重置当前客户端事件缓存）。 */
   setEvents: (events: RuntimeEvent[], taskId?: string) => void;
@@ -80,22 +102,76 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
     set((state) => {
       // 重复事件去重：已处理过的事件直接跳过
       if (state.processedEventIds.has(event.event_id)) {
+        // 调试：命中去重说明同一 event_id 被重复投递（实时流 + 历史回放等跨通道），
+        // 用于排查"事件被重复处理"导致思考块内容翻倍/异常。
+        logWarn("event_dup_skipped", {
+          module: "eventStore",
+          event_id: event.event_id,
+          event_type: event.event_type,
+          turn_id: event.turn_id,
+          task_id: event.task_id,
+        });
         return state;
       }
 
-      const events = [...state.events, event].sort(compareRuntimeEvents);
-      const taskEvents = [...(state.eventsByTaskId[event.task_id] ?? []), event].sort(compareRuntimeEvents);
-      const turnEvents = event.turn_id
-        ? [...(state.eventsByTurnId[event.turn_id] ?? []), event].sort(compareRuntimeEvents)
-        : [];
-      return {
-        events,
-        eventsByTaskId: { ...state.eventsByTaskId, [event.task_id]: taskEvents },
-        eventsByTurnId: event.turn_id
-          ? { ...state.eventsByTurnId, [event.turn_id]: turnEvents }
-          : state.eventsByTurnId,
-        processedEventIds: new Set([...state.processedEventIds, event.event_id]),
-      };
+      // 后端 sequence 全局单调，实时事件天然落在各分片数组末尾，直接 push（O(1) 摊还），
+      // 不再对每个事件做三次全量 O(n log n) 排序，避免高频 delta 下大量比较拖慢主线程。
+      const events = state.events.concat(event);
+      const taskEvents = state.eventsByTaskId[event.task_id]
+        ? state.eventsByTaskId[event.task_id].concat(event)
+        : [event];
+      const eventsByTaskId = { ...state.eventsByTaskId, [event.task_id]: taskEvents };
+      let eventsByTurnId = state.eventsByTurnId;
+      if (event.turn_id) {
+        const turnEvents = state.eventsByTurnId[event.turn_id]
+          ? state.eventsByTurnId[event.turn_id].concat(event)
+          : [event];
+        eventsByTurnId = { ...state.eventsByTurnId, [event.turn_id]: turnEvents };
+      }
+      const processedEventIds = new Set(state.processedEventIds);
+      processedEventIds.add(event.event_id);
+      return { events, eventsByTaskId, eventsByTurnId, processedEventIds };
+    });
+  },
+
+  appendEvents: (incoming: RuntimeEvent[]) => {
+    if (incoming.length === 0) {
+      return;
+    }
+    set((state) => {
+      const eventsByTaskId = { ...state.eventsByTaskId };
+      const eventsByTurnId = { ...state.eventsByTurnId };
+      const processedEventIds = new Set(state.processedEventIds);
+      // 先按 event_id 去重，避免攒批内重复（如实时流与历史回放叠加）污染扁平数组与分片。
+      const deduped: RuntimeEvent[] = [];
+      for (const event of incoming) {
+        if (processedEventIds.has(event.event_id)) {
+          // 攒批内或跨通道重复，跳过（保持与 appendEvent 一致的去重语义）
+          logWarn("event_dup_skipped", {
+            module: "eventStore",
+            event_id: event.event_id,
+            event_type: event.event_type,
+            turn_id: event.turn_id,
+            task_id: event.task_id,
+          });
+          continue;
+        }
+        processedEventIds.add(event.event_id);
+        deduped.push(event);
+        eventsByTaskId[event.task_id] = eventsByTaskId[event.task_id]
+          ? eventsByTaskId[event.task_id].concat(event)
+          : [event];
+        if (event.turn_id) {
+          eventsByTurnId[event.turn_id] = eventsByTurnId[event.turn_id]
+            ? eventsByTurnId[event.turn_id].concat(event)
+            : [event];
+        }
+      }
+      if (deduped.length === 0) {
+        return state;
+      }
+      const events = state.events.concat(deduped);
+      return { events, eventsByTaskId, eventsByTurnId, processedEventIds };
     });
   },
 
@@ -179,11 +255,19 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
 // ---------- 派生选择器 ----------
 
 /**
- * 获取当前事件流的最新一条事件。
- * @returns 最新事件或 undefined。
+ * 获取指定任务事件流的最新一条事件（按当前客户端缓存顺序）。
+ *
+ * 严格按 taskId 隔离，避免后台其它任务的 SSE 事件污染当前视图的滚动与派生状态。
+ *
+ * @param state - 事件 store 状态。
+ * @param taskId - 任务标识；为空或非字符串时返回 undefined。
+ * @returns 该任务下最新事件，或 undefined。
  */
-export const selectLatestEvent = (state: EventState): RuntimeEvent | undefined => {
-  return state.events[state.events.length - 1];
+export const selectLatestEvent = (state: EventState, taskId: string | null): RuntimeEvent | undefined => {
+  if (!taskId || typeof taskId !== "string") return undefined;
+  const taskEvents = state.eventsByTaskId[taskId];
+  if (!taskEvents || taskEvents.length === 0) return undefined;
+  return taskEvents[taskEvents.length - 1];
 };
 
 /**
@@ -202,8 +286,8 @@ export const selectEventCount = (state: EventState): number => {
  * @returns 指定任务下按客户端缓存顺序排序的事件列表。
  */
 export function selectEventsForTask(state: EventState, taskId: string | null): RuntimeEvent[] {
-  if (!taskId) return [];
-  return state.eventsByTaskId[taskId] ?? [];
+  if (!taskId) return EMPTY_EVENTS;
+  return state.eventsByTaskId[taskId] ?? EMPTY_EVENTS;
 }
 
 /**

@@ -7,10 +7,11 @@
  * @module components/chat/ThinkingBlock
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { logInfo } from "@/lib/logger";
 
 /** ThinkingBlock 组件属性。 */
 interface ThinkingBlockProps {
@@ -28,6 +29,21 @@ interface ThinkingBlockProps {
  */
 export function ThinkingBlock({ content, className }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
+
+  // 防御：纯空白内容不渲染任何元素（包括标题栏），避免出现空壳"深度思考"。
+  // 投影器（projector）应已拦截此类条目，此处为最终防线。
+  if (!content || content.trim().length === 0) {
+    return null;
+  }
+
+  // 调试：思考块挂载时记录内容长度与默认折叠态，用于区分"内容为空"与"有内容但被折叠隐藏"。
+  useEffect(() => {
+    logInfo("thinking_block_mounted", {
+      module: "ThinkingBlock",
+      content_len: content.length,
+      expanded_initial: false,
+    });
+  }, [content]);
 
   return (
     <div className={cn("w-full", className)}>

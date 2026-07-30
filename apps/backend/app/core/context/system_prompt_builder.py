@@ -11,7 +11,6 @@ class SystemPromptBuilder:
     system_prompt_context: SystemPromptContext
     agent_profile: AgentProfile
 
-
     def build(self, agent_profile: AgentProfile, context: SystemPromptContext) -> str:
         """构建完整系统提示词文本。
 
@@ -63,10 +62,17 @@ class SystemPromptBuilder:
                 f"Agent ID: {agent_profile.agent_id}",
                 f"Role: {agent_profile.role}",
                 f"当前所处于的操作系统: {context.os_name}",
-                f"当前工作区根目录: {context.workspace_root},你所有的代码都在这个目录下，且写、编辑、删除操作将被系统限制在这个目录下，超出这个目录范围的操作将被系统拒绝",
+                (
+                    f"当前工作区根目录: {context.workspace_root},你所有的代码都在这个目录下，"
+                    f"且写、编辑、删除操作将被系统限制在这个目录下，"
+                    f"超出这个目录范围的操作将被系统拒绝"
+                ),
                 f"今天日期: {context.today}",
-                f"所拥有的工具集合: {', '.join(agent_profile.allowed_tools) or 'none'}"
-                f"你所面向的用户所使用的语言: {context.language},请使用友好的语言和用户交流"
+                f"所拥有的工具集合: {', '.join(agent_profile.allowed_tools) or 'none'}",
+                (
+                    f"你所面向的用户所使用的语言: {context.language},"
+                    f"请使用友好的语言和用户交流。除非用户要求，不要使用emjio表情回复。"
+                ),
                 "</agent_identity>",
             ]
         )
