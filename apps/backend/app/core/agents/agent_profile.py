@@ -57,7 +57,7 @@ class AgentProfile:
     参数:
         agent_id: 持久化在任务和事件上的稳定 Agent 标识。
         role: 人类可读的 Agent 角色。
-        goal: 注入到模型上下文中的运行目标。
+        goal: 注入到模型上下文中的运行目标，标明Agent职责。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         context_policy: 该 Agent 的上下文处理策略名称。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
@@ -76,7 +76,7 @@ class AgentProfile:
 
     agent_id: str
     role: str
-    system_prompt: str
+    goal: str
     allowed_tools: list[str]
     context_policy: str
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
@@ -126,7 +126,7 @@ class AgentProfile:
         return {
             "agent_id": self.agent_id,
             "role": self.role,
-            "goal": self.system_prompt,
+            "goal": self.goal,
             "allowed_tools": self.allowed_tools,
             "context_policy": self.context_policy,
             "workflow": getattr(self.workflow, "workflow_id", "custom"),
@@ -153,11 +153,8 @@ def default_developer_agent() -> AgentProfile:
 
     return AgentProfile(
         agent_id=DEFAULT_AGENT_ID,
-        role="developer",
-        system_prompt=(
-            "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
-            "第一版只处理纯文本输入。"
-        ),
+        role="coding-agent-flush",
+        goal="协助用户完成软件工程项目开发任务",
         allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
         context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
@@ -186,11 +183,8 @@ def developer_agent_pro() -> AgentProfile:
 
     return AgentProfile(
         agent_id="developer_pro",
-        role="developer_pro",
-        system_prompt=(
-            "完成本地 coding-agent 任务；优先保持代码清晰、可诊断、可扩展，"
-            "第一版只处理纯文本输入。"
-        ),
+        role="coding-agent-pro",
+        goal="协助用户完成软件工程项目开发任务",
         allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
         context_policy="text_only_v1",
         model_name="deepseek-v4-pro",

@@ -488,7 +488,7 @@ async def __call__(self, params: Params) -> ToolReturnValue:
 
     subagent = Agent(
         name=params.name,
-        system_prompt=params.system_prompt,
+        system_prompt=params.goal,
         toolset=self._toolset,  # 共享父代理的工具集
         runtime=self._runtime.copy_for_dynamic_subagent(),
     )

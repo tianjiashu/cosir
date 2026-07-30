@@ -630,7 +630,7 @@ async def _agent_loop(self) -> TurnOutcome:
         wire_send(StepBegin(n=step_no))
 
         try:
-            # compact the context if needed
+            # compact the runtime_context if needed
             reserved = self._loop_control.reserved_context_size
             if self._context.token_count + reserved >= self._runtime.llm.max_context_size:
                 logger.info("Context too long, compacting...")

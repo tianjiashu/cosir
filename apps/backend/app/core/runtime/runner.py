@@ -14,7 +14,7 @@ from app.config.logging import (
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.context import TextContextBuilder
+from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TaskRecord, TurnRecord
@@ -52,7 +52,7 @@ class AgentRuntime:
         self,
         task_service: TaskService,
         turn_service: TurnService,
-        context_builder: TextContextBuilder,
+        context_builder: RuntimeContextBuilder,
         tool_scheduler: ToolScheduler,
         agent_registry: AgentProfileRegistry,
         workspace_service: WorkspaceService | None = None,

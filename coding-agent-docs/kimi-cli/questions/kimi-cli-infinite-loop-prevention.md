@@ -508,7 +508,7 @@ async def _agent_loop(self) -> TurnOutcome:
 async def _kosong_step_with_retry() -> StepResult:
     return await kosong.step(
         chat_provider,
-        self._agent.system_prompt,
+        self._agent.goal,
         self._agent.toolset,
         self._context.history,
         on_message_part=wire_send,

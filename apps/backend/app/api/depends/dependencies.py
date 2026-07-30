@@ -5,7 +5,7 @@ from app.core.agents.agent_profile import (
     developer_agent_pro,
 )
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.context import TextContextBuilder
+from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
@@ -203,7 +203,7 @@ def build_runtime(
     return AgentRuntime(
         task_service=services["task_service"],
         turn_service=services["turn_service"],
-        context_builder=TextContextBuilder(),
+        context_builder=RuntimeContextBuilder(),
         tool_scheduler=tool_system.scheduler,
         agent_registry=agent_registry,
         workspace_service=services["workspace_service"],

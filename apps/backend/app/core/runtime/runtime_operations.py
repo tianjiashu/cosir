@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
-from app.core.context.text_context_builder import TextContextBuilder
+from app.core.context.runtime_context_builder import RuntimeContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
@@ -27,14 +27,14 @@ class RuntimeOperations:
     """
 
     def __init__(
-            self,
-            turn_store,
-            context_builder: TextContextBuilder,
-            tool_scheduler: ToolScheduler,
-            agent_profile: AgentProfile,
-            current_turn_id: str = "",
-            model_tools: list[ToolDefinition] | None = None,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        turn_store,
+        context_builder: RuntimeContextBuilder,
+        tool_scheduler: ToolScheduler,
+        agent_profile: AgentProfile,
+        current_turn_id: str = "",
+        model_tools: list[ToolDefinition] | None = None,
+        execution_context: ToolExecutionContext | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -135,7 +135,11 @@ class RuntimeOperations:
             turn = self.get_current_turn()
             turn_history = self._turn_store.list_turns_for_task(turn.task_id)
             messages = self._context_builder.build_messages(
-                self.agent_profile, turn, turn_history, self._turn_store
+                self.agent_profile,
+                turn,
+                turn_history,
+                self._turn_store,
+                execution_context=self._execution_context,
             )
             log.info(
                 "messages_built",
@@ -177,7 +181,7 @@ class RuntimeOperations:
         return has
 
     def update_turn_status(
-            self, turn_id: str, status: str, end_reason: str | None = None
+        self, turn_id: str, status: str, end_reason: str | None = None
     ) -> TurnRecord:
         """Update turn status (and optional end reason) through the turn store."""
 
@@ -211,11 +215,11 @@ class RuntimeOperations:
         return self._turn_store.update_turn_response(turn_id, response_text)
 
     def run_tool_calls(
-            self,
-            task_id: str,
-            calls: list[ToolCall],
-            step_id: str | None = None,
-            write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
+        self,
+        task_id: str,
+        calls: list[ToolCall],
+        step_id: str | None = None,
+        write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 
@@ -246,10 +250,12 @@ class RuntimeOperations:
 
         return result
 
-    def _pre_process_turn(self,
-                          task_id: str,
-                          calls: list[ToolCall],
-                          step_id: str | None = None, ):
+    def _pre_process_turn(
+        self,
+        task_id: str,
+        calls: list[ToolCall],
+        step_id: str | None = None,
+    ):
         """Pre-process a turn before it is used for model input."""
 
         log.info(
@@ -261,14 +267,14 @@ class RuntimeOperations:
                     "step_id": step_id,
                     "call_count": len(calls),
                     "tool_names": [call.tool_name for call in calls],
-                    "workspace_id": self._execution_context.workspace_id
+                    "workspace_id": self._execution_context.workspace_id,
                 },
             },
         )
 
-    def _post_process_turn(self, task_id: str,
-                           step_id: str | None = None,
-                           result: ToolRunResult = None):
+    def _post_process_turn(
+        self, task_id: str, step_id: str | None = None, result: ToolRunResult = None
+    ):
         """Post-process a turn after it is used for model output."""
         status_counts: dict[str, int] = {}
         error_count = 0
