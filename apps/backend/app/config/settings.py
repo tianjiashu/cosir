@@ -46,6 +46,15 @@ class Settings:
     MAX_CONTEXT_CHARS: ClassVar[int] = 20000
     MAX_TOOL_OUTPUT_CHARS: ClassVar[int] = 20000
 
+    # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
+    # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
+    LANGFUSE_ENABLED: ClassVar[bool] = False
+    # project 级写入密钥，仅存环境变量，不落库、不进日志、不进 trace metadata。
+    LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
+    LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
+    # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
+    LANGFUSE_BASE_URL: ClassVar[str] = "https://langfuse.your-cloud.example.com"
+
     # 允许被 ``override`` 覆盖的字段名集合；实际值在 ``Settings`` 类定义结束后由
     # ``_finalize_overridable`` 经 ``Settings.__annotations__`` 推导注入，规避类体内裸
     # ``__annotations__`` 的 IDE 静态解析告警；占位为空集，置位见 ``_finalize_overridable``。
@@ -216,6 +225,15 @@ class Settings:
         cls.MAX_CONTEXT_CHARS = int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000"))
         cls.MAX_TOOL_OUTPUT_CHARS = int(
             os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")
+        )
+
+        # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
+        cls.LANGFUSE_ENABLED = cls._env_bool("CODING_AGENT_LANGFUSE_ENABLED", False)
+        cls.LANGFUSE_PUBLIC_KEY = os.environ.get("CODING_AGENT_LANGFUSE_PUBLIC_KEY")
+        cls.LANGFUSE_SECRET_KEY = os.environ.get("CODING_AGENT_LANGFUSE_SECRET_KEY")
+        cls.LANGFUSE_BASE_URL = os.environ.get(
+            "CODING_AGENT_LANGFUSE_BASE_URL",
+            "https://langfuse.your-cloud.example.com",
         )
 
         cls._validate()

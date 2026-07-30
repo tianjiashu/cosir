@@ -15,6 +15,12 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import RuntimeContextBuilder
+from app.core.observability import (
+    LangfuseToolTraceRecorder,
+    TraceMetadata,
+    tracing_enabled,
+    turn_trace,
+)
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TaskRecord, TurnRecord
@@ -27,6 +33,7 @@ from app.models.trace_context import TraceContext
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
+from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.tools.schemas import ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
@@ -275,10 +282,24 @@ class AgentRuntime:
                 )
             )
 
-            operations = self._build_operations(task, turn, agent_profile)
+            metadata = TraceMetadata(
+                task_id=task_id,
+                turn_id=turn.turn_id,
+                agent_id=agent_profile.agent_id,
+                workspace_id=task.workspace_id,
+            )
+            recorder = LangfuseToolTraceRecorder() if tracing_enabled() else None
+            operations = self._build_operations(
+                task, turn, agent_profile, tool_trace_recorder=recorder
+            )
 
-            async for event in agent_profile.workflow.run(task, operations):
-                yield await emit(event)
+            with turn_trace(metadata) as callbacks:
+                async for event in agent_profile.workflow.run(
+                    task, operations, callbacks=callbacks
+                ):
+                    yield await emit(event)
+            if recorder is not None:
+                recorder.flush()
             await self._persist_turn_trajectory(turn.turn_id)
             return
         except Exception as exc:
@@ -455,7 +476,11 @@ class AgentRuntime:
         return ToolExecutionContext.from_workspace(task.task_id, workspace)
 
     def _build_operations(
-        self, task: TaskRecord, turn: TurnRecord, agent_profile: AgentProfile
+        self,
+        task: TaskRecord,
+        turn: TurnRecord,
+        agent_profile: AgentProfile,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> RuntimeOperations:
         """为单个 turn 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -468,9 +493,11 @@ class AgentRuntime:
             task: 当前执行的任务记录（已预取，提供 ``workspace_id`` 与 ``task_id``）。
             turn: 当前执行的轮次记录（提供 ``turn_id`` 作为门面绑定）。
             agent_profile: 驱动本轮执行的 agent profile。
+            tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
+                工具执行不产生 trace，行为与集成前一致。
 
         返回:
-            已注入正确 tool_scheduler / model_tools / execution_context 的
+            已注入正确 tool_scheduler / model_tools / execution_context / trace_recorder 的
             RuntimeOperations 实例。
         """
 
@@ -484,6 +511,7 @@ class AgentRuntime:
             current_turn_id=turn.turn_id,
             model_tools=model_tools,
             execution_context=execution_context,
+            tool_trace_recorder=tool_trace_recorder,
         )
 
     def _record(

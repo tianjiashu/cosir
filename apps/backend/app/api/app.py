@@ -36,6 +36,7 @@ from app.bootstate import (
 from app.config.logging import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.storage.store_engines import close_storage, init_storage
 from app.tools.tool_system import ToolSystem
@@ -98,6 +99,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        flush_langfuse()
         close_storage()
         _mark_boot_stopped()
 

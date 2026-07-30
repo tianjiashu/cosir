@@ -18,7 +18,16 @@ from app.models.enums.event_type import EventType
 from app.models.payload import ToolCallFinishedPayload, ToolCallStartedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.tool_execution.run_result import ToolRunResult
-from app.tools.schemas import ToolCall, ToolDefinition, ToolDisplayHints, ToolExecutionContext
+from app.service.tool_execution.tool_trace_recorder import (
+    ToolTraceRecorder,
+    _NullToolTraceRecorder,
+)
+from app.tools.schemas import (
+    ToolCall,
+    ToolDefinition,
+    ToolDisplayHints,
+    ToolExecutionContext,
+)
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.trace_infra.redaction import redact_terminal_output
 
@@ -27,11 +36,12 @@ class ToolExecutionService:
     """Orchestrate a batch of tool calls requested by the model."""
 
     def __init__(
-            self,
-            scheduler: ToolScheduler,
-            agent_id: str,
-            allowed_tool_names: Iterable[str] | None = None,
-            tool_definitions: list[ToolDefinition] | None = None,
+        self,
+        scheduler: ToolScheduler,
+        agent_id: str,
+        allowed_tool_names: Iterable[str] | None = None,
+        tool_definitions: list[ToolDefinition] | None = None,
+        trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """Initialize the tool execution service.
 
@@ -42,6 +52,8 @@ class ToolExecutionService:
             tool_definitions: 本次运行暴露给模型的工具定义列表；用于按工具名取
                 ``ToolDisplayHints`` 渲染执行后结果摘要。``None``（旧调用者）时
                 ``TOOL_CALL_FINISHED`` 的 ``summary`` 恒为 ``None``，行为不变。
+            trace_recorder: 可选的工具调用 trace 记录器（依赖倒置，实现在 core/observability）。
+                ``None`` 时退化为空实现（``_NullToolTraceRecorder``），不产生任何 trace 开销。
 
         返回:
             无。
@@ -63,13 +75,14 @@ class ToolExecutionService:
             for definition in (tool_definitions or [])
             if definition.display is not None
         }
+        self._trace_recorder = trace_recorder or _NullToolTraceRecorder()
 
     def run_calls_with_events(
-            self,
-            step_id: str,
-            calls: list[ToolCall],
-            execution_context: ToolExecutionContext | None = None,
-            write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
+        self,
+        step_id: str,
+        calls: list[ToolCall],
+        execution_context: ToolExecutionContext | None = None,
+        write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
     ) -> ToolRunResult:
         """执行一批工具调用并发出生命周期事件。
 
@@ -78,7 +91,6 @@ class ToolExecutionService:
         回调，则对每个完成的工具调用发出 ``TOOL_CALL_FINISHED`` 事件。
 
         参数:
-            task_id: 当前任务标识（用于日志关联）。
             step_id: 请求这些工具调用的步骤标识。
             calls: 模型请求的工具调用列表。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
@@ -107,7 +119,7 @@ class ToolExecutionService:
                 display.render_request(call.arguments) if display is not None else None
             )
 
-            #工具执行开始事件
+            # 工具执行开始事件
             write_event(
                 EventType.TOOL_CALL_STARTED,
                 ToolCallStartedPayload(
@@ -116,15 +128,17 @@ class ToolExecutionService:
                     tool_call_id=call.call_id,
                     display=request_display,
                     request_summary=request_display,
-                )
+                ),
             )
 
-            # 执行工具调用
-            observation = self._scheduler.execute(
-                call,
-                execution_context=execution_context,
-                allowed_tool_names=self._allowed_tool_names,
-            )
+            # 执行工具调用（包在可选 trace span 内，记录参数/结果/耗时；缺省为空实现）。
+            with self._trace_recorder.span(call, step_id) as tool_span:
+                observation = self._scheduler.execute(
+                    call,
+                    execution_context=execution_context,
+                    allowed_tool_names=self._allowed_tool_names,
+                )
+                tool_span.record(observation)
             # 记录观察结果
             observations.append(observation)
             result_display = (
@@ -141,7 +155,7 @@ class ToolExecutionService:
                 if isinstance(raw_data, dict):
                     event_data = raw_data
 
-            #工具执行结束事件
+            # 工具执行结束事件
             write_event(
                 EventType.TOOL_CALL_FINISHED,
                 ToolCallFinishedPayload(

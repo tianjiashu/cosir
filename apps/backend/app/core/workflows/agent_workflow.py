@@ -15,14 +15,16 @@ class AgentWorkflow(Protocol):
         self,
         task: TaskRecord,
         operations: RuntimeOperations,
+        callbacks: list | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """通过一个工作流策略运行一个任务。
 
         参数:
             task: 由运行时选中的任务记录。
             operations: 暴露给工作流的、运行时拥有的操作。
-            model: 可选注入的 LangChain chat model（用于测试或显式覆盖）；缺省时由工作流
-                按 ``operations.agent_profile`` 的模型配置自行构建。
+            callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
+                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
+                缺省为空列表，不影响既有行为。
 
         生成:
             工作流运行期间产生的运行时事件。

@@ -1,9 +1,9 @@
 # Langfuse 可观测性集成技术方案（含工具调用 Trace）
 
 > 状态：方案评审中（未实施）
-> 日期：2026-07-28
-> 范围：后端 LLM 调用追踪 + 工具调用追踪；前端展示为后续独立任务
-> 部署形态：Langfuse Cloud 起步（零 Docker），代码预留一键切换本地自托管
+> 日期：2026-07-30（修订：部署形态改为云服务器自托管 Docker；补充 token 细项与耗时采集设计）
+> 范围：后端 LLM 调用追踪（含 token 用量 / 耗时 / 成本）+ 工具调用追踪；前端展示为后续独立任务
+> 部署形态：**云服务器自托管 Docker**（langfuse/server + ClickHouse + PostgreSQL 经官方 docker-compose 部署），桌面客户端经公网/内网 URL 上报
 
 ---
 
@@ -13,10 +13,28 @@
 
 目标：
 
-1. **LLM 调用自动追踪**：每次 `model.astream` 的 prompt / completion / token 用量 / 耗时自动上报。
+1. **LLM 调用自动追踪**：每次 `model.astream` 的 prompt / completion / **token 用量（输入 / 输出 / 总计 / 缓存命中 / 缓存写入）/ 耗时（latency）/ 成本（cost）**自动上报 Langfuse generation span。
 2. **工具调用纳入 trace**（本方案重点）：每个 `ToolCall → ToolObservation` 形成一个 tool span，含参数、结果、状态、耗时，与同一 turn 的 LLM span 挂在同一棵 trace 树下。
 3. **零侵入降级**：未启用 / 缺密钥 / 未安装 langfuse 时，运行时行为与集成前完全一致。
-4. **本地切换零代码**：改 `LANGFUSE_BASE_URL` 环境变量即可指向 Docker 自托管实例。
+4. **云服务器自托管**：Langfuse 后端（server + ClickHouse + PostgreSQL）以 Docker 部署在用户云服务器；客户端上报地址由 `LANGFUSE_BASE_URL` 指向云服务器（HTTPS 反向代理），本地不持久化任何观测数据。切回 Langfuse Cloud 仅改该变量即可。
+
+### 1.1 token 与耗时采集目标（Langfuse generation span 维度）
+
+LLM 调用在 Langfuse UI 中应呈现以下维度，缺失项记为开放问题（见第十章）：
+
+| 维度 | 含义 | 来源 |
+|---|---|---|
+| `input_tokens` | 输入 token 数 | LangChain `AIMessage.usage_metadata` |
+| `output_tokens` | 输出 token 数 | 同上 |
+| `total_tokens` | 总 token 数 | 同上（input + output；缓存字段可能单列不计入） |
+| `cache_read_input_tokens` | **命中缓存的输入 token**（prompt cache hit） | 同上（DeepSeek 经 OpenAI 协议返回 `prompt_tokens_details.cached_tokens`） |
+| `cache_creation_input_tokens` | **写入缓存的输入 token**（cache write） | 同上 |
+| `latency`（自动） | 本次 generation 端到端耗时 | Langfuse SDK 自动测量 |
+| `cost`（可选） | 本次调用成本 | Langfuse 控制台按模型单价计算；DeepSeek 单价需自定义配置（见第十章问题 1） |
+
+采集方式分两层（见 5.8 节）：
+- **自动层**：LangChain 在流式结束后聚合 `usage_metadata` 到最终 `AIMessage`，`CallbackHandler` 自动把上述 token 字段写入 generation span。
+- **显式兜底层**：若 DeepSeek provider 未把缓存字段填入 `usage_metadata`（取决于 langchain-openai 版本），在 `langfuse_tracing` 中经 `on_llm_end` 读取原始响应 `usage`（OpenAI 兼容的 `prompt_tokens_details.cached_tokens` / `total_tokens`），用 `generation.update(usage=...)` 显式补写，确保缓存命中 token 不丢。
 
 ## 二、现状链路分析（关键事实）
 
@@ -59,7 +77,7 @@ flowchart TD
 
 - **LLM 追踪走官方 LangChain 集成**（`CallbackHandler` 注入 `config["callbacks"]`），零侵入节点代码。
 - **工具追踪走「协议注入」（依赖倒置）**：`service` 层定义窄协议 `ToolTraceRecorder`，`core/observability/` 提供 Langfuse 实现，`runner` 在装配时注入。`service` 只依赖自己定义的协议，不认识 Langfuse。
-- **统一 trace 树**：runner 在消费事件流前用 `start_as_current_span` 打开 turn 级根 span；Langfuse v3 SDK 基于 OpenTelemetry，OTel context 通过 asyncio contextvars 自然传播——`CallbackHandler` 的 generation span 与工具 span 都会自动挂到这棵根 span 下，无需手工传 trace_id。
+- **统一 trace 树**：runner 在消费事件流前用 `start_as_current_observation(as_type="span")` 打开 turn 级根 observation；Langfuse v4（基于 OpenTelemetry）的 OTel context 通过 asyncio contextvars 自然传播——`CallbackHandler` 的 generation span 与工具 span 都会自动挂到这棵根 observation 下，无需手工传 trace_id。
 
 ### 为什么工具追踪不能也走 CallbackHandler 自动化
 
@@ -85,10 +103,14 @@ flowchart TD
 LANGFUSE_ENABLED: ClassVar[bool] = False          # CODING_AGENT_LANGFUSE_ENABLED
 LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None  # CODING_AGENT_LANGFUSE_PUBLIC_KEY
 LANGFUSE_SECRET_KEY: ClassVar[str | None] = None  # CODING_AGENT_LANGFUSE_SECRET_KEY
-LANGFUSE_BASE_URL: ClassVar[str] = "https://cloud.langfuse.com"  # CODING_AGENT_LANGFUSE_BASE_URL
+LANGFUSE_BASE_URL: ClassVar[str] = "https://langfuse.your-cloud.example.com"  # CODING_AGENT_LANGFUSE_BASE_URL
 ```
 
-字段自动进入 `_OVERRIDABLE`（由 `__annotations__` 派生），测试经 `Settings.override()` 注入。切本地自托管仅需改 `LANGFUSE_BASE_URL`。
+字段自动进入 `_OVERRIDABLE`（由 `__annotations__` 派生），测试经 `Settings.override()` 注入。
+
+`LANGFUSE_BASE_URL` 指向云服务器经反向代理对外暴露的 HTTPS 域名（如 `https://langfuse.your-cloud.example.com`，部署与 TLS 见第七章）。
+**密钥与地址不写死、不落库**，统一由环境变量注入（开发机与云服务器各自设置，互不影响）。
+public/secret key 由云服务器 Langfuse 控制台创建，本地客户端仅持有「写入」权限的 project key 即可上报，无需访问数据库。
 
 ### 5.2 依赖（`apps/backend/pyproject.toml`）
 
@@ -130,11 +152,13 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[list[Any]]:
     """打开 turn 级根 span 并产出待注入 workflow 的 callbacks 列表。
 
     - 未启用 → yield []，完全空操作（零开销路径）。
-    - 启用 → langfuse.start_as_current_span(name=f"turn {turn_id}") 作为根 span，
-      经 span.update_trace(session_id=task_id, user_id=agent_id,
+    - 启用 → langfuse.start_as_current_observation(as_type="span",
+      name=f"turn {turn_id}") 作为根 observation（OTel context 自然传播），
+      经顶层 propagate_attributes(session_id=task_id, user_id=agent_id,
       tags=["coding-agent"], metadata={...}) 写 trace 级属性，
-      在该上下文内构造 CallbackHandler() 并 yield [handler]。
-    - 任何 Langfuse 侧异常 → log.exception 后降级为 yield []，绝不中断 turn 执行。
+      在该上下文内构造 CallbackHandler(public_key=...) 并 yield [handler]。
+    - 任何 Langfuse 侧初始化/进入异常 → log.exception 后降级为 yield []，绝不中断 turn 执行；
+      yield 期间（turn 真实执行）的异常不属于可观测性故障，不在此捕获，交由 runner 落定。
     """
 
 
@@ -142,8 +166,10 @@ def flush_langfuse() -> None:
     """尽力 flush 缓冲 trace；进程退出前调用（api/app.py lifespan finally）。"""
 ```
 
-> 说明：v3 SDK 中 trace 级属性（session_id/user_id/tags/metadata）通过根 span 的
-> `update_trace()` 设置，而非 `CallbackHandler` 构造参数（v2 旧 API）。
+> 说明：Langfuse v4（基于 OpenTelemetry）中 trace 级属性（session_id/user_id/tags/metadata）
+> 经顶层 `propagate_attributes(...)` 设置（v3 的 `span.update_trace()` 已废弃），而非
+> `CallbackHandler` 构造参数（v2 旧 API）；`start_as_current_observation(as_type="span")`
+> 打开的根 observation 在上下文退出时自动结束，无需手动 `end()`。
 > `session_id=task_id` 使同一任务多轮 turn 在 Langfuse UI 聚为一个 session；
 > 每个 turn 是 session 内一棵独立 trace。
 
@@ -251,13 +277,137 @@ trace: turn <turn_id>            (session = task_id, user = agent_id)
 > 「当前在哪个 chain span 里」）。定位靠 `metadata.step_id` / `tool_call_id` 关联，够用；
 > 强行嵌套需在 nodes.py 传递 span 引用，破坏分层，不做（YAGNI）。
 
+### 5.8 token 用量与耗时采集（generation span 维度补全）
+
+目标（见 1.1 节）是让 Langfuse UI 的 generation span 呈现 total / input / output / cache-read / cache-creation token、latency 与 cost。分层如下：
+
+#### 5.8.1 自动层（首选，零代码）
+
+LangChain `BaseChatModel.astream` 在流结束后会把聚合的用量写入最终 `AIMessage.usage_metadata`，
+结构（langchain-core ≥ 0.3）含：
+
+```text
+usage_metadata = {
+    "input_tokens": int,
+    "output_tokens": int,
+    "total_tokens": int,
+    "cache_read_input_tokens": int,    # 命中缓存
+    "cache_creation_input_tokens": int,  # 写入缓存
+}
+```
+
+`langfuse` v3 的 `CallbackHandler` 在 `on_llm_end` 中读取该字典并自动写入 generation span 的
+`usage`（含 `input`, `output`, `total`, `cache_read_input_tokens`, `cache_creation_input_tokens`），
+`latency` 由 SDK 自动测量。**此路径下无需任何手写代码即可拿到 total/cache token 与耗时。**
+
+前提：DeepSeek provider（`DeepSeekProvider.build`）走 OpenAI 协议兼容客户端（langchain-openai
+`ChatOpenAI`），其 `prompt_tokens_details.cached_tokens` 需被该客户端映射到
+`usage_metadata["cache_read_input_tokens"]`。实施时需先验证（见 5.8.3 验证项）。
+
+#### 5.8.2 显式兜底层（缓存字段未自动填充时启用）
+
+若 langchain-openai 版本未把 `cached_tokens` 映射进 `usage_metadata`，在 `langfuse_tracing.py`
+中扩展 `CallbackHandler` 子类（或复用 `on_llm_end`），从原始响应 `response.llm_output` /
+`response.generations[...].message.model_extra["usage"]`（OpenAI 兼容原始字段）读取：
+
+```text
+usage.prompt_tokens             → input
+usage.completion_tokens         → output
+usage.total_tokens              → total
+usage.prompt_tokens_details.cached_tokens        → cache_read_input_tokens
+usage.prompt_tokens_details.prompt_tokens        → （如有 cache_creation 子键）→ cache_creation_input_tokens
+```
+
+经 `generation.update(usage=Usage(input=..., output=..., total=..., cache_read_input_tokens=..., cache_creation_input_tokens=...))`
+显式补写，确保缓存命中 token 不丢。**此层是兜底，仅在 5.8.1 验证不通过时落地**（避免重复造轮子）。
+
+#### 5.8.3 验证项（实施 P1 时必做）
+
+1. 用真实 DeepSeek key 跑一次 `model.astream`，打印最终 `AIMessage.usage_metadata`，
+   确认 5 个 token 字段（含 cache 两项）是否齐全。
+2. 若齐全 → 仅依赖 5.8.1；若缺失 cache 字段 → 落地 5.8.2 兜底层。
+3. Langfuse UI 打开该 generation span，核对 `Usage` 区块显示 total / input / output /
+   cache read / cache creation，以及 `Latency`（秒级耗时）。
+4. `cost` 列若为空（DeepSeek 不在 Langfuse 内置价表）→ 在 Langfuse 控制台为该模型配置自定义
+   单价（不改代码，见第十章问题 1）。
+
+#### 5.8.4 工具耗时
+
+tool span 的 `latency` 由 `langfuse_tool_trace_recorder.span()` 的上下文管理器自动测量
+（进入 `with` 计时、退出 `end`），无需额外字段；嵌套在父 process span 的 `execute_terminal`
+场景，耗时覆盖「提交 → 执行 → 强杀/完成」全周期，语义正确。
+
 ## 六、安全与脱敏
 
 - **输出脱敏**：`observation.content` 上报前经既有 `trace_infra.redaction.redact_terminal_output`（与回传模型的脱敏边界一致，不新造轮子）。
 - **输入脱敏**：工具参数原样上报（本地单用户桌面场景，参数即用户自己的命令/路径）；`redact_terminal_output` 若已覆盖 secret 模式则顺带对参数字符串套用，实现时确认其接口适配成本，成本高则 v1 不做（记入开放问题）。
 - **密钥**：Langfuse public/secret key 仅存环境变量，不落库、不进日志、不进 trace metadata。
 
-## 七、降级与失败策略
+## 七、云服务器自托管部署（Docker）
+
+部署目标：把 Langfuse 后端（server + 存储）完全跑在用户自有云服务器上，桌面客户端通过公网
+HTTPS 把 trace 上报到该服务器；本地不持久化任何观测数据，云服务器持有全部链路数据。
+
+### 7.1 部署拓扑
+
+```text
+┌──────────────┐      HTTPS(443)       ┌─────────────────────────────────────┐
+│ 桌面客户端    │  LANGFUSE_BASE_URL=   │  云服务器（公网 IP / 域名）          │
+│ (本地 Python) │ ──▶ https://lf.xxx ─▶ │  nginx(Caddy) 反代 + TLS            │
+│ Langfuse SDK  │   public/secret key   │     │                              │
+└──────────────┘                       │     ▼ :3000                        │
+                                       │  langfuse/server (Docker)          │
+                                       │     │                              │
+                                       │     ├── ClickHouse (Docker)        │
+                                       │     └── PostgreSQL (Docker)        │
+                                       └─────────────────────────────────────┘
+```
+
+- 桌面客户端：仅持有 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`（project 级「写入」权限），
+  经 `LANGFUSE_BASE_URL` 上报；不直连数据库。
+- 云服务器：`langfuse/server` 经官方 docker-compose 编排，自带 ClickHouse + PostgreSQL
+  （最新官方 compose 已含，无需自管存储）。存储数据落本地 `volumes`，定期备份。
+
+### 7.2 部署步骤（云服务器侧）
+
+1. **前置**：云服务器装 Docker + Docker Compose v2；域名解析到服务器公网 IP；开放 443（与 80
+   用于 ACME 签发），**不建议直接暴露 3000 端口到公网**（绕开反代与 TLS）。
+2. **拉取官方 compose**：使用 `langfuse/langfuse` 官方 `docker-compose.yml`
+   （含 `langfuse-server` / `clickhouse` / `postgres` / `redis` 服务，版本锁定到发布 tag，
+   如 `langfuse/langfuse:v3.x.x`，禁止使用 `latest` 以保证可复现）。
+3. **环境变量**：在 compose 的 `.env` 中设置：
+   - ` DATABASE_URL`（postgres）、`CLICKHOUSE_URL`（compose 内网服务名即可）、`REDIS_URL`；
+   - `NEXTAUTH_SECRET`、`SALT` 等密钥类用 `openssl rand -base64 32` 生成，**不进版本库**；
+   - `LANGFUSE_BASE_URL=https://lf.your-cloud.example.com`（server 自身回调/重定向用）。
+4. **反向代理 + TLS**：在宿主机跑 Caddy（或 nginx），把 `https://lf.your-cloud.example.com`
+   反代到 `localhost:3000`；Caddy 自动签发 Let's Encrypt 证书，零手动维护。
+5. **启动与初始化**：`docker compose up -d`；浏览器打开域名 → 注册首个用户（owner）→
+   新建 project → 在 project settings 生成 **public / secret key**，把这对 key 与域名
+   交回桌面客户端侧配置。
+6. **防火墙**：仅放 443 入站；3000/ClickHouse/Postgres 端口只绑定内网/localhost，不对外。
+7. **备份**：定期 `docker compose exec` 导出 Postgres + ClickHouse 数据卷，或挂云盘快照。
+
+### 7.3 客户端侧配置（开发机 / 用户机）
+
+```bash
+export CODING_AGENT_LANGFUSE_ENABLED=true
+export CODING_AGENT_LANGFUSE_BASE_URL=https://lf.your-cloud.example.com
+export CODING_AGENT_LANGFUSE_PUBLIC_KEY=pk-lf-...
+export CODING_AGENT_LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+与 Langfuse Cloud 切换：仅改 `LANGFUSE_BASE_URL` + 对应 key，代码零改动（见 5.1 节）。
+
+### 7.4 安全要点
+
+- **公网暴露必须有 TLS + 强鉴权**：Langfuse 自带用户体系（project key + 登录），secret key
+  等同数据库写入凭证，**绝不入库 / 不提交 / 不进日志**。
+- **最小暴露面**：只开 443；server 的 3000、ClickHouse、Postgres 仅内网。
+- **数据归属**：所有 trace / token / 工具输入输出（含可能含路径、命令）落在云服务器，
+  属于用户自有数据；若需脱敏增强见第六章「输入脱敏」开放问题。
+- **版本锁定**：compose 镜像 tag 固定，升级走有计划变更并先备份。
+
+## 八、降级与失败策略
 
 | 场景 | 行为 |
 |---|---|
@@ -267,7 +417,7 @@ trace: turn <turn_id>            (session = task_id, user = agent_id)
 | span 创建/上报异常 | `log.exception` 后继续执行工具，**绝不因可观测性失败中断 turn** |
 | 上报网络阻塞 | SDK 后台批量异步上报（OTel BatchSpanProcessor），不阻塞执行线程；退出前 `flush_langfuse()` 尽力送达，失败仅记日志 |
 
-## 八、测试计划（独立测试 Agent 执行）
+## 九、测试计划（独立测试 Agent 执行）
 
 新增 `tests/test_langfuse_tracing.py` / `tests/test_tool_trace_recorder.py`：
 
@@ -280,7 +430,7 @@ trace: turn <turn_id>            (session = task_id, user = agent_id)
 
 真实上报到 Langfuse Cloud 的联调属手工验收（配置密钥后跑一轮 turn，UI 核对 trace 树形态与第 5.7 节一致），不进 CI。
 
-## 九、实施分期与闭环
+## 十、实施分期与闭环
 
 | 阶段 | 内容 | 涉及文件 |
 |---|---|---|
@@ -289,10 +439,13 @@ trace: turn <turn_id>            (session = task_id, user = agent_id)
 | P2 | service 埋点 + 注入链路 | `tool_execution_service.py`、`runtime_operations.py`、`runner.py`、`workflow.py`、`api/app.py` |
 | P3 | 测试 + `ruff check` / `mypy` 清零 | `tests/` 2 个新文件 |
 | P4 | 独立审查 Agent + 独立测试 Agent 闭环（中型改动：新文件 + 多文件 + 核心链路） | — |
-| P5（后续） | 客户端可观测性入口（iframe 嵌 Langfuse UI，`sessionId=task_id` 过滤） | desktop（单独任务） |
+| P5（后续） | 客户端可观测性入口（iframe 嵌 Langfuse UI，src 用 `LANGFUSE_BASE_URL` 云服务器域名 + `sessionId=task_id` 过滤） | desktop（单独任务） |
 
-## 十、开放问题
+## 十一、开放问题
 
 1. DeepSeek 模型单价不在 Langfuse 内置价表 → 成本列可能为空；需要精确成本时在 Langfuse 控制台配置自定义模型单价（不改代码）。
-2. 工具参数是否套用 `redact_terminal_output` 级别的输入脱敏（见第六节），实现时按接口适配成本定。
+2. 工具参数是否套用 `redact_terminal_output` 级别的输入脱敏（见第六节），实现时按接口适配成本定；**云服务器自托管后该数据落在第三方（用户自有）云端，优先级提升**。
 3. `TOOL_CALL_STARTED` 保留事件与本方案无关，维持不发出；若未来前端需要「执行中」态再启用，与 trace 体系互不影响。
+4. **token 缓存字段自动采集验证**（见 5.8.3）：实施 P1 时先用真实 key 跑一次 `astream`，确认 `usage_metadata` 是否含 `cache_read_input_tokens` / `cache_creation_input_tokens`；若缺失则落地 5.8.2 兜底层。该验证结果会反向决定 5.8 的实现范围。
+5. **云服务器自托管网络连通性**：客户端（开发机/用户机）出网到云服务器 443 是否被企业网/家庭网拦截，需在真机验收；若受限需提供代理或内网穿透方案。
+6. **云服务器数据备份与灾难恢复**：Postgres / ClickHouse 数据卷的备份频率与 RPO/RTO，上线前在部署清单中确定（第七章 7.2 第 7 步）。

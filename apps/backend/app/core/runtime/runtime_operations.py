@@ -12,6 +12,7 @@ from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
+from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
@@ -35,6 +36,7 @@ class RuntimeOperations:
         current_turn_id: str = "",
         model_tools: list[ToolDefinition] | None = None,
         execution_context: ToolExecutionContext | None = None,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -47,6 +49,8 @@ class RuntimeOperations:
             model_tools: 暴露给模型的工具定义列表。
             execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
                 日志不注入 ``workspace_id``。
+            tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
+                工具执行不产生 trace，行为与集成前一致。
 
         返回:
             无。
@@ -67,6 +71,7 @@ class RuntimeOperations:
             agent_id=agent_profile.agent_id,
             allowed_tool_names=(tool.name for tool in self.model_tools),
             tool_definitions=self.model_tools,
+            trace_recorder=tool_trace_recorder,
         )
         self._current_turn_id = current_turn_id
         self._execution_context = execution_context

@@ -84,6 +84,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         self,
         task: TaskRecord,
         operations: RuntimeOperations,
+        callbacks: list | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -97,6 +98,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         Args:
             task: 当前需要执行的任务记录。
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
+            callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
+                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
+                缺省为空列表，不影响既有行为。
 
         Yields:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
@@ -138,7 +142,10 @@ class ReactLikeWorkflow(AgentWorkflow):
             "configurable": {
                 "thread_id": thread_id,
                 "runtime_config": runtime_config,
-            }
+            },
+            # LangChain callbacks（如 Langfuse CallbackHandler）经此注入模型调用追踪；
+            # 缺省空列表不影响既有行为。
+            "callbacks": callbacks or [],
         }
 
         async with build_checkpointer() as checkpointer:
