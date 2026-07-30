@@ -2,14 +2,14 @@
 
 本模块只承载 write_file 这一个工具。写盘经由 ``file_io.atomic_write`` 做原子写
 并保留目标文件既有 BOM/CRLF；落盘前做行号污染门禁（拒绝把 read_file 的带行号
-输出回写），对 ``.py`` 文件做 ``ast.parse`` 软校验（仅告警不拒写）。
+输出回写），成功后额外返回统一 diff 展示数据。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``，不内联路径规则。
-- 只写文件，不读（除 .py 语法校验外）。
+- 执行逻辑只提供文件修改前后的事实元数据；diff 展示投影由 ``file_change_display`` 收口。
 """
 
-import ast
+from pathlib import Path
 from typing import Any
 
 from app.tools.schemas import (
@@ -24,7 +24,12 @@ from app.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.tools.tool_execute.tool_success import tool_success
+from app.tools.tool_handler.patch.file_change_display import (
+    build_file_change_display_data,
+    render_file_change_entries,
+)
 from app.tools.tool_handler.file_io.atomic_write import atomic_write_text, looks_like_line_numbered
+from app.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.write_file_args import WriteFileArgs
@@ -50,8 +55,8 @@ class WriteFileTool(HandlerBase):
     description = (
         "Write a file with the provided content, creating parent directories as needed. "
         "Uses atomic write and preserves the target file's existing CRLF/BOM. Refuses to "
-        "write content that looks like line-numbered read_file output. For .py files a "
-        "syntax check is reported but does not block the write."
+        "write content that looks like line-numbered read_file output. Returns a unified "
+        "diff for display."
     )
     permission = "file_write"
     args_model = WriteFileArgs
@@ -87,7 +92,7 @@ class WriteFileTool(HandlerBase):
                 破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
         返回:
-            ``ToolObservation``；成功时 content 含写入字节数与可选语法告警，
+            ``ToolObservation``；成功时 content 保持为写入内容，
             失败时 status 为 error，``error``/``reason`` 提供面向模型的富文本诊断
             （``error``=发生了什么、``reason``=为什么失败+如何修正+是否重试）。
 
@@ -145,6 +150,25 @@ class WriteFileTool(HandlerBase):
                 ),
                 permission=self.permission,
             )
+        existed = resolved.exists()
+        original = ""
+        if existed:
+            try:
+                original = Path(resolved).read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                return tool_error(
+                    self.name,
+                    os_error_message(exc, "read the file"),
+                    reason=(
+                        "the existing file could not be read before writing, usually "
+                        "because it is locked by another process or the current user lacks "
+                        "read permission. Close the program holding the file or adjust "
+                        "permissions, then retry the same write."
+                    ),
+                    retryable=True,
+                    permission=self.permission,
+                )
+
         try:
             atomic_write_text(
                 resolved,
@@ -165,21 +189,51 @@ class WriteFileTool(HandlerBase):
                 permission=self.permission,
             )
 
+        status = "modified" if existed else "added"
+        snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=content,
+            display_data=build_file_change_display_data([snapshot]),
         )
 
     def render_request_summary(self, arguments: dict[str, Any]) -> str:
-        """
-        返回 write_file 执行请求摘要。TODO: 待实现
-        """
+        """返回 write_file 执行请求摘要。
 
-    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        参数:
+            arguments: 工具调用参数字典。
+
+        返回:
+            待写入文件路径；缺失时返回 ``write``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
-        返回 write_file 执行结果摘要。TODO: 待实现
+        return str(arguments.get("path") or "write")
+
+    def render_result_summary(
+        self,
+        display_data: dict[str, Any],
+    ) -> str | list[dict[str, Any]] | None:
+        """返回 write_file 执行后 diff 展示条目。
+
+        参数:
+            display_data: 工具观察中的展示元数据。
+
+        返回:
+            失败时返回错误摘要；成功时返回文件 diff 展示条目。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
+        return render_file_change_entries(display_data)
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。

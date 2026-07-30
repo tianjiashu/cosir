@@ -21,4 +21,10 @@ class ToolCallFinishedPayload(RuntimeEventPayload):
     tool_name: str
     status: Literal["success", "error"]
     tool_call_id: str
-    result_summary: dict[str, Any] | None = None
+    result_summary: dict[str, Any] | list[dict[str, Any]] | None = None
+    summary: str | None = None
+    content: str | None = None
+    error: str = ""
+    reason: str = ""
+    retryable: bool = False
+    data: dict[str, Any] = Field(default_factory=dict)

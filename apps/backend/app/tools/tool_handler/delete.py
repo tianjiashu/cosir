@@ -83,10 +83,10 @@ class DeleteTool(HandlerBase):
         """
 
     def execute(
-        self,
-        path: str,
-        recursive: bool = False,
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            path: str,
+            recursive: bool = False,
+            execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """删除项目内文件或目录，返回结构化观察结果。
 
@@ -161,7 +161,7 @@ class DeleteTool(HandlerBase):
             try:
                 current_entry, current_error = resolver.resolve_entry(path)
                 current_is_link = current_entry is not None and (
-                    current_entry.is_symlink() or is_windows_directory_reparse_point(current_entry)
+                        current_entry.is_symlink() or is_windows_directory_reparse_point(current_entry)
                 )
                 if current_entry != entry or current_error or not current_is_link:
                     raise OSError(errno.EAGAIN, "delete target changed before unlink")
@@ -230,9 +230,9 @@ class DeleteTool(HandlerBase):
             try:
                 current_resolved, current_error = resolver.resolve(path)
                 if (
-                    current_resolved != resolved
-                    or current_error
-                    or current_resolved == root_resolved
+                        current_resolved != resolved
+                        or current_error
+                        or current_resolved == root_resolved
                 ):
                     raise OSError(errno.EAGAIN, "delete target changed before directory removal")
                 if recursive:
@@ -299,13 +299,19 @@ class DeleteTool(HandlerBase):
         """返回 delete 折叠态摘要。"""
         path = arguments.get("path", "")
         recursive = arguments.get("recursive", False)
-        return f"删除 {path} {'（递归）' if recursive else ''}"
-
+        return f"{path} {'（递归）' if recursive else ''}"
 
     def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
-        """返回 delete 执行后结果摘要。"""
-        return f"已删除 {display_data.get('path_basename', '')}"
+        """返回 delete 执行后结果摘要。
+                如果执行成功，则返回 None，不显示结果摘要。
+                如果执行失败，结果摘要为错误信息，
+                app.tools.schemas.tool_display.ToolDisplayHints.render_result_summary 会进行判断。
+        """
+        status = display_data.get("status", "success")
+        if status == "success":
+            return None
 
+        return "error:" + display_data.get("error", "")
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
@@ -335,7 +341,7 @@ class DeleteTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="删除",
                 icon="trash-2",
-                title_summary = self.render_request_summary,
+                title_summary=self.render_request_summary,
                 result_summary=self.render_result_summary,
                 expandable=False,
                 expand_layout="details",

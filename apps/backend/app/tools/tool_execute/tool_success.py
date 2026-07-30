@@ -16,6 +16,7 @@ def tool_success(
         permission: str,
         content: str,
         tool_call_id: str = "",
+        display_data: dict[str, object] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -27,6 +28,8 @@ def tool_success(
             必须**用英文**撰写、对模型友好（简洁、结构化、便于模型直接消费与纠正）；
             开发者向的中文 docstring/注释不在此限。
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
+        display_data: 仅供客户端展示消费的结构化数据；会合并进
+            ``ToolObservation.display_data``，不会回传给模型。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="success"``，
@@ -50,7 +53,15 @@ def tool_success(
           既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
     """
 
-    observation = ToolObservation(tool_name=tool_name, status="success", content=content, permission=permission,
-                                  tool_call_id=tool_call_id)
-    observation.display_data = dataclasses.asdict(observation)
+    observation = ToolObservation(
+        tool_name=tool_name,
+        status="success",
+        content=content,
+        permission=permission,
+        tool_call_id=tool_call_id,
+    )
+    merged_display_data = dataclasses.asdict(observation)
+    if display_data:
+        merged_display_data.update(display_data)
+    observation.display_data = merged_display_data
     return observation

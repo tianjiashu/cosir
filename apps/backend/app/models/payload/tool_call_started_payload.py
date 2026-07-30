@@ -10,4 +10,5 @@ class ToolCallStartedPayload(RuntimeEventPayload):
     tool_name: str
     step_id: str | None = None
     tool_call_id: str | None = None
-    request_summary: dict[str, Any]
+    display: dict[str, Any] | None = None
+    request_summary: dict[str, Any] | None = None

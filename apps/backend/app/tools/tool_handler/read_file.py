@@ -227,7 +227,7 @@ class ReadFileTool(HandlerBase):
         if status == "success":
             return None
 
-        return display_data.get("error", "")
+        return "error:" + display_data.get("error", "")
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成当前注册系统使用的 ``ToolDefinition``。

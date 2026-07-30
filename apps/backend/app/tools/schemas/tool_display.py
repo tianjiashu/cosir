@@ -15,8 +15,35 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+ToolResultProjection = str | list[dict[str, Any]] | dict[str, Any] | None
+
+
+def derive_display_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """补齐工具展示通用派生字段。
+
+    参数:
+        data: 工具参数或工具结果展示数据。
+
+    返回:
+        带 ``path_basename`` 等通用字段的浅拷贝字典。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    derived = dict(data)
+    path = derived.get("path")
+    if isinstance(path, str) and path:
+        derived.setdefault("path_basename", Path(path).name or path)
+    return derived
+
 
 @dataclass(frozen=True)
 class ToolDisplayHints:
@@ -48,8 +75,8 @@ class ToolDisplayHints:
 
     verb: str
     icon: str
-    title_summary: Callable[[dict[str, Any]], str] | None = None
-    result_summary: Callable[[dict[str, Any]], str | None] | None = None
+    title_summary: Callable[[dict[str, Any]], str | None] | None = None
+    result_summary: Callable[[dict[str, Any]], ToolResultProjection] | None = None
     expandable: bool = True
     expand_layout: str = "details"
 
@@ -75,16 +102,21 @@ class ToolDisplayHints:
         副作用:
             无。
         """
-        title_summary = self.title_summary(arguments)
+        try:
+            derived_arguments = derive_display_fields(arguments)
+            title_summary = (
+                self.title_summary(derived_arguments) if self.title_summary else None
+            )
+        except (KeyError, TypeError, ValueError):
+            title_summary = None
         return {
             "verb": self.verb,
             "icon": self.icon,
+            "summary": title_summary or "",
             "title_summary": title_summary,
             "expandable": self.expandable,
             "expand_layout": self.expand_layout,
         }
-
-
 
     def render_result_summary(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """把执行后观察的结构化 ``data`` 投影成一行结果摘要。
@@ -103,10 +135,28 @@ class ToolDisplayHints:
         副作用:
             无。
         """
-        result_summary = self.result_summary(data)
+        if self.result_summary is None:
+            return None
+        try:
+            result_summary = self.result_summary(data)
+        except (KeyError, TypeError, ValueError):
+            return None
         if result_summary is None:
             return None
+        if isinstance(result_summary, dict):
+            return result_summary
+        if isinstance(result_summary, list):
+            return {
+                "result_summary": result_summary,
+                "data": {"entries": result_summary},
+            }
+        if result_summary.startswith("error:"):
+            summary = result_summary.removeprefix("error:")
+            return {
+                "result_summary": summary,
+                "expandable": True,
+                "expand_layout": "details",
+            }
         return {
             "result_summary": result_summary,
-            "expandable": True,
         }

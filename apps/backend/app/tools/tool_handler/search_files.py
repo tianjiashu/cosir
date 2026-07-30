@@ -152,6 +152,7 @@ class SearchFilesTool(HandlerBase):
                 permission=self.permission,
             )
         resolved_path_text = str(resolved_path)
+        display_items: list[Any]
         if target == "files":
             result, match_count, file_items = search_filenames(
                 workspace_root,
@@ -160,6 +161,7 @@ class SearchFilesTool(HandlerBase):
                 limit=limit,
                 offset=offset,
             )
+            display_items = file_items
             empty_message = "No files found."
         else:
             result, match_count, hit_items = search_content(
@@ -172,6 +174,7 @@ class SearchFilesTool(HandlerBase):
                 limit=limit,
                 offset=offset,
             )
+            display_items = hit_items
             empty_message = "No matches found."
 
         if result.startswith(INVALID_REGEX_PREFIX):
@@ -204,18 +207,201 @@ class SearchFilesTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=result
+            content=result,
+            display_data={
+                "items": display_items,
+                "pattern": pattern,
+                "target": target,
+                "path": search_path,
+            },
         )
 
     def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """返回 search_files 执行前摘要。
+
+        参数:
+            arguments: 工具调用参数字典。
+
+        返回:
+            搜索模式摘要；尽量贴近前端折叠行展示。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
-        TODO:待实现
+        pattern = str(arguments.get("pattern") or "")
+        target = str(arguments.get("target") or "content")
+        path = str(arguments.get("path") or ".")
+        file_glob = arguments.get("file_glob")
+        if target == "files":
+            return f"{pattern} in {path}" if path != "." else pattern
+        if file_glob:
+            return f"{pattern} in {file_glob}"
+        return f"{pattern} in {path}" if path != "." else pattern
+
+    def render_result_summary(
+        self,
+        display_data: dict[str, Any],
+    ) -> str | list[dict[str, Any]] | None:
+        """把 search_files 执行元数据投影为前端搜索结果列表。
+
+        参数:
+            display_data: 工具观察里的客户端展示数据。
+
+        返回:
+            失败时返回错误摘要；无命中时返回空状态文案；有命中时返回列表条目。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        if display_data.get("status") == "error":
+            return "error:" + str(display_data.get("error", ""))
+        target = str(display_data.get("target") or "content")
+        search_path = str(display_data.get("path") or ".")
+        raw_items = display_data.get("items", [])
+        if not isinstance(raw_items, list) or not raw_items:
+            return "没有搜索到相关内容"
+        if target == "files" and isinstance(raw_items, list):
+            return self._filename_entries(
+                [str(item) for item in raw_items],
+                search_path,
+            )
+        return self._content_entries(
+            [item for item in raw_items if isinstance(item, dict)],
+            search_path,
+        )
+
+    def _content_entries(
+        self,
+        items: list[dict[str, Any]],
+        search_path: str,
+    ) -> list[dict[str, Any]]:
+        """把内容搜索命中转换成前端 list 布局条目。
+
+        参数:
+            items: 搜索引擎返回的命中行结构。
+            search_path: 用户指定的搜索根。
+
+        返回:
+            前端可按字段形状渲染的搜索命中列表。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        return [self._content_entry(item, search_path) for item in items]
+
+    def _content_entry(self, item: dict[str, Any], search_path: str) -> dict[str, Any]:
+        """把单条内容命中转换为前端搜索结果行。
+
+        参数:
+            item: 搜索引擎返回的单条命中。
+            search_path: 用户指定的搜索根。
+
+        返回:
+            前端必要的搜索结果行数据。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
-    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        file_path = self._join_display_path(search_path, str(item.get("file_path", "")))
+        name, parent = self._split_display_path(file_path)
+        line_number = int(item.get("line_number", 0) or 0)
+        return {
+            "kind": "content_match",
+            "icon": "file",
+            "name": name,
+            "path": parent,
+            "line_number": line_number,
+            "line_label": f"#L{line_number}" if line_number > 0 else "",
+        }
+
+    def _filename_entries(self, items: list[str], search_path: str) -> list[dict[str, Any]]:
+        """把文件名搜索结果转换成前端 list 布局条目。
+
+        参数:
+            items: 搜索引擎返回的相对路径列表。
+            search_path: 用户指定的搜索根。
+
+        返回:
+            前端可按 ``name`` / ``path`` / ``type`` 渲染的文件条目列表。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
-        TODO:待实现
+        entries: list[dict[str, Any]] = []
+        for item in items:
+            item_path = Path(item)
+            parent = item_path.parent.as_posix()
+            parent = search_path if parent == "." else self._join_display_path(search_path, parent)
+            entries.append(
+                {
+                    "kind": "file_result",
+                    "icon": "file",
+                    "name": item_path.name,
+                    "path": parent,
+                    "type": "file",
+                }
+            )
+        return entries
+
+    def _join_display_path(self, search_path: str, relative_path: str) -> str:
+        """拼接搜索根与相对结果路径，仅用于展示。
+
+        参数:
+            search_path: 用户指定的搜索根。
+            relative_path: 搜索引擎返回的相对路径。
+
+        返回:
+            POSIX 风格展示路径；绝对搜索根或 ``.`` 场景保持可读降级。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
+        if not relative_path:
+            return search_path or "."
+        if not search_path or search_path == ".":
+            return Path(relative_path).as_posix()
+        if Path(search_path).is_absolute():
+            return Path(relative_path).as_posix()
+        return (Path(search_path) / relative_path).as_posix()
+
+    def _split_display_path(self, file_path: str) -> tuple[str, str]:
+        """拆分前端展示用文件名与父路径。
+
+        参数:
+            file_path: POSIX 风格文件路径。
+
+        返回:
+            ``(name, parent_path)``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        path = Path(file_path)
+        parent = path.parent.as_posix()
+        return path.name, "" if parent == "." else parent
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。

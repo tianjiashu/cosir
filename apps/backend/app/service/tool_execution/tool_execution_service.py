@@ -12,14 +12,13 @@
 import dataclasses
 import json
 from collections.abc import Callable, Iterable
-from typing import Literal
 
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import ToolCallFinishedPayload, ToolCallStartedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.tool_execution.run_result import ToolRunResult
-from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolDisplayHints
+from app.tools.schemas import ToolCall, ToolDefinition, ToolDisplayHints, ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.trace_infra.redaction import redact_terminal_output
 
@@ -103,7 +102,10 @@ class ToolExecutionService:
         messages: list[RuntimeMessage] = []
         # 当前串行执行，后续可并行
         for call in calls:
-            display:ToolDisplayHints = self._display_by_name.get(call.tool_name)
+            display: ToolDisplayHints | None = self._display_by_name.get(call.tool_name)
+            request_display = (
+                display.render_request(call.arguments) if display is not None else None
+            )
 
             #工具执行开始事件
             write_event(
@@ -112,7 +114,8 @@ class ToolExecutionService:
                     tool_name=call.tool_name,
                     step_id=step_id,
                     tool_call_id=call.call_id,
-                    request_summary=display.render_request(call.arguments) if display is not None else None
+                    display=request_display,
+                    request_summary=request_display,
                 )
             )
 
@@ -124,6 +127,19 @@ class ToolExecutionService:
             )
             # 记录观察结果
             observations.append(observation)
+            result_display = (
+                display.render_result_summary(observation.display_data)
+                if display is not None
+                else None
+            )
+            summary = None
+            event_data = observation.display_data or {}
+            if result_display is not None:
+                raw_summary = result_display.get("summary") or result_display.get("result_summary")
+                summary = str(raw_summary) if isinstance(raw_summary, str) else None
+                raw_data = result_display.get("data")
+                if isinstance(raw_data, dict):
+                    event_data = raw_data
 
             #工具执行结束事件
             write_event(
@@ -133,7 +149,13 @@ class ToolExecutionService:
                     tool_name=observation.tool_name,
                     status="success" if observation.status == "success" else "error",
                     tool_call_id=observation.tool_call_id,
-                    result_summary=display.render_result_summary(observation.display_data) if display is not None else None,
+                    result_summary=result_display,
+                    summary=summary,
+                    content=observation.content,
+                    error=observation.error,
+                    reason=observation.reason,
+                    retryable=observation.retryable,
+                    data=event_data,
                 ),
             )
 

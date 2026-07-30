@@ -88,7 +88,7 @@ class ToolOutputBudget:
         return replace(
             safe_observation,
             content=visible_prefix + visible_hint,
-            data=data,
+            display_data=data,
         )
 
     def _write_artifact(

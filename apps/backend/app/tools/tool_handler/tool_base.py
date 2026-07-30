@@ -102,7 +102,10 @@ class HandlerBase(ABC):
         ...
 
     @abstractmethod
-    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+    def render_result_summary(
+        self,
+        display_data: dict[str, Any],
+    ) -> str | list[dict[str, Any]] | dict[str, Any] | None:
         """将 ``ToolObservation.data`` 投影为执行后结果摘要。
 
         参数:

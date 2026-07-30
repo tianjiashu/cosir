@@ -11,6 +11,7 @@
 import fnmatch
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.tools.schemas import (
@@ -172,7 +173,7 @@ class ListDirectoryTool(HandlerBase):
             children = sorted(raw_entries, key=lambda e: (not e.is_dir(), e.name.lower()))
             page = children[offset : offset + limit]
             entries: list[str] = []
-            entry_dicts: list[dict[str, str]] = []
+            entry_dicts: list[dict[str, Any]] = []
             for entry in page:
                 entry_type = "dir" if entry.is_dir() else "file"
                 try:
@@ -183,7 +184,15 @@ class ListDirectoryTool(HandlerBase):
                     size = 0
                     modified = "unknown"
                 entries.append(f"{entry_type:4s} {size:>12}  {modified}  {entry.name}")
-                entry_dicts.append({"name": entry.name, "type": entry_type, "path": path})
+                entry_dicts.append(
+                    {
+                        "name": entry.name,
+                        "type": entry_type,
+                        "path": self._display_parent_path(path),
+                        "size": size,
+                        "modified": modified,
+                    }
+                )
         content = "\n".join(entries) if entries else "(empty directory)"
         next_offset = offset + len(page) if offset + len(page) < len(children) else None
         if next_offset is not None:
@@ -196,17 +205,123 @@ class ListDirectoryTool(HandlerBase):
             tool_name=self.name,
             content=content,
             permission=self.permission,
+            display_data={
+                "entries": entry_dicts,
+            },
         )
 
     def render_request_summary(self, arguments: dict[str, Any]) -> str:
+        """返回 list_directory 执行前摘要。
+
+        参数:
+            arguments: 工具调用参数字典。
+
+        返回:
+            待列举目录路径；缺失时返回 ``.``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
-        返回 list_directory 请求摘要。TODO: 待实现
+        path = arguments.get("path") or "."
+        return str(path)
+
+    def render_result_summary(
+        self,
+        display_data: dict[str, Any],
+    ) -> str | list[dict[str, Any]] | None:
+        """把 list_directory 执行元数据投影为前端展示契约。
+
+        参数:
+            display_data: 工具观察里的客户端展示数据。
+
+        返回:
+            失败时返回错误摘要；成功时返回包含摘要、布局与 list 条目的展示契约。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        if display_data.get("status") == "error":
+            return "error:" + str(display_data.get("error", ""))
+        raw_entries = [
+            entry for entry in display_data.get("entries", []) if isinstance(entry, dict)
+        ]
+        if not raw_entries:
+            return "（空目录）"
+        return self._render_directory_entries(raw_entries)
+
+    def _render_directory_entries(
+        self,
+        entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """把目录条目事实数据转换为前端 list 条目。
+
+        参数:
+            entries: ``execute`` 产出的目录条目事实数据。
+
+        返回:
+            带 ``kind`` / ``title`` / ``subtitle`` / ``icon`` 的展示条目列表。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
-    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
+        return [self._render_directory_entry(entry) for entry in entries]
+
+    def _render_directory_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """把单个目录条目事实数据转换为前端展示条目。
+
+        参数:
+            entry: 单个目录条目事实数据。
+
+        返回:
+            前端可直接渲染的 list item 字典。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
-        返回 list_directory 展开态摘要。TODO: 待实现
+
+        entry_type = str(entry.get("type") or "file")
+        name = str(entry.get("name") or "")
+        parent_path = str(entry.get("path") or ".")
+        return {
+            "kind": "directory_entry",
+            "icon": "folder" if entry_type == "dir" else "file",
+            "name": name,
+            "type": entry_type,
+            "path": parent_path,
+        }
+
+    def _display_parent_path(self, path: str) -> str:
+        """归一化列表项的父目录展示路径。
+
+        参数:
+            path: 用户传入的目录路径。
+
+        返回:
+            用于前端列表副标题的目录路径。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
+        if not path:
+            return "."
+        normalized = Path(path)
+        return normalized.as_posix()
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
@@ -235,7 +350,7 @@ class ListDirectoryTool(HandlerBase):
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
                 verb="读取",
-                icon="folder",
+                icon="eye",
                 title_summary=self.render_request_summary,
                 result_summary=self.render_result_summary,
                 expandable=True,
