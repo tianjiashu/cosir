@@ -14,6 +14,11 @@ import { Button } from "@/components/ui/button";
 import { logWarn } from "@/lib/logger";
 import { MessageTypography } from "./messageTypography";
 
+/** 流式期触发折叠的行数阈值（超过则折叠）。 */
+const CODE_FOLD_LINES = 12;
+/** 流式期触发折叠的字符数阈值（超过则折叠）。 */
+const CODE_FOLD_CHARS = 600;
+
 /** 代码块组件属性。 */
 interface CodeBlockProps {
   /** 代码文本内容。 */
@@ -35,6 +40,9 @@ interface CodeBlockProps {
  *   使用等宽字体 + 浅色背景 + 圆角边框渲染代码，
  *   右上角提供复制按钮（点击后显示已复制状态）。
  *   当本块为流式消息的末块时，在代码尾部渲染光标。
+ *   流式生成期间若代码超过行数/字符阈值则限高折叠，
+ *   底部提供「展开完整代码」按钮，避免长代码撑爆滚动视图；
+ *   非流式（生成完成）状态永不折叠。
  *
  * 参数:
  *   code - 代码文本；language - 语言标识；
@@ -48,12 +56,18 @@ interface CodeBlockProps {
  *   不抛出异常（复制失败仅记录告警日志）。
  *
  * 副作用:
- *   复制按钮会写入系统剪贴板并记录日志。
+ *   复制按钮会写入系统剪贴板并记录日志；
+ *   展开按钮会更新组件内部展开状态。
  *
  * TODO: 后续替换为 Monaco Editor（对齐开发计划 §1.3 预留项）。
  */
 export function CodeBlock({ code, language, streaming = false, isLastLeaf = false, className }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const lineCount = code.split("\n").length;
+  const shouldFold = streaming === true && (lineCount > CODE_FOLD_LINES || code.length > CODE_FOLD_CHARS);
+  const folded = shouldFold && !expanded;
 
   const handleCopy = useCallback(async () => {
     try {
@@ -87,13 +101,31 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
         </Button>
       </div>
 
-      {/* 代码内容 */}
-      <pre className="overflow-x-auto p-3">
-        <code className="font-mono text-xs leading-relaxed text-slate-300">{code}</code>
-        {streaming && isLastLeaf ? (
-          <span className={cn(MessageTypography.caret, "ml-0.5")} aria-hidden />
+      {/* 代码内容：流式期超阈值时限高折叠 */}
+      <div className="relative">
+        <pre className={cn("overflow-x-auto p-3", folded && "max-h-48")}>
+          <code className={cn(MessageTypography.code, "break-words text-slate-300")}>{code}</code>
+          {streaming && isLastLeaf ? (
+            <span className={cn(MessageTypography.caret, "ml-0.5")} aria-hidden />
+          ) : null}
+        </pre>
+        {folded ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-slate-950 to-transparent"
+            aria-hidden
+          />
         ) : null}
-      </pre>
+      </div>
+
+      {folded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="w-full border-t border-border/20 bg-slate-900 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+        >
+          展开完整代码
+        </button>
+      ) : null}
     </div>
   );
 }
