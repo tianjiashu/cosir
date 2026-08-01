@@ -139,7 +139,7 @@ describe("timeline projector", () => {
 
     expect(timeline).toHaveLength(1);
     expect(timeline[0].entries).toHaveLength(1);
-    expect(timeline[0].entries[0]).toEqual({
+    expect(timeline[0].entries[0]).toMatchObject({
       kind: "assistant",
       eventId: "e-1",
       content: "我来查看当前项目。",
@@ -159,7 +159,7 @@ describe("timeline projector", () => {
     expect(timeline[0].entries).toHaveLength(3);
     expect(timeline[0].entries[0]).toEqual({ kind: "assistant", eventId: "e-1", content: "我来查看" });
     expect(timeline[0].entries[1].kind).toBe("tool");
-    expect(timeline[0].entries[2]).toEqual({ kind: "assistant", eventId: "e-4", content: "继续输出" });
+    expect(timeline[0].entries[2]).toMatchObject({ kind: "assistant", eventId: "e-4", content: "继续输出" });
   });
 
   it("delta 被 status 事件中断时拆分为两条 assistant 消息", () => {
@@ -170,7 +170,7 @@ describe("timeline projector", () => {
     expect(timeline[0].entries).toHaveLength(3);
     expect(timeline[0].entries[0]).toEqual({ kind: "assistant", eventId: "e-1", content: "第一部" });
     expect(timeline[0].entries[1].kind).toBe("status");
-    expect(timeline[0].entries[2]).toEqual({ kind: "assistant", eventId: "e-3", content: "第二部" });
+    expect(timeline[0].entries[2]).toMatchObject({ kind: "assistant", eventId: "e-3", content: "第二部" });
   });
 
   it("无事件且无 response_text 时返回空 entries", () => {
@@ -208,7 +208,7 @@ describe("timeline projector", () => {
     const timeline = projectTurnTimeline([turn], events);
 
     expect(timeline[0].entries).toHaveLength(1);
-    expect(timeline[0].entries[0]).toEqual({
+    expect(timeline[0].entries[0]).toMatchObject({
       kind: "assistant",
       eventId: "e-1",
       content: "后续",
@@ -228,8 +228,8 @@ describe("timeline projector", () => {
     // 当前实现：任何非 delta 事件都会先 flush pendingDelta，因此未知事件虽自身不产出条目，
     // 但会把前后 delta 拆成两条 assistant 消息。
     expect(timeline[0].entries).toHaveLength(2);
-    expect(timeline[0].entries[0]).toEqual({ kind: "assistant", eventId: "e-1", content: "前缀" });
-    expect(timeline[0].entries[1]).toEqual({ kind: "assistant", eventId: "e-4", content: "后缀" });
+    expect(timeline[0].entries[0]).toMatchObject({ kind: "assistant", eventId: "e-1", content: "前缀" });
+    expect(timeline[0].entries[1]).toMatchObject({ kind: "assistant", eventId: "e-4", content: "后缀" });
   });
 
   it("相邻 model_thinking_delta 聚合为一条 thinking 条目，且显示在回答之前", () => {
@@ -242,8 +242,8 @@ describe("timeline projector", () => {
     const timeline = projectTurnTimeline([turn], events);
 
     expect(timeline[0].entries).toHaveLength(2);
-    expect(timeline[0].entries[0]).toEqual({ kind: "thinking", eventId: "t-1", content: "先分析需求" });
-    expect(timeline[0].entries[1]).toEqual({ kind: "assistant", eventId: "e-1", content: "我来帮你" });
+    expect(timeline[0].entries[0]).toMatchObject({ kind: "thinking", eventId: "t-1", content: "先分析需求" });
+    expect(timeline[0].entries[1]).toMatchObject({ kind: "assistant", eventId: "e-1", content: "我来帮你" });
   });
 
   it("按 turn_id 隔离事件，不同 turn 互不干扰", () => {
@@ -273,9 +273,9 @@ describe("timeline projector", () => {
 
     expect(timeline).toHaveLength(2);
     expect(timeline[0].entries).toHaveLength(1);
-    expect(timeline[0].entries[0]).toEqual({ kind: "assistant", eventId: "e-1", content: "A 的内容" });
+    expect(timeline[0].entries[0]).toMatchObject({ kind: "assistant", eventId: "e-1", content: "A 的内容" });
     expect(timeline[1].entries).toHaveLength(1);
-    expect(timeline[1].entries[0]).toEqual({ kind: "assistant", eventId: "e-2", content: "B 的内容" });
+    expect(timeline[1].entries[0]).toMatchObject({ kind: "assistant", eventId: "e-2", content: "B 的内容" });
   });
 
   it("run_failed 和 run_cancelled 投影为 status 条目", () => {
@@ -532,6 +532,61 @@ describe("projectTurnTimeline — final_response 投影为 assistant 条目", ()
     if (entry.kind === "assistant") {
       expect(entry.eventId).toBe("d1");
       expect(entry.content).toBe("流式增量部分");
+    }
+  });
+});
+
+describe("streaming 投影", () => {
+  it("进行中 assistant 块投影为 streaming:true", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [makeDelta("e-1", "Hello "), makeDelta("e-2", "World")];
+    const timeline = projectTurnTimeline([turn], events);
+
+    const entries = timeline[0].entries;
+    const last = entries[entries.length - 1];
+    expect(last.kind).toBe("assistant");
+    if (last.kind === "assistant") {
+      expect(last.content).toBe("Hello World");
+      expect(last.streaming).toBe(true);
+    }
+  });
+
+  it("delta 被工具事件中断后 flush 的块 streaming 为假", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [makeDelta("e-1", "我来查看"), makeToolRequested("e-2", "read_file")];
+    const timeline = projectTurnTimeline([turn], events);
+
+    const flushed = timeline[0].entries[0];
+    expect(flushed.kind).toBe("assistant");
+    if (flushed.kind === "assistant") {
+      expect(flushed.streaming).not.toBe(true);
+    }
+  });
+
+  it("run_finished 后无悬空 streaming 块", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [makeDelta("e-1", "输出内容"), makeRunFinished("e-2")];
+    const timeline = projectTurnTimeline([turn], events);
+
+    const hasDangling = timeline[0].entries.some(
+      (entry) => (entry.kind === "assistant" || entry.kind === "thinking") && entry.streaming === true,
+    );
+    expect(hasDangling).toBe(false);
+  });
+
+  it("思考/回答交错时各自 streaming 标志正确", () => {
+    const turn = makeTurn("turn-1", "hello");
+    const events = [makeThinking("t-1", "先分析需求"), makeDelta("e-1", "我来帮你")];
+    const timeline = projectTurnTimeline([turn], events);
+
+    const [thinking, assistant] = timeline[0].entries;
+    expect(thinking.kind).toBe("thinking");
+    if (thinking.kind === "thinking") {
+      expect(thinking.streaming).not.toBe(true);
+    }
+    expect(assistant.kind).toBe("assistant");
+    if (assistant.kind === "assistant") {
+      expect(assistant.streaming).toBe(true);
     }
   });
 });
