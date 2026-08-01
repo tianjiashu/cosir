@@ -1,9 +1,9 @@
 """FastAPI dependency wiring.
 
 进程级运行时单例（``AgentProfileRegistry`` / ``ToolSystem`` / ``AgentRuntime``）已收口到
-``app.config.configuration``；本模块仅保留领域 service 三件套单例（``_SERVICES``）及
-``build_runtime`` 装配，并对 ``configuration`` 中的单例访问器做薄壳 re-export，使现有
-``Depends(get_agent_registry)`` / ``app.py`` 等调用点零改动。
+``app.config.configuration``；领域 service 与底层 CRUD/Store 单例由 ``app.service.depends``
+统一管理。本模块仅保留 ``build_runtime`` 装配，并对 ``configuration`` 中的单例访问器
+做薄壳 re-export，使现有 ``Depends(get_agent_registry)`` / ``app.py`` 等调用点零改动。
 """
 
 from app.config.configuration import (
@@ -15,17 +15,13 @@ from app.config.configuration import (
 )
 from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
+from app.service import depends as service_depends
+from app.service.log_query_service import LogQueryService
 from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
-from app.storage.crud.runtime_event_crud import RuntimeEventCrud
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
-from app.storage.crud.turn_message_crud import TurnMessageCrud
-from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.storage.store_engines import init_storage
 from app.tools.tool_system import ToolSystem
 
 # 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持
@@ -38,7 +34,6 @@ __all__ = [
     "set_tool_system",
 ]
 
-_SERVICES: dict | None = None
 _RUNTIME: "AgentRuntime | None" = None
 
 
@@ -59,9 +54,9 @@ def build_runtime(
         OSError: If logs or SQLite storage cannot be created.
 
     Side effects:
-        Configures logging and initializes SQLite-backed stores. Backend runtime
-        limits are read from module-level static configuration instead of a
-        passed-in settings object.
+        Backend runtime limits are read from module-level static configuration
+        instead of a passed-in settings object. Storage initialization is owned
+        by application startup before this function is called.
     """
 
     tool_system = tool_system or get_tool_system()
@@ -81,7 +76,7 @@ def build_runtime(
 
 
 def _build_services() -> dict:
-    """Build and cache the process-wide domain service singletons.
+    """Build the process-wide domain service mapping.
 
     参数:
         无。后端运行配置由 ``Settings`` 类级静态属性提供，不以对象传入。
@@ -90,39 +85,20 @@ def _build_services() -> dict:
         含 ``task_service`` / ``turn_service`` / ``workspace_service`` 的字典。
 
     异常:
-        无。
+        RuntimeError: 如果应用启动尚未初始化 storage。
 
     副作用:
-        首次调用时初始化 SQLite 存储并构建 service；结果在进程内缓存复用。
+        具体 service 单例由 ``app.service.depends`` 缓存复用。
     """
 
-    global _SERVICES
-    if _SERVICES is not None:
-        return _SERVICES
-    init_storage()
-    task_crud = TaskCrud()
-    turn_crud = TurnCrud()
-    turn_message_crud = TurnMessageCrud()
-    workspace_crud = WorkspaceCrud()
-    runtime_event_crud = RuntimeEventCrud()
-    runtime_event_bus = RuntimeEventBus()
-    runtime_event_service = RuntimeEventService(runtime_event_crud, runtime_event_bus)
-    _SERVICES = {
-        "runtime_event_bus": runtime_event_bus,
-        "runtime_event_service": runtime_event_service,
-        "task_service": TaskService(
-            task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
-        ),
-        "turn_service": TurnService(
-            task_crud,
-            turn_crud,
-            turn_message_crud,
-        ),
-        "workspace_service": WorkspaceService(
-            task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
-        ),
+    return {
+        "runtime_event_bus": service_depends.get_runtime_event_bus(),
+        "runtime_event_service": service_depends.get_runtime_event_service(),
+        "task_service": service_depends.get_task_service(),
+        "turn_service": service_depends.get_turn_service(),
+        "workspace_service": service_depends.get_workspace_service(),
+        "log_query_service": service_depends.get_log_query_service(),
     }
-    return _SERVICES
 
 
 def get_workspace_service() -> WorkspaceService:
@@ -182,26 +158,23 @@ def get_turn_service() -> TurnService:
     return _build_services()["turn_service"]
 
 
-def get_runtime_event_crud() -> RuntimeEventCrud:
-    """返回运行时事件 CRUD 实例（用于事件回放查询）。
-
-    事件回放属于只读历史重建，仅依赖 ``runtime_events`` 表；``RuntimeEventCrud``
-    为无状态封装，每次调用实例化避免跨请求复用 session（与 ``TaskCrud`` 等同构）。
+def get_log_query_service() -> LogQueryService:
+    """返回进程级日志查询 service 单例。
 
     参数:
         无。
 
     返回:
-        RuntimeEventCrud。
+        LogQueryService。
 
     异常:
         RuntimeError: 若存储初始化失败。
 
     副作用:
-        无。
+        首次调用时构建并缓存 service。
     """
 
-    return RuntimeEventCrud()
+    return _build_services()["log_query_service"]
 
 
 def get_runtime_event_bus() -> RuntimeEventBus:

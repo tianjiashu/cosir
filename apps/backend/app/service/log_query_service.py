@@ -4,17 +4,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.models import LogEntryRecord, LogQuery, LogQueryResult
-from app.storage.crud.log_crud import LogStore
+from app.service import depends as service_depends
 
 
 class LogQueryService:
     """封装日志查询规则和文本渲染。"""
 
-    def __init__(self, store: LogStore, max_limit: int = 1000) -> None:
+    def __init__(self, max_limit: int = 1000) -> None:
         """初始化日志查询服务。
 
         参数:
-            store: 日志 SQLite 存储。
             max_limit: API 允许的最大 limit。
 
         返回:
@@ -24,12 +23,12 @@ class LogQueryService:
             ValueError: 如果最大 limit 小于 1。
 
         副作用:
-            保存依赖引用。
+            从 service 依赖入口取得日志存储单例并保存引用。
         """
 
         if max_limit < 1:
             raise ValueError("max_limit must be greater than zero")
-        self._store = store
+        self._store = service_depends.get_log_store()
         self._max_limit = max_limit
 
     def query_by_trace(

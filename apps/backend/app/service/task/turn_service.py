@@ -9,24 +9,32 @@
 """
 
 from app.models import RuntimeMessage, TurnRecord
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
-from app.storage.crud.turn_message_crud import TurnMessageCrud
+from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
 
 
 class TurnService:
     """Orchestrate turn creation, queries, status management, and message store."""
 
-    def __init__(
-        self,
-        task_crud: TaskCrud,
-        turn_crud: TurnCrud,
-        message_crud: TurnMessageCrud | None = None,
-    ) -> None:
-        self._task = task_crud
-        self._turn = turn_crud
-        self._message = message_crud
+    def __init__(self) -> None:
+        """初始化轮次 service。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 如果 storage 尚未初始化。
+
+        副作用:
+            从 service 依赖入口取得 CRUD 单例并保存引用。
+        """
+
+        self._task = service_depends.get_task_crud()
+        self._turn = service_depends.get_turn_crud()
+        self._message = service_depends.get_turn_message_crud()
 
     def create_turn(
         self,
@@ -145,13 +153,9 @@ class TurnService:
     def save_turn_messages(self, turn_id: str, messages: list[RuntimeMessage]) -> None:
         """Persist a turn's ordered message trajectory (cross-turn memory)."""
 
-        if self._message is None:
-            return
         self._message.save_messages(turn_id, messages)
 
     def load_turn_messages(self, turn_id: str) -> list[RuntimeMessage]:
         """Load a turn's ordered message trajectory; empty list if none stored."""
 
-        if self._message is None:
-            return []
         return self._message.load_messages(turn_id)

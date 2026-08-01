@@ -25,8 +25,6 @@ from app.models.payload import RunCancelledPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.models.turn_record import TurnRecord
-from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
-from app.service.runtime_event.runtime_event_service import RuntimeEventService
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.storage.crud.runtime_event_crud import RuntimeEventCrud
@@ -310,6 +308,84 @@ class _FailingRuntimeEventCrud:
         raise RuntimeError("persist failed")
 
 
+class _RecordingRuntimeEventService:
+    """Runtime event service fake backed by _RecordingRuntimeEventCrud."""
+
+    def __init__(self) -> None:
+        """Initialize the fake service.
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            创建内存 CRUD fake。
+        """
+
+        self._crud = _RecordingRuntimeEventCrud()
+
+    def save_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        """Persist an event without publishing.
+
+        参数:
+            event: 待记录的 runtime event。
+
+        返回:
+            写入 sequence 后的 runtime event。
+
+        异常:
+            无。
+
+        副作用:
+            追加事件字典到测试记录列表。
+        """
+
+        if event.turn_id is None:
+            self._crud.save_event(event.to_dict())
+            return event
+        sequence = self._crud.save_event_with_next_sequence(event.to_dict())
+        return replace(event, sequence=sequence)
+
+    def publish_event(self, event: RuntimeEvent) -> None:
+        """Ignore live publishing in cancellation unit tests.
+
+        参数:
+            event: 待发布的 runtime event，本 fake 不使用。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+    def save_and_publish(self, event: RuntimeEvent) -> RuntimeEvent:
+        """Persist an event and skip live publishing.
+
+        参数:
+            event: 待记录的 runtime event。
+
+        返回:
+            写入 sequence 后的 runtime event。
+
+        异常:
+            无。
+
+        副作用:
+            追加事件字典到测试记录列表。
+        """
+
+        return self.save_event(event)
+
+
 class _FakeScheduler:
     """Record tool execution order for cancellation tests."""
 
@@ -531,10 +607,7 @@ def _runtime(turn_service: _FakeTurnService) -> AgentRuntime:
         context_builder=None,  # type: ignore[arg-type]
         tool_scheduler=None,  # type: ignore[arg-type]
         agent_registry=None,  # type: ignore[arg-type]
-        runtime_event_service=RuntimeEventService(
-            _RecordingRuntimeEventCrud(),  # type: ignore[arg-type]
-            RuntimeEventBus(),
-        ),
+        runtime_event_service=_RecordingRuntimeEventService(),  # type: ignore[arg-type]
     )
 
 

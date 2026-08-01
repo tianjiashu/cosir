@@ -13,6 +13,7 @@ from app.api.turns_api import _sse_turn_events
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload
 from app.models.runtime_event import RuntimeEvent
+from app.service import depends as service_depends
 from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.runtime_event.runtime_event_service import RuntimeEventService
 
@@ -169,12 +170,16 @@ class _BlockingRuntime:
 
 
 @pytest.mark.asyncio
-async def test_runtime_event_service_saves_and_publishes_to_subscriber() -> None:
+async def test_runtime_event_service_saves_and_publishes_to_subscriber(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Saving a runtime event must publish the stamped event to turn subscribers."""
 
     crud = _RecordingRuntimeEventCrud()
     bus = RuntimeEventBus()
-    service = RuntimeEventService(crud, bus)  # type: ignore[arg-type]
+    monkeypatch.setattr(service_depends, "get_runtime_event_crud", lambda: crud)
+    monkeypatch.setattr(service_depends, "get_runtime_event_bus", lambda: bus)
+    service = RuntimeEventService()
     subscription = bus.subscribe("turn-1")
     event = RuntimeEvent(
         event_type=EventType.RUN_CANCELLED,

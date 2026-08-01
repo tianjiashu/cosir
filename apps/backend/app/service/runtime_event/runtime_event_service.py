@@ -5,19 +5,18 @@ from __future__ import annotations
 import dataclasses
 
 from app.models.runtime_event import RuntimeEvent
+from app.service import depends as service_depends
 from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
-from app.storage.crud.runtime_event_crud import RuntimeEventCrud
 
 
 class RuntimeEventService:
     """Persist runtime events and publish the saved event to live subscribers."""
 
-    def __init__(self, runtime_event_crud: RuntimeEventCrud, event_bus: RuntimeEventBus) -> None:
+    def __init__(self) -> None:
         """Initialize the runtime event service.
 
         参数:
-            runtime_event_crud: runtime_events 表 CRUD。
-            event_bus: 进程内 runtime event 广播总线。
+            无。
 
         返回:
             无。
@@ -26,11 +25,11 @@ class RuntimeEventService:
             无。
 
         副作用:
-            持有 CRUD 与 bus 引用。
+            从 service 依赖入口取得 CRUD 与 bus 单例并保存引用。
         """
 
-        self._runtime_event_crud = runtime_event_crud
-        self._event_bus = event_bus
+        self._runtime_event_crud = service_depends.get_runtime_event_crud()
+        self._event_bus = service_depends.get_runtime_event_bus()
 
     @property
     def event_bus(self) -> RuntimeEventBus:
@@ -110,3 +109,39 @@ class RuntimeEventService:
         stamped = self.save_event(event)
         self.publish_event(stamped)
         return stamped
+
+    def list_by_task(self, task_id: str) -> list[dict[str, object]]:
+        """List persisted runtime events under a task.
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            按 turn 与 sequence 升序排列的事件字典列表。
+
+        异常:
+            RuntimeError: 如果底层查询失败。
+
+        副作用:
+            读取 runtime_events 表。
+        """
+
+        return self._runtime_event_crud.list_by_task(task_id)
+
+    def list_by_turn(self, turn_id: str) -> list[dict[str, object]]:
+        """List persisted runtime events under a turn.
+
+        参数:
+            turn_id: 轮次标识。
+
+        返回:
+            按 sequence 升序排列的事件字典列表。
+
+        异常:
+            RuntimeError: 如果底层查询失败。
+
+        副作用:
+            读取 runtime_events 表。
+        """
+
+        return self._runtime_event_crud.list_by_turn(turn_id)

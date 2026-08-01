@@ -14,11 +14,7 @@ from uuid import uuid4
 from app.config.configuration import build_agent_registry, get_agent_registry
 from app.config.logging.logger import log
 from app.models import TaskRecord
-from app.storage.crud.runtime_event_crud import RuntimeEventCrud
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
-from app.storage.crud.turn_message_crud import TurnMessageCrud
-from app.storage.crud.workspace_crud import WorkspaceCrud
+from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
 
 
@@ -52,19 +48,27 @@ def _registered_agent_ids() -> set[str]:
 class TaskService:
     """Orchestrate task creation, lifecycle management, and execution-status derivation."""
 
-    def __init__(
-        self,
-        task_crud: TaskCrud,
-        turn_crud: TurnCrud,
-        workspace_crud: WorkspaceCrud,
-        runtime_event_crud: RuntimeEventCrud,
-        turn_message_crud: TurnMessageCrud,
-    ) -> None:
-        self._task = task_crud
-        self._turn = turn_crud
-        self._workspace = workspace_crud
-        self._runtime_event = runtime_event_crud
-        self._turn_message = turn_message_crud
+    def __init__(self) -> None:
+        """初始化任务 service。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 如果 storage 尚未初始化。
+
+        副作用:
+            从 service 依赖入口取得 CRUD 单例并保存引用。
+        """
+
+        self._task = service_depends.get_task_crud()
+        self._turn = service_depends.get_turn_crud()
+        self._workspace = service_depends.get_workspace_crud()
+        self._runtime_event = service_depends.get_runtime_event_crud()
+        self._turn_message = service_depends.get_turn_message_crud()
 
     def create_task(
         self,

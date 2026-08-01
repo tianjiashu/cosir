@@ -178,7 +178,7 @@
     "/tasks/{task_id}/events": {
       "get": {
         "summary": "Replay Task Events",
-        "description": "回放某任务下的完整运行时事件流（按 turn + sequence 升序）。\n\n用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史\n回看与刷新后重连重渲染；只读查询，不重新执行 Agent。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。\n    event_crud: 通过依赖注入的运行时事件 CRUD。\n\n返回:\n    按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。\n\n异常:\n    HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。\n\n副作用:\n    无（只读查询）。",
+        "description": "回放某任务下的完整运行时事件流（按 turn + sequence 升序）。\n\n用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史\n回看与刷新后重连重渲染；只读查询，不重新执行 Agent。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。\n    event_service: 通过依赖注入的运行时事件 service。\n\n返回:\n    按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。\n\n异常:\n    HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。\n\n副作用:\n    无（只读查询）。",
         "operationId": "replay_task_events_tasks__task_id__events_get",
         "parameters": [
           {
@@ -222,7 +222,7 @@
     "/tasks/{task_id}/turns/{turn_id}/events": {
       "get": {
         "summary": "Replay Turn Events",
-        "description": "回放某轮次下的运行时事件流（按 sequence 升序）。\n\n用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需\n隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。\n\n参数:\n    task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。\n    turn_id: 来自路由的轮次标识。\n    event_crud: 通过依赖注入的运行时事件 CRUD。\n\n返回:\n    按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。\n\n异常:\n    无。\n\n副作用:\n    无（只读查询）。",
+        "description": "回放某轮次下的运行时事件流（按 sequence 升序）。\n\n用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需\n隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。\n\n参数:\n    task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。\n    turn_id: 来自路由的轮次标识。\n    event_service: 通过依赖注入的运行时事件 service。\n\n返回:\n    按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。\n\n异常:\n    无。\n\n副作用:\n    无（只读查询）。",
         "operationId": "replay_turn_events_tasks__task_id__turns__turn_id__events_get",
         "parameters": [
           {
@@ -553,7 +553,7 @@
     "/logs/query": {
       "get": {
         "summary": "Query Logs",
-        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
+        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
         "operationId": "query_logs_logs_query_get",
         "parameters": [
           {
@@ -635,7 +635,7 @@
     "/logs/recent": {
       "get": {
         "summary": "Recent Logs",
-        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
+        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
         "operationId": "recent_logs_logs_recent_get",
         "parameters": [
           {
