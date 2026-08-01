@@ -22,3 +22,4 @@ def test_tool_system_registers_web_search() -> None:
     system = ToolSystem.build_tool_system()
 
     assert system.registry.get_tool_definition("web_search") is not None
+    assert system.registry.get_tool_definition("web_extract") is not None
