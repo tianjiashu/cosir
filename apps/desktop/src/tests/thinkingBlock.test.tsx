@@ -49,7 +49,7 @@ describe("ThinkingBlock 流式行为", () => {
     await renderBlock("正在思考的中间过程", true);
 
     expect(container.textContent).toContain("正在思考的中间过程");
-    expect(container.querySelector('[aria-hidden="true"].animate-pulse')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stream-caret"]')).not.toBeNull();
     expect(findToggle()).toBeUndefined();
     expect(container.textContent).not.toContain("深度思考");
   });
@@ -67,7 +67,7 @@ describe("ThinkingBlock 流式行为", () => {
 
     expect(container.textContent).toContain("被折叠的思考内容");
     // 非流式期不应出现流式光标
-    expect(container.querySelector('[aria-hidden="true"].animate-pulse')).toBeNull();
+    expect(container.querySelector('[data-testid="stream-caret"]')).toBeNull();
   });
 
   it("内容为纯空白时不渲染任何元素", async () => {

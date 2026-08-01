@@ -38,9 +38,9 @@ async function renderMessage(content: string, streaming?: boolean): Promise<void
   });
 }
 
-/** 查询 caret 元素（流式光标以 aria-hidden + animate-pulse 标识）。 */
+/** 查询 caret 元素（流式光标以 data-testid="stream-caret" 标识）。 */
 function queryCaret(scope: ParentNode = container): Element | null {
-  return scope.querySelector('[aria-hidden="true"].animate-pulse');
+  return scope.querySelector('[data-testid="stream-caret"]');
 }
 
 describe("AgentMessage 流式 caret", () => {
@@ -64,7 +64,7 @@ describe("AgentMessage 流式 caret", () => {
     const lastParagraph = paragraphs[paragraphs.length - 1];
     expect(queryCaret(lastParagraph)).not.toBeNull();
     // caret 只出现一次，不应每个段落都挂
-    expect(container.querySelectorAll('[aria-hidden="true"].animate-pulse')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-testid="stream-caret"]')).toHaveLength(1);
   });
 
   it("代码块结尾的内容把 caret 放进 <pre>", async () => {
@@ -78,6 +78,22 @@ describe("AgentMessage 流式 caret", () => {
     paragraphs.forEach((paragraph) => {
       expect(queryCaret(paragraph)).toBeNull();
     });
+  });
+
+  it("空段落守卫不误删「只含行内元素」的段落（M2 回归）", async () => {
+    // 旧实现把 children 非字符串的段落也判为空并 return null，
+    // 导致 **bold** / `code` / [link]() 这类整段内容被整体吞掉。
+    await renderMessage("**bold**", false);
+
+    expect(container.querySelector("strong")?.textContent).toBe("bold");
+    expect(container.textContent).toContain("bold");
+  });
+
+  it("空段落守卫仍丢弃纯空白段落", async () => {
+    await renderMessage("正文\n\n&#32;\n", false);
+
+    // 纯空白字符串段落不应产生可见文本残留。
+    expect(container.textContent?.trim()).toBe("正文");
   });
 
   it("消息主体容器带 min-h-[1.5em] 与 min-w-0", async () => {

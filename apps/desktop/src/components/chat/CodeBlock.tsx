@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { logWarn } from "@/lib/logger";
 import { MessageTypography } from "./messageTypography";
+import { StreamingCaret } from "./StreamingCaret";
 
 /** 流式期触发折叠的行数阈值（超过则折叠）。 */
 const CODE_FOLD_LINES = 12;
@@ -105,9 +106,7 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
       <div className="relative">
         <pre className={cn("overflow-x-auto p-3", folded && "max-h-48 overflow-y-hidden")}>
           <code className={cn(MessageTypography.code, "break-words text-slate-300")}>{code}</code>
-          {streaming && isLastLeaf ? (
-            <span className={cn(MessageTypography.caret, "ml-0.5")} aria-hidden />
-          ) : null}
+          <StreamingCaret show={streaming && isLastLeaf} />
         </pre>
         {folded ? (
           <div

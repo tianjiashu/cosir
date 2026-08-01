@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { CodeBlock } from "./CodeBlock";
 import { FileLink } from "./FileLink";
 import { MessageTypography } from "./messageTypography";
+import { StreamingCaret } from "./StreamingCaret";
 
 /** Agent 消息组件属性。 */
 interface AgentMessageProps {
@@ -97,28 +98,6 @@ function lastBlockStartLine(content: string): number {
 }
 
 /**
- * 流式光标元素。
- *
- * 目的:
- *   统一 caret 的样式与无障碍属性，避免各处重复书写类名。
- *
- * 参数:
- *   无。
- *
- * 返回:
- *   一个 `aria-hidden` 的装饰性 span 元素。
- *
- * 异常:
- *   不抛出异常。
- *
- * 副作用:
- *   无。
- */
-function StreamingCaret() {
-  return <span className={cn(MessageTypography.caret, "ml-0.5")} aria-hidden />;
-}
-
-/**
  * 构建 react-markdown 的自定义组件映射。
  *
  * 目的:
@@ -129,6 +108,7 @@ function StreamingCaret() {
  *   streaming - 是否处于流式生成中。
  *   lastTag - `lastBlockTag` 探测出的末块类型。
  *   hasContent - 内容去空白后是否非空（空内容不渲染光标）。
+ *   lastLine - `lastBlockStartLine` 算出的末块起始行号。
  *
  * 返回:
  *   react-markdown 的 `Components` 映射对象。
@@ -143,7 +123,7 @@ function buildMarkdownComponents(
   streaming: boolean,
   lastTag: "pre" | "p",
   hasContent: boolean,
-  lastBlockStartLine: number,
+  lastLine: number,
 ): Components {
   const caretInCode = streaming && hasContent && lastTag === "pre";
   const caretInParagraph = streaming && hasContent && lastTag === "p";
@@ -177,11 +157,11 @@ function buildMarkdownComponents(
       const text = typeof children === "string" ? children : "";
       if (typeof children === "string" && !text.trim()) return null;
       // 仅「源码行号等于末块起始行」的段落挂 caret，避免多段落时每段都挂。
-      const isLast = node?.position?.start.line === lastBlockStartLine;
+      const isLast = node?.position?.start.line === lastLine;
       return (
         <p className="whitespace-pre-wrap">
           {children}
-          {caretInParagraph && isLast ? <StreamingCaret /> : null}
+          <StreamingCaret show={caretInParagraph && isLast} />
         </p>
       );
     },

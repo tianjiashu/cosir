@@ -62,9 +62,9 @@ function queryByText(text: string): Element | null {
   return nodes.find((node) => node.textContent?.trim() === text) ?? null;
 }
 
-/** 查询流式光标元素（aria-hidden + animate-pulse 标识）。 */
+/** 查询流式光标元素（data-testid="stream-caret" 标识）。 */
 function queryCaret(scope: ParentNode = container): Element | null {
-  return scope.querySelector('[aria-hidden="true"].animate-pulse');
+  return scope.querySelector('[data-testid="stream-caret"]');
 }
 
 describe("CodeBlock 流式折叠", () => {

@@ -16,6 +16,7 @@ import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logInfo } from "@/lib/logger";
 import { MessageTypography } from "./messageTypography";
+import { StreamingCaret } from "./StreamingCaret";
 
 /** ThinkingBlock 组件属性。 */
 interface ThinkingBlockProps {
@@ -80,7 +81,7 @@ export function ThinkingBlock({ content, streaming = false, className }: Thinkin
         <div className={cn(CONTENT_BOX_CLASS, MessageTypography.secondary)}>
           <div className="whitespace-pre-wrap">
             {content}
-            <span className={cn(MessageTypography.caret, "ml-0.5")} aria-hidden />
+            <StreamingCaret show />
           </div>
         </div>
       </div>
