@@ -9,6 +9,8 @@
 
 import { cn } from "@/lib/utils";
 
+import { MessageTypography } from "./messageTypography";
+
 /** 用户消息组件属性。 */
 interface UserMessageProps {
   /** 消息文本内容。 */
@@ -30,7 +32,12 @@ export function UserMessage({ content, className }: UserMessageProps) {
   }
   return (
     <div className={cn("flex justify-end", className)}>
-      <div className="max-w-[85%] rounded-lg rounded-br-sm bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm">
+      <div
+        className={cn(
+          "max-w-[85%] rounded-lg rounded-br-sm bg-primary px-4 py-2.5 text-primary-foreground shadow-sm",
+          MessageTypography.body,
+        )}
+      >
         <p className="whitespace-pre-wrap">{trimmed}</p>
       </div>
     </div>

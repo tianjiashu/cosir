@@ -66,8 +66,8 @@ export interface TimelineToolItem {
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
 export type TurnTimelineEntry =
-  | { kind: "assistant"; eventId: string; content: string }
-  | { kind: "thinking"; eventId: string; content: string }
+  | { kind: "assistant"; eventId: string; content: string; streaming?: boolean }
+  | { kind: "thinking"; eventId: string; content: string; streaming?: boolean }
   | { kind: "tool"; item: TimelineToolItem }
   | { kind: "status"; eventId: string; eventType: RuntimeEvent["event_type"]; payload: RuntimeEvent["payload"] };
 
@@ -121,8 +121,13 @@ export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[])
  *
  * 未识别的事件类型（如 `run_started`、`step_started` 等）不产生渲染条目，
  * 但同样会中断相邻 delta 的聚合。
+ *
+ * 块级 streaming 语义：被后续事件中断而定稿的块不带 `streaming`；
+ * 事件流耗尽时仍在累积的块标记 `streaming: true`。由于 `run_finished` /
+ * `run_failed` / `run_cancelled` 属于非 delta 事件，会先触发 flush，
+ * 因此运行结束后不会残留 `streaming: true` 的悬空块。
  * @param events - 单个 turn 下的 runtime event 列表。
- * @returns 可按原始事件顺序渲染的 timeline 条目。
+ * @returns 可按原始事件顺序渲染的 timeline 条目；进行中的块带 `streaming: true`。
  *
  * @throws 不抛出异常。
  *
@@ -167,6 +172,44 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     if (pendingDelta) {
       entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
       pendingDelta = null;
+    }
+  };
+
+  /**
+   * 在事件流末尾把仍未被中断的 pending 块投影为「进行中」条目。
+   *
+   * 与 `flushPending` 的区别：`flushPending` 处理的是被后续事件中断、
+   * 已经定稿的块（不带 streaming）；本函数处理的是流尚未结束、
+   * 后续 delta 仍会继续追加的块，因此标记 `streaming: true`，
+   * 供渲染层做「正在输出」的排版处理（如光标、去抖动）。
+   *
+   * 参数:
+   *   无。
+   *
+   * 返回:
+   *   无返回值。
+   *
+   * @throws 不抛出异常。
+   *
+   * @sideeffect 向闭包内的 `entries` 追加条目；**不清空** `pendingDelta` /
+   *   `pendingThinking`，以便下一次重新投影时能从已累积状态继续。
+   */
+  const flushPendingFinal = () => {
+    if (pendingThinking && pendingThinking.content.trim().length > 0) {
+      entries.push({
+        kind: "thinking",
+        eventId: pendingThinking.eventId,
+        content: pendingThinking.content,
+        streaming: true,
+      });
+    }
+    if (pendingDelta) {
+      entries.push({
+        kind: "assistant",
+        eventId: pendingDelta.eventId,
+        content: pendingDelta.content,
+        streaming: true,
+      });
     }
   };
 
@@ -254,7 +297,7 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     }
   }
 
-  flushPending();
+  flushPendingFinal();
 
   return entries;
 }

@@ -78,7 +78,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
             });
             return (
               <div key={entry.eventId} className={widthClass}>
-                <ThinkingBlock content={entry.content} />
+                <ThinkingBlock content={entry.content} streaming={entry.streaming} />
               </div>
             );
           }
@@ -94,7 +94,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
         if (entry.kind === "assistant") {
           return entry.content.length > 0 ? (
             <div key={entry.eventId} className={widthClass}>
-              <AgentMessage content={entry.content} />
+              <AgentMessage content={entry.content} streaming={entry.streaming} />
             </div>
           ) : null;
         }
