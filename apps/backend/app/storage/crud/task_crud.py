@@ -50,8 +50,8 @@ class TaskCrud:
         input_text: str,
         title: str,
         last_message_preview: str,
-        latest_turn_id: str,
-        status: str,
+        latest_turn_id: str | None = None,
+        status: str | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
@@ -65,8 +65,8 @@ class TaskCrud:
             input_text: 任务的原始输入文本。
             title: 任务标题。
             last_message_preview: 最近一条消息的预览文本。
-            latest_turn_id: 最新一轮对话的 turn 标识。
-            status: 任务初始状态。
+            latest_turn_id: 最新一轮对话的 turn 标识，允许为 None（task 创建时首 turn 尚未生成）。
+            status: 任务初始状态，允许为 None，缺省时回退为 ``"pending"``。
 
         返回:
             落库成功的 ``TaskRecord``（含填充好的创建 / 更新时间）。
@@ -79,6 +79,7 @@ class TaskCrud:
             向 ``tasks`` 表插入一行。
         """
         now = utc_now()
+        effective_status = status or "pending"
         task = TaskRecord(
             task_id=task_id,
             workspace_id=workspace_id,
@@ -87,7 +88,7 @@ class TaskCrud:
             title=title,
             last_message_preview=last_message_preview,
             latest_turn_id=latest_turn_id,
-            status=status,
+            status=effective_status,
             created_at=now,
             updated_at=now,
         )

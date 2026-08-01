@@ -10,6 +10,8 @@ token 由 ``model.astream()`` 产出并在节点内就地翻译为增量事件�
 状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
 """
 
+from time import perf_counter
+
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.config import get_config, get_stream_writer
 from langgraph.types import interrupt
@@ -130,6 +132,33 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     )
 
 
+def _extract_usage_from_chunk(chunk: AIMessageChunk) -> dict[str, int | float] | None:
+    """从模型流式分块中提取可用 token usage 元数据。
+
+    不同 provider/SDK 把 usage 放在不同位置：LangChain 标准 ``usage_metadata``、
+    OpenAI 适配器的 ``response_metadata.token_usage`` / ``response_metadata.usage`` 等。
+    本函数按优先级尝试，返回第一个非空字典；都没有则返回 None。
+
+    参数:
+        chunk: 模型 ``astream`` 产出的单个消息分块。
+
+    返回:
+        可用的 usage 字典；无则 None。
+    """
+
+    usage = getattr(chunk, "usage_metadata", None)
+    if isinstance(usage, dict) and usage:
+        return usage
+    response_metadata = getattr(chunk, "response_metadata", None)
+    if not isinstance(response_metadata, dict):
+        return None
+    for key in ("token_usage", "usage"):
+        candidate = response_metadata.get(key)
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return None
+
+
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
@@ -208,6 +237,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                 ModelOutputDeltaPayload(step_id=step_id, text=text),
             )
         chunks.append(chunk)  # 所有 chunk 都留着，后面合并成完整消息
+        chunk_usage = _extract_usage_from_chunk(chunk)
+        if chunk_usage is not None:
+            rc.usage_stats.add_message_usage(chunk_usage)
         reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
         # 过滤纯空白分片：DeepSeek 推理流会在词间/段间推送单独的空格或换行 token
         # （如 " "、"\n"、".\n\n"），Python 中非空即 truthy，若仅用 `if reasoning` 判断
@@ -330,10 +362,22 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
         operations.update_turn_status(turn.turn_id, "completed")  # turn 标完成
         operations.update_turn_response(turn.turn_id, output_text)  # 回复文本落库（历史回看用）
-        # 整个 run 结束
+        # 整个 run 结束：计算耗时并汇总 token
+        duration_ms = int((perf_counter() - rc.start_time) * 1000)
+        usage = rc.usage_stats.to_dict()
         write_event(
             EventType.RUN_FINISHED,
-            RunFinishedPayload(status="completed", step_id=step_id),
+            RunFinishedPayload(
+                status="completed",
+                step_id=step_id,
+                duration_ms=duration_ms,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                total_tokens=usage["total_tokens"],
+                cache_hit_tokens=usage["cache_hit_tokens"],
+                cache_miss_tokens=usage["cache_miss_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+            ),
         )
         return {
             "step_count": step_count,

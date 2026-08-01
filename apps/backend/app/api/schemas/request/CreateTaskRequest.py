@@ -19,6 +19,7 @@ class CreateTaskRequest(BaseModel):
     """
 
     text: str
+    agent_id: str
     workspace_id: str
 
     @field_validator("text")

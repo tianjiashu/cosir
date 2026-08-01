@@ -126,6 +126,7 @@ class ToolExecutionService:
                     tool_name=call.tool_name,
                     step_id=step_id,
                     tool_call_id=call.call_id,
+                    arguments=call.arguments if isinstance(call.arguments, dict) else {},
                     display=request_display,
                     request_summary=request_display,
                 ),

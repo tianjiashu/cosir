@@ -27,7 +27,7 @@ describe("api.ts — post/get 网络失败分支", () => {
   it("POST fetch 抛错 → 抛出 ServiceError 且经 logError（含 path/method）", async () => {
     const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchImpl = mockFetch(new Error("network down"));
-    await expect(createTask({ text: "x", workspace_id: "workspace-1" })).rejects.toBeInstanceOf(ServiceError);
+    await expect(createTask({ text: "x", workspace_id: "workspace-1", agent_id: "developer" })).rejects.toBeInstanceOf(ServiceError);
     const init = fetchImpl.mock.calls[0][1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers["x-trace-id"]).toMatch(/^[0-9a-f]{32}$/);
@@ -176,7 +176,7 @@ describe("api.ts — post/get 网络失败分支", () => {
       }),
       json: async () => taskRecord,
     } as unknown as Response);
-    const result = await createTask({ text: "x", workspace_id: "workspace-1" });
+    const result = await createTask({ text: "x", workspace_id: "workspace-1", agent_id: "developer" });
     expect(result.task_id).toBe("t-1");
     const lastTrace = useClientTraceStore.getState().lastTrace;
     expect(lastTrace?.traceId).toBe("1234567890abcdef1234567890abcdef");

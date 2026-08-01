@@ -30,6 +30,10 @@ vi.mock("@/lib/logger", () => ({
   logDebug: vi.fn(),
 }));
 
+vi.mock("@/services/api", () => ({
+  listAgents: vi.fn(() => new Promise(() => undefined)),
+}));
+
 let container: HTMLDivElement;
 let root: Root;
 

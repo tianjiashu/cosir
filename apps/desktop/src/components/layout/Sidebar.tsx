@@ -32,6 +32,7 @@ import { deleteTask as deleteTaskApi } from "@/services/api";
 import { logError } from "@/lib/logger";
 import type { TaskRecord } from "@shared/task";
 import type { WorkspaceRecord } from "@shared/workspace";
+import appIconUrl from "../../../src-tauri/icons/icon.png";
 
 /** Sidebar 组件属性。 */
 interface SidebarProps {
@@ -136,7 +137,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     <aside className="flex h-full w-60 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
       {/* 应用标题 */}
       <div className="flex h-12 items-center gap-2 px-4 font-semibold tracking-tight">
-        <img src="../../src-tauri/icons/icon.png" alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />
+        <img src={appIconUrl} alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />
         <span>Coding Agent</span>
       </div>
 

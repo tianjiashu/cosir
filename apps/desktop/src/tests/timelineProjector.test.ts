@@ -56,7 +56,7 @@ function makeDeltaWithPayload(eventId: string, payload: Record<string, unknown>,
 function makeToolRequested(eventId: string, toolName: string, sequence = 1): RuntimeEvent {
   return {
     event_id: eventId,
-    event_type: "tool_call_requested",
+    event_type: "tool_call_started",
     task_id: "task-1",
     turn_id: "turn-1",
     sequence,
@@ -327,12 +327,12 @@ describe("timeline projector", () => {
     });
   });
 
-  it("tool_call_requested 与 tool_call_finished 按 callId 合并为单条且保留参数", () => {
+  it("tool_call_started 与 tool_call_finished 按 callId 合并为单条且保留参数", () => {
     const turn = makeTurn("turn-1", "hello");
     const events = [
       {
         event_id: "e-1",
-        event_type: "tool_call_requested",
+        event_type: "tool_call_started",
         task_id: "task-1",
         turn_id: "turn-1",
         sequence: 1,
@@ -364,12 +364,12 @@ describe("timeline projector", () => {
     });
   });
 
-  it("tool_call_requested 的 display 透传为 camelCase 的 ToolDisplayInfo", () => {
+  it("tool_call_started 的 display 透传为 camelCase 的 ToolDisplayInfo", () => {
     const turn = makeTurn("turn-1", "hello");
     const events = [
       {
         event_id: "e-1",
-        event_type: "tool_call_requested",
+        event_type: "tool_call_started",
         task_id: "task-1",
         turn_id: "turn-1",
         sequence: 1,
@@ -411,7 +411,7 @@ describe("timeline projector", () => {
     const events = [
       {
         event_id: "e-1",
-        event_type: "tool_call_requested",
+        event_type: "tool_call_started",
         task_id: "task-1",
         turn_id: "turn-1",
         sequence: 1,

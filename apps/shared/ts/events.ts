@@ -19,7 +19,6 @@ export type RuntimeEventType =
   | "model_thinking_delta"
   | "model_completed"
   | "model_failed"
-  | "tool_call_requested"
   | "tool_call_started"
   | "tool_call_finished"
   | "observation_added"
@@ -60,6 +59,13 @@ export interface RunCancelledPayload extends RuntimeEventPayloadObject {
 export interface RunFinishedPayload extends RuntimeEventPayloadObject {
   status: "completed";
   step_id?: string | null;
+  duration_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cache_hit_tokens?: number;
+  cache_miss_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 export interface StepStartedPayload extends RuntimeEventPayloadObject {
@@ -95,18 +101,13 @@ export interface ModelFailedPayload extends RuntimeEventPayloadObject {
   status?: "failed" | null;
 }
 
-export interface ToolCallRequestedPayload extends RuntimeEventPayloadObject {
-  tool_name: string;
-  arguments?: Record<string, unknown>;
-  step_id?: string | null;
-  tool_call_id?: string | null;
-  display?: Record<string, unknown> | null;
-}
-
 export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {
   tool_name: string;
   step_id?: string | null;
   tool_call_id?: string | null;
+  arguments?: Record<string, unknown> | null;
+  display?: Record<string, unknown> | null;
+  request_summary?: Record<string, unknown> | null;
 }
 
 export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
@@ -114,6 +115,7 @@ export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
   tool_name: string;
   status: "success" | "error";
   tool_call_id: string;
+  result_summary?: Record<string, unknown> | Record<string, unknown>[] | null;
   summary?: string | null;
   content?: string | null;
   error?: string;
@@ -161,7 +163,6 @@ export interface RuntimeEventPayloadMap {
   model_thinking_delta: ModelThinkingDeltaPayload;
   model_completed: ModelCompletedPayload;
   model_failed: ModelFailedPayload;
-  tool_call_requested: ToolCallRequestedPayload;
   tool_call_started: ToolCallStartedPayload;
   tool_call_finished: ToolCallFinishedPayload;
   observation_added: ObservationAddedPayload;

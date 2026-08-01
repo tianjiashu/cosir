@@ -48,11 +48,11 @@ class Settings:
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
+    # 密钥仅通过环境变量（``CODING_AGENT_LANGFUSE_*``）注入，不写入代码库，避免泄露。
     LANGFUSE_ENABLED: ClassVar[bool] = False
-    # project 级写入密钥，仅存环境变量，不落库、不进日志、不进 trace metadata。
     LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
     LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
-    # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
+    # 云服务器经反向代理对外暴露的域名（指向 langfuse/server）。
     LANGFUSE_BASE_URL: ClassVar[str] = "https://langfuse.your-cloud.example.com"
 
     # 允许被 ``override`` 覆盖的字段名集合；实际值在 ``Settings`` 类定义结束后由

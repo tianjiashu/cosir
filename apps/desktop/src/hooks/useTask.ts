@@ -96,12 +96,12 @@ export function useTask(): UseTaskReturn {
       if (ownsOperation) {
         beginClientTrace();
       }
+      const temporaryTaskId = `temp-${Date.now()}`;
 
       try {
         // 断开旧的 SSE 连接
         disconnect();
 
-        const temporaryTaskId = `temp-${Date.now()}`;
         const now = new Date().toISOString();
         addTask({
           task_id: temporaryTaskId,
@@ -119,7 +119,11 @@ export function useTask(): UseTaskReturn {
         setActiveTask(temporaryTaskId, null);
 
         // 调用 API 创建任务
-        const task = await api.createTask({ text, workspace_id: workspaceId });
+        const task = await api.createTask({
+          text,
+          workspace_id: workspaceId,
+          agent_id: selectedAgentId,
+        });
         const turns = await api.listTaskTurns(task.task_id);
         const firstTurn = turns[turns.length - 1] ?? null;
         const taskWithResolvedTurn = firstTurn
@@ -146,10 +150,7 @@ export function useTask(): UseTaskReturn {
       } catch (err) {
         const message = err instanceof Error ? err.message : "创建任务失败";
         logError("createTask 失败", err, { module: "useTask" });
-        const temporaryTask = useTaskStore.getState().tasks.find((task) => task.task_id.startsWith("temp-"));
-        if (temporaryTask) {
-          removeTask(temporaryTask.task_id);
-        }
+        removeTask(temporaryTaskId);
         setOperation({ loading: false, error: message });
         return false;
       } finally {
@@ -208,7 +209,7 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [activeTaskId, connect, disconnect, setActiveTurn, setStreamingTurn, updateTask, upsertTurn],
+    [activeTaskId, connect, disconnect, selectedAgentId, setActiveTurn, setStreamingTurn, updateTask, upsertTurn],
   );
 
   /**

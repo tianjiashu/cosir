@@ -14,12 +14,13 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.language_models import BaseChatModel
 
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TaskRecord, TurnRecord
+from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
 
@@ -45,6 +46,10 @@ class RuntimeConfig:
         model: 已绑定工具的 LangChain chat model 实例，供 model 节点推理。
         approval_resolver: 可选的工具审批解析器；``tools`` 节点因 ``interrupt()`` 暂停时，
             用它把待审批的工具调用解析为「批准执行的调用列表」。``None`` 表示直接批准全部调用。
+        start_time: graph 开始执行的 ``time.perf_counter()`` 时间戳，用于在 ``run_finished``
+            中计算耗时。
+        usage_stats: turn 级 token 与耗时累加器；model 节点在每次模型调用后把
+            ``usage_metadata`` 累加进来，``run_finished`` 事件读取后下发给前端。
     """
 
     operations: RuntimeOperations
@@ -52,3 +57,5 @@ class RuntimeConfig:
     turn: TurnRecord
     model: BaseChatModel
     approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None
+    start_time: float = 0.0
+    usage_stats: TurnUsageStats = field(default_factory=TurnUsageStats)

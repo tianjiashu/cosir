@@ -270,7 +270,7 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
  * @sideeffect 无。
  */
 function projectTool(event: RuntimeEvent): TimelineToolItem | null {
-  if (event.event_type === "tool_call_requested" || event.event_type === "tool_call_started") {
+  if (event.event_type === "tool_call_started") {
     const payload = event.payload as {
       tool_name?: string;
       arguments?: Record<string, unknown>;

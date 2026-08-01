@@ -438,17 +438,6 @@
         "summary": "Create Workspace Task",
         "description": "在工作区下创建任务容器和首个 pending turn。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    payload: 包含首条用户输入的请求体。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    创建后的 ``TaskResponse``。\n\n异常:\n    HTTPException: 当工作区不存在或输入非法时抛出。\n\n副作用:\n    在存储中创建 task 与首个 turn。",
         "operationId": "create_workspace_task_workspaces__workspace_id__tasks_post",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Workspace Id"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -796,6 +785,10 @@
             "type": "string",
             "title": "Text"
           },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
           "workspace_id": {
             "type": "string",
             "title": "Workspace Id"
@@ -804,6 +797,7 @@
         "type": "object",
         "required": [
           "text",
+          "agent_id",
           "workspace_id"
         ],
         "title": "CreateTaskRequest",

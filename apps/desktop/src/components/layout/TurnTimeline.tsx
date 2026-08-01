@@ -44,6 +44,13 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
   // 仅依赖本 turn 的 events / turn，过去轮次引用不变时 memo 跳过，不重投影。
   const projected = useMemo(() => projectTurnTimeline([turn], events), [turn, events]);
   const turnItem = projected[0];
+  logInfo("turn_timeline_rendered", {
+    module: "TurnTimeline",
+    turn_id: turn.turn_id,
+    user_text_len: turnItem?.userText?.length ?? 0,
+    user_text_preview: turnItem?.userText?.slice(0, 80) ?? "",
+    entries_count: turnItem?.entries?.length ?? 0,
+  });
   if (!turnItem) {
     return null;
   }

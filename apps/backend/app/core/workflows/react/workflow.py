@@ -10,6 +10,7 @@
 """
 
 from collections.abc import AsyncIterator, Callable
+from time import perf_counter
 from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
@@ -25,6 +26,7 @@ from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
+from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
 from ...runtime.runtime_operations import RuntimeOperations
@@ -137,6 +139,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             turn=turn,
             model=cast(BaseChatModel, bound_model),
             approval_resolver=self._approval_resolver,
+            start_time=perf_counter(),
+            usage_stats=TurnUsageStats(),
         )
         config = {
             "configurable": {

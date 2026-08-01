@@ -25,6 +25,7 @@ export const API_PATHS = {
 
 export interface CreateTaskRequest {
   text: string;
+  agent_id: string;
   workspace_id: string;
 }
 
