@@ -78,50 +78,54 @@ class WebSearchTool(HandlerBase):
         del execution_context
         effective_limit = min(limit, Settings.WEB_SEARCH_LIMIT_MAX)
         backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
-        provider = self._provider_registry.active_search_provider(backend)
-        if provider is None:
-            return tool_error(
-                self.name,
-                "No web search provider configured.",
-                reason=(
-                    "Configure a supported web search provider, then retry the search. "
-                    "No network request was made."
-                ),
-                permission=self.permission,
-            )
-        if not provider.supports_search():
-            return tool_error(
-                self.name,
-                f"Web search provider '{provider.name}' does not support search.",
-                reason=(
-                    "Select a provider with search capability through WEB_SEARCH_BACKEND or "
-                    "WEB_BACKEND, then retry."
-                ),
-                permission=self.permission,
-            )
-        if not provider.is_available():
-            return tool_error(
-                self.name,
-                provider.missing_configuration_message(),
-                reason=(
-                    "Configure the selected web search provider locally, then retry. "
-                    "No network request was made."
-                ),
-                permission=self.permission,
-            )
+        provider = None
         try:
+            provider = self._provider_registry.active_search_provider(backend)
+            if provider is None:
+                return tool_error(
+                    self.name,
+                    "No web search provider configured.",
+                    reason=(
+                        "Configure a supported web search provider, then retry the search. "
+                        "No network request was made."
+                    ),
+                    permission=self.permission,
+                )
+            if not provider.supports_search():
+                return tool_error(
+                    self.name,
+                    f"Web search provider '{provider.name}' does not support search.",
+                    reason=(
+                        "Select a provider with search capability through WEB_SEARCH_BACKEND "
+                        "or WEB_BACKEND, then retry."
+                    ),
+                    permission=self.permission,
+                )
+            if not provider.is_available():
+                return tool_error(
+                    self.name,
+                    provider.missing_configuration_message(),
+                    reason=(
+                        "Configure the selected web search provider locally, then retry. "
+                        "No network request was made."
+                    ),
+                    permission=self.permission,
+                )
             results = provider.search(query, effective_limit)
         except Exception:
+            provider_name = (
+                provider.name if provider is not None else backend or "selected provider"
+            )
             log.exception(
                 "web_search_provider_failed",
                 extra={
                     "msg": "网页搜索 Provider 调用失败",
-                    "data": {"provider": provider.name},
+                    "data": {"provider": provider_name},
                 },
             )
             return tool_error(
                 self.name,
-                f"Web search failed using provider '{provider.name}'.",
+                f"Web search failed using provider '{provider_name}'.",
                 reason=(
                     "The provider could not complete the search. Retry once; if it keeps "
                     "failing, select another configured web search provider."

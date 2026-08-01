@@ -14,11 +14,11 @@ class FakeSearchProvider:
     name = "fake"
     display_name = "Fake"
 
-    def __init__(self) -> None:
+    def __init__(self, fail_on: str = "") -> None:
         """初始化测试替身的调用记录。
 
         参数:
-            无。
+            fail_on: 需要抛出异常的本地 Provider 方法名；空字符串表示不抛出。
 
         返回:
             无。
@@ -30,6 +30,7 @@ class FakeSearchProvider:
             创建用于断言的搜索调用记录。
         """
 
+        self._fail_on = fail_on
         self.search_limits: list[int] = []
 
     def is_available(self) -> bool:
@@ -48,6 +49,8 @@ class FakeSearchProvider:
             无。
         """
 
+        if self._fail_on == "is_available":
+            raise RuntimeError("availability check failed")
         return True
 
     def supports_search(self) -> bool:
@@ -66,6 +69,8 @@ class FakeSearchProvider:
             无。
         """
 
+        if self._fail_on == "supports_search":
+            raise RuntimeError("capability check failed")
         return True
 
     def supports_extract(self) -> bool:
@@ -210,3 +215,57 @@ def test_web_search_clamps_limit_before_calling_provider(monkeypatch) -> None:
     tool.execute("python", limit=Settings.WEB_SEARCH_LIMIT_MAX + 1)
 
     assert provider.search_limits == [Settings.WEB_SEARCH_LIMIT_MAX]
+
+
+def test_web_search_normalizes_supports_search_exception(monkeypatch) -> None:
+    """验证 Provider 搜索能力检查异常会归一化为工具错误。
+
+    参数:
+        monkeypatch: pytest 提供的模块属性替换工具。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 能力检查异常逃逸或错误观察不符合契约时抛出。
+
+    副作用:
+        临时指定 fake Provider 为当前搜索后端。
+    """
+
+    registry = WebProviderRegistry()
+    registry.register(FakeSearchProvider(fail_on="supports_search"))
+    tool = WebSearchTool(provider_registry=registry)
+    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "fake")
+
+    observation = tool.execute("python", limit=1)
+
+    assert observation.status == "error"
+    assert observation.error == "Web search failed using provider 'fake'."
+
+
+def test_web_search_normalizes_is_available_exception(monkeypatch) -> None:
+    """验证 Provider 配置可用性检查异常会归一化为工具错误。
+
+    参数:
+        monkeypatch: pytest 提供的模块属性替换工具。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 可用性检查异常逃逸或错误观察不符合契约时抛出。
+
+    副作用:
+        临时指定 fake Provider 为当前搜索后端。
+    """
+
+    registry = WebProviderRegistry()
+    registry.register(FakeSearchProvider(fail_on="is_available"))
+    tool = WebSearchTool(provider_registry=registry)
+    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "fake")
+
+    observation = tool.execute("python", limit=1)
+
+    assert observation.status == "error"
+    assert observation.error == "Web search failed using provider 'fake'."
