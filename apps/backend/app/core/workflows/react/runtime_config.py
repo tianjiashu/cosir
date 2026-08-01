@@ -45,7 +45,8 @@ class RuntimeConfig:
         turn: 当前执行轮次记录，节点经它写入 turn 状态（单一事实来源）。
         model: 已绑定工具的 LangChain chat model 实例，供 model 节点推理。
         approval_resolver: 可选的工具审批解析器；``tools`` 节点因 ``interrupt()`` 暂停时，
-            用它把待审批的工具调用解析为「批准执行的调用列表」。``None`` 表示直接批准全部调用。
+            用它把待审批的工具调用解析为「批准执行的调用列表」。``None`` 表示自动放行全部调用，
+            且 ``tools`` 节点不调用 ``interrupt()``（不暂停 graph），直接执行工具。
         start_time: graph 开始执行的 ``time.perf_counter()`` 时间戳，用于在 ``run_finished``
             中计算耗时。
         usage_stats: turn 级 token 与耗时累加器；model 节点在每次模型调用后把
@@ -58,6 +59,7 @@ class RuntimeConfig:
     task: TaskRecord
     turn: TurnRecord
     model: BaseChatModel
+    # None 表示自动放行全部调用，且 tools 节点不调用 interrupt()（不暂停 graph）。
     approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None
     start_time: float = 0.0
     usage_stats: TurnUsageStats = field(default_factory=TurnUsageStats)

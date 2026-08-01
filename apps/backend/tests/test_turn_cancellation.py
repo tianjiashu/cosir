@@ -1154,3 +1154,61 @@ def test_after_tools_terminal_state_routes_to_end() -> None:
     )
 
     assert next_node == END
+
+
+def test_tools_node_auto_approves_without_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When no approval_resolver is configured the tools node must not pause.
+
+    无审批器时 tools 节点应直接执行工具，而不调用 ``interrupt()`` 暂停 graph；
+    否则编排层在 ``approval_resolver is None`` 时会反复 ``interrupt``→``resume``
+    同一工具调用，形成死循环（见排查记录）。该测试锁定「不暂停」行为，防止回归。
+    """
+
+    operations = _FakeToolOperations()
+    interrupt_calls: list[object] = []
+    monkeypatch.setattr(
+        react_nodes,
+        "_runtime_config",
+        lambda: SimpleNamespace(
+            operations=operations,
+            task=SimpleNamespace(task_id="task-1"),
+            turn=SimpleNamespace(turn_id="turn-1"),
+            # 故意不提供 approval_resolver，模拟无审批器场景。
+        ),
+    )
+
+    def _recording_interrupt(payload: dict) -> object:
+        """记录 interrupt 调用并返回原样放行（模拟审批恢复值）。
+
+        参数:
+            payload: ``interrupt`` 传入的暂停载荷（``{"tool_calls": [...]}``）。
+
+        返回:
+            原样返回 ``payload["tool_calls"]``，模拟审批器放行全部调用。
+        """
+
+        interrupt_calls.append(payload)
+        return payload["tool_calls"]
+
+    monkeypatch.setattr(react_nodes, "interrupt", _recording_interrupt)
+
+    result = react_nodes._tools_node(
+        ReactGraphState(
+            messages=[],
+            step_count=1,
+            tool_error_count=0,
+            requested_tool=True,
+            final_response=False,
+            terminal=False,
+            pending_tool_calls=[{"tool_name": "read_file", "arguments": {}, "call_id": "call-1"}],
+            max_steps=3,
+            final_text="",
+        )
+    )
+
+    # 关键断言：无审批器时绝不应暂停 graph。
+    assert interrupt_calls == []
+    # 工具应在不暂停的情况下被执行。
+    assert operations.tool_call_count == 1
+    # 取消检查在执行后触发（_FakeToolOperations 在首次执行后置为 cancelled）→ 终态。
+    assert result["terminal"] is True

@@ -501,10 +501,17 @@ async def _model_node(state: ReactGraphState) -> dict:
 def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：在权限审批后执行工具并把观察结果追加回上下文。
 
-    节点先用 ``interrupt()`` 暂停 graph 等待审批，审批结果（批准的工具调用列表）通过
-    ``Command(resume=)`` 恢复；随后通过 ``RuntimeOperations`` 执行工具，工具生命周期事件
-    经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。
-    状态写入 **turn**。
+    节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批：
+
+    - 存在 ``approval_resolver``：用 ``interrupt()`` 暂停 graph 等待审批，审批结果
+      （批准的工具调用列表）通过 ``Command(resume=)`` 恢复；随后执行工具。
+    - 不存在 ``approval_resolver``（``None``）：视为「自动放行全部调用」，
+      **不经过 ``interrupt()``**，直接以 ``state.pending_tool_calls`` 作为已批准列表执行工具。
+      这样 graph 不会暂停，编排层循环可正常走到终态，避免「无审批器时反复
+      interrupt→resume 同一工具调用」的死循环。
+
+    工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
+    自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。状态写入 **turn**。
 
     参数:
         state: 当前 graph state，含待执行工具调用。
@@ -520,21 +527,36 @@ def _tools_node(state: ReactGraphState) -> dict:
 
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-    log.info(
-        "tools_node_started",
-        extra={
-            "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
-            "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
-        },
-    )
 
-    # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
-    # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
-    approved = interrupt({"tool_calls": tool_calls})
-    # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
-    approved_dicts = tool_calls if not isinstance(approved, list) else approved
+    # 无审批器（含字段缺失的测试桩）→ 自动放行，不暂停 graph，
+    # 直接用原始 tool_calls 作为已批准列表。
+    if getattr(rc, "approval_resolver", None) is None:
+        log.info(
+            "tools_node_auto_approved",
+            extra={
+                "msg": (
+                    f"无审批器，自动放行 {len(tool_calls)} 个工具调用"
+                    f"（不暂停 graph），step_id={step_id}"
+                ),
+                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
+            },
+        )
+        approved_dicts = tool_calls
+    else:
+        log.info(
+            "tools_node_started",
+            extra={
+                "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
+                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
+            },
+        )
+        # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
+        # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
+        approved = interrupt({"tool_calls": tool_calls})
+        # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
+        approved_dicts = tool_calls if not isinstance(approved, list) else approved
 
-    # ★ 取消检查：审批恢复后、工具执行前，若 turn 已被取消则跳过工具执行
+    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行
     if operations.is_current_turn_cancelled():
         log.info(
             "tools_node_cancelled",

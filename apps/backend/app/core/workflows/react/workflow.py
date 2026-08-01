@@ -93,9 +93,10 @@ class ReactLikeWorkflow(AgentWorkflow):
         方法构建并编译 graph，挂 ``AsyncSqliteSaver`` checkpointer；以
         ``astream(stream_mode=["custom"])`` 单循环驱动 graph，把节点经 ``get_stream_writer()``
         写入的 ``custom`` 业务事件（含 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA`` 等流式
-        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。当 ``tools`` 节点触发 ``interrupt()`` 时，
-        方法用审批解析器解析出批准的工具调用，并通过 ``Command(resume=)`` 恢复 graph，直到
-        工作流结束。
+        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。当存在 ``approval_resolver`` 时，
+        ``tools`` 节点会触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并通过
+        ``Command(resume=)`` 恢复 graph；当 ``approval_resolver`` 为 ``None`` 时，``tools`` 节点
+        不暂停 graph、直接执行工具（自动放行）。循环直到 graph 无待处理任务或工作流结束。
 
         Args:
             task: 当前需要执行的任务记录。
@@ -231,6 +232,8 @@ class ReactLikeWorkflow(AgentWorkflow):
                     )
                     break
 
+                # 此分支仅在「存在 approval_resolver」时进入：无审批器时 tools 节点不会
+                # 调用 interrupt()，graph 不会暂停，外层循环已在上面 `not interrupts` 处退出。
                 interrupt_value = interrupts[0].value
                 pending = (
                     interrupt_value.get("tool_calls", [])
