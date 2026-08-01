@@ -115,6 +115,31 @@ def test_rejects_private_ip_from_resolver() -> None:
     assert "private or internal" in reason
 
 
+def test_rejects_url_with_authority_credentials() -> None:
+    """验证 URL authority 中的用户名或密码会在 DNS 解析前被拒绝。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: authority 凭据未被拒绝时由断言抛出。
+
+    副作用:
+        使用内存解析器替身，不执行真实 DNS 查询。
+    """
+
+    safe, reason = is_safe_public_url(
+        "https://user:password@example.com",
+        resolver=lambda host: ["93.184.216.34"],
+    )
+
+    assert safe is False
+    assert "credentials" in reason
+
+
 def test_rejects_non_http_scheme() -> None:
     """验证非 HTTP(S) 协议会被拒绝。
 

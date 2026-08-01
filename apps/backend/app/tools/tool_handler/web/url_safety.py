@@ -131,7 +131,7 @@ def is_safe_public_url(
     url: str,
     resolver: Callable[[str], Iterable[str]] | None = None,
 ) -> tuple[bool, str]:
-    """验证 URL 仅指向可公开访问的 HTTP(S) 主机。
+    """验证 URL 为无 authority 凭据的公开 HTTP(S) 主机。
 
     参数:
         url: 待校验的原始 URL。
@@ -151,6 +151,8 @@ def is_safe_public_url(
     parsed = urlsplit(normalized_url)
     if parsed.scheme not in {"http", "https"}:
         return False, "Blocked: URL scheme must be http or https."
+    if parsed.username is not None or parsed.password is not None:
+        return False, "Blocked: URL must not include credentials."
     if not parsed.hostname:
         return False, "Blocked: URL must include a hostname."
 
