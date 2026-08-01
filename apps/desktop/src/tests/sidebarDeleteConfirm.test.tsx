@@ -40,7 +40,14 @@ vi.mock("@/hooks/useTask", () => ({
   useTask: () => ({ openTask: vi.fn().mockResolvedValue(undefined) }),
 }));
 
+// 引导新建工作区服务：避免真实触发 Tauri 目录选择器；单工作区删除用例会断言其被调用
+const pickAndCreateWorkspaceSafeMock = vi.fn().mockResolvedValue(false);
+vi.mock("@/services/workspace", () => ({
+  pickAndCreateWorkspaceSafe: (...args: unknown[]) => pickAndCreateWorkspaceSafeMock(...args),
+}));
+
 import { Sidebar } from "@/components/layout/Sidebar";
+import type { SidebarProps } from "@/components/layout/Sidebar";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { useTaskStore } from "@/stores/taskStore";
 
@@ -67,6 +74,7 @@ beforeEach(() => {
 
   deleteWorkspaceMock.mockReset().mockResolvedValue(undefined);
   logErrorMock.mockReset();
+  pickAndCreateWorkspaceSafeMock.mockReset().mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -76,25 +84,35 @@ afterEach(() => {
   container.remove();
 });
 
-function render(): void {
+function renderWith(props: Partial<SidebarProps> = {}): void {
   act(() => {
     root.render(
-      <Sidebar activeView="chat" onOpenLogs={vi.fn()} onOpenChat={vi.fn()} onNewTask={vi.fn()} />,
+      <Sidebar
+        activeView="chat"
+        onOpenLogs={props.onOpenLogs ?? vi.fn()}
+        onOpenChat={props.onOpenChat ?? vi.fn()}
+        onNewTask={props.onNewTask ?? vi.fn()}
+      />,
     );
   });
 }
 
+function render(): void {
+  renderWith();
+}
+
 function clickDeleteButton(name: string): void {
-  const buttons = Array.from(container.querySelectorAll("button[title='删除工作区']")) as HTMLButtonElement[];
-  const target = buttons.find((b) => {
-    // 找到同工作区行内的删除按钮：通过最近的父 div 文本匹配
-    let el: HTMLElement | null = b.parentElement;
-    while (el && el !== container) {
-      if (el.textContent?.includes(name)) return true;
-      el = el.parentElement;
-    }
-    return false;
-  });
+  // 先定位工作区名 span（其文本精确等于 name），再向上找到工作区行容器，
+  // 在工作区行内查找删除按钮，避免与同区块其他工作区名误匹配。
+  const nameSpans = Array.from(container.querySelectorAll("span")) as HTMLSpanElement[];
+  const nameSpan = nameSpans.find((span) => span.textContent?.trim() === name);
+  expect(nameSpan, `未找到工作区名 ${name}`).toBeTruthy();
+  let row: HTMLElement | null = nameSpan!;
+  while (row && row !== container && !row.className.includes("items-center gap-2 rounded-md px-2 py-1.5")) {
+    row = row.parentElement;
+  }
+  expect(row, `未找到工作区 ${name} 所在行`).toBeTruthy();
+  const target = row!.querySelector("button[title='删除工作区']") as HTMLButtonElement | null;
   expect(target, `未找到工作区 ${name} 的删除按钮`).toBeTruthy();
   act(() => {
     target!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -208,5 +226,53 @@ describe("Sidebar — 删除确认弹窗状态流转", () => {
     expect(confirmBtnAfter.disabled).toBe(true);
     expect(cancelBtnAfter.disabled).toBe(true);
     expect(confirmBtnAfter.textContent).toContain("删除中");
+  });
+
+  it("删除当前活跃工作区（多工作区之一）后切换主视图并引导新建不被触发", async () => {
+    const onOpenChat = vi.fn();
+    renderWith({ onOpenChat });
+    clickDeleteButton("Alpha"); // Alpha 为 activeWorkspaceId
+    const confirmBtn = Array.from(getDialog()!.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "删除",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+    expect(pickAndCreateWorkspaceSafeMock).not.toHaveBeenCalled();
+  });
+
+  it("删除非活跃工作区不触发 onOpenChat 与引导新建", async () => {
+    const onOpenChat = vi.fn();
+    renderWith({ onOpenChat });
+    clickDeleteButton("Beta"); // Beta 非 active
+    const confirmBtn = Array.from(getDialog()!.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "删除",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onOpenChat).not.toHaveBeenCalled();
+    expect(pickAndCreateWorkspaceSafeMock).not.toHaveBeenCalled();
+  });
+
+  it("删除唯一工作区后引导新建工作区被触发", async () => {
+    useWorkspaceStore.setState({
+      workspaces: [makeWorkspace("a", "Alpha")],
+      activeWorkspaceId: "a",
+      collapsedWorkspaceIds: new Set<string>(),
+    });
+    renderWith({ onOpenChat: vi.fn() });
+    clickDeleteButton("Alpha");
+    const confirmBtn = Array.from(getDialog()!.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "删除",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(pickAndCreateWorkspaceSafeMock).toHaveBeenCalledTimes(1);
   });
 });

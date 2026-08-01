@@ -29,13 +29,14 @@ import { useEventStore } from "@/stores/eventStore";
 import { useTask } from "@/hooks/useTask";
 import * as api from "@/services/api";
 import { deleteTask as deleteTaskApi } from "@/services/api";
+import { pickAndCreateWorkspaceSafe } from "@/services/workspace";
 import { logError } from "@/lib/logger";
 import type { TaskRecord } from "@shared/task";
 import type { WorkspaceRecord } from "@shared/workspace";
 import appIconUrl from "../../../src-tauri/icons/icon.png";
 
 /** Sidebar 组件属性。 */
-interface SidebarProps {
+export interface SidebarProps {
   /** 当前主视图，用于展示导航选中态。 */
   activeView: "chat" | "new-task" | "logs";
   /** 打开日志页面。 */
@@ -66,6 +67,11 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
 
   // 待删除的工作区（非空时展示应用内确认弹窗）。
   const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
+  // 待删除工作区下的任务数量（用于确认弹窗展示）。
+  const pendingDeleteTaskCount =
+    pendingDelete ? tasks.filter((task) => task.workspace_id === pendingDelete.workspace_id).length : 0;
+  // 待删除工作区是否为当前活跃工作区（用于确认弹窗提示切换/新建行为）。
+  const pendingDeleteIsActive = pendingDelete ? activeWorkspaceId === pendingDelete.workspace_id : false;
   // 删除请求进行中标记，用于禁用按钮并展示 loading 文案。
   const [deleting, setDeleting] = useState(false);
   // 删除失败提示，展示在确认弹窗内。
@@ -81,31 +87,47 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
    * 执行工作区删除。
    *
    * 调用后端删除接口，成功后同步移除本地工作区与其任务并关闭弹窗；
+   * 删除当前活跃工作区时一并清空活跃任务并将主视图切回会话页，
+   * 若列表已空（删除的是唯一工作区）则引导直接新建工作区；
    * 失败时保留弹窗并在其中展示错误信息。
    */
   const handleConfirmDelete = async () => {
     if (!pendingDelete) {
       return;
     }
+    const deletedWorkspaceId = pendingDelete.workspace_id;
+    const wasActive = activeWorkspaceId === deletedWorkspaceId;
     setDeleting(true);
     setDeleteError(null);
+    let needGuideNewWorkspace = false;
     try {
-      await api.deleteWorkspace(pendingDelete.workspace_id);
+      await api.deleteWorkspace(deletedWorkspaceId);
       const removedTaskIds = tasks
-        .filter((task) => task.workspace_id === pendingDelete.workspace_id)
+        .filter((task) => task.workspace_id === deletedWorkspaceId)
         .map((task) => task.task_id);
-      removeWorkspace(pendingDelete.workspace_id);
-      setTasks(tasks.filter((task) => task.workspace_id !== pendingDelete.workspace_id));
+      // removeWorkspace 内部会在删除当前活跃区时自动切到剩余列表第一项。
+      removeWorkspace(deletedWorkspaceId);
+      setTasks(tasks.filter((task) => task.workspace_id !== deletedWorkspaceId));
       // 同步使被删工作区下各任务的事件缓存失效，避免幽灵 timeline。
       for (const taskId of removedTaskIds) {
         useEventStore.getState().invalidateTask(taskId);
       }
       setPendingDelete(null);
+      // 删的是当前活跃区 → 主视图切回会话页，避免停留在已不存在的对话。
+      if (wasActive) {
+        onOpenChat();
+      }
+      // 删完已无工作区（删的是唯一区）→ 标记后续引导新建，避免在 deleting 态内 await 长耗时目录选择。
+      needGuideNewWorkspace = useWorkspaceStore.getState().workspaces.length === 0;
     } catch (err) {
-      logError("删除工作区失败", err, { module: "Sidebar", workspace_id: pendingDelete.workspace_id });
+      logError("删除工作区失败", err, { module: "Sidebar", workspace_id: deletedWorkspaceId });
       setDeleteError(err instanceof Error ? err.message : "删除工作区失败，请检查后端日志");
     } finally {
       setDeleting(false);
+    }
+    // 删除态已结束后再引导新建，目录选择器的长耗时交互不持有 deleting 态。
+    if (needGuideNewWorkspace) {
+      await pickAndCreateWorkspaceSafe();
     }
   };
 
@@ -291,7 +313,11 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
           >
             <h3 className="text-sm font-semibold text-foreground">删除工作区</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              确定删除工作区「{pendingDelete.name}」及其任务记录？此操作不可恢复。
+              确定删除工作区「{pendingDelete.name}」及其 {pendingDeleteTaskCount} 个任务记录？此操作不可恢复。
+              {pendingDeleteIsActive &&
+                (workspaces.length > 1
+                  ? "删除后自动切换到其他工作区。"
+                  : "删除后需新建一个工作区才能继续。")}
             </p>
             {deleteError && <p className="mt-2 text-xs text-destructive">{deleteError}</p>}
             <div className="mt-4 flex justify-end gap-2">

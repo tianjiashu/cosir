@@ -22,8 +22,9 @@ Langfuse 客户端 API 版本：基于 langfuse v4（OpenTelemetry 后端）。�
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -42,6 +43,18 @@ class TraceMetadata:
     turn_id: str
     agent_id: str
     workspace_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TurnTraceResult:
+    """``turn_trace`` 上下文管理器的产出结果。
+
+    同时携带注入 workflow 的 LangChain callbacks 与本 turn 预分配的 Langfuse trace_id。
+    未启用 tracing 时 ``callbacks`` 为空列表、``trace_id`` 为 None。
+    """
+
+    callbacks: list[Any] = field(default_factory=list)
+    trace_id: str | None = None
 
 
 def tracing_enabled() -> bool:
@@ -118,21 +131,22 @@ def _build_langfuse_client() -> Any:
 
 
 @contextmanager
-def turn_trace(metadata: TraceMetadata) -> Iterator[list[Any]]:
-    """打开 turn 级根 observation，并产出待注入 workflow 的 LangChain callbacks 列表。
+def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
+    """打开 turn 级根 observation，并产出待注入 workflow 的 LangChain callbacks 列表与 trace_id。
 
-    未启用 → yield ``[]``，完全空操作（零开销路径）。启用 → 构造 Langfuse 客户端，经
+    未启用 → yield ``TurnTraceResult([], None)``，完全空操作（零开销路径）。启用 → 构造 Langfuse
+    客户端，预分配一个稳定的 ``trace_id`` 并经 ``CallbackHandler(trace_context=...)`` 注入，再经
     ``start_as_current_observation(as_type="span")`` 建立 turn 根 observation（OTel current
     context 自然传播，使 ``CallbackHandler`` 的 generation observation 自动挂到该根下），用
     ``propagate_attributes`` 写 trace 级属性（session/user/tags/metadata），在该上下文内构造
-    ``CallbackHandler`` 后 yield ``[handler]``。任何 Langfuse 侧异常 → ``log.exception`` 后
-    降级为 yield ``[]``，绝不中断 turn 执行。
+    ``CallbackHandler`` 后 yield ``TurnTraceResult([handler], trace_id)``。任何 Langfuse 侧异常 →
+    ``log.exception`` 后降级为 yield ``TurnTraceResult([], None)``，绝不中断 turn 执行。
 
     参数:
         metadata: 本次 turn 的可观测元数据（task/turn/agent/workspace 标识）。
 
     生成:
-        LangChain callbacks 列表（启用时含一个 ``CallbackHandler``，未启用时为空列表）。
+        ``TurnTraceResult``：callbacks 列表与本 turn 预分配的 Langfuse trace_id（未启用时为 None）。
 
     异常:
         不向上抛出：Langfuse 客户端/observation 异常被内部捕获并记日志。
@@ -143,16 +157,17 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[list[Any]]:
     """
 
     if not tracing_enabled():
-        yield []
+        yield TurnTraceResult(callbacks=[], trace_id=None)
         return
 
     # 仅包裹「客户端构造 + 根 observation 打开 + CallbackHandler 构造」三段（进入 yield 之前）。
-    # 这一段任何失败都属于「可观测性初始化故障」，降级为不追踪（yield []），绝不中断 turn。
+    # 这一段任何失败都属于「可观测性初始化故障」，降级为不追踪（yield 空结果），绝不中断 turn。
     try:
         from langfuse import propagate_attributes
         from langfuse.langchain import CallbackHandler
 
         client = _build_langfuse_client()
+        trace_id = str(uuid4())
         trace_metadata: dict[str, str] = {
             "task_id": metadata.task_id,
             "turn_id": metadata.turn_id,
@@ -176,7 +191,7 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[list[Any]]:
                 "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
             },
         )
-        yield []
+        yield TurnTraceResult(callbacks=[], trace_id=None)
         return
 
     # 显式进入根 observation 上下文：若 __enter__ 阶段（可观测性故障）失败，降级为不追踪，
@@ -193,13 +208,16 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[list[Any]]:
                 "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
             },
         )
-        yield []
+        yield TurnTraceResult(callbacks=[], trace_id=None)
         return
 
-    handler = CallbackHandler(public_key=Settings.LANGFUSE_PUBLIC_KEY)
+    handler = CallbackHandler(
+        public_key=Settings.LANGFUSE_PUBLIC_KEY,
+        trace_context={"trace_id": trace_id},
+    )
     try:
         try:
-            yield [handler]
+            yield TurnTraceResult(callbacks=[handler], trace_id=trace_id)
         finally:
             # 同步 flush：等待 OTel 后台批量上报队列排空；可能短暂阻塞运行循环，属可接受的
             # 退出成本（不依赖主流程正确性）。

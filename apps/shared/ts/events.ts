@@ -48,12 +48,14 @@ export interface RunFailedPayload extends RuntimeEventPayloadObject {
   requested_agent_id?: string | null;
   task_agent_id?: string | null;
   tool_name?: string | null;
+  langfuse_trace_id?: string | null;
 }
 
 export interface RunCancelledPayload extends RuntimeEventPayloadObject {
   status: "cancelled";
   step_id?: string | null;
   error?: string | null;
+  langfuse_trace_id?: string | null;
 }
 
 export interface RunFinishedPayload extends RuntimeEventPayloadObject {
@@ -66,6 +68,7 @@ export interface RunFinishedPayload extends RuntimeEventPayloadObject {
   cache_hit_tokens?: number;
   cache_miss_tokens?: number;
   reasoning_tokens?: number;
+  langfuse_trace_id?: string | null;
 }
 
 export interface StepStartedPayload extends RuntimeEventPayloadObject {

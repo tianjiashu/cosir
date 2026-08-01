@@ -7,7 +7,8 @@
  * @module components/chat/StatusBadge
  */
 
-import { CheckCircle2, XCircle, Ban, Clock, Cpu } from "lucide-react";
+import { CheckCircle2, XCircle, Ban, Clock, Cpu, Copy, Check } from "lucide-react";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { RuntimeEventType } from "@shared/events";
 
@@ -57,6 +58,7 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
   const inputTokens = typeof payload.input_tokens === "number" ? payload.input_tokens : undefined;
   const outputTokens = typeof payload.output_tokens === "number" ? payload.output_tokens : undefined;
   const totalTokens = typeof payload.total_tokens === "number" ? payload.total_tokens : undefined;
+  const langfuseTraceId = typeof payload.langfuse_trace_id === "string" ? payload.langfuse_trace_id : undefined;
 
   return (
     <div className="flex justify-center py-2">
@@ -89,7 +91,43 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
             输入 {inputTokens ?? 0} / 输出 {outputTokens ?? 0} / 总计 {totalTokens} tokens
           </span>
         )}
+
+        {/* Langfuse Trace ID */}
+        {langfuseTraceId && (
+          <CopyableTraceId traceId={langfuseTraceId} />
+        )}
       </div>
     </div>
+  );
+}
+
+/** 可复制展示的 Langfuse trace ID。 */
+function CopyableTraceId({ traceId }: { traceId: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(traceId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // 复制失败静默处理，避免打断 UI
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="flex max-w-xs items-center gap-1.5 rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      title="复制 Langfuse trace ID"
+    >
+      <span className="truncate font-mono">Langfuse trace: {traceId}</span>
+      {copied ? (
+        <Check className="h-3 w-3 shrink-0 text-green-500" />
+      ) : (
+        <Copy className="h-3 w-3 shrink-0" />
+      )}
+    </button>
   );
 }

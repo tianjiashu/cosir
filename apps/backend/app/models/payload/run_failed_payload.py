@@ -15,3 +15,4 @@ class RunFailedPayload(RuntimeEventPayload):
     requested_agent_id: str | None = None
     task_agent_id: str | None = None
     tool_name: str | None = None
+    langfuse_trace_id: str | None = None

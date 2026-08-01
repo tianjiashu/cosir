@@ -62,9 +62,9 @@ describe("ConversationTraceBlock", () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(container.textContent).toContain("stream_trace_id");
+    expect(container.textContent).toContain("请求链路 trace");
     expect(container.textContent).toContain("11111111111111111111111111111111");
-    expect(container.textContent).toContain("latest_trace_id");
+    expect(container.textContent).toContain("历史 trace (最新)");
     expect(container.textContent).toContain("22222222222222222222222222222222");
     expect(onOpenLogs).toHaveBeenCalledTimes(1);
   });

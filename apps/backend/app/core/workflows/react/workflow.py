@@ -87,6 +87,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         task: TaskRecord,
         operations: RuntimeOperations,
         callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -103,6 +104,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
                 注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
                 缺省为空列表，不影响既有行为。
+            langfuse_trace_id: 可选的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
+                ``run_finished`` / ``run_failed`` / ``run_cancelled`` 等终态事件 payload
+                会携带该字段供前端展示。未启用 Langfuse 时为 None。
 
         Yields:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
@@ -141,6 +145,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             approval_resolver=self._approval_resolver,
             start_time=perf_counter(),
             usage_stats=TurnUsageStats(),
+            langfuse_trace_id=langfuse_trace_id,
         )
         config = {
             "configurable": {

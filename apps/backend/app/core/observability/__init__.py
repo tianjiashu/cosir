@@ -7,6 +7,7 @@ import 均为惰性加载，未启用 / 缺密钥 / 未安装时运行时行为�
 from app.core.observability.langfuse_tool_trace_recorder import LangfuseToolTraceRecorder
 from app.core.observability.langfuse_tracing import (
     TraceMetadata,
+    TurnTraceResult,
     flush_langfuse,
     tracing_enabled,
     turn_trace,
@@ -15,6 +16,7 @@ from app.core.observability.langfuse_tracing import (
 __all__ = [
     "LangfuseToolTraceRecorder",
     "TraceMetadata",
+    "TurnTraceResult",
     "flush_langfuse",
     "tracing_enabled",
     "turn_trace",

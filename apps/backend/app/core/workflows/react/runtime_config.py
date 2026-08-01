@@ -50,6 +50,8 @@ class RuntimeConfig:
             中计算耗时。
         usage_stats: turn 级 token 与耗时累加器；model 节点在每次模型调用后把
             ``usage_metadata`` 累加进来，``run_finished`` 事件读取后下发给前端。
+        langfuse_trace_id: 本 turn 的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
+            供终态事件 payload 携带给前端展示。未启用 Langfuse 时为 None。
     """
 
     operations: RuntimeOperations
@@ -59,3 +61,4 @@ class RuntimeConfig:
     approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None
     start_time: float = 0.0
     usage_stats: TurnUsageStats = field(default_factory=TurnUsageStats)
+    langfuse_trace_id: str | None = None

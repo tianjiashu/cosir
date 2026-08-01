@@ -87,11 +87,19 @@ describe("useWorkspaceStore — 基础状态流转", () => {
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.workspace_id)).toEqual(["b"]);
   });
 
-  it("removeWorkspace 删除当前 active 时回退为 null", () => {
+  it("removeWorkspace 删除唯一的当前 active 时置 null", () => {
     useWorkspaceStore.getState().upsertWorkspace(makeWorkspace("a"));
     useWorkspaceStore.setState({ activeWorkspaceId: "a" });
     useWorkspaceStore.getState().removeWorkspace("a");
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull();
+  });
+
+  it("removeWorkspace 删除当前 active 且仍有其他工作区时自动切到第一项", () => {
+    useWorkspaceStore.getState().upsertWorkspace(makeWorkspace("a"));
+    useWorkspaceStore.getState().upsertWorkspace(makeWorkspace("b"));
+    useWorkspaceStore.setState({ activeWorkspaceId: "b" });
+    useWorkspaceStore.getState().removeWorkspace("b");
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe("a");
   });
 
   it("removeWorkspace 删除非 active 时不影响 active", () => {

@@ -293,9 +293,12 @@ class AgentRuntime:
                 task, turn, agent_profile, tool_trace_recorder=recorder
             )
 
-            with turn_trace(metadata) as callbacks:
+            with turn_trace(metadata) as trace_result:
                 async for event in agent_profile.workflow.run(
-                    task, operations, callbacks=callbacks
+                    task,
+                    operations,
+                    callbacks=trace_result.callbacks,
+                    langfuse_trace_id=trace_result.trace_id,
                 ):
                     yield await emit(event)
             if recorder is not None:

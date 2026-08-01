@@ -216,7 +216,11 @@ async def _model_node(state: ReactGraphState) -> dict:
         if operations.has_turn_status(turn.turn_id, "cancelled"):
             write_event(
                 EventType.RUN_CANCELLED,
-                RunCancelledPayload(step_id=step_id, status="cancelled"),
+                RunCancelledPayload(
+                    step_id=step_id,
+                    status="cancelled",
+                    langfuse_trace_id=rc.langfuse_trace_id,
+                ),
             )
             terminal = True  # 标记提前终止
             log.info(
@@ -313,7 +317,11 @@ async def _model_node(state: ReactGraphState) -> dict:
             # 超限失败
             write_event(
                 EventType.RUN_FAILED,
-                RunFailedPayload(status="failed", error="max_steps_reached"),
+                RunFailedPayload(
+                    status="failed",
+                    error="max_steps_reached",
+                    langfuse_trace_id=rc.langfuse_trace_id,
+                ),
             )
             operations.update_turn_status(turn.turn_id, "failed")
             return {
@@ -377,6 +385,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 cache_hit_tokens=usage["cache_hit_tokens"],
                 cache_miss_tokens=usage["cache_miss_tokens"],
                 reasoning_tokens=usage["reasoning_tokens"],
+                langfuse_trace_id=rc.langfuse_trace_id,
             ),
         )
         return {
@@ -401,6 +410,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         RunFailedPayload(
             error="invalid_model_output",
             message="Model did not return tool call or final text.",
+            langfuse_trace_id=rc.langfuse_trace_id,
         ),
     )
     operations.update_turn_status(turn.turn_id, "failed")
@@ -461,7 +471,11 @@ def _tools_node(state: ReactGraphState) -> dict:
         )
         write_event(
             EventType.RUN_CANCELLED,
-            RunCancelledPayload(step_id=step_id, status="cancelled"),
+            RunCancelledPayload(
+                step_id=step_id,
+                status="cancelled",
+                langfuse_trace_id=rc.langfuse_trace_id,
+            ),
         )
         return {
             "pending_tool_calls": [],
@@ -537,6 +551,7 @@ def _tools_node(state: ReactGraphState) -> dict:
                 status="failed",
                 error="tool_error_limit_reached",
                 tool_name=observations[0].tool_name if observations else "",
+                langfuse_trace_id=rc.langfuse_trace_id,
             ),
         )
         operations.update_turn_status(turn.turn_id, "failed")
