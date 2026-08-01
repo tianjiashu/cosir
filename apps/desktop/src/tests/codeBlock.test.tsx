@@ -108,4 +108,24 @@ describe("CodeBlock 流式折叠", () => {
     expect(pre).not.toBeNull();
     expect(queryCaret(pre as Element)).not.toBeNull();
   });
+
+  it("恰好 12 行时（未超阈值）不折叠", async () => {
+    const EXACTLY_12 = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
+    await renderCodeBlock({ code: EXACTLY_12, streaming: true, isLastLeaf: true });
+
+    expect(queryByText(EXPAND_LABEL)).toBeNull();
+  });
+
+  it("恰好 13 行时（超阈值）折叠并展示展开按钮", async () => {
+    const EXACTLY_13 = Array.from({ length: 13 }, (_, i) => `line ${i}`).join("\n");
+    await renderCodeBlock({ code: EXACTLY_13, streaming: true, isLastLeaf: true });
+
+    expect(queryByText(EXPAND_LABEL)).not.toBeNull();
+  });
+
+  it("单行 700 字符（超字符阈值）折叠并展示展开按钮", async () => {
+    await renderCodeBlock({ code: "x".repeat(700), streaming: true, isLastLeaf: true });
+
+    expect(queryByText(EXPAND_LABEL)).not.toBeNull();
+  });
 });

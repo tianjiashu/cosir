@@ -103,7 +103,7 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
 
       {/* 代码内容：流式期超阈值时限高折叠 */}
       <div className="relative">
-        <pre className={cn("overflow-x-auto p-3", folded && "max-h-48")}>
+        <pre className={cn("overflow-x-auto p-3", folded && "max-h-48 overflow-y-hidden")}>
           <code className={cn(MessageTypography.code, "break-words text-slate-300")}>{code}</code>
           {streaming && isLastLeaf ? (
             <span className={cn(MessageTypography.caret, "ml-0.5")} aria-hidden />
