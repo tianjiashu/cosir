@@ -472,6 +472,47 @@ def test_parallel_extract_normalizes_default_excerpts_from_v1(monkeypatch) -> No
     ]
 
 
+def test_parallel_search_normalizes_v1_excerpts(monkeypatch) -> None:
+    """验证 Parallel V1 搜索会将 excerpts 合并为结果描述。
+
+    参数:
+        monkeypatch: pytest 提供的模块属性替换工具。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 搜索结果描述未保留 V1 excerpts 时由断言抛出。
+
+    副作用:
+        临时替换 Parallel Provider 的 HTTP 请求方法，避免真实网络请求。
+    """
+
+    provider = ParallelProvider(api_key="key")
+    monkeypatch.setattr(
+        provider,
+        "_post",
+        lambda endpoint, body: {
+            "results": [
+                {
+                    "title": "Example",
+                    "url": "https://example.com",
+                    "excerpts": ["Alpha", "Beta"],
+                }
+            ]
+        },
+    )
+
+    assert provider.search("query", 1) == [
+        WebSearchItem(
+            title="Example",
+            url="https://example.com",
+            description="Alpha\nBeta",
+            position=1,
+        )
+    ]
+
+
 def test_exa_search_handles_empty_highlights(monkeypatch) -> None:
     """验证 Exa 空 highlights 响应不会导致搜索归一化崩溃。
 

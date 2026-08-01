@@ -154,7 +154,7 @@ class ParallelProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("url", "")),
-                description=str(item.get("excerpt") or item.get("content") or ""),
+                description=self._content(item),
                 position=position,
             )
             for position, item in enumerate(raw_results[:limit], start=1)
