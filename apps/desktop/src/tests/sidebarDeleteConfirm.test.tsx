@@ -40,12 +40,6 @@ vi.mock("@/hooks/useTask", () => ({
   useTask: () => ({ openTask: vi.fn().mockResolvedValue(undefined) }),
 }));
 
-// 引导新建工作区服务：避免真实触发 Tauri 目录选择器；单工作区删除用例会断言其被调用
-const pickAndCreateWorkspaceSafeMock = vi.fn().mockResolvedValue(false);
-vi.mock("@/services/workspace", () => ({
-  pickAndCreateWorkspaceSafe: (...args: unknown[]) => pickAndCreateWorkspaceSafeMock(...args),
-}));
-
 import { Sidebar } from "@/components/layout/Sidebar";
 import type { SidebarProps } from "@/components/layout/Sidebar";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
@@ -74,7 +68,6 @@ beforeEach(() => {
 
   deleteWorkspaceMock.mockReset().mockResolvedValue(undefined);
   logErrorMock.mockReset();
-  pickAndCreateWorkspaceSafeMock.mockReset().mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -228,9 +221,10 @@ describe("Sidebar — 删除确认弹窗状态流转", () => {
     expect(confirmBtnAfter.textContent).toContain("删除中");
   });
 
-  it("删除当前活跃工作区（多工作区之一）后切换主视图并引导新建不被触发", async () => {
+  it("删除当前活跃工作区（多工作区之一）后切换主视图且 onNewTask 不被触发", async () => {
     const onOpenChat = vi.fn();
-    renderWith({ onOpenChat });
+    const onNewTask = vi.fn();
+    renderWith({ onOpenChat, onNewTask });
     clickDeleteButton("Alpha"); // Alpha 为 activeWorkspaceId
     const confirmBtn = Array.from(getDialog()!.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "删除",
@@ -240,12 +234,13 @@ describe("Sidebar — 删除确认弹窗状态流转", () => {
       await Promise.resolve();
     });
     expect(onOpenChat).toHaveBeenCalledTimes(1);
-    expect(pickAndCreateWorkspaceSafeMock).not.toHaveBeenCalled();
+    expect(onNewTask).not.toHaveBeenCalled();
   });
 
-  it("删除非活跃工作区不触发 onOpenChat 与引导新建", async () => {
+  it("删除非活跃工作区不触发 onOpenChat 与 onNewTask", async () => {
     const onOpenChat = vi.fn();
-    renderWith({ onOpenChat });
+    const onNewTask = vi.fn();
+    renderWith({ onOpenChat, onNewTask });
     clickDeleteButton("Beta"); // Beta 非 active
     const confirmBtn = Array.from(getDialog()!.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "删除",
@@ -255,16 +250,17 @@ describe("Sidebar — 删除确认弹窗状态流转", () => {
       await Promise.resolve();
     });
     expect(onOpenChat).not.toHaveBeenCalled();
-    expect(pickAndCreateWorkspaceSafeMock).not.toHaveBeenCalled();
+    expect(onNewTask).not.toHaveBeenCalled();
   });
 
-  it("删除唯一工作区后引导新建工作区被触发", async () => {
+  it("删除唯一工作区后触发 onNewTask 跳转到新建任务页", async () => {
     useWorkspaceStore.setState({
       workspaces: [makeWorkspace("a", "Alpha")],
       activeWorkspaceId: "a",
       collapsedWorkspaceIds: new Set<string>(),
     });
-    renderWith({ onOpenChat: vi.fn() });
+    const onNewTask = vi.fn();
+    renderWith({ onOpenChat: vi.fn(), onNewTask });
     clickDeleteButton("Alpha");
     const confirmBtn = Array.from(getDialog()!.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "删除",
@@ -273,6 +269,6 @@ describe("Sidebar — 删除确认弹窗状态流转", () => {
       confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
-    expect(pickAndCreateWorkspaceSafeMock).toHaveBeenCalledTimes(1);
+    expect(onNewTask).toHaveBeenCalledTimes(1);
   });
 });

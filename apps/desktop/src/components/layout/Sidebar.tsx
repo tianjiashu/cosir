@@ -29,7 +29,6 @@ import { useEventStore } from "@/stores/eventStore";
 import { useTask } from "@/hooks/useTask";
 import * as api from "@/services/api";
 import { deleteTask as deleteTaskApi } from "@/services/api";
-import { pickAndCreateWorkspaceSafe } from "@/services/workspace";
 import { logError } from "@/lib/logger";
 import type { TaskRecord } from "@shared/task";
 import type { WorkspaceRecord } from "@shared/workspace";
@@ -88,7 +87,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
    *
    * 调用后端删除接口，成功后同步移除本地工作区与其任务并关闭弹窗；
    * 删除当前活跃工作区时一并清空活跃任务并将主视图切回会话页，
-   * 若列表已空（删除的是唯一工作区）则引导直接新建工作区；
+   * 若列表已空（删除的是唯一工作区）则跳转到新建任务页引导选择工作区；
    * 失败时保留弹窗并在其中展示错误信息。
    */
   const handleConfirmDelete = async () => {
@@ -99,7 +98,6 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     const wasActive = activeWorkspaceId === deletedWorkspaceId;
     setDeleting(true);
     setDeleteError(null);
-    let needGuideNewWorkspace = false;
     try {
       await api.deleteWorkspace(deletedWorkspaceId);
       const removedTaskIds = tasks
@@ -117,17 +115,16 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
       if (wasActive) {
         onOpenChat();
       }
-      // 删完已无工作区（删的是唯一区）→ 标记后续引导新建，避免在 deleting 态内 await 长耗时目录选择。
-      needGuideNewWorkspace = useWorkspaceStore.getState().workspaces.length === 0;
     } catch (err) {
       logError("删除工作区失败", err, { module: "Sidebar", workspace_id: deletedWorkspaceId });
       setDeleteError(err instanceof Error ? err.message : "删除工作区失败，请检查后端日志");
     } finally {
       setDeleting(false);
     }
-    // 删除态已结束后再引导新建，目录选择器的长耗时交互不持有 deleting 态。
-    if (needGuideNewWorkspace) {
-      await pickAndCreateWorkspaceSafe();
+    // 删除态已结束后再跳转：删完已无工作区（删的是唯一区）时跳新建任务页引导选择工作区，
+    // 不在此直接弹系统目录选择器（避免在 deleting 态内持有长耗时交互）。
+    if (useWorkspaceStore.getState().workspaces.length === 0) {
+      onNewTask();
     }
   };
 
@@ -317,7 +314,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
               {pendingDeleteIsActive &&
                 (workspaces.length > 1
                   ? "删除后自动切换到其他工作区。"
-                  : "删除后需新建一个工作区才能继续。")}
+                  : "删除后将跳转到新建任务页选择工作区。")}
             </p>
             {deleteError && <p className="mt-2 text-xs text-destructive">{deleteError}</p>}
             <div className="mt-4 flex justify-end gap-2">

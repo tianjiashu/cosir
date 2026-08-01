@@ -40,3 +40,5 @@ node_modules/
 /.workbuddy/
 /.agents/
 /.npm-cache/
+/.superpowers/
+/temp/

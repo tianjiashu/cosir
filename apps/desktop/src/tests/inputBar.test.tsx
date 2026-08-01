@@ -11,6 +11,7 @@ import { makeTask } from "@/tests/test-utils/factories";
 
 const createTaskMock = vi.fn().mockResolvedValue(true);
 const createTurnMock = vi.fn().mockResolvedValue(true);
+const cancelTurnMock = vi.fn().mockResolvedValue(undefined);
 const logErrorMock = vi.fn();
 
 let operationState = { loading: false, error: null as string | null };
@@ -19,6 +20,7 @@ vi.mock("@/hooks/useTask", () => ({
   useTask: () => ({
     createTask: (...args: unknown[]) => createTaskMock(...args),
     createTurn: (...args: unknown[]) => createTurnMock(...args),
+    cancelTurn: (...args: unknown[]) => cancelTurnMock(...args),
     operation: operationState,
   }),
 }));
@@ -53,6 +55,7 @@ beforeEach(() => {
 
   createTaskMock.mockReset().mockResolvedValue(true);
   createTurnMock.mockReset().mockResolvedValue(true);
+  cancelTurnMock.mockReset().mockResolvedValue(undefined);
   logErrorMock.mockReset();
   operationState = { loading: false, error: null };
 });
@@ -79,6 +82,12 @@ function getInput(): HTMLInputElement {
 function getSendButton(): HTMLButtonElement {
   const button = container.querySelector('button[aria-label="发送"]');
   if (!button) throw new Error("InputBar send button not found");
+  return button as HTMLButtonElement;
+}
+
+function getStopButton(): HTMLButtonElement {
+  const button = container.querySelector('button[aria-label="停止当前轮次"]');
+  if (!button) throw new Error("InputBar stop button not found");
   return button as HTMLButtonElement;
 }
 
@@ -140,6 +149,17 @@ describe("InputBar — 发送入口", () => {
     expect(getSendButton().disabled).toBe(true);
   });
 
+  it("无工作区时占位提示引导先选择工作区", () => {
+    render();
+    expect(getInput().getAttribute("placeholder")).toBe("请先选择工作区再开始对话...");
+  });
+
+  it("有工作区但无活跃任务时占位提示为开始对话", () => {
+    useWorkspaceStore.setState({ activeWorkspaceId: "workspace-1" });
+    render();
+    expect(getInput().getAttribute("placeholder")).toBe("输入任务内容开始对话...");
+  });
+
   it("操作加载中时发送按钮禁用", () => {
     useWorkspaceStore.setState({ activeWorkspaceId: "workspace-1" });
     operationState = { loading: true, error: null };
@@ -150,14 +170,22 @@ describe("InputBar — 发送入口", () => {
     expect(getSendButton().disabled).toBe(true);
   });
 
-  it("当前轮次还在接收事件流时发送按钮禁用", () => {
+  it("当前轮次还在接收事件流时显示停止按钮", async () => {
     useWorkspaceStore.setState({ activeWorkspaceId: "workspace-1" });
     useTurnStore.getState().setStreamingTurn("turn-1");
     render();
     act(() => {
       setInputValue(getInput(), "你好");
     });
-    expect(getSendButton().disabled).toBe(true);
+
+    await act(async () => {
+      getStopButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(cancelTurnMock).toHaveBeenCalledTimes(1);
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(createTurnMock).not.toHaveBeenCalled();
   });
 
   it("创建任务失败时保留输入内容", async () => {
