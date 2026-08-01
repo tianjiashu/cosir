@@ -9,6 +9,7 @@ from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
     WebProviderUnavailableError,
     WebSearchItem,
+    provider_result_metadata,
 )
 
 
@@ -152,9 +153,10 @@ class TavilyProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("url", "")),
-                snippet=str(item.get("content", "")),
+                description=str(item.get("content", "")),
+                position=position,
             )
-            for item in raw_results[:limit]
+            for position, item in enumerate(raw_results[:limit], start=1)
             if isinstance(item, dict) and item.get("url")
         ]
 
@@ -185,6 +187,12 @@ class TavilyProvider:
                 url=str(item.get("url", "")),
                 title=str(item.get("title", "")),
                 content=str(item.get("raw_content") or item.get("content") or "")[:char_limit],
+                raw_content=str(item.get("raw_content") or item.get("content") or ""),
+                metadata=provider_result_metadata(
+                    item,
+                    frozenset({"url", "title", "raw_content", "content", "error"}),
+                ),
+                error=str(item.get("error") or ""),
             )
             for item in raw_results
             if isinstance(item, dict) and item.get("url")

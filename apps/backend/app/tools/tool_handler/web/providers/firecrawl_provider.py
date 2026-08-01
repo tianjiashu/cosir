@@ -9,6 +9,7 @@ from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
     WebProviderUnavailableError,
     WebSearchItem,
+    provider_result_metadata,
 )
 
 _DEFAULT_BASE_URL = "https://api.firecrawl.dev/v1"
@@ -158,9 +159,10 @@ class FirecrawlProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("url", "")),
-                snippet=str(item.get("description") or item.get("markdown") or ""),
+                description=str(item.get("description") or item.get("markdown") or ""),
+                position=position,
             )
-            for item in raw_results[:limit]
+            for position, item in enumerate(raw_results[:limit], start=1)
             if isinstance(item, dict) and item.get("url")
         ]
 
@@ -190,11 +192,18 @@ class FirecrawlProvider:
                 continue
             metadata = data.get("metadata")
             title = metadata.get("title", "") if isinstance(metadata, dict) else ""
+            raw_content = str(data.get("markdown") or data.get("content") or "")
             results.append(
                 WebExtractItem(
                     url=str(data.get("url") or url),
                     title=str(title),
-                    content=str(data.get("markdown") or data.get("content") or "")[:char_limit],
+                    content=raw_content[:char_limit],
+                    raw_content=raw_content,
+                    metadata=provider_result_metadata(
+                        data,
+                        frozenset({"url", "markdown", "content", "error"}),
+                    ),
+                    error=str(data.get("error") or ""),
                 )
             )
         return results

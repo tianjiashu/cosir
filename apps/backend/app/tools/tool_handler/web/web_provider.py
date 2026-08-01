@@ -10,7 +10,8 @@ class WebSearchItem:
 
     title: str
     url: str
-    snippet: str = ""
+    description: str
+    position: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,8 +19,37 @@ class WebExtractItem:
     """Web page content extracted by a provider."""
 
     url: str
+    title: str
     content: str
-    title: str = ""
+    raw_content: str
+    metadata: dict[str, object]
+    error: str = ""
+
+
+def provider_result_metadata(
+    item: dict[str, object],
+    excluded_fields: frozenset[str],
+) -> dict[str, object]:
+    """提取 Provider 结果中的结构化元数据。
+
+    参数:
+        item: Provider 返回的单条原始结果。
+        excluded_fields: 已映射到 WebExtractItem 专有字段的键名。
+
+    返回:
+        Provider 明确返回 metadata 时使用其副本，否则返回未映射字段。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    metadata = item.get("metadata")
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    return {key: value for key, value in item.items() if key not in excluded_fields}
 
 
 class WebProviderUnavailableError(RuntimeError):

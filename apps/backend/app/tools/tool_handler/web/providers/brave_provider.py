@@ -164,9 +164,10 @@ class BraveProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("url", "")),
-                snippet=str(item.get("description", "")),
+                description=str(item.get("description", "")),
+                position=position,
             )
-            for item in raw_results[:limit]
+            for position, item in enumerate(raw_results[:limit], start=1)
             if isinstance(item, dict) and item.get("url")
         ]
 

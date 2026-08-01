@@ -9,6 +9,7 @@ from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
     WebProviderUnavailableError,
     WebSearchItem,
+    provider_result_metadata,
 )
 
 
@@ -155,9 +156,10 @@ class ExaProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("url", "")),
-                snippet=str(item.get("text") or item.get("highlights", [""])[0]),
+                description=self._description(item),
+                position=position,
             )
-            for item in raw_results[:limit]
+            for position, item in enumerate(raw_results[:limit], start=1)
             if isinstance(item, dict) and item.get("url")
         ]
 
@@ -188,6 +190,12 @@ class ExaProvider:
                 url=str(item.get("url", "")),
                 title=str(item.get("title", "")),
                 content=str(item.get("text") or "")[:char_limit],
+                raw_content=str(item.get("text") or ""),
+                metadata=provider_result_metadata(
+                    item,
+                    frozenset({"url", "title", "text", "error"}),
+                ),
+                error=str(item.get("error") or ""),
             )
             for item in raw_results
             if isinstance(item, dict) and item.get("url")
@@ -221,3 +229,27 @@ class ExaProvider:
             )
             response.raise_for_status()
         return response.json()
+
+    def _description(self, item: dict[str, object]) -> str:
+        """从 Exa 搜索结果中选择稳定的描述文本。
+
+        参数:
+            item: Exa 返回的单条搜索结果。
+
+        返回:
+            优先返回 text；没有 text 时返回首个 highlights；两者都不可用时返回空字符串。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        text = item.get("text")
+        if text:
+            return str(text)
+        highlights = item.get("highlights")
+        if isinstance(highlights, list) and highlights:
+            return str(highlights[0])
+        return ""

@@ -9,6 +9,7 @@ from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
     WebProviderUnavailableError,
     WebSearchItem,
+    provider_result_metadata,
 )
 
 
@@ -153,9 +154,10 @@ class ParallelProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("url", "")),
-                snippet=str(item.get("excerpt") or item.get("content") or ""),
+                description=str(item.get("excerpt") or item.get("content") or ""),
+                position=position,
             )
-            for item in raw_results[:limit]
+            for position, item in enumerate(raw_results[:limit], start=1)
             if item.get("url")
         ]
 
@@ -182,7 +184,13 @@ class ParallelProvider:
             WebExtractItem(
                 url=str(item.get("url", "")),
                 title=str(item.get("title", "")),
-                content=str(item.get("content") or item.get("full_content") or "")[:char_limit],
+                content=self._content(item)[:char_limit],
+                raw_content=self._content(item),
+                metadata=provider_result_metadata(
+                    item,
+                    frozenset({"url", "title", "content", "full_content", "excerpts", "error"}),
+                ),
+                error=str(item.get("error") or ""),
             )
             for item in self._results(payload)
             if item.get("url")
@@ -210,7 +218,7 @@ class ParallelProvider:
             raise WebProviderUnavailableError(self.missing_configuration_message())
         with httpx.Client(timeout=Settings.WEB_REQUEST_TIMEOUT_SECONDS) as client:
             response = client.post(
-                f"https://api.parallel.ai/v1beta/{endpoint}",
+                f"https://api.parallel.ai/v1/{endpoint}",
                 json=body,
                 headers={"x-api-key": self._api_key},
             )
@@ -243,3 +251,27 @@ class ParallelProvider:
             if isinstance(nested_results, list):
                 raw_results = nested_results
         return [item for item in raw_results if isinstance(item, dict)]
+
+    def _content(self, item: dict[str, object]) -> str:
+        """从 Parallel 提取结果中选择完整正文或默认摘要。
+
+        参数:
+            item: Parallel 返回的单条提取结果。
+
+        返回:
+            优先返回完整正文；缺失时返回由 excerpts 拼接的正文；都不存在时返回空字符串。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        content = item.get("content") or item.get("full_content")
+        if content:
+            return str(content)
+        excerpts = item.get("excerpts")
+        if isinstance(excerpts, list):
+            return "\n".join(str(excerpt) for excerpt in excerpts)
+        return ""

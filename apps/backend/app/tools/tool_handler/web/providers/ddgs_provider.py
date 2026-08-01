@@ -136,9 +136,10 @@ class DdgsProvider:
             WebSearchItem(
                 title=str(item.get("title", "")),
                 url=str(item.get("href", "")),
-                snippet=str(item.get("body", "")),
+                description=str(item.get("body", "")),
+                position=position,
             )
-            for item in raw_results
+            for position, item in enumerate(raw_results, start=1)
             if isinstance(item, dict) and item.get("href")
         ]
 
