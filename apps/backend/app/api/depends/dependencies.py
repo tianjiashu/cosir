@@ -1,10 +1,18 @@
-"""FastAPI dependency wiring."""
+"""FastAPI dependency wiring.
 
-from app.core.agents.agent_profile import (
-    default_developer_agent,
-    developer_agent_pro,
+进程级运行时单例（``AgentProfileRegistry`` / ``ToolSystem`` / ``AgentRuntime``）已收口到
+``app.config.configuration``；本模块仅保留领域 service 三件套单例（``_SERVICES``）及
+``build_runtime`` 装配，并对 ``configuration`` 中的单例访问器做薄壳 re-export，使现有
+``Depends(get_agent_registry)`` / ``app.py`` 等调用点零改动。
+"""
+
+from app.config.configuration import (
+    build_agent_registry,
+    get_agent_registry,
+    get_tool_system,
+    set_agent_registry,
+    set_tool_system,
 )
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
 from app.service.task.task_service import TaskService
@@ -18,159 +26,18 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.store_engines import init_storage
 from app.tools.tool_system import ToolSystem
 
-_RUNTIME: AgentRuntime | None = None
-_TOOL_SYSTEM: ToolSystem | None = None
-_AGENT_REGISTRY: AgentProfileRegistry | None = None
+# 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持
+# ``Depends(get_agent_registry)`` / ``app.py`` 等既有调用点零改动。
+__all__ = [
+    "build_agent_registry",
+    "get_agent_registry",
+    "get_tool_system",
+    "set_agent_registry",
+    "set_tool_system",
+]
+
 _SERVICES: dict | None = None
-
-
-def set_runtime(runtime: AgentRuntime) -> None:
-    """Set the process-wide runtime instance.
-
-    Parameters:
-        runtime: Runtime instance to expose through dependency injection.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Replaces the module-level runtime singleton.
-    """
-
-    global _RUNTIME
-    _RUNTIME = runtime
-
-
-def set_tool_system(tool_system: ToolSystem) -> None:
-    """Set the process-wide tool system instance.
-
-    Parameters:
-        tool_system: Initialized tool system built during application startup.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Replaces the module-level tool system singleton.
-    """
-
-    global _TOOL_SYSTEM
-    _TOOL_SYSTEM = tool_system
-
-
-def get_tool_system() -> ToolSystem:
-    """Return the process-wide tool system instance.
-
-    Parameters:
-        None.
-
-    Returns:
-        Initialized ToolSystem.
-
-    Raises:
-        RuntimeError: If the tool system has not been initialized.
-
-    Side effects:
-        None.
-    """
-
-    if _TOOL_SYSTEM is None:
-        raise RuntimeError("tool system has not been initialized")
-    return _TOOL_SYSTEM
-
-
-def get_runtime() -> AgentRuntime:
-    """Return the process-wide runtime instance.
-
-    Parameters:
-        None.
-
-    Returns:
-        Configured runtime instance.
-
-    Raises:
-        RuntimeError: If the runtime has not been initialized.
-
-    Side effects:
-        None.
-    """
-
-    if _RUNTIME is None:
-        raise RuntimeError("runtime has not been initialized")
-    return _RUNTIME
-
-
-def set_agent_registry(registry: AgentProfileRegistry) -> None:
-    """Set the process-wide agent profile registry singleton.
-
-    Parameters:
-        registry: Initialized agent profile registry built during startup.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Replaces the module-level agent registry singleton.
-    """
-
-    global _AGENT_REGISTRY
-    _AGENT_REGISTRY = registry
-
-
-def get_agent_registry() -> AgentProfileRegistry:
-    """Return the process-wide agent profile registry singleton.
-
-    Parameters:
-        None.
-
-    Returns:
-        Initialized AgentProfileRegistry.
-
-    Raises:
-        RuntimeError: If the agent registry has not been initialized.
-
-    Side effects:
-        None.
-    """
-
-    if _AGENT_REGISTRY is None:
-        raise RuntimeError("agent registry has not been initialized")
-    return _AGENT_REGISTRY
-
-
-def build_agent_registry() -> AgentProfileRegistry:
-    """构建并播种进程级 agent profile 目录。
-
-    集中注册所有内置 agent；新增 agent 仅需在此多 ``register`` 一行。
-    该函数是「启动时注册所有 agent」的单一落点，与 ``_RUNTIME`` / ``_TOOL_SYSTEM`` 同构。
-
-    参数:
-        无。
-
-    返回:
-        已播种完成的 ``AgentProfileRegistry``。
-
-    异常:
-        无。
-
-    副作用:
-        构造并填充进程级 registry 单例所依赖的 registry 实例。
-    """
-
-    registry = AgentProfileRegistry()
-    registry.register(default_developer_agent())
-    registry.register(developer_agent_pro())
-    # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
-    return registry
+_RUNTIME: "AgentRuntime | None" = None
 
 
 def build_runtime(
@@ -324,3 +191,44 @@ def get_runtime_event_crud() -> RuntimeEventCrud:
     """
 
     return RuntimeEventCrud()
+
+
+def set_runtime(runtime: "AgentRuntime") -> None:
+    """设置进程级运行时单例。
+
+    参数:
+        runtime: 已构建的运行时实例，由应用启动时经 ``build_runtime`` 产出并注入。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        替换模块级运行时单例。
+    """
+
+    global _RUNTIME
+    _RUNTIME = runtime
+
+
+def get_runtime() -> "AgentRuntime":
+    """返回进程级运行时单例。
+
+    参数:
+        无。
+
+    返回:
+        已配置的 ``AgentRuntime`` 实例。
+
+    异常:
+        RuntimeError: 如果运行时尚未初始化（未调用 ``set_runtime``）。
+
+    副作用:
+        无。
+    """
+
+    if _RUNTIME is None:
+        raise RuntimeError("runtime has not been initialized")
+    return _RUNTIME

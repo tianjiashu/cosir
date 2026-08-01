@@ -11,6 +11,7 @@
 from dataclasses import replace
 from uuid import uuid4
 
+from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.models import TaskRecord
 from app.storage.crud.runtime_event_crud import RuntimeEventCrud
@@ -18,7 +19,7 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.turn_message_crud import TurnMessageCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.utils.datetime_utils import preview, utc_now
+from app.utils.datetime_utils import preview
 
 
 class TaskService:
@@ -48,32 +49,47 @@ class TaskService:
         """Create a task and its first turn (atomic).
 
         ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离；
-        首个轮次固定为 ``pending`` 执行态。
+        首个轮次固定为 ``pending`` 执行态。因 ``turns.task_id`` 外键指向 ``tasks.task_id``，
+        必须先创建 task（``latest_turn_id`` 暂置空），再创建首 turn 并用真实
+        ``turn_id`` 回写 task 的最新轮次指针，保证 ``latest_turn_id`` 与实际一致。
         """
 
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
-        now = utc_now()
-        resolved_workspace_id = workspace_id or self._workspace.ensure_default(now)
+
+        if workspace_id is None or not isinstance(workspace_id, str) or not workspace_id.strip():
+            raise ValueError("workspace_id must be a non-empty string")
+
+        if agent_id is None or not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("agent_id must be a non-empty string")
+
+        if agent_id not in get_agent_registry().list_agent_ids():
+            raise ValueError(f"agent_id {agent_id} is not registered")
+
+        resolved_workspace_id = workspace_id
         title = preview(input_text)
-        turn_id = str(uuid4())
-        task = self._task.create(
-            task_id=str(uuid4()),
+        task_id = str(uuid4())
+        # 先创建 task（turns.task_id 外键指向 tasks.task_id，必须先有 task 才能建 turn）。
+        self._task.create(
+            task_id=task_id,
             workspace_id=resolved_workspace_id,
             agent_id=agent_id,
             input_text=input_text,
             title=title,
             last_message_preview=title,
-            latest_turn_id=turn_id,
+            latest_turn_id=None,
             status=status,
         )
-        self._turn.create(
-            task_id=task.task_id,
+        # 再创建首 turn，并用真实 turn_id 回写 task 的最新轮次指针。
+        first_turn = self._turn.create(
+            task_id=task_id,
             input_text=input_text,
             status="pending",
-            agent_id=task.agent_id,
+            agent_id=agent_id,
         )
-        return task
+        self._task.update_latest_turn(task_id, first_turn.turn_id, title)
+        # 重新取回带最新 latest_turn_id 的 task 记录返回给调用方。
+        return self._task.get(task_id)
 
     def get_task(self, task_id: str) -> TaskRecord:
         """Return the task with its derived ``execution_status`` attached."""
