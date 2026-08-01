@@ -11,6 +11,7 @@ from app.tools.tool_handler.list_directory import build_list_directory_definitio
 from app.tools.tool_handler.patch_tool import build_patch_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.search_files import build_search_files_definition
+from app.tools.tool_handler.web.web_search import build_web_search_definition
 from app.tools.tool_handler.write_file import build_write_file_definition
 from app.tools.tool_registry import ToolRegistry
 
@@ -68,6 +69,7 @@ class ToolSystem:
         registry.register(build_list_directory_definition())
         registry.register(build_delete_definition())
         registry.register(build_execute_terminal_definition())
+        registry.register(build_web_search_definition())
         scheduler = ToolScheduler(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),
