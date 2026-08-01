@@ -11,7 +11,7 @@
 from dataclasses import replace
 from uuid import uuid4
 
-from app.config.configuration import get_agent_registry
+from app.config.configuration import build_agent_registry, get_agent_registry
 from app.config.logging.logger import log
 from app.models import TaskRecord
 from app.storage.crud.runtime_event_crud import RuntimeEventCrud
@@ -20,6 +20,33 @@ from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.turn_message_crud import TurnMessageCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.utils.datetime_utils import preview
+
+
+def _registered_agent_ids() -> set[str]:
+    """返回当前已注册的 agent_id 集合。
+
+    优先复用进程级 registry 单例（由应用启动经 ``set_agent_registry`` 注入，
+    供 API 层依赖注入与校验共享同一份）；单例未注入（如单元 / 脚本场景）时，
+    回退到 ``build_agent_registry`` 临时构建一份只读目录用于校验，避免模块级
+    缓存导致与运行态不一致。
+
+    参数:
+        无。
+
+    返回:
+        已注册 agent_id 的集合。
+
+    异常:
+        无。
+
+    副作用:
+        单例未注入时临时构造一个 registry 实例（仅用于本次校验，不写入单例）。
+    """
+
+    try:
+        return get_agent_registry().list_agent_ids()
+    except RuntimeError:
+        return build_agent_registry().list_agent_ids()
 
 
 class TaskService:
@@ -63,7 +90,7 @@ class TaskService:
         if agent_id is None or not isinstance(agent_id, str) or not agent_id.strip():
             raise ValueError("agent_id must be a non-empty string")
 
-        if agent_id not in get_agent_registry().list_agent_ids():
+        if agent_id not in _registered_agent_ids():
             raise ValueError(f"agent_id {agent_id} is not registered")
 
         resolved_workspace_id = workspace_id
