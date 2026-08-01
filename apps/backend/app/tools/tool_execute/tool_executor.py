@@ -21,6 +21,10 @@ from app.tools.tool_execute.windows_job_object import (
 )
 
 
+class _ToolExecutionCancelled(Exception):
+    """Internal signal raised when a process tool should stop for turn cancellation."""
+
+
 class ToolExecutor:
     """Isolate and execute one tool handler, choosing isolation strategy by ``execution_mode``.
 
@@ -48,6 +52,7 @@ class ToolExecutor:
         arguments: Mapping[str, Any],
         execution_context: ToolExecutionContext | None = None,
         tool_call_id: str = "",
+        should_cancel: Callable[[], bool] | None = None,
     ) -> ToolObservation:
         """在隔离子进程或当前线程中执行单个工具 handler 并返回归一化结果。
 
@@ -64,6 +69,7 @@ class ToolExecutor:
             arguments: 已通过参数校验的关键字参数字典。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
+            should_cancel: 可选取消检查回调；process 模式等待结果时会轮询该回调。
 
         返回:
             归一化后的 :class:`ToolObservation`。
@@ -76,7 +82,13 @@ class ToolExecutor:
         """
 
         if tool.execution_mode == "process":
-            return self._execute_in_process(tool, arguments, execution_context, tool_call_id)
+            return self._execute_in_process(
+                tool,
+                arguments,
+                execution_context,
+                tool_call_id,
+                should_cancel=should_cancel,
+            )
         return self._execute_in_thread(tool, arguments, execution_context, tool_call_id)
 
     # ------------------------------------------------------------------
@@ -89,6 +101,7 @@ class ToolExecutor:
         arguments: Mapping[str, Any],
         execution_context: ToolExecutionContext | None = None,
         tool_call_id: str = "",
+        should_cancel: Callable[[], bool] | None = None,
     ) -> ToolObservation:
         """在隔离子进程中执行单个工具 handler 并返回归一化结果。
 
@@ -98,6 +111,7 @@ class ToolExecutor:
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
                 跨进程序列化后由 handler 在执行期消费，便于后续扩展执行参数。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
+            should_cancel: 可选取消检查回调；返回 True 时终止子进程并返回取消观察。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"，
@@ -172,7 +186,31 @@ class ToolExecutor:
             "traceback": "",
         }
         try:
-            status, payload = self._wait_for_result(process, result_queue, timeout)
+            status, payload = self._wait_for_result(
+                process,
+                result_queue,
+                timeout,
+                should_cancel=should_cancel,
+            )
+        except _ToolExecutionCancelled:
+            log.info(
+                "tool_execution_cancelled",
+                extra={
+                    "msg": "工具执行因 turn 取消而中止",
+                    "data": {"tool_name": tool.name},
+                },
+            )
+            return tool_error(
+                tool.name,
+                "tool execution cancelled",
+                reason=(
+                    "the current turn was cancelled while this tool was running; "
+                    "the tool process was terminated and no further action is needed."
+                ),
+                retryable=False,
+                permission=tool.permission,
+                tool_call_id=tool_call_id,
+            )
         except TimeoutError:
             log.warning(
                 "tool_execution_timed_out",
@@ -259,6 +297,7 @@ class ToolExecutor:
         process: multiprocessing.Process,
         result_queue: multiprocessing.Queue,
         timeout: float,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """阻塞轮询子进程回写的执行结果，超时或进程异常退出时给出明确结论。
 
@@ -266,6 +305,7 @@ class ToolExecutor:
             process: 已 ``start()`` 的守护子进程。
             result_queue: 子进程回写结果的跨进程队列。
             timeout: 软超时秒数（调用方已保证 > 0）。
+            should_cancel: 可选取消检查回调；返回 True 时抛出内部取消异常。
 
         返回:
             ``(status, payload)`` 二元组：成功时为 handler 写入的
@@ -283,6 +323,8 @@ class ToolExecutor:
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if should_cancel is not None and should_cancel():
+                raise _ToolExecutionCancelled()
             remaining = deadline - time.monotonic()
             try:
                 return result_queue.get(timeout=min(0.05, remaining))
@@ -437,7 +479,12 @@ class ToolExecutor:
             content = json.dumps(payload, ensure_ascii=False, default=str)
         else:
             content = str(payload)
-        return tool_success(tool, content, tool_call_id=tool_call_id)
+        return tool_success(
+            tool.name,
+            tool.permission,
+            content,
+            tool_call_id=tool_call_id,
+        )
 
     # ------------------------------------------------------------------
     # Child-process entry point (static — no self/cls access)

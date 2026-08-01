@@ -42,6 +42,7 @@ class ToolExecutionService:
         allowed_tool_names: Iterable[str] | None = None,
         tool_definitions: list[ToolDefinition] | None = None,
         trace_recorder: ToolTraceRecorder | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize the tool execution service.
 
@@ -54,6 +55,7 @@ class ToolExecutionService:
                 ``TOOL_CALL_FINISHED`` 的 ``summary`` 恒为 ``None``，行为不变。
             trace_recorder: 可选的工具调用 trace 记录器（依赖倒置，实现在 core/observability）。
                 ``None`` 时退化为空实现（``_NullToolTraceRecorder``），不产生任何 trace 开销。
+            should_cancel: 可选的运行时取消检查回调；返回 True 时停止执行后续工具。
 
         返回:
             无。
@@ -76,6 +78,7 @@ class ToolExecutionService:
             if definition.display is not None
         }
         self._trace_recorder = trace_recorder or _NullToolTraceRecorder()
+        self._should_cancel = should_cancel or (lambda: False)
 
     def run_calls_with_events(
         self,
@@ -114,6 +117,8 @@ class ToolExecutionService:
         messages: list[RuntimeMessage] = []
         # 当前串行执行，后续可并行
         for call in calls:
+            if self._should_cancel():
+                break
             display: ToolDisplayHints | None = self._display_by_name.get(call.tool_name)
             request_display = (
                 display.render_request(call.arguments) if display is not None else None
@@ -138,6 +143,7 @@ class ToolExecutionService:
                     call,
                     execution_context=execution_context,
                     allowed_tool_names=self._allowed_tool_names,
+                    should_cancel=self._should_cancel,
                 )
                 tool_span.record(observation)
             # 记录观察结果

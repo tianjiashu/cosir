@@ -184,6 +184,107 @@ class TurnCrud:
             session.execute(update(TurnModel).where(TurnModel.turn_id == turn_id).values(**values))
         return self.get(turn_id)
 
+    def cancel_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
+        """以原子方式把 active turn 取消。
+
+        仅当 turn 当前仍处于 ``pending`` 或 ``running`` 时，才更新为 ``cancelled``。
+        该条件更新用于避免取消请求和完成/失败收尾竞态时改写历史终态。
+
+        参数:
+            turn_id: turn 标识。
+            end_reason: 取消原因。
+
+        返回:
+            成功取消时返回更新后的 TurnRecord；turn 存在但已是其它状态时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            条件满足时更新 ``turns`` 表中对应行的 status / end_reason / updated_at。
+        """
+
+        self.get(turn_id)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(TurnModel.turn_id == turn_id, TurnModel.status.in_(("pending", "running")))
+                .values(
+                    status="cancelled",
+                    end_reason=end_reason,
+                    updated_at=to_text(utc_now()),
+                )
+            )
+        if not result.rowcount:
+            return None
+        return self.get(turn_id)
+
+    def complete_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
+        """以原子方式把 running turn 完成为 completed 并写入回复文本。
+
+        参数:
+            turn_id: turn 标识。
+            response_text: Agent 最终回复文本。
+
+        返回:
+            成功完成时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            条件满足时同事务更新 ``status``、``response_text`` 和 ``updated_at``。
+        """
+
+        self.get(turn_id)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(TurnModel.turn_id == turn_id, TurnModel.status == "running")
+                .values(
+                    status="completed",
+                    response_text=response_text,
+                    updated_at=to_text(utc_now()),
+                )
+            )
+        if not result.rowcount:
+            return None
+        return self.get(turn_id)
+
+    def fail_if_running(self, turn_id: str, end_reason: str | None = None) -> TurnRecord | None:
+        """以原子方式把 running turn 标记为 failed。
+
+        参数:
+            turn_id: turn 标识。
+            end_reason: 可选失败原因。
+
+        返回:
+            成功失败落定时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            条件满足时更新 ``status``、``end_reason`` 和 ``updated_at``。
+        """
+
+        self.get(turn_id)
+        values = {"status": "failed", "updated_at": to_text(utc_now())}
+        if end_reason is not None:
+            values["end_reason"] = end_reason
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(TurnModel.turn_id == turn_id, TurnModel.status == "running")
+                .values(**values)
+            )
+        if not result.rowcount:
+            return None
+        return self.get(turn_id)
+
     def update_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
         """更新轮次的 Agent 回复文本并刷新更新时间。
 

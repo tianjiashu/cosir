@@ -23,7 +23,6 @@ from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_l
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.models import TaskRecord
 from app.models.enums.event_type import EventType
-from app.models.payload import RunCancelledPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.models.turn_usage_stats import TurnUsageStats
@@ -31,7 +30,7 @@ from app.tools.schemas import ToolCall
 
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
-from .edges import _should_continue
+from .edges import _after_tools, _should_continue
 from .nodes import _model_node, _tools_node
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
@@ -79,7 +78,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         builder.add_node("tools", _tools_node)
         builder.add_edge(START, "model")
         builder.add_conditional_edges("model", _should_continue, {"tools": "tools", END: END})
-        builder.add_edge("tools", "model")
+        builder.add_conditional_edges("tools", _after_tools, {"model": "model", END: END})
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
@@ -222,7 +221,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     break
 
                 # ★ 取消检查：graph 暂停在 interrupt()（等待审批），若 turn 已取消则不恢复
-                if operations.has_turn_status(turn_id, "cancelled"):
+                if operations.is_current_turn_cancelled():
                     log.info(
                         "workflow_interrupt_cancelled",
                         extra={
@@ -230,14 +229,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                             "data": {"turn_id": turn_id},
                         },
                     )
-                    yield RuntimeEvent(
-                        event_type=EventType.RUN_CANCELLED,
-                        task_id=task.task_id,
-                        turn_id=turn_id,
-                        sequence=sequence,
-                        payload=RunCancelledPayload(status="cancelled"),
-                    )
-                    sequence += 1
                     break
 
                 interrupt_value = interrupts[0].value

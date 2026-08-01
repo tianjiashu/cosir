@@ -15,6 +15,8 @@ from app.config.configuration import (
 )
 from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
+from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
+from app.service.runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
@@ -74,6 +76,7 @@ def build_runtime(
         tool_scheduler=tool_system.scheduler,
         agent_registry=agent_registry,
         workspace_service=services["workspace_service"],
+        runtime_event_service=services["runtime_event_service"],
     )
 
 
@@ -102,11 +105,19 @@ def _build_services() -> dict:
     turn_message_crud = TurnMessageCrud()
     workspace_crud = WorkspaceCrud()
     runtime_event_crud = RuntimeEventCrud()
+    runtime_event_bus = RuntimeEventBus()
+    runtime_event_service = RuntimeEventService(runtime_event_crud, runtime_event_bus)
     _SERVICES = {
+        "runtime_event_bus": runtime_event_bus,
+        "runtime_event_service": runtime_event_service,
         "task_service": TaskService(
             task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
         ),
-        "turn_service": TurnService(task_crud, turn_crud, turn_message_crud),
+        "turn_service": TurnService(
+            task_crud,
+            turn_crud,
+            turn_message_crud,
+        ),
         "workspace_service": WorkspaceService(
             task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
         ),
@@ -191,6 +202,44 @@ def get_runtime_event_crud() -> RuntimeEventCrud:
     """
 
     return RuntimeEventCrud()
+
+
+def get_runtime_event_bus() -> RuntimeEventBus:
+    """返回进程级 runtime event 广播总线。
+
+    参数:
+        无。
+
+    返回:
+        RuntimeEventBus。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return _build_services()["runtime_event_bus"]
+
+
+def get_runtime_event_service() -> RuntimeEventService:
+    """返回进程级 runtime event 持久化与广播 service。
+
+    参数:
+        无。
+
+    返回:
+        RuntimeEventService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return _build_services()["runtime_event_service"]
 
 
 def set_runtime(runtime: "AgentRuntime") -> None:

@@ -1,9 +1,9 @@
 """Coordinate task lifecycle and workflow execution."""
 
 import asyncio
-import dataclasses
 import os
 from collections.abc import AsyncGenerator
+from functools import partial
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage
@@ -23,6 +23,7 @@ from app.core.observability import (
 )
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
+from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry
 from app.models import TaskRecord, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload, RunFailedPayload, RunStartedPayload
@@ -30,6 +31,7 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
+from app.service.runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
@@ -62,7 +64,9 @@ class AgentRuntime:
         context_builder: RuntimeContextBuilder,
         tool_scheduler: ToolScheduler,
         agent_registry: AgentProfileRegistry,
+        runtime_event_service: RuntimeEventService,
         workspace_service: WorkspaceService | None = None,
+        cancellation_registry: TurnCancellationRegistry | None = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -76,6 +80,17 @@ class AgentRuntime:
             workspace_service: 工作区编排服务；提供 ``task → workspace → root_path``
                 解析，使破坏性工具以 workspace 根为路径边界。缺省 None 时只暴露
                 不要求 workspace context 的只读工具。
+            cancellation_registry: 进程内 turn 取消信号注册表；缺省时创建独立实例。
+            runtime_event_service: 运行时事件持久化与广播 service。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            持有传入协作者引用；缺省时创建一个进程内取消注册表。
         """
 
         self._task_service = task_service
@@ -84,6 +99,8 @@ class AgentRuntime:
         self._tool_scheduler = tool_scheduler
         self._agent_registry = agent_registry
         self._workspace_service = workspace_service
+        self._cancellation_registry = cancellation_registry or TurnCancellationRegistry()
+        self._runtime_event_service = runtime_event_service
 
     @property
     def agent_registry(self) -> AgentProfileRegistry:
@@ -107,26 +124,54 @@ class AgentRuntime:
     def cancel_turn(self, turn_id: str) -> TurnRecord:
         """Cancel a turn and mark it cancelled.
 
-        置该 turn 为 ``cancelled``（带终态原因），并 emit ``RUN_CANCELLED`` 事件。模型节点在
-        下一轮循环检查到 turn 已取消会停止派发工具，从而中止该 turn 的运行（满足「取消要中止
-        工具运行」的编排层语义）。
+        仅允许 ``pending`` / ``running`` 进入 ``cancelled``；已取消轮次幂等返回，已完成 /
+        已失败轮次拒绝取消，避免改写历史终态。取消时同时写入进程内取消信号和
+        ``RUN_CANCELLED`` 持久化事件。
 
         参数:
             turn_id: 待取消的轮次标识。
 
         返回:
             取消后的 ``TurnRecord``。
+
+        异常:
+            ValueError: 当 turn 已处于 completed/failed 等不可取消终态时抛出。
+
+        副作用:
+            更新 turn 状态、写入进程内取消信号、持久化 run_cancelled 事件并记录日志。
         """
 
-        turn = self._turn_service.update_turn_status(
-            turn_id, "cancelled", end_reason="user_cancelled"
-        )
-        self._record(
-            EventType.RUN_CANCELLED,
-            turn.task_id,
-            RunCancelledPayload(status="cancelled"),
-            turn_id=turn_id,
-        )
+        before_cancel = self._turn_service.get_turn(turn_id)
+        if before_cancel.status == "cancelled":
+            self._cancellation_registry.mark_cancelled(turn_id)
+            return before_cancel
+        if before_cancel.status not in {"pending", "running"}:
+            raise ValueError(f"cannot cancel turn in status {before_cancel.status}")
+
+        self._cancellation_registry.mark_cancelled(turn_id)
+        turn = self._turn_service.cancel_turn_if_active(turn_id, "user_cancelled")
+        if turn is None:
+            after_race = self._turn_service.get_turn(turn_id)
+            if after_race.status == "cancelled":
+                return after_race
+            raise ValueError(f"cannot cancel turn in status {after_race.status}")
+        try:
+            self._save_and_publish_runtime_event(
+                self._record(
+                    EventType.RUN_CANCELLED,
+                    turn.task_id,
+                    RunCancelledPayload(status="cancelled"),
+                    turn_id=turn_id,
+                )
+            )
+        except RuntimeError:
+            log.exception(
+                "turn_cancelled_event_persist_failed",
+                extra={
+                    "msg": "turn 已取消，但取消事件持久化失败",
+                    "data": {"turn_id": turn_id, "task_id": turn.task_id},
+                },
+            )
         log.info(
             "turn_cancelled",
             extra={
@@ -161,16 +206,12 @@ class AgentRuntime:
         # 预取任务记录
         task = self._task_service.get_task(task_id)
 
-        # 本轮事件持久化的自增序号：``runtime_events`` 主键为 (turn_id, sequence)，
-        # 必须为每条事件分配唯一递增序号，否则同 turn 多事件主键冲突、后者静默丢失。
-        seq = 0
-
         async def emit(event: RuntimeEvent) -> RuntimeEvent:
             """落库并透传一条运行时事件（赋唯一递增 sequence）。
 
-            在 ``yield`` 前调用：把事件以独立线程写入 ``runtime_events`` 表（避免阻塞
-            SSE 事件循环），并为冻结的 ``RuntimeEvent`` 赋上本轮自增序号；持久化失败仅
-            由 ``RuntimeEventCrud.save_event`` 内部记日志，不会中断流式运行。
+            在 ``yield`` 前调用：经 ``RuntimeEventService`` 以独立线程写入 ``runtime_events`` 表
+            （避免阻塞 SSE 事件循环），并使用存储层分配的真实 turn-local sequence。
+            持久化失败由存储层记日志，不会中断流式运行。
 
             参数:
                 event: 待落库并透传的运行时事件。
@@ -182,15 +223,25 @@ class AgentRuntime:
                 不向上抛出：落库异常被 ``save_event`` 内部吞掉并记日志。
 
             副作用:
-                向 ``runtime_events`` 表插入一行（失败仅记日志）；推进本轮 ``seq`` 计数器。
+                向 ``runtime_events`` 表插入一行（失败仅记日志）。
             """
 
-            nonlocal seq
-            from app.storage.crud.runtime_event_crud import RuntimeEventCrud
-
-            stamped = dataclasses.replace(event, sequence=seq)
-            seq += 1
-            await asyncio.to_thread(RuntimeEventCrud().save_event, stamped.to_dict())
+            try:
+                stamped = await asyncio.to_thread(self._save_runtime_event, event)
+            except RuntimeError:
+                log.exception(
+                    "runtime_event_emit_persist_failed",
+                    extra={
+                        "msg": "运行时事件持久化失败，继续透传实时事件",
+                        "data": {
+                            "event_id": event.event_id,
+                            "event_type": event.event_type.value,
+                            "turn_id": event.turn_id,
+                        },
+                    },
+                )
+                stamped = event
+            self._publish_runtime_event(stamped)
             # 调试：确认思考 delta 确实带内容发射（排除上游 reasoning_content 为空导致的空白）。
             if event.event_type == EventType.MODEL_THINKING_DELTA:
                 _thinking_text = ""
@@ -350,11 +401,11 @@ class AgentRuntime:
         """
 
         try:
-            if not self._turn_service.has_turn_status(turn_id, "running"):
-                return
-            self._turn_service.update_turn_status(
-                turn_id, "failed", end_reason="client_disconnected"
+            failed_turn = self._turn_service.fail_turn_if_running(
+                turn_id, end_reason="client_disconnected"
             )
+            if failed_turn is None:
+                return
             log.info(
                 "turn_marked_disconnected",
                 extra={
@@ -370,6 +421,60 @@ class AgentRuntime:
                     "data": {"turn_id": turn_id},
                 },
             )
+
+    def _save_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        """Persist a runtime event through the configured event service.
+
+        参数:
+            event: 待持久化的运行时事件。
+
+        返回:
+            已赋真实 sequence 的 RuntimeEvent。
+
+        异常:
+            RuntimeError: 当 runtime event 持久化失败时抛出。
+
+        副作用:
+            向 runtime_events 表写入一条事件。
+        """
+
+        return self._runtime_event_service.save_event(event)
+
+    def _publish_runtime_event(self, event: RuntimeEvent) -> None:
+        """Publish a runtime event through the configured event service.
+
+        参数:
+            event: 待发布的运行时事件。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            向 RuntimeEventBus 订阅队列发布事件。
+        """
+
+        self._runtime_event_service.publish_event(event)
+
+    def _save_and_publish_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        """Persist and publish a runtime event.
+
+        参数:
+            event: 待保存并发布的运行时事件。
+
+        返回:
+            已赋真实 sequence 的 RuntimeEvent。
+
+        异常:
+            RuntimeError: 当 runtime event 持久化失败时抛出。
+
+        副作用:
+            向 runtime_events 表写入事件，并在可用时广播给当前订阅者。
+        """
+
+        return self._runtime_event_service.save_and_publish(event)
 
     async def _persist_turn_trajectory(self, turn_id: str) -> None:
         """Persist the turn's message trajectory for cross-turn memory.
@@ -515,6 +620,7 @@ class AgentRuntime:
             model_tools=model_tools,
             execution_context=execution_context,
             tool_trace_recorder=tool_trace_recorder,
+            should_cancel=partial(self._cancellation_registry.is_cancelled, turn.turn_id),
         )
 
     def _record(

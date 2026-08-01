@@ -1,20 +1,20 @@
 """工具调度器：对模型请求的工具调用做权限门禁 + 参数校验 + 隔离执行编排。"""
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 
+from app.tools.guard.file_resource_paths import FileResourcePathError
+from app.tools.guard.file_tool_state_coordinator import (
+    FileToolStateCoordinator,
+)
+from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.tools.guard.file_resource_paths import FileResourcePathError
-from app.tools.guard.file_tool_state_coordinator import (
-    FileToolStateCoordinator,
-)
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_executor import ToolExecutor
-from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.tool_registry import ToolRegistry
 from app.tools.validation.arguments import validate_tool_arguments
 
@@ -90,6 +90,7 @@ class ToolScheduler:
         call: ToolCall,
         execution_context: ToolExecutionContext | None = None,
         allowed_tool_names: Collection[str] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> ToolObservation:
         """执行单次工具调用并返回归一化观察结果。
 
@@ -105,6 +106,7 @@ class ToolScheduler:
                 透传给执行器并由 handler 在执行期消费，便于后续扩展更多执行参数。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
+            should_cancel: 可选取消检查回调；透传给 process 工具执行器用于中止长工具。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"；
@@ -256,6 +258,7 @@ class ToolScheduler:
                         validation.arguments,
                         execution_context=execution_context,
                         tool_call_id=call.call_id,
+                        should_cancel=should_cancel,
                     )
                     self._state_coordinator.complete(
                         plan,
@@ -285,6 +288,7 @@ class ToolScheduler:
                 validation.arguments,
                 execution_context=execution_context,
                 tool_call_id=call.call_id,
+                should_cancel=should_cancel,
             )
         return self._apply_output_budget(observation, execution_context)
 

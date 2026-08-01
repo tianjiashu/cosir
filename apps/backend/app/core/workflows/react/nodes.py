@@ -27,7 +27,6 @@ from app.models.payload import (
     ModelRequestedPayload,
     ModelThinkingDeltaPayload,
     ModelToolCallPayload,
-    RunCancelledPayload,
     RunFailedPayload,
     RunFinishedPayload,
     StepStartedPayload,
@@ -183,6 +182,22 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     step_count = state.step_count + 1  # 步数 +1（本轮模型步）
     step_id = f"step-{step_count}"  # 步唯一 id
+    if operations.is_current_turn_cancelled():
+        log.info(
+            "model_node_cancelled_before_request",
+            extra={
+                "msg": f"模型请求前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "final_response": False,
+            "terminal": True,
+            "messages": [],
+            "pending_tool_calls": [],
+        }
     log.info(
         "model_node_started",
         extra={
@@ -199,6 +214,22 @@ async def _model_node(state: ReactGraphState) -> dict:
         EventType.STEP_STARTED,
         StepStartedPayload(step_id=step_id, kind="model", index=step_count),
     )
+    if operations.is_current_turn_cancelled():
+        log.info(
+            "model_node_cancelled_before_model_requested",
+            extra={
+                "msg": f"模型请求事件前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "final_response": False,
+            "terminal": True,
+            "messages": [],
+            "pending_tool_calls": [],
+        }
     write_event(
         # 请求模型，带上历史消息数
         EventType.MODEL_REQUESTED,
@@ -213,15 +244,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 真正流式调用模型，state.messages 为历史+系统上下文
     async for chunk in model.astream(state.messages):
         # 每收到 chunk 都检查 turn 是否被取消
-        if operations.has_turn_status(turn.turn_id, "cancelled"):
-            write_event(
-                EventType.RUN_CANCELLED,
-                RunCancelledPayload(
-                    step_id=step_id,
-                    status="cancelled",
-                    langfuse_trace_id=rc.langfuse_trace_id,
-                ),
-            )
+        if operations.is_current_turn_cancelled():
             terminal = True  # 标记提前终止
             log.info(
                 "model_node_cancelled",
@@ -257,7 +280,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             )
 
     if terminal:  # 因取消而终止
-        operations.update_turn_status(turn.turn_id, "cancelled")  # 更新 turn 状态为 cancelled
         return {
             "step_count": step_count,
             "requested_tool": False,
@@ -303,6 +325,28 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     if requested_tool:  # 模型要求调用工具
         if step_count >= state.max_steps:  # 步数已达上限
+            failed_turn = operations.fail_turn_if_running(
+                turn.turn_id, end_reason="max_steps_reached"
+            )
+            if failed_turn is None:
+                log.info(
+                    "model_node_max_steps_terminal_race_lost",
+                    extra={
+                        "msg": (
+                            f"最大步数失败落定时 turn 已非 running，"
+                            f"跳过失败事件，step_id={step_id}"
+                        ),
+                        "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                    },
+                )
+                return {
+                    "step_count": step_count,
+                    "requested_tool": False,
+                    "final_response": False,
+                    "terminal": True,
+                    "messages": [],
+                    "pending_tool_calls": [],
+                }
             log.warning(
                 "model_node_max_steps",
                 extra={
@@ -323,7 +367,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                     langfuse_trace_id=rc.langfuse_trace_id,
                 ),
             )
-            operations.update_turn_status(turn.turn_id, "failed")
             return {
                 "step_count": step_count,
                 "requested_tool": False,
@@ -357,6 +400,23 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if output_text:  # 没有工具调用但有文本 → 最终回答
+        completed_turn = operations.complete_turn_if_running(turn.turn_id, output_text)
+        if completed_turn is None:
+            log.info(
+                "model_node_final_response_terminal_race_lost",
+                extra={
+                    "msg": f"最终回复落定时 turn 已非 running，跳过完成事件，step_id={step_id}",
+                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                },
+            )
+            return {
+                "step_count": step_count,
+                "requested_tool": False,
+                "final_response": False,
+                "terminal": True,
+                "messages": [],
+                "pending_tool_calls": [],
+            }
         log.info(
             "model_node_final_response",
             extra={
@@ -368,8 +428,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             EventType.FINAL_RESPONSE,
             FinalResponsePayload(text=output_text, step_id=step_id, status="completed"),
         )
-        operations.update_turn_status(turn.turn_id, "completed")  # turn 标完成
-        operations.update_turn_response(turn.turn_id, output_text)  # 回复文本落库（历史回看用）
         # 整个 run 结束：计算耗时并汇总 token
         duration_ms = int((perf_counter() - rc.start_time) * 1000)
         usage = rc.usage_stats.to_dict()
@@ -405,6 +463,23 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "output_text_length": len(output_text)},
         },
     )
+    failed_turn = operations.fail_turn_if_running(turn.turn_id, end_reason="invalid_model_output")
+    if failed_turn is None:
+        log.info(
+            "model_node_invalid_output_terminal_race_lost",
+            extra={
+                "msg": f"非法模型输出失败落定时 turn 已非 running，跳过失败事件，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "final_response": False,
+            "terminal": True,
+            "messages": [],
+            "pending_tool_calls": [],
+        }
     write_event(  # 既没工具调用也没文本 → 模型输出非法
         EventType.RUN_FAILED,
         RunFailedPayload(
@@ -413,7 +488,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             langfuse_trace_id=rc.langfuse_trace_id,
         ),
     )
-    operations.update_turn_status(turn.turn_id, "failed")
     return {
         "step_count": step_count,
         "requested_tool": False,
@@ -461,21 +535,13 @@ def _tools_node(state: ReactGraphState) -> dict:
     approved_dicts = tool_calls if not isinstance(approved, list) else approved
 
     # ★ 取消检查：审批恢复后、工具执行前，若 turn 已被取消则跳过工具执行
-    if operations.has_turn_status(turn.turn_id, "cancelled"):
+    if operations.is_current_turn_cancelled():
         log.info(
             "tools_node_cancelled",
             extra={
                 "msg": f"工具节点恢复后检测到 turn 已取消，跳过工具执行，step_id={step_id}",
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
-        )
-        write_event(
-            EventType.RUN_CANCELLED,
-            RunCancelledPayload(
-                step_id=step_id,
-                status="cancelled",
-                langfuse_trace_id=rc.langfuse_trace_id,
-            ),
         )
         return {
             "pending_tool_calls": [],
@@ -510,6 +576,21 @@ def _tools_node(state: ReactGraphState) -> dict:
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
 
+    if operations.is_current_turn_cancelled():
+        log.info(
+            "tools_node_cancelled_after_execution",
+            extra={
+                "msg": f"工具批次执行后检测到 turn 已取消，停止后续模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "pending_tool_calls": [],
+            "tool_error_count": state.tool_error_count,
+            "terminal": True,
+            "messages": [],
+        }
+
     tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
     for observation in observations:
         if observation.status == "success":
@@ -533,6 +614,26 @@ def _tools_node(state: ReactGraphState) -> dict:
     )
 
     if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
+        failed_turn = operations.fail_turn_if_running(
+            turn.turn_id, end_reason="tool_error_limit_reached"
+        )
+        if failed_turn is None:
+            log.info(
+                "tools_node_error_limit_terminal_race_lost",
+                extra={
+                    "msg": (
+                        f"工具错误上限失败落定时 turn 已非 running，"
+                        f"跳过失败事件，step_id={step_id}"
+                    ),
+                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                },
+            )
+            return {
+                "pending_tool_calls": [],
+                "tool_error_count": tool_error_count,
+                "terminal": True,
+                "messages": [],
+            }
         log.warning(
             "tools_node_error_limit",
             extra={
@@ -554,7 +655,6 @@ def _tools_node(state: ReactGraphState) -> dict:
                 langfuse_trace_id=rc.langfuse_trace_id,
             ),
         )
-        operations.update_turn_status(turn.turn_id, "failed")
         return {
             "pending_tool_calls": [],
             "tool_error_count": tool_error_count,

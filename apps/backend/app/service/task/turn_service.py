@@ -67,6 +67,68 @@ class TurnService:
     ) -> TurnRecord:
         return self._turn.update_status(turn_id, status, end_reason)
 
+    def cancel_turn_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
+        """Cancel a pending/running turn atomically.
+
+        参数:
+            turn_id: 待取消的 turn 标识。
+            end_reason: 取消原因。
+
+        返回:
+            成功取消时返回更新后的 TurnRecord；turn 已处于非 active 状态时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态为 cancelled。
+        """
+
+        return self._turn.cancel_if_active(turn_id, end_reason)
+
+    def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
+        """Complete a running turn and persist its response atomically.
+
+        参数:
+            turn_id: 待完成的 turn 标识。
+            response_text: Agent 最终回复文本。
+
+        返回:
+            成功完成时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态和回复文本。
+        """
+
+        return self._turn.complete_if_running(turn_id, response_text)
+
+    def fail_turn_if_running(
+        self, turn_id: str, end_reason: str | None = None
+    ) -> TurnRecord | None:
+        """Fail a running turn atomically.
+
+        参数:
+            turn_id: 待失败落定的 turn 标识。
+            end_reason: 可选失败原因。
+
+        返回:
+            成功失败落定时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态。
+        """
+
+        return self._turn.fail_if_running(turn_id, end_reason)
+
     def update_turn_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
         """把轮次的 Agent 回复文本落库，供历史接口直接读取。"""
 

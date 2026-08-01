@@ -38,19 +38,33 @@
 SSE 文本帧；它不直接处理 HTTP，仅做格式适配。
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import suppress
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.api.app import app
-from app.api.depends.dependencies import get_runtime, get_turn_service
+from app.api.depends.dependencies import (
+    get_runtime,
+    get_runtime_event_bus,
+    get_turn_service,
+)
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models import TurnRecord
+from app.models.enums.event_type import EventType
+from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.task.turn_service import TurnService
+
+_TERMINAL_EVENT_TYPES = {
+    EventType.RUN_FINISHED,
+    EventType.RUN_FAILED,
+    EventType.RUN_CANCELLED,
+}
 
 
 @app.post("/tasks/{task_id}/turns")
@@ -96,6 +110,7 @@ async def stream_turn(
     turn_id: str,
     runtime: AgentRuntime = Depends(get_runtime),
     turn_service: TurnService = Depends(get_turn_service),
+    event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
@@ -143,7 +158,7 @@ async def stream_turn(
             detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
         )
     return StreamingResponse(
-        _sse_turn_events(runtime, turn_id, turn),
+        _sse_turn_events(runtime, turn_id, turn, event_bus),
         media_type="text/event-stream",
     )
 
@@ -177,7 +192,10 @@ async def cancel_turn(
         turn_service.get_turn(turn_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="turn not found") from exc
-    turn = runtime.cancel_turn(turn_id)
+    try:
+        turn = runtime.cancel_turn(turn_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return TurnResponse.from_record(turn)
 
 
@@ -185,6 +203,7 @@ async def _sse_turn_events(
     runtime: AgentRuntime,
     turn_id: str,
     turn: TurnRecord | None = None,
+    event_bus: RuntimeEventBus | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
 
@@ -219,10 +238,28 @@ async def _sse_turn_events(
             "data": {"turn_id": turn_id},
         },
     )
-    events = runtime.run_turn(turn_id, turn=turn)
+    if event_bus is None:
+        raise ValueError("event_bus is None")
+
+    subscription = event_bus.subscribe(turn_id)
+    producer: asyncio.Task[None] | None = None
+    if event_bus.claim_turn_producer(turn_id):
+        producer = asyncio.create_task(_drive_runtime_turn(runtime, turn_id, turn, event_bus))
+    else:
+        log.info(
+            "turn_stream_producer_already_running",
+            extra={
+                "msg": f"轮次 producer 已存在，本连接仅订阅事件，turn_id={turn_id}",
+                "data": {"turn_id": turn_id},
+            },
+        )
+    terminal_received = False
     try:
-        async for event in events:
+        async for event in subscription:
             yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
+            if event.event_type in _TERMINAL_EVENT_TYPES:
+                terminal_received = True
+                break
         log.info(
             "turn_stream_completed",
             extra={
@@ -249,6 +286,61 @@ async def _sse_turn_events(
             },
         )
     finally:
-        # 确定性关闭底层运行生成器：客户端断开时借此触发 run_turn 的 finally 断开兜底，
-        # 该兜底按「本连接是否成功认领」精确判定，避免误杀他连接驱动的 running turn。
-        await events.aclose()
+        event_bus.unsubscribe(subscription)
+        if producer is not None:
+            if terminal_received and not producer.done():
+                with suppress(Exception):
+                    await producer
+            if not producer.done():
+                producer.cancel()
+                with suppress(asyncio.CancelledError):
+                    await producer
+            if producer.done():
+                with suppress(asyncio.CancelledError):
+                    try:
+                        producer.result()
+                    except Exception:
+                        log.exception(
+                            "turn_stream_producer_failed",
+                            extra={
+                                "msg": f"轮次事件生产任务异常，turn_id={turn_id}",
+                                "data": {"turn_id": turn_id},
+                            },
+                        )
+
+
+async def _drive_runtime_turn(
+    runtime: AgentRuntime,
+    turn_id: str,
+    turn: TurnRecord | None,
+    event_bus: RuntimeEventBus,
+) -> None:
+    """Drive ``run_turn`` as an event producer for bus-backed SSE.
+
+    参数:
+        runtime: 产生轮次事件的运行时。
+        turn_id: 待运行的轮次标识。
+        turn: 可选预取轮次记录。
+        event_bus: 当前进程 runtime event 广播总线。
+
+    返回:
+        无。
+
+    异常:
+        向上透传 ``runtime.run_turn`` 的未预期异常，由持有 producer 的 SSE 层记录。
+
+    副作用:
+        消费 ``runtime.run_turn`` 以驱动执行，并把产出的事件发布到 bus；结束时关闭当前
+        turn 的订阅。
+    """
+
+    events = runtime.run_turn(turn_id, turn=turn)
+    try:
+        async for event in events:
+            event_bus.publish(event)
+    finally:
+        try:
+            await events.aclose()
+            event_bus.close_turn(turn_id)
+        finally:
+            event_bus.release_turn_producer(turn_id)
