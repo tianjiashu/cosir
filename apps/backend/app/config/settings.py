@@ -45,6 +45,14 @@ class Settings:
     TOOL_ERROR_LIMIT: ClassVar[int] = 3
     MAX_CONTEXT_CHARS: ClassVar[int] = 20000
     MAX_TOOL_OUTPUT_CHARS: ClassVar[int] = 20000
+    WEB_SEARCH_BACKEND: ClassVar[str] = ""
+    WEB_EXTRACT_BACKEND: ClassVar[str] = ""
+    WEB_BACKEND: ClassVar[str] = ""
+    WEB_REQUEST_TIMEOUT_SECONDS: ClassVar[float] = 20.0
+    WEB_SEARCH_LIMIT_MAX: ClassVar[int] = 20
+    WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
+    WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
+    WEB_EXTRACT_STORE_DIR_NAME: ClassVar[str] = ".coding-agent/tool-results/web"
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
@@ -175,6 +183,14 @@ class Settings:
             raise ValueError("LOG_FLUSH_INTERVAL_MS must be greater than zero")
         if cls.LOG_QUERY_LIMIT_MAX < 1:
             raise ValueError("LOG_QUERY_LIMIT_MAX must be greater than zero")
+        if cls.WEB_REQUEST_TIMEOUT_SECONDS <= 0:
+            raise ValueError("WEB_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+        if cls.WEB_SEARCH_LIMIT_MAX < 1:
+            raise ValueError("WEB_SEARCH_LIMIT_MAX must be greater than zero")
+        if cls.WEB_EXTRACT_URL_LIMIT_MAX < 1:
+            raise ValueError("WEB_EXTRACT_URL_LIMIT_MAX must be greater than zero")
+        if cls.WEB_EXTRACT_CHAR_LIMIT < 1:
+            raise ValueError("WEB_EXTRACT_CHAR_LIMIT must be greater than zero")
 
     @classmethod
     def load(cls, repository_root: Path | None = None) -> None:
@@ -225,6 +241,27 @@ class Settings:
         cls.MAX_CONTEXT_CHARS = int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000"))
         cls.MAX_TOOL_OUTPUT_CHARS = int(
             os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")
+        )
+        cls.WEB_SEARCH_BACKEND = (
+            os.environ.get("CODING_AGENT_WEB_SEARCH_BACKEND", "").strip().lower()
+        )
+        cls.WEB_EXTRACT_BACKEND = (
+            os.environ.get("CODING_AGENT_WEB_EXTRACT_BACKEND", "").strip().lower()
+        )
+        cls.WEB_BACKEND = os.environ.get("CODING_AGENT_WEB_BACKEND", "").strip().lower()
+        cls.WEB_REQUEST_TIMEOUT_SECONDS = float(
+            os.environ.get("CODING_AGENT_WEB_REQUEST_TIMEOUT_SECONDS", "20")
+        )
+        cls.WEB_SEARCH_LIMIT_MAX = int(os.environ.get("CODING_AGENT_WEB_SEARCH_LIMIT_MAX", "20"))
+        cls.WEB_EXTRACT_URL_LIMIT_MAX = int(
+            os.environ.get("CODING_AGENT_WEB_EXTRACT_URL_LIMIT_MAX", "5")
+        )
+        cls.WEB_EXTRACT_CHAR_LIMIT = int(
+            os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
+        )
+        cls.WEB_EXTRACT_STORE_DIR_NAME = os.environ.get(
+            "CODING_AGENT_WEB_EXTRACT_STORE_DIR_NAME",
+            ".coding-agent/tool-results/web",
         )
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
