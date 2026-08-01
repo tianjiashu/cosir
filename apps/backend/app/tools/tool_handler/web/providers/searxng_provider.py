@@ -108,6 +108,24 @@ class SearxngProvider:
 
         return False
 
+    def supported_extract_formats(self) -> frozenset[str]:
+        """返回 SearXNG 支持的正文格式集合。
+
+        参数:
+            无。
+
+        返回:
+            空集合，因为 SearXNG 不支持正文提取。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return frozenset()
+
     def missing_configuration_message(self) -> str:
         """返回 SearXNG 未配置时的英文诊断信息。
 

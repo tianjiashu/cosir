@@ -91,6 +91,24 @@ class FakeExtractProvider:
 
         return True
 
+    def supported_extract_formats(self) -> frozenset[str]:
+        """返回测试 Provider 支持的全部正文格式。
+
+        参数:
+            无。
+
+        返回:
+            包含模型工具契约全部格式的不可变集合。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return frozenset({"markdown", "html", "text"})
+
     def missing_configuration_message(self) -> str:
         """返回缺少配置时的诊断文本。
 
@@ -185,6 +203,28 @@ class FakeSearchOnlyProvider(FakeExtractProvider):
         """
 
         return False
+
+
+class FakeMarkdownOnlyProvider(FakeExtractProvider):
+    """仅支持 Markdown 正文提取的无网络 Provider。"""
+
+    def supported_extract_formats(self) -> frozenset[str]:
+        """返回测试 Provider 唯一支持的正文格式。
+
+        参数:
+            无。
+
+        返回:
+            只包含 ``markdown`` 的不可变集合。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return frozenset({"markdown"})
 
 
 class FakeAsyncExtractProvider(FakeExtractProvider):
@@ -614,6 +654,37 @@ def test_web_extract_passes_requested_format_to_provider(
     assert provider.calls == [
         (["https://example.com"], output_format, Settings.WEB_EXTRACT_CHAR_LIMIT)
     ]
+
+
+def test_web_extract_rejects_unsupported_provider_format_before_provider_io(tmp_path: Path) -> None:
+    """验证工具会在 Provider 调用前拒绝其不支持的正文格式。
+
+    参数:
+        tmp_path: pytest 提供的隔离工作区根目录。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 错误文本或 Provider 调用记录不符合预期时抛出。
+
+    副作用:
+        不发起真实网络请求，也不调用测试 Provider 的提取入口。
+    """
+
+    provider = FakeMarkdownOnlyProvider()
+    tool = build_tool(provider)
+    context = ToolExecutionContext("task_1", "workspace_1", tmp_path)
+
+    observation = tool.execute(
+        ["https://example.com"],
+        format="html",
+        execution_context=context,
+    )
+
+    assert observation.status == "error"
+    assert observation.error == "Fake does not support 'html' extraction format."
+    assert provider.calls == []
 
 
 def test_web_extract_does_not_store_failed_page_content(tmp_path: Path) -> None:

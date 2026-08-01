@@ -91,6 +91,24 @@ class FakeProvider:
 
         return self.extract_capability
 
+    def supported_extract_formats(self) -> frozenset[str]:
+        """返回测试替身声明支持的正文格式集合。
+
+        参数:
+            无。
+
+        返回:
+            具备提取能力时返回 Markdown 格式集合，否则返回空集合。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return frozenset({"markdown"}) if self.extract_capability else frozenset()
+
     def missing_configuration_message(self) -> str:
         """返回测试替身未配置时的英文诊断信息。
 
@@ -128,11 +146,17 @@ class FakeProvider:
 
         return []
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(
+        self,
+        urls: list[str],
+        output_format: str,
+        char_limit: int,
+    ) -> list[WebExtractItem]:
         """实现完整 Provider 契约中的正文提取入口。
 
         参数:
             urls: 测试调用传入的网页地址列表。
+            output_format: 测试调用传入的网页正文格式。
             char_limit: 测试调用传入的单页字符上限。
 
         返回:

@@ -1,11 +1,19 @@
 """Web Provider adapter tests."""
 
+import pytest
+
 from app.tools.tool_handler.web.providers import default_web_providers
 from app.tools.tool_handler.web.providers.brave_provider import BraveProvider
 from app.tools.tool_handler.web.providers.exa_provider import ExaProvider
+from app.tools.tool_handler.web.providers.firecrawl_provider import FirecrawlProvider
 from app.tools.tool_handler.web.providers.parallel_provider import ParallelProvider
 from app.tools.tool_handler.web.providers.searxng_provider import SearxngProvider
-from app.tools.tool_handler.web.web_provider import WebExtractItem, WebSearchItem
+from app.tools.tool_handler.web.providers.tavily_provider import TavilyProvider
+from app.tools.tool_handler.web.web_provider import (
+    WebExtractItem,
+    WebProviderUnavailableError,
+    WebSearchItem,
+)
 
 
 def test_brave_normalizes_search_results(monkeypatch) -> None:
@@ -463,7 +471,7 @@ def test_parallel_extract_normalizes_default_excerpts_from_v1(monkeypatch) -> No
     assert requests == [
         (
             "https://api.parallel.ai/v1/extract",
-            {"urls": ["https://example.com"], "format": "markdown"},
+            {"urls": ["https://example.com"]},
         )
     ]
     assert results == [
@@ -516,6 +524,142 @@ def test_parallel_search_normalizes_v1_excerpts(monkeypatch) -> None:
             position=1,
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "output_format", "expected_request"),
+    [
+        (
+            FirecrawlProvider(api_key="key"),
+            "html",
+            ("scrape", {"url": "https://example.com", "formats": ["html"]}),
+        ),
+        (
+            TavilyProvider(api_key="key"),
+            "text",
+            ("extract", {"urls": ["https://example.com"], "format": "text"}),
+        ),
+        (
+            ExaProvider(api_key="key"),
+            "text",
+            ("contents", {"urls": ["https://example.com"], "text": True}),
+        ),
+        (
+            ParallelProvider(api_key="key"),
+            "markdown",
+            ("extract", {"urls": ["https://example.com"]}),
+        ),
+    ],
+    ids=["firecrawl-html", "tavily-text", "exa-text", "parallel-markdown"],
+)
+def test_extract_supported_format_uses_provider_request_contract(
+    monkeypatch,
+    provider,
+    output_format: str,
+    expected_request: tuple[str, dict[str, object]],
+) -> None:
+    """验证支持的正文格式会映射到各 Provider 的实际请求契约。
+
+    参数:
+        monkeypatch: pytest 提供的模块属性替换工具。
+        provider: 已配置的待测正文提取 Provider。
+        output_format: 模型请求且 Provider 支持的正文格式。
+        expected_request: Provider 应发起的端点与请求体。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: Provider 请求未遵守其实际 API 格式契约时抛出。
+
+    副作用:
+        临时替换 Provider 请求入口，避免真实网络请求。
+    """
+
+    requests: list[tuple[str, dict[str, object]]] = []
+
+    def record_request(endpoint: str, body: dict[str, object]) -> object:
+        """记录 Provider 请求并返回空结果。
+
+        参数:
+            endpoint: Provider 请求的相对端点。
+            body: Provider 请求的 JSON 请求体。
+
+        返回:
+            不含提取结果的空响应字典。
+
+        异常:
+            无。
+
+        副作用:
+            向当前测试的请求记录列表追加一次调用。
+        """
+
+        requests.append((endpoint, body))
+        return {}
+
+    monkeypatch.setattr(provider, "_post", record_request)
+
+    provider.extract(["https://example.com"], output_format, 100)
+
+    assert requests == [expected_request]
+
+
+@pytest.mark.parametrize(
+    ("provider", "output_format"),
+    [
+        (FirecrawlProvider(api_key="key"), "text"),
+        (TavilyProvider(api_key="key"), "html"),
+        (ExaProvider(api_key="key"), "html"),
+        (ParallelProvider(api_key="key"), "html"),
+    ],
+    ids=["firecrawl-text", "tavily-html", "exa-html", "parallel-html"],
+)
+def test_extract_rejects_unsupported_format_before_provider_request(
+    monkeypatch,
+    provider,
+    output_format: str,
+) -> None:
+    """验证 Provider 在请求 API 前拒绝不支持的正文格式。
+
+    参数:
+        monkeypatch: pytest 提供的模块属性替换工具。
+        provider: 已配置的待测正文提取 Provider。
+        output_format: Provider 不支持的正文格式。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 不支持格式未被拒绝或仍调用 Provider 请求入口时抛出。
+
+    副作用:
+        临时替换 Provider 请求入口，使意外请求立即导致测试失败。
+    """
+
+    def fail_request(endpoint: str, body: dict[str, object]) -> object:
+        """使意外的 Provider 请求立即失败。
+
+        参数:
+            endpoint: Provider 请求的相对端点。
+            body: Provider 请求的 JSON 请求体。
+
+        返回:
+            不返回结果。
+
+        异常:
+            AssertionError: 总是抛出，表示不应发起 Provider 请求。
+
+        副作用:
+            无。
+        """
+
+        raise AssertionError(f"unexpected provider request: {endpoint} {body}")
+
+    monkeypatch.setattr(provider, "_post", fail_request)
+
+    with pytest.raises(WebProviderUnavailableError, match="does not support .* extraction format"):
+        provider.extract(["https://example.com"], output_format, 100)
 
 
 def test_exa_search_handles_empty_highlights(monkeypatch) -> None:

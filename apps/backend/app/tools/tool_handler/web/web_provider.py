@@ -57,6 +57,54 @@ class WebProviderUnavailableError(RuntimeError):
     """Raised when a selected web provider lacks required configuration."""
 
 
+def unsupported_extract_format_message(provider_name: str, output_format: str) -> str:
+    """构造 Provider 不支持正文格式时的稳定英文错误文本。
+
+    参数:
+        provider_name: Provider 的可读显示名称。
+        output_format: 调用方请求但 Provider 不支持的正文格式。
+
+    返回:
+        面向模型和用户的简洁英文格式不支持说明。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return f"{provider_name} does not support '{output_format}' extraction format."
+
+
+def ensure_supported_extract_format(
+    provider_name: str,
+    output_format: str,
+    supported_formats: frozenset[str],
+) -> None:
+    """在 Provider API 调用前校验正文格式能力。
+
+    参数:
+        provider_name: Provider 的可读显示名称。
+        output_format: 调用方请求的网页正文格式。
+        supported_formats: Provider 实际支持的正文格式集合。
+
+    返回:
+        无。
+
+    异常:
+        WebProviderUnavailableError: 请求格式不在 Provider 支持集合中时抛出。
+
+    副作用:
+        无；只执行本地能力校验，不发起网络请求。
+    """
+
+    if output_format not in supported_formats:
+        raise WebProviderUnavailableError(
+            unsupported_extract_format_message(provider_name, output_format)
+        )
+
+
 class WebProvider(Protocol):
     """Contract implemented by web search and extraction provider adapters."""
 
@@ -125,6 +173,22 @@ class WebProvider(Protocol):
 
         副作用:
             无。
+        """
+
+    def supported_extract_formats(self) -> frozenset[str]:
+        """返回 Provider 实际支持的网页正文格式集合。
+
+        参数:
+            无。
+
+        返回:
+            支持正文提取时返回可请求格式的不可变集合；不支持提取时返回空集合。
+
+        异常:
+            无。
+
+        副作用:
+            无；只读取 Provider 的静态能力声明，不发起网络请求。
         """
 
     def missing_configuration_message(self) -> str:

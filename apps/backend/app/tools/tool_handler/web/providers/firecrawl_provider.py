@@ -9,6 +9,7 @@ from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
     WebProviderUnavailableError,
     WebSearchItem,
+    ensure_supported_extract_format,
     provider_result_metadata,
 )
 
@@ -115,6 +116,24 @@ class FirecrawlProvider:
 
         return True
 
+    def supported_extract_formats(self) -> frozenset[str]:
+        """返回 Firecrawl 实际支持的正文格式。
+
+        参数:
+            无。
+
+        返回:
+            包含 Markdown 与 HTML 的不可变格式集合。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return frozenset({"markdown", "html"})
+
     def missing_configuration_message(self) -> str:
         """返回 Firecrawl 未配置时的英文诊断信息。
 
@@ -190,6 +209,11 @@ class FirecrawlProvider:
             为每个 URL 发起一次 Firecrawl Scrape API 网络请求。
         """
 
+        ensure_supported_extract_format(
+            self.display_name,
+            output_format,
+            self.supported_extract_formats(),
+        )
         results: list[WebExtractItem] = []
         for url in urls:
             payload = self._post("scrape", {"url": url, "formats": [output_format]})

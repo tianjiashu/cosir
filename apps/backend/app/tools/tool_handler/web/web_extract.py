@@ -29,7 +29,11 @@ from app.tools.tool_handler.web.web_content_store import (
     convert_base64_images_to_placeholders,
     truncate_or_store_content,
 )
-from app.tools.tool_handler.web.web_provider import WebExtractItem, WebProvider
+from app.tools.tool_handler.web.web_provider import (
+    WebExtractItem,
+    WebProvider,
+    unsupported_extract_format_message,
+)
 from app.tools.tool_handler.web.web_provider_registry import (
     WebProviderRegistry,
     register_default_web_providers,
@@ -82,7 +86,7 @@ class WebExtractTool(HandlerBase):
 
         参数:
             urls: URL 字符串，或含字符串 ``url`` / ``href`` 的搜索结果对象。
-            format: 模型请求的正文格式；当前 Provider 契约统一返回其清理后的正文文本。
+            format: 模型请求的正文格式；必须受已选 Provider 实际支持。
             char_limit: 单页直接传给模型的最大字符数；省略时使用全局配置。
             execution_context: 当前工具执行工作区边界；超限正文只能在该根目录内保存。
 
@@ -152,6 +156,17 @@ class WebExtractTool(HandlerBase):
                     reason=(
                         "Select an extract-capable backend through WEB_EXTRACT_BACKEND or "
                         "WEB_BACKEND, then retry. No network request was made."
+                    ),
+                    permission=self.permission,
+                )
+            if format not in provider.supported_extract_formats():
+                return tool_error(
+                    self.name,
+                    unsupported_extract_format_message(provider.display_name, format),
+                    reason=(
+                        "Select a format supported by the configured extraction provider, "
+                        "then retry. "
+                        "No network request was made."
                     ),
                     permission=self.permission,
                 )
