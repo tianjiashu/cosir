@@ -458,9 +458,14 @@ def test_parallel_extract_normalizes_default_excerpts_from_v1(monkeypatch) -> No
         lambda timeout: FakeClient(),
     )
 
-    results = provider.extract(["https://example.com"], 100)
+    results = provider.extract(["https://example.com"], "markdown", 100)
 
-    assert requests == [("https://api.parallel.ai/v1/extract", {"urls": ["https://example.com"]})]
+    assert requests == [
+        (
+            "https://api.parallel.ai/v1/extract",
+            {"urls": ["https://example.com"], "format": "markdown"},
+        )
+    ]
     assert results == [
         WebExtractItem(
             url="https://example.com",

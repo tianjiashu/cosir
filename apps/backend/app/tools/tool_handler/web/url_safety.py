@@ -207,7 +207,8 @@ def _is_private_or_internal_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Ad
         address: 已成功解析的 IPv4 或 IPv6 地址。
 
     返回:
-        地址为回环、私有、链路本地、多播、保留、未指定或站点本地地址时返回 ``True``。
+        地址为回环、私有、链路本地、多播、保留、未指定、站点本地或其他非全局可路由地址时
+        返回 ``True``。
 
     异常:
         无。
@@ -224,4 +225,5 @@ def _is_private_or_internal_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Ad
         or address.is_reserved
         or address.is_unspecified
         or getattr(address, "is_site_local", False)
+        or not address.is_global
     )

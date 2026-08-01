@@ -115,6 +115,31 @@ def test_rejects_private_ip_from_resolver() -> None:
     assert "private or internal" in reason
 
 
+def test_rejects_cgnat_address_from_resolver() -> None:
+    """验证解析到 CGNAT 共享地址的 URL 会被拒绝。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: CGNAT 共享地址未被拒绝时由断言抛出。
+
+    副作用:
+        使用内存解析器替身，不执行真实 DNS 查询。
+    """
+
+    safe, reason = is_safe_public_url(
+        "https://shared-address.example",
+        resolver=lambda _host: ["100.64.0.1"],
+    )
+
+    assert safe is False
+    assert "private or internal" in reason
+
+
 def test_rejects_url_with_authority_credentials() -> None:
     """验证 URL authority 中的用户名或密码会在 DNS 解析前被拒绝。
 

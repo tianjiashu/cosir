@@ -1,7 +1,8 @@
 """Web search and extraction provider contracts."""
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,15 +160,21 @@ class WebProvider(Protocol):
             可能发起网络请求。
         """
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(
+        self,
+        urls: list[str],
+        output_format: Literal["markdown", "html", "text"],
+        char_limit: int,
+    ) -> list[WebExtractItem] | Awaitable[list[WebExtractItem]]:
         """提取网页正文内容。
 
         参数:
             urls: 待提取的网页地址列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: 每个网页最多保留的正文字符数。
 
         返回:
-            与成功提取网页对应的正文结果。
+            与成功提取网页对应、尽可能采用请求格式的正文结果。
 
         异常:
             WebProviderUnavailableError: Provider 未配置或不可用时抛出。

@@ -171,11 +171,12 @@ class BraveProvider:
             if isinstance(item, dict) and item.get("url")
         ]
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(self, urls: list[str], output_format: str, char_limit: int) -> list[WebExtractItem]:
         """拒绝 Brave 不支持的正文提取调用。
 
         参数:
             urls: 待提取的网页地址列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: 单页正文最大字符数。
 
         返回:

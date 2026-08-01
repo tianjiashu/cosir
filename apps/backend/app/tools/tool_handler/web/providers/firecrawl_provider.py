@@ -166,11 +166,17 @@ class FirecrawlProvider:
             if isinstance(item, dict) and item.get("url")
         ]
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(
+        self,
+        urls: list[str],
+        output_format: str,
+        char_limit: int,
+    ) -> list[WebExtractItem]:
         """使用 Firecrawl Scrape API 逐页提取网页正文。
 
         参数:
             urls: 待提取的网页地址列表。
+            output_format: 请求 Firecrawl 返回的正文格式。
             char_limit: 每页正文最大保留字符数。
 
         返回:
@@ -186,13 +192,15 @@ class FirecrawlProvider:
 
         results: list[WebExtractItem] = []
         for url in urls:
-            payload = self._post("scrape", {"url": url, "formats": ["markdown"]})
+            payload = self._post("scrape", {"url": url, "formats": [output_format]})
             data = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(data, dict):
                 continue
             metadata = data.get("metadata")
             title = metadata.get("title", "") if isinstance(metadata, dict) else ""
-            raw_content = str(data.get("markdown") or data.get("content") or "")
+            raw_content = str(
+                data.get(output_format) or data.get("markdown") or data.get("content") or ""
+            )
             results.append(
                 WebExtractItem(
                     url=str(data.get("url") or url),

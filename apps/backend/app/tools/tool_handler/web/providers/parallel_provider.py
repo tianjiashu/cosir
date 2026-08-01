@@ -161,11 +161,17 @@ class ParallelProvider:
             if item.get("url")
         ]
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(
+        self,
+        urls: list[str],
+        output_format: str,
+        char_limit: int,
+    ) -> list[WebExtractItem]:
         """使用 Parallel API 提取网页正文。
 
         参数:
             urls: 待提取的网页地址列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: 每页正文最大保留字符数。
 
         返回:
@@ -179,7 +185,7 @@ class ParallelProvider:
             发起 Parallel Extract API 网络请求。
         """
 
-        payload = self._post("extract", {"urls": urls})
+        payload = self._post("extract", {"urls": urls, "format": output_format})
         return [
             WebExtractItem(
                 url=str(item.get("url", "")),

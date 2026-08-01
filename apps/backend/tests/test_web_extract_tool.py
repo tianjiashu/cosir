@@ -35,7 +35,7 @@ class FakeExtractProvider:
         """
 
         self.content = content
-        self.calls: list[tuple[list[str], int]] = []
+        self.calls: list[tuple[list[str], str, int]] = []
 
     def is_available(self) -> bool:
         """返回 Provider 可用状态。
@@ -109,11 +109,17 @@ class FakeExtractProvider:
 
         return "Fake is not configured"
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(
+        self,
+        urls: list[str],
+        output_format: str,
+        char_limit: int,
+    ) -> list[WebExtractItem]:
         """记录调用并返回固定提取结果。
 
         参数:
             urls: 已通过工具安全校验的 URL 列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: Provider 接收的每页字符上限。
 
         返回:
@@ -126,7 +132,7 @@ class FakeExtractProvider:
             向 ``calls`` 追加一次调用记录。
         """
 
-        self.calls.append((urls, char_limit))
+        self.calls.append((urls, output_format, char_limit))
         return [
             WebExtractItem(
                 url=urls[0],
@@ -184,11 +190,17 @@ class FakeSearchOnlyProvider(FakeExtractProvider):
 class FakeAsyncExtractProvider(FakeExtractProvider):
     """以协程方式返回固定正文的无网络提取 Provider。"""
 
-    async def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    async def extract(
+        self,
+        urls: list[str],
+        output_format: str,
+        char_limit: int,
+    ) -> list[WebExtractItem]:
         """记录调用并通过协程返回固定提取结果。
 
         参数:
             urls: 已通过工具安全校验的 URL 列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: Provider 接收的每页字符上限。
 
         返回:
@@ -201,17 +213,23 @@ class FakeAsyncExtractProvider(FakeExtractProvider):
             向 ``calls`` 追加一次调用记录，但不发起真实网络请求。
         """
 
-        return super().extract(urls, char_limit)
+        return super().extract(urls, output_format, char_limit)
 
 
 class FakeFailedExtractProvider(FakeExtractProvider):
     """返回单页提取错误的无网络 Provider。"""
 
-    def extract(self, urls: list[str], char_limit: int) -> list[WebExtractItem]:
+    def extract(
+        self,
+        urls: list[str],
+        output_format: str,
+        char_limit: int,
+    ) -> list[WebExtractItem]:
         """记录调用并返回不含正文的单页 Provider 错误。
 
         参数:
             urls: 已通过工具安全校验的 URL 列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: Provider 接收的每页字符上限。
 
         返回:
@@ -224,7 +242,7 @@ class FakeFailedExtractProvider(FakeExtractProvider):
             向 ``calls`` 追加一次调用记录，但不发起真实网络请求。
         """
 
-        self.calls.append((urls, char_limit))
+        self.calls.append((urls, output_format, char_limit))
         return [
             WebExtractItem(
                 url=urls[0],
@@ -285,7 +303,9 @@ def test_web_extract_accepts_search_result_objects(tmp_path: Path) -> None:
     assert payload["success"] is True
     assert payload["results"][0]["url"] == "https://example.com/page"
     assert payload["results"][0]["content"] == "Hello world"
-    assert provider.calls == [(["https://example.com/page"], Settings.WEB_EXTRACT_CHAR_LIMIT)]
+    assert provider.calls == [
+        (["https://example.com/page"], "markdown", Settings.WEB_EXTRACT_CHAR_LIMIT)
+    ]
 
 
 def test_web_extract_accepts_search_result_href(tmp_path: Path) -> None:
@@ -311,7 +331,9 @@ def test_web_extract_accepts_search_result_href(tmp_path: Path) -> None:
     observation = tool.execute([{"href": "example.com/page"}], execution_context=context)
 
     assert observation.status == "success"
-    assert provider.calls == [(["https://example.com/page"], Settings.WEB_EXTRACT_CHAR_LIMIT)]
+    assert provider.calls == [
+        (["https://example.com/page"], "markdown", Settings.WEB_EXTRACT_CHAR_LIMIT)
+    ]
 
 
 def test_web_extract_blocks_secret_urls_before_provider_io(tmp_path: Path) -> None:
@@ -395,6 +417,7 @@ def test_web_extract_requires_execution_context() -> None:
     [
         (["file:///tmp/page"], lambda _host: ["93.184.216.34"], "scheme must be http or https"),
         (["http://localhost/page"], lambda _host: ["127.0.0.1"], "private or internal"),
+        (["https://shared-address.example"], lambda _host: ["100.64.0.1"], "private or internal"),
     ],
 )
 def test_web_extract_blocks_unsafe_urls_before_provider_io(
@@ -551,7 +574,46 @@ def test_web_extract_runs_async_provider_without_network(tmp_path: Path) -> None
     observation = tool.execute(["https://example.com"], execution_context=context)
 
     assert observation.status == "success"
-    assert provider.calls == [(["https://example.com"], Settings.WEB_EXTRACT_CHAR_LIMIT)]
+    assert provider.calls == [
+        (["https://example.com"], "markdown", Settings.WEB_EXTRACT_CHAR_LIMIT)
+    ]
+
+
+@pytest.mark.parametrize("output_format", ["html", "text"])
+def test_web_extract_passes_requested_format_to_provider(
+    tmp_path: Path,
+    output_format: str,
+) -> None:
+    """验证 web_extract 将模型请求的正文格式传递给 Provider。
+
+    参数:
+        tmp_path: pytest 提供的隔离工作区根目录。
+        output_format: 期望透传到 Provider 的网页正文格式。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: Provider 未收到请求格式或工具执行失败时抛出。
+
+    副作用:
+        通过测试 Provider 记录一次提取调用，但不发起真实网络请求。
+    """
+
+    provider = FakeExtractProvider()
+    tool = build_tool(provider)
+    context = ToolExecutionContext("task_1", "workspace_1", tmp_path)
+
+    observation = tool.execute(
+        ["https://example.com"],
+        format=output_format,
+        execution_context=context,
+    )
+
+    assert observation.status == "success"
+    assert provider.calls == [
+        (["https://example.com"], output_format, Settings.WEB_EXTRACT_CHAR_LIMIT)
+    ]
 
 
 def test_web_extract_does_not_store_failed_page_content(tmp_path: Path) -> None:

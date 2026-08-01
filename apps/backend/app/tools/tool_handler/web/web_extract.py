@@ -98,7 +98,6 @@ class WebExtractTool(HandlerBase):
             ``execution_context.workspace_root`` 内写入完整清理内容；Provider 失败会写结构化日志。
         """
 
-        del format
         if execution_context is None:
             return tool_error(
                 self.name,
@@ -169,6 +168,7 @@ class WebExtractTool(HandlerBase):
             extracted_items = self._execute_provider_extract(
                 provider,
                 normalized_urls_or_error,
+                format,
                 effective_char_limit,
             )
             results = self._build_results(
@@ -279,6 +279,7 @@ class WebExtractTool(HandlerBase):
         self,
         provider: WebProvider,
         urls: list[str],
+        output_format: Literal["markdown", "html", "text"],
         char_limit: int,
     ) -> list[WebExtractItem]:
         """调用同步或异步 Provider 的正文提取方法。
@@ -286,6 +287,7 @@ class WebExtractTool(HandlerBase):
         参数:
             provider: 已通过能力与本地配置校验的 Web Provider。
             urls: 已完成安全检查的规范化 URL 列表。
+            output_format: 调用方请求的网页正文格式。
             char_limit: 每页直接返回给模型的字符上限。
 
         返回:
@@ -298,7 +300,7 @@ class WebExtractTool(HandlerBase):
             可能发起 Provider 网络请求；异步 Provider 会在本方法创建的私有事件循环中执行。
         """
 
-        result = provider.extract(urls, char_limit)
+        result = provider.extract(urls, output_format, char_limit)
         if inspect.isawaitable(result):
             return asyncio.run(cast(Any, result))
         return result
