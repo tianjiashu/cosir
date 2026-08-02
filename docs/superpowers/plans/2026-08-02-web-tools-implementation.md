@@ -620,7 +620,7 @@ import json
 
 from app.tools.tool_handler.web.web_provider import WebSearchItem
 from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
-from app.tools.tool_handler.web.web_search import WebSearchTool
+from app.tools.tool_handler.web_search import WebSearchTool
 
 
 class FakeSearchProvider:
@@ -730,7 +730,7 @@ execution_mode = "thread"
 Add:
 
 ```python
-from app.tools.tool_handler.web.web_search import build_web_search_definition
+from app.tools.tool_handler.web_search import build_web_search_definition
 
 registry.register(build_web_search_definition())
 ```
@@ -778,7 +778,7 @@ import json
 from pathlib import Path
 
 from app.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.tools.tool_handler.web.web_extract import WebExtractTool
+from app.tools.tool_handler.web_extract import WebExtractTool
 from app.tools.tool_handler.web.web_provider import WebExtractItem
 from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
 
@@ -916,7 +916,7 @@ execution_mode = "thread"
 Add:
 
 ```python
-from app.tools.tool_handler.web.web_extract import build_web_extract_definition
+from app.tools.tool_handler.web_extract import build_web_extract_definition
 
 registry.register(build_web_extract_definition())
 ```
