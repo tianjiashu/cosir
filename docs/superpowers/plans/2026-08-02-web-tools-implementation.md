@@ -109,8 +109,8 @@ from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
 class FakeProvider:
     name: str
     available: bool = True
-    search: bool = True
-    extract: bool = True
+    search_capability: bool = True
+    extract_capability: bool = True
 
     @property
     def display_name(self) -> str:
@@ -120,10 +120,10 @@ class FakeProvider:
         return self.available
 
     def supports_search(self) -> bool:
-        return self.search
+        return self.search_capability
 
     def supports_extract(self) -> bool:
-        return self.extract
+        return self.extract_capability
 
     def missing_configuration_message(self) -> str:
         return f"{self.name} is not configured"
@@ -145,8 +145,8 @@ def test_explicit_search_backend_wins_even_when_unavailable():
 
 def test_extract_rejects_search_only_explicit_backend_without_fallback():
     registry = WebProviderRegistry()
-    registry.register(FakeProvider("brave-free", available=True, extract=False))
-    registry.register(FakeProvider("firecrawl", available=True, extract=True))
+    registry.register(FakeProvider("brave-free", available=True, extract_capability=False))
+    registry.register(FakeProvider("firecrawl", available=True, extract_capability=True))
 
     provider = registry.active_extract_provider(explicit_backend="brave-free")
 
@@ -157,9 +157,9 @@ def test_extract_rejects_search_only_explicit_backend_without_fallback():
 
 def test_fallback_uses_legacy_priority_filtered_by_capability_and_availability():
     registry = WebProviderRegistry()
-    registry.register(FakeProvider("exa", available=True, extract=True))
-    registry.register(FakeProvider("firecrawl", available=False, extract=True))
-    registry.register(FakeProvider("brave-free", available=True, extract=False))
+    registry.register(FakeProvider("exa", available=True, extract_capability=True))
+    registry.register(FakeProvider("firecrawl", available=False, extract_capability=True))
+    registry.register(FakeProvider("brave-free", available=True, extract_capability=False))
 
     assert registry.active_search_provider(explicit_backend="").name == "exa"
     assert registry.active_extract_provider(explicit_backend="").name == "exa"
@@ -947,7 +947,7 @@ git commit -m "feat: add web extract tool"
 - Consumes: `ToolSystem.build_tool_system()`, `ToolScheduler`, `ToolExecutionContext`.
 - Produces: regression coverage that Web tools execute through the same scheduler path as existing tools.
 
-- [ ] **Step 1: Write scheduler integration tests**
+- [x] **Step 1: Write scheduler integration tests**
 
 ```python
 import json
@@ -980,13 +980,13 @@ async def test_web_search_executes_through_scheduler(monkeypatch, tmp_path: Path
     assert observation.permission == "network"
 ```
 
-- [ ] **Step 2: Run tests to verify current behavior**
+- [x] **Step 2: Run tests to verify current behavior**
 
 Run: `cd apps/backend && uv run pytest tests/test_tool_system_web_tools.py -v`
 
 Expected: PASS after Tasks 5 and 6. If this fails because of provider availability, update the test to inject a fake registry into `build_web_search_definition(provider_registry=registry)` and keep no-network behavior.
 
-- [ ] **Step 3: Add display summaries**
+- [x] **Step 3: Add display summaries**
 
 Add `render_request_summary()` and `render_result_summary()` to both handlers:
 
@@ -1004,7 +1004,7 @@ Use the existing `SearchFilesTool` display shape:
 }
 ```
 
-- [ ] **Step 4: Run focused and full backend tests**
+- [x] **Step 4: Run focused and full backend tests**
 
 Run:
 
@@ -1016,7 +1016,7 @@ uv run pytest -q
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/backend/tests/test_tool_system_web_tools.py apps/backend/app/tools/tool_handler/web
@@ -1033,7 +1033,7 @@ git commit -m "test: cover web tools scheduler integration"
 - Consumes: completed Web tool implementation.
 - Produces: user-facing developer documentation for configuration and behavior.
 
-- [ ] **Step 1: Write Web tools documentation**
+- [x] **Step 1: Write Web tools documentation**
 
 Create `docs/web-tools.md` with these sections:
 
@@ -1081,7 +1081,7 @@ Large extracted pages are truncated in the tool response. Full content is saved 
 ```
 ```
 
-- [ ] **Step 2: Run formatting and checks**
+- [x] **Step 2: Run formatting and checks**
 
 Run:
 
@@ -1095,7 +1095,7 @@ uv run pytest -q
 
 Expected: all pass.
 
-- [ ] **Step 3: Inspect dependencies**
+- [x] **Step 3: Inspect dependencies**
 
 Run:
 
@@ -1105,7 +1105,7 @@ git diff -- apps/backend/pyproject.toml apps/backend/uv.lock
 
 Expected: no dependency changes unless `ddgs` was intentionally added. If `ddgs` was added, both `pyproject.toml` and `uv.lock` are updated together.
 
-- [ ] **Step 4: Final commit**
+- [x] **Step 4: Final commit**
 
 ```bash
 git add docs/web-tools.md docs/superpowers/plans/2026-08-02-web-tools-implementation.md
