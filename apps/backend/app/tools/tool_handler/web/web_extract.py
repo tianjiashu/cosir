@@ -482,11 +482,14 @@ class WebExtractTool(HandlerBase):
         )
 
 
-def build_web_extract_definition() -> ToolDefinition:
+def build_web_extract_definition(
+    provider_registry: WebProviderRegistry | None = None,
+) -> ToolDefinition:
     """构造使用内置 Provider 的网页正文提取工具定义。
 
     参数:
-        无。
+        provider_registry: 可选注入的 Provider 注册表；省略时新建并注册内置 Provider。
+            测试可传入 fake 注册表以覆盖 Provider 选择而无需真实网络配置。
 
     返回:
         可直接注册到 ``ToolRegistry`` 的 ``web_extract`` 工具定义。
@@ -495,11 +498,13 @@ def build_web_extract_definition() -> ToolDefinition:
         无。
 
     副作用:
-        创建当前工具定义专属的 Provider 注册表及内置 Provider 实例，但不执行网络请求。
+        当 ``provider_registry`` 为 None 时，创建当前工具定义专属的 Provider 注册表及
+        内置 Provider 实例，但不执行网络请求。
     """
 
-    provider_registry = register_default_web_providers(
-        WebProviderRegistry(),
-        default_web_providers(),
-    )
+    if provider_registry is None:
+        provider_registry = register_default_web_providers(
+            WebProviderRegistry(),
+            default_web_providers(),
+        )
     return WebExtractTool(provider_registry).to_definition()
