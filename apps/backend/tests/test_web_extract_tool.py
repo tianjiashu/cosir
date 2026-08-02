@@ -7,9 +7,9 @@ import pytest
 
 from app.config.settings import Settings
 from app.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.tools.tool_handler.web.web_extract import WebExtractTool
 from app.tools.tool_handler.web.web_provider import WebExtractItem
 from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
+from app.tools.tool_handler.web_extract import WebExtractTool
 
 
 class FakeExtractProvider:
@@ -562,8 +562,8 @@ def test_web_extract_reports_search_only_backend(tmp_path: Path) -> None:
     assert provider.calls == []
 
 
-def test_web_extract_stores_full_clean_content_within_workspace(tmp_path: Path) -> None:
-    """验证 web_extract 去除内联图片并在超限时保存完整内容。
+def test_web_extract_returns_full_clean_content_without_self_storing(tmp_path: Path) -> None:
+    """验证 web_extract 返回完整且已清洗的正文，且不再自行落盘（方案 A）。
 
     参数:
         tmp_path: pytest 提供的隔离工作区根目录。
@@ -572,23 +572,26 @@ def test_web_extract_stores_full_clean_content_within_workspace(tmp_path: Path) 
         无。
 
     异常:
-        AssertionError: 当截断标记、工作区相对路径或清理后的存储内容不符合预期时抛出。
+        AssertionError: 当返回正文未清洗或工具自行落盘时抛出。
 
     副作用:
-        在 pytest 的临时工作区内创建完整内容文件，不发起真实网络请求。
+        不发起真实网络请求，也不在工作区内创建内容文件。
     """
 
     provider = FakeExtractProvider("Before ![diagram](data:image/png;base64,AAAA) after")
     tool = build_tool(provider)
     context = ToolExecutionContext("task_1", "workspace_1", tmp_path)
 
-    observation = tool.execute(["https://example.com"], char_limit=10, execution_context=context)
+    observation = tool.execute(["https://example.com"], execution_context=context)
     payload = json.loads(observation.content)
     result = payload["results"][0]
 
-    assert result["truncated"] is True
-    assert result["stored_path"].startswith(".coding-agent/tool-results/web/")
-    assert "[IMAGE: diagram]" in (tmp_path / result["stored_path"]).read_text(encoding="utf-8")
+    # 完整正文（未做 head+tail 截断）+ 内联图片已替换为占位符
+    assert result["content"] == "Before [IMAGE: diagram] after"
+    # 落盘已上收至全局 ToolOutputBudget，工具自身不再写 tool-results
+    assert "stored_path" not in result
+    assert "truncated" not in result
+    assert not (tmp_path / ".coding-agent" / "tool-results").exists()
 
 
 def test_web_extract_runs_async_provider_without_network(tmp_path: Path) -> None:
@@ -688,7 +691,7 @@ def test_web_extract_rejects_unsupported_provider_format_before_provider_io(tmp_
 
 
 def test_web_extract_does_not_store_failed_page_content(tmp_path: Path) -> None:
-    """验证 web_extract 不会为单页 Provider 错误写入工作区。
+    """验证 web_extract 对单页 Provider 错误保留 error 条目且不落盘。
 
     参数:
         tmp_path: pytest 提供的隔离工作区根目录。
@@ -713,7 +716,8 @@ def test_web_extract_does_not_store_failed_page_content(tmp_path: Path) -> None:
 
     assert observation.status == "success"
     assert result["content"] == ""
-    assert result["stored_path"] == ""
-    assert result["truncated"] is False
     assert result["error"] == "Page extraction failed."
+    # 不再暴露落盘相关字段，且工具自身不写任何目录
+    assert "stored_path" not in result
+    assert "truncated" not in result
     assert not (tmp_path / ".coding-agent").exists()

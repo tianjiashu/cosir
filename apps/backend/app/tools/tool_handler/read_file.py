@@ -13,7 +13,7 @@
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -126,11 +126,11 @@ class ReadFileTool(HandlerBase):
         """
 
     def execute(
-            self,
-            path: str,
-            offset: int = 1,
-            limit: int = 500,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        path: str,
+        offset: int = 1,
+        limit: int = 500,
+        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """读取项目目录内的文本文件，并返回适合模型消费的观测结果。
 
@@ -208,27 +208,6 @@ class ReadFileTool(HandlerBase):
             content=json.dumps(dataclasses.asdict(result)),
         )
 
-    def render_request_summary(self, arguments: dict[str, Any]) -> str | None:
-        """返回 read_file 执行前参数摘要。"""
-        path = arguments.get("path", "")
-        offset = arguments.get("offset", None)
-        limit: int | None = arguments.get("limit", None)
-        start = max(1, int(offset if offset is not None else 1))
-        end_label = "End" if limit is None else str(start + int(limit) - 1)
-        return f"{path} L{start}-{end_label}"
-
-    def render_result_summary(self, display_data: dict[str, Any]) -> str | None:
-        """返回 read_file 执行后结果摘要。
-        如果执行成功，则返回 None，不显示结果摘要。
-        如果执行失败，结果摘要为错误信息，
-        app.tools.schemas.tool_display.ToolDisplayHints.render_result_summary 会进行判断。
-        """
-        status = display_data.get("status", "success")
-        if status == "success":
-            return None
-
-        return "error:" + display_data.get("error", "")
-
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成当前注册系统使用的 ``ToolDefinition``。
 
@@ -257,8 +236,6 @@ class ReadFileTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="读取",
                 icon="eye",
-                title_summary=self.render_request_summary,
-                result_summary=self.render_result_summary,
                 expandable=False,
                 expand_layout="none",
             ),
@@ -355,7 +332,7 @@ class ReadFileTool(HandlerBase):
 
                     line = raw_line.rstrip("\r\n")
                     if line_number == 1 and line.startswith(self.utf8_bom):
-                        line = line[len(self.utf8_bom):]
+                        line = line[len(self.utf8_bom) :]
 
                     rendered = self._render_line(line_number, line)
                     addition = len(rendered) + (1 if selected else 0)

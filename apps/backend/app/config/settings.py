@@ -52,7 +52,6 @@ class Settings:
     WEB_SEARCH_LIMIT_MAX: ClassVar[int] = 20
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
-    WEB_EXTRACT_STORE_DIR_NAME: ClassVar[str] = ".coding-agent/tool-results/web"
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
@@ -258,10 +257,6 @@ class Settings:
         )
         cls.WEB_EXTRACT_CHAR_LIMIT = int(
             os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
-        )
-        cls.WEB_EXTRACT_STORE_DIR_NAME = os.environ.get(
-            "CODING_AGENT_WEB_EXTRACT_STORE_DIR_NAME",
-            ".coding-agent/tool-results/web",
         )
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。

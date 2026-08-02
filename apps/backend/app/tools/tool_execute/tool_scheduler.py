@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Collection
 
+from app.tools.guard.display_data_budget import DisplayDataBudget
 from app.tools.guard.file_resource_paths import FileResourcePathError
 from app.tools.guard.file_tool_state_coordinator import (
     FileToolStateCoordinator,
@@ -40,13 +41,15 @@ class ToolScheduler:
         registry: ToolRegistry,
         state_coordinator: FileToolStateCoordinator | None = None,
         output_budget: ToolOutputBudget | None = None,
+        display_data_budget: DisplayDataBudget | None = None,
     ) -> None:
         """初始化调度器并固化权限策略。
 
         参数:
             registry: 工具注册表，提供工具定义查询。
             state_coordinator: 文件 revision、重复调用和路径锁协作者。
-            output_budget: 统一工具输出预算。
+            output_budget: 模型可见 ``content`` 的统一输出预算。
+            display_data_budget: 客户端展示数据通道的统一字符预算。
 
         返回:
             无。
@@ -63,6 +66,7 @@ class ToolScheduler:
         self._executor = ToolExecutor()
         self._state_coordinator = state_coordinator or FileToolStateCoordinator()
         self._output_budget = output_budget or ToolOutputBudget()
+        self._display_data_budget = display_data_budget or DisplayDataBudget()
 
     def list_tools(self) -> list[ToolDefinition]:
         return self._registry.get_all_definitions()
@@ -299,12 +303,16 @@ class ToolScheduler:
     ) -> ToolObservation:
         """对任意成功、失败或提前返回观察统一应用输出预算，超出预算截断，并保留本地文件。
 
+        模型通道（``content``）与客户端展示通道（``display_data``）分别受
+        :class:`ToolOutputBudget` 与 :class:`DisplayDataBudget` 约束，避免展示
+        通道绕过模型通道预算无约束膨胀。
+
         参数:
             observation: 待返回给上层的工具观察。
             execution_context: 当前 workspace 上下文。
 
         返回:
-            已脱敏并受全局字符预算约束的观察。
+            已脱敏并受两条通道字符预算约束的观察。
 
         异常:
             无。artifact 写入失败由 :class:`ToolOutputBudget` 内部退化处理。
@@ -313,4 +321,5 @@ class ToolScheduler:
             超限且有 workspace 时可能写入脱敏 artifact。
         """
 
-        return self._output_budget.apply(observation, execution_context)
+        budgeted = self._output_budget.apply(observation, execution_context)
+        return self._display_data_budget.apply(budgeted)

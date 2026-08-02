@@ -11,8 +11,8 @@ from app.tools.tool_handler.list_directory import build_list_directory_definitio
 from app.tools.tool_handler.patch_tool import build_patch_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.search_files import build_search_files_definition
-from app.tools.tool_handler.web.web_extract import build_web_extract_definition
-from app.tools.tool_handler.web.web_search import build_web_search_definition
+from app.tools.tool_handler.web_extract import build_web_extract_definition
+from app.tools.tool_handler.web_search import build_web_search_definition
 from app.tools.tool_handler.write_file import build_write_file_definition
 from app.tools.tool_registry import ToolRegistry
 

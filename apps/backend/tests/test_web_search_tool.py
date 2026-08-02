@@ -5,7 +5,7 @@ import json
 from app.config.settings import Settings
 from app.tools.tool_handler.web.web_provider import WebSearchItem
 from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
-from app.tools.tool_handler.web.web_search import WebSearchTool
+from app.tools.tool_handler.web_search import WebSearchTool
 
 
 class FakeSearchProvider:

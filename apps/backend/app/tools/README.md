@@ -96,32 +96,33 @@ def build_read_file_definition() -> ToolDefinition:
   `args_model` / `timeout_seconds` / `risk_level` / `resource_keys` / `display` 均来自
   类属性，不重写在构造里。
 
-### 3.3 `ToolDisplayHints` 约定（展示元数据）
+### 3.3 `ToolDisplayHints` 约定（静态展示声明）
 
-`ToolDisplayHints` 是 `ToolDefinition.display` 字段的类型，承载「工具在前端如何展示」
-的语义元数据。新增工具时必须附带，前端保留一个通用渲染引擎，不按工具名写特化分支。
+`ToolDisplayHints` 是 `ToolDefinition.display` 字段的类型，承载「工具在前端如何展示」的
+**静态声明**。后端**不承载任何渲染逻辑**：折叠态摘要、结果摘要、list/diff 条目等一律由
+客户端共享渲染层（`apps/shared/ts/toolDisplayRules.ts`）按声明与运行时数据生成。
 
 ```python
 display=ToolDisplayHints(
-    verb="写入",               # 动作名（中文），前端主标题动词
-    icon="file-plus",          # lucide 图标名
-    summary_template="{path_basename}",  # 摘要模板，str.format 占位符引用参数字典
-    detail_keys=("path", "content"),     # 展开态优先展示的参数 key 顺序
-    click_action="open_file:{path}",     # 可选点击动作，格式 "<action>:<target_template>"
+    verb="写入",        # 动作名（中文），前端主标题动词
+    icon="git-compare", # lucide 图标名
+    expandable=True,    # 是否可展开
+    expand_layout="diff",  # 展开态布局：none/details/list/diff/write/terminal
 )
 ```
 
 关键规则：
 - **所有工具必须有 `display`**，前端依赖它做统一渲染。当前存量工具（write_file / read_file
-  / patch_tool / list_directory / search_files / delete / execute_terminal）均已携带。
-- **`summary_template`** 优先用 `path_basename`（自动派生自 `path` 参数）做精简摘要；
-  分页类工具自动补 `start` / `end` 行号，模板可引用如 `"{path}:L{start}-L{end}"`。
-- **`detail_keys`** 控制展开态展示哪些参数及其顺序；未列出的参数按字典序兜底排在后面。
-- **`click_action`** 格式 `<action>:<target_template>`，模板占位符来自参数字典；
-  渲染时解析为 `{"action": ..., "target": ...}` 由前端按 `action` 分发（如
-  `"open_file:{path}"` → 点击文件路径跳转）。
-- **渲染零依赖**：`ToolDisplayHints.render(arguments)` 不 import `app.*` 之外的业务模块；
-  模板缺字段安全降级为 `verb + 主参数`，不抛异常。
+  / patch_tool / list_directory / search_files / delete / execute_terminal / web_search /
+  web_extract）均已携带。
+- **纯静态、零渲染**：`ToolDisplayHints` 只有字面量字段（`verb` / `icon` / `expandable` /
+  `expand_layout`），无 `Callable`、无摘要模板、无 `render_*` 方法。任何摘要文本或条目投影
+  都不在后端发生。
+- **布局驱动**：前端仅按 `expand_layout` 字符串分发布局（`list` / `diff` / `write` /
+  `terminal` / `details` / `none`），不按工具名写特化分支；渲染差异收敛在客户端共享规则表。
+- **展示数据透传**：工具执行结果的结构化数据放入 `ToolObservation.display_data`，经
+  `tool_call_finished` 事件的 `data` 字段透传给前端；`DisplayDataBudget` 守卫负责该通道的
+  输出治理（截断 + 截断标记），同样不涉及渲染。
 
 ### 3.4 文件与命名
 

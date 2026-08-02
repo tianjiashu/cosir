@@ -27,7 +27,6 @@ from app.tools.tool_handler.web.url_safety import (
 )
 from app.tools.tool_handler.web.web_content_store import (
     convert_base64_images_to_placeholders,
-    truncate_or_store_content,
 )
 from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
@@ -45,7 +44,14 @@ class WebExtractTool(HandlerBase):
     """验证 URL 后调用已配置 Provider 返回清理后的网页正文。"""
 
     name: ClassVar[str] = "web_extract"
-    description: ClassVar[str] = "Extract cleaned page content from public web URLs."
+    description: ClassVar[str] = (
+        "Extract content from public web page URLs. Returns clean page content in "
+        "markdown/html (no LLM summarization - fast). Also works with PDF URLs "
+        "(arxiv papers, documents) - pass the PDF link directly. Very large pages are "
+        "auto-truncated by the global tool output budget, with the full text saved to "
+        "disk and a [output truncated; full output: <path>] marker you can read_file. "
+        "If a URL fails or times out, use the browser tool instead."
+    )
     permission: ClassVar[str] = "network"
     args_model: ClassVar[type[WebExtractArgs]] = WebExtractArgs
     timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 10
@@ -82,24 +88,24 @@ class WebExtractTool(HandlerBase):
         char_limit: int | None = None,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """校验 URL、提取清理后的正文并在超限时保存完整内容。
+        """校验 URL、提取清理后的正文并交上层统一截断落盘。
 
         参数:
             urls: URL 字符串，或含字符串 ``url`` / ``href`` 的搜索结果对象。
             format: 模型请求的正文格式；必须受已选 Provider 实际支持。
-            char_limit: 单页直接传给模型的最大字符数；省略时使用全局配置。
-            execution_context: 当前工具执行工作区边界；超限正文只能在该根目录内保存。
+            char_limit: 透传给 Provider 的单页字符预算；省略时使用全局配置。
+            execution_context: 当前工具执行上下文；本工具不再自行落盘，超长正文由上层
+                :class:`ToolOutputBudget` 统一截断并保存 artifact。
 
         返回:
-            成功时返回含 URL、标题、清理正文、Provider、存储路径和元数据的 JSON 观察结果；
+            成功时返回含 URL、标题、完整清理正文、Provider 和元数据的 JSON 观察结果；
             输入、Provider 配置、安全检查或提取失败时返回错误观察结果。
 
         异常:
-            不向上抛出；所有 URL、Provider、内容存储和异步执行错误都归一化为错误观察结果。
+            不向上抛出；所有 URL、Provider 与结果构造错误都归一化为错误观察结果。
 
         副作用:
-            在全部 URL 通过安全检查后调用 Provider，可能发起网络请求；当正文超限时仅在当前
-            ``execution_context.workspace_root`` 内写入完整清理内容；Provider 失败会写结构化日志。
+            在全部 URL 通过安全检查后调用 Provider，可能发起网络请求；Provider 失败会写结构化日志。
         """
 
         if execution_context is None:
@@ -132,70 +138,39 @@ class WebExtractTool(HandlerBase):
 
         effective_char_limit = char_limit or Settings.WEB_EXTRACT_CHAR_LIMIT
         backend = Settings.WEB_EXTRACT_BACKEND or Settings.WEB_BACKEND
-        provider = None
+        provider = self._resolve_extract_provider(backend)
+        if isinstance(provider, ToolObservation):
+            return provider
+        if format not in provider.supported_extract_formats():
+            return tool_error(
+                self.name,
+                unsupported_extract_format_message(provider.display_name, format),
+                reason=(
+                    "Select a format supported by the configured extraction provider, "
+                    "then retry. "
+                    "No network request was made."
+                ),
+                permission=self.permission,
+            )
+        if not provider.is_available():
+            return tool_error(
+                self.name,
+                provider.missing_configuration_message(),
+                reason=(
+                    "Configure the selected web extraction provider locally, then retry. "
+                    "No network request was made."
+                ),
+                permission=self.permission,
+            )
         try:
-            provider = self._provider_registry.active_extract_provider(backend)
-            if provider is None and not backend:
-                providers = self._provider_registry.list_providers()
-                if len(providers) == 1:
-                    provider = providers[0]
-            if provider is None:
-                return tool_error(
-                    self.name,
-                    "No web extraction provider configured.",
-                    reason=(
-                        "Configure an extract-capable web provider, then retry. "
-                        "No network request was made."
-                    ),
-                    permission=self.permission,
-                )
-            if not provider.supports_extract():
-                return tool_error(
-                    self.name,
-                    self._search_only_provider_message(provider),
-                    reason=(
-                        "Select an extract-capable backend through WEB_EXTRACT_BACKEND or "
-                        "WEB_BACKEND, then retry. No network request was made."
-                    ),
-                    permission=self.permission,
-                )
-            if format not in provider.supported_extract_formats():
-                return tool_error(
-                    self.name,
-                    unsupported_extract_format_message(provider.display_name, format),
-                    reason=(
-                        "Select a format supported by the configured extraction provider, "
-                        "then retry. "
-                        "No network request was made."
-                    ),
-                    permission=self.permission,
-                )
-            if not provider.is_available():
-                return tool_error(
-                    self.name,
-                    provider.missing_configuration_message(),
-                    reason=(
-                        "Configure the selected web extraction provider locally, then retry. "
-                        "No network request was made."
-                    ),
-                    permission=self.permission,
-                )
             extracted_items = self._execute_provider_extract(
                 provider,
                 normalized_urls_or_error,
                 format,
                 effective_char_limit,
             )
-            results = self._build_results(
-                extracted_items,
-                provider.name,
-                execution_context,
-                effective_char_limit,
-            )
         except Exception:
-            provider_name = (
-                provider.name if provider is not None else backend or "selected provider"
-            )
+            provider_name = provider.name
             log.exception(
                 "web_extract_provider_failed",
                 extra={
@@ -214,12 +189,79 @@ class WebExtractTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
+        try:
+            results = self._build_results(extracted_items, provider.name)
+        except Exception:
+            log.exception(
+                "web_extract_result_build_failed",
+                extra={
+                    "msg": "网页正文提取结果构造失败",
+                    "data": {"provider": provider.name if provider else backend},
+                },
+            )
+            return tool_error(
+                self.name,
+                "Web extraction result assembly failed.",
+                reason=(
+                    "The provider returned data that could not be normalized. "
+                    "Retry once; if it keeps failing, select another provider."
+                ),
+                retryable=False,
+                permission=self.permission,
+            )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps({"success": True, "results": results}, separators=(",", ":")),
             display_data={"web": results},
         )
+
+    def _resolve_extract_provider(
+        self,
+        backend: str,
+    ) -> WebProvider | ToolObservation:
+        """选择已配置且支持正文提取的 Provider，或直接返回本地配置错误。
+
+        参数:
+            backend: 显式指定的 Provider 名称；为空时按注册表回退策略选择。
+
+        返回:
+            选中且支持提取的 Provider；无可用 Provider 或所选 Provider 不支持提取时
+            返回错误观察结果（不发起网络请求）。
+
+        异常:
+            不向上抛出；Provider 注册表查询与能力判定失败均转换为错误观察结果。
+
+        副作用:
+            仅读取 Provider 注册表与本地可用性状态，不发起网络请求。
+        """
+
+        provider = self._provider_registry.active_extract_provider(backend)
+        if provider is None and not backend:
+            providers = self._provider_registry.list_providers()
+            if len(providers) == 1:
+                provider = providers[0]
+        if provider is None:
+            return tool_error(
+                self.name,
+                "No web extraction provider configured.",
+                reason=(
+                    "Configure an extract-capable web provider, then retry. "
+                    "No network request was made."
+                ),
+                permission=self.permission,
+            )
+        if not provider.supports_extract():
+            return tool_error(
+                self.name,
+                self._search_only_provider_message(provider),
+                reason=(
+                    "Select an extract-capable backend through WEB_EXTRACT_BACKEND or "
+                    "WEB_BACKEND, then retry. No network request was made."
+                ),
+                permission=self.permission,
+            )
+        return provider
 
     def _validate_urls(self, urls: list[object]) -> list[str] | ToolObservation:
         """将候选输入转换为已完成安全校验的规范化 URL 列表。
@@ -324,62 +366,38 @@ class WebExtractTool(HandlerBase):
         self,
         extracted_items: list[WebExtractItem],
         provider_name: str,
-        execution_context: ToolExecutionContext,
-        char_limit: int,
     ) -> list[dict[str, object]]:
         """清理 Provider 正文并构造模型可见的提取结果。
 
         参数:
             extracted_items: Provider 返回的正文结果。
             provider_name: 本次调用的 Provider 稳定名称。
-            execution_context: 完整内容可写入的当前工作区边界。
-            char_limit: 单页模型输出字符上限。
 
         返回:
-            包含清理正文、存储定位和 Provider 元数据的结果字典列表。
+            包含完整清理正文、Provider 元数据与可选错误的结果字典列表。超长正文
+            的截断与落盘由上层 :class:`ToolOutputBudget` 统一处理，本方法返回整页
+            内容，不自行写入磁盘。
 
         异常:
-            ValueError: 内容存储路径逃逸工作区时由内容存储模块抛出。
-            OSError: 创建目录或写入完整内容失败时由内容存储模块抛出。
+            无。图片占位替换与字段投影均为纯函数，不会向上抛出。
 
         副作用:
-            替换内联 base64 图片；正文超限时只在当前工作区内写入完整内容。
+            替换内联 base64 图片为文本占位符。
         """
 
         results: list[dict[str, object]] = []
         for item in extracted_items:
-            if item.error:
-                results.append(
-                    {
-                        "url": item.url,
-                        "title": item.title,
-                        "content": "",
-                        "provider": provider_name,
-                        "stored_path": "",
-                        "truncated": False,
-                        "metadata": item.metadata,
-                        "error": item.error,
-                    }
-                )
-                continue
-            full_content = item.raw_content or item.content
-            cleaned_content = convert_base64_images_to_placeholders(full_content)
-            content, stored_content = truncate_or_store_content(
-                cleaned_content,
-                item.url,
-                item.title,
-                execution_context,
-                char_limit,
+            cleaned_content = convert_base64_images_to_placeholders(
+                item.raw_content or item.content
             )
             results.append(
                 {
                     "url": item.url,
                     "title": item.title,
-                    "content": content,
+                    "content": cleaned_content,
                     "provider": provider_name,
-                    "stored_path": stored_content.relative_path if stored_content else "",
-                    "truncated": stored_content is not None,
                     "metadata": item.metadata,
+                    "error": item.error,
                 }
             )
         return results
@@ -405,46 +423,6 @@ class WebExtractTool(HandlerBase):
             "Configure an extract-capable backend such as firecrawl, tavily, exa, or parallel."
         )
 
-    def render_request_summary(self, arguments: dict[str, Any]) -> str:
-        """返回网页正文提取的执行前摘要。
-
-        参数:
-            arguments: 已通过参数校验的工具调用参数。
-
-        返回:
-            请求 URL 数量的英文单行摘要。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        urls = arguments.get("urls")
-        return f"{len(urls) if isinstance(urls, list) else 0} URL(s)"
-
-    def render_result_summary(self, display_data: dict[str, Any]) -> str:
-        """返回网页正文提取的执行后摘要。
-
-        参数:
-            display_data: 工具观察中的客户端展示数据。
-
-        返回:
-            成功时为提取页面数量摘要，失败时为错误摘要。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        if display_data.get("status") == "error":
-            return "error:" + str(display_data.get("error", ""))
-        results = display_data.get("web", [])
-        return f"{len(results) if isinstance(results, list) else 0} extracted pages"
-
     def to_definition(self) -> ToolDefinition:
         """构造可注册的网页正文提取工具定义。
 
@@ -469,13 +447,11 @@ class WebExtractTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
-            resource_keys=("network", "filesystem"),
+            resource_keys=("network",),
             execution_mode="thread",
             display=ToolDisplayHints(
                 verb="网页正文提取",
                 icon="globe",
-                title_summary=self.render_request_summary,
-                result_summary=self.render_result_summary,
                 expandable=True,
                 expand_layout="list",
             ),

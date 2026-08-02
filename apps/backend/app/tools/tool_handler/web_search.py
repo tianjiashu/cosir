@@ -1,7 +1,7 @@
 """模型可见的网页搜索工具。"""
 
 import json
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -26,7 +26,12 @@ class WebSearchTool(HandlerBase):
     """调用已配置 Provider 并将搜索元数据返回给模型。"""
 
     name: ClassVar[str] = "web_search"
-    description: ClassVar[str] = "Search the web and return concise result metadata."
+    description: ClassVar[str] = (
+        "Search the web for information. Returns up to 5 results by default with "
+        "titles, URLs, and descriptions. The query is passed through to the configured "
+        "backend, so operators such as site:domain, filetype:pdf, intitle:word, -term, "
+        'and "exact phrase" may work when the backend supports them.'
+    )
     permission: ClassVar[str] = "network"
     args_model: ClassVar[type[WebSearchArgs]] = WebSearchArgs
     timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 5
@@ -152,45 +157,6 @@ class WebSearchTool(HandlerBase):
             display_data={"web": web_results},
         )
 
-    def render_request_summary(self, arguments: dict[str, Any]) -> str:
-        """返回网页搜索的执行前摘要。
-
-        参数:
-            arguments: 已通过参数校验的工具调用参数。
-
-        返回:
-            搜索关键词；缺失时返回空字符串。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return str(arguments.get("query") or "")
-
-    def render_result_summary(self, display_data: dict[str, Any]) -> str:
-        """返回网页搜索的执行后摘要。
-
-        参数:
-            display_data: 工具观察中的客户端展示数据。
-
-        返回:
-            成功时为结果数量摘要，失败时为错误摘要。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        if display_data.get("status") == "error":
-            return "error:" + str(display_data.get("error", ""))
-        results = display_data.get("web", [])
-        return f"{len(results) if isinstance(results, list) else 0} web results"
-
     def to_definition(self) -> ToolDefinition:
         """构造可注册的网页搜索工具定义。
 
@@ -220,8 +186,6 @@ class WebSearchTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="网页搜索",
                 icon="globe",
-                title_summary=self.render_request_summary,
-                result_summary=self.render_result_summary,
                 expandable=True,
                 expand_layout="list",
             ),

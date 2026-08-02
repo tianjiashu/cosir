@@ -10,11 +10,11 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
-from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.guard.file_resource_paths import (
     FileResourcePaths,
     resolve_file_resource_paths,
 )
+from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_handler.file_state import (
     FileFingerprint,

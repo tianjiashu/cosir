@@ -1,17 +1,14 @@
 """Built-in web provider adapters."""
 
-from app.tools.tool_handler.web.providers.brave_provider import BraveProvider
-from app.tools.tool_handler.web.providers.ddgs_provider import DdgsProvider
-from app.tools.tool_handler.web.providers.exa_provider import ExaProvider
 from app.tools.tool_handler.web.providers.firecrawl_provider import FirecrawlProvider
-from app.tools.tool_handler.web.providers.parallel_provider import ParallelProvider
-from app.tools.tool_handler.web.providers.searxng_provider import SearxngProvider
-from app.tools.tool_handler.web.providers.tavily_provider import TavilyProvider
 from app.tools.tool_handler.web.web_provider import WebProvider
 
 
 def default_web_providers() -> list[WebProvider]:
     """构造按既定回退优先级排列的内置 Web Provider。
+
+    第一阶段只内置 ``firecrawl`` 一条通路，覆盖「查 API 文档 / GitHub」核心场景：
+    ``firecrawl`` 提供 search + extract 全能，配 ``FIRECRAWL_API_KEY`` 后全功能可用。
 
     参数:
         无。
@@ -28,22 +25,10 @@ def default_web_providers() -> list[WebProvider]:
 
     return [
         FirecrawlProvider(),
-        ParallelProvider(),
-        TavilyProvider(),
-        ExaProvider(),
-        SearxngProvider(),
-        BraveProvider(),
-        DdgsProvider(),
     ]
 
 
 __all__ = [
-    "BraveProvider",
-    "DdgsProvider",
-    "ExaProvider",
     "FirecrawlProvider",
-    "ParallelProvider",
-    "SearxngProvider",
-    "TavilyProvider",
     "default_web_providers",
 ]

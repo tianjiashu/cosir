@@ -15,11 +15,10 @@
 
 - ``execute(**kwargs) -> ToolObservation``: 工具执行入口。具体参数按工具需要声明，
   但必须接受 ``execution_context`` 关键字参数，由执行链在调用时强制注入。
-- ``render_summary(derived) -> str``: 把补齐派生字段的参数字典投影为折叠态摘要文本
-  （执行前渲染）。
-- ``render_result_summary(data) -> str | None``: 把 ``ToolObservation.data`` 投影为
-  执行后结果摘要；返回 ``None`` 时前端降级为执行前摘要。
 - ``to_definition() -> ToolDefinition``: 返回可注册到 ``ToolRegistry`` 的工具定义。
+
+后端不承载任何渲染职责：handler 只产出模型可见的 ``content`` 与客户端渲染所需的
+结构化 ``display_data``；摘要文本与展示条目一律由客户端渲染。
 """
 
 from abc import ABC, abstractmethod
@@ -34,8 +33,7 @@ class HandlerBase(ABC):
     """工具 handler 抽象基类。
 
     本类定义所有内置工具的共有接口契约。子类必须声明类级元数据并实现
-    ``execute`` / ``render_summary`` / ``render_result_summary`` /
-    ``to_definition`` 四个实例方法。
+    ``execute`` / ``to_definition`` 两个实例方法。
 
     **调用约定**：
     ``ToolExecutor`` 通过 ``handler(**arguments, execution_context=ec)`` 调用 execute，
@@ -89,43 +87,12 @@ class HandlerBase(ABC):
         ...
 
     @abstractmethod
-    def render_request_summary(self, arguments: dict[str, Any]) -> str:
-        """将补齐派生字段的参数字典投影为折叠态摘要文本（执行前渲染）。
-
-
-        参数:
-            arguments: 已通过 pydantic 校验的参数字典。
-
-        返回:
-            用于前端折叠态展示的单行摘要。
-        """
-        ...
-
-    @abstractmethod
-    def render_result_summary(
-        self,
-        display_data: dict[str, Any],
-    ) -> str | list[dict[str, Any]] | dict[str, Any] | None:
-        """将 ``ToolObservation.data`` 投影为执行后结果摘要。
-
-        参数:
-            data: ``ToolObservation.data`` 结构化载荷。子类须自行处理缺失键
-                （通过 ``data.get()`` 或直接索引——直接索引抛 ``KeyError`` 时
-                会被 ``ToolDisplayHints.render_result`` 捕获并降级为 ``None``）。
-
-        返回:
-            结果摘要文本；返回 ``None`` 或空串时前端降级为执行前摘要。
-        """
-        ...
-
-    @abstractmethod
     def to_definition(self) -> ToolDefinition:
         """返回当前工具的可注册定义。
 
         子类必须返回一个包含完整元数据的 ``ToolDefinition`` 实例，其
-        ``handler`` 回调指向本实例的 ``execute`` 方法，
-        ``display.render_summary`` / ``display.render_result_summary`` 分别指向
-        本实例的 ``render_summary`` / ``render_result_summary`` 方法。
+        ``handler`` 回调指向本实例的 ``execute`` 方法，``display`` 为纯静态的
+        ``ToolDisplayHints`` 声明（不含任何渲染函数）。
 
         参数:
             无。

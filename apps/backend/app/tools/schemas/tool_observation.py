@@ -62,7 +62,8 @@ class ToolObservation:
             便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         tool_call_id: 与本次观察对应的模型工具调用 id（透传自 :class:`ToolCall`）；
             用于把观察回绑到具体的模型请求，缺失时为空。
-        data: 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据，其他一律由content、error、reason承载
+        data: 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据；
+            其他一律由 content、error、reason 承载。
     """
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。
@@ -84,9 +85,10 @@ class ToolObservation:
     permission: str = ""
     # 对应的模型工具调用 id，透传自 ToolCall，用于observation回绑；缺失为空。
     tool_call_id: str = ""
-    # 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据，其他一律由content、error、reason承载
+    # 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据；
+    # 其他一律由 content、error、reason 承载。
     display_data: dict[str, Any] = field(default_factory=dict)
 
-    #display_data 不可以给模型看，用完后要清空
+    # display_data 不可以给模型看，用完后要清空
     def clear_display_data(self):
         self.display_data = None

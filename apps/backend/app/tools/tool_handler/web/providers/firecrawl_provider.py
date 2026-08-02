@@ -7,6 +7,7 @@ import httpx
 from app.config.settings import Settings
 from app.tools.tool_handler.web.web_provider import (
     WebExtractItem,
+    WebProvider,
     WebProviderUnavailableError,
     WebSearchItem,
     ensure_supported_extract_format,
@@ -16,7 +17,7 @@ from app.tools.tool_handler.web.web_provider import (
 _DEFAULT_BASE_URL = "https://api.firecrawl.dev/v1"
 
 
-class FirecrawlProvider:
+class FirecrawlProvider(WebProvider):
     """通过 Firecrawl API 提供网页搜索与正文提取。"""
 
     name = "firecrawl"
@@ -170,7 +171,8 @@ class FirecrawlProvider:
             发起 Firecrawl Search API 网络请求。
         """
 
-        payload = self._post("search", {"query": query, "limit": limit})
+        effective_limit = min(limit, Settings.WEB_SEARCH_LIMIT_MAX)
+        payload = self._post("search", {"query": query, "limit": effective_limit})
         raw_results = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(raw_results, list):
             return []
@@ -181,7 +183,7 @@ class FirecrawlProvider:
                 description=str(item.get("description") or item.get("markdown") or ""),
                 position=position,
             )
-            for position, item in enumerate(raw_results[:limit], start=1)
+            for position, item in enumerate(raw_results[:effective_limit], start=1)
             if isinstance(item, dict) and item.get("url")
         ]
 
@@ -219,6 +221,16 @@ class FirecrawlProvider:
             payload = self._post("scrape", {"url": url, "formats": [output_format]})
             data = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(data, dict):
+                results.append(
+                    WebExtractItem(
+                        url=url,
+                        title="",
+                        content="",
+                        raw_content="",
+                        metadata={},
+                        error="Firecrawl scrape response missing 'data' object.",
+                    )
+                )
                 continue
             metadata = data.get("metadata")
             title = metadata.get("title", "") if isinstance(metadata, dict) else ""

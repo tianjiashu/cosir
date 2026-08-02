@@ -5,15 +5,7 @@ from collections.abc import Iterable
 from app.config.settings import Settings
 from app.tools.tool_handler.web.web_provider import WebProvider
 
-LEGACY_PROVIDER_PRIORITY = (
-    "firecrawl",
-    "parallel",
-    "tavily",
-    "exa",
-    "searxng",
-    "brave-free",
-    "ddgs",
-)
+LEGACY_PROVIDER_PRIORITY = ("firecrawl",)
 
 
 class WebProviderRegistry:
@@ -132,14 +124,16 @@ class WebProviderRegistry:
         explicit_backend: str,
         capability_name: str,
     ) -> WebProvider | None:
-        """按显式配置或遗留优先级选择支持目标能力的 Provider。
+        """按显式配置或默认回退优先级选择支持目标能力的 Provider。
 
         参数:
             explicit_backend: 显式指定的 Provider 名称。
             capability_name: ``WebProvider`` 上的能力判定方法名。
 
         返回:
-            显式 Provider、首个可用且支持目标能力的 Provider，或 ``None``。
+            显式 Provider、按 ``LEGACY_PROVIDER_PRIORITY`` 命中的首个可用且支持目标能力的
+            Provider；若均未命中，则返回注册表中任意首个支持该能力且可用的 Provider
+            （兼容显式注入非默认 Provider 的场景）；都不满足时返回 ``None``。
 
         异常:
             无。
@@ -155,6 +149,11 @@ class WebProviderRegistry:
             provider = self.get_provider(provider_name)
             if provider is None:
                 continue
+            supports_capability = getattr(provider, capability_name)
+            if supports_capability() and provider.is_available():
+                return provider
+
+        for provider in self._providers.values():
             supports_capability = getattr(provider, capability_name)
             if supports_capability() and provider.is_available():
                 return provider

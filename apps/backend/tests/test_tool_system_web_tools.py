@@ -5,13 +5,13 @@ from pathlib import Path
 
 from app.tools.schemas import ToolCall, ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
-from app.tools.tool_handler.web.web_extract import (
+from app.tools.tool_handler.web.web_provider import WebSearchItem
+from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
+from app.tools.tool_handler.web_extract import (
     WebExtractItem,
     WebExtractTool,
 )
-from app.tools.tool_handler.web.web_provider import WebSearchItem
-from app.tools.tool_handler.web.web_provider_registry import WebProviderRegistry
-from app.tools.tool_handler.web.web_search import (
+from app.tools.tool_handler.web_search import (
     WebSearchTool,
     build_web_search_definition,
 )
@@ -182,8 +182,8 @@ def test_web_extract_executes_through_scheduler(tmp_path: Path) -> None:
     assert payload["results"][0]["content"] == "Hello world"
 
 
-def test_web_search_renders_display_summaries(tmp_path: Path) -> None:
-    """验证 web_search 的请求与结果摘要输出格式。
+def test_web_search_carries_no_backend_rendering(tmp_path: Path) -> None:
+    """验证 web_search 后端不再承载渲染：工具无 render_* 方法，display_data 为纯数据。
 
     参数:
         tmp_path: pytest 提供的临时目录。
@@ -192,7 +192,7 @@ def test_web_search_renders_display_summaries(tmp_path: Path) -> None:
         无。
 
     异常:
-        AssertionError: 摘要文本不符预期时抛出。
+        AssertionError: 后端仍残留渲染方法或 display_data 混入渲染文本时抛出。
 
     副作用:
         无。
@@ -201,15 +201,18 @@ def test_web_search_renders_display_summaries(tmp_path: Path) -> None:
     del tmp_path
     tool = WebSearchTool(_build_fake_search_registry())
 
-    assert tool.render_request_summary({"query": "python"}) == "python"
-    result_summary = tool.render_result_summary(
-        {"web": [{"title": "A", "url": "u"}, {"title": "B", "url": "u"}]}
-    )
-    assert result_summary == "2 web results"
+    # 后端渲染方法必须不存在（渲染完全由客户端共享层负责）。
+    assert not hasattr(tool, "render_request_summary")
+    assert not hasattr(tool, "render_result_summary")
+
+    definition = tool.to_definition()
+    # display 仅为静态声明，不含摘要文本字段。
+    assert definition.display is not None
+    assert not hasattr(definition.display, "summary")
 
 
-def test_web_extract_renders_display_summaries(tmp_path: Path) -> None:
-    """验证 web_extract 的请求与结果摘要输出格式。
+def test_web_extract_carries_no_backend_rendering(tmp_path: Path) -> None:
+    """验证 web_extract 后端不再承载渲染：工具无 render_* 方法，display_data 为纯数据。
 
     参数:
         tmp_path: pytest 提供的临时目录。
@@ -218,7 +221,7 @@ def test_web_extract_renders_display_summaries(tmp_path: Path) -> None:
         无。
 
     异常:
-        AssertionError: 摘要文本不符预期时抛出。
+        AssertionError: 后端仍残留渲染方法或 display_data 混入渲染文本时抛出。
 
     副作用:
         无。
@@ -227,8 +230,10 @@ def test_web_extract_renders_display_summaries(tmp_path: Path) -> None:
     del tmp_path
     tool = WebExtractTool(_build_fake_extract_registry())
 
-    assert tool.render_request_summary({"urls": ["u1", "u2"]}) == "2 URL(s)"
-    result_summary = tool.render_result_summary(
-        {"web": [{"title": "A", "url": "u"}, {"title": "B", "url": "u"}]}
-    )
-    assert result_summary == "2 extracted pages"
+    # 后端渲染方法必须不存在（渲染完全由客户端共享层负责）。
+    assert not hasattr(tool, "render_request_summary")
+    assert not hasattr(tool, "render_result_summary")
+
+    definition = tool.to_definition()
+    assert definition.display is not None
+    assert not hasattr(definition.display, "summary")

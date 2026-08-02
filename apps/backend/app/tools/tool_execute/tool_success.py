@@ -6,17 +6,18 @@
 都应经此构造，确保成功观察的字段（``content``/``data``/``permission`` 等）
 填充方式在整个代码库一致。
 """
+
 import dataclasses
 
 from app.tools.schemas import ToolObservation
 
 
 def tool_success(
-        tool_name: str,
-        permission: str,
-        content: str,
-        tool_call_id: str = "",
-        display_data: dict[str, object] | None = None,
+    tool_name: str,
+    permission: str,
+    content: str,
+    tool_call_id: str = "",
+    display_data: dict[str, object] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -51,6 +52,12 @@ def tool_success(
           类型等），类型恒为 ``dict``；例如删除文件时 ``content`` 写「已删除
           文件 xxx」、``data`` 写 ``{"type": "file", "path": "..."}``，上层
           既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
+
+    返回对象的 ``display_data`` 不变量:
+        ``display_data`` 恒**不含** ``content`` 键。``content`` 是面向模型的文本，
+        下游展示应消费 ``display_data`` 的结构化字段而非其副本；剔除副本可避免大体积
+        正文经 ``display_data`` 旁路无约束进入前端事件流与可观测性平台（完整文本只
+        存在于 ``observation.content``，并受全局 ``ToolOutputBudget`` 约束）。
     """
 
     observation = ToolObservation(
@@ -61,6 +68,10 @@ def tool_success(
         tool_call_id=tool_call_id,
     )
     merged_display_data = dataclasses.asdict(observation)
+    # 不把完整 content 全文复制进 display_data：content 是面向模型的文本，
+    # 下游展示应消费 display_data 的结构化字段而非其副本；避免大体积正文
+    # 经 display_data 旁路无约束进入前端事件流与可观测性平台。
+    merged_display_data.pop("content", None)
     if display_data:
         merged_display_data.update(display_data)
     observation.display_data = merged_display_data
