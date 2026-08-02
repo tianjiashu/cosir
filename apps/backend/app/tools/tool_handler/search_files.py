@@ -88,7 +88,7 @@ class SearchFilesTool(HandlerBase):
         offset: int = 0,
         output_mode: str = "content",
         context: int = 0,
-        execution_context: ToolExecutionContext | None = None,
+        execution_context: ToolExecutionContext = None,
     ) -> ToolObservation:
         """按 target 分流执行内容搜索或文件名查找，统一收口成功/失败观察。
 
