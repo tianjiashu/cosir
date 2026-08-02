@@ -8,12 +8,11 @@
  * 不进入 ToolCallCard 的通用分支。
  *
  * 设计要点：
- * - 命令统一来自 `args.command`；后端 `render_request_summary` 也投影同一命令，
- *   二者一致，缺失时降级为 `display.summary`。
+ * - 命令统一来自 `args.command`；缺失时降级为占位文案。
  * - 折叠态命令按原文换行展示（不截断），右侧显示运行/成功/失败状态图标与展开 chevron。
  * - 展开态 header 右侧提供「复制命令」「状态」「关闭」三个操作。
  * - 输出块使用浅色等宽块，保留换行与滚动，支持一键复制全部输出。
- * - `runData.output_truncated` 为真时额外显示截断提示，不单独展示 exit_code / timed_out 等元数据。
+ * - `resultData.output_truncated` 为真时额外显示截断提示，不单独展示 exit_code / timed_out 等元数据。
  * - header 的关闭（×）按钮仅用于折叠卡片；终止运行中命令的能力预留
  *   （暂未实现，后续可由后端任务取消 API 驱动）。
  *
@@ -55,13 +54,13 @@ interface TerminalCallCardProps {
 /**
  * 从 props 中解析出要展示的命令文本。
  *
- * 优先使用 `command` 直传；缺失时回退到 `args.command`；再缺失回退到
- * `display.summary`；最终兜底为占位文案，保证折叠行始终有内容。
+ * 优先使用 `command` 直传；缺失时回退到 `args.command`；最终兜底为占位文案，
+ * 保证折叠行始终有内容。后端不再产出命令摘要文本，命令仅来自参数。
  *
  * 参数:
  *   command - 直传命令文本。
  *   args - 工具参数字典。
- *   display - 后端展示提示。
+ *   display - 后端展示提示（仅用于静态声明，不承载命令文本）。
  *
  * 返回:
  *   人读命令字符串。
@@ -78,9 +77,8 @@ function resolveCommand(
   if (typeof fromArgs === "string" && fromArgs.trim()) {
     return fromArgs;
   }
-  if (display?.summary && display.summary.trim()) {
-    return display.summary;
-  }
+  // display 仅含静态声明（verb/icon/expandable/expandLayout），无命令文本，直接兜底。
+  void display;
   return "（空命令）";
 }
 

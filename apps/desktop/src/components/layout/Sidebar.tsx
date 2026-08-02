@@ -49,7 +49,8 @@ export interface SidebarProps {
 /**
  * Sidebar 左侧导航栏组件。
  *
- * 固定宽度 240px，负责工作区任务树导航、新建任务入口、日志入口和工作区删除。
+ * 宽度由外层可拖拽 Panel 决定（本组件撑满容器），负责工作区任务树导航、
+ * 新建任务入口、日志入口和工作区删除。
  */
 export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: SidebarProps) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -153,7 +154,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   };
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
+    <aside className="flex h-full w-full min-w-0 flex-col bg-sidebar text-sidebar-foreground">
       {/* 应用标题 */}
       <div className="flex h-12 items-center gap-2 px-4 font-semibold tracking-tight">
         <img src={appIconUrl} alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />

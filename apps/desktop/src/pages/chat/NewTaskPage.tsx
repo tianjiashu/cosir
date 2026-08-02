@@ -148,7 +148,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
   }, []);
 
   return (
-    <main className="flex flex-1 flex-col overflow-hidden bg-background">
+    <main className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-8 px-4 py-12">
         {/* 居中大标题 */}
         <h1 className="text-center text-2xl font-semibold text-foreground">

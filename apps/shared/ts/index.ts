@@ -23,6 +23,8 @@ export {
   type ListAgentsResponse,
 } from "./api";
 export * from "./backend";
+export * from "./toolDisplay";
+export * from "./toolDisplayRules";
 export * from "./toolExecution";
 export * from "./tracePropagation";
 export * from "./logs";

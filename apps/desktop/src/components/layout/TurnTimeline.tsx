@@ -125,6 +125,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
             status="running"
             args={tool.arguments}
             display={tool.display}
+            requestSummary={tool.requestSummary}
             resultData={tool.resultData}
             onOpenFile={(path) => {
               void openFileInEditor(path);
@@ -141,6 +142,9 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
             result={tool.result}
             reason={tool.reason}
             retryable={tool.retryable}
+            requestSummary={tool.requestSummary}
+            listEntries={tool.listEntries}
+            emptyLabel={tool.emptyLabel}
             resultData={tool.resultData}
             onOpenFile={(path) => {
               void openFileInEditor(path);
