@@ -320,7 +320,7 @@ class ReadFileTool(HandlerBase):
         total_lines = 0
         current_chars = 0
         try:
-            with path.open("r", encoding="utf-8", errors="replace") as file:
+            with path.open("r", encoding="utf-8", errors="strict") as file:
                 for line_number, raw_line in enumerate(file, start=1):
                     total_lines = line_number
                     if line_number < offset:
@@ -346,6 +346,20 @@ class ReadFileTool(HandlerBase):
 
                     selected.append((line_number, line))
                     current_chars += addition
+        except UnicodeDecodeError:
+            return TextReadResult(
+                error=(
+                    "File is not valid UTF-8 and cannot be read as text. It may use a "
+                    "different encoding (e.g. GBK on Windows) or be a binary file. "
+                    "Re-save it as UTF-8, or convert it before reading."
+                ),
+                reason=(
+                    "read_file refuses to silently replace invalid bytes, because doing so "
+                    "would feed corrupted text (replacement characters) back to the model. "
+                    "Convert the file to UTF-8 and retry the same read; the same non-UTF-8 "
+                    "file will always be rejected."
+                ),
+            )
         except OSError as exc:
             return TextReadResult(
                 error=os_error_message(exc, "read the file"),

@@ -83,8 +83,8 @@ def search_content(
 
     for file_path in iter_files(base, file_glob):
         try:
-            text = file_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            text = file_path.read_text(encoding="utf-8", errors="strict")
+        except (OSError, UnicodeDecodeError):
             continue
         lines = text.split("\n")
         hits = [i for i, line in enumerate(lines, start=1) if regex.search(line)]

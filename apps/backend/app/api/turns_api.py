@@ -159,7 +159,7 @@ async def stream_turn(
         )
     return StreamingResponse(
         _sse_turn_events(runtime, turn_id, turn, event_bus),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
     )
 
 
