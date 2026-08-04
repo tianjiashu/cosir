@@ -48,7 +48,8 @@ class PatchOperation:
     file_path: str
     new_path: str | None = None  # Move 操作的目标路径
     hunks: list[Hunk] = field(default_factory=list)
-    content: str | None = None  # Add 操作的完整内容（由 hunks 推导）
+    content: str | None = None  # 反向/整文件操作的目标完整内容（精确还原用）
+    reverse_content: str | None = None  # 正向 UPDATE 携带的 before 原文，仅供 reverse 读取
 
 
 def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | None]:

@@ -549,11 +549,15 @@ class AgentRuntime:
 
         return self._agent_registry.resolve(agent_id)
 
-    def _resolve_execution_context(self, task: TaskRecord) -> ToolExecutionContext | None:
+    def _resolve_execution_context(
+        self, task: TaskRecord, turn_id: str = ""
+    ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
         参数:
             task: 当前执行的任务记录；提供 ``workspace_id`` 与 ``task_id``。
+            turn_id: 当前执行所属轮次标识；用于在工具执行时把文件操作快照关联到
+                具体 turn，供 Turn 回退精准还原。缺省为空字符串。
 
         返回:
             命中 workspace 时返回 ToolExecutionContext；workspace 缺失或
@@ -581,7 +585,9 @@ class AgentRuntime:
                 },
             )
             return None
-        return ToolExecutionContext.from_workspace(task.task_id, workspace)
+        return ToolExecutionContext.from_workspace(
+            task.task_id, workspace, turn_id=turn_id
+        )
 
     def _build_operations(
         self,
@@ -609,7 +615,7 @@ class AgentRuntime:
             RuntimeOperations 实例。
         """
 
-        execution_context = self._resolve_execution_context(task)
+        execution_context = self._resolve_execution_context(task, turn_id=turn.turn_id)
         model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
         return RuntimeOperations(
             turn_store=self._turn_service,

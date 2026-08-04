@@ -14,6 +14,7 @@
 import errno
 import shutil
 
+from app.config.logging.logger import log
 from app.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -109,6 +110,7 @@ class DeleteTool(HandlerBase):
         副作用:
             成功时删除目标文件（或符号链接本身）或目录（recursive=True 时连同子树）。
         """
+        assert execution_context is not None, "delete requires a workspace execution context"
         root = execution_context.workspace_root
         root_resolved = root.resolve()
         resolver = ProjectPathResolver(root)
@@ -272,6 +274,24 @@ class DeleteTool(HandlerBase):
             current_resolved, current_error = resolver.resolve(path)
             if current_resolved != resolved or current_error:
                 raise OSError(errno.EAGAIN, "delete target changed before unlink")
+            # 删除前读取全文，供文件快照采集（Turn 回退可据此重建文件）。
+            # 读取失败不阻断删除：降级为 before 空串并保留 warning 日志。
+            before_content = ""
+            try:
+                # 用 bytes 解码而非 read_text：保留原始 CRLF / BOM，避免 text 模式
+                # universal-newline 翻译把 "\r\n" 折成 "\n"，否则回退时无法还原原样换行。
+                before_content = resolved.read_bytes().decode("utf-8", errors="replace")
+            except OSError as read_exc:
+                log.warning(
+                    "delete_before_read_failed",
+                    extra={
+                        "msg": "删除前读取文件全文失败，回退时该文件将无法重建内容",
+                        "data": {
+                            "path": str(resolved),
+                            "error": str(read_exc),
+                        },
+                    },
+                )
             entry.unlink()
         except OSError as exc:
             return tool_error(
@@ -286,12 +306,24 @@ class DeleteTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
-        return ToolObservation(
+        return tool_success(
             tool_name=self.name,
-            status="success",
-            content=f"Deleted file: {resolved}",
             permission=self.permission,
-            display_data={"path": str(resolved), "path_basename": resolved.name, "type": "file"},
+            content=f"Deleted file: {resolved}",
+            display_data={
+                "path": str(resolved),
+                "path_basename": resolved.name,
+                "type": "file",
+                "changes": [
+                    {
+                        "path": path,
+                        "new_path": None,
+                        "status": "deleted",
+                        "before": before_content,
+                        "after": "",
+                    }
+                ],
+            },
         )
 
     def to_definition(self) -> ToolDefinition:

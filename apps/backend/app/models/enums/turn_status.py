@@ -19,6 +19,7 @@ class TurnStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    REVERTED = "reverted"
 
     def __str__(self) -> str:
         """返回状态稳定字符串值。

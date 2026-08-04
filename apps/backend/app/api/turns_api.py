@@ -42,6 +42,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from pathlib import Path
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -50,7 +51,9 @@ from app.api.app import app
 from app.api.depends.dependencies import (
     get_runtime,
     get_runtime_event_bus,
+    get_task_service,
     get_turn_service,
+    get_workspace_service,
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.config.logging.logger import log
@@ -58,7 +61,11 @@ from app.core.runtime.runner import AgentRuntime
 from app.models import TurnRecord
 from app.models.enums.event_type import EventType
 from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
+from app.service.task.task_service import TaskService
+from app.service.task.turn_revert_service import revert_turn
 from app.service.task.turn_service import TurnService
+from app.service.task.workspace_service import WorkspaceService
+from app.tools.tool_handler.patch.patch_apply import PatchApplyError
 
 _TERMINAL_EVENT_TYPES = {
     EventType.RUN_FINISHED,
@@ -197,6 +204,67 @@ async def cancel_turn(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return TurnResponse.from_record(turn)
+
+
+@app.post("/turns/{turn_id}/rollback")
+async def rollback_turn(
+    turn_id: str,
+    turn_service: TurnService = Depends(get_turn_service),
+    task_service: TaskService = Depends(get_task_service),
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
+) -> dict:
+    """原地回退一个已结束 turn（仅最新已结束 turn，D6）。
+
+    把该 turn 触碰过的文件按执行前状态还原，并清空其 checkpoint 与 turn_messages
+    对话轨迹，使该 turn 在用户视角「从未发生」。仅支持该 task 序列中最新一个已结束
+    turn；中间历史 turn 因会造成上下文悬空、同文件后续改动被覆盖等撕裂态，第一版
+    不开放（见方案 §十.11）。
+
+    参数:
+        turn_id: 来自路由的轮次标识。
+        turn_service: 通过依赖注入的轮次 service（用于取 turn 记录）。
+        task_service: 通过依赖注入的任务 service（用于解析 workspace）。
+        workspace_service: 通过依赖注入的工作区 service（用于解析 workspace 根）。
+
+    返回:
+        回退结果字典：``ok`` / ``turn_id`` / ``file_reverted`` /
+        ``non_revertible_actions``。
+
+    异常:
+        HTTPException: turn 不存在（404）、仍在运行（409 turn not finished）、
+            非最新已结束 turn（409 only the latest finished turn can be reverted）时抛出。
+    """
+    try:
+        turn = turn_service.get_turn(turn_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="turn not found") from exc
+    try:
+        task = task_service.get_task(turn.task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    try:
+        workspace = workspace_service.get_workspace(task.workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
+    workspace_root = Path(workspace.root_path)
+
+    try:
+        result = await revert_turn(turn_id, workspace_root=workspace_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PatchApplyError as exc:
+        # 文件还原失败：业务库状态保持原样（turn 未标记 reverted），可重入重试。
+        # 返回 500 并带失败原因，便于前端提示用户手动收尾（方案 §八 失败契约）。
+        raise HTTPException(
+            status_code=500,
+            detail=f"turn file restore failed: {exc}",
+        ) from exc
+    return {
+        "ok": result.ok,
+        "turn_id": result.turn_id,
+        "file_reverted": result.file_reverted,
+        "non_revertible_actions": result.non_revertible_actions,
+    }
 
 
 async def _sse_turn_events(
