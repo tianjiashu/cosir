@@ -12,7 +12,7 @@
 2. vendor 侧新增最小 `tsc` 构建配置，产出 `dist/agent-kernel/server.js`（不破坏现有 `dist/` 构建）。
 3. 后端 `CodeGraphKernelSupervisor`：从项目内固定目录解析锁定的 `node` 可执行文件，启动 Kernel 子进程，管理握手、健康检查、重启、关闭、stderr 桥接。
 4. 后端 `CodeGraphKernelClient`：通过子进程 stdin/stdout 发送 JSON-line RPC、管理 `request_id`、超时、取消、协议错误转换。
-5. 端到端验证：后端启动 Kernel → 握手 → 对当前仓库（已有 `.codegraph/`）发起一次 `codegraph_explore` 查询 → 收回结构化/文本结果。
+5. 端到端验证：后端启动 Kernel → 握手 → 对当前仓库（已有 `.codegraph/`）发起一次 `codegraph_explore` 查询 → 收回结构化/文本结果；并**切换到第二个 workspace 再 explore 一次**，验证跨 workspace 懒加载路由。
 
 ### 第一阶段不做（明确排除）
 
@@ -37,15 +37,21 @@
 
 **Node 版本锁定：** Node 22 LTS（满足 `engines >=20 <25`，避开 25/26 拦截风险）。
 
-### 判断二：workspace 关联 —— 按请求带 `workspace_path`，常驻 Kernel 多 workspace 懒加载
+### 判断二：workspace 关联 —— 按请求带 `workspace_path`，复用 `ToolHandler.projectCache` 懒加载
 
 **事实依据：**
 
 - 讨论文档核心架构：Kernel 是**应用级**常驻，索引是 **workspace 级**；`MCPEngine` 设计意图是「one engine, many sessions」，direct mode 即单 stdio 会话按路径找索引。
 - 本项目产品模型：`workspace → task1..N`，多 task 共享同一 workspace 索引。若启动即固定单一 workspace，等于每 workspace 起一个进程，违背「一个常驻 Kernel 服务多 workspace」。
-- 但 `MCPEngine.ensureInitialized(searchFrom)` 缓存的是**单个 default project**（`this.cg` 唯一），并非多 workspace 映射。因此适配层必须自行维护 workspace 到 engine 的映射。
+- `MCPEngine.ensureInitialized(searchFrom)` 缓存的是**单个 default project**（`this.cg` 唯一），并非多 workspace 映射。
+- **但上游 `ToolHandler` 已内置跨项目能力**：它持有 `projectCache: Map<string, CodeGraph>`，每个查询工具内部都经 `getCodeGraph(args.projectPath)` 按路径懒加载/缓存项目索引（`src/mcp/tools.ts`）。多 workspace 索引路由**上游已实现**。
+- `MCPEngine.ensureInitialized` 内部已有 `initPromise` 去重（`src/mcp/engine.ts`），同 engine 内并发初始化天然 singleflight，适配层无需重复实现。
 
-**结论：** Kernel 单进程应用级常驻；`agent-kernel` 内部维护 `Map<workspace_path, MCPEngine>`；每个 RPC 请求带 `workspace_path`，适配层路由到对应 engine 实例并懒加载/复用其索引。同一 workspace 的索引初始化必须 singleflight（并发请求只触发一次 `ensureInitialized`）。
+**结论（2026-08-04 修订，原设计为「每 workspace 一个 `MCPEngine`」）：** Kernel 单进程应用级常驻，`agent-kernel` 持有**单个 `MCPEngine`**（承载 default project 的 watcher 与 query pool）；每个 RPC 请求带 `workspace_path`，`tool-service` 将其映射为 `args.projectPath` 交给 `ToolHandler`，跨 workspace 索引由 `projectCache` 懒加载/复用。
+
+**修订理由：** 自建 `Map<workspace_path, MCPEngine>` 与上游 `projectCache` 职责重复，违反「不重复造轮子」；且每 workspace 一个 engine 意味着每 workspace 一个 watcher + query pool，初始化与内存成本显著更高。第一阶段范围是**只读查询**（见 5.3），非 default workspace 无独立 watcher 不影响目标。
+
+**已知取舍：** 仅 default project 拥有文件 watcher 自动同步；其余 workspace 经 `projectCache` 打开的实例无 watcher，索引更新需显式 `sync`。该限制在第二阶段引入写入型 `sync` 编排时重新评估。
 
 ## 三、agent-kernel 适配层设计（vendor 内新建）
 
@@ -55,20 +61,21 @@
 
 - `server.ts` —— 进程入口。解析启动参数（如 `--port` 不用，默认 stdio）、实例化 `RpcServer`，注册 `workspace-service` 与 `tool-service`，监听 stdin JSON-line，写 stdout JSON-line，stderr 只写内部日志。
 - `protocol.ts` —— 定义 RPC 消息形状：`RpcRequest { id, method, params }`、`RpcResponse { id, result?, error? }`、`KernelError` 错误码枚举、`handshake` 协议类型。纯类型 + 序列化辅助，无副作用。
-- `workspace-service.ts` —— 封装 `Map<workspace_path, MCPEngine>` 的管理：按 `workspace_path` 取/建 `MCPEngine`、`ensureInitialized` singleflight、`getStatus`（是否已索引/是否 ready）、`stop` 全部。不直接理解查询语义。
-- `tool-service.ts` —— 封装查询分发：接收 `method=codegraph_explore|node|callers|callees|impact|affected` + `workspace_path` + 参数，路由到对应 `MCPEngine.getToolHandler()` 执行，返回文本或结构化结果。复用 `ToolHandler` 现有查询能力，不重写核心逻辑。
+- `workspace-service.ts` —— 持有**单个** `MCPEngine` 实例：懒创建、`ensureInitialized`、`getStatus`（是否已索引/是否 ready）、`getToolHandler`、`stop`。不维护 workspace→engine 映射（见判断二），不直接理解查询语义。
+- `tool-service.ts` —— 封装查询分发：接收 `method` + `workspace_path` + 参数，把 `workspace_path` 映射为 `projectPath` 后调用 `ToolHandler.execute(toolName, args)`，返回文本或结构化结果。复用 `ToolHandler` 现有查询能力，不重写核心逻辑。
 
 ### 3.2 复用关系（关键，避免重写）
 
-- `workspace-service` 复用 `MCPEngine`：`new MCPEngine({ watch: true, queryPool: true })` → `engine.setProjectPathHint(path)` → `engine.ensureInitialized(path)` → `engine.getToolHandler()`。
-- `tool-service` 复用 `ToolHandler`：调用其底层查询方法（探索/节点/调用方/被调用方/影响/受影响），**第一版直接复用 MCP 文本输出**，不在适配层重新定义结构化响应。
+- `workspace-service` 复用 `MCPEngine`：`new MCPEngine({ watch: true, queryPool: true })` → `engine.ensureInitialized(path)` → `engine.getToolHandler()`。初始化 singleflight 由 `MCPEngine` 内部 `initPromise` 保证，适配层不重复实现。
+- `tool-service` 复用 `ToolHandler`：其对外只暴露 `execute(toolName, args)` / `executeReadTool(toolName, args)` 两个分发入口（内部 `dispatchTool` switch 路由），**不是**一组独立查询方法。跨 workspace 由 `args.projectPath` 驱动 `projectCache` 懒加载。**第一版直接复用 MCP 文本输出**，不在适配层重新定义结构化响应。
 - 不再引入 `mcp/server.ts` / `mcp/daemon.ts` 那套完整 MCP 协议栈；`agent-kernel` 只借 `engine` + `tools` 两个内部模块，协议自定（更薄、不占端口）。
 
 ### 3.3 构建配置
 
-- 在 `third_party/codegraph/tsconfig.json` 现有配置下，确保 `src/agent-kernel/**` 被纳入编译（若现有 `include` 已覆盖 `src/**` 则无需改；否则追加）。
+- 已核实：`third_party/codegraph/tsconfig.json` 的 `include` 为 `["src/**/*"]`，`src/agent-kernel/**` **天然被纳入编译，无需修改 tsconfig**。
 - 不修改 `package.json` 的 `build` 主体；如需单独构建 agent-kernel，新增 `"build:agent-kernel": "tsc -p tsconfig.agent-kernel.json"` 或在现有 `build` 中自然产出 `dist/agent-kernel/server.js`。
 - 注意 `copy-assets` 已把 `src/db/schema.sql` 与 `src/extraction/wasm/*.wasm` 拷到 `dist/`；agent-kernel 运行时依赖这些资源，必须随 `build` 一起产出。
+- **vendor 侧联网屏蔽（T1 前置，已落地）**：上游 `mcp/` 层在常驻路径上会触发两个对外网络调用——`src/telemetry/index.ts`（`getTelemetry().startInterval()` 周期上报）与 `src/upgrade/update-check.ts`（`getUpdateNotice`/`checkForUpdateInBackground` 后台查 GitHub 版本）。本集成是本地-first 常驻 Kernel，必须零对外联网。已在不改 `mcp/` 调用点的前提下置空：`telemetry/index.ts` 的 `getStatus()` 强制返回 `enabled:false`（所有 record/flush 路径 early-return，不写盘不联网），`upgrade/update-check.ts` 的 `updateCheckDisabled()` 强制返回 `true`（所有检查路径早退返回 null，绝不发请求）。`upgrade/index.ts` 对 `../installer/targets/claude` 的动态 import 已置空为 no-op（installer 目录已删）。**导出签名全部保留**，故 `mcp/` 编译与 `new MCPEngine().getToolHandler()` 调用不受影响。T1 验证须确认编译产物不含真实联网行为。
 
 ## 四、后端 Kernel 管理设计
 
@@ -111,16 +118,21 @@ kernel.ping   ->  ok / uptime_ms / active_workspaces
 
 ### 5.2 查询方法（第一阶段仅验证 explore，接口预留全部）
 
+工具名以上游 `ToolHandler.dispatchTool` 实际路由为准（`src/mcp/tools.ts`）：
+
 ```text
 codegraph_explore(workspace_path, query)
+codegraph_search(workspace_path, query)
 codegraph_node(workspace_path, symbol)
 codegraph_callers(workspace_path, symbol)
 codegraph_callees(workspace_path, symbol)
 codegraph_impact(workspace_path, symbol)
-codegraph_affected(workspace_path, changed_file)
+codegraph_files(workspace_path, ...)
 ```
 
-`workspace_path` 为必带参数；`tool-service` 据其路由到对应 `MCPEngine`。
+> 更正：原文档列出的 `codegraph_affected` **在上游 MCP 工具面中不存在**——`affected` 是 CLI 命令（`codegraph affected <file>`），不是 `dispatchTool` 的路由项。实际存在但原文档遗漏的是 `codegraph_search` 与 `codegraph_files`。
+
+`workspace_path` 为必带参数；`tool-service` 将其映射为 `args.projectPath` 传给 `ToolHandler.execute`，由 `projectCache` 完成索引路由。
 
 ### 5.3 调度规则
 
@@ -132,16 +144,16 @@ codegraph_affected(workspace_path, changed_file)
 
 | 序 | 任务 | 产出 | 依赖 |
 |----|------|------|------|
-| T1 | vendor 构建验证 | 在 `third_party/codegraph` 跑通 `npm run build`，确认产出 `dist/` 且 `dist/agent-kernel` 被纳入（先加空 `server.ts` 验证编译链路） | 无 |
+| T1 | vendor 构建验证 | 在 `third_party/codegraph` 跑通 `npm run build`，确认产出 `dist/` 且 `dist/agent-kernel` 被纳入（先加空 `server.ts` 验证编译链路）；**前置**：vendor 侧 telemetry/upgrade 联网已屏蔽（见 3.3）；验证点须补强——① `dist/agent-kernel/server.js` 能 `require('../index')` 成功；② 确认 `dist/db/schema.sql` 与 `dist/extraction/wasm/*.wasm` 随 `copy-assets` 产出且路径正确（server 运行时加载 wasm 不报 `ENOENT`）；③ 确认 `getTelemetry().isEnabled()` 为 false、`getUpdateNotice()` 返回 null（零联网） | 无 |
 | T2 | `agent-kernel/protocol.ts` | RPC 消息类型 + 错误码 + 握手类型 | T1 |
-| T3 | `agent-kernel/workspace-service.ts` | `Map<workspace_path, MCPEngine>` 管理 + singleflight `ensureInitialized` + `getStatus` + `stop` | T2 |
-| T4 | `agent-kernel/tool-service.ts` | 6 个查询方法路由到 `ToolHandler`，第一版复用文本输出 | T3 |
+| T3 | `agent-kernel/workspace-service.ts` | 持有单个 `MCPEngine`：懒创建 + `ensureInitialized` + `getStatus` + `getToolHandler` + `stop` | T2 |
+| T4 | `agent-kernel/tool-service.ts` | 查询方法映射 `workspace_path → args.projectPath`，分发到 `ToolHandler.execute`，第一版复用文本输出 | T3 |
 | T5 | `agent-kernel/server.ts` | stdio JSON-line 服务入口，串起 T2–T4 + `kernel.hello/ping/shutdown` | T2–T4 |
 | T6 | 后端 `resolve_node_binary()` | 从固定目录解析锁定 node，缺失即结构化错误；对齐 `runtime_locator` 范式 | T1 |
 | T7 | 后端 `CodeGraphKernelSupervisor` | 启动/握手/健康检查/重启/关闭/stderr 桥接 | T5, T6 |
 | T8 | 后端 `CodeGraphKernelClient` | JSON-line RPC、request_id、超时、取消、错误转换 | T5 |
-| T9 | 后端集成验证脚本 | `apps/backend/temp/` 下临时脚本：启 Kernel → 握手 → 对当前仓库 explore → 收回结果 | T7, T8 |
-| T10 | 单元测试 | `CodeGraphKernelClient` 协议序列化/错误映射单测；`workspace-service` singleflight 单测（需 Node 环境） | T7, T8 |
+| T9 | 后端集成验证脚本 | `apps/backend/temp/` 下临时脚本：启 Kernel → 握手 → 对当前仓库 explore → **切换到第二个 workspace 再 explore**（验证 `projectCache` 懒加载路由）→ 收回结果 | T7, T8 |
+| T10 | 单元测试 | `CodeGraphKernelClient` 协议序列化/错误映射单测；`tool-service` 的 `workspace_path → projectPath` 映射单测（需 Node 环境） | T7, T8 |
 
 > 交付纪律：开发完成后走独立审查 + 独立测试闭环（遵守 `Agent代码开发规范` 第八章）。T9 为临时验证脚本，验证通过后清理，不进 `tests/`。
 
@@ -150,7 +162,7 @@ codegraph_affected(workspace_path, changed_file)
 ### 已收敛（本文档已决策）
 
 - 构建形态：编译 `dist` + 锁定 node（判断一）。
-- workspace 关联：按请求带 path + 多 workspace 懒加载（判断二）。
+- workspace 关联：按请求带 path + 单 `MCPEngine` + 复用 `ToolHandler.projectCache` 懒加载（判断二，2026-08-04 修订）。
 - 适配层位置：`third_party/codegraph/src/agent-kernel/`，窄适配不污染上游。
 - 查询输出：第一版复用 MCP 文本，不重新定义结构化响应。
 
@@ -163,7 +175,8 @@ codegraph_affected(workspace_path, changed_file)
 
 ### 开放风险
 
-- `MCPEngine` 的 `ensureInitialized` 仅缓存单个 default project；多 workspace 映射在 `workspace-service` 维护，需验证并发 `ensureInitialized` 的 singleflight 正确性（T3/T10 重点）。
+- 非 default workspace 经 `ToolHandler.projectCache` 打开的 `CodeGraph` 实例**无 watcher**，索引不会自动同步（判断二已知取舍）；第二阶段引入 `sync` 编排时需重新评估。
+- `projectCache` 无上限淘汰策略，长期运行下多 workspace 累积的 `CodeGraph` 实例内存占用需观测（第一阶段验证 2 个 workspace，不做淘汰）。
 - vendor TS 未被仓库根 CodeGraph 索引覆盖，适配层开发期调试依赖 `tsc` + 直接运行，不依赖 CodeGraph。
 - Node 运行时固定目录第一阶段用本地占位目录，最终需接入桌面资源打包（Tauri `resourcesDir`）；路径解析接口预留，不写死。
 - `dist/` 产物是否提交仓库：当前 `.gitignore` 行为需确认；若随桌面端打包则不加仓库，若本地验证则需临时产出（T1 确认）。

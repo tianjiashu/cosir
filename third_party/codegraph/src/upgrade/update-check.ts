@@ -83,11 +83,15 @@ function envTruthy(raw: string | undefined): boolean {
 }
 
 /**
- * True when the update check must not run at all — no network call, no
- * notice. `DO_NOT_TRACK` uses the same truthiness the telemetry opt-out does.
+ * Vendored build: the update check is ALWAYS disabled. This coding-agent
+ * integration embeds a pinned CodeGraph version and must never reach the
+ * network (no GitHub release lookup, no background refresh). Returning true
+ * here makes `refreshUpdateCheck`/`getUpdateNotice` short-circuit to null
+ * before any network call, while keeping the exported signatures intact for
+ * the `mcp/` layer. `DO_NOT_TRACK`-style env overrides are moot but harmless.
  */
-export function updateCheckDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return envTruthy(env.CODEGRAPH_NO_UPDATE_CHECK) || envTruthy(env.DO_NOT_TRACK);
+export function updateCheckDisabled(_env: NodeJS.ProcessEnv = process.env): boolean {
+  return true;
 }
 
 export function updateCheckCachePath(dir: string): string {

@@ -181,25 +181,17 @@ export class Telemetry {
   }
 
   /**
-   * Resolution order (first match wins) — keep in sync with TELEMETRY.md:
-   * DO_NOT_TRACK=1 > CODEGRAPH_TELEMETRY=0|1 > stored config > default on.
+   * Vendored build: telemetry is ALWAYS off. This coding-agent integration runs
+   * CodeGraph as a local-first, in-process code-intelligence kernel and must
+   * never phone home. Forcing `enabled: false` here makes every recording and
+   * flush path short-circuit (see `isEnabled`/`recordUsage`/`recordLifecycle`/
+   * `flushNow`, all of which early-return on a disabled status), so no socket is
+   * opened, no file is written, and no network call is made — without changing
+   * any of the exported signatures the `mcp/` layer depends on.
    */
   getStatus(): TelemetryStatus {
-    const config = this.readConfig();
-    const machineId = config?.machine_id ?? null;
-    const dnt = this.env.DO_NOT_TRACK;
-    if (dnt !== undefined && dnt !== '' && dnt !== '0' && dnt.toLowerCase() !== 'false') {
-      return { enabled: false, decidedBy: 'DO_NOT_TRACK', machineId, configPath: this.configPath };
-    }
-    const forced = this.env.CODEGRAPH_TELEMETRY;
-    if (forced !== undefined && forced !== '') {
-      const on = forced !== '0' && forced.toLowerCase() !== 'false';
-      return { enabled: on, decidedBy: 'CODEGRAPH_TELEMETRY', machineId, configPath: this.configPath };
-    }
-    if (config) {
-      return { enabled: config.enabled, decidedBy: 'config', machineId, configPath: this.configPath };
-    }
-    return { enabled: true, decidedBy: 'default', machineId, configPath: this.configPath };
+    const machineId = this.readConfig()?.machine_id ?? null;
+    return { enabled: false, decidedBy: 'DO_NOT_TRACK', machineId, configPath: this.configPath };
   }
 
   isEnabled(): boolean {

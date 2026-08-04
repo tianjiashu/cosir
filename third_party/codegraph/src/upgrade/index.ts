@@ -503,20 +503,15 @@ function selfHealInstalledSurfaces(deps: UpgradeDeps): void {
 }
 
 /**
- * Wire the Claude `UserPromptSubmit` front-load hook on upgrade for an
- * already-configured global Claude install. No-op when Claude isn't configured,
- * when the hook is already present, or when the kill-switch is set.
+ * Vendored build: the Claude prompt-hook self-heal is a no-op. The upstream
+ * `codegraph upgrade` flow writes into a user's global Claude config; this
+ * coding-agent integration does not run that CLI self-update path, and the
+ * `../installer/targets/claude` module it imported was removed from the vendor
+ * tree. Kept as an async no-op so the `runUpgrade` orchestrator's call site
+ * stays intact (and never touches external agent config).
  */
-async function selfHealPromptHook(deps: UpgradeDeps): Promise<void> {
-  if (process.env.CODEGRAPH_NO_PROMPT_HOOK === '1' || process.env.CODEGRAPH_PROMPT_HOOK === '0') return;
-  const { claudeTarget, writePromptHookEntry } = await import('../installer/targets/claude');
-  if (!claudeTarget.detect('global').alreadyConfigured) return;
-  const res = writePromptHookEntry('global');
-  if (res.action === 'created' || res.action === 'updated') {
-    deps.log(
-      c.dim('Enabled the CodeGraph front-load hook for Claude Code (structural prompts). Disable any time: CODEGRAPH_NO_PROMPT_HOOK=1'),
-    );
-  }
+async function selfHealPromptHook(_deps: UpgradeDeps): Promise<void> {
+  return;
 }
 
 function upgradeUnixBundle(
