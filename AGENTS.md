@@ -2,7 +2,7 @@
 
 本文件是 `coding-agent` 项目的长期 Agent 入口指南。它保留项目愿景、不可变决议、协作原则、当前目录结构与职责，以及**已落地的项目约定**；详细规则放在 `docs/` 和 `rules/` 下。
 
-> 当前项目已**进入代码开发阶段**（后端 FastAPI + LangGraph 主体骨架与日志子系统已落地，桌面端 Tauri 2 框架已搭起）。本文件的目录结构与约定以**当前真实代码为准**；`rules/目录组织规范.md` 已于 2026-07-26 与真实代码全量对齐，两者应保持一致，冲突时以真实代码为准并同步修订两份文档。
+> 当前项目已**进入代码开发阶段**（后端 FastAPI + LangGraph 运行时、自定义工具系统、日志子系统、Langfuse 可观测性、Web 工具均已落地；桌面端 Tauri 2 + React 前端与 Rust 后端托管 supervisor 已搭起）。本文件的目录结构与约定以**当前真实代码为准**；`rules/目录组织规范.md` 于 2026-08-04 与真实代码二次对齐（含工具系统演进、core/observability、service/runtime_event 等新增），两者应保持一致，冲突时以真实代码为准并同步修订两份文档。
 
 ---
 
@@ -29,12 +29,13 @@
 - ReAct 只能作为第一版默认 ReAct-like Workflow 的候选形式；Workflow 编排层强依赖 LangGraph（`StateGraph` + `SqliteSaver` checkpoint + `interrupt()` 审批中断 + `Command(resume=)` 恢复 + subgraph/`Send` subagent），底层仍是可扩展 Agent Runtime，支持后续替换或新增 Workflow。
 - 工具注册与执行保持自定义，不绑定 LangGraph `Tool`：`ToolDefinition` 是工具契约的单一事实来源，LangGraph graph 的 node 调用自定义 `ToolRuntime`，工具定义不被编排框架绑架。
 - LangGraph 为硬依赖，不再保留「缺失即降级为无 checkpoint 模式」的回退分支；最低运行环境要求 Python 3.11+（与 `pyproject.toml` 的 `requires-python>=3.11` 及 `.python-version` 一致）。
+- 前后端共享协议落地于 `apps/shared/ts/`（通过 Vite alias `@shared` 引用），不放在 `packages/`。
 
 ## 三、Agent 协作原则
 
 - Agent 不是单纯执行器，应作为工程协作伙伴参与判断。
 - Agent 应围绕项目愿景主动提出建议、风险提醒和取舍方案。
-- 建议必须区分“必须做”“建议做”“以后做”，避免无边界发散。
+- 建议必须区分"必须做""建议做""以后做"，避免无边界发散。
 - 如果用户想法可能偏离愿景，Agent 应温和指出，并给出更贴近愿景的替代方案。
 - 不把候选建议写成已确认决议。
 - 高影响决策必须等用户确认后再升级为决议。
@@ -49,22 +50,23 @@ coding-agent/
   .pre-commit-config.yaml # 提交前强制 ruff-format + ruff --fix + mypy + 自动导出 OpenAPI 文档（配置位于仓库根，不在 apps/backend）
   apps/
     backend/
-      pyproject.toml          # 唯一依赖来源（uv）；Ruff/mypy/pytest 配置集中于此
+      pyproject.toml          # 唯一依赖来源（uv）；Ruff/mypy/pytest 配置集中于此；新增 langfuse/httpx/jsonschema/langchain
       uv.lock                 # 锁文件，必须提交
       .python-version         # 3.11
       app/
-        __main__.py           # CLI 入口，触发 config.logging 与 default_settings
+        __main__.py           # CLI 入口（python -m app），触发 config.logging 与 Settings.load，写 bootstate
         main.py               # 进程入口，create_app 装配 FastAPI
-        bootstate.py          # 启动状态初始化（配置、存储、工具系统）
+        bootstate.py          # 启动状态文件写入器（booting/ready/failed/stopped 契约，供桌面端 supervisor 轮询）
         api/                  # FastAPI 接入层
-          app.py              # 应用装配入口、lifespan、中间件
+          app.py              # 应用装配入口、lifespan、中间件、importlib 触发路由注册
           agents_api.py / tasks_api.py / turns_api.py / workspaces_api.py / logs_api.py
-          depends/dependencies.py   # FastAPI 依赖接线（runtime/tool_system 单例）
+          depends/dependencies.py   # FastAPI 依赖接线（runtime/tool_system/各 service 单例）
           middleware/api_logging.py # 请求/异常日志中间件
           schemas/request/         # API Pydantic 请求模型（一文件一模型；文件名 PascalCase，待确认，见 D12）
           schemas/response/        # API Pydantic 响应模型（一文件一模型；同上）
         config/
-          settings.py         # 不可变 BackendSettings 值对象 + default_settings()
+          settings.py         # Settings 类级静态命名空间（进程级运行配置；含 MAX_*/WEB_*/LANGFUSE_*）
+          configuration.py    # 进程级单例装配（AgentProfileRegistry / ToolSystem）；含 config→core/tools 待定性依赖，见 D14
           logging/            # 日志子系统聚合包（特例：允许依赖 storage/trace_infra）
             logger.py         # log 单例 + install_msg_relocation（支持 extra["msg"]）
             configuration.py  # configure_logging / install_logging_for_current_process（装配）
@@ -76,97 +78,116 @@ coding-agent/
             formatter/jsonl_formatter.py   # LogRecord → 单行 JSON（9 字段）
             handler/sqlite_handler.py     # 异步写入独立日志库
         core/                 # Agent 运行底座，全基于 LangGraph 体系
-          agents/agent_profile.py / agent_profile_registry.py
-          context/budget.py（预算校验）/ text_context_builder.py（TextContextBuilder）
+          agents/agent_profile.py / agent_profile_registry.py   # 内置 developer/developer_pro 两个 profile
+          context/runtime_context_builder.py（构建 RuntimeMessage）/ system_prompt_builder.py / system_prompt_context.py / rules/default-coding-rules.md
           llm/factory.py（build_chat_model）/ langchain_bridge.py / model_settings.py
           llm/llm_provider/base.py / deepseek_provider.py  # OpenAI 协议接入 DeepSeek
+          observability/      # Langfuse 可观测性（LLM/工具调用 trace）
+            langfuse_tracing.py            # turn_trace 根 observation + CallbackHandler 工厂
+            langfuse_tool_trace_recorder.py # 工具调用 → Langfuse tool observation
           runtime/runner.py（AgentRuntime 总控）/ runtime_operations.py（窄边界门面）
           runtime/runs/checkpointer.py   # LangGraph AsyncSqliteSaver 持久化
+          runtime/turn_cancellation_registry.py   # 进程内 turn 取消信号注册表
           workflows/agent_workflow.py（Protocol）
-          workflows/react/    # StateGraph 实现：state / nodes / edges / workflow / runtime_config
+          workflows/react/    # StateGraph 实现：state / nodes / edges / workflow / runtime_config（支持 approval_resolver 审批中断）
         models/               # 业务层值对象（一文件一 model，文件名=类名）
           log_entry_record.py / log_query.py / log_query_result.py / mapped_log_record.py
           runtime_event.py / runtime_message.py / task_record.py / trace_context.py
-          turn_record.py / workspace_record.py
+          turn_record.py / turn_usage_stats.py / workspace_record.py
           enums/event_type.py / enums/turn_status.py
-          payload/            # 运行时事件 payload 值对象（一文件一 payload，共 19 个：run_* / step_started / model_* / tool_call_* / observation_added / human_input_* / final_response / runtime_event_payload 基类型）
+          payload/            # 运行时事件 payload 值对象（run_* / step_started / model_* / tool_call_started / tool_call_finished / observation_added / human_input_* / final_response / runtime_event_payload 基类型；model_tool_call 为嵌套值对象，非独立事件类型）
+          payload/registry/runtime_event_payload_registry.py   # payload 注册表
         service/              # 领域服务编排层（仅 xxx_service + 结果值对象）
+          depends.py          # service 层内部依赖装配（storage CRUD + service 单例；initialize/close/reset_service_dependencies）
           task/task_service.py / turn_service.py / workspace_service.py
-          tool_execution/tool_execution_service.py / run_result.py
+          tool_execution/tool_execution_service.py / run_result.py / tool_trace_recorder.py（ToolTraceRecorder 协议）
+          runtime_event/runtime_event_bus.py / runtime_event_service.py / runtime_event_subscription.py   # 进程内事件总线 + 持久化 + SSE 订阅
           log_query_service.py   # 日志查询业务服务（组合 SQLite 日志库与 JSONL）
         storage/              # SQLite 数据层
           engine_cache.py / init_schema.py / store_engines.py
           crud/log_crud.py / runtime_event_crud.py / task_crud.py / turn_crud.py / turn_message_crud.py / workspace_crud.py
           model/base.py / log_model.py / runtime_event_model.py / task_model.py / turn_message_model.py / turn_model.py / workspace_model.py
         tools/                # 工具系统（不基于 LangGraph）
-          schemas/tool_definition.py（契约单一事实来源）/ tool_call.py / tool_observation.py / tool_display.py / tool_execution_context.py
-          tool_execute/tool_scheduler.py（执行固定入口）/ tool_executor.py（子进程隔离+超时强杀）
-          tool_execute/tool_error.py / tool_success.py（构造 ToolObservation 的纯工厂）/ windows_job_object.py（Windows 子进程树强杀）
-          tool_handler/       # 7 个内置工具：read_file / write_file / patch_tool / search_files / list_directory / delete（文件目录统一）/ execute_terminal
+          schemas/tool_definition.py（契约单一事实来源，含 execution_mode 分级隔离）/ tool_call.py / tool_observation.py / tool_display.py / tool_execution_context.py
+          tool_execute/tool_scheduler.py（执行固定入口）/ tool_executor.py（分级隔离：thread 直跑 / process 子进程+硬超时强杀）
+          tool_execute/tool_error.py / tool_success.py / windows_job_object.py
+          tool_handler/       # 9 个内置工具：read_file / write_file / patch_tool / search_files / list_directory / delete / execute_terminal / web_search / web_extract
+            tool_base.py      # HandlerBase 抽象基类（name/description/permission/args_model/timeout_seconds/risk_level + execute/to_definition）
             file_io/atomic_write.py       # 原子写支撑
-            patch/            # 补丁解析/差异/应用/模糊匹配
-            search/           # 内容/文件名搜索与遍历
+            file_state/       # 文件协作状态：file_path_lock_registry / file_revision_registry / repeated_call_registry
+            patch/            # patch_parser / patch_diff / patch_apply / fuzzy_match / file_change_display
+            search/           # content_search / filename_search / file_walker / error_prefixes
             security/project_path.py      # ProjectPathResolver：路径边界唯一收口
-            terminal/         # 终端执行后端 + 危险命令 deny-list（删除类命令全面硬拒）
-          tool_models/        # 各工具 pydantic 参数/结果模型（一工具一 args 文件 + text_read_result.py）
+            security/windows_reparse_point.py   # Windows 重解析点安全
+            terminal/         # execution_backend / local_backend / execution_result / dangerous_command（删除类命令全面硬拒）
+            web/              # web 工具系统：web_provider(协议) / web_provider_registry / web_content_store / url_safety / providers/firecrawl_provider
+          tool_models/        # 各工具 pydantic 参数/结果模型（含 web_search_args / web_extract_args）
           validation/arguments.py     # 参数校验唯一收口
-          guard/             # 工具执行横切子层（语法检查守卫等跨工具共享横切能力，依赖白名单同 tools/）
+          guard/              # 工具执行横切子层：display_data_budget / file_resource_paths / file_tool_state_coordinator / tool_output_budget
           tool_registry.py / tool_system.py
         trace_infra/          # trace 基础设施原语（leaf：零 app.* 依赖）
           ids.py / redaction.py
+        utils/                # 叶子工具函数（leaf：零 app.* 依赖）
+          datetime_utils.py / file_utils.py
       tests/                  # pytest 测试目录（test_*.py）
       temp/                   # 临时验证/调试脚本（已被 .gitignore 忽略，用完清理）
     desktop/                  # Tauri 2 + React + TS 桌面客户端
-      src/                    # React 前端（会话/任务/审批/工具调用/变更展示/日志入口）
-      src-tauri/              # Rust 宿主（窗口、系统能力、与后端通信）
-      index.html / vite.config.ts / tailwind.config.ts / components.json（shadcn/ui）
-  packages/
-    shared/                   # 前后端共享协议、schema、类型、事件契约
-  docs/                       # 项目愿景/需求/技术栈/架构/验收/设计文档
+      src/                    # React 前端（chat/layout/sidebar/right-panel/backend/ui 组件 + pages/stores/services/hooks/lib/tests）
+      src/services/           # api.ts / sse.ts / workspace.ts / logs.ts / backend.ts / tracePropagation.ts / dialog.ts / types.ts / timeline/projector.ts 等
+      src/stores/             # zustand：backendStore / eventStore / taskStore / turnStore / workspaceStore / clientTraceStore / conversationTraceStore
+      src-tauri/              # Rust 宿主（src/lib.rs / main.rs / backend/ supervisor 托管 + commands/）
+        src/backend/          # boot_state.rs / health_checker.rs / process_launcher.rs / runtime_locator.rs / supervisor.rs / types.rs
+        src/commands/         # backend.rs（start/stop/restart/status/logs_tail）/ fs.rs / logging.rs
+    shared/                   # 前后端共享协议（13 个 ts：api/events/task/turn/workspace/agents/backend/logs/toolDisplay/toolDisplayRules/toolExecution/tracePropagation/index）
+  docs/                       # 项目愿景/需求/技术栈/架构/验收/设计文档（含 Langfuse可观测性集成技术方案/web-tools/工具系统改造计划 等）
   rules/                      # 项目级协作规则、代码开发规范、交互澄清、经验记录
   coding-agent-docs/          # 成熟 coding-agent 原理资料库（仅参考，不混入源码）
-  scripts/                    # 开发/检查/构建/生成 schema/维护数据等辅助脚本
+  scripts/                    # 开发/检查/构建/生成 schema/维护数据等辅助脚本（dev.sh / dev-client.sh / generate_api_ts.py 等）
   logs/                       # 本地日志落盘目录（运行时生成）
   storage/                    # 本地 SQLite 运行状态文件目录（运行产物，不提交）
 ```
 
 目录职责要点：
 
-- `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装（接入层）。**网关约定**：`api/app.py` 必须用 `importlib.import_module("app.api.xxx")` 触发路由注册，不能用 `import app.api.xxx`，否则顶层包名 `app` 被覆盖为模块对象。
-- `apps/backend/app/config/logging/`：日志子系统聚合包（配置 + 运行时 filter/formatter/handler/bridge/context）。属配置层特例，明确允许依赖 `storage` / `trace_infra`，豁免通用 config 轻量约束；路径保持 `app.config.logging` 不拆分。
-- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。`core/logs/`、`core/events/` 不存在；运行时事件定义在 `models/runtime_event.py`（payload 在 `models/payload/`），日志查询服务在 `service/log_query_service.py`。
-- `apps/backend/app/models/`：业务层值对象（dataclass / 枚举），一文件一 model，文件名与 model 同名；主体平铺，枚举归入 `enums/`，运行时事件 payload 归入 `payload/`。不承载服务、适配或 helper。
-- `apps/backend/app/service/`：领域服务编排层，只放 `xxx_service`（及结果值对象 `run_result.py`）；不直接写 SQL、不承载 model/原语。
-- `apps/backend/app/storage/`：SQLite 持久化存储，承载引擎缓存、schema 初始化（含列迁移）、进程级引擎装配、ORM 模型与单实体 CRUD（数据层最底层）。
-- `apps/backend/app/tools/`：工具系统统一收口，**不基于 LangGraph**；内置 7 工具（read_file / write_file / patch / search_files / list_directory / delete / execute_terminal）经 `core` 调度执行。`ToolDefinition` 是契约单一事实来源，模型可见结构由 `ToolDefinition.to_model_tool_definition()` 投影，禁止平行类；文件类工具路径安全统一收口 `tool_handler/security/project_path.ProjectPathResolver`（workspace 外写/删被 path_escape 强制拒绝）。
-- `apps/backend/app/trace_infra/`：trace 基础设施原语（ID 生成/校验、payload 脱敏）。不依赖 `app.models` 与 `app.service`，避免循环依赖。
+- `apps/backend/app/api/`：FastAPI 路由、SSE 格式化和 API 依赖组装（接入层）。**网关约定**：`api/app.py` 必须用 `importlib.import_module("app.api.xxx")` 触发路由注册，不能用 `import app.api.xxx`，否则顶层包名 `app` 被覆盖为模块对象。SSE 采用「事件总线 + producer 认领」模式：`_drive_runtime_turn` 作为 producer 消费 `runtime.run_turn` 并 publish 到 `RuntimeEventBus`，HTTP 连接作为 consumer 订阅自身 turn。
+- `apps/backend/app/config/logging/`：日志子系统聚合包（配置 + 运行时 filter/formatter/handler/bridge/context）。属配置层特例，明确允许依赖 `storage` / `trace_infra`，豁免通用 config 轻量约束。
+- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。`core/logs/`、`core/events/` 不存在；运行时事件定义在 `models/runtime_event.py`（payload 在 `models/payload/`），日志查询服务在 `service/log_query_service.py`。`core/observability/` 承载 Langfuse 可观测性（`turn_trace` + `LangfuseToolTraceRecorder`），是所有 langfuse 三方依赖的耦合收口。
+- `apps/backend/app/models/`：业务层值对象（dataclass / 枚举），一文件一 model，文件名与 model 同名；主体平铺，枚举归入 `enums/`，运行时事件 payload 归入 `payload/`（含 `registry/`）。不承载服务、适配或 helper。
+- `apps/backend/app/service/`：领域服务编排层，只放 `xxx_service`（及结果值对象）。`service/depends.py` 是 service 层内部单例装配入口（storage CRUD + service 单例，含 `initialize_service_dependencies` / `close_service_dependencies` / `reset_service_dependencies`）。`service/runtime_event/` 承载运行时事件总线（持久化 + 进程内广播 + SSE 订阅）。不直接写 SQL。
+- `apps/backend/app/storage/`：SQLite 持久化存储，承载引擎缓存、schema 初始化（含列迁移）、进程级引擎装配、ORM 模型与单实体 CRUD。LangGraph checkpoint 由 `app.core.runtime.runs.checkpointer` 经 aiosqlite 直连，不经本层引擎。
+- `apps/backend/app/tools/`：工具系统统一收口，**不基于 LangGraph**；内置 9 工具（read_file / write_file / patch / search_files / list_directory / delete / execute_terminal / web_search / web_extract）经 `core` 调度执行。`ToolDefinition` 是契约单一事实来源；所有内置工具继承 `tool_handler/tool_base.HandlerBase`。工具执行采用**分级隔离**（`execution_mode`：`process` 子进程+硬超时强杀用于 execute_terminal；默认 `thread` 当前线程直跑）。文件类工具路径安全统一收口 `security/project_path.ProjectPathResolver`，并经 `guard/file_tool_state_coordinator` 做 revision/stale/路径锁协调。Web 工具通过 `web/web_provider_registry` + `web/providers/`（当前 firecrawl）扩展。
+- `apps/backend/app/trace_infra/`：trace 基础设施原语（ID 生成/校验、payload 脱敏）。`utils/` 叶子工具函数。两者均为 leaf，零 `app.*` 依赖。
+- `apps/backend/app/bootstate.py`：后端启动状态文件写入器。与桌面端 Rust supervisor 约定 `storage/backend.bootstate.json` 契约（booting/ready/failed/stopped），使后端崩溃瞬间即可拿到结构化失败原因；错误信息落盘前自动脱敏。
+- `apps/shared/`：前后端共享 TypeScript 协议（API 路径、事件类型、工具展示规则等），通过 Vite alias `@shared` 引用，路径在 `apps/shared/ts/`。
 
 当前已确认的概念边界：
 
-- `Agent` 是执行主体，描述角色、目标、上下文、工具权限、状态和运行记录。
+- `Agent` 是执行主体，描述角色、目标、上下文、工具权限、状态和运行记录。内置 `developer`（deepseek-v4-flash）与 `developer_pro`（deepseek-v4-pro）两个 profile。
 - `Workflow` 是执行策略，描述 Agent 如何完成任务，例如 ReAct-like、Plan-and-Execute、Review-Fix。
 - `Runtime` 是执行底座，负责状态管理、模型调用、工具调度、审批、checkpoint、context compaction、事件流、取消、恢复和终止保护。
 - `Subagent` 不应实现成一套平行系统；它应作为 child agent / child run 复用 Agent、Workflow 和 Runtime 能力。
 - `core` 是 LangGraph 编排内核，承载 Agent 运行底座；`tools` 不基于 LangGraph，由 `core` 调度执行。
+- 工具执行分级隔离：`ToolDefinition.execution_mode` 声明「是否需要 OS 级故障隔离」，`ToolExecutor.execute` 据此分流——`process` 走子进程 + 硬超时强杀 + 树杀（execute_terminal）；`thread`（默认）当前线程直跑、无子进程开销但无硬超时强杀。该字段按工具逐个声明，不按「是否文件工具」归类。
 
 ## 五、项目约定（已落地、强制）
 
 以下约定已从 `rules/` 与真实代码反推后固化，是开发 Agent 提交前的事实基线；详细条款见文末「开发前必须路由」指向的规范文件。
 
 ### 1. Python 代码与命名
-- **一文件一类**：文件名 = 主类名 snake_case（如 `CallerFilter` ↔ `caller_filter.py`）。允许例外：服务类用 `xxx_service.py` / `xxx_recorder`；值对象工厂类、bridge、utils 等工具模块可承载多个强相关公共符号（如 `*_bridge.py`、`log_query_service.py`）。
-- **值对象自带工厂方法**：从源对象（如 `logging.LogRecord`）到领域值对象的映射逻辑，收进值对象自身的 `from_xxx` 类方法（如 `MappedLogRecord.from_record(record)`），不单独保留无状态的 Mapper 类。
+- **一文件一类**：文件名 = 主类名 snake_case（如 `CallerFilter` ↔ `caller_filter.py`）。允许例外：服务类用 `xxx_service.py`；值对象工厂类、bridge、utils 等工具模块可承载多个强相关公共符号。工具 handler 统一继承 `tool_handler/tool_base.HandlerBase`（`tool_base.py` 承载抽象基类）。
+- **值对象自带工厂方法**：从源对象到领域值对象的映射逻辑，收进值对象自身的 `from_xxx` 类方法，不单独保留无状态的 Mapper 类。
 - **docstring 四段式**：每个函数/方法必须有完整中文 docstring，采用「参数 / 返回 / 异常 / 副作用」Google 风格；函数签名变更时同步更新。
-- **工具链（单一来源）**：依赖与锁由 `uv` 管理（`pyproject.toml` + 已提交 `uv.lock`，无 `requirements.txt`）；Ruff（行宽 100、双引号）做 format+lint+import 排序，mypy 做渐进类型检查，pre-commit 提交前强制。**新代码**必须 Ruff 通过、带完整类型注解、无 `import *`。
-- **导入纪律**：绝对导入 `from app.xxx import yyy`，不使用相对导入跨包；`__init__.py` 只做薄壳 `from .X import Y` re-export，不放业务逻辑；禁止 `import *`。
+- **工具链（单一来源）**：依赖与锁由 `uv` 管理（`pyproject.toml` + 已提交 `uv.lock`）；Ruff（行宽 100、双引号）做 format+lint+import 排序，mypy 做渐进类型检查，pre-commit 提交前强制。**新代码**必须 Ruff 通过、带完整类型注解、无 `import *`。
+- **导入纪律**：绝对导入 `from app.xxx import yyy`，不使用相对导入跨包；`__init__.py` 只做薄壳 re-export，不放业务逻辑；禁止 `import *`。
 - **命名禁止模糊词**：`Utils` / `Helper` / `Common` / `Misc` / `Manager` 等笼统命名不允许（约定别名 `log` / `log_query_service` 等除外）。
 
 ### 2. 目录与依赖方向
-- **单向依赖总纲**（详细见 `rules/目录组织规范.md` 第一章）：`api → core/service`；`core → service/tools/models/config/trace_infra`；`service → storage/models/config/trace_infra/tools`（tool_execution 编排 tools 合法）；`storage → models`；`tools → config/models/trace_infra`（不依赖 service）；`models → utils/trace_infra`（leaf）；`config` 通用轻量，`config/logging` 聚合特例允许依赖 `storage/trace_infra`。
+- **单向依赖总纲**（详细见 `rules/目录组织规范.md` 第一章）：`api → core/service`；`core → service/tools/models/config/trace_infra`；`service → storage/models/config/trace_infra/tools`（tool_execution 编排 tools 合法）；`storage → models`；`tools → config/models/utils/trace_infra`（不依赖 service）；`models → utils/trace_infra`（leaf）；`utils`/`trace_infra` 为纯 leaf；`config` 通用轻量，`config/logging` 聚合特例允许依赖 `storage/trace_infra`。
 - **禁止跳层 / 反向依赖**：如 `api` 直 import `storage`/`tools`、`tools → service`、`models → 编排层` 均为违规。
+- **依赖倒置范例**：`ToolTraceRecorder` 协议定义在 `service/tool_execution/tool_trace_recorder.py`（service 层自定自消费、零三方依赖），实现收口在 `core/observability`，`core → service` 为合法方向，无反向依赖。
 
 ### 3. 日志约定（强制）
-- **业务模块统一单例**：一律 `from app.config.logging.logger import log`，**禁止**在业务代码散落 `logging.getLogger("coding_agent.backend")`——同名 `getLogger` 虽返回同一对象，但分散写法易在 name typo 时静默新建分裂 logger。仅 `logger.py`（定义源头）、`configuration.py`（装配 handler）、`process_bridge.py`（桥接 handler）三类子系统内部文件保留 `getLogger` 装配职责。
+- **业务模块统一单例**：一律 `from app.config.logging.logger import log`，**禁止**在业务代码散落 `logging.getLogger("coding_agent.backend")`。仅 `logger.py`、`configuration.py`、`process_bridge.py` 三类子系统内部文件保留 `getLogger` 装配职责。
 - **跨进程**：spawn 子进程经 `process_bridge` 队列桥汇入父进程统一管线（子进程入口用 `install_logging_for_current_process(log_queue=...)` 重新挂载），不共享 logger 对象。
 - **统一格式**：落盘为单行 JSON（JSONL），固定 9 字段；`event` 稳定英文 snake_case（禁 f-string 拼动态）、`msg` 中文人读、`data` 结构化业务字段、**唯一链路键 `trace_id`**（业务实体 ID 值放 `data`/`msg`，不进顶层）。详见 `rules/Agent日志开发规范.md`。
 - **异常纪律**：捕获异常必须用 `.exception()` 带堆栈并 `raise`（底层重抛让上层补上下文）；禁止空 `except`、禁止 `print` 当系统日志、禁止输出 secret。
@@ -175,8 +196,21 @@ coding-agent/
 - 验证 / 调试脚本统一放 `apps/backend/temp/`（已在 `.gitignore` 忽略），禁止散落项目根或其他位置；**用完及时清理，避免误提交**。
 
 ### 5. 测试与闭环
-- pytest；`tests/` 下 `test_*.py`，`pytest-asyncio` `asyncio_mode=auto`；关键路径（工具执行、checkpoint、审批、日志）必须有测试。
+- pytest；`tests/` 下 `test_*.py`，`pytest-asyncio` `asyncio_mode=auto`；关键路径（工具执行、checkpoint、审批、日志、web 工具）必须有测试。
 - 开发完成后必须形成**审查与测试闭环**；开发 Agent 不能既当开发又当裁判（见第六章铁律）。
+
+### 6. 工具系统约定（强制）
+- **工具契约单一事实来源**：`ToolDefinition`（`schemas/tool_definition.py`）是工具契约的唯一来源，模型可见结构由 `to_model_tool_definition()` 投影，禁止平行类。
+- **内置工具继承 HandlerBase**：全部 9 个内置工具 handler 继承 `tool_base.HandlerBase`，声明类级元数据（name/description/permission/args_model/timeout_seconds/risk_level）并实现 `execute`/`to_definition`。
+- **分级隔离**：`execution_mode` 声明隔离策略——`process`（子进程 + 硬超时强杀）仅用于 execute_terminal 等需 OS 级隔离的工具；其余默认 `thread`（当前线程直跑）。
+- **文件协作状态**：文件类工具经 `guard/file_tool_state_coordinator` 做 revision/stale/重复调用检测/写路径锁；只读重复调用（read_file/search_files）会被提前拦截。
+- **输出预算**：`guard/tool_output_budget` 统一截断模型可见 `content`，超限时在 workspace 内 `.coding-agent/tool-artifacts/` 落盘完整 artifact；`guard/display_data_budget` 约束客户端展示通道。
+- **Web 工具**：`web_search` / `web_extract` 通过 `web/web_provider_registry` 选择 provider（当前 firecrawl），URL 安全校验（`web/url_safety`）拦截带凭据/内网地址的请求；`execution_context` 缺失时 web_extract 拒绝执行。
+
+### 7. 可观测性约定（Langfuse）
+- Langfuse 三方依赖**唯一收口**在 `core/observability/`（`langfuse_tracing.py` + `langfuse_tool_trace_recorder.py`），其余业务代码不得直接 import langfuse。
+- 所有 langfuse import 惰性加载；未启用/缺密钥/未安装时运行时行为与集成前完全一致，**绝不因可观测性失败中断 turn 执行**。
+- 开启条件：`LANGFUSE_ENABLED` + public/secret key 齐备 + 包可导入（`tracing_enabled()`）。密钥仅经环境变量注入，不写入代码库。
 
 ## 六、进入代码开发后的铁律
 
@@ -199,12 +233,13 @@ coding-agent/
 - Python 代码开发规范（uv/Ruff/mypy/pre-commit 补充）：`rules/Python代码开发规范.md`
 - 客户端代码开发规范（Tauri/React/TS 派生附录）：`rules/Agent客户端代码开发规范.md`
 - 日志开发规范（log 单例、JSONL 9 字段、event/msg/data 纪律）：`rules/Agent日志开发规范.md`
-- 目录组织规范（分层依赖方向契约、各目录职责）：`rules/目录组织规范.md`
+- 目录组织规范（分层依赖方向契约、各目录职责、偏差清单）：`rules/目录组织规范.md`
 - 交互澄清规则：`rules/global-interaction-clarification.md`
 - 成熟机制复用规则：`rules/mature-mechanism-reuse.md`
 - 经验复用记录：`rules/agent-lessons.md`
+- CodeGraph CLI 使用指南：`rules/codegraph-cli-agent-guide.md`
 - coding-agent 原理文档：`coding-agent-docs`
-- 设计/计划类文档（部分已落地）：`docs/`（含 `logging-guide.md`、`refactor-state-model-and-checkpoint.md`、`工具系统待完善清单.md` 等）
+- 设计/计划类文档（部分已落地）：`docs/`（含 `Langfuse可观测性集成技术方案.md`、`web-tools.md`、`工具系统改造计划.md`、`工具系统待完善清单.md`、`工具调用结果透传与前端渲染技术方案.md` 等）
 
 ## 八、CodeGraph 使用规则
 
@@ -253,20 +288,21 @@ codegraph sync
 - 不是一开始就做大量未经验证的个人化抽象。
 - 不是只做代码补全或聊天问答。
 - 不是为了兼容旧系统而牺牲设计清晰度。
-- 不是追求“尽快生成代码”，而是追求“长期稳定地完成开发任务”。
+- 不是追求"尽快生成代码"，而是追求"长期稳定地完成开发任务"。
 
 ## 十、已知偏差与开放问题
 
-### 已知偏差（待修复，详见 `rules/目录组织规范.md` 1.4 节，2026-07-26 对齐）
-- **D5（跳层，仍存在且范围扩大）**：`api/depends/dependencies.py`、`api/app.py` 直 import `app.storage.*` / `app.tools.tool_system`（装配点）；`api/tasks_api.py` 直用 `RuntimeEventCrud`、`api/logs_api.py` 直用 `LogStore`（端点级跳层，应优先经 service 收口）。
-- **D10（空壳文件，待清理）**：`tools/tool_handler/delete_file.py` / `delete_directory.py`、`tools/tool_models/delete_file_args.py` / `delete_directory_args.py`、`models/tool_execution_context.py` 为 0 字节残留，应删除。
+### 已知偏差（待修复，详见 `rules/目录组织规范.md` 1.4 节，2026-08-04 二次对齐）
+- **D5（跳层，范围收窄）**：仅残留 `api → tools` 装配点（`api/depends/dependencies.py`、`api/app.py` 直 import `app.tools.tool_system`）；`api → storage` 端点级跳层（`tasks_api` 直用 `RuntimeEventCrud`、`logs_api` 直用 `LogStore`）已于 service 收口后消除，归档。
 - **D11（空目录，待清理）**：`config/logging/save/`、`service/trace/` 仅剩 `__pycache__`，应删除。
 - **D12（命名待确认）**：`api/schemas/request|response` 文件名用 PascalCase（如 `CreateTaskRequest.py`），与 snake_case 约定不一致，待确认豁免或改名。
 
 ### 文档待同步
-- 无。`rules/目录组织规范.md` 已于 2026-07-26 与真实代码全量对齐（trace 服务层/`event_names.py`/`durable_crud` 等已移除项、storage 重构后文件名、tools 7 工具与支撑子包、models/payload 均已更新）。
+- 本文件与 `rules/目录组织规范.md` 已于 2026-08-04 二次对齐到当前真实代码，并经独立审查 Agent 复核修正（D8 已归档、D5 收窄为仅 `api→tools` 装配点、payload 清单修正、注册表类名修正、tool_system 字段修正）。
+- 新增待定性项：**D14**（`config/configuration.py` 存在 `config→core`/`config→tools` 依赖，且其模块 docstring 仍承诺收口 `AgentRuntime` 单例但源码无对应实现，属失效 docstring；需定性为装配点特例或记为待修复偏差）。
+- `apps/backend/README.md` 已随本次修订重写，移除早期「Python 3.9」「app/agents/」「step_controller 降级」等过时描述，更新为当前 LangGraph 强依赖 + 工具系统 + 可观测性 + 启动契约的真实状态。
 
 ### 开放问题
 - DeepSeek 之后的大模型接入顺序。
-- （已决议）LangGraph 使用深度：作为强依赖编排底座，承载 workflow 扩展、checkpoint、interrupts、streaming、subgraphs；工具执行层仍自定义。若未来 LangGraph 无法满足特定需求（如极致自定义调度、客户端体积），再评估抽离 graph 层接口。
+- （已决议）LangGraph 使用深度：作为强依赖编排底座，承载 workflow 扩展、checkpoint、interrupts、streaming、subgraphs；工具执行层仍自定义。
 - 第一阶段各能力的验收标准和优先级排序。
