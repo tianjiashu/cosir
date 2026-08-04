@@ -6,6 +6,9 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+# pytest-cov 覆盖率缓存（运行时产物，不进仓库）
+.coverage
+apps/backend/.coverage
 
 logs/*.log
 logs/*.pid
@@ -23,6 +26,8 @@ apps/backend/.env.local
 
 # CodeGraph 索引缓存
 .codegraph/
+# CodeGraph 锁定 node 运行时（随应用分发，不提交仓库）
+apps/backend/.codegraph-node/
 
 # Tauri 生成产物
 apps/desktop/src-tauri/gen/
