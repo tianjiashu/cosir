@@ -112,6 +112,7 @@ def tool_error(
     retryable: bool = False,
     permission: str = "",
     tool_call_id: str = "",
+    display_data: dict[str, object] | None = None,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
 
@@ -134,10 +135,14 @@ def tool_error(
         permission: 触发工具所需权限标识（用于审计/展示），默认空字符串；权限被
             拒时由调用方回填被拒的权限值。
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
+        display_data: 仅供客户端展示消费的结构化数据；会 merge 进
+            ``ToolObservation.display_data``（不含 ``content`` 副本），**不会回传给
+            模型**。为 error 观察携带结构化诊断（如语法检查的 ``syntax_errors``）而
+            增补，与 :func:`tool_success` 的 ``display_data`` 语义对称。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="error"``，``content`` 与
-        ``error`` 均包含人类可读错误，其余诊断字段按入参填充，``data`` 为空字典。
+        ``error`` 均包含人类可读错误，其余诊断字段按入参填充。
 
     异常:
         无。
@@ -160,5 +165,7 @@ def tool_error(
     merged = dataclasses.asdict(observation)
     merged.pop("content", None)
     merged.pop("display_data", None)
-    observation.display_data = merged
+    if display_data:
+        merged.update(display_data)
+    observation.data = merged
     return observation

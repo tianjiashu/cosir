@@ -3,18 +3,22 @@
 本模块只承载 patch 这一个工具，按 ``mode`` 分流为 replace（单文件模糊替换，
 原 edit_file）与 patch（V4A 多文件补丁，原 apply_patch）两种能力。成功后统一
 返回 unified diff 回显（``content``）与结构化 diff 统计（``data["diff_stats"]``），
-对齐 Hermes ``patch_tool``。
+对齐 Hermes ``patch_tool``。落盘后经 ``guard.syntax_check`` 做多语言语法检查
+（error 驱动）：命中语法错误返回 error 观察（文件已写），经 ``reason`` 引导
+Agent 二次编辑覆盖自修复。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``。
 - replace 的模糊匹配复用 ``patch.fuzzy_match``，patch 的解析/应用复用
   ``patch.patch_parser`` / ``patch.patch_apply``。
 - 成功/失败观察统一经 ``tool_execute.tool_success`` / ``tool_error`` 工厂构造。
+- 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
 
-import ast
+import dataclasses
 from pathlib import Path
 
+from app.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax, format_syntax_reason
 from app.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -44,6 +48,42 @@ from app.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.patch_args import PatchArgs
+
+
+def _format_multi_file_syntax_reason(diagnostics: list[SyntaxDiagnostic]) -> str:
+    """聚合多个文件的语法诊断为英文 reason（patch 模式多文件自修复引导）。
+
+    参数:
+        diagnostics: 各文件语法诊断的扁平集合（含 ``language`` / ``row`` /
+            ``column`` / ``expected`` 字段）。
+
+    返回:
+        面向模型的英文 ``reason``：列出每个语法错误的位置与缺失 token，引导
+        Agent 逐文件二次编辑覆盖修复。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+    if not diagnostics:
+        return (
+            "the patched file(s) have syntax errors; fix them with follow-up edits "
+            "(write_file or patch_tool)."
+        )
+    parts = [
+        f"line {d.row} col {d.column}"
+        + (f" missing '{d.expected}'" if d.expected else " unexpected token")
+        for d in diagnostics
+    ]
+    return (
+        "the patched file(s) have syntax errors ("
+        + "; ".join(parts)
+        + "); the files have been written but are not valid. Fix each with a follow-up "
+        "edit (write_file or patch_tool) that corrects the syntax at the reported location."
+    )
+
 
 PATCH_DESCRIPTION = (
     "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "
@@ -292,18 +332,23 @@ class PatchTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
-        warning = ""
-        if str(resolved).endswith(".py"):
-            try:
-                ast.parse(new_content)
-            except SyntaxError as exc:
-                warning = f"\n[warning] Python syntax error: {exc}"
+        # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
+        # 经 reason 引导 Agent 二次编辑覆盖自修复。
+        result = check_source_syntax(str(resolved), new_content)
+        if result.has_error:
+            return tool_error(
+                tool_name=self.name,
+                error="syntax error detected after patch",
+                reason=format_syntax_reason(result),
+                permission=self.permission,
+                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
+            )
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=format_patch_diff([snapshot]) + warning,
-            display_data=build_file_change_display_data([snapshot]),
+            content=format_patch_diff([snapshot]),
+            data=build_file_change_display_data([snapshot]),
         )
 
     def _execute_patch(self, patch: str | None, resolver: ProjectPathResolver) -> ToolObservation:
@@ -407,11 +452,39 @@ class PatchTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
+        # 落盘后逐文件语法检查（error 驱动）：任一文件命中语法错误即返回 error 观察，
+        # 聚合所有错误诊断（带文件维度），经 reason 引导 Agent 逐文件二次编辑覆盖自修复。
+        syntax_errors: list[dict[str, object]] = []
+        diagnostics_all: list[SyntaxDiagnostic] = []
+        # 仅对产生新内容的文件（modified/added）做语法检查；deleted/moved 无新内容可查。
+        for r in results:
+            if r.status not in ("modified", "added"):
+                continue
+            resolved_path, _ = resolver.resolve(r.path)
+            if resolved_path is None:
+                continue
+            check = check_source_syntax(str(resolved_path), r.after)
+            if check.has_error:
+                syntax_errors.append(
+                    {
+                        "path": r.path,
+                        "errors": [dataclasses.asdict(d) for d in check.diagnostics],
+                    }
+                )
+                diagnostics_all.extend(check.diagnostics)
+        if syntax_errors:
+            return tool_error(
+                tool_name=self.name,
+                error="syntax error detected in patched file(s)",
+                reason=_format_multi_file_syntax_reason(diagnostics_all),
+                permission=self.permission,
+                display_data={"syntax_errors": syntax_errors},
+            )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff(results),
-            display_data=build_file_change_display_data(results),
+            data=build_file_change_display_data(results),
         )
 
     def to_definition(self) -> ToolDefinition:

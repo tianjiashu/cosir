@@ -2,15 +2,20 @@
 
 本模块只承载 write_file 这一个工具。写盘经由 ``file_io.atomic_write`` 做原子写
 并保留目标文件既有 BOM/CRLF；落盘前做行号污染门禁（拒绝把 read_file 的带行号
-输出回写），成功后额外返回统一 diff 展示数据。
+输出回写），成功后额外返回统一 diff 展示数据。落盘后经 ``guard.syntax_check``
+做多语言语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
+经 ``reason`` 引导 Agent 二次编辑覆盖自修复。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``，不内联路径规则。
 - 执行逻辑只提供文件修改前后的事实元数据；diff 展示投影由 ``file_change_display`` 收口。
+- 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
 
+import dataclasses
 from pathlib import Path
 
+from app.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -187,13 +192,25 @@ class WriteFileTool(HandlerBase):
                 permission=self.permission,
             )
 
+        # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
+        # 经 reason 引导 Agent 二次编辑覆盖自修复；display_data 只给前端展示。
+        result = check_source_syntax(str(resolved), content)
+        if result.has_error:
+            return tool_error(
+                tool_name=self.name,
+                error="syntax error detected after write",
+                reason=format_syntax_reason(result),
+                permission=self.permission,
+                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
+            )
+
         status = "modified" if existed else "added"
         snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=content,
-            display_data=build_file_change_display_data([snapshot]),
+            data=build_file_change_display_data([snapshot]),
         )
 
     def to_definition(self) -> ToolDefinition:
