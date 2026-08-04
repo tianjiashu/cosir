@@ -44,6 +44,13 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
   // 仅依赖本 turn 的 events / turn，过去轮次引用不变时 memo 跳过，不重投影。
   const projected = useMemo(() => projectTurnTimeline([turn], events), [turn, events]);
   const turnItem = projected[0];
+  logInfo("turn_timeline_rendered", {
+    module: "TurnTimeline",
+    turn_id: turn.turn_id,
+    user_text_len: turnItem?.userText?.length ?? 0,
+    user_text_preview: turnItem?.userText?.slice(0, 80) ?? "",
+    entries_count: turnItem?.entries?.length ?? 0,
+  });
   if (!turnItem) {
     return null;
   }
@@ -71,7 +78,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
             });
             return (
               <div key={entry.eventId} className={widthClass}>
-                <ThinkingBlock content={entry.content} />
+                <ThinkingBlock content={entry.content} streaming={entry.streaming} />
               </div>
             );
           }
@@ -87,7 +94,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
         if (entry.kind === "assistant") {
           return entry.content.length > 0 ? (
             <div key={entry.eventId} className={widthClass}>
-              <AgentMessage content={entry.content} />
+              <AgentMessage content={entry.content} streaming={entry.streaming} />
             </div>
           ) : null;
         }
@@ -118,6 +125,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
             status="running"
             args={tool.arguments}
             display={tool.display}
+            requestSummary={tool.requestSummary}
             resultData={tool.resultData}
             onOpenFile={(path) => {
               void openFileInEditor(path);
@@ -134,6 +142,9 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
             result={tool.result}
             reason={tool.reason}
             retryable={tool.retryable}
+            requestSummary={tool.requestSummary}
+            listEntries={tool.listEntries}
+            emptyLabel={tool.emptyLabel}
             resultData={tool.resultData}
             onOpenFile={(path) => {
               void openFileInEditor(path);

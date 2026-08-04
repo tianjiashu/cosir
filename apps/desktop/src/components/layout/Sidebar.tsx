@@ -32,9 +32,10 @@ import { deleteTask as deleteTaskApi } from "@/services/api";
 import { logError } from "@/lib/logger";
 import type { TaskRecord } from "@shared/task";
 import type { WorkspaceRecord } from "@shared/workspace";
+import appIconUrl from "../../../src-tauri/icons/icon.png";
 
 /** Sidebar 组件属性。 */
-interface SidebarProps {
+export interface SidebarProps {
   /** 当前主视图，用于展示导航选中态。 */
   activeView: "chat" | "new-task" | "logs";
   /** 打开日志页面。 */
@@ -48,7 +49,8 @@ interface SidebarProps {
 /**
  * Sidebar 左侧导航栏组件。
  *
- * 固定宽度 240px，负责工作区任务树导航、新建任务入口、日志入口和工作区删除。
+ * 宽度由外层可拖拽 Panel 决定（本组件撑满容器），负责工作区任务树导航、
+ * 新建任务入口、日志入口和工作区删除。
  */
 export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: SidebarProps) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -65,6 +67,11 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
 
   // 待删除的工作区（非空时展示应用内确认弹窗）。
   const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
+  // 待删除工作区下的任务数量（用于确认弹窗展示）。
+  const pendingDeleteTaskCount =
+    pendingDelete ? tasks.filter((task) => task.workspace_id === pendingDelete.workspace_id).length : 0;
+  // 待删除工作区是否为当前活跃工作区（用于确认弹窗提示切换/新建行为）。
+  const pendingDeleteIsActive = pendingDelete ? activeWorkspaceId === pendingDelete.workspace_id : false;
   // 删除请求进行中标记，用于禁用按钮并展示 loading 文案。
   const [deleting, setDeleting] = useState(false);
   // 删除失败提示，展示在确认弹窗内。
@@ -80,31 +87,45 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
    * 执行工作区删除。
    *
    * 调用后端删除接口，成功后同步移除本地工作区与其任务并关闭弹窗；
+   * 删除当前活跃工作区时一并清空活跃任务并将主视图切回会话页，
+   * 若列表已空（删除的是唯一工作区）则跳转到新建任务页引导选择工作区；
    * 失败时保留弹窗并在其中展示错误信息。
    */
   const handleConfirmDelete = async () => {
     if (!pendingDelete) {
       return;
     }
+    const deletedWorkspaceId = pendingDelete.workspace_id;
+    const wasActive = activeWorkspaceId === deletedWorkspaceId;
     setDeleting(true);
     setDeleteError(null);
     try {
-      await api.deleteWorkspace(pendingDelete.workspace_id);
+      await api.deleteWorkspace(deletedWorkspaceId);
       const removedTaskIds = tasks
-        .filter((task) => task.workspace_id === pendingDelete.workspace_id)
+        .filter((task) => task.workspace_id === deletedWorkspaceId)
         .map((task) => task.task_id);
-      removeWorkspace(pendingDelete.workspace_id);
-      setTasks(tasks.filter((task) => task.workspace_id !== pendingDelete.workspace_id));
+      // removeWorkspace 内部会在删除当前活跃区时自动切到剩余列表第一项。
+      removeWorkspace(deletedWorkspaceId);
+      setTasks(tasks.filter((task) => task.workspace_id !== deletedWorkspaceId));
       // 同步使被删工作区下各任务的事件缓存失效，避免幽灵 timeline。
       for (const taskId of removedTaskIds) {
         useEventStore.getState().invalidateTask(taskId);
       }
       setPendingDelete(null);
+      // 删的是当前活跃区 → 主视图切回会话页，避免停留在已不存在的对话。
+      if (wasActive) {
+        onOpenChat();
+      }
     } catch (err) {
-      logError("删除工作区失败", err, { module: "Sidebar", workspace_id: pendingDelete.workspace_id });
+      logError("删除工作区失败", err, { module: "Sidebar", workspace_id: deletedWorkspaceId });
       setDeleteError(err instanceof Error ? err.message : "删除工作区失败，请检查后端日志");
     } finally {
       setDeleting(false);
+    }
+    // 删除态已结束后再跳转：删完已无工作区（删的是唯一区）时跳新建任务页引导选择工作区，
+    // 不在此直接弹系统目录选择器（避免在 deleting 态内持有长耗时交互）。
+    if (useWorkspaceStore.getState().workspaces.length === 0) {
+      onNewTask();
     }
   };
 
@@ -133,10 +154,10 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   };
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
+    <aside className="flex h-full w-full min-w-0 flex-col bg-sidebar text-sidebar-foreground">
       {/* 应用标题 */}
       <div className="flex h-12 items-center gap-2 px-4 font-semibold tracking-tight">
-        <img src="../../src-tauri/icons/icon.png" alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />
+        <img src={appIconUrl} alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />
         <span>Coding Agent</span>
       </div>
 
@@ -290,7 +311,11 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
           >
             <h3 className="text-sm font-semibold text-foreground">删除工作区</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              确定删除工作区「{pendingDelete.name}」及其任务记录？此操作不可恢复。
+              确定删除工作区「{pendingDelete.name}」及其 {pendingDeleteTaskCount} 个任务记录？此操作不可恢复。
+              {pendingDeleteIsActive &&
+                (workspaces.length > 1
+                  ? "删除后自动切换到其他工作区。"
+                  : "删除后将跳转到新建任务页选择工作区。")}
             </p>
             {deleteError && <p className="mt-2 text-xs text-destructive">{deleteError}</p>}
             <div className="mt-4 flex justify-end gap-2">

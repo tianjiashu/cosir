@@ -22,6 +22,8 @@ interface TaskOperationState {
   loading: boolean;
   /** 上一次操作错误（如有）。 */
   error: string | null;
+  /** 历史事件回填失败信息（骨架已就绪但内容未完整加载）；当前仅用于日志与后续 UI 提示/重试扩展。 */
+  eventsError: string | null;
 }
 
 /**
@@ -61,6 +63,7 @@ export function useTask(): UseTaskReturn {
   const [operation, setOperation] = useState<TaskOperationState>({
     loading: false,
     error: null,
+    eventsError: null,
   });
 
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
@@ -91,17 +94,17 @@ export function useTask(): UseTaskReturn {
    */
   const createTask = useCallback(
     async (text: string, workspaceId: string): Promise<boolean> => {
-      setOperation({ loading: true, error: null });
+      setOperation({ loading: true, error: null, eventsError: null });
       const ownsOperation = !hasClientTrace();
       if (ownsOperation) {
         beginClientTrace();
       }
+      const temporaryTaskId = `temp-${Date.now()}`;
 
       try {
         // 断开旧的 SSE 连接
         disconnect();
 
-        const temporaryTaskId = `temp-${Date.now()}`;
         const now = new Date().toISOString();
         addTask({
           task_id: temporaryTaskId,
@@ -119,7 +122,11 @@ export function useTask(): UseTaskReturn {
         setActiveTask(temporaryTaskId, null);
 
         // 调用 API 创建任务
-        const task = await api.createTask({ text, workspace_id: workspaceId });
+        const task = await api.createTask({
+          text,
+          workspace_id: workspaceId,
+          agent_id: selectedAgentId,
+        });
         const turns = await api.listTaskTurns(task.task_id);
         const firstTurn = turns[turns.length - 1] ?? null;
         const taskWithResolvedTurn = firstTurn
@@ -141,16 +148,13 @@ export function useTask(): UseTaskReturn {
           await connect(task.task_id, taskWithResolvedTurn.latest_turn_id);
         }
 
-        setOperation({ loading: false, error: null });
+        setOperation({ loading: false, error: null, eventsError: null });
         return true;
       } catch (err) {
         const message = err instanceof Error ? err.message : "创建任务失败";
         logError("createTask 失败", err, { module: "useTask" });
-        const temporaryTask = useTaskStore.getState().tasks.find((task) => task.task_id.startsWith("temp-"));
-        if (temporaryTask) {
-          removeTask(temporaryTask.task_id);
-        }
-        setOperation({ loading: false, error: message });
+        removeTask(temporaryTaskId);
+        setOperation({ loading: false, error: message, eventsError: null });
         return false;
       } finally {
         if (ownsOperation) {
@@ -174,10 +178,10 @@ export function useTask(): UseTaskReturn {
   const createTurn = useCallback(
     async (text: string): Promise<boolean> => {
       if (!activeTaskId) {
-        setOperation({ loading: false, error: "未选择任务" });
+        setOperation({ loading: false, error: "未选择任务", eventsError: null });
         return false;
       }
-      setOperation({ loading: true, error: null });
+      setOperation({ loading: true, error: null, eventsError: null });
       const ownsOperation = !hasClientTrace();
       if (ownsOperation) {
         beginClientTrace({ taskId: activeTaskId });
@@ -195,12 +199,12 @@ export function useTask(): UseTaskReturn {
         });
         setStreamingTurn(turn.turn_id);
         await connect(activeTaskId, turn.turn_id);
-        setOperation({ loading: false, error: null });
+        setOperation({ loading: false, error: null, eventsError: null });
         return true;
       } catch (err) {
         const message = err instanceof Error ? err.message : "创建轮次失败";
         logError("createTurn 失败", err, { module: "useTask", task_id: activeTaskId });
-        setOperation({ loading: false, error: message });
+        setOperation({ loading: false, error: message, eventsError: null });
         return false;
       } finally {
         if (ownsOperation) {
@@ -208,40 +212,56 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [activeTaskId, connect, disconnect, setActiveTurn, setStreamingTurn, updateTask, upsertTurn],
+    [activeTaskId, connect, disconnect, selectedAgentId, setActiveTurn, setStreamingTurn, updateTask, upsertTurn],
   );
 
   /**
    * 加载任务历史并切换当前任务。
    *
+   * 采用「先渲染后回填」策略以加速历史回放：先并行拉取 task/turns 并立即
+   * ``setActiveTask`` 让中央会话区出现（用户消息与 turn 骨架），随后异步拉取
+   * 体积更大的历史事件流并 ``setEvents`` 增量投影。这样面板不必等全量事件到达
+   * 才出现，显著缩短「点击任务后等待加载」的体感时长。
+   *
    * @param taskId - 待打开的任务标识。
    *
-   * @sideeffect 从后端并行读取 task/turns/events 并写入对应 store；历史事件经
+   * @sideeffect 从后端读取 task/turns/events 并写入对应 store；历史事件经
    *   eventStore 缓存，跨任务切换不重复拉取（历史对话不可变）。
    */
   const openTask = useCallback(
     async (taskId: string): Promise<void> => {
-      setOperation({ loading: true, error: null });
+      setOperation({ loading: true, error: null, eventsError: null });
       try {
-        const [task, turns, events] = await Promise.all([
+        // 先拉 task + turns 并立刻渲染骨架：两者体量与事件流相比很小，能快速出首屏。
+        const [task, turns] = await Promise.all([
           api.getTask(taskId),
           api.listTaskTurns(taskId),
-          api.listTaskEvents(taskId),
         ]);
         if (useTaskStore.getState().getTaskById(taskId)) {
           updateTask(taskId, task);
         } else {
           addTask(task);
         }
-        // 灌入历史事件（合并式：保留其他任务缓存，仅覆盖当前 task 分组）
-        setEvents(events, taskId);
         setTurnsForTask(taskId, turns);
+        // 关键：先切活跃任务触发 ChatPanel 首屏渲染，不等历史事件全量到达。
         setActiveTask(taskId, turns.length > 0 ? turns[turns.length - 1].turn_id : null);
-        setOperation({ loading: false, error: null });
+        setOperation({ loading: false, error: null, eventsError: null });
+
+        // 再异步拉历史事件：到达后按 task 分组增量灌入，timeline 自然补全。
+        // 即使此期间用户切走，events 仍按 taskId 落缓存，下次打开即命中。
+        // 回填失败仅标记 eventsError：骨架已就绪，不回退为"打开失败"态，保留已渲染内容。
+        try {
+          const events = await api.listTaskEvents(taskId);
+          setEvents(events, taskId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "历史事件加载失败";
+          logError("openTask 历史事件回填失败", err, { module: "useTask", task_id: taskId });
+          setOperation((prev) => ({ ...prev, eventsError: message }));
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : "打开任务失败";
         logError("openTask 失败", err, { module: "useTask", task_id: taskId });
-        setOperation({ loading: false, error: message });
+        setOperation({ loading: false, error: message, eventsError: null });
       }
     },
     [addTask, setActiveTask, setEvents, setTurnsForTask, updateTask],
@@ -256,11 +276,11 @@ export function useTask(): UseTaskReturn {
     if (!activeTaskId) return;
     const turnId = activeTurnId ?? useTaskStore.getState().activeTurnId;
     if (!turnId) {
-      setOperation({ loading: false, error: "当前任务没有可取消的轮次" });
+      setOperation({ loading: false, error: "当前任务没有可取消的轮次", eventsError: null });
       return;
     }
 
-    setOperation({ loading: true, error: null });
+    setOperation({ loading: true, error: null, eventsError: null });
     const ownsOperation = !hasClientTrace();
     if (ownsOperation) {
       beginClientTrace({ taskId: activeTaskId });
@@ -274,21 +294,17 @@ export function useTask(): UseTaskReturn {
         updated_at: updated.updated_at,
       });
 
-      // 断开 SSE 连接（任务已取消）
-      disconnect();
-      setStreamingTurn(null);
-
-      setOperation({ loading: false, error: null });
+      setOperation({ loading: false, error: null, eventsError: null });
     } catch (err) {
       const message = err instanceof Error ? err.message : "取消任务失败";
       logError("cancelTurn 失败", err, { module: "useTask", task_id: activeTaskId, turn_id: turnId });
-      setOperation({ loading: false, error: message });
+      setOperation({ loading: false, error: message, eventsError: null });
     } finally {
       if (ownsOperation) {
         endClientTrace();
       }
     }
-  }, [activeTaskId, activeTurnId, updateTask, upsertTurn, disconnect, setStreamingTurn]);
+  }, [activeTaskId, activeTurnId, updateTask, upsertTurn]);
 
   /**
    * 从后端刷新当前活跃任务的最新状态。

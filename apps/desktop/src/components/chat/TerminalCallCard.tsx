@@ -2,24 +2,25 @@
  * 终端命令工具卡片（execute_terminal 专用）。
  *
  * 与通用 ToolCallCard 分离：终端的折叠/展开态是独立布局——
- * 折叠行是「prompt 图标 + 命令 + 状态图标」，展开态是「命令 header + 深色输出块」。
+ * 折叠行是「浅灰卡片 + prompt 图标 + 完整命令 + 状态/展开操作」，
+ * 展开态是「命令 header + 浅色等宽输出块」。
  * 组件由 TurnTimeline 按 `display.expandLayout === "terminal"` 分发渲染，
  * 不进入 ToolCallCard 的通用分支。
  *
  * 设计要点：
- * - 命令统一来自 `args.command`；后端 `render_request_summary` 也投影同一命令，
- *   二者一致，缺失时降级为 `display.summary`。
- * - 折叠态右侧图标：运行中/成功显示绿色 Terminal，失败显示红色 AlertCircle。
- * - 展开态 header 的关闭（×）按钮仅用于折叠卡片；终止运行中命令的能力预留
+ * - 命令统一来自 `args.command`；缺失时降级为占位文案。
+ * - 折叠态命令按原文换行展示（不截断），右侧显示运行/成功/失败状态图标与展开 chevron。
+ * - 展开态 header 右侧提供「复制命令」「状态」「关闭」三个操作。
+ * - 输出块使用浅色等宽块，保留换行与滚动，支持一键复制全部输出。
+ * - `resultData.output_truncated` 为真时额外显示截断提示，不单独展示 exit_code / timed_out 等元数据。
+ * - header 的关闭（×）按钮仅用于折叠卡片；终止运行中命令的能力预留
  *   （暂未实现，后续可由后端任务取消 API 驱动）。
- * - 输出块只渲染命令输出（`result`）；`runData.output_truncated` 为真时
- *   额外显示截断提示，不单独展示 exit_code / timed_out 等元数据。
  *
  * @module components/chat/TerminalCallCard
  */
 
-import { useState } from "react";
-import { AlertCircle, ChevronRight, Copy, Terminal, X } from "lucide-react";
+import * as React from "react";
+import { AlertCircle, Check, ChevronDown, Copy, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ToolDisplayInfo } from "@/services/timeline/projector";
 
@@ -53,13 +54,13 @@ interface TerminalCallCardProps {
 /**
  * 从 props 中解析出要展示的命令文本。
  *
- * 优先使用 `command` 直传；缺失时回退到 `args.command`；再缺失回退到
- * `display.summary`；最终兜底为占位文案，保证折叠行始终有内容。
+ * 优先使用 `command` 直传；缺失时回退到 `args.command`；最终兜底为占位文案，
+ * 保证折叠行始终有内容。后端不再产出命令摘要文本，命令仅来自参数。
  *
  * 参数:
  *   command - 直传命令文本。
  *   args - 工具参数字典。
- *   display - 后端展示提示。
+ *   display - 后端展示提示（仅用于静态声明，不承载命令文本）。
  *
  * 返回:
  *   人读命令字符串。
@@ -76,18 +77,70 @@ function resolveCommand(
   if (typeof fromArgs === "string" && fromArgs.trim()) {
     return fromArgs;
   }
-  if (display?.summary && display.summary.trim()) {
-    return display.summary;
-  }
+  // display 仅含静态声明（verb/icon/expandable/expandLayout），无命令文本，直接兜底。
+  void display;
   return "（空命令）";
+}
+
+/**
+ * 复制按钮（图标 + 复制成功反馈）。
+ *
+ * 复制成功后临时展示绿色 Check 图标，2 秒后恢复，与项目内 CodeBlock/StatusBadge 保持一致。
+ *
+ * @param props - 组件属性。
+ * @param props.text - 要复制到剪贴板的文本。
+ * @param props.className - 额外样式类。
+ * @param props.title - 按钮 hover 提示。
+ * @param props.children - 默认显示的图标（可选）。
+ */
+function CopyButton({
+  text,
+  className,
+  title = "复制",
+  children,
+}: {
+  text: string;
+  className?: string;
+  title?: string;
+  children?: React.ReactNode;
+}) {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = React.useCallback(
+    async (event: React.MouseEvent) => {
+      event.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {
+        // 剪贴板写入失败时静默忽略，不阻断用户查看。
+      }
+    },
+    [text],
+  );
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={title}
+      className={cn(
+        "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors",
+        className,
+      )}
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : children ?? <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
 }
 
 /**
  * TerminalCallCard 终端命令卡片（可折叠）。
  *
- * 折叠态：`Terminal` prompt 图标 + 命令（超长截断）+ 右侧状态图标（成功/运行
- * 绿色 Terminal，失败红色 AlertCircle）+ 展开 chevron。
- * 展开态：命令 header（prompt 图标 + 命令 + × 关闭按钮）+ 深色等宽输出块
+ * 折叠态：浅灰圆角卡片，左侧 prompt 图标，中间命令原文换行展示，
+ * 右侧状态图标 + 展开 chevron。
+ * 展开态：命令 header（prompt 图标 + 命令 + 复制/状态/关闭操作）+ 浅色等宽输出块
  * （可滚动、可复制）+ 截断提示。
  */
 export function TerminalCallCard({
@@ -101,67 +154,108 @@ export function TerminalCallCard({
   retryable,
   resultData,
 }: TerminalCallCardProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = React.useState(false);
   const commandText = resolveCommand(command, args, display);
   const expandable = display?.expandable ?? true;
   // 成功/失败才允许展示输出块；运行中尚无输出。
   const hasOutput = status !== "running" && result !== null && result !== undefined;
   const isError = status === "error";
+  const isRunning = status === "running";
+
+  const toggleOpen = React.useCallback(() => {
+    if (expandable) {
+      setIsOpen((prev) => !prev);
+    }
+  }, [expandable]);
 
   return (
-    <div className="w-full">
-      {/* 折叠触发区：prompt 图标 + 命令 + 状态图标 + chevron */}
-      <button
-        type="button"
-        onClick={() => expandable && setIsOpen((prev) => !prev)}
+    <div className="w-full overflow-hidden rounded-lg border border-border bg-muted">
+      {/* Header：折叠态即整个命令行卡片，展开态复用同一 header */}
+      <div
         className={cn(
-          "flex w-full cursor-pointer items-center gap-1.5 rounded px-1 py-1 text-left text-sm hover:bg-accent/30 focus-visible:bg-accent/30 transition-colors",
-          !expandable && "cursor-default",
+          "flex items-start gap-2 px-2.5 py-2",
+          expandable && "cursor-pointer hover:bg-accent/20",
         )}
+        onClick={toggleOpen}
+        role={expandable ? "button" : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        onKeyDown={(event) => {
+          if (expandable && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            toggleOpen();
+          }
+        }}
       >
-        <Terminal className="h-4 w-4 shrink-0 text-green-500" />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
-          {commandText}
-        </span>
-        {isError ? (
-          <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-        ) : (
-          <Terminal className="h-4 w-4 shrink-0 text-green-500" />
-        )}
-        {expandable && (
-          <ChevronRight
+        <Terminal
+          className={cn(
+            "mt-0.5 h-3.5 w-3.5 shrink-0",
+            isError ? "text-destructive" : "text-green-600",
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <span
             className={cn(
-              "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-              isOpen && "rotate-90",
+              "font-mono text-xs text-foreground",
+              isOpen ? "whitespace-pre-wrap break-all" : "truncate",
             )}
-          />
-        )}
-      </button>
+          >
+            {commandText}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {isOpen && <CopyButton text={commandText} title="复制命令" />}
+
+          {/* 状态图标 */}
+          {isError ? (
+            <div className="flex h-6 w-6 items-center justify-center text-destructive" title="执行失败">
+              <AlertCircle className="h-4 w-4" />
+            </div>
+          ) : isRunning ? (
+            <div className="flex h-6 w-6 items-center justify-center text-green-600" title="运行中">
+              <Terminal className="h-4 w-4" />
+            </div>
+          ) : (
+            <div className="flex h-6 w-6 items-center justify-center text-green-600" title="执行成功">
+              <Terminal className="h-4 w-4" />
+            </div>
+          )}
+
+          {expandable && !isOpen && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsOpen(true);
+              }}
+              title="展开"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+            >
+              <ChevronDown className="h-4 w-4" />
+            </button>
+          )}
+
+          {isOpen && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsOpen(false);
+              }}
+              title="关闭"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* 展开详情 */}
       {isOpen && (
-        <div className="mt-1 ml-6 space-y-1.5 border-l border-border pl-3 py-1">
-          {/* 命令 header：prompt 图标 + 命令 + × 关闭 */}
-          <div className="flex items-center gap-1.5">
-            <Terminal className="h-3.5 w-3.5 shrink-0 text-green-500" />
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
-              {commandText}
-            </span>
-            {expandable && (
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                title="折叠"
-                className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent/40 transition-colors"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-
+        <div className="space-y-2 px-3 pb-3">
           {/* 失败：错误主因 + 辅因 + 可重试徽标 */}
           {isError && (error || reason) && (
-            <div className="space-y-1">
+            <div className="space-y-1 text-sm">
               {error && (
                 <div className="flex gap-2">
                   <span className="text-muted-foreground shrink-0">错误:</span>
@@ -190,23 +284,14 @@ export function TerminalCallCard({
             </div>
           )}
 
-          {/* 输出块：深色等宽 + 滚动 + 复制 */}
+          {/* 输出块：浅色等宽 + 滚动 + 复制 */}
           {hasOutput && (
-            <div className="overflow-hidden rounded border border-zinc-700">
-              <div className="flex items-center gap-2 border-b border-zinc-700 bg-zinc-800 px-3 py-1.5">
-                <span className="text-[11px] font-medium text-zinc-300">终端输出</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(result ?? "");
-                  }}
-                  className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-700 transition-colors"
-                >
-                  <Copy className="h-3 w-3" />
-                  复制
-                </button>
+            <div className="overflow-hidden rounded border border-border bg-background">
+              <div className="flex items-center gap-2 border-b border-border bg-muted-foreground/5 px-3 py-1.5">
+                <span className="text-[11px] font-medium text-muted-foreground">终端输出</span>
+                <CopyButton text={result ?? ""} title="复制输出" className="ml-auto" />
               </div>
-              <pre className="max-h-64 overflow-auto bg-zinc-900 p-3 font-mono text-[11px] text-zinc-100 whitespace-pre-wrap break-all">
+              <pre className="max-h-64 overflow-auto p-3 font-mono text-xs text-foreground whitespace-pre-wrap break-all">
                 {result ?? ""}
               </pre>
             </div>

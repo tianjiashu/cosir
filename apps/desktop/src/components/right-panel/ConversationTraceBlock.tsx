@@ -40,13 +40,13 @@ export function ConversationTraceBlock({ onOpenLogs }: ConversationTraceBlockPro
 
       {displayTrace ? (
         <div className="space-y-2 rounded-md border border-border bg-card p-2">
-          <TraceField label={streamTrace ? "stream_trace_id" : "trace_id"} value={displayTrace.traceId} />
+          <TraceField label={streamTrace ? "请求链路 trace" : "历史 trace"} value={displayTrace.traceId} />
           <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
             <TraceMeta label="来源" value={operationLabel(displayTrace.operation)} />
             <TraceMeta label="方法" value={displayTrace.method} />
           </div>
           {streamTrace && latestTrace && latestTrace.traceId !== streamTrace.traceId ? (
-            <TraceField label="latest_trace_id" value={latestTrace.traceId} />
+            <TraceField label="历史 trace (最新)" value={latestTrace.traceId} />
           ) : null}
           <Button variant="outline" size="sm" className="h-7 w-full gap-1.5 text-xs" onClick={onOpenLogs}>
             <FileText className="h-3.5 w-3.5" />

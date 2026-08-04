@@ -15,9 +15,11 @@ session 工厂访问数据库。
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.storage.model.runtime_event_model import RuntimeEventModel
 from app.storage.store_engines import main_session_factory
@@ -38,6 +40,9 @@ class RuntimeEventCrud:
     副作用:
         通过主库 session 执行 runtime_events 的增查操作。
     """
+
+    _sequence_lock = threading.Lock()
+    _SEQUENCE_RETRY_LIMIT = 5
 
     def save_event(self, event_dict: dict[str, Any]) -> None:
         """写入一条运行时事件到持久化存储。
@@ -86,6 +91,136 @@ class RuntimeEventCrud:
                     },
                 },
             )
+
+    def save_event_with_next_sequence(self, event_dict: dict[str, Any]) -> int:
+        """Assign and persist the next turn-local runtime event sequence atomically.
+
+        参数:
+            event_dict: 已序列化的事件字典，必须包含 ``turn_id``。
+
+        返回:
+            实际写入的 sequence。
+
+        异常:
+            RuntimeError: 如果分配 sequence 或写入事件失败。
+
+        副作用:
+            在进程级锁保护下向 ``runtime_events`` 表插入一行。
+        """
+
+        from app.config.logging.logger import log
+
+        turn_id = event_dict.get("turn_id")
+        if not isinstance(turn_id, str) or not turn_id:
+            self.save_event(event_dict)
+            sequence = event_dict.get("sequence", 0)
+            if not isinstance(sequence, int):
+                raise RuntimeError("runtime event sequence must be an integer")
+            return sequence
+
+        for attempt in range(self._SEQUENCE_RETRY_LIMIT):
+            with self._sequence_lock:
+                try:
+                    with main_session_factory().begin() as session:
+                        value = session.execute(
+                            select(func.max(RuntimeEventModel.sequence)).where(
+                                RuntimeEventModel.turn_id == turn_id
+                            )
+                        ).scalar_one()
+                        sequence = 0 if value is None else int(value) + 1
+                        payload_json = __import__("json").dumps(
+                            event_dict.get("payload", {}), ensure_ascii=False, default=str
+                        )
+                        session.add(
+                            RuntimeEventModel(
+                                turn_id=turn_id,
+                                sequence=sequence,
+                                event_id=event_dict["event_id"],
+                                event_type=event_dict["event_type"],
+                                task_id=event_dict["task_id"],
+                                payload_json=payload_json,
+                                created_at=event_dict.get("created_at", ""),
+                            )
+                        )
+                        return sequence
+                except IntegrityError:
+                    log.warning(
+                        "runtime_event_sequence_conflict",
+                        extra={
+                            "msg": "runtime event sequence conflict, retrying",
+                            "data": {
+                                "event_id": event_dict.get("event_id"),
+                                "event_type": event_dict.get("event_type"),
+                                "turn_id": turn_id,
+                                "attempt": attempt + 1,
+                            },
+                        },
+                    )
+                    continue
+                except Exception as exc:
+                    log.exception(
+                        "runtime_event_persist_with_sequence_failed",
+                        extra={
+                            "msg": "failed to persist runtime event with next sequence",
+                            "data": {
+                                "event_id": event_dict.get("event_id"),
+                                "event_type": event_dict.get("event_type"),
+                                "turn_id": turn_id,
+                            },
+                        },
+                    )
+                    raise RuntimeError(
+                        "failed to persist runtime event with next sequence"
+                    ) from exc
+        log.error(
+            "runtime_event_sequence_retry_exhausted",
+            extra={
+                "msg": "runtime event sequence retry exhausted",
+                "data": {
+                    "event_id": event_dict.get("event_id"),
+                    "event_type": event_dict.get("event_type"),
+                    "turn_id": turn_id,
+                    "retry_limit": self._SEQUENCE_RETRY_LIMIT,
+                },
+            },
+        )
+        raise RuntimeError("runtime event sequence retry exhausted")
+
+    def next_sequence_for_turn(self, turn_id: str) -> int:
+        """Return the next runtime event sequence for a turn.
+
+        参数:
+            turn_id: 待分配事件序号的轮次标识。
+
+        返回:
+            当前 turn 下一个可用的 sequence。无历史事件时返回 0。
+
+        异常:
+            无。查询失败返回 0 并记日志。
+
+        副作用:
+            无（只读查询）。
+        """
+
+        from app.config.logging.logger import log
+
+        try:
+            with main_session_factory()() as session:
+                value = session.execute(
+                    select(func.max(RuntimeEventModel.sequence)).where(
+                        RuntimeEventModel.turn_id == turn_id
+                    )
+                ).scalar_one()
+                return 0 if value is None else int(value) + 1
+        except Exception:
+            log.exception(
+                "runtime_event_next_sequence_failed",
+                extra={
+                    "msg": "failed to query next runtime event sequence",
+                    "data": {"turn_id": turn_id},
+                },
+            )
+            return 0
 
     def list_by_turn(self, turn_id: str) -> list[dict[str, Any]]:
         """按 turn_id 查询所有已持久化的运行时事件（按 sequence 升序）。

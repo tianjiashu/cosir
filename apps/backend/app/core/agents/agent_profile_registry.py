@@ -76,3 +76,12 @@ class AgentProfileRegistry:
         """
 
         return list(self._profiles.values())
+
+    def list_agent_ids(self) -> set[str]:
+        """
+        列举当前目录中所有已注册的 agent_id。
+
+        参数:
+            无。
+        """
+        return set(self._profiles.keys())

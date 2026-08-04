@@ -21,9 +21,9 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
-from app.config.logging import install_logging_for_current_process
+from app.config.logging.configuration import install_logging_for_current_process
 from app.config.settings import Settings
-from app.storage.store_engines import init_storage
+from app.service.depends import initialize_service_dependencies
 
 
 def main() -> None:
@@ -58,7 +58,7 @@ def main() -> None:
         # 否则 SQLiteLogHandler 内部构造 LogStore 时会因 log_session_factory()
         # 不可用而抛 RuntimeError，导致日志仅落文件、SQLite 库永远为空。
         Settings.load()
-        init_storage()
+        initialize_service_dependencies()
         install_logging_for_current_process(
             log_dir=Settings.LOG_DIR,
             log_database_file=Settings.LOG_DATABASE_FILE,

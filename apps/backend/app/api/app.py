@@ -33,12 +33,12 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
-from app.config.logging import install_logging_for_current_process
+from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
-from app.storage.store_engines import close_storage, init_storage
+from app.service.depends import close_service_dependencies, initialize_service_dependencies
 from app.tools.tool_system import ToolSystem
 
 
@@ -70,7 +70,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # handler，避免 LogStore 因 session 工厂未就绪而抛 RuntimeError 被降级为仅文件日志。
     # 此处重建 handler 也会在 fork 子进程里重新拉起 SQLite 写入线程，规避 fork 后写线程死亡的隐患。
     Settings.load()
-    init_storage()
+    initialize_service_dependencies()
     install_logging_for_current_process(
         log_dir=Settings.LOG_DIR,
         log_database_file=Settings.LOG_DATABASE_FILE,
@@ -100,7 +100,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         flush_langfuse()
-        close_storage()
+        close_service_dependencies()
         _mark_boot_stopped()
 
 

@@ -9,24 +9,32 @@
 """
 
 from app.models import RuntimeMessage, TurnRecord
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
-from app.storage.crud.turn_message_crud import TurnMessageCrud
+from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
 
 
 class TurnService:
     """Orchestrate turn creation, queries, status management, and message store."""
 
-    def __init__(
-        self,
-        task_crud: TaskCrud,
-        turn_crud: TurnCrud,
-        message_crud: TurnMessageCrud | None = None,
-    ) -> None:
-        self._task = task_crud
-        self._turn = turn_crud
-        self._message = message_crud
+    def __init__(self) -> None:
+        """初始化轮次 service。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 如果 storage 尚未初始化。
+
+        副作用:
+            从 service 依赖入口取得 CRUD 单例并保存引用。
+        """
+
+        self._task = service_depends.get_task_crud()
+        self._turn = service_depends.get_turn_crud()
+        self._message = service_depends.get_turn_message_crud()
 
     def create_turn(
         self,
@@ -67,6 +75,68 @@ class TurnService:
     ) -> TurnRecord:
         return self._turn.update_status(turn_id, status, end_reason)
 
+    def cancel_turn_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
+        """Cancel a pending/running turn atomically.
+
+        参数:
+            turn_id: 待取消的 turn 标识。
+            end_reason: 取消原因。
+
+        返回:
+            成功取消时返回更新后的 TurnRecord；turn 已处于非 active 状态时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态为 cancelled。
+        """
+
+        return self._turn.cancel_if_active(turn_id, end_reason)
+
+    def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
+        """Complete a running turn and persist its response atomically.
+
+        参数:
+            turn_id: 待完成的 turn 标识。
+            response_text: Agent 最终回复文本。
+
+        返回:
+            成功完成时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态和回复文本。
+        """
+
+        return self._turn.complete_if_running(turn_id, response_text)
+
+    def fail_turn_if_running(
+        self, turn_id: str, end_reason: str | None = None
+    ) -> TurnRecord | None:
+        """Fail a running turn atomically.
+
+        参数:
+            turn_id: 待失败落定的 turn 标识。
+            end_reason: 可选失败原因。
+
+        返回:
+            成功失败落定时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态。
+        """
+
+        return self._turn.fail_if_running(turn_id, end_reason)
+
     def update_turn_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
         """把轮次的 Agent 回复文本落库，供历史接口直接读取。"""
 
@@ -83,13 +153,9 @@ class TurnService:
     def save_turn_messages(self, turn_id: str, messages: list[RuntimeMessage]) -> None:
         """Persist a turn's ordered message trajectory (cross-turn memory)."""
 
-        if self._message is None:
-            return
         self._message.save_messages(turn_id, messages)
 
     def load_turn_messages(self, turn_id: str) -> list[RuntimeMessage]:
         """Load a turn's ordered message trajectory; empty list if none stored."""
 
-        if self._message is None:
-            return []
         return self._message.load_messages(turn_id)

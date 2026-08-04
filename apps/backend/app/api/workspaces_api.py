@@ -150,7 +150,6 @@ async def list_workspace_tasks(
 
 @app.post("/workspaces/{workspace_id}/tasks")
 async def create_workspace_task(
-    workspace_id: str,
     payload: CreateTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
@@ -175,7 +174,8 @@ async def create_workspace_task(
         task = task_service.create_task(
             input_text=payload.text,
             status="pending",
-            workspace_id=workspace_id,
+            workspace_id=payload.workspace_id,
+            agent_id=payload.agent_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

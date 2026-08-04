@@ -8,6 +8,7 @@ Windows 树杀用系统自带 ``taskkill /F /T``，Job Object 由 ``tool_executo
 """
 
 import contextlib
+import locale
 import os
 import re
 import signal
@@ -48,6 +49,23 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_PATTERN.sub("", text)
 
 
+def _decode_line(raw: bytes) -> str:
+    """把子进程输出的一行原始字节解码为文本。
+
+    优先按 UTF-8 解码；失败时回退到 GBK（覆盖 Windows 子进程常见的 CP936 输出，
+    无论宿主机 locale 为何），再回退到系统首选编码；避免把非 UTF-8 字节错误地
+    解释为替换字符，进而造成终端输出中文乱码。所有编码均失败时退化为
+    ``errors="replace"``（仅用于展示，不会被写回文件）。
+    """
+    preferred = locale.getpreferredencoding(False) or "utf-8"
+    for enc in ("utf-8", "gbk", preferred):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 class _OutputCollector:
     """单读取线程 drain 合并流，做 head+tail 有界截断。
 
@@ -67,7 +85,8 @@ class _OutputCollector:
 
     def run(self) -> None:
         phase = "head"
-        for line in self._stream:
+        for raw_line in self._stream:
+            line = _decode_line(raw_line)
             if phase == "head":
                 if self._head_len + len(line) <= HEAD_CHARS:
                     self._head.append(line)
@@ -132,9 +151,6 @@ class LocalExecutionBackend(ExecutionBackend):
                 cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 start_new_session=(os.name == "posix"),
             )
         except OSError as exc:

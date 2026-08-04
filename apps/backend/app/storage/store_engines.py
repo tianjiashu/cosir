@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -40,7 +40,7 @@ from app.config.settings import Settings
 from app.storage.engine_cache import _engine_cache, create_session_factory
 from app.storage.init_schema import initialize_app_schema, initialize_log_schema
 
-_INIT_LOCK = Lock()
+_INIT_LOCK = RLock()
 
 
 @dataclass

@@ -11,7 +11,6 @@ import { ArrowLeft, RefreshCw, Search } from "lucide-react";
 import type { LogLevel, LogQueryResponse } from "@shared/logs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchLogsByTrace, fetchRecentLogs } from "@/services/logs";
 import { logError, logInfo } from "@/lib/logger";
@@ -114,7 +113,7 @@ export function LogsPage({ onBack }: LogsPageProps) {
   }, [autoLoadedTraceId, defaultTrace?.traceId, level, userEditedTraceId]);
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+    <main className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex min-w-0 items-center gap-2">
           <TooltipProvider>
@@ -181,42 +180,19 @@ export function LogsPage({ onBack }: LogsPageProps) {
         </div>
       ) : null}
 
-      <ScrollArea className="flex-1">
-        <div className="space-y-4 p-4">
-          {logs.entries.length === 0 && !isLoading ? (
-            <div className="rounded-md border border-dashed border-border p-6 text-sm text-muted-foreground">
-              暂无日志内容
-            </div>
-          ) : null}
-          <section className="overflow-hidden rounded-md border border-border bg-card">
-            <pre className="max-h-[600px] overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5 text-foreground">
-              {logs.text || "(empty)"}
+      <div className="min-h-0 flex-1 overflow-hidden p-4">
+        {logs.text ? (
+          <section className="h-full overflow-hidden rounded-md border border-border bg-card">
+            <pre className="h-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5 text-foreground">
+              {logs.text}
             </pre>
           </section>
-          {logs.entries.length > 0 ? (
-            <section className="overflow-hidden rounded-md border border-border bg-card">
-              <div className="divide-y divide-border">
-                {logs.entries.map((entry, index) => (
-                  <article
-                    key={`${entry.ts}-${entry.event}-${index}`}
-                    className="space-y-2 p-3 font-mono text-xs leading-5 text-foreground"
-                  >
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="text-muted-foreground">{entry.ts}</span>
-                      <span>{entry.level}</span>
-                      <span>{entry.event}</span>
-                    </div>
-                    {entry.msg ? <p className="whitespace-pre-wrap break-words">{entry.msg}</p> : null}
-                    {entry.error?.stack ? (
-                      <pre className="whitespace-pre-wrap break-words text-destructive">{entry.error.stack}</pre>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            </section>
-          ) : null}
-        </div>
-      </ScrollArea>
+        ) : (
+          <div className="rounded-md border border-dashed border-border p-6 text-sm text-muted-foreground">
+            暂无日志内容
+          </div>
+        )}
+      </div>
     </main>
   );
 }

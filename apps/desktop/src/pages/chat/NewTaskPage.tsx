@@ -29,10 +29,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTask } from "@/hooks/useTask";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
-import * as api from "@/services/api";
 import { logError } from "@/lib/logger";
-import { basenameOf, cn } from "@/lib/utils";
-import { selectDirectory } from "@/services/dialog";
+import { cn } from "@/lib/utils";
+import { pickAndCreateWorkspace } from "@/services/workspace";
 
 /** NewTaskPage 组件属性。 */
 interface NewTaskPageProps {
@@ -66,7 +65,6 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
-  const upsertWorkspace = useWorkspaceStore((s) => s.upsertWorkspace);
 
   const activeWorkspace = workspaces.find((w) => w.workspace_id === activeWorkspaceId) ?? null;
 
@@ -114,8 +112,8 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
   /**
    * 弹出系统目录选择器并将所选目录注册为工作区。
    *
-   * 选择后直接调用后端创建工作区，工作区名称取目录末级名；
-   * 取消选择不做任何处理；选择失败在选择器下方回显错误而非静默丢弃。
+   * 复用 services/workspace 的共享流程；取消选择不做任何处理；
+   * 选择失败在选择器下方回显错误而非静默丢弃。
    */
   const handlePickWorkspace = async () => {
     if (workspaceLoading) {
@@ -124,14 +122,10 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
     setWorkspaceLoading(true);
     setWorkspaceError(null);
     try {
-      const selected = await selectDirectory();
-      if (!selected) {
+      const workspace = await pickAndCreateWorkspace();
+      if (!workspace) {
         return;
       }
-      const name = basenameOf(selected);
-      const workspace = await api.createWorkspace({ name, root_path: selected });
-      upsertWorkspace(workspace);
-      setActiveWorkspace(workspace.workspace_id);
       setMenuOpen(false);
     } catch (err) {
       logError("选择目录作为工作区失败", err, { module: "NewTaskPage" });
@@ -154,7 +148,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
   }, []);
 
   return (
-    <main className="flex flex-1 flex-col overflow-hidden bg-background">
+    <main className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-8 px-4 py-12">
         {/* 居中大标题 */}
         <h1 className="text-center text-2xl font-semibold text-foreground">

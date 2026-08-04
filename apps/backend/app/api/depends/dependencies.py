@@ -1,176 +1,40 @@
-"""FastAPI dependency wiring."""
+"""FastAPI dependency wiring.
 
-from app.core.agents.agent_profile import (
-    default_developer_agent,
-    developer_agent_pro,
+进程级运行时单例（``AgentProfileRegistry`` / ``ToolSystem`` / ``AgentRuntime``）已收口到
+``app.config.configuration``；领域 service 与底层 CRUD/Store 单例由 ``app.service.depends``
+统一管理。本模块仅保留 ``build_runtime`` 装配，并对 ``configuration`` 中的单例访问器
+做薄壳 re-export，使现有 ``Depends(get_agent_registry)`` / ``app.py`` 等调用点零改动。
+"""
+
+from app.config.configuration import (
+    build_agent_registry,
+    get_agent_registry,
+    get_tool_system,
+    set_agent_registry,
+    set_tool_system,
 )
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
+from app.service import depends as service_depends
+from app.service.log_query_service import LogQueryService
+from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
+from app.service.runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
-from app.storage.crud.runtime_event_crud import RuntimeEventCrud
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
-from app.storage.crud.turn_message_crud import TurnMessageCrud
-from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.storage.store_engines import init_storage
 from app.tools.tool_system import ToolSystem
 
-_RUNTIME: AgentRuntime | None = None
-_TOOL_SYSTEM: ToolSystem | None = None
-_AGENT_REGISTRY: AgentProfileRegistry | None = None
-_SERVICES: dict | None = None
+# 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持
+# ``Depends(get_agent_registry)`` / ``app.py`` 等既有调用点零改动。
+__all__ = [
+    "build_agent_registry",
+    "get_agent_registry",
+    "get_tool_system",
+    "set_agent_registry",
+    "set_tool_system",
+]
 
-
-def set_runtime(runtime: AgentRuntime) -> None:
-    """Set the process-wide runtime instance.
-
-    Parameters:
-        runtime: Runtime instance to expose through dependency injection.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Replaces the module-level runtime singleton.
-    """
-
-    global _RUNTIME
-    _RUNTIME = runtime
-
-
-def set_tool_system(tool_system: ToolSystem) -> None:
-    """Set the process-wide tool system instance.
-
-    Parameters:
-        tool_system: Initialized tool system built during application startup.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Replaces the module-level tool system singleton.
-    """
-
-    global _TOOL_SYSTEM
-    _TOOL_SYSTEM = tool_system
-
-
-def get_tool_system() -> ToolSystem:
-    """Return the process-wide tool system instance.
-
-    Parameters:
-        None.
-
-    Returns:
-        Initialized ToolSystem.
-
-    Raises:
-        RuntimeError: If the tool system has not been initialized.
-
-    Side effects:
-        None.
-    """
-
-    if _TOOL_SYSTEM is None:
-        raise RuntimeError("tool system has not been initialized")
-    return _TOOL_SYSTEM
-
-
-def get_runtime() -> AgentRuntime:
-    """Return the process-wide runtime instance.
-
-    Parameters:
-        None.
-
-    Returns:
-        Configured runtime instance.
-
-    Raises:
-        RuntimeError: If the runtime has not been initialized.
-
-    Side effects:
-        None.
-    """
-
-    if _RUNTIME is None:
-        raise RuntimeError("runtime has not been initialized")
-    return _RUNTIME
-
-
-def set_agent_registry(registry: AgentProfileRegistry) -> None:
-    """Set the process-wide agent profile registry singleton.
-
-    Parameters:
-        registry: Initialized agent profile registry built during startup.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-
-    Side effects:
-        Replaces the module-level agent registry singleton.
-    """
-
-    global _AGENT_REGISTRY
-    _AGENT_REGISTRY = registry
-
-
-def get_agent_registry() -> AgentProfileRegistry:
-    """Return the process-wide agent profile registry singleton.
-
-    Parameters:
-        None.
-
-    Returns:
-        Initialized AgentProfileRegistry.
-
-    Raises:
-        RuntimeError: If the agent registry has not been initialized.
-
-    Side effects:
-        None.
-    """
-
-    if _AGENT_REGISTRY is None:
-        raise RuntimeError("agent registry has not been initialized")
-    return _AGENT_REGISTRY
-
-
-def build_agent_registry() -> AgentProfileRegistry:
-    """构建并播种进程级 agent profile 目录。
-
-    集中注册所有内置 agent；新增 agent 仅需在此多 ``register`` 一行。
-    该函数是「启动时注册所有 agent」的单一落点，与 ``_RUNTIME`` / ``_TOOL_SYSTEM`` 同构。
-
-    参数:
-        无。
-
-    返回:
-        已播种完成的 ``AgentProfileRegistry``。
-
-    异常:
-        无。
-
-    副作用:
-        构造并填充进程级 registry 单例所依赖的 registry 实例。
-    """
-
-    registry = AgentProfileRegistry()
-    registry.register(default_developer_agent())
-    registry.register(developer_agent_pro())
-    # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
-    return registry
+_RUNTIME: "AgentRuntime | None" = None
 
 
 def build_runtime(
@@ -190,9 +54,9 @@ def build_runtime(
         OSError: If logs or SQLite storage cannot be created.
 
     Side effects:
-        Configures logging and initializes SQLite-backed stores. Backend runtime
-        limits are read from module-level static configuration instead of a
-        passed-in settings object.
+        Backend runtime limits are read from module-level static configuration
+        instead of a passed-in settings object. Storage initialization is owned
+        by application startup before this function is called.
     """
 
     tool_system = tool_system or get_tool_system()
@@ -207,11 +71,12 @@ def build_runtime(
         tool_scheduler=tool_system.scheduler,
         agent_registry=agent_registry,
         workspace_service=services["workspace_service"],
+        runtime_event_service=services["runtime_event_service"],
     )
 
 
 def _build_services() -> dict:
-    """Build and cache the process-wide domain service singletons.
+    """Build the process-wide domain service mapping.
 
     参数:
         无。后端运行配置由 ``Settings`` 类级静态属性提供，不以对象传入。
@@ -220,31 +85,20 @@ def _build_services() -> dict:
         含 ``task_service`` / ``turn_service`` / ``workspace_service`` 的字典。
 
     异常:
-        无。
+        RuntimeError: 如果应用启动尚未初始化 storage。
 
     副作用:
-        首次调用时初始化 SQLite 存储并构建 service；结果在进程内缓存复用。
+        具体 service 单例由 ``app.service.depends`` 缓存复用。
     """
 
-    global _SERVICES
-    if _SERVICES is not None:
-        return _SERVICES
-    init_storage()
-    task_crud = TaskCrud()
-    turn_crud = TurnCrud()
-    turn_message_crud = TurnMessageCrud()
-    workspace_crud = WorkspaceCrud()
-    runtime_event_crud = RuntimeEventCrud()
-    _SERVICES = {
-        "task_service": TaskService(
-            task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
-        ),
-        "turn_service": TurnService(task_crud, turn_crud, turn_message_crud),
-        "workspace_service": WorkspaceService(
-            task_crud, turn_crud, workspace_crud, runtime_event_crud, turn_message_crud
-        ),
+    return {
+        "runtime_event_bus": service_depends.get_runtime_event_bus(),
+        "runtime_event_service": service_depends.get_runtime_event_service(),
+        "task_service": service_depends.get_task_service(),
+        "turn_service": service_depends.get_turn_service(),
+        "workspace_service": service_depends.get_workspace_service(),
+        "log_query_service": service_depends.get_log_query_service(),
     }
-    return _SERVICES
 
 
 def get_workspace_service() -> WorkspaceService:
@@ -304,23 +158,99 @@ def get_turn_service() -> TurnService:
     return _build_services()["turn_service"]
 
 
-def get_runtime_event_crud() -> RuntimeEventCrud:
-    """返回运行时事件 CRUD 实例（用于事件回放查询）。
-
-    事件回放属于只读历史重建，仅依赖 ``runtime_events`` 表；``RuntimeEventCrud``
-    为无状态封装，每次调用实例化避免跨请求复用 session（与 ``TaskCrud`` 等同构）。
+def get_log_query_service() -> LogQueryService:
+    """返回进程级日志查询 service 单例。
 
     参数:
         无。
 
     返回:
-        RuntimeEventCrud。
+        LogQueryService。
 
     异常:
         RuntimeError: 若存储初始化失败。
 
     副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return _build_services()["log_query_service"]
+
+
+def get_runtime_event_bus() -> RuntimeEventBus:
+    """返回进程级 runtime event 广播总线。
+
+    参数:
+        无。
+
+    返回:
+        RuntimeEventBus。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return _build_services()["runtime_event_bus"]
+
+
+def get_runtime_event_service() -> RuntimeEventService:
+    """返回进程级 runtime event 持久化与广播 service。
+
+    参数:
+        无。
+
+    返回:
+        RuntimeEventService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return _build_services()["runtime_event_service"]
+
+
+def set_runtime(runtime: "AgentRuntime") -> None:
+    """设置进程级运行时单例。
+
+    参数:
+        runtime: 已构建的运行时实例，由应用启动时经 ``build_runtime`` 产出并注入。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        替换模块级运行时单例。
+    """
+
+    global _RUNTIME
+    _RUNTIME = runtime
+
+
+def get_runtime() -> "AgentRuntime":
+    """返回进程级运行时单例。
+
+    参数:
+        无。
+
+    返回:
+        已配置的 ``AgentRuntime`` 实例。
+
+    异常:
+        RuntimeError: 如果运行时尚未初始化（未调用 ``set_runtime``）。
+
+    副作用:
         无。
     """
 
-    return RuntimeEventCrud()
+    if _RUNTIME is None:
+        raise RuntimeError("runtime has not been initialized")
+    return _RUNTIME

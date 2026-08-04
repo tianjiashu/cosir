@@ -16,6 +16,7 @@ class AgentWorkflow(Protocol):
         task: TaskRecord,
         operations: RuntimeOperations,
         callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """通过一个工作流策略运行一个任务。
 
@@ -25,6 +26,8 @@ class AgentWorkflow(Protocol):
             callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
                 注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
                 缺省为空列表，不影响既有行为。
+            langfuse_trace_id: 可选的 Langfuse trace 标识；工作流可在终态事件 payload
+                中携带，供前端展示与跳转。未启用 Langfuse 时为 None。
 
         生成:
             工作流运行期间产生的运行时事件。

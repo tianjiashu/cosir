@@ -13,6 +13,7 @@ storage/*.sqlite
 storage/*.sqlite3
 storage/*.sqlite3-shm
 storage/*.sqlite3-wal
+storage/*.db
 storage/backend.bootstate.json
 
 # 本地 Agent 项目数据（非缓存，但属本地运行产物，不提交）
@@ -30,6 +31,7 @@ apps/desktop/src-tauri/gen/
 apps/backend/tests/_tmp_*.py
 apps/backend/_trace_dbg.py
 apps/backend/temp/
+apps/desktop/temp/
 .filter-replace.txt
 
 # 前端依赖（不应提交）
@@ -38,3 +40,5 @@ node_modules/
 /.workbuddy/
 /.agents/
 /.npm-cache/
+/.superpowers/
+/temp/

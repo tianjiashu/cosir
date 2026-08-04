@@ -1,6 +1,15 @@
 # Codex 风格工具调用卡片技术方案
 
-> 在「工具调用结果透传与前端渲染技术方案」已落地的 `ToolDisplayHints` 声明式后端驱动架构与 `tool_call_finished` 结果透传链之上，把前端 `ToolCallCard` 升级为 Codex 风格：新增两声明式字段 `expandable` / `expand_layout`，后端一次性声明「是否可展开 + 用哪种布局展开」，前端按字符串分发布局（list / diff / write / terminal / details / none），**零工具名特化分支**；`read_file` 显式 `expandable=False` 保持折叠即全量。`write_file` 的 `content` 由摘要改为写入全文（Codex「write 展开=全绿正文」），由既有 `ToolOutputBudget` 统一裁剪。
+> ⚠️ **本方案为历史文档**：文中 `ToolDisplayHints` 的 `summary_template` / `result_summary_template` /
+> `render_fn` / `click_action` 与「后端 `display.summary` / `resultSummary`」等均为已被推翻的旧架构。
+> 当前落地架构：后端 `ToolDisplayHints` 仅为纯静态声明（`verb`/`icon`/`expandable`/`expand_layout`），
+> 所有摘要与 list/diff 条目由客户端共享渲染层 `apps/shared/ts/toolDisplayRules.ts` 生成；折叠态摘要来自
+> `projectToolRequestSummary`、结果投影来自 `projectToolResult`。下文保留 Codex 风格卡片的布局/交互推导供追溯，
+> 字段名以当前代码为准。
+
+> 原方案摘要（已废弃）：在 `ToolDisplayHints` 声明式后端驱动架构之上把 `ToolCallCard` 升级为 Codex 风格，
+> 新增 `expandable` / `expand_layout` 声明式字段，前端按字符串分发布局（list/diff/write/terminal/details/none）。
+> 其中 `expandable` / `expand_layout` 的**纯静态声明**思路被保留，但其「后端渲染 summary」部分已被客户端渲染取代。
 > 依赖策略（已与用户确认）：**零新依赖**——diff/list/terminal 三种展开态均为「按行前缀上色 / 列表映射 / 等宽 pre」级别，用已有 `lucide-react` + shadcn 原语手写为最优解；语法高亮库（shiki/prismjs，常 MB 级）与 diff 计算库（difflib/jsdiff）均不引入。
 > 改动规模：中/大（后端 8 文件 + 前端 3 文件 + 扩展既有测试），按 `AGENTS.md` 第八节须走**独立审查 Agent + 独立测试 Agent** 闭环。
 

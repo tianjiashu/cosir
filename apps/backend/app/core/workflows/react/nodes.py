@@ -10,6 +10,8 @@ token 由 ``model.astream()`` 产出并在节点内就地翻译为增量事件�
 状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
 """
 
+from time import perf_counter
+
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.config import get_config, get_stream_writer
 from langgraph.types import interrupt
@@ -25,7 +27,6 @@ from app.models.payload import (
     ModelRequestedPayload,
     ModelThinkingDeltaPayload,
     ModelToolCallPayload,
-    RunCancelledPayload,
     RunFailedPayload,
     RunFinishedPayload,
     StepStartedPayload,
@@ -130,6 +131,33 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     )
 
 
+def _extract_usage_from_chunk(chunk: AIMessageChunk) -> dict[str, int | float] | None:
+    """从模型流式分块中提取可用 token usage 元数据。
+
+    不同 provider/SDK 把 usage 放在不同位置：LangChain 标准 ``usage_metadata``、
+    OpenAI 适配器的 ``response_metadata.token_usage`` / ``response_metadata.usage`` 等。
+    本函数按优先级尝试，返回第一个非空字典；都没有则返回 None。
+
+    参数:
+        chunk: 模型 ``astream`` 产出的单个消息分块。
+
+    返回:
+        可用的 usage 字典；无则 None。
+    """
+
+    usage = getattr(chunk, "usage_metadata", None)
+    if isinstance(usage, dict) and usage:
+        return usage
+    response_metadata = getattr(chunk, "response_metadata", None)
+    if not isinstance(response_metadata, dict):
+        return None
+    for key in ("token_usage", "usage"):
+        candidate = response_metadata.get(key)
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return None
+
+
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
@@ -154,6 +182,22 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     step_count = state.step_count + 1  # 步数 +1（本轮模型步）
     step_id = f"step-{step_count}"  # 步唯一 id
+    if operations.is_current_turn_cancelled():
+        log.info(
+            "model_node_cancelled_before_request",
+            extra={
+                "msg": f"模型请求前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "final_response": False,
+            "terminal": True,
+            "messages": [],
+            "pending_tool_calls": [],
+        }
     log.info(
         "model_node_started",
         extra={
@@ -170,6 +214,22 @@ async def _model_node(state: ReactGraphState) -> dict:
         EventType.STEP_STARTED,
         StepStartedPayload(step_id=step_id, kind="model", index=step_count),
     )
+    if operations.is_current_turn_cancelled():
+        log.info(
+            "model_node_cancelled_before_model_requested",
+            extra={
+                "msg": f"模型请求事件前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "final_response": False,
+            "terminal": True,
+            "messages": [],
+            "pending_tool_calls": [],
+        }
     write_event(
         # 请求模型，带上历史消息数
         EventType.MODEL_REQUESTED,
@@ -184,11 +244,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 真正流式调用模型，state.messages 为历史+系统上下文
     async for chunk in model.astream(state.messages):
         # 每收到 chunk 都检查 turn 是否被取消
-        if operations.has_turn_status(turn.turn_id, "cancelled"):
-            write_event(
-                EventType.RUN_CANCELLED,
-                RunCancelledPayload(step_id=step_id, status="cancelled"),
-            )
+        if operations.is_current_turn_cancelled():
             terminal = True  # 标记提前终止
             log.info(
                 "model_node_cancelled",
@@ -208,6 +264,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                 ModelOutputDeltaPayload(step_id=step_id, text=text),
             )
         chunks.append(chunk)  # 所有 chunk 都留着，后面合并成完整消息
+        chunk_usage = _extract_usage_from_chunk(chunk)
+        if chunk_usage is not None:
+            rc.usage_stats.add_message_usage(chunk_usage)
         reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
         # 过滤纯空白分片：DeepSeek 推理流会在词间/段间推送单独的空格或换行 token
         # （如 " "、"\n"、".\n\n"），Python 中非空即 truthy，若仅用 `if reasoning` 判断
@@ -221,7 +280,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             )
 
     if terminal:  # 因取消而终止
-        operations.update_turn_status(turn.turn_id, "cancelled")  # 更新 turn 状态为 cancelled
         return {
             "step_count": step_count,
             "requested_tool": False,
@@ -267,6 +325,28 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     if requested_tool:  # 模型要求调用工具
         if step_count >= state.max_steps:  # 步数已达上限
+            failed_turn = operations.fail_turn_if_running(
+                turn.turn_id, end_reason="max_steps_reached"
+            )
+            if failed_turn is None:
+                log.info(
+                    "model_node_max_steps_terminal_race_lost",
+                    extra={
+                        "msg": (
+                            f"最大步数失败落定时 turn 已非 running，"
+                            f"跳过失败事件，step_id={step_id}"
+                        ),
+                        "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                    },
+                )
+                return {
+                    "step_count": step_count,
+                    "requested_tool": False,
+                    "final_response": False,
+                    "terminal": True,
+                    "messages": [],
+                    "pending_tool_calls": [],
+                }
             log.warning(
                 "model_node_max_steps",
                 extra={
@@ -281,9 +361,12 @@ async def _model_node(state: ReactGraphState) -> dict:
             # 超限失败
             write_event(
                 EventType.RUN_FAILED,
-                RunFailedPayload(status="failed", error="max_steps_reached"),
+                RunFailedPayload(
+                    status="failed",
+                    error="max_steps_reached",
+                    langfuse_trace_id=rc.langfuse_trace_id,
+                ),
             )
-            operations.update_turn_status(turn.turn_id, "failed")
             return {
                 "step_count": step_count,
                 "requested_tool": False,
@@ -317,6 +400,23 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if output_text:  # 没有工具调用但有文本 → 最终回答
+        completed_turn = operations.complete_turn_if_running(turn.turn_id, output_text)
+        if completed_turn is None:
+            log.info(
+                "model_node_final_response_terminal_race_lost",
+                extra={
+                    "msg": f"最终回复落定时 turn 已非 running，跳过完成事件，step_id={step_id}",
+                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                },
+            )
+            return {
+                "step_count": step_count,
+                "requested_tool": False,
+                "final_response": False,
+                "terminal": True,
+                "messages": [],
+                "pending_tool_calls": [],
+            }
         log.info(
             "model_node_final_response",
             extra={
@@ -328,12 +428,23 @@ async def _model_node(state: ReactGraphState) -> dict:
             EventType.FINAL_RESPONSE,
             FinalResponsePayload(text=output_text, step_id=step_id, status="completed"),
         )
-        operations.update_turn_status(turn.turn_id, "completed")  # turn 标完成
-        operations.update_turn_response(turn.turn_id, output_text)  # 回复文本落库（历史回看用）
-        # 整个 run 结束
+        # 整个 run 结束：计算耗时并汇总 token
+        duration_ms = int((perf_counter() - rc.start_time) * 1000)
+        usage = rc.usage_stats.to_dict()
         write_event(
             EventType.RUN_FINISHED,
-            RunFinishedPayload(status="completed", step_id=step_id),
+            RunFinishedPayload(
+                status="completed",
+                step_id=step_id,
+                duration_ms=duration_ms,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                total_tokens=usage["total_tokens"],
+                cache_hit_tokens=usage["cache_hit_tokens"],
+                cache_miss_tokens=usage["cache_miss_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                langfuse_trace_id=rc.langfuse_trace_id,
+            ),
         )
         return {
             "step_count": step_count,
@@ -352,14 +463,31 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "output_text_length": len(output_text)},
         },
     )
+    failed_turn = operations.fail_turn_if_running(turn.turn_id, end_reason="invalid_model_output")
+    if failed_turn is None:
+        log.info(
+            "model_node_invalid_output_terminal_race_lost",
+            extra={
+                "msg": f"非法模型输出失败落定时 turn 已非 running，跳过失败事件，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "final_response": False,
+            "terminal": True,
+            "messages": [],
+            "pending_tool_calls": [],
+        }
     write_event(  # 既没工具调用也没文本 → 模型输出非法
         EventType.RUN_FAILED,
         RunFailedPayload(
             error="invalid_model_output",
             message="Model did not return tool call or final text.",
+            langfuse_trace_id=rc.langfuse_trace_id,
         ),
     )
-    operations.update_turn_status(turn.turn_id, "failed")
     return {
         "step_count": step_count,
         "requested_tool": False,
@@ -373,10 +501,17 @@ async def _model_node(state: ReactGraphState) -> dict:
 def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：在权限审批后执行工具并把观察结果追加回上下文。
 
-    节点先用 ``interrupt()`` 暂停 graph 等待审批，审批结果（批准的工具调用列表）通过
-    ``Command(resume=)`` 恢复；随后通过 ``RuntimeOperations`` 执行工具，工具生命周期事件
-    经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。
-    状态写入 **turn**。
+    节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批：
+
+    - 存在 ``approval_resolver``：用 ``interrupt()`` 暂停 graph 等待审批，审批结果
+      （批准的工具调用列表）通过 ``Command(resume=)`` 恢复；随后执行工具。
+    - 不存在 ``approval_resolver``（``None``）：视为「自动放行全部调用」，
+      **不经过 ``interrupt()``**，直接以 ``state.pending_tool_calls`` 作为已批准列表执行工具。
+      这样 graph 不会暂停，编排层循环可正常走到终态，避免「无审批器时反复
+      interrupt→resume 同一工具调用」的死循环。
+
+    工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
+    自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。状态写入 **turn**。
 
     参数:
         state: 当前 graph state，含待执行工具调用。
@@ -392,32 +527,43 @@ def _tools_node(state: ReactGraphState) -> dict:
 
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-    log.info(
-        "tools_node_started",
-        extra={
-            "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
-            "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
-        },
-    )
 
-    # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
-    # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
-    approved = interrupt({"tool_calls": tool_calls})
-    # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
-    approved_dicts = tool_calls if not isinstance(approved, list) else approved
+    # 无审批器（含字段缺失的测试桩）→ 自动放行，不暂停 graph，
+    # 直接用原始 tool_calls 作为已批准列表。
+    if getattr(rc, "approval_resolver", None) is None:
+        log.info(
+            "tools_node_auto_approved",
+            extra={
+                "msg": (
+                    f"无审批器，自动放行 {len(tool_calls)} 个工具调用"
+                    f"（不暂停 graph），step_id={step_id}"
+                ),
+                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
+            },
+        )
+        approved_dicts = tool_calls
+    else:
+        log.info(
+            "tools_node_started",
+            extra={
+                "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
+                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
+            },
+        )
+        # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
+        # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
+        approved = interrupt({"tool_calls": tool_calls})
+        # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
+        approved_dicts = tool_calls if not isinstance(approved, list) else approved
 
-    # ★ 取消检查：审批恢复后、工具执行前，若 turn 已被取消则跳过工具执行
-    if operations.has_turn_status(turn.turn_id, "cancelled"):
+    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行
+    if operations.is_current_turn_cancelled():
         log.info(
             "tools_node_cancelled",
             extra={
                 "msg": f"工具节点恢复后检测到 turn 已取消，跳过工具执行，step_id={step_id}",
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
-        )
-        write_event(
-            EventType.RUN_CANCELLED,
-            RunCancelledPayload(step_id=step_id, status="cancelled"),
         )
         return {
             "pending_tool_calls": [],
@@ -452,6 +598,21 @@ def _tools_node(state: ReactGraphState) -> dict:
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
 
+    if operations.is_current_turn_cancelled():
+        log.info(
+            "tools_node_cancelled_after_execution",
+            extra={
+                "msg": f"工具批次执行后检测到 turn 已取消，停止后续模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+            },
+        )
+        return {
+            "pending_tool_calls": [],
+            "tool_error_count": state.tool_error_count,
+            "terminal": True,
+            "messages": [],
+        }
+
     tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
     for observation in observations:
         if observation.status == "success":
@@ -475,6 +636,26 @@ def _tools_node(state: ReactGraphState) -> dict:
     )
 
     if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
+        failed_turn = operations.fail_turn_if_running(
+            turn.turn_id, end_reason="tool_error_limit_reached"
+        )
+        if failed_turn is None:
+            log.info(
+                "tools_node_error_limit_terminal_race_lost",
+                extra={
+                    "msg": (
+                        f"工具错误上限失败落定时 turn 已非 running，"
+                        f"跳过失败事件，step_id={step_id}"
+                    ),
+                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                },
+            )
+            return {
+                "pending_tool_calls": [],
+                "tool_error_count": tool_error_count,
+                "terminal": True,
+                "messages": [],
+            }
         log.warning(
             "tools_node_error_limit",
             extra={
@@ -493,9 +674,9 @@ def _tools_node(state: ReactGraphState) -> dict:
                 status="failed",
                 error="tool_error_limit_reached",
                 tool_name=observations[0].tool_name if observations else "",
+                langfuse_trace_id=rc.langfuse_trace_id,
             ),
         )
-        operations.update_turn_status(turn.turn_id, "failed")
         return {
             "pending_tool_calls": [],
             "tool_error_count": tool_error_count,

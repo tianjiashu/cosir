@@ -11,3 +11,4 @@ class RunCancelledPayload(RuntimeEventPayload):
     status: Literal["cancelled"]
     step_id: str | None = None
     error: str | None = None
+    langfuse_trace_id: str | None = None

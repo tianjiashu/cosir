@@ -6,7 +6,8 @@
 
 职责边界：
 - 负责：批量执行工具调用、发出工具生命周期事件、把观察结果转为模型消息。
-- 不负责：工具注册、参数校验细节、子进程隔离（均由 ``ToolScheduler`` / ``ToolExecutor`` 负责）。
+- 不负责：工具注册、参数校验细节、子进程隔离（均由 ``ToolScheduler`` / ``ToolExecutor`` 负责）；
+  也不负责任何渲染——事件只透传工具的静态展示声明与结构化数据，摘要与条目由客户端生成。
 """
 
 import dataclasses
@@ -42,6 +43,7 @@ class ToolExecutionService:
         allowed_tool_names: Iterable[str] | None = None,
         tool_definitions: list[ToolDefinition] | None = None,
         trace_recorder: ToolTraceRecorder | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize the tool execution service.
 
@@ -49,11 +51,12 @@ class ToolExecutionService:
             scheduler: 底层工具调度器（负责校验与执行）。
             agent_id: 执行主体标识（用于日志关联）。
             allowed_tool_names: 当前 Agent profile 允许执行的工具名。
-            tool_definitions: 本次运行暴露给模型的工具定义列表；用于按工具名取
-                ``ToolDisplayHints`` 渲染执行后结果摘要。``None``（旧调用者）时
-                ``TOOL_CALL_FINISHED`` 的 ``summary`` 恒为 ``None``，行为不变。
+            tool_definitions: 本次运行暴露给模型的工具定义列表；用于按工具名取静态
+                ``ToolDisplayHints`` 并随 ``TOOL_CALL_STARTED`` 透传给客户端。
+                ``None`` 时事件不携带展示声明，客户端降级为通用展示。
             trace_recorder: 可选的工具调用 trace 记录器（依赖倒置，实现在 core/observability）。
                 ``None`` 时退化为空实现（``_NullToolTraceRecorder``），不产生任何 trace 开销。
+            should_cancel: 可选的运行时取消检查回调；返回 True 时停止执行后续工具。
 
         返回:
             无。
@@ -76,6 +79,7 @@ class ToolExecutionService:
             if definition.display is not None
         }
         self._trace_recorder = trace_recorder or _NullToolTraceRecorder()
+        self._should_cancel = should_cancel or (lambda: False)
 
     def run_calls_with_events(
         self,
@@ -114,10 +118,10 @@ class ToolExecutionService:
         messages: list[RuntimeMessage] = []
         # 当前串行执行，后续可并行
         for call in calls:
+            if self._should_cancel():
+                break
             display: ToolDisplayHints | None = self._display_by_name.get(call.tool_name)
-            request_display = (
-                display.render_request(call.arguments) if display is not None else None
-            )
+            display_payload = dataclasses.asdict(display) if display is not None else None
 
             # 工具执行开始事件
             write_event(
@@ -126,8 +130,8 @@ class ToolExecutionService:
                     tool_name=call.tool_name,
                     step_id=step_id,
                     tool_call_id=call.call_id,
-                    display=request_display,
-                    request_summary=request_display,
+                    arguments=call.arguments if isinstance(call.arguments, dict) else {},
+                    display=display_payload,
                 ),
             )
 
@@ -137,25 +141,13 @@ class ToolExecutionService:
                     call,
                     execution_context=execution_context,
                     allowed_tool_names=self._allowed_tool_names,
+                    should_cancel=self._should_cancel,
                 )
                 tool_span.record(observation)
             # 记录观察结果
             observations.append(observation)
-            result_display = (
-                display.render_result_summary(observation.display_data)
-                if display is not None
-                else None
-            )
-            summary = None
-            event_data = observation.display_data or {}
-            if result_display is not None:
-                raw_summary = result_display.get("summary") or result_display.get("result_summary")
-                summary = str(raw_summary) if isinstance(raw_summary, str) else None
-                raw_data = result_display.get("data")
-                if isinstance(raw_data, dict):
-                    event_data = raw_data
 
-            # 工具执行结束事件
+            # 工具执行结束事件：只透传结构化数据，摘要与展示条目由客户端渲染
             write_event(
                 EventType.TOOL_CALL_FINISHED,
                 ToolCallFinishedPayload(
@@ -163,13 +155,11 @@ class ToolExecutionService:
                     tool_name=observation.tool_name,
                     status="success" if observation.status == "success" else "error",
                     tool_call_id=observation.tool_call_id,
-                    result_summary=result_display,
-                    summary=summary,
                     content=observation.content,
                     error=observation.error,
                     reason=observation.reason,
                     retryable=observation.retryable,
-                    data=event_data,
+                    data=observation.display_data or {},
                 ),
             )
 

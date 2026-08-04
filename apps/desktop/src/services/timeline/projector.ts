@@ -2,37 +2,32 @@
  * 对话 timeline 投影器。
  *
  * 把 turn 记录与 runtime event 投影成 ChatPanel 可直接渲染的显示模型。
+ * 工具相关的摘要与条目由共享渲染层（`@shared/toolDisplayRules`）按工具名规则生成，
+ * 本模块只负责把事件数据喂给渲染层并装配成稳定结构，不承载任何渲染逻辑。
  *
  * @module services/timeline/projector
  */
 
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
+import {
+  type ToolDiffEntry,
+  type ToolListEntry,
+  projectToolRequestSummary,
+  projectToolResult,
+} from "@shared/toolDisplayRules";
+import { type ToolDisplayHints, toToolDisplayHints } from "@shared/toolDisplay";
 import { logInfo, logWarn } from "../../lib/logger";
 
-/** 工具点击动作（来自后端 `ToolDefinition.display`，已投影）。 */
-export interface ToolDisplayClickAction {
-  /** 动作类型，如 `open_file`，前端据此分发行为。 */
-  action: string;
-  /** 动作目标，已结合本次调用参数渲染，如文件路径。 */
-  target: string;
-}
-
-/** 工具展示提示（来自后端 `ToolDefinition.display.render`，已投影为 camelCase）。 */
+/** 工具展示提示（后端静态声明，已投影为 camelCase；不含任何摘要文本）。 */
 export interface ToolDisplayInfo {
   /** 动作名，如 “读取”。 */
   verb: string;
   /** lucide 图标名，如 “eye”。 */
   icon: string;
-  /** 折叠态摘要文本（已含路径/行范围等）。 */
-  summary: string;
-  /** 展开态优先展示的参数 key 顺序。 */
-  detailKeys: string[];
-  /** 可选点击动作；为空表示不可点击。 */
-  clickAction: ToolDisplayClickAction | null;
-  /** 是否可展开（默认 true）；read_file 等显式 false。 */
+  /** 是否可展开。 */
   expandable: boolean;
-  /** 展开态布局：none/details/list/diff/write/terminal（默认 details）。 */
+  /** 展开态布局：none/details/list/diff/write/terminal。 */
   expandLayout: string;
 }
 
@@ -46,13 +41,15 @@ export interface TimelineToolItem {
   status: "running" | "completed" | "error";
   /** 可选错误。 */
   error?: string;
-  /** 工具调用参数（来自 `tool_call_requested`，用于前端展示文件路径/行范围等）。 */
+  /** 工具调用参数（来自 `tool_call_started`，用于渲染折叠态摘要与展开态参数）。 */
   arguments?: Record<string, unknown>;
-  /** 工具调用唯一 ID，用于把 requested / finished 事件合并为同一条目。 */
+  /** 工具调用唯一 ID，用于把 started / finished 事件合并为同一条目。 */
   callId?: string;
-  /** 工具展示提示；来自后端，未声明时缺省，前端降级为通用展示。 */
+  /** 工具展示静态提示；来自后端，未声明时缺省，前端降级为通用展示。 */
   display?: ToolDisplayInfo;
-  /** 执行后结果摘要（成功时，来自后端 result_summary_template 渲染）。 */
+  /** 折叠态请求摘要（前端按参数渲染）。 */
+  requestSummary?: string;
+  /** 执行后结果摘要（成功时，来自共享渲染层）。 */
   resultSummary?: string;
   /** 执行后完整结果正文（模型所见，展开态渲染）。 */
   result?: string;
@@ -60,14 +57,20 @@ export interface TimelineToolItem {
   reason?: string;
   /** 失败是否可重试（瞬态错误 true / 需先修正参数 false）。 */
   retryable?: boolean;
-  /** 执行后结构化载荷（通用透传）。 */
+  /** list 布局条目（前端按字段形状渲染）。 */
+  listEntries?: ToolListEntry[];
+  /** list 布局空态文案。 */
+  emptyLabel?: string | null;
+  /** diff 布局条目。 */
+  diffEntries?: ToolDiffEntry[];
+  /** 执行后结构化载荷（治理标记通道，如 output_truncated / artifact_path）。 */
   resultData?: Record<string, unknown>;
 }
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
 export type TurnTimelineEntry =
-  | { kind: "assistant"; eventId: string; content: string }
-  | { kind: "thinking"; eventId: string; content: string }
+  | { kind: "assistant"; eventId: string; content: string; streaming?: boolean }
+  | { kind: "thinking"; eventId: string; content: string; streaming?: boolean }
   | { kind: "tool"; item: TimelineToolItem }
   | { kind: "status"; eventId: string; eventType: RuntimeEvent["event_type"]; payload: RuntimeEvent["payload"] };
 
@@ -121,8 +124,13 @@ export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[])
  *
  * 未识别的事件类型（如 `run_started`、`step_started` 等）不产生渲染条目，
  * 但同样会中断相邻 delta 的聚合。
+ *
+ * 块级 streaming 语义：被后续事件中断而定稿的块不带 `streaming`；
+ * 事件流耗尽时仍在累积的块标记 `streaming: true`。由于 `run_finished` /
+ * `run_failed` / `run_cancelled` 属于非 delta 事件，会先触发 flush，
+ * 因此运行结束后不会残留 `streaming: true` 的悬空块。
  * @param events - 单个 turn 下的 runtime event 列表。
- * @returns 可按原始事件顺序渲染的 timeline 条目。
+ * @returns 可按原始事件顺序渲染的 timeline 条目；进行中的块带 `streaming: true`。
  *
  * @throws 不抛出异常。
  *
@@ -135,7 +143,7 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
   // 本 turn 是否出现过 model_output_delta。它不随 flushPending 重置，
   // 用于判断 final_response 是否为冗余（delta 已聚合过同文本）从而跳过，避免重复渲染。
   let hasDeltaStreamed = false;
-  // 工具条目按 callId 合并：requested 携参数创建条目，finished 更新其状态，
+  // 工具条目按 callId 合并：started 携参数创建条目，finished 更新其状态，
   // 避免同一工具调用产生「运行中 + 完成」两条碎片条目。
   const toolByCallId = new Map<string, number>();
 
@@ -167,6 +175,44 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     if (pendingDelta) {
       entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
       pendingDelta = null;
+    }
+  };
+
+  /**
+   * 在事件流末尾把仍未被中断的 pending 块投影为「进行中」条目。
+   *
+   * 与 `flushPending` 的区别：`flushPending` 处理的是被后续事件中断、
+   * 已经定稿的块（不带 streaming）；本函数处理的是流尚未结束、
+   * 后续 delta 仍会继续追加的块，因此标记 `streaming: true`，
+   * 供渲染层做「正在输出」的排版处理（如光标、去抖动）。
+   *
+   * 参数:
+   *   无。
+   *
+   * 返回:
+   *   无返回值。
+   *
+   * @throws 不抛出异常。
+   *
+   * @sideeffect 向闭包内的 `entries` 追加条目；**不清空** `pendingDelta` /
+   *   `pendingThinking`，以便下一次重新投影时能从已累积状态继续。
+   */
+  const flushPendingFinal = () => {
+    if (pendingThinking && pendingThinking.content.trim().length > 0) {
+      entries.push({
+        kind: "thinking",
+        eventId: pendingThinking.eventId,
+        content: pendingThinking.content,
+        streaming: true,
+      });
+    }
+    if (pendingDelta) {
+      entries.push({
+        kind: "assistant",
+        eventId: pendingDelta.eventId,
+        content: pendingDelta.content,
+        streaming: true,
+      });
     }
   };
 
@@ -208,16 +254,19 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     if (tool) {
       const callId = tool.callId;
       if (callId && toolByCallId.has(callId)) {
-        // 同一工具调用已有 requested 条目，仅更新其状态/错误/结果字段/id，保留参数
+        // 同一工具调用已有 started 条目，仅更新其状态/错误/结果字段/id，保留参数
         const idx = toolByCallId.get(callId)!;
         const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
         existing.item.status = tool.status;
-        existing.item.error = tool.error;
         existing.item.eventId = tool.eventId;
+        existing.item.error = tool.error;
         existing.item.resultSummary = tool.resultSummary;
         existing.item.result = tool.result;
         existing.item.reason = tool.reason;
         existing.item.retryable = tool.retryable;
+        existing.item.listEntries = tool.listEntries;
+        existing.item.emptyLabel = tool.emptyLabel;
+        existing.item.diffEntries = tool.diffEntries;
         existing.item.resultData = tool.resultData;
         if (tool.arguments) {
           existing.item.arguments = tool.arguments;
@@ -254,13 +303,16 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
     }
   }
 
-  flushPending();
+  flushPendingFinal();
 
   return entries;
 }
 
 /**
  * 投影单个工具事件。
+ *
+ * 工具相关的摘要与条目委托给共享渲染层（`projectToolRequestSummary` /
+ * `projectToolResult`），本函数只装配事件数据并回填渲染结果，不含渲染分支。
  *
  * @param event - runtime event。
  * @returns 工具显示项；非工具事件返回 null。
@@ -270,21 +322,24 @@ function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
  * @sideeffect 无。
  */
 function projectTool(event: RuntimeEvent): TimelineToolItem | null {
-  if (event.event_type === "tool_call_requested" || event.event_type === "tool_call_started") {
+  if (event.event_type === "tool_call_started") {
     const payload = event.payload as {
       tool_name?: string;
       arguments?: Record<string, unknown>;
       tool_call_id?: string | null;
       display?: Record<string, unknown> | null;
     };
+    const toolName = String(payload.tool_name ?? "未知工具");
+    const arguments_ = payload.arguments ? (payload.arguments as Record<string, unknown>) : undefined;
     return {
-        eventId: event.event_id,
-        toolName: String(payload.tool_name ?? "未知工具"),
-        status: "running" as const,
-        arguments: payload.arguments ? (payload.arguments as Record<string, unknown>) : undefined,
-        callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
-        display: toolDisplayFromPayload(payload.display),
-      };
+      eventId: event.event_id,
+      toolName,
+      status: "running" as const,
+      arguments: arguments_,
+      callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
+      display: toToolDisplayHints(payload.display),
+      requestSummary: projectToolRequestSummary(toolName, arguments_),
+    };
   }
   if (event.event_type === "tool_call_finished") {
     const payload = event.payload as {
@@ -292,67 +347,30 @@ function projectTool(event: RuntimeEvent): TimelineToolItem | null {
       status?: string;
       error?: string;
       tool_call_id?: string | null;
-      summary?: string | null;
       content?: string | null;
       reason?: string;
       retryable?: boolean;
       data?: Record<string, unknown>;
     };
+    const toolName = String(payload.tool_name ?? "未知工具");
+    const projection = projectToolResult(toolName, payload.data);
     return {
-        eventId: event.event_id,
-        toolName: String(payload.tool_name ?? "未知工具"),
-        status: String(payload.status) === "error" ? "error" as const : "completed" as const,
-        error: payload.error ? String(payload.error) : undefined,
-        callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
-        resultSummary: payload.summary ? String(payload.summary) : undefined,
-        result: payload.content ? String(payload.content) : undefined,
-        reason: payload.reason ? String(payload.reason) : undefined,
-        retryable: typeof payload.retryable === "boolean" ? payload.retryable : undefined,
-        resultData: payload.data && typeof payload.data === "object" ? payload.data : undefined,
-      };
+      eventId: event.event_id,
+      toolName,
+      status: String(payload.status) === "error" ? "error" as const : "completed" as const,
+      error: payload.error ? String(payload.error) : undefined,
+      callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
+      resultSummary: projection.summary ?? undefined,
+      result: payload.content ? String(payload.content) : undefined,
+      reason: payload.reason ? String(payload.reason) : undefined,
+      retryable: typeof payload.retryable === "boolean" ? payload.retryable : undefined,
+      listEntries: projection.listEntries,
+      emptyLabel: projection.emptyLabel,
+      diffEntries: projection.diffEntries,
+      resultData: payload.data && typeof payload.data === "object" ? payload.data : undefined,
+    };
   }
   return null;
 }
 
-/**
- * 把后端透传的展示提示投影成前端使用的结构。
- *
- * 后端 `display` 为 snake_case 字典且字段可选；本函数做类型收窄与 camelCase
- * 转换，缺字段时给出安全默认值，保证 `ToolCallCard` 可无分支消费。
- *
- * 参数:
- *   raw - 事件 payload 中的 `display` 字段（可能为 undefined / null / 非对象）。
- *
- * 返回:
- *   转换后的 `ToolDisplayInfo`；输入非法时返回 undefined。
- *
- * @throws 不抛出异常。
- *
- * @sideeffect 无。
- */
-function toolDisplayFromPayload(raw: unknown): ToolDisplayInfo | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const display = raw as Record<string, unknown>;
-  const clickActionRaw = display.click_action;
-  let clickAction: ToolDisplayClickAction | null = null;
-  if (clickActionRaw && typeof clickActionRaw === "object") {
-    const ca = clickActionRaw as Record<string, unknown>;
-    if (typeof ca.action === "string" && typeof ca.target === "string") {
-      clickAction = { action: ca.action, target: ca.target };
-    }
-  }
-  const detailKeys = Array.isArray(display.detail_keys)
-    ? (display.detail_keys as unknown[]).filter((key) => typeof key === "string") as string[]
-    : [];
-  return {
-    verb: typeof display.verb === "string" ? display.verb : "",
-    icon: typeof display.icon === "string" ? display.icon : "wrench",
-    summary: typeof display.summary === "string" ? display.summary : "",
-    detailKeys,
-    clickAction,
-    expandable: typeof display.expandable === "boolean" ? display.expandable : true,
-    expandLayout: typeof display.expand_layout === "string" ? display.expand_layout : "details",
-  };
-}
+export type { ToolDiffEntry, ToolDisplayHints, ToolListEntry };

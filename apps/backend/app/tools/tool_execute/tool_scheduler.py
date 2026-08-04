@@ -1,20 +1,21 @@
 """工具调度器：对模型请求的工具调用做权限门禁 + 参数校验 + 隔离执行编排。"""
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 
+from app.tools.guard.display_data_budget import DisplayDataBudget
+from app.tools.guard.file_resource_paths import FileResourcePathError
+from app.tools.guard.file_tool_state_coordinator import (
+    FileToolStateCoordinator,
+)
+from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.tools.guard.file_resource_paths import FileResourcePathError
-from app.tools.guard.file_tool_state_coordinator import (
-    FileToolStateCoordinator,
-)
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_executor import ToolExecutor
-from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.tool_registry import ToolRegistry
 from app.tools.validation.arguments import validate_tool_arguments
 
@@ -40,13 +41,15 @@ class ToolScheduler:
         registry: ToolRegistry,
         state_coordinator: FileToolStateCoordinator | None = None,
         output_budget: ToolOutputBudget | None = None,
+        display_data_budget: DisplayDataBudget | None = None,
     ) -> None:
         """初始化调度器并固化权限策略。
 
         参数:
             registry: 工具注册表，提供工具定义查询。
             state_coordinator: 文件 revision、重复调用和路径锁协作者。
-            output_budget: 统一工具输出预算。
+            output_budget: 模型可见 ``content`` 的统一输出预算。
+            display_data_budget: 客户端展示数据通道的统一字符预算。
 
         返回:
             无。
@@ -63,6 +66,7 @@ class ToolScheduler:
         self._executor = ToolExecutor()
         self._state_coordinator = state_coordinator or FileToolStateCoordinator()
         self._output_budget = output_budget or ToolOutputBudget()
+        self._display_data_budget = display_data_budget or DisplayDataBudget()
 
     def list_tools(self) -> list[ToolDefinition]:
         return self._registry.get_all_definitions()
@@ -90,6 +94,7 @@ class ToolScheduler:
         call: ToolCall,
         execution_context: ToolExecutionContext | None = None,
         allowed_tool_names: Collection[str] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> ToolObservation:
         """执行单次工具调用并返回归一化观察结果。
 
@@ -105,6 +110,7 @@ class ToolScheduler:
                 透传给执行器并由 handler 在执行期消费，便于后续扩展更多执行参数。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
+            should_cancel: 可选取消检查回调；透传给 process 工具执行器用于中止长工具。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"；
@@ -256,6 +262,7 @@ class ToolScheduler:
                         validation.arguments,
                         execution_context=execution_context,
                         tool_call_id=call.call_id,
+                        should_cancel=should_cancel,
                     )
                     self._state_coordinator.complete(
                         plan,
@@ -285,6 +292,7 @@ class ToolScheduler:
                 validation.arguments,
                 execution_context=execution_context,
                 tool_call_id=call.call_id,
+                should_cancel=should_cancel,
             )
         return self._apply_output_budget(observation, execution_context)
 
@@ -295,12 +303,16 @@ class ToolScheduler:
     ) -> ToolObservation:
         """对任意成功、失败或提前返回观察统一应用输出预算，超出预算截断，并保留本地文件。
 
+        模型通道（``content``）与客户端展示通道（``display_data``）分别受
+        :class:`ToolOutputBudget` 与 :class:`DisplayDataBudget` 约束，避免展示
+        通道绕过模型通道预算无约束膨胀。
+
         参数:
             observation: 待返回给上层的工具观察。
             execution_context: 当前 workspace 上下文。
 
         返回:
-            已脱敏并受全局字符预算约束的观察。
+            已脱敏并受两条通道字符预算约束的观察。
 
         异常:
             无。artifact 写入失败由 :class:`ToolOutputBudget` 内部退化处理。
@@ -309,4 +321,5 @@ class ToolScheduler:
             超限且有 workspace 时可能写入脱敏 artifact。
         """
 
-        return self._output_budget.apply(observation, execution_context)
+        budgeted = self._output_budget.apply(observation, execution_context)
+        return self._display_data_budget.apply(budgeted)

@@ -9,6 +9,8 @@
 
 import { cn } from "@/lib/utils";
 
+import { MessageTypography } from "./messageTypography";
+
 /** 用户消息组件属性。 */
 interface UserMessageProps {
   /** 消息文本内容。 */
@@ -20,14 +22,23 @@ interface UserMessageProps {
 /**
  * UserMessage 用户消息气泡。
  *
- * 使用浅色背景 + 右侧边距区分用户消息与 Agent 输出，
+ * 使用主色背景 + 前景色文字，靠右对齐，与 Agent 输出形成明显区分；
  * 对齐 Codex 桌面客户端的消息样式方向。
  */
 export function UserMessage({ content, className }: UserMessageProps) {
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
   return (
     <div className={cn("flex justify-end", className)}>
-      <div className="max-w-[85%] rounded-lg rounded-br-sm bg-primary/10 px-4 py-2.5 text-sm leading-relaxed">
-        <p className="whitespace-pre-wrap">{content}</p>
+      <div
+        className={cn(
+          "max-w-[85%] rounded-lg rounded-br-sm bg-primary px-4 py-2.5 text-primary-foreground shadow-sm",
+          MessageTypography.body,
+        )}
+      >
+        <p className="whitespace-pre-wrap">{trimmed}</p>
       </div>
     </div>
   );

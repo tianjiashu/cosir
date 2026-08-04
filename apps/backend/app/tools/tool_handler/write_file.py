@@ -10,7 +10,6 @@
 """
 
 from pathlib import Path
-from typing import Any
 
 from app.tools.schemas import (
     ToolDefinition,
@@ -24,11 +23,10 @@ from app.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.tools.tool_execute.tool_success import tool_success
+from app.tools.tool_handler.file_io.atomic_write import atomic_write_text, looks_like_line_numbered
 from app.tools.tool_handler.patch.file_change_display import (
     build_file_change_display_data,
-    render_file_change_entries,
 )
-from app.tools.tool_handler.file_io.atomic_write import atomic_write_text, looks_like_line_numbered
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.tools.tool_handler.security.project_path import ProjectPathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
@@ -80,7 +78,7 @@ class WriteFileTool(HandlerBase):
         self,
         path: str,
         content: str,
-        execution_context: ToolExecutionContext | None = None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """把内容原子写入项目内文件，并返回结构化观察结果。
 
@@ -198,43 +196,6 @@ class WriteFileTool(HandlerBase):
             display_data=build_file_change_display_data([snapshot]),
         )
 
-    def render_request_summary(self, arguments: dict[str, Any]) -> str:
-        """返回 write_file 执行请求摘要。
-
-        参数:
-            arguments: 工具调用参数字典。
-
-        返回:
-            待写入文件路径；缺失时返回 ``write``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        return str(arguments.get("path") or "write")
-
-    def render_result_summary(
-        self,
-        display_data: dict[str, Any],
-    ) -> str | list[dict[str, Any]] | None:
-        """返回 write_file 执行后 diff 展示条目。
-
-        参数:
-            display_data: 工具观察中的展示元数据。
-
-        返回:
-            失败时返回错误摘要；成功时返回文件 diff 展示条目。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        return render_file_change_entries(display_data)
-
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成 ``ToolDefinition``。
 
@@ -263,8 +224,6 @@ class WriteFileTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="",
                 icon="git-compare",
-                title_summary=self.render_request_summary,
-                result_summary=self.render_result_summary,
                 expandable=True,
                 expand_layout="diff",
             ),

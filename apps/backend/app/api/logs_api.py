@@ -8,19 +8,21 @@ from fastapi import Depends, HTTPException
 from pydantic import ValidationError
 
 from app.api.app import app
+from app.api.depends.dependencies import get_log_query_service
 from app.api.schemas import LogQueryResponse, QueryLogsRequest, RecentLogsRequest
 from app.service.log_query_service import LogQueryService
-from app.storage.crud.log_crud import LogStore
 
 
 @app.get("/logs/query")
 async def query_logs(
     req: QueryLogsRequest = Depends(),
+    query_service: LogQueryService = Depends(get_log_query_service),
 ) -> LogQueryResponse:
     """按 trace_id 查询日志。
 
     参数:
         req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。
+        query_service: 通过依赖注入的日志查询 service。
 
     返回:
         ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。
@@ -34,7 +36,6 @@ async def query_logs(
     """
 
     try:
-        query_service = LogQueryService(store=LogStore())
         result = query_service.query_by_trace(
             trace_id=req.trace_id,
             level=req.level,
@@ -58,11 +59,13 @@ async def query_logs(
 @app.get("/logs/recent")
 async def recent_logs(
     req: RecentLogsRequest = Depends(),
+    query_service: LogQueryService = Depends(get_log_query_service),
 ) -> LogQueryResponse:
     """查询最近日志。
 
     参数:
         req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。
+        query_service: 通过依赖注入的日志查询 service。
 
     返回:
         ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。
@@ -75,7 +78,6 @@ async def recent_logs(
     """
 
     try:
-        query_service = LogQueryService(store=LogStore())
         result = query_service.recent(
             level=req.level,
             start_time=req.start_time,

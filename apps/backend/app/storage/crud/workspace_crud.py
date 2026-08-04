@@ -46,38 +46,6 @@ class WorkspaceCrud:
         """
         self._session_factory = main_session_factory()
 
-    def ensure_default(self, now: datetime) -> str:
-        """确保默认工作区存在，返回其标识（幂等）。
-
-        使用固定标识 ``"default-workspace"``：不存在则创建，已存在则直接返回，可安全重复调用。
-
-        参数:
-            now: 用于填充创建 / 更新时间的时间戳（由调用方提供，便于测试与时钟统一）。
-
-        返回:
-            默认工作区标识 ``"default-workspace"``。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询或写入失败。
-
-        副作用:
-            默认工作区不存在时向 ``workspaces`` 表插入一行。
-        """
-
-        workspace_id = "default-workspace"
-        with self._session_factory.begin() as session:
-            if session.get(WorkspaceModel, workspace_id) is None:
-                session.add(
-                    WorkspaceModel(
-                        workspace_id=workspace_id,
-                        name="Default Workspace",
-                        root_path=".",
-                        created_at=to_text(now),
-                        updated_at=to_text(now),
-                    )
-                )
-        return workspace_id
-
     def create(self, name: str, root_path: str) -> WorkspaceRecord:
         """新建一个工作区并落库。
 

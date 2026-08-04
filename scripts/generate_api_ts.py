@@ -24,6 +24,8 @@ API_PATH_TEMPLATES: Mapping[str, str] = {
     "/workspaces/{workspace_id}/tasks": "/workspaces/${workspaceId}/tasks",
     "/tasks/{task_id}": "/tasks/${taskId}",
     "/tasks/{task_id}/turns": "/tasks/${taskId}/turns",
+    "/tasks/{task_id}/events": "/tasks/${taskId}/events",
+    "/tasks/{task_id}/turns/{turn_id}/events": "/tasks/${taskId}/turns/${turnId}/events",
     "/turns/{turn_id}/stream": "/turns/${turnId}/stream",
     "/turns/{turn_id}/cancel": "/turns/${turnId}/cancel",
     "/logs/query": "/logs/query",
@@ -38,6 +40,7 @@ from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceReques
 from app.api.schemas.request.QueryLogsRequest import QueryLogsRequest  # noqa: E402
 from app.api.schemas.request.RecentLogsRequest import RecentLogsRequest  # noqa: E402
 from app.api.schemas.response.AgentProfileResponse import AgentProfileResponse  # noqa: E402
+from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse  # noqa: E402
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse  # noqa: E402
 from app.api.schemas.response.HealthResponse import HealthResponse  # noqa: E402
 from app.api.schemas.response.ListAgentsResponse import ListAgentsResponse  # noqa: E402
@@ -189,6 +192,7 @@ def render_api_types() -> str:
             render_interface(CreateTurnRequest),
             render_interface(HealthResponse, "BackendHealthResponse"),
             render_interface(DeleteWorkspaceResponse),
+            render_interface(DeleteTaskResponse),
             'export type TaskResponse = import("./task").TaskRecord;',
             'export type WorkspaceResponse = import("./workspace").WorkspaceRecord;',
             'export type TurnResponse = import("./turn").TurnRecord;',
@@ -268,6 +272,7 @@ export const API_PATHS = {
   WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
+  TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
   TURN_CANCEL: (turnId: string) => `/turns/${turnId}/cancel`,
   LOGS_QUERY: "/logs/query",

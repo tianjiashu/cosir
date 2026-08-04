@@ -62,10 +62,16 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>((set)
   },
 
   removeWorkspace: (workspaceId) => {
-    set((state) => ({
-      workspaces: state.workspaces.filter((item) => item.workspace_id !== workspaceId),
-      activeWorkspaceId: state.activeWorkspaceId === workspaceId ? null : state.activeWorkspaceId,
-    }));
+    set((state) => {
+      const nextWorkspaces = state.workspaces.filter((item) => item.workspace_id !== workspaceId);
+      // 删除后若正好是当前活跃工作区，自动切到剩余列表中的第一个；
+      // 列表已空则置 null（由调用方引导新建工作区）。
+      const nextActive =
+        state.activeWorkspaceId === workspaceId
+          ? nextWorkspaces[0]?.workspace_id ?? null
+          : state.activeWorkspaceId;
+      return { workspaces: nextWorkspaces, activeWorkspaceId: nextActive };
+    });
   },
 
   setActiveWorkspace: (workspaceId) => {

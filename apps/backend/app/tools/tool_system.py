@@ -11,6 +11,8 @@ from app.tools.tool_handler.list_directory import build_list_directory_definitio
 from app.tools.tool_handler.patch_tool import build_patch_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.search_files import build_search_files_definition
+from app.tools.tool_handler.web_extract import build_web_extract_definition
+from app.tools.tool_handler.web_search import build_web_search_definition
 from app.tools.tool_handler.write_file import build_write_file_definition
 from app.tools.tool_registry import ToolRegistry
 
@@ -44,7 +46,7 @@ class ToolSystem:
     def build_tool_system(cls) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册全部 8 个工具定义，并用 ``Settings.MAX_TOOL_OUTPUT_CHARS``
+        按内置清单注册全部 9 个工具定义，并用 ``Settings.MAX_TOOL_OUTPUT_CHARS``
         （类级静态配置，非传入的 settings 对象）构造输出预算上限，装配调度器。
 
         参数:
@@ -68,6 +70,8 @@ class ToolSystem:
         registry.register(build_list_directory_definition())
         registry.register(build_delete_definition())
         registry.register(build_execute_terminal_definition())
+        registry.register(build_web_search_definition())
+        registry.register(build_web_extract_definition())
         scheduler = ToolScheduler(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),

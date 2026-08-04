@@ -10,6 +10,7 @@
 """
 
 from collections.abc import AsyncIterator, Callable
+from time import perf_counter
 from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
@@ -22,14 +23,14 @@ from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_l
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.models import TaskRecord
 from app.models.enums.event_type import EventType
-from app.models.payload import RunCancelledPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
+from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
-from .edges import _should_continue
+from .edges import _after_tools, _should_continue
 from .nodes import _model_node, _tools_node
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
@@ -77,7 +78,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         builder.add_node("tools", _tools_node)
         builder.add_edge(START, "model")
         builder.add_conditional_edges("model", _should_continue, {"tools": "tools", END: END})
-        builder.add_edge("tools", "model")
+        builder.add_conditional_edges("tools", _after_tools, {"model": "model", END: END})
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
@@ -85,15 +86,17 @@ class ReactLikeWorkflow(AgentWorkflow):
         task: TaskRecord,
         operations: RuntimeOperations,
         callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
         方法构建并编译 graph，挂 ``AsyncSqliteSaver`` checkpointer；以
         ``astream(stream_mode=["custom"])`` 单循环驱动 graph，把节点经 ``get_stream_writer()``
         写入的 ``custom`` 业务事件（含 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA`` 等流式
-        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。当 ``tools`` 节点触发 ``interrupt()`` 时，
-        方法用审批解析器解析出批准的工具调用，并通过 ``Command(resume=)`` 恢复 graph，直到
-        工作流结束。
+        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。当存在 ``approval_resolver`` 时，
+        ``tools`` 节点会触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并通过
+        ``Command(resume=)`` 恢复 graph；当 ``approval_resolver`` 为 ``None`` 时，``tools`` 节点
+        不暂停 graph、直接执行工具（自动放行）。循环直到 graph 无待处理任务或工作流结束。
 
         Args:
             task: 当前需要执行的任务记录。
@@ -101,6 +104,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
                 注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
                 缺省为空列表，不影响既有行为。
+            langfuse_trace_id: 可选的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
+                ``run_finished`` / ``run_failed`` / ``run_cancelled`` 等终态事件 payload
+                会携带该字段供前端展示。未启用 Langfuse 时为 None。
 
         Yields:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
@@ -137,6 +143,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             turn=turn,
             model=cast(BaseChatModel, bound_model),
             approval_resolver=self._approval_resolver,
+            start_time=perf_counter(),
+            usage_stats=TurnUsageStats(),
+            langfuse_trace_id=langfuse_trace_id,
         )
         config = {
             "configurable": {
@@ -213,7 +222,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     break
 
                 # ★ 取消检查：graph 暂停在 interrupt()（等待审批），若 turn 已取消则不恢复
-                if operations.has_turn_status(turn_id, "cancelled"):
+                if operations.is_current_turn_cancelled():
                     log.info(
                         "workflow_interrupt_cancelled",
                         extra={
@@ -221,16 +230,10 @@ class ReactLikeWorkflow(AgentWorkflow):
                             "data": {"turn_id": turn_id},
                         },
                     )
-                    yield RuntimeEvent(
-                        event_type=EventType.RUN_CANCELLED,
-                        task_id=task.task_id,
-                        turn_id=turn_id,
-                        sequence=sequence,
-                        payload=RunCancelledPayload(status="cancelled"),
-                    )
-                    sequence += 1
                     break
 
+                # 此分支仅在「存在 approval_resolver」时进入：无审批器时 tools 节点不会
+                # 调用 interrupt()，graph 不会暂停，外层循环已在上面 `not interrupts` 处退出。
                 interrupt_value = interrupts[0].value
                 pending = (
                     interrupt_value.get("tool_calls", [])

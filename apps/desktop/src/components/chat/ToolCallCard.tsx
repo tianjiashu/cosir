@@ -2,18 +2,19 @@
  * 工具调用展示组件。
  *
  * 折叠态模仿 Codex 风格：紧凑单行 `> 图标 动作名 参数摘要`，无边框卡片；
- * 完成后折叠行优先显示执行结果摘要（后端 result_summary_template 渲染），
- * 失败时红色高亮错误主因。展开态按成功/失败分区：成功渲染模型所见结果正文，
- * 失败渲染错误主因 + 辅因 + 可重试徽标；同时保留完整参数与打开文件动作。
+ * 完成后折叠行优先显示执行结果摘要（前端共享渲染层生成），失败时红色高亮错误主因。
+ * 展开态按成功/失败分区：成功按 `expandLayout` 分发（list/diff/write/details），
+ * 失败渲染错误主因 + 辅因 + 可重试徽标；同时保留完整参数。
  *
- * 组件不按工具名写特化分支：所有展示差异都收敛在后端 `ToolDefinition.display`，
- * 这里只做数据驱动的通用渲染。未携带 `display` 的工具降级为「工具名 + 通用参数摘要」。
+ * 组件不按工具名写特化分支：所有展示差异（摘要文本、list/diff 条目）都收敛在
+ * 共享渲染层（`@shared/toolDisplayRules`），这里只做数据驱动的通用渲染。
+ * 未携带 `display` 的工具降级为「工具名 + 通用参数摘要」。
  *
  * @module components/chat/ToolCallCard
  */
 
-import type { ComponentType, SyntheticEvent } from "react";
-import { useMemo, useState } from "react";
+import type { ComponentType, ReactNode, SyntheticEvent } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   AlertCircle,
   ChevronRight,
@@ -34,8 +35,9 @@ import {
 import { Diff, parseDiff } from "react-diff-view";
 import type { FileData } from "react-diff-view";
 import "react-diff-view/style/index.css";
-import { cn } from "@/lib/utils";
-import type { ToolDisplayInfo } from "@/services/timeline/projector";
+import { basenameOf, cn } from "@/lib/utils";
+import { VirtualList } from "@/lib/virtual/VirtualList";
+import type { ToolDisplayInfo, ToolListEntry } from "@/services/timeline/projector";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -53,9 +55,9 @@ interface ToolCallCardProps {
   error?: string;
   /** 工具调用参数（用于展开态展示完整字典）。 */
   args?: Record<string, unknown>;
-  /** 后端投影出的展示提示；缺省时降级为通用展示。 */
+  /** 后端透传的静态展示提示；缺省时降级为通用展示。 */
   display?: ToolDisplayInfo;
-  /** 执行后结果摘要（成功时折叠行优先显示）。 */
+  /** 执行后结果摘要（成功时折叠行优先显示，来自共享渲染层）。 */
   resultSummary?: string | null;
   /** 执行后完整结果正文（成功时展开态渲染）。 */
   result?: string | null;
@@ -63,10 +65,16 @@ interface ToolCallCardProps {
   reason?: string | null;
   /** 失败是否可重试（展开态徽标）。 */
   retryable?: boolean;
-  /** 点击「打开文件」动作的回调（仅当 display.clickAction 为 open_file 时可用）。 */
-  onOpenFile?: (path: string) => void;
-  /** 执行后结构化载荷（通用透传），含 list 布局的 entries 与截断标记。 */
+  /** 折叠态请求摘要（前端按参数渲染，来自共享渲染层）。 */
+  requestSummary?: string;
+  /** list 布局条目（前端按字段形状渲染）。 */
+  listEntries?: ToolListEntry[];
+  /** list 布局空态文案。 */
+  emptyLabel?: string | null;
+  /** 执行后结构化载荷（治理标记通道，如 output_truncated / artifact_path）。 */
   resultData?: Record<string, unknown>;
+  /** 点击「打开文件」动作的回调。 */
+  onOpenFile?: (path: string) => void;
 }
 
 /**
@@ -130,8 +138,11 @@ export function ToolCallCard({
   result,
   reason,
   retryable,
-  onOpenFile,
+  requestSummary,
+  listEntries,
+  emptyLabel,
   resultData,
+  onOpenFile,
 }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(false);
   // diff/write 两态共享的视图模式；提升到这里避免两个分支重复声明 hook。
@@ -146,11 +157,12 @@ export function ToolCallCard({
   // 折叠态主摘要：
   // - error    → 红色高亮错误主因（error 为主因约定）
   // - completed→ 优先执行后结果摘要，缺失时降级为执行前摘要
-  // - running  → 执行前摘要（verb + summary），或「工具名 + 通用摘要」降级
-  const requestSummary = display
-    ? [display.verb, display.summary].filter(Boolean).join(" ")
-    : [toolName, fallbackArgsSummary(args)].filter(Boolean).join(" ");
-  let summaryText = requestSummary;
+  // - running  → 执行前摘要（verb + requestSummary），或「工具名 + 通用摘要」降级
+  const fallbackRequest = [toolName, fallbackArgsSummary(args)].filter(Boolean).join(" ");
+  const runningSummary = display
+    ? [display.verb, requestSummary ?? ""].filter(Boolean).join(" ")
+    : fallbackRequest;
+  let summaryText = runningSummary;
   if (status === "error") {
     // 失败以 error 为主因；error 空缺时降级为 reason，再兜底为固定文案，
     // 保证失败态折叠行始终有红色高亮的失败信息。
@@ -160,19 +172,9 @@ export function ToolCallCard({
     summaryText = display?.verb ? `${display.verb} ${resultSummary}` : resultSummary;
   }
 
-  // 展开态参数：按 display.detailKeys 排序，再补其余参数。
+  // 展开态参数：直接按参数原始顺序展示。
   const argEntries = args ? Object.entries(args) : [];
-  const orderedEntries =
-    display?.detailKeys?.length && args
-      ? [
-          ...display.detailKeys
-            .filter((key) => key in args)
-            .map((key) => [key, args[key]] as [string, unknown]),
-          ...argEntries.filter(([key]) => !display.detailKeys.includes(key)),
-        ]
-      : argEntries;
 
-  const clickAction = display?.clickAction ?? null;
   const hasResult = result !== null && result !== undefined;
   const isChangeLayout = expandLayout === "diff" || expandLayout === "write";
 
@@ -208,7 +210,7 @@ export function ToolCallCard({
                 <DiffFileHeaderContent
                   file={firstFile}
                   content={result ?? ""}
-                  openPath={clickAction?.target}
+                  openPath={typeof args?.path === "string" ? args.path : undefined}
                   viewType={diffViewType}
                   setViewType={setDiffViewType}
                   onOpenFile={onOpenFile}
@@ -292,12 +294,12 @@ export function ToolCallCard({
       {/* 展开详情 */}
       {isOpen ? (
         <div className="ml-6 mt-1 space-y-1.5 border-l border-border pl-3 py-1 text-xs">
-          {/* 参数（按 detailKeys 排序优先展示） */}
-          {orderedEntries.length > 0 && (
+          {/* 参数（按原始顺序展示） */}
+          {argEntries.length > 0 && (
             <div className="flex gap-2">
               <span className="text-muted-foreground shrink-0">参数:</span>
               <div className="space-y-0.5">
-                {orderedEntries.map(([key, value]) => (
+                {argEntries.map(([key, value]) => (
                   <div key={key} className="font-mono text-[11px]">
                     <span className="text-muted-foreground">{key}=</span>
                     {String(JSON.stringify(value))}
@@ -307,29 +309,9 @@ export function ToolCallCard({
             </div>
           )}
 
-          {/* 打开文件动作（由后端 display.clickAction 驱动，数据驱动、无工具特化） */}
-          {clickAction?.action === "open_file" && (
-            <div className="flex gap-2">
-              <span className="text-muted-foreground shrink-0">操作:</span>
-              <button
-                type="button"
-                onClick={() => onOpenFile?.(clickAction.target)}
-                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent/40 transition-colors"
-              >
-                <ExternalLink className="h-3 w-3" />
-                打开文件 {clickAction.target}
-              </button>
-            </div>
-          )}
-
           {/* 成功：按 expand_layout 分发差异化展开态（零工具名特化分支） */}
           {status === "completed" && hasResult && expandLayout === "list" && (
-            <ListView
-              entries={toListEntries(resultData?.entries)}
-              emptyLabel={
-                typeof resultData?.empty_label === "string" ? resultData.empty_label : undefined
-              }
-            />
+            <ListView entries={listEntries ?? []} emptyLabel={emptyLabel ?? undefined} />
           )}
           {status === "completed" && hasResult && expandLayout === "diff" && (
             <FileDiffView content={result ?? ""} viewType={diffViewType} />
@@ -401,59 +383,133 @@ export function ToolCallCard({
   );
 }
 
-/** list 布局的单条元素（字段形状驱动，不依赖工具名）。 */
-interface ListEntry {
-  name?: string;
-  path?: string;
-  type?: string;
-  file_path?: string;
-  line_number?: number;
-  content?: string;
-}
-
-/** 把未知数据收窄为 ListEntry 列表（过滤非对象元素）。 */
-function toListEntries(raw: unknown): ListEntry[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((e): e is ListEntry => typeof e === "object" && e !== null);
-}
+/** list 布局超过该阈值才启用虚拟滚动；小列表虚拟化反而增加开销。 */
+const VIRTUAL_LIST_THRESHOLD = 50;
 
 /**
  * list 布局：按元素字段形状渲染（不依赖工具名）。
- * 含 file_path → 搜索命中行；含 type → 目录/文件图标；含 name+path → 文件名+路径。
+ * 含 filePath → 搜索命中行；含 type → 目录/文件图标；含 name+path → 文件名+路径；
+ * path 为 http(s) 且含 content → 网页结果，渲染为可点击链接 + 可折叠正文预览。
+ * 条目由共享渲染层（`@shared/toolDisplayRules`）投影为 `ToolListEntry` 后传入。
+ *
+ * 参数:
+ *   entries   - 列表条目数组。
+ *   emptyLabel - 空态文案；缺省时回退为固定提示。
+ *
+ * 返回:
+ *   React 渲染节点：条目数超过阈值时返回虚拟化列表，否则返回普通 `map` 列表。
+ *
+ * @sideeffect 无。
  */
-function ListView({ entries, emptyLabel }: { entries: ListEntry[]; emptyLabel?: string }) {
+function ListView({ entries, emptyLabel }: { entries: ToolListEntry[]; emptyLabel?: string }) {
   if (entries.length === 0) {
     return <div className="text-[11px] text-muted-foreground">{emptyLabel ?? "（无条目）"}</div>;
   }
+  if (entries.length > VIRTUAL_LIST_THRESHOLD) {
+    // 只读展示列表，条目不会在头部插入；key 由条目内在字段 + 下标兜底唯一性构成，
+    // 不单纯使用数组下标（满足 VirtualList 的 getKey 稳定性契约）。
+    return (
+      <VirtualList
+        className="max-h-64"
+        items={entries}
+        getKey={(entry, idx) => listEntryKey(entry, idx)}
+        estimateSize={20}
+        renderItem={(entry) => <div className="py-0.5">{renderListEntry(entry)}</div>}
+      />
+    );
+  }
   return (
-    <div className="space-y-0.5">
-      {entries.map((entry, idx) => {
-        if (entry.file_path) {
-          return (
-            <div key={idx} className="flex items-baseline gap-1.5 font-mono text-[11px]">
-              <Code2 className="h-3 w-3 shrink-0 text-sky-600" />
-              <span className="text-muted-foreground">
-                {entry.file_path}:{entry.line_number ?? 0}
-              </span>{" "}
-              {entry.content}
-            </div>
-          );
-        }
-        const isPython = typeof entry.name === "string" && entry.name.endsWith(".py");
-        const Icon = entry.type === "dir" ? Folder : isPython ? Code2 : File;
-        return (
-          <div key={idx} className="flex items-center gap-1.5 font-mono text-[11px]">
-            <Icon
-              className={cn(
-                "h-3 w-3 shrink-0",
-                isPython ? "text-sky-600" : "text-muted-foreground",
-              )}
-            />
-            <span>{entry.name}</span>
-            <span className="text-muted-foreground">{entry.path}</span>
+    <div className="space-y-1">
+      {entries.map((entry, idx) => (
+        <Fragment key={listEntryKey(entry, idx)}>{renderListEntry(entry)}</Fragment>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 为 list 条目生成稳定且全局唯一的 key。
+ *
+ * 优先用条目内在字段（文件路径 / URL+名称 / 名称+路径）拼接；
+ * 因同名字段可能重复，叠加下标 `idx` 兜底保证唯一性，避免纯下标导致的可复用性隐患。
+ *
+ * 参数:
+ *   entry - 列表条目。
+ *   idx   - 条目下标（仅在固有字段不足时参与去重）。
+ *
+ * 返回:
+ *   字符串 key。
+ */
+function listEntryKey(entry: ToolListEntry, idx: number): string {
+  const intrinsic = entry.filePath ?? `${entry.path}::${entry.name}`;
+  return `${intrinsic}::${idx}`;
+}
+
+/**
+ * 渲染单条 list 条目（按字段形状分支）。
+ *
+ * 该纯函数被 `ListView` 的虚拟化与非虚拟化两条路径共用，避免渲染逻辑重复。
+ * 自身不设置 React key（key 由调用方的 `getKey` 或 `map` 统一提供）。
+ *
+ * 参数:
+ *   entry - 列表条目。
+ *
+ * 返回:
+ *   单条目的 React 渲染节点。
+ *
+ * @sideeffect 无。
+ */
+function renderListEntry(entry: ToolListEntry): ReactNode {
+  if (entry.filePath) {
+    return (
+      <div className="flex items-baseline gap-1.5 font-mono text-[11px]">
+        <Code2 className="h-3 w-3 shrink-0 text-sky-600" />
+        <span className="text-muted-foreground">
+          {entry.filePath}:{entry.lineNumber ?? 0}
+        </span>{" "}
+        {entry.content}
+      </div>
+    );
+  }
+  // 网页结果：path 为 URL 且携带正文（web_extract 的 content 字段）。
+  if (typeof entry.path === "string" && entry.path.startsWith("http") && entry.content) {
+    return (
+      <div className="rounded border border-border bg-muted/30 p-1.5">
+        <div className="flex items-center gap-1.5 font-mono text-[11px]">
+          <ExternalLink className="h-3 w-3 shrink-0 text-sky-600" />
+          <a
+            href={entry.path}
+            target="_blank"
+            rel="noreferrer"
+            className="truncate text-sky-600 hover:underline"
+            title={entry.path}
+          >
+            {entry.name}
+          </a>
+        </div>
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-background/60 p-1.5 font-mono text-[10px] text-muted-foreground">
+          {entry.content}
+        </pre>
+        {entry.contentTruncated && (
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            正文已截断，完整内容见结果全文
           </div>
-        );
-      })}
+        )}
+      </div>
+    );
+  }
+  const isPython = typeof entry.name === "string" && entry.name.endsWith(".py");
+  const Icon = entry.type === "dir" ? Folder : isPython ? Code2 : File;
+  return (
+    <div className="flex items-center gap-1.5 font-mono text-[11px]">
+      <Icon
+        className={cn(
+          "h-3 w-3 shrink-0",
+          isPython ? "text-sky-600" : "text-muted-foreground",
+        )}
+      />
+      <span>{entry.name}</span>
+      <span className="text-muted-foreground">{entry.path}</span>
     </div>
   );
 }
@@ -647,13 +703,6 @@ function DiffFileHeaderContent({
 /** 去掉 unified diff 路径前缀 a/ b/。 */
 function normalizeDiffPath(raw: string): string {
   return raw.replace(/^[ab]\//, "");
-}
-
-/** 取路径最后一段作为文件名展示。 */
-function basenameOf(raw: string): string {
-  const normalized = normalizeDiffPath(raw);
-  const segments = normalized.split("/");
-  return segments[segments.length - 1] || normalized;
 }
 
 /** 把 diff/write 折叠态的长路径摘要截断为 basename；非路径文本原样保留。 */

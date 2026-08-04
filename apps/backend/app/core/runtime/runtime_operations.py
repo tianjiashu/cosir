@@ -37,6 +37,7 @@ class RuntimeOperations:
         model_tools: list[ToolDefinition] | None = None,
         execution_context: ToolExecutionContext | None = None,
         tool_trace_recorder: ToolTraceRecorder | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -51,6 +52,7 @@ class RuntimeOperations:
                 日志不注入 ``workspace_id``。
             tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
                 工具执行不产生 trace，行为与集成前一致。
+            should_cancel: 当前 turn 的取消检查回调；为 None 时退化为状态查询。
 
         返回:
             无。
@@ -66,15 +68,17 @@ class RuntimeOperations:
         self._context_builder = context_builder
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
+        self._current_turn_id = current_turn_id
+        self._execution_context = execution_context
+        self._should_cancel = should_cancel
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
             allowed_tool_names=(tool.name for tool in self.model_tools),
             tool_definitions=self.model_tools,
             trace_recorder=tool_trace_recorder,
+            should_cancel=self.is_current_turn_cancelled,
         )
-        self._current_turn_id = current_turn_id
-        self._execution_context = execution_context
 
         log.info(
             "runtime_ops_initialized",
@@ -185,6 +189,28 @@ class RuntimeOperations:
         )
         return has
 
+    def is_current_turn_cancelled(self) -> bool:
+        """Return whether the currently bound turn should stop.
+
+        参数:
+            无。
+
+        返回:
+            当前 turn 已被取消时返回 True，否则返回 False。
+
+        异常:
+            无。
+
+        副作用:
+            可能调用注入的取消检查回调；无回调时读取 turn 状态。
+        """
+
+        if self._should_cancel is not None and self._should_cancel():
+            return True
+        if not self._current_turn_id:
+            return False
+        return self.has_turn_status(self._current_turn_id, "cancelled")
+
     def update_turn_status(
         self, turn_id: str, status: str, end_reason: str | None = None
     ) -> TurnRecord:
@@ -202,6 +228,63 @@ class RuntimeOperations:
             },
         )
         return self._turn_store.update_turn_status(turn_id, status, end_reason)
+
+    def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
+        """Complete the turn only if it is still running.
+
+        参数:
+            turn_id: 待完成的 turn 标识。
+            response_text: Agent 最终回复文本。
+
+        返回:
+            成功完成时返回更新后的 TurnRecord；turn 已被取消/失败/完成时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时同事务写入 completed 状态和回复文本。
+        """
+
+        response_len = len(response_text)
+        log.info(
+            "turn_completion_attempted",
+            extra={
+                "msg": f"尝试完成 running turn，turn_id={turn_id}",
+                "data": {"turn_id": turn_id, "response_length": response_len},
+            },
+        )
+        return self._turn_store.complete_turn_if_running(turn_id, response_text)
+
+    def fail_turn_if_running(
+        self, turn_id: str, end_reason: str | None = None
+    ) -> TurnRecord | None:
+        """Fail the turn only if it is still running.
+
+        参数:
+            turn_id: 待失败落定的 turn 标识。
+            end_reason: 可选失败原因。
+
+        返回:
+            成功失败落定时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时写入 failed 状态。
+        """
+
+        log.info(
+            "turn_failure_attempted",
+            extra={
+                "msg": f"尝试将 running turn 标记为 failed，turn_id={turn_id}",
+                "data": {"turn_id": turn_id, "end_reason": end_reason},
+            },
+        )
+        return self._turn_store.fail_turn_if_running(turn_id, end_reason)
 
     def update_turn_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
         """Persist the turn's agent reply text through the turn store."""
@@ -260,8 +343,27 @@ class RuntimeOperations:
         task_id: str,
         calls: list[ToolCall],
         step_id: str | None = None,
-    ):
-        """Pre-process a turn before it is used for model input."""
+    ) -> None:
+        """Log metadata before dispatching a tool-call batch.
+
+        参数:
+            task_id: 当前任务标识。
+            calls: 待派发的工具调用列表。
+            step_id: 可选步骤标识。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            写入工具批次派发日志。
+        """
+
+        workspace_id = (
+            self._execution_context.workspace_id if self._execution_context is not None else None
+        )
 
         log.info(
             "tool_calls_dispatched",
@@ -272,15 +374,37 @@ class RuntimeOperations:
                     "step_id": step_id,
                     "call_count": len(calls),
                     "tool_names": [call.tool_name for call in calls],
-                    "workspace_id": self._execution_context.workspace_id,
+                    "workspace_id": workspace_id,
                 },
             },
         )
 
     def _post_process_turn(
-        self, task_id: str, step_id: str | None = None, result: ToolRunResult = None
-    ):
-        """Post-process a turn after it is used for model output."""
+        self,
+        task_id: str,
+        result: ToolRunResult,
+        step_id: str | None = None,
+    ) -> None:
+        """Log metadata after a tool-call batch completes.
+
+        参数:
+            task_id: 当前任务标识。
+            result: 工具批次执行结果。
+            step_id: 可选步骤标识。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            写入工具批次完成日志。
+        """
+
+        workspace_id = (
+            self._execution_context.workspace_id if self._execution_context is not None else None
+        )
         status_counts: dict[str, int] = {}
         error_count = 0
         for obs in result.observations:
@@ -302,7 +426,7 @@ class RuntimeOperations:
                     "messages_for_model_count": len(result.messages_for_model),
                     "status_counts": status_counts,
                     "error_count": error_count,
-                    "workspace_id": self._execution_context.workspace_id,
+                    "workspace_id": workspace_id,
                 },
             },
         )
