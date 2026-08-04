@@ -205,7 +205,7 @@ class ListDirectoryTool(HandlerBase):
             tool_name=self.name,
             content=content,
             permission=self.permission,
-            display_data={
+            data={
                 "entries": entry_dicts,
             },
         )

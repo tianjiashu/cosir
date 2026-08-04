@@ -125,13 +125,13 @@ def test_web_extract_returns_full_content_without_self_storing(tmp_path: Path) -
     assert "truncated" not in result
     # display_data 是纯结构化数据透传，由客户端渲染层与调度层 DisplayDataBudget 守卫处理；
     # 后端 handler 不渲染、不混入摘要字段、不复制 content 全文到 display_data 顶层。
-    assert "web" in observation.display_data
-    assert isinstance(observation.display_data["web"], list)
-    assert len(observation.display_data["web"]) == 1
+    assert "web" in observation.data
+    assert isinstance(observation.data["web"], list)
+    assert len(observation.data["web"]) == 1
     # 根因防护：display_data 顶层不得混入渲染字段或 content 全文副本。
-    assert "summary" not in observation.display_data
-    assert "result_summary" not in observation.display_data
-    assert "content" not in observation.display_data
+    assert "summary" not in observation.data
+    assert "result_summary" not in observation.data
+    assert "content" not in observation.data
     # 自身不落盘到 tool-results 目录
     assert not (tmp_path / ".coding-agent" / "tool-results").exists()
 

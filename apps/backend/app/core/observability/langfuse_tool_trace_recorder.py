@@ -74,7 +74,7 @@ class _LangfuseToolSpan:
             return
         output = {
             "content": redact_terminal_output(observation.content),
-            "data": observation.display_data or {},
+            "data": observation.data or {},
             "error": observation.error,
             "reason": observation.reason,
             "retryable": observation.retryable,

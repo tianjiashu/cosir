@@ -22,20 +22,24 @@ class ToolObservation:
       各 handler 的职责，本类只是它们产出的纯数据快照。
 
     设计要点：
-    - 不可变（``frozen=True``）：结果一旦构造即不可更改，避免上层误改历史
-      观察，也利于跨进程/跨线程安全传递。
+    - 可变快照（``frozen=False``）：字段在构造后可被内部方法修改——唯一例外是
+      ``clear_display_data()`` 在把观察转模型消息前清空 ``data``（模型不可见通道）；
+      除此之外字段应视为只读，调用方不应改写历史观察。
     - 绝不抛异常：所有失败路径都被归一化为 ``status="error"`` 的观察对象，
       由 :func:`tool_error` 工厂构造，使上层永远拿到可落库/可回传的结果。
 
     content 与 data 的区别（易混，单独说明）:
-        - ``content`` 是「人读文本」：给模型/用户看的故事（命令回显、文件
-          摘要、可恢复错误等），类型恒为 ``str``；失败时与 ``error`` 同时
-          携带可读诊断，``reason`` 提供稳定机器分类。
-        - ``data`` 是「机读字典」：给上层程序逻辑消费的账本（``exit_code`` /
-          ``type`` / ``recursive`` 等结构化字段），类型恒为 ``dict``。
-        - 两者互不替代、可同时填充：例如删除文件时 ``content`` 写「已删除
-          文件 xxx」，``data`` 写 ``{"type": "file", "path": "..."}``，上层
-          既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
+        - ``content`` 是「面向模型的英文人读文本」：给模型/用户看的故事（命令回显、
+          文件摘要、可恢复错误等），类型恒为 ``str``；失败时与 ``error`` 同时携带可读
+          诊断。它是**模型唯一直接消费的文本通道**。
+        - ``data`` 是「面向客户端的结构化机读字典」：给前端渲染消费的计算数据与治理
+          标记（如 ``items`` / ``web`` / ``diff`` / ``syntax_errors`` / ``output_truncated`` /
+          ``artifact_path``），类型恒为 ``dict``。它**不到模型**——``ToolExecutionService``
+          在把观察转模型消息前会 ``clear_display_data()`` 清空，模型只看到
+          ``content`` / ``error`` / ``reason``。
+        - 两者互不替代、可同时填充：例如删除文件时 ``content`` 写「已删除文件 xxx」，
+          ``data`` 写 ``{"type": "file", "path": "..."}``，前端既能展示文本，也能不解析
+          文本就直接拿到类型/路径做后续判断；Agent 自修复则只依赖 ``content``/``reason``。
 
     字段:
         tool_name: 触发本次观察的工具名称（与 :class:`ToolDefinition.name` 对应）。
@@ -62,8 +66,12 @@ class ToolObservation:
             便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         tool_call_id: 与本次观察对应的模型工具调用 id（透传自 :class:`ToolCall`）；
             用于把观察回绑到具体的模型请求，缺失时为空。
-        data: 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据；
-            其他一律由 content、error、reason 承载。
+        data: 面向客户端的结构化机读字典（仅前端渲染消费），承载「计算数据 + 治理
+            标记」两类：① 工具的结构化结果（如 ``items`` / ``web`` / ``diff`` /
+            ``syntax_errors``）；② 输出治理标记（如 ``output_truncated`` /
+            ``artifact_path``）。**不到模型**——转模型消息前被 ``clear_display_data()``
+            清空；模型只见 ``content`` / ``error`` / ``reason``。不允许承载工具逻辑
+            内部数据，其余一律由 content、error、reason 承载。
     """
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。
@@ -85,10 +93,15 @@ class ToolObservation:
     permission: str = ""
     # 对应的模型工具调用 id，透传自 ToolCall，用于observation回绑；缺失为空。
     tool_call_id: str = ""
-    # 只允许承载客户端渲染所需的计算数据，不允许承载工具逻辑的数据；
-    # 其他一律由 content、error、reason 承载。
-    display_data: dict[str, Any] = field(default_factory=dict)
+    # 面向客户端的结构化机读字典（计算数据 + 治理标记），仅前端渲染消费，
+    # 不到模型；工具逻辑内部数据一律由 content/error/reason 承载。
+    # 类型含 None：clear_display_data() 在转模型消息前会置 None，消费方须容忍 None。
+    data: dict[str, Any] | None = field(default_factory=dict)
 
-    # display_data 不可以给模型看，用完后要清空
-    def clear_display_data(self):
-        self.display_data = None
+    def clear_display_data(self) -> None:
+        """清空 ``data``（模型不可见通道），供转模型消息前调用。
+
+        历史命名保留 ``clear_display_data``（与 ``display_data`` 时代语义一致），
+        未随字段更名 ``data`` 同步，避免破坏 ``ToolExecutionService`` 等调用方。
+        """
+        self.data = None

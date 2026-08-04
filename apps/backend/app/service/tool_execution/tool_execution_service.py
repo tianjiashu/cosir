@@ -159,7 +159,7 @@ class ToolExecutionService:
                     error=observation.error,
                     reason=observation.reason,
                     retryable=observation.retryable,
-                    data=observation.display_data or {},
+                    data=observation.data or {},
                 ),
             )
 

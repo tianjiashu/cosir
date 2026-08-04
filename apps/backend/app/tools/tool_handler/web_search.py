@@ -25,15 +25,15 @@ from app.tools.tool_models.web_search_args import WebSearchArgs
 class WebSearchTool(HandlerBase):
     """调用已配置 Provider 并将搜索元数据返回给模型。"""
 
-    name: ClassVar[str] = "web_search"
-    description: ClassVar[str] = (
+    name: str = "web_search"
+    description: str = (
         "Search the web for information. Returns up to 5 results by default with "
         "titles, URLs, and descriptions. The query is passed through to the configured "
         "backend, so operators such as site:domain, filetype:pdf, intitle:word, -term, "
         'and "exact phrase" may work when the backend supports them.'
     )
     permission: ClassVar[str] = "network"
-    args_model: ClassVar[type[WebSearchArgs]] = WebSearchArgs
+    args_model: type[WebSearchArgs] = WebSearchArgs
     timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 5
     risk_level: ClassVar[str] = "medium"
 
@@ -154,7 +154,7 @@ class WebSearchTool(HandlerBase):
             content=json.dumps(
                 {"success": True, "data": {"web": web_results}}, separators=(",", ":")
             ),
-            display_data={"web": web_results},
+            data={"web": web_results},
         )
 
     def to_definition(self) -> ToolDefinition:

@@ -209,7 +209,7 @@ class SearchFilesTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=result,
-            display_data={
+            data={
                 "items": display_items,
                 "pattern": pattern,
                 "target": target,

@@ -43,8 +43,8 @@ from app.tools.tool_models.web_extract_args import WebExtractArgs
 class WebExtractTool(HandlerBase):
     """验证 URL 后调用已配置 Provider 返回清理后的网页正文。"""
 
-    name: ClassVar[str] = "web_extract"
-    description: ClassVar[str] = (
+    name: str = "web_extract"
+    description: str = (
         "Extract content from public web page URLs. Returns clean page content in "
         "markdown/html (no LLM summarization - fast). Also works with PDF URLs "
         "(arxiv papers, documents) - pass the PDF link directly. Very large pages are "
@@ -53,7 +53,7 @@ class WebExtractTool(HandlerBase):
         "If a URL fails or times out, use the browser tool instead."
     )
     permission: ClassVar[str] = "network"
-    args_model: ClassVar[type[WebExtractArgs]] = WebExtractArgs
+    args_model: type[WebExtractArgs] = WebExtractArgs
     timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 10
     risk_level: ClassVar[str] = "medium"
 
@@ -213,7 +213,7 @@ class WebExtractTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps({"success": True, "results": results}, separators=(",", ":")),
-            display_data={"web": results},
+            data={"web": results},
         )
 
     def _resolve_extract_provider(

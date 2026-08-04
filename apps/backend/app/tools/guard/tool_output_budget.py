@@ -77,7 +77,7 @@ class ToolOutputBudget:
             hint = "\n... [output truncated by global tool budget]"
         visible_hint = hint[: self._max_chars]
         visible_prefix = redacted_content[: max(0, self._max_chars - len(visible_hint))]
-        data = dict(observation.display_data)
+        data = dict(observation.data or {})
         data.update(
             {
                 "output_truncated": True,
@@ -88,7 +88,7 @@ class ToolOutputBudget:
         return replace(
             safe_observation,
             content=visible_prefix + visible_hint,
-            display_data=data,
+            data=data,
         )
 
     def _write_artifact(

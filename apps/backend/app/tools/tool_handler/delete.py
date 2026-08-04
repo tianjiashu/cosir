@@ -291,7 +291,7 @@ class DeleteTool(HandlerBase):
             status="success",
             content=f"Deleted file: {resolved}",
             permission=self.permission,
-            display_data={"path": str(resolved), "path_basename": resolved.name, "type": "file"},
+            data={"path": str(resolved), "path_basename": resolved.name, "type": "file"},
         )
 
     def to_definition(self) -> ToolDefinition:

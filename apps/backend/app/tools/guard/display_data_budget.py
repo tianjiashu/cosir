@@ -58,13 +58,13 @@ class DisplayDataBudget:
             无（不修改入参，返回新对象）。
         """
 
-        display_data = observation.display_data
+        display_data = observation.data
         if not display_data:
             return observation
         trimmed, changed = self._trim_value(display_data)
         if not changed:
             return observation
-        return replace(observation, display_data=trimmed)
+        return replace(observation, data=trimmed)
 
     def _trim_value(self, value: Any) -> tuple[Any, bool]:
         """递归截断任意展示数据结构中的长文本。

@@ -17,7 +17,7 @@ def tool_success(
     permission: str,
     content: str,
     tool_call_id: str = "",
-    display_data: dict[str, object] | None = None,
+    data: dict[str, object] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -72,7 +72,7 @@ def tool_success(
     # 下游展示应消费 display_data 的结构化字段而非其副本；避免大体积正文
     # 经 display_data 旁路无约束进入前端事件流与可观测性平台。
     merged_display_data.pop("content", None)
-    if display_data:
-        merged_display_data.update(display_data)
-    observation.display_data = merged_display_data
+    if data:
+        merged_display_data.update(data)
+    observation.data = merged_display_data
     return observation
