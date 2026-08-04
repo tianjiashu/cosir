@@ -28,6 +28,12 @@ class EventType(str, Enum):
     HUMAN_INPUT_REQUESTED = "human_input_requested"
     HUMAN_INPUT_RECEIVED = "human_input_received"
 
+    # --- CodeGraph 索引准备阶段事件（第二阶段方案二） ---
+    # 只在 turn 执行前 emit：workspace_preparing（开始）→ ready / degraded（结束）。
+    WORKSPACE_PREPARING = "workspace_preparing"
+    WORKSPACE_READY = "workspace_ready"
+    WORKSPACE_DEGRADED = "workspace_degraded"
+
     def __str__(self) -> str:
         """返回事件类型的稳定字符串值。
 

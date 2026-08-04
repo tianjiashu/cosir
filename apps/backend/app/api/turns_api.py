@@ -50,15 +50,22 @@ from app.api.app import app
 from app.api.depends.dependencies import (
     get_runtime,
     get_runtime_event_bus,
+    get_turn_prepare_service,
     get_turn_service,
+    get_turn_workspace_resolver,
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models import TurnRecord
 from app.models.enums.event_type import EventType
+from app.models.payload.run_failed_payload import RunFailedPayload
+from app.models.runtime_event import RuntimeEvent
 from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
+from app.service.runtime_event.runtime_event_service import RuntimeEventService
+from app.service.task.turn_prepare_service import TurnPrepareService
 from app.service.task.turn_service import TurnService
+from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 
 _TERMINAL_EVENT_TYPES = {
     EventType.RUN_FINISHED,
@@ -111,6 +118,8 @@ async def stream_turn(
     runtime: AgentRuntime = Depends(get_runtime),
     turn_service: TurnService = Depends(get_turn_service),
     event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
+    prepare_service: TurnPrepareService | None = Depends(get_turn_prepare_service),
+    resolver: TurnWorkspaceResolver = Depends(get_turn_workspace_resolver),
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
@@ -158,7 +167,15 @@ async def stream_turn(
             detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
         )
     return StreamingResponse(
-        _sse_turn_events(runtime, turn_id, turn, event_bus),
+        _sse_turn_events(
+            runtime,
+            turn_id,
+            turn,
+            event_bus,
+            turn_service=turn_service,
+            prepare_service=prepare_service,
+            resolver=resolver,
+        ),
         media_type="text/event-stream; charset=utf-8",
     )
 
@@ -204,6 +221,9 @@ async def _sse_turn_events(
     turn_id: str,
     turn: TurnRecord | None = None,
     event_bus: RuntimeEventBus | None = None,
+    turn_service: TurnService | None = None,
+    prepare_service: TurnPrepareService | None = None,
+    resolver: TurnWorkspaceResolver | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
 
@@ -244,7 +264,17 @@ async def _sse_turn_events(
     subscription = event_bus.subscribe(turn_id)
     producer: asyncio.Task[None] | None = None
     if event_bus.claim_turn_producer(turn_id):
-        producer = asyncio.create_task(_drive_runtime_turn(runtime, turn_id, turn, event_bus))
+        producer = asyncio.create_task(
+            _drive_turn_with_prepare(
+                runtime,
+                turn_id,
+                turn,
+                event_bus,
+                turn_service=turn_service,
+                prepare_service=prepare_service,
+                resolver=resolver,
+            )
+        )
     else:
         log.info(
             "turn_stream_producer_already_running",
@@ -309,38 +339,114 @@ async def _sse_turn_events(
                         )
 
 
-async def _drive_runtime_turn(
+async def _drive_turn_with_prepare(
     runtime: AgentRuntime,
     turn_id: str,
     turn: TurnRecord | None,
     event_bus: RuntimeEventBus,
+    turn_service: TurnService | None = None,
+    prepare_service: TurnPrepareService | None = None,
+    resolver: TurnWorkspaceResolver | None = None,
 ) -> None:
-    """Drive ``run_turn`` as an event producer for bus-backed SSE.
+    """Drive ``run_turn`` as an event producer, with optional CodeGraph prepare upfront.
+
+    在 ``run_turn`` 之前先执行 CodeGraph 索引准备（方案二 §4.2）：由 API 层经
+    ``TurnWorkspaceResolver`` 解析 workspace_path，交给 ``TurnPrepareService`` 异步准备，
+    就绪/降级后再启动 ``run_turn``。Kernel 不可用（``prepare_service`` 为 None）时跳过准备。
 
     参数:
         runtime: 产生轮次事件的运行时。
         turn_id: 待运行的轮次标识。
         turn: 可选预取轮次记录。
         event_bus: 当前进程 runtime event 广播总线。
+        turn_service: 轮次 service（prepare 阶段断开兜底落 failed 用）。
+        prepare_service: 索引准备 service；None 表示 CodeGraph 不可用，跳过准备。
+        resolver: turn → workspace_path 解析器。
 
     返回:
         无。
 
     异常:
-        向上透传 ``runtime.run_turn`` 的未预期异常，由持有 producer 的 SSE 层记录。
+        向上透传 ``runtime.run_turn`` 的未预期异常，由持有 producer 的 SSE 层记录；
+        prepare 阶段被取消时 re-raise ``CancelledError``（兜底落 failed 后不吞）。
 
     副作用:
-        消费 ``runtime.run_turn`` 以驱动执行，并把产出的事件发布到 bus；结束时关闭当前
-        turn 的订阅。
+        可能触发 CodeGraph 索引 init/sync 并发布准备阶段事件；消费 ``run_turn`` 事件
+        发布到 bus；结束时释放 producer 槽位（覆盖 prepare + run 整体）。
     """
 
-    events = runtime.run_turn(turn_id, turn=turn)
-    try:
-        async for event in events:
-            event_bus.publish(event)
-    finally:
+    workspace_path = resolver.resolve(turn) if (resolver is not None and turn is not None) else None
+    entered_run = False
+
+    async def execute() -> None:
+        """消费 ``run_turn`` 事件并发布到 bus（原 _drive_runtime_turn 主体）。"""
+        nonlocal entered_run
+        entered_run = True
+        events = runtime.run_turn(turn_id, turn=turn)
         try:
-            await events.aclose()
-            event_bus.close_turn(turn_id)
+            async for event in events:
+                event_bus.publish(event)
         finally:
-            event_bus.release_turn_producer(turn_id)
+            try:
+                await events.aclose()
+                event_bus.close_turn(turn_id)
+            finally:
+                event_bus.release_turn_producer(turn_id)
+
+    try:
+        if prepare_service is not None:
+            task_id = turn.task_id if turn is not None else ""
+            await prepare_service.prepare_then_execute(task_id, turn_id, workspace_path, execute)
+        else:
+            await execute()
+    except asyncio.CancelledError:
+        # 仅 prepare 阶段（turn 仍 pending，未进入 run_turn）断开需落 failed 兜底；
+        # run 阶段断开由 run_turn 内部 fail_turn_if_running 兜底（§九.3/4）。
+        if not entered_run and turn_service is not None and turn_id:
+            try:
+                # 方法偏离说明（§九.4）：fail_turn_if_running 的 WHERE status="running"
+                # 原子约束对 pending 不生效（turn_crud），而 prepare 期间 turn 仍 pending；
+                # 且本 producer 已 claim 独占（无并发认领竞态），故用无条件
+                # update_turn_status 强制落 failed。兜底后 emit run_failed 提供终态事件。
+                turn_service.update_turn_status(
+                    turn_id, "failed", end_reason="client_disconnected"
+                )
+                _emit_run_failed(turn, turn_id)
+            except Exception:
+                log.exception(
+                    "turn_prepare_disconnect_failed",
+                    extra={"msg": "prepare 阶段断开落 failed 失败", "data": {"turn_id": turn_id}},
+                )
+        raise
+    finally:
+        # 最外层释放 producer 槽位，覆盖 prepare + run 整体（方案二 §4.2.1）。
+        event_bus.release_turn_producer(turn_id)
+
+
+def _emit_run_failed(turn: TurnRecord | None, turn_id: str) -> None:
+    """prepare 阶段断开兜底时发布一条 run_failed 终态事件。
+
+    与 ``runtime.run_turn`` 内部落 failed 时的终态事件同构，经 ``RuntimeEventService``
+    落库并发布，避免留下无终态事件的孤儿 turn（方案二 §4.2.1 / §六 验收 5）。
+
+    参数:
+        turn: 预取轮次记录（task_id 来源；为 None 时用空串）。
+        turn_id: 待落终态的轮次标识。
+
+    返回:
+        无。
+
+    异常:
+        RuntimeError: storage 未初始化时抛出（由调用方兜底捕获）。
+
+    副作用:
+        向 runtime_events 表写入 run_failed 事件并广播。
+    """
+    task_id = turn.task_id if turn is not None else ""
+    event = RuntimeEvent(
+        event_type=EventType.RUN_FAILED,
+        task_id=task_id,
+        turn_id=turn_id,
+        payload=RunFailedPayload(error="client_disconnected", status="failed"),
+    )
+    RuntimeEventService().save_and_publish(event)

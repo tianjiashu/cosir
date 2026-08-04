@@ -20,6 +20,9 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.payload.step_started_payload import StepStartedPayload
 from app.models.payload.tool_call_finished_payload import ToolCallFinishedPayload
 from app.models.payload.tool_call_started_payload import ToolCallStartedPayload
+from app.models.payload.workspace_degraded_payload import WorkspaceDegradedPayload
+from app.models.payload.workspace_preparing_payload import WorkspacePreparingPayload
+from app.models.payload.workspace_ready_payload import WorkspaceReadyPayload
 
 EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
     EventType.RUN_STARTED: RunStartedPayload,
@@ -38,4 +41,7 @@ EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
     EventType.FINAL_RESPONSE: FinalResponsePayload,
     EventType.HUMAN_INPUT_REQUESTED: HumanInputRequestedPayload,
     EventType.HUMAN_INPUT_RECEIVED: HumanInputReceivedPayload,
+    EventType.WORKSPACE_PREPARING: WorkspacePreparingPayload,
+    EventType.WORKSPACE_READY: WorkspaceReadyPayload,
+    EventType.WORKSPACE_DEGRADED: WorkspaceDegradedPayload,
 }

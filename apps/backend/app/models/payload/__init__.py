@@ -19,6 +19,9 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.payload.step_started_payload import StepStartedPayload
 from app.models.payload.tool_call_finished_payload import ToolCallFinishedPayload
 from app.models.payload.tool_call_started_payload import ToolCallStartedPayload
+from app.models.payload.workspace_degraded_payload import WorkspaceDegradedPayload
+from app.models.payload.workspace_preparing_payload import WorkspacePreparingPayload
+from app.models.payload.workspace_ready_payload import WorkspaceReadyPayload
 
 __all__ = [
     "EVENT_PAYLOAD_MODELS",
@@ -40,4 +43,7 @@ __all__ = [
     "StepStartedPayload",
     "ToolCallFinishedPayload",
     "ToolCallStartedPayload",
+    "WorkspaceDegradedPayload",
+    "WorkspacePreparingPayload",
+    "WorkspaceReadyPayload",
 ]

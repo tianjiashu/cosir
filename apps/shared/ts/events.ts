@@ -24,7 +24,10 @@ export type RuntimeEventType =
   | "observation_added"
   | "final_response"
   | "human_input_requested"
-  | "human_input_received";
+  | "human_input_received"
+  | "workspace_preparing"
+  | "workspace_ready"
+  | "workspace_degraded";
 
 /** 所有运行时事件 payload 都是 JSON object。 */
 export type RuntimeEventPayloadObject = Record<string, unknown>;
@@ -110,7 +113,6 @@ export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {
   tool_call_id?: string | null;
   arguments?: Record<string, unknown> | null;
   display?: Record<string, unknown> | null;
-  request_summary?: Record<string, unknown> | null;
 }
 
 export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
@@ -118,8 +120,6 @@ export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
   tool_name: string;
   status: "success" | "error";
   tool_call_id: string;
-  result_summary?: Record<string, unknown> | Record<string, unknown>[] | null;
-  summary?: string | null;
   content?: string | null;
   error?: string;
   reason?: string;
@@ -154,6 +154,23 @@ export interface HumanInputReceivedPayload extends RuntimeEventPayloadObject {
   details?: Record<string, unknown>;
 }
 
+export interface WorkspacePreparingPayload extends RuntimeEventPayloadObject {
+  workspace_path: string;
+}
+
+export interface WorkspaceReadyPayload extends RuntimeEventPayloadObject {
+  workspace_path: string;
+  action_taken: "init" | "sync";
+  files_changed: number;
+  duration_ms: number;
+}
+
+export interface WorkspaceDegradedPayload extends RuntimeEventPayloadObject {
+  workspace_path: string;
+  state: string;
+  degraded_reason: string;
+}
+
 /** event_type 到 payload 类型的映射。 */
 export interface RuntimeEventPayloadMap {
   run_started: RunStartedPayload;
@@ -172,6 +189,9 @@ export interface RuntimeEventPayloadMap {
   final_response: FinalResponsePayload;
   human_input_requested: HumanInputRequestedPayload;
   human_input_received: HumanInputReceivedPayload;
+  workspace_preparing: WorkspacePreparingPayload;
+  workspace_ready: WorkspaceReadyPayload;
+  workspace_degraded: WorkspaceDegradedPayload;
 }
 
 /** SSE 传输的运行时事件信封，对应后端 `RuntimeEvent.to_dict()`。 */

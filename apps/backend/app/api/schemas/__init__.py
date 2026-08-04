@@ -15,6 +15,7 @@ from app.api.schemas.response.AgentProfileResponse import AgentProfileResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
+from app.api.schemas.response.IndexPrepareResponse import IndexPrepareResponse
 from app.api.schemas.response.ListAgentsResponse import ListAgentsResponse
 from app.api.schemas.response.LogEntryResponse import LogEntryResponse
 from app.api.schemas.response.LogQueryResponse import LogQueryResponse
@@ -31,6 +32,7 @@ __all__ = [
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
     "HealthResponse",
+    "IndexPrepareResponse",
     "ListAgentsResponse",
     "LogEntryResponse",
     "LogQueryResponse",

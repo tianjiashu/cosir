@@ -10,12 +10,17 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from app.service.codegraph.workspace_index_bus import WorkspaceIndexBus
+
 if TYPE_CHECKING:
+    from app.service.codegraph.workspace_index_service import WorkspaceIndexService
     from app.service.log_query_service import LogQueryService
     from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
     from app.service.runtime_event.runtime_event_service import RuntimeEventService
     from app.service.task.task_service import TaskService
+    from app.service.task.turn_prepare_service import TurnPrepareService
     from app.service.task.turn_service import TurnService
+    from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
     from app.storage.crud.log_crud import LogStore
     from app.storage.crud.runtime_event_crud import RuntimeEventCrud
@@ -311,6 +316,114 @@ def get_workspace_service() -> WorkspaceService:
 
 
 @lru_cache(maxsize=1)
+def get_turn_workspace_resolver() -> TurnWorkspaceResolver:
+    """Return the process-local TurnWorkspaceResolver singleton.
+
+    参数:
+        无。
+
+    返回:
+        TurnWorkspaceResolver 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 TurnWorkspaceResolver。
+    """
+
+    from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
+
+    return TurnWorkspaceResolver()
+
+
+def get_turn_prepare_service() -> TurnPrepareService | None:
+    """Return the turn prepare service, or None if CodeGraph is unavailable.
+
+    因依赖 Kernel 进程状态（可能后启动/重启/不可用），不做缓存；每次构造轻量。
+    CodeGraph 不可用时返回 None，调用方（API 层）据此跳过索引准备直接执行
+    （降级到文件搜索，方案二 §五）。
+
+    参数:
+        无。
+
+    返回:
+        TurnPrepareService 实例；CodeGraph Kernel 不可用时返回 None。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        尝试从 supervisor 取得 Kernel client。
+    """
+
+    from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
+    from app.service.codegraph.lifecycle_service import CodeGraphLifecycleService
+    from app.service.task.turn_prepare_service import TurnPrepareService
+
+    try:
+        client = get_kernel_supervisor().get_client()
+    except (RuntimeError, CodeGraphKernelUnavailableError):
+        # supervisor 未初始化或 Kernel 未就绪：禁用索引准备，降级到文件搜索。
+        return None
+    return TurnPrepareService(CodeGraphLifecycleService(client))
+
+
+@lru_cache(maxsize=1)
+def get_workspace_index_bus() -> WorkspaceIndexBus:
+    """Return the process-local workspace index progress bus singleton.
+
+    参数:
+        无。
+
+    返回:
+        WorkspaceIndexBus 单例。
+
+    异常:
+        无。
+
+    副作用:
+        首次调用时创建 WorkspaceIndexBus。
+    """
+
+    return WorkspaceIndexBus()
+
+
+def get_workspace_index_service() -> WorkspaceIndexService | None:
+    """Return the workspace index prepare service, or None if CodeGraph is unavailable.
+
+    因依赖 Kernel 进程状态（可能后启动/重启/不可用），不做缓存；每次构造轻量。
+    CodeGraph 不可用时返回 None，调用方（API 层）据此降级返回 ready=False。
+
+    参数:
+        无。
+
+    返回:
+        WorkspaceIndexService 实例；CodeGraph Kernel 不可用时返回 None。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        尝试从 supervisor 取得 Kernel client。
+    """
+
+    from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
+    from app.service.codegraph.lifecycle_service import CodeGraphLifecycleService
+    from app.service.codegraph.workspace_index_service import WorkspaceIndexService
+
+    try:
+        client = get_kernel_supervisor().get_client()
+    except (RuntimeError, CodeGraphKernelUnavailableError):
+        # supervisor 未初始化或 Kernel 未就绪：禁用索引准备，降级到文件搜索。
+        return None
+    return WorkspaceIndexService(
+        lifecycle=CodeGraphLifecycleService(client),
+        bus=get_workspace_index_bus(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_log_query_service() -> LogQueryService:
     """Return the process-local LogQueryService singleton.
 
@@ -349,7 +462,9 @@ def reset_service_dependencies() -> None:
     """
 
     get_log_query_service.cache_clear()
+    get_workspace_index_bus.cache_clear()
     get_workspace_service.cache_clear()
+    get_turn_workspace_resolver.cache_clear()
     get_turn_service.cache_clear()
     get_task_service.cache_clear()
     get_runtime_event_service.cache_clear()
