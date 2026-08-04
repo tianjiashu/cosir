@@ -23,6 +23,12 @@ DEFAULT_DEVELOPER_TOOLS = (
     "patch",
     "delete",
     "execute_terminal",
+    "codegraph_explore",
+    "codegraph_search",
+    "codegraph_node",
+    "codegraph_callers",
+    "codegraph_callees",
+    "codegraph_impact",
 )
 
 

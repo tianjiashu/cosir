@@ -13,6 +13,7 @@
 ``from app.api.app import app`` 取到的是包模块而非 FastAPI 实例。
 """
 
+import asyncio
 import importlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,6 +34,7 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
+from app.codegraph import CodeGraphKernelClient, CodeGraphKernelSupervisor
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -80,8 +82,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
     )
 
+    # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
+    # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
+    # 必须先于 build_tool_system：codegraph 工具装配需要注入已就绪的 Kernel client，
+    # 否则 supervisor 未初始化，_codegraph_client() 恒返回 None，工具恒降级（审查暴露）。
+    _kernel_supervisor = await _start_codegraph_kernel()
+
     if runtime_override is None:
-        tool_system = tool_system or ToolSystem.build_tool_system()
+        tool_system = tool_system or ToolSystem.build_tool_system(_codegraph_client())
         set_tool_system(tool_system)
         set_agent_registry(build_agent_registry())
         runtime = build_runtime(tool_system=tool_system)
@@ -99,6 +107,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if _kernel_supervisor is not None:
+            _kernel_supervisor.shutdown()
         flush_langfuse()
         close_service_dependencies()
         _mark_boot_stopped()
@@ -118,6 +128,7 @@ install_http_exception_logging(app, log)
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
+importlib.import_module("app.api.workspace_index_api")
 importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.agents_api")
@@ -148,6 +159,75 @@ def create_app(runtime=None, tool_system=None) -> FastAPI:
     if tool_system is not None:
         set_tool_system(tool_system)
     return app
+
+
+async def _start_codegraph_kernel() -> CodeGraphKernelSupervisor | None:
+    """启动常驻 CodeGraph Kernel 子进程并设进程级单例；失败降级不阻断启动。
+
+    应用级预热：在应用装配完成后、标记 boot ready 前，拉起 CodeGraph Kernel 常驻
+    子进程（``supervisor.start()``），避免首次 Agent 工具调用才发现 Kernel 不可用。
+
+    启动失败不阻断后端启动：异常仅记录日志，supervisor 仍通过 ``set_kernel_supervisor``
+    设为进程级单例（state 为 failed），使 ``get_client()`` 抛 ``CodeGraphKernelUnavailableError``，
+    由 service 层（如 ``depends.get_turn_prepare_service``）降级到文件搜索。
+
+    已知延迟：``supervisor.start()`` 内含握手（``client.hello``），极端场景（node 挂起
+    无响应）下可能阻塞最多一个 RPC 超时（默认 30s），从而延迟 ``_mark_boot_ready()``。
+    这是「延迟 ready」而非「不 ready」——握手失败会走降级不抛。正常场景握手秒级完成。
+
+    参数:
+        无。
+
+    返回:
+        已装配的 ``CodeGraphKernelSupervisor`` 单例；启动成功则 state=ready。
+        （当前实现始终返回非 None，因失败也保留 supervisor 供状态查询；预留 None 分支
+        供测试注入或未来「完全禁用 Kernel」配置。）
+
+    异常:
+        无（启动失败归一化为降级，不向上抛）。
+
+    副作用:
+        创建 Kernel 子进程并设进程级 supervisor 单例；失败时记录日志并保留 failed 状态。
+    """
+
+    from app.codegraph import CodeGraphKernelSupervisor, set_kernel_supervisor
+
+    supervisor = CodeGraphKernelSupervisor()
+    try:
+        # supervisor.start() 是同步阻塞（spawn + 握手），放进线程池避免卡事件循环。
+        await asyncio.to_thread(supervisor.start)
+    except Exception:
+        log.exception(
+            "codegraph_kernel_startup_failed",
+            extra={"msg": "CodeGraph Kernel 启动失败，降级到文件搜索"},
+        )
+    set_kernel_supervisor(supervisor)
+    return supervisor
+
+
+def _codegraph_client() -> CodeGraphKernelClient | None:
+    """安全取得 CodeGraph Kernel RPC 客户端；Kernel 未就绪返回 None。
+
+    参数:
+        无。
+
+    返回:
+        Kernel 就绪时的 ``CodeGraphKernelClient``；supervisor 未初始化或 Kernel 非
+        ready 时返回 None（CodeGraph 工具仍注册，execute 降级）。
+
+    异常:
+        无（内部捕获，不向上抛）。
+
+    副作用:
+        无。
+    """
+
+    from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
+
+    try:
+        return get_kernel_supervisor().get_client()
+    except (RuntimeError, CodeGraphKernelUnavailableError):
+        return None
 
 
 def _mark_boot_ready() -> None:

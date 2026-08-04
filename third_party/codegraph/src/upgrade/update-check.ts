@@ -78,10 +78,6 @@ function resolveDeps(deps: UpdateCheckDeps = {}): ResolvedDeps {
   };
 }
 
-function envTruthy(raw: string | undefined): boolean {
-  return raw !== undefined && raw !== '' && raw !== '0' && raw.toLowerCase() !== 'false';
-}
-
 /**
  * Vendored build: the update check is ALWAYS disabled. This coding-agent
  * integration embeds a pinned CodeGraph version and must never reach the

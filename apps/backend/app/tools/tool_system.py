@@ -2,9 +2,18 @@
 
 from dataclasses import dataclass
 
+from app.codegraph import CodeGraphKernelClient
 from app.config.settings import Settings
 from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.tools.tool_handler.codegraph_query import (
+    build_codegraph_callees_definition,
+    build_codegraph_callers_definition,
+    build_codegraph_explore_definition,
+    build_codegraph_impact_definition,
+    build_codegraph_node_definition,
+    build_codegraph_search_definition,
+)
 from app.tools.tool_handler.delete import build_delete_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
@@ -43,14 +52,19 @@ class ToolSystem:
     scheduler: ToolScheduler
 
     @classmethod
-    def build_tool_system(cls) -> "ToolSystem":
+    def build_tool_system(
+        cls, client: CodeGraphKernelClient | None = None
+    ) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册全部 9 个工具定义，并用 ``Settings.MAX_TOOL_OUTPUT_CHARS``
-        （类级静态配置，非传入的 settings 对象）构造输出预算上限，装配调度器。
+        按内置清单注册全部 15 个工具定义（9 个既有 + 6 个 CodeGraph 查询工具），并用
+        ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
+        构造输出预算上限，装配调度器。
 
         参数:
-            无。
+            client: 可选的 CodeGraph Kernel RPC 客户端；由调用方（api 装配层）从
+                supervisor 取得。为 None 时 CodeGraph 工具仍注册，execute 降级
+                （Kernel 不可用）。本方法**不自调** get_client，避免构造即抛破坏装配。
 
         返回:
             已初始化 registry 与 scheduler 的 ToolSystem。
@@ -72,6 +86,13 @@ class ToolSystem:
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
+        # CodeGraph 查询工具（client 可为 None，execute 降级）。
+        registry.register(build_codegraph_explore_definition(client))
+        registry.register(build_codegraph_search_definition(client))
+        registry.register(build_codegraph_node_definition(client))
+        registry.register(build_codegraph_callers_definition(client))
+        registry.register(build_codegraph_callees_definition(client))
+        registry.register(build_codegraph_impact_definition(client))
         scheduler = ToolScheduler(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),

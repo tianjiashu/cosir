@@ -53,14 +53,17 @@ class Settings:
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
 
+    # --- CodeGraph 索引生命周期（见 codegraph-workspace-lifecycle-design.md） ---
+    # 首次建索引（init）大仓库可能数分钟，需长超时；增量同步（sync）耗时较短。
+    CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS: ClassVar[float] = 600.0
+    CODEGRAPH_INDEX_SYNC_TIMEOUT_SECONDS: ClassVar[float] = 120.0
+
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
     # 密钥仅通过环境变量（``CODING_AGENT_LANGFUSE_*``）注入，不写入代码库，避免泄露。
     LANGFUSE_ENABLED: ClassVar[bool] = False
     LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
     LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
-    # 云服务器经反向代理对外暴露的域名（指向 langfuse/server）。
-    LANGFUSE_BASE_URL: ClassVar[str] = "https://langfuse.your-cloud.example.com"
     # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
     LANGFUSE_BASE_URL: ClassVar[str] = "http://124.220.55.187"
 
@@ -70,8 +73,8 @@ class Settings:
     _OVERRIDABLE: ClassVar[frozenset[str]] = frozenset()
 
     @staticmethod
-    def _resolve_repository_root() -> Path:
-        """从本文件位置推导仓库根目录绝对路径。
+    def repository_root() -> Path:
+        """推导仓库根目录绝对路径（公开契约，供跨模块安全调用）。
 
         参数:
             无。
@@ -213,7 +216,7 @@ class Settings:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性。
         """
 
-        root = repository_root or cls._resolve_repository_root()
+        root = repository_root or cls.repository_root()
         cls._load_local_env(root)
 
         cls.LOG_DIR = root / "logs"
