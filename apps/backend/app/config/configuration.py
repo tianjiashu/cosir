@@ -1,36 +1,29 @@
-"""进程级运行时单例的集中收口（轻量配置层的特例扩展）。
+"""进程级轻量配置单例的集中收口（轻量配置层的特例扩展）。
 
-本模块属于 ``app.config`` 通用轻量层，但作为进程级运行时单例的单一收口点，
+本模块属于 ``app.config`` 通用轻量层，但作为进程级配置类单例的单一收口点，
 允许被 ``core`` / ``service`` / ``api`` / ``storage`` 各层安全导入，不存在反向依赖。
 
 收口内容（进程级、按需构建、可热替换）：
 - agent profile 目录（``AgentProfileRegistry``）：``set_agent_registry`` /
   ``get_agent_registry`` / ``build_agent_registry``。
 - 工具系统（``ToolSystem``）：``set_tool_system`` / ``get_tool_system``。
-- 运行时（``AgentRuntime``）：``set_runtime`` / ``get_runtime``。
 
 设计要点：
-- 三组单例均为 ``None`` 起步，由应用启动（``api/app.py`` 的 lifespan / ``create_app``）
+- 两组单例均为 ``None`` 起步，由应用启动（``api/app.py`` 的 lifespan / ``create_app``）
   经对应 ``set_*`` 注入；未注入即 ``get_*`` 会抛出一致的 ``RuntimeError``，避免散落的
   模块级全局变量与 ``global`` 声明。
-- 领域 service 三件套单例（``_SERVICES``）按既有约定继续留在
-  ``api/depends/dependencies.py``，本模块不持有，避免 ``config`` 层耦合 service 装配。
-- ``build_runtime`` 因依赖 service 装配与 ``RuntimeContextBuilder``，仍置于
-  ``api/depends/dependencies.py``；其最终产出的 ``AgentRuntime`` 经本模块的 ``set_runtime``
-  收口。
+- 本模块仅收口轻量配置层可安全持有的 agent 目录与工具系统；运行时（``AgentRuntime``）
+  单例因依赖 service 装配与 ``RuntimeContextBuilder``，收口在 ``api/depends/dependencies.py``
+  （``set_runtime`` / ``get_runtime`` / ``build_runtime``）；领域 service 与底层 CRUD/Store
+  单例由 ``app.service.depends`` 统一管理。本模块均不持有，避免 ``config`` 层耦合
+  service / core 装配。
 """
-
-# 类型在运行时才可用，避免顶层硬依赖导致循环导入；此处仅作注解类型提示。
-from typing import TYPE_CHECKING
 
 from app.core.agents.agent_profile import default_developer_agent, developer_agent_pro
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
 from app.tools.tool_system import ToolSystem
-
-if TYPE_CHECKING:
-    pass
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _TOOL_SYSTEM: ToolSystem | None = None

@@ -1,72 +1,54 @@
 # Backend
 
-This directory contains the local Python backend for the desktop coding agent.
+本地桌面 coding-agent 的 Python 后端，基于 FastAPI + LangGraph + SQLite，由桌面端（Tauri 2）托管启动。
 
-The first implementation slice focuses on a text-only Agent runtime skeleton:
+## 技术底座
 
-- task creation
-- default Agent profile persistence and prompt injection
-- runtime event emission
-- injectable workflow strategy boundary
-- streaming model adapter boundary
-- OpenAI-compatible streaming response parsing
-- model-facing tool schema injection for model-visible tools
-- context budget guard before model provider calls
-- SSE API boundary
-- trace/log query boundary
-- file logging boundary
+- **FastAPI**：HTTP / SSE 接入层（`app/api/`），承载任务、轮次、Agent、工作区、日志等端点。
+- **LangGraph（强依赖）**：Agent 运行底座。Workflow 编排层基于 `StateGraph` + `SqliteSaver` checkpoint，支持 `interrupt()` 审批中断、`Command(resume=)` 恢复、subgraph/`Send` subagent。最低运行环境 Python 3.11+。
+- **自定义工具系统（不基于 LangGraph）**：`ToolDefinition` 是工具契约单一事实来源；内置 9 个工具（read_file / write_file / patch / search_files / list_directory / delete / execute_terminal / web_search / web_extract），全部继承 `tool_handler/tool_base.HandlerBase`，由 `core` 调度执行，采用分级隔离（thread 直跑 / process 子进程+硬超时强杀）。
+- **Langfuse 可观测性**：LLM 与工具调用的 trace 唯一收口在 `core/observability/`，惰性加载、缺配置不影响主流程。
+- **SQLite**：运行时状态与日志持久化（`app/storage/`）；LangGraph checkpoint 由 `core.runtime.runs.checkpointer` 经 aiosqlite 直连。
 
-`app/agents/` owns Agent execution profiles. The default runtime uses the
-built-in `developer` profile, persists its `agent_id` on each task, injects the
-profile into the system prompt, emits it in `run_started`, and stores it in
-runtime records. The profile also filters model-visible tools and blocks tool
-calls outside the Agent boundary before they reach execution. This keeps Agent,
-Workflow, and Runtime separate before alternate role support exists.
+## 分层架构
 
-Model provider streams and client SSE are separate boundaries. The model
-adapter consumes provider streaming chunks and emits internal runtime deltas;
-the API layer formats stored runtime events as SSE for the desktop client.
+```
+api/          FastAPI 接入层（路由、SSE、依赖装配）
+core/         Agent 运行底座（全基于 LangGraph：runtime / workflows / llm / context / agents / observability）
+service/      领域服务编排层（task / turn / workspace / tool_execution / runtime_event / log_query）
+storage/      SQLite 数据层（引擎缓存、schema、CRUD）
+tools/        自定义工具系统（schemas / tool_execute / tool_handler / tool_models / validation / guard）
+models/       业务值对象地基（dataclass / 枚举 / payload）
+config/       运行配置 + 日志子系统聚合包（logging/ 特例允许依赖 storage/trace_infra）
+trace_infra/  trace 原语（leaf）
+utils/        叶子工具函数（leaf）
+```
 
-`app/runtime/` owns task lifecycle boundaries, event persistence, and the
-controlled operation facade exposed to workflows.
-`app/workflows/` owns replaceable Agent execution strategies; a workflow decides
-which runtime operations to call while the runtime keeps storage, model, tool,
-and event side effects behind that facade.
+依赖方向单向：`api → core/service`；`core → service/tools/models/config/trace_infra`；`service → storage/models/config/trace_infra/tools`；`storage → models`；`tools → config/models/utils/trace_infra`（不依赖 service）。禁止跳层与反向依赖。
 
-Tool definitions are split between execution-facing and model-facing shapes.
-`ToolScheduler` filters registered tools by model visibility, the runtime
-converts those definitions into model-facing tool schemas, and the
-OpenAI-compatible adapter serializes them as Chat Completions function tools.
-Provider tool call ids are preserved across the assistant tool call message and
-the following tool observation so follow-up Chat Completions requests remain
-protocol-compatible. The first version explicitly requests serial tool calls
-with `parallel_tool_calls=false` and rejects multiple tool calls if a provider
-returns them anyway. Denied tools are not exposed to the model.
+## 关键约定
 
-Context size is guarded at the runtime/model-call boundary. The first version
-uses `CODING_AGENT_MAX_CONTEXT_CHARS` as a character-count proxy and fails with a
-clear `context_window_exceeded` error before provider I/O. Future tokenizer-based
-budgeting or context compaction should reuse this boundary.
+- **日志**：业务模块统一 `from app.config.logging.logger import log` 单例；落盘为单行 JSON（JSONL，9 字段），`trace_id` 为唯一链路键。详见 `rules/Agent日志开发规范.md`。
+- **启动契约**：`app/bootstate.py` 向 `storage/backend.bootstate.json` 写入 `booting/ready/failed/stopped` 状态，供桌面端 Rust supervisor 轮询（崩溃瞬间也能拿到脱敏后的失败原因）。
+- **配置**：`app/config/settings.py` 以 `Settings` 类级静态命名空间承载进程级配置，消费点静态读 `Settings.X`，不实例化、不传递 Settings 对象。
+- **Web 工具**：`web_search` / `web_extract` 经 `tools/tool_handler/web/` 子系统，通过 `web_provider_registry` 选择 provider（当前 firecrawl），URL 安全校验拦截带凭据/内网地址。
+- **工具执行分级隔离**：`ToolDefinition.execution_mode` 声明隔离策略，`process` 仅用于 execute_terminal 等需 OS 级隔离的工具。
 
-The first LangGraph integration is intentionally narrow and version-gated:
-`app/workflows/step_controller.py` uses a LangGraph `StateGraph` for workflow
-step continuation decisions only when a safe LangGraph baseline is installed.
-Current Python 3.9 development falls back to deterministic local logic because
-the secure LangGraph baseline requires Python 3.10+. The ReAct-like workflow
-still owns event streaming and tool/model orchestration; this is a controlled
-graph-backed insertion point, not a full migration of the workflow graph yet.
+## 开发工具链
 
-FastAPI and httpx are imported lazily by API/model adapter paths where possible, so the core runtime can be tested before project dependencies are installed.
+- 依赖与锁文件由 `uv` 管理（`pyproject.toml` + 已提交 `uv.lock`）。
+- Ruff（行宽 100、双引号）做 format + lint + import 排序；mypy 渐进类型检查；pre-commit 提交前强制。
+- pytest（`pytest-asyncio`，`asyncio_mode=auto`）；关键路径（工具执行、checkpoint、审批、日志、web 工具）必须有测试，置于 `tests/`。
 
 ## 启动方式
 
 ### 后端（开发期）
 
-在 `apps/backend` 目录下使用约定的模块入口启动 uvicorn：
+在 `apps/backend` 目录下使用模块入口启动：
 
 ```bash
 cd apps/backend
-.venv/bin/python -m app
+uv run python -m app
 ```
 
 可用环境变量覆盖运行参数：

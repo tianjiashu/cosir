@@ -562,3 +562,4 @@ CodeGraph 能力分两类：
 - 2026-08-02：整理文档结构，移除过时的“候选方案优先级”表述，将当前确认方向整理为决策快照、生命周期、工具边界、风险和开放问题。
 - 2026-08-02：更新第一版策略：内置 Node runtime 随桌面端打包；`agent-kernel` 采用 stdio JSON line RPC；首次索引默认创建不再确认；已有索引 sync 阻塞 task 启动；前端 workspace UI 展示索引状态；第一版配齐 Agent 可见查询工具。
 - 2026-08-02：补充内置 Node Kernel 生命周期管理，并整理上下文一致性：区分应用级 Kernel 生命周期、workspace 级索引生命周期、task/run 级工具请求；将早期“首次索引需用户确认”统一标注为历史想法。
+- 2026-08-04：讨论收敛出第一阶段技术方案，落地于 `codegraph-agent-kernel-design.md`。第一阶段唯一目标为「打通 Kernel 常驻 + 一次 explore 查询端到端跑通」，明确排除 LifecycleService / Agent 工具面 / 前端 UI。达成两项核心生产判断：（1）构建形态=编译 `dist` 后由锁定内置 Node 22 LTS 运行，不用 tsx 直跑；（2）workspace 关联=按请求带 `workspace_path`、常驻 Kernel 多 workspace 懒加载（`agent-kernel` 内维护 `Map<workspace_path, MCPEngine>`）。两项判断均基于项目事实（`package.json` 的 tsc 工程、`runtime_locator.rs` 固定目录解析范式、`tool_executor.py` 进程管理范式、AGENTS.md 的 Node 25/26 拦截风险）。

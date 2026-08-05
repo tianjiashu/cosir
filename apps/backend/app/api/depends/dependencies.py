@@ -1,9 +1,10 @@
 """FastAPI dependency wiring.
 
-进程级运行时单例（``AgentProfileRegistry`` / ``ToolSystem`` / ``AgentRuntime``）已收口到
-``app.config.configuration``；领域 service 与底层 CRUD/Store 单例由 ``app.service.depends``
-统一管理。本模块仅保留 ``build_runtime`` 装配，并对 ``configuration`` 中的单例访问器
-做薄壳 re-export，使现有 ``Depends(get_agent_registry)`` / ``app.py`` 等调用点零改动。
+轻量配置单例（``AgentProfileRegistry`` / ``ToolSystem``）已收口到 ``app.config.configuration``，
+由本模块做薄壳 re-export，使现有 ``Depends(get_agent_registry)`` / ``app.py`` 等调用点零改动；
+运行时单例（``AgentRuntime``）因依赖 service 装配与 ``RuntimeContextBuilder``，由本模块自身
+持有（``set_runtime`` / ``get_runtime`` / ``build_runtime``）。领域 service 与底层 CRUD/Store
+单例由 ``app.service.depends`` 统一管理。
 """
 
 from app.config.configuration import (
