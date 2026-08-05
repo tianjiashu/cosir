@@ -8,12 +8,13 @@
  */
 
 import { Copy, Check } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { logWarn } from "@/lib/logger";
 import { MessageTypography } from "./messageTypography";
 import { StreamingCaret } from "./StreamingCaret";
+import { highlightCode } from "@/lib/markdown/highlight";
 
 /** 流式期触发折叠的行数阈值（超过则折叠）。 */
 const CODE_FOLD_LINES = 12;
@@ -66,7 +67,15 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const lineCount = code.split("\n").length;
+  // 仅需行数用于折叠判定：直接计数换行符，避免流式每帧 split 出整个行数组（纯垃圾分配）。
+  const lineCount = useMemo(() => {
+    let count = 1;
+    for (let i = 0; i < code.length; i += 1) {
+      if (code.charCodeAt(i) === 10) count += 1;
+    }
+    return count;
+  }, [code]);
+  const highlight = useMemo(() => highlightCode(code, language), [code, language]);
   const shouldFold = streaming === true && (lineCount > CODE_FOLD_LINES || code.length > CODE_FOLD_CHARS);
   const folded = shouldFold && !expanded;
 
@@ -84,7 +93,7 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
   }, [code]);
 
   return (
-    <div className={cn("group relative overflow-hidden rounded-md border border-border bg-slate-950 text-sm", className)}>
+    <div className={cn("group relative min-w-0 overflow-hidden rounded-md border border-border bg-slate-950 text-sm", className)}>
       {/* 头部：语言标签 + 复制按钮 */}
       <div className="flex items-center justify-between border-b border-border/20 bg-slate-900 px-3 py-1.5">
         <span className="text-xs text-slate-400">{language ?? "text"}</span>
@@ -105,7 +114,14 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
       {/* 代码内容：流式期超阈值时限高折叠 */}
       <div className="relative">
         <pre className={cn("overflow-x-auto p-3", folded && "max-h-48 overflow-y-hidden")}>
-          <code className={cn(MessageTypography.code, "break-words text-slate-300")}>{code}</code>
+          {highlight ? (
+            <code
+              className={cn(MessageTypography.code, "break-words text-slate-300")}
+              dangerouslySetInnerHTML={{ __html: highlight.html }}
+            />
+          ) : (
+            <code className={cn(MessageTypography.code, "break-words text-slate-300")}>{code}</code>
+          )}
           <StreamingCaret show={streaming && isLastLeaf} />
         </pre>
         {folded ? (

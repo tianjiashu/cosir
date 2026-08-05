@@ -15,9 +15,9 @@
 import os
 from pathlib import Path
 
+from app.codegraph.exceptions import CodeGraphNodeMissingError
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.codegraph.exceptions import CodeGraphNodeMissingError
 
 #: 第一阶段占位：锁定的 node 位于后端固定资源目录（最终阶段改为桌面 resourcesDir）。
 NODE_DIR_ENV = "CODING_AGENT_CODEGRAPH_NODE"
@@ -39,7 +39,7 @@ def _fixed_node_candidates() -> list[Path]:
         无。
     """
     backend_root = Settings.repository_root() / "apps" / "backend"
-    node_dir = backend_root / ".codegraph-node"
+    node_dir = backend_root / ".workspace_event-node"
     if os.name == "nt":
         return [node_dir / "node.exe"]
     return [node_dir / "node", node_dir / "bin" / "node"]
@@ -50,7 +50,7 @@ def resolve_node_binary() -> Path:
 
     解析顺序：
         1. 环境变量 ``CODING_AGENT_CODEGRAPH_NODE``（显式覆盖，仅验证用）；
-        2. 项目内固定目录 ``apps/backend/.codegraph-node/node[.exe]``；
+        2. 项目内固定目录 ``apps/backend/.workspace_event-node/node[.exe]``；
         3. 以上均无 → 抛 ``CodeGraphNodeMissingError``（绝不回退到 PATH）。
 
     参数:

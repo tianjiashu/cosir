@@ -66,9 +66,7 @@ _ARGS_MODELS = {
 
 
 def _tool(name: str, client: _FakeClient | None = None) -> CodegraphQueryTool:
-    return CodegraphQueryTool.for_tool(
-        name, _ARGS_MODELS[name], "test description", client
-    )
+    return CodegraphQueryTool.for_tool(name, _ARGS_MODELS[name], "test description", client)
 
 
 def _ec(workspace_root: str = "/ws/root") -> ToolExecutionContext:
@@ -159,7 +157,7 @@ _CODE_GRAPH_TOOL_NAMES = {
 
 
 def test_build_tool_system_registers_codegraph_tools_with_client():
-    """build_tool_system(client=fake) 后 registry 含 6 个 codegraph 工具。"""
+    """build_tool_system(client=fake) 后 registry 含 6 个 workspace_event 工具。"""
     from app.tools.tool_system import ToolSystem
 
     ts = ToolSystem.build_tool_system(client=_FakeClient())  # type: ignore[arg-type]
@@ -174,14 +172,14 @@ def test_build_tool_system_none_client_registers_but_degrades():
     ts = ToolSystem.build_tool_system(client=None)
     names = set(ts.registry.get_all_tool_names())
     assert _CODE_GRAPH_TOOL_NAMES.issubset(names)
-    # 取一个 codegraph 工具的 handler，execute 应降级为 error（client None）
+    # 取一个 workspace_event 工具的 handler，execute 应降级为 error（client None）
     handler = ts.registry.get_tool_definition("codegraph_explore").handler
     obs = handler(query="x", execution_context=_ec())
     assert obs.status == "error"
 
 
 def test_agent_profile_selects_codegraph_tools():
-    """agent_profile.select_tools() 后 model_tools 含 6 个 codegraph 工具。"""
+    """agent_profile.select_tools() 后 model_tools 含 6 个 workspace_event 工具。"""
     from app.tools.tool_system import ToolSystem
 
     ts = ToolSystem.build_tool_system(client=_FakeClient())  # type: ignore[arg-type]

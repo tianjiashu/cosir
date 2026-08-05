@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.config.logging import merge_log_context, reset_log_context
-from app.trace_infra import is_trace_id, new_trace_id
+from app.utils.trace_infra import is_trace_id, new_trace_id
 
 
 def install_request_logging(app, logger: logging.Logger) -> None:

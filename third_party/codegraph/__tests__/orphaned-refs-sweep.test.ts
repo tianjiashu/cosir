@@ -24,7 +24,7 @@ describe('Orphaned refs sweep (#1187)', () => {
   let cg: CodeGraph;
 
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-orphan-sweep-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-orphan-sweep-'));
   });
 
   afterEach(() => {

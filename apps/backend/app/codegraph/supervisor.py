@@ -20,15 +20,15 @@ import time
 from enum import Enum
 from pathlib import Path
 
-from app.config.logging.logger import log
-from app.config.settings import Settings
-from app.codegraph.kernel_client import CodeGraphKernelClient
 from app.codegraph.exceptions import (
     CodeGraphKernelError,
     CodeGraphKernelUnavailableError,
     CodeGraphNodeMissingError,
 )
+from app.codegraph.kernel_client import CodeGraphKernelClient
 from app.codegraph.node_resolver import resolve_node_binary
+from app.config.logging.logger import log
+from app.config.settings import Settings
 
 #: 退避重启间隔（秒）；用尽后状态置 failed。
 _BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0)
@@ -64,6 +64,14 @@ def _server_script_path() -> Path:
 
     副作用:
         无。
+
+    路径约定:
+        agent-kernel 是 ``third_party/codegraph`` vendor 内的窄适配层（源码位于
+        ``third_party/codegraph/src/agent-kernel/``），随 codegraph 主工程 ``tsc``
+        构建一并产出到 ``third_party/codegraph/dist/agent-kernel/server.js``
+        （见 docs/codegraph-docs/codegraph-agent-kernel-design.md）。早期实现误指到
+        不存在的 ``third_party/workspace_event`` 目录，导致 Kernel 启动报
+        ``agent-kernel server not built``；此处以真实 vendor 路径为准。
     """
     root = Settings.repository_root()
     return root / "third_party" / "codegraph" / "dist" / "agent-kernel" / "server.js"
@@ -258,7 +266,7 @@ class CodeGraphKernelSupervisor:
         """启动 stderr 读取线程，把 Kernel 内部日志汇入后端统一日志。"""
         assert self._proc is not None
         self._stderr_thread = threading.Thread(
-            target=self._stderr_loop, name="codegraph-kernel-stderr", daemon=True
+            target=self._stderr_loop, name="workspace_event-kernel-stderr", daemon=True
         )
         self._stderr_thread.start()
 
@@ -280,7 +288,7 @@ class CodeGraphKernelSupervisor:
         """启动周期健康检查线程（kernel.ping + 进程存活探测）。"""
         self._stop_health.clear()
         self._health_thread = threading.Thread(
-            target=self._health_loop, name="codegraph-kernel-health", daemon=True
+            target=self._health_loop, name="workspace_event-kernel-health", daemon=True
         )
         self._health_thread.start()
 
@@ -334,7 +342,7 @@ class CodeGraphKernelSupervisor:
             threading.Thread(
                 target=self._restart_after_backoff,
                 args=(backoff,),
-                name="codegraph-kernel-restart",
+                name="workspace_event-kernel-restart",
                 daemon=True,
             ).start()
         else:
@@ -410,5 +418,5 @@ def get_kernel_supervisor() -> CodeGraphKernelSupervisor:
         RuntimeError: 未初始化时抛出。
     """
     if _SUPERVISOR is None:
-        raise RuntimeError("codegraph kernel supervisor has not been initialized")
+        raise RuntimeError("workspace_event kernel supervisor has not been initialized")
     return _SUPERVISOR

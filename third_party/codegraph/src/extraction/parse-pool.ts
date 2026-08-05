@@ -1,6 +1,6 @@
 /**
  * Parse worker pool — runs tree-sitter parsing across N worker threads so a full
- * `codegraph index` uses every core instead of pinning one.
+ * `workspace_event index` uses every core instead of pinning one.
  *
  * Why this exists: `ExtractionOrchestrator.indexAll()` already reads files in
  * parallel, but it parsed them through a SINGLE worker thread, so on an
@@ -45,7 +45,7 @@ export interface ParsePoolWorker {
 }
 
 /** A single file to parse. `language` is resolved on the main thread (it holds
- *  the project's codegraph.json extension overrides) and handed to the worker. */
+ *  the project's workspace_event.json extension overrides) and handed to the worker. */
 export interface ParseTask {
   filePath: string;
   content: string;

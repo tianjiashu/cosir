@@ -53,7 +53,7 @@ class Settings:
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
 
-    # --- CodeGraph 索引生命周期（见 codegraph-workspace-lifecycle-design.md） ---
+    # --- CodeGraph 索引生命周期（见 workspace_event-workspace-lifecycle-design.md） ---
     # 首次建索引（init）大仓库可能数分钟，需长超时；增量同步（sync）耗时较短。
     CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS: ClassVar[float] = 600.0
     CODEGRAPH_INDEX_SYNC_TIMEOUT_SECONDS: ClassVar[float] = 120.0

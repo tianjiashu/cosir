@@ -71,7 +71,7 @@ describe('peerIsDead', () => {
 describe('Daemon.reapDeadClients', () => {
   // Construct with idleTimeoutMs:0 so dropping the last client doesn't arm a real
   // idle timer. The constructor opens no sockets/DB, so this stays a fast unit test.
-  const makeDaemon = () => new Daemon('/tmp/codegraph-reap-unit-test', { idleTimeoutMs: 0 }) as any;
+  const makeDaemon = () => new Daemon('/tmp/workspace_event-reap-unit-test', { idleTimeoutMs: 0 }) as any;
   const fakeSession = () => ({ stopped: false, stop() { this.stopped = true; } });
 
   it('drops clients with a dead peer and leaves live ones attached', () => {
@@ -117,7 +117,7 @@ describe('Daemon.backstopShouldExit', () => {
   // maxIdleMs small; idleTimeoutMs:0 so a sweep that empties the set doesn't arm
   // a real timer. Force the inactivity window open by backdating lastActivityAt.
   const makeDaemon = () => {
-    const d = new Daemon('/tmp/codegraph-backstop-unit-test', { idleTimeoutMs: 0, maxIdleMs: 1000 }) as any;
+    const d = new Daemon('/tmp/workspace_event-backstop-unit-test', { idleTimeoutMs: 0, maxIdleMs: 1000 }) as any;
     d.lastActivityAt = Date.now() - 60_000; // long past the 1000ms window
     return d;
   };

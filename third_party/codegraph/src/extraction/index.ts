@@ -259,7 +259,7 @@ function readGitignorePatterns(giPath: string): string {
   // Fast path: one `.ignores()` call forces the library to compile EVERY rule,
   // so if it doesn't throw, the whole file is safe to use verbatim.
   try {
-    ignore().add(content).ignores('.codegraph-probe');
+    ignore().add(content).ignores('.workspace_event-probe');
     return content;
   } catch {
     // Fall through: a line is uncompilable — keep the good ones, drop the bad.
@@ -268,7 +268,7 @@ function readGitignorePatterns(giPath: string): string {
   let dropped = 0;
   for (const line of content.split(/\r?\n/)) {
     try {
-      ignore().add(line).ignores('.codegraph-probe');
+      ignore().add(line).ignores('.workspace_event-probe');
       kept.push(line);
     } catch {
       dropped++;
@@ -307,7 +307,7 @@ function defaultsOnlyIgnore(): Ignore {
 }
 
 /**
- * Matcher for the project's `codegraph.json` `includeIgnored` patterns — the
+ * Matcher for the project's `workspace_event.json` `includeIgnored` patterns — the
  * explicit opt-in to index embedded git repos living inside gitignored
  * directories (#622, #699). Returns `null` when the project opted in nothing,
  * which is the zero-config DEFAULT: `.gitignore` is then fully respected and a
@@ -321,7 +321,7 @@ function loadIncludeIgnoredMatcher(rootDir: string): Ignore | null {
 }
 
 /**
- * Matcher for the project's `codegraph.json` `exclude` patterns — paths to keep
+ * Matcher for the project's `workspace_event.json` `exclude` patterns — paths to keep
  * OUT of the index even when git-tracked, which `.gitignore` cannot do (#999).
  * The escape hatch for a committed vendor/theme/SDK directory. Returns `null`
  * when nothing is excluded (the zero-config default → no overhead). Matched
@@ -335,7 +335,7 @@ function loadExcludeMatcher(rootDir: string): Ignore | null {
 }
 
 /**
- * Matcher for the project's `codegraph.json` `include` patterns — first-party
+ * Matcher for the project's `workspace_event.json` `include` patterns — first-party
  * source to force INTO the index even when `.gitignore` drops it (the general
  * whitelist `includeIgnored` never was — that one only revives *embedded git
  * repos*). The case it exists for: a project under a second VCS (SVN/Perforce)
@@ -474,7 +474,7 @@ function collectIncludedFiles(
 }
 
 /**
- * The included source files (`codegraph.json` `include`) for a scan root, or an
+ * The included source files (`workspace_event.json` `include`) for a scan root, or an
  * empty set when nothing is force-included. Centralizes loading the matcher,
  * roots, exclude, and overrides so both enumeration paths (git and filesystem
  * walk) add the same files.
@@ -628,13 +628,13 @@ export class ScopeIgnore {
     private rootMatcher: Ignore,
     embedded: Array<{ root: string; matcher: Ignore }>,
     /**
-     * Project `codegraph.json` `exclude` patterns (#999), matched against the
+     * Project `workspace_event.json` `exclude` patterns (#999), matched against the
      * full root-relative path. Wins over everything else — an explicit user
      * exclude applies even to tracked files and even inside embedded repos.
      */
     private exclude: Ignore | null = null,
     /**
-     * Project `codegraph.json` `include` patterns — first-party source forced
+     * Project `workspace_event.json` `include` patterns — first-party source forced
      * INTO the index despite `.gitignore`. When a path matches, it is NOT
      * ignored (so the watcher watches it), overriding `.gitignore`/`rootMatcher`
      * — but never `exclude` (checked first) and never a built-in default-ignored
@@ -712,7 +712,7 @@ export function buildScopeIgnore(rootDir: string, embeddedRoots?: Iterable<strin
  *      under `node_modules` is never project code; not even an explicit opt-in
  *      revives it (matches `findIgnoredEmbeddedRepos`).
  *   2. The parent repo's own `.gitignore` covers its path and the project did
- *      NOT opt that path in via `codegraph.json` `includeIgnored`. The gitignore
+ *      NOT opt that path in via `workspace_event.json` `includeIgnored`. The gitignore
  *      rule is the user's stated intent to keep that path out of scope, exactly
  *      as for an UNtracked embedded repo — respect it by default, opt back in
  *      with `includeIgnored` (#514, #970, #976).
@@ -738,7 +738,7 @@ function gitlinkEmbeddedRepoSkipped(
 /**
  * Standalone discovery of every embedded repo root under `rootDir` (relative,
  * trailing-slashed) — the untracked kind (#193) always, and the gitignored kind
- * (#514) only for directories the project opted in via `codegraph.json`
+ * (#514) only for directories the project opted in via `workspace_event.json`
  * `includeIgnored` (#622, #699); otherwise `.gitignore` is respected and they
  * are not discovered (#970, #976). Recursive (an embedded repo can embed further
  * repos). Returns [] for non-git roots: the filesystem walk handles nested repos
@@ -812,7 +812,7 @@ const UNINDEXED_IGNORED_REPO_HINT_CAP = 100;
 /**
  * The INVERSE of the gitignored side of {@link discoverEmbeddedRepoRoots}:
  * nested git repositories under a gitignored directory that the project has NOT
- * opted into via `codegraph.json` `includeIgnored`. These are real repos the
+ * opted into via `workspace_event.json` `includeIgnored`. These are real repos the
  * default `init`/`index` deliberately skips because `.gitignore` excludes them
  * (#970, #976) — most visibly the "super-repo `.gitignore`s its child repos"
  * layout (#1156), where `init` at the parent correctly indexes ~nothing while
@@ -852,7 +852,7 @@ export function findUnindexedIgnoredRepos(rootDir: string): string[] {
  * OPT-IN ONLY. Walking into a gitignored directory contradicts what every other
  * tool (and CodeGraph's own `git ls-files` foundation) does — `.gitignore`
  * excludes. So this returns `[]` unless the project opted the directory in via
- * `codegraph.json` `includeIgnored`; without that, a gitignored dir — including
+ * `workspace_event.json` `includeIgnored`; without that, a gitignored dir — including
  * a huge reference/data dir full of nested clones — is left untouched (#970,
  * #976). When opted in, it restores the super-repo-of-clones behavior (#622,
  * #699). `prefix` is the scan-root-relative path of `repoDir`, so a pattern like
@@ -884,7 +884,7 @@ function findIgnoredEmbeddedRepos(repoDir: string, includeIgnored: Ignore | null
  * embedded repo is its own git boundary, so we re-run `git ls-files` inside it.
  * (See issue #193.) GITIGNORED embedded repos are invisible even to that; they
  * are discovered separately via `findIgnoredEmbeddedRepos` (#514) but ONLY for
- * directories the project opted in through `codegraph.json` `includeIgnored`
+ * directories the project opted in through `workspace_event.json` `includeIgnored`
  * (`includeIgnored` here, threaded from the scan root) — by default `.gitignore`
  * is respected and they stay out (#970, #976). Every embedded repo root (however
  * found) is recorded in `embeddedRoots` so callers can exempt its files from the
@@ -981,7 +981,7 @@ function collectGitFiles(repoDir: string, prefix: string, files: Set<string>, em
   // Embedded repos hidden by THIS repo's ignore rules (`/packages/` in a
   // super-repo .gitignore) never appear in any listing above. By default they
   // stay hidden — `.gitignore` is respected (#970, #976). They are recursed into
-  // only when the project opted the directory in via `codegraph.json`
+  // only when the project opted the directory in via `workspace_event.json`
   // `includeIgnored` (#622, #699), which `findIgnoredEmbeddedRepos` enforces.
   for (const rel of findIgnoredEmbeddedRepos(repoDir, includeIgnored, prefix)) {
     embeddedRoots?.add(normalizePath(prefix + rel));
@@ -1033,7 +1033,7 @@ function getGitVisibleFiles(rootDir: string): Set<string> | null {
     const ig = buildScopeIgnore(rootDir, embeddedRoots);
     const visible = new Set([...files].filter((f) => !ig.ignores(f)));
     // Force-include first-party source the project whitelisted in
-    // `codegraph.json` `include`. These are gitignored, so `git ls-files` never
+    // `workspace_event.json` `include`. These are gitignored, so `git ls-files` never
     // listed them above — discover them directly off disk and add them. (The
     // common SVN+Git dual-VCS case: source committed to SVN, gitignored out of
     // Git, but still wanted in the graph.)
@@ -1062,17 +1062,17 @@ interface GitChanges {
  * Recurses into embedded repos — the untracked kind (#193: the parent's status
  * collapses them to an opaque `?? subdir/` entry) always, and the gitignored
  * kind (#514: they never appear in the parent's status at all) only for
- * directories opted in via `codegraph.json` `includeIgnored` (#622, #699) —
+ * directories opted in via `workspace_event.json` `includeIgnored` (#622, #699) —
  * running `git status` inside each, so changes in a multi-repo workspace sync
  * without a full rescan. By default a gitignored dir is left alone, matching the
  * full-index scan (#970, #976). Deleting an ENTIRE embedded repo dir is the one
  * case this cannot see (the child status that would report the deletions is gone
- * with it); a full `codegraph index` reconciles that.
+ * with it); a full `workspace_event index` reconciles that.
  */
 function getGitChangedFiles(rootDir: string): GitChanges | null {
   try {
     const changes: GitChanges = { modified: [], added: [], deleted: [] };
-    // Custom extension → language overrides from the project's codegraph.json,
+    // Custom extension → language overrides from the project's workspace_event.json,
     // so change detection sees the same custom-extension files the full index does.
     const overrides = loadExtensionOverrides(rootDir);
     collectGitStatus(rootDir, '', changes, overrides, loadIncludeIgnoredMatcher(rootDir), loadExcludeMatcher(rootDir));
@@ -1094,7 +1094,7 @@ function collectGitStatus(repoDir: string, prefix: string, out: GitChanges, over
   // status hides neither: it ignores nothing for *tracked* paths, and the
   // built-in defaults aren't gitignore at all. Without this filter a committed
   // vendor/ dir, or a tracked file under a .gitignored dir, surfaces here as a
-  // change — so `codegraph status` (which reads getChangedFiles) reports a
+  // change — so `workspace_event status` (which reads getChangedFiles) reports a
   // pending edit the full index never tracks and `sync` never clears. Matching
   // repo-relative `rel` at each recursion level mirrors getGitVisibleFiles'
   // ScopeIgnore: every embedded repo is judged by ITS OWN rules, never the
@@ -1129,7 +1129,7 @@ function collectGitStatus(repoDir: string, prefix: string, out: GitChanges, over
     // Added (`??`) / modified files inside an excluded dir must not enter the
     // index — match against the repo-relative path, same as the full scan. (#766)
     if (ig.ignores(rel)) continue;
-    // User `codegraph.json` `exclude` (#999) is project-root-relative, so it's
+    // User `workspace_event.json` `exclude` (#999) is project-root-relative, so it's
     // matched against the full path — sync must not re-add a tracked file the
     // full index now keeps out. Deletions above stay unfiltered so a file that
     // WAS indexed before an exclude was added still cleans itself out.
@@ -1168,7 +1168,7 @@ export function scanDirectory(
   rootDir: string,
   onProgress?: (current: number, file: string) => void
 ): string[] {
-  // Custom extension → language overrides from the project's codegraph.json.
+  // Custom extension → language overrides from the project's workspace_event.json.
   const overrides = loadExtensionOverrides(rootDir);
 
   // Fast path: use git to get all visible files (respects .gitignore everywhere)
@@ -1198,7 +1198,7 @@ export async function scanDirectoryAsync(
   rootDir: string,
   onProgress?: (current: number, file: string) => void
 ): Promise<string[]> {
-  // Custom extension → language overrides from the project's codegraph.json.
+  // Custom extension → language overrides from the project's workspace_event.json.
   const overrides = loadExtensionOverrides(rootDir);
 
   const gitFiles = getGitVisibleFiles(rootDir);
@@ -1232,7 +1232,7 @@ function scanDirectoryWalk(
   const files: string[] = [];
   let count = 0;
   const visitedDirs = new Set<string>();
-  // Custom extension → language overrides from the project's codegraph.json.
+  // Custom extension → language overrides from the project's workspace_event.json.
   const overrides = loadExtensionOverrides(rootDir);
 
   // A .gitignore matcher scoped to the directory that declared it. Patterns in
@@ -1339,14 +1339,14 @@ function scanDirectoryWalk(
   // Seed a base matcher with the built-in default ignores (merged with the root
   // .gitignore so a negation can override). Nested .gitignores still layer per-dir.
   const baseMatchers: ScopedIgnore[] = [{ dir: rootDir, ig: buildDefaultIgnore(rootDir) }];
-  // Project `codegraph.json` `exclude` patterns (#999), rooted at the project so
+  // Project `workspace_event.json` `exclude` patterns (#999), rooted at the project so
   // `isIgnored` matches them against root-relative paths — same coverage the
   // git path gets via ScopeIgnore, for non-git projects.
   const exclude = loadExcludeMatcher(rootDir);
   if (exclude) baseMatchers.push({ dir: rootDir, ig: exclude });
   walk(rootDir, baseMatchers);
 
-  // Force-include first-party source whitelisted in `codegraph.json` `include`
+  // Force-include first-party source whitelisted in `workspace_event.json` `include`
   // — the walk above honours `.gitignore`, so anything gitignored was dropped;
   // add it back here (deduped). Mirrors the git path's union.
   const included = collectIncludedFilesForRoot(rootDir);
@@ -1504,7 +1504,7 @@ export class ExtractionOrchestrator {
     let totalNodes = 0;
     let totalEdges = 0;
 
-    // Custom extension → language overrides from the project's codegraph.json.
+    // Custom extension → language overrides from the project's workspace_event.json.
     // Threaded into language detection so custom-extension files load the right
     // grammar and store under the mapped language.
     const overrides = loadExtensionOverrides(this.rootDir);
@@ -1613,7 +1613,7 @@ export class ExtractionOrchestrator {
      * Parse one file: on the pool when available (the promise REJECTS on a worker
      * crash/timeout — the caller records it and the retry pass re-attempts), or
      * in-process synchronously as the no-worker fallback. The language is resolved
-     * here on the main thread, where the codegraph.json overrides are loaded.
+     * here on the main thread, where the workspace_event.json overrides are loaded.
      */
     const parseFile = (filePath: string, content: string): Promise<ExtractionResult> => {
       const language = detectLanguage(filePath, content, overrides);
@@ -2122,7 +2122,7 @@ export class ExtractionOrchestrator {
       };
     }
 
-    // Detect language (honoring the project's codegraph.json extension overrides)
+    // Detect language (honoring the project's workspace_event.json extension overrides)
     const language = detectLanguage(relativePath, content, loadExtensionOverrides(this.rootDir));
     if (!isLanguageSupported(language)) {
       return {

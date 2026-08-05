@@ -2,7 +2,7 @@
  * No-default-project → projectPath is `required` in the tool schema (issue #993).
  *
  * When the MCP server has no default project to fall back to — a gateway server
- * started outside any repo, or a monorepo root whose `.codegraph/` indexes live
+ * started outside any repo, or a monorepo root whose `.workspace_event/` indexes live
  * only in sub-projects — every tool call MUST carry an explicit `projectPath`.
  * `ToolHandler.getTools()` reflects that by marking `projectPath` required in the
  * exposed schemas, a high-salience nudge that gets the agent to pass it on the
@@ -75,7 +75,7 @@ describe('A default project keeps projectPath OPTIONAL (#993)', () => {
   let cg: CodeGraph;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-reqpath-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-reqpath-'));
     fs.writeFileSync(
       path.join(tempDir, 'pay.ts'),
       'export function processPayment(amount: number): boolean { return amount > 0; }\n'

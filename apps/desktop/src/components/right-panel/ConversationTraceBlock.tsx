@@ -6,6 +6,8 @@
 
 import { Activity, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Caption } from "@/components/ui/tokens";
+import { cn } from "@/lib/utils";
 import { useTaskStore } from "@/stores/taskStore";
 import { useConversationTraceStore, type ConversationTraceRecord } from "@/stores/conversationTraceStore";
 
@@ -41,7 +43,7 @@ export function ConversationTraceBlock({ onOpenLogs }: ConversationTraceBlockPro
       {displayTrace ? (
         <div className="space-y-2 rounded-md border border-border bg-card p-2">
           <TraceField label={streamTrace ? "请求链路 trace" : "历史 trace"} value={displayTrace.traceId} />
-          <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+          <div className={cn("grid grid-cols-2 gap-2 text-muted-foreground", Caption.xs)}>
             <TraceMeta label="来源" value={operationLabel(displayTrace.operation)} />
             <TraceMeta label="方法" value={displayTrace.method} />
           </div>
@@ -79,8 +81,8 @@ interface TraceFieldProps {
 function TraceField({ label, value }: TraceFieldProps) {
   return (
     <div className="space-y-1">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="break-all rounded bg-muted px-2 py-1 font-mono text-[11px] leading-4 text-foreground">
+      <div className={cn(Caption.xs, "text-muted-foreground")}>{label}</div>
+      <div className={cn("break-all rounded bg-muted px-2 py-1 leading-4 text-foreground", Caption.mono)}>
         {value}
       </div>
     </div>
@@ -125,6 +127,7 @@ function operationLabel(operation: ConversationTraceRecord["operation"]): string
     task_changes_keep: "保留变更",
     task_changes_revert: "撤销变更",
     task_delete: "删任务",
+    workspace_index_prepare: "索引准备",
   };
   return labels[operation];
 }

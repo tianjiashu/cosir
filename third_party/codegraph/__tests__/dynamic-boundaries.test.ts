@@ -133,7 +133,7 @@ describe('codegraph_explore — dynamic boundaries', () => {
   let handler: ToolHandler;
 
   const setup = async (files: Record<string, string>, include: string[]) => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-boundary-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-boundary-'));
     const src = path.join(testDir, 'src');
     fs.mkdirSync(src, { recursive: true });
     for (const [name, content] of Object.entries(files)) {
@@ -308,7 +308,7 @@ describe('codegraph_explore — interface dispatch', () => {
   let handler: ToolHandler;
 
   const setup = async (files: Record<string, string>, include: string[]) => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-iface-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-iface-'));
     const src = path.join(testDir, 'src');
     fs.mkdirSync(src, { recursive: true });
     for (const [name, content] of Object.entries(files)) {

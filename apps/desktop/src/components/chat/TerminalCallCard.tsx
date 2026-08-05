@@ -9,8 +9,10 @@
  *
  * 设计要点：
  * - 命令统一来自 `args.command`；缺失时降级为占位文案。
- * - 折叠态命令按原文换行展示（不截断），右侧显示运行/成功/失败状态图标与展开 chevron。
- * - 展开态 header 右侧提供「复制命令」「状态」「关闭」三个操作。
+ * - 折叠态：多行命令经 `whitespace-pre-wrap` 保留真实换行，限制最大高度避免长命令撑破卡片，
+ *   右侧常驻展开 chevron，不截断命令内容。
+ * - 展开态 header：独立浅色背景与卡片主体隔离，右侧提供「复制命令」「状态」「关闭」三个操作；
+ *   命令区使用 `Caption.mono`（11px 等宽 token）而非裸 `text-xs`，折行后左侧缩进与图标对齐。
  * - 输出块使用浅色等宽块，保留换行与滚动，支持一键复制全部输出。
  * - `resultData.output_truncated` 为真时额外显示截断提示，不单独展示 exit_code / timed_out 等元数据。
  * - header 的关闭（×）按钮仅用于折叠卡片；终止运行中命令的能力预留
@@ -22,6 +24,8 @@
 import * as React from "react";
 import { AlertCircle, Check, ChevronDown, Copy, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Caption } from "@/components/ui/tokens";
+import { logError } from "@/lib/logger";
 import type { ToolDisplayInfo } from "@/services/timeline/projector";
 
 /** 终端命令卡片状态枚举（与通用工具卡片对齐）。 */
@@ -113,8 +117,9 @@ function CopyButton({
         await navigator.clipboard.writeText(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-      } catch {
-        // 剪贴板写入失败时静默忽略，不阻断用户查看。
+      } catch (err) {
+        // 剪贴板写入失败时经统一日志出口记录，不静默吞错，便于排查环境权限问题。
+        logError("复制命令到剪贴板失败", err, { module: "TerminalCallCard" });
       }
     },
     [text],
@@ -170,17 +175,18 @@ export function TerminalCallCard({
 
   return (
     <div className="w-full overflow-hidden rounded-lg border border-border bg-muted">
-      {/* Header：折叠态即整个命令行卡片，展开态复用同一 header */}
+      {/* Header：折叠态即整个命令行卡片，展开态复用同一 header；展开时加深背景与主体隔离 */}
       <div
         className={cn(
           "flex items-start gap-2 px-2.5 py-2",
-          expandable && "cursor-pointer hover:bg-accent/20",
+          isOpen && "bg-muted-foreground/5",
+          expandable && !isOpen && "cursor-pointer hover:bg-accent/20",
         )}
-        onClick={toggleOpen}
-        role={expandable ? "button" : undefined}
-        tabIndex={expandable ? 0 : undefined}
+        onClick={expandable && !isOpen ? toggleOpen : undefined}
+        role={expandable && !isOpen ? "button" : undefined}
+        tabIndex={expandable && !isOpen ? 0 : undefined}
         onKeyDown={(event) => {
-          if (expandable && (event.key === "Enter" || event.key === " ")) {
+          if (expandable && !isOpen && (event.key === "Enter" || event.key === " ")) {
             event.preventDefault();
             toggleOpen();
           }
@@ -193,10 +199,15 @@ export function TerminalCallCard({
           )}
         />
         <div className="min-w-0 flex-1">
+          {/* 折叠态保留真实换行并限高，避免长命令被单行截断看不到；
+              展开态命令折行后左侧留白与图标对齐，使用 Caption.mono（11px 等宽 token） */}
           <span
             className={cn(
-              "font-mono text-xs text-foreground",
-              isOpen ? "whitespace-pre-wrap break-all" : "truncate",
+              Caption.mono,
+              "block text-foreground",
+              isOpen
+                ? "whitespace-pre-wrap break-words"
+                : "max-h-12 overflow-hidden whitespace-pre-wrap",
             )}
           >
             {commandText}
@@ -252,7 +263,7 @@ export function TerminalCallCard({
 
       {/* 展开详情 */}
       {isOpen && (
-        <div className="space-y-2 px-3 pb-3">
+        <div className="space-y-2 px-3 pb-3 pt-1">
           {/* 失败：错误主因 + 辅因 + 可重试徽标 */}
           {isError && (error || reason) && (
             <div className="space-y-1 text-sm">
@@ -272,7 +283,8 @@ export function TerminalCallCard({
                 <span className="text-muted-foreground shrink-0">重试:</span>
                 <span
                   className={cn(
-                    "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px]",
+                    "inline-flex items-center rounded border px-1.5 py-0.5",
+                    Caption.xs,
                     retryable
                       ? "border-amber-500/40 text-amber-600"
                       : "border-border text-muted-foreground",
@@ -288,10 +300,10 @@ export function TerminalCallCard({
           {hasOutput && (
             <div className="overflow-hidden rounded border border-border bg-background">
               <div className="flex items-center gap-2 border-b border-border bg-muted-foreground/5 px-3 py-1.5">
-                <span className="text-[11px] font-medium text-muted-foreground">终端输出</span>
+                <span className={cn(Caption.xs, "font-medium text-muted-foreground")}>终端输出</span>
                 <CopyButton text={result ?? ""} title="复制输出" className="ml-auto" />
               </div>
-              <pre className="max-h-64 overflow-auto p-3 font-mono text-xs text-foreground whitespace-pre-wrap break-all">
+              <pre className={cn("max-h-64 overflow-auto p-3 text-foreground whitespace-pre-wrap break-words", Caption.mono)}>
                 {result ?? ""}
               </pre>
             </div>
@@ -299,7 +311,7 @@ export function TerminalCallCard({
 
           {/* 输出被截断提示（不展示 exit_code / timed_out 等元数据） */}
           {hasOutput && Boolean(resultData?.output_truncated) && (
-            <div className="text-[11px] text-muted-foreground">完整输出已截断</div>
+            <div className={cn(Caption.xs, "text-muted-foreground")}>完整输出已截断</div>
           )}
         </div>
       )}

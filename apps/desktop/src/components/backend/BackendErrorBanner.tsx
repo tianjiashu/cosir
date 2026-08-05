@@ -16,12 +16,14 @@ import {
   ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Caption } from "@/components/ui/tokens";
 import {
   useBackendStore,
   selectBackendStatus,
   selectBackendSnapshot,
 } from "@/stores/backendStore";
 import { useBackend } from "@/hooks/useBackend";
+import { cn } from "@/lib/utils";
 import { logError } from "@/lib/logger";
 
 /** 后端错误横幅属性。 */
@@ -111,12 +113,12 @@ export function BackendErrorBanner({ onViewLogs }: BackendErrorBannerProps) {
           </div>
 
           {expanded && error.traceback ? (
-            <pre className="mt-2 max-h-48 overflow-auto rounded bg-background/60 p-2 text-[11px] leading-relaxed text-muted-foreground">
+            <pre className={cn("mt-2 max-h-48 overflow-auto rounded bg-background/60 p-2 leading-relaxed text-muted-foreground", Caption.xs)}>
               {error.traceback}
             </pre>
           ) : null}
 
-          <p className="mt-1 text-[11px] text-muted-foreground/70">
+          <p className={cn("mt-1 text-muted-foreground/70", Caption.xs)}>
             {error.stage} · {error.occurredAt}
           </p>
         </div>

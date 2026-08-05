@@ -20,7 +20,7 @@ describe('codegraph_explore — blast radius', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-blast-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-blast-'));
     const src = path.join(testDir, 'src');
     fs.mkdirSync(src, { recursive: true });
 

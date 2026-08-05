@@ -24,8 +24,8 @@ from app.models.payload import (
     WorkspaceReadyPayload,
 )
 from app.models.runtime_event import RuntimeEvent
-from app.service.codegraph.lifecycle_service import CodeGraphLifecycleService
-from app.service.runtime_event.runtime_event_service import RuntimeEventService
+from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
+from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
 
 
 class TurnPrepareService:

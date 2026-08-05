@@ -7,11 +7,11 @@
  * @module components/layout/ChatPanel
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { FolderOpen } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import { VirtualList } from "@/lib/virtual/VirtualList";
 import { useEventStore, selectLatestEvent, selectEventsForTask, EMPTY_EVENTS } from "@/stores/eventStore";
 import { useTaskStore, selectActiveTask } from "@/stores/taskStore";
 import { useTurnStore } from "@/stores/turnStore";
@@ -54,8 +54,8 @@ export interface ChatPanelProps {
 /**
  * ChatPanel 中央主会话区组件。
  *
- * 消息列表区域使用 ScrollArea 包裹，
- * 新消息自动滚动到底部（通过 scrollIntoView 实现）。
+ * 消息列表区域由 VirtualList 虚拟化渲染（仅挂载视口内 turn），
+ * 新消息通过滚动容器 scrollTo 到底部（节流 200ms）。
  *
  * 当不存在活跃工作区时（例如删除了唯一工作区）展示引导空状态，
  * 提示用户先选择或创建项目目录，避免中间区域完全空白。
@@ -74,7 +74,7 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   const activeTask = useTaskStore(selectActiveTask);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const turns = useTurnStore(useShallow((s) => (activeTask ? s.turnsByTaskId[activeTask.task_id] ?? [] : [])));
-  const scrollEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 无任何工作区时的引导空状态（先于「无活跃任务」判断，覆盖删完所有工作区的场景）。
   const noWorkspace = !activeWorkspaceId;
@@ -108,8 +108,29 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   }, [activeTaskId]);
 
   // 首屏只取最近 visibleTurnCount 个 turn；更早的以折叠入口呈现。
-  const visibleTurns = timelineTurns.slice(-visibleTurnCount);
+  const visibleTurns = useMemo(
+    () => timelineTurns.slice(-visibleTurnCount),
+    [timelineTurns, visibleTurnCount],
+  );
   const hasEarlierTurns = timelineTurns.length > visibleTurnCount;
+
+  // 单个 turn 渲染：外层包 px-4 py-2 承托内边距与条目垂直节奏（VirtualList 绝对定位条目，
+  // 不受 space-y 影响）。
+  // 关键性能点：renderItem 必须保持引用稳定——VirtualList 每次重渲染都会对视口内条目调用
+  // renderItem，若其引用随 store 更新而频繁变化，会导致整个视口重新协调、击穿 TurnTimeline
+  // 的 memo。这里用 ref 持有最新 eventsByTurnId（每次 ChatPanel 渲染即刷新），
+  // renderItem 本身用 useCallback([]) 锁定引用；TurnTimeline 仍按各自 events 引用的变化
+  // 决定是否重渲染（由 eventStore.mergeByEventId 的引用稳定性保证），无需在此感知全局映射。
+  const eventsByTurnIdRef = useRef(eventsByTurnId);
+  eventsByTurnIdRef.current = eventsByTurnId;
+  const renderTurnItem = useCallback((turn: TurnRecord) => {
+    const turnEvents = eventsByTurnIdRef.current[turn.turn_id] ?? EMPTY_EVENTS;
+    return (
+      <div className="px-4 py-2">
+        <TurnTimeline turn={turn} events={turnEvents} />
+      </div>
+    );
+  }, []);
 
   // 是否显示空状态（仅取决于是否有活跃任务；具体空态由 timelineTurns 决定）
   const emptySession = isNoActiveTask(activeTask);
@@ -117,6 +138,7 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   // 当有新事件或新消息时自动滚动到底部。
   // 节流：流式期间事件高频到达，若每次都触发 smooth 滚动动画会导致大量重排重绘而卡顿。
   // 用 rAF + 节流（每 200ms 至多滚动一次），保证跟随最新内容的同时不阻塞渲染。
+  // 虚拟列表下改用滚动容器 scrollTo 到底（锚点 div 在虚拟列表中不保证挂载）。
   const lastScrollAt = useRef(0);
   useEffect(() => {
     const now = Date.now();
@@ -124,67 +146,67 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
       return;
     }
     lastScrollAt.current = now;
-    if (scrollEndRef.current) {
-      scrollEndRef.current.scrollIntoView({ behavior: "smooth" });
+    const el = scrollContainerRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [events.length, latestEvent]);
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden bg-background">
-      {/* 消息列表区域 */}
-      <ScrollArea className="flex-1 scrollbar-thin">
-        <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
-          {/* 无工作区引导：删除所有工作区后回到会话页时的防御性空状态 */}
-          {noWorkspace && (
-            <div
-              data-testid="workspace-guide"
-              className="flex flex-col items-center justify-center gap-4 py-24 text-center"
-            >
-              <p className="text-sm text-muted-foreground">
-                当前没有可用的工作区。工作区是 Agent 读取和修改代码的项目根目录，请先选择或创建一个。
-              </p>
-              <Button variant="outline" size="sm" onClick={onPickWorkspace} className="gap-2">
-                <FolderOpen className="h-4 w-4" />
-                选择工作区
-              </Button>
-            </div>
-          )}
-
-          {/* 空会话提示（已有工作区但无活跃任务） */}
-          {!noWorkspace && emptySession && (
-            <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
-              在下方输入框发送指令开始对话
-            </div>
-          )}
-
-          {/* 更早的历史对话折叠入口：点击后向窗口扩展，避免一次性投影全部 turn */}
-          {hasEarlierTurns && (
-            <div className="flex justify-center py-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs text-muted-foreground"
-                onClick={() => setVisibleTurnCount((count) => count + LOAD_MORE_TURN_COUNT)}
-                data-testid="load-earlier-turns"
-              >
-                加载更早的 {Math.min(LOAD_MORE_TURN_COUNT, timelineTurns.length - visibleTurnCount)} 条对话
-              </Button>
-            </div>
-          )}
-
-          {/* 每个 turn 独立投影 + memo：只有收事件的活跃 turn 重渲染，历史 turn 整块跳过 */}
-          {visibleTurns.map((turn) => (
-            <TurnTimeline
-              key={turn.turn_id}
-              turn={turn}
-              events={eventsByTurnId[turn.turn_id] ?? EMPTY_EVENTS}
-            />
-          ))}
-
-          {/* 滚动锚点 */}
-          <div ref={scrollEndRef} className="h-1" />
+      {/* 无工作区引导：删除所有工作区后回到会话页时的防御性空状态 */}
+      {noWorkspace && (
+        <div
+          data-testid="workspace-guide"
+          className="flex flex-col items-center justify-center gap-4 py-24 text-center"
+        >
+          <p className="text-sm text-muted-foreground">
+            当前没有可用的工作区。工作区是 Agent 读取和修改代码的项目根目录，请先选择或创建一个。
+          </p>
+          <Button variant="outline" size="sm" onClick={onPickWorkspace} className="gap-2">
+            <FolderOpen className="h-4 w-4" />
+            选择工作区
+          </Button>
         </div>
-      </ScrollArea>
+      )}
+
+      {/* 空会话提示（已有工作区但无活跃任务） */}
+      {!noWorkspace && emptySession && (
+        <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+          在下方输入框发送指令开始对话
+        </div>
+      )}
+
+      {/* 更早的历史对话折叠入口：点击后向窗口扩展，避免一次性投影全部 turn */}
+      {hasEarlierTurns && (
+        <div className="flex justify-center py-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-muted-foreground"
+            onClick={() => setVisibleTurnCount((count) => count + LOAD_MORE_TURN_COUNT)}
+            data-testid="load-earlier-turns"
+          >
+            加载更早的 {Math.min(LOAD_MORE_TURN_COUNT, timelineTurns.length - visibleTurnCount)} 条对话
+          </Button>
+        </div>
+      )}
+
+      {/* 每个 turn 独立投影 + memo：只有收事件的活跃 turn 重渲染，历史 turn 整块跳过。
+          长会话通过 VirtualList 仅渲染视口内 turn，与既有时序窗口（maxTurns）协同控制渲染代价。
+          renderItem 外包 px-4 py-2 承担条目内边距与垂直节奏，补偿原滚动容器内 mx-auto/space-y
+          在虚拟列表下丢失的布局（虚拟条目绝对定位，不受父容器 space-y 影响）。 */}
+      {!noWorkspace && !emptySession && (
+        <VirtualList
+          items={visibleTurns}
+          getKey={(turn) => turn.turn_id}
+          renderItem={renderTurnItem}
+          scrollContainerRef={scrollContainerRef}
+          className="min-w-0 flex-1 scrollbar-thin py-6"
+          estimateSize={240}
+          overscan={4}
+        />
+      )}
     </main>
   );
 }

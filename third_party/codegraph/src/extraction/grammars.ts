@@ -178,7 +178,7 @@ export const EXTENSION_MAP: Record<string, Language> = {
  * from EXTENSION_MAP so parser support and indexing selection never drift.
  *
  * `overrides` is the project's validated custom extension → language map (from
- * `codegraph.json`); when present its extensions count as indexable in addition
+ * `workspace_event.json`); when present its extensions count as indexable in addition
  * to the built-ins. Omitting it is byte-identical to the zero-config behavior.
  */
 export function isSourceFile(filePath: string, overrides?: Record<string, Language>): boolean {
@@ -408,7 +408,7 @@ export function getParser(language: Language): Parser | null {
  * Detect language from file extension.
  *
  * `overrides` is the project's validated custom extension → language map (from
- * `codegraph.json`); when present its mappings take precedence over the built-in
+ * `workspace_event.json`); when present its mappings take precedence over the built-in
  * `EXTENSION_MAP`. Omitting it is byte-identical to the zero-config behavior.
  */
 export function detectLanguage(filePath: string, source?: string, overrides?: Record<string, Language>): Language {

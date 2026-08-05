@@ -13,9 +13,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { ChevronDown, Check, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { logError } from "@/lib/logger";
 import { listAgents } from "@/services/api";
 import type { AgentProfileResponse, ListAgentsResponse } from "@shared/api";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Caption } from "@/components/ui/tokens";
 
 /** 默认 Agent ID（与后端 DEFAULT_AGENT_ID 对齐）。 */
 const FALLBACK_AGENT_ID = "developer";
@@ -46,8 +48,9 @@ export function AgentSelector({ value, onChange, className }: AgentSelectorProps
     try {
       const response: ListAgentsResponse = await listAgents();
       setAgents(response.agents);
-    } catch (_err) {
-      // 降级：列表为空时 UI 仅显示 fallback，不阻塞输入
+    } catch (err) {
+      // 降级：列表为空时 UI 仅显示 fallback，不阻塞输入；失败仍经统一出口记录，便于排查后端/网络问题
+      logError("拉取 Agent 列表失败，降级为 fallback", err, { module: "AgentSelector" });
       setAgents([]);
     }
   }, []);
@@ -73,6 +76,8 @@ export function AgentSelector({ value, onChange, className }: AgentSelectorProps
           )}
         >
           <Bot className="h-3.5 w-3.5 shrink-0" />
+          {/* 选择器宽度 80px 是紧凑折叠态的固定净空，非通用语义，待收敛到 token */}
+          {/* eslint-disable-next-line tailwind/no-arbitrary-value */}
           <span className="max-w-[80px] truncate">{currentLabel}</span>
           <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
         </button>
@@ -105,7 +110,7 @@ export function AgentSelector({ value, onChange, className }: AgentSelectorProps
                 <div className="flex flex-1 items-center justify-between gap-2 overflow-hidden">
                   <div className="min-w-0">
                     <div className="truncate font-medium">{agent.role}</div>
-                    <div className="truncate text-[11px] text-muted-foreground">
+                    <div className={cn("truncate text-muted-foreground", Caption.xs)}>
                       {agent.model_name}
                     </div>
                   </div>

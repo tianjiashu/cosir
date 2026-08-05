@@ -109,7 +109,7 @@ export function InputBar() {
   return (
     <div className="border-t border-border bg-background px-4 py-3">
       {/* 输入区域容器 */}
-      <div className="mx-auto flex max-w-3xl items-end gap-2">
+      <div className="mx-auto flex max-w-content items-end gap-2">
         {/* 左侧附件按钮（占位） */}
         <TooltipProvider>
           <Tooltip>
@@ -124,18 +124,20 @@ export function InputBar() {
           </Tooltip>
         </TooltipProvider>
 
-        {/* 文本输入框 */}
-        <div className="relative flex-1">
+        {/* 文本输入框（与右侧内嵌按钮组同处一个 flex 容器，按钮组自然占位，消除手工预留耦合） */}
+        <div className="flex min-w-0 flex-1 items-center gap-1">
           <Input
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            className="min-h-[36px] pr-24 resize-none"
+            // 36px 为输入框最小高度（单行舒适高度），非通用间距语义，待收敛到 token
+            // eslint-disable-next-line tailwind/no-arbitrary-value
+            className="min-h-[36px] min-w-0 flex-1 resize-none"
           />
 
           {/* 右侧内嵌按钮组 */}
-          <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-0.5">
             {/* Agent 选择器 */}
             <AgentSelector
               value={selectedAgentId}

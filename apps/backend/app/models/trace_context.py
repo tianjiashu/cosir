@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass
 
-from app.trace_infra.ids import new_span_id
+from app.utils.trace_infra import new_span_id
 
 
 @dataclass(frozen=True)

@@ -36,7 +36,7 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
-from app.service.runtime_event.runtime_event_service import RuntimeEventService
+from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
@@ -710,7 +710,7 @@ class AgentRuntime:
             payload=payload,
         )
         log.info(
-            "runtime_event",
+            "agent_runtime_event",
             extra={
                 "msg": "runtime event recorded",
                 "data": {

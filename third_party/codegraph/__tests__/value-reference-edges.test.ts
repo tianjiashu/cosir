@@ -33,7 +33,7 @@ describe('value-reference edges', () => {
   let cg: CodeGraph | undefined;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-valueref-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-valueref-'));
   });
   afterEach(() => {
     cg?.destroy();

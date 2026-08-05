@@ -203,9 +203,9 @@ export default function App() {
 
           <PanelDragHandle ariaLabel="调整左侧导航栏宽度" />
 
-          <Panel id={CENTER_PANEL_ID} minSize={CENTER_MIN_SIZE} className="overflow-hidden">
+          <Panel id={CENTER_PANEL_ID} minSize={CENTER_MIN_SIZE} className="min-w-0 overflow-hidden">
             {/* 中央主会话区 + 底部输入区 */}
-            <div className="flex h-full flex-col overflow-hidden">
+            <div className="flex h-full min-w-0 flex-col overflow-hidden">
               <ChatPanel onPickWorkspace={() => setActiveView("new-task")} />
               <InputBar />
             </div>
@@ -247,7 +247,7 @@ export default function App() {
 
           <PanelDragHandle ariaLabel="调整左侧导航栏宽度" />
 
-          <Panel id={CENTER_PANEL_ID} minSize={CENTER_MIN_SIZE} className="overflow-hidden">
+          <Panel id={CENTER_PANEL_ID} minSize={CENTER_MIN_SIZE} className="min-w-0 overflow-hidden">
             {activeView === "logs" ? (
               <LogsPage onBack={() => setActiveView("chat")} />
             ) : (

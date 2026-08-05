@@ -1,7 +1,7 @@
 /**
  * Directory Management
  *
- * Manages the .codegraph/ directory structure for CodeGraph data.
+ * Manages the .workspace_event/ directory structure for CodeGraph data.
  */
 
 import * as fs from 'fs';
@@ -9,21 +9,21 @@ import * as os from 'os';
 import * as path from 'path';
 
 /** The default per-project data directory name. */
-const DEFAULT_CODEGRAPH_DIR = '.codegraph';
+const DEFAULT_CODEGRAPH_DIR = '.workspace_event';
 
 let warnedBadDirName = false;
 
 /**
  * Resolve the per-project data directory name, honoring the `CODEGRAPH_DIR`
- * environment override (default `.codegraph`). The override is a single path
+ * environment override (default `.workspace_event`). The override is a single path
  * segment that lives in the project root.
  *
  * Why this exists: two environments that share one working tree must NOT share
- * one `.codegraph/` — most concretely Windows-native and WSL (issue #636). The
- * daemon lockfile (`.codegraph/daemon.pid`) records a platform-specific pid and
+ * one `.workspace_event/` — most concretely Windows-native and WSL (issue #636). The
+ * daemon lockfile (`.workspace_event/daemon.pid`) records a platform-specific pid and
  * socket path (a Windows named pipe vs a WSL Unix socket), and SQLite file
  * locking across the WSL2 ↔ Windows filesystem boundary is unreliable, so two
- * daemons sharing one index risks corruption. Setting `CODEGRAPH_DIR=.codegraph-win`
+ * daemons sharing one index risks corruption. Setting `CODEGRAPH_DIR=.workspace_event-win`
  * on one side gives each environment its own index in the same tree.
  *
  * Read live (not captured at load) so it is both process-accurate and testable.
@@ -66,8 +66,8 @@ export const CODEGRAPH_DIR = codeGraphDirName();
 
 /**
  * Is `name` (a single path segment) a CodeGraph data directory? Matches the
- * default `.codegraph`, the active `CODEGRAPH_DIR` override, and any
- * `.codegraph-*` sibling. File-watching and the indexer skip ALL of these, so
+ * default `.workspace_event`, the active `CODEGRAPH_DIR` override, and any
+ * `.workspace_event-*` sibling. File-watching and the indexer skip ALL of these, so
  * when two environments share one working tree (Windows + WSL, issue #636)
  * neither indexes or watches the other's index directory.
  */
@@ -80,7 +80,7 @@ export function isCodeGraphDataDir(name: string): boolean {
 }
 
 /**
- * Get the .codegraph directory path for a project
+ * Get the .workspace_event directory path for a project
  */
 export function getCodeGraphDir(projectRoot: string): string {
   return path.join(projectRoot, codeGraphDirName());
@@ -88,26 +88,26 @@ export function getCodeGraphDir(projectRoot: string): string {
 
 /**
  * Check if a project has been initialized with CodeGraph
- * Requires both .codegraph/ directory AND codegraph.db to exist
+ * Requires both .workspace_event/ directory AND workspace_event.db to exist
  */
 export function isInitialized(projectRoot: string): boolean {
   const codegraphDir = getCodeGraphDir(projectRoot);
   if (!fs.existsSync(codegraphDir) || !fs.statSync(codegraphDir).isDirectory()) {
     return false;
   }
-  // Must have codegraph.db, not just .codegraph folder
-  const dbPath = path.join(codegraphDir, 'codegraph.db');
+  // Must have workspace_event.db, not just .workspace_event folder
+  const dbPath = path.join(codegraphDir, 'workspace_event.db');
   return fs.existsSync(dbPath);
 }
 
 /**
- * Find the nearest parent directory containing .codegraph/
+ * Find the nearest parent directory containing .workspace_event/
  *
  * Walks up from the given path to find a CodeGraph-initialized project,
  * similar to how git finds .git/ directories.
  *
  * @param startPath - Directory to start searching from
- * @returns The project root containing .codegraph/, or null if not found
+ * @returns The project root containing .workspace_event/, or null if not found
  */
 /**
  * Reason a directory is unsafe to use as an index ROOT, or null when it's fine.
@@ -116,7 +116,7 @@ export function isInitialized(projectRoot: string): boolean {
  * every other project, etc. — a multi-GB index, constant file-watcher churn, and
  * (pre-1.0 on macOS) a file-descriptor blowup that exhausted `kern.maxfiles` and
  * took unrelated apps / the whole machine down (#845). The classic trigger:
- * running the installer or `codegraph init` from `$HOME`, which auto-indexes the
+ * running the installer or `workspace_event init` from `$HOME`, which auto-indexes the
  * current directory. These are never intended project roots, so the installer
  * and `init`/`index` refuse them (overridable with `--force`).
  *
@@ -204,7 +204,7 @@ function escapeRegExp(s: string): string {
 /**
  * Indexed sub-project roots beneath `root` (bounded breadth-first scan). For
  * the monorepo case behind #964: the index lives in a CHILD
- * (`packages/x/.codegraph/`), not at the workspace root the agent's cwd points
+ * (`packages/x/.workspace_event/`), not at the workspace root the agent's cwd points
  * at. Descent stops at the first indexed directory on a branch (a project's
  * own sub-dirs aren't separate projects) and is bounded by depth + count so it
  * never turns into a full-tree crawl on a large repo.
@@ -529,7 +529,7 @@ export interface FrontloadPlan {
 
 /**
  * Decide what the front-load hook injects for a `prompt` issued from `cwd`,
- * shaped by where the `.codegraph/` index(es) actually are:
+ * shaped by where the `.workspace_event/` index(es) actually are:
  *   1. **cwd (or an ancestor) is indexed** → front-load that project. The
  *      normal single-project / nested-file case.
  *   2. **cwd isn't indexed but looks like a workspace root** → the indexes live
@@ -583,7 +583,7 @@ export function planFrontload(cwd: string, prompt: string): FrontloadPlan {
 }
 
 /**
- * Contents of `.codegraph/.gitignore`. A single wildcard ignore keeps every
+ * Contents of `.workspace_event/.gitignore`. A single wildcard ignore keeps every
  * transient file in the index dir — the database, `daemon.pid`, the socket,
  * logs, cache, and anything future versions add — out of git, without having
  * to enumerate each name (issues #788, #492, #484). Older versions wrote an
@@ -616,7 +616,7 @@ function isStaleDefaultGitignore(content: string): boolean {
 }
 
 /**
- * Write `.codegraph/.gitignore` if it's absent, or upgrade a stale
+ * Write `.workspace_event/.gitignore` if it's absent, or upgrade a stale
  * CodeGraph-generated default in place; a user-customized file is left alone.
  * Best-effort — returns `false` only if a needed write failed.
  */
@@ -638,15 +638,15 @@ function ensureGitignore(gitignorePath: string): boolean {
 }
 
 /**
- * Create the .codegraph directory structure
- * Note: Only throws if codegraph.db already exists, not just if .codegraph/ exists.
+ * Create the .workspace_event directory structure
+ * Note: Only throws if workspace_event.db already exists, not just if .workspace_event/ exists.
  */
 export function createDirectory(projectRoot: string): void {
   const codegraphDir = getCodeGraphDir(projectRoot);
-  const dbPath = path.join(codegraphDir, 'codegraph.db');
+  const dbPath = path.join(codegraphDir, 'workspace_event.db');
 
   // Only throw if CodeGraph is actually initialized (db exists)
-  // .codegraph/ folder alone is fine
+  // .workspace_event/ folder alone is fine
   if (fs.existsSync(dbPath)) {
     throw new Error(`CodeGraph already initialized in ${projectRoot}`);
   }
@@ -654,13 +654,13 @@ export function createDirectory(projectRoot: string): void {
   // Create main directory (if it doesn't exist)
   fs.mkdirSync(codegraphDir, { recursive: true });
 
-  // Write .gitignore inside .codegraph (create if absent, upgrade a stale
+  // Write .gitignore inside .workspace_event (create if absent, upgrade a stale
   // pre-wildcard default left by an older version — issue #788).
   ensureGitignore(path.join(codegraphDir, '.gitignore'));
 }
 
 /**
- * Remove the .codegraph directory
+ * Remove the .workspace_event directory
  */
 export function removeDirectory(projectRoot: string): void {
   const codegraphDir = getCodeGraphDir(projectRoot);
@@ -669,7 +669,7 @@ export function removeDirectory(projectRoot: string): void {
     return;
   }
 
-  // Verify .codegraph is a real directory, not a symlink pointing elsewhere
+  // Verify .workspace_event is a real directory, not a symlink pointing elsewhere
   const lstat = fs.lstatSync(codegraphDir);
   if (lstat.isSymbolicLink()) {
     // Only remove the symlink itself, never follow it for recursive delete
@@ -688,7 +688,7 @@ export function removeDirectory(projectRoot: string): void {
 }
 
 /**
- * Get all files in the .codegraph directory
+ * Get all files in the .workspace_event directory
  */
 export function listDirectoryContents(projectRoot: string): string[] {
   const codegraphDir = getCodeGraphDir(projectRoot);
@@ -705,7 +705,7 @@ export function listDirectoryContents(projectRoot: string): string[] {
     for (const entry of entries) {
       const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
 
-      // Skip symlinks to prevent following links outside .codegraph
+      // Skip symlinks to prevent following links outside .workspace_event
       if (entry.isSymbolicLink()) {
         continue;
       }
@@ -723,7 +723,7 @@ export function listDirectoryContents(projectRoot: string): string[] {
 }
 
 /**
- * Get the total size of the .codegraph directory in bytes
+ * Get the total size of the .workspace_event directory in bytes
  */
 export function getDirectorySize(projectRoot: string): number {
   const codegraphDir = getCodeGraphDir(projectRoot);
@@ -738,7 +738,7 @@ export function getDirectorySize(projectRoot: string): number {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
 
     for (const entry of entries) {
-      // Skip symlinks to prevent following links outside .codegraph
+      // Skip symlinks to prevent following links outside .workspace_event
       if (entry.isSymbolicLink()) {
         continue;
       }
@@ -759,7 +759,7 @@ export function getDirectorySize(projectRoot: string): number {
 }
 
 /**
- * Ensure a subdirectory exists within .codegraph
+ * Ensure a subdirectory exists within .workspace_event
  */
 export function ensureSubdirectory(projectRoot: string, subdirName: string): string {
   if (subdirName.includes('..') || subdirName.includes(path.sep) || subdirName.includes('/')) {
@@ -776,7 +776,7 @@ export function ensureSubdirectory(projectRoot: string, subdirName: string): str
 }
 
 /**
- * Check if the .codegraph directory has valid structure
+ * Check if the .workspace_event directory has valid structure
  */
 export function validateDirectory(projectRoot: string): {
   valid: boolean;
@@ -791,7 +791,7 @@ export function validateDirectory(projectRoot: string): {
   }
 
   if (!fs.statSync(codegraphDir).isDirectory()) {
-    errors.push('.codegraph exists but is not a directory');
+    errors.push('.workspace_event exists but is not a directory');
     return { valid: false, errors };
   }
 
@@ -803,7 +803,7 @@ export function validateDirectory(projectRoot: string): {
   if (!ensureGitignore(gitignorePath) && !existedBefore) {
     // Only a missing-and-uncreatable file is surfaced; a failed in-place
     // upgrade of an existing file is non-fatal — the index still works.
-    errors.push('.gitignore missing in .codegraph directory and could not be created');
+    errors.push('.gitignore missing in .workspace_event directory and could not be created');
   }
 
   return {

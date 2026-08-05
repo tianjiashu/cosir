@@ -1,7 +1,7 @@
 /**
  * Git worktree index-mismatch detection (issue #155).
  *
- * A CodeGraph index is resolved by walking up to the nearest `.codegraph/`.
+ * A CodeGraph index is resolved by walking up to the nearest `.workspace_event/`.
  * When a worktree is nested inside the main checkout, that walk reaches the
  * MAIN checkout's index and a query silently returns the main branch's code
  * instead of the worktree's. `detectWorktreeIndexMismatch` spots exactly this
@@ -35,7 +35,7 @@ function real(p: string): string {
 }
 
 describe('detectWorktreeIndexMismatch (issue #155)', () => {
-  let mainRepo: string;   // main checkout — owns the .codegraph index
+  let mainRepo: string;   // main checkout — owns the .workspace_event index
   let worktree: string;   // a linked worktree nested inside the main checkout
   let nonGit: string;     // a directory outside any git repo
 
@@ -101,7 +101,7 @@ describe('detectWorktreeIndexMismatch (issue #155)', () => {
     const msg = worktreeMismatchWarning(detectWorktreeIndexMismatch(worktree, mainRepo)!);
     expect(msg).toContain(real(worktree));
     expect(msg).toContain(real(mainRepo));
-    expect(msg).toContain('codegraph init');
+    expect(msg).toContain('workspace_event init');
   });
 });
 
@@ -153,7 +153,7 @@ describe('worktree mismatch surfaces on hot read tools (issue #155)', () => {
     expect(res.isError).toBeFalsy();
     expect(text).toContain('different git worktree');
     expect(text).toContain(real(worktree));
-    expect(text).toContain('codegraph init');
+    expect(text).toContain('workspace_event init');
   });
 
   it('does NOT prefix when the default project is the main checkout itself', async () => {
@@ -193,7 +193,7 @@ describe('worktree mismatch surfaces on hot read tools (issue #155)', () => {
  * A long-lived MCP server (the shared daemon) cached its worktree-mismatch
  * verdict keyed only by the start path, and that cache was cleared only on
  * shutdown. So once the server decided "this worktree borrows the main
- * checkout's index" — true while the worktree had no `.codegraph/` of its own —
+ * checkout's index" — true while the worktree had no `.workspace_event/` of its own —
  * the verdict was pinned for the daemon's whole life. After the worktree got
  * its own index (the resolved index root flipped from the main checkout to the
  * worktree itself), the CLI saw the worktree's index but the MCP server kept
@@ -270,10 +270,10 @@ describe('worktree mismatch verdict re-resolves when the index root changes (iss
  * super-repo descends into its submodules and gitlinked clones, so a query run
  * from inside one resolves up to the parent index — which genuinely contains
  * that nested repo's symbols. The warning's premise is false there, and its
- * "run codegraph init -i" advice would fragment the unified index. (#1031, #1033)
+ * "run workspace_event init -i" advice would fragment the unified index. (#1031, #1033)
  */
 describe('detectWorktreeIndexMismatch — nested repos covered by the parent index (#1031, #1033)', () => {
-  let parent: string;     // super-repo that owns the .codegraph index
+  let parent: string;     // super-repo that owns the .workspace_event index
   let subSource: string;  // separate repo used as the submodule source
 
   beforeEach(() => {

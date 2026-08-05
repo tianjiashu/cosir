@@ -1,6 +1,6 @@
 /**
  * ParseWorkerPool — the worker pool that parses files across cores during a full
- * `codegraph index` (issue #1015). These tests drive the pool's queue / growth /
+ * `workspace_event index` (issue #1015). These tests drive the pool's queue / growth /
  * recycle / crash-recovery / timeout / teardown logic with INJECTED fake
  * workers, so they exercise the real scheduling code without spawning threads or
  * needing a built dist.

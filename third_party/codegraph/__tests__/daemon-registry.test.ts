@@ -37,7 +37,7 @@ describe('daemon-registry', () => {
     process.env.HOME = tmpHome; // os.homedir() honors HOME (POSIX) ...
     process.env.USERPROFILE = tmpHome; // ... and USERPROFILE (Windows)
     // Sanity: the registry must resolve under our temp home, or the test would
-    // pollute the real ~/.codegraph.
+    // pollute the real ~/.workspace_event.
     expect(getRegistryDir().startsWith(tmpHome)).toBe(true);
   });
 

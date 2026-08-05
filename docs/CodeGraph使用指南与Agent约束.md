@@ -58,19 +58,19 @@ irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | 
 已有 Node 时也可以用 npm：
 
 ```bash
-npm i -g @colbymchenry/codegraph
+npm i -g @colbymchenry/workspace_event
 ```
 
 ### 2.2 接入 Agent
 
 ```bash
-codegraph install
+workspace_event install
 ```
 
 非交互安装常用：
 
 ```bash
-codegraph install --target auto --location global --yes
+workspace_event install --target auto --location global --yes
 ```
 
 安装命令参数：
@@ -89,7 +89,7 @@ codegraph install --target auto --location global --yes
 在每个代码仓库根目录执行：
 
 ```bash
-codegraph init
+workspace_event init
 ```
 
 `init` 会创建 `.codegraph/` 并完成首次索引。一个全局 `codegraph install` 可以服务多个项目，但每个项目仍需要单独 `codegraph init`。
@@ -97,28 +97,28 @@ codegraph init
 ## 3. CLI 命令总览
 
 ```bash
-codegraph                         # 运行交互式安装器
-codegraph install                 # 接入支持的 Agent
-codegraph uninstall               # 从 Agent 配置和 CLI 中移除 CodeGraph
-codegraph init [path]             # 初始化项目并建立索引
-codegraph uninit [path]           # 删除项目 .codegraph/ 索引
-codegraph index [path]            # 全量重建索引
-codegraph sync [path]             # 增量同步变更
-codegraph status [path]           # 查看索引状态
-codegraph unlock [path]           # 清理陈旧索引锁
-codegraph query <search>          # 搜索符号
-codegraph explore <query>         # 主查询入口，返回源码、调用路径、影响范围
-codegraph node <symbol|file>      # 查看单个符号或文件
-codegraph files [path]            # 从索引展示文件结构
-codegraph callers <symbol>        # 查询谁调用了某个符号
-codegraph callees <symbol>        # 查询某个符号调用了谁
-codegraph impact <symbol>         # 分析修改某个符号的影响范围
-codegraph affected [files...]     # 根据变更文件推断受影响测试
-codegraph daemon                  # 管理后台 daemon
-codegraph telemetry [on|off]      # 查看或切换匿名遥测
-codegraph upgrade [version]       # 升级 CodeGraph
-codegraph version                 # 打印版本
-codegraph help [command]          # 查看帮助
+workspace_event                         # 运行交互式安装器
+workspace_event install                 # 接入支持的 Agent
+workspace_event uninstall               # 从 Agent 配置和 CLI 中移除 CodeGraph
+workspace_event init [path]             # 初始化项目并建立索引
+workspace_event uninit [path]           # 删除项目 .workspace_event/ 索引
+workspace_event index [path]            # 全量重建索引
+workspace_event sync [path]             # 增量同步变更
+workspace_event status [path]           # 查看索引状态
+workspace_event unlock [path]           # 清理陈旧索引锁
+workspace_event query <search>          # 搜索符号
+workspace_event explore <query>         # 主查询入口，返回源码、调用路径、影响范围
+workspace_event node <symbol|file>      # 查看单个符号或文件
+workspace_event files [path]            # 从索引展示文件结构
+workspace_event callers <symbol>        # 查询谁调用了某个符号
+workspace_event callees <symbol>        # 查询某个符号调用了谁
+workspace_event impact <symbol>         # 分析修改某个符号的影响范围
+workspace_event affected [files...]     # 根据变更文件推断受影响测试
+workspace_event daemon                  # 管理后台 daemon
+workspace_event telemetry [on|off]      # 查看或切换匿名遥测
+workspace_event upgrade [version]       # 升级 CodeGraph
+workspace_event version                 # 打印版本
+workspace_event help [command]          # 查看帮助
 ```
 
 ## 4. 索引类命令
@@ -128,8 +128,8 @@ codegraph help [command]          # 查看帮助
 用途：初始化项目并建立首次索引。
 
 ```bash
-codegraph init
-codegraph init /path/to/project
+workspace_event init
+workspace_event init /path/to/project
 ```
 
 参数：
@@ -151,8 +151,8 @@ Agent 规则：
 用途：查看索引健康状态。
 
 ```bash
-codegraph status
-codegraph status --json
+workspace_event status
+workspace_event status --json
 ```
 
 参数：
@@ -194,8 +194,8 @@ Agent 规则：
 用途：增量同步变更。
 
 ```bash
-codegraph sync
-codegraph sync --quiet
+workspace_event sync
+workspace_event sync --quiet
 ```
 
 参数：
@@ -214,9 +214,9 @@ Agent 规则：
 用途：全量重建索引，相当于 fresh init 后的完整结果。
 
 ```bash
-codegraph index
-codegraph index --force
-codegraph index --quiet
+workspace_event index
+workspace_event index --force
+workspace_event index --quiet
 ```
 
 参数：
@@ -238,7 +238,7 @@ codegraph index --quiet
 用途：清理阻塞索引的陈旧 lock 文件。
 
 ```bash
-codegraph unlock
+workspace_event unlock
 ```
 
 使用时机：
@@ -253,10 +253,10 @@ codegraph unlock
 这是最重要的命令。用途是一次性探索一个区域、问题、符号或调用流。
 
 ```bash
-codegraph explore "AgentRuntime 如何运行 workflow 并调用工具执行"
-codegraph explore "从 tasks_api 到 AgentRuntime.run 的调用路径"
-codegraph explore "tools/tool_execute 这一层如何执行工具并处理错误"
-codegraph explore "RuntimeEvent payload models"
+workspace_event explore "AgentRuntime 如何运行 workflow 并调用工具执行"
+workspace_event explore "从 tasks_api 到 AgentRuntime.run 的调用路径"
+workspace_event explore "tools/tool_execute 这一层如何执行工具并处理错误"
+workspace_event explore "RuntimeEvent payload models"
 ```
 
 参数：
@@ -277,7 +277,7 @@ codegraph explore "RuntimeEvent payload models"
 当前项目真实示例：
 
 ```bash
-codegraph explore "AgentRuntime 如何运行 workflow 并调用工具执行" --max-files 4
+workspace_event explore "AgentRuntime 如何运行 workflow 并调用工具执行" --max-files 4
 ```
 
 输出包含：
@@ -299,10 +299,10 @@ Agent 规则：
 用途：搜索符号候选。
 
 ```bash
-codegraph query AgentRuntime
-codegraph query runtime --limit 20
-codegraph query AgentRuntime --kind class
-codegraph query execute --json
+workspace_event query AgentRuntime
+workspace_event query runtime --limit 20
+workspace_event query AgentRuntime --kind class
+workspace_event query execute --json
 ```
 
 参数：
@@ -323,7 +323,7 @@ codegraph query execute --json
 当前项目真实示例：
 
 ```bash
-codegraph query AgentRuntime --limit 5
+workspace_event query AgentRuntime --limit 5
 ```
 
 返回候选包括：
@@ -341,10 +341,10 @@ method  cancel_turn
 用途：查看单个符号或文件。
 
 ```bash
-codegraph node AgentRuntime
-codegraph node "apps/backend/app/core/runtime/runner.py"
-codegraph node "apps/backend/app/core/runtime/runner.py" --offset 80 --limit 80
-codegraph node runner.py --symbols-only
+workspace_event node AgentRuntime
+workspace_event node "apps/backend/app/core/runtime/runner.py"
+workspace_event node "apps/backend/app/core/runtime/runner.py" --offset 80 --limit 80
+workspace_event node runner.py --symbols-only
 ```
 
 参数：
@@ -373,10 +373,10 @@ Agent 规则：
 用途：从索引查看文件结构。
 
 ```bash
-codegraph files
-codegraph files --filter apps/backend/app/core
-codegraph files --format flat --filter apps/backend/app/core --no-metadata
-codegraph files --pattern "**/*.py" --format grouped
+workspace_event files
+workspace_event files --filter apps/backend/app/core
+workspace_event files --format flat --filter apps/backend/app/core --no-metadata
+workspace_event files --pattern "**/*.py" --format grouped
 ```
 
 参数：
@@ -404,9 +404,9 @@ codegraph files --pattern "**/*.py" --format grouped
 用途：查谁调用某个函数/方法。
 
 ```bash
-codegraph callers AgentRuntime
-codegraph callers execute_tool --limit 50
-codegraph callers RuntimeOperations --json
+workspace_event callers AgentRuntime
+workspace_event callers execute_tool --limit 50
+workspace_event callers RuntimeOperations --json
 ```
 
 参数：
@@ -428,8 +428,8 @@ codegraph callers RuntimeOperations --json
 用途：查某个函数/方法调用了谁。
 
 ```bash
-codegraph callees AgentRuntime.run
-codegraph callees execute_tool --limit 50
+workspace_event callees AgentRuntime.run
+workspace_event callees execute_tool --limit 50
 ```
 
 参数：
@@ -451,9 +451,9 @@ codegraph callees execute_tool --limit 50
 用途：分析修改某个符号会影响哪些代码。
 
 ```bash
-codegraph impact AgentRuntime
-codegraph impact RuntimeOperations --depth 3
-codegraph impact ToolDefinition --json
+workspace_event impact AgentRuntime
+workspace_event impact RuntimeOperations --depth 3
+workspace_event impact ToolDefinition --json
 ```
 
 参数：
@@ -480,10 +480,10 @@ Agent 规则：
 用途：根据变更文件推断受影响测试。
 
 ```bash
-codegraph affected apps/backend/app/core/runtime/runner.py
-git diff --name-only | codegraph affected --stdin
-codegraph affected src/auth.ts --filter "e2e/*"
-codegraph affected --stdin --quiet
+workspace_event affected apps/backend/app/core/runtime/runner.py
+git diff --name-only | workspace_event affected --stdin
+workspace_event affected src/auth.ts --filter "e2e/*"
+workspace_event affected --stdin --quiet
 ```
 
 参数：
@@ -506,7 +506,7 @@ codegraph affected --stdin --quiet
 示例：
 
 ```bash
-git diff --name-only | codegraph affected --stdin --quiet
+git diff --name-only | workspace_event affected --stdin --quiet
 ```
 
 ## 7. MCP 用法
@@ -693,7 +693,7 @@ CodeGraph not initialized
 处理：
 
 ```bash
-codegraph init
+workspace_event init
 ```
 
 ### 10.2 索引慢
@@ -709,7 +709,7 @@ codegraph init
 README 说明当前版本使用 WAL，正常不应阻塞读写。如果遇到：
 
 ```bash
-codegraph status
+workspace_event status
 ```
 
 检查 `journalMode` 是否为 `wal`。如果不是，优先把项目和 `.codegraph/` 移到本地磁盘。
@@ -719,8 +719,8 @@ codegraph status
 检查：
 
 ```bash
-codegraph status
-codegraph install --refresh
+workspace_event status
+workspace_event install --refresh
 ```
 
 MCP 场景下，不需要手动启动 server，Agent 会自己启动。
@@ -732,7 +732,7 @@ MCP 场景下，不需要手动启动 server，Agent 会自己启动。
 可用不同目录：
 
 ```bash
-CODEGRAPH_DIR=.codegraph-win
+CODEGRAPH_DIR=.workspace_event-win
 ```
 
 ### 10.6 缺少符号
@@ -740,9 +740,9 @@ CODEGRAPH_DIR=.codegraph-win
 处理顺序：
 
 ```bash
-codegraph sync
-codegraph status
-codegraph index --force
+workspace_event sync
+workspace_event status
+workspace_event index --force
 ```
 
 还要确认：
@@ -769,22 +769,22 @@ pendingChanges=0
 
 ```bash
 # 理解 runtime
-codegraph explore "AgentRuntime 如何运行 workflow 并调用工具执行" --max-files 4
+workspace_event explore "AgentRuntime 如何运行 workflow 并调用工具执行" --max-files 4
 
 # 找 AgentRuntime 符号
-codegraph query AgentRuntime --limit 5
+workspace_event query AgentRuntime --limit 5
 
 # 查看 core 文件结构
-codegraph files --filter apps/backend/app/core --format flat --no-metadata
+workspace_event files --filter apps/backend/app/core --format flat --no-metadata
 
 # 查看 runner.py
-codegraph node "apps/backend/app/core/runtime/runner.py"
+workspace_event node "apps/backend/app/core/runtime/runner.py"
 
 # 改 RuntimeOperations 前看影响
-codegraph impact RuntimeOperations --depth 3
+workspace_event impact RuntimeOperations --depth 3
 
 # 修改完成后推断测试
-git diff --name-only | codegraph affected --stdin --quiet
+git diff --name-only | workspace_event affected --stdin --quiet
 ```
 
 建议本项目 Agent 规则：

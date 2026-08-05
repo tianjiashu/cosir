@@ -513,7 +513,7 @@
     "/workspaces/{workspace_id}/index/prepare": {
       "post": {
         "summary": "Prepare Workspace Index",
-        "description": "同步触发一次 workspace 索引进度准备（ensure_ready）。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。\n    index_service: 索引准备编排 service；Kernel 不可用时为 None（降级）。\n\n返回:\n    IndexPrepareResponse，含就绪状态与动作摘要。\n\n异常:\n    HTTPException: 当 workspace 不存在（404）时抛出。\n\n副作用:\n    发布 preparing/ready/degraded 进度事件到总线。",
+        "description": "同步触发一次 workspace 索引进度准备（prepare）。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。\n    index_service: 索引准备编排 service；Kernel 不可用时为 None（降级）。\n    index_bus: workspace 级索引进度事件总线（用于 Kernel 不可用时主动发降级终态）。\n\n返回:\n    IndexPrepareResponse，含就绪状态与动作摘要。\n\n异常:\n    HTTPException: 当 workspace 不存在（404）时抛出。\n\n副作用:\n    发布 preparing/ready/degraded 进度事件到总线。\n\n设计要点:\n    Kernel 不可用时 index_service 为 None，属于设计明确的正常降级场景。此时不仅\n    HTTP 返回 unavailable，还**主动 emit 一条 WORKSPACE_DEGRADED 事件**到总线——\n    因为前端先连 SSE 再 POST prepare，若只靠 HTTP 响应而 SSE 订阅者未收到终态事件，\n    前端会永远停在 preparing（独立审查暴露的时序 bug 的另一半）。",
         "operationId": "prepare_workspace_index_workspaces__workspace_id__index_prepare_post",
         "parameters": [
           {
@@ -1330,7 +1330,7 @@
           "duration_ms"
         ],
         "title": "IndexPrepareResponse",
-        "description": "校验并序列化 workspace 索引准备结果响应。\n\n参数:\n    workspace_id: 所属 workspace 标识。\n    ready: 索引是否就绪（False 表示降级到文件搜索）。\n    state: 归一化状态（ready / failed / unavailable）。\n    action_taken: 就绪路径动作（init / sync / none）。\n    files_changed: 变更文件数。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（就绪时为 None）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化 workspace 索引准备结果响应。\n\n参数:\n    workspace_id: 所属 workspace 标识。\n    ready: 索引是否就绪（False 表示降级到文件搜索）。\n    state: 归一化状态（ready / failed / unavailable / unreachable / timeout）。\n        ready 表示索引就绪；failed 表示就绪路径失败；unavailable 表示 Kernel 不可用\n        （设计明确的降级场景）；unreachable 表示 prepare 前健康快检未通过；\n        timeout 表示 prepare 超过总超时上限而被强制降级。\n    action_taken: 就绪路径动作（init / sync / none）。\n    files_changed: 变更文件数。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（就绪时为 None）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ListAgentsResponse": {
         "properties": {

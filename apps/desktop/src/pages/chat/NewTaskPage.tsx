@@ -149,7 +149,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
 
   return (
     <main className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-8 px-4 py-12">
+      <div className="mx-auto flex w-full max-w-content flex-1 flex-col items-center justify-center gap-8 px-4 py-12">
         {/* 居中大标题 */}
         <h1 className="text-center text-2xl font-semibold text-foreground">
           我们应该在 {activeWorkspace ? `「${activeWorkspace.name}」` : "当前工作区"} 中构建什么？
@@ -208,6 +208,8 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
               className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
             >
               <Folder className="h-3.5 w-3.5" />
+              {/* 16rem 为工作区名展示宽度上限，非通用语义，待收敛到 token */}
+              {/* eslint-disable-next-line tailwind/no-arbitrary-value */}
               <span className="max-w-[16rem] truncate">{activeWorkspace?.name ?? "选择工作区"}</span>
               {menuOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             </button>

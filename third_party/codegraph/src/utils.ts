@@ -8,7 +8,7 @@
  *
  * @example
  * ```typescript
- * import { Mutex, processInBatches, MemoryMonitor, validatePathWithinRoot } from 'codegraph';
+ * import { Mutex, processInBatches, MemoryMonitor, validatePathWithinRoot } from 'workspace_event';
  *
  * // Use mutex for concurrent safety
  * const mutex = new Mutex();

@@ -69,7 +69,7 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
     const t0 = performance.now();
     try {
       // The main thread resolves the language (it holds the project's
-      // codegraph.json extension overrides) and sends it; fall back to detection
+      // workspace_event.json extension overrides) and sends it; fall back to detection
       // for older callers / safety.
       const language = msg.language ?? detectLanguage(filePath!, content);
       const result: ExtractionResult = extractFromSource(filePath!, content!, language, frameworkNames);

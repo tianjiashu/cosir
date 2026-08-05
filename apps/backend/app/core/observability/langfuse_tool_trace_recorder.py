@@ -22,7 +22,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.service.tool_execution.tool_trace_recorder import _NullToolSpan
 from app.tools.schemas import ToolCall, ToolObservation
-from app.trace_infra.redaction import redact_terminal_output
+from app.utils.trace_infra.redaction import redact_terminal_output
 
 
 class _LangfuseToolSpan:

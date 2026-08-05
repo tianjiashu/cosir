@@ -30,7 +30,7 @@ from app.tools.schemas import (
     ToolExecutionContext,
 )
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
-from app.trace_infra.redaction import redact_terminal_output
+from app.utils.trace_infra.redaction import redact_terminal_output
 
 
 class ToolExecutionService:

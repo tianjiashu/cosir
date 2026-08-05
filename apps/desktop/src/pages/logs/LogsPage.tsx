@@ -139,7 +139,7 @@ export function LogsPage({ onBack }: LogsPageProps) {
             </p>
           </div>
         </div>
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Input
             value={traceId}
             onChange={(event) => {
@@ -147,7 +147,7 @@ export function LogsPage({ onBack }: LogsPageProps) {
               setTraceId(event.target.value);
             }}
             placeholder="trace_id"
-            className="h-8 w-72 font-mono text-xs"
+            className="h-8 min-w-0 w-48 flex-1 font-mono text-xs"
             aria-label="trace_id"
           />
           <select

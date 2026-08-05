@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChangeFileRow } from "@/components/right-panel/ChangeFileRow";
 import { ChangeCheckpointSelect } from "@/components/right-panel/ChangeCheckpointSelect";
 import { ChangesToolbar } from "@/components/right-panel/ChangesToolbar";
+import { VirtualList } from "@/lib/virtual/VirtualList";
 import { useChanges } from "@/hooks/useChanges";
 
 /** ChangesTab 组件属性。 */
@@ -61,10 +62,13 @@ export function ChangesTab({ taskId }: ChangesTabProps) {
     void revert([...selected]);
   }, [revert, selected]);
 
+  const keepOne = useCallback((path: string) => void keep([path]), [keep]);
+  const revertOne = useCallback((path: string) => void revert([path]), [revert]);
+
   const files = changeSet?.files ?? [];
 
   return (
-    <div className="space-y-2 p-3">
+    <div className="flex h-full flex-col gap-2 p-3">
       <div className="space-y-2 border-b border-border pb-2">
         <ChangeCheckpointSelect
           checkpoints={changeSet?.checkpoints ?? []}
@@ -92,18 +96,21 @@ export function ChangesTab({ taskId }: ChangesTabProps) {
       )}
 
       {!loading && files.length > 0 && (
-        <div className="space-y-1">
-          {files.map((file) => (
+        <VirtualList
+          items={files}
+          getKey={(file) => file.path}
+          renderItem={(file) => (
             <ChangeFileRow
-              key={file.path}
               file={file}
               selected={selected.has(file.path)}
               onToggleSelect={toggleSelect}
-              onKeep={(path) => void keep([path])}
-              onRevert={(path) => void revert([path])}
+              onKeep={keepOne}
+              onRevert={revertOne}
             />
-          ))}
-        </div>
+          )}
+          className="min-h-0 flex-1"
+          estimateSize={44}
+        />
       )}
     </div>
   );

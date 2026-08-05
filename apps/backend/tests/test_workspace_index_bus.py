@@ -16,7 +16,7 @@ import pytest
 
 from app.models.enums.event_type import EventType
 from app.models.workspace_index_event import WorkspaceIndexEvent
-from app.service.codegraph.workspace_index_bus import WorkspaceIndexBus
+from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
 
 
 def _event(workspace_id: str = "ws-1") -> WorkspaceIndexEvent:

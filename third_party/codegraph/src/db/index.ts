@@ -25,7 +25,7 @@ export { SqliteDatabase, SqliteBackend } from './sqlite-adapter';
  * The 5s window (was 120s) rides out a normal incremental sync; the old
  * 2-minute wait presented as a frozen, hung agent. With WAL, reads never block
  * on a writer, so this timeout only governs cross-process write contention
- * (e.g. the git-hook `codegraph sync` running while the MCP server writes).
+ * (e.g. the git-hook `workspace_event sync` running while the MCP server writes).
  */
 function configureConnection(db: SqliteDatabase): void {
   db.pragma('busy_timeout = 5000');      // MUST be first — see above
@@ -48,7 +48,7 @@ export class DatabaseConnection {
    * `dev:ino` of the DB file at the moment we opened it (or null when the
    * platform/filesystem reports no usable inode). Lets us notice when the file
    * we hold open has been unlinked and REPLACED by a new file at the same path
-   * — a git worktree removed and re-added, or `.codegraph/` deleted and
+   * — a git worktree removed and re-added, or `.workspace_event/` deleted and
    * re-`init`ed under a long-lived server — at which point our fd reads a now
    * dead inode forever (#925). See `isReplacedOnDisk`.
    */
@@ -144,7 +144,7 @@ export class DatabaseConnection {
    * SQLite silently keeps the prior mode if WAL can't be enabled — e.g. on
    * filesystems without shared-memory support (some network/virtualized mounts,
    * WSL2 /mnt). So the effective mode can differ
-   * from what `configureConnection` requested. Surfaced in `codegraph status` so
+   * from what `configureConnection` requested. Surfaced in `workspace_event status` so
    * a "database is locked" report is triageable: 'wal' ⇒ readers never block on a
    * writer; anything else ⇒ they can. See issue #238.
    */
@@ -392,9 +392,9 @@ export class DatabaseConnection {
    * True when the DB file at our path has been REPLACED on disk since we opened
    * it — a different inode now lives at the same path, so the fd we still hold
    * points at a now-unlinked inode that can never receive new writes (#925).
-   * The trigger is removing and recreating `.codegraph/` at the same path under
+   * The trigger is removing and recreating `.workspace_event/` at the same path under
    * a long-lived process (`git worktree remove` + re-add, or `rm -rf
-   * .codegraph` + `codegraph init`). Returns false when the inode is unchanged,
+   * .workspace_event` + `workspace_event init`). Returns false when the inode is unchanged,
    * when the file is momentarily absent (mid-recreate — nothing to reopen onto
    * yet), or when the platform doesn't report a usable inode (Windows can't
    * unlink an open file and its st_ino is unreliable, so this never fires there).
@@ -426,7 +426,7 @@ function statInode(p: string): string | null {
 /**
  * Default database filename
  */
-export const DATABASE_FILENAME = 'codegraph.db';
+export const DATABASE_FILENAME = 'workspace_event.db';
 
 /**
  * SQLite's sidecar files in WAL mode — the write-ahead log and its shared-memory

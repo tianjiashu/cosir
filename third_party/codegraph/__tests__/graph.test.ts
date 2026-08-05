@@ -18,7 +18,7 @@ describe('Graph Queries', () => {
 
   beforeEach(async () => {
     // Create temp directory
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-graph-test-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-graph-test-'));
 
     // Create test files with relationships
     const srcDir = path.join(testDir, 'src');
@@ -411,7 +411,7 @@ export { main };
     // Regression: getFileDependents/getFileDependencies used to follow
     // ONLY `imports` edges, which in this engine are same-file (a file → its
     // own local import declarations). That made both return [] for EVERY file,
-    // so `codegraph affected` found no dependents on any language/framework.
+    // so `workspace_event affected` found no dependents on any language/framework.
     // They must follow the cross-file symbol graph instead (calls / references
     // / instantiates / extends / implements / ...).
     it('reports cross-file dependencies via the symbol graph, not just imports', () => {

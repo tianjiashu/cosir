@@ -73,11 +73,11 @@ class ListDirectoryTool(HandlerBase):
     def execute(
         self,
         path: str,
+        execution_context: ToolExecutionContext,
         offset: int = 0,
         limit: int = 200,
         include_hidden: bool = False,
         ignore_globs: list[str] | None = None,
-        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """列出项目内目录条目，返回结构化观察结果。
 

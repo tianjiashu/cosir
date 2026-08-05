@@ -1,10 +1,10 @@
 /**
- * `codegraph uninstall` — CLI binary removal (the #1071 shadow, uninstall
+ * `workspace_event uninstall` — CLI binary removal (the #1071 shadow, uninstall
  * edition).
  *
- * Before this feature, `codegraph uninstall` removed agent configs only:
+ * Before this feature, `workspace_event uninstall` removed agent configs only:
  * a user with both a bundle install and an npm global install (the shadow
- * scenario) still had a working `codegraph` on PATH afterward. The planner
+ * scenario) still had a working `workspace_event` on PATH afterward. The planner
  * must find EVERY install present on the machine — not just the one the
  * running binary belongs to — and the executor must remove them all, with
  * the Windows locked-exe rename dance instead of a hard failure.
@@ -39,7 +39,7 @@ function probes(over: Partial<RemoveBinaryProbes> & { present?: Set<string>; lin
   };
 }
 
-/** A standard unix bundle install under ~/.codegraph, running from it. */
+/** A standard unix bundle install under ~/.workspace_event, running from it. */
 function bundlePresent(): Set<string> {
   const root = `${STATE}/versions/v1.4.0`;
   return new Set([
@@ -51,7 +51,7 @@ function bundlePresent(): Set<string> {
 }
 
 describe('planBinaryRemoval', () => {
-  it('unix bundle at ~/.codegraph: removes artifacts only, never the state dir itself', () => {
+  it('unix bundle at ~/.workspace_event: removes artifacts only, never the state dir itself', () => {
     const links = new Map([
       [`${STATE}/current`, `${STATE}/versions/v1.4.0`],
       [`${HOME}/.local/bin/codegraph`, `${STATE}/versions/v1.4.0/bin/codegraph`],
@@ -115,7 +115,7 @@ describe('planBinaryRemoval', () => {
   it('a bin-dir shim pointing somewhere ELSE is left alone', () => {
     const links = new Map([
       [`${STATE}/current`, `${STATE}/versions/v1.4.0`],
-      [`${HOME}/.local/bin/codegraph`, '/usr/local/other-tool/bin/codegraph'],
+      [`${HOME}/.local/bin/codegraph`, '/usr/local/other-tool/bin/workspace_event'],
     ]);
     const plan = planBinaryRemoval(probes({ present: bundlePresent(), links }));
     expect(plan.paths).not.toContain(`${HOME}/.local/bin/codegraph`);
@@ -124,18 +124,18 @@ describe('planBinaryRemoval', () => {
   it('CODEGRAPH_BIN_DIR override is honored for the shim', () => {
     const links = new Map([
       [`${STATE}/current`, `${STATE}/versions/v1.4.0`],
-      ['/opt/bin/codegraph', `${STATE}/versions/v1.4.0/bin/codegraph`],
+      ['/opt/bin/workspace_event', `${STATE}/versions/v1.4.0/bin/codegraph`],
     ]);
     const plan = planBinaryRemoval(probes({
       env: { CODEGRAPH_BIN_DIR: '/opt/bin' },
       present: bundlePresent(),
       links,
     }));
-    expect(plan.paths).toContain('/opt/bin/codegraph');
+    expect(plan.paths).toContain('/opt/bin/workspace_event');
   });
 
   it('nothing installed → empty plan', () => {
-    const plan = planBinaryRemoval(probes({ filename: '/somewhere/odd/codegraph.js' }));
+    const plan = planBinaryRemoval(probes({ filename: '/somewhere/odd/workspace_event.js' }));
     expect(plan.paths).toHaveLength(0);
     expect(plan.npmGlobal).toBe(false);
     expect(plan.summary).toHaveLength(0);
@@ -188,14 +188,14 @@ describe('executeBinaryRemoval', () => {
   });
 
   it('windows: a locked exe inside the tree is renamed aside, then the tree deletes', () => {
-    const dir = 'C:\\Users\\u\\AppData\\Local\\codegraph';
+    const dir = 'C:\\Users\\u\\AppData\\Local\\workspace_event';
     const exe = path.join(dir, 'current', 'node.exe');
     const d = deps({ platform: 'win32', execPath: exe, rmFails: new Set([dir]) });
     const result = executeBinaryRemoval(plan({ paths: [dir] }), d);
     expect(result.removed).toEqual([dir]);
     // The renamed exe is surfaced as a leftover for the user to delete.
     expect(result.leftovers).toHaveLength(1);
-    expect(result.leftovers[0]).toContain('codegraph-old-node-');
+    expect(result.leftovers[0]).toContain('workspace_event-old-node-');
     expect(d.calls.some((c) => c.startsWith(`mv ${exe} `))).toBe(true);
   });
 

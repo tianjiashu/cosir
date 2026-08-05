@@ -36,7 +36,7 @@ export class WorkspaceService {
    *
    * 参数:
    *   workspacePath: 用作首次初始化的 searchFrom；引擎会向上查找最近
-   *     `.codegraph/` 作为 default project（承载 watcher）。
+   *     `.workspace_event/` 作为 default project（承载 watcher）。
    * 返回:
    *   无。
    * 异常:

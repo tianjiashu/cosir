@@ -128,9 +128,9 @@ class ReadFileTool(HandlerBase):
     def execute(
         self,
         path: str,
+        execution_context: ToolExecutionContext,
         offset: int = 1,
         limit: int = 500,
-        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """读取项目目录内的文本文件，并返回适合模型消费的观测结果。
 

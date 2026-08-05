@@ -138,13 +138,13 @@ class PatchTool(HandlerBase):
 
     def execute(
         self,
+        execution_context: ToolExecutionContext,
         mode: str = "replace",
         path: str | None = None,
         old_string: str | None = None,
         new_string: str | None = None,
         replace_all: bool = False,
         patch: str | None = None,
-        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """按 mode 分流执行 replace 或 patch，统一收口成功/失败观察。
 

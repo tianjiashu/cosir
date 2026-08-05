@@ -5,22 +5,22 @@
  * Command-line interface for CodeGraph code intelligence.
  *
  * Usage:
- *   codegraph                    Run interactive installer (when no args)
- *   codegraph install            Run interactive installer
- *   codegraph uninstall          Remove CodeGraph from your agents
- *   codegraph init [path]        Initialize CodeGraph in a project
- *   codegraph uninit [path]      Remove CodeGraph from a project
- *   codegraph index [path]       Index all files in the project
- *   codegraph sync [path]        Sync changes since last index
- *   codegraph status [path]      Show index status
- *   codegraph query <search>     Search for symbols
- *   codegraph files [options]    Show project file structure
- *   codegraph context <task>     Build context for a task
- *   codegraph callers <symbol>   Find what calls a function/method
- *   codegraph callees <symbol>   Find what a function/method calls
- *   codegraph impact <symbol>    Analyze what code is affected by changing a symbol
- *   codegraph affected [files]   Find test files affected by changes
- *   codegraph upgrade [version]  Update CodeGraph to the latest release
+ *   workspace_event                    Run interactive installer (when no args)
+ *   workspace_event install            Run interactive installer
+ *   workspace_event uninstall          Remove CodeGraph from your agents
+ *   workspace_event init [path]        Initialize CodeGraph in a project
+ *   workspace_event uninit [path]      Remove CodeGraph from a project
+ *   workspace_event index [path]       Index all files in the project
+ *   workspace_event sync [path]        Sync changes since last index
+ *   workspace_event status [path]      Show index status
+ *   workspace_event query <search>     Search for symbols
+ *   workspace_event files [options]    Show project file structure
+ *   workspace_event context <task>     Build context for a task
+ *   workspace_event callers <symbol>   Find what calls a function/method
+ *   workspace_event callees <symbol>   Find what a function/method calls
+ *   workspace_event impact <symbol>    Analyze what code is affected by changing a symbol
+ *   workspace_event affected [files]   Find test files affected by changes
+ *   workspace_event upgrade [version]  Update CodeGraph to the latest release
  */
 
 // FIRST import, before anything else loads: capture process.ppid while our
@@ -53,7 +53,7 @@ async function loadCodeGraph(): Promise<typeof import('../index')> {
     console.error(`\x1b[31m${getGlyphs().err}\x1b[0m Failed to load CodeGraph modules.`);
     console.error(`\n  Node: ${process.version}  Platform: ${process.platform} ${process.arch}`);
     console.error(`\n  Error: ${msg}`);
-    console.error('\n  Try reinstalling with: npm install -g @colbymchenry/codegraph\n');
+    console.error('\n  Try reinstalling with: npm install -g @colbymchenry/workspace_event\n');
     process.exit(1);
   }
 }
@@ -131,8 +131,8 @@ const packageJson = JSON.parse(
 // `--version` and `-V`; intercept the spellings it can't — lowercase `-v` and
 // single-dash `-version` — before any parsing. (commander's version short flag
 // is the capital `-V`, and its parser rejects a multi-character single-dash
-// flag.) The bare `codegraph version` subcommand is registered further down so
-// the affordance also shows up in `codegraph --help`.
+// flag.) The bare `workspace_event version` subcommand is registered further down so
+// the affordance also shows up in `workspace_event --help`.
 const firstArg = process.argv[2];
 if (firstArg === '-v' || firstArg === '-version') {
   console.log(packageJson.version);
@@ -201,18 +201,18 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
 /**
  * Resolve project path from argument or current directory
  * Walks up parent directories to find nearest initialized CodeGraph project
- * (must have .codegraph/codegraph.db, not just .codegraph/lessons.db)
+ * (must have .workspace_event/workspace_event.db, not just .workspace_event/lessons.db)
  */
 function resolveProjectPath(pathArg?: string): string {
   const absolutePath = path.resolve(pathArg || process.cwd());
 
-  // If exact path is initialized (has codegraph.db), use it
+  // If exact path is initialized (has workspace_event.db), use it
   if (isInitialized(absolutePath)) {
     return absolutePath;
   }
 
   // Walk up to find nearest parent with CodeGraph initialized
-  // Note: findNearestCodeGraphRoot finds any .codegraph folder, but we need one with codegraph.db
+  // Note: findNearestCodeGraphRoot finds any .workspace_event folder, but we need one with workspace_event.db
   let current = absolutePath;
   const root = path.parse(current).root;
 
@@ -398,7 +398,7 @@ function printIndexResult(clack: typeof import('@clack/prompts'), result: IndexR
 
     if (projectPath) {
       writeErrorLog(projectPath, result.errors);
-      clack.log.info('See .codegraph/errors.log for details');
+      clack.log.info('See .workspace_event/errors.log for details');
     }
 
     if (result.filesIndexed > 0) {
@@ -418,7 +418,7 @@ function printIndexResult(clack: typeof import('@clack/prompts'), result: IndexR
  * gitignores its child repos" layout (#1156), where `init` at the parent
  * correctly indexes ~nothing while `init` inside each child works — name those
  * repos and offer to index them. An interactive terminal gets a yes/no prompt
- * that writes `includeIgnored` to codegraph.json and re-indexes; a
+ * that writes `includeIgnored` to workspace_event.json and re-indexes; a
  * non-interactive run just prints the one-line opt-in snippet. The caller gates
  * this on `nodesCreated === 0`, so a project that DID index real content is
  * never nagged about the gitignored reference clones it deliberately keeps out
@@ -489,7 +489,7 @@ async function offerIndexIgnoredRepos(
 }
 
 /**
- * Write detailed error log to .codegraph/errors.log
+ * Write detailed error log to .workspace_event/errors.log
  */
 function writeErrorLog(projectPath: string, errors: Array<{ message: string; filePath?: string; severity: string; code?: string }>): void {
   const cgDir = getCodeGraphDir(projectPath);
@@ -552,7 +552,7 @@ async function recordIndexTelemetry(
 // =============================================================================
 
 /**
- * codegraph init [path]
+ * workspace_event init [path]
  */
 program
   .command('init [path]')
@@ -581,7 +581,7 @@ program
 
       if (isInitialized(projectPath)) {
         clack.log.warn(`Already initialized in ${projectPath}`);
-        clack.log.info('Use "codegraph index" to re-index or "codegraph sync" to update');
+        clack.log.info('Use "workspace_event index" to re-index or "workspace_event sync" to update');
         try {
           const { offerWatchFallback } = await import('../installer');
           await offerWatchFallback(clack, projectPath);
@@ -643,11 +643,11 @@ program
   });
 
 /**
- * codegraph uninit [path]
+ * workspace_event uninit [path]
  */
 program
   .command('uninit [path]')
-  .description('Remove CodeGraph from a project (deletes .codegraph/ directory)')
+  .description('Remove CodeGraph from a project (deletes .workspace_event/ directory)')
   .option('-f, --force', 'Skip confirmation prompt')
   .action(async (pathArg: string | undefined, options: { force?: boolean }) => {
     const projectPath = resolveProjectPath(pathArg);
@@ -704,7 +704,7 @@ program
   });
 
 /**
- * codegraph index [path]
+ * workspace_event index [path]
  */
 program
   .command('index [path]')
@@ -726,13 +726,13 @@ program
 
       if (!isInitialized(projectPath)) {
         error(`CodeGraph not initialized in ${projectPath}`);
-        info('Run "codegraph init" first');
+        info('Run "workspace_event init" first');
         process.exit(1);
       }
 
       const { default: CodeGraph, getDatabasePath } = await loadCodeGraph();
       // `index` is a FULL re-index — identical to a fresh `init`. RECREATE the
-      // database from scratch (discard .codegraph/codegraph.db + its WAL) rather
+      // database from scratch (discard .workspace_event/workspace_event.db + its WAL) rather
       // than opening the old graph and DELETE-ing every row. The clear-then-index
       // approach reported "0 nodes" without the clear (#874); the recreate keeps
       // that fixed AND avoids the failure mode where, on a large or pre-fix
@@ -801,7 +801,7 @@ program
   });
 
 /**
- * codegraph sync [path]
+ * workspace_event sync [path]
  */
 program
   .command('sync [path]')
@@ -863,7 +863,7 @@ program
   });
 
 /**
- * codegraph status [path]
+ * workspace_event status [path]
  */
 program
   .command('status [path]')
@@ -892,7 +892,7 @@ program
         console.log(chalk.bold('\nCodeGraph Status\n'));
         info(`Project: ${projectPath}`);
         warn('Not initialized');
-        info('Run "codegraph init" to initialize');
+        info('Run "workspace_event init" to initialize');
         return;
       }
 
@@ -962,11 +962,11 @@ program
         warn(worktreeMismatchWarning(worktreeMismatch));
       }
       if (indexState === 'indexing') {
-        warn('The last index run never finished (killed mid-index?) — the index is truncated. Re-run "codegraph index".');
+        warn('The last index run never finished (killed mid-index?) — the index is truncated. Re-run "workspace_event index".');
       } else if (indexState === 'partial') {
-        warn('The last index run silently dropped files — the index is partial. Re-run "codegraph index".');
+        warn('The last index run silently dropped files — the index is partial. Re-run "workspace_event index".');
       } else if (indexState === 'failed') {
-        warn('The last index run failed — results may be incomplete. Re-run "codegraph index".');
+        warn('The last index run failed — results may be incomplete. Re-run "workspace_event index".');
       }
       if (pendingRefs > 0) {
         warn(`${formatNumber(pendingRefs)} references from an interrupted run are awaiting resolution — some callers/impact edges are missing. Run "codegraph sync" to resolve them.`);
@@ -1026,7 +1026,7 @@ program
         if (changes.removed.length > 0) {
           console.log(`  Removed:   ${changes.removed.length} files`);
         }
-        info('Run "codegraph sync" to update the index');
+        info('Run "workspace_event sync" to update the index');
       } else {
         success('Index is up to date');
       }
@@ -1037,7 +1037,7 @@ program
       if (reindexRecommended) {
         const builtWith = buildInfo.version ? `v${buildInfo.version.replace(/^v/, '')}` : 'an earlier version';
         warn(`Index was built by ${builtWith}; re-index to pick up this engine's improvements.`);
-        info('Run "codegraph index" (full rebuild) or "codegraph sync"');
+        info('Run "workspace_event index" (full rebuild) or "workspace_event sync"');
         console.log();
       }
 
@@ -1049,7 +1049,7 @@ program
   });
 
 /**
- * codegraph query <search>
+ * workspace_event query <search>
  */
 program
   .command('query <search>')
@@ -1124,7 +1124,7 @@ program
   });
 
 /**
- * codegraph explore <query...>
+ * workspace_event explore <query...>
  *
  * The CLI face of the MCP codegraph_explore tool — same handler, same
  * output (source of the relevant symbols grouped by file + the call path
@@ -1165,7 +1165,7 @@ program
   });
 
 /**
- * codegraph prompt-hook  (hidden)
+ * workspace_event prompt-hook  (hidden)
  *
  * A Claude Code `UserPromptSubmit` hook entry point. Reads `{prompt, cwd}` JSON
  * on stdin; for a structural/flow/impact prompt it runs `codegraph_explore` on
@@ -1329,14 +1329,14 @@ program
   });
 
 /**
- * codegraph node [name]
+ * workspace_event node [name]
  *
  * The CLI face of the MCP codegraph_node tool: one symbol's source +
  * caller/callee trail, or a whole file with line numbers + dependents
  * (Read-parity). Same subagent/non-MCP rationale as `explore`.
  *
  * `name` is OPTIONAL because `--file` (file-read mode) carries no symbol —
- * a required `<name>` made `codegraph node -f <file>` unreachable (#1044).
+ * a required `<name>` made `workspace_event node -f <file>` unreachable (#1044).
  */
 program
   .command('node [name]')
@@ -1348,10 +1348,10 @@ program
   .option('--symbols-only', 'File mode: just the symbol map + dependents')
   .action(async (name: string | undefined, options: { path?: string; file?: string; offset?: string; limit?: string; symbolsOnly?: boolean }) => {
     // Need a symbol (positional) OR a file (--file / a path-like positional).
-    // With [name] optional, a bare `codegraph node` reaches here with neither
+    // With [name] optional, a bare `workspace_event node` reaches here with neither
     // and must be told what to pass, rather than crashing downstream.
     if (!name && !options.file) {
-      error("Pass a symbol name (e.g. 'codegraph node parseToken') or a file (e.g. 'codegraph node -f src/auth.ts', or 'codegraph node src/auth.ts').");
+      error("Pass a symbol name (e.g. 'workspace_event node parseToken') or a file (e.g. 'workspace_event node -f src/auth.ts', or 'workspace_event node src/auth.ts').");
       process.exit(1);
     }
 
@@ -1399,7 +1399,7 @@ program
   });
 
 /**
- * codegraph files [path]
+ * workspace_event files [path]
  */
 program
   .command('files')
@@ -1433,7 +1433,7 @@ program
       let files = cg.getFiles();
 
       if (files.length === 0) {
-        info('No files indexed. Run "codegraph index" first.');
+        info('No files indexed. Run "workspace_event index" first.');
         cg.destroy();
         return;
       }
@@ -1527,7 +1527,7 @@ program
  * Normalize a user-supplied file path to the project-relative, forward-slash
  * form CodeGraph stores in the index. Accepts an absolute path, a `./`-prefixed
  * path, or Windows back-slashes; an empty string when the input is blank. Used
- * by `codegraph affected` so `./src/x.ts`, `/abs/repo/src/x.ts`, and
+ * by `workspace_event affected` so `./src/x.ts`, `/abs/repo/src/x.ts`, and
  * `src/x.ts` all match the same indexed file. (#825)
  */
 function normalizeIndexPath(filePath: string, projectPath: string): string {
@@ -1623,7 +1623,7 @@ function printFileTree(
 }
 
 /**
- * codegraph daemon — interactive manager for the background daemons. Arrow keys
+ * workspace_event daemon — interactive manager for the background daemons. Arrow keys
  * to pick one (the current project's daemon floats to the top, auto-selected),
  * enter to stop it. Falls back to a plain list when output isn't a TTY.
  */
@@ -1671,7 +1671,7 @@ program
   });
 
 /**
- * codegraph serve
+ * workspace_event serve
  */
 program
   // Hidden from `--help`: this is the stdio entry point an AI agent launches
@@ -1705,9 +1705,9 @@ program
           console.error(chalk.bold('\nCodeGraph MCP server\n'));
           console.error("This is the MCP server your AI agent (Claude Code, Cursor, Codex, opencode, …)");
           console.error("starts automatically — you don't run it yourself.");
-          console.error(`\nIt's already wired up by ${chalk.cyan('codegraph install')}. To check on things:`);
-          console.error(`  ${chalk.cyan('codegraph status')}   ${chalk.dim('— is this project indexed and healthy?')}`);
-          console.error(`  ${chalk.cyan('codegraph daemon')}   ${chalk.dim('— list or stop background MCP servers')}`);
+          console.error(`\nIt's already wired up by ${chalk.cyan('workspace_event install')}. To check on things:`);
+          console.error(`  ${chalk.cyan('workspace_event status')}   ${chalk.dim('— is this project indexed and healthy?')}`);
+          console.error(`  ${chalk.cyan('workspace_event daemon')}   ${chalk.dim('— list or stop background MCP servers')}`);
           console.error(chalk.dim('\n(Running it directly only does something when an MCP client drives it over stdin.)'));
           return;
         }
@@ -1749,7 +1749,7 @@ program
   });
 
 /**
- * codegraph unlock [path]
+ * workspace_event unlock [path]
  */
 program
   .command('unlock [path]')
@@ -1763,7 +1763,7 @@ program
         return;
       }
 
-      const lockPath = path.join(getCodeGraphDir(projectPath), 'codegraph.lock');
+      const lockPath = path.join(getCodeGraphDir(projectPath), 'workspace_event.lock');
 
       if (!fs.existsSync(lockPath)) {
         info(`No lock file found ${getGlyphs().dash} nothing to do`);
@@ -1779,7 +1779,7 @@ program
   });
 
 /**
- * codegraph callers <symbol>
+ * workspace_event callers <symbol>
  *
  * CLI parity with the MCP graph tools (codegraph_callers/callees/impact) so the
  * traversal queries work in scripts, CI, and git hooks without a running MCP
@@ -1862,7 +1862,7 @@ program
   });
 
 /**
- * codegraph callees <symbol>
+ * workspace_event callees <symbol>
  */
 program
   .command('callees <symbol>')
@@ -1940,7 +1940,7 @@ program
   });
 
 /**
- * codegraph impact <symbol>
+ * workspace_event impact <symbol>
  */
 program
   .command('impact <symbol>')
@@ -2037,14 +2037,14 @@ program
   });
 
 /**
- * codegraph affected [files...]
+ * workspace_event affected [files...]
  *
  * Find test files affected by the given source files.
  * Traces dependency edges transitively to find test files that depend on changed code.
  *
  * Usage:
- *   git diff --name-only | codegraph affected --stdin
- *   codegraph affected src/lib/components/Editor.svelte src/routes/+page.svelte
+ *   git diff --name-only | workspace_event affected --stdin
+ *   workspace_event affected src/lib/components/Editor.svelte src/routes/+page.svelte
  */
 program
   .command('affected [files...]')
@@ -2183,17 +2183,17 @@ program
   });
 
 /**
- * codegraph install
+ * workspace_event install
  */
 program
   .command('install')
-  .description('Install codegraph MCP server into one or more agents (Claude Code, Cursor, Codex CLI, opencode, Hermes Agent)')
+  .description('Install workspace_event MCP server into one or more agents (Claude Code, Cursor, Codex CLI, opencode, Hermes Agent)')
   .option('-t, --target <ids>', 'Target agent(s): comma-separated ids, or "auto"|"all"|"none". Default: prompt')
   .option('-l, --location <where>', 'Install location: "global" or "local". Default: prompt')
   .option('-y, --yes', 'Non-interactive: defaults to --location=global --target=auto, auto-allow on')
   .option('--no-permissions', 'Skip writing the auto-allow permissions list (Claude Code only)')
   .option('--print-config <id>', 'Print MCP config snippet for the named agent and exit (no file writes)')
-  .option('--refresh', 'Rewrite what previous installs configured, for already-configured agents only (never adds new ones). Run automatically by `codegraph upgrade`')
+  .option('--refresh', 'Rewrite what previous installs configured, for already-configured agents only (never adds new ones). Run automatically by `workspace_event upgrade`')
   .action(async (opts: {
     target?: string;
     location?: string;
@@ -2278,20 +2278,20 @@ program
   });
 
 /**
- * codegraph uninstall
+ * workspace_event uninstall
  *
- * Inverse of `install`. Removes the codegraph MCP server entry,
+ * Inverse of `install`. Removes the workspace_event MCP server entry,
  * instructions block, and permissions from every agent (or a
  * `--target` subset). Prompts global-vs-local when not given. Does NOT
- * delete the `.codegraph/` index — that's `codegraph uninit`.
+ * delete the `.workspace_event/` index — that's `workspace_event uninit`.
  */
 program
   .command('uninstall')
-  .description('Remove codegraph from your agents (Claude Code, Cursor, Codex CLI, opencode, Hermes Agent)')
+  .description('Remove workspace_event from your agents (Claude Code, Cursor, Codex CLI, opencode, Hermes Agent)')
   .option('-t, --target <ids>', 'Target agent(s): comma-separated ids, or "all". Default: all')
   .option('-l, --location <where>', 'Uninstall location: "global" or "local". Default: prompt')
   .option('-y, --yes', 'Non-interactive: defaults to --location=global --target=all')
-  .option('--keep-cli', 'Remove agent configs only — leave the codegraph CLI installed')
+  .option('--keep-cli', 'Remove agent configs only — leave the workspace_event CLI installed')
   .action(async (opts: {
     target?: string;
     location?: string;
@@ -2318,7 +2318,7 @@ program
   });
 
 /**
- * codegraph telemetry [on|off|status]
+ * workspace_event telemetry [on|off|status]
  */
 program
   .command('telemetry [action]')
@@ -2362,7 +2362,7 @@ program
   });
 
 /**
- * codegraph upgrade [version]
+ * workspace_event upgrade [version]
  *
  * Self-update, however CodeGraph was installed (bundle via install.sh/.ps1,
  * npm-global, npx, or a source checkout). See ../upgrade for the detection and
@@ -2400,12 +2400,12 @@ program
   });
 
 /**
- * codegraph version
+ * workspace_event version
  *
  * The bare-noun form of `--version`. commander already provides `--version`
  * and `-V`, and the `-v` / `-version` spellings are intercepted before parse
- * (see top of main). This subcommand makes `codegraph version` work and lists
- * the version affordance in `codegraph --help`.
+ * (see top of main). This subcommand makes `workspace_event version` work and lists
+ * the version affordance in `workspace_event --help`.
  */
 program
   .command('version')

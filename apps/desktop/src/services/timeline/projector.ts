@@ -85,7 +85,284 @@ export interface TurnTimelineItem {
 }
 
 /**
+ * timeline 投影累积状态。
+ *
+ * 设计约束（性能契约）：
+ * - `entries` 引用稳定：未受新事件影响的项**保留旧引用**，仅新增/更新的项产生新引用，
+ *   使 React 的 memo / 列表 diff 能精确跳过未变化项，避免流式每帧全量重渲染。
+ * - `pendingDelta` / `pendingThinking` 为「尚未被后续事件中断」的累积块；流式期持续追加，
+ *   被中断（遇到非 delta 事件）时由 {@link flushPending} 定稿进 entries。
+ * - `toolByCallId` 为 callId → entries 下标的映射（下标仅追加不删，稳定），
+ *   用于把同一工具调用的 started / finished 合并为单条。
+ * - `processedEventIds` 为幂等缓存：已投影的 event_id 不再重复处理（回放/重连场景）。
+ */
+export interface TimelineProjectorState {
+  /** 按到达顺序的显示项；引用稳定（未变项沿用旧引用）。 */
+  entries: TurnTimelineEntry[];
+  /** 仍在累积的 assistant 文本块（被非 delta 事件中断前不落 entries）。 */
+  pendingDelta: { eventId: string; content: string } | null;
+  /** 仍在累积的 thinking 文本块。 */
+  pendingThinking: { eventId: string; content: string } | null;
+  /** 本轮是否出现过 model_output_delta（用于判断 final_response 是否冗余）。 */
+  hasDeltaStreamed: boolean;
+  /** callId → entries 下标，合并同工具调用的 started/finished。 */
+  toolByCallId: Map<string, number>;
+  /** 已投影 event_id 集合（幂等去重）。 */
+  processedEventIds: Set<string>;
+}
+
+/** 空投影状态（无事件时复用，避免每次新建）。 */
+export const EMPTY_PROJECTION_STATE: TimelineProjectorState = {
+  entries: [],
+  pendingDelta: null,
+  pendingThinking: null,
+  hasDeltaStreamed: false,
+  toolByCallId: new Map(),
+  processedEventIds: new Set(),
+};
+
+/**
+ * 创建初始投影状态。
+ *
+ * @returns 空的 {@link TimelineProjectorState}（引用稳定的空数组/空 Map）。
+ */
+export function createTimelineProjectorState(): TimelineProjectorState {
+  return {
+    entries: [],
+    pendingDelta: null,
+    pendingThinking: null,
+    hasDeltaStreamed: false,
+    toolByCallId: new Map(),
+    processedEventIds: new Set(),
+  };
+}
+
+/**
+ * 增量投影：在已有累积状态上应用「新增事件」，返回新状态。
+ *
+ * 目的（性能核心）:
+ *   流式期间每帧只传入「本帧新增的事件」（delta），而非全量 events；
+ *   仅新增/更新的项产生新引用，未变项沿用 prev.entries 中的旧引用，
+ *   使下游 memo 能跳过未变化项。把「每帧 O(n) 全量重建」降为「每帧 O(delta)」。
+ *
+ * 幂等性:
+ *   - 同一 event_id 重复到达（如回放/重连）时直接跳过，不重复投影。
+ *   - 同一 callId 的 tool_call_finished 到达时，更新既有条目引用而非新增。
+ *
+ * 参数:
+ *   prev - 上一帧投影状态（含稳定引用 entries 与幂等缓存）。
+ *   events - 本帧新增的事件（delta，非全量）。
+ *
+ * 返回:
+ *   新投影状态；entries 仅含变化项的新引用，未变项沿用 prev 引用。
+ *   若 events 为空或全部已处理，直接返回 prev（零分配）。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无（纯函数，不修改 prev）。
+ */
+export function projectTimelineIncrementally(
+  prev: TimelineProjectorState,
+  events: RuntimeEvent[],
+): TimelineProjectorState {
+  if (events.length === 0) {
+    return prev;
+  }
+
+  // 先判幂等：若本批事件全部已处理过，则零分配返回 prev（避免每帧复制大数组）。
+  const hasNew = events.some((e) => !prev.processedEventIds.has(e.event_id));
+  if (!hasNew) {
+    return prev;
+  }
+
+  // 拷贝可变部分；未变项在 push/更新时直接复用 prev.entries[i] 的引用。
+  let entries = prev.entries;
+  let pendingDelta = prev.pendingDelta;
+  let pendingThinking = prev.pendingThinking;
+  let hasDeltaStreamed = prev.hasDeltaStreamed;
+  const toolByCallId = new Map(prev.toolByCallId);
+  const processedEventIds = new Set(prev.processedEventIds);
+
+  const flushPending = () => {
+    if (pendingThinking) {
+      const thinkingLen = pendingThinking.content.length;
+      logInfo("thinking_block_flushed", {
+        module: "projector",
+        event_id: pendingThinking.eventId,
+        content_len: thinkingLen,
+        empty: thinkingLen === 0,
+      });
+      if (pendingThinking.content.trim().length > 0) {
+        entries = entries.concat({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
+      } else {
+        logWarn("thinking_block_skipped", {
+          module: "projector",
+          event_id: pendingThinking.eventId,
+          content_len: thinkingLen,
+          reason: "思考块内容为纯空白，跳过以避免渲染空壳",
+        });
+      }
+      pendingThinking = null;
+    }
+    if (pendingDelta) {
+      entries = entries.concat({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
+      pendingDelta = null;
+    }
+  };
+
+  for (const event of events) {
+    if (processedEventIds.has(event.event_id)) {
+      continue;
+    }
+    processedEventIds.add(event.event_id);
+
+    if (event.event_type === "model_thinking_delta") {
+      const thinking = String(event.payload.text ?? "");
+      if (pendingDelta) {
+        entries = entries.concat({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
+        pendingDelta = null;
+      }
+      // 不可变更新：新建对象而非就地 +=，避免污染调用方仍持有的 prev 状态。
+      pendingThinking = pendingThinking
+        ? { eventId: pendingThinking.eventId, content: pendingThinking.content + thinking }
+        : { eventId: event.event_id, content: thinking };
+      continue;
+    }
+
+    if (event.event_type === "model_output_delta") {
+      const text = String(event.payload.text ?? "");
+      if (pendingThinking) {
+        entries = entries.concat({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
+        pendingThinking = null;
+      }
+      // 不可变更新：新建对象而非就地 +=，避免污染调用方仍持有的 prev 状态。
+      pendingDelta = pendingDelta
+        ? { eventId: pendingDelta.eventId, content: pendingDelta.content + text }
+        : { eventId: event.event_id, content: text };
+      hasDeltaStreamed = true;
+      continue;
+    }
+
+    flushPending();
+
+    const tool = projectTool(event);
+    if (tool) {
+      const callId = tool.callId;
+      if (callId && toolByCallId.has(callId)) {
+        const idx = toolByCallId.get(callId)!;
+        const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
+        const updated: TurnTimelineEntry = {
+          kind: "tool",
+          item: {
+            ...existing.item,
+            status: tool.status,
+            eventId: tool.eventId,
+            error: tool.error,
+            resultSummary: tool.resultSummary,
+            result: tool.result,
+            reason: tool.reason,
+            retryable: tool.retryable,
+            listEntries: tool.listEntries,
+            emptyLabel: tool.emptyLabel,
+            diffEntries: tool.diffEntries,
+            resultData: tool.resultData,
+            ...(tool.arguments ? { arguments: tool.arguments } : {}),
+            ...(tool.display ? { display: tool.display } : {}),
+          },
+        };
+        entries = entries.slice();
+        entries[idx] = updated;
+      } else {
+        if (callId) {
+          toolByCallId.set(callId, entries.length);
+        }
+        entries = entries.concat({ kind: "tool", item: tool });
+      }
+      continue;
+    }
+
+    if (
+      event.event_type === "run_finished" ||
+      event.event_type === "run_failed" ||
+      event.event_type === "run_cancelled"
+    ) {
+      entries = entries.concat({
+        kind: "status",
+        eventId: event.event_id,
+        eventType: event.event_type,
+        payload: event.payload,
+      });
+    }
+
+    if (event.event_type === "final_response") {
+      const text = String((event.payload as { text?: unknown }).text ?? "");
+      if (text.length > 0 && !hasDeltaStreamed) {
+        entries = entries.concat({ kind: "assistant", eventId: event.event_id, content: text });
+      }
+    }
+  }
+
+  return {
+    entries,
+    pendingDelta,
+    pendingThinking,
+    hasDeltaStreamed,
+    toolByCallId,
+    processedEventIds,
+  };
+}
+
+/**
+ * 读取「可见条目」：已定稿 entries + 仍在累积的 pending 块（标记 streaming）。
+ *
+ * 目的:
+ *   TimelineProjectorState.entries 只保存**已定稿**条目，pending 块不写入；
+ *   否则每帧把未完成块 concat 进累积状态，会导致同一块被反复追加
+ *   （"Hel" / "Hello" / "Hello world" 层层堆叠）。渲染所需的
+ *   「定稿 + 进行中」视图在此按需派生，保证累积态干净且幂等。
+ *
+ * 参数:
+ *   state - 当前投影状态。
+ *
+ * 返回:
+ *   渲染用条目数组；无 pending 时直接返回 state.entries 原引用（零分配，引用稳定）。
+ *
+ * 异常:
+ *   不抛出。
+ *
+ * @sideeffect 无（纯函数）。
+ */
+export function selectVisibleEntries(state: TimelineProjectorState): TurnTimelineEntry[] {
+  const { entries, pendingThinking, pendingDelta } = state;
+  const hasThinking = Boolean(pendingThinking && pendingThinking.content.trim().length > 0);
+  if (!hasThinking && !pendingDelta) {
+    return entries;
+  }
+  const visible = entries.slice();
+  if (pendingThinking && hasThinking) {
+    visible.push({
+      kind: "thinking",
+      eventId: pendingThinking.eventId,
+      content: pendingThinking.content,
+      streaming: true,
+    });
+  }
+  if (pendingDelta) {
+    visible.push({
+      kind: "assistant",
+      eventId: pendingDelta.eventId,
+      content: pendingDelta.content,
+      streaming: true,
+    });
+  }
+  return visible;
+}
+
+/**
  * 将 turn 与事件投影成稳定 timeline。
+ *
+ * 实现为「从零增量投影」的便捷封装：先建空状态，再把全部 events 应用一遍增量逻辑，
+ * 与流式增量路径共用同一投影语义，保证首屏/回放与流式产出完全一致的项结构（幂等）。
  *
  * @param turns - 当前 task 下的轮次列表。
  * @param events - 当前 task 下的 runtime event 列表。
@@ -98,7 +375,8 @@ export interface TurnTimelineItem {
 export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[]): TurnTimelineItem[] {
   return turns.map((turn) => {
     const turnEvents = events.filter((event) => event.turn_id === turn.turn_id);
-    const entries = projectEntries(turnEvents);
+    const state = projectTimelineIncrementally(EMPTY_PROJECTION_STATE, turnEvents);
+    const entries = selectVisibleEntries(state).slice();
     if (entries.length === 0 && turn.response_text) {
       entries.push({
         kind: "assistant",
@@ -112,200 +390,6 @@ export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[])
       entries,
     };
   });
-}
-
-/**
- * 投影一个 turn 内的运行事件。
- *
- * 将相邻的 `model_output_delta` 事件聚合成一条 assistant 消息，
- * 避免每个 delta 渲染成独立气泡导致界面碎片化。
- * 遇到工具、状态或其他非 delta 事件时，会先 flush 当前 pending 的 assistant 内容，
- * 使后续 delta 从新的 assistant 消息开始聚合。
- *
- * 未识别的事件类型（如 `run_started`、`step_started` 等）不产生渲染条目，
- * 但同样会中断相邻 delta 的聚合。
- *
- * 块级 streaming 语义：被后续事件中断而定稿的块不带 `streaming`；
- * 事件流耗尽时仍在累积的块标记 `streaming: true`。由于 `run_finished` /
- * `run_failed` / `run_cancelled` 属于非 delta 事件，会先触发 flush，
- * 因此运行结束后不会残留 `streaming: true` 的悬空块。
- * @param events - 单个 turn 下的 runtime event 列表。
- * @returns 可按原始事件顺序渲染的 timeline 条目；进行中的块带 `streaming: true`。
- *
- * @throws 不抛出异常。
- *
- * @sideeffect 无。
- */
-function projectEntries(events: RuntimeEvent[]): TurnTimelineEntry[] {
-  const entries: TurnTimelineEntry[] = [];
-  let pendingDelta: { eventId: string; content: string } | null = null;
-  let pendingThinking: { eventId: string; content: string } | null = null;
-  // 本 turn 是否出现过 model_output_delta。它不随 flushPending 重置，
-  // 用于判断 final_response 是否为冗余（delta 已聚合过同文本）从而跳过，避免重复渲染。
-  let hasDeltaStreamed = false;
-  // 工具条目按 callId 合并：started 携参数创建条目，finished 更新其状态，
-  // 避免同一工具调用产生「运行中 + 完成」两条碎片条目。
-  const toolByCallId = new Map<string, number>();
-
-  const flushPending = () => {
-    if (pendingThinking) {
-      // 调试：思考块产出时记录内容长度，空白块（len=0）是"深度思考空白"的直接嫌疑点。
-      const thinkingLen = pendingThinking.content.length;
-      logInfo("thinking_block_flushed", {
-        module: "projector",
-        event_id: pendingThinking.eventId,
-        content_len: thinkingLen,
-        empty: thinkingLen === 0,
-      });
-      // 防御：跳过空白或纯空白字符的思考块，避免渲染空的"深度思考"壳。
-      // 上游可能发送仅含换行/空格的 thinking delta（如 DeepSeek reasoning 的分隔符），
-      // 累积后经 flushPending 产出无意义的空白块。
-      if (pendingThinking.content.trim().length > 0) {
-        entries.push({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
-      } else {
-        logWarn("thinking_block_skipped", {
-          module: "projector",
-          event_id: pendingThinking.eventId,
-          content_len: thinkingLen,
-          reason: "思考块内容为纯空白，跳过以避免渲染空壳",
-        });
-      }
-      pendingThinking = null;
-    }
-    if (pendingDelta) {
-      entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
-      pendingDelta = null;
-    }
-  };
-
-  /**
-   * 在事件流末尾把仍未被中断的 pending 块投影为「进行中」条目。
-   *
-   * 与 `flushPending` 的区别：`flushPending` 处理的是被后续事件中断、
-   * 已经定稿的块（不带 streaming）；本函数处理的是流尚未结束、
-   * 后续 delta 仍会继续追加的块，因此标记 `streaming: true`，
-   * 供渲染层做「正在输出」的排版处理（如光标、去抖动）。
-   *
-   * 参数:
-   *   无。
-   *
-   * 返回:
-   *   无返回值。
-   *
-   * @throws 不抛出异常。
-   *
-   * @sideeffect 向闭包内的 `entries` 追加条目；**不清空** `pendingDelta` /
-   *   `pendingThinking`，以便下一次重新投影时能从已累积状态继续。
-   */
-  const flushPendingFinal = () => {
-    if (pendingThinking && pendingThinking.content.trim().length > 0) {
-      entries.push({
-        kind: "thinking",
-        eventId: pendingThinking.eventId,
-        content: pendingThinking.content,
-        streaming: true,
-      });
-    }
-    if (pendingDelta) {
-      entries.push({
-        kind: "assistant",
-        eventId: pendingDelta.eventId,
-        content: pendingDelta.content,
-        streaming: true,
-      });
-    }
-  };
-
-  for (const event of events) {
-    if (event.event_type === "model_thinking_delta") {
-      const thinking = String(event.payload.text ?? "");
-      // 思考与回答交错时，先把已累积的回答 flush，再开始新的思考块
-      if (pendingDelta) {
-        entries.push({ kind: "assistant", eventId: pendingDelta.eventId, content: pendingDelta.content });
-        pendingDelta = null;
-      }
-      if (pendingThinking) {
-        pendingThinking.content += thinking;
-      } else {
-        pendingThinking = { eventId: event.event_id, content: thinking };
-      }
-      continue;
-    }
-
-    if (event.event_type === "model_output_delta") {
-      const text = String(event.payload.text ?? "");
-      // 回答开始前先把思考块 flush，保证思考显示在前
-      if (pendingThinking) {
-        entries.push({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
-        pendingThinking = null;
-      }
-      if (pendingDelta) {
-        pendingDelta.content += text;
-      } else {
-        pendingDelta = { eventId: event.event_id, content: text };
-      }
-      hasDeltaStreamed = true;
-      continue;
-    }
-
-    flushPending();
-
-    const tool = projectTool(event);
-    if (tool) {
-      const callId = tool.callId;
-      if (callId && toolByCallId.has(callId)) {
-        // 同一工具调用已有 started 条目，仅更新其状态/错误/结果字段/id，保留参数
-        const idx = toolByCallId.get(callId)!;
-        const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
-        existing.item.status = tool.status;
-        existing.item.eventId = tool.eventId;
-        existing.item.error = tool.error;
-        existing.item.resultSummary = tool.resultSummary;
-        existing.item.result = tool.result;
-        existing.item.reason = tool.reason;
-        existing.item.retryable = tool.retryable;
-        existing.item.listEntries = tool.listEntries;
-        existing.item.emptyLabel = tool.emptyLabel;
-        existing.item.diffEntries = tool.diffEntries;
-        existing.item.resultData = tool.resultData;
-        if (tool.arguments) {
-          existing.item.arguments = tool.arguments;
-        }
-        if (tool.display) {
-          existing.item.display = tool.display;
-        }
-      } else {
-        if (callId) {
-          toolByCallId.set(callId, entries.length);
-        }
-        entries.push({ kind: "tool", item: tool });
-      }
-      continue;
-    }
-
-    if (
-      event.event_type === "run_finished" ||
-      event.event_type === "run_failed" ||
-      event.event_type === "run_cancelled"
-    ) {
-      entries.push({ kind: "status", eventId: event.event_id, eventType: event.event_type, payload: event.payload });
-    }
-
-    // final_response 携带 Agent 最终完整文本回复（后端 model 节点在流结束时发出）。
-    // 若本轮已有 delta 流式累积（hasDeltaStreamed），该文本与 delta 聚合内容一致，
-    // 为避免重复渲染，此处跳过；只有「无 delta 流、仅靠 final_response 携带文本」时才投影为 assistant 条目。
-    // 注意：判断依据是 hasDeltaStreamed（不随 flushPending 重置），而非 pendingDelta（flush 后恒为 null）。
-    if (event.event_type === "final_response") {
-      const text = String((event.payload as { text?: unknown }).text ?? "");
-      if (text.length > 0 && !hasDeltaStreamed) {
-        entries.push({ kind: "assistant", eventId: event.event_id, content: text });
-      }
-    }
-  }
-
-  flushPendingFinal();
-
-  return entries;
 }
 
 /**

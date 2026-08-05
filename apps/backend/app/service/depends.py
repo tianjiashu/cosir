@@ -10,18 +10,18 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from app.service.codegraph.workspace_index_bus import WorkspaceIndexBus
+from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
 
 if TYPE_CHECKING:
-    from app.service.codegraph.workspace_index_service import WorkspaceIndexService
+    from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
+    from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
     from app.service.log_query_service import LogQueryService
-    from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
-    from app.service.runtime_event.runtime_event_service import RuntimeEventService
     from app.service.task.task_service import TaskService
     from app.service.task.turn_prepare_service import TurnPrepareService
     from app.service.task.turn_service import TurnService
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
+    from app.service.workspace_event.workspace_index_service import WorkspaceIndexService
     from app.storage.crud.log_crud import LogStore
     from app.storage.crud.runtime_event_crud import RuntimeEventCrud
     from app.storage.crud.task_crud import TaskCrud
@@ -222,7 +222,7 @@ def get_runtime_event_bus() -> RuntimeEventBus:
         首次调用时创建 RuntimeEventBus。
     """
 
-    from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
+    from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 
     return RuntimeEventBus()
 
@@ -244,7 +244,7 @@ def get_runtime_event_service() -> RuntimeEventService:
         首次调用时创建 RuntimeEventService。
     """
 
-    from app.service.runtime_event.runtime_event_service import RuntimeEventService
+    from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 
     return RuntimeEventService()
 
@@ -358,7 +358,7 @@ def get_turn_prepare_service() -> TurnPrepareService | None:
     """
 
     from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
-    from app.service.codegraph.lifecycle_service import CodeGraphLifecycleService
+    from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
     from app.service.task.turn_prepare_service import TurnPrepareService
 
     try:
@@ -409,8 +409,8 @@ def get_workspace_index_service() -> WorkspaceIndexService | None:
     """
 
     from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
-    from app.service.codegraph.lifecycle_service import CodeGraphLifecycleService
-    from app.service.codegraph.workspace_index_service import WorkspaceIndexService
+    from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
+    from app.service.workspace_event.workspace_index_service import WorkspaceIndexService
 
     try:
         client = get_kernel_supervisor().get_client()

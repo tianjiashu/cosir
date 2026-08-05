@@ -1,10 +1,10 @@
 /**
- * Read-only MCP ToolAnnotations on every codegraph tool (issue #1018).
+ * Read-only MCP ToolAnnotations on every workspace_event tool (issue #1018).
  *
- * Every codegraph tool is query-only — it reads the pre-built index and never
+ * Every workspace_event tool is query-only — it reads the pre-built index and never
  * mutates the workspace. Clients gate on this: Cursor's Ask mode refuses any MCP
  * tool that doesn't advertise `readOnlyHint: true`, so without annotations the
- * codegraph tools were blocked there even though they only read.
+ * workspace_event tools were blocked there even though they only read.
  *
  * These tests pin that the read-only contract is present on the master tool
  * array AND survives every transform that builds a `tools/list` response — the
@@ -34,7 +34,7 @@ function expectReadOnly(tool: ToolDefinition): void {
   expect(tool.annotations!.openWorldHint).toBe(false);
 }
 
-describe('Read-only annotations on the codegraph MCP tools (#1018)', () => {
+describe('Read-only annotations on the workspace_event MCP tools (#1018)', () => {
   const original = process.env[ENV];
   afterEach(() => {
     if (original === undefined) delete process.env[ENV];
@@ -74,7 +74,7 @@ describe('Live tool surface keeps annotations with a project open (#1018)', () =
   const original = process.env[ENV];
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-annot-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-annot-'));
     fs.writeFileSync(
       path.join(tempDir, 'pay.ts'),
       'export function processPayment(amount: number): boolean { return amount > 0; }\n'

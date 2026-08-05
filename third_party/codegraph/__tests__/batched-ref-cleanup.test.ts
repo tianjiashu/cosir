@@ -58,7 +58,7 @@ describe('Batched ref cleanup precision (#1269)', () => {
   let q: QueryBuilder;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-refcleanup-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-refcleanup-'));
     db = DatabaseConnection.initialize(path.join(dir, 'test.db'));
     q = new QueryBuilder(db.getDb());
     // The files the refs/nodes point at must exist for resolution context.

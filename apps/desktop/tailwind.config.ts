@@ -13,6 +13,12 @@ const config: Config = {
       },
     },
     extend: {
+      maxWidth: {
+        // 会话内容列宽令牌：替换散落的 max-w-3xl（768px），单点调整全站对齐。
+        content: "48rem",
+        // 消息气泡宽度令牌：替换散落的 max-w-[85%]，与列宽体系联动收敛。
+        bubble: "85%",
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

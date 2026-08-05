@@ -18,7 +18,7 @@
  * @module lib/virtual/VirtualList
  */
 
-import { useRef, type ReactNode, type UIEvent } from "react";
+import { useRef, type ReactNode, type UIEvent, type Ref } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +46,11 @@ export interface VirtualListProps<T> {
    * 默认 80。测试环境下可显式传入固定值以绕过布局测量。
    */
   estimateSize?: number;
+  /**
+   * 外部转发滚动容器 ref（可选）。调用方可用它直接操作滚动位置
+   * （如流式期「滚动到底部」），不影响内部 `useVirtualizer` 测量。
+   */
+  scrollContainerRef?: Ref<HTMLDivElement>;
 }
 
 /**
@@ -70,6 +75,7 @@ export function VirtualList<T>({
   emptyState,
   onScroll,
   estimateSize = 80,
+  scrollContainerRef,
 }: VirtualListProps<T>) {
   const parentRef = useRef<HTMLDivElement | null>(null);
 
@@ -87,14 +93,18 @@ export function VirtualList<T>({
   // 空数据：直接渲染占位，不挂载虚拟列表的滚动容器与 0 高占位 div。
   if (items.length === 0) {
     return (
-      <div ref={parentRef} className={cn("overflow-auto", className)} onScroll={onScroll}>
+      <div ref={mergeRefs(parentRef, scrollContainerRef)} className={cn("overflow-auto", className)} onScroll={onScroll}>
         {emptyState ?? null}
       </div>
     );
   }
 
   return (
-    <div ref={parentRef} className={cn("overflow-auto", className)} onScroll={onScroll}>
+    <div
+      ref={mergeRefs(parentRef, scrollContainerRef)}
+      className={cn("overflow-auto", className)}
+      onScroll={onScroll}
+    >
       <div style={{ height: totalSize, position: "relative", width: "100%" }}>
         {virtualItems.map((virtualItem) => (
           <div
@@ -115,4 +125,35 @@ export function VirtualList<T>({
       </div>
     </div>
   );
+}
+
+/**
+ * 合并多个 ref 为一个回调 ref（内部 ref + 外部透传 ref）。
+ *
+ * 目的:
+ *   让 VirtualList 内部的 `parentRef`（供 useVirtualizer 测量）与外部调用方传入的
+ *   `scrollContainerRef`（供操作滚动位置）指向同一 DOM 节点，互不影响。
+ *
+ * 参数:
+ *   refs - 任意数量的 ref（RefObject 或回调 ref 或 null）。
+ *
+ * 返回:
+ *   合并后的回调 ref。
+ *
+ * 异常:
+ *   不抛出。
+ *
+ * @sideeffect 无（纯函数）。
+ */
+function mergeRefs<T>(...refs: Array<Ref<T> | undefined>): (node: T | null) => void {
+  return (node: T | null) => {
+    for (const ref of refs) {
+      if (!ref) continue;
+      if (typeof ref === "function") {
+        ref(node);
+      } else {
+        (ref as { current: T | null }).current = node;
+      }
+    }
+  };
 }

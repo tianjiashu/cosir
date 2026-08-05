@@ -21,7 +21,7 @@ from app.api.schemas import (
     TaskResponse,
     TurnResponse,
 )
-from app.service.runtime_event.runtime_event_service import RuntimeEventService
+from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 
@@ -48,7 +48,7 @@ async def get_task(
     """
 
     try:
-        return TaskResponse(**task_service.get_task(task_id).to_dict())
+        return TaskResponse.from_record(task_service.get_task(task_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
 
@@ -78,7 +78,7 @@ async def list_turns(
         turns = turn_service.list_turns_for_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    return [TurnResponse(**turn.to_dict()) for turn in turns]
+    return [TurnResponse.from_record(turn) for turn in turns]
 
 
 @app.get("/tasks/{task_id}/events")

@@ -7,7 +7,7 @@
  * @module components/layout/Sidebar
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FileText,
   Settings,
@@ -22,8 +22,10 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { HistoryList } from "@/components/sidebar/HistoryList";
 import { PluginList } from "@/components/sidebar/PluginList";
+import { WorkspaceIndexBadge } from "@/components/sidebar/WorkspaceIndexBadge";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
+import { useWorkspaceIndexStore } from "@/stores/workspaceIndexStore";
 import { useTaskStore } from "@/stores/taskStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useTask } from "@/hooks/useTask";
@@ -83,6 +85,20 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   // 任务删除失败提示。
   const [deleteTaskError, setDeleteTaskError] = useState<string | null>(null);
 
+  // 各 workspace 的 CodeGraph 索引进度状态与触发入口。
+  const indexStatusByWorkspace = useWorkspaceIndexStore((s) => s.statusByWorkspaceId);
+  const startIndexing = useWorkspaceIndexStore((s) => s.startIndexing);
+  const removeIndex = useWorkspaceIndexStore((s) => s.removeIndex);
+
+  // 对每个已出现的工作区自动触发索引进度（幂等：已在索引中的会跳过）。
+  // 覆盖「创建新 workspace」与「应用启动加载已有 workspace」两条路径，
+  // Kernel 不可用时后端降级返回 degraded，前端仅展示状态不报错。
+  useEffect(() => {
+    for (const workspace of workspaces) {
+      startIndexing(workspace.workspace_id);
+    }
+  }, [workspaces, startIndexing]);
+
   /**
    * 执行工作区删除。
    *
@@ -106,6 +122,8 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
         .map((task) => task.task_id);
       // removeWorkspace 内部会在删除当前活跃区时自动切到剩余列表第一项。
       removeWorkspace(deletedWorkspaceId);
+      // 同步清理该工作区的索引任务（断开 SSE）与状态快照。
+      removeIndex(deletedWorkspaceId);
       setTasks(tasks.filter((task) => task.workspace_id !== deletedWorkspaceId));
       // 同步使被删工作区下各任务的事件缓存失效，避免幽灵 timeline。
       for (const taskId of removedTaskIds) {
@@ -156,7 +174,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   return (
     <aside className="flex h-full w-full min-w-0 flex-col bg-sidebar text-sidebar-foreground">
       {/* 应用标题 */}
-      <div className="flex h-12 items-center gap-2 px-4 font-semibold tracking-tight">
+      <div className="flex h-12 items-center gap-2 px-2 font-semibold tracking-tight">
         <img src={appIconUrl} alt="Coding Agent" className="h-6 w-6 rounded-sm object-contain" />
         <span>Coding Agent</span>
       </div>
@@ -218,6 +236,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                     <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} />
                     <span className="truncate">{workspace.name}</span>
                   </button>
+                  <WorkspaceIndexBadge status={indexStatusByWorkspace[workspace.workspace_id]} />
                   <button
                     title="删除工作区"
                     className="ml-auto rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"

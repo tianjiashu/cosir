@@ -146,12 +146,12 @@ class CodegraphQueryTool(HandlerBase):
 
     def execute(self, *args, **kwargs) -> ToolObservation:
         execution_context = kwargs.pop("execution_context", None)
-        # 1. workspace 缺失降级：codegraph 不在 _WORKSPACE_REQUIRED_PERMISSIONS，
+        # 1. workspace 缺失降级：workspace_event 不在 _WORKSPACE_REQUIRED_PERMISSIONS，
         #    execution_context 可能为 None。无 workspace 时 vendor dispatch 必然失败
         #    （强制要求非空 workspace_path），故先降级。
         if execution_context is None or execution_context.workspace_root is None:
             return tool_error(self.name, "CodeGraph query requires a workspace",
-                              reason="当前没有关联 workspace，无法执行 codegraph 查询；请在工作区内使用，或改用文件搜索工具",
+                              reason="当前没有关联 workspace，无法执行 workspace_event 查询；请在工作区内使用，或改用文件搜索工具",
                               permission=self.permission)
         # 2. Kernel 不可用降级
         if self._client is None:

@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 
 from app.models.enums.event_type import EventType
 from app.models.workspace_index_event import WorkspaceIndexEvent
-from app.service.codegraph.workspace_index_bus import WorkspaceIndexBus
+from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
 
 
 def _event(event_type: EventType, workspace_id: str = "ws-1") -> WorkspaceIndexEvent:
@@ -25,7 +25,7 @@ def _event(event_type: EventType, workspace_id: str = "ws-1") -> WorkspaceIndexE
 
 
 def _stream(bus: WorkspaceIndexBus, workspace_id: str) -> AsyncIterator[str]:
-    from app.api.workspace_index_api import _stream_workspace_index_events
+    from app.api.workspaces_api import _stream_workspace_index_events
 
     return _stream_workspace_index_events(bus, workspace_id)
 
@@ -156,7 +156,7 @@ def test_prepare_404_when_workspace_missing():
     import pytest
     from fastapi import HTTPException
 
-    from app.api.workspace_index_api import prepare_workspace_index
+    from app.api.workspaces_api import prepare_workspace_index
 
     async def _run():
         return await prepare_workspace_index(
@@ -172,7 +172,7 @@ def test_prepare_404_when_workspace_missing():
 
 def test_prepare_returns_readiness_response():
     """prepare 返回 IndexPrepareResponse，含 ready 与 action。"""
-    from app.api.workspace_index_api import prepare_workspace_index
+    from app.api.workspaces_api import prepare_workspace_index
 
     async def _run():
         return await prepare_workspace_index(
@@ -191,13 +191,17 @@ def test_prepare_returns_readiness_response():
 
 def test_prepare_degrades_when_index_service_none():
     """Kernel 不可用（index_service=None）时应降级返回 unavailable，不抛异常。"""
-    from app.api.workspace_index_api import prepare_workspace_index
+    from app.api.workspaces_api import prepare_workspace_index
+    from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
+
+    bus = WorkspaceIndexBus()
 
     async def _run():
         return await prepare_workspace_index(
             "ws-1",
             workspace_service=_FakeWorkspaceService(),  # type: ignore[arg-type]
             index_service=None,
+            index_bus=bus,
         )
 
     resp = asyncio.run(_run())
@@ -205,4 +209,81 @@ def test_prepare_degrades_when_index_service_none():
     assert resp.state == "unavailable"
     assert resp.action_taken == "none"
     assert resp.workspace_id == "ws-1"
-    assert resp.degraded_reason == "codegraph kernel unavailable"
+    assert resp.degraded_reason == "workspace_event kernel unavailable"
+
+
+def test_prepare_emits_degraded_event_when_index_service_none():
+    """核心修复点：Kernel 不可用（index_service=None）时，端点必须主动 publish 一条
+    WORKSPACE_DEGRADED 终态事件到总线——前端先连 SSE 再 POST prepare，仅靠 HTTP 响应
+    不足以让 SSE 订阅者离开 preparing 状态（独立审查暴露的时序 bug 另一半）。
+
+    注意：订阅与端点调用必须在同一事件循环内进行（先 subscribe 建立队列，再触发
+    publish），否则 publish 发生在订阅之前会导致事件入队前订阅者尚未存在而丢失。
+    """
+    from app.api.workspaces_api import prepare_workspace_index
+    from app.models.enums.event_type import EventType
+    from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
+
+    bus = WorkspaceIndexBus()
+
+    async def _run():
+        # 先订阅建立队列，再触发端点 publish，最后消费终态事件。
+        sub = bus.subscribe("ws-2")
+        resp = await prepare_workspace_index(
+            "ws-2",
+            workspace_service=_FakeWorkspaceService(),  # type: ignore[arg-type]
+            index_service=None,
+            index_bus=bus,
+        )
+        event = await asyncio.wait_for(sub.__anext__(), timeout=1.0)
+        return resp, event.event_type
+
+    resp, event_type = asyncio.run(_run())
+    assert resp.ready is False
+    assert resp.state == "unavailable"
+    assert event_type == EventType.WORKSPACE_DEGRADED
+
+
+def test_prepare_timeout_degrades_when_prepare_exceeds():
+    """核心降级路径 3/3：index_service.prepare 阻塞超过总超时上限时，端点必须降级返回
+    state="timeout" 并 publish WORKSPACE_DEGRADED(state=timeout)。用 monkeypatch 把
+    PREPARE_TIMEOUT_SECONDS 调小到 0.2s，再用一个阻塞的伪 service 触发 wait_for 超时
+    （避免真实跑满 660s）。"""
+    import time
+
+    from app.api import workspaces_api
+    from app.api.workspaces_api import prepare_workspace_index
+    from app.models.enums.event_type import EventType
+    from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
+
+    class _BlockingIndexService:
+        def prepare(self, _workspace_id: str, _root_path: str):
+            # 在线程池里阻塞 1s，超过被 monkeypatch 缩小的 0.2s 超时上限。
+            time.sleep(1)
+            raise AssertionError("prepare 不应在超时后返回")
+
+    bus = WorkspaceIndexBus()
+    original_timeout = workspaces_api.PREPARE_TIMEOUT_SECONDS
+
+    async def _run():
+        sub = bus.subscribe("ws-3")
+        resp = await prepare_workspace_index(
+            "ws-3",
+            workspace_service=_FakeWorkspaceService(),  # type: ignore[arg-type]
+            index_service=_BlockingIndexService(),  # type: ignore[arg-type]
+            index_bus=bus,
+        )
+        event = await asyncio.wait_for(sub.__anext__(), timeout=1.0)
+        return resp, event.event_type
+
+    try:
+        # 缩小超时，使阻塞 service 触发 wait_for 超时而不是真实等待 660s。
+        workspaces_api.PREPARE_TIMEOUT_SECONDS = 0.2
+        resp, event_type = asyncio.run(_run())
+    finally:
+        workspaces_api.PREPARE_TIMEOUT_SECONDS = original_timeout
+
+    assert resp.ready is False
+    assert resp.state == "timeout"
+    assert resp.degraded_reason == "workspace index prepare exceeded timeout"
+    assert event_type == EventType.WORKSPACE_DEGRADED

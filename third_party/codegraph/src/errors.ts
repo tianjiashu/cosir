@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { FileError, ParseError, setLogger, silentLogger } from 'codegraph';
+ * import { FileError, ParseError, setLogger, silentLogger } from 'workspace_event';
  *
  * // Catch specific error types
  * try {

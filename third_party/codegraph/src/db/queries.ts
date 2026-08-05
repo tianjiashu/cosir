@@ -760,7 +760,7 @@ export class QueryBuilder {
    * `route` nodes (framework-emitted: Express/Gin/Flask/Rails/Drupal/etc.).
    * Used by handleContext on small repos to inline the project's routing
    * config when the agent's query is about request flow — eliminating the
-   * "Glob + Read routes.rb" pattern that beats codegraph on tiny realworld
+   * "Glob + Read routes.rb" pattern that beats workspace_event on tiny realworld
    * template repos.
    *
    * Excludes test/generated files from candidacy. Returns null if there

@@ -41,6 +41,7 @@ import type { ToolDisplayInfo, ToolListEntry } from "@/services/timeline/project
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Caption, Panel } from "@/components/ui/tokens";
 
 /** 工具调用状态枚举。 */
 type ToolCallStatus = "running" | "completed" | "error";
@@ -178,21 +179,24 @@ export function ToolCallCard({
   const hasResult = result !== null && result !== undefined;
   const isChangeLayout = expandLayout === "diff" || expandLayout === "write";
 
+  // 无条件计算 diff 解析结果，避免在条件分支内调用 useMemo 破坏 Hooks 调用顺序。
+  // result 为空或解析失败时回退为空数组，调用方按 isChangeLayout 决定是否使用。
+  const diffFiles = useMemo<FileData[]>(() => {
+    if (!result) return [];
+    try {
+      return parseDiff(result);
+    } catch {
+      return [];
+    }
+  }, [result]);
+
   if (isChangeLayout) {
     // diff/write 布局共享的视图模式与解析结果；折叠态文件头需要和展开态一致。
-    const diffFiles = useMemo<FileData[]>(() => {
-      if (!result) return [];
-      try {
-        return parseDiff(result);
-      } catch {
-        return [];
-      }
-    }, [result]);
     const firstFile = diffFiles[0];
 
     return (
       <TooltipProvider>
-        <div className="w-full">
+        <div className="w-full min-w-0">
           <div
             role="button"
             tabIndex={0}
@@ -239,7 +243,7 @@ export function ToolCallCard({
                       {shortenChangeSummary(summaryText)}
                     </span>
                   </TooltipTrigger>
-                  <TooltipContent className="max-w-xs break-all font-mono text-[11px]">
+                  <TooltipContent className={cn("max-w-xs break-all", Caption.mono)}>
                     {summaryText}
                   </TooltipContent>
                 </Tooltip>
@@ -265,7 +269,7 @@ export function ToolCallCard({
   }
 
   return (
-    <div className="w-full">
+    <div className="w-full min-w-0">
       {/* 折叠触发区：紧凑单行，模仿 Codex > 图标 动作 参数 风格 */}
       <button
         type="button"
@@ -300,7 +304,7 @@ export function ToolCallCard({
               <span className="text-muted-foreground shrink-0">参数:</span>
               <div className="space-y-0.5">
                 {argEntries.map(([key, value]) => (
-                  <div key={key} className="font-mono text-[11px]">
+                  <div key={key} className={Caption.mono}>
                     <span className="text-muted-foreground">{key}=</span>
                     {String(JSON.stringify(value))}
                   </div>
@@ -328,20 +332,20 @@ export function ToolCallCard({
                   onClick={() => {
                     void navigator.clipboard.writeText(result ?? "");
                   }}
-                  className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent/40 transition-colors"
+                  className={cn("inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 hover:bg-accent/40 transition-colors", Caption.xs)}
                 >
                   <Copy className="h-3 w-3" />
                   复制
                 </button>
               </div>
-              <pre className="max-h-64 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+              <pre className={cn("max-h-64 overflow-auto rounded bg-muted/40 p-2 whitespace-pre-wrap break-all", Caption.mono)}>
                 {result ?? ""}
               </pre>
             </div>
           )}
           {/* 受 ToolOutputBudget 裁剪时的提示（write/terminal 等全文场景） */}
           {status === "completed" && Boolean(resultData?.output_truncated) && (
-            <div className="text-[11px] text-muted-foreground">
+            <div className={cn(Caption.xs, "text-muted-foreground")}>
               完整输出已截断
               {resultData?.artifact_path ? `，见 ${String(resultData.artifact_path)}` : ""}
             </div>
@@ -366,7 +370,7 @@ export function ToolCallCard({
                 <span className="text-muted-foreground shrink-0">重试:</span>
                 <span
                   className={cn(
-                    "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px]",
+                    cn("inline-flex items-center rounded border px-1.5 py-0.5", Caption.xs),
                     retryable
                       ? "border-amber-500/40 text-amber-600"
                       : "border-border text-muted-foreground",
@@ -403,7 +407,7 @@ const VIRTUAL_LIST_THRESHOLD = 50;
  */
 function ListView({ entries, emptyLabel }: { entries: ToolListEntry[]; emptyLabel?: string }) {
   if (entries.length === 0) {
-    return <div className="text-[11px] text-muted-foreground">{emptyLabel ?? "（无条目）"}</div>;
+    return <div className={cn(Caption.xs, "text-muted-foreground")}>{emptyLabel ?? "（无条目）"}</div>;
   }
   if (entries.length > VIRTUAL_LIST_THRESHOLD) {
     // 只读展示列表，条目不会在头部插入；key 由条目内在字段 + 下标兜底唯一性构成，
@@ -462,7 +466,7 @@ function listEntryKey(entry: ToolListEntry, idx: number): string {
 function renderListEntry(entry: ToolListEntry): ReactNode {
   if (entry.filePath) {
     return (
-      <div className="flex items-baseline gap-1.5 font-mono text-[11px]">
+      <div className={cn("flex items-baseline gap-1.5", Caption.mono)}>
         <Code2 className="h-3 w-3 shrink-0 text-sky-600" />
         <span className="text-muted-foreground">
           {entry.filePath}:{entry.lineNumber ?? 0}
@@ -475,7 +479,7 @@ function renderListEntry(entry: ToolListEntry): ReactNode {
   if (typeof entry.path === "string" && entry.path.startsWith("http") && entry.content) {
     return (
       <div className="rounded border border-border bg-muted/30 p-1.5">
-        <div className="flex items-center gap-1.5 font-mono text-[11px]">
+        <div className={cn("flex items-center gap-1.5", Caption.mono)}>
           <ExternalLink className="h-3 w-3 shrink-0 text-sky-600" />
           <a
             href={entry.path}
@@ -487,11 +491,11 @@ function renderListEntry(entry: ToolListEntry): ReactNode {
             {entry.name}
           </a>
         </div>
-        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-background/60 p-1.5 font-mono text-[10px] text-muted-foreground">
+        <pre className={cn("mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-background/60 p-1.5 font-mono text-muted-foreground", Caption.xs10)}>
           {entry.content}
         </pre>
         {entry.contentTruncated && (
-          <div className="mt-1 text-[10px] text-muted-foreground">
+          <div className={cn("mt-1 text-muted-foreground", Caption.xs10)}>
             正文已截断，完整内容见结果全文
           </div>
         )}
@@ -501,7 +505,7 @@ function renderListEntry(entry: ToolListEntry): ReactNode {
   const isPython = typeof entry.name === "string" && entry.name.endsWith(".py");
   const Icon = entry.type === "dir" ? Folder : isPython ? Code2 : File;
   return (
-    <div className="flex items-center gap-1.5 font-mono text-[11px]">
+    <div className={cn("flex items-center gap-1.5", Caption.mono)}>
       <Icon
         className={cn(
           "h-3 w-3 shrink-0",
@@ -562,7 +566,7 @@ function FileDiffView({
           className="overflow-hidden rounded border border-border bg-background"
         >
           {/* diff 主体：react-diff-view 渲染，自带行号列与红绿底色；字体与折叠态对齐为 11px */}
-          <div className="max-h-[480px] overflow-auto text-[11px]">
+          <div className={cn(`${Panel.codeBlockMaxHeight} overflow-auto`, Caption.xs)}>
             <Diff diffType={file.type} hunks={file.hunks} viewType={viewType} />
           </div>
         </div>
@@ -636,14 +640,14 @@ function DiffFileHeaderContent({
             {basenameOf(rawPath)}
           </span>
         </TooltipTrigger>
-        <TooltipContent className="max-w-xs break-all font-mono text-[11px]">
+        <TooltipContent className={cn("max-w-xs break-all", Caption.mono)}>
           {fullPath}
         </TooltipContent>
       </Tooltip>
       {added > 0 && (
         <Badge
           variant="outline"
-          className="shrink-0 border-green-200 px-1.5 py-0 text-[11px] font-medium tabular-nums text-green-700"
+          className={cn("shrink-0 border-green-200 px-1.5 py-0 font-medium tabular-nums text-green-700", Caption.xs)}
         >
           +{added}
         </Badge>
@@ -651,7 +655,7 @@ function DiffFileHeaderContent({
       {removed > 0 && (
         <Badge
           variant="outline"
-          className="shrink-0 border-red-200 px-1.5 py-0 text-[11px] font-medium tabular-nums text-red-700"
+          className={cn("shrink-0 border-red-200 px-1.5 py-0 font-medium tabular-nums text-red-700", Caption.xs)}
         >
           -{removed}
         </Badge>
@@ -759,7 +763,9 @@ function countDiffChanges(file: FileData): { added: number; removed: number } {
 function UnifiedDiffView({ content }: { content: string }) {
   const lines = content.split("\n");
   return (
-    <pre className="max-h-[480px] overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+    <pre
+      className={cn(`${Panel.codeBlockMaxHeight} overflow-auto rounded bg-muted/40 p-2 whitespace-pre-wrap break-all`, Caption.mono)}
+    >
       {lines.map((line, idx) => {
         let cls = "";
         if (line.startsWith("+")) {

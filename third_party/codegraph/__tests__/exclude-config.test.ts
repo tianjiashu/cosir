@@ -1,5 +1,5 @@
 /**
- * `codegraph.json` `exclude` — keep paths out of the index even when git-TRACKED
+ * `workspace_event.json` `exclude` — keep paths out of the index even when git-TRACKED
  * (#999).
  *
  * The escape hatch for a committed vendor/theme/SDK directory (a checked-in
@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { loadExcludePatterns, loadExtensionOverrides, loadIncludeIgnoredPatterns, clearProjectConfigCache } from '../src/project-config';
 import { scanDirectory } from '../src/extraction';
 
-describe('exclude loader (codegraph.json)', () => {
+describe('exclude loader (workspace_event.json)', () => {
   let dir: string;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-exclude-'));
@@ -33,11 +33,11 @@ describe('exclude loader (codegraph.json)', () => {
   });
   const writeConfig = (obj: unknown) =>
     fs.writeFileSync(
-      path.join(dir, 'codegraph.json'),
+      path.join(dir, 'workspace_event.json'),
       typeof obj === 'string' ? obj : JSON.stringify(obj)
     );
 
-  it('returns an empty list when there is no codegraph.json (the default)', () => {
+  it('returns an empty list when there is no workspace_event.json (the default)', () => {
     expect(loadExcludePatterns(dir)).toEqual([]);
   });
 
@@ -74,7 +74,7 @@ describe('exclude loader (codegraph.json)', () => {
 
     writeConfig({ exclude: ['assets/'] });
     const future = new Date(Date.now() + 2000);
-    fs.utimesSync(path.join(dir, 'codegraph.json'), future, future);
+    fs.utimesSync(path.join(dir, 'workspace_event.json'), future, future);
 
     expect(loadExcludePatterns(dir)).toEqual(['assets/']);
   });
@@ -82,7 +82,7 @@ describe('exclude loader (codegraph.json)', () => {
   it('drops the patterns again when the config file is removed', () => {
     writeConfig({ exclude: ['static/'] });
     expect(loadExcludePatterns(dir)).toEqual(['static/']);
-    fs.rmSync(path.join(dir, 'codegraph.json'));
+    fs.rmSync(path.join(dir, 'workspace_event.json'));
     expect(loadExcludePatterns(dir)).toEqual([]);
   });
 });
@@ -95,7 +95,7 @@ describe('exclude behavior — scanDirectory drops excluded paths (#999)', () =>
     fs.writeFileSync(p, content);
   };
   const writeConfig = (obj: unknown) =>
-    fs.writeFileSync(path.join(dir, 'codegraph.json'), JSON.stringify(obj));
+    fs.writeFileSync(path.join(dir, 'workspace_event.json'), JSON.stringify(obj));
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-exclude-scan-'));

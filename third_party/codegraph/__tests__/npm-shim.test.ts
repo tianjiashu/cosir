@@ -39,7 +39,7 @@ function mkTmp(label: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `cg-shim-${label}-`));
 }
 
-// A temp dir standing in for the installed @colbymchenry/codegraph main package.
+// A temp dir standing in for the installed @colbymchenry/workspace_event main package.
 function makePkg(version = '9.9.9-test'): string {
   const dir = mkTmp('pkg');
   fs.copyFileSync(SHIM_SRC, path.join(dir, 'npm-shim.js'));
@@ -52,7 +52,7 @@ function makePkg(version = '9.9.9-test'): string {
 // shim found and exec'd it (and passed args through).
 function writeLauncher(binDir: string): void {
   fs.mkdirSync(binDir, { recursive: true });
-  const p = path.join(binDir, 'codegraph');
+  const p = path.join(binDir, 'workspace_event');
   fs.writeFileSync(p, '#!/bin/sh\necho "FAKE_BUNDLE_RAN args:$*"\n');
   fs.chmodSync(p, 0o755);
 }
@@ -61,7 +61,7 @@ function writeLauncher(binDir: string): void {
 // shim passed CODEGRAPH_HOST_PPID down to the server (#1185).
 function writeHostPpidLauncher(binDir: string): void {
   fs.mkdirSync(binDir, { recursive: true });
-  const p = path.join(binDir, 'codegraph');
+  const p = path.join(binDir, 'workspace_event');
   fs.writeFileSync(p, '#!/bin/sh\necho "HOST_PPID=[${CODEGRAPH_HOST_PPID}]"\n');
   fs.chmodSync(p, 0o755);
 }
@@ -221,7 +221,7 @@ describe.skipIf(!CAN_NET)('npm-shim download fallback (local HTTPS)', () => {
       { stdio: 'ignore' },
     );
 
-    // Build a fake bundle archive (codegraph-<target>/bin/codegraph), like a real release asset.
+    // Build a fake bundle archive (workspace_event-<target>/bin/workspace_event), like a real release asset.
     const work = mkTmp('fixture');
     writeLauncher(path.join(work, `codegraph-${target}`, 'bin'));
     const archive = path.join(work, asset);
@@ -265,7 +265,7 @@ describe.skipIf(!CAN_NET)('npm-shim download fallback (local HTTPS)', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('FAKE_BUNDLE_RAN');
     expect(r.stdout).toContain('--probe-net');
-    expect(fs.existsSync(path.join(cache, 'bundles', `${target}-5.0.0-net`, 'bin', 'codegraph'))).toBe(true);
+    expect(fs.existsSync(path.join(cache, 'bundles', `${target}-5.0.0-net`, 'bin', 'workspace_event'))).toBe(true);
   }, 20000);
 
   it('prunes older cached bundles after downloading a new one (#1074)', async () => {
@@ -282,7 +282,7 @@ describe.skipIf(!CAN_NET)('npm-shim download fallback (local HTTPS)', () => {
     expect(r.stderr).toContain('downloading');
     expect(r.stdout).toContain('FAKE_BUNDLE_RAN');
     // freshly downloaded version present, stale one pruned
-    expect(fs.existsSync(path.join(bundles, `${target}-6.0.0-new`, 'bin', 'codegraph'))).toBe(true);
+    expect(fs.existsSync(path.join(bundles, `${target}-6.0.0-new`, 'bin', 'workspace_event'))).toBe(true);
     expect(fs.existsSync(path.join(bundles, `${target}-5.0.0-stale`))).toBe(false);
   }, 20000);
 

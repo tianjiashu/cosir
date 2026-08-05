@@ -20,6 +20,7 @@ import {
   readBackendTraceHeaders,
   recordBackendTrace,
 } from "./tracePropagation";
+import { parseSSEFrame } from "./sseParser";
 import { useConversationTraceStore } from "@/stores/conversationTraceStore";
 
 /** 鍚庣鍩虹 URL锛屽紑鍙戠幆澧冭蛋 Vite 浠ｇ悊銆?*/
@@ -275,30 +276,20 @@ export class SSEConnection {
    * @private
    */
   private parseSSEEvent(text: string): RuntimeEvent | null {
-    let eventType = "";
-    let dataStr = "";
-
-    for (const line of text.split("\n")) {
-      if (line.startsWith("event:")) {
-        eventType = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataStr = line.slice(5).trim();
-      }
-    }
-
-    if (!dataStr || !eventType) {
+    const frame = parseSSEFrame(text);
+    if (!frame) {
       return null;
     }
 
     try {
-      return JSON.parse(dataStr) as RuntimeEvent;
+      return JSON.parse(frame.data) as RuntimeEvent;
     } catch (parseErr) {
       logWarn("SSE 浜嬩欢 JSON 瑙ｆ瀽澶辫触", {
         module: "sse",
         task_id: this.options.taskId,
         turn_id: this.options.turnId,
-        event_type: eventType || "(unknown)",
-        data_preview: dataStr.slice(0, 200),
+        event_type: frame.eventType || "(unknown)",
+        data_preview: frame.data.slice(0, 200),
         error: parseErr instanceof Error ? parseErr.message : String(parseErr),
       });
       return null;

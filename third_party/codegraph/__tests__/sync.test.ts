@@ -2,7 +2,7 @@
  * Sync Module Tests
  *
  * Tests for sync functionality (incremental updates).
- * Note: Git hooks functionality has been removed in favor of codegraph's
+ * Note: Git hooks functionality has been removed in favor of workspace_event's
  * Claude Code hooks integration.
  */
 
@@ -19,7 +19,7 @@ describe('Sync Module', () => {
     let cg: CodeGraph;
 
     beforeEach(async () => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-sync-func-'));
+      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-sync-func-'));
 
       // Create initial source files
       const srcDir = path.join(testDir, 'src');
@@ -161,7 +161,7 @@ describe('Sync Module', () => {
     }
 
     beforeEach(async () => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-git-sync-'));
+      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-git-sync-'));
 
       // Initialize a git repo with an initial commit
       git('init');
@@ -226,7 +226,7 @@ describe('Sync Module', () => {
     });
 
     it('should stop reporting untracked files once they are indexed (issue #206)', async () => {
-      // Untracked files stay `??` in git status even after codegraph indexes
+      // Untracked files stay `??` in git status even after workspace_event indexes
       // them. Change detection must compare them against the DB by hash, not
       // report every untracked file as "added" on every sync/status.
       fs.writeFileSync(
@@ -318,7 +318,7 @@ describe('Sync Module', () => {
     }
 
     beforeEach(async () => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-766-'));
+      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-766-'));
 
       git('init');
       git('config', 'user.email', 'test@test.com');
@@ -401,7 +401,7 @@ describe('Sync Module', () => {
     });
 
     it('status (getChangedFiles) agrees with sync — no phantom pending changes', async () => {
-      // The user-visible symptom today: `codegraph status` reads getChangedFiles
+      // The user-visible symptom today: `workspace_event status` reads getChangedFiles
       // and reports a vendor edit as a pending change that `sync` (a filesystem
       // reconcile) then never indexes — so the count never clears. Both must now
       // agree that nothing happened.
@@ -452,7 +452,7 @@ describe('Sync Module', () => {
     }
 
     beforeEach(async () => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-1240-'));
+      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-1240-'));
 
       // a.ts references `greet`, which does not exist anywhere yet — the ref
       // fails resolution during the initial index.
@@ -557,7 +557,7 @@ describe('Sync Module', () => {
     }
 
     beforeEach(async () => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-1240-removal-'));
+      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-1240-removal-'));
 
       // No import — cross-file name matching, so the caller can legitimately
       // rebind to a definition in ANY file, which is what a full re-index does.
@@ -628,7 +628,7 @@ describe('Sync Module', () => {
     let cg: CodeGraph;
 
     beforeEach(async () => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-899-'));
+      testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-899-'));
 
       // pkg/mod.py — a module with two functions, both called from a separate
       // test file via `mod.<fn>(...)` (module-attribute access). This is the

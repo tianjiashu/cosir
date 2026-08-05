@@ -34,7 +34,7 @@ describe('Android resource XML exclusion (#1047)', () => {
   };
 
   beforeEach(async () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-android-res-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-android-res-'));
 
     // Android resource files (every typed subdir, incl. a locale qualifier) — all
     // should be EXCLUDED.

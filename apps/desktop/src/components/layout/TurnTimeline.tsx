@@ -10,7 +10,7 @@
  * @module components/layout/TurnTimeline
  */
 
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useReducer, useRef } from "react";
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 import { UserMessage } from "@/components/chat/UserMessage";
@@ -19,7 +19,12 @@ import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { TerminalCallCard } from "@/components/chat/TerminalCallCard";
 import { StatusBadge } from "@/components/chat/StatusBadge";
-import { projectTurnTimeline } from "@/services/timeline/projector";
+import {
+  createTimelineProjectorState,
+  type TimelineProjectorState,
+  projectTimelineIncrementally,
+  selectVisibleEntries,
+} from "@/services/timeline/projector";
 import { openFileInEditor } from "@/services/backend";
 import { logInfo, logWarn } from "@/lib/logger";
 
@@ -37,34 +42,88 @@ interface TurnTimelineProps {
  * 每个 turn 独立投影并保持 memo：仅当本 turn 的 `events` 或 `turn` 引用变化时
  * 才重投影，其余 turn 在父组件重渲染时整块跳过。
  *
+ * 增量投影（性能核心）：
+ * 本组件持有可续算的 {@link TimelineProjectorState}，每帧只把 `events` 的「新增尾部」
+ * （append-only 保证 delta = events.slice(lastLen)）增量投影进既有状态，而非从零全量重建。
+ * 投影结果 `entries` 引用稳定（未变项沿用旧引用），使下游 `memo` 精确跳过未变化项，
+ * 把「每帧 O(n) 全量重投影」降为「每帧 O(delta)」，彻底消除流式期整棵 timeline 重算卡顿。
+ *
  * @param props.turn - 轮次记录。
  * @param props.events - 该轮次事件列表。
  */
 function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
-  // 仅依赖本 turn 的 events / turn，过去轮次引用不变时 memo 跳过，不重投影。
-  const projected = useMemo(() => projectTurnTimeline([turn], events), [turn, events]);
-  const turnItem = projected[0];
-  logInfo("turn_timeline_rendered", {
-    module: "TurnTimeline",
-    turn_id: turn.turn_id,
-    user_text_len: turnItem?.userText?.length ?? 0,
-    user_text_preview: turnItem?.userText?.slice(0, 80) ?? "",
-    entries_count: turnItem?.entries?.length ?? 0,
-  });
-  if (!turnItem) {
+  // 可续算投影状态（持久引用，跨帧累积；不随 render 重建）。
+  const stateRef = useRef<TimelineProjectorState>(createTimelineProjectorState());
+  // 已投影到 stateRef 的 events 长度；events 为 append-only，delta = events.slice(lastLen)。
+  const lastLenRef = useRef(0);
+  // 已投影 events 的首个 event_id；用于检测「头部插入」式整体替换
+  // （setEvents 经排序/合并后可能在数组头部插入更早的历史事件，此时长度可能不减反增，
+  // 仅比长度无法识别，必须靠首事件身份）。身份变化则整体重建而非按尾部切片续算。
+  const lastFirstEventIdRef = useRef<string | null>(null);
+  // 触发重渲染的轻量信号；renderTick 同时作为下游 useMemo 的显式依赖——
+  // ref 的 .current 变化 React 侦测不到，必须靠递增计数传达「投影状态已更新」。
+  const [renderTick, forceRender] = useReducer((x: number) => x + 1, 0);
+
+  useEffect(() => {
+    // 首帧或 turn 切换：重建投影状态（turn 变了，旧累积态无效）。
+    if (lastLenRef.current === 0 && events.length > 0) {
+      stateRef.current = projectTimelineIncrementally(createTimelineProjectorState(), events);
+      lastLenRef.current = events.length;
+      lastFirstEventIdRef.current = events[0]?.event_id ?? null;
+      forceRender();
+      return;
+    }
+    const firstEventId = events[0]?.event_id ?? null;
+    if (
+      events.length < lastLenRef.current ||
+      (firstEventId !== null && firstEventId !== lastFirstEventIdRef.current)
+    ) {
+      // events 被整体替换（如回放/重连，或头部插入更早历史事件）：重建而非续算，
+      // 避免脏累积或把尾部误当新增；projectTimelineIncrementally 幂等，重建安全。
+      stateRef.current = projectTimelineIncrementally(createTimelineProjectorState(), events);
+      lastLenRef.current = events.length;
+      lastFirstEventIdRef.current = firstEventId;
+      forceRender();
+      return;
+    }
+    const delta = events.slice(lastLenRef.current);
+    if (delta.length > 0) {
+      stateRef.current = projectTimelineIncrementally(stateRef.current, delta);
+      lastLenRef.current = events.length;
+      lastFirstEventIdRef.current = firstEventId;
+      forceRender();
+    }
+  }, [events]);
+
+  const turnItem = useMemo(() => {
+    const entries = selectVisibleEntries(stateRef.current).slice();
+    if (entries.length === 0 && turn.response_text) {
+      entries.push({
+        kind: "assistant",
+        eventId: `turn-response-${turn.turn_id}`,
+        content: turn.response_text,
+      });
+    }
+    return { turnId: turn.turn_id, userText: turn.input_text, entries };
+    // renderTick 是「stateRef.current 已更新」的唯一可观测信号；
+    // ESLint 无法追踪 ref 读取，故此依赖必要而非冗余。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turn, renderTick]);
+
+  if (turnItem.entries.length === 0 && !turn.response_text) {
     return null;
   }
 
   return (
-    <div className="space-y-4">
-      <div className="mx-auto max-w-3xl">
+    <div className="space-y-3">
+      <div className="mx-auto w-full min-w-0 max-w-content">
         <UserMessage content={turnItem.userText} />
       </div>
 
       {turnItem.entries.map((entry) => {
-        // 所有 timeline 条目统一限宽 max-w-3xl，与用户消息、输入栏保持宽度对齐，
+        // 所有 timeline 条目统一限宽 content 令牌，与用户消息、输入栏保持宽度对齐，
         // 避免 diff/write 工具卡片单独 breakout 导致右侧参差不齐。
-        const widthClass = "mx-auto max-w-3xl";
+        const widthClass = "mx-auto w-full min-w-0 max-w-content";
 
         if (entry.kind === "thinking") {
           // 过滤纯空白与极短无意义内容（至少 2 个字符才值得展示折叠块）

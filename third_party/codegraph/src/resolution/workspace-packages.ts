@@ -125,7 +125,7 @@ const OHPM_MANIFEST = 'oh-package.json5';
 const OHPM_WALK_MAX_DEPTH = 6;
 const OHPM_WALK_DIR_BUDGET = 8000;
 const OHPM_SKIP_DIRS = new Set([
-  'node_modules', 'oh_modules', '.git', '.codegraph', '.hvigor', '.preview',
+  'node_modules', 'oh_modules', '.git', '.workspace_event', '.hvigor', '.preview',
   'build', 'dist', 'out', 'oh-package-lock.json5',
 ]);
 

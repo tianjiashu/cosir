@@ -19,7 +19,7 @@ from app.models.enums.event_type import EventType
 from app.models.payload.file_change_stable_payload import FileChangeStablePayload
 from app.models.payload.run_finished_payload import RunFinishedPayload
 from app.models.runtime_event import RuntimeEvent
-from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
+from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 
 
 class _StubRuntime:

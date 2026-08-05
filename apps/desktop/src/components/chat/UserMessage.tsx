@@ -31,10 +31,10 @@ export function UserMessage({ content, className }: UserMessageProps) {
     return null;
   }
   return (
-    <div className={cn("flex justify-end", className)}>
+    <div className={cn("flex min-w-0 justify-end", className)}>
       <div
         className={cn(
-          "max-w-[85%] rounded-lg rounded-br-sm bg-primary px-4 py-2.5 text-primary-foreground shadow-sm",
+          "max-w-bubble min-w-0 rounded-lg rounded-br-sm bg-primary px-4 py-2.5 text-primary-foreground shadow-sm",
           MessageTypography.body,
         )}
       >

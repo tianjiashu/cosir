@@ -293,21 +293,43 @@ export function selectEventsForTask(state: EventState, taskId: string | null): R
 /**
  * 按 event_id 合并两组事件（后者优先），用于 setEvents 跨任务 / 轮次合并历史缓存。
  *
+ * 引用稳定性（性能关键）：当合并结果与 `target` 逐项引用相同时，直接复用 `target` 的数组引用，
+ * 而非返回新数组。setEvents 合并历史时会遍历全部传入事件并刷新 `eventsByTurnId` / `eventsByTaskId`
+ * 的切分映射——若每次都无条件生成新数组引用，会让「未变化的轮次 / 任务」的事件列表引用失效，
+ * 进而击穿下游 TurnTimeline 的 memo（依赖 events 引用跳过重渲染），导致「加载历史对话时整棵
+ * timeline 全量重投影 + 重渲染 markdown」卡顿。复用旧引用可让未变化轮次精确跳过。
+ *
+ * 现实边界：冷启动路径（openTask 经 `api.listTaskEvents` 拉取）返回的是新反序列化对象，
+ * 引用必与旧缓存不同，此时本函数仍会返回新数组；该路径下 events 引用稳定的真正来源是
+ * `useTask.openTask` 的「内存缓存命中即跳过 setEvents」优化。本函数的引用复用主要作为
+ * 「同引用幂等合并」的语义防线（如重复传入同一批已缓存对象、或实时流与回放叠加的合并），
+ * 与 openTask 缓存命中共同构成引用稳定保障。
+ *
  * @param target - 已有的事件列表（可为 undefined）。
  * @param incoming - 新拉取 / 传入的事件列表。
- * @returns 去重并按客户端顺序排序后的合并事件列表。
+ * @returns 去重并按客户端顺序排序后的合并事件列表；若与 target 等价则复用 target 引用。
  */
 function mergeByEventId(
   target: RuntimeEvent[] | undefined,
   incoming: RuntimeEvent[],
 ): RuntimeEvent[] {
+  const targetArr = target ?? [];
   const map = new Map<string, RuntimeEvent>();
-  for (const e of target ?? []) {
+  for (const e of targetArr) {
     map.set(e.event_id, e);
   }
-  // 传入事件优先（重新打开任务时后端回放为最新全量）
+  // 传入事件优先（重新打开任务时后端回放为最新全量）；仅当某 event_id 对应的事件
+  // 引用发生变化（新增或内容更新）时才标记 changed。
+  let changed = false;
   for (const e of incoming) {
-    map.set(e.event_id, e);
+    if (map.get(e.event_id) !== e) {
+      changed = true;
+      map.set(e.event_id, e);
+    }
+  }
+  if (!changed) {
+    // 合并结果与 target 完全等价，复用旧引用以保住下游 memo 跳过。
+    return targetArr;
   }
   return [...map.values()].sort(compareRuntimeEvents);
 }

@@ -80,6 +80,7 @@ class SearchFilesTool(HandlerBase):
     def execute(
         self,
         pattern: str,
+        execution_context: ToolExecutionContext,
         target: str = "content",
         path: str | None = None,
         file_glob: str | None = None,
@@ -87,7 +88,6 @@ class SearchFilesTool(HandlerBase):
         offset: int = 0,
         output_mode: str = "content",
         context: int = 0,
-        execution_context: ToolExecutionContext = None,
     ) -> ToolObservation:
         """按 target 分流执行内容搜索或文件名查找，统一收口成功/失败观察。
 
@@ -117,8 +117,6 @@ class SearchFilesTool(HandlerBase):
         副作用:
             只读文件系统（搜索引擎内部）。
         """
-        if execution_context is None:
-            pass
         workspace_root = execution_context.workspace_root
         resolver = ProjectPathResolver(workspace_root)
         search_path = path or "."

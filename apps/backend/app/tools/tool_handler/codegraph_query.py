@@ -192,7 +192,7 @@ class CodegraphQueryTool(HandlerBase):
         """
         execution_context: ToolExecutionContext | None = kwargs.pop("execution_context", None)
 
-        # 1. 无 workspace 降级：codegraph 不在 _WORKSPACE_REQUIRED_PERMISSIONS，
+        # 1. 无 workspace 降级：workspace_event 不在 _WORKSPACE_REQUIRED_PERMISSIONS，
         #    execution_context 可能为 None；vendor 强制要求非空 workspace_path。
         if execution_context is None or execution_context.workspace_root is None:
             return tool_error(
@@ -276,7 +276,7 @@ class CodegraphQueryTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
-            resource_keys=("codegraph",),
+            resource_keys=("workspace_event",),
             display=ToolDisplayHints(
                 verb="代码语义查询" if self.name == "codegraph_explore" else "代码关系查询",
                 icon="network",

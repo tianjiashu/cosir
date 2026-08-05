@@ -24,7 +24,7 @@ from app.tools.tool_handler.terminal import (
 )
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import ExecuteTerminalArgs
-from app.trace_infra.redaction import redact_terminal_output
+from app.utils.trace_infra.redaction import redact_terminal_output
 
 # workdir 字符白名单：挡住命令注入式 workdir（含 ;|&$() 等注入字符直接拒绝）。
 _WORKDIR_SAFE_RE = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")

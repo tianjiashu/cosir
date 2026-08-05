@@ -11,6 +11,7 @@ export * from "./events";
 export * from "./task";
 export * from "./turn";
 export * from "./workspace";
+export * from "./codegraph";
 export * from "./agents";
 export {
   API_BASE,

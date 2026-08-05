@@ -17,16 +17,16 @@ from app.config.configuration import (
 from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
 from app.service import depends as service_depends
-from app.service.codegraph.workspace_index_bus import WorkspaceIndexBus
-from app.service.codegraph.workspace_index_service import WorkspaceIndexService
+from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
+from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.log_query_service import LogQueryService
-from app.service.runtime_event.runtime_event_bus import RuntimeEventBus
-from app.service.runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_prepare_service import TurnPrepareService
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 from app.service.task.workspace_service import WorkspaceService
+from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
+from app.service.workspace_event.workspace_index_service import WorkspaceIndexService
 from app.tools.tool_system import ToolSystem
 
 # 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持

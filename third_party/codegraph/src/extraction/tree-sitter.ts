@@ -3022,7 +3022,7 @@ export class TreeSitterExtractor {
    * dynamic factory (`createService<MyServiceList>()`) turns into a callable
    * property (`api.query_apply_record(…)`). Static extraction otherwise never
    * sees that name — it's a type argument, not a declaration — so
-   * `codegraph query query_apply_record` returned nothing (issue #634). We emit
+   * `workspace_event query query_apply_record` returned nothing (issue #634). We emit
    * each name as a `method` node under the type alias (qualifiedName
    * `MyServiceList::query_apply_record`) so it's searchable and resolvable as a
    * symbol. (A call through the proxy, `api.query_apply_record(…)`, still

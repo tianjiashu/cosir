@@ -24,7 +24,7 @@ from app.codegraph import (
     IndexSyncResult,
 )
 from app.models.workspace_index_readiness import WorkspaceIndexReadiness
-from app.service.codegraph.lifecycle_service import CodeGraphLifecycleService
+from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
 from app.utils.inflight_registry import InflightRegistry
 
 
@@ -39,17 +39,13 @@ class _FakeClient:
     def index_status(self, workspace_path: str, timeout: float | None = None) -> IndexStatusResult:
         return self._status
 
-    def index_init(
-        self, workspace_path: str, timeout: float | None = None
-    ) -> IndexInitResult:
+    def index_init(self, workspace_path: str, timeout: float | None = None) -> IndexInitResult:
         self.init_calls.append(workspace_path)
         # 模拟真实 init 的耗时，让 singleflight 的并发窗口成立（否则瞬时完成会错过去重）。
         time.sleep(0.05)
         return IndexInitResult(state="ready", files_indexed=42, duration_ms=100)
 
-    def index_sync(
-        self, workspace_path: str, timeout: float | None = None
-    ) -> IndexSyncResult:
+    def index_sync(self, workspace_path: str, timeout: float | None = None) -> IndexSyncResult:
         self.sync_calls.append(workspace_path)
         return IndexSyncResult(
             state="ready",
@@ -133,6 +129,19 @@ def test_ensure_ready_kernel_unavailable_degrades_not_raise():
     assert result.ready is False
     assert result.state == "unavailable"
     assert result.degraded_reason is not None
+
+
+def test_get_client_returns_injected_client():
+    """新增的 get_client() 应返回构造时注入的底层 client（供 prepare 前健康快检使用）。"""
+    client = _FakeClient(IndexStatusResult(state="ready", last_indexed_at=1))
+    svc = _svc(client)
+    assert svc.get_client() is client
+
+
+def test_get_client_returns_none_when_not_injected():
+    """未注入 client 时 get_client() 返回 None（prepare 应据此直接降级）。"""
+    svc = CodeGraphLifecycleService(None)
+    assert svc.get_client() is None
 
 
 def test_ensure_ready_init_protocol_error_degrades_not_raise():

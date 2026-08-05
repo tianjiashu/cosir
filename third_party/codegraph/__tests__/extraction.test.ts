@@ -21,7 +21,7 @@ beforeAll(async () => {
 
 // Create a temporary directory for each test
 function createTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-test-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-test-'));
 }
 
 // Clean up temporary directory
@@ -146,7 +146,7 @@ describe('Language Detection', () => {
 
   it('should detect Nix files', () => {
     expect(detectLanguage('default.nix')).toBe('nix');
-    expect(detectLanguage('pkgs/development/tools/misc/codegraph/default.nix')).toBe('nix');
+    expect(detectLanguage('pkgs/development/tools/misc/workspace_event/default.nix')).toBe('nix');
     expect(isSourceFile('default.nix')).toBe(true);
   });
 
@@ -6976,7 +6976,7 @@ describe('Nested gitlink repos (#1031, #1033)', () => {
   // gitlink-discovery pass must honor that `.gitignore` the same way — otherwise a
   // gitignored reference/benchmark corpus full of `git add`ed clones gets pulled
   // into the index (the 138k-file blow-up the reporter hit). Respect it by default;
-  // re-include only via `codegraph.json` `includeIgnored`.
+  // re-include only via `workspace_event.json` `includeIgnored`.
   it('does not index a gitlink under a gitignored directory by default (#1065)', async () => {
     const { execFileSync } = await import('child_process');
     const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' });
@@ -7001,7 +7001,7 @@ describe('Nested gitlink repos (#1031, #1033)', () => {
     expect(buildScopeIgnore(root).ignores('benchmark/repos/ref/ref.ts')).toBe(true);
   });
 
-  it('re-includes a gitignored gitlink when codegraph.json includeIgnored opts in (#1065)', async () => {
+  it('re-includes a gitignored gitlink when workspace_event.json includeIgnored opts in (#1065)', async () => {
     const { execFileSync } = await import('child_process');
     const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' });
 
@@ -7010,8 +7010,8 @@ describe('Nested gitlink repos (#1031, #1033)', () => {
     await makeRepo(path.join(root, 'benchmark', 'repos', 'ref'), 'ref');
     git(root, 'add', 'benchmark/repos/ref');
     fs.writeFileSync(path.join(root, '.gitignore'), 'benchmark/repos/\n');
-    fs.writeFileSync(path.join(root, 'codegraph.json'), JSON.stringify({ includeIgnored: ['benchmark/repos/'] }));
-    git(root, 'add', '.gitignore', 'codegraph.json');
+    fs.writeFileSync(path.join(root, 'workspace_event.json'), JSON.stringify({ includeIgnored: ['benchmark/repos/'] }));
+    git(root, 'add', '.gitignore', 'workspace_event.json');
     git(root, 'commit', '-q', '-m', 'opt the gitignored gitlink back in');
 
     const files = scanDirectory(root);

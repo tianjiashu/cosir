@@ -17,7 +17,6 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from subprocess import Popen
 from typing import Any
 
-from app.config.logging.logger import log
 from app.codegraph.exceptions import (
     CodeGraphKernelError,
     CodeGraphKernelTimeoutError,
@@ -41,6 +40,7 @@ from app.codegraph.protocol import (
     PingResult,
     QueryResult,
 )
+from app.config.logging.logger import log
 
 
 class CodeGraphKernelClient:
@@ -69,7 +69,7 @@ class CodeGraphKernelClient:
         self._write_lock = threading.Lock()
         self._stop_reader = threading.Event()
         self._reader = threading.Thread(
-            target=self._read_loop, name="codegraph-kernel-reader", daemon=True
+            target=self._read_loop, name="workspace_event-kernel-reader", daemon=True
         )
         self._reader.start()
 
@@ -151,9 +151,26 @@ class CodeGraphKernelClient:
             )
         return hello
 
-    def ping(self) -> PingResult:
-        """发起 kernel.ping 健康检查（显式取值，字段异常归为协议错误）。"""
-        result = self.call(METHOD_PING)
+    def ping(self, timeout: float | None = None) -> PingResult:
+        """发起 kernel.ping 健康检查（显式取值，字段异常归为协议错误）。
+
+        参数:
+            timeout: RPC 超时（秒）；None 时沿用客户端构造时设定的 ``timeout_seconds``。
+                用于调用方做短超时健康快检（如 prepare 前 5s 探活）。
+
+        返回:
+            PingResult：Kernel 存活状态与活跃 workspace 数。
+
+        异常:
+            CodeGraphProtocolIncompatibleError: 当返回体不是对象或字段缺失/类型不符。
+            CodeGraphKernelUnavailableError: 当 Kernel 进程不可达。
+            CodeGraphKernelTimeoutError: 当 RPC 超过给定或默认的 ``timeout_seconds``。
+
+        副作用:
+            无（不修改 Kernel 状态）。
+        """
+
+        result = self.call(METHOD_PING, timeout=timeout)
         if not isinstance(result, dict):
             raise CodeGraphProtocolIncompatibleError("kernel.ping returned a non-object payload")
         try:
@@ -229,9 +246,7 @@ class CodeGraphKernelClient:
     def _index_init_result(result: Any) -> IndexInitResult:
         """解析 codegraph_init 响应（畸形 payload 归为协议错误，保证上层不逃逸裸异常）。"""
         if not isinstance(result, dict):
-            raise CodeGraphProtocolIncompatibleError(
-                "codegraph_init returned a non-object payload"
-            )
+            raise CodeGraphProtocolIncompatibleError("codegraph_init returned a non-object payload")
         try:
             return IndexInitResult(
                 state=str(result["state"]),
@@ -247,9 +262,7 @@ class CodeGraphKernelClient:
     def _index_sync_result(result: Any) -> IndexSyncResult:
         """解析 codegraph_sync 响应（畸形 payload 归为协议错误，保证上层不逃逸裸异常）。"""
         if not isinstance(result, dict):
-            raise CodeGraphProtocolIncompatibleError(
-                "codegraph_sync returned a non-object payload"
-            )
+            raise CodeGraphProtocolIncompatibleError("codegraph_sync returned a non-object payload")
         try:
             return IndexSyncResult(
                 state=str(result["state"]),
@@ -294,9 +307,7 @@ class CodeGraphKernelClient:
                 stdin.write(line)
                 stdin.flush()
             except (OSError, BrokenPipeError) as exc:
-                raise CodeGraphKernelUnavailableError(
-                    f"kernel stdin write failed: {exc}"
-                ) from exc
+                raise CodeGraphKernelUnavailableError(f"kernel stdin write failed: {exc}") from exc
 
     def _read_loop(self) -> None:
         """消费 stdout 的 JSON-line，按 id 投递给等待中的 Future。"""

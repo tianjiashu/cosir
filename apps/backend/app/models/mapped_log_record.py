@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.config.logging.filter.caller_filter import compute_caller
-from app.trace_infra.redaction import redact_value
+from app.utils.trace_infra.redaction import redact_value
 
 MAX_LOG_TEXT_LENGTH = 2000
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")

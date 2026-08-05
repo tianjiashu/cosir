@@ -11,6 +11,7 @@
  * @module components/right-panel/ChangeFileRow
  */
 
+import { memo } from "react";
 import { Check, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,10 +41,13 @@ interface ChangeFileRowProps {
 /**
  * 变更集单行文件条目。
  *
+ * 用 `memo` 包裹：当 `file` / `selected` / 回调引用不变时跳过重渲染，
+ * 配合 `ChangesTab` 的虚拟列表渲染，避免大变更集整列表重渲染。
+ *
  * @param props - 组件属性。
  * @returns 单行变更条目。
  */
-export function ChangeFileRow({
+export const ChangeFileRow = memo(function ChangeFileRow({
   file,
   selected,
   onToggleSelect,
@@ -98,4 +102,4 @@ export function ChangeFileRow({
       </div>
     </div>
   );
-}
+});

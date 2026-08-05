@@ -9,6 +9,7 @@
 import * as React from "react";
 import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import { cn } from "@/lib/utils";
+import { ScrollAreaPadding } from "@/components/ui/tokens";
 
 /**
  * ScrollArea 根组件。
@@ -25,6 +26,8 @@ const ScrollArea = React.forwardRef<
     className={cn("relative overflow-hidden", className)}
     {...props}
   >
+    {/* inherit 继承外层圆角，shadcn scroll-area 标准写法，非通用语义 */}
+    {/* eslint-disable-next-line tailwind/no-arbitrary-value */}
     <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
       {children}
     </ScrollAreaPrimitive.Viewport>
@@ -46,8 +49,8 @@ const ScrollBar = React.forwardRef<
     orientation={orientation}
     className={cn(
       "flex touch-none select-none transition-colors",
-      orientation === "vertical" && "h-full w-2.5 border-l border-l-transparent p-[1px]",
-      orientation === "horizontal" && "h-2.5 flex-col border-t border-t-transparent p-[1px]",
+      orientation === "vertical" && `h-full w-2.5 border-l border-l-transparent ${ScrollAreaPadding.all}`,
+      orientation === "horizontal" && `h-2.5 flex-col border-t border-t-transparent ${ScrollAreaPadding.all}`,
       className,
     )}
     {...props}

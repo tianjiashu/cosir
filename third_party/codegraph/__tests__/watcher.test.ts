@@ -63,7 +63,7 @@ describe('FileWatcher', () => {
     new FileWatcher(testDir, syncFn, { inertForTests: true, ...opts });
 
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-watcher-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-watcher-'));
     // Create a source file so the directory isn't empty
     const srcDir = path.join(testDir, 'src');
     fs.mkdirSync(srcDir);
@@ -120,7 +120,7 @@ describe('FileWatcher', () => {
     // uses — recursive on macOS/Windows, per-directory on Linux. Each uses its
     // OWN EMPTY temp dir so exactly one watch is installed and the close-count
     // is deterministic across platforms.
-    const mkEmptyDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-exhaust-'));
+    const mkEmptyDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-exhaust-'));
 
     it('fails to start and degrades when fs.watch setup exhausts watch resources', () => {
       const dir = mkEmptyDir();
@@ -216,7 +216,7 @@ describe('FileWatcher', () => {
         // Empty-but-for-one-subdir temp dir: the root watch succeeds, then the
         // child watch hits the (simulated) inotify budget — the realistic
         // "partial watch installed, then exhausted" shape.
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-inotify-'));
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-inotify-'));
         fs.mkdirSync(path.join(dir, 'sub'));
         const onDegraded = vi.fn();
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -449,16 +449,16 @@ describe('FileWatcher', () => {
       watcher.stop();
     });
 
-    it('should ignore .codegraph directory changes', async () => {
+    it('should ignore .workspace_event directory changes', async () => {
       const syncFn = vi.fn().mockResolvedValue({ filesChanged: 0, durationMs: 0 });
       const watcher = newWatcher(syncFn, { debounceMs: 200 });
 
       watcher.start();
       await watcher.waitUntilReady();
 
-      // A .codegraph event — FileWatcher's `isAlwaysIgnored` filter must drop
+      // A .workspace_event event — FileWatcher's `isAlwaysIgnored` filter must drop
       // it before scheduling sync.
-      __emitWatchEventForTests(testDir, '.codegraph/db.sqlite');
+      __emitWatchEventForTests(testDir, '.workspace_event/db.sqlite');
 
       await new Promise((r) => setTimeout(r, 400));
       expect(syncFn).not.toHaveBeenCalled();

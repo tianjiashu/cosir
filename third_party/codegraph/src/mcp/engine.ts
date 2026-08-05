@@ -54,7 +54,7 @@ export class MCPEngine {
   private cg: CodeGraph | null = null;
   private toolHandler: ToolHandler;
   // Project root we resolved to. Null until `ensureInitialized` succeeds
-  // (or null forever if no .codegraph/ ever turned up — that's a valid
+  // (or null forever if no .workspace_event/ ever turned up — that's a valid
   // state for the engine, since cross-project queries still work).
   private projectPath: string | null = null;
   // Set on first `ensureInitialized` so subsequent sessions don't redo work.
@@ -122,7 +122,7 @@ export class MCPEngine {
   }
 
   /**
-   * Walk up from `searchFrom` to find the nearest `.codegraph/` and open it.
+   * Walk up from `searchFrom` to find the nearest `.workspace_event/` and open it.
    * Idempotent: concurrent callers share one in-flight init; subsequent
    * callers after success are no-ops.
    *
@@ -203,7 +203,7 @@ export class MCPEngine {
 
     const resolvedRoot = findNearestCodeGraphRoot(searchFrom);
     if (!resolvedRoot) {
-      // No .codegraph/ above searchFrom. Sessions may still discover one later via roots/list
+      // No .workspace_event/ above searchFrom. Sessions may still discover one later via roots/list
       this.projectPath = searchFrom;
       return;
     }
@@ -268,7 +268,7 @@ export class MCPEngine {
         // write lock held past the retry budget). Say so loudly and ONCE — the
         // graph will no longer auto-update, so a long-running MCP session must
         // not keep assuming it's fresh. The reason already names the remedy
-        // (`codegraph sync` / git sync hooks).
+        // (`workspace_event sync` / git sync hooks).
         process.stderr.write(`[CodeGraph MCP] File watcher degraded — ${reason}\n`);
       },
     });
@@ -278,7 +278,7 @@ export class MCPEngine {
       process.stderr.write('[CodeGraph MCP] File watcher active — graph will auto-sync on changes\n');
     } else {
       process.stderr.write(
-        '[CodeGraph MCP] File watcher unavailable on this platform — run `codegraph sync` to refresh the graph after changes.\n'
+        '[CodeGraph MCP] File watcher unavailable on this platform — run `workspace_event sync` to refresh the graph after changes.\n'
       );
     }
   }

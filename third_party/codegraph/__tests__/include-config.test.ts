@@ -1,5 +1,5 @@
 /**
- * `codegraph.json` `include` — force first-party source INTO the index even when
+ * `workspace_event.json` `include` — force first-party source INTO the index even when
  * `.gitignore` would drop it.
  *
  * The whitelist `includeIgnored` never was: that one only revives *embedded git
@@ -30,7 +30,7 @@ import {
 } from '../src/project-config';
 import { scanDirectory, buildScopeIgnore } from '../src/extraction';
 
-describe('include loader (codegraph.json)', () => {
+describe('include loader (workspace_event.json)', () => {
   let dir: string;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-include-'));
@@ -42,11 +42,11 @@ describe('include loader (codegraph.json)', () => {
   });
   const writeConfig = (obj: unknown) =>
     fs.writeFileSync(
-      path.join(dir, 'codegraph.json'),
+      path.join(dir, 'workspace_event.json'),
       typeof obj === 'string' ? obj : JSON.stringify(obj)
     );
 
-  it('returns an empty list when there is no codegraph.json (the default)', () => {
+  it('returns an empty list when there is no workspace_event.json (the default)', () => {
     expect(loadIncludePatterns(dir)).toEqual([]);
   });
 
@@ -89,7 +89,7 @@ describe('include loader (codegraph.json)', () => {
 
     writeConfig({ include: ['Local/'] });
     const future = new Date(Date.now() + 2000);
-    fs.utimesSync(path.join(dir, 'codegraph.json'), future, future);
+    fs.utimesSync(path.join(dir, 'workspace_event.json'), future, future);
 
     expect(loadIncludePatterns(dir)).toEqual(['Local/']);
   });
@@ -97,7 +97,7 @@ describe('include loader (codegraph.json)', () => {
   it('drops the patterns again when the config file is removed', () => {
     writeConfig({ include: ['Tools/'] });
     expect(loadIncludePatterns(dir)).toEqual(['Tools/']);
-    fs.rmSync(path.join(dir, 'codegraph.json'));
+    fs.rmSync(path.join(dir, 'workspace_event.json'));
     expect(loadIncludePatterns(dir)).toEqual([]);
   });
 });
@@ -110,7 +110,7 @@ describe('include behavior — scanDirectory force-indexes gitignored source', (
     fs.writeFileSync(p, content);
   };
   const writeConfig = (obj: unknown) =>
-    fs.writeFileSync(path.join(dir, 'codegraph.json'), JSON.stringify(obj));
+    fs.writeFileSync(path.join(dir, 'workspace_event.json'), JSON.stringify(obj));
   const scan = () => scanDirectory(dir).map((f) => f.replace(/\\/g, '/'));
 
   beforeEach(() => {
@@ -235,7 +235,7 @@ describe('include scope — buildScopeIgnore keeps included paths watchable', ()
     clearProjectConfigCache();
     execFileSync('git', ['init', '-q'], { cwd: dir });
     fs.writeFileSync(path.join(dir, '.gitignore'), 'Tools/\nOther/\n');
-    fs.writeFileSync(path.join(dir, 'codegraph.json'), JSON.stringify({ include: ['Tools/'] }));
+    fs.writeFileSync(path.join(dir, 'workspace_event.json'), JSON.stringify({ include: ['Tools/'] }));
   });
   afterEach(() => {
     clearProjectConfigCache();
@@ -253,7 +253,7 @@ describe('include scope — buildScopeIgnore keeps included paths watchable', ()
   });
 
   it('still ignores everything when no include is configured', () => {
-    fs.writeFileSync(path.join(dir, 'codegraph.json'), JSON.stringify({}));
+    fs.writeFileSync(path.join(dir, 'workspace_event.json'), JSON.stringify({}));
     clearProjectConfigCache();
     const scope = buildScopeIgnore(dir);
     expect(scope.ignores('Tools/gen.py')).toBe(true);

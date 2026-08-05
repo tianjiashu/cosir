@@ -19,7 +19,7 @@ export enum KernelErrorCode {
   TIMEOUT = 'TIMEOUT',
   /** Kernel 不可用（未就绪 / 已退出 / 内部致命）。 */
   KERNEL_UNAVAILABLE = 'KERNEL_UNAVAILABLE',
-  /** workspace 未建索引（无 .codegraph/ 或未初始化成功）。 */
+  /** workspace 未建索引（无 .workspace_event/ 或未初始化成功）。 */
   WORKSPACE_NOT_INDEXED = 'WORKSPACE_NOT_INDEXED',
   /** 工具被 CODEGRAPH_MCP_TOOLS 裁剪拒绝。 */
   TOOL_NOT_ALLOWED = 'TOOL_NOT_ALLOWED',

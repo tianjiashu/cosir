@@ -84,17 +84,19 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
     <aside className="flex h-full w-full min-w-0 flex-col bg-background">
       <Tabs defaultValue="outputs" className="flex h-full flex-col">
         {/* Tab 切换栏 */}
-        <TabsList className="mx-2 mt-2 w-[calc(100%-1rem)]">
-          <TabsTrigger value="outputs" className="gap-1.5 text-xs">
-            <FileText className="h-3.5 w-3.5" />
+        {/* calc 用于抵消父容器 mx-2 左右外边距，使 Tab 栏宽度与内容区对齐，非通用语义 */}
+        {/* eslint-disable-next-line tailwind/no-arbitrary-value */}
+        <TabsList className="mx-2 mt-2 flex min-w-0 overflow-hidden w-[calc(100%-1rem)]">
+          <TabsTrigger value="outputs" className="min-w-0 flex-1 gap-1.5 truncate text-xs">
+            <FileText className="h-3.5 w-3.5 shrink-0" />
             Outputs
           </TabsTrigger>
-          <TabsTrigger value="sources" className="gap-1.5 text-xs">
-            <Link2 className="h-3.5 w-3.5" />
+          <TabsTrigger value="sources" className="min-w-0 flex-1 gap-1.5 truncate text-xs">
+            <Link2 className="h-3.5 w-3.5 shrink-0" />
             Sources
           </TabsTrigger>
-          <TabsTrigger value="changes" className="gap-1.5 text-xs">
-            <GitCompareArrows className="h-3.5 w-3.5" />
+          <TabsTrigger value="changes" className="min-w-0 flex-1 gap-1.5 truncate text-xs">
+            <GitCompareArrows className="h-3.5 w-3.5 shrink-0" />
             Changes
           </TabsTrigger>
         </TabsList>
@@ -104,7 +106,7 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
           {/* Outputs Tab：使用独立子组件 */}
           <TabsContent value="outputs" className="mt-0 h-full">
             <ScrollArea className="h-full scrollbar-thin">
-              <div className="space-y-1 p-3">
+              <div className="space-y-1 p-2">
                 <OutputsTab items={MOCK_OUTPUTS} />
 
                 <Separator className="my-3" />
@@ -119,7 +121,7 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
           {/* Sources Tab：使用独立子组件 */}
           <TabsContent value="sources" className="mt-0 h-full">
             <ScrollArea className="h-full scrollbar-thin">
-              <div className="space-y-1 p-3">
+              <div className="space-y-1 p-2">
                 <SourcesTab items={MOCK_SOURCES} />
 
                 <Separator className="my-3" />

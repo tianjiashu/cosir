@@ -10,6 +10,8 @@
 import { CheckCircle2, XCircle, Ban, Clock, Cpu, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Caption } from "@/components/ui/tokens";
+import { cn } from "@/lib/utils";
 import type { RuntimeEventType } from "@shared/events";
 
 /** 状态标签组件属性。 */
@@ -78,7 +80,7 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
 
         {/* 耗时 */}
         {durationMs !== undefined && (
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <span className={cn("flex items-center gap-1 text-muted-foreground", Caption.xs)}>
             <Clock className="h-3 w-3" />
             耗时 {formatDuration(durationMs)}
           </span>
@@ -86,7 +88,7 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
 
         {/* Token 消耗 */}
         {(totalTokens !== undefined && totalTokens > 0) && (
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <span className={cn("flex items-center gap-1 text-muted-foreground", Caption.xs)}>
             <Cpu className="h-3 w-3" />
             输入 {inputTokens ?? 0} / 输出 {outputTokens ?? 0} / 总计 {totalTokens} tokens
           </span>
@@ -119,7 +121,7 @@ function CopyableTraceId({ traceId }: { traceId: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="flex max-w-xs items-center gap-1.5 rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      className={cn("flex max-w-xs items-center gap-1.5 rounded bg-muted px-2 py-1 text-muted-foreground transition-colors hover:text-foreground", Caption.xs)}
       title="复制 Langfuse trace ID"
     >
       <span className="truncate font-mono">Langfuse trace: {traceId}</span>

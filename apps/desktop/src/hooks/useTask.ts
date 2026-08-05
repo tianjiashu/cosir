@@ -34,8 +34,13 @@ interface UseTaskReturn {
   createTask: (text: string, workspaceId: string) => Promise<boolean>;
   /** 给当前任务追加一个新轮次并自动监听该轮次 SSE 流。 */
   createTurn: (text: string) => Promise<boolean>;
-  /** 加载任务历史事件和轮次，并切换为活跃任务。 */
-  openTask: (taskId: string) => Promise<void>;
+  /**
+   * 加载任务历史事件和轮次，并切换为活跃任务。
+   * @param taskId - 待打开的任务标识。
+   * @param forceRefresh - 为 true 时忽略内存缓存，强制从后端重新拉取历史事件；
+   *   用于在「后端产生了本会话未缓存的新历史」场景下刷新（默认 false 命中缓存跳过拉取）。
+   */
+  openTask: (taskId: string, forceRefresh?: boolean) => Promise<void>;
   /** 取消当前活跃轮次。 */
   cancelTurn: () => Promise<void>;
   /** 刷新当前活跃任务的最新状态。 */
@@ -224,12 +229,15 @@ export function useTask(): UseTaskReturn {
    * 才出现，显著缩短「点击任务后等待加载」的体感时长。
    *
    * @param taskId - 待打开的任务标识。
+   * @param forceRefresh - 为 true 时忽略内存缓存，强制从后端重新拉取历史事件；
+   *   用于「后端产生了本会话未缓存的新历史」场景（如其它会话/进程写入了历史）。
+   *   默认 false：命中缓存即跳过拉取，复用既有 events 引用避免击穿 TurnTimeline memo。
    *
    * @sideeffect 从后端读取 task/turns/events 并写入对应 store；历史事件经
    *   eventStore 缓存，跨任务切换不重复拉取（历史对话不可变）。
    */
   const openTask = useCallback(
-    async (taskId: string): Promise<void> => {
+    async (taskId: string, forceRefresh = false): Promise<void> => {
       setOperation({ loading: true, error: null, eventsError: null });
       try {
         // 先拉 task + turns 并立刻渲染骨架：两者体量与事件流相比很小，能快速出首屏。
@@ -250,13 +258,25 @@ export function useTask(): UseTaskReturn {
         // 再异步拉历史事件：到达后按 task 分组增量灌入，timeline 自然补全。
         // 即使此期间用户切走，events 仍按 taskId 落缓存，下次打开即命中。
         // 回填失败仅标记 eventsError：骨架已就绪，不回退为"打开失败"态，保留已渲染内容。
-        try {
-          const events = await api.listTaskEvents(taskId);
-          setEvents(events, taskId);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "历史事件加载失败";
-          logError("openTask 历史事件回填失败", err, { module: "useTask", task_id: taskId });
-          setOperation((prev) => ({ ...prev, eventsError: message }));
+        //
+        // 内存缓存命中优化（性能关键）：历史对话不可变，且实时 SSE 已通过 appendEvent
+        // 并入同一缓存。若本会话内该 task 的事件已缓存（非空）且未要求强制刷新，则跳过
+        // 「重新拉取 + setEvents」，直接复用既有 eventsByTurnId 的数组引用——否则每次打开/
+        // 切换任务都会让所有 turn 的 events 引用失效，击穿 TurnTimeline 的 memo，造成
+        // 「加载历史对话时整棵 timeline 全量重投影 + 重渲染 markdown」卡顿。仅当缓存为空
+        // （冷启动首次打开）或 forceRefresh=true（后端有新历史）才走网络回填。
+        const cachedEvents = useEventStore.getState().eventsByTaskId[taskId];
+        if (!forceRefresh && cachedEvents && cachedEvents.length > 0) {
+          setOperation({ loading: false, error: null, eventsError: null });
+        } else {
+          try {
+            const events = await api.listTaskEvents(taskId);
+            setEvents(events, taskId);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "历史事件加载失败";
+            logError("openTask 历史事件回填失败", err, { module: "useTask", task_id: taskId });
+            setOperation((prev) => ({ ...prev, eventsError: message }));
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "打开任务失败";
