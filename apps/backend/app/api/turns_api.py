@@ -289,6 +289,14 @@ async def _sse_turn_events(
             yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
             if event.event_type in _TERMINAL_EVENT_TYPES:
                 terminal_received = True
+                # RUN_FINISHED 之后 run_turn 还会发布 file_change_stable（成功路径的
+                # 变更集增量通知）。若立即 break，这些事件会滞留在订阅队列无法送达
+                # 前端。故等待 producer 结束（run_turn 完全 return、事件已入队、
+                # close_turn 已写入关闭哨兵），再继续消费剩余事件至订阅关闭。
+                if event.event_type == EventType.RUN_FINISHED and producer is not None:
+                    await producer
+                    continue
+                # RUN_FAILED / RUN_CANCELLED 之后无后续事件，保持原立即结束语义。
                 break
         log.info(
             "turn_stream_completed",
@@ -408,9 +416,7 @@ async def _drive_turn_with_prepare(
                 # 原子约束对 pending 不生效（turn_crud），而 prepare 期间 turn 仍 pending；
                 # 且本 producer 已 claim 独占（无并发认领竞态），故用无条件
                 # update_turn_status 强制落 failed。兜底后 emit run_failed 提供终态事件。
-                turn_service.update_turn_status(
-                    turn_id, "failed", end_reason="client_disconnected"
-                )
+                turn_service.update_turn_status(turn_id, "failed", end_reason="client_disconnected")
                 _emit_run_failed(turn, turn_id)
             except Exception:
                 log.exception(

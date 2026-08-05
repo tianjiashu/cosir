@@ -23,6 +23,7 @@ export type RuntimeEventType =
   | "tool_call_finished"
   | "observation_added"
   | "final_response"
+  | "file_change_stable"
   | "human_input_requested"
   | "human_input_received"
   | "workspace_preparing"
@@ -142,6 +143,13 @@ export interface FinalResponsePayload extends RuntimeEventPayloadObject {
   status: "completed";
 }
 
+export interface FileChangeStablePayload extends RuntimeEventPayloadObject {
+  task_id: string;
+  turn_id: string;
+  path: string;
+  action: string;
+}
+
 export interface HumanInputRequestedPayload extends RuntimeEventPayloadObject {
   prompt: string;
   request_id?: string | null;
@@ -187,6 +195,7 @@ export interface RuntimeEventPayloadMap {
   tool_call_finished: ToolCallFinishedPayload;
   observation_added: ObservationAddedPayload;
   final_response: FinalResponsePayload;
+  file_change_stable: FileChangeStablePayload;
   human_input_requested: HumanInputRequestedPayload;
   human_input_received: HumanInputReceivedPayload;
   workspace_preparing: WorkspacePreparingPayload;

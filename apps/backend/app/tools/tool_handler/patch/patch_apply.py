@@ -286,9 +286,17 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
         assert resolved is not None
         if os.path.lexists(resolved):
             raise RuntimeError(f"{operation.file_path}: destination already exists")
-        content = "\n".join(
-            line.content for hunk in operation.hunks for line in hunk.lines if line.prefix == "+"
-        )
+        # 优先使用显式完整内容（content，保留原始尾换行 / CRLF / BOM），
+        # 缺失时回退到从 hunks 拼接的 '+' 行（不保留尾换行，仅防御路径）。
+        if operation.content is not None:
+            content = operation.content
+        else:
+            content = "\n".join(
+                line.content
+                for hunk in operation.hunks
+                for line in hunk.lines
+                if line.prefix == "+"
+            )
         atomic_write_text(
             Path(resolved),
             content,
@@ -334,21 +342,43 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
 
     resolved, _ = resolver.resolve(operation.file_path)
     assert resolved is not None
+    # 显式完整内容（content，整文件目标态）优先：直接覆盖还原，绕开 fuzzy 行匹配，
+    # 正确处理「after 为空（清空）/ before 为空（整文件新增）」等整文件变更场景，
+    # 避免空 search 被跳过导致虚假成功。
+    if operation.content is not None:
+        before = Path(resolved).read_text(encoding="utf-8")
+        atomic_write_text(
+            Path(resolved),
+            operation.content,
+            containment_root=resolver.workspace_root,
+        )
+        return FileDiffResult(
+            path=operation.file_path,
+            status="modified",
+            before=before,
+            after=operation.content,
+        )
     before = Path(resolved).read_text(encoding="utf-8")
     content = before
     for hunk in operation.hunks:
         search = _hunk_search(hunk)
         replace = _hunk_replace(hunk)
-        if search and search != replace:
-            new_content, count, _, error = fuzzy_find_and_replace(
-                content, search, replace, replace_all=False
+        if search == replace:
+            continue
+        if not search:
+            # 空 search（hunk 仅含 '+' 行）表示整文件内容替换为 replace，
+            # 用于「把文件清空后再还原为原内容」等整文件覆盖场景，不可跳过。
+            content = replace
+            continue
+        new_content, count, _, error = fuzzy_find_and_replace(
+            content, search, replace, replace_all=False
+        )
+        if count == 0:
+            raise RuntimeError(
+                f"{operation.file_path}: hunk apply failed after validation"
+                + (f" — {error}" if error else "")
             )
-            if count == 0:
-                raise RuntimeError(
-                    f"{operation.file_path}: hunk apply failed after validation"
-                    + (f" — {error}" if error else "")
-                )
-            content = new_content
+        content = new_content
     atomic_write_text(
         Path(resolved),
         content,

@@ -18,6 +18,7 @@ import type { WorkspaceRecord } from "@shared/workspace";
 import type { RuntimeEvent } from "@shared/events";
 import type {
   BackendHealthResponse,
+  ChangeSet,
   CreateTaskRequest,
   CreateTurnRequest,
   CreateWorkspaceRequest,
@@ -395,6 +396,49 @@ export async function createTaskTurn(taskId: string, request: CreateTurnRequest)
 export async function listTaskTurns(taskId: string): Promise<TurnRecord[]> {
   const response = await get<TurnRecord[]>(API_PATHS.TASK_TURNS(taskId), taskId);
   recordConversationTrace(response.trace, "task_turns", taskId);
+  return response.data;
+}
+
+/**
+ * 拉取某 task 的累积文件变更集。
+ *
+ * @param taskId - 任务标识。
+ * @param checkpoint - 可选检查点 turn 标识，只返回到该 turn（含）为止的变更。
+ * @returns 变更集（检查点 + 去重后的文件条目）。
+ * @throws {ServiceError} 当任务不存在或请求失败时抛出。
+ */
+export async function fetchChangeSet(taskId: string, checkpoint?: string): Promise<ChangeSet> {
+  const query = checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : "";
+  const response = await get<ChangeSet>(`${API_PATHS.TASK_CHANGES(taskId)}${query}`, taskId);
+  recordConversationTrace(response.trace, "task_changes", taskId);
+  return response.data;
+}
+
+/**
+ * 把一批文件的最新变更标记为「保留」。
+ *
+ * @param taskId - 任务标识。
+ * @param paths - 待保留的文件路径列表。
+ * @returns 操作后的完整变更集，供前端直接替换本地状态。
+ * @throws {ServiceError} 当任一路径没有已稳定变更时抛出。
+ */
+export async function keepChanges(taskId: string, paths: string[]): Promise<ChangeSet> {
+  const response = await post<ChangeSet>(API_PATHS.TASK_CHANGES_KEEP(taskId), { paths }, taskId);
+  recordConversationTrace(response.trace, "task_changes_keep", taskId);
+  return response.data;
+}
+
+/**
+ * 撤销一批文件的最新变更，把它们还原到变更之前。
+ *
+ * @param taskId - 任务标识。
+ * @param paths - 待撤销的文件路径列表。
+ * @returns 操作后的完整变更集，供前端直接替换本地状态。
+ * @throws {ServiceError} 当任一路径没有已稳定变更，或反向操作应用失败时抛出。
+ */
+export async function revertChanges(taskId: string, paths: string[]): Promise<ChangeSet> {
+  const response = await post<ChangeSet>(API_PATHS.TASK_CHANGES_REVERT(taskId), { paths }, taskId);
+  recordConversationTrace(response.trace, "task_changes_revert", taskId);
   return response.data;
 }
 

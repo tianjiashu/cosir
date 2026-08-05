@@ -1,5 +1,6 @@
 """运行时事件 payload 模型。"""
 
+from app.models.payload.file_change_stable_payload import FileChangeStablePayload
 from app.models.payload.final_response_payload import FinalResponsePayload
 from app.models.payload.human_input_received_payload import HumanInputReceivedPayload
 from app.models.payload.human_input_requested_payload import HumanInputRequestedPayload
@@ -25,6 +26,7 @@ from app.models.payload.workspace_ready_payload import WorkspaceReadyPayload
 
 __all__ = [
     "EVENT_PAYLOAD_MODELS",
+    "FileChangeStablePayload",
     "FinalResponsePayload",
     "HumanInputReceivedPayload",
     "HumanInputRequestedPayload",

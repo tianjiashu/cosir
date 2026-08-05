@@ -28,6 +28,9 @@ export type ConversationTraceOperation =
   | "turn_cancel"
   | "task_stream"
   | "task_events"
+  | "task_changes"
+  | "task_changes_keep"
+  | "task_changes_revert"
   | "task_delete";
 
 /**

@@ -28,6 +28,9 @@ API_PATH_TEMPLATES: Mapping[str, str] = {
     "/tasks/{task_id}/turns/{turn_id}/events": "/tasks/${taskId}/turns/${turnId}/events",
     "/turns/{turn_id}/stream": "/turns/${turnId}/stream",
     "/turns/{turn_id}/cancel": "/turns/${turnId}/cancel",
+    "/tasks/{task_id}/changes": "/tasks/${taskId}/changes",
+    "/tasks/{task_id}/changes/keep": "/tasks/${taskId}/changes/keep",
+    "/tasks/{task_id}/changes/revert": "/tasks/${taskId}/changes/revert",
     "/logs/query": "/logs/query",
     "/logs/recent": "/logs/recent",
 }
@@ -40,6 +43,11 @@ from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceReques
 from app.api.schemas.request.QueryLogsRequest import QueryLogsRequest  # noqa: E402
 from app.api.schemas.request.RecentLogsRequest import RecentLogsRequest  # noqa: E402
 from app.api.schemas.response.AgentProfileResponse import AgentProfileResponse  # noqa: E402
+from app.api.schemas.response.ChangeSetResponse import (  # noqa: E402
+    ChangeCheckpointResponse,
+    ChangeFileResponse,
+    ChangeSetResponse,
+)
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse  # noqa: E402
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse  # noqa: E402
 from app.api.schemas.response.HealthResponse import HealthResponse  # noqa: E402
@@ -85,6 +93,7 @@ def main() -> None:
     write(
         "agents.ts", render_module([AgentProfileResponse, ListAgentsResponse], "agents")
     )
+    write("changes.ts", render_change_types())
     write("api.ts", render_api_types())
 
 
@@ -196,12 +205,57 @@ def render_api_types() -> str:
             'export type TaskResponse = import("./task").TaskRecord;',
             'export type WorkspaceResponse = import("./workspace").WorkspaceRecord;',
             'export type TurnResponse = import("./turn").TurnRecord;',
+            'export type ChangeSet = import("./changes").ChangeSet;',
+            'export type ChangeFile = import("./changes").ChangeFile;',
+            'export type ChangeCheckpoint = import("./changes").ChangeCheckpoint;',
             'export type LogQueryResponse = import("./logs").LogQueryResponse;',
             'export type AgentProfileResponse = import("./agents").AgentProfileResponse;',
             'export type ListAgentsResponse = import("./agents").ListAgentsResponse;',
         ]
     )
     return generated_header("api") + "\n" + body + "\n"
+
+
+def render_change_types() -> str:
+    """渲染变更集共享类型（``ChangeFile`` / ``ChangeCheckpoint`` / ``ChangeSet``）。
+
+    后端响应模型命名为 ``Change*Response``，此处按前端消费习惯重命名为无
+    ``Response`` 后缀的 ``ChangeFile`` / ``ChangeCheckpoint`` / ``ChangeSet``，
+    并通过字段覆盖把嵌套列表类型对齐到同名接口。
+
+    参数:
+        无。
+
+    返回:
+        ``changes.ts`` 内容。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    parts = [
+        generated_header("changes"),
+        render_interface(
+            ChangeFileResponse,
+            "ChangeFile",
+            field_overrides={
+                "status": "'pending' | 'kept' | 'reverted'",
+            },
+        ),
+        render_interface(ChangeCheckpointResponse, "ChangeCheckpoint"),
+        render_interface(
+            ChangeSetResponse,
+            "ChangeSet",
+            field_overrides={
+                "checkpoints": "ChangeCheckpoint[]",
+                "files": "ChangeFile[]",
+            },
+        ),
+    ]
+    return "\n\n".join(parts) + "\n"
 
 
 def render_logs_types() -> str:
@@ -273,6 +327,9 @@ export const API_PATHS = {
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
   TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
+  TASK_CHANGES: (taskId: string) => `/tasks/${taskId}/changes`,
+  TASK_CHANGES_REVERT: (taskId: string) => `/tasks/${taskId}/changes/revert`,
+  TASK_CHANGES_KEEP: (taskId: string) => `/tasks/${taskId}/changes/keep`,
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
   TURN_CANCEL: (turnId: string) => `/turns/${turnId}/cancel`,
   LOGS_QUERY: "/logs/query",

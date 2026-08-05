@@ -1,7 +1,13 @@
 """工具调度器：对模型请求的工具调用做权限门禁 + 参数校验 + 隔离执行编排。"""
 
+import dataclasses
+import enum
+import json
 from collections.abc import Callable, Collection
 
+from app.config.logging.logger import log
+from app.models.file_snapshot_record import FileSnapshotRecord
+from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.guard.display_data_budget import DisplayDataBudget
 from app.tools.guard.file_resource_paths import FileResourcePathError
 from app.tools.guard.file_tool_state_coordinator import (
@@ -16,6 +22,11 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_executor import ToolExecutor
+from app.tools.tool_handler.patch.patch_parser import PatchOperation
+from app.tools.tool_handler.patch.v4a_reverse import (
+    build_forward_operations,
+    reverse_v4a_operation,
+)
 from app.tools.tool_registry import ToolRegistry
 from app.tools.validation.arguments import validate_tool_arguments
 
@@ -269,6 +280,7 @@ class ToolScheduler:
                         observation,
                         execution_context,
                     )
+                    self._record_file_snapshot(tool, observation, execution_context)
             except RuntimeError as exc:
                 return self._apply_output_budget(
                     tool_error(
@@ -294,7 +306,75 @@ class ToolScheduler:
                 tool_call_id=call.call_id,
                 should_cancel=should_cancel,
             )
+            self._record_file_snapshot(tool, observation, execution_context)
         return self._apply_output_budget(observation, execution_context)
+
+    def _record_file_snapshot(
+        self,
+        tool: ToolDefinition,
+        observation: ToolObservation,
+        execution_context: ToolExecutionContext | None,
+    ) -> None:
+        """在文件工具成功执行后采集反向操作快照，供 Turn 回退按 turn 精准还原。
+
+        采集逻辑（方案 §五）：从 ``observation.data["changes"]``（采集层事实
+        快照）构造正向 V4A，再反转为反向操作；仅落库「碰过文件的 filesystem 工具」
+        且执行成功、且带 ``turn_id`` 的调用。``execute_terminal`` 不产 ``changes``，
+        自然跳过（其副作用不入快照，见方案 D5）。采集失败只记 warning 日志，不阻断
+        工具主流程（方案 §六 可重入要求）。
+
+        参数:
+            tool: 被执行工具的定义（提供 ``name`` 作为快照 ``tool_name``）。
+            observation: 归一化后的工具观察结果。
+            execution_context: 本次执行的运行时边界（取其 ``turn_id``）。
+
+        返回:
+            无。
+
+        异常:
+            内部吞掉并转 warning 日志：采集异常绝不冒泡到工具主流程。
+
+        副作用:
+            向 ``file_snapshots`` 表写入 0~N 条反向操作记录（每个变更文件一条）。
+        """
+        if observation.status != "success":
+            return
+        if execution_context is None or not execution_context.turn_id:
+            return
+        data = observation.data
+        if not data:
+            return
+        changes = data.get("changes")
+        if not changes:
+            return
+        try:
+            forward_ops = build_forward_operations(changes)
+            crud = FileSnapshotCrud()
+            next_seq = crud.next_seq(execution_context.turn_id)
+            for offset, forward in enumerate(forward_ops):
+                reverse_op = reverse_v4a_operation(forward)
+                crud.save(
+                    FileSnapshotRecord(
+                        turn_id=execution_context.turn_id,
+                        seq=next_seq + offset,
+                        tool_name=tool.name,
+                        tool_call_id=observation.tool_call_id,
+                        path=forward.file_path,
+                        action=forward.operation.value,
+                        op_json=_reverse_op_to_json(reverse_op),
+                    )
+                )
+        except Exception:
+            log.exception(
+                "file_snapshot_record_failed",
+                extra={
+                    "msg": "文件快照采集失败，回退时可能丢失该次文件改动还原能力",
+                    "data": {
+                        "turn_id": execution_context.turn_id,
+                        "tool_name": tool.name,
+                    },
+                },
+            )
 
     def _apply_output_budget(
         self,
@@ -303,7 +383,7 @@ class ToolScheduler:
     ) -> ToolObservation:
         """对任意成功、失败或提前返回观察统一应用输出预算，超出预算截断，并保留本地文件。
 
-        模型通道（``content``）与客户端展示通道（``display_data``）分别受
+        模型通道（``content``）与客户端展示通道（``data``）分别受
         :class:`ToolOutputBudget` 与 :class:`DisplayDataBudget` 约束，避免展示
         通道绕过模型通道预算无约束膨胀。
 
@@ -323,3 +403,38 @@ class ToolScheduler:
 
         budgeted = self._output_budget.apply(observation, execution_context)
         return self._display_data_budget.apply(budgeted)
+
+
+def _reverse_op_to_json(reverse_op: "PatchOperation") -> str:
+    """把反向 PatchOperation 投影为可 JSON 序列化的字典字符串。
+
+    采用 ``dataclasses.asdict`` 保留与 ``PatchOperation(**data)`` 兼容的嵌套结构
+    （``hunks`` → ``{"lines": [{"prefix", "content"}]}``），仅把 ``OperationType``
+    枚举落为 ``value`` 字符串以满足 JSON 序列化，确保回退侧可直接
+    ``PatchOperation(**json.loads(op_json))`` 重建。
+
+    参数:
+        reverse_op: 已构造的反向 PatchOperation（含 OperationType 枚举与嵌套 Hunk）。
+
+    返回:
+        JSON 字符串；结构与 ``PatchOperation`` 构造参数一致。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    def _enum_to_value(obj: object) -> object:
+        if isinstance(obj, enum.Enum):
+            return obj.value
+        if isinstance(obj, dict):
+            return {k: _enum_to_value(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_enum_to_value(v) for v in obj]
+        return obj
+
+    raw = dataclasses.asdict(reverse_op)
+    serializable = _enum_to_value(raw)
+    return json.dumps(serializable, ensure_ascii=False)

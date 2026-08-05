@@ -17,6 +17,9 @@ export const API_PATHS = {
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
   TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
+  TASK_CHANGES: (taskId: string) => `/tasks/${taskId}/changes`,
+  TASK_CHANGES_REVERT: (taskId: string) => `/tasks/${taskId}/changes/revert`,
+  TASK_CHANGES_KEEP: (taskId: string) => `/tasks/${taskId}/changes/keep`,
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
   TURN_CANCEL: (turnId: string) => `/turns/${turnId}/cancel`,
   LOGS_QUERY: "/logs/query",
@@ -64,6 +67,12 @@ export type TaskResponse = import("./task").TaskRecord;
 export type WorkspaceResponse = import("./workspace").WorkspaceRecord;
 
 export type TurnResponse = import("./turn").TurnRecord;
+
+export type ChangeSet = import("./changes").ChangeSet;
+
+export type ChangeFile = import("./changes").ChangeFile;
+
+export type ChangeCheckpoint = import("./changes").ChangeCheckpoint;
 
 export type LogQueryResponse = import("./logs").LogQueryResponse;
 
