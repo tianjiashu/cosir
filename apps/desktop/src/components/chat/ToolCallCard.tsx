@@ -14,7 +14,7 @@
  */
 
 import type { ComponentType, ReactNode, SyntheticEvent } from "react";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, memo, useMemo, useState } from "react";
 import {
   AlertCircle,
   ChevronRight,
@@ -129,7 +129,7 @@ function resolveIcon(iconName: string | undefined): ComponentType<{ className?: 
  * 展开态：成功显示模型结果正文（等宽、可滚动、可复制），失败显示
  * 错误主因 + 辅因 + 可重试徽标；均保留完整参数与打开文件按钮。
  */
-export function ToolCallCard({
+export const ToolCallCard = memo(function ToolCallCard({
   toolName,
   status,
   error,
@@ -385,7 +385,7 @@ export function ToolCallCard({
       ) : null}
     </div>
   );
-}
+});
 
 /** list 布局超过该阈值才启用虚拟滚动；小列表虚拟化反而增加开销。 */
 const VIRTUAL_LIST_THRESHOLD = 50;

@@ -13,6 +13,8 @@ export interface ChangeFile {
   status: 'pending' | 'kept' | 'reverted';
   last_tool_call_id: string;
   last_turn_id: string;
+  additions: number;
+  deletions: number;
 }
 
 export interface ChangeCheckpoint {

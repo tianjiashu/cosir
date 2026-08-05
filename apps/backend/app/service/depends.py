@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
+from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 
 if TYPE_CHECKING:
     from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from app.service.task.turn_service import TurnService
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
-    from app.service.workspace_event.workspace_index_service import WorkspaceIndexService
+    from app.service.workspace_event.workspace_event_service import WorkspaceEventService
     from app.storage.crud.log_crud import LogStore
     from app.storage.crud.runtime_event_crud import RuntimeEventCrud
     from app.storage.crud.task_crud import TaskCrud
@@ -370,27 +370,27 @@ def get_turn_prepare_service() -> TurnPrepareService | None:
 
 
 @lru_cache(maxsize=1)
-def get_workspace_index_bus() -> WorkspaceIndexBus:
-    """Return the process-local workspace index progress bus singleton.
+def get_workspace_event_bus() -> WorkspaceEventBus:
+    """返回进程级 workspace 状态事件总线单例。
 
     参数:
         无。
 
     返回:
-        WorkspaceIndexBus 单例。
+        WorkspaceEventBus 单例。
 
     异常:
         无。
 
     副作用:
-        首次调用时创建 WorkspaceIndexBus。
+        首次调用时创建 WorkspaceEventBus。
     """
 
-    return WorkspaceIndexBus()
+    return WorkspaceEventBus()
 
 
-def get_workspace_index_service() -> WorkspaceIndexService | None:
-    """Return the workspace index prepare service, or None if CodeGraph is unavailable.
+def get_workspace_event_service() -> WorkspaceEventService | None:
+    """返回 workspace 状态事件 service，CodeGraph 不可用时返回 None。
 
     因依赖 Kernel 进程状态（可能后启动/重启/不可用），不做缓存；每次构造轻量。
     CodeGraph 不可用时返回 None，调用方（API 层）据此降级返回 ready=False。
@@ -399,7 +399,7 @@ def get_workspace_index_service() -> WorkspaceIndexService | None:
         无。
 
     返回:
-        WorkspaceIndexService 实例；CodeGraph Kernel 不可用时返回 None。
+        WorkspaceEventService 实例；CodeGraph Kernel 不可用时返回 None。
 
     异常:
         RuntimeError: 如果 storage 尚未初始化。
@@ -410,16 +410,16 @@ def get_workspace_index_service() -> WorkspaceIndexService | None:
 
     from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
     from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
-    from app.service.workspace_event.workspace_index_service import WorkspaceIndexService
+    from app.service.workspace_event.workspace_event_service import WorkspaceEventService
 
     try:
         client = get_kernel_supervisor().get_client()
     except (RuntimeError, CodeGraphKernelUnavailableError):
         # supervisor 未初始化或 Kernel 未就绪：禁用索引准备，降级到文件搜索。
         return None
-    return WorkspaceIndexService(
+    return WorkspaceEventService(
         lifecycle=CodeGraphLifecycleService(client),
-        bus=get_workspace_index_bus(),
+        bus=get_workspace_event_bus(),
     )
 
 
@@ -462,7 +462,7 @@ def reset_service_dependencies() -> None:
     """
 
     get_log_query_service.cache_clear()
-    get_workspace_index_bus.cache_clear()
+    get_workspace_event_bus.cache_clear()
     get_workspace_service.cache_clear()
     get_turn_workspace_resolver.cache_clear()
     get_turn_service.cache_clear()

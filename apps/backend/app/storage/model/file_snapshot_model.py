@@ -33,6 +33,14 @@ class FileSnapshotModel(StorageBase):
     action: Mapped[str] = mapped_column(Text, nullable=False)
     op_json: Mapped[str] = mapped_column(Text, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 该次变更相对上一次的 diff 增删行数（基于采集层 before/after 用 difflib 统计）。
+    # 用于变更集行内展示「+N -M」徽标；MOVE 计 0/0。
+    additions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    deletions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     # 变更是否已稳定：所属 turn 结束时置 1，运行中落库为 0（运行中不展示、不可撤销）。
     stable: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")

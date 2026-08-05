@@ -22,10 +22,10 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { HistoryList } from "@/components/sidebar/HistoryList";
 import { PluginList } from "@/components/sidebar/PluginList";
-import { WorkspaceIndexBadge } from "@/components/sidebar/WorkspaceIndexBadge";
+import { WorkspaceEventBadge } from "@/components/sidebar/WorkspaceEventBadge";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
-import { useWorkspaceIndexStore } from "@/stores/workspaceIndexStore";
+import { useWorkspaceEventStore } from "@/stores/workspaceEventStore";
 import { useTaskStore } from "@/stores/taskStore";
 import { useEventStore } from "@/stores/eventStore";
 import { useTask } from "@/hooks/useTask";
@@ -85,19 +85,19 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   // 任务删除失败提示。
   const [deleteTaskError, setDeleteTaskError] = useState<string | null>(null);
 
-  // 各 workspace 的 CodeGraph 索引进度状态与触发入口。
-  const indexStatusByWorkspace = useWorkspaceIndexStore((s) => s.statusByWorkspaceId);
-  const startIndexing = useWorkspaceIndexStore((s) => s.startIndexing);
-  const removeIndex = useWorkspaceIndexStore((s) => s.removeIndex);
+  // 各 workspace 的状态与触发入口。
+  const statusByWorkspace = useWorkspaceEventStore((s) => s.statusByWorkspaceId);
+  const startEvent = useWorkspaceEventStore((s) => s.startEvent);
+  const removeEvent = useWorkspaceEventStore((s) => s.removeEvent);
 
-  // 对每个已出现的工作区自动触发索引进度（幂等：已在索引中的会跳过）。
+  // 对每个已出现的工作区自动触发准备（幂等：已在准备中的会跳过）。
   // 覆盖「创建新 workspace」与「应用启动加载已有 workspace」两条路径，
   // Kernel 不可用时后端降级返回 degraded，前端仅展示状态不报错。
   useEffect(() => {
     for (const workspace of workspaces) {
-      startIndexing(workspace.workspace_id);
+      startEvent(workspace.workspace_id);
     }
-  }, [workspaces, startIndexing]);
+  }, [workspaces, startEvent]);
 
   /**
    * 执行工作区删除。
@@ -123,7 +123,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
       // removeWorkspace 内部会在删除当前活跃区时自动切到剩余列表第一项。
       removeWorkspace(deletedWorkspaceId);
       // 同步清理该工作区的索引任务（断开 SSE）与状态快照。
-      removeIndex(deletedWorkspaceId);
+      removeEvent(deletedWorkspaceId);
       setTasks(tasks.filter((task) => task.workspace_id !== deletedWorkspaceId));
       // 同步使被删工作区下各任务的事件缓存失效，避免幽灵 timeline。
       for (const taskId of removedTaskIds) {
@@ -236,7 +236,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                     <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} />
                     <span className="truncate">{workspace.name}</span>
                   </button>
-                  <WorkspaceIndexBadge status={indexStatusByWorkspace[workspace.workspace_id]} />
+                  <WorkspaceEventBadge status={statusByWorkspace[workspace.workspace_id]} />
                   <button
                     title="删除工作区"
                     className="ml-auto rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"

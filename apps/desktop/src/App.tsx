@@ -23,6 +23,7 @@ import { Group, Panel, useDefaultLayout } from "react-resizable-panels";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { ChatPanel } from "@/components/layout/ChatPanel";
+import { ChangesDrawer } from "@/components/layout/ChangesDrawer";
 import { RightPanel } from "@/components/layout/RightPanel";
 import { InputBar } from "@/components/layout/InputBar";
 import { BackendErrorBanner } from "@/components/backend/BackendErrorBanner";
@@ -207,6 +208,7 @@ export default function App() {
             {/* 中央主会话区 + 底部输入区 */}
             <div className="flex h-full min-w-0 flex-col overflow-hidden">
               <ChatPanel onPickWorkspace={() => setActiveView("new-task")} />
+              <ChangesDrawer />
               <InputBar />
             </div>
           </Panel>
@@ -219,7 +221,7 @@ export default function App() {
             minSize={RIGHT_PANEL_MIN_SIZE}
             className="overflow-hidden"
           >
-            <RightPanel onOpenLogs={() => setActiveView("logs")} />
+            <RightPanel />
           </Panel>
         </Group>
       ) : (

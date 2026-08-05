@@ -3,11 +3,11 @@
  *
  * 把单条 SSE 帧（``event:`` + ``data:`` 格式的原始文本）拆解为事件类型与
  * data 原始字符串。只做「行级拆分」，不做 JSON 解析——因为不同事件类型的
- * data 结构不同（如 turn 级 ``RuntimeEvent`` 与 workspace 索引进度
- * ``WorkspaceIndexEvent``），由调用方决定如何 parse 成自己的类型。
+ * data 结构不同（如 turn 级 ``RuntimeEvent`` 与 workspace 状态事件
+ * ``WorkspaceEvent``），由调用方决定如何 parse 成自己的类型。
  *
  * 单一职责：SSE 帧文本 → 事件类型 + data 字符串。供 ``sse.ts``（turn 级流）与
- * ``api.ts`` 的 ``connectWorkspaceIndexStream``（workspace 索引进度流）共用，
+ * ``api.ts`` 的 ``connectWorkspaceEventStream``（workspace 状态事件流）共用，
  * 避免两处手写重复的逐行解析。
  *
  * @module services/sseParser

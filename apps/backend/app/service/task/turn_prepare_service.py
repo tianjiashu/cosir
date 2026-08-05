@@ -18,12 +18,12 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.models.enums.event_type import EventType
+from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload import (
     WorkspaceDegradedPayload,
     WorkspacePreparingPayload,
     WorkspaceReadyPayload,
 )
-from app.models.runtime_event import RuntimeEvent
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
 

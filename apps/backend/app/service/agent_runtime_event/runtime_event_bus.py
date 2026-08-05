@@ -7,7 +7,7 @@ import threading
 from contextlib import suppress
 
 from app.config.logging.logger import log
-from app.models.runtime_event import RuntimeEvent
+from app.models.event.runtime_event import RuntimeEvent
 from app.service.agent_runtime_event.runtime_event_subscription import (
     _QUEUE_CLOSED,
     RuntimeEventSubscription,

@@ -1,4 +1,4 @@
-"""WorkspaceIndexBus 单元测试。
+"""WorkspaceEventBus 单元测试。
 
 覆盖：
 - subscribe 按 workspace_id 建订阅队列；
@@ -15,12 +15,12 @@ import asyncio
 import pytest
 
 from app.models.enums.event_type import EventType
-from app.models.workspace_index_event import WorkspaceIndexEvent
-from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
+from app.models.event.workspace_event import WorkspaceEvent
+from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 
 
-def _event(workspace_id: str = "ws-1") -> WorkspaceIndexEvent:
-    return WorkspaceIndexEvent(
+def _event(workspace_id: str = "ws-1") -> WorkspaceEvent:
+    return WorkspaceEvent(
         event_type=EventType.WORKSPACE_READY,
         workspace_id=workspace_id,
         workspace_path="/ws/root",
@@ -29,13 +29,13 @@ def _event(workspace_id: str = "ws-1") -> WorkspaceIndexEvent:
 
 
 def test_empty_workspace_id_raises():
-    bus = WorkspaceIndexBus()
+    bus = WorkspaceEventBus()
     with pytest.raises(ValueError):
         bus.subscribe("")
 
 
 def test_subscribe_routes_publish_by_workspace_id():
-    bus = WorkspaceIndexBus()
+    bus = WorkspaceEventBus()
     sub_a = bus.subscribe("ws-a")
     sub_b = bus.subscribe("ws-b")
 
@@ -53,7 +53,7 @@ def test_subscribe_routes_publish_by_workspace_id():
 
 
 def test_publish_only_to_registered_subscribers():
-    bus = WorkspaceIndexBus()
+    bus = WorkspaceEventBus()
     sub = bus.subscribe("ws-1")
     bus.unsubscribe(sub)
     # 已退订后 publish 不应投递，也不抛
@@ -67,7 +67,7 @@ def test_publish_only_to_registered_subscribers():
 
 
 def test_unsubscribe_stops_delivery():
-    bus = WorkspaceIndexBus()
+    bus = WorkspaceEventBus()
     sub = bus.subscribe("ws-1")
     bus.unsubscribe(sub)
     # 退订后发布无投递（同 test_publish_only...），重复退订幂等
@@ -82,7 +82,7 @@ def test_unsubscribe_stops_delivery():
 
 
 def test_close_terminates_async_iteration():
-    bus = WorkspaceIndexBus()
+    bus = WorkspaceEventBus()
     sub = bus.subscribe("ws-1")
     bus.close("ws-1")
 
@@ -94,7 +94,7 @@ def test_close_terminates_async_iteration():
 
 
 def test_close_is_idempotent_and_publish_after_close_is_noop():
-    bus = WorkspaceIndexBus()
+    bus = WorkspaceEventBus()
     sub = bus.subscribe("ws-1")
     bus.close("ws-1")
     bus.close("ws-1")  # 重复 close 不抛
@@ -109,15 +109,15 @@ def test_close_is_idempotent_and_publish_after_close_is_noop():
 
 def test_queue_size_must_be_positive():
     with pytest.raises(ValueError):
-        WorkspaceIndexBus(queue_size=0)
+        WorkspaceEventBus(queue_size=0)
 
 
-def test_event_rejects_non_workspace_index_type():
-    """非 workspace 索引进度类型（如 RUN_STARTED）应被拒绝。"""
-    from app.models.workspace_index_event import WorkspaceIndexEvent
+def test_event_rejects_non_workspace_event_type():
+    """非 workspace 状态事件类型（如 RUN_STARTED）应被拒绝。"""
+    from app.models.event.workspace_event import WorkspaceEvent
 
     with pytest.raises(ValueError):
-        WorkspaceIndexEvent(
+        WorkspaceEvent(
             event_type=EventType.RUN_STARTED,
             workspace_id="ws-1",
             workspace_path="/ws",
@@ -127,7 +127,7 @@ def test_event_rejects_non_workspace_index_type():
 
 def test_publish_drops_oldest_when_queue_full():
     """队列满时 publish 应丢弃最旧事件并放入新事件（不抛异常）。"""
-    bus = WorkspaceIndexBus(queue_size=2)
+    bus = WorkspaceEventBus(queue_size=2)
     sub = bus.subscribe("ws-1")
 
     async def run():

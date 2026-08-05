@@ -23,11 +23,11 @@ import type {
   CreateTurnRequest,
   CreateWorkspaceRequest,
   DeleteTaskResponse,
-  IndexPrepareResponse,
   ListAgentsResponse,
+  WorkspacePrepareResponse,
 } from "@shared/api";
-import type { WorkspaceIndexEvent } from "@shared/codegraph";
-import { isWorkspaceIndexEventType } from "@shared/codegraph";
+import type { WorkspaceEvent } from "@shared/workspaceEvent";
+import { isWorkspaceEventType } from "@shared/workspaceEvent";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
 import { parseSSEFrame } from "./sseParser";
@@ -340,39 +340,44 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
 }
 
 /**
- * 触发一次 workspace 索引进度准备（ensure_ready：init 或增量 sync）。
+ * 触发一次 workspace 状态准备（ensure_ready：init 或增量 sync）。
  *
- * 调用方应先建立 `/index/stream` 的 SSE 订阅再触发本方法，确保 preparing 事件不丢失。
+ * 调用方应先建立 `/events/stream` 的 SSE 订阅再触发本方法，确保 preparing 事件不丢失。
  *
  * @param workspaceId - 工作区标识。
- * @returns 索引准备结果（ready / state / files_changed / duration_ms 等）。
+ * @returns workspace 准备结果（ready / state / files_changed / duration_ms 等）。
  * @throws {ServiceError} 当工作区不存在或请求失败时抛出。
  *
- * @sideeffect 向后端 POST /workspaces/{workspace_id}/index/prepare，可能触发一次
+ * @sideeffect 向后端 POST /workspaces/{workspace_id}/events/prepare，可能触发一次
  *   CodeGraph init/sync 建索引（大仓库首次可达数分钟）。
  */
-export async function prepareWorkspaceIndex(workspaceId: string): Promise<IndexPrepareResponse> {
-  const response = await post<IndexPrepareResponse>(API_PATHS.WORKSPACE_INDEX_PREPARE(workspaceId), {});
-  recordConversationTrace(response.trace, "workspace_index_prepare", "");
+export async function prepareWorkspace(workspaceId: string): Promise<WorkspacePrepareResponse> {
+  const response = await post<WorkspacePrepareResponse>(API_PATHS.WORKSPACE_EVENT_PREPARE(workspaceId), {});
+  recordConversationTrace(response.trace, "workspace_event_prepare", "");
   return response.data;
 }
 
 /**
- * 订阅 workspace 索引进度事件流（SSE）。
+ * 订阅 workspace 状态事件流（SSE）。
  *
- * 解析 `/workspaces/{id}/index/stream` 返回的 `event:` + `data:` 帧；每收到一条
- * workspace 索引进度事件即回调。返回的断开函数在组件卸载时调用，避免泄漏连接。
+ * 解析 `/workspaces/{id}/events/stream` 返回的 `event:` + `data:` 帧；每收到一条
+ * workspace 状态事件即回调。返回的断开函数在组件卸载时调用，避免泄漏连接。
  *
- * @param workspaceId - 需要订阅索引进度的工作区标识。
- * @param onEvent - 收到索引进度事件时的回调。
+ * 注意：调用方**不应**依赖本函数返回的 promise 去串联后续动作（如触发 prepare）。
+ * Tauri WebView 中 workspace 事件流连接后若无数据推送（prepare 尚未触发），
+ * ``await fetch`` 可能一直不 resolve，串行依赖会卡住。调用方应将 prepare 与
+ * 本订阅**并行**发起（详见 ``workspaceEventStore.startEvent``）。
+ *
+ * @param workspaceId - 需要订阅状态事件的工作区标识。
+ * @param onEvent - 收到状态事件时的回调。
  * @returns 断开连接的清理函数。
  * @throws {ServiceError} 当请求失败时抛出（同步建立连接失败）。
  *
  * @sideeffect 建立一条到后端的 SSE 长连接，直至返回的清理函数被调用或后端推送终态。
  */
-export async function connectWorkspaceIndexStream(
+export async function connectWorkspaceEventStream(
   workspaceId: string,
-  onEvent: (event: WorkspaceIndexEvent) => void,
+  onEvent: (event: WorkspaceEvent) => void,
 ): Promise<() => void> {
   const abortController = new AbortController();
   const requestTrace = buildTraceHeaders({});
@@ -380,10 +385,10 @@ export async function connectWorkspaceIndexStream(
     module: "api",
     workspace_id: workspaceId,
     method: "GET",
-    path: API_PATHS.WORKSPACE_INDEX_STREAM(workspaceId),
+    path: API_PATHS.WORKSPACE_EVENT_STREAM(workspaceId),
     trace_id: requestTrace.trace.traceId,
   };
-  const response = await fetch(`${BASE_URL}${API_PATHS.WORKSPACE_INDEX_STREAM(workspaceId)}`, {
+  const response = await fetch(`${BASE_URL}${API_PATHS.WORKSPACE_EVENT_STREAM(workspaceId)}`, {
     signal: abortController.signal,
     headers: { Accept: "text/event-stream", ...requestTrace.headers },
   });
@@ -392,10 +397,10 @@ export async function connectWorkspaceIndexStream(
 
   if (!response.ok || !response.body) {
     const error = new ServiceError(
-      `连接索引进度流失败: HTTP ${response.status}`,
+      `连接 workspace 状态事件流失败: HTTP ${response.status}`,
       { cause: new Error(response.statusText) },
     );
-    logError("HTTP 请求失败: GET index/stream", error, {
+    logError("HTTP 请求失败: GET events/stream", error, {
       ...requestContext,
       status_code: response.status,
     });
@@ -418,7 +423,7 @@ export async function connectWorkspaceIndexStream(
         const frames = buffer.split("\n\n");
         buffer = frames.pop() ?? "";
         for (const frameText of frames) {
-          const parsed = parseIndexEvent(frameText.trim());
+          const parsed = parseWorkspaceEvent(frameText.trim());
           if (parsed) {
             onEvent(parsed);
           }
@@ -426,7 +431,7 @@ export async function connectWorkspaceIndexStream(
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        logError("索引进度流读取失败", err, requestContext);
+        logError("workspace 状态事件流读取失败", err, requestContext);
       }
     }
   };
@@ -439,22 +444,22 @@ export async function connectWorkspaceIndexStream(
 }
 
 /**
- * 解析单条 workspace 索引进度 SSE 帧。
+ * 解析单条 workspace 状态事件 SSE 帧。
  *
- * 复用 ``parseSSEFrame`` 做行级拆分，再按索引进度事件类型校验并 JSON.parse。
+ * 复用 ``parseSSEFrame`` 做行级拆分，再按 workspace 状态事件类型校验并 JSON.parse。
  *
  * @param text - `event:` + `data:` 格式的原始帧文本。
- * @returns 解析成功返回 WorkspaceIndexEvent；格式无效或事件类型非法返回 null。
+ * @returns 解析成功返回 WorkspaceEvent；格式无效或事件类型非法返回 null。
  */
-function parseIndexEvent(text: string): WorkspaceIndexEvent | null {
+function parseWorkspaceEvent(text: string): WorkspaceEvent | null {
   const frame = parseSSEFrame(text);
-  if (!frame || !isWorkspaceIndexEventType(frame.eventType)) {
+  if (!frame || !isWorkspaceEventType(frame.eventType)) {
     return null;
   }
   try {
-    return JSON.parse(frame.data) as WorkspaceIndexEvent;
+    return JSON.parse(frame.data) as WorkspaceEvent;
   } catch (err) {
-    logWarn("索引进度事件 JSON 解析失败", {
+    logWarn("workspace 状态事件 JSON 解析失败", {
       module: "api",
       event_type: frame.eventType,
       data_preview: frame.data.slice(0, 200),

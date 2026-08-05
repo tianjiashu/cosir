@@ -25,8 +25,8 @@ from app.service.task.turn_prepare_service import TurnPrepareService
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 from app.service.task.workspace_service import WorkspaceService
-from app.service.workspace_event.workspace_index_bus import WorkspaceIndexBus
-from app.service.workspace_event.workspace_index_service import WorkspaceIndexService
+from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
+from app.service.workspace_event.workspace_event_service import WorkspaceEventService
 from app.tools.tool_system import ToolSystem
 
 # 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持
@@ -201,14 +201,14 @@ def get_turn_prepare_service() -> TurnPrepareService | None:
     return service_depends.get_turn_prepare_service()
 
 
-def get_workspace_index_bus() -> WorkspaceIndexBus:
-    """返回进程级 workspace 索引进度事件总线单例。
+def get_workspace_event_bus() -> WorkspaceEventBus:
+    """返回进程级 workspace 状态事件总线单例。
 
     参数:
         无。
 
     返回:
-        WorkspaceIndexBus 单例。
+        WorkspaceEventBus 单例。
 
     异常:
         无。
@@ -217,17 +217,17 @@ def get_workspace_index_bus() -> WorkspaceIndexBus:
         首次调用时构建并缓存总线。
     """
 
-    return service_depends.get_workspace_index_bus()
+    return service_depends.get_workspace_event_bus()
 
 
-def get_workspace_index_service() -> WorkspaceIndexService | None:
-    """返回进程级 workspace 索引准备 service；CodeGraph 不可用时返回 None。
+def get_workspace_event_service() -> WorkspaceEventService | None:
+    """返回进程级 workspace 状态事件 service；CodeGraph 不可用时返回 None。
 
     参数:
         无。
 
     返回:
-        WorkspaceIndexService 实例；CodeGraph Kernel 不可用时返回 None（降级到文件搜索）。
+        WorkspaceEventService 实例；CodeGraph Kernel 不可用时返回 None（降级到文件搜索）。
 
     异常:
         RuntimeError: 若存储初始化失败。
@@ -236,7 +236,7 @@ def get_workspace_index_service() -> WorkspaceIndexService | None:
         尝试从 supervisor 取得 Kernel client。
     """
 
-    return service_depends.get_workspace_index_service()
+    return service_depends.get_workspace_event_service()
 
 
 def get_log_query_service() -> LogQueryService:

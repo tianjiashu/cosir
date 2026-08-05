@@ -21,6 +21,8 @@ class ChangeFileResponse(BaseModel):
     status: str
     last_tool_call_id: str
     last_turn_id: str
+    additions: int
+    deletions: int
 
 
 class ChangeSetResponse(BaseModel):
@@ -59,6 +61,8 @@ class ChangeSetResponse(BaseModel):
                     status=f.status,
                     last_tool_call_id=f.last_tool_call_id,
                     last_turn_id=f.last_turn_id,
+                    additions=f.additions,
+                    deletions=f.deletions,
                 )
                 for f in change_set.files
             ],

@@ -20,10 +20,10 @@ import pytest
 
 from app.models.enums.event_type import EventType
 from app.models.payload import EVENT_PAYLOAD_MODELS
-from app.models.payload.workspace_degraded_payload import WorkspaceDegradedPayload
-from app.models.payload.workspace_preparing_payload import WorkspacePreparingPayload
-from app.models.payload.workspace_ready_payload import WorkspaceReadyPayload
-from app.models.workspace_index_readiness import WorkspaceIndexReadiness
+from app.models.payload.workspace_event.workspace_degraded_payload import WorkspaceDegradedPayload
+from app.models.payload.workspace_event.workspace_preparing_payload import WorkspacePreparingPayload
+from app.models.payload.workspace_event.workspace_ready_payload import WorkspaceReadyPayload
+from app.models.workspace_readiness import WorkspaceReadiness
 from app.service.task.turn_prepare_service import TurnPrepareService
 
 # ----------------------------------------------------------------------
@@ -67,10 +67,10 @@ class _FakeWorkspaceCrud:
 
 
 class _FakeLifecycle:
-    def __init__(self, readiness: WorkspaceIndexReadiness) -> None:
+    def __init__(self, readiness: WorkspaceReadiness) -> None:
         self._readiness = readiness
 
-    def ensure_ready(self, _workspace_path: str) -> WorkspaceIndexReadiness:
+    def ensure_ready(self, _workspace_path: str) -> WorkspaceReadiness:
         return self._readiness
 
 
@@ -133,15 +133,15 @@ def test_resolver_no_workspace_id_returns_none():
 
 
 def _make_service(
-    readiness: WorkspaceIndexReadiness,
+    readiness: WorkspaceReadiness,
 ) -> tuple[TurnPrepareService, _FakeEventService]:
     events = _FakeEventService()
     svc = TurnPrepareService(_FakeLifecycle(readiness), event_service=events)  # type: ignore[arg-type]
     return svc, events
 
 
-def _readiness(ready: bool, action: str = "init", state: str = "ready") -> WorkspaceIndexReadiness:
-    return WorkspaceIndexReadiness(
+def _readiness(ready: bool, action: str = "init", state: str = "ready") -> WorkspaceReadiness:
+    return WorkspaceReadiness(
         ready=ready,
         state=state,
         action_taken=action,
@@ -196,9 +196,7 @@ def test_prepare_skipped_when_workspace_path_none():
     executed: list[bool] = []
 
     async def run():
-        await svc.prepare_then_execute(
-            "task-1", "turn-1", None, lambda: _record_executed(executed)
-        )
+        await svc.prepare_then_execute("task-1", "turn-1", None, lambda: _record_executed(executed))
 
     asyncio.run(run())
 
@@ -276,7 +274,7 @@ def test_drive_turn_with_prepare_skips_when_prepare_service_none():
 def test_emit_run_failed_publishes_terminal_event(monkeypatch):
     """prepare 断开兜底应发布 run_failed 终态事件（§六 验收 5）。"""
     from app.api.turns_api import _emit_run_failed
-    from app.models.runtime_event import RuntimeEvent
+    from app.models.event.runtime_event import RuntimeEvent
 
     saved: list[RuntimeEvent] = []
 
@@ -285,9 +283,7 @@ def test_emit_run_failed_publishes_terminal_event(monkeypatch):
             saved.append(event)
             return event
 
-    monkeypatch.setattr(
-        "app.api.turns_api.RuntimeEventService", lambda: _FakeRuntimeEventService()
-    )
+    monkeypatch.setattr("app.api.turns_api.RuntimeEventService", lambda: _FakeRuntimeEventService())
     _emit_run_failed(_FakeTurn(task_id="task-1"), "turn-1")
     assert len(saved) == 1
     assert saved[0].event_type == EventType.RUN_FAILED

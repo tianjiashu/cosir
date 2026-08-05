@@ -79,9 +79,7 @@ def test_resolve_node_binary_missing_raises(monkeypatch, tmp_path):
     from app.codegraph import node_resolver
 
     missing_dir = tmp_path / "no-node"
-    monkeypatch.setattr(
-        node_resolver, "_fixed_node_candidates", lambda: [missing_dir / "node.exe"]
-    )
+    monkeypatch.setattr(node_resolver, "_fixed_node_candidates", lambda: [missing_dir / "node.exe"])
     try:
         resolve_node_binary()
         raise AssertionError("expected CodeGraphNodeMissingError")

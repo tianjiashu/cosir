@@ -7,6 +7,7 @@
  * @module components/chat/UserMessage
  */
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 
 import { MessageTypography } from "./messageTypography";
@@ -25,7 +26,7 @@ interface UserMessageProps {
  * 使用主色背景 + 前景色文字，靠右对齐，与 Agent 输出形成明显区分；
  * 对齐 Codex 桌面客户端的消息样式方向。
  */
-export function UserMessage({ content, className }: UserMessageProps) {
+export const UserMessage = memo(function UserMessage({ content, className }: UserMessageProps) {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
     return null;
@@ -42,4 +43,4 @@ export function UserMessage({ content, className }: UserMessageProps) {
       </div>
     </div>
   );
-}
+});

@@ -17,7 +17,9 @@ class FileSnapshotRecord:
     ``op_json`` 为反向 ``PatchOperation`` 的序列化 JSON，单文件撤销时反序列化为
     ``PatchOperation`` 直接交给 ``apply_all_with_diff`` 应用，把文件还原到改动前。
     ``stable`` 标记变更是否已随所属 turn 结束而稳定；``status`` 记录用户对该文件
-    最新变更的处理态。``id`` 为数据库自增主键，构造占位为 -1，落库由存储引擎分配。
+    最新变更的处理态。``additions`` / ``deletions`` 为该次变更相对上一次的 diff
+    增删行数（采集时用 difflib 统计，MOVE 计 0/0），供变更集行内展示。
+    ``id`` 为数据库自增主键，构造占位为 -1，落库由存储引擎分配。
     """
 
     id: int = field(default=-1)
@@ -31,6 +33,8 @@ class FileSnapshotRecord:
     stable: int = 0
     status: str = "pending"
     reverted_at: str = ""
+    additions: int = 0
+    deletions: int = 0
 
     @classmethod
     def from_model(cls, row: FileSnapshotModel) -> "FileSnapshotRecord":
@@ -60,6 +64,8 @@ class FileSnapshotRecord:
             stable=row.stable,
             status=row.status,
             reverted_at=row.reverted_at,
+            additions=row.additions,
+            deletions=row.deletions,
         )
 
     def to_row_dict(self) -> dict[str, Any]:
@@ -88,4 +94,6 @@ class FileSnapshotRecord:
             "stable": self.stable,
             "status": self.status,
             "reverted_at": self.reverted_at,
+            "additions": self.additions,
+            "deletions": self.deletions,
         }  # id 为自增主键，由存储引擎分配，不在此显式写入

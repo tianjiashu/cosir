@@ -22,6 +22,7 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_executor import ToolExecutor
+from app.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
 from app.tools.tool_handler.patch.patch_parser import PatchOperation
 from app.tools.tool_handler.patch.v4a_reverse import (
     build_forward_operations,
@@ -335,7 +336,9 @@ class ToolScheduler:
             内部吞掉并转 warning 日志：采集异常绝不冒泡到工具主流程。
 
         副作用:
-            向 ``file_snapshots`` 表写入 0~N 条反向操作记录（每个变更文件一条）。
+            向 ``file_snapshots`` 表写入 0~N 条反向操作记录（每个变更文件一条），
+            每条记录同时写入该次变更相对上一次的 diff 增删行数（``additions`` /
+            ``deletions``，moved 计 0/0），供变更集行内展示。
         """
         if observation.status != "success":
             return
@@ -349,10 +352,13 @@ class ToolScheduler:
             return
         try:
             forward_ops = build_forward_operations(changes)
+            # 每个文件的 diff 增删行数（顺序与 changes 一致；MOVE 计 0/0）。
+            diff_stats = _change_diff_stats(changes)
             crud = FileSnapshotCrud()
             next_seq = crud.next_seq(execution_context.turn_id)
             for offset, forward in enumerate(forward_ops):
                 reverse_op = reverse_v4a_operation(forward)
+                additions, deletions = diff_stats[offset] if offset < len(diff_stats) else (0, 0)
                 crud.save(
                     FileSnapshotRecord(
                         turn_id=execution_context.turn_id,
@@ -362,6 +368,8 @@ class ToolScheduler:
                         path=forward.file_path,
                         action=forward.operation.value,
                         op_json=_reverse_op_to_json(reverse_op),
+                        additions=additions,
+                        deletions=deletions,
                     )
                 )
         except Exception:
@@ -403,6 +411,44 @@ class ToolScheduler:
 
         budgeted = self._output_budget.apply(observation, execution_context)
         return self._display_data_budget.apply(budgeted)
+
+
+def _change_diff_stats(changes: list[dict]) -> list[tuple[int, int]]:
+    """计算采集快照中每个文件的 diff 增删行数。
+
+    复用 ``patch_diff.build_diff_stats`` 的 difflib 逐行统计，避免重复实现差异算法：
+    - ``added``：全部 after 行计为新增，deletions 为 0。
+    - ``deleted``：全部 before 行计为删除，additions 为 0。
+    - ``modified``：按 before/after 逐行 diff 统计增删。
+    - ``moved``：计 0/0。
+
+    参数:
+        changes: ``display_data["changes"]`` 中的单文件变更字典列表，每个含
+            ``path`` / ``new_path`` / ``status`` / ``before`` / ``after``。
+
+    返回:
+        与 ``changes`` 顺序一致的 ``(additions, deletions)`` 二元组列表。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+    results = [
+        FileDiffResult(
+            path=change.get("path", ""),
+            status=change.get("status", "modified"),
+            before=change.get("before", ""),
+            after=change.get("after", ""),
+            new_path=change.get("new_path"),
+        )
+        for change in changes
+    ]
+    stats = build_diff_stats(results)
+    return [
+        (int(f.get("insertions", 0)), int(f.get("deletions", 0))) for f in stats.get("files", [])
+    ]
 
 
 def _reverse_op_to_json(reverse_op: "PatchOperation") -> str:

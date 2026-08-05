@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Self
 
-from app.models.runtime_event import RuntimeEvent
+from app.models.event.runtime_event import RuntimeEvent
 
 # Sentinel pushed into a subscription queue to signal that the subscription
 # has been closed. Shared with the event bus via import.

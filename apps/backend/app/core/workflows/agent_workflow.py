@@ -5,7 +5,7 @@ from typing import Protocol
 
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import TaskRecord
-from app.models.runtime_event import RuntimeEvent
+from app.models.event.runtime_event import RuntimeEvent
 
 
 class AgentWorkflow(Protocol):

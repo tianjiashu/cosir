@@ -11,7 +11,7 @@
  * @module components/chat/AgentMessage
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { Components } from "react-markdown";
 
 import { cn } from "@/lib/utils";
@@ -119,7 +119,7 @@ function buildMarkdownComponents(streaming: boolean): Components {
  * 副作用:
  *   无。
  */
-export function AgentMessage({ content, streaming = false, className }: AgentMessageProps) {
+export const AgentMessage = memo(function AgentMessage({ content, streaming = false, className }: AgentMessageProps) {
   const hasContent = content.trim().length > 0;
   const components = useMemo(() => buildMarkdownComponents(streaming), [streaming]);
 
@@ -141,4 +141,4 @@ export function AgentMessage({ content, streaming = false, className }: AgentMes
       </div>
     </div>
   );
-}
+});

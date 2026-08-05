@@ -10,7 +10,7 @@
  * @module components/chat/ThinkingBlock
  */
 
-import { useState, useEffect } from "react";
+import { memo, useState, useEffect } from "react";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -53,7 +53,7 @@ const CONTENT_BOX_CLASS = "mt-2 rounded-lg border border-muted bg-muted/50 px-3 
  *   挂载时通过 logInfo 记录内容长度与初始折叠态，用于排查
  *   「内容为空」与「有内容但被折叠隐藏」两类现象。
  */
-export function ThinkingBlock({ content, streaming = false, className }: ThinkingBlockProps) {
+export const ThinkingBlock = memo(function ThinkingBlock({ content, streaming = false, className }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const isEmpty = !content || content.trim().length === 0;
 
@@ -113,4 +113,4 @@ export function ThinkingBlock({ content, streaming = false, className }: Thinkin
       ) : null}
     </div>
   );
-}
+});

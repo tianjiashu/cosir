@@ -14,6 +14,8 @@ export const API_PATHS = {
   WORKSPACES: "/workspaces",
   WORKSPACE_DETAIL: (workspaceId: string) => `/workspaces/${workspaceId}`,
   WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,
+  WORKSPACE_EVENT_STREAM: (workspaceId: string) => `/workspaces/${workspaceId}/events/stream`,
+  WORKSPACE_EVENT_PREPARE: (workspaceId: string) => `/workspaces/${workspaceId}/events/prepare`,
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
   TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,
@@ -21,8 +23,6 @@ export const API_PATHS = {
   TASK_CHANGES_REVERT: (taskId: string) => `/tasks/${taskId}/changes/revert`,
   TASK_CHANGES_KEEP: (taskId: string) => `/tasks/${taskId}/changes/keep`,
   TURN_STREAM: (turnId: string) => `/turns/${turnId}/stream`,
-  WORKSPACE_INDEX_STREAM: (workspaceId: string) => `/workspaces/${workspaceId}/index/stream`,
-  WORKSPACE_INDEX_PREPARE: (workspaceId: string) => `/workspaces/${workspaceId}/index/prepare`,
   TURN_CANCEL: (turnId: string) => `/turns/${turnId}/cancel`,
   LOGS_QUERY: "/logs/query",
   LOGS_RECENT: "/logs/recent",
@@ -64,19 +64,11 @@ export interface DeleteTaskResponse {
   deleted: boolean;
 }
 
-export interface IndexPrepareResponse {
-  workspace_id: string;
-  ready: boolean;
-  state: string;
-  action_taken: string;
-  files_changed: number;
-  duration_ms: number;
-  degraded_reason?: string | null;
-}
-
 export type TaskResponse = import("./task").TaskRecord;
 
 export type WorkspaceResponse = import("./workspace").WorkspaceRecord;
+
+export type WorkspacePrepareResponse = import("./workspace").WorkspacePrepareResponse;
 
 export type TurnResponse = import("./turn").TurnRecord;
 

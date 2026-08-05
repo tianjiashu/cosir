@@ -23,7 +23,7 @@ from app.codegraph import (
     IndexStatusResult,
     IndexSyncResult,
 )
-from app.models.workspace_index_readiness import WorkspaceIndexReadiness
+from app.models.workspace_readiness import WorkspaceReadiness
 from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
 from app.utils.inflight_registry import InflightRegistry
 
@@ -158,7 +158,7 @@ def test_ensure_ready_same_workspace_singleflight():
     status = IndexStatusResult(state="unindexed", last_indexed_at=None)
     client = _FakeClient(status)
     svc = _svc(client)
-    results: list[WorkspaceIndexReadiness] = []
+    results: list[WorkspaceReadiness] = []
 
     def run() -> None:
         results.append(svc.ensure_ready("/ws/concurrent"))

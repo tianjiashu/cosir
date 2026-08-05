@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from app.models.runtime_event import RuntimeEvent
+from app.models.event.runtime_event import RuntimeEvent
 from app.service import depends as service_depends
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 

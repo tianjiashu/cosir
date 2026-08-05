@@ -472,11 +472,11 @@
         }
       }
     },
-    "/workspaces/{workspace_id}/index/stream": {
+    "/workspaces/{workspace_id}/events/stream": {
       "get": {
-        "summary": "Stream Workspace Index",
-        "description": "以 SSE 流式返回 workspace 索引进度事件。\n\n客户端须先调用本端点建立订阅，再触发 prepare，避免错过 preparing 事件。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    index_bus: workspace 级索引进度事件总线。\n\n返回:\n    text/event-stream 的 StreamingResponse；终态事件（ready/degraded）后结束流。\n\n异常:\n    无（订阅缺失时流自然结束）。\n\n副作用:\n    注册并最终移除一条 workspace 索引进度订阅。",
-        "operationId": "stream_workspace_index_workspaces__workspace_id__index_stream_get",
+        "summary": "Stream Workspace Events",
+        "description": "以 SSE 流式返回 workspace 状态事件。\n\n通用 workspace 状态事件通道：当前承载创建时的准备进度（preparing/ready/degraded），\n后续可扩展其他 workspace 状态事件。客户端须先调用本端点建立订阅，再触发 prepare，\n避免错过 preparing 事件。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    event_bus: workspace 级状态事件总线。\n\n返回:\n    text/event-stream 的 StreamingResponse；终态事件（ready/degraded）后结束流。\n\n异常:\n    无（订阅缺失时流自然结束）。\n\n副作用:\n    注册并最终移除一条 workspace 状态事件订阅。",
+        "operationId": "stream_workspace_events_workspaces__workspace_id__events_stream_get",
         "parameters": [
           {
             "name": "workspace_id",
@@ -510,11 +510,11 @@
         }
       }
     },
-    "/workspaces/{workspace_id}/index/prepare": {
+    "/workspaces/{workspace_id}/events/prepare": {
       "post": {
-        "summary": "Prepare Workspace Index",
-        "description": "同步触发一次 workspace 索引进度准备（prepare）。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。\n    index_service: 索引准备编排 service；Kernel 不可用时为 None（降级）。\n    index_bus: workspace 级索引进度事件总线（用于 Kernel 不可用时主动发降级终态）。\n\n返回:\n    IndexPrepareResponse，含就绪状态与动作摘要。\n\n异常:\n    HTTPException: 当 workspace 不存在（404）时抛出。\n\n副作用:\n    发布 preparing/ready/degraded 进度事件到总线。\n\n设计要点:\n    Kernel 不可用时 index_service 为 None，属于设计明确的正常降级场景。此时不仅\n    HTTP 返回 unavailable，还**主动 emit 一条 WORKSPACE_DEGRADED 事件**到总线——\n    因为前端先连 SSE 再 POST prepare，若只靠 HTTP 响应而 SSE 订阅者未收到终态事件，\n    前端会永远停在 preparing（独立审查暴露的时序 bug 的另一半）。",
-        "operationId": "prepare_workspace_index_workspaces__workspace_id__index_prepare_post",
+        "summary": "Prepare Workspace",
+        "description": "同步触发一次 workspace 准备（prepare）。\n\n当前准备动作是 CodeGraph 索引就绪；该端点走通用 workspace 状态事件通道，后续可扩展\n其他 workspace 状态事件的准备动作。客户端应先连 ``/events/stream`` 建立订阅再触发本端点。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。\n    event_service: workspace 状态事件编排 service；Kernel 不可用时为 None（降级）。\n    event_bus: workspace 级状态事件总线（用于 Kernel 不可用时主动发降级终态）。\n\n返回:\n    WorkspacePrepareResponse，含就绪状态与动作摘要。\n\n异常:\n    HTTPException: 当 workspace 不存在（404）时抛出。\n\n副作用:\n    发布 preparing/ready/degraded 工作状态事件到总线。\n\n设计要点:\n    Kernel 不可用时 event_service 为 None，属于设计明确的正常降级场景。此时不仅\n    HTTP 返回 unavailable，还**主动 emit 一条 WORKSPACE_DEGRADED 事件**到总线——\n    因为前端先连 SSE 再 POST prepare，若只靠 HTTP 响应而 SSE 订阅者未收到终态事件，\n    前端会永远停在 preparing（独立审查暴露的时序 bug 的另一半）。",
+        "operationId": "prepare_workspace_workspaces__workspace_id__events_prepare_post",
         "parameters": [
           {
             "name": "workspace_id",
@@ -532,7 +532,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IndexPrepareResponse"
+                  "$ref": "#/components/schemas/WorkspacePrepareResponse"
                 }
               }
             }
@@ -1058,6 +1058,14 @@
           "last_turn_id": {
             "type": "string",
             "title": "Last Turn Id"
+          },
+          "additions": {
+            "type": "integer",
+            "title": "Additions"
+          },
+          "deletions": {
+            "type": "integer",
+            "title": "Deletions"
           }
         },
         "type": "object",
@@ -1066,7 +1074,9 @@
           "action",
           "status",
           "last_tool_call_id",
-          "last_turn_id"
+          "last_turn_id",
+          "additions",
+          "deletions"
         ],
         "title": "ChangeFileResponse",
         "description": "文件变更响应项。"
@@ -1281,56 +1291,6 @@
         ],
         "title": "HealthResponse",
         "description": "校验并序列化后端健康状态响应（与 ``AgentRuntime.backend_health()`` 对齐）。\n\n参数:\n    status: 健康状态标识。\n    model_provider: 模型提供方。\n    model_base_url: 模型基础地址。\n    model_name: 模型名称。\n    model_thinking_mode: 模型思考模式。\n    model_api_key_env: API Key 所在环境变量名。\n    has_model_api_key: 环境变量是否已配置。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
-      },
-      "IndexPrepareResponse": {
-        "properties": {
-          "workspace_id": {
-            "type": "string",
-            "title": "Workspace Id"
-          },
-          "ready": {
-            "type": "boolean",
-            "title": "Ready"
-          },
-          "state": {
-            "type": "string",
-            "title": "State"
-          },
-          "action_taken": {
-            "type": "string",
-            "title": "Action Taken"
-          },
-          "files_changed": {
-            "type": "integer",
-            "title": "Files Changed"
-          },
-          "duration_ms": {
-            "type": "integer",
-            "title": "Duration Ms"
-          },
-          "degraded_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Degraded Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "workspace_id",
-          "ready",
-          "state",
-          "action_taken",
-          "files_changed",
-          "duration_ms"
-        ],
-        "title": "IndexPrepareResponse",
-        "description": "校验并序列化 workspace 索引准备结果响应。\n\n参数:\n    workspace_id: 所属 workspace 标识。\n    ready: 索引是否就绪（False 表示降级到文件搜索）。\n    state: 归一化状态（ready / failed / unavailable / unreachable / timeout）。\n        ready 表示索引就绪；failed 表示就绪路径失败；unavailable 表示 Kernel 不可用\n        （设计明确的降级场景）；unreachable 表示 prepare 前健康快检未通过；\n        timeout 表示 prepare 超过总超时上限而被强制降级。\n    action_taken: 就绪路径动作（init / sync / none）。\n    files_changed: 变更文件数。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（就绪时为 None）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ListAgentsResponse": {
         "properties": {
@@ -1689,6 +1649,56 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WorkspacePrepareResponse": {
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "title": "Workspace Id"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "action_taken": {
+            "type": "string",
+            "title": "Action Taken",
+            "default": "none"
+          },
+          "files_changed": {
+            "type": "integer",
+            "title": "Files Changed",
+            "default": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 0
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "ready",
+          "state"
+        ],
+        "title": "WorkspacePrepareResponse",
+        "description": "POST /workspaces/{workspace_id}/events/prepare 的响应。\n\n触发一次 workspace 准备（当前为 CodeGraph 索引就绪）并立即返回；\n准备进度经 ``GET /workspaces/{workspace_id}/events/stream`` SSE 推送。\n\n属性:\n    workspace_id: 触发准备的 workspace 标识。\n    ready: 即时快照中 Kernel 是否已就绪（True / False）。\n    state: 即时状态快照，取值 ``ready`` / ``failed`` / ``unavailable`` /\n        ``unreachable`` / ``timeout``；任何非 ``ready`` 值均表示未就绪，前端应\n        降级到文件搜索但任务可继续。同步阻塞路径下通常为 ``accepted`` 初值，\n        终态以 SSE 事件为准。\n    action_taken: 采取的动作（``init`` / ``sync`` / ``none``）。\n    files_changed: 索引变更文件数（ready 时有效）。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（非 ready 时有效；脱敏，不记录 secret）。"
       },
       "WorkspaceResponse": {
         "properties": {

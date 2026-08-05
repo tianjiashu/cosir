@@ -1,9 +1,10 @@
-"""Workspace 索引进度事件值对象（workspace 级，不带 task/turn 信封）。
+"""Workspace 状态事件值对象（workspace 级，不带 task/turn 信封）。
 
-单一职责：承载 workspace 创建时索引进度的一次事件（preparing/ready/degraded）。
-与 ``RuntimeEvent`` 不同，本事件**无 task_id / turn_id**（创建 workspace 时既无 task
-也无 turn），自带 ``workspace_id`` 与 ``workspace_path``，经独立的 ``WorkspaceIndexBus``
-分发，供 workspace 级 SSE 端点推送给前端进度条。
+单一职责：承载 workspace 级状态事件（如创建时的准备进度 preparing/ready/degraded，
+后续可扩展其他 workspace 状态事件）。与 ``RuntimeEvent`` 不同，本事件**无 task_id /
+turn_id**（创建 workspace 时既无 task 也无 turn），自带 ``workspace_id`` 与
+``workspace_path``，经独立的 ``WorkspaceEventBus`` 分发，供 workspace 级 SSE 端点
+推送给前端状态展示。
 
 属 ``models`` 层 leaf：仅依赖 ``EventType`` 枚举与标准库，零 ``app.*`` 编排依赖。
 """
@@ -16,8 +17,8 @@ from app.models.enums.event_type import EventType
 
 
 @dataclass(frozen=True)
-class WorkspaceIndexEvent:
-    """workspace 索引进度事件（创建时触发）。
+class WorkspaceEvent:
+    """workspace 状态事件（创建时触发，后续可扩展其他 workspace 事件）。
 
     参数:
         event_type: 稳定事件类型，限 WORKSPACE_PREPARING / WORKSPACE_READY / WORKSPACE_DEGRADED。
@@ -28,7 +29,7 @@ class WorkspaceIndexEvent:
         created_at: 事件创建 UTC 时间戳。
 
     返回:
-        一个 workspace 索引进度事件值对象。
+        一个 workspace 状态事件值对象。
 
     异常:
         无。
@@ -45,7 +46,7 @@ class WorkspaceIndexEvent:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
-        """校验事件类型为 workspace 索引进度类型。
+        """校验事件类型为 workspace 状态事件类型。
 
         参数:
             无。
@@ -67,9 +68,7 @@ class WorkspaceIndexEvent:
             EventType.WORKSPACE_DEGRADED,
         }
         if self.event_type not in allowed:
-            raise ValueError(
-                f"event_type must be a workspace index progress type: {self.event_type}"
-            )
+            raise ValueError(f"event_type must be a workspace event type: {self.event_type}")
 
     def to_dict(self) -> dict[str, object]:
         """转换为可序列化为 JSON 的字典。

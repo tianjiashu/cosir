@@ -26,6 +26,7 @@ from app.core.runtime.runtime_operations import RuntimeOperations
 from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry
 from app.models import TaskRecord, TurnRecord
 from app.models.enums.event_type import EventType
+from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload import (
     FileChangeStablePayload,
     RunCancelledPayload,
@@ -33,7 +34,6 @@ from app.models.payload import (
     RunStartedPayload,
 )
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
-from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
 from app.models.trace_context import TraceContext
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
@@ -710,7 +710,7 @@ class AgentRuntime:
             payload=payload,
         )
         log.info(
-            "agent_runtime_event",
+            "workspace_event",
             extra={
                 "msg": "runtime event recorded",
                 "data": {

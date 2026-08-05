@@ -17,7 +17,7 @@ from app.codegraph import (
 )
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.models.workspace_index_readiness import WorkspaceIndexReadiness
+from app.models.workspace_readiness import WorkspaceReadiness
 from app.utils.inflight_registry import InflightRegistry
 
 
@@ -25,7 +25,7 @@ class CodeGraphLifecycleService:
     """Workspace 索引生命周期编排：确保 workspace 在 Agent 使用前索引就绪。
 
     ``ensure_ready`` 是同步阻塞语义（可放进线程/任务等待），绝不抛异常——
-    失败一律转为 ``WorkspaceIndexReadiness(ready=False)``，由调用方决定降级。
+    失败一律转为 ``WorkspaceReadiness(ready=False)``，由调用方决定降级。
     """
 
     def __init__(
@@ -70,14 +70,14 @@ class CodeGraphLifecycleService:
 
         return self._client
 
-    def ensure_ready(self, workspace_path: str) -> WorkspaceIndexReadiness:
+    def ensure_ready(self, workspace_path: str) -> WorkspaceReadiness:
         """确保 workspace 索引就绪（阻塞至完成），失败以降级结果返回。
 
         参数:
             workspace_path: 目标 workspace 的绝对路径。
 
         返回:
-            WorkspaceIndexReadiness：ready=True 表示 CodeGraph 可用；
+            WorkspaceReadiness：ready=True 表示 CodeGraph 可用；
             ready=False 表示降级到文件搜索（reason 含英文原因）。
 
         异常:
@@ -93,7 +93,7 @@ class CodeGraphLifecycleService:
     # Internal: orchestration
     # ------------------------------------------------------------------
 
-    def _prepare(self, workspace_path: str) -> WorkspaceIndexReadiness:
+    def _prepare(self, workspace_path: str) -> WorkspaceReadiness:
         """执行一次完整的索引准备编排（singleflight 内运行）。"""
         started = self._monotonic_ms()
         log.info(
@@ -148,7 +148,7 @@ class CodeGraphLifecycleService:
                 workspace_path, "unavailable", f"malformed index payload: {exc}", started
             )
 
-    def _do_init(self, workspace_path: str, started: int) -> WorkspaceIndexReadiness:
+    def _do_init(self, workspace_path: str, started: int) -> WorkspaceReadiness:
         """执行首次索引（codegraph_init，长超时）。"""
         timeout = Settings.CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS
         log.info(
@@ -163,7 +163,7 @@ class CodeGraphLifecycleService:
             self._elapsed_ms(started),
         )
 
-    def _do_sync(self, workspace_path: str, started: int) -> WorkspaceIndexReadiness:
+    def _do_sync(self, workspace_path: str, started: int) -> WorkspaceReadiness:
         """执行增量同步（codegraph_sync，D2：已索引也总是显式 sync）。"""
         timeout = Settings.CODEGRAPH_INDEX_SYNC_TIMEOUT_SECONDS
         log.info(
@@ -185,9 +185,9 @@ class CodeGraphLifecycleService:
         action: str,
         files_changed: int,
         duration_ms: int,
-    ) -> WorkspaceIndexReadiness:
+    ) -> WorkspaceReadiness:
         """构造就绪结果并写 ready 日志。"""
-        readiness = WorkspaceIndexReadiness(
+        readiness = WorkspaceReadiness(
             ready=True,
             state="ready",
             action_taken=action,
@@ -215,9 +215,9 @@ class CodeGraphLifecycleService:
         state: str,
         reason: str,
         started: int,
-    ) -> WorkspaceIndexReadiness:
+    ) -> WorkspaceReadiness:
         """构造降级结果并写 degraded 日志（warning）。"""
-        readiness = WorkspaceIndexReadiness(
+        readiness = WorkspaceReadiness(
             ready=False,
             state=state,
             action_taken="none",

@@ -22,6 +22,7 @@
  */
 
 import * as React from "react";
+import { memo } from "react";
 import { AlertCircle, Check, ChevronDown, Copy, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Caption } from "@/components/ui/tokens";
@@ -148,7 +149,7 @@ function CopyButton({
  * 展开态：命令 header（prompt 图标 + 命令 + 复制/状态/关闭操作）+ 浅色等宽输出块
  * （可滚动、可复制）+ 截断提示。
  */
-export function TerminalCallCard({
+export const TerminalCallCard = memo(function TerminalCallCard({
   status,
   command,
   args,
@@ -317,4 +318,4 @@ export function TerminalCallCard({
       )}
     </div>
   );
-}
+});

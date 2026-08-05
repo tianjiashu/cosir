@@ -15,4 +15,14 @@ export interface WorkspaceResponse {
   updated_at: string;
 }
 
+export interface WorkspacePrepareResponse {
+  workspace_id: string;
+  ready: boolean;
+  state: string;
+  action_taken?: string;
+  files_changed?: number;
+  duration_ms?: number;
+  degraded_reason?: string | null;
+}
+
 export type WorkspaceRecord = WorkspaceResponse;

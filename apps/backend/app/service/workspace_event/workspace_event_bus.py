@@ -1,11 +1,12 @@
-"""Workspace 级索引进度事件广播总线。
+"""Workspace 级状态事件广播总线。
 
-单一职责：把 workspace 创建时的索引进度事件（preparing/ready/degraded）按
-``workspace_id`` 分发到当前订阅者队列，供 workspace 级 SSE 端点推送。
+单一职责：把 workspace 级状态事件（创建时的准备进度 preparing/ready/degraded，后续
+可扩展其他 workspace 状态事件）按 ``workspace_id`` 分发到当前订阅者队列，供 workspace
+级 SSE 端点推送。
 
 与 turn 级 ``RuntimeEventBus`` 的差异（见 design §2.1）：
 - 按 ``workspace_id`` 路由（而非 turn_id）；创建 workspace 时无 task/turn。
-- 只承载 ``WorkspaceIndexEvent``（不带 task/turn 信封），不落 turn 级事件表。
+- 只承载 ``WorkspaceEvent``（不带 task/turn 信封），不落 turn 级事件表。
 - ``publish`` 只向已注册订阅分发、无缓冲重放；``close`` 幂等（已关闭的
   workspace_id 再 publish 为 noop）。
 
@@ -21,18 +22,18 @@ import threading
 from contextlib import suppress
 
 from app.config.logging.logger import log
-from app.models.workspace_index_event import WorkspaceIndexEvent
-from app.service.workspace_event.workspace_index_subscription import (
+from app.models.event.workspace_event import WorkspaceEvent
+from app.service.workspace_event.workspace_event_subscription import (
     _QUEUE_CLOSED,
-    WorkspaceIndexSubscription,
+    WorkspaceEventSubscription,
 )
 
 
-class WorkspaceIndexBus:
-    """把 workspace 索引进度事件广播到订阅者。"""
+class WorkspaceEventBus:
+    """把 workspace 状态事件广播到订阅者。"""
 
     def __init__(self, queue_size: int = 256) -> None:
-        """初始化空的 workspace 索引进度事件总线。
+        """初始化空的 workspace 状态事件总线。
 
         参数:
             queue_size: 单个订阅者队列容量。
@@ -50,18 +51,18 @@ class WorkspaceIndexBus:
         if queue_size < 1:
             raise ValueError("queue_size must be positive")
         self._queue_size = queue_size
-        self._subscribers: dict[str, set[asyncio.Queue[WorkspaceIndexEvent | object]]] = {}
+        self._subscribers: dict[str, set[asyncio.Queue[WorkspaceEvent | object]]] = {}
         self._closed: set[str] = set()
         self._lock = threading.RLock()
 
-    def subscribe(self, workspace_id: str) -> WorkspaceIndexSubscription:
-        """订阅指定 workspace 的索引进度事件。
+    def subscribe(self, workspace_id: str) -> WorkspaceEventSubscription:
+        """订阅指定 workspace 的状态事件。
 
         参数:
             workspace_id: 需要订阅的 workspace 标识。
 
         返回:
-            可异步迭代的 WorkspaceIndexSubscription。
+            可异步迭代的 WorkspaceEventSubscription。
 
         异常:
             ValueError: 当 workspace_id 为空时抛出。
@@ -72,20 +73,20 @@ class WorkspaceIndexBus:
 
         if not workspace_id:
             raise ValueError("workspace_id must be non-empty")
-        queue: asyncio.Queue[WorkspaceIndexEvent | object] = asyncio.Queue(maxsize=self._queue_size)
+        queue: asyncio.Queue[WorkspaceEvent | object] = asyncio.Queue(maxsize=self._queue_size)
         with self._lock:
             self._subscribers.setdefault(workspace_id, set()).add(queue)
         log.info(
-            "workspace_index_subscribed",
+            "workspace_event_subscribed",
             extra={
-                "msg": "workspace index subscriber registered",
+                "msg": "workspace event subscriber registered",
                 "data": {"workspace_id": workspace_id},
             },
         )
-        return WorkspaceIndexSubscription(workspace_id=workspace_id, queue=queue)
+        return WorkspaceEventSubscription(workspace_id=workspace_id, queue=queue)
 
-    def unsubscribe(self, subscription: WorkspaceIndexSubscription) -> None:
-        """移除一个 workspace 索引进度订阅。
+    def unsubscribe(self, subscription: WorkspaceEventSubscription) -> None:
+        """移除一个 workspace 状态订阅。
 
         参数:
             subscription: 需要移除的订阅对象。
@@ -108,18 +109,18 @@ class WorkspaceIndexBus:
             if not queues:
                 self._subscribers.pop(subscription.workspace_id, None)
         log.info(
-            "workspace_index_unsubscribed",
+            "workspace_event_unsubscribed",
             extra={
-                "msg": "workspace index subscriber removed",
+                "msg": "workspace event subscriber removed",
                 "data": {"workspace_id": subscription.workspace_id},
             },
         )
 
-    def publish(self, event: WorkspaceIndexEvent) -> None:
-        """发布一条索引进度事件到当前订阅者。
+    def publish(self, event: WorkspaceEvent) -> None:
+        """发布一条状态事件到当前订阅者。
 
         参数:
-            event: workspace 索引进度事件。
+            event: workspace 状态事件。
 
         返回:
             无。
@@ -144,9 +145,9 @@ class WorkspaceIndexBus:
                     queue.get_nowait()
                 queue.put_nowait(event)
                 log.warning(
-                    "workspace_index_subscriber_queue_full",
+                    "workspace_event_subscriber_queue_full",
                     extra={
-                        "msg": "workspace index subscriber queue full; dropped oldest event",
+                        "msg": "workspace event subscriber queue full; dropped oldest event",
                         "data": {"workspace_id": event.workspace_id},
                     },
                 )

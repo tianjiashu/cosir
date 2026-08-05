@@ -41,6 +41,8 @@ class ChangeFileEntry:
         status: 用户处理态，取值 ``pending`` / ``kept`` / ``reverted``。
         last_tool_call_id: 产生该最新变更的工具调用标识。
         last_turn_id: 产生该最新变更的轮次标识。
+        additions: 该次变更的 diff 新增行数。
+        deletions: 该次变更的 diff 删除行数。
     """
 
     path: str
@@ -48,6 +50,8 @@ class ChangeFileEntry:
     status: str
     last_tool_call_id: str
     last_turn_id: str
+    additions: int = 0
+    deletions: int = 0
 
 
 @dataclass(frozen=True)
@@ -139,6 +143,8 @@ def query_change_set(task_id: str, checkpoint_turn_id: str | None = None) -> Cha
             status=snap.status,
             last_tool_call_id=snap.tool_call_id,
             last_turn_id=snap.turn_id,
+            additions=snap.additions,
+            deletions=snap.deletions,
         )
     return ChangeSet(
         task_id=task_id,
@@ -203,6 +209,8 @@ def keep_file(task_id: str, path: str) -> ChangeFileEntry:
         status="kept",
         last_tool_call_id=snapshot.tool_call_id,
         last_turn_id=snapshot.turn_id,
+        additions=snapshot.additions,
+        deletions=snapshot.deletions,
     )
 
 
@@ -268,6 +276,8 @@ async def revert_file(
         status="reverted",
         last_tool_call_id=snapshot.tool_call_id,
         last_turn_id=snapshot.turn_id,
+        additions=snapshot.additions,
+        deletions=snapshot.deletions,
     )
 
 

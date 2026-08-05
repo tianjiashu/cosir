@@ -10,7 +10,7 @@
  * @module components/layout/TurnTimeline
  */
 
-import { memo, useEffect, useMemo, useReducer, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 import { UserMessage } from "@/components/chat/UserMessage";
@@ -22,6 +22,7 @@ import { StatusBadge } from "@/components/chat/StatusBadge";
 import {
   createTimelineProjectorState,
   type TimelineProjectorState,
+  type TurnTimelineEntry,
   projectTimelineIncrementally,
   selectVisibleEntries,
 } from "@/services/timeline/projector";
@@ -110,6 +111,13 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turn, renderTick]);
 
+  // 打开文件回调必须保持引用稳定：本组件每帧重渲染都会重建内联箭头函数，
+  // 若直接内联传入 ToolCallCard/TerminalCallCard，会击穿其 memo（props 引用变化），
+  // 导致所有工具卡片每帧重渲染。用 useCallback 固定引用，使未变化的工具条目真正跳过。
+  const handleOpenFile = useCallback((path: string) => {
+    void openFileInEditor(path);
+  }, []);
+
   if (turnItem.entries.length === 0 && !turn.response_text) {
     return null;
   }
@@ -120,101 +128,127 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
         <UserMessage content={turnItem.userText} />
       </div>
 
-      {turnItem.entries.map((entry) => {
-        // 所有 timeline 条目统一限宽 content 令牌，与用户消息、输入栏保持宽度对齐，
-        // 避免 diff/write 工具卡片单独 breakout 导致右侧参差不齐。
-        const widthClass = "mx-auto w-full min-w-0 max-w-content";
-
-        if (entry.kind === "thinking") {
-          // 过滤纯空白与极短无意义内容（至少 2 个字符才值得展示折叠块）
-          const trimmed = entry.content.trim();
-          if (trimmed.length >= 2) {
-            logInfo("thinking_rendered", {
-              module: "TurnTimeline",
-              event_id: entry.eventId,
-              content_len: entry.content.length,
-              trimmed_len: trimmed.length,
-            });
-            return (
-              <div key={entry.eventId} className={widthClass}>
-                <ThinkingBlock content={entry.content} streaming={entry.streaming} />
-              </div>
-            );
-          }
-          logWarn("thinking_filtered_out", {
-            module: "TurnTimeline",
-            event_id: entry.eventId,
-            content_len: entry.content.length,
-            trimmed_len: trimmed.length,
-            reason: "content too short (<2 chars), block hidden",
-          });
-          return null;
-        }
-        if (entry.kind === "assistant") {
-          return entry.content.length > 0 ? (
-            <div key={entry.eventId} className={widthClass}>
-              <AgentMessage content={entry.content} streaming={entry.streaming} />
-            </div>
-          ) : null;
-        }
-        if (entry.kind === "status") {
-          return (
-            <div key={entry.eventId} className={widthClass}>
-              <StatusBadge eventType={entry.eventType} payload={entry.payload} />
-            </div>
-          );
-        }
-        const tool = entry.item;
-        const card = tool.display?.expandLayout === "terminal" ? (
-          <TerminalCallCard
-            toolName={tool.toolName}
-            status={tool.status}
-            command={tool.arguments?.command as string | undefined}
-            args={tool.arguments}
-            display={tool.display}
-            result={tool.result}
-            error={tool.error}
-            reason={tool.reason}
-            retryable={tool.retryable}
-            resultData={tool.resultData}
-          />
-        ) : tool.status === "running" ? (
-          <ToolCallCard
-            toolName={tool.toolName}
-            status="running"
-            args={tool.arguments}
-            display={tool.display}
-            requestSummary={tool.requestSummary}
-            resultData={tool.resultData}
-            onOpenFile={(path) => {
-              void openFileInEditor(path);
-            }}
-          />
-        ) : (
-          <ToolCallCard
-            toolName={tool.toolName}
-            status={tool.status}
-            error={tool.error}
-            args={tool.arguments}
-            display={tool.display}
-            resultSummary={tool.resultSummary}
-            result={tool.result}
-            reason={tool.reason}
-            retryable={tool.retryable}
-            requestSummary={tool.requestSummary}
-            listEntries={tool.listEntries}
-            emptyLabel={tool.emptyLabel}
-            resultData={tool.resultData}
-            onOpenFile={(path) => {
-              void openFileInEditor(path);
-            }}
-          />
-        );
-        return <div key={tool.eventId} className={widthClass}>{card}</div>;
-      })}
+      {turnItem.entries.map((entry) => (
+        // 以稳定 key 配合下方 memo 包裹的 TimelineEntry：
+        // 当投影器保证「未变化条目沿用旧引用」时，父组件每帧重渲染只会真正重算
+        // 内容/引用变化的那一条目（如流式追加的 assistant 块），其余条目被 React 跳过。
+        // tool 条目优先用 callId 作 key：entry.item.eventId 在 running→completed 时会
+        // 从 started 事件 id 变为 finished 事件 id（projector 行 259），若直接作 key 会导致
+        // 工具完成瞬间 React 卸载旧 TimelineEntry、挂载新实例，重置 ToolCallCard 展开态。
+        // 用 callId 可保证 key 在条目整个生命周期内恒定。
+        <TimelineEntry
+          key={entry.kind === "tool" ? entry.item.callId ?? entry.item.eventId : entry.eventId}
+          entry={entry}
+          onOpenFile={handleOpenFile}
+        />
+      ))}
     </div>
   );
 }
+
+/**
+ * 单条 timeline 条目的渲染单元，使用 React.memo 包裹。
+ *
+ * 设计目的：TurnTimelineImpl 在流式期每帧都会因 forceRender 重渲染并重建 entries 数组，
+ * 但投影器保证「内容未变化」的条目沿用旧引用。把单条目渲染抽成独立 memo 组件后，
+ * 父重渲染时只要 entry 引用/内容不变（浅比较命中），React 会直接跳过该条目，
+ * 不会重新执行内部 ThinkingBlock / AgentMessage 等渲染与 Markdown 解析逻辑，
+ * 从源头消除「历史流每帧重复解析已完成块」的卡顿。
+ */
+const TimelineEntry = memo(function TimelineEntry({
+  entry,
+  onOpenFile,
+}: {
+  entry: TurnTimelineEntry;
+  onOpenFile: (path: string) => void;
+}) {
+  // 所有 timeline 条目统一限宽 content 令牌，与用户消息、输入栏保持宽度对齐，
+  // 避免 diff/write 工具卡片单独 breakout 导致右侧参差不齐。
+  const widthClass = "mx-auto w-full min-w-0 max-w-content";
+
+  if (entry.kind === "thinking") {
+    // 过滤纯空白与极短无意义内容（至少 2 个字符才值得展示折叠块）
+    const trimmed = entry.content.trim();
+    if (trimmed.length >= 2) {
+      logInfo("thinking_rendered", {
+        module: "TurnTimeline",
+        event_id: entry.eventId,
+        content_len: entry.content.length,
+        trimmed_len: trimmed.length,
+      });
+      return (
+        <div className={widthClass}>
+          <ThinkingBlock content={entry.content} streaming={entry.streaming} />
+        </div>
+      );
+    }
+    logWarn("thinking_filtered_out", {
+      module: "TurnTimeline",
+      event_id: entry.eventId,
+      content_len: entry.content.length,
+      trimmed_len: trimmed.length,
+      reason: "content too short (<2 chars), block hidden",
+    });
+    return null;
+  }
+  if (entry.kind === "assistant") {
+    return entry.content.length > 0 ? (
+      <div className={widthClass}>
+        <AgentMessage content={entry.content} streaming={entry.streaming} />
+      </div>
+    ) : null;
+  }
+  if (entry.kind === "status") {
+    return (
+      <div className={widthClass}>
+        <StatusBadge eventType={entry.eventType} payload={entry.payload} />
+      </div>
+    );
+  }
+  const tool = entry.item;
+  const card = tool.display?.expandLayout === "terminal" ? (
+    <TerminalCallCard
+      toolName={tool.toolName}
+      status={tool.status}
+      command={tool.arguments?.command as string | undefined}
+      args={tool.arguments}
+      display={tool.display}
+      result={tool.result}
+      error={tool.error}
+      reason={tool.reason}
+      retryable={tool.retryable}
+      resultData={tool.resultData}
+    />
+  ) : tool.status === "running" ? (
+    <ToolCallCard
+      toolName={tool.toolName}
+      status="running"
+      args={tool.arguments}
+      display={tool.display}
+      requestSummary={tool.requestSummary}
+      resultData={tool.resultData}
+      onOpenFile={onOpenFile}
+    />
+  ) : (
+    <ToolCallCard
+      toolName={tool.toolName}
+      status={tool.status}
+      error={tool.error}
+      args={tool.arguments}
+      display={tool.display}
+      resultSummary={tool.resultSummary}
+      result={tool.result}
+      reason={tool.reason}
+      retryable={tool.retryable}
+      requestSummary={tool.requestSummary}
+      listEntries={tool.listEntries}
+      emptyLabel={tool.emptyLabel}
+      resultData={tool.resultData}
+      onOpenFile={onOpenFile}
+    />
+  );
+  return <div className={widthClass}>{card}</div>;
+});
 
 /**
  * 单轮 timeline 渲染组件（memo 包裹）。

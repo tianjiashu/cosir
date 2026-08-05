@@ -35,6 +35,8 @@ def test_snapshot_record_defaults_and_roundtrip(isolated_storage):
     assert row.stable == 0
     assert row.status == "pending"
     assert row.reverted_at == ""
+    assert row.additions == 0
+    assert row.deletions == 0
 
 
 def test_orm_column_defaults_without_value_object(isolated_storage):
@@ -105,6 +107,8 @@ def test_existing_db_migration_sets_status_pending(isolated_storage):
     assert row.stable == 0
     assert row.status == "pending"
     assert row.reverted_at == ""
+    assert row.additions == 0
+    assert row.deletions == 0
     assert row.status in {"pending", "kept", "reverted"}
 
 
@@ -861,3 +865,118 @@ def test_changes_api_revert_file(isolated_storage, api_client):
     assert resp.status_code == 200
     assert resp.json()["files"][0]["status"] == "reverted"
     assert (ws / "del.txt").read_text(encoding="utf-8") == "recover-me"
+
+
+# ---------------------------------------------------------------------------
+# diff 增删行统计（additions / deletions）
+# ---------------------------------------------------------------------------
+
+
+def test_change_diff_stats_modified():
+    """modified 文件按 before/after 逐行 diff 统计增删。"""
+    from app.tools.tool_execute.tool_scheduler import _change_diff_stats
+
+    stats = _change_diff_stats(
+        [
+            {
+                "path": "a.py",
+                "status": "modified",
+                "before": "line1\nkeep\nline3\n",
+                "after": "line1\nkeep\nline3-new\nline4\n",
+            }
+        ]
+    )
+    assert stats == [(2, 1)]  # 增 line3-new/line4，删 line3
+
+
+def test_change_diff_stats_added_and_deleted():
+    """added 全计新增、deleted 全计删除。"""
+    from app.tools.tool_execute.tool_scheduler import _change_diff_stats
+
+    stats = _change_diff_stats(
+        [
+            {
+                "path": "new.txt",
+                "status": "added",
+                "before": "",
+                "after": "a\nb\nc\n",
+            },
+            {
+                "path": "gone.txt",
+                "status": "deleted",
+                "before": "x\ny\n",
+                "after": "",
+            },
+        ]
+    )
+    assert stats == [(3, 0), (0, 2)]
+
+
+def test_change_diff_stats_moved_is_zero():
+    """moved 不计增删（0/0）。"""
+    from app.tools.tool_execute.tool_scheduler import _change_diff_stats
+
+    stats = _change_diff_stats(
+        [
+            {
+                "path": "src.py",
+                "new_path": "dst.py",
+                "status": "moved",
+                "before": "same\n",
+                "after": "same\n",
+            }
+        ]
+    )
+    assert stats == [(0, 0)]
+
+
+def test_query_change_set_carries_diff_stats(isolated_storage):
+    """query_change_set 透传每文件的 additions / deletions。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    FileSnapshotCrud().save(
+        FileSnapshotRecord(
+            turn_id="turn1",
+            tool_call_id="call1",
+            tool_name="write_file",
+            path="a.txt",
+            action="modified",
+            op_json="{}",
+            seq=0,
+            stable=1,
+            additions=2,
+            deletions=4,
+        )
+    )
+
+    files = change_set_service.query_change_set("task1").files
+    assert len(files) == 1
+    assert files[0].additions == 2
+    assert files[0].deletions == 4
+
+
+def test_changes_api_returns_diff_stats(isolated_storage, api_client):
+    """GET /changes 响应含 additions / deletions 字段。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    FileSnapshotCrud().save(
+        FileSnapshotRecord(
+            turn_id="turn1",
+            tool_call_id="call1",
+            tool_name="write_file",
+            path="a.txt",
+            action="modified",
+            op_json="{}",
+            seq=0,
+            stable=1,
+            additions=2,
+            deletions=4,
+        )
+    )
+
+    resp = api_client.get("/tasks/task1/changes")
+    assert resp.status_code == 200
+    assert resp.json()["files"][0]["additions"] == 2
+    assert resp.json()["files"][0]["deletions"] == 4

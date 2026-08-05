@@ -1,74 +1,76 @@
 /**
- * 变更集 Tab 组件。
+ * 变更集面板组件。
  *
  * 组合检查点选择、批量工具栏与单行文件条目，提供 task 级文件变更的查看、
- * 保留与撤销交互。数据与操作来自 ``useChanges`` hook。
+ * 单文件保留 / 撤销与批量保留 / 撤销交互。数据与操作来自 ``useChanges`` hook。
+ *
+ * 设计取舍：仅展示 ``status === 'pending'`` 的文件——保留 / 撤销完成后该文件从面板
+ * 消失（符合用户「保留即清空、撤销即清空」的心智模型）。后端仍返回全量状态以利排查，
+ * 前端按需过滤。
+ *
+ * 该面板为纯内容体，被对话上方折叠区的 ChangesDrawer 复用；其高度 / 容器由调用方通过
+ * ``className`` 决定（当前主入口为 ChangesDrawer，不再由 RightPanel 包裹）。
  *
  * @module components/right-panel/ChangesTab
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { ChangeFileRow } from "@/components/right-panel/ChangeFileRow";
 import { ChangeCheckpointSelect } from "@/components/right-panel/ChangeCheckpointSelect";
 import { ChangesToolbar } from "@/components/right-panel/ChangesToolbar";
 import { VirtualList } from "@/lib/virtual/VirtualList";
 import { useChanges } from "@/hooks/useChanges";
 
-/** ChangesTab 组件属性。 */
-interface ChangesTabProps {
+/** ChangesPanel 组件属性。 */
+interface ChangesPanelProps {
   /** 当前任务标识；为 null 时不加载。 */
   taskId: string | null;
+  /** 自定义外层容器类名（Drawer 内需要去掉 h-full，改为自适应高度）。 */
+  className?: string;
 }
 
 /**
- * 变更集 Tab。
+ * 变更集面板主体（无卡片容器）。
+ *
+ * 组合检查点选择、批量工具栏与单行文件条目，提供 task 级文件变更的查看、
+ * 单文件保留 / 撤销与批量保留 / 撤销交互。数据与操作来自 ``useChanges`` hook。
+ *
+ * 设计为可复用的纯内容体，由对话上方的 ``ChangesDrawer`` 折叠区复用，
+ * 避免与折叠容器重复实现交互逻辑。
  *
  * @param props - 组件属性。
- * @returns 变更集 Tab 内容。
+ * @returns 变更集面板内容。
  */
-export function ChangesTab({ taskId }: ChangesTabProps) {
-  const { changeSet, checkpoint, setCheckpoint, revert, keep, refresh, loading, error } =
+export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
+  const { changeSet, checkpoint, setCheckpoint, revert, keep, loading, error } =
     useChanges(taskId);
-
-  // 多选状态：每次变更集整体替换后清空选中，避免残留已不存在的路径。
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    setSelected(new Set());
-  }, [changeSet]);
-
-  const toggleSelect = useCallback((path: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
-
-  const keepSelected = useCallback(() => {
-    if (selected.size === 0) {
-      return;
-    }
-    void keep([...selected]);
-  }, [keep, selected]);
-
-  const revertSelected = useCallback(() => {
-    if (selected.size === 0) {
-      return;
-    }
-    void revert([...selected]);
-  }, [revert, selected]);
 
   const keepOne = useCallback((path: string) => void keep([path]), [keep]);
   const revertOne = useCallback((path: string) => void revert([path]), [revert]);
 
-  const files = changeSet?.files ?? [];
+  // 仅展示 pending 文件：保留 / 撤销完成后该行从面板消失（保持「保留即清空」心智模型）。
+  // 用 useMemo 收敛引用，配合 memo 化的 ChangeFileRow 避免大列表整列重渲染。
+  const files = useMemo(
+    () => (changeSet?.files ?? []).filter((file) => file.status === "pending"),
+    [changeSet]
+  );
+
+  const keepAll = useCallback(() => {
+    if (files.length === 0) {
+      return;
+    }
+    void keep(files.map((file) => file.path));
+  }, [keep, files]);
+
+  const revertAll = useCallback(() => {
+    if (files.length === 0) {
+      return;
+    }
+    void revert(files.map((file) => file.path));
+  }, [revert, files]);
 
   return (
-    <div className="flex h-full flex-col gap-2 p-3">
+    <div className={className ?? "flex h-full flex-col gap-2 p-3"}>
       <div className="space-y-2 border-b border-border pb-2">
         <ChangeCheckpointSelect
           checkpoints={changeSet?.checkpoints ?? []}
@@ -76,10 +78,9 @@ export function ChangesTab({ taskId }: ChangesTabProps) {
           onChange={setCheckpoint}
         />
         <ChangesToolbar
-          selectedCount={selected.size}
-          onKeepSelected={keepSelected}
-          onRevertSelected={revertSelected}
-          onRefresh={() => void refresh()}
+          hasFiles={files.length > 0}
+          onKeepAll={keepAll}
+          onRevertAll={revertAll}
         />
       </div>
 
@@ -100,16 +101,10 @@ export function ChangesTab({ taskId }: ChangesTabProps) {
           items={files}
           getKey={(file) => file.path}
           renderItem={(file) => (
-            <ChangeFileRow
-              file={file}
-              selected={selected.has(file.path)}
-              onToggleSelect={toggleSelect}
-              onKeep={keepOne}
-              onRevert={revertOne}
-            />
+            <ChangeFileRow file={file} onKeep={keepOne} onRevert={revertOne} />
           )}
           className="min-h-0 flex-1"
-          estimateSize={44}
+          estimateSize={32}
         />
       )}
     </div>

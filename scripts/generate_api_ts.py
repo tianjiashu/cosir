@@ -22,6 +22,8 @@ API_PATH_TEMPLATES: Mapping[str, str] = {
     "/workspaces": "/workspaces",
     "/workspaces/{workspace_id}": "/workspaces/${workspaceId}",
     "/workspaces/{workspace_id}/tasks": "/workspaces/${workspaceId}/tasks",
+    "/workspaces/{workspace_id}/events/stream": "/workspaces/${workspaceId}/events/stream",
+    "/workspaces/{workspace_id}/events/prepare": "/workspaces/${workspaceId}/events/prepare",
     "/tasks/{task_id}": "/tasks/${taskId}",
     "/tasks/{task_id}/turns": "/tasks/${taskId}/turns",
     "/tasks/{task_id}/events": "/tasks/${taskId}/events",
@@ -57,6 +59,9 @@ from app.api.schemas.response.LogQueryResponse import LogQueryResponse  # noqa: 
 from app.api.schemas.response.TaskResponse import TaskResponse  # noqa: E402
 from app.api.schemas.response.TurnResponse import TurnResponse  # noqa: E402
 from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse  # noqa: E402
+from app.api.schemas.response.WorkspacePrepareResponse import (  # noqa: E402
+    WorkspacePrepareResponse,
+)
 from app.models.enums.turn_status import TurnStatus  # noqa: E402
 
 
@@ -81,7 +86,7 @@ def main() -> None:
     write(
         "workspace.ts",
         render_module(
-            [WorkspaceResponse],
+            [WorkspaceResponse, WorkspacePrepareResponse],
             "workspace",
             aliases={"WorkspaceRecord": "WorkspaceResponse"},
         ),
@@ -204,6 +209,7 @@ def render_api_types() -> str:
             render_interface(DeleteTaskResponse),
             'export type TaskResponse = import("./task").TaskRecord;',
             'export type WorkspaceResponse = import("./workspace").WorkspaceRecord;',
+            'export type WorkspacePrepareResponse = import("./workspace").WorkspacePrepareResponse;',
             'export type TurnResponse = import("./turn").TurnRecord;',
             'export type ChangeSet = import("./changes").ChangeSet;',
             'export type ChangeFile = import("./changes").ChangeFile;',
@@ -324,6 +330,8 @@ export const API_PATHS = {
   WORKSPACES: "/workspaces",
   WORKSPACE_DETAIL: (workspaceId: string) => `/workspaces/${workspaceId}`,
   WORKSPACE_TASKS: (workspaceId: string) => `/workspaces/${workspaceId}/tasks`,
+  WORKSPACE_EVENT_STREAM: (workspaceId: string) => `/workspaces/${workspaceId}/events/stream`,
+  WORKSPACE_EVENT_PREPARE: (workspaceId: string) => `/workspaces/${workspaceId}/events/prepare`,
   TASK_DETAIL: (taskId: string) => `/tasks/${taskId}`,
   TASK_TURNS: (taskId: string) => `/tasks/${taskId}/turns`,
   TASK_EVENTS: (taskId: string) => `/tasks/${taskId}/events`,

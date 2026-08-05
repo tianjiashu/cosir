@@ -8,7 +8,7 @@
  */
 
 import { CheckCircle2, XCircle, Ban, Clock, Cpu, Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Caption } from "@/components/ui/tokens";
 import { cn } from "@/lib/utils";
@@ -48,7 +48,7 @@ function formatDuration(ms: number): string {
  * 当收到终态事件（run_finished / run_failed / run_cancelled）时，
  * 在消息流底部渲染醒目的状态标签，帮助用户快速了解任务结果。
  */
-export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
+export const StatusBadge = memo(function StatusBadge({ eventType, payload }: StatusBadgeProps) {
   const config = FINAL_STATUS_CONFIG[eventType];
 
   if (!config) return null;
@@ -101,7 +101,7 @@ export function StatusBadge({ eventType, payload }: StatusBadgeProps) {
       </div>
     </div>
   );
-}
+});
 
 /** 可复制展示的 Langfuse trace ID。 */
 function CopyableTraceId({ traceId }: { traceId: string }) {

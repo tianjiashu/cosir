@@ -32,8 +32,8 @@ def test_startup_success_sets_singleton(monkeypatch):
     recorded: list[object] = []
     fake = _FakeSupervisor(fail=False)
 
-    monkeypatch.setattr("app.workspace_event.CodeGraphKernelSupervisor", lambda: fake)
-    monkeypatch.setattr("app.workspace_event.set_kernel_supervisor", lambda s: recorded.append(s))
+    monkeypatch.setattr("app.codegraph.CodeGraphKernelSupervisor", lambda: fake)
+    monkeypatch.setattr("app.codegraph.set_kernel_supervisor", lambda s: recorded.append(s))
 
     result = asyncio.run(_start_codegraph_kernel())
 
@@ -47,8 +47,8 @@ def test_startup_failure_degrades_not_raise(monkeypatch):
     recorded: list[object] = []
     fake = _FakeSupervisor(fail=True)
 
-    monkeypatch.setattr("app.workspace_event.CodeGraphKernelSupervisor", lambda: fake)
-    monkeypatch.setattr("app.workspace_event.set_kernel_supervisor", lambda s: recorded.append(s))
+    monkeypatch.setattr("app.codegraph.CodeGraphKernelSupervisor", lambda: fake)
+    monkeypatch.setattr("app.codegraph.set_kernel_supervisor", lambda s: recorded.append(s))
 
     # 不应抛异常
     result = asyncio.run(_start_codegraph_kernel())
@@ -66,7 +66,7 @@ def test_startup_always_registers_singleton(monkeypatch):
 
     # 用真实 set_kernel_supervisor + 假 supervisor，验证单例被设置
     fake = _FakeSupervisor(fail=False)
-    monkeypatch.setattr("app.workspace_event.CodeGraphKernelSupervisor", lambda: fake)
+    monkeypatch.setattr("app.codegraph.CodeGraphKernelSupervisor", lambda: fake)
 
     asyncio.run(_start_codegraph_kernel())
 

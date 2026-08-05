@@ -5,9 +5,10 @@
  * - OutputsTab：Outputs 列表（任务产生的修改文件、文档）
  * - SourcesTab：Sources 列表（引用文档、上下文片段、规则文件）
  * - ContextBlock：上下文引用占位
- * - ConversationTraceBlock：当前对话 trace 诊断入口
  * - McpBlock：MCP 入口占位
  * - SubagentBlock：subagent 分组占位
+ *
+ * 变更集（Changes）已从右侧栏移出，改由中央对话区上方的 ChangesDrawer 折叠呈现。
  *
  * 第一版使用静态 mock 数据。
  *
@@ -17,15 +18,12 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { FileText, GitCompareArrows, Link2 } from "lucide-react";
+import { FileText, Link2 } from "lucide-react";
 import { OutputsTab, type OutputItem } from "@/components/right-panel/OutputsTab";
 import { SourcesTab, type SourceItem } from "@/components/right-panel/SourcesTab";
-import { ChangesTab } from "@/components/right-panel/ChangesTab";
 import { ContextBlock } from "@/components/right-panel/ContextBlock";
-import { ConversationTraceBlock } from "@/components/right-panel/ConversationTraceBlock";
 import { McpBlock } from "@/components/right-panel/McpBlock";
 import { SubagentBlock } from "@/components/right-panel/SubagentBlock";
-import { useTaskStore } from "@/stores/taskStore";
 
 /** Mock Outputs 数据（第一版静态数据）。 */
 const MOCK_OUTPUTS: OutputItem[] = [
@@ -61,25 +59,15 @@ const MOCK_SOURCES: SourceItem[] = [
 ];
 
 /**
- * RightPanel 组件属性。
- */
-interface RightPanelProps {
-  /** 打开日志页面。 */
-  onOpenLogs: () => void;
-}
-
-/**
  * 右侧信息面板组件。
  *
  * 宽度由外层可拖拽 Panel 决定（本组件撑满容器），
- * 通过 Tabs 切换 Outputs/Sources，底部展示预留扩展区块。
+ * 通过 Tabs 切换 Outputs/Sources，展示各标签页内容。
+ * 注意：Changes 已移至中央对话区上方的 ChangesDrawer，本面板不再含 Changes Tab。
  *
- * @param props - 组件属性。
  * @returns 右侧信息面板。
  */
-export function RightPanel({ onOpenLogs }: RightPanelProps) {
-  const activeTaskId = useTaskStore((state) => state.activeTaskId);
-
+export function RightPanel() {
   return (
     <aside className="flex h-full w-full min-w-0 flex-col bg-background">
       <Tabs defaultValue="outputs" className="flex h-full flex-col">
@@ -95,10 +83,6 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
             <Link2 className="h-3.5 w-3.5 shrink-0" />
             Sources
           </TabsTrigger>
-          <TabsTrigger value="changes" className="min-w-0 flex-1 gap-1.5 truncate text-xs">
-            <GitCompareArrows className="h-3.5 w-3.5 shrink-0" />
-            Changes
-          </TabsTrigger>
         </TabsList>
 
         {/* 内容区：可滚动 */}
@@ -108,10 +92,6 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
             <ScrollArea className="h-full scrollbar-thin">
               <div className="space-y-1 p-2">
                 <OutputsTab items={MOCK_OUTPUTS} />
-
-                <Separator className="my-3" />
-
-                <ConversationTraceBlock onOpenLogs={onOpenLogs} />
 
                 <Separator className="my-3" />
               </div>
@@ -131,13 +111,6 @@ export function RightPanel({ onOpenLogs }: RightPanelProps) {
                 <McpBlock />
                 <SubagentBlock />
               </div>
-            </ScrollArea>
-          </TabsContent>
-
-          {/* Changes Tab：task 级文件变更集 */}
-          <TabsContent value="changes" className="mt-0 h-full">
-            <ScrollArea className="h-full scrollbar-thin">
-              <ChangesTab taskId={activeTaskId} />
             </ScrollArea>
           </TabsContent>
         </div>
