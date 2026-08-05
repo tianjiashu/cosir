@@ -5,7 +5,7 @@ CRUD 收口在 ``app.storage.crud.file_snapshot_crud``，值对象在
 ``app.models.file_snapshot_record``。
 """
 
-from sqlalchemy import Index, Integer, Text
+from sqlalchemy import Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -16,6 +16,10 @@ class FileSnapshotModel(StorageBase):
 
     每条记录对应一次文件写/改/删操作的反向 V4A 操作（已序列化的
     ``PatchOperation``），回退时按 ``seq`` 逆序 apply 即还原该 turn 的磁盘副作用。
+
+    ``stable`` 标记该变更是否已稳定：所属 turn 运行中落库为 0（不展示、不可撤销），
+    turn 结束时置 1 才进入 task 级变更集。``status`` 为用户对该文件最新变更的处理态，
+    取 ``pending`` / ``kept`` / ``reverted`` 三态之一。
     """
 
     __tablename__ = "file_snapshots"
@@ -29,3 +33,15 @@ class FileSnapshotModel(StorageBase):
     action: Mapped[str] = mapped_column(Text, nullable=False)
     op_json: Mapped[str] = mapped_column(Text, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 变更是否已稳定：所属 turn 结束时置 1，运行中落库为 0（运行中不展示、不可撤销）。
+    stable: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    # 用户对该文件最新变更的处理态：pending / kept / reverted。
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default=text("'pending'")
+    )
+    # 撤销时间（仅 status=reverted 时有值），用于排查；非 reverted 时为空字符串。
+    reverted_at: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("''")
+    )

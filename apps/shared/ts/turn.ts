@@ -11,7 +11,8 @@ export type TurnStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "reverted";
 
 export interface TurnRecord {
   turn_id: string;

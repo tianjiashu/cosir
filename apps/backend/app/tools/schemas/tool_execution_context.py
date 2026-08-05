@@ -30,7 +30,7 @@ class ToolExecutionContext:
             task_id: 当前执行所属的任务标识符。
             workspace: 解析出的工作区记录；其 ``root_path`` 即工具边界基准根。
             turn_id: 当前执行所属的轮次标识；用于把文件操作快照关联到具体 turn，
-                供 Turn 回退（``turn_revert_service``）按 turn 精准还原。缺省为空
+                供 task 级变更集（``change_set_service``）按文件精准还原。缺省为空
                 字符串，表示未携带轮次上下文（如非 turn 驱动的一次性执行）。
 
         返回:

@@ -131,6 +131,24 @@ def init_storage() -> None:
         checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
 
 
+def main_engine() -> Engine:
+    """返回主库引擎（进程级单例）。
+
+    参数:
+        无。
+
+    返回:
+        主库 SQLAlchemy 引擎。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+
+    副作用:
+        无。
+    """
+    return _require(_state.main_engine, "main_engine")
+
+
 def main_session_factory() -> sessionmaker[Session]:
     """返回主库 session 工厂（进程级单例）。
 

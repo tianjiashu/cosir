@@ -2,8 +2,8 @@
 
 把一次 turn 内文件工具（write_file / patch / delete / move）成功执行产生的
 ``display_data["changes"]``（采集层事实快照）转换为「反向 V4A 操作」列表，落库后
-供 Turn 回退（``turn_revert_service``）用 ``apply_all_with_diff`` 逆向应用，将文件
-还原到该 turn 执行前的状态。
+供 task 级变更集（``change_set_service``）用 ``apply_all_with_diff`` 逆向应用，将文件
+还原到该变更执行前的状态。
 
 设计边界：
 - 只做「采集快照 → 反向 PatchOperation」的纯转换，不读写文件、不关心工具权限。
@@ -146,12 +146,20 @@ def reverse_v4a_operation(forward: PatchOperation) -> PatchOperation:
     # UPDATE：after ↔ before 对调；content 携 forward.reverse_content（before 原文），
     # 供 apply_all_with_diff 整文件覆盖还原，正确处理「after 为空（整文件清空）/
     # before 为空（整文件新增）」等场景，避免 fuzzy 空 search 跳过导致虚假成功。
-    reversed_hunks = [_reverse_update_hunk(hunk) for hunk in forward.hunks]
+    before = (
+        forward.reverse_content
+        if forward.reverse_content is not None
+        else _hunk_to_content(forward.hunks)
+    )
     return PatchOperation(
         operation=OperationType.UPDATE,
         file_path=forward.file_path,
-        hunks=reversed_hunks,
-        content=forward.reverse_content,
+        # 保留正向 hunks 仅供审计/回显，apply 侧只依赖 content 做整文件覆盖还原，
+        # 不读取 hunks（patch_apply UPDATE 分支 content 非 None 时直接返回）。
+        # 注意：未来若对反向 UPDATE 调 validate_all，其 hunk fuzzy 校验会用正向方向
+        # 的 hunks 匹配磁盘 after 态，可能失败；当前 revert_file 不调 validate_all。
+        hunks=forward.hunks,
+        content=before,
     )
 
 

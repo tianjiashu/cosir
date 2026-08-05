@@ -26,7 +26,12 @@ from app.core.runtime.runtime_operations import RuntimeOperations
 from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry
 from app.models import TaskRecord, TurnRecord
 from app.models.enums.event_type import EventType
-from app.models.payload import RunCancelledPayload, RunFailedPayload, RunStartedPayload
+from app.models.payload import (
+    FileChangeStablePayload,
+    RunCancelledPayload,
+    RunFailedPayload,
+    RunStartedPayload,
+)
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.runtime_event import RuntimeEvent
 from app.models.runtime_message import RuntimeMessage
@@ -36,6 +41,7 @@ from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
+from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.schemas import ToolExecutionContext
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
@@ -355,6 +361,7 @@ class AgentRuntime:
             if recorder is not None:
                 recorder.flush()
             await self._persist_turn_trajectory(turn.turn_id)
+            await self._publish_stable_file_changes(task_id, turn.turn_id)
             return
         except Exception as exc:
             self._turn_service.update_turn_status(turn.turn_id, "failed", end_reason=str(exc))
@@ -509,6 +516,54 @@ class AgentRuntime:
                 },
             )
 
+    async def _publish_stable_file_changes(self, task_id: str, turn_id: str) -> None:
+        """把本 turn 的文件快照标记为已稳定，并逐条广播 file_change_stable 事件。
+
+        turn 结束意味着其内所有工具调用已定稿，此时变更才对用户可见、可撤销。
+        事件仅广播（不持久化到 ``runtime_events`` 表）：它只是展示侧增量通知，
+        数据源在 ``file_snapshots`` 表，前端可靠 ``GET /tasks/{id}/changes`` 全量校准。
+
+        参数:
+            task_id: 所属任务标识。
+            turn_id: 刚结束的轮次标识。
+
+        返回:
+            无。
+
+        异常:
+            无。变更集广播属展示侧增强，任何失败都不应让已成功的 turn 被判为失败，
+            故整体捕获并记 warning；前端仍可靠全量查询校准。
+
+        副作用:
+            把该 turn 的 file_snapshots 行置 stable=1；向事件总线广播若干事件。
+        """
+        try:
+            crud = FileSnapshotCrud()
+            if crud.mark_stable_by_turn(turn_id) == 0:
+                return
+            for snapshot in crud.list_stable_by_turns([turn_id]):
+                self._publish_runtime_event(
+                    self._record(
+                        EventType.FILE_CHANGE_STABLE,
+                        task_id,
+                        FileChangeStablePayload(
+                            task_id=task_id,
+                            turn_id=turn_id,
+                            path=snapshot.path,
+                            action=snapshot.action,
+                        ),
+                        turn_id=turn_id,
+                    )
+                )
+        except Exception:
+            log.warning(
+                "file_change_stable_publish_failed",
+                extra={
+                    "msg": "变更集稳定标记或事件广播失败，不影响 turn 结果",
+                    "data": {"task_id": task_id, "turn_id": turn_id},
+                },
+            )
+
     def backend_health(self) -> dict:
         """Return backend model configuration and availability summary."""
 
@@ -585,9 +640,7 @@ class AgentRuntime:
                 },
             )
             return None
-        return ToolExecutionContext.from_workspace(
-            task.task_id, workspace, turn_id=turn_id
-        )
+        return ToolExecutionContext.from_workspace(task.task_id, workspace, turn_id=turn_id)
 
     def _build_operations(
         self,

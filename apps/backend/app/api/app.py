@@ -119,6 +119,7 @@ install_http_exception_logging(app, log)
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.turns_api")
+importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.agents_api")
 

@@ -550,6 +550,162 @@
         }
       }
     },
+    "/tasks/{task_id}/changes": {
+      "get": {
+        "summary": "Get Changes",
+        "description": "查询某 task 的累积文件变更集。\n\n参数:\n    task_id: 任务标识。\n    checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。\n\n返回:\n    ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当 checkpoint 不属于该 task 时。\n\n副作用:\n    只读查询。",
+        "operationId": "get_changes_tasks__task_id__changes_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "checkpoint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Checkpoint"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/changes/keep": {
+      "post": {
+        "summary": "Keep Changes",
+        "description": "把一批文件的最新变更标记为「保留」。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。\n\n异常:\n    HTTPException(404): 当任一路径没有已稳定变更时。\n\n副作用:\n    改写 ``file_snapshots`` 的 status。",
+        "operationId": "keep_changes_tasks__task_id__changes_keep_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeSetActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/changes/revert": {
+      "post": {
+        "summary": "Revert Changes",
+        "description": "撤销一批文件的最新变更，把它们还原到变更之前。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当任一路径没有已稳定变更时。\n    HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。\n\n副作用:\n    修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at。",
+        "operationId": "revert_changes_tasks__task_id__changes_revert_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeSetActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/logs/query": {
       "get": {
         "summary": "Query Logs",
@@ -778,6 +934,112 @@
         ],
         "title": "AgentProfileResponse",
         "description": "校验并序列化单个已注册 agent 的元信息。\n\n字段与 ``AgentProfile.to_dict()`` 保持一致，供前端渲染 agent 选择器与说明。\n\n参数:\n    agent_id: 稳定的 Agent 标识。\n    role: 人类可读的 Agent 角色。\n    goal: 注入到模型上下文中的运行目标。\n    allowed_tools: 该 Agent 允许使用的工具名或权限名。\n    context_policy: 该 Agent 的上下文处理策略名称。\n    workflow: 该 Agent 使用的执行策略标识。\n    model_name: 该 Agent 使用的模型名称。\n    max_steps: 单轮最大执行步数。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "ChangeCheckpointResponse": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "turn_seq": {
+            "type": "integer",
+            "title": "Turn Seq"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "turn_seq",
+          "label"
+        ],
+        "title": "ChangeCheckpointResponse",
+        "description": "检查点响应项。"
+      },
+      "ChangeFileResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "last_tool_call_id": {
+            "type": "string",
+            "title": "Last Tool Call Id"
+          },
+          "last_turn_id": {
+            "type": "string",
+            "title": "Last Turn Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "action",
+          "status",
+          "last_tool_call_id",
+          "last_turn_id"
+        ],
+        "title": "ChangeFileResponse",
+        "description": "文件变更响应项。"
+      },
+      "ChangeSetActionRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paths"
+        ],
+        "title": "ChangeSetActionRequest",
+        "description": "对一批文件执行撤销或保留的请求体。\n\n参数:\n    paths: 相对 workspace 的文件路径列表，至少一项；长度为 1 即单文件操作。"
+      },
+      "ChangeSetResponse": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeCheckpointResponse"
+            },
+            "type": "array",
+            "title": "Checkpoints"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeFileResponse"
+            },
+            "type": "array",
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "checkpoints",
+          "files"
+        ],
+        "title": "ChangeSetResponse",
+        "description": "某 task 的累积变更集响应。"
       },
       "CreateTaskRequest": {
         "properties": {

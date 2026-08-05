@@ -23,6 +23,7 @@ export type RuntimeEventType =
   | "tool_call_finished"
   | "observation_added"
   | "final_response"
+  | "file_change_stable"
   | "human_input_requested"
   | "human_input_received";
 
@@ -110,7 +111,6 @@ export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {
   tool_call_id?: string | null;
   arguments?: Record<string, unknown> | null;
   display?: Record<string, unknown> | null;
-  request_summary?: Record<string, unknown> | null;
 }
 
 export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
@@ -118,8 +118,6 @@ export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
   tool_name: string;
   status: "success" | "error";
   tool_call_id: string;
-  result_summary?: Record<string, unknown> | Record<string, unknown>[] | null;
-  summary?: string | null;
   content?: string | null;
   error?: string;
   reason?: string;
@@ -140,6 +138,13 @@ export interface FinalResponsePayload extends RuntimeEventPayloadObject {
   text: string;
   step_id: string;
   status: "completed";
+}
+
+export interface FileChangeStablePayload extends RuntimeEventPayloadObject {
+  task_id: string;
+  turn_id: string;
+  path: string;
+  action: string;
 }
 
 export interface HumanInputRequestedPayload extends RuntimeEventPayloadObject {
@@ -170,6 +175,7 @@ export interface RuntimeEventPayloadMap {
   tool_call_finished: ToolCallFinishedPayload;
   observation_added: ObservationAddedPayload;
   final_response: FinalResponsePayload;
+  file_change_stable: FileChangeStablePayload;
   human_input_requested: HumanInputRequestedPayload;
   human_input_received: HumanInputReceivedPayload;
 }
