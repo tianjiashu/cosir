@@ -216,9 +216,10 @@ coding-agent/
 
 进入代码开发后，必须遵守 `rules/Agent代码开发规范.md`（通用）与 `rules/Python代码开发规范.md`（Python 专属）。摘要如下：
 
+- **第零铁律（最高优先级）：以「方便项目稳定迭代」为最终目标**。所有下述条款都是手段不是目的；当「最小改动 / 零新增依赖」等默认偏好损害长期可维护性时，允许做结构性大改动、允许引入成熟外部依赖。但「不重复造轮子」是不可解除的底线——禁止为「显得敢改」而手写本可复用的通用复杂能力。各质量维度（正确性、可排查性、复用、单一职责、结构清晰、可读性、改动聚焦、性能）同等重要，不设固定优先级链，冲突时以本铁律为最终判据。
 - 单一职责：一个文件只做一件事，按职责而非行数判定。
 - 不重复造轮子：能用成熟方案就不自己写。
-- 改动最小化：改一行能解决的不改十行。
+- 改动聚焦（默认偏好，非刚性）：改一行能解决的不改十行；但当结构性重构对长期迭代更优时，可扩大改动面（见第零铁律）。
 - 目录结构清晰：开发过程中可持续拆分文件/目录；目标是不看代码，只看目录就知道能力模块与职责边界。
 - 可排查日志：系统中必须存在可排查问题的日志文件。
 - 函数 docstring：每个函数必须有完整 docstring，且随函数修改同步更新。
@@ -255,15 +256,15 @@ coding-agent/
 常用命令：
 
 ```bash
-codegraph status
-codegraph files
-codegraph explore "要理解的模块、符号、文件或问题"
-codegraph node "符号名或文件路径"
-codegraph callers "函数或方法名"
-codegraph callees "函数或方法名"
-codegraph impact "准备修改的符号名"
-codegraph affected <changed-file>
-codegraph sync
+workspace_event status
+workspace_event files
+workspace_event explore "要理解的模块、符号、文件或问题"
+workspace_event node "符号名或文件路径"
+workspace_event callers "函数或方法名"
+workspace_event callees "函数或方法名"
+workspace_event impact "准备修改的符号名"
+workspace_event affected <changed-file>
+workspace_event sync
 ```
 
 使用要求：
