@@ -22,6 +22,10 @@
  * 注意：本组件只展示 status === 'pending' 的文件（由 ChangesPanel 过滤），故无需处理
  * kept / reverted 的视觉态——保留 / 撤销动作完成后该行会从列表移除。
  *
+ * 运行中态（``turnRunning``）：该文件所属 turn 仍在运行，变更为中间态结果。此时
+ * 保留 / 撤销按钮**依然可用**（支持运行中撤销），但行首显示脉冲圆点、撤销按钮提示语
+ * 改为说明「后续工具可能再次修改该文件」，避免用户误以为撤销后不会再变化。
+ *
  * @module components/right-panel/ChangeFileRow
  */
 
@@ -29,6 +33,9 @@ import { memo } from "react";
 import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ChangeFile } from "@shared/api";
+
+/** 运行中态下撤销按钮的提示语（说明撤销的是中间态结果）。 */
+const RUNNING_REVERT_HINT = "撤销（该轮次仍在运行，后续工具可能再次修改此文件）";
 
 /** ChangeFileRow 组件属性。 */
 interface ChangeFileRowProps {
@@ -38,6 +45,8 @@ interface ChangeFileRowProps {
   onKeep: (path: string) => void;
   /** 撤销单个文件（还原磁盘 + 从 pending 列表移除）。 */
   onRevert: (path: string) => void;
+  /** 该文件所属 turn 是否仍在运行（运行中变更为中间态结果）。 */
+  turnRunning?: boolean;
 }
 
 /**
@@ -55,11 +64,20 @@ export const ChangeFileRow = memo(function ChangeFileRow({
   file,
   onKeep,
   onRevert,
+  turnRunning = false,
 }: ChangeFileRowProps) {
   const hasDiff = file.additions > 0 || file.deletions > 0;
+  const revertHint = turnRunning ? RUNNING_REVERT_HINT : "撤销";
 
   return (
     <div className="group/row flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent/50 focus-within:bg-accent/50">
+      {turnRunning && (
+        <span
+          className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+          title="该轮次仍在运行，此变更为中间态结果"
+          aria-label="运行中"
+        />
+      )}
       <p className="min-w-0 flex-1 truncate font-mono text-xs" title={file.path}>
         {file.path}
       </p>
@@ -92,8 +110,8 @@ export const ChangeFileRow = memo(function ChangeFileRow({
           size="sm"
           className="h-6 w-6 p-0"
           onClick={() => onRevert(file.path)}
-          aria-label={`撤销 ${file.path}`}
-          title="撤销"
+          aria-label={`${revertHint} ${file.path}`}
+          title={revertHint}
         >
           <X className="h-3.5 w-3.5" />
         </Button>

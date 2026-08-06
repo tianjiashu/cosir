@@ -24,6 +24,7 @@ export type RuntimeEventType =
   | "observation_added"
   | "final_response"
   | "file_change_stable"
+  | "file_change_updated"
   | "human_input_requested"
   | "human_input_received"
   | "workspace_preparing"
@@ -150,6 +151,21 @@ export interface FileChangeStablePayload extends RuntimeEventPayloadObject {
   action: string;
 }
 
+export interface FileChangeUpdatedPayload extends RuntimeEventPayloadObject {
+  task_id: string;
+  turn_id: string;
+  path: string;
+  action: string;
+  /** 实时新增行数，来自实际快照（零延迟渲染用）。 */
+  additions: number;
+  /** 实时删除行数，来自实际快照（零延迟渲染用）。 */
+  deletions: number;
+  /** 变更前全文；created 为 null。 */
+  before: string | null;
+  /** 变更后全文；deleted 为 null。 */
+  after: string | null;
+}
+
 export interface HumanInputRequestedPayload extends RuntimeEventPayloadObject {
   prompt: string;
   request_id?: string | null;
@@ -196,6 +212,7 @@ export interface RuntimeEventPayloadMap {
   observation_added: ObservationAddedPayload;
   final_response: FinalResponsePayload;
   file_change_stable: FileChangeStablePayload;
+  file_change_updated: FileChangeUpdatedPayload;
   human_input_requested: HumanInputRequestedPayload;
   human_input_received: HumanInputReceivedPayload;
   workspace_preparing: WorkspacePreparingPayload;

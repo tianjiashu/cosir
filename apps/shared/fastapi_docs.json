@@ -631,7 +631,7 @@
     "/tasks/{task_id}/changes": {
       "get": {
         "summary": "Get Changes",
-        "description": "查询某 task 的累积文件变更集。\n\n参数:\n    task_id: 任务标识。\n    checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。\n\n返回:\n    ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当 checkpoint 不属于该 task 时。\n\n副作用:\n    只读查询。",
+        "description": "查询某 task 的累积文件变更集。\n\n参数:\n    task_id: 任务标识。\n    checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。\n    include_running: 是否纳入运行中（``stable=0``）变更；默认 True，使工具执行中\n        产生的变更可被实时展示与撤销。置 False 可回到「仅已稳定」的旧视图。\n\n返回:\n    ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当 checkpoint 不属于该 task 时。\n\n副作用:\n    只读查询。",
         "operationId": "get_changes_tasks__task_id__changes_get",
         "parameters": [
           {
@@ -657,6 +657,16 @@
                 }
               ],
               "title": "Checkpoint"
+            }
+          },
+          {
+            "name": "include_running",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Include Running"
             }
           }
         ],
@@ -687,7 +697,7 @@
     "/tasks/{task_id}/changes/keep": {
       "post": {
         "summary": "Keep Changes",
-        "description": "把一批文件的最新变更标记为「保留」。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。\n\n异常:\n    HTTPException(404): 当任一路径没有已稳定变更时。\n\n副作用:\n    改写 ``file_snapshots`` 的 status。",
+        "description": "把一批文件的最新变更标记为「保留」。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。\n\n异常:\n    HTTPException(404): 当任一路径没有任何变更快照（含运行中）时。\n    HTTPException(409): 当某快照 ``status`` 已被并发改态（CAS miss，lost update 防护）时。\n\n副作用:\n    改写 ``file_snapshots`` 的 status。",
         "operationId": "keep_changes_tasks__task_id__changes_keep_post",
         "parameters": [
           {
@@ -737,7 +747,7 @@
     "/tasks/{task_id}/changes/revert": {
       "post": {
         "summary": "Revert Changes",
-        "description": "撤销一批文件的最新变更，把它们还原到变更之前。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当任一路径没有已稳定变更时。\n    HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。\n\n副作用:\n    修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at。",
+        "description": "撤销一批文件的最新变更，把它们还原到变更之前。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当任一路径没有任何变更快照时。\n    HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。\n    HTTPException(409): 当某快照 ``status`` 已被并发改态（CAS miss，lost update 防护）时。\n\n副作用:\n    修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at；\n    对每个成功撤销的文件广播 ``file_change_updated`` 事件。",
         "operationId": "revert_changes_tasks__task_id__changes_revert_post",
         "parameters": [
           {

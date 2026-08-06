@@ -11,6 +11,10 @@
  * 该面板为纯内容体，被对话上方折叠区的 ChangesDrawer 复用；其高度 / 容器由调用方通过
  * ``className`` 决定（当前主入口为 ChangesDrawer，不再由 RightPanel 包裹）。
  *
+ * 运行中变更：后端在工具执行完成时即广播 ``file_change_updated``，故本面板会实时出现
+ * 仍在运行的 turn 所产生的变更。此类文件行由 ``turnRunning`` 标出，提示用户撤销的是
+ * 「运行中的中间态结果」，后续工具可能再次修改同一文件。
+ *
  * @module components/right-panel/ChangesTab
  */
 
@@ -20,6 +24,7 @@ import { ChangeCheckpointSelect } from "@/components/right-panel/ChangeCheckpoin
 import { ChangesToolbar } from "@/components/right-panel/ChangesToolbar";
 import { VirtualList } from "@/lib/virtual/VirtualList";
 import { useChanges } from "@/hooks/useChanges";
+import { useTurnStore } from "@/stores/turnStore";
 
 /** ChangesPanel 组件属性。 */
 interface ChangesPanelProps {
@@ -47,6 +52,18 @@ export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
 
   const keepOne = useCallback((path: string) => void keep([path]), [keep]);
   const revertOne = useCallback((path: string) => void revert([path]), [revert]);
+
+  // 运行中 turn 集合：用于标记「该变更对应的轮次仍在运行」，此时撤销的是中间态结果。
+  // selector 只取 store 中的稳定引用（数组本身），Set 的构造放在 useMemo 里，
+  // 避免 selector 每次返回新 Set 引用导致 zustand 无限重渲染。
+  const turns = useTurnStore((s) => s.turnsByTaskId[taskId ?? ""]);
+  const runningTurnIds = useMemo(
+    () =>
+      new Set(
+        (turns ?? []).filter((turn) => turn.status === "running").map((turn) => turn.turn_id),
+      ),
+    [turns],
+  );
 
   // 仅展示 pending 文件：保留 / 撤销完成后该行从面板消失（保持「保留即清空」心智模型）。
   // 用 useMemo 收敛引用，配合 memo 化的 ChangeFileRow 避免大列表整列重渲染。
@@ -101,7 +118,12 @@ export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
           items={files}
           getKey={(file) => file.path}
           renderItem={(file) => (
-            <ChangeFileRow file={file} onKeep={keepOne} onRevert={revertOne} />
+            <ChangeFileRow
+              file={file}
+              onKeep={keepOne}
+              onRevert={revertOne}
+              turnRunning={file.last_turn_id ? runningTurnIds.has(file.last_turn_id) : false}
+            />
           )}
           className="min-h-0 flex-1"
           estimateSize={32}

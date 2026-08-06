@@ -15,6 +15,7 @@ from app.service.task import change_set_service
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.store_engines import close_storage, init_storage, main_engine, main_session_factory
+from app.tools.tool_handler.patch.patch_apply import PatchApplyError
 
 
 def test_snapshot_record_defaults_and_roundtrip(isolated_storage):
@@ -199,6 +200,82 @@ def test_change_set_short_circuits(isolated_storage):
     assert crud.latest_stable_by_path(["turn1"], "nope.txt") is None
 
 
+def test_update_status_cas_matching_updates_and_returns_1(isolated_storage):
+    """CAS：当前 status 等于期望值时更新并返回 1，状态正确落库。"""
+    crud = FileSnapshotCrud()
+    crud.save(
+        FileSnapshotRecord(
+            turn_id="turn1",
+            tool_call_id="call1",
+            tool_name="write_file",
+            path="a.txt",
+            action="modified",
+            op_json="{}",
+            seq=0,
+        )
+    )
+    [snap] = crud.list_by_turn("turn1")
+
+    affected = crud.update_status(snap.id, "kept", expected_statuses=("pending",))
+
+    assert affected == 1
+    [after] = crud.list_by_turn("turn1")
+    assert after.status == "kept"
+
+
+def test_update_status_cas_mismatch_returns_0_and_no_change(isolated_storage):
+    """CAS：当前 status 已不等于期望值时不更新，返回 0，保留并发方的改态。"""
+    crud = FileSnapshotCrud()
+    crud.save(
+        FileSnapshotRecord(
+            turn_id="turn1",
+            tool_call_id="call1",
+            tool_name="write_file",
+            path="a.txt",
+            action="modified",
+            op_json="{}",
+            seq=0,
+        )
+    )
+    [snap] = crud.list_by_turn("turn1")
+    # 模拟并发方已先置为 kept。
+    crud.update_status(snap.id, "kept", expected_statuses=("pending",))
+
+    affected = crud.update_status(snap.id, "reverted", expected_statuses=("pending",))
+
+    assert affected == 0
+    [after] = crud.list_by_turn("turn1")
+    assert after.status == "kept"  # 并发改态未被盲写覆盖
+
+
+def test_keep_file_cas_miss_rejects_when_already_mutated(isolated_storage):
+    """keep_file 遇到 status 已被并发改态（CAS 不匹配）时抛 ChangeSetConflictError。
+
+    该异常是 ``ValueError`` 子类但语义为并发冲突（API 映射 409），区别于「路径无变更」的
+    404；并发方写入的 kept 得以保留（lost update 防护）。
+    """
+    from app.service.task.change_set_service import ChangeSetConflictError
+
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    crud = FileSnapshotCrud()
+    _save(crud, "turn1", "a.txt", 0, stable=1)
+
+    # 模拟并发方（如另一路操作）已先把该行置为 kept。
+    latest = crud.latest_any_by_path(["turn1"], "a.txt")
+    assert latest is not None
+    crud.update_status(latest.id, "kept", expected_statuses=("pending",))
+
+    with pytest.raises(ChangeSetConflictError):
+        change_set_service.keep_file("task1", "a.txt")
+
+    # 行状态保持 kept，未被二次改写。
+    after = crud.latest_any_by_path(["turn1"], "a.txt")
+    assert after is not None
+    assert after.status == "kept"
+
+
 # ---------------------------------------------------------------------------
 # change_set_service：查询编排 + 单文件保留/撤销
 # ---------------------------------------------------------------------------
@@ -348,19 +425,48 @@ def test_query_change_set_rejects_foreign_checkpoint(isolated_storage):
         change_set_service.query_change_set("task1", checkpoint_turn_id="turn_other")
 
 
-def test_query_change_set_hides_unstable(isolated_storage):
-    """运行中（stable=0）的变更不出现在变更集里，稳定后才可见。"""
+def test_query_change_set_hides_unstable_when_excluded(isolated_storage):
+    """``include_running=False`` 时运行中（stable=0）的变更不出现，稳定后才可见。"""
     ws = isolated_storage["tmp_path"] / "ws"
     ws.mkdir()
     _seed_task_turn(ws, "task1", "turn1")
     crud = FileSnapshotCrud()
     _save(crud, "turn1", "a.txt", 0, stable=0)
 
-    assert change_set_service.query_change_set("task1").files == []
+    assert change_set_service.query_change_set("task1", include_running=False).files == []
 
     # 对照组：标记稳定后同一行必须出现，证明上面的空列表来自 stable 过滤而非查不到数据。
     crud.mark_stable_by_turn("turn1")
+    assert [
+        f.path for f in change_set_service.query_change_set("task1", include_running=False).files
+    ] == ["a.txt"]
+
+
+def test_query_change_set_includes_running_by_default(isolated_storage):
+    """默认 ``include_running=True``：运行中的变更即时可见，支撑实时展示。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1", status="running")
+    _save(FileSnapshotCrud(), "turn1", "a.txt", 0, stable=0)
+
     assert [f.path for f in change_set_service.query_change_set("task1").files] == ["a.txt"]
+
+
+def test_query_change_set_running_and_stable_dedupe_by_path(isolated_storage):
+    """同 path 同时存在稳定与运行中条目时，取 seq 最大的运行中那条。
+
+    锁住「运行中条目参与去重、且不被稳定条目盖掉」，否则实时视图会停留在旧内容。
+    """
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    crud = FileSnapshotCrud()
+    _save(crud, "turn1", "a.txt", 0, stable=1)
+    _save(crud, "turn1", "a.txt", 1, stable=0)
+
+    files = change_set_service.query_change_set("task1").files
+    assert [f.path for f in files] == ["a.txt"]
+    assert [f.last_tool_call_id for f in files] == ["call1"]
 
 
 def test_keep_file_marks_kept(isolated_storage):
@@ -396,24 +502,17 @@ def test_keep_file_targets_latest_entry_only(isolated_storage):
 
 
 def test_keep_file_rejects_unknown_path(isolated_storage):
-    """对不存在的路径 keep 抛 ValueError（API 层映射 404）。"""
+    """对不存在的路径 keep 抛 ValueError（API 层映射 404）。
+
+    keep 改用「最新快照（含运行中）」定位后，错误文案同步为 ``no change for path``；
+    「运行中条目可被 keep」由 ``test_keep_file_allows_running_snapshot`` 覆盖。
+    """
     ws = isolated_storage["tmp_path"] / "ws"
     ws.mkdir()
     _seed_task_turn(ws, "task1", "turn1")
 
-    with pytest.raises(ValueError, match="no stable change"):
+    with pytest.raises(ValueError, match="no change for path"):
         change_set_service.keep_file("task1", "missing.txt")
-
-
-def test_keep_file_ignores_unstable_entry(isolated_storage):
-    """未稳定的变更不可被 keep：运行中的工具调用尚未定稿。"""
-    ws = isolated_storage["tmp_path"] / "ws"
-    ws.mkdir()
-    _seed_task_turn(ws, "task1", "turn1")
-    _save(FileSnapshotCrud(), "turn1", "a.txt", 0, stable=0)
-
-    with pytest.raises(ValueError, match="no stable change"):
-        change_set_service.keep_file("task1", "a.txt")
 
 
 def _save_reverse_op(turn_id: str, path: str, seq: int, op: dict, stable: int = 1) -> None:
@@ -688,12 +787,16 @@ async def test_revert_file_records_reverted_at(isolated_storage):
 
 @pytest.mark.asyncio
 async def test_revert_file_rejects_unknown_path(isolated_storage):
-    """撤销不存在的路径抛 ValueError，且不触碰磁盘。"""
+    """撤销不存在的路径抛 ValueError，且不触碰磁盘。
+
+    撤销改用「最新快照（含运行中）」定位后，错误语义由「无稳定变更」变为
+    「该路径无任何变更」，故断言文案同步为 ``no change for path``。
+    """
     ws = isolated_storage["tmp_path"] / "ws"
     ws.mkdir()
     _seed_task_turn(ws, "task1", "turn1")
 
-    with pytest.raises(ValueError, match="no stable change"):
+    with pytest.raises(ValueError, match="no change for path"):
         await change_set_service.revert_file("task1", "missing.txt", workspace_root=ws)
 
 
@@ -747,6 +850,271 @@ def test_file_change_stable_payload_registered():
     )
 
     assert EVENT_PAYLOAD_MODELS[EventType.FILE_CHANGE_STABLE] is FileChangeStablePayload
+
+
+def test_file_change_updated_payload_registered():
+    """``file_change_updated`` 必须注册 payload，否则实时广播构造事件即 KeyError。"""
+    from app.models.enums.event_type import EventType
+    from app.models.payload.file_change_updated_payload import FileChangeUpdatedPayload
+    from app.models.payload.registry.runtime_event_payload_registry import (
+        EVENT_PAYLOAD_MODELS,
+    )
+
+    assert EVENT_PAYLOAD_MODELS[EventType.FILE_CHANGE_UPDATED] is FileChangeUpdatedPayload
+
+
+def test_file_change_updated_publish_carries_realtime_diff(tmp_path):
+    """运行中实时广播的 FILE_CHANGE_UPDATED 事件必须携带实时 diff，供前端零延迟渲染。
+
+    覆盖：additions / deletions / before / after 均按采集快照正确回填，且 before/after
+    在 add/delete 场景按语义为 None（避免事件体冗余携带无关全文）。
+    """
+    from app.models.enums.event_type import EventType
+    from app.models.payload.file_change_updated_payload import FileChangeUpdatedPayload
+    from app.service.tool_execution.tool_execution_service import ToolExecutionService
+    from app.tools.schemas.tool_execution_context import ToolExecutionContext
+    from app.tools.schemas.tool_observation import ToolObservation
+
+    captured: list[tuple[object, object]] = []
+
+    class _FakeBus:
+        def publish(self, event: object) -> None:
+            captured.append((event, None))
+
+    ctx = ToolExecutionContext(
+        task_id="task1",
+        workspace_id="ws1",
+        workspace_root=tmp_path,
+        turn_id="turn1",
+    )
+    observation = ToolObservation(
+        tool_name="patch_tool",
+        status="success",
+        content="ok",
+        data={
+            "changes": [
+                {
+                    "path": "a.txt",
+                    "status": "modified",
+                    "before": "line1\nold\nline3\n",
+                    "after": "line1\nnew\nline3\n",
+                }
+            ]
+        },
+    )
+
+    service = ToolExecutionService(
+        scheduler=None,
+        agent_id="dev",
+        event_bus=_FakeBus(),
+    )
+    service._publish_file_change_updated(ctx, observation)
+
+    assert len(captured) == 1
+    event = captured[0][0]
+    assert event.event_type == EventType.FILE_CHANGE_UPDATED
+    payload: FileChangeUpdatedPayload = event.payload
+    assert payload.path == "a.txt"
+    assert payload.action == "modified"
+    assert payload.additions == 1
+    assert payload.deletions == 1
+    assert payload.before == "line1\nold\nline3\n"
+    assert payload.after == "line1\nnew\nline3\n"
+
+
+# ---------------------------------------------------------------------------
+# 运行中撤销 + R6 软冲突防护
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revert_file_allows_running_snapshot(isolated_storage):
+    """运行中（stable=0）的变更也可被撤销：磁盘还原且状态标记为 reverted。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1", status="running")
+    _write(ws, "a.txt", "new-a")
+    _save_reverse_op(
+        "turn1",
+        "a.txt",
+        0,
+        {
+            "operation": "update",
+            "file_path": "a.txt",
+            "new_path": None,
+            "hunks": [
+                {
+                    "lines": [
+                        {"prefix": "-", "content": "new-a"},
+                        {"prefix": "+", "content": "old-a"},
+                    ]
+                }
+            ],
+        },
+        stable=0,
+    )
+
+    entry = await change_set_service.revert_file("task1", "a.txt", workspace_root=ws)
+
+    assert entry.status == "reverted"
+    assert (ws / "a.txt").read_text(encoding="utf-8").rstrip("\n") == "old-a"
+
+
+@pytest.mark.asyncio
+async def test_revert_file_cas_miss_rejects_when_already_mutated(isolated_storage):
+    """revert_file 遇到 status 已被并发改态（CAS 不匹配）时抛 ChangeSetConflictError。
+
+    磁盘处于 after 态（R6 可通过），但落库状态已被并发方改为 kept —— 模拟
+    「磁盘仍可撤销，但状态已非 pending」的并发窗口。CAS 保护的是「状态字段不被盲写」：
+    行数 0 → 抛 ChangeSetConflictError（并发冲突，API 映射 409），并发方写入的 kept
+    得以保留（lost update 防护）。
+    注意：磁盘 apply 发生在状态 CAS 之前，故磁盘已被还原；这正是方案 A（仅状态 CAS）
+    的边界——磁盘与状态的一致性属 TOCTOU 范畴，超出本方案范围（见注释）。
+    """
+    from app.service.task.change_set_service import ChangeSetConflictError
+
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    _write(ws, "a.txt", "new-a")
+    _save_reverse_op(
+        "turn1",
+        "a.txt",
+        0,
+        {
+            "operation": "update",
+            "file_path": "a.txt",
+            "new_path": None,
+            "hunks": [
+                {
+                    "lines": [
+                        {"prefix": "-", "content": "new-a"},
+                        {"prefix": "+", "content": "old-a"},
+                    ]
+                }
+            ],
+        },
+        stable=1,
+    )
+
+    # 模拟并发方已先把该行置为 kept（CAS 期望集合不含 kept → 应拒绝）。
+    crud = FileSnapshotCrud()
+    latest = crud.latest_any_by_path(["turn1"], "a.txt")
+    assert latest is not None
+    crud.update_status(latest.id, "kept", expected_statuses=("pending",))
+
+    with pytest.raises(ChangeSetConflictError):
+        await change_set_service.revert_file("task1", "a.txt", workspace_root=ws)
+
+    # 状态字段未被盲写覆盖：保持并发方写入的 kept（CAS 的 lost update 防护生效）。
+    after = crud.latest_any_by_path(["turn1"], "a.txt")
+    assert after is not None
+    assert after.status == "kept"
+
+
+def test_keep_file_allows_running_snapshot(isolated_storage):
+    """运行中（stable=0）的变更也可被「保留」。
+
+    保留与撤销必须同步放开：变更一旦实时展示，两个按钮都不能报 404。
+    """
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1", status="running")
+    _save(FileSnapshotCrud(), "turn1", "a.txt", 0, stable=0)
+
+    entry = change_set_service.keep_file("task1", "a.txt")
+
+    assert entry.status == "kept"
+    row = FileSnapshotCrud().latest_any_by_path(["turn1"], "a.txt")
+    assert row is not None
+    assert row.status == "kept"
+
+
+@pytest.mark.asyncio
+async def test_revert_file_rejects_manually_modified_file(isolated_storage):
+    """R6：磁盘既非 before 也非 after（用户手改）时拒绝撤销，不覆盖用户内容。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    # Agent 改完态应为 new-a，用户又手动改成了 user-edited。
+    _write(ws, "a.txt", "user-edited")
+    _save_reverse_op(
+        "turn1",
+        "a.txt",
+        0,
+        {
+            "operation": "update",
+            "file_path": "a.txt",
+            "new_path": None,
+            "hunks": [
+                {
+                    "lines": [
+                        {"prefix": "-", "content": "new-a"},
+                        {"prefix": "+", "content": "old-a"},
+                    ]
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(PatchApplyError, match="manually modified"):
+        await change_set_service.revert_file("task1", "a.txt", workspace_root=ws)
+
+    # 用户改动必须原样保留，状态也不得被改写为 reverted。
+    assert (ws / "a.txt").read_text(encoding="utf-8") == "user-edited"
+    row = FileSnapshotCrud().latest_any_by_path(["turn1"], "a.txt")
+    assert row is not None
+    assert row.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_revert_file_is_idempotent_when_already_reverted(isolated_storage):
+    """已处于还原态（before）时重复撤销静默跳过 apply，不报冲突。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    # 磁盘已是 before 态 old-a（上一次撤销已完成，仅状态未落库）。
+    _write(ws, "a.txt", "old-a")
+    _save_reverse_op(
+        "turn1",
+        "a.txt",
+        0,
+        {
+            "operation": "update",
+            "file_path": "a.txt",
+            "new_path": None,
+            "content": "old-a",
+            "hunks": [
+                {
+                    "lines": [
+                        {"prefix": "-", "content": "new-a"},
+                        {"prefix": "+", "content": "old-a"},
+                    ]
+                }
+            ],
+        },
+    )
+
+    entry = await change_set_service.revert_file("task1", "a.txt", workspace_root=ws)
+
+    assert entry.status == "reverted"
+    assert (ws / "a.txt").read_text(encoding="utf-8") == "old-a"
+
+
+def test_changes_api_includes_running_by_default(isolated_storage, api_client):
+    """GET /changes 默认返回运行中变更；include_running=false 时回到仅稳定视图。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1", status="running")
+    _save(FileSnapshotCrud(), "turn1", "a.txt", 0, stable=0)
+
+    resp = api_client.get("/tasks/task1/changes")
+    assert resp.status_code == 200
+    assert [f["path"] for f in resp.json()["files"]] == ["a.txt"]
+
+    resp = api_client.get("/tasks/task1/changes", params={"include_running": "false"})
+    assert resp.status_code == 200
+    assert resp.json()["files"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +1183,58 @@ def test_changes_api_revert_apply_failure_returns_409(isolated_storage, api_clie
             ],
         },
     )
+
+    resp = api_client.post("/tasks/task1/changes/revert", json={"paths": ["a.txt"]})
+    assert resp.status_code == 409
+
+
+def test_changes_api_keep_cas_miss_returns_409(isolated_storage, api_client):
+    """keep 时快照 status 已被并发改态（CAS miss）返回 409，区别于路径不存在的 404。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _seed_task_turn(ws, "task1", "turn1")
+    crud = FileSnapshotCrud()
+    _save(crud, "turn1", "a.txt", 0, stable=1)
+    latest = crud.latest_any_by_path(["turn1"], "a.txt")
+    assert latest is not None
+    # 模拟并发方已先把该行置为 kept。
+    crud.update_status(latest.id, "kept", expected_statuses=("pending",))
+
+    resp = api_client.post("/tasks/task1/changes/keep", json={"paths": ["a.txt"]})
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_changes_api_revert_cas_miss_returns_409(isolated_storage, api_client):
+    """revert 时快照 status 已被并发改态（CAS miss）返回 409，区别于路径不存在的 404。"""
+    ws = isolated_storage["tmp_path"] / "ws"
+    ws.mkdir()
+    _write(ws, "a.txt", "new-a")
+    _seed_task_turn(ws, "task1", "turn1")
+    _save_reverse_op(
+        "turn1",
+        "a.txt",
+        0,
+        {
+            "operation": "update",
+            "file_path": "a.txt",
+            "new_path": None,
+            "hunks": [
+                {
+                    "lines": [
+                        {"prefix": "-", "content": "new-a"},
+                        {"prefix": "+", "content": "old-a"},
+                    ]
+                }
+            ],
+        },
+        stable=1,
+    )
+    crud = FileSnapshotCrud()
+    latest = crud.latest_any_by_path(["turn1"], "a.txt")
+    assert latest is not None
+    # 模拟并发方已先把该行置为 kept。
+    crud.update_status(latest.id, "kept", expected_statuses=("pending",))
 
     resp = api_client.post("/tasks/task1/changes/revert", json={"paths": ["a.txt"]})
     assert resp.status_code == 409

@@ -218,30 +218,3 @@ def _before_after_to_hunk(before: str, after: str) -> Hunk:
     hunk_lines: list[HunkLine] = [HunkLine(prefix="-", content=line) for line in before_lines]
     hunk_lines.extend(HunkLine(prefix="+", content=line) for line in after_lines)
     return Hunk(lines=hunk_lines)
-
-
-def _reverse_update_hunk(hunk: Hunk) -> Hunk:
-    """对调 UPDATE hunk 中 '-'（删除）与 '+'（新增）行的语义，保留上下文行。
-
-    反向语义（基于采集 diff 对调）：
-    - 原 ``-X``（被删行）→ 回退时要把 X 加回 → 变为 ``+X``。
-    - 原 ``+Y``（新增行）→ 回退时要把 Y 删掉 → 变为 ``-Y``。
-    - 原 `` ctx``（上下文）→ 保留为上下文。
-
-    查找文本变为原 after，替换文本变为原 before。
-
-    参数:
-        hunk: 正向 UPDATE hunk。
-
-    返回:
-        反向 UPDATE hunk：``-``/``+`` 语义对调，上下文行不变。
-    """
-    reversed_lines: list[HunkLine] = []
-    for line in hunk.lines:
-        if line.prefix == "-":
-            reversed_lines.append(HunkLine(prefix="+", content=line.content))
-        elif line.prefix == "+":
-            reversed_lines.append(HunkLine(prefix="-", content=line.content))
-        else:
-            reversed_lines.append(line)
-    return Hunk(lines=reversed_lines)

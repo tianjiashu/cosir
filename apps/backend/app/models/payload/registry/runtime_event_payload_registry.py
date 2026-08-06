@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 from app.models.enums.event_type import EventType
 from app.models.payload.file_change_stable_payload import FileChangeStablePayload
+from app.models.payload.file_change_updated_payload import FileChangeUpdatedPayload
 from app.models.payload.final_response_payload import FinalResponsePayload
 from app.models.payload.human_input_received_payload import HumanInputReceivedPayload
 from app.models.payload.human_input_requested_payload import HumanInputRequestedPayload
@@ -41,6 +42,7 @@ EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
     EventType.OBSERVATION_ADDED: ObservationAddedPayload,
     EventType.FINAL_RESPONSE: FinalResponsePayload,
     EventType.FILE_CHANGE_STABLE: FileChangeStablePayload,
+    EventType.FILE_CHANGE_UPDATED: FileChangeUpdatedPayload,
     EventType.HUMAN_INPUT_REQUESTED: HumanInputRequestedPayload,
     EventType.HUMAN_INPUT_RECEIVED: HumanInputReceivedPayload,
     EventType.WORKSPACE_PREPARING: WorkspacePreparingPayload,

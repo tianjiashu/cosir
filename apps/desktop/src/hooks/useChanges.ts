@@ -5,19 +5,34 @@
  * - 初始全量拉取 + 检查点过滤
  * - 保留 / 撤销单/多文件
  * - 订阅 ``file_change_stable`` SSE 事件，turn 结束时增量触发全量校准
+ * - 订阅 ``file_change_updated`` SSE 事件，工具执行中实时（去抖）刷新运行中变更
  *
- * 设计取舍：SSE 收到 ``file_change_stable`` 后走全量 ``refresh()`` 而非本地增量，
+ * 设计取舍：两类 SSE 事件收到后都走全量 ``refresh()`` 而非本地增量，
  * 避免在前端重复实现「检查点过滤 + 按 path 去重」逻辑（该逻辑已在后端
  * ``change_set_service`` 收敛，前端再写一遍必然漂移）。
+ * ``file_change_updated`` 在工具批量执行时高频到达，故做 ``FILE_CHANGE_UPDATED_DEBOUNCE_MS``
+ * 去抖聚合；``file_change_stable`` 是 turn 终态校准，不去抖以保证最终一致。
+ *
+ * 两类事件 effect 采用「增量游标」遍历 ``taskEvents``：维护 ``stableCursorRef`` /
+ * ``updatedCursorRef`` 记录上次处理到的索引，每帧只遍历新增尾部，避免长会话下事件累积导致的
+ * O(n²) 全量重扫。整体替换的识别同时比对「首事件身份」（``stableFirstEventIdRef`` /
+ * ``updatedFirstEventIdRef``）：``setEvents`` 经排序/合并后可能在数组头部插入更早的历史事件，
+ * 此时长度可能不减反增，仅靠长度无法识别，故以首事件 ``event_id`` 是否变化判定——身份变化即回退
+ * 全量重扫（例如同 task 内 ``openTask(forceRefresh=true)`` 补灌历史）。切 task（``taskId`` 变化）
+ * 时清空已消费集合与游标、重新消费既有事件，避免跨 task 无限累积与遗漏。
  *
  * @module hooks/useChanges
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChangeSet } from "@shared/api";
+import type { ChangeSet, ChangeFile } from "@shared/api";
+import type { FileChangeUpdatedPayload } from "@shared/events";
 import { useEventStore, selectEventsForTask } from "../stores/eventStore";
 import * as api from "../services/api";
 import { logError } from "../lib/logger";
+
+/** 运行中文件变更事件去抖刷新的静默窗口（毫秒）。 */
+const FILE_CHANGE_UPDATED_DEBOUNCE_MS = 600;
 
 /**
  * 变更集 Hook 返回值接口。
@@ -58,10 +73,32 @@ export function useChanges(taskId: string | null): UseChangesReturn {
   const taskIdRef = useRef<string | null>(taskId);
   taskIdRef.current = taskId;
   // 已触发 refresh 的 stable 事件 id 集合，避免历史已消费的 stable 重复触发全量刷新。
+  // 切 task（taskId 变化）时清空，避免跨 task 无限累积导致内存随会话增长。
   const consumedStableEventIdsRef = useRef<Set<string>>(new Set());
   // 标记当前 taskId 是否已完成「历史 stable 消费」：初始 refresh 由 taskId-effect 承担，
   // 因此首次遇到非空事件列表时先把既有 stable 全部消费进 set，此后仅对新增 stable 触发刷新。
   const initializedTaskIdRef = useRef<string | null>(null);
+  // 已消费的 file_change_updated 事件 id 集合；该事件不持久化、仅 SSE 实时推送，
+  // 每个未消费的 updated 触发一次去抖全量刷新（运行中实时展示增量变更）。
+  // 切 task 时清空，避免跨 task 无限累积（event_id 全局唯一，不清空也无害，但为内存考虑清空）。
+  const consumedUpdatedEventIdsRef = useRef<Set<string>>(new Set());
+  // 标记当前 taskId 是否已完成「历史 updated 消费」：与 stable 对称。updated 不持久化、历史
+  // 回放不含，故正常场景不会命中；但在同 task 内 forceRefresh 补灌且实时已累积较多事件时，
+  // 该分支可避免把「游标之前位置的既有 updated」跳过，保证预览/去抖不遗漏。
+  const updatedInitializedTaskIdRef = useRef<string | null>(null);
+  // file_change_updated 去抖定时器；避免工具批量执行时高频事件导致连续全量刷新。
+  const updatedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // file_change_stable 增量遍历游标：记录上次处理到的 taskEvents 索引，仅遍历新增尾部。
+  // taskEvents 被整体替换（长度小于游标，或首事件身份变化）时回退为 0 做全量重扫。
+  const stableCursorRef = useRef(0);
+  // file_change_updated 增量遍历游标：语义同 stableCursorRef，用于 updated 事件增量处理。
+  const updatedCursorRef = useRef(0);
+  // file_change_stable 已处理区间的首个事件 event_id：用于识别「头部插入」式整体替换
+  // （setEvents 经排序/合并后可能在数组头部插入更早的历史事件，此时长度可能不减反增，
+  // 仅比长度无法识别，必须靠首事件身份）。身份变化则回退全量重扫，避免漏处理历史插入事件。
+  const stableFirstEventIdRef = useRef<string | null>(null);
+  // file_change_updated 首事件身份游标：语义同 stableFirstEventIdRef，用于 updated 事件。
+  const updatedFirstEventIdRef = useRef<string | null>(null);
 
   /**
    * 全量拉取当前 task 的变更集，整体替换本地状态。
@@ -106,21 +143,43 @@ export function useChanges(taskId: string | null): UseChangesReturn {
     if (!taskId) {
       consumedStableEventIdsRef.current = new Set();
       initializedTaskIdRef.current = null;
+      stableCursorRef.current = 0;
+      stableFirstEventIdRef.current = null;
       return;
     }
     const consumed = consumedStableEventIdsRef.current;
-    // 该 taskId 首次见到非空事件列表：消费全部既有 stable，不触发刷新。
-    if (initializedTaskIdRef.current !== taskId && taskEvents.length > 0) {
-      for (const event of taskEvents) {
-        if (event.event_type === "file_change_stable" && event.payload.task_id === taskId) {
-          consumed.add(event.event_id);
+    // 增量遍历起点：默认沿用上次游标；切 task（taskId 变化）或整体替换时回退全量。
+    const firstEventId = taskEvents[0]?.event_id ?? null;
+    let start = stableCursorRef.current;
+    const replaced =
+      start < 0 ||
+      taskEvents.length < start ||
+      (firstEventId !== null && firstEventId !== stableFirstEventIdRef.current);
+    // 切 task（taskId 变化）：清空当前 task 的已消费集合与游标，重新消费既有 stable（不触发刷新，
+    // 数据由初始全量 refresh 覆盖），并回退全量重扫后续新增。
+    // 注意：用 clear() 保留同一 Set 引用（consumed 与 ref 指向同一对象），不可用 new Set() 替换。
+    if (initializedTaskIdRef.current !== taskId) {
+      consumedStableEventIdsRef.current.clear();
+      if (taskEvents.length > 0) {
+        for (const event of taskEvents) {
+          if (event.event_type === "file_change_stable" && event.payload.task_id === taskId) {
+            consumedStableEventIdsRef.current.add(event.event_id);
+          }
         }
       }
       initializedTaskIdRef.current = taskId;
+      stableCursorRef.current = 0;
+      stableFirstEventIdRef.current = firstEventId;
+      start = 0;
+    } else if (replaced) {
+      // 同 task 内整体替换（重连补灌 / 头部插入历史）：回退全量重扫；历史已在 consumed 中，
+      // 仅对未消费的（新增或补灌）触发刷新，不会重复处理既有。
+      start = 0;
     }
     // 仅对 set 中未消费的 stable 触发刷新，循环内只触发一次。
     let shouldRefresh = false;
-    for (const event of taskEvents) {
+    for (let i = start; i < taskEvents.length; i++) {
+      const event = taskEvents[i];
       if (
         event.event_type === "file_change_stable" &&
         event.payload.task_id === taskId &&
@@ -130,10 +189,137 @@ export function useChanges(taskId: string | null): UseChangesReturn {
         shouldRefresh = true;
       }
     }
+    stableCursorRef.current = taskEvents.length;
+    stableFirstEventIdRef.current = firstEventId;
     if (shouldRefresh) {
       void refresh();
     }
   }, [taskEvents, taskId, refresh]);
+
+  /**
+   * 把单条 file_change_updated 的 diff 即时合并进本地变更集（零延迟预览）。
+   *
+   * 以 path 为键 upsert：已存在则原地更新 diff，不存在则追加一行 pending 文件。
+   * 该预览在去抖全量刷新到达后被权威数据整体替换，不会长期漂移。
+   *
+   * 参数:
+   *   payload - 文件变更实时更新负载，含 path / action / additions / deletions / before / after。
+   */
+  const applyUpdatedDiff = useCallback((payload: FileChangeUpdatedPayload) => {
+    const currentTaskId = taskIdRef.current;
+    if (!currentTaskId) {
+      return;
+    }
+    setChangeSet((prev) => {
+      const base: ChangeSet =
+        prev ?? { task_id: currentTaskId, checkpoints: [], files: [] };
+      const files = base.files.slice();
+      const idx = files.findIndex((f) => f.path === payload.path);
+      const merged: ChangeFile = {
+        path: payload.path,
+        action: payload.action,
+        status: "pending",
+        last_tool_call_id: "",
+        last_turn_id: payload.turn_id,
+        additions: payload.additions,
+        deletions: payload.deletions,
+      };
+      if (idx >= 0) {
+        files[idx] = { ...files[idx], ...merged };
+      } else {
+        files.push(merged);
+      }
+      return { ...base, files };
+    });
+  }, []);
+
+  // 订阅 file_change_updated：工具执行中每次产生文件变更即实时推送（不持久化，仅 SSE 实时）。
+  // 每个未消费事件先本地即时合并 diff（零延迟渲染），再触发一次去抖全量刷新做最终校准，
+  // 聚合高频批量变更，避免连续刷屏。数据源以后端 changes 接口为准，本地合并仅是即时预览。
+  useEffect(() => {
+    if (!taskId) {
+      // 切到无 task（卸载/task 置空）：清理 pending 去抖定时器，避免对空 task 发起多余刷新。
+      if (updatedDebounceRef.current) {
+        clearTimeout(updatedDebounceRef.current);
+        updatedDebounceRef.current = null;
+      }
+      consumedUpdatedEventIdsRef.current = new Set();
+      updatedInitializedTaskIdRef.current = null;
+      updatedCursorRef.current = 0;
+      updatedFirstEventIdRef.current = null;
+      return;
+    }
+    const consumed = consumedUpdatedEventIdsRef.current;
+    // 增量遍历起点：默认沿用上次游标；切 task（taskId 变化）或整体替换时回退全量。
+    const firstEventId = taskEvents[0]?.event_id ?? null;
+    let start = updatedCursorRef.current;
+    const replaced =
+      start < 0 ||
+      taskEvents.length < start ||
+      (firstEventId !== null && firstEventId !== updatedFirstEventIdRef.current);
+    // 切 task（taskId 变化）：清空当前 task 的已消费集合与游标，重新消费既有 updated（不触发刷新，
+    // 数据将由初始全量 refresh 覆盖），并回退全量重扫后续新增。
+    // 注意：用 clear() 保留同一 Set 引用（consumed 与 ref 指向同一对象），不可用 new Set() 替换。
+    if (updatedInitializedTaskIdRef.current !== taskId) {
+      // 切 task 前清理旧 task 的 pending 去抖定时器，避免其用新 taskId 触发多余 fetchChangeSet。
+      if (updatedDebounceRef.current) {
+        clearTimeout(updatedDebounceRef.current);
+        updatedDebounceRef.current = null;
+      }
+      consumedUpdatedEventIdsRef.current.clear();
+      if (taskEvents.length > 0) {
+        for (const event of taskEvents) {
+          if (event.event_type === "file_change_updated" && event.payload.task_id === taskId) {
+            consumedUpdatedEventIdsRef.current.add(event.event_id);
+          }
+        }
+      }
+      updatedInitializedTaskIdRef.current = taskId;
+      updatedCursorRef.current = 0;
+      updatedFirstEventIdRef.current = firstEventId;
+      start = 0;
+    } else if (replaced) {
+      // 同 task 内整体替换（重连补灌 / 头部插入历史）：回退全量重扫；历史已在 consumed 中，
+      // 仅对未消费的（新增或补灌）即时合并，不会重复处理既有。
+      start = 0;
+    }
+    let shouldSchedule = false;
+    for (let i = start; i < taskEvents.length; i++) {
+      const event = taskEvents[i];
+      if (
+        event.event_type === "file_change_updated" &&
+        event.payload.task_id === taskId &&
+        !consumed.has(event.event_id)
+      ) {
+        consumed.add(event.event_id);
+        shouldSchedule = true;
+        // 即时合并：把该事件的 diff 直接写入本地变更集，工具返回即显示，不等去抖刷新。
+        applyUpdatedDiff(event.payload as FileChangeUpdatedPayload);
+      }
+    }
+    updatedCursorRef.current = taskEvents.length;
+    updatedFirstEventIdRef.current = firstEventId;
+    if (!shouldSchedule) {
+      return;
+    }
+    if (updatedDebounceRef.current) {
+      clearTimeout(updatedDebounceRef.current);
+    }
+    updatedDebounceRef.current = setTimeout(() => {
+      updatedDebounceRef.current = null;
+      void refresh();
+    }, FILE_CHANGE_UPDATED_DEBOUNCE_MS);
+  }, [taskEvents, taskId, refresh, applyUpdatedDiff]);
+
+  // 卸载时清理未触发的去抖定时器，避免组件销毁后仍触发 refresh 导致的状态更新与无效请求。
+  useEffect(() => {
+    return () => {
+      if (updatedDebounceRef.current) {
+        clearTimeout(updatedDebounceRef.current);
+        updatedDebounceRef.current = null;
+      }
+    };
+  }, []);
 
   /**
    * 切换检查点并触发刷新。

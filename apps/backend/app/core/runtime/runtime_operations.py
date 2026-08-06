@@ -10,6 +10,7 @@ from app.core.context.runtime_context_builder import RuntimeContextBuilder
 from app.models import RuntimeMessage, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
+from app.service.depends import get_runtime_event_bus
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
@@ -78,6 +79,7 @@ class RuntimeOperations:
             tool_definitions=self.model_tools,
             trace_recorder=tool_trace_recorder,
             should_cancel=self.is_current_turn_cancelled,
+            event_bus=get_runtime_event_bus(),
         )
 
         log.info(

@@ -170,6 +170,9 @@ class AgentRuntime:
                     turn_id=turn_id,
                 )
             )
+            # 取消即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
+            # 使运行后变更能立即展示与撤销。同步调用（cancel_turn 非 async）。
+            self._mark_stable_file_changes(turn_id)
         except RuntimeError:
             log.exception(
                 "turn_cancelled_event_persist_failed",
@@ -365,6 +368,9 @@ class AgentRuntime:
             return
         except Exception as exc:
             self._turn_service.update_turn_status(turn.turn_id, "failed", end_reason=str(exc))
+            # 失败即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
+            # 使运行后变更能展示与撤销。同步调用（此处非 await 上下文）。
+            self._mark_stable_file_changes(turn.turn_id)
             log.exception(
                 "task_failed",
                 extra={
@@ -420,6 +426,8 @@ class AgentRuntime:
                     "data": {"turn_id": turn_id, "end_reason": "client_disconnected"},
                 },
             )
+            # 客户端断开致 failed，同样收口快照为稳定，保证变更可见与可撤销。
+            self._mark_stable_file_changes(turn_id)
         except Exception:
             log.exception(
                 "turn_disconnect_mark_failed",
@@ -516,6 +524,36 @@ class AgentRuntime:
                 },
             )
 
+    def _mark_stable_file_changes(self, turn_id: str) -> None:
+        """把某 turn 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。
+
+        抽离为同步方法，以便终态路径（成功/失败/取消/客户端断开）无论是否处于
+        async 上下文都能调用：失败与取消分支在同步方法内无法 ``await`` 广播，
+        故本方法只做落库标记，广播交由 ``_publish_stable_file_changes``（仅成功路径）。
+
+        参数:
+            turn_id: 刚结束的轮次标识。
+
+        返回:
+            无。
+
+        异常:
+            无。快照收口属展示侧增强，失败不应影响 turn 主流程，故整体捕获并记 warning。
+
+        副作用:
+            把该 turn 的 file_snapshots 行置 stable=1。
+        """
+        try:
+            FileSnapshotCrud().mark_stable_by_turn(turn_id)
+        except Exception:
+            log.warning(
+                "file_change_mark_stable_failed",
+                extra={
+                    "msg": "运行中快照收口为稳定失败，不影响 turn 结果",
+                    "data": {"turn_id": turn_id},
+                },
+            )
+
     async def _publish_stable_file_changes(self, task_id: str, turn_id: str) -> None:
         """把本 turn 的文件快照标记为已稳定，并逐条广播 file_change_stable 事件。
 
@@ -538,8 +576,9 @@ class AgentRuntime:
             把该 turn 的 file_snapshots 行置 stable=1；向事件总线广播若干事件。
         """
         try:
+            self._mark_stable_file_changes(turn_id)
             crud = FileSnapshotCrud()
-            if crud.mark_stable_by_turn(turn_id) == 0:
+            if not crud.list_stable_by_turns([turn_id]):
                 return
             for snapshot in crud.list_stable_by_turns([turn_id]):
                 self._publish_runtime_event(
