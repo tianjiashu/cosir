@@ -21,7 +21,6 @@ from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
-from app.service.task.turn_prepare_service import TurnPrepareService
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 from app.service.task.workspace_service import WorkspaceService
@@ -180,25 +179,6 @@ def get_turn_workspace_resolver() -> TurnWorkspaceResolver:
     """
 
     return service_depends.get_turn_workspace_resolver()
-
-
-def get_turn_prepare_service() -> TurnPrepareService | None:
-    """返回进程级 turn 索引准备 service；CodeGraph 不可用时返回 None。
-
-    参数:
-        无。
-
-    返回:
-        TurnPrepareService 实例；CodeGraph Kernel 不可用时返回 None（降级到文件搜索）。
-
-    异常:
-        RuntimeError: 若存储初始化失败。
-
-    副作用:
-        尝试从 supervisor 取得 Kernel client。
-    """
-
-    return service_depends.get_turn_prepare_service()
 
 
 def get_workspace_event_bus() -> WorkspaceEventBus:

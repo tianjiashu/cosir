@@ -5,8 +5,8 @@
 
 职责边界：
 - 负责：按 turn.task_id 取 task、按 task.workspace_id 取 workspace，返回 workspace.root_path。
-- 不负责：索引准备（归 CodeGraphLifecycleService）、turn 状态管理（归 TurnService）、
-  事件发布（归 TurnPrepareService / API 层）。
+- 不负责：索引准备（归 CodeGraphLifecycleService / CodeGraphIndexPrepareHook）、
+  turn 状态管理（归 TurnService）、事件发布（归 workspace 创建即索引链路）。
 """
 
 from app.models import TurnRecord

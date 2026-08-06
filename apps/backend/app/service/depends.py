@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
     from app.service.log_query_service import LogQueryService
     from app.service.task.task_service import TaskService
-    from app.service.task.turn_prepare_service import TurnPrepareService
     from app.service.task.turn_service import TurnService
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
@@ -335,38 +334,6 @@ def get_turn_workspace_resolver() -> TurnWorkspaceResolver:
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 
     return TurnWorkspaceResolver()
-
-
-def get_turn_prepare_service() -> TurnPrepareService | None:
-    """Return the turn prepare service, or None if CodeGraph is unavailable.
-
-    因依赖 Kernel 进程状态（可能后启动/重启/不可用），不做缓存；每次构造轻量。
-    CodeGraph 不可用时返回 None，调用方（API 层）据此跳过索引准备直接执行
-    （降级到文件搜索，方案二 §五）。
-
-    参数:
-        无。
-
-    返回:
-        TurnPrepareService 实例；CodeGraph Kernel 不可用时返回 None。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        尝试从 supervisor 取得 Kernel client。
-    """
-
-    from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
-    from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
-    from app.service.task.turn_prepare_service import TurnPrepareService
-
-    try:
-        client = get_kernel_supervisor().get_client()
-    except (RuntimeError, CodeGraphKernelUnavailableError):
-        # supervisor 未初始化或 Kernel 未就绪：禁用索引准备，降级到文件搜索。
-        return None
-    return TurnPrepareService(CodeGraphLifecycleService(client))
 
 
 @lru_cache(maxsize=1)

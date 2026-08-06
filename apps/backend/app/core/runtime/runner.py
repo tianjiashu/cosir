@@ -24,6 +24,8 @@ from app.core.observability import (
 from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry
+from app.hook.hook_event import HookEvent
+from app.hook.hook_interceptor import HookInterceptor
 from app.models import TaskRecord, TurnRecord
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
@@ -330,8 +332,13 @@ class AgentRuntime:
             )
             return
 
+        # UserPromptSubmit 挂接：本轮已被成功认领后触发。首版 deny 不阻断主流程
+        # （turn 已认领，硬中断需额外终态收敛，侵入面过大，见 Hook机制技术方案.md §4.2）；
+        # 无内置实现，空订阅下 fire 零开销放行。统一经 HookInterceptor 收口。
+        await HookInterceptor.fire_run_event(HookEvent.USER_PROMPT_SUBMIT, task, turn)
+
         # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
-        # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorExit），终态都只由本连接决定。
+        # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorError），终态都只由本连接决定。
         try:
             yield await emit(
                 self._record(
@@ -365,6 +372,9 @@ class AgentRuntime:
                 recorder.flush()
             await self._persist_turn_trajectory(turn.turn_id)
             await self._publish_stable_file_changes(task_id, turn.turn_id)
+            # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
+            # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
+            await HookInterceptor.fire_run_event(HookEvent.STOP, task, turn)
             return
         except Exception as exc:
             self._turn_service.update_turn_status(turn.turn_id, "failed", end_reason=str(exc))

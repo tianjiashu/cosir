@@ -40,6 +40,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
+from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import close_service_dependencies, initialize_service_dependencies
 from app.tools.tool_system import ToolSystem
 
@@ -88,8 +89,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # 否则 supervisor 未初始化，_codegraph_client() 恒返回 None，工具恒降级（审查暴露）。
     _kernel_supervisor = await _start_codegraph_kernel()
 
+    # Hook 注册表初始化（启动期单线程播种，必须在 ToolScheduler 首次触发拦截前完成，
+    # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
+    from app.hook.hook_registry import initialize_hook_registry
+
+    initialize_hook_registry()
+
     if runtime_override is None:
-        tool_system = tool_system or ToolSystem.build_tool_system(_codegraph_client())
+        tool_system = tool_system or ToolSystem.build_tool_system(
+            _codegraph_client(),
+        )
         set_tool_system(tool_system)
         set_agent_registry(build_agent_registry())
         runtime = build_runtime(tool_system=tool_system)
@@ -97,16 +106,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     else:
         if tool_system is not None:
             set_tool_system(tool_system)
-        # 覆写路径：从 runtime 取出其持有的 registry 同步到进程级单例，
-        # 保证 GET /agents 与执行引擎共享同一份目录。
+        # 覆写路径（测试专用）：从 runtime_override 取出其持有的 registry 同步到进程级
+        # 单例，保证 GET /agents 与执行引擎共享同一份目录。该分支不调用 build_tool_system，
+        # 但其持有的 ToolScheduler 仍会静态调用 HookInterceptor（注册表已初始化时生效）；
+        # 测试若需验证 Hook 应自行保证 HookRegistry 已初始化。
         set_agent_registry(runtime_override.agent_registry)
         set_runtime(runtime_override)
         runtime = runtime_override
+
+    # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
+    # 统一经 HookInterceptor 收口。
+    HookInterceptor.fire_session_event("SessionStart")
 
     _mark_boot_ready()
     try:
         yield
     finally:
+        # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
+        HookInterceptor.fire_session_event("SessionEnd")
         if _kernel_supervisor is not None:
             _kernel_supervisor.shutdown()
         flush_langfuse()
@@ -169,7 +186,8 @@ async def _start_codegraph_kernel() -> CodeGraphKernelSupervisor | None:
 
     启动失败不阻断后端启动：异常仅记录日志，supervisor 仍通过 ``set_kernel_supervisor``
     设为进程级单例（state 为 failed），使 ``get_client()`` 抛 ``CodeGraphKernelUnavailableError``，
-    由 service 层（如 ``depends.get_turn_prepare_service``）降级到文件搜索。
+    由 service 层（如 ``CodeGraphIndexPrepareHook`` 内置 Hook 的 ensure_ready 降级分支）
+    降级到文件搜索。
 
     已知延迟：``supervisor.start()`` 内含握手（``client.hello``），极端场景（node 挂起
     无响应）下可能阻塞最多一个 RPC 超时（默认 30s），从而延迟 ``_mark_boot_ready()``。

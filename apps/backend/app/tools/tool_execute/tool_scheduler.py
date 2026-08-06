@@ -6,6 +6,8 @@ import json
 from collections.abc import Callable, Collection
 
 from app.config.logging.logger import log
+from app.hook.hook_event import HookDecision
+from app.hook.hook_interceptor import HookInterceptor
 from app.models.file_snapshot_record import FileSnapshotRecord
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.guard.display_data_budget import DisplayDataBudget
@@ -71,8 +73,7 @@ class ToolScheduler:
             无。
 
         副作用:
-            持有 ``registry``、``state_coordinator`` 和
-            ``executor`` 引用；不触发任何工具执行。
+            持有 ``registry``、``state_coordinator``、``executor`` 引用；不触发任何工具执行。
         """
 
         self._registry = registry
@@ -222,6 +223,26 @@ class ToolScheduler:
                 ),
                 execution_context,
             )
+        # PreToolUse 拦截点（Hook 机制）：参数校验通过后、执行前。
+        # 直接调用 HookInterceptor.before_tool_call 静态方法。硬拒绝时短路返回
+        # tool_error 且不执行工具、不触发 after_tool_call；改写参数时替换
+        # validation.arguments 后再继续。注册表未初始化 / Hook 异常时 HookInterceptor
+        # 兜底放行（失败安全）。
+        decision = HookInterceptor.before_tool_call(tool, execution_context, validation.arguments)
+        if decision.decision == HookDecision.DENY:
+            return self._apply_output_budget(
+                tool_error(
+                    tool.name,
+                    decision.deny_reason or "blocked by pre-tool-use hook",
+                    reason=decision.deny_reason,
+                    permission=tool.permission,
+                    tool_call_id=call.call_id,
+                ),
+                execution_context,
+            )
+        if decision.modified_arguments is not None:
+            validation = dataclasses.replace(validation, arguments=decision.modified_arguments)
+
         # 仅触碰文件系统的工具走文件状态协调（revision/stale/锁）；
         # 非文件工具（如 execute_terminal）直接执行，避免把文件协调机制
         # 错配到无关资源上。
@@ -287,6 +308,7 @@ class ToolScheduler:
                         execution_context,
                     )
                     self._record_file_snapshot(tool, observation, execution_context)
+                    self._fire_after_intercept(tool, execution_context, observation)
             except RuntimeError as exc:
                 return self._apply_output_budget(
                     tool_error(
@@ -314,7 +336,35 @@ class ToolScheduler:
                 output_sink=output_sink,
             )
             self._record_file_snapshot(tool, observation, execution_context)
+            self._fire_after_intercept(tool, execution_context, observation)
         return self._apply_output_budget(observation, execution_context)
+
+    def _fire_after_intercept(
+        self,
+        tool: ToolDefinition,
+        execution_context: ToolExecutionContext | None,
+        observation: ToolObservation,
+    ) -> None:
+        """PostToolUse 拦截点（Hook 机制）：工具真实执行拿到 observation 后触发。
+
+        直接调用 ``HookInterceptor.after_tool_call`` 静态方法（审计切面）。其实现内部已
+        兜底异常（失败安全：审计切面不得影响主流程）。当前 after 决策的拒绝不阻断。
+
+        参数:
+            tool: 已执行工具的定义。
+            execution_context: 工具执行上下文（提供 workspace_id / task_id / turn_id）。
+            observation: 工具执行的归一化结果（``ToolObservation``）。
+
+        返回:
+            无。
+
+        异常:
+            无（异常由 ``HookInterceptor.after_tool_call`` 内部兜底）。
+
+        副作用:
+            触发 ``HookInterceptor.after_tool_call``，进而写入审计日志。
+        """
+        HookInterceptor.after_tool_call(tool, execution_context, observation)
 
     def _record_file_snapshot(
         self,

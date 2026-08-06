@@ -52,12 +52,17 @@ class ToolSystem:
     scheduler: ToolScheduler
 
     @classmethod
-    def build_tool_system(cls, client: CodeGraphKernelClient | None = None) -> "ToolSystem":
+    def build_tool_system(
+        cls,
+        client: CodeGraphKernelClient | None = None,
+    ) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
         按内置清单注册全部 15 个工具定义（9 个既有 + 6 个 CodeGraph 查询工具），并用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
-        构造输出预算上限，装配调度器。
+        构造输出预算上限，装配调度器。工具拦截（Pre/PostToolUse）通过
+        ``app.hook.hook_interceptor.HookInterceptor`` 静态方法直接收口，
+        无需注入拦截器实例。
 
         参数:
             client: 可选的 CodeGraph Kernel RPC 客户端；由调用方（api 装配层）从

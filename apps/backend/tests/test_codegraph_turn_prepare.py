@@ -1,11 +1,16 @@
-"""CodeGraph 第二阶段方案二 turn 准备编排单元测试（对齐方案二 §六验收 6）。
+"""CodeGraph turn 前索引保活迁移后的单元测试。
 
-覆盖：
-- TurnWorkspaceResolver.resolve：turn → task → workspace_path 解析；
-- TurnPrepareService.prepare_then_execute 各分支：就绪（ready）/ 降级（degraded）/
-  跳过（workspace_path=None）；
-- 准备事件经 RuntimeEventService.save_and_publish 发布；
-- EventType 新增 3 事件已注册 payload（registry 完整性）。
+迁移说明：原 ``TurnPrepareService``（turn 前索引准备）已迁移到内置 Hook
+``CodeGraphIndexPrepareHook``（挂载于 ``USER_PROMPT_SUBMIT``，在 run_turn 内部触发）；
+API 层 ``_drive_runtime_turn`` 不再做任何前置准备。本文件覆盖：
+
+- ``TurnWorkspaceResolver.resolve``：turn → task → workspace_path 解析（仍被
+  workspace 创建即索引链路使用，未删除）。
+- ``CodeGraphIndexPrepareHook`` 各分支：无 workspace_id 跳过 / 路径解析失败跳过 /
+  空路径跳过 / CodeGraph 不可用（ready=False）放行 / index_sync 成功记日志 /
+  异常兜底 ALLOW。
+- EventType 新增 3 事件已注册 payload（registry 完整性，workspace lifecycle 事件）。
+- ``_drive_runtime_turn``（API 层直接执行）与 ``_emit_run_failed`` 兜底。
 
 不覆盖：真实 Kernel 进程与索引（归端到端冒烟）。
 """
@@ -13,20 +18,29 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
+from app.hook.builtins.codegraph_index_prepare_hook import (
+    CodeGraphIndexPrepareHook,
+)
+from app.hook.hook_context import HookContext
+from app.hook.hook_event import HookEvent
+from app.hook.hook_registry import HookRegistry
 from app.models.enums.event_type import EventType
 from app.models.payload import EVENT_PAYLOAD_MODELS
-from app.models.payload.workspace_payload.workspace_degraded_payload import WorkspaceDegradedPayload
+from app.models.payload.workspace_payload.workspace_degraded_payload import (
+    WorkspaceDegradedPayload,
+)
 from app.models.payload.workspace_payload.workspace_preparing_payload import (
     WorkspacePreparingPayload,
 )
-from app.models.payload.workspace_payload.workspace_ready_payload import WorkspaceReadyPayload
+from app.models.payload.workspace_payload.workspace_ready_payload import (
+    WorkspaceReadyPayload,
+)
 from app.models.workspace_readiness import WorkspaceReadiness
-from app.service.task.turn_prepare_service import TurnPrepareService
 
 # ----------------------------------------------------------------------
 # 轻量假对象
@@ -68,32 +82,62 @@ class _FakeWorkspaceCrud:
         return self._workspace
 
 
-class _FakeLifecycle:
-    def __init__(self, readiness: WorkspaceReadiness) -> None:
-        self._readiness = readiness
+@dataclass
+class _FakeWorkspaceRecord:
+    workspace_id: str
+    root_path: str
 
-    def ensure_ready(self, _workspace_path: str) -> WorkspaceReadiness:
+
+class _FakeWorkspaceService:
+    def __init__(
+        self, record: _FakeWorkspaceRecord | None = None, raise_on_get: bool = False
+    ) -> None:
+        self._record = record
+        self._raise = raise_on_get
+
+    def get_workspace(self, workspace_id: str) -> _FakeWorkspaceRecord:
+        if self._raise:
+            raise RuntimeError("resolve failed")
+        if self._record is None:
+            raise KeyError("workspace not found")
+        return self._record
+
+
+class _FakeLifecycle:
+    def __init__(self, readiness: WorkspaceReadiness, raise_on_call: bool = False) -> None:
+        self._readiness = readiness
+        self._raise = raise_on_call
+        self.calls: list[str] = []
+
+    def ensure_ready(self, workspace_path: str) -> WorkspaceReadiness:
+        self.calls.append(workspace_path)
+        if self._raise:
+            raise RuntimeError("ensure_ready boom")
         return self._readiness
 
 
-@dataclass
-class _FakeEventService:
-    """记录 save_and_publish 调用的事件服务桩。"""
+def _readiness(ready: bool, action: str = "init", state: str = "ready") -> WorkspaceReadiness:
+    return WorkspaceReadiness(
+        ready=ready,
+        state=state,
+        action_taken=action,
+        files_changed=1,
+        duration_ms=10,
+        degraded_reason=None if ready else "boom",
+    )
 
-    events: list[Any] = field(default_factory=list)
 
-    def save_and_publish(self, event: Any) -> Any:
-        self.events.append(event)
-        return event
-
-
-async def _record_executed(lst: list[bool]) -> None:
-    """execute 回调：记录一次执行。"""
-    lst.append(True)
+def _ctx(workspace_id: str | None = "ws-1", turn_id: str = "turn-1") -> HookContext:
+    return HookContext(
+        event=HookEvent.USER_PROMPT_SUBMIT,
+        workspace_id=workspace_id,
+        task_id="task-1",
+        turn_id=turn_id,
+    )
 
 
 # ----------------------------------------------------------------------
-# TurnWorkspaceResolver
+# TurnWorkspaceResolver（仍被 workspace 创建即索引链路使用）
 # ----------------------------------------------------------------------
 
 
@@ -130,96 +174,92 @@ def test_resolver_no_workspace_id_returns_none():
 
 
 # ----------------------------------------------------------------------
-# TurnPrepareService 分支
+# CodeGraphIndexPrepareHook
 # ----------------------------------------------------------------------
 
 
-def _make_service(
-    readiness: WorkspaceReadiness,
-) -> tuple[TurnPrepareService, _FakeEventService]:
-    events = _FakeEventService()
-    svc = TurnPrepareService(_FakeLifecycle(readiness), event_service=events)  # type: ignore[arg-type]
-    return svc, events
+def test_hook_skips_when_no_workspace_id():
+    hook = CodeGraphIndexPrepareHook(_FakeLifecycle(_readiness(True)), _FakeWorkspaceService())
+    decision = hook.execute(_ctx(workspace_id=None))
+    assert decision.decision.value == "allow"
 
 
-def _readiness(ready: bool, action: str = "init", state: str = "ready") -> WorkspaceReadiness:
-    return WorkspaceReadiness(
-        ready=ready,
-        state=state,
-        action_taken=action,
-        files_changed=1,
-        duration_ms=10,
-        degraded_reason=None if ready else "boom",
+def test_hook_skips_when_resolve_fails():
+    hook = CodeGraphIndexPrepareHook(
+        _FakeLifecycle(_readiness(True)), _FakeWorkspaceService(raise_on_get=True)
     )
+    decision = hook.execute(_ctx())
+    assert decision.decision.value == "allow"
 
 
-def test_prepare_ready_emits_preparing_then_ready_and_executes():
-    svc, events = _make_service(_readiness(ready=True, action="sync"))
-    executed: list[bool] = []
-
-    async def run():
-        await svc.prepare_then_execute(
-            "task-1", "turn-1", "/ws/root", lambda: _record_executed(executed)
-        )
-
-    asyncio.run(run())
-
-    types = [e.event_type for e in events.events]
-    assert types == [EventType.WORKSPACE_PREPARING, EventType.WORKSPACE_READY]
-    ready_payload = events.events[-1].payload
-    assert ready_payload.workspace_path == "/ws/root"
-    assert ready_payload.action_taken == "sync"
-    assert executed == [True]
+def test_hook_skips_when_empty_path():
+    hook = CodeGraphIndexPrepareHook(
+        _FakeLifecycle(_readiness(True)),
+        _FakeWorkspaceService(_FakeWorkspaceRecord("ws-1", "")),
+    )
+    decision = hook.execute(_ctx())
+    assert decision.decision.value == "allow"
 
 
-def test_prepare_degraded_emits_preparing_then_degraded_and_executes():
-    svc, events = _make_service(_readiness(ready=False, state="unavailable"))
-    executed: list[bool] = []
-
-    async def run():
-        await svc.prepare_then_execute(
-            "task-1", "turn-1", "/ws/root", lambda: _record_executed(executed)
-        )
-
-    asyncio.run(run())
-
-    types = [e.event_type for e in events.events]
-    assert types == [EventType.WORKSPACE_PREPARING, EventType.WORKSPACE_DEGRADED]
-    degraded_payload = events.events[-1].payload
-    assert degraded_payload.workspace_path == "/ws/root"
-    assert degraded_payload.state == "unavailable"
-    assert degraded_payload.degraded_reason == "boom"
-    # 降级仍放行 execute
-    assert executed == [True]
+def test_hook_allows_when_degraded():
+    lifecycle = _FakeLifecycle(_readiness(ready=False, state="unavailable"))
+    hook = CodeGraphIndexPrepareHook(
+        lifecycle, _FakeWorkspaceService(_FakeWorkspaceRecord("ws-1", "/ws/root"))
+    )
+    decision = hook.execute(_ctx())
+    assert decision.decision.value == "allow"
+    assert lifecycle.calls == ["/ws/root"]
 
 
-def test_prepare_skipped_when_workspace_path_none():
-    svc, events = _make_service(_readiness(ready=True))
-    executed: list[bool] = []
+def test_hook_allows_when_ready():
+    lifecycle = _FakeLifecycle(_readiness(ready=True, action="sync"))
+    hook = CodeGraphIndexPrepareHook(
+        lifecycle, _FakeWorkspaceService(_FakeWorkspaceRecord("ws-1", "/ws/root"))
+    )
+    decision = hook.execute(_ctx())
+    assert decision.decision.value == "allow"
+    assert lifecycle.calls == ["/ws/root"]
 
-    async def run():
-        await svc.prepare_then_execute("task-1", "turn-1", None, lambda: _record_executed(executed))
 
-    asyncio.run(run())
+def test_hook_allows_on_exception():
+    lifecycle = _FakeLifecycle(_readiness(True), raise_on_call=True)
+    hook = CodeGraphIndexPrepareHook(
+        lifecycle, _FakeWorkspaceService(_FakeWorkspaceRecord("ws-1", "/ws/root"))
+    )
+    decision = hook.execute(_ctx())
+    assert decision.decision.value == "allow"
 
-    # workspace_path=None 不产生任何准备事件，直接 execute
-    assert events.events == []
-    assert executed == [True]
+
+def test_hook_fires_through_registry_matches_and_executes():
+    """经 HookRegistry.fire → matches 链路（非直调 execute），验证 __init__ 正确
+    固化基类属性，matches 不抛 AttributeError 且 execute 真正执行。回归：缺
+    super().__init__ 时 matches 会抛错，导致 Hook 永不执行。"""
+    lifecycle = _FakeLifecycle(_readiness(True, action="sync"))
+    hook = CodeGraphIndexPrepareHook(
+        lifecycle, _FakeWorkspaceService(_FakeWorkspaceRecord("ws-1", "/ws/root"))
+    )
+    registry = HookRegistry()
+    registry.register(hook)
+
+    # fire 必须成功（不抛），且 ensure_ready 被调用（execute 确实执行）。
+    result = registry.fire(_ctx())
+    assert result.decision.value == "allow"
+    assert lifecycle.calls == ["/ws/root"]
 
 
 # ----------------------------------------------------------------------
-# EventType registry 完整性
+# EventType registry 完整性（workspace lifecycle 事件，仍由 WorkspaceEventService 使用）
 # ----------------------------------------------------------------------
 
 
-def test_new_prepare_events_registered():
+def test_workspace_prepare_events_registered():
     assert EVENT_PAYLOAD_MODELS[EventType.WORKSPACE_PREPARING] is WorkspacePreparingPayload
     assert EVENT_PAYLOAD_MODELS[EventType.WORKSPACE_READY] is WorkspaceReadyPayload
     assert EVENT_PAYLOAD_MODELS[EventType.WORKSPACE_DEGRADED] is WorkspaceDegradedPayload
 
 
 # ----------------------------------------------------------------------
-# _drive_turn_with_prepare（API 层接入）与 _emit_run_failed 兜底
+# _drive_runtime_turn（API 层接入）与 _emit_run_failed 兜底
 # ----------------------------------------------------------------------
 
 
@@ -252,29 +292,28 @@ class _FakeRuntime:
         return self._empty_events()
 
 
-def test_drive_turn_with_prepare_skips_when_prepare_service_none():
-    """Kernel 不可用（prepare_service=None）时应跳过准备直接执行，且释放 producer 槽位。"""
-    from app.api.turns_api import _drive_turn_with_prepare
+def test_drive_runtime_turn_runs_and_releases():
+    """索引准备迁移到 Hook 后，API 层直接执行 run_turn，并释放 producer 槽位。"""
+    from app.api.turns_api import _drive_runtime_turn
 
     bus = _FakeEventBus()
     runtime = _FakeRuntime()
 
     async def _run():
-        await _drive_turn_with_prepare(
+        await _drive_runtime_turn(
             runtime,  # type: ignore[arg-type]
             "turn-1",
             _FakeTurn(task_id="task-1"),
             bus,  # type: ignore[arg-type]
-            prepare_service=None,
         )
 
     asyncio.run(_run())
-    # 跳过准备也完整走完 run_turn 并释放 producer 槽位（幂等，execute 内与最外层均释放）。
+    # 直接走完 run_turn 并释放 producer 槽位（execute 内与最外层均释放）。
     assert "turn-1" in bus.released
 
 
 def test_emit_run_failed_publishes_terminal_event(monkeypatch):
-    """prepare 断开兜底应发布 run_failed 终态事件（§六 验收 5）。"""
+    """run 未启动即断开兜底应发布 run_failed 终态事件。"""
     from app.api.turns_api import _emit_run_failed
     from app.models.event.runtime_event import RuntimeEvent
 
