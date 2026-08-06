@@ -10,12 +10,17 @@
  *   而是以 `REPARSE_INTERVAL_MS` 节流（默认 120ms）才把最新 content 喂给 markdown 子树；
  *   未到节流点的帧只更新「挂于独立层」的光标，不牵动 markdown 子树，避免每帧全量重 parse。
  * - 定稿期（`streaming=false`）直接渲染最新 content，无节流、无光标。
+ * - 定稿态 markdown 子树用 `useMemo([renderedContent, components])` 缓存解析结果：
+ *   同一 `renderedContent` + 同一 `components` 引用不重复跑 react-markdown 全量解析，
+ *   使冷启动从零全量投影（父层因事件引用变化而多次重渲染）时，历史消息只解析一次，
+ *   避免几十次同步全量解析阻塞主线程。流式态与 `REPARSE_INTERVAL_MS` 节流互补——
+ *   仅当 `renderedContent` 真正变化时才重算，不会丢失流式 token。
  * - 光标层（StreamingCaret）独立挂载于 markdown 子树之外，位置由调用方决定。
  *
  * @module components/chat/MarkdownStream
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
@@ -42,7 +47,7 @@ interface MarkdownStreamProps {
  *
  * 目的:
  *   在「流式实时性」与「markdown 重解析开销」之间取平衡——流式期节流重解析、
- *   光标独立层；定稿期零节流直接渲染。
+ *   光标独立层；定稿期零节流直接渲染，且用 useMemo 缓存定稿态解析结果。
  *
  * 参数:
  *   content - Markdown 文本；streaming - 是否流式；
@@ -56,7 +61,9 @@ interface MarkdownStreamProps {
  *   不主动抛出。
  *
  * 副作用:
- *   流式期持有一个节流定时器（rAF/timeout），卸载时清理。
+ *   流式期持有一个节流定时器（rAF/timeout），卸载时清理；
+ *   定稿态把 ReactMarkdown 子树用 useMemo 缓存，仅当 renderedContent/components
+ *   变化时重新解析，降低冷启动全量重投影时的重复解析开销。
  */
 export function MarkdownStream({ content, streaming = false, components, caret, className }: MarkdownStreamProps) {
   // 节流后的「实际喂给 markdown 子树」的内容；初始为最新 content。
@@ -103,11 +110,21 @@ export function MarkdownStream({ content, streaming = false, components, caret, 
     };
   }, []);
 
-  return (
-    <div className={className}>
+  // 定稿态缓存：同一 renderedContent + components 不重复跑 react-markdown + remark-gfm 全量解析。
+  // 流式期 renderedContent 受 REPARSE_INTERVAL_MS 节流已天然降低解析频率，此处缓存与之互补而非冲突——
+  // 仅当 renderedContent 真正变化或 components 引用变化时才重算，父层因事件引用变化而重渲染时直接复用旧结果。
+  const renderedMarkdown = useMemo(
+    () => (
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {renderedContent}
       </ReactMarkdown>
+    ),
+    [renderedContent, components],
+  );
+
+  return (
+    <div className={className}>
+      {renderedMarkdown}
       {streaming ? caret : null}
     </div>
   );
