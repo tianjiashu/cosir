@@ -192,7 +192,7 @@ describe('Installer targets — partial-state idempotency', () => {
     fs.rmSync(tmpCwd, { recursive: true, force: true });
   });
 
-  it('codex: install writes config.toml AND the AGENTS.md workspace_event block (#704)', () => {
+  it('codex: install writes config.toml AND the AGENTS.md workspace_payload block (#704)', () => {
     const codex = getTarget('codex')!;
     const first = codex.install('global', { autoAllow: false });
     const agentsMd = path.join(tmpHome, '.codex', 'AGENTS.md');
@@ -202,13 +202,13 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(fs.existsSync(agentsMd)).toBe(true);
     const body = fs.readFileSync(agentsMd, 'utf-8');
     expect(body).toContain('## CodeGraph');
-    expect(body).toContain('workspace_event explore');
+    expect(body).toContain('workspace_payload explore');
     // Re-install is fully unchanged (byte-equal block → idempotent).
     const second = codex.install('global', { autoAllow: false });
     for (const f of second.files) expect(f.action).toBe('unchanged');
   });
 
-  it('codex: install replaces a legacy AGENTS.md workspace_event block with the current one, keeping user content', () => {
+  it('codex: install replaces a legacy AGENTS.md workspace_payload block with the current one, keeping user content', () => {
     const codex = getTarget('codex')!;
     const dir = path.join(tmpHome, '.codex');
     fs.mkdirSync(dir, { recursive: true });
@@ -222,7 +222,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(body).toContain('Be terse.');
     // Self-heal: the stale pre-#529 body is gone, the current block is in.
     expect(body).not.toContain('Prefer `codegraph_search`');
-    expect(body).toContain('workspace_event explore');
+    expect(body).toContain('workspace_payload explore');
     const mdEntry = result.files.find((f) => f.path.endsWith('AGENTS.md'));
     expect(mdEntry?.action).toBe('updated');
   });
@@ -285,7 +285,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(afterInstall).toContain('// top-level note about my opencode setup');
     expect(afterInstall).toContain('/* multi-line block comment');
     expect(afterInstall).toContain('// pinned');
-    expect(afterInstall).toContain('"workspace_event"');
+    expect(afterInstall).toContain('"workspace_payload"');
     expect(afterInstall).toContain('"providers"');
 
     // Idempotent re-run reports unchanged, file is byte-identical.
@@ -294,16 +294,16 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(fs.readFileSync(file, 'utf-8')).toBe(afterInstall);
   });
 
-  it('opencode: install writes the AGENTS.md workspace_event block (#704)', () => {
+  it('opencode: install writes the AGENTS.md workspace_payload block (#704)', () => {
     const opencode = getTarget('opencode')!;
     const result = opencode.install('global', { autoAllow: true });
     const agentsMd = path.join(tmpHome, '.config', 'opencode', 'AGENTS.md');
     expect(fs.existsSync(agentsMd)).toBe(true);
-    expect(fs.readFileSync(agentsMd, 'utf-8')).toContain('workspace_event explore');
+    expect(fs.readFileSync(agentsMd, 'utf-8')).toContain('workspace_payload explore');
     expect(result.files.find((f) => f.path.endsWith('AGENTS.md'))?.action).toBe('created');
   });
 
-  it('opencode: install replaces a legacy AGENTS.md workspace_event block, preserving user content', () => {
+  it('opencode: install replaces a legacy AGENTS.md workspace_payload block, preserving user content', () => {
     const opencode = getTarget('opencode')!;
     const dir = path.join(tmpHome, '.config', 'opencode');
     fs.mkdirSync(dir, { recursive: true });
@@ -316,11 +316,11 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(body).toContain('# My personal opencode instructions');
     expect(body).toContain('Always respond in pirate.');
     expect(body).not.toContain('Prefer `codegraph_search`');
-    expect(body).toContain('workspace_event explore');
+    expect(body).toContain('workspace_payload explore');
     expect(result.files.find((f) => f.path.endsWith('AGENTS.md'))?.action).toBe('updated');
   });
 
-  it('opencode: uninstall strips a leftover workspace_event block from AGENTS.md, keeping user content', () => {
+  it('opencode: uninstall strips a leftover workspace_payload block from AGENTS.md, keeping user content', () => {
     const opencode = getTarget('opencode')!;
     const dir = path.join(tmpHome, '.config', 'opencode');
     fs.mkdirSync(dir, { recursive: true });
@@ -345,7 +345,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(fs.existsSync(path.join(process.cwd(), 'AGENTS.md'))).toBe(true);
   });
 
-  it('gemini: install writes settings.json (mcpServers.workspace_event) and the GEMINI.md block (#704)', () => {
+  it('gemini: install writes settings.json (mcpServers.workspace_payload) and the GEMINI.md block (#704)', () => {
     const gemini = getTarget('gemini')!;
     const result = gemini.install('global', { autoAllow: true });
     const settings = path.join(tmpHome, '.gemini', 'settings.json');
@@ -353,7 +353,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(result.files.some((f) => f.path === settings)).toBe(true);
     expect(result.files.some((f) => f.path === geminiMd)).toBe(true);
     expect(fs.existsSync(geminiMd)).toBe(true);
-    expect(fs.readFileSync(geminiMd, 'utf-8')).toContain('workspace_event explore');
+    expect(fs.readFileSync(geminiMd, 'utf-8')).toContain('workspace_payload explore');
 
     const cfg = JSON.parse(fs.readFileSync(settings, 'utf-8'));
     expect(cfg.mcpServers.codegraph).toEqual({ type: 'stdio', command: 'codegraph', args: ['serve', '--mcp'] });
@@ -374,7 +374,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(after.mcpServers?.codegraph).toBeDefined();
   });
 
-  it('gemini: uninstall strips workspace_event but leaves pre-existing settings (security.auth) intact', () => {
+  it('gemini: uninstall strips workspace_payload but leaves pre-existing settings (security.auth) intact', () => {
     const gemini = getTarget('gemini')!;
     const settings = path.join(tmpHome, '.gemini', 'settings.json');
     fs.mkdirSync(path.dirname(settings), { recursive: true });
@@ -399,7 +399,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(fs.existsSync(path.join(process.cwd(), 'GEMINI.md'))).toBe(true);
   });
 
-  it('gemini: uninstall strips a leftover GEMINI.md workspace_event block, keeping user content', () => {
+  it('gemini: uninstall strips a leftover GEMINI.md workspace_payload block, keeping user content', () => {
     const gemini = getTarget('gemini')!;
     const geminiMd = path.join(tmpHome, '.gemini', 'GEMINI.md');
     fs.mkdirSync(path.dirname(geminiMd), { recursive: true });
@@ -413,11 +413,11 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(body).not.toContain('CODEGRAPH_START');
   });
 
-  it('kiro: install writes settings/mcp.json (mcpServers.workspace_event) and no steering doc (#529)', () => {
+  it('kiro: install writes settings/mcp.json (mcpServers.workspace_payload) and no steering doc (#529)', () => {
     const kiro = getTarget('kiro')!;
     const result = kiro.install('global', { autoAllow: true });
     const mcp = path.join(tmpHome, '.kiro', 'settings', 'mcp.json');
-    const steering = path.join(tmpHome, '.kiro', 'steering', 'workspace_event.md');
+    const steering = path.join(tmpHome, '.kiro', 'steering', 'workspace_payload.md');
     expect(result.files.some((f) => f.path === mcp)).toBe(true);
     expect(result.files.some((f) => f.path === steering)).toBe(false);
     expect(fs.existsSync(steering)).toBe(false);
@@ -426,9 +426,9 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(cfg.mcpServers.codegraph).toEqual({ type: 'stdio', command: 'codegraph', args: ['serve', '--mcp'] });
   });
 
-  it('kiro: install deletes a leftover steering workspace_event.md (self-heal) (#529)', () => {
+  it('kiro: install deletes a leftover steering workspace_payload.md (self-heal) (#529)', () => {
     const kiro = getTarget('kiro')!;
-    const steering = path.join(tmpHome, '.kiro', 'steering', 'workspace_event.md');
+    const steering = path.join(tmpHome, '.kiro', 'steering', 'workspace_payload.md');
     fs.mkdirSync(path.dirname(steering), { recursive: true });
     fs.writeFileSync(steering, `${LEGACY_BLOCK}\n`);
 
@@ -452,7 +452,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(after.mcpServers.codegraph).toBeDefined();
   });
 
-  it('kiro: uninstall strips workspace_event but leaves sibling MCP servers intact', () => {
+  it('kiro: uninstall strips workspace_payload but leaves sibling MCP servers intact', () => {
     const kiro = getTarget('kiro')!;
     const mcp = path.join(tmpHome, '.kiro', 'settings', 'mcp.json');
     fs.mkdirSync(path.dirname(mcp), { recursive: true });
@@ -468,9 +468,9 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(after.mcpServers.codegraph).toBeUndefined();
   });
 
-  it('kiro: uninstall removes a leftover steering workspace_event.md file outright', () => {
+  it('kiro: uninstall removes a leftover steering workspace_payload.md file outright', () => {
     const kiro = getTarget('kiro')!;
-    const steering = path.join(tmpHome, '.kiro', 'steering', 'workspace_event.md');
+    const steering = path.join(tmpHome, '.kiro', 'steering', 'workspace_payload.md');
     fs.mkdirSync(path.dirname(steering), { recursive: true });
     fs.writeFileSync(steering, `${LEGACY_BLOCK}\n`);
 
@@ -481,7 +481,7 @@ describe('Installer targets — partial-state idempotency', () => {
   it('kiro: uninstall removes our steering doc but leaves a sibling (product.md) untouched', () => {
     const kiro = getTarget('kiro')!;
     const sibling = path.join(tmpHome, '.kiro', 'steering', 'product.md');
-    const ours = path.join(tmpHome, '.kiro', 'steering', 'workspace_event.md');
+    const ours = path.join(tmpHome, '.kiro', 'steering', 'workspace_payload.md');
     fs.mkdirSync(path.dirname(sibling), { recursive: true });
     fs.writeFileSync(sibling, '# Product\n\nMy team practices.\n');
     fs.writeFileSync(ours, `${LEGACY_BLOCK}\n`);
@@ -498,7 +498,7 @@ describe('Installer targets — partial-state idempotency', () => {
     const result = kiro.install('local', { autoAllow: true });
     const paths = result.files.map((f) => f.path.replace(/\\/g, '/'));
     expect(paths.some((p) => p.endsWith('/.kiro/settings/mcp.json'))).toBe(true);
-    expect(paths.some((p) => p.endsWith('/.kiro/steering/workspace_event.md'))).toBe(false);
+    expect(paths.some((p) => p.endsWith('/.kiro/steering/workspace_payload.md'))).toBe(false);
   });
 
   it('antigravity: install writes to LEGACY ~/.gemini/antigravity/mcp_config.json when no migration marker', () => {
@@ -562,12 +562,12 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(cfg.mcpServers.codegraph.args).toEqual(['serve', '--mcp']);
   });
 
-  it('antigravity: install migrates a legacy workspace_event entry to the unified path when marker appears', () => {
+  it('antigravity: install migrates a legacy workspace_payload entry to the unified path when marker appears', () => {
     const antigravity = getTarget('antigravity')!;
     // Simulate: user installed on the legacy path, then Antigravity
     // migrated their config (dropped the `.migrated` marker + created
-    // the unified file). Re-running workspace_event install should land
-    // workspace_event in the new file AND strip the stale legacy entry.
+    // the unified file). Re-running workspace_payload install should land
+    // workspace_payload in the new file AND strip the stale legacy entry.
     const legacyFile = path.join(tmpHome, '.gemini', 'antigravity', 'mcp_config.json');
     fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
     fs.writeFileSync(legacyFile, JSON.stringify({
@@ -582,7 +582,7 @@ describe('Installer targets — partial-state idempotency', () => {
       path.join(tmpHome, '.gemini', 'config', 'mcp_config.json'), 'utf-8'
     ));
     expect(unified.mcpServers.codegraph).toBeDefined();
-    // Legacy file's workspace_event entry got stripped.
+    // Legacy file's workspace_payload entry got stripped.
     const legacy = JSON.parse(fs.readFileSync(legacyFile, 'utf-8'));
     expect(legacy.mcpServers).toBeUndefined();
   });
@@ -624,7 +624,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(after.mcpServers.codegraph).toBeDefined();
   });
 
-  it('antigravity: uninstall removes only workspace_event, sibling MCP server survives', () => {
+  it('antigravity: uninstall removes only workspace_payload, sibling MCP server survives', () => {
     const antigravity = getTarget('antigravity')!;
     const mcpFile = path.join(tmpHome, '.gemini', 'antigravity', 'mcp_config.json');
     fs.mkdirSync(path.dirname(mcpFile), { recursive: true });
@@ -642,7 +642,7 @@ describe('Installer targets — partial-state idempotency', () => {
 
   it('antigravity: uninstall sweeps BOTH legacy and unified paths (handles migration half-state)', () => {
     const antigravity = getTarget('antigravity')!;
-    // User had workspace_event in BOTH files (e.g. legacy install + post-migration
+    // User had workspace_payload in BOTH files (e.g. legacy install + post-migration
     // re-install before our migration cleanup landed). Uninstall must clean
     // both so a "fresh slate" really is fresh.
     const legacy = path.join(tmpHome, '.gemini', 'antigravity', 'mcp_config.json');
@@ -699,7 +699,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(cliAfter.mcpServers.codegraph).toBeDefined();
   });
 
-  it('hermes: install adds workspace_event MCP server and cli toolset, preserving existing yaml', () => {
+  it('hermes: install adds workspace_payload MCP server and cli toolset, preserving existing yaml', () => {
     const hermes = getTarget('hermes')!;
     const config = path.join(tmpHome, '.hermes', 'config.yaml');
     fs.mkdirSync(path.dirname(config), { recursive: true });
@@ -722,16 +722,16 @@ describe('Installer targets — partial-state idempotency', () => {
     const body = fs.readFileSync(config, 'utf-8');
     expect(body).toContain('model:\n  default: qwen-3.7');
     expect(body).toContain('mcp_servers:\n  other:\n    command: other');
-    expect(body).toContain('  workspace_event:\n    command: workspace_event');
+    expect(body).toContain('  workspace_payload:\n    command: workspace_payload');
     expect(body).toContain('    - hermes-cli');
-    expect(body).toContain('    - mcp-workspace_event');
+    expect(body).toContain('    - mcp-workspace_payload');
     expect(body).toContain('  discord:\n    - hermes-discord');
 
     const second = hermes.install('global', { autoAllow: true });
     expect(second.files[0].action).toBe('unchanged');
   });
 
-  it('hermes: uninstall removes only workspace_event MCP server and toolset entry', () => {
+  it('hermes: uninstall removes only workspace_payload MCP server and toolset entry', () => {
     const hermes = getTarget('hermes')!;
     const config = path.join(tmpHome, '.hermes', 'config.yaml');
     fs.mkdirSync(path.dirname(config), { recursive: true });
@@ -741,15 +741,15 @@ describe('Installer targets — partial-state idempotency', () => {
 
     hermes.uninstall('global');
     const body = fs.readFileSync(config, 'utf-8');
-    expect(body).not.toContain('workspace_event:');
-    expect(body).not.toContain('mcp-workspace_event');
+    expect(body).not.toContain('workspace_payload:');
+    expect(body).not.toContain('mcp-workspace_payload');
     expect(body).toContain('custom:\n  keep: true');
   });
 
   // Regression for #456: PyYAML's default block style writes list items at the
   // SAME indent as the parent key (`cli:` and its `- hermes-cli` are both at
   // indent 2). The pre-fix line-based patcher mistook that first list item for
-  // the next sibling key, truncated the cli block, and spliced `- mcp-workspace_event`
+  // the next sibling key, truncated the cli block, and spliced `- mcp-workspace_payload`
   // at indent 4 BEFORE the existing items — producing unparseable YAML.
   it('hermes: install preserves PyYAML-default list-at-same-indent style (issue #456)', () => {
     const hermes = getTarget('hermes')!;
@@ -776,8 +776,8 @@ describe('Installer targets — partial-state idempotency', () => {
     hermes.install('global', { autoAllow: true });
     const body = fs.readFileSync(config, 'utf-8');
 
-    // mcp-workspace_event appended at the same 2-space indent as existing items
-    expect(body).toContain('\n  - mcp-workspace_event\n');
+    // mcp-workspace_payload appended at the same 2-space indent as existing items
+    expect(body).toContain('\n  - mcp-workspace_payload\n');
     // hermes-cli preserved
     expect(body).toContain('\n  - hermes-cli\n');
     // Sibling sections kept their indent — `telegram:` is still a key under
@@ -789,7 +789,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(body).not.toMatch(/^- hermes-telegram/m);
 
     // The whole platform_toolsets block extracted by line search should
-    // start with `cli:` and not contain a stray 4-space `mcp-workspace_event`
+    // start with `cli:` and not contain a stray 4-space `mcp-workspace_payload`
     // appearing before the rest of the existing items.
     expect(body).toContain('  cli:\n  - hermes-cli\n  - browser');
 
@@ -815,18 +815,18 @@ describe('Installer targets — partial-state idempotency', () => {
 
     hermes.install('global', { autoAllow: true });
     const installed = fs.readFileSync(config, 'utf-8');
-    expect(installed).toContain('- mcp-workspace_event');
-    expect(installed).toContain('workspace_event:');
+    expect(installed).toContain('- mcp-workspace_payload');
+    expect(installed).toContain('workspace_payload:');
 
     hermes.uninstall('global');
     const body = fs.readFileSync(config, 'utf-8');
-    expect(body).not.toContain('mcp-workspace_event');
-    expect(body).not.toContain('command: workspace_event');
+    expect(body).not.toContain('mcp-workspace_payload');
+    expect(body).not.toContain('command: workspace_payload');
     expect(body).toContain('  cli:\n  - hermes-cli\n  - browser');
     expect(body).toContain('  telegram:\n  - hermes-telegram');
   });
 
-  it('opencode: uninstall removes only mcp.workspace_event, preserves comments and siblings', () => {
+  it('opencode: uninstall removes only mcp.workspace_payload, preserves comments and siblings', () => {
     const opencode = getTarget('opencode')!;
     const dir = path.join(tmpHome, '.config', 'opencode');
     fs.mkdirSync(dir, { recursive: true });
@@ -844,7 +844,7 @@ describe('Installer targets — partial-state idempotency', () => {
 
     opencode.install('global', { autoAllow: true });
     const afterInstall = fs.readFileSync(file, 'utf-8');
-    expect(afterInstall).toContain('"workspace_event"');
+    expect(afterInstall).toContain('"workspace_payload"');
     expect(afterInstall).toContain('"other"');
 
     opencode.uninstall('global');
@@ -854,7 +854,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(afterUninstall).toContain('"other"');
   });
 
-  it('codex: user-added key inside [mcp_servers.workspace_event] survives idempotent re-install', () => {
+  it('codex: user-added key inside [mcp_servers.workspace_payload] survives idempotent re-install', () => {
     const codex = getTarget('codex')!;
     codex.install('global', { autoAllow: false });
     const tomlPath = path.join(tmpHome, '.codex', 'config.toml');
@@ -868,7 +868,7 @@ describe('Installer targets — partial-state idempotency', () => {
     // Re-install: our serializer doesn't know `enabled = true`, so
     // the block no longer matches the canonical form — we'll
     // overwrite it. This is the documented contract: we own the
-    // workspace_event block exclusively.
+    // workspace_payload block exclusively.
     const second = codex.install('global', { autoAllow: false });
     const tomlEntry = second.files.find((f) => f.path.endsWith('config.toml'))!;
     expect(tomlEntry.action).toBe('updated');
@@ -887,18 +887,18 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(cfg.mcpServers.codegraph).toBeDefined();
   });
 
-  it('claude: install creates the CLAUDE.md workspace_event block (#704)', () => {
+  it('claude: install creates the CLAUDE.md workspace_payload block (#704)', () => {
     const claude = getTarget('claude')!;
     const result = claude.install('local', { autoAllow: false });
     const claudeMd = path.join(tmpCwd, '.claude', 'CLAUDE.md');
     expect(fs.existsSync(claudeMd)).toBe(true);
     const body = fs.readFileSync(claudeMd, 'utf-8');
     expect(body).toContain('## CodeGraph');
-    expect(body).toContain('workspace_event explore');
+    expect(body).toContain('workspace_payload explore');
     expect(result.files.find((f) => f.path.endsWith('CLAUDE.md'))?.action).toBe('created');
   });
 
-  it('claude: install replaces a legacy CLAUDE.md workspace_event block, keeping user content', () => {
+  it('claude: install replaces a legacy CLAUDE.md workspace_payload block, keeping user content', () => {
     const claude = getTarget('claude')!;
     const claudeMd = path.join(tmpCwd, '.claude', 'CLAUDE.md');
     fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
@@ -910,7 +910,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(body).toContain('# My project rules');
     expect(body).toContain('Use tabs.');
     expect(body).not.toContain('Prefer `codegraph_search`');
-    expect(body).toContain('workspace_event explore');
+    expect(body).toContain('workspace_payload explore');
     expect(result.files.find((f) => f.path.endsWith('CLAUDE.md'))?.action).toBe('updated');
   });
 
@@ -921,7 +921,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(cfg.mcpServers.codegraph).toBeDefined();
   });
 
-  it('claude: local install migrates a legacy ./.claude.json workspace_event entry into ./.mcp.json', () => {
+  it('claude: local install migrates a legacy ./.claude.json workspace_payload entry into ./.mcp.json', () => {
     const claude = getTarget('claude')!;
     const legacy = path.join(tmpCwd, '.claude.json');
     fs.writeFileSync(
@@ -931,8 +931,8 @@ describe('Installer targets — partial-state idempotency', () => {
 
     claude.install('local', { autoAllow: false });
 
-    // workspace_event now lives in .mcp.json; the legacy file (which held only
-    // workspace_event) is gone.
+    // workspace_payload now lives in .mcp.json; the legacy file (which held only
+    // workspace_payload) is gone.
     const mcp = JSON.parse(fs.readFileSync(path.join(tmpCwd, '.mcp.json'), 'utf-8'));
     expect(mcp.mcpServers.codegraph).toBeDefined();
     expect(fs.existsSync(legacy)).toBe(false);
@@ -954,7 +954,7 @@ describe('Installer targets — partial-state idempotency', () => {
 
     claude.install('local', { autoAllow: false });
 
-    // Only workspace_event is stripped from the legacy file; siblings survive.
+    // Only workspace_payload is stripped from the legacy file; siblings survive.
     const after = JSON.parse(fs.readFileSync(legacy, 'utf-8'));
     expect(after.mcpServers.codegraph).toBeUndefined();
     expect(after.mcpServers.other).toBeDefined();
@@ -963,7 +963,7 @@ describe('Installer targets — partial-state idempotency', () => {
     expect(mcp.mcpServers.codegraph).toBeDefined();
   });
 
-  it('claude: uninstall strips workspace_event from ./.mcp.json and a legacy ./.claude.json', () => {
+  it('claude: uninstall strips workspace_payload from ./.mcp.json and a legacy ./.claude.json', () => {
     const claude = getTarget('claude')!;
     // A user left with both the working .mcp.json and a stale .claude.json.
     fs.writeFileSync(
@@ -985,7 +985,7 @@ describe('Installer targets — partial-state idempotency', () => {
   });
 
   // ---- Legacy auto-sync hook cleanup ----
-  // Pre-0.8 installs wrote `workspace_event mark-dirty` / `sync-if-dirty`
+  // Pre-0.8 installs wrote `workspace_payload mark-dirty` / `sync-if-dirty`
   // hooks to settings.json. Both subcommands were removed from the CLI,
   // so the Stop hook fails every turn ("unknown command
   // 'sync-if-dirty'"). The installer must strip them on upgrade and
@@ -1005,17 +1005,17 @@ describe('Installer targets — partial-state idempotency', () => {
     return {
       hooks: {
         PostToolUse: [
-          { matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'workspace_event mark-dirty', async: true }] },
+          { matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'workspace_payload mark-dirty', async: true }] },
         ],
         Stop: [
-          { hooks: [{ type: 'command', command: 'workspace_event sync-if-dirty' }] },
+          { hooks: [{ type: 'command', command: 'workspace_payload sync-if-dirty' }] },
           { hooks: [{ type: 'command', command: '"/Users/me/gk" ai hook run --host claude-code' }] },
         ],
       },
     };
   }
 
-  it('claude: install strips stale workspace_event auto-sync hooks but keeps the user\'s GitKraken hook', () => {
+  it('claude: install strips stale workspace_payload auto-sync hooks but keeps the user\'s GitKraken hook', () => {
     const claude = getTarget('claude')!;
     const file = seedSettings('global', legacyHookSettings());
 
@@ -1027,7 +1027,7 @@ describe('Installer targets — partial-state idempotency', () => {
     const stopCommands = (after.hooks?.Stop ?? []).flatMap((g: any) =>
       (g.hooks ?? []).map((h: any) => h.command),
     );
-    expect(stopCommands).not.toContain('workspace_event sync-if-dirty');
+    expect(stopCommands).not.toContain('workspace_payload sync-if-dirty');
     // The unrelated GitKraken hook survives untouched.
     expect(stopCommands.some((c: string) => c.includes('gk') && c.includes('ai hook run'))).toBe(true);
     // Permissions still written as normal alongside the cleanup.
@@ -1040,7 +1040,7 @@ describe('Installer targets — partial-state idempotency', () => {
         Stop: [
           {
             hooks: [
-              { type: 'command', command: 'workspace_event sync-if-dirty' },
+              { type: 'command', command: 'workspace_payload sync-if-dirty' },
               { type: 'command', command: 'gk ai hook run --host claude-code' },
             ],
           },
@@ -1056,7 +1056,7 @@ describe('Installer targets — partial-state idempotency', () => {
     ]);
   });
 
-  it('claude: cleanupLegacyHooks is a byte-for-byte no-op without workspace_event hooks', () => {
+  it('claude: cleanupLegacyHooks is a byte-for-byte no-op without workspace_payload hooks', () => {
     const original =
       JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'gk ai hook run' }] }] } }, null, 2) + '\n';
     const file = seedSettings('global', JSON.parse(original));
@@ -1083,10 +1083,10 @@ describe('Installer targets — partial-state idempotency', () => {
     const file = seedSettings('local', {
       hooks: {
         PostToolUse: [
-          { matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'npx @colbymchenry/workspace_event mark-dirty', async: true }] },
+          { matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'npx @colbymchenry/workspace_payload mark-dirty', async: true }] },
         ],
         Stop: [
-          { hooks: [{ type: 'command', command: 'npx @colbymchenry/workspace_event sync-if-dirty' }] },
+          { hooks: [{ type: 'command', command: 'npx @colbymchenry/workspace_payload sync-if-dirty' }] },
         ],
       },
     });
@@ -1100,7 +1100,7 @@ describe('Installer targets — partial-state idempotency', () => {
 
   // ---- Front-load prompt hook (UserPromptSubmit) — #841 follow-up ----
   // Opt-in (default-yes in the installer) UserPromptSubmit hook that runs
-  // `workspace_event prompt-hook`. Must write/remove surgically, be idempotent, and
+  // `workspace_payload prompt-hook`. Must write/remove surgically, be idempotent, and
   // round-trip an opt-out — without disturbing the user's own hooks.
   const promptCommands = (s: any): string[] =>
     (s.hooks?.UserPromptSubmit ?? []).flatMap((g: any) => (g.hooks ?? []).map((h: any) => h.command));
@@ -1109,7 +1109,7 @@ describe('Installer targets — partial-state idempotency', () => {
     const claude = getTarget('claude')!;
     claude.install('global', { autoAllow: true, promptHook: true });
     const s = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf-8'));
-    expect(promptCommands(s)).toContain('workspace_event prompt-hook');
+    expect(promptCommands(s)).toContain('workspace_payload prompt-hook');
     expect(s.permissions?.allow).toContain('mcp__codegraph__*');
   });
 
@@ -1117,7 +1117,7 @@ describe('Installer targets — partial-state idempotency', () => {
     const claude = getTarget('claude')!;
     claude.install('global', { autoAllow: true });
     const s = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf-8'));
-    expect(promptCommands(s)).not.toContain('workspace_event prompt-hook');
+    expect(promptCommands(s)).not.toContain('workspace_payload prompt-hook');
   });
 
   it('claude: install with promptHook:true is idempotent (no duplicate, byte-identical re-run)', () => {
@@ -1128,7 +1128,7 @@ describe('Installer targets — partial-state idempotency', () => {
     claude.install('global', { autoAllow: true, promptHook: true });
     expect(fs.readFileSync(file, 'utf-8')).toBe(first);
     const s = JSON.parse(first);
-    expect(promptCommands(s).filter((c: string) => c === 'workspace_event prompt-hook')).toHaveLength(1);
+    expect(promptCommands(s).filter((c: string) => c === 'workspace_payload prompt-hook')).toHaveLength(1);
   });
 
   it('claude: install with promptHook:false strips a hook a prior install wrote (opt-out round-trips)', () => {
@@ -1136,7 +1136,7 @@ describe('Installer targets — partial-state idempotency', () => {
     claude.install('global', { autoAllow: true, promptHook: true });
     claude.install('global', { autoAllow: true, promptHook: false });
     const s = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf-8'));
-    expect(promptCommands(s)).not.toContain('workspace_event prompt-hook');
+    expect(promptCommands(s)).not.toContain('workspace_payload prompt-hook');
   });
 
   it('claude: writePromptHookEntry preserves a sibling UserPromptSubmit hook', () => {
@@ -1145,14 +1145,14 @@ describe('Installer targets — partial-state idempotency', () => {
     });
     expect(writePromptHookEntry('global').action).toBe('updated');
     const s = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    expect(promptCommands(s)).toEqual(['my-own-hook', 'workspace_event prompt-hook']);
+    expect(promptCommands(s)).toEqual(['my-own-hook', 'workspace_payload prompt-hook']);
   });
 
   it('claude: uninstall removes the prompt hook but keeps the user\'s sibling', () => {
     const file = seedSettings('global', {
       hooks: {
         UserPromptSubmit: [
-          { hooks: [{ type: 'command', command: 'workspace_event prompt-hook' }] },
+          { hooks: [{ type: 'command', command: 'workspace_payload prompt-hook' }] },
           { hooks: [{ type: 'command', command: 'my-own-hook' }] },
         ],
       },
@@ -1165,15 +1165,15 @@ describe('Installer targets — partial-state idempotency', () => {
   it('claude: removePromptHookEntry leaves the legacy auto-sync hook untouched', () => {
     const file = seedSettings('global', {
       hooks: {
-        UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'workspace_event prompt-hook' }] }],
-        Stop: [{ hooks: [{ type: 'command', command: 'workspace_event sync-if-dirty' }] }],
+        UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'workspace_payload prompt-hook' }] }],
+        Stop: [{ hooks: [{ type: 'command', command: 'workspace_payload sync-if-dirty' }] }],
       },
     });
     expect(removePromptHookEntry('global').action).toBe('removed');
     const s = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    expect(promptCommands(s)).not.toContain('workspace_event prompt-hook');
+    expect(promptCommands(s)).not.toContain('workspace_payload prompt-hook');
     const stopCmds = (s.hooks?.Stop ?? []).flatMap((g: any) => (g.hooks ?? []).map((h: any) => h.command));
-    expect(stopCmds).toContain('workspace_event sync-if-dirty');
+    expect(stopCmds).toContain('workspace_payload sync-if-dirty');
   });
 });
 
@@ -1203,27 +1203,27 @@ describe('Installer targets — registry', () => {
 });
 
 describe('Installer targets — TOML serializer (Codex backbone)', () => {
-  it('builds a [mcp_servers.workspace_event] block with command + args', () => {
-    const block = buildTomlTable('mcp_servers.workspace_event', {
+  it('builds a [mcp_servers.workspace_payload] block with command + args', () => {
+    const block = buildTomlTable('mcp_servers.workspace_payload', {
       command: 'codegraph',
       args: ['serve', '--mcp'],
     });
-    expect(block).toContain('[mcp_servers.workspace_event]');
-    expect(block).toContain('command = "workspace_event"');
+    expect(block).toContain('[mcp_servers.workspace_payload]');
+    expect(block).toContain('command = "workspace_payload"');
     expect(block).toContain('args = ["serve", "--mcp"]');
   });
 
   it('upsert inserts into empty content', () => {
-    const block = buildTomlTable('mcp_servers.workspace_event', { command: 'codegraph', args: ['serve'] });
-    const { content, action } = upsertTomlTable('', 'mcp_servers.workspace_event', block);
+    const block = buildTomlTable('mcp_servers.workspace_payload', { command: 'codegraph', args: ['serve'] });
+    const { content, action } = upsertTomlTable('', 'mcp_servers.workspace_payload', block);
     expect(action).toBe('inserted');
-    expect(content.startsWith('[mcp_servers.workspace_event]')).toBe(true);
+    expect(content.startsWith('[mcp_servers.workspace_payload]')).toBe(true);
   });
 
   it('upsert is idempotent — second call returns unchanged', () => {
-    const block = buildTomlTable('mcp_servers.workspace_event', { command: 'codegraph', args: ['serve'] });
-    const first = upsertTomlTable('', 'mcp_servers.workspace_event', block);
-    const second = upsertTomlTable(first.content, 'mcp_servers.workspace_event', block);
+    const block = buildTomlTable('mcp_servers.workspace_payload', { command: 'codegraph', args: ['serve'] });
+    const first = upsertTomlTable('', 'mcp_servers.workspace_payload', block);
+    const second = upsertTomlTable(first.content, 'mcp_servers.workspace_payload', block);
     expect(second.action).toBe('unchanged');
     expect(second.content).toBe(first.content);
   });
@@ -1233,26 +1233,26 @@ describe('Installer targets — TOML serializer (Codex backbone)', () => {
       '[other_table]',
       'foo = "bar"',
       '',
-      '[mcp_servers.workspace_event]',
-      'command = "old-workspace_event"',
+      '[mcp_servers.workspace_payload]',
+      'command = "old-workspace_payload"',
       'args = ["old"]',
       '',
       '[zzz]',
       'baz = "qux"',
       '',
     ].join('\n');
-    const newBlock = buildTomlTable('mcp_servers.workspace_event', {
+    const newBlock = buildTomlTable('mcp_servers.workspace_payload', {
       command: 'codegraph',
       args: ['serve', '--mcp'],
     });
-    const { content, action } = upsertTomlTable(existing, 'mcp_servers.workspace_event', newBlock);
+    const { content, action } = upsertTomlTable(existing, 'mcp_servers.workspace_payload', newBlock);
     expect(action).toBe('replaced');
     expect(content).toContain('[other_table]');
     expect(content).toContain('foo = "bar"');
     expect(content).toContain('[zzz]');
     expect(content).toContain('baz = "qux"');
-    expect(content).toContain('command = "workspace_event"');
-    expect(content).not.toContain('old-workspace_event');
+    expect(content).toContain('command = "workspace_payload"');
+    expect(content).not.toContain('old-workspace_payload');
   });
 
   it('removeTomlTable strips the block and preserves siblings', () => {
@@ -1260,20 +1260,20 @@ describe('Installer targets — TOML serializer (Codex backbone)', () => {
       '[other_table]',
       'foo = "bar"',
       '',
-      '[mcp_servers.workspace_event]',
-      'command = "workspace_event"',
+      '[mcp_servers.workspace_payload]',
+      'command = "workspace_payload"',
       'args = ["serve"]',
     ].join('\n');
-    const { content, action } = removeTomlTable(existing, 'mcp_servers.workspace_event');
+    const { content, action } = removeTomlTable(existing, 'mcp_servers.workspace_payload');
     expect(action).toBe('removed');
     expect(content).toContain('[other_table]');
     expect(content).toContain('foo = "bar"');
-    expect(content).not.toContain('mcp_servers.workspace_event');
+    expect(content).not.toContain('mcp_servers.workspace_payload');
   });
 
   it('removeTomlTable on missing table returns not-found, no content change', () => {
     const existing = '[other]\nfoo = "bar"\n';
-    const { content, action } = removeTomlTable(existing, 'mcp_servers.workspace_event');
+    const { content, action } = removeTomlTable(existing, 'mcp_servers.workspace_payload');
     expect(action).toBe('not-found');
     expect(content).toBe(existing);
   });
@@ -1287,14 +1287,14 @@ describe('Installer targets — TOML serializer (Codex backbone)', () => {
       'name = "b"',
       '',
     ].join('\n');
-    const block = buildTomlTable('mcp_servers.workspace_event', { command: 'codegraph', args: ['serve'] });
-    const { content } = upsertTomlTable(existing, 'mcp_servers.workspace_event', block);
+    const block = buildTomlTable('mcp_servers.workspace_payload', { command: 'codegraph', args: ['serve'] });
+    const { content } = upsertTomlTable(existing, 'mcp_servers.workspace_payload', block);
     expect(content.match(/\[\[foo\]\]/g)?.length).toBe(2);
-    expect(content).toContain('[mcp_servers.workspace_event]');
+    expect(content).toContain('[mcp_servers.workspace_payload]');
   });
 });
 
-describe('Installer — uninstallTargets sweep (workspace_event uninstall)', () => {
+describe('Installer — uninstallTargets sweep (workspace_payload uninstall)', () => {
   let tmpHome: string;
   let tmpCwd: string;
   let origCwd: string;
@@ -1396,7 +1396,7 @@ describe('Installer — uninstallTargets sweep (workspace_event uninstall)', () 
   });
 });
 
-describe('Installer — refreshTargets sweep (workspace_event install --refresh)', () => {
+describe('Installer — refreshTargets sweep (workspace_payload install --refresh)', () => {
   let tmpHome: string;
   let tmpCwd: string;
   let origCwd: string;
@@ -1501,7 +1501,7 @@ describe('Installer — Cursor rules file cleanup on uninstall', () => {
     fs.rmSync(tmpCwd, { recursive: true, force: true });
   });
 
-  const rulesFile = () => path.join(process.cwd(), '.cursor', 'rules', 'workspace_event.mdc');
+  const rulesFile = () => path.join(process.cwd(), '.cursor', 'rules', 'workspace_payload.mdc');
 
   // The frontmatter a previous install wrote ahead of the marked block.
   // `removeRulesEntry` recognizes it to decide whether the leftover .mdc
@@ -1519,7 +1519,7 @@ describe('Installer — Cursor rules file cleanup on uninstall', () => {
     fs.writeFileSync(rulesFile(), MDC_FRONTMATTER + LEGACY_BLOCK + '\n' + extra);
   }
 
-  it('uninstall deletes a leftover workspace_event.mdc entirely (no orphaned frontmatter left behind)', () => {
+  it('uninstall deletes a leftover workspace_payload.mdc entirely (no orphaned frontmatter left behind)', () => {
     plantLegacyRulesFile();
     expect(fs.existsSync(rulesFile())).toBe(true);
 
@@ -1529,14 +1529,14 @@ describe('Installer — Cursor rules file cleanup on uninstall', () => {
     expect(fs.existsSync(rulesFile())).toBe(false);
   });
 
-  it('install self-heals a leftover workspace_event.mdc (#529)', () => {
+  it('install self-heals a leftover workspace_payload.mdc (#529)', () => {
     plantLegacyRulesFile();
     const result = cursor.install('local', { autoAllow: true });
     expect(fs.existsSync(rulesFile())).toBe(false);
-    expect(result.files.some((f) => f.path.endsWith('workspace_event.mdc') && f.action === 'removed')).toBe(true);
+    expect(result.files.some((f) => f.path.endsWith('workspace_payload.mdc') && f.action === 'removed')).toBe(true);
   });
 
-  it('uninstall preserves user content added outside the workspace_event markers (strips only our block)', () => {
+  it('uninstall preserves user content added outside the workspace_payload markers (strips only our block)', () => {
     plantLegacyRulesFile('## My own rule\nkeep me\n');
 
     cursor.uninstall('local');
@@ -1618,7 +1618,7 @@ describe('Installer targets — opencode XDG config path (#535)', () => {
   it('greenfield: targets ~/.config/opencode even when the dir does not exist yet (#535)', () => {
     // The rejected fallback design (#670) would send this install to
     // %APPDATA% — where opencode would never find it. opencode creates
-    // ~/.config/opencode itself on first run; installing workspace_event FIRST
+    // ~/.config/opencode itself on first run; installing workspace_payload FIRST
     // must land where opencode will look.
     expect(fs.existsSync(path.join(tmpHome, '.config', 'opencode'))).toBe(false);
     const opencode = getTarget('opencode')!;
@@ -1638,7 +1638,7 @@ describe('Installer targets — opencode XDG config path (#535)', () => {
   });
 
   it('install self-heals a pre-#535 %APPDATA% entry, preserving siblings and comments', () => {
-    // A previous workspace_event version wrote into %APPDATA%/opencode. The user
+    // A previous workspace_payload version wrote into %APPDATA%/opencode. The user
     // also has another MCP server and a comment there — those must survive.
     fs.mkdirSync(legacyDir(), { recursive: true });
     fs.writeFileSync(path.join(legacyDir(), 'opencode.jsonc'), [
@@ -1646,7 +1646,7 @@ describe('Installer targets — opencode XDG config path (#535)', () => {
       '  // my servers',
       '  "$schema": "https://opencode.ai/config.json",',
       '  "mcp": {',
-      '    "workspace_event": { "type": "local", "command": ["workspace_event", "serve", "--mcp"], "enabled": true },',
+      '    "workspace_payload": { "type": "local", "command": ["workspace_payload", "serve", "--mcp"], "enabled": true },',
       '    "other": { "type": "local", "command": ["other"], "enabled": true }',
       '  }',
       '}',
@@ -1674,11 +1674,11 @@ describe('Installer targets — opencode XDG config path (#535)', () => {
   });
 
   it('uninstall sweeps the legacy %APPDATA% entry too (no prior re-install needed)', () => {
-    // A user on the broken version goes straight to `workspace_event uninstall`:
+    // A user on the broken version goes straight to `workspace_payload uninstall`:
     // the only entry that exists is the stale %APPDATA% one.
     fs.mkdirSync(legacyDir(), { recursive: true });
     fs.writeFileSync(path.join(legacyDir(), 'opencode.json'),
-      '{\n  "mcp": {\n    "workspace_event": { "type": "local", "command": ["workspace_event", "serve", "--mcp"], "enabled": true }\n  }\n}\n');
+      '{\n  "mcp": {\n    "workspace_payload": { "type": "local", "command": ["workspace_payload", "serve", "--mcp"], "enabled": true }\n  }\n}\n');
 
     const opencode = getTarget('opencode')!;
     const result = opencode.uninstall('global');
@@ -1690,7 +1690,7 @@ describe('Installer targets — opencode XDG config path (#535)', () => {
   it('install after install sweeps only once — second run reports no legacy changes', () => {
     fs.mkdirSync(legacyDir(), { recursive: true });
     fs.writeFileSync(path.join(legacyDir(), 'opencode.json'),
-      '{\n  "mcp": {\n    "workspace_event": { "type": "local", "command": ["workspace_event", "serve", "--mcp"], "enabled": true }\n  }\n}\n');
+      '{\n  "mcp": {\n    "workspace_payload": { "type": "local", "command": ["workspace_payload", "serve", "--mcp"], "enabled": true }\n  }\n}\n');
 
     const opencode = getTarget('opencode')!;
     const first = opencode.install('global', { autoAllow: true });

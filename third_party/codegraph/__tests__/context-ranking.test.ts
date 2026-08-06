@@ -69,7 +69,7 @@ describe('scorePathRelevance per-word scoring (#720)', () => {
 // name alone, so the rest of the query decides the ranking (#720).
 describe('project-name down-weighting in path relevance (#720)', () => {
   it('derives the project name from go.mod / package.json, skipping short names', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-projname-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-projname-'));
     try {
       fs.writeFileSync(path.join(dir, 'go.mod'), 'module example.com/SuperBizAgent\n\ngo 1.21\n');
       fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: '@acme/superbizagent-web' }));
@@ -110,7 +110,7 @@ describe('Context ranking — common-word precision & confidence', () => {
   let cg: CodeGraph;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-ctxrank-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-ctxrank-'));
 
     // The corroborated target: a capture-flow screen whose NAME alone matches
     // three query terms (capture + intro + screen), and which lives under a

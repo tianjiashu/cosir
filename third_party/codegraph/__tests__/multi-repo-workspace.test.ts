@@ -4,7 +4,7 @@
  * A directory holding several independent git repositories can be indexed as a
  * whole, but ONLY when the project opts the gitignored directories in. The
  * default is the universal one: `.gitignore` excludes. Walking into a gitignored
- * directory to index embedded repos there is OPT-IN via `workspace_event.json`
+ * directory to index embedded repos there is OPT-IN via `workspace_payload.json`
  * `includeIgnored` (#622, #699) — without it a gitignored `node_modules`-style
  * reference/data dir full of nested clones is left untouched, instead of blowing
  * the graph up or stalling the scan (#970, #976).
@@ -58,9 +58,9 @@ describe('multi-repo workspaces (#514) + .gitignore-respect default (#970, #976)
     fs.rmSync(ws, { recursive: true, force: true });
   });
 
-  /** Drop a `workspace_event.json` at the workspace root. */
+  /** Drop a `workspace_payload.json` at the workspace root. */
   const writeConfig = (obj: unknown) =>
-    fs.writeFileSync(path.join(ws, 'workspace_event.json'),
+    fs.writeFileSync(path.join(ws, 'workspace_payload.json'),
       typeof obj === 'string' ? obj : JSON.stringify(obj));
 
   describe('default: .gitignore is respected (#970, #976)', () => {
@@ -103,7 +103,7 @@ describe('multi-repo workspaces (#514) + .gitignore-respect default (#970, #976)
     });
   });
 
-  describe('opt-in: workspace_event.json includeIgnored re-includes a gitignored dir (#622, #699)', () => {
+  describe('opt-in: workspace_payload.json includeIgnored re-includes a gitignored dir (#622, #699)', () => {
     it('indexes embedded repos hidden by the super-repo .gitignore', () => {
       write(path.join(ws, 'packages/proj-a/src/auth.ts'), 'export function login() { return 1; }\n');
       write(path.join(ws, 'packages/proj-b/src/billing.ts'), 'export function charge() { return 2; }\n');
@@ -240,7 +240,7 @@ describe('multi-repo workspaces (#514) + .gitignore-respect default (#970, #976)
       git(ws, 'rm', '-r', '--cached', '-q', 'vendor-src');
       git(ws, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'untrack');
 
-      // No workspace_event.json: the untracked path is unaffected by the opt-in gate.
+      // No workspace_payload.json: the untracked path is unaffected by the opt-in gate.
       const files = scanDirectory(ws);
       expect(files).toContain('vendor-src/lib/src/util.ts');
       expect(files).toContain('main.ts');
@@ -347,7 +347,7 @@ describe('multi-repo workspaces (#514) + .gitignore-respect default (#970, #976)
       // That sentinel used to reach the `ignore` matcher and throw
       // ("path should be a `path.relative()`d string, but got "./""), aborting
       // buildScopeIgnore → the MCP daemon's watcher never started and auto-sync
-      // silently stalled until a manual `workspace_event sync`.
+      // silently stalled until a manual `workspace_payload sync`.
       write(path.join(ws, 'child/src/a.ts'), 'export const x = 1;\n');
       write(path.join(ws, '.gitignore'), '/child/\n');
       makeRepo(ws);

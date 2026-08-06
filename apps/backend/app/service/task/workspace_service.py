@@ -5,7 +5,7 @@
 
 职责边界：
 - 负责：工作区创建、列表查询、级联删除
-  （task + turn + turn_message + workspace_event）。
+  （task + turn + turn_message + workspace_payload）。
 - 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``/
   ``TurnCrud``/``TurnMessageCrud``/``RuntimeEventCrud``）。
 """

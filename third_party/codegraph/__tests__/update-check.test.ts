@@ -1,7 +1,7 @@
 /**
  * Background update-availability check (#1243).
  *
- * The MCP config launches the local `workspace_event` binary, so a server left
+ * The MCP config launches the local `workspace_payload` binary, so a server left
  * running drifts behind releases silently. `src/upgrade/update-check.ts` gives
  * it visibility: a cached, fail-silent check against the latest release,
  * surfaced as a one-line notice. These tests pin the contract: TTL/backoff
@@ -32,7 +32,7 @@ describe('update check (#1243)', () => {
   const T0 = 1_750_000_000_000;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-upcheck-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-upcheck-'));
     resetUpdateNoticeMemo();
   });
 
@@ -55,7 +55,7 @@ describe('update check (#1243)', () => {
       expect(notice).toBe(formatUpdateNotice('v1.4.0', 'v1.5.0'));
       expect(notice).toContain('v1.5.0');
       expect(notice).toContain('v1.4.0');
-      expect(notice).toContain('workspace_event upgrade');
+      expect(notice).toContain('workspace_payload upgrade');
     });
 
     it('is null when already on the latest version', async () => {
@@ -204,7 +204,7 @@ describe('update check (#1243)', () => {
       const out = initializeInstructions('BASE', formatUpdateNotice('1.4.0', 'v1.5.0'));
       expect(out.startsWith('BASE\n\n')).toBe(true);
       expect(out).toContain('v1.5.0');
-      expect(out).toContain('workspace_event upgrade');
+      expect(out).toContain('workspace_payload upgrade');
       expect(out).toContain('do not run the upgrade yourself');
     });
   });
@@ -219,7 +219,7 @@ describe('update check (#1243)', () => {
 
       // Up-to-date case in its own cache dir (the first call above just wrote
       // a fresh "v1.5.0 available" cache into `dir`, which would win otherwise).
-      const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-upcheck2-'));
+      const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-upcheck2-'));
       try {
         const quiet: string[] = [];
         checkForUpdateInBackground(deps({ dir: dir2, resolveLatest: async () => 'v1.4.0' }), (l) => quiet.push(l));

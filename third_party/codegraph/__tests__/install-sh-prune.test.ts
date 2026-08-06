@@ -52,7 +52,7 @@ function runPrune(installDir: string, dest: string): { code: number; stdout: str
 function seedVersion(installDir: string, version: string): string {
   const dir = path.join(installDir, 'versions', version);
   fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'bin', 'workspace_event'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(dir, 'bin', 'workspace_payload'), '#!/bin/sh\n');
   return dir;
 }
 

@@ -16,7 +16,7 @@ describe('DatabaseConnection — backend reporting', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-backend-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-backend-'));
   });
 
   afterEach(() => {

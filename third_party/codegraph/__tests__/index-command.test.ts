@@ -1,6 +1,6 @@
 /**
- * Regression coverage for issue #874: `workspace_event index` produced 0 nodes / 0
- * edges while `workspace_event init` worked, and appeared to wipe the graph.
+ * Regression coverage for issue #874: `workspace_payload index` produced 0 nodes / 0
+ * edges while `workspace_payload init` worked, and appeared to wipe the graph.
  *
  * Root cause: `index` ran a full extraction against the already-populated DB
  * without clearing it first. Every file's content hash still matched, so the
@@ -21,7 +21,7 @@ import * as os from 'os';
 import { CodeGraph } from '../src';
 import { DatabaseConnection } from '../src/db';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 /** Normalize a PRAGMA read across return shapes (array | object | scalar). */
 function pragmaValue(raw: unknown, key: string): unknown {
@@ -49,11 +49,11 @@ function graphCounts(dir: string): { nodes: number; edges: number } {
   }
 }
 
-describe('workspace_event index — full re-index keeps the graph populated (#874)', () => {
+describe('workspace_payload index — full re-index keeps the graph populated (#874)', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-index-cmd-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-index-cmd-'));
     // A couple of files with a call edge so there is a non-trivial graph to
     // (fail to) reproduce.
     fs.writeFileSync(
@@ -126,12 +126,12 @@ describe('workspace_event index — full re-index keeps the graph populated (#87
  * away. The fix discards (unlinks) the database files and re-initializes a fresh
  * one — O(1) regardless of size — so `index` recovers any prior state.
  */
-describe('workspace_event index — recovers a stale/oversized prior index (#1067)', () => {
+describe('workspace_payload index — recovers a stale/oversized prior index (#1067)', () => {
   let tempDir: string;
-  const dbPath = (dir: string) => path.join(dir, '.workspace_event', 'workspace_event.db');
+  const dbPath = (dir: string) => path.join(dir, '.workspace_payload', 'workspace_payload.db');
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-index-recover-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-index-recover-'));
     fs.writeFileSync(
       path.join(tempDir, 'a.ts'),
       `export function greet(name: string) { return hello(name); }\n` +
@@ -166,7 +166,7 @@ describe('workspace_event index — recovers a stale/oversized prior index (#106
     expect(recovered.nodes).toBeLessThan(withJunk.nodes);
 
     // …and the result is identical to a fresh init of the same (now-smaller) tree.
-    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-index-fresh-'));
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-index-fresh-'));
     try {
       fs.copyFileSync(path.join(tempDir, 'a.ts'), path.join(fresh, 'a.ts'));
       runCodegraph(['init'], fresh);

@@ -40,7 +40,7 @@ describe('codegraph_explore — NL-stopword collision guard', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-stopword-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-stopword-'));
 
     // --- The collision file: an unrelated class whose methods are ordinary
     // English words ("check", "drain", "fire" — the only defs of those names).

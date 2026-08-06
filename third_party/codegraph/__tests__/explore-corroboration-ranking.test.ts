@@ -45,7 +45,7 @@ describe('codegraph_explore — multi-term corroboration tier', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-corrob-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-corrob-'));
 
     // --- The large, internally DENSE frontend layer ---------------------------
     // Many `app/` files whose SYMBOLS all match the word "item" and form a tight

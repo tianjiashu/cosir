@@ -21,7 +21,7 @@ import * as path from 'path';
 import * as os from 'os';
 import CodeGraph from '../../src/index';
 
-function createTempDir(prefix = 'workspace_event-int-'): string {
+function createTempDir(prefix = 'workspace_payload-int-'): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 

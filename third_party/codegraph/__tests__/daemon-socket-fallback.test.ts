@@ -6,7 +6,7 @@
  * breaks the daemon at TWO points, BOTH surfacing as ENOTSUP (verified on a real
  * macOS fskit ExFAT volume):
  *
- *   1. Lock acquisition `link()`s a temp file onto `.workspace_event/daemon.pid` for
+ *   1. Lock acquisition `link()`s a temp file onto `.workspace_payload/daemon.pid` for
  *      race-free exclusivity (#411). ExFAT has no hard links, so this throws
  *      first — before the socket is ever reached. The fix falls back to an
  *      O_EXCL create (`acquireLockViaExclusiveOpen`).
@@ -74,13 +74,13 @@ describe('getDaemonSocketCandidates (#997)', () => {
     const root = path.join(os.tmpdir(), 'cg-cand-short');
     const candidates = getDaemonSocketCandidates(root);
     expect(candidates).toHaveLength(2);
-    expect(candidates[0]).toBe(path.join(root, '.workspace_event', 'daemon.sock'));
+    expect(candidates[0]).toBe(path.join(root, '.workspace_payload', 'daemon.sock'));
     expect(candidates[1]!.startsWith(os.tmpdir())).toBe(true);
     expect(path.basename(candidates[1]!)).toMatch(/^codegraph-[0-9a-f]{16}\.sock$/);
   });
 
   it.runIf(POSIX)('drops straight to [tmpdir] when the in-project path is too long', () => {
-    // A deep root pushes `.workspace_event/daemon.sock` past the POSIX socket limit.
+    // A deep root pushes `.workspace_payload/daemon.sock` past the POSIX socket limit.
     const root = path.join('/tmp', 'x'.repeat(120));
     const candidates = getDaemonSocketCandidates(root);
     expect(candidates).toHaveLength(1);
@@ -100,7 +100,7 @@ describe('getDaemonSocketCandidates (#997)', () => {
   it.runIf(!POSIX)('returns a single named pipe on Windows', () => {
     const candidates = getDaemonSocketCandidates('C:/dev/proj');
     expect(candidates).toHaveLength(1);
-    expect(candidates[0]!.startsWith('\\\\.\\pipe\\workspace_event-')).toBe(true);
+    expect(candidates[0]!.startsWith('\\\\.\\pipe\\workspace_payload-')).toBe(true);
   });
 
   it('getDaemonSocketPath returns the preferred candidate (index 0)', () => {
@@ -114,12 +114,12 @@ describe('bindFirstUsableSocket (#997)', () => {
     const tried: string[] = [];
     const relocations: string[] = [];
     const result = await bindFirstUsableSocket(
-      ['/proj/.workspace_event/daemon.sock', '/tmp/fallback.sock'],
+      ['/proj/.workspace_payload/daemon.sock', '/tmp/fallback.sock'],
       (p) => { tried.push(p); return Promise.resolve(fakeServer(p)); },
       { onRelocate: (from, to) => relocations.push(`${from}->${to}`) },
     );
-    expect(result.socketPath).toBe('/proj/.workspace_event/daemon.sock');
-    expect(tried).toEqual(['/proj/.workspace_event/daemon.sock']); // never touched the fallback
+    expect(result.socketPath).toBe('/proj/.workspace_payload/daemon.sock');
+    expect(tried).toEqual(['/proj/.workspace_payload/daemon.sock']); // never touched the fallback
     expect(relocations).toEqual([]);
   });
 
@@ -127,7 +127,7 @@ describe('bindFirstUsableSocket (#997)', () => {
     const tried: string[] = [];
     const relocations: Array<[string, string, string]> = [];
     const result = await bindFirstUsableSocket(
-      ['/exfat/proj/.workspace_event/daemon.sock', '/tmp/fallback.sock'],
+      ['/exfat/proj/.workspace_payload/daemon.sock', '/tmp/fallback.sock'],
       (p) => {
         tried.push(p);
         if (p.includes('/exfat/')) return Promise.reject(errno('ENOTSUP'));
@@ -136,9 +136,9 @@ describe('bindFirstUsableSocket (#997)', () => {
       { onRelocate: (from, to, code) => relocations.push([from, to, code]) },
     );
     expect(result.socketPath).toBe('/tmp/fallback.sock');
-    expect(tried).toEqual(['/exfat/proj/.workspace_event/daemon.sock', '/tmp/fallback.sock']);
+    expect(tried).toEqual(['/exfat/proj/.workspace_payload/daemon.sock', '/tmp/fallback.sock']);
     expect(relocations).toEqual([
-      ['/exfat/proj/.workspace_event/daemon.sock', '/tmp/fallback.sock', 'ENOTSUP'],
+      ['/exfat/proj/.workspace_payload/daemon.sock', '/tmp/fallback.sock', 'ENOTSUP'],
     ]);
   });
 
@@ -146,11 +146,11 @@ describe('bindFirstUsableSocket (#997)', () => {
     const tried: string[] = [];
     await expect(
       bindFirstUsableSocket(
-        ['/proj/.workspace_event/daemon.sock', '/tmp/fallback.sock'],
+        ['/proj/.workspace_payload/daemon.sock', '/tmp/fallback.sock'],
         (p) => { tried.push(p); return Promise.reject(errno('EADDRINUSE')); },
       ),
     ).rejects.toMatchObject({ code: 'EADDRINUSE' });
-    expect(tried).toEqual(['/proj/.workspace_event/daemon.sock']); // fallback never tried
+    expect(tried).toEqual(['/proj/.workspace_payload/daemon.sock']); // fallback never tried
   });
 
   it('propagates a capability error on the LAST candidate (nowhere left to go)', async () => {
@@ -186,7 +186,7 @@ describe('bindFirstUsableSocket (#997)', () => {
     // anticipated must still fall through to tmpdir. 'EWEIRD' stands in for any
     // such surprise.
     const result = await bindFirstUsableSocket(
-      ['/odd/proj/.workspace_event/daemon.sock', '/tmp/fallback.sock'],
+      ['/odd/proj/.workspace_payload/daemon.sock', '/tmp/fallback.sock'],
       (p) => p.includes('/odd/') ? Promise.reject(errno('EWEIRD')) : Promise.resolve(fakeServer(p)),
     );
     expect(result.socketPath).toBe('/tmp/fallback.sock');

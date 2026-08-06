@@ -1,10 +1,10 @@
 /**
  * Deleted-but-open DB inode self-heal (issue #925).
  *
- * A long-lived process (the MCP daemon) opens `.workspace_event/workspace_event.db` and
- * holds the file descriptor for its whole life. If `.workspace_event/` is removed and
+ * A long-lived process (the MCP daemon) opens `.workspace_payload/workspace_payload.db` and
+ * holds the file descriptor for its whole life. If `.workspace_payload/` is removed and
  * recreated AT THE SAME PATH while it's running — `git worktree remove <p>` then
- * `git worktree add <p>` + `workspace_event init`, or `rm -rf .workspace_event` + re-init —
+ * `git worktree add <p>` + `workspace_payload init`, or `rm -rf .workspace_payload` + re-init —
  * the held fd points at the now-unlinked inode and can never see the new index.
  * Queries then return the pre-removal snapshot until the process restarts; the
  * CLI (a fresh process) reads the new inode and diverges.
@@ -32,7 +32,7 @@ describe('DatabaseConnection.isReplacedOnDisk (issue #925)', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-925-db-'));
-    dbPath = path.join(dir, 'workspace_event.db');
+    dbPath = path.join(dir, 'workspace_payload.db');
     conn = DatabaseConnection.initialize(dbPath);
   });
 
@@ -84,9 +84,9 @@ describe('CodeGraph.reopenIfReplaced (issue #925)', () => {
     expect(server.searchNodes('fooOld').length).toBeGreaterThan(0);
     expect(server.searchNodes('fooNew').length).toBe(0);
 
-    // Simulate `git worktree remove` + re-add (or rm -rf .workspace_event + init):
+    // Simulate `git worktree remove` + re-add (or rm -rf .workspace_payload + init):
     // a NEW index inode at the same path, carrying a renamed symbol, written by
-    // a separate instance (mirrors a fresh `workspace_event init` process).
+    // a separate instance (mirrors a fresh `workspace_payload init` process).
     fs.rmSync(getCodeGraphDir(root), { recursive: true, force: true });
     fs.writeFileSync(path.join(root, 'src', 'a.ts'), 'export function fooNew() { return 2; }\n');
     const fresh = CodeGraph.initSync(root);

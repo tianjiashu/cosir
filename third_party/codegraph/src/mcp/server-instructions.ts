@@ -3,7 +3,7 @@
  *
  * MCP clients (Claude Code, Cursor, opencode, LangChain, OpenAI Agent
  * SDK, …) surface this text in the agent's system prompt automatically,
- * giving the agent a high-level playbook for the workspace_event toolset
+ * giving the agent a high-level playbook for the workspace_payload toolset
  * before it sees individual tool descriptions.
  *
  * Goals when editing this:
@@ -70,14 +70,14 @@ calls; a grep/read exploration is dozens.
 `;
 
 /**
- * Instructions variant sent when the server's own root has NO workspace_event index.
+ * Instructions variant sent when the server's own root has NO workspace_payload index.
  *
  * The tools are still exposed (gating tool availability on whether `./` has an
  * index is the bug behind #964: it breaks monorepos where only sub-projects are
- * indexed, and a server that started before `workspace_event init` never surfaces the
+ * indexed, and a server that started before `workspace_payload init` never surfaces the
  * tools afterward). Instead of an "inactive" note, this variant tells the agent
- * workspace_event works **per project**: there's no default project to query, so pass
- * a `projectPath` to any project that HAS a `.workspace_event/`. The full single-
+ * workspace_payload works **per project**: there's no default project to query, so pass
+ * a `projectPath` to any project that HAS a `.workspace_payload/`. The full single-
  * project playbook ({@link SERVER_INSTRUCTIONS}) is sent instead when the root
  * IS indexed, so the common case stays tight.
  */

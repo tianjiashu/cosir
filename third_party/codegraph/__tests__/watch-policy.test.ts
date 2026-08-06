@@ -70,7 +70,7 @@ describe('FileWatcher honors the watch policy', () => {
   });
 
   it('does not start when CODEGRAPH_NO_WATCH=1', () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-nowatch-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-nowatch-'));
     process.env.CODEGRAPH_NO_WATCH = '1';
 
     const syncFn = vi.fn().mockResolvedValue({ filesChanged: 0, durationMs: 0 });

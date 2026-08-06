@@ -1,5 +1,5 @@
 /**
- * `workspace_event query` score rendering (#1045).
+ * `workspace_payload query` score rendering (#1045).
  *
  * The human-readable output used to print `(score * 100)%` next to each hit,
  * but `score` is an unbounded BM25/FTS relevance magnitude (relative-ranking
@@ -17,7 +17,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { CodeGraph } from '../src';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 function query(cwd: string, extraArgs: string[]): string {
   return execFileSync(process.execPath, [BIN, 'query', 'parseToken', ...extraArgs, '-p', cwd], {
@@ -27,11 +27,11 @@ function query(cwd: string, extraArgs: string[]): string {
   });
 }
 
-describe('workspace_event query — score rendering (#1045)', () => {
+describe('workspace_payload query — score rendering (#1045)', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-query-cmd-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-query-cmd-'));
     fs.mkdirSync(path.join(tempDir, 'src'));
     fs.writeFileSync(
       path.join(tempDir, 'src/auth.ts'),

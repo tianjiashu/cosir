@@ -41,7 +41,7 @@ export const SERVER_INFO = {
  * respond-fast contract holds; when no notice exists the instructions are
  * byte-identical to the bare constants.
  *
- * Test-authoring note: on a machine whose real `~/.workspace_event` cache knows a
+ * Test-authoring note: on a machine whose real `~/.workspace_payload` cache knows a
  * newer release, spawned servers append the notice — a test asserting exact
  * instructions equality must set `CODEGRAPH_NO_UPDATE_CHECK=1` in the spawn
  * env or it will fail only in the weeks after a release ships.
@@ -217,9 +217,9 @@ export class MCPSession {
     // single-project playbook. When it ISN'T, send the per-project variant
     // (tools are still exposed — see handleToolsList): it tells the agent there
     // is no default project and to pass `projectPath` to any project that has a
-    // `.workspace_event/`. Gating tool AVAILABILITY on whether `./` is indexed was the
+    // `.workspace_payload/`. Gating tool AVAILABILITY on whether `./` is indexed was the
     // #964 bug — it broke monorepos (only sub-projects indexed) and never
-    // surfaced the tools after a mid-session `workspace_event init`. When no explicit
+    // surfaced the tools after a mid-session `workspace_payload init`. When no explicit
     // path is known yet (roots/list dance pending), cwd is the best predictor of
     // where the default project will resolve.
     const indexed = findNearestCodeGraphRoot(explicitPath ?? process.cwd()) !== null;
@@ -244,14 +244,14 @@ export class MCPSession {
     await this.retryInitIfNeeded();
     // Always expose the tools — even when the server root has no index. Gating
     // availability on whether `./` is indexed (the old behavior) breaks the
-    // monorepo case where only sub-projects carry a `.workspace_event/` (the agent
+    // monorepo case where only sub-projects carry a `.workspace_payload/` (the agent
     // saw zero tools and couldn't even reach an indexed sub-project by
     // `projectPath`), and it hides the tools from a session that started before
-    // the user ran `workspace_event init` (most hosts request the list once, so the
+    // the user ran `workspace_payload init` (most hosts request the list once, so the
     // freshly-built index never surfaces). #964. The not-indexed case is still
     // safe: a call against an un-indexed path returns SUCCESS-shaped guidance
-    // ("pass projectPath / run workspace_event init"), never `isError`, so it can't
-    // teach the agent to abandon workspace_event. `getTools()` returns the default
+    // ("pass projectPath / run workspace_payload init"), never `isError`, so it can't
+    // teach the agent to abandon workspace_payload. `getTools()` returns the default
     // surface even before a project is open.
     this.transport.sendResult(request.id, {
       tools: this.engine.getToolHandler().getTools(),
@@ -300,7 +300,7 @@ export class MCPSession {
    *   2. if still uninitialized and we never asked the client for its roots,
    *      do so now (one-shot); fall back to cwd if the client lacks roots;
    *   3. last-resort: re-walk from the best candidate — picks up projects
-   *      that were `workspace_event init`'d *after* the server started.
+   *      that were `workspace_payload init`'d *after* the server started.
    */
   private async retryInitIfNeeded(): Promise<void> {
     if (this.resolvePromise) {

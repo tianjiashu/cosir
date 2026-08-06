@@ -20,9 +20,11 @@ import pytest
 
 from app.models.enums.event_type import EventType
 from app.models.payload import EVENT_PAYLOAD_MODELS
-from app.models.payload.workspace_event.workspace_degraded_payload import WorkspaceDegradedPayload
-from app.models.payload.workspace_event.workspace_preparing_payload import WorkspacePreparingPayload
-from app.models.payload.workspace_event.workspace_ready_payload import WorkspaceReadyPayload
+from app.models.payload.workspace_payload.workspace_degraded_payload import WorkspaceDegradedPayload
+from app.models.payload.workspace_payload.workspace_preparing_payload import (
+    WorkspacePreparingPayload,
+)
+from app.models.payload.workspace_payload.workspace_ready_payload import WorkspaceReadyPayload
 from app.models.workspace_readiness import WorkspaceReadiness
 from app.service.task.turn_prepare_service import TurnPrepareService
 

@@ -23,7 +23,7 @@ describe('codegraph_files path normalization', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-files-paths-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-files-paths-'));
     fs.mkdirSync(path.join(tempDir, 'src', 'components'), { recursive: true });
     fs.mkdirSync(path.join(tempDir, 'tests'), { recursive: true });
     fs.writeFileSync(path.join(tempDir, 'src', 'index.ts'), `export const x = 1;\n`);

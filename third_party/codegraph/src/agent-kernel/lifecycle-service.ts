@@ -89,7 +89,7 @@ export class LifecycleService {
    *     - INDEX_LOCKED（retryable）：SQLite 忙碌 / 实例持锁。
    *   workspace 为空则 INVALID_REQUEST（不可重试）。
    * 副作用:
-   *   在 workspace 下创建 .workspace_event/ 并全量索引；实例入缓存。
+   *   在 workspace 下创建 .workspace_payload/ 并全量索引；实例入缓存。
    */
   async init(workspacePath: string): Promise<IndexInitPayload> {
     const resolvedRoot = findNearestCodeGraphRoot(workspacePath) ?? workspacePath;

@@ -1,7 +1,7 @@
 /**
  * Daemon bind-failure cleanup — issue #974.
  *
- * A detached daemon acquires the `.workspace_event/daemon.pid` lock (via
+ * A detached daemon acquires the `.workspace_payload/daemon.pid` lock (via
  * `tryAcquireDaemonLock`) BEFORE it binds its socket. If the bind then fails —
  * e.g. AF_UNIX is unsupported/unreliable on the filesystem (the WSL2 DrvFs
  * hazard behind #974) — `Daemon.start()` must release that lockfile before it

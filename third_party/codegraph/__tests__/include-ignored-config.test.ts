@@ -1,5 +1,5 @@
 /**
- * `workspace_event.json` `includeIgnored` loader (#970, #976 / #622, #699).
+ * `workspace_payload.json` `includeIgnored` loader (#970, #976 / #622, #699).
  *
  * Parsing, validation, and mtime-caching of the opt-in patterns that re-include
  * gitignored directories for embedded-repo discovery. The behavioral end of this
@@ -16,7 +16,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { loadIncludeIgnoredPatterns, loadExtensionOverrides, clearProjectConfigCache, addIncludeIgnoredPatterns } from '../src/project-config';
 
-describe('includeIgnored loader (workspace_event.json)', () => {
+describe('includeIgnored loader (workspace_payload.json)', () => {
   let dir: string;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-includeignored-'));
@@ -28,11 +28,11 @@ describe('includeIgnored loader (workspace_event.json)', () => {
   });
   const writeConfig = (obj: unknown) =>
     fs.writeFileSync(
-      path.join(dir, 'workspace_event.json'),
+      path.join(dir, 'workspace_payload.json'),
       typeof obj === 'string' ? obj : JSON.stringify(obj)
     );
 
-  it('returns an empty list when there is no workspace_event.json (the default)', () => {
+  it('returns an empty list when there is no workspace_payload.json (the default)', () => {
     expect(loadIncludeIgnoredPatterns(dir)).toEqual([]);
   });
 
@@ -74,7 +74,7 @@ describe('includeIgnored loader (workspace_event.json)', () => {
     writeConfig({ includeIgnored: ['services/'] });
     // Force a distinct mtime in case the filesystem clock is coarse.
     const future = new Date(Date.now() + 2000);
-    fs.utimesSync(path.join(dir, 'workspace_event.json'), future, future);
+    fs.utimesSync(path.join(dir, 'workspace_payload.json'), future, future);
 
     expect(loadIncludeIgnoredPatterns(dir)).toEqual(['services/']);
   });
@@ -83,12 +83,12 @@ describe('includeIgnored loader (workspace_event.json)', () => {
     writeConfig({ includeIgnored: ['packages/'] });
     expect(loadIncludeIgnoredPatterns(dir)).toEqual(['packages/']);
 
-    fs.rmSync(path.join(dir, 'workspace_event.json'));
+    fs.rmSync(path.join(dir, 'workspace_payload.json'));
     expect(loadIncludeIgnoredPatterns(dir)).toEqual([]);
   });
 });
 
-describe('addIncludeIgnoredPatterns (workspace_event.json writer, #1156)', () => {
+describe('addIncludeIgnoredPatterns (workspace_payload.json writer, #1156)', () => {
   let dir: string;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-addincludeignored-'));
@@ -98,16 +98,16 @@ describe('addIncludeIgnoredPatterns (workspace_event.json writer, #1156)', () =>
     clearProjectConfigCache();
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  const readConfig = () => JSON.parse(fs.readFileSync(path.join(dir, 'workspace_event.json'), 'utf-8'));
+  const readConfig = () => JSON.parse(fs.readFileSync(path.join(dir, 'workspace_payload.json'), 'utf-8'));
 
-  it('creates workspace_event.json when none exists', () => {
+  it('creates workspace_payload.json when none exists', () => {
     expect(addIncludeIgnoredPatterns(dir, ['mtc-a/', 'mtc-b/'])).toBe(2);
     expect(loadIncludeIgnoredPatterns(dir)).toEqual(['mtc-a/', 'mtc-b/']);
   });
 
   it('merges into an existing list, preserving other keys and de-duping', () => {
     fs.writeFileSync(
-      path.join(dir, 'workspace_event.json'),
+      path.join(dir, 'workspace_payload.json'),
       JSON.stringify({ extensions: { '.foo': 'typescript' }, includeIgnored: ['mtc-a/'] }),
     );
     expect(addIncludeIgnoredPatterns(dir, ['mtc-a/', 'mtc-b/'])).toBe(1); // only mtc-b/ is new
@@ -123,21 +123,21 @@ describe('addIncludeIgnoredPatterns (workspace_event.json writer, #1156)', () =>
   });
 
   it('replaces a non-array includeIgnored value rather than crashing', () => {
-    fs.writeFileSync(path.join(dir, 'workspace_event.json'), JSON.stringify({ includeIgnored: 'oops' }));
+    fs.writeFileSync(path.join(dir, 'workspace_payload.json'), JSON.stringify({ includeIgnored: 'oops' }));
     expect(addIncludeIgnoredPatterns(dir, ['mtc-a/'])).toBe(1);
     expect(loadIncludeIgnoredPatterns(dir)).toEqual(['mtc-a/']);
   });
 
-  it('refuses to clobber a malformed existing workspace_event.json (throws, leaves file intact)', () => {
+  it('refuses to clobber a malformed existing workspace_payload.json (throws, leaves file intact)', () => {
     const bad = '{ not: valid json ';
-    fs.writeFileSync(path.join(dir, 'workspace_event.json'), bad);
+    fs.writeFileSync(path.join(dir, 'workspace_payload.json'), bad);
     expect(() => addIncludeIgnoredPatterns(dir, ['mtc-a/'])).toThrow();
-    expect(fs.readFileSync(path.join(dir, 'workspace_event.json'), 'utf-8')).toBe(bad);
+    expect(fs.readFileSync(path.join(dir, 'workspace_payload.json'), 'utf-8')).toBe(bad);
   });
 
   it('writes pretty-printed, newline-terminated JSON', () => {
     addIncludeIgnoredPatterns(dir, ['mtc-a/']);
-    const raw = fs.readFileSync(path.join(dir, 'workspace_event.json'), 'utf-8');
+    const raw = fs.readFileSync(path.join(dir, 'workspace_payload.json'), 'utf-8');
     expect(raw.endsWith('\n')).toBe(true);
     expect(raw).toContain('\n  "includeIgnored"'); // 2-space indent
   });

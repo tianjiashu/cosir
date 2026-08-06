@@ -17,15 +17,19 @@ import { UserMessage } from "@/components/chat/UserMessage";
 import { AgentMessage } from "@/components/chat/AgentMessage";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
+import { ToolCallGroup } from "@/components/chat/ToolCallGroup";
 import { TerminalCallCard } from "@/components/chat/TerminalCallCard";
 import { StatusBadge } from "@/components/chat/StatusBadge";
 import {
   createTimelineProjectorState,
   type TimelineProjectorState,
-  type TurnTimelineEntry,
   projectTimelineIncrementally,
   selectVisibleEntries,
 } from "@/services/timeline/projector";
+import {
+  groupConsecutiveTools,
+  type RenderEntry,
+} from "@/services/timeline/groupTools";
 import { openFileInEditor } from "@/services/backend";
 import { logInfo, logWarn } from "@/lib/logger";
 
@@ -105,7 +109,13 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
         content: turn.response_text,
       });
     }
-    return { turnId: turn.turn_id, userText: turn.input_text, entries };
+    return {
+      turnId: turn.turn_id,
+      userText: turn.input_text,
+      entries,
+      // 把「长度 ≥ 2 的连续 tool 段」聚合成一行摘要，避免同 turn 多工具纵向过长。
+      renderEntries: groupConsecutiveTools(entries),
+    };
     // renderTick 是「stateRef.current 已更新」的唯一可观测信号；
     // ESLint 无法追踪 ref 读取，故此依赖必要而非冗余。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,16 +138,23 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
         <UserMessage content={turnItem.userText} />
       </div>
 
-      {turnItem.entries.map((entry) => (
+      {turnItem.renderEntries.map((entry) => (
         // 以稳定 key 配合下方 memo 包裹的 TimelineEntry：
         // 当投影器保证「未变化条目沿用旧引用」时，父组件每帧重渲染只会真正重算
         // 内容/引用变化的那一条目（如流式追加的 assistant 块），其余条目被 React 跳过。
         // tool 条目优先用 callId 作 key：entry.item.eventId 在 running→completed 时会
         // 从 started 事件 id 变为 finished 事件 id（projector 行 259），若直接作 key 会导致
         // 工具完成瞬间 React 卸载旧 TimelineEntry、挂载新实例，重置 ToolCallCard 展开态。
-        // 用 callId 可保证 key 在条目整个生命周期内恒定。
+        // 用 callId 可保证 key 在条目整个生命周期内恒定；
+        // toolGroup 用聚合 groupId 作 key，保证流式期组引用稳定、不重置展开态。
         <TimelineEntry
-          key={entry.kind === "tool" ? entry.item.callId ?? entry.item.eventId : entry.eventId}
+          key={
+            entry.kind === "toolGroup"
+              ? entry.groupId
+              : entry.kind === "tool"
+                ? entry.item.callId ?? entry.item.eventId
+                : entry.eventId
+          }
           entry={entry}
           onOpenFile={handleOpenFile}
         />
@@ -159,12 +176,21 @@ const TimelineEntry = memo(function TimelineEntry({
   entry,
   onOpenFile,
 }: {
-  entry: TurnTimelineEntry;
+  entry: RenderEntry;
   onOpenFile: (path: string) => void;
 }) {
   // 所有 timeline 条目统一限宽 content 令牌，与用户消息、输入栏保持宽度对齐，
   // 避免 diff/write 工具卡片单独 breakout 导致右侧参差不齐。
   const widthClass = "mx-auto w-full min-w-0 max-w-content";
+
+  // 连续工具段聚合：收成一行「运行了 N 个工具 ▾」，展开才见明细。
+  if (entry.kind === "toolGroup") {
+    return (
+      <div className={widthClass}>
+        <ToolCallGroup groupId={entry.groupId} items={entry.items} onOpenFile={onOpenFile} />
+      </div>
+    );
+  }
 
   if (entry.kind === "thinking") {
     // 过滤纯空白与极短无意义内容（至少 2 个字符才值得展示折叠块）

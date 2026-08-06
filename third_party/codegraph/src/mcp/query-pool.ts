@@ -19,7 +19,7 @@
  *     caller falls back to in-process dispatch instead of thrashing respawns.
  *   - graceful backstop: a call that can't be served within `softTimeoutMs`
  *     resolves with SUCCESS-shaped "busy, retry" guidance — never `isError`, so
- *     a momentary overload can't teach the agent to abandon workspace_event — instead
+ *     a momentary overload can't teach the agent to abandon workspace_payload — instead
  *     of hanging past the client's hard timeout.
  */
 
@@ -253,7 +253,7 @@ export class QueryPool {
         job.retries++;
         this.queue.unshift(job); // head of line — retry promptly
       } else {
-        this.settle(job, { isError: true, content: [{ type: 'text', text: 'workspace_event worker crashed; please retry the call.' }] });
+        this.settle(job, { isError: true, content: [{ type: 'text', text: 'workspace_payload worker crashed; please retry the call.' }] });
       }
     }
     this.drain();
@@ -317,7 +317,7 @@ export class QueryPool {
     this.pendingWorkers.clear();
     this.idle = [];
     for (const job of [...this.inflight.values(), ...this.queue]) {
-      this.settle(job, { isError: true, content: [{ type: 'text', text: 'workspace_event is shutting down; retry shortly.' }] });
+      this.settle(job, { isError: true, content: [{ type: 'text', text: 'workspace_payload is shutting down; retry shortly.' }] });
     }
     this.inflight.clear();
     this.queue = [];

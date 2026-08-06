@@ -1,13 +1,13 @@
 /**
  * Background update-availability check for long-lived servers (#1243).
  *
- * The recommended MCP config launches the LOCAL `workspace_event` binary, so the
+ * The recommended MCP config launches the LOCAL `workspace_payload` binary, so the
  * server (and the prompt hook alongside it) silently stays on whatever version
  * was last manually upgraded — users discover the drift only when something
  * breaks. This module gives the running server *visibility* without changing
  * behavior: a non-blocking check against the latest GitHub release, surfaced
  * as a one-line notice (stderr log, MCP initialize instructions, and
- * `codegraph_status`) telling the user to run `workspace_event upgrade`.
+ * `codegraph_status`) telling the user to run `workspace_payload upgrade`.
  *
  * Invariants (mirrors the telemetry module's contract):
  *   - Never stdout — stdio is the MCP protocol channel.
@@ -22,7 +22,7 @@
  *
  * The check itself reuses `resolveLatestVersion` — the GitHub release-redirect
  * trick with the API fallback — so version resolution can't drift from what
- * `workspace_event upgrade` installs. Results are cached in `~/.workspace_event/` (the
+ * `workspace_payload upgrade` installs. Results are cached in `~/.workspace_payload/` (the
  * same global state dir telemetry and the daemon registry use) with a 24h TTL
  * on success and a 1h backoff after failure, shared across every proxy /
  * daemon process on the machine.
@@ -51,7 +51,7 @@ export interface UpdateCheckCacheFile {
 }
 
 export interface UpdateCheckDeps {
-  /** Global state dir; defaults to ~/.workspace_event. Tests inject a temp dir. */
+  /** Global state dir; defaults to ~/.workspace_payload. Tests inject a temp dir. */
   dir?: string;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
@@ -69,7 +69,7 @@ interface ResolvedDeps {
 
 function resolveDeps(deps: UpdateCheckDeps = {}): ResolvedDeps {
   return {
-    dir: deps.dir ?? path.join(os.homedir(), '.workspace_event'),
+    dir: deps.dir ?? path.join(os.homedir(), '.workspace_payload'),
     env: deps.env ?? process.env,
     now: deps.now ?? Date.now,
     resolveLatest:

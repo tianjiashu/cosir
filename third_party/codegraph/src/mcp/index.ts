@@ -8,7 +8,7 @@
  *
  * @example
  * ```typescript
- * import { MCPServer } from 'workspace_event';
+ * import { MCPServer } from 'workspace_payload';
  *
  * const server = new MCPServer('/path/to/project');
  * await server.start();
@@ -18,7 +18,7 @@
  *
  * - **Direct** — one process serves one MCP client over stdio. The pre-#411
  *   behavior; used when the user opts out (`CODEGRAPH_NO_DAEMON=1`), no
- *   `.workspace_event/` is reachable, or the daemon machinery fails for any reason.
+ *   `.workspace_payload/` is reachable, or the daemon machinery fails for any reason.
  * - **Proxy** — what an MCP host actually talks to when sharing is on: a thin
  *   stdio↔socket pipe to the shared daemon. The proxy carries the #277 PPID
  *   watchdog, so a SIGKILL'd host reaps its proxy promptly. See {@link ./proxy.ts}.
@@ -105,9 +105,9 @@ function daemonInternalSet(): boolean {
 
 /**
  * Resolve the project root the daemon machinery should key on. Returns
- * `null` when no `.workspace_event/` is reachable from the candidate path — in
+ * `null` when no `.workspace_payload/` is reachable from the candidate path — in
  * that case the caller must run in direct mode, since the daemon lockfile
- * and socket both live under `.workspace_event/`.
+ * and socket both live under `.workspace_payload/`.
  *
  * The result is canonicalized with `realpathSync` so every client converges on
  * the same socket/lock path regardless of how it expressed the path: a client
@@ -127,7 +127,7 @@ function resolveDaemonRoot(explicitPath: string | null): string | null {
  * Spawn the shared daemon as a fully detached background process: its own
  * session/process group (so a SIGHUP/SIGINT to the launcher's terminal can't
  * reach it) with stdio decoupled from the launcher (logs to
- * `.workspace_event/daemon.log`). Re-invokes the *same* CLI faithfully across dev and
+ * `.workspace_payload/daemon.log`). Re-invokes the *same* CLI faithfully across dev and
  * bundled launches by reusing `process.argv[0]` (the right node), the current
  * `process.execArgv` (carries `--liftoff-only`, so the daemon never re-execs)
  * and `process.argv[1]` (this script). The spawned process self-arbitrates the
@@ -216,8 +216,8 @@ export class MCPServer {
    * Decision order:
    *   1. `CODEGRAPH_NO_DAEMON=1` → direct mode (unchanged pre-#411 behavior).
    *   2. `CODEGRAPH_DAEMON_INTERNAL=1` → we ARE the detached daemon; listen.
-   *   3. No `.workspace_event/` reachable → direct mode (the daemon's lockfile and
-   *      socket both live under `.workspace_event/`).
+   *   3. No `.workspace_payload/` reachable → direct mode (the daemon's lockfile and
+   *      socket both live under `.workspace_payload/`).
    *   4. Otherwise connect to (or spawn) the shared daemon and proxy to it.
    *
    * On any unexpected failure in step 4 we transparently fall back to direct
@@ -253,7 +253,7 @@ export class MCPServer {
     if (!root) {
       // No initialized project found — daemon mode has nowhere to put its
       // socket. The fresh-checkout / outside-project case; behave as before.
-      return this.startDirect('no .workspace_event/ root found');
+      return this.startDirect('no .workspace_payload/ root found');
     }
 
     try {

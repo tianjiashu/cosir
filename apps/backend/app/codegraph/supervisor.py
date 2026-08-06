@@ -70,7 +70,7 @@ def _server_script_path() -> Path:
         ``third_party/codegraph/src/agent-kernel/``），随 codegraph 主工程 ``tsc``
         构建一并产出到 ``third_party/codegraph/dist/agent-kernel/server.js``
         （见 docs/codegraph-docs/codegraph-agent-kernel-design.md）。早期实现误指到
-        不存在的 ``third_party/workspace_event`` 目录，导致 Kernel 启动报
+        不存在的 ``third_party/workspace_payload`` 目录，导致 Kernel 启动报
         ``agent-kernel server not built``；此处以真实 vendor 路径为准。
     """
     root = Settings.repository_root()
@@ -266,7 +266,7 @@ class CodeGraphKernelSupervisor:
         """启动 stderr 读取线程，把 Kernel 内部日志汇入后端统一日志。"""
         assert self._proc is not None
         self._stderr_thread = threading.Thread(
-            target=self._stderr_loop, name="workspace_event-kernel-stderr", daemon=True
+            target=self._stderr_loop, name="workspace_payload-kernel-stderr", daemon=True
         )
         self._stderr_thread.start()
 
@@ -288,7 +288,7 @@ class CodeGraphKernelSupervisor:
         """启动周期健康检查线程（kernel.ping + 进程存活探测）。"""
         self._stop_health.clear()
         self._health_thread = threading.Thread(
-            target=self._health_loop, name="workspace_event-kernel-health", daemon=True
+            target=self._health_loop, name="workspace_payload-kernel-health", daemon=True
         )
         self._health_thread.start()
 
@@ -342,7 +342,7 @@ class CodeGraphKernelSupervisor:
             threading.Thread(
                 target=self._restart_after_backoff,
                 args=(backoff,),
-                name="workspace_event-kernel-restart",
+                name="workspace_payload-kernel-restart",
                 daemon=True,
             ).start()
         else:
@@ -418,5 +418,5 @@ def get_kernel_supervisor() -> CodeGraphKernelSupervisor:
         RuntimeError: 未初始化时抛出。
     """
     if _SUPERVISOR is None:
-        raise RuntimeError("workspace_event kernel supervisor has not been initialized")
+        raise RuntimeError("workspace_payload kernel supervisor has not been initialized")
     return _SUPERVISOR

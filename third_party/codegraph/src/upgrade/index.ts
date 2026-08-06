@@ -1,5 +1,5 @@
 /**
- * `workspace_event upgrade`
+ * `workspace_payload upgrade`
  *
  * Self-update for the CLI, whatever way it was installed:
  *
@@ -8,13 +8,13 @@
  *     canonical installer script (single source of truth) so the download /
  *     version-resolution / PATH logic never drifts between first-install and
  *     upgrade.
- *   - **npm** — installed via `npm i -g @colbymchenry/workspace_event`. Upgrading
+ *   - **npm** — installed via `npm i -g @colbymchenry/workspace_payload`. Upgrading
  *     shells out to npm.
  *   - **npx** — ephemeral; nothing to upgrade (next `npx` fetches latest).
  *   - **source** — a git checkout running its own `dist/`; `git pull` + rebuild.
  *
  * Detection is structural (see `detectInstallMethod`): a bundle carries a
- * vendored `node` binary and a `bin/workspace_event` launcher next to its `lib/`, so
+ * vendored `node` binary and a `bin/workspace_payload` launcher next to its `lib/`, so
  * we can recognize it from the running file's path without a marker file.
  *
  * Windows wrinkle: a running `node.exe` is locked and can't be deleted, so the
@@ -29,8 +29,8 @@ import * as path from 'path';
 import * as https from 'https';
 import { spawnSync } from 'child_process';
 
-export const REPO = 'colbymchenry/workspace_event';
-export const NPM_PACKAGE = '@colbymchenry/workspace_event';
+export const REPO = 'colbymchenry/workspace_payload';
+export const NPM_PACKAGE = '@colbymchenry/workspace_payload';
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main`;
 export const INSTALL_SH_URL = `${RAW_BASE}/install.sh`;
 
@@ -46,7 +46,7 @@ export type InstallMethod =
   | { kind: 'unknown'; reason: string };
 
 export interface DetectInput {
-  /** `__filename` of the running CLI module — `<…>/dist/bin/workspace_event.js`. */
+  /** `__filename` of the running CLI module — `<…>/dist/bin/workspace_payload.js`. */
   filename: string;
   platform: NodeJS.Platform;
   cwd: string;
@@ -102,16 +102,16 @@ export function detectInstallMethod(input: DetectInput): InstallMethod {
   const norm = toPosix(input.filename);
 
   // Path-based checks come FIRST. The npm thin-installer's per-platform
-  // package (@colbymchenry/workspace_event-<platform>-<arch>) is itself a complete
+  // package (@colbymchenry/workspace_payload-<platform>-<arch>) is itself a complete
   // bundle — vendored node + bin/ launcher — living inside node_modules, so
   // the layout sniff below would misread every npm install as a standalone
-  // bundle. `upgrade` would then curl install.sh into ~/.workspace_event: a SECOND
+  // bundle. `upgrade` would then curl install.sh into ~/.workspace_payload: a SECOND
   // install that never wins the PATH race against npm's shim, leaving
-  // `workspace_event -v` permanently on the old version (the #1071 shadow,
+  // `workspace_payload -v` permanently on the old version (the #1071 shadow,
   // self-inflicted). A path under node_modules is authoritative about HOW the
   // user installed, whatever the artifact inside looks like.
 
-  // npx cache: <…>/_npx/<hash>/node_modules/@colbymchenry/workspace_event/…
+  // npx cache: <…>/_npx/<hash>/node_modules/@colbymchenry/workspace_payload/…
   // (checked before npm — the npx cache path also contains /node_modules/).
   if (norm.includes('/_npx/')) {
     return { kind: 'npx' };
@@ -123,17 +123,17 @@ export function detectInstallMethod(input: DetectInput): InstallMethod {
     return { kind: 'npm', scope: underCwd ? 'local' : 'global' };
   }
 
-  // Bundle: <root>/lib/dist/bin/workspace_event.js → <root> is up 3 from bin/.
+  // Bundle: <root>/lib/dist/bin/workspace_payload.js → <root> is up 3 from bin/.
   // A bundle has a vendored node + a launcher script as siblings of lib/.
   const bundleRoot = P.resolve(binDir, '..', '..', '..');
   const vendoredNode = P.join(bundleRoot, isWin ? 'node.exe' : 'node');
-  const launcher = P.join(bundleRoot, 'bin', isWin ? 'workspace_event.cmd' : 'codegraph');
+  const launcher = P.join(bundleRoot, 'bin', isWin ? 'workspace_payload.cmd' : 'codegraph');
   if (exists(vendoredNode) && exists(launcher)) {
     const os = isWin ? 'windows' : 'unix';
     return { kind: 'bundle', os, bundleRoot, installDir: deriveInstallDir(bundleRoot, os, exists) };
   }
 
-  // Source checkout: running <repo>/dist/bin/workspace_event.js with a sibling .git.
+  // Source checkout: running <repo>/dist/bin/workspace_payload.js with a sibling .git.
   const repoRoot = P.resolve(binDir, '..', '..');
   if (exists(P.join(repoRoot, 'package.json')) && exists(P.join(repoRoot, '.git'))) {
     return { kind: 'source', root: repoRoot };
@@ -244,7 +244,7 @@ export async function resolveLatestVersion(repo = REPO, timeoutMs = 12000): Prom
   try {
     const res = await httpsGet(
       `https://github.com/${repo}/releases/latest`,
-      { 'User-Agent': 'workspace_event-upgrade' },
+      { 'User-Agent': 'workspace_payload-upgrade' },
       timeoutMs
     );
     const loc = res.headers.location;
@@ -256,7 +256,7 @@ export async function resolveLatestVersion(repo = REPO, timeoutMs = 12000): Prom
   try {
     const res = await httpsGet(
       `https://api.github.com/repos/${repo}/releases/latest`,
-      { 'User-Agent': 'workspace_event-upgrade', Accept: 'application/vnd.github+json' },
+      { 'User-Agent': 'workspace_payload-upgrade', Accept: 'application/vnd.github+json' },
       timeoutMs
     );
     const tag = JSON.parse(res.body)?.tag_name;
@@ -265,7 +265,7 @@ export async function resolveLatestVersion(repo = REPO, timeoutMs = 12000): Prom
     /* fall through to error */
   }
   throw new Error(
-    'could not resolve the latest version from GitHub. Check your network, or pin a version: `workspace_event upgrade <version>`.'
+    'could not resolve the latest version from GitHub. Check your network, or pin a version: `workspace_payload upgrade <version>`.'
   );
 }
 
@@ -311,9 +311,9 @@ export function reindexAdvisory(): string {
   return [
     c.dim('Your existing project indexes keep working, but were built by the previous version.'),
     c.dim('To pick up this version’s extraction improvements, refresh each project:'),
-    `  ${c.cyan('workspace_event sync')}        ${c.dim('# incremental, fast')}`,
-    `  ${c.cyan('workspace_event index -f')}    ${c.dim('# full rebuild')}`,
-    c.dim('(`workspace_event status` flags any index that predates the engine you’re running.)'),
+    `  ${c.cyan('workspace_payload sync')}        ${c.dim('# incremental, fast')}`,
+    `  ${c.cyan('workspace_payload index -f')}    ${c.dim('# full rebuild')}`,
+    c.dim('(`workspace_payload status` flags any index that predates the engine you’re running.)'),
   ].join('\n');
 }
 
@@ -340,7 +340,7 @@ export async function runUpgrade(opts: UpgradeOptions, deps: UpgradeDeps): Promi
   if (opts.check) {
     if (updateAvailable) {
       deps.log(c.yellow(`An update is available: ${currentDisplay} → ${latest}`));
-      deps.log(c.dim('Run `workspace_event upgrade` to install it.'));
+      deps.log(c.dim('Run `workspace_payload upgrade` to install it.'));
     } else {
       deps.log(c.green(`You’re on the latest version (${currentDisplay}).`));
     }
@@ -349,7 +349,7 @@ export async function runUpgrade(opts: UpgradeOptions, deps: UpgradeDeps): Promi
 
   if (!updateAvailable && !opts.force && !opts.version) {
     deps.log(c.green(`Already up to date (${currentDisplay}).`));
-    deps.log(c.dim('Use `--force` to reinstall, or `workspace_event upgrade <version>` to change versions.'));
+    deps.log(c.dim('Use `--force` to reinstall, or `workspace_payload upgrade <version>` to change versions.'));
     return 0;
   }
 
@@ -400,7 +400,7 @@ export async function runUpgrade(opts: UpgradeOptions, deps: UpgradeDeps): Promi
     } catch {
       /* a hook-wiring hiccup must not fail the upgrade */
     }
-    // The refresh executes whatever `workspace_event` PATH resolves. If the probe
+    // The refresh executes whatever `workspace_payload` PATH resolves. If the probe
     // just proved that's a stale shadowed install, spawning it would rewrite
     // the agent surfaces with the very templates the refresh exists to heal —
     // skip, and point at the manual command for after the PATH is fixed.
@@ -411,7 +411,7 @@ export async function runUpgrade(opts: UpgradeOptions, deps: UpgradeDeps): Promi
         /* a refresh hiccup must not fail the upgrade */
       }
     } else {
-      deps.log(c.dim('Skipped refreshing agent instructions/config — run `workspace_event install --refresh` once the PATH is fixed.'));
+      deps.log(c.dim('Skipped refreshing agent instructions/config — run `workspace_payload install --refresh` once the PATH is fixed.'));
     }
   }
   return code;
@@ -420,22 +420,22 @@ export async function runUpgrade(opts: UpgradeOptions, deps: UpgradeDeps): Promi
 type VersionProbe = 'match' | 'mismatch' | 'inconclusive';
 
 /**
- * Prove the upgrade actually took: spawn the `workspace_event` this terminal's PATH
+ * Prove the upgrade actually took: spawn the `workspace_payload` this terminal's PATH
  * resolves and compare its reported version to the target. Catches the silent
  * failure mode where ANOTHER install shadows the one we just upgraded (issue
  * #1071 — e.g. a stale `npm i -g` copy earlier on PATH than the bundle
- * launcher): the upgrade "succeeds" but `workspace_event -v` — in this terminal and
+ * launcher): the upgrade "succeeds" but `workspace_payload -v` — in this terminal and
  * every future one — keeps serving the old version. Exported for unit tests.
  */
 export function verifyResolvedVersion(latest: string, deps: UpgradeDeps): VersionProbe {
   if (!deps.hasCommand('codegraph')) return 'inconclusive';
-  // Windows installs expose workspace_event through a .cmd launcher; Node can't
+  // Windows installs expose workspace_payload through a .cmd launcher; Node can't
   // spawn .cmd files without a shell, so route through cmd.exe there.
   const probe = deps.platform === 'win32'
-    ? deps.capture('cmd.exe', ['/d', '/s', '/c', 'workspace_event --version'])
+    ? deps.capture('cmd.exe', ['/d', '/s', '/c', 'workspace_payload --version'])
     : deps.capture('codegraph', ['--version']);
   if (!probe || probe.code !== 0) return 'inconclusive';
-  // `workspace_event --version` prints the bare version; take the last non-empty
+  // `workspace_payload --version` prints the bare version; take the last non-empty
   // line so a stray runtime warning above it can't spoil the parse.
   const reported = probe.stdout.trim().split(/\r?\n/).pop()?.trim() ?? '';
   if (!parseSemver(reported)) return 'inconclusive';
@@ -446,15 +446,15 @@ export function verifyResolvedVersion(latest: string, deps: UpgradeDeps): Versio
  * Log the outcome of the post-upgrade version probe. On a match the user
  * knows the current terminal is already serving the new version; on a
  * mismatch they get told exactly which stale install is hijacking their PATH
- * instead of discovering it via a mysteriously unchanged `workspace_event -v`.
+ * instead of discovering it via a mysteriously unchanged `workspace_payload -v`.
  * Inconclusive probes fall back to the old soft hint — never a scare on
- * setups we can't inspect (no `workspace_event` on PATH yet, exotic wrappers).
+ * setups we can't inspect (no `workspace_payload` on PATH yet, exotic wrappers).
  * Returns the probe result so the caller can gate the post-upgrade refresh
  * (which spawns the PATH-resolved binary) on it.
  */
 function reportResolvedVersion(latest: string, deps: UpgradeDeps): VersionProbe {
   const { method } = deps;
-  // A project-local npm install isn't served by PATH's `workspace_event` (that
+  // A project-local npm install isn't served by PATH's `workspace_payload` (that
   // would be some other install) — a probe could only false-alarm.
   if (method.kind === 'npm' && method.scope === 'local') return 'inconclusive';
   const probe = verifyResolvedVersion(latest, deps);
@@ -465,10 +465,10 @@ function reportResolvedVersion(latest: string, deps: UpgradeDeps): VersionProbe 
     case 'mismatch':
       deps.warn(`Installed ${latest}, but the \`codegraph\` this terminal resolves still reports an older version.`);
       deps.log(c.dim('Another CodeGraph install earlier on your PATH is shadowing the one just upgraded.'));
-      deps.log(c.dim('Find every copy with `which -a workspace_event` (Windows: `where workspace_event`) and remove or upgrade the stale one.'));
+      deps.log(c.dim('Find every copy with `which -a workspace_payload` (Windows: `where workspace_payload`) and remove or upgrade the stale one.'));
       break;
     case 'inconclusive':
-      deps.log(c.dim('Open a new terminal if `workspace_event --version` looks unchanged (PATH cache).'));
+      deps.log(c.dim('Open a new terminal if `workspace_payload --version` looks unchanged (PATH cache).'));
       break;
   }
   return probe;
@@ -481,30 +481,30 @@ function reportResolvedVersion(latest: string, deps: UpgradeDeps): VersionProbe 
  * Unlike the prompt hook above, this content is NOT version-agnostic: the
  * templates are baked into the binary, so the still-running old process
  * would only rewrite its own stale copy — the exact staleness this heals.
- * We therefore spawn the freshly-installed binary (`workspace_event install
+ * We therefore spawn the freshly-installed binary (`workspace_payload install
  * --refresh`), which is refresh-only: agents never configured stay
  * untouched, and permission / prompt-hook choices are preserved. Gated on
- * `workspace_event` being resolvable on PATH (an npm-local install isn't) and on
+ * `workspace_payload` being resolvable on PATH (an npm-local install isn't) and on
  * the kill-switch; never fatal to the upgrade.
  */
 function selfHealInstalledSurfaces(deps: UpgradeDeps): void {
   if (process.env.CODEGRAPH_NO_INSTALL_REFRESH === '1') return;
   if (!deps.hasCommand('codegraph')) return;
   deps.log(c.dim('Refreshing agent instruction sections and config written by previous versions…'));
-  // Windows installs expose workspace_event through a .cmd launcher. Node cannot
+  // Windows installs expose workspace_payload through a .cmd launcher. Node cannot
   // spawn .cmd files directly without a shell, so route the constant command
   // through cmd.exe there (the same launcher a terminal would resolve).
   const code = deps.platform === 'win32'
-    ? deps.run('cmd.exe', ['/d', '/s', '/c', 'workspace_event install --refresh'])
+    ? deps.run('cmd.exe', ['/d', '/s', '/c', 'workspace_payload install --refresh'])
     : deps.run('codegraph', ['install', '--refresh']);
   if (code !== 0) {
-    deps.warn('Could not refresh the installed agent surfaces — run `workspace_event install --refresh` manually.');
+    deps.warn('Could not refresh the installed agent surfaces — run `workspace_payload install --refresh` manually.');
   }
 }
 
 /**
  * Vendored build: the Claude prompt-hook self-heal is a no-op. The upstream
- * `workspace_event upgrade` flow writes into a user's global Claude config; this
+ * `workspace_payload upgrade` flow writes into a user's global Claude config; this
  * coding-agent integration does not run that CLI self-update path, and the
  * `../installer/targets/claude` module it imported was removed from the vendor
  * tree. Kept as an async no-op so the `runUpgrade` orchestrator's call site
@@ -542,7 +542,7 @@ function upgradeUnixBundle(
   }
   deps.log('');
   // No "open a new terminal" hedge here — after the swap, runUpgrade probes
-  // the PATH-resolved `workspace_event --version` and reports the real outcome.
+  // the PATH-resolved `workspace_payload --version` and reports the real outcome.
   deps.log(c.green('✓ Upgrade complete.'));
   deps.log(reindexAdvisory());
   return 0;
@@ -556,7 +556,7 @@ export function buildWindowsUpgradeScript(bundleRoot: string, version: string, a
   // PLACE: download → rename the locked node.exe aside → extract the new bundle
   // over current\. Synchronous, no detached helper (which dies under SSH/job
   // objects and has worse UX). The running process keeps its renamed node.exe
-  // mapped; the NEXT `workspace_event` invocation uses the new one. We can't reuse
+  // mapped; the NEXT `workspace_payload` invocation uses the new one. We can't reuse
   // install.ps1 here — it `Remove-Item`s current\, which fails on the locked exe.
   return [
     `$ErrorActionPreference='Stop'`,

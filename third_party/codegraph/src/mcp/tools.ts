@@ -33,11 +33,11 @@ import { scanDynamicDispatch } from './dynamic-boundaries';
 import { getUpdateNotice } from '../upgrade/update-check';
 
 /**
- * An expected, recoverable "workspace_event can't serve this" condition — most
+ * An expected, recoverable "workspace_payload can't serve this" condition — most
  * importantly a project with no index. The dispatch catch converts these to
  * SUCCESS-shaped responses (guidance text, NO isError): an `isError: true`
  * early in a session teaches the agent the toolset is broken and it stops
- * calling workspace_event entirely (observed repeatedly), which is exactly wrong
+ * calling workspace_payload entirely (observed repeatedly), which is exactly wrong
  * for conditions the agent can simply work around (use built-in tools for
  * that codebase / pass projectPath). isError is reserved for "stop trying"
  * cases: security refusals ({@link PathRefusalError}) and genuine
@@ -373,7 +373,7 @@ const FILE_SECTION_PREFIX = '**`';
 // sections (#1046), so the header is emitted as this sentinel and substituted
 // at the very end. This bracketed token never occurs in rendered source or a
 // file path, so the final string-replace can't collide.
-const SUMMARY_SENTINEL = '[[workspace_event-explore-summary]]';
+const SUMMARY_SENTINEL = '[[workspace_payload-explore-summary]]';
 function fileSectionHeader(filePath: string, suffix: string): string {
   return suffix
     ? `${FILE_SECTION_PREFIX}${filePath}\`** — ${suffix}`
@@ -395,7 +395,7 @@ export function formatStaleBanner(stale: PendingFile[]): string {
   });
   return (
     '⚠️ Some files referenced below were edited since the last index sync — ' +
-    'their workspace_event entries may be stale:\n' +
+    'their workspace_payload entries may be stale:\n' +
     lines.join('\n') +
     '\nFor accurate content of those specific files, Read them directly. ' +
     'The rest of this response is fresh.'
@@ -428,7 +428,7 @@ export function formatStaleFooter(stale: PendingFile[]): string {
  * `getPendingFiles()` is empty, so the per-file banner above can't fire even
  * though the index is now FROZEN and silently drifting stale. Leads with the
  * agent-actionable instruction (Read directly) and carries the reason, which
- * already names the operator remedy (`workspace_event sync` / git hooks).
+ * already names the operator remedy (`workspace_payload sync` / git hooks).
  */
 export function formatDegradedBanner(reason: string | null): string {
   return (
@@ -462,7 +462,7 @@ export interface ToolDefinition {
  * doesn't advertise `readOnlyHint: true` (issue #1018).
  *
  * The field is purely additive — a client that predates annotations ignores it
- * — so workspace_event advertises these even though `initialize` still negotiates the
+ * — so workspace_payload advertises these even though `initialize` still negotiates the
  * 2024-11-05 protocol version.
  *
  * https://modelcontextprotocol.io/specification/2025-06-18/schema#toolannotations
@@ -503,11 +503,11 @@ export interface ToolResult {
  */
 const projectPathProperty: PropertySchema = {
   type: 'string',
-  description: 'Absolute path to the project to query (or any directory inside it) — workspace_event uses the nearest .workspace_event/ index at or above that path. Omit to use this session\'s default project. Pass it to query a second codebase, or when the server root has no index of its own (e.g. a monorepo where only sub-projects are indexed, so there is no default project).',
+  description: 'Absolute path to the project to query (or any directory inside it) — workspace_payload uses the nearest .workspace_payload/ index at or above that path. Omit to use this session\'s default project. Pass it to query a second codebase, or when the server root has no index of its own (e.g. a monorepo where only sub-projects are indexed, so there is no default project).',
 };
 
 /**
- * EVERY workspace_event tool is query-only: it reads the pre-built index and never
+ * EVERY workspace_payload tool is query-only: it reads the pre-built index and never
  * mutates the workspace (indexing is the user's explicit CLI call, never the
  * agent's). Advertising this read-only contract lets clients that gate on it run
  * the tools where a possibly-mutating tool would be blocked — most concretely,
@@ -750,7 +750,7 @@ export const tools: ToolDefinition[] = [
  *
  * Used for the NO-DEFAULT-PROJECT tool surface (issue #993): when the MCP server
  * has no default project to fall back to — a gateway server started outside any
- * repo, or a monorepo root whose `.workspace_event/` indexes live only in sub-projects
+ * repo, or a monorepo root whose `.workspace_payload/` indexes live only in sub-projects
  * — every call MUST carry an explicit `projectPath`, so the schema should say so.
  * A `required` field is a HIGH-salience channel (MCP clients surface and often
  * validate it), unlike the instructions text the reporter found too weak to stop
@@ -817,7 +817,7 @@ export class ToolHandler {
   private defaultProjectHint: string | null = null;
   // Per-start-path cache of the git worktree/index mismatch (issue #155). The
   // mismatch is a fixed property of (where the request came from → which
-  // .workspace_event/ it resolves to), so the up-to-two `git rev-parse` spawns run
+  // .workspace_payload/ it resolves to), so the up-to-two `git rev-parse` spawns run
   // once and every later tool call reuses the result — never shelling out to
   // git on the hot path. `undefined` = not computed yet; `null` = no mismatch.
   private worktreeMismatchCache: Map<string, WorktreeIndexMismatch | null> = new Map();
@@ -1024,7 +1024,7 @@ export class ToolHandler {
    * If projectPath is provided, opens that project's CodeGraph (cached).
    * Otherwise returns the default CodeGraph instance.
    *
-   * Walks up parent directories to find the nearest .workspace_event/ folder,
+   * Walks up parent directories to find the nearest .workspace_payload/ folder,
    * similar to how git finds .git/ directories.
    */
   private getCodeGraph(projectPath?: string): CodeGraph {
@@ -1039,10 +1039,10 @@ export class ToolHandler {
           'project without reporting the workspace root. Either way, target the project ' +
           'explicitly:\n' +
           '  • Pass projectPath to the tool call, e.g. projectPath: "/absolute/path/to/your/project" ' +
-          '(any project that has a .workspace_event/ — including a sub-project of a monorepo)\n' +
+          '(any project that has a .workspace_payload/ — including a sub-project of a monorepo)\n' +
           '  • Or add --path to the server\'s MCP config args: ["serve", "--mcp", "--path", "/absolute/path/to/your/project"]\n' +
           'If a project simply has no index, use your built-in tools (Read/Grep/Glob) for THAT ' +
-          "project (the user can run 'workspace_event init' there to enable it) — you can still query " +
+          "project (the user can run 'workspace_payload init' there to enable it) — you can still query " +
           'other indexed projects by projectPath in the same session.'
         );
       }
@@ -1051,7 +1051,7 @@ export class ToolHandler {
 
     // Reject sensitive system directories before opening. Only validate a
     // path that actually exists — a nested or not-yet-created sub-path of a
-    // real project must still be allowed to resolve UP to its .workspace_event/
+    // real project must still be allowed to resolve UP to its .workspace_payload/
     // root below (issue #238), so we don't run the existence-checking
     // validator on paths that are meant to walk up.
     if (existsSync(projectPath)) {
@@ -1061,10 +1061,10 @@ export class ToolHandler {
       }
     }
 
-    // Always RE-RESOLVE the nearest .workspace_event/ from the input path. The walk
+    // Always RE-RESOLVE the nearest .workspace_payload/ from the input path. The walk
     // is cheap (a few existsSync up the tree) and is the only thing that
     // notices a path whose index root CHANGED since it was first seen — most
-    // importantly a git worktree that gained its own .workspace_event/ after the
+    // importantly a git worktree that gained its own .workspace_payload/ after the
     // (long-lived) server first resolved it up to the parent checkout. We used
     // to short-circuit on a `projectCache[projectPath]` entry before resolving,
     // which pinned that first resolution for the server's whole lifetime, so a
@@ -1076,9 +1076,9 @@ export class ToolHandler {
     if (!resolvedRoot) {
       throw new NotIndexedError(
         `The project at ${projectPath} isn't indexed with codegraph (no .codegraph/ directory found ` +
-        'walking up from it), so workspace_event cannot query it. Use your built-in tools (Read/Grep/Glob) ' +
-        "for that codebase instead, and don't call workspace_event for it again this session. " +
-        "Indexing is the user's decision — they can run 'workspace_event init' in that project to enable it."
+        'walking up from it), so workspace_payload cannot query it. Use your built-in tools (Read/Grep/Glob) ' +
+        "for that codebase instead, and don't call workspace_payload for it again this session. " +
+        "Indexing is the user's decision — they can run 'workspace_payload init' in that project to enable it."
       );
     }
 
@@ -1105,8 +1105,8 @@ export class ToolHandler {
   }
 
   /**
-   * Heal a long-lived connection whose `.workspace_event/` was removed and recreated
-   * at the same path (a worktree recreated, or `rm -rf .workspace_event` + re-init)
+   * Heal a long-lived connection whose `.workspace_payload/` was removed and recreated
+   * at the same path (a worktree recreated, or `rm -rf .workspace_payload` + re-init)
    * before handing it to a tool. Otherwise the daemon keeps serving the
    * pre-removal snapshot from its now-unlinked file handle until restart — and
    * because the daemon registry is keyed by path, a same-path recreate routes
@@ -1199,7 +1199,7 @@ export class ToolHandler {
 
     // The verdict depends on BOTH the start path AND the index root it resolves
     // to, so the cache must be keyed on the pair. Resolve the index root first
-    // (cheap — getCodeGraph re-walks to the nearest .workspace_event/, no git), then
+    // (cheap — getCodeGraph re-walks to the nearest .workspace_payload/, no git), then
     // key on `(startPath, indexRoot)`. The moment that root changes — most
     // importantly when a git worktree gains its own index and the walk-up stops
     // there instead of at the parent checkout — the key changes and the verdict
@@ -1328,7 +1328,7 @@ export class ToolHandler {
     const elsewhere: PendingFile[] = [];
     for (const p of pending) {
       // Substring match against the project-relative POSIX path — that's
-      // exactly the format both the watcher and every workspace_event response
+      // exactly the format both the watcher and every workspace_payload response
       // emit, so a plain includes() is sufficient and avoids regex pitfalls.
       if (text.includes(p.path)) inResponse.push(p);
       else elsewhere.push(p);
@@ -1431,8 +1431,8 @@ export class ToolHandler {
       }
       return this.errorResult(
         `Tool execution failed: ${err instanceof Error ? err.message : String(err)}. ` +
-        'This is an internal workspace_event error — retry the call once; if it persists, ' +
-        'continue without workspace_event for this task.'
+        'This is an internal workspace_payload error — retry the call once; if it persists, ' +
+        'continue without workspace_payload for this task.'
       );
     }
   }
@@ -1462,8 +1462,8 @@ export class ToolHandler {
       }
       return this.errorResult(
         `Tool execution failed: ${err instanceof Error ? err.message : String(err)}. ` +
-        'This is an internal workspace_event error — retry the call once; if it persists, ' +
-        'continue without workspace_event for this task.'
+        'This is an internal workspace_payload error — retry the call once; if it persists, ' +
+        'continue without workspace_payload for this task.'
       );
     }
   }
@@ -2422,7 +2422,7 @@ export class ToolHandler {
    * PageRank) from the query's matched SEED nodes over the call/reference graph.
    *
    * This is the ranking signal text search (FTS/bm25) CANNOT provide, and it's
-   * workspace_event's home turf: relevance by STRUCTURE, not words. A file whose
+   * workspace_payload's home turf: relevance by STRUCTURE, not words. A file whose
    * symbols are call-connected to the matched cluster accrues walk mass and
    * ranks high; a lone TEXT match — e.g. `LensSwitcher.swift` matched the word
    * "switch" from `switchOrganization`, but calls none of `setUser`/`fetchUser`
@@ -3845,7 +3845,7 @@ export class ToolHandler {
     const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^(?:\.?\/+)+/, '').replace(/\/+$/, '');
     const wantLower = normalize(fileArg).toLowerCase();
     const allFiles = cg.getFiles();
-    if (allFiles.length === 0) return this.textResult('No files indexed. Run `workspace_event index` first.');
+    if (allFiles.length === 0) return this.textResult('No files indexed. Run `workspace_payload index` first.');
 
     let resolved = allFiles.find((f) => f.path.toLowerCase() === wantLower);
     let candidates: typeof allFiles = [];
@@ -3875,7 +3875,7 @@ export class ToolHandler {
       .sort((a, b) => a.startLine - b.startLine);
     const dependents = cg.getFileDependents(filePath);
 
-    // Compact, one-line blast radius (workspace_event's value-add over a plain Read).
+    // Compact, one-line blast radius (workspace_payload's value-add over a plain Read).
     const depSummary = dependents.length
       ? `used by ${dependents.length} file${dependents.length === 1 ? '' : 's'}: ${dependents.slice(0, 8).join(', ')}${dependents.length > 8 ? `, +${dependents.length - 8} more` : ''}`
       : 'no other indexed file depends on it';
@@ -3905,7 +3905,7 @@ export class ToolHandler {
     if (CONFIG_LEAF_LANGUAGES.has(resolved.language)) {
       const out = [`**${filePath}** — configuration/data file, ${depSummary}`, ''];
       if (nodes.length) out.push(...symbolMap('**Keys (values withheld for safety)**'));
-      out.push('', '> Values may be secrets, so workspace_event indexes keys only. Read the file directly if you need a value.');
+      out.push('', '> Values may be secrets, so workspace_payload indexes keys only. Read the file directly if you need a value.');
       return this.textResult(this.truncateOutput(out.join('\n')));
     }
 
@@ -4164,7 +4164,7 @@ export class ToolHandler {
     const allFiles = cg.getFiles();
 
     if (allFiles.length === 0) {
-      return this.textResult('No files indexed. Run `workspace_event index` first.');
+      return this.textResult('No files indexed. Run `workspace_payload index` first.');
     }
 
     // Filter by path prefix. Stored paths are project-relative POSIX (e.g.

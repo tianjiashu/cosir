@@ -65,7 +65,7 @@ class CodeGraphKernelTimeoutError(CodeGraphKernelError):
 
 
 class CodeGraphWorkspaceNotIndexedError(CodeGraphKernelError):
-    """workspace 未建索引（无 .workspace_event/ 或未初始化成功）。"""
+    """workspace 未建索引（无 .workspace_payload/ 或未初始化成功）。"""
 
     code = KernelErrorCode.WORKSPACE_NOT_INDEXED
     retryable = False

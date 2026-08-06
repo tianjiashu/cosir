@@ -32,14 +32,14 @@ describe('git sync hooks', () => {
   let repo: string;
 
   beforeEach(() => {
-    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-githooks-'));
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-githooks-'));
   });
 
   afterEach(() => {
     if (fs.existsSync(repo)) fs.rmSync(repo, { recursive: true, force: true });
   });
 
-  it('installs all default hooks, executable, invoking workspace_event sync', () => {
+  it('installs all default hooks, executable, invoking workspace_payload sync', () => {
     gitInit(repo);
     const result = installGitSyncHook(repo);
 
@@ -50,8 +50,8 @@ describe('git sync hooks', () => {
       const file = path.join(repo, '.git', 'hooks', hook);
       expect(fs.existsSync(file)).toBe(true);
       const body = fs.readFileSync(file, 'utf8');
-      expect(body).toContain('workspace_event sync');
-      expect(body).toContain('command -v workspace_event'); // no-op when not on PATH
+      expect(body).toContain('workspace_payload sync');
+      expect(body).toContain('command -v workspace_payload'); // no-op when not on PATH
       expect(isExecutable(file)).toBe(true);
     }
     expect(isSyncHookInstalled(repo)).toBe(true);
@@ -63,7 +63,7 @@ describe('git sync hooks', () => {
     installGitSyncHook(repo);
 
     const body = fs.readFileSync(path.join(repo, '.git', 'hooks', 'post-commit'), 'utf8');
-    const occurrences = body.split('# >>> workspace_event sync hook >>>').length - 1;
+    const occurrences = body.split('# >>> workspace_payload sync hook >>>').length - 1;
     expect(occurrences).toBe(1);
   });
 
@@ -76,7 +76,7 @@ describe('git sync hooks', () => {
 
     const body = fs.readFileSync(file, 'utf8');
     expect(body).toContain('echo "my custom hook"');
-    expect(body).toContain('workspace_event sync');
+    expect(body).toContain('workspace_payload sync');
   });
 
   it('remove strips our block; deletes a hook that was only ours', () => {
@@ -102,7 +102,7 @@ describe('git sync hooks', () => {
     expect(fs.existsSync(file)).toBe(true);
     const body = fs.readFileSync(file, 'utf8');
     expect(body).toContain('echo "keep me"');
-    expect(body).not.toContain('workspace_event sync');
+    expect(body).not.toContain('workspace_payload sync');
   });
 
   it('honors core.hooksPath', () => {

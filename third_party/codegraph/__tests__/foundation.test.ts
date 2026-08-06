@@ -15,7 +15,7 @@ import { DatabaseConnection, getDatabasePath, removeDatabaseFiles } from '../src
 
 // Create a temporary directory for each test
 function createTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-test-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-test-'));
 }
 
 // Clean up temporary directory
@@ -61,7 +61,7 @@ describe('CodeGraph Foundation', () => {
       expect(fs.existsSync(gitignorePath)).toBe(true);
 
       const content = fs.readFileSync(gitignorePath, 'utf-8');
-      // Ignore everything in .workspace_event/ except this file itself, so transient
+      // Ignore everything in .workspace_payload/ except this file itself, so transient
       // files (db, daemon.pid, sockets, logs) never show up in git. (#492, #484)
       expect(content).toContain('*');
       expect(content).toContain('!.gitignore');
@@ -151,7 +151,7 @@ describe('CodeGraph Foundation', () => {
     });
   });
 
-  // recreate() backs `workspace_event index`: it discards the existing DB and returns
+  // recreate() backs `workspace_payload index`: it discards the existing DB and returns
   // a fresh, empty instance rather than DELETE-clearing in place — the path that
   // recovers a poisoned/oversized prior index without wedging (#1067).
   describe('Recreate (#1067)', () => {
@@ -273,7 +273,7 @@ describe('CodeGraph Foundation', () => {
       expect(upgraded).not.toContain('.dirty'); // old explicit list is gone
     });
 
-    it('leaves a user-customized .workspace_event/.gitignore untouched', () => {
+    it('leaves a user-customized .workspace_payload/.gitignore untouched', () => {
       const cg = CodeGraph.initSync(tempDir);
       cg.close();
 
@@ -436,14 +436,14 @@ describe('Query Builder', () => {
 });
 
 // Two environments that share one working tree (Windows-native + WSL) must not
-// share one `.workspace_event/`. CODEGRAPH_DIR overrides the data directory name so
+// share one `.workspace_payload/`. CODEGRAPH_DIR overrides the data directory name so
 // each side keeps its own index in the same tree (issue #636).
 describe('CODEGRAPH_DIR override (#636)', () => {
   const saved = process.env.CODEGRAPH_DIR;
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-dirname-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-dirname-'));
   });
   afterEach(() => {
     if (saved === undefined) delete process.env.CODEGRAPH_DIR;
@@ -452,33 +452,33 @@ describe('CODEGRAPH_DIR override (#636)', () => {
   });
 
   describe('codeGraphDirName()', () => {
-    it('defaults to .workspace_event when unset', () => {
+    it('defaults to .workspace_payload when unset', () => {
       delete process.env.CODEGRAPH_DIR;
-      expect(codeGraphDirName()).toBe('.workspace_event');
+      expect(codeGraphDirName()).toBe('.workspace_payload');
     });
 
     it('honors a valid override', () => {
-      process.env.CODEGRAPH_DIR = '.workspace_event-win';
-      expect(codeGraphDirName()).toBe('.workspace_event-win');
+      process.env.CODEGRAPH_DIR = '.workspace_payload-win';
+      expect(codeGraphDirName()).toBe('.workspace_payload-win');
     });
 
     // Anything that isn't a plain segment could escape the project root or
     // clobber it, so it's ignored in favor of the default.
     it.each(['foo/bar', 'a\\b', '..', '../x', '.', '/abs/path', '   ', ''])(
-      'falls back to .workspace_event for invalid value %j',
+      'falls back to .workspace_payload for invalid value %j',
       (bad) => {
         process.env.CODEGRAPH_DIR = bad;
-        expect(codeGraphDirName()).toBe('.workspace_event');
+        expect(codeGraphDirName()).toBe('.workspace_payload');
       }
     );
   });
 
   describe('isCodeGraphDataDir()', () => {
-    it('matches the default, the active override, and .workspace_event-* siblings', () => {
-      process.env.CODEGRAPH_DIR = '.workspace_event-win';
-      expect(isCodeGraphDataDir('.workspace_event')).toBe(true);       // the other env's dir
-      expect(isCodeGraphDataDir('.workspace_event-win')).toBe(true);   // active override
-      expect(isCodeGraphDataDir('.workspace_event-wsl')).toBe(true);   // any sibling
+    it('matches the default, the active override, and .workspace_payload-* siblings', () => {
+      process.env.CODEGRAPH_DIR = '.workspace_payload-win';
+      expect(isCodeGraphDataDir('.workspace_payload')).toBe(true);       // the other env's dir
+      expect(isCodeGraphDataDir('.workspace_payload-win')).toBe(true);   // active override
+      expect(isCodeGraphDataDir('.workspace_payload-wsl')).toBe(true);   // any sibling
     });
 
     it('does not match unrelated directories', () => {
@@ -489,13 +489,13 @@ describe('CODEGRAPH_DIR override (#636)', () => {
     });
   });
 
-  it('init writes the index under the overridden directory, not .workspace_event', () => {
-    process.env.CODEGRAPH_DIR = '.workspace_event-win';
+  it('init writes the index under the overridden directory, not .workspace_payload', () => {
+    process.env.CODEGRAPH_DIR = '.workspace_payload-win';
     const cg = CodeGraph.initSync(tempDir);
     try {
-      expect(fs.existsSync(path.join(tempDir, '.workspace_event-win', 'workspace_event.db'))).toBe(true);
-      expect(fs.existsSync(path.join(tempDir, '.workspace_event'))).toBe(false);
-      expect(getCodeGraphDir(tempDir)).toBe(path.join(tempDir, '.workspace_event-win'));
+      expect(fs.existsSync(path.join(tempDir, '.workspace_payload-win', 'workspace_payload.db'))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, '.workspace_payload'))).toBe(false);
+      expect(getCodeGraphDir(tempDir)).toBe(path.join(tempDir, '.workspace_payload-win'));
       expect(CodeGraph.isInitialized(tempDir)).toBe(true);
     } finally {
       cg.close();
@@ -503,7 +503,7 @@ describe('CODEGRAPH_DIR override (#636)', () => {
   });
 
   it('two index dirs coexist in one tree and the override side skips the sibling', async () => {
-    // WSL side: default `.workspace_event`, with a source file.
+    // WSL side: default `.workspace_payload`, with a source file.
     delete process.env.CODEGRAPH_DIR;
     fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export function onlyReal() {}\n');
     const wsl = await CodeGraph.init(tempDir, { index: true });
@@ -511,12 +511,12 @@ describe('CODEGRAPH_DIR override (#636)', () => {
 
     // Windows side: override dir, same tree. Plant a decoy source file INSIDE
     // the WSL data dir — the override-side index must not pick it up.
-    process.env.CODEGRAPH_DIR = '.workspace_event-win';
-    fs.writeFileSync(path.join(tempDir, '.workspace_event', 'decoy.ts'), 'export function decoyLeak() {}\n');
+    process.env.CODEGRAPH_DIR = '.workspace_payload-win';
+    fs.writeFileSync(path.join(tempDir, '.workspace_payload', 'decoy.ts'), 'export function decoyLeak() {}\n');
     const win = await CodeGraph.init(tempDir, { index: true });
     try {
-      expect(fs.existsSync(path.join(tempDir, '.workspace_event', 'workspace_event.db'))).toBe(true);
-      expect(fs.existsSync(path.join(tempDir, '.workspace_event-win', 'workspace_event.db'))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, '.workspace_payload', 'workspace_payload.db'))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, '.workspace_payload-win', 'workspace_payload.db'))).toBe(true);
       expect(win.searchNodes('onlyReal').length).toBeGreaterThan(0);
       expect(win.searchNodes('decoyLeak')).toEqual([]); // sibling data dir not indexed
     } finally {

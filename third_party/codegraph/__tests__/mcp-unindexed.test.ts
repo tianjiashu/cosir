@@ -1,17 +1,17 @@
 /**
  * No-root-index session policy tests (#964).
  *
- * A server whose own root has no .workspace_event/ still exposes its tools — gating
+ * A server whose own root has no .workspace_payload/ still exposes its tools — gating
  * tool AVAILABILITY on whether `./` is indexed broke monorepos (only
  * sub-projects indexed) and hid the tools from a session that started before
- * `workspace_event init`. So `initialize` returns the per-project instructions
+ * `workspace_payload init`. So `initialize` returns the per-project instructions
  * variant (not the full single-project playbook, and NOT an "inactive" note),
  * `tools/list` exposes the tool surface, and a query against an indexed project
  * by `projectPath` works even with no default project. Safety is preserved by
  * the response SHAPE, not by hiding tools: a call against an un-indexed path
- * returns SUCCESS-shaped guidance ("pass projectPath / run workspace_event init"),
+ * returns SUCCESS-shaped guidance ("pass projectPath / run workspace_payload init"),
  * never `isError: true` — one or two early isError responses teach an agent to
- * abandon workspace_event for the whole session, and that failure mode is still
+ * abandon workspace_payload for the whole session, and that failure mode is still
  * guarded below.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -22,14 +22,14 @@ import * as os from 'os';
 import { CodeGraph } from '../src';
 import { ToolHandler } from '../src/mcp/tools';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 function spawnServer(cwd: string): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [BIN, 'serve', '--mcp'], {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     // Direct (in-process) mode — the unindexed path never has a daemon
-    // anyway (the daemon socket lives in .workspace_event/), and this keeps the
+    // anyway (the daemon socket lives in .workspace_payload/), and this keeps the
     // suite from leaking a detached daemon in the indexed test.
     // CODEGRAPH_WASM_RELAUNCHED skips the --liftoff-only re-exec: without
     // it the server runs as a GRANDCHILD that survives child.kill() on
@@ -91,7 +91,7 @@ describe('No-root-index session policy', () => {
   let child: ChildProcessWithoutNullStreams | null = null;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-unindexed-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-unindexed-'));
   });
 
   afterEach(async () => {
@@ -141,7 +141,7 @@ describe('No-root-index session policy', () => {
   it('a query by projectPath reaches an INDEXED sub-project of an unindexed root (monorepo) (#964)', async () => {
     // The server root (tempDir) has no index; an indexed sub-project lives
     // under it — exactly the monorepo shape. The query must resolve to the
-    // sub-project's .workspace_event/ and return real results. Run through the real
+    // sub-project's .workspace_payload/ and return real results. Run through the real
     // spawned server (a second-project open can't be exercised in-process under
     // vitest — see mcp-toolhandler cache notes — but a child process can).
     const svc = path.join(tempDir, 'service_a');
@@ -192,7 +192,7 @@ describe('No-error policy on expected conditions', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-noerror-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-noerror-'));
   });
 
   afterEach(() => {
@@ -239,7 +239,7 @@ describe('search kind filter', () => {
   let cg: CodeGraph;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-kind-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-kind-'));
     fs.writeFileSync(
       path.join(tempDir, 'types.ts'),
       'export type PaymentMethod = { id: string };\nexport function pay(): void {}\n'

@@ -14,7 +14,7 @@ if (!codebasePath) {
 }
 
 const resolvedPath = path.resolve(codebasePath);
-if (!fs.existsSync(path.join(resolvedPath, '.workspace_event', 'workspace_event.db'))) {
+if (!fs.existsSync(path.join(resolvedPath, '.workspace_payload', 'workspace_payload.db'))) {
   console.error(`No .codegraph/codegraph.db found at ${resolvedPath}`);
   process.exit(1);
 }

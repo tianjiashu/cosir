@@ -335,7 +335,7 @@ export class ReferenceResolver {
    * warmCaches for the async resolution entry points: streams the distinct
    * name set with periodic yields instead of one synchronous `.all()`. On a
    * multi-million-node index the DISTINCT scan is a solid multi-second block
-   * (measured up to 28s inside `workspace_event sync` on the Linux kernel index),
+   * (measured up to 28s inside `workspace_payload sync` on the Linux kernel index),
    * long enough to matter to the #850 watchdog on slower hardware. Same
    * result, same memory — only the event loop keeps turning.
    */

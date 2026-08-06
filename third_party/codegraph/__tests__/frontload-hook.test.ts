@@ -14,10 +14,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { planFrontload, findIndexedSubprojectRoots, isStructuralPrompt, hasStructuralKeyword, extractCodeTokens } from '../src/directory';
 
-/** Make `dir` look indexed (isInitialized needs `.workspace_event/workspace_event.db`). */
+/** Make `dir` look indexed (isInitialized needs `.workspace_payload/workspace_payload.db`). */
 function mkIndexed(dir: string): string {
-  fs.mkdirSync(path.join(dir, '.workspace_event'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.workspace_event', 'workspace_event.db'), '');
+  fs.mkdirSync(path.join(dir, '.workspace_payload'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.workspace_payload', 'workspace_payload.db'), '');
   return dir;
 }
 /** A workspace-root manifest so the down-scan gate (looksLikeProjectRoot) passes. */

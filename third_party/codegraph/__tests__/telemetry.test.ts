@@ -41,7 +41,7 @@ describe('Telemetry', () => {
     });
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-telemetry-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-telemetry-'));
     calls = [];
     stderrLines = [];
     nowValue = new Date('2026-06-12T08:00:00.000Z');
@@ -125,7 +125,7 @@ describe('Telemetry', () => {
       await t.flushNow();
       expect(calls).toHaveLength(2);
       expect(stderrLines).toHaveLength(1);
-      expect(stderrLines[0]).toContain('workspace_event telemetry off');
+      expect(stderrLines[0]).toContain('workspace_payload telemetry off');
       expect(stderrLines[0]).toContain('CODEGRAPH_TELEMETRY=0');
       const config = JSON.parse(fs.readFileSync(t.configPath, 'utf8'));
       expect(config.machine_id).toMatch(/^[0-9a-f-]{36}$/);

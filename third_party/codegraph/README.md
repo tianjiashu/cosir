@@ -82,7 +82,7 @@ irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | 
 <summary><b>Already have Node? Use npm instead (works on any version)</b></summary>
 
 ```bash
-npm i -g @colbymchenry/workspace_event
+npm i -g @colbymchenry/workspace_payload
 ```
 
 <sub>CodeGraph bundles its own runtime — nothing to compile, no native build, works the same everywhere. The installer puts `codegraph` on your PATH but **doesn't change your current shell** — open a new terminal before the next step so the command resolves.</sub>
@@ -96,7 +96,7 @@ npm i -g @colbymchenry/workspace_event
 In a **new terminal**, run the installer to connect CodeGraph to the agents you use:
 
 ```bash
-workspace_event install
+workspace_payload install
 ```
 
 <sub>Detects and auto-configures Claude Code, Cursor, Codex CLI, opencode, Hermes Agent, Gemini CLI, Antigravity IDE, and Kiro — wiring the CodeGraph MCP server into each. **This is the step that connects CodeGraph to your agent;** installing the CLI in step 1 does not do it on its own. It only wires up your agent — it does **not** index any code; building each project's graph is the separate `codegraph init` in step 3. (Shortcut: `npx @colbymchenry/codegraph` downloads and runs this in one go.)</sub>
@@ -105,7 +105,7 @@ workspace_event install
 
 ```bash
 cd your-project
-workspace_event init
+workspace_payload init
 ```
 
 <sub>`codegraph init` creates the local `.codegraph/` directory and builds the full graph in the same step — one command, done.</sub>
@@ -125,7 +125,7 @@ Auto-sync is enabled by default. CodeGraph watches the project and updates the g
 Changed your mind? One command removes CodeGraph from every agent it configured **and** the CLI itself — every install it finds (standalone bundle, npm global package, launcher link), shown to you before anything is deleted:
 
 ```bash
-workspace_event uninstall
+workspace_payload uninstall
 ```
 
 Pass `--keep-cli` to remove only the agent configurations and keep the CLI installed.
@@ -408,7 +408,7 @@ Each bridge emits edges tagged `provenance:'heuristic'` with `metadata.synthesiz
 ### 1. Run the Installer
 
 ```bash
-npx @colbymchenry/workspace_event
+npx @colbymchenry/workspace_payload
 ```
 
 The installer will:
@@ -423,10 +423,10 @@ The installer **wires up your agents only — it does not index your code.** Aft
 **Non-interactive (scripting / CI):**
 
 ```bash
-workspace_event install --yes                              # auto-detect agents, install global
-workspace_event install --target=cursor,claude --yes       # explicit target list
-workspace_event install --target=auto --location=local     # detected agents, project-local
-workspace_event install --print-config codex               # print snippet, no file writes
+workspace_payload install --yes                              # auto-detect agents, install global
+workspace_payload install --target=cursor,claude --yes       # explicit target list
+workspace_payload install --target=auto --location=local     # detected agents, project-local
+workspace_payload install --print-config codex               # print snippet, no file writes
 ```
 
 | Flag | Values | Default |
@@ -445,7 +445,7 @@ Restart your agent (Claude Code / Cursor / Codex CLI / opencode / Hermes Agent /
 
 ```bash
 cd your-project
-workspace_event init
+workspace_payload init
 ```
 
 Builds the per-project knowledge graph index, which then auto-syncs on every file change. A single global `codegraph install` works in every project you open — no need to re-run the installer per project.
@@ -457,7 +457,7 @@ That's it — your agent will use CodeGraph tools automatically when a `.codegra
 
 **Install globally:**
 ```bash
-npm install -g @colbymchenry/workspace_event
+npm install -g @colbymchenry/workspace_payload
 ```
 
 **Add to `~/.claude.json`:**
@@ -466,7 +466,7 @@ npm install -g @colbymchenry/workspace_event
   "mcpServers": {
     "codegraph": {
       "type": "stdio",
-      "command": "workspace_event",
+      "command": "workspace_payload",
       "args": ["serve", "--mcp"]
     }
   }
@@ -540,28 +540,28 @@ The exact text is `src/mcp/server-instructions.ts` — the single source of trut
 ## CLI Reference
 
 ```bash
-workspace_event                         # Run interactive installer
-workspace_event install                 # Run installer (explicit)
-workspace_event uninstall               # Remove CodeGraph from your agents AND the CLI (--keep-cli for configs only)
-workspace_event init [path]             # Initialize a project + build its graph (one step)
-workspace_event uninit [path]           # Remove CodeGraph from a project (--force to skip prompt)
-workspace_event index [path]            # Full index (--force to re-index, --quiet for less output)
-workspace_event sync [path]             # Incremental update
-workspace_event status [path]           # Show statistics
-workspace_event unlock [path]           # Remove a stale lock file that's blocking indexing
-workspace_event query <search>          # Search symbols (--kind, --limit, --json)
-workspace_event explore <query>         # Relevant symbols' source + call paths in one shot (same output as the codegraph_explore MCP tool)
-workspace_event node <symbol|file>      # One symbol's source + callers, or read a file with line numbers (same output as codegraph_node)
-workspace_event files [path]            # Show file structure (--format, --filter, --max-depth, --json)
-workspace_event callers <symbol>        # Find what calls a function/method (--limit, --json)
-workspace_event callees <symbol>        # Find what a function/method calls (--limit, --json)
-workspace_event impact <symbol>         # Analyze what code is affected by changing a symbol (--depth, --json)
-workspace_event affected [files...]     # Find test files affected by changes (see below)
-workspace_event daemon                  # Manage background daemons — pick one to stop (alias: daemons)
-workspace_event telemetry [on|off]      # Show or change anonymous usage telemetry
-workspace_event upgrade [version]       # Update to the latest release (--check, --force)
-workspace_event version                 # Print the installed version (also -v, --version)
-workspace_event help [command]          # Show help, optionally for one command
+workspace_payload                         # Run interactive installer
+workspace_payload install                 # Run installer (explicit)
+workspace_payload uninstall               # Remove CodeGraph from your agents AND the CLI (--keep-cli for configs only)
+workspace_payload init [path]             # Initialize a project + build its graph (one step)
+workspace_payload uninit [path]           # Remove CodeGraph from a project (--force to skip prompt)
+workspace_payload index [path]            # Full index (--force to re-index, --quiet for less output)
+workspace_payload sync [path]             # Incremental update
+workspace_payload status [path]           # Show statistics
+workspace_payload unlock [path]           # Remove a stale lock file that's blocking indexing
+workspace_payload query <search>          # Search symbols (--kind, --limit, --json)
+workspace_payload explore <query>         # Relevant symbols' source + call paths in one shot (same output as the codegraph_explore MCP tool)
+workspace_payload node <symbol|file>      # One symbol's source + callers, or read a file with line numbers (same output as codegraph_node)
+workspace_payload files [path]            # Show file structure (--format, --filter, --max-depth, --json)
+workspace_payload callers <symbol>        # Find what calls a function/method (--limit, --json)
+workspace_payload callees <symbol>        # Find what a function/method calls (--limit, --json)
+workspace_payload impact <symbol>         # Analyze what code is affected by changing a symbol (--depth, --json)
+workspace_payload affected [files...]     # Find test files affected by changes (see below)
+workspace_payload daemon                  # Manage background daemons — pick one to stop (alias: daemons)
+workspace_payload telemetry [on|off]      # Show or change anonymous usage telemetry
+workspace_payload upgrade [version]       # Update to the latest release (--check, --force)
+workspace_payload version                 # Print the installed version (also -v, --version)
+workspace_payload help [command]          # Show help, optionally for one command
 ```
 
 ### `codegraph affected`
@@ -569,9 +569,9 @@ workspace_event help [command]          # Show help, optionally for one command
 Traces import dependencies transitively to find which test files are affected by changed source files.
 
 ```bash
-workspace_event affected src/utils.ts src/api.ts         # Pass files as arguments
-git diff --name-only | workspace_event affected --stdin   # Pipe from git diff
-workspace_event affected src/auth.ts --filter "e2e/*"     # Custom test file pattern
+workspace_payload affected src/utils.ts src/api.ts         # Pass files as arguments
+git diff --name-only | workspace_payload affected --stdin   # Pipe from git diff
+workspace_payload affected src/auth.ts --filter "e2e/*"     # Custom test file pattern
 ```
 
 | Option | Description | Default |
@@ -586,7 +586,7 @@ workspace_event affected src/auth.ts --filter "e2e/*"     # Custom test file pat
 
 ```bash
 #!/usr/bin/env bash
-AFFECTED=$(git diff --name-only HEAD | workspace_event affected --stdin --quiet)
+AFFECTED=$(git diff --name-only HEAD | workspace_payload affected --stdin --quiet)
 if [ -n "$AFFECTED" ]; then
   npx vitest run $AFFECTED
 fi
@@ -615,9 +615,9 @@ API, so both `import` and `require` resolve the `CodeGraph` class in your own
 process — handy for embedding it in an app (e.g. an Electron main process).
 
 ```typescript
-import CodeGraph from '@colbymchenry/workspace_event';
+import CodeGraph from '@colbymchenry/workspace_payload';
 // CommonJS works too:
-//   const { CodeGraph } = require('@colbymchenry/workspace_event');
+//   const { CodeGraph } = require('@colbymchenry/workspace_payload');
 
 const cg = await CodeGraph.init('/path/to/project');
 // Or: const cg = await CodeGraph.open('/path/to/project');
@@ -737,7 +737,7 @@ that enforces the documented field list. The installer asks up front; turn it
 off any time:
 
 ```bash
-workspace_event telemetry off    # or: CODEGRAPH_TELEMETRY=0, or DO_NOT_TRACK=1
+workspace_payload telemetry off    # or: CODEGRAPH_TELEMETRY=0, or DO_NOT_TRACK=1
 ```
 
 [`TELEMETRY.md`](TELEMETRY.md) lists every field, with the off-switches and the

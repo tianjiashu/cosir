@@ -2,10 +2,10 @@
  * Custom extension → language mapping (#906).
  *
  * A project can map non-standard file extensions to a supported language via a
- * committed `workspace_event.json` at the repo root, so files that would otherwise be
+ * committed `workspace_payload.json` at the repo root, so files that would otherwise be
  * silently skipped get indexed under the right grammar. These tests cover the
  * two choke-point functions (detectLanguage / isSourceFile) honoring an override
- * map, the loader's validation/normalization/caching of `workspace_event.json`, and a
+ * map, the loader's validation/normalization/caching of `workspace_payload.json`, and a
  * full index proving a custom-extension file is actually extracted — while the
  * zero-config path stays byte-identical (the file is NOT indexed without config).
  */
@@ -40,7 +40,7 @@ describe('custom extension → language mapping (#906)', () => {
     });
   });
 
-  describe('loadExtensionOverrides (workspace_event.json)', () => {
+  describe('loadExtensionOverrides (workspace_payload.json)', () => {
     let dir: string;
     beforeEach(() => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-extmap-'));
@@ -52,11 +52,11 @@ describe('custom extension → language mapping (#906)', () => {
     });
     const writeConfig = (obj: unknown) =>
       fs.writeFileSync(
-        path.join(dir, 'workspace_event.json'),
+        path.join(dir, 'workspace_payload.json'),
         typeof obj === 'string' ? obj : JSON.stringify(obj)
       );
 
-    it('returns an empty map when there is no workspace_event.json', () => {
+    it('returns an empty map when there is no workspace_payload.json', () => {
       expect(loadExtensionOverrides(dir)).toEqual({});
     });
 
@@ -97,13 +97,13 @@ describe('custom extension → language mapping (#906)', () => {
       writeConfig({ extensions: { '.foo': 'go' } });
       // Force a distinct mtime in case the filesystem clock is coarse.
       const future = new Date(Date.now() + 2000);
-      fs.utimesSync(path.join(dir, 'workspace_event.json'), future, future);
+      fs.utimesSync(path.join(dir, 'workspace_payload.json'), future, future);
 
       expect(loadExtensionOverrides(dir)).toEqual({ '.foo': 'go' });
     });
   });
 
-  describe('indexAll honors workspace_event.json end-to-end', () => {
+  describe('indexAll honors workspace_payload.json end-to-end', () => {
     let dir: string;
     beforeEach(() => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-extmap-idx-'));
@@ -135,7 +135,7 @@ describe('custom extension → language mapping (#906)', () => {
     const SOURCE = 'export function widgetHandler(x: number): number { return x + 1; }\n';
 
     it('indexes a custom-extension file mapped to a supported language', async () => {
-      write('workspace_event.json', JSON.stringify({ extensions: { '.foo': 'typescript' } }));
+      write('workspace_payload.json', JSON.stringify({ extensions: { '.foo': 'typescript' } }));
       write('widget.foo', SOURCE);
 
       const { nodes, files } = await indexAndQuery();
@@ -145,7 +145,7 @@ describe('custom extension → language mapping (#906)', () => {
       expect(nodes.some((n: any) => n.name === 'widgetHandler' && n.language === 'typescript')).toBe(true);
     });
 
-    it('does NOT index the same file without workspace_event.json (zero-config preserved)', async () => {
+    it('does NOT index the same file without workspace_payload.json (zero-config preserved)', async () => {
       write('widget.foo', SOURCE);
 
       const { nodes, files } = await indexAndQuery();

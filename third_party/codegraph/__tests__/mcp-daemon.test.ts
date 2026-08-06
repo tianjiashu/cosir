@@ -19,9 +19,9 @@
  *     idle-times-out after the last client leaves (so a single session can't
  *     leak a daemon forever).
  *
- * These tests intentionally spawn real `node dist/bin/workspace_event.js` processes
+ * These tests intentionally spawn real `node dist/bin/workspace_payload.js` processes
  * over real sockets/pipes — the same surface a Claude Code / Cursor / Codex
- * install exercises. The daemon logs to `.workspace_event/daemon.log` (it has no
+ * install exercises. The daemon logs to `.workspace_payload/daemon.log` (it has no
  * client stderr of its own), so daemon-side assertions read that file.
  *
  * `realRoot` vs `tempDir`: processes are spawned with the (possibly symlinked)
@@ -40,7 +40,7 @@ import * as path from 'path';
 import { CodeGraph } from '../src';
 import { getDaemonSocketPath } from '../src/mcp/daemon-paths';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 interface SpawnedServer {
   child: ChildProcessWithoutNullStreams;
@@ -146,14 +146,14 @@ function isAlive(pid: number): boolean {
 
 function readLockPid(root: string): number | null {
   try {
-    const raw = fs.readFileSync(path.join(root, '.workspace_event', 'daemon.pid'), 'utf8');
+    const raw = fs.readFileSync(path.join(root, '.workspace_payload', 'daemon.pid'), 'utf8');
     const info = JSON.parse(raw);
     return typeof info.pid === 'number' ? info.pid : null;
   } catch { return null; }
 }
 
 function readDaemonLog(root: string): string {
-  try { return fs.readFileSync(path.join(root, '.workspace_event', 'daemon.log'), 'utf8'); }
+  try { return fs.readFileSync(path.join(root, '.workspace_payload', 'daemon.log'), 'utf8'); }
   catch { return ''; }
 }
 
@@ -177,7 +177,7 @@ describe('Shared MCP daemon (issue #411)', () => {
   const servers: SpawnedServer[] = [];
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-mcp-daemon-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-mcp-daemon-'));
     const cg = await CodeGraph.init(tempDir);
     cg.close();
     realRoot = fs.realpathSync(tempDir);
@@ -211,7 +211,7 @@ describe('Shared MCP daemon (issue #411)', () => {
     await waitFor(() => first.stderr.some((l) => l.includes('Attached to shared daemon')), 8000);
 
     // A detached daemon came up and recorded itself.
-    await waitFor(() => fs.existsSync(path.join(realRoot, '.workspace_event', 'daemon.pid')), 8000);
+    await waitFor(() => fs.existsSync(path.join(realRoot, '.workspace_payload', 'daemon.pid')), 8000);
     await waitFor(() => countListeningLines(realRoot) >= 1, 8000);
     const daemonPid = readLockPid(realRoot);
     expect(daemonPid).toBeTruthy();
@@ -305,14 +305,14 @@ describe('Shared MCP daemon (issue #411)', () => {
     await waitFor(() => findResponse(first.stdout, 1), 10000);
     // Direct mode — no daemon machinery touched.
     expect(first.stderr.some((l) => l.includes('Attached to shared daemon'))).toBe(false);
-    expect(fs.existsSync(path.join(realRoot, '.workspace_event', 'daemon.pid'))).toBe(false);
-    expect(fs.existsSync(path.join(realRoot, '.workspace_event', 'daemon.log'))).toBe(false);
+    expect(fs.existsSync(path.join(realRoot, '.workspace_payload', 'daemon.pid'))).toBe(false);
+    expect(fs.existsSync(path.join(realRoot, '.workspace_payload', 'daemon.log'))).toBe(false);
   }, 20000);
 
   it('clears a stale (dead-pid) lockfile and a fresh daemon takes over', async () => {
     // Plant a lockfile pointing at a definitely-dead pid + the real socket path.
     fs.writeFileSync(
-      path.join(realRoot, '.workspace_event', 'daemon.pid'),
+      path.join(realRoot, '.workspace_payload', 'daemon.pid'),
       JSON.stringify({
         pid: 999_999,
         version: '0.0.0-fake',
@@ -342,7 +342,7 @@ describe('Shared MCP daemon (issue #411)', () => {
     // Plant a live-pid lockfile so the launcher treats the lock as held, and a
     // mini-server that answers with a mismatched-version hello.
     fs.writeFileSync(
-      path.join(realRoot, '.workspace_event', 'daemon.pid'),
+      path.join(realRoot, '.workspace_payload', 'daemon.pid'),
       JSON.stringify({ pid: process.pid, version: '0.0.0-mismatch', socketPath: sockPath, startedAt: Date.now() }),
     );
     const miniServer = net.createServer((sock) => {
@@ -414,7 +414,7 @@ describe('Shared MCP daemon (issue #411)', () => {
     server.child.stdin.end();
 
     expect(await waitProcessExit(daemonPid, 10000)).toBe(true);
-    expect(fs.existsSync(path.join(realRoot, '.workspace_event', 'daemon.pid'))).toBe(false);
+    expect(fs.existsSync(path.join(realRoot, '.workspace_payload', 'daemon.pid'))).toBe(false);
   }, 30000);
 
   it('proxy survives the daemon dying mid-session and keeps serving (#662)', async () => {
@@ -438,7 +438,7 @@ describe('Shared MCP daemon (issue #411)', () => {
       // This is the wait that historically flaked — surface WHERE the request
       // died: proxy side (stderr) or daemon side (daemon.log).
       let daemonLog = '<no daemon.log>';
-      try { daemonLog = fs.readFileSync(path.join(realRoot, '.workspace_event', 'daemon.log'), 'utf8').split('\n').slice(-25).join('\n'); } catch { /* absent */ }
+      try { daemonLog = fs.readFileSync(path.join(realRoot, '.workspace_payload', 'daemon.log'), 'utf8').split('\n').slice(-25).join('\n'); } catch { /* absent */ }
       throw new Error(
         `${(e as Error).message}\ndaemonAlive=${isAlive(daemonPid)} proxyAlive=${isAlive(server.child.pid!)}\n` +
         `--- proxy stderr tail ---\n${server.stderr.slice(-15).join('')}\n--- daemon.log tail ---\n${daemonLog}`

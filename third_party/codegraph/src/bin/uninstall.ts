@@ -2,7 +2,7 @@
 /**
  * CodeGraph preuninstall cleanup script
  *
- * Runs automatically when `npm uninstall -g @colbymchenry/workspace_event`
+ * Runs automatically when `npm uninstall -g @colbymchenry/workspace_payload`
  * is called. Loops over every known agent target's `uninstall(loc)`
  * for the global location only — local-location entries live inside
  * project working trees and aren't ours to nuke at npm-uninstall

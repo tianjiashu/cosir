@@ -1,16 +1,16 @@
 /**
- * CLI binary removal for `workspace_event uninstall` (the #1071 shadow, uninstall
+ * CLI binary removal for `workspace_payload uninstall` (the #1071 shadow, uninstall
  * edition).
  *
  * Before this module, three disconnected paths each removed PART of an
- * installation and none removed it all: `workspace_event uninstall` swept agent
+ * installation and none removed it all: `workspace_payload uninstall` swept agent
  * configs only, `install.sh --uninstall` deleted the bundle only, and npm's
  * `preuninstall` hook cleaned configs when npm removed its own package. A
  * user with more than one install method (the common drift: npm first, the
- * bundle later — or vice versa) ran `workspace_event uninstall` and still had a
- * working `workspace_event` on PATH.
+ * bundle later — or vice versa) ran `workspace_payload uninstall` and still had a
+ * working `workspace_payload` on PATH.
  *
- * This module makes `workspace_event uninstall` complete: PLAN every binary
+ * This module makes `workspace_payload uninstall` complete: PLAN every binary
  * install present on the machine (bundle layout(s), the npm global package,
  * the bin-dir shim), then EXECUTE the removals. Split planner/executor with
  * injected side effects, same convention as the upgrade orchestrator.
@@ -20,14 +20,14 @@
  *     user's working tree, not an "install".
  *   - A project-local npm install is left alone — the project's
  *     package.json owns it, not the machine-level uninstaller.
- *   - On unix the default install dir (`~/.workspace_event`) doubles as the
+ *   - On unix the default install dir (`~/.workspace_payload`) doubles as the
  *     machine-level state dir (telemetry choice, daemon records, the
  *     update-check cache) — only the install ARTIFACTS (`versions/`,
  *     `current`) are removed there, never the whole dir. A dedicated
- *     install dir (Windows `%LOCALAPPDATA%\workspace_event`, or a custom
+ *     install dir (Windows `%LOCALAPPDATA%\workspace_payload`, or a custom
  *     `CODEGRAPH_INSTALL_DIR`) is removed wholesale.
  *   - The bin-dir shim is removed only when it verifiably points into a
- *     detected install dir — a user's unrelated `workspace_event` file survives.
+ *     detected install dir — a user's unrelated `workspace_payload` file survives.
  *   - Windows cannot DELETE a running exe but CAN rename it (the same
  *     trick the in-place upgrade uses): a locked `node.exe` is renamed
  *     aside and reported as a leftover for the user to delete after the
@@ -45,7 +45,7 @@ import { detectInstallMethod, npmInvocation, NPM_PACKAGE } from './index';
 // ---------------------------------------------------------------------------
 
 export interface RemoveBinaryProbes {
-  /** `__filename` of the running CLI entry (dist/bin/workspace_event.js). */
+  /** `__filename` of the running CLI entry (dist/bin/workspace_payload.js). */
   filename: string;
   platform: NodeJS.Platform;
   cwd: string;
@@ -106,7 +106,7 @@ function pathFor(platform: NodeJS.Platform): path.PlatformPath {
 
 /** The machine-level state dir that must survive an artifacts-only removal. */
 function stateDir(p: RemoveBinaryProbes): string {
-  return pathFor(p.platform).join(p.homedir, '.workspace_event');
+  return pathFor(p.platform).join(p.homedir, '.workspace_payload');
 }
 
 /** Candidate bundle install dirs: the running binary's own, plus the defaults. */

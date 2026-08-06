@@ -30,7 +30,7 @@ describe('issue #238 — connection PRAGMAs (#1)', () => {
 
   beforeAll(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg238-pragma-'));
-    conn = DatabaseConnection.initialize(path.join(dir, 'workspace_event.db'));
+    conn = DatabaseConnection.initialize(path.join(dir, 'workspace_payload.db'));
   });
 
   afterAll(() => {
@@ -66,7 +66,7 @@ describe('issue #238 — WAL lets a reader proceed during a writer', () => {
   });
 
   it('a read on a 2nd connection succeeds while a writer holds the lock', () => {
-    const dbPath = path.join(dir, 'workspace_event.db');
+    const dbPath = path.join(dir, 'workspace_payload.db');
     const writer = DatabaseConnection.initialize(dbPath);
     // The property only holds under WAL; skip if the filesystem couldn't enable it.
     if (writer.getJournalMode() !== 'wal') {

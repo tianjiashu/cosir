@@ -17,7 +17,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { CodeGraph } from '../src';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 function spawnServer(cwd: string): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [BIN, 'serve', '--mcp'], {
@@ -26,7 +26,7 @@ function spawnServer(cwd: string): ChildProcessWithoutNullStreams {
     // Pin to direct (in-process) mode. #172 is a contract about the in-process
     // server's init ordering — the "File watcher active" log this test observes
     // is emitted in-process. In daemon mode the watcher runs in the detached
-    // daemon (logging to .workspace_event/daemon.log, not the child's stderr); the
+    // daemon (logging to .workspace_payload/daemon.log, not the child's stderr); the
     // same response-before-init guarantee lives in the shared session code and
     // is covered by mcp-daemon.test.ts. Direct mode also avoids leaking a
     // detached daemon from this suite.
@@ -104,7 +104,7 @@ describe('MCP initialize handshake (issue #172)', () => {
   let child: ChildProcessWithoutNullStreams | null = null;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-mcp-init-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-mcp-init-'));
   });
 
   afterEach(() => {
@@ -115,7 +115,7 @@ describe('MCP initialize handshake (issue #172)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('responds to initialize quickly when no .workspace_event exists in cwd', async () => {
+  it('responds to initialize quickly when no .workspace_payload exists in cwd', async () => {
     child = spawnServer(tempDir);
     const events = tagStreams(child);
     sendInitialize(child, tempDir);
@@ -128,7 +128,7 @@ describe('MCP initialize handshake (issue #172)', () => {
   }, 10000);
 
   it('sends initialize response BEFORE tryInitializeDefault finishes', async () => {
-    // Seed a real .workspace_event so the server's tryInitializeDefault path runs
+    // Seed a real .workspace_payload so the server's tryInitializeDefault path runs
     // its full body: CodeGraph.open() (which awaits initGrammars()) and then
     // startWatching() (which logs "File watcher active" to stderr). On any
     // platform, that stderr log is observable evidence that tryInitializeDefault

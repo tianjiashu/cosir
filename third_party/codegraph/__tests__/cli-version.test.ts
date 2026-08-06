@@ -1,5 +1,5 @@
 /**
- * Tests for the `workspace_event version` affordances.
+ * Tests for the `workspace_payload version` affordances.
  *
  * The version should be reachable however a user reaches for it — the bare
  * `version` subcommand, lowercase `-v`, single-dash `-version`, plus
@@ -16,7 +16,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 const PKG_VERSION = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8'),
 ).version as string;
@@ -31,7 +31,7 @@ function run(args: string[]): string {
   }).trim();
 }
 
-describe('workspace_event version affordances', () => {
+describe('workspace_payload version affordances', () => {
   for (const spelling of ['version', '-v', '-version', '--version', '-V']) {
     it(`\`codegraph ${spelling}\` prints exactly the package version`, () => {
       expect(run([spelling])).toBe(PKG_VERSION);
@@ -42,9 +42,9 @@ describe('workspace_event version affordances', () => {
     expect(run(['--help'])).toContain('version');
   });
 
-  it('`workspace_event help` prints usage and the command list', () => {
+  it('`workspace_payload help` prints usage and the command list', () => {
     const out = run(['help']);
-    expect(out).toContain('Usage: workspace_event');
+    expect(out).toContain('Usage: workspace_payload');
     expect(out).toContain('Commands:');
   });
 
@@ -60,7 +60,7 @@ describe('workspace_event version affordances', () => {
     // the index command's --verbose, then short-circuits at "not initialized"
     // and exits non-zero. The point is it must NOT print the bare version,
     // which would mean the top-level intercept swallowed a subcommand flag.
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-version-test-'));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-version-test-'));
     let combined = '';
     try {
       combined = execFileSync(process.execPath, [BIN, 'index', '-v', tempDir], {

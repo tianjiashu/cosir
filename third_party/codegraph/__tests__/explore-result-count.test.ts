@@ -44,7 +44,7 @@ describe('codegraph_explore — curated result count (#1046)', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-count-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-count-'));
 
     // The real, connected flow — its symbols call each other, so it clears the
     // relevance gate and renders. snake_case so FTS tokenizes "status" out of
@@ -89,6 +89,6 @@ describe('codegraph_explore — curated result count (#1046)', () => {
     // 8 noise) are reported. Pre-fix this was the inflated gather count.
     expect(headerFiles!).toBeLessThan(5);
     // And the sentinel placeholder never leaks into the rendered header.
-    expect(text).not.toContain('workspace_event-explore-summary');
+    expect(text).not.toContain('workspace_payload-explore-summary');
   });
 });

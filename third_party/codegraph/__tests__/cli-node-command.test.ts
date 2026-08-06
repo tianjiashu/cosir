@@ -1,7 +1,7 @@
 /**
- * `workspace_event node` argument handling (#1044).
+ * `workspace_payload node` argument handling (#1044).
  *
- * File-read mode (`workspace_event node -f <file>`) carries no symbol name, but the
+ * File-read mode (`workspace_payload node -f <file>`) carries no symbol name, but the
  * command was defined with a REQUIRED `<name>` positional, so commander.js
  * rejected the call with "missing required argument 'name'" before the action
  * ever ran — making file mode unreachable from the CLI. `name` is now optional
@@ -17,7 +17,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { CodeGraph } from '../src';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 function runNode(cwd: string, extraArgs: string[]): { stdout: string; stderr: string; code: number } {
   try {
@@ -32,11 +32,11 @@ function runNode(cwd: string, extraArgs: string[]): { stdout: string; stderr: st
   }
 }
 
-describe('workspace_event node — argument handling (#1044)', () => {
+describe('workspace_payload node — argument handling (#1044)', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-node-cmd-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-node-cmd-'));
     fs.mkdirSync(path.join(tempDir, 'src'));
     fs.writeFileSync(path.join(tempDir, 'src/util.ts'), 'export function util(x: number){ return x + 1; }\n');
     const cg = CodeGraph.initSync(tempDir);

@@ -69,7 +69,7 @@ class CodeGraphKernelClient:
         self._write_lock = threading.Lock()
         self._stop_reader = threading.Event()
         self._reader = threading.Thread(
-            target=self._read_loop, name="workspace_event-kernel-reader", daemon=True
+            target=self._read_loop, name="workspace_payload-kernel-reader", daemon=True
         )
         self._reader.start()
 

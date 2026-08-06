@@ -749,7 +749,7 @@ class AgentRuntime:
             payload=payload,
         )
         log.info(
-            "workspace_event",
+            "workspace_payload",
             extra={
                 "msg": "runtime event recorded",
                 "data": {

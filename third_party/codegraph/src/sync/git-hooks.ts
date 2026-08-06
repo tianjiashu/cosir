@@ -3,12 +3,12 @@
  *
  * When the live file watcher is disabled (e.g. on WSL2 `/mnt/*` drives,
  * see watch-policy.ts), the CodeGraph index would otherwise go stale until
- * the user runs `workspace_event sync` by hand. As an opt-in alternative, we can
+ * the user runs `workspace_payload sync` by hand. As an opt-in alternative, we can
  * install git hooks that refresh the index after the operations that change
  * files on disk: commit, merge (covers `git pull`), and checkout.
  *
- * The hooks run `workspace_event sync` in the background so they never block git,
- * and are guarded by `command -v workspace_event` so they no-op cleanly when the
+ * The hooks run `workspace_payload sync` in the background so they never block git,
+ * and are guarded by `command -v workspace_payload` so they no-op cleanly when the
  * CLI isn't on PATH. Our snippet is delimited by marker comments so install
  * is idempotent and removal preserves any user-authored hook content.
  */
@@ -17,8 +17,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-const MARKER_BEGIN = '# >>> workspace_event sync hook >>>';
-const MARKER_END = '# <<< workspace_event sync hook <<<';
+const MARKER_BEGIN = '# >>> workspace_payload sync hook >>>';
+const MARKER_END = '# <<< workspace_payload sync hook <<<';
 
 export type GitHookName = 'post-commit' | 'post-merge' | 'post-checkout';
 
@@ -79,9 +79,9 @@ function markerBlock(): string {
     MARKER_BEGIN,
     '# Keeps the CodeGraph index fresh while the live file watcher is off',
     '# (e.g. WSL2 /mnt drives). Runs in the background so it never blocks git.',
-    '# Managed by workspace_event; remove with `workspace_event uninit` or delete this block.',
-    'if command -v workspace_event >/dev/null 2>&1; then',
-    '  ( workspace_event sync >/dev/null 2>&1 & ) >/dev/null 2>&1',
+    '# Managed by workspace_payload; remove with `workspace_payload uninit` or delete this block.',
+    'if command -v workspace_payload >/dev/null 2>&1; then',
+    '  ( workspace_payload sync >/dev/null 2>&1 & ) >/dev/null 2>&1',
     'fi',
     MARKER_END,
   ].join('\n');

@@ -65,7 +65,7 @@ describe('adaptive codegraph_explore sizing — sibling skeletonization', () => 
     'dispatch proceed handleLogging LoggingInterceptor BridgeInterceptor CacheInterceptor RetryInterceptor ResponseFormatter';
 
   beforeAll(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-adaptive-explore-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-adaptive-explore-'));
     const srcDir = path.join(testDir, 'src');
     fs.mkdirSync(srcDir);
 

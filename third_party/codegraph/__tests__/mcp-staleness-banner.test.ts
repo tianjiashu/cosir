@@ -46,7 +46,7 @@ describe('MCP staleness banner', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-stale-banner-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-stale-banner-'));
     fs.mkdirSync(path.join(testDir, 'src'));
     // Three isolated files with no cross-references — keeps each test's
     // "which path does the response mention?" assertion unambiguous. If the

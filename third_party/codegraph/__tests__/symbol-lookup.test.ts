@@ -2,7 +2,7 @@
  * Module-qualified symbol lookup (`stage_apply::run`, `Session.request`,
  * `configurator/stage_apply`).
  *
- * Pinned because the lookup vocabulary is what makes workspace_event useful
+ * Pinned because the lookup vocabulary is what makes workspace_payload useful
  * in workspaces with same-named symbols across modules — Rust
  * sub-pipelines, Python `__init__.py` packages, Java packages, etc.
  * See #173 for the original report: a `run` function in
@@ -36,7 +36,7 @@ function hasSqliteBindings(): boolean {
 const HAS_SQLITE = hasSqliteBindings();
 
 function tmpRoot(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-symbol-lookup-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-symbol-lookup-'));
 }
 
 function rmTree(dir: string): void {

@@ -33,9 +33,9 @@ describe('detectInstallMethod', () => {
   }
 
   it('detects a unix bundle and derives the install dir from the versions/ layout', () => {
-    const root = '/home/u/.workspace_event/versions/v0.9.9';
+    const root = '/home/u/.workspace_payload/versions/v0.9.9';
     const filename = `${root}/lib/dist/bin/codegraph.js`;
-    const present = new Set([`${root}/node`, `${root}/bin/codegraph`, '/home/u/.workspace_event']);
+    const present = new Set([`${root}/node`, `${root}/bin/codegraph`, '/home/u/.workspace_payload']);
     const m = detectInstallMethod({
       filename,
       platform: 'linux',
@@ -46,12 +46,12 @@ describe('detectInstallMethod', () => {
       kind: 'bundle',
       os: 'unix',
       bundleRoot: root,
-      installDir: '/home/u/.workspace_event',
+      installDir: '/home/u/.workspace_payload',
     });
   });
 
   it('detects a windows bundle and derives the install dir from current\\', () => {
-    const root = 'C:/Users/u/AppData/Local/workspace_event/current';
+    const root = 'C:/Users/u/AppData/Local/workspace_payload/current';
     const filename = `${root}/lib/dist/bin/codegraph.js`;
     const present = new Set([`${root}/node.exe`, `${root}/bin/codegraph.cmd`]);
     const m = detectInstallMethod({
@@ -63,11 +63,11 @@ describe('detectInstallMethod', () => {
     expect(m.kind).toBe('bundle');
     expect(m.os).toBe('windows');
     // win32 path math emits backslashes; compare separator-independently.
-    expect(m.installDir?.replace(/\\/g, '/')).toBe('C:/Users/u/AppData/Local/workspace_event');
+    expect(m.installDir?.replace(/\\/g, '/')).toBe('C:/Users/u/AppData/Local/workspace_payload');
   });
 
   it('detects a global npm install', () => {
-    const filename = '/usr/local/lib/node_modules/@colbymchenry/workspace_event/dist/bin/workspace_event.js';
+    const filename = '/usr/local/lib/node_modules/@colbymchenry/workspace_payload/dist/bin/workspace_payload.js';
     const m = detectInstallMethod({
       filename,
       platform: 'linux',
@@ -85,7 +85,7 @@ describe('detectInstallMethod', () => {
   });
 
   it('detects an npx run from the _npx cache', () => {
-    const filename = '/home/u/.npm/_npx/abc123/node_modules/@colbymchenry/workspace_event/dist/bin/workspace_event.js';
+    const filename = '/home/u/.npm/_npx/abc123/node_modules/@colbymchenry/workspace_payload/dist/bin/workspace_payload.js';
     const m = detectInstallMethod({ filename, platform: 'linux', cwd: '/home/u', exists: () => false });
     expect(m).toEqual({ kind: 'npx' });
   });
@@ -93,10 +93,10 @@ describe('detectInstallMethod', () => {
   // The npm thin-installer's per-platform package IS a complete bundle
   // (vendored node + bin/ launcher) sitting inside node_modules. The layout
   // sniff must not win over the node_modules path check, or `upgrade` curls
-  // install.sh into ~/.workspace_event — a second install that loses the PATH race
-  // to npm's shim, so `workspace_event -v` stays on the old version forever.
+  // install.sh into ~/.workspace_payload — a second install that loses the PATH race
+  // to npm's shim, so `workspace_payload -v` stays on the old version forever.
   it('detects the npm thin-installer platform package as npm, not bundle', () => {
-    const root = '/usr/local/lib/node_modules/@colbymchenry/workspace_event/node_modules/@colbymchenry/workspace_event-linux-x64';
+    const root = '/usr/local/lib/node_modules/@colbymchenry/workspace_payload/node_modules/@colbymchenry/workspace_payload-linux-x64';
     const filename = `${root}/lib/dist/bin/codegraph.js`;
     const present = new Set([`${root}/node`, `${root}/bin/codegraph`]);
     const m = detectInstallMethod({
@@ -118,7 +118,7 @@ describe('detectInstallMethod', () => {
   });
 
   it('still detects an npx run when the cached platform package has the bundle layout', () => {
-    const root = '/home/u/.npm/_npx/abc123/node_modules/@colbymchenry/workspace_event/node_modules/@colbymchenry/workspace_event-linux-x64';
+    const root = '/home/u/.npm/_npx/abc123/node_modules/@colbymchenry/workspace_payload/node_modules/@colbymchenry/workspace_payload-linux-x64';
     const filename = `${root}/lib/dist/bin/codegraph.js`;
     const present = new Set([`${root}/node`, `${root}/bin/codegraph`]);
     const m = detectInstallMethod({ filename, platform: 'linux', cwd: '/home/u', exists: bundleExists(present) });
@@ -126,7 +126,7 @@ describe('detectInstallMethod', () => {
   });
 
   it('detects a source checkout via sibling package.json + .git', () => {
-    const repo = '/home/u/dev/workspace_event';
+    const repo = '/home/u/dev/workspace_payload';
     const filename = `${repo}/dist/bin/codegraph.js`;
     const present = new Set([`${repo}/package.json`, `${repo}/.git`]);
     const m = detectInstallMethod({
@@ -140,7 +140,7 @@ describe('detectInstallMethod', () => {
 
   it('returns unknown for an unrecognized layout', () => {
     const m = detectInstallMethod({
-      filename: '/opt/weird/place/workspace_event.js',
+      filename: '/opt/weird/place/workspace_payload.js',
       platform: 'linux',
       cwd: '/tmp',
       exists: () => false,
@@ -151,16 +151,16 @@ describe('detectInstallMethod', () => {
 
 describe('deriveInstallDir', () => {
   it('unix: returns the dir above versions/', () => {
-    expect(deriveInstallDir('/a/b/.workspace_event/versions/v1.2.3', 'unix', () => true)).toBe('/a/b/.workspace_event');
+    expect(deriveInstallDir('/a/b/.workspace_payload/versions/v1.2.3', 'unix', () => true)).toBe('/a/b/.workspace_payload');
   });
   it('unix: null when not under versions/', () => {
     expect(deriveInstallDir('/a/b/somewhere', 'unix', () => true)).toBeNull();
   });
   it('windows: returns the parent of current\\', () => {
-    expect(deriveInstallDir('C:/x/workspace_event/current', 'windows', () => true)?.replace(/\\/g, '/')).toBe('C:/x/workspace_event');
+    expect(deriveInstallDir('C:/x/workspace_payload/current', 'windows', () => true)?.replace(/\\/g, '/')).toBe('C:/x/workspace_payload');
   });
   it('windows: null when basename is not current', () => {
-    expect(deriveInstallDir('C:/x/workspace_event/v1', 'windows', () => true)).toBeNull();
+    expect(deriveInstallDir('C:/x/workspace_payload/v1', 'windows', () => true)).toBeNull();
   });
 });
 
@@ -206,18 +206,18 @@ describe('version helpers', () => {
 
   it('reindexAdvisory mentions the refresh commands', () => {
     const a = reindexAdvisory();
-    expect(a).toContain('workspace_event sync');
-    expect(a).toContain('workspace_event index -f');
+    expect(a).toContain('workspace_payload sync');
+    expect(a).toContain('workspace_payload index -f');
   });
 
   it('buildWindowsUpgradeScript targets the right asset per arch and renames-not-deletes the exe', () => {
     const arm = buildWindowsUpgradeScript('C:\\cg\\current', 'v1.2.3', 'arm64');
-    expect(arm).toContain('releases/download/v1.2.3/workspace_event-win32-arm64.zip');
+    expect(arm).toContain('releases/download/v1.2.3/workspace_payload-win32-arm64.zip');
     expect(arm).toContain("$dest='C:\\cg\\current'");
     expect(arm).toContain('Rename-Item'); // never Remove-Item on the locked exe
     expect(arm).not.toMatch(/Remove-Item[^;]*\$dest'?\s*;/); // doesn't delete current\
     const x64 = buildWindowsUpgradeScript('C:\\cg\\current', 'v1.2.3', 'x64');
-    expect(x64).toContain('workspace_event-win32-x64.zip');
+    expect(x64).toContain('workspace_payload-win32-x64.zip');
   });
 });
 
@@ -289,7 +289,7 @@ describe('runUpgrade', () => {
 
   it('unix bundle: runs the installer via sh with the derived install dir', async () => {
     const { deps, calls } = makeDeps({
-      method: { kind: 'bundle', os: 'unix', bundleRoot: '/h/.workspace_event/versions/v0.9.8', installDir: '/h/.workspace_event' },
+      method: { kind: 'bundle', os: 'unix', bundleRoot: '/h/.workspace_payload/versions/v0.9.8', installDir: '/h/.workspace_payload' },
       currentVersion: '0.9.8',
     });
     const code = await runUpgrade({}, deps);
@@ -299,13 +299,13 @@ describe('runUpgrade', () => {
     expect(calls.runs[0].args[0]).toBe('-c');
     expect(calls.runs[0].args[1]).toContain('curl -fsSL');
     expect(calls.runs[0].args[1]).toContain('| sh');
-    expect(calls.runs[0].env?.CODEGRAPH_INSTALL_DIR).toBe('/h/.workspace_event');
+    expect(calls.runs[0].env?.CODEGRAPH_INSTALL_DIR).toBe('/h/.workspace_payload');
     expect(calls.logs.join('\n')).toMatch(/codegraph sync/); // re-index advisory printed
   });
 
   it('unix bundle: falls back to wget, and errors when neither downloader exists', async () => {
     const { deps, calls } = makeDeps({
-      method: { kind: 'bundle', os: 'unix', bundleRoot: '/h/.workspace_event/versions/v0.9.8', installDir: null },
+      method: { kind: 'bundle', os: 'unix', bundleRoot: '/h/.workspace_payload/versions/v0.9.8', installDir: null },
       currentVersion: '0.9.8',
       hasCommand: () => false,
     });
@@ -317,7 +317,7 @@ describe('runUpgrade', () => {
 
   it('windows bundle: runs a synchronous in-place (rename + extract) powershell upgrade', async () => {
     const { deps, calls } = makeDeps({
-      method: { kind: 'bundle', os: 'windows', bundleRoot: 'C:/x/workspace_event/current', installDir: 'C:/x/workspace_event' },
+      method: { kind: 'bundle', os: 'windows', bundleRoot: 'C:/x/workspace_payload/current', installDir: 'C:/x/workspace_payload' },
       currentVersion: '0.9.8',
       platform: 'win32',
     });
@@ -327,7 +327,7 @@ describe('runUpgrade', () => {
     expect(calls.runs[0].cmd).toBe('powershell.exe');
     const decoded = decodeEncodedCommand(calls.runs[0].args);
     // Downloads the right asset, renames the locked exe aside, copies over current\.
-    expect(decoded).toContain('releases/download/v0.9.9/workspace_event-win32-');
+    expect(decoded).toContain('releases/download/v0.9.9/workspace_payload-win32-');
     expect(decoded).toContain('Rename-Item');
     expect(decoded).toContain('node.exe.old-');
     expect(decoded).toContain('Copy-Item');
@@ -336,7 +336,7 @@ describe('runUpgrade', () => {
   it('windows bundle: a non-zero installer exit is a failure', async () => {
     const { deps, calls } = makeDeps(
       {
-        method: { kind: 'bundle', os: 'windows', bundleRoot: 'C:/x/workspace_event/current', installDir: 'C:/x/workspace_event' },
+        method: { kind: 'bundle', os: 'windows', bundleRoot: 'C:/x/workspace_payload/current', installDir: 'C:/x/workspace_payload' },
         currentVersion: '0.9.8',
         platform: 'win32',
       },
@@ -400,7 +400,7 @@ describe('runUpgrade', () => {
 
   it('source: tells the user to git pull, runs nothing', async () => {
     const { deps, calls } = makeDeps({
-      method: { kind: 'source', root: '/dev/workspace_event' },
+      method: { kind: 'source', root: '/dev/workspace_payload' },
       currentVersion: '0.9.8',
     });
     const code = await runUpgrade({}, deps);
@@ -415,7 +415,7 @@ describe('runUpgrade', () => {
 // ---------------------------------------------------------------------------
 
 describe('post-upgrade refresh of installed agent surfaces', () => {
-  it('runs `workspace_event install --refresh` via the NEW binary after a successful npm upgrade', async () => {
+  it('runs `workspace_payload install --refresh` via the NEW binary after a successful npm upgrade', async () => {
     const { deps, calls } = makeDeps({
       method: { kind: 'npm', scope: 'global' },
       currentVersion: '0.9.8',
@@ -441,10 +441,10 @@ describe('post-upgrade refresh of installed agent surfaces', () => {
     expect(code).toBe(0);
     const last = calls.runs[calls.runs.length - 1];
     expect(last?.cmd).toBe('cmd.exe');
-    expect(last?.args).toEqual(['/d', '/s', '/c', 'workspace_event install --refresh']);
+    expect(last?.args).toEqual(['/d', '/s', '/c', 'workspace_payload install --refresh']);
   });
 
-  it('skips the refresh when `workspace_event` is not resolvable on PATH', async () => {
+  it('skips the refresh when `workspace_payload` is not resolvable on PATH', async () => {
     const { deps, calls } = makeDeps({
       method: { kind: 'npm', scope: 'global' },
       currentVersion: '0.9.8',
@@ -509,7 +509,7 @@ describe('post-upgrade refresh of installed agent surfaces', () => {
     });
     const code = await runUpgrade({}, deps);
     expect(code).toBe(0);
-    // Spawning `workspace_event install --refresh` would execute the shadowed stale
+    // Spawning `workspace_payload install --refresh` would execute the shadowed stale
     // binary — the exact staleness the refresh exists to heal.
     expect(calls.runs.filter((r) => r.cmd === 'codegraph')).toHaveLength(0);
     expect(calls.logs.join('\n')).toMatch(/run `codegraph install --refresh` once the PATH is fixed/);
@@ -517,7 +517,7 @@ describe('post-upgrade refresh of installed agent surfaces', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Post-upgrade version probe — does the PATH-resolved `workspace_event` serve the
+// Post-upgrade version probe — does the PATH-resolved `workspace_payload` serve the
 // version we just installed, in THIS terminal?
 // ---------------------------------------------------------------------------
 
@@ -552,7 +552,7 @@ describe('post-upgrade version probe', () => {
     expect(out).toMatch(/which -a codegraph/);
   });
 
-  it('inconclusive: falls back to the soft new-terminal hint when workspace_event is not on PATH', async () => {
+  it('inconclusive: falls back to the soft new-terminal hint when workspace_payload is not on PATH', async () => {
     const { deps, calls } = makeDeps(npmGlobal); // hasCommand resolves only curl
     const code = await runUpgrade({}, deps);
     expect(code).toBe(0);
@@ -591,7 +591,7 @@ describe('post-upgrade version probe', () => {
     });
     const code = await runUpgrade({}, deps);
     expect(code).toBe(0);
-    expect(calls.captures).toEqual([{ cmd: 'cmd.exe', args: ['/d', '/s', '/c', 'workspace_event --version'] }]);
+    expect(calls.captures).toEqual([{ cmd: 'cmd.exe', args: ['/d', '/s', '/c', 'workspace_payload --version'] }]);
     expect(calls.logs.join('\n')).toMatch(/now reports v0\.9\.9/);
   });
 

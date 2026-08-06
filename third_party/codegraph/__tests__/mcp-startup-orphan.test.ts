@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-const BIN = path.resolve(__dirname, '../dist/bin/workspace_event.js');
+const BIN = path.resolve(__dirname, '../dist/bin/workspace_payload.js');
 
 function spawnServer(cwd: string, handshakeTimeoutMs: number): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [BIN, 'serve', '--mcp'], {

@@ -163,7 +163,7 @@ export class CodeGraph {
     this.queries = queries;
     this.projectRoot = projectRoot;
     this.fileLock = new FileLock(
-      path.join(getCodeGraphDir(projectRoot), 'workspace_event.lock')
+      path.join(getCodeGraphDir(projectRoot), 'workspace_payload.lock')
     );
     this.wireLayers();
   }
@@ -194,9 +194,9 @@ export class CodeGraph {
   }
 
   /**
-   * Heal a stale database handle in place. If `.workspace_event/` was removed and
+   * Heal a stale database handle in place. If `.workspace_payload/` was removed and
    * recreated at the SAME path while this instance held the DB open — a git
-   * worktree removed and re-added, or `rm -rf .workspace_event` + `workspace_event init` —
+   * worktree removed and re-added, or `rm -rf .workspace_payload` + `workspace_payload init` —
    * our open fd points at the now-unlinked inode and can never see the new
    * index, so every query returns the pre-removal snapshot until the process
    * restarts (#925). When that's detected, open the live file at the same path,
@@ -325,11 +325,11 @@ export class CodeGraph {
 
   /**
    * Rebuild the project's database from scratch and return a fresh, empty
-   * instance — the "same result as a fresh init" semantics that `workspace_event
+   * instance — the "same result as a fresh init" semantics that `workspace_payload
    * index` documents.
    *
    * Unlike `open()` followed by `clear()`, this DISCARDS the existing
-   * `.workspace_event/workspace_event.db` (and its `-wal`/`-shm` sidecars) before
+   * `.workspace_payload/workspace_payload.db` (and its `-wal`/`-shm` sidecars) before
    * re-initializing, instead of opening the old database and DELETE-ing every
    * row. On a large or pre-fix poisoned index — e.g. an old graph that scanned
    * an ignored gitlink corpus (#1065) into ~1.6M nodes with a multi-GB WAL —
@@ -463,7 +463,7 @@ export class CodeGraph {
         const before = this.queries.getNodeAndEdgeCount();
         // Mark the index as in-flight BEFORE any writes: a run killed
         // mid-index (OOM, SIGKILL, the #850 liveness watchdog) leaves this
-        // marker behind, so `workspace_event status` can tell a truncated index
+        // marker behind, so `workspace_payload status` can tell a truncated index
         // from a completed one instead of silently serving partial results.
         try { this.queries.setMetadata('index_state', 'indexing'); } catch { /* metadata is advisory */ }
         // Segment vocabulary starts empty and is repopulated by the node write
@@ -556,8 +556,8 @@ export class CodeGraph {
           result.edgesCreated = after.edges - before.edges;
         }
 
-        // Stamp the index with the engine that built it, so `workspace_event status`
-        // and `workspace_event upgrade` can recommend a re-index when the running
+        // Stamp the index with the engine that built it, so `workspace_payload status`
+        // and `workspace_payload upgrade` can recommend a re-index when the running
         // engine produces richer extraction than the one on disk. Only on a
         // real full index — a sync touches a subset, so it must NOT advance the
         // extraction stamp (the bulk would still be stale). See extraction-version.ts.
@@ -756,7 +756,7 @@ export class CodeGraph {
         // status='failed' for the #1240 retry above), so any pending row now
         // is such an orphan — or a row from an older engine's scoped pass.
         // Grind them down with the batched resolver; this also makes a bare
-        // `workspace_event sync` the recovery command for a wedged index. On a
+        // `workspace_payload sync` the recovery command for a wedged index. On a
         // healthy index this is one COUNT query.
         const orphanCount = this.queries.getUnresolvedReferencesCount();
         if (orphanCount > 0) {
@@ -923,7 +923,7 @@ export class CodeGraph {
   /**
    * Most recent index timestamp (ms since epoch) across all tracked files, or
    * null when nothing is indexed yet. Lets library consumers check index
-   * freshness without shelling out to `workspace_event status --json`. (#329)
+   * freshness without shelling out to `workspace_payload status --json`. (#329)
    */
   getLastIndexedAt(): number | null {
     return this.queries.getLastIndexedAt();
@@ -936,7 +936,7 @@ export class CodeGraph {
    * `'partial'` means the run finished but silently dropped files
    * (discovered > indexed+skipped+errored); `'failed'` means it reported
    * failure. `null` = index predates this marker. Surfaced by
-   * `workspace_event status`.
+   * `workspace_payload status`.
    */
   getIndexState(): 'indexing' | 'complete' | 'partial' | 'failed' | null {
     const raw = this.queries.getMetadata('index_state');
@@ -962,8 +962,8 @@ export class CodeGraph {
    * True when the on-disk index was built by an engine whose extraction is
    * older than the one now running — i.e. a re-index would add data a migration
    * can't backfill. False when there's no index yet (nothing to refresh) or the
-   * stamp is current. This is the signal behind `workspace_event status`'s re-index
-   * hint and `workspace_event upgrade`'s reminder.
+   * stamp is current. This is the signal behind `workspace_payload status`'s re-index
+   * hint and `workspace_payload upgrade`'s reminder.
    */
   isIndexStale(): boolean {
     if (this.queries.getLastIndexedAt() == null) return false;
@@ -1045,7 +1045,7 @@ export class CodeGraph {
 
   /**
    * Active SQLite backend for this project's connection (`node-sqlite` — Node's
-   * built-in real-SQLite module). Surfaced via `workspace_event status` and the
+   * built-in real-SQLite module). Surfaced via `workspace_payload status` and the
    * `codegraph_status` MCP tool alongside the effective journal mode.
    */
   getBackend(): import('./db').SqliteBackend {
@@ -1056,7 +1056,7 @@ export class CodeGraph {
    * The journal mode actually in effect ('wal', 'delete', …). 'wal' means
    * readers never block on a concurrent writer; anything else means they can,
    * which is the precondition for the "database is locked" failures in issue
-   * #238. Surfaced via `workspace_event status` and the `codegraph_status` MCP tool.
+   * #238. Surfaced via `workspace_payload status` and the `codegraph_status` MCP tool.
    */
   getJournalMode(): string {
     return this.db.getJournalMode();
@@ -1285,7 +1285,7 @@ export class CodeGraph {
    * of all non-test routes). Used to inline the routing config in
    * `codegraph_explore` responses on small realworld template repos
    * (rails-realworld, laravel-realworld, drupal-admintoolbar, …) where
-   * Glob+Read of `routes.rb`/`urls.py`/etc. otherwise beats workspace_event.
+   * Glob+Read of `routes.rb`/`urls.py`/etc. otherwise beats workspace_payload.
    */
   getTopRouteFile(): { filePath: string; routeCount: number; totalRoutes: number } | null {
     return this.queries.getTopRouteFile();

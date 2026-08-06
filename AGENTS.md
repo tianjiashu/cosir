@@ -256,15 +256,15 @@ coding-agent/
 常用命令：
 
 ```bash
-workspace_event status
-workspace_event files
-workspace_event explore "要理解的模块、符号、文件或问题"
-workspace_event node "符号名或文件路径"
-workspace_event callers "函数或方法名"
-workspace_event callees "函数或方法名"
-workspace_event impact "准备修改的符号名"
-workspace_event affected <changed-file>
-workspace_event sync
+workspace_payload status
+workspace_payload files
+workspace_payload explore "要理解的模块、符号、文件或问题"
+workspace_payload node "符号名或文件路径"
+workspace_payload callers "函数或方法名"
+workspace_payload callees "函数或方法名"
+workspace_payload impact "准备修改的符号名"
+workspace_payload affected <changed-file>
+workspace_payload sync
 ```
 
 使用要求：

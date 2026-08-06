@@ -84,7 +84,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
     # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
-    # 必须先于 build_tool_system：workspace_event 工具装配需要注入已就绪的 Kernel client，
+    # 必须先于 build_tool_system：workspace_payload 工具装配需要注入已就绪的 Kernel client，
     # 否则 supervisor 未初始化，_codegraph_client() 恒返回 None，工具恒降级（审查暴露）。
     _kernel_supervisor = await _start_codegraph_kernel()
 

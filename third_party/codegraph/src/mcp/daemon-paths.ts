@@ -1,14 +1,14 @@
 /**
  * Daemon socket + lockfile path helpers — issue #411.
  *
- * One shared `workspace_event serve --mcp` daemon per project root means we need a
+ * One shared `workspace_payload serve --mcp` daemon per project root means we need a
  * stable, project-keyed rendezvous between cooperating processes. The IPC
  * surface area is just two file paths:
  *
  *   - `daemon.sock` — Unix domain socket / named pipe the daemon listens on.
  *   - `daemon.pid` — atomic-create lockfile holding the daemon's pid + version.
  *
- * Both live under `.workspace_event/` so the project-scoped uninstall (`workspace_event
+ * Both live under `.workspace_payload/` so the project-scoped uninstall (`workspace_payload
  * uninit`) sweeps them up for free.
  *
  * Special-case: Unix domain socket paths have a hard length limit (~104 on
@@ -61,7 +61,7 @@ function tmpdirSocketPath(projectRoot: string): string {
  *
  *   - Windows: a single named pipe (lives in the kernel pipe namespace, not on
  *     the project FS, so neither the length nor the ExFAT hazard applies).
- *   - Short in-project path: `[ .workspace_event/daemon.sock , <tmpdir> ]` — try the
+ *   - Short in-project path: `[ .workspace_payload/daemon.sock , <tmpdir> ]` — try the
  *     project first, fall back to tmpdir if its FS can't host a socket (#997).
  *   - Long in-project path (deep monorepos, Bazel out dirs): `[ <tmpdir> ]` only
  *     — bind would throw ENAMETOOLONG, so we skip straight to tmpdir.

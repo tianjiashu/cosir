@@ -20,7 +20,7 @@ import {
 } from '../src/installer/config-writer';
 
 function createTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-installer-test-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-installer-test-'));
 }
 
 function cleanupTempDir(dir: string): void {
@@ -79,14 +79,14 @@ describe('Installer Config Writer', () => {
       const backup = fs.readFileSync(mcpJson + '.backup', 'utf-8');
       expect(backup).toContain('this is not valid json');
 
-      // New file should be valid JSON with workspace_event config
+      // New file should be valid JSON with workspace_payload config
       const content = JSON.parse(fs.readFileSync(mcpJson, 'utf-8'));
       expect(content.mcpServers.codegraph).toBeDefined();
 
       warnSpy.mockRestore();
     });
 
-    it('should preserve existing valid config when adding workspace_event', () => {
+    it('should preserve existing valid config when adding workspace_payload', () => {
       const mcpJson = path.join(tempDir, '.mcp.json');
       fs.writeFileSync(mcpJson, JSON.stringify({
         mcpServers: { other: { command: 'other-tool' } },

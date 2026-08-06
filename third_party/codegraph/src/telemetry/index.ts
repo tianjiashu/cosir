@@ -122,7 +122,7 @@ interface EventLine {
 type BufferLine = CountLine | EventLine;
 
 export interface TelemetryOptions {
-  /** Global state dir; defaults to ~/.workspace_event. Tests inject a temp dir. */
+  /** Global state dir; defaults to ~/.workspace_payload. Tests inject a temp dir. */
   dir?: string;
   fetchImpl?: typeof globalThis.fetch;
   now?: () => Date;
@@ -163,7 +163,7 @@ export class Telemetry {
   private intervalHandle: NodeJS.Timeout | null = null;
 
   constructor(opts: TelemetryOptions = {}) {
-    this.dir = opts.dir ?? path.join(os.homedir(), '.workspace_event');
+    this.dir = opts.dir ?? path.join(os.homedir(), '.workspace_payload');
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.now = opts.now ?? (() => new Date());
     this.env = opts.env ?? process.env;
@@ -199,7 +199,7 @@ export class Telemetry {
   }
 
   /**
-   * Persist an explicit user choice (installer toggle or `workspace_event
+   * Persist an explicit user choice (installer toggle or `workspace_payload
    * telemetry on|off`). Turning telemetry off also deletes any buffered,
    * unsent data — off means off.
    */
@@ -381,7 +381,7 @@ export class Telemetry {
     const lines: BufferLine[] = [...this.counts.values(), ...this.events];
     this.counts.clear();
     this.events = [];
-    // Re-check at persist time: `workspace_event telemetry off` mid-process must not
+    // Re-check at persist time: `workspace_payload telemetry off` mid-process must not
     // have its own invocation resurrect the queue file at exit.
     if (!this.isEnabled()) return;
     this.appendLines(lines);

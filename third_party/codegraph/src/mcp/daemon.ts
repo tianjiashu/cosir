@@ -1,7 +1,7 @@
 /**
  * Shared MCP daemon — issue #411.
  *
- * One detached `workspace_event serve --mcp` daemon process per project root,
+ * One detached `workspace_payload serve --mcp` daemon process per project root,
  * accepting N concurrent MCP clients over a Unix-domain socket (or named pipe
  * on Windows). Each incoming connection gets its own {@link MCPSession}; all
  * sessions share a single {@link MCPEngine}, which means a single file watcher
@@ -28,7 +28,7 @@
  *   - Listening on the daemon socket and spawning per-connection sessions.
  *   - The handshake "hello" line that lets a proxy verify it found a
  *     same-version daemon before piping any JSON-RPC through it.
- *   - The lockfile (`.workspace_event/daemon.pid`) competing daemons arbitrate
+ *   - The lockfile (`.workspace_payload/daemon.pid`) competing daemons arbitrate
  *     against — atomic `O_EXCL` create with the full record written in the same
  *     breath (no empty-file window) + cleanup on exit.
  *   - Reference counting + idle timeout.
@@ -226,7 +226,7 @@ export class Daemon {
         server.once('error', reject);
         server.listen(socketPath, () => {
           // POSIX: tighten permissions to user-only — the socket lives under
-          // `.workspace_event/` (git-ignored, maybe a shared FS) or tmpdir.
+          // `.workspace_payload/` (git-ignored, maybe a shared FS) or tmpdir.
           if (process.platform !== 'win32') {
             try { fs.chmodSync(socketPath, 0o600); } catch { /* best-effort */ }
           }
@@ -284,7 +284,7 @@ export class Daemon {
       } catch { /* best-effort; the registry record below carries the real path */ }
     }
 
-    // Drop a discovery record so `workspace_event list` / `stop --all` can find us.
+    // Drop a discovery record so `workspace_payload list` / `stop --all` can find us.
     // Best-effort; a missing record only means list's liveness prune covers it.
     registerDaemon({ root: this.projectRoot, ...lock });
 
@@ -554,7 +554,7 @@ export type AcquireResult =
  */
 export function tryAcquireDaemonLock(projectRoot: string): AcquireResult {
   const pidPath = getDaemonPidPath(projectRoot);
-  // Make sure the .workspace_event/ directory exists — the daemon may be the first
+  // Make sure the .workspace_payload/ directory exists — the daemon may be the first
   // thing to touch it on a fresh-clone-but-already-initialized checkout.
   fs.mkdirSync(path.dirname(pidPath), { recursive: true });
 

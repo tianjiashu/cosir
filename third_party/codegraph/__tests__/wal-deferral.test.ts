@@ -201,7 +201,7 @@ describe('indexAll WAL deferral end-to-end', () => {
     const counts1 = { nodes: r1.nodesCreated, edges: r1.edgesCreated };
     await cg1.close();
 
-    fs.rmSync(path.join(tmpDir, '.workspace_event'), { recursive: true, force: true });
+    fs.rmSync(path.join(tmpDir, '.workspace_payload'), { recursive: true, force: true });
 
     process.env.CODEGRAPH_NO_WAL_DEFER = '1';
     try {

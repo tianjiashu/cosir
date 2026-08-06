@@ -1,7 +1,7 @@
 /**
  * Git Worktree Awareness
  *
- * A CodeGraph index lives in a `.workspace_event/` directory and is resolved by
+ * A CodeGraph index lives in a `.workspace_payload/` directory and is resolved by
  * walking up parent directories to the nearest one (see
  * `findNearestCodeGraphRoot`). That walk is unaware of git worktrees: when a
  * worktree is created *inside* the main checkout (e.g. some tools place them
@@ -75,7 +75,7 @@ export function gitCommonDir(dir: string): string | null {
 export interface WorktreeIndexMismatch {
   /** The git working tree the command was run from. */
   worktreeRoot: string;
-  /** The (different) working tree whose `.workspace_event` index is being used. */
+  /** The (different) working tree whose `.workspace_payload` index is being used. */
   indexRoot: string;
 }
 
@@ -87,7 +87,7 @@ export interface WorktreeIndexMismatch {
  *   - `startPath` isn't in a git repo (or git is unavailable),
  *   - the index already lives in `startPath`'s own working tree, or
  *   - `indexRoot` isn't itself a working-tree root (an unrelated parent dir
- *     that merely happens to contain a `.workspace_event/`), which keeps non-git
+ *     that merely happens to contain a `.workspace_payload/`), which keeps non-git
  *     and monorepo-subdir layouts from producing false warnings.
  */
 export function detectWorktreeIndexMismatch(
@@ -110,7 +110,7 @@ export function detectWorktreeIndexMismatch(
   // and gitlinked clones, so a query run from inside one resolves up to the
   // parent index — whose graph *does* contain that nested repo's files. The
   // warning's premise ("results are a different branch; symbols changed only
-  // here are missing") is false there, and its "run workspace_event init -i" advice
+  // here are missing") is false there, and its "run workspace_payload init -i" advice
   // would needlessly fragment the unified workspace index. A genuine borrowed
   // worktree and the index root are the SAME repository (they share a git
   // common dir); a submodule/embedded clone is a DIFFERENT repository and does

@@ -15,7 +15,7 @@ describe('Context Builder', () => {
   let cg: CodeGraph;
 
   beforeEach(async () => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_event-context-test-'));
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace_payload-context-test-'));
 
     // Create a sample codebase
     const srcDir = path.join(testDir, 'src');

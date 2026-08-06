@@ -409,7 +409,7 @@ export class ContextBuilder {
       ...kept.map((c) => `- ${renderChain(c)}`),
       '',
       hasSynth
-        ? '_Hops marked `[callback/event …]` are dynamic dispatch bridged by workspace_event (with the registration site); the rest are direct calls. codegraph_node any symbol for its body._'
+        ? '_Hops marked `[callback/event …]` are dynamic dispatch bridged by workspace_payload (with the registration site); the rest are direct calls. codegraph_node any symbol for its body._'
         : '_codegraph_node any symbol above for its source + its own callers/callees._',
     ];
     return '\n' + lines.join('\n') + '\n';

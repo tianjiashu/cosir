@@ -1,5 +1,5 @@
 /**
- * Project-scoped configuration: a committed `workspace_event.json` at the project
+ * Project-scoped configuration: a committed `workspace_payload.json` at the project
  * root that a team shares through version control.
  *
  * Today it carries one thing — `extensions`, an opt-in map from a custom file
@@ -29,7 +29,7 @@ import { isLanguageSupported } from './extraction/grammars';
 import { logWarn } from './errors';
 
 /** Filename of the project-scoped config, resolved relative to the project root. */
-export const PROJECT_CONFIG_FILENAME = 'workspace_event.json';
+export const PROJECT_CONFIG_FILENAME = 'workspace_payload.json';
 
 export interface ProjectConfig {
   /** Map of custom file extension (`.foo`) to a supported language id. */
@@ -69,7 +69,7 @@ export interface ProjectConfig {
   include?: string[];
 }
 
-/** Parsed, validated view of a project's `workspace_event.json`. */
+/** Parsed, validated view of a project's `workspace_payload.json`. */
 interface ParsedConfig {
   extensions: Record<string, Language>;
   includeIgnored: string[];
@@ -85,7 +85,7 @@ interface CacheEntry {
 /**
  * Cache keyed by project root. The loader is called once per indexing/scan/sync
  * operation (and per watch event), so the mtime guard keeps repeat calls to one
- * `stat` while a single `workspace_event.json` is in force. Keying by root keeps two
+ * `stat` while a single `workspace_payload.json` is in force. Keying by root keeps two
  * projects in the same process (the daemon / multi-project MCP server) isolated.
  */
 const cache = new Map<string, CacheEntry>();
@@ -120,7 +120,7 @@ function normalizeExtKey(raw: string): string | null {
 }
 
 /**
- * Read + JSON-parse a `workspace_event.json` once and return its validated view.
+ * Read + JSON-parse a `workspace_payload.json` once and return its validated view.
  * Every failure mode degrades to the zero-config default — a missing file, bad
  * JSON, or a typo'd value never throws.
  */
@@ -265,7 +265,7 @@ function extractInclude(parsed: object, file: string): string[] {
 }
 
 /**
- * Load the parsed `workspace_event.json` for a project, mtime-cached. A missing or
+ * Load the parsed `workspace_payload.json` for a project, mtime-cached. A missing or
  * malformed file yields the zero-config default. One `stat` (and at most one
  * read/parse) while a single config file is in force, shared across every field.
  */
@@ -295,7 +295,7 @@ function loadParsedConfig(rootDir: string): ParsedConfig {
  * Returns a map of `.ext` → supported language id. The result merges on top of
  * the built-in extension map at the point of use (see `detectLanguage` /
  * `isSourceFile`), with these user mappings taking precedence. Returns an empty
- * map when there is no `workspace_event.json` (the zero-config default).
+ * map when there is no `workspace_payload.json` (the zero-config default).
  */
 export function loadExtensionOverrides(rootDir: string): Record<string, Language> {
   return loadParsedConfig(rootDir).extensions;
@@ -344,13 +344,13 @@ export function clearProjectConfigCache(): void {
 }
 
 /**
- * Add gitignore-style patterns to a project's `workspace_event.json` `includeIgnored`
+ * Add gitignore-style patterns to a project's `workspace_payload.json` `includeIgnored`
  * list, creating the file if absent and preserving every other key. Used by the
  * CLI to opt a "super-repo of gitignored child repos" (#1156) into the index on
  * the user's say-so. Returns the count of patterns actually ADDED (ones already
  * present are skipped, so a re-run is idempotent).
  *
- * A plain-JSON round-trip: a `workspace_event.json` carrying comments (not valid JSON)
+ * A plain-JSON round-trip: a `workspace_payload.json` carrying comments (not valid JSON)
  * already fails to load with a warning, so rather than silently clobber such a
  * file this throws when an existing config won't parse — the caller falls back
  * to printing the manual snippet. Invalidates the config cache so a subsequent
