@@ -20,6 +20,7 @@ export type RuntimeEventType =
   | "model_completed"
   | "model_failed"
   | "tool_call_started"
+  | "tool_output_delta"
   | "tool_call_finished"
   | "observation_added"
   | "final_response"
@@ -117,6 +118,13 @@ export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {
   display?: Record<string, unknown> | null;
 }
 
+export interface ToolOutputDeltaPayload extends RuntimeEventPayloadObject {
+  tool_call_id: string;
+  step_id: string;
+  text: string;
+  truncated?: boolean;
+}
+
 export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
   step_id: string;
   tool_name: string;
@@ -156,14 +164,10 @@ export interface FileChangeUpdatedPayload extends RuntimeEventPayloadObject {
   turn_id: string;
   path: string;
   action: string;
-  /** 实时新增行数，来自实际快照（零延迟渲染用）。 */
-  additions: number;
-  /** 实时删除行数，来自实际快照（零延迟渲染用）。 */
-  deletions: number;
-  /** 变更前全文；created 为 null。 */
-  before: string | null;
-  /** 变更后全文；deleted 为 null。 */
-  after: string | null;
+  additions?: number;
+  deletions?: number;
+  before?: string | null;
+  after?: string | null;
 }
 
 export interface HumanInputRequestedPayload extends RuntimeEventPayloadObject {
@@ -208,6 +212,7 @@ export interface RuntimeEventPayloadMap {
   model_completed: ModelCompletedPayload;
   model_failed: ModelFailedPayload;
   tool_call_started: ToolCallStartedPayload;
+  tool_output_delta: ToolOutputDeltaPayload;
   tool_call_finished: ToolCallFinishedPayload;
   observation_added: ObservationAddedPayload;
   final_response: FinalResponsePayload;

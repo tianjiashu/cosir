@@ -6,6 +6,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import text
@@ -881,6 +882,25 @@ def test_file_change_updated_publish_carries_realtime_diff(tmp_path):
         def publish(self, event: object) -> None:
             captured.append((event, None))
 
+    class _ImmediateLoop:
+        """把 call_soon_threadsafe 退化为同步直调的事件循环替身。
+
+        广播实现运行在 asyncio.to_thread 的工作线程上，需经事件循环调度回环；
+        本替身让调度在测试中同步生效，便于直接断言广播结果。
+        """
+
+        def call_soon_threadsafe(self, callback: object, *args: object) -> None:
+            """同步执行被调度的回调。
+
+            参数:
+                callback: 待调度的可调用对象。
+                *args: 传给回调的位置参数。
+
+            返回:
+                无。
+            """
+            callback(*args)  # type: ignore[operator]
+
     ctx = ToolExecutionContext(
         task_id="task1",
         workspace_id="ws1",
@@ -908,7 +928,7 @@ def test_file_change_updated_publish_carries_realtime_diff(tmp_path):
         agent_id="dev",
         event_bus=_FakeBus(),
     )
-    service._publish_file_change_updated(ctx, observation)
+    service._publish_file_change_updated(ctx, observation, cast(Any, _ImmediateLoop()))
 
     assert len(captured) == 1
     event = captured[0][0]

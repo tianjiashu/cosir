@@ -10,6 +10,9 @@ token 由 ``model.astream()`` 产出并在节点内就地翻译为增量事件�
 状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
 """
 
+import asyncio
+import json
+from collections.abc import Callable
 from time import perf_counter
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -18,7 +21,11 @@ from langgraph.types import interrupt
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.llm.langchain_bridge import runtime_to_langchain, tool_calls_from_langchain
+from app.core.llm.langchain_bridge import (
+    runtime_to_langchain,
+    tool_calls_from_langchain,
+)
+from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import (
     FinalResponsePayload,
@@ -42,6 +49,30 @@ from .state import ReactGraphState
 def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
     writer = get_stream_writer()  # 自定义事件写入器
     writer({"event_type": str(event_type), "payload": payload})
+
+
+def _make_write_event() -> Callable[[EventType, RuntimeEventPayload], None]:
+    """在当前 LangGraph 运行上下文中取出 writer，返回可跨线程调用的事件写入回调。
+
+    ``write_event`` 每次调用都现取 ``get_stream_writer()``，只能在持有 LangGraph
+    运行上下文的协程内使用。当节点把工作交给 ``asyncio.to_thread`` 时，需要先在
+    协程内取出 writer 对象并由闭包持有，工作线程才能继续写 ``custom`` 事件流。
+
+    返回:
+        与 ``write_event`` 同签名的回调，内部使用已捕获的 writer。
+
+    异常:
+        RuntimeError: 在无 LangGraph 运行上下文处调用时由 ``get_stream_writer()`` 抛出。
+
+    副作用:
+        无（调用返回的回调时才写入事件流）。
+    """
+    writer = get_stream_writer()
+
+    def _write(event_type: EventType, payload: RuntimeEventPayload) -> None:
+        writer({"event_type": str(event_type), "payload": payload})
+
+    return _write
 
 
 def _runtime_config() -> RuntimeConfig:
@@ -241,7 +272,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     chunks: list[AIMessageChunk] = []  # 累积流式分块
     terminal = False  # 是否因取消而提前终止
 
-    # 真正流式调用模型，state.messages 为历史+系统上下文
+    # 真正流式调用模型，state.messages 为历史+系统上下文。
     async for chunk in model.astream(state.messages):
         # 每收到 chunk 都检查 turn 是否被取消
         if operations.is_current_turn_cancelled():
@@ -498,7 +529,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     }
 
 
-def _tools_node(state: ReactGraphState) -> dict:
+async def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：在权限审批后执行工具并把观察结果追加回上下文。
 
     节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批：
@@ -512,6 +543,13 @@ def _tools_node(state: ReactGraphState) -> dict:
 
     工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
     自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。状态写入 **turn**。
+
+    本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
+    ``execute_terminal`` 会同步阻塞至命令结束（最长 ``max_command_timeout``），
+    若在事件循环线程内直跑，会连带卡死 SSE 推送与全部并发请求，运行期增量
+    也就无从实时到达客户端。工作线程内的事件写入使用**闭包捕获的 writer**
+    （见 ``_make_write_event``），因为 ``get_stream_writer()`` 依赖 LangGraph 的
+    运行上下文，需在协程内先取出再带入线程。
 
     参数:
         state: 当前 graph state，含待执行工具调用。
@@ -565,11 +603,24 @@ def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
         )
+        # 关键修复：跳过工具执行时，必须为 assistant 已写入 checkpoint 的 tool_calls 补占位
+        # ToolMessage，否则下一轮拉回历史会出现悬空 assistant，触发 OpenAI 协议校验失败。
+        placeholder_messages = [
+            RuntimeMessage(
+                role="tool",
+                content_text=json.dumps(
+                    {"content": "工具执行已被取消，未产生响应"}, ensure_ascii=False
+                ),
+                metadata={"tool_call_id": call.get("id", "")},
+            )
+            for call in state.pending_tool_calls
+            if call.get("id")
+        ]
         return {
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
             "terminal": True,
-            "messages": [],
+            "messages": placeholder_messages,
         }
 
     # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
@@ -590,11 +641,17 @@ def _tools_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "approved_count": len(approved_calls)},
         },
     )
-    tool_run = operations.run_tool_calls(
+    # 在协程内取出 writer 并闭包捕获：工具批次在工作线程执行，线程内无法再依赖
+    # get_stream_writer() 的运行上下文。同理，事件循环也需在此取出并传入，
+    # 供命令运行期输出增量从工作线程调度回环广播。
+    node_write_event = _make_write_event()
+    tool_run = await asyncio.to_thread(
+        operations.run_tool_calls,
         task.task_id,
         approved_calls,
         step_id,
-        write_event=write_event,
+        write_event=node_write_event,
+        running_loop=asyncio.get_running_loop(),
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
 
@@ -606,11 +663,16 @@ def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
         )
+        # 关键修复：取消时不能丢弃本批次已产生的工具响应消息，否则 checkpoint 中
+        # assistant 的 tool_calls 将缺少对应 ToolMessage，导致下一轮拉回历史时触发
+        # OpenAI 协议校验失败（"assistant message with tool_calls must be followed by
+        # tool messages"）。已执行的工具（含被取消返回 error 的）其 observation 仍
+        # 在 messages_for_model 中，必须回写 checkpoint 以闭合配对。
         return {
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
             "terminal": True,
-            "messages": [],
+            "messages": list(tool_run.messages_for_model),
         }
 
     tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数

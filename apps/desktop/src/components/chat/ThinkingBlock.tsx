@@ -10,13 +10,16 @@
  * @module components/chat/ThinkingBlock
  */
 
-import { memo, useState, useEffect } from "react";
+import { memo, useState, useEffect, useMemo } from "react";
+import type { Components } from "react-markdown";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { logInfo } from "@/lib/logger";
 import { MessageTypography } from "./messageTypography";
 import { StreamingCaret } from "./StreamingCaret";
+import { MarkdownStream } from "./MarkdownStream";
+import { buildMarkdownComponents } from "./AgentMessage";
 
 /** ThinkingBlock 组件属性。 */
 interface ThinkingBlockProps {
@@ -57,6 +60,10 @@ export const ThinkingBlock = memo(function ThinkingBlock({ content, streaming = 
   const [expanded, setExpanded] = useState(false);
   const isEmpty = !content || content.trim().length === 0;
 
+  // 复用 AgentMessage 的 markdown 组件映射（CodeBlock / FileLink / 行内代码），
+  // 使「深度思考」与正式回复走同一套渲染链路，代码引用 / 文件路径 / 列表均可正确格式化。
+  const components = useMemo<Components>(() => buildMarkdownComponents(streaming), [streaming]);
+
   // 注意：hooks 必须在任何 early return 之前调用，否则违反 React Hooks 规则。
   useEffect(() => {
     if (isEmpty) return;
@@ -79,10 +86,13 @@ export const ThinkingBlock = memo(function ThinkingBlock({ content, streaming = 
     return (
       <div className={cn("w-full", className)}>
         <div className={cn(CONTENT_BOX_CLASS, MessageTypography.secondary)}>
-          <div className="whitespace-pre-wrap">
-            {content}
-            <StreamingCaret show />
-          </div>
+          <MarkdownStream
+            content={content}
+            streaming
+            components={components}
+            caret={<StreamingCaret show />}
+            className="space-y-2"
+          />
         </div>
       </div>
     );
@@ -108,7 +118,12 @@ export const ThinkingBlock = memo(function ThinkingBlock({ content, streaming = 
       {/* 展开内容区 */}
       {expanded ? (
         <div className={cn(CONTENT_BOX_CLASS, MessageTypography.secondary)}>
-          <div className="whitespace-pre-wrap">{content}</div>
+          <MarkdownStream
+            content={content}
+            streaming={false}
+            components={components}
+            className="space-y-2"
+          />
         </div>
       ) : null}
     </div>

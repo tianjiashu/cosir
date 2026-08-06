@@ -65,6 +65,8 @@ export interface TimelineToolItem {
   diffEntries?: ToolDiffEntry[];
   /** 执行后结构化载荷（治理标记通道，如 output_truncated / artifact_path）。 */
   resultData?: Record<string, unknown>;
+  /** 运行期累积的实时输出（仅 execute_terminal 类工具产生；进入终态后清空）。 */
+  output?: string;
 }
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
@@ -243,6 +245,30 @@ export function projectTimelineIncrementally(
       continue;
     }
 
+    if (event.event_type === "tool_output_delta") {
+      // 运行期输出增量：只更新既有工具条目的 output，不打断 pending 文本块，
+      // 也不新建孤立条目（started 未到达说明该 delta 无归属，直接丢弃）。
+      const payload = event.payload as { tool_call_id?: string; text?: string };
+      const callId = payload.tool_call_id ? String(payload.tool_call_id) : "";
+      const idx = callId ? toolByCallId.get(callId) : undefined;
+      if (idx === undefined) {
+        logWarn("tool_output_delta_orphan", {
+          module: "projector",
+          event_id: event.event_id,
+          tool_call_id: callId,
+          reason: "未找到对应的 tool_call_started 条目，丢弃该输出增量",
+        });
+        continue;
+      }
+      const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
+      entries = entries.slice();
+      entries[idx] = {
+        kind: "tool",
+        item: { ...existing.item, output: (existing.item.output ?? "") + String(payload.text ?? "") },
+      };
+      continue;
+    }
+
     flushPending();
 
     const tool = projectTool(event);
@@ -266,6 +292,9 @@ export function projectTimelineIncrementally(
             emptyLabel: tool.emptyLabel,
             diffEntries: tool.diffEntries,
             resultData: tool.resultData,
+            // 运行期输出是 xterm 视图的专用通道；进入终态后由静态 <pre> 渲染 result，
+            // 此处清空避免两条渲染路径同时持有输出造成重复展示与脏状态。
+            output: undefined,
             ...(tool.arguments ? { arguments: tool.arguments } : {}),
             ...(tool.display ? { display: tool.display } : {}),
           },

@@ -28,6 +28,7 @@ from app.tools.tool_handler.patch.v4a_reverse import (
     build_forward_operations,
     reverse_v4a_operation,
 )
+from app.tools.tool_handler.terminal import OutputSink
 from app.tools.tool_registry import ToolRegistry
 from app.tools.validation.arguments import validate_tool_arguments
 
@@ -107,6 +108,7 @@ class ToolScheduler:
         execution_context: ToolExecutionContext | None = None,
         allowed_tool_names: Collection[str] | None = None,
         should_cancel: Callable[[], bool] | None = None,
+        output_sink: OutputSink | None = None,
     ) -> ToolObservation:
         """执行单次工具调用并返回归一化观察结果。
 
@@ -123,6 +125,8 @@ class ToolScheduler:
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
             should_cancel: 可选取消检查回调；透传给 process 工具执行器用于中止长工具。
+            output_sink: 可选实时输出回调；透传给执行器，使 process 工具（当前仅
+                ``execute_terminal``）的运行期输出可增量回传上层做实时展示。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"；
@@ -275,6 +279,7 @@ class ToolScheduler:
                         execution_context=execution_context,
                         tool_call_id=call.call_id,
                         should_cancel=should_cancel,
+                        output_sink=output_sink,
                     )
                     self._state_coordinator.complete(
                         plan,
@@ -306,6 +311,7 @@ class ToolScheduler:
                 execution_context=execution_context,
                 tool_call_id=call.call_id,
                 should_cancel=should_cancel,
+                output_sink=output_sink,
             )
             self._record_file_snapshot(tool, observation, execution_context)
         return self._apply_output_budget(observation, execution_context)

@@ -88,7 +88,7 @@ export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
 
   return (
     <div className={className ?? "flex h-full flex-col gap-2 p-3"}>
-      <div className="space-y-2 border-b border-border pb-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
         <ChangeCheckpointSelect
           checkpoints={changeSet?.checkpoints ?? []}
           value={checkpoint}

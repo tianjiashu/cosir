@@ -16,6 +16,8 @@ storage/*.sqlite
 storage/*.sqlite3
 storage/*.sqlite3-shm
 storage/*.sqlite3-wal
+storage/*.sqlite-shm
+storage/*.sqlite-wal
 storage/*.db
 storage/backend.bootstate.json
 
@@ -26,6 +28,8 @@ apps/backend/.env.local
 
 # CodeGraph 索引缓存
 .codegraph/
+# CodeGraph workspace event 运行时数据库（本地运行产物，不提交）
+.workspace_event/
 # CodeGraph 锁定 node 运行时（随应用分发，不提交仓库）
 apps/backend/.codegraph-node/
 

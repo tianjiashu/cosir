@@ -59,7 +59,7 @@ const FILE_PATH_PATTERN = /^([a-zA-Z0-9_/.-]+\.(?:md|ts|tsx|py|json|yaml|yml|tom
  * 副作用:
  *   无（返回的组件本身为纯渲染）。
  */
-function buildMarkdownComponents(streaming: boolean): Components {
+export function buildMarkdownComponents(streaming: boolean): Components {
   return {
     /** 代码块 → CodeBlock 富展示。 */
     code({ className, children, ...props }) {

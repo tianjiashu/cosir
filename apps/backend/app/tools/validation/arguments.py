@@ -99,17 +99,13 @@ def validate_tool_arguments(
     except SchemaError as exc:
         return ToolArgumentValidation(
             ok=False,
-            error=(
-                f"Tool argument schema definition is invalid: {exc.message}"
-            ),
+            error=(f"Tool argument schema definition is invalid: {exc.message}"),
         )
     except JsonSchemaValidationError as exc:
         path = getattr(exc, "json_path", "") or ""
         where = f" (at {path})" if path else ""
         return ToolArgumentValidation(
             ok=False,
-            error=(
-                f"Arguments do not match schema{where}: {exc.message}"
-            ),
+            error=(f"Arguments do not match schema{where}: {exc.message}"),
         )
     return ToolArgumentValidation(ok=True, arguments=dict(arguments))

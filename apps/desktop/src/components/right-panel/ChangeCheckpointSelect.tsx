@@ -35,7 +35,7 @@ export function ChangeCheckpointSelect({
       value={value ?? ""}
       onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
       aria-label="变更检查点"
-      className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+      className="h-8 w-[160px] shrink-0 rounded-md border border-input bg-background px-2 text-xs"
     >
       <option value="">最新</option>
       {checkpoints.map((checkpoint) => (

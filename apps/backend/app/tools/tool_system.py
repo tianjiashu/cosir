@@ -52,9 +52,7 @@ class ToolSystem:
     scheduler: ToolScheduler
 
     @classmethod
-    def build_tool_system(
-        cls, client: CodeGraphKernelClient | None = None
-    ) -> "ToolSystem":
+    def build_tool_system(cls, client: CodeGraphKernelClient | None = None) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
         按内置清单注册全部 15 个工具定义（9 个既有 + 6 个 CodeGraph 查询工具），并用

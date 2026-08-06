@@ -10,6 +10,7 @@
   也不负责任何渲染——事件只透传工具的静态展示声明与结构化数据，摘要与条目由客户端生成。
 """
 
+import asyncio
 import dataclasses
 import json
 from collections.abc import Callable, Iterable
@@ -18,7 +19,11 @@ from app.config.logging.logger import log
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
-from app.models.payload import ToolCallFinishedPayload, ToolCallStartedPayload
+from app.models.payload import (
+    ToolCallFinishedPayload,
+    ToolCallStartedPayload,
+    ToolOutputDeltaPayload,
+)
 from app.models.payload.file_change_updated_payload import FileChangeUpdatedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
@@ -36,6 +41,7 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
+from app.tools.tool_handler.terminal import OutputSink
 from app.utils.trace_infra.redaction import redact_terminal_output
 
 
@@ -64,8 +70,9 @@ class ToolExecutionService:
             trace_recorder: 可选的工具调用 trace 记录器（依赖倒置，实现在 core/observability）。
                 ``None`` 时退化为空实现（``_NullToolTraceRecorder``），不产生任何 trace 开销。
             should_cancel: 可选的运行时取消检查回调；返回 True 时停止执行后续工具。
-            event_bus: 可选的运行时事件总线；提供时，每次产生文件变更的工具调用完成后
-                广播 ``FILE_CHANGE_UPDATED``（不持久化，仅驱动前端实时展示运行中变更）。
+            event_bus: 可选的运行时事件总线；提供时承载两条**不持久化**的实时广播通道：
+                每次产生文件变更的工具调用完成后广播 ``FILE_CHANGE_UPDATED``；
+                命令类工具运行期逐段广播 ``TOOL_OUTPUT_DELTA``。二者均只驱动前端实时展示。
 
         返回:
             无。
@@ -97,6 +104,7 @@ class ToolExecutionService:
         calls: list[ToolCall],
         execution_context: ToolExecutionContext | None = None,
         write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
+        running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """执行一批工具调用并发出生命周期事件。
 
@@ -110,6 +118,10 @@ class ToolExecutionService:
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
                 透传给 ``ToolScheduler.execute``，最终在执行期注入 handler。
             write_event: 可选的工具生命周期事件写入回调。
+            running_loop: 承载本轮运行的事件循环。本方法通常被异步节点经
+                ``asyncio.to_thread`` 调度到工作线程执行，无法自行获取该循环，
+                故由调用方传入，用于把命令运行期输出增量广播调度回循环线程。
+                缺省时禁用实时输出通道，其余行为不变。
 
         返回:
             含观察列表与模型消息的 ``ToolRunResult``。
@@ -123,6 +135,10 @@ class ToolExecutionService:
 
         if write_event is None:
             raise RuntimeError("write_event is None")
+
+        # 本方法整体运行在 asyncio.to_thread 的工作线程上，无法用 get_running_loop 取到
+        # 承载本轮的事件循环，故由调用方（异步节点）显式传入，供实时输出通道调度回环。
+        loop = running_loop
 
         observations = []
         messages: list[RuntimeMessage] = []
@@ -152,6 +168,7 @@ class ToolExecutionService:
                     execution_context=execution_context,
                     allowed_tool_names=self._allowed_tool_names,
                     should_cancel=self._should_cancel,
+                    output_sink=self._build_output_sink(step_id, call, execution_context, loop),
                 )
                 tool_span.record(observation)
             # 记录观察结果
@@ -175,9 +192,8 @@ class ToolExecutionService:
 
             # 运行中实时广播：本工具调用产生文件变更时，广播 FILE_CHANGE_UPDATED 驱动
             # 前端即时展示（不持久化到 runtime_events，数据源仍在 file_snapshots 表）。
-            # 采集在 ToolScheduler._record_file_snapshot 完成（含 stable=0 运行中态），
-            # 此处与 TOOL_CALL_FINISHED 同级、确定在事件循环协程栈上广播。无 event_bus
-            # 时跳过（降级为仅全量查询可见）。
+            # 采集在 ToolScheduler._record_file_snapshot 完成（含 stable=0 运行中态）。
+            # 缺 event_bus 或 loop 时跳过（降级为仅全量查询可见）。
             if (
                 self._event_bus is not None
                 and observation.status == "success"
@@ -185,7 +201,7 @@ class ToolExecutionService:
                 and execution_context.task_id
                 and execution_context.turn_id
             ):
-                self._publish_file_change_updated(execution_context, observation)
+                self._publish_file_change_updated(execution_context, observation, loop)
 
             # 转为模型消息,display_data 不可以给模型看。
             observation.clear_display_data()
@@ -203,18 +219,106 @@ class ToolExecutionService:
             )
         return ToolRunResult(observations=observations, messages_for_model=messages)
 
+    def _build_output_sink(
+        self,
+        step_id: str,
+        call: ToolCall,
+        execution_context: ToolExecutionContext | None,
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> OutputSink | None:
+        """构造把命令运行期输出片段广播为 ``TOOL_OUTPUT_DELTA`` 的回调。
+
+        与 ``FILE_CHANGE_UPDATED`` 同属「运行中实时广播」通道：经 ``RuntimeEventBus``
+        发布且**不持久化**到 ``runtime_events``（终态完整输出已由 ``TOOL_CALL_FINISHED``
+        承载，逐行落库会放大写入量且回放时与终态输出重复）。
+
+        返回的回调运行在 ``ToolExecutor`` 等待子进程结果的**工作线程**上，而事件总线的
+        订阅者投递需在事件循环线程执行，故经 ``loop.call_soon_threadsafe`` 调度回环。
+        缺少总线、事件循环或 task/turn 上下文时返回 ``None``——由调用方据此跳过实时通道，
+        不构造无处可发的回调。
+
+        参数:
+            step_id: 产生该工具调用的步骤标识。
+            call: 当前工具调用，取其 ``call_id`` 作为前端归并键。
+            execution_context: 本次执行的运行时边界；需含 ``task_id`` / ``turn_id``。
+            loop: 承载本次运行的事件循环；用于把广播动作调度回循环线程。
+
+        返回:
+            ``OutputSink`` 回调（签名 ``(text, truncated) -> None``）；
+            实时通道不可用时返回 ``None``。
+
+        异常:
+            返回的回调不向上抛出：调度失败只记 warning，避免实时展示故障反压命令执行
+            （``ToolExecutor`` 侧亦会因异常关闭实时通道）。
+
+        副作用:
+            调用时向事件循环投递一次广播，经 ``RuntimeEventBus`` 发出一条不持久化的
+            ``TOOL_OUTPUT_DELTA`` 事件。
+        """
+
+        bus = self._event_bus
+        if (
+            bus is None
+            or loop is None
+            or execution_context is None
+            or not execution_context.task_id
+            or not execution_context.turn_id
+        ):
+            return None
+
+        task_id = execution_context.task_id
+        turn_id = execution_context.turn_id
+
+        def _sink(text: str, truncated: bool) -> None:
+            event = RuntimeEvent(
+                event_type=EventType.TOOL_OUTPUT_DELTA,
+                task_id=task_id,
+                turn_id=turn_id,
+                payload=ToolOutputDeltaPayload(
+                    tool_call_id=call.call_id,
+                    step_id=step_id,
+                    text=text,
+                    truncated=truncated,
+                ),
+            )
+            try:
+                loop.call_soon_threadsafe(bus.publish, event)
+            except RuntimeError:
+                # 事件循环已关闭（turn 提前结束/取消）：实时展示降级，命令继续跑完。
+                log.warning(
+                    "tool_output_delta_publish_failed",
+                    extra={
+                        "msg": "工具输出增量广播失败，实时展示降级，不影响工具执行",
+                        "data": {
+                            "tool_name": call.tool_name,
+                            "tool_call_id": call.call_id,
+                            "step_id": step_id,
+                            "turn_id": turn_id,
+                        },
+                    },
+                )
+
+        return _sink
+
     def _publish_file_change_updated(
         self,
         execution_context: ToolExecutionContext,
         observation: ToolObservation,
+        loop: asyncio.AbstractEventLoop | None,
     ) -> None:
         """广播本次工具调用产生的文件变更，驱动前端运行中实时展示。
+
+        本方法运行在 ``asyncio.to_thread`` 的工作线程上（``run_calls_with_events``
+        整体被异步节点调度到线程池），而事件总线的订阅者投递需在事件循环线程执行，
+        故与 ``TOOL_OUTPUT_DELTA`` 采用同一范式，经 ``loop.call_soon_threadsafe``
+        调度回环，不在工作线程直接操作订阅队列。
 
         参数:
             execution_context: 本次执行的运行时边界（含 task_id / turn_id）。
             observation: 工具观察结果；其 ``data["changes"]`` 为单文件变更字典列表，
                 每个含 ``path`` / ``before`` / ``after`` 与变更动作
                 （``action`` 或 ``status`` 字段）。
+            loop: 承载本轮运行的事件循环；为 ``None`` 时跳过广播（降级为仅全量查询可见）。
 
         返回:
             无。
@@ -227,7 +331,7 @@ class ToolExecutionService:
             每条携带该文件实时 diff（additions / deletions / before / after），供前端零延迟渲染。
         """
         bus = self._event_bus
-        if bus is None:
+        if bus is None or loop is None:
             return
         changes = (observation.data or {}).get("changes")
         if not isinstance(changes, list) or not changes:
@@ -255,23 +359,22 @@ class ToolExecutionService:
                 if not path or not action:
                     continue
                 file_stat = stat_by_index.get(index, {})
-                bus.publish(
-                    RuntimeEvent(
-                        event_type=EventType.FILE_CHANGE_UPDATED,
+                event = RuntimeEvent(
+                    event_type=EventType.FILE_CHANGE_UPDATED,
+                    task_id=execution_context.task_id,
+                    turn_id=execution_context.turn_id,
+                    payload=FileChangeUpdatedPayload(
                         task_id=execution_context.task_id,
                         turn_id=execution_context.turn_id,
-                        payload=FileChangeUpdatedPayload(
-                            task_id=execution_context.task_id,
-                            turn_id=execution_context.turn_id,
-                            path=str(path),
-                            action=str(action),
-                            additions=int(file_stat.get("insertions") or 0),
-                            deletions=int(file_stat.get("deletions") or 0),
-                            before=change.get("before"),
-                            after=change.get("after"),
-                        ),
-                    )
+                        path=str(path),
+                        action=str(action),
+                        additions=int(file_stat.get("insertions") or 0),
+                        deletions=int(file_stat.get("deletions") or 0),
+                        before=change.get("before"),
+                        after=change.get("after"),
+                    ),
                 )
+                loop.call_soon_threadsafe(bus.publish, event)
         except Exception:
             log.exception(
                 "file_change_updated_publish_failed",

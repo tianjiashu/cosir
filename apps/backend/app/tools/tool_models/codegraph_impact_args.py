@@ -23,9 +23,7 @@ class CodegraphImpactArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    symbol: str = Field(
-        description="Name of the symbol to analyze impact for."
-    )
+    symbol: str = Field(description="Name of the symbol to analyze impact for.")
     file: str | None = Field(
         default=None,
         description=(

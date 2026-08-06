@@ -1,5 +1,6 @@
 """工具 handler 隔离执行器：在守护子进程中运行单个工具 handler 并提供硬超时强杀保护。"""
 
+import contextlib
 import json
 import multiprocessing
 import os
@@ -19,6 +20,10 @@ from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_execute.windows_job_object import (
     assign_current_process_to_kill_on_close_job,
 )
+from app.tools.tool_handler.terminal import OutputSink
+
+# 实时输出队列容量上限：满时子进程侧丢弃新片段而非阻塞命令执行。
+_OUTPUT_QUEUE_MAXSIZE = 2000
 
 
 class _ToolExecutionCancelled(Exception):
@@ -53,6 +58,7 @@ class ToolExecutor:
         execution_context: ToolExecutionContext | None = None,
         tool_call_id: str = "",
         should_cancel: Callable[[], bool] | None = None,
+        output_sink: OutputSink | None = None,
     ) -> ToolObservation:
         """在隔离子进程或当前线程中执行单个工具 handler 并返回归一化结果。
 
@@ -70,6 +76,9 @@ class ToolExecutor:
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
             should_cancel: 可选取消检查回调；process 模式等待结果时会轮询该回调。
+            output_sink: 可选实时输出回调，签名 ``(text, truncated) -> None``。
+                **仅 process 模式支持**：父进程轮询跨进程队列后在调用线程内回调它；
+                thread 模式忽略该参数（当前无流式产出的 thread 工具）。
 
         返回:
             归一化后的 :class:`ToolObservation`。
@@ -88,6 +97,7 @@ class ToolExecutor:
                 execution_context,
                 tool_call_id,
                 should_cancel=should_cancel,
+                output_sink=output_sink,
             )
         return self._execute_in_thread(tool, arguments, execution_context, tool_call_id)
 
@@ -102,6 +112,7 @@ class ToolExecutor:
         execution_context: ToolExecutionContext | None = None,
         tool_call_id: str = "",
         should_cancel: Callable[[], bool] | None = None,
+        output_sink: OutputSink | None = None,
     ) -> ToolObservation:
         """在隔离子进程中执行单个工具 handler 并返回归一化结果。
 
@@ -112,6 +123,8 @@ class ToolExecutor:
                 跨进程序列化后由 handler 在执行期消费，便于后续扩展执行参数。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
             should_cancel: 可选取消检查回调；返回 True 时终止子进程并返回取消观察。
+            output_sink: 可选实时输出回调；非 None 时额外建立跨进程输出队列，
+                父进程在等待结果的轮询间隙 drain 队列并回调它。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"，
@@ -154,9 +167,21 @@ class ToolExecutor:
         # 取父进程已建好的跨进程日志队列；为 None 表示父进程未启用日志桥，
         # 子进程退化为默认 logging（不接入统一管线），不影响工具执行本身。
         log_queue = get_log_queue()
+        output_queue: multiprocessing.Queue | None = None
+        if output_sink is not None:
+            # 有界队列：消费端（父进程轮询）跟不上时子进程侧丢片段而非反压命令执行。
+            output_queue = multiprocessing.Queue(maxsize=_OUTPUT_QUEUE_MAXSIZE)
+            output_queue.cancel_join_thread()
         process = multiprocessing.Process(
             target=ToolExecutor._execute_handler,
-            args=(tool.handler, dict(arguments), result_queue, log_queue, execution_context),
+            args=(
+                tool.handler,
+                dict(arguments),
+                result_queue,
+                log_queue,
+                execution_context,
+                output_queue,
+            ),
             daemon=True,
         )
         try:
@@ -191,6 +216,8 @@ class ToolExecutor:
                 result_queue,
                 timeout,
                 should_cancel=should_cancel,
+                output_queue=output_queue,
+                output_sink=output_sink,
             )
         except _ToolExecutionCancelled:
             log.info(
@@ -293,11 +320,52 @@ class ToolExecutor:
         return self._normalize_result(tool, payload, tool_call_id)
 
     @staticmethod
+    def _drain_output_queue(
+        output_queue: "multiprocessing.Queue | None",
+        output_sink: OutputSink | None,
+    ) -> None:
+        """把输出队列中当前已积压的片段全部取出并回调 ``output_sink``。
+
+        非阻塞：只 drain「此刻已就绪」的片段，读空即返回，因此可安全地放在
+        等待结果的轮询间隙反复调用，实现运行期实时推送。
+
+        参数:
+            output_queue: 跨进程输出队列；为 None 时直接返回。
+            output_sink: 片段消费回调；为 None 时直接返回。
+
+        返回:
+            无。
+
+        异常:
+            不向上抛出：队列已关闭 / 管道损坏 / sink 自身抛错，均视为实时通道
+            失效并静默结束本次 drain，不影响工具结果的获取与归一化。
+
+        副作用:
+            消费队列中的片段并逐条调用 ``output_sink``。
+        """
+        if output_queue is None or output_sink is None:
+            return
+        while True:
+            try:
+                text, truncated = output_queue.get_nowait()
+            except queue.Empty:
+                return
+            except Exception:
+                # 队列已关闭或管道损坏：实时通道到此为止，最终输出仍由 result_queue 保证。
+                return
+            try:
+                output_sink(text, truncated)
+            except Exception:
+                return
+
+    @staticmethod
     def _wait_for_result(
         process: multiprocessing.Process,
         result_queue: multiprocessing.Queue,
         timeout: float,
         should_cancel: Callable[[], bool] | None = None,
+        output_queue: "multiprocessing.Queue | None" = None,
+        output_sink: OutputSink | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """阻塞轮询子进程回写的执行结果，超时或进程异常退出时给出明确结论。
 
@@ -306,6 +374,8 @@ class ToolExecutor:
             result_queue: 子进程回写结果的跨进程队列。
             timeout: 软超时秒数（调用方已保证 > 0）。
             should_cancel: 可选取消检查回调；返回 True 时抛出内部取消异常。
+            output_queue: 可选跨进程输出队列，承载运行期的输出片段。
+            output_sink: 可选片段消费回调，与 ``output_queue`` 成对提供。
 
         返回:
             ``(status, payload)`` 二元组：成功时为 handler 写入的
@@ -316,27 +386,43 @@ class ToolExecutor:
             TimeoutError: 超过 ``timeout`` 且子进程仍存活时抛出，交由调用方
                 归一为 ``status="error"``（``reason`` 为超时富文本提示）并在
                 finally 中强杀清理。
+            _ToolExecutionCancelled: ``should_cancel`` 返回 True 时抛出。
 
         副作用:
-            以 0.05s 步长轮询 ``result_queue``；不修改 ``process`` 状态
-            （强杀由调用方 finally 负责）。
+            以 0.05s 步长轮询 ``result_queue``；每轮空转即 drain 一次
+            ``output_queue``（实时推送），并在取消 / 成功返回 / 进程退出 / 超时
+            四条终态路径上各补一次 drain，保证尾部片段不丢；不修改 ``process``
+            状态（强杀由调用方 finally 负责）。
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if should_cancel is not None and should_cancel():
+                # 取消终态：先收尾已产生的输出，再抛出取消信号。
+                ToolExecutor._drain_output_queue(output_queue, output_sink)
                 raise _ToolExecutionCancelled()
             remaining = deadline - time.monotonic()
             try:
-                return result_queue.get(timeout=min(0.05, remaining))
+                result = result_queue.get(timeout=min(0.05, remaining))
             except queue.Empty:
+                # 空转即实时 drain：这是运行期增量能实时到达前端的关键落点，
+                # 缺少此处会退化为命令结束后一次性刷出。
+                ToolExecutor._drain_output_queue(output_queue, output_sink)
                 if process.is_alive():
                     continue
                 # 进程已退出：再给 0.1s 做最后一次非阻塞读取，仍无结果则判定无结果。
                 try:
-                    return result_queue.get(timeout=0.1)
+                    result = result_queue.get(timeout=0.1)
                 except queue.Empty:
+                    ToolExecutor._drain_output_queue(output_queue, output_sink)
                     break
+                ToolExecutor._drain_output_queue(output_queue, output_sink)
+                return result
+            # 成功拿到结果：先 drain 尾部片段再返回，避免最后几行输出丢失。
+            ToolExecutor._drain_output_queue(output_queue, output_sink)
+            return result
         if process.is_alive():
+            # 超时终态：强杀前收尾，保留已产生的部分输出。
+            ToolExecutor._drain_output_queue(output_queue, output_sink)
             raise TimeoutError()
         return "error", {
             "message": "tool process exited without a result",
@@ -497,6 +583,7 @@ class ToolExecutor:
         result_queue: multiprocessing.Queue,
         log_queue: "multiprocessing.Queue | None" = None,
         execution_context: ToolExecutionContext | None = None,
+        output_queue: "multiprocessing.Queue | None" = None,
     ) -> None:
         """子进程入口：执行 handler 并把结果/异常放入结果队列。
 
@@ -508,6 +595,9 @@ class ToolExecutor:
             log_queue: 父进程跨进程日志队列；为 None 时子进程退化为默认 logging。
             execution_context: 本次执行的运行时边界；随 ``arguments`` 一同跨进程序列化，
                 作为关键字参数 ``execution_context`` 注入 handler。
+            output_queue: 可选实时输出队列；非 None 时以关键字参数 ``output_sink``
+                注入 handler，handler 可在运行期回传 ``(text, truncated)`` 片段。
+                队列满时片段被丢弃而非阻塞，保证命令执行不被消费端拖慢。
 
         返回:
             无（结果通过 ``result_queue`` 回传）。
@@ -521,7 +611,8 @@ class ToolExecutor:
             自立为进程组组长（Windows 跳过），使 :meth:`_force_kill` 的
             ``os.killpg`` 能可靠清理 handler fork 出的孙进程；当 ``log_queue``
             非空时通过 ``install_logging_for_current_process`` 将子进程日志重新接入
-            父进程统一管线；执行结束前把成功结果或异常现场写入 ``result_queue``。
+            父进程统一管线；执行结束前把成功结果或异常现场写入 ``result_queue``；
+            当 ``output_queue`` 非空时在 handler 运行期向其写入输出片段。
         """
 
         # POSIX 下让子进程自立为进程组组长，使 _force_kill 的 os.killpg
@@ -546,8 +637,40 @@ class ToolExecutor:
 
             install_logging_for_current_process(log_queue=log_queue)
 
+        extra_kwargs: dict[str, Any] = {}
+        if output_queue is not None:
+
+            def _output_sink(text: str, truncated: bool) -> None:
+                """把一段输出片段非阻塞地回传父进程。
+
+                参数:
+                    text: 已脱敏的增量输出片段。
+                    truncated: 实时通道预算是否已耗尽。
+
+                返回:
+                    无。
+
+                异常:
+                    不向上抛出：队列已满或已关闭时静默丢弃该片段，实时展示属旁路
+                    能力，不得反压命令执行或使 handler 失败。
+
+                副作用:
+                    向跨进程 ``output_queue`` 写入一条 ``(text, truncated)`` 元组。
+                """
+                # 队列满 / 已关闭时丢弃该片段：实时展示是旁路能力，
+                # 绝不能反压命令执行，最终完整输出仍由 result_queue 保证。
+                with contextlib.suppress(Exception):
+                    output_queue.put_nowait((text, truncated))
+
+            extra_kwargs["output_sink"] = _output_sink
+
         try:
-            result_queue.put(("success", handler(**arguments, execution_context=execution_context)))
+            result_queue.put(
+                (
+                    "success",
+                    handler(**arguments, execution_context=execution_context, **extra_kwargs),
+                )
+            )
         except Exception as exc:
             result_queue.put(
                 (
@@ -559,6 +682,12 @@ class ToolExecutor:
                 )
             )
         finally:
+            if output_queue is not None:
+                # 与 result_queue 同理：feeder 线程需 flush 完剩余片段再退出，
+                # 否则末尾输出会随进程退出丢失。
+                with contextlib.suppress(Exception):
+                    output_queue.close()
+                    output_queue.join_thread()
             # 【Bug 修复】multiprocessing.Queue 的写入由一条 daemon feeder 线程异步完成，
             # put() 仅把数据塞进进程内缓冲并唤醒 feeder。若子进程在 feeder 把缓冲写入
             # 管道前就因 return 退出，daemon 线程会被强制中止、缓冲数据直接丢失，父进程

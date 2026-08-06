@@ -19,6 +19,7 @@ from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_handler.terminal import (
     DangerousCommandVerdict,
+    OutputSink,
     create_backend,
     detect_dangerous_command,
 )
@@ -88,6 +89,7 @@ class ExecuteTerminalTool(HandlerBase):
         timeout: float | None = None,
         workdir: str | None = None,
         execution_context: ToolExecutionContext | None = None,
+        output_sink: OutputSink | None = None,
     ) -> ToolObservation:
         """在本机 shell 同步执行一条命令并返回归一化观测。
 
@@ -102,6 +104,9 @@ class ExecuteTerminalTool(HandlerBase):
                 ``ToolExecutor._execute_handler`` 调用约定；本工具为命令执行入口且用户已
                 注入时作为 workdir 的解析边界。此工具当前不对模型可见，且不依靠
                 cwd/deny-list 宣称可以约束命令的全部文件系统副作用。
+            output_sink: 可选实时输出回调；由 ``ToolExecutor`` 在子进程内注入，
+                透传给执行后端，使命令输出可在运行期回传父进程做实时展示。
+                为 None 时行为与流式接入前完全一致。
 
         返回:
             ``ToolObservation``。灾难级命令/工作目录不存在/后端异常为
@@ -149,7 +154,9 @@ class ExecuteTerminalTool(HandlerBase):
             return self._workdir_error_observation(err)
 
         effective = min(timeout or self.default_command_timeout, self.max_command_timeout)
-        result = create_backend("local").execute(command, str(cwd), effective)
+        result = create_backend("local").execute(
+            command, str(cwd), effective, output_sink=output_sink
+        )
 
         log.info(
             "terminal_command_finished",

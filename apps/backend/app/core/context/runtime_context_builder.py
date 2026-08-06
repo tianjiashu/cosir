@@ -29,12 +29,12 @@ class RuntimeContextBuilder:
         self._system_prompt_builder = system_prompt_builder or SystemPromptBuilder()
 
     def build_messages(
-            self,
-            agent_profile: AgentProfile,
-            current_turn: TurnRecord,
-            turn_history: list[TurnRecord] | None,
-            message_store,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        agent_profile: AgentProfile,
+        current_turn: TurnRecord,
+        turn_history: list[TurnRecord] | None,
+        message_store,
+        execution_context: ToolExecutionContext | None = None,
     ) -> list[RuntimeMessage]:
         """为当前轮构建与模型无关的运行时消息。
 

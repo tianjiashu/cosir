@@ -9,7 +9,7 @@ from app.tools.tool_handler.terminal.dangerous_command import (
     DangerousCommandVerdict,
     detect_dangerous_command,
 )
-from app.tools.tool_handler.terminal.execution_backend import ExecutionBackend
+from app.tools.tool_handler.terminal.execution_backend import ExecutionBackend, OutputSink
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
 
@@ -39,6 +39,7 @@ __all__ = [
     "ExecutionBackend",
     "ExecutionResult",
     "LocalExecutionBackend",
+    "OutputSink",
     "create_backend",
     "detect_dangerous_command",
 ]

@@ -28,16 +28,19 @@ class CodegraphSearchArgs(BaseModel):
     query: str = Field(
         description='Symbol name or partial name to search (e.g. "auth", "signIn", "UserService").'
     )
-    kind: Literal[
-        "function",
-        "method",
-        "class",
-        "interface",
-        "type",
-        "variable",
-        "route",
-        "component",
-    ] | None = Field(
+    kind: (
+        Literal[
+            "function",
+            "method",
+            "class",
+            "interface",
+            "type",
+            "variable",
+            "route",
+            "component",
+        ]
+        | None
+    ) = Field(
         default=None,
         description=(
             "Filter results by node kind "

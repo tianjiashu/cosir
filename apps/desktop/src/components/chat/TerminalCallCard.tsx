@@ -13,7 +13,9 @@
  *   右侧常驻展开 chevron，不截断命令内容。
  * - 展开态 header：独立浅色背景与卡片主体隔离，右侧提供「复制命令」「状态」「关闭」三个操作；
  *   命令区使用 `Caption.mono`（11px 等宽 token）而非裸 `text-xs`，折行后左侧缩进与图标对齐。
- * - 输出块使用浅色等宽块，保留换行与滚动，支持一键复制全部输出。
+ * - 输出块分运行态与终态两条互斥路径：运行中由 `TerminalViewer`（xterm）渲染实时流，
+ *   终态切回浅色等宽 `<pre>` 渲染最终输出；两者都支持一键复制。
+ * - 运行期首次收到实时输出会自动展开卡片；用户手动折叠后不再强制展开。
  * - `resultData.output_truncated` 为真时额外显示截断提示，不单独展示 exit_code / timed_out 等元数据。
  * - header 的关闭（×）按钮仅用于折叠卡片；终止运行中命令的能力预留
  *   （暂未实现，后续可由后端任务取消 API 驱动）。
@@ -27,6 +29,7 @@ import { AlertCircle, Check, ChevronDown, Copy, Terminal, X } from "lucide-react
 import { cn } from "@/lib/utils";
 import { Caption } from "@/components/ui/tokens";
 import { logError } from "@/lib/logger";
+import { TerminalViewer } from "@/components/chat/TerminalViewer";
 import type { ToolDisplayInfo } from "@/services/timeline/projector";
 
 /** 终端命令卡片状态枚举（与通用工具卡片对齐）。 */
@@ -44,8 +47,10 @@ interface TerminalCallCardProps {
   args?: Record<string, unknown>;
   /** 后端投影出的展示提示；缺省时降级为通用展示。 */
   display?: ToolDisplayInfo;
-  /** 命令输出正文（展开态渲染）。 */
+  /** 命令输出正文（终态展开渲染）。 */
   result?: string | null;
+  /** 运行期实时累积输出（仅 `status === "running"` 时用 xterm 渲染）。 */
+  output?: string;
   /** 失败主因。 */
   error?: string;
   /** 失败辅因。 */
@@ -155,24 +160,50 @@ export const TerminalCallCard = memo(function TerminalCallCard({
   args,
   display,
   result,
+  output,
   error,
   reason,
   retryable,
   resultData,
 }: TerminalCallCardProps) {
   const [isOpen, setIsOpen] = React.useState(false);
+  /** 用户是否手动折叠过：一旦为真，运行期不再自动展开，避免覆盖用户意图。 */
+  const userCollapsedRef = React.useRef(false);
   const commandText = resolveCommand(command, args, display);
   const expandable = display?.expandable ?? true;
-  // 成功/失败才允许展示输出块；运行中尚无输出。
-  const hasOutput = status !== "running" && result !== null && result !== undefined;
   const isError = status === "error";
   const isRunning = status === "running";
+  // 运行期空终端也应立即出现：只要进入 running 即挂载 xterm 视图（无需等待首个 delta），
+  // 命令启动到产出首行输出之间的空窗期也呈现「正在执行」的终端质感。
+  const hasStreamingOutput = isRunning;
+  // 运行中展示实时流；终态展示最终输出正文。
+  const hasOutput = isRunning ? hasStreamingOutput : result !== null && result !== undefined;
 
   const toggleOpen = React.useCallback(() => {
-    if (expandable) {
-      setIsOpen((prev) => !prev);
+    if (!expandable) {
+      return;
     }
+    setIsOpen((prev) => {
+      if (prev) {
+        userCollapsedRef.current = true;
+      }
+      return !prev;
+    });
   }, [expandable]);
+
+  const collapse = React.useCallback(() => {
+    userCollapsedRef.current = true;
+    setIsOpen(false);
+  }, []);
+
+  // 进入运行期即自动展开，让空白终端立即可见、无需手动点击；
+  // 命令启动到产出首行输出之间的空窗期也呈现「正在执行」的终端质感。
+  // 用户手动折叠过则尊重其选择，不再强制展开。
+  React.useEffect(() => {
+    if (expandable && isRunning && !userCollapsedRef.current) {
+      setIsOpen(true);
+    }
+  }, [expandable, isRunning]);
 
   return (
     <div className="w-full overflow-hidden rounded-lg border border-border bg-muted">
@@ -251,7 +282,7 @@ export const TerminalCallCard = memo(function TerminalCallCard({
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                setIsOpen(false);
+                collapse();
               }}
               title="关闭"
               className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
@@ -297,21 +328,27 @@ export const TerminalCallCard = memo(function TerminalCallCard({
             </div>
           )}
 
-          {/* 输出块：浅色等宽 + 滚动 + 复制 */}
+          {/* 输出块：运行中走 xterm 实时流，终态走静态 <pre>（两者互斥，避免双渲染） */}
           {hasOutput && (
             <div className="overflow-hidden rounded border border-border bg-background">
               <div className="flex items-center gap-2 border-b border-border bg-muted-foreground/5 px-3 py-1.5">
-                <span className={cn(Caption.xs, "font-medium text-muted-foreground")}>终端输出</span>
-                <CopyButton text={result ?? ""} title="复制输出" className="ml-auto" />
+                <span className={cn(Caption.xs, "font-medium text-muted-foreground")}>
+                  {isRunning ? "终端输出（运行中）" : "终端输出"}
+                </span>
+                <CopyButton text={(isRunning ? output : result) ?? ""} title="复制输出" className="ml-auto" />
               </div>
-              <pre className={cn("max-h-64 overflow-auto p-3 text-foreground whitespace-pre-wrap break-words", Caption.mono)}>
-                {result ?? ""}
-              </pre>
+              {isRunning ? (
+                <TerminalViewer output={output ?? ""} className="p-2" />
+              ) : (
+                <pre className={cn("max-h-64 overflow-auto p-3 text-foreground whitespace-pre-wrap break-words", Caption.mono)}>
+                  {result ?? ""}
+                </pre>
+              )}
             </div>
           )}
 
           {/* 输出被截断提示（不展示 exit_code / timed_out 等元数据） */}
-          {hasOutput && Boolean(resultData?.output_truncated) && (
+          {hasOutput && !isRunning && Boolean(resultData?.output_truncated) && (
             <div className={cn(Caption.xs, "text-muted-foreground")}>完整输出已截断</div>
           )}
         </div>

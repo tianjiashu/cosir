@@ -22,6 +22,7 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.payload.step_started_payload import StepStartedPayload
 from app.models.payload.tool_call_finished_payload import ToolCallFinishedPayload
 from app.models.payload.tool_call_started_payload import ToolCallStartedPayload
+from app.models.payload.tool_output_delta_payload import ToolOutputDeltaPayload
 from app.models.payload.workspace_event.workspace_degraded_payload import WorkspaceDegradedPayload
 from app.models.payload.workspace_event.workspace_preparing_payload import WorkspacePreparingPayload
 from app.models.payload.workspace_event.workspace_ready_payload import WorkspaceReadyPayload
@@ -38,6 +39,7 @@ EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
     EventType.MODEL_COMPLETED: ModelCompletedPayload,
     EventType.MODEL_FAILED: ModelFailedPayload,
     EventType.TOOL_CALL_STARTED: ToolCallStartedPayload,
+    EventType.TOOL_OUTPUT_DELTA: ToolOutputDeltaPayload,
     EventType.TOOL_CALL_FINISHED: ToolCallFinishedPayload,
     EventType.OBSERVATION_ADDED: ObservationAddedPayload,
     EventType.FINAL_RESPONSE: FinalResponsePayload,

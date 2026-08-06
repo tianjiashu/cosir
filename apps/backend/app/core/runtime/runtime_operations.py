@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -310,6 +311,7 @@ class RuntimeOperations:
         calls: list[ToolCall],
         step_id: str | None = None,
         write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
+        running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 
@@ -322,6 +324,9 @@ class RuntimeOperations:
             calls: 模型请求的工具调用列表。
             step_id: 请求这些工具调用的步骤标识符。
             write_event: 可选的运行时事件写入回调。
+            running_loop: 承载本轮运行的事件循环；本方法常被异步节点经
+                ``asyncio.to_thread`` 调度到工作线程执行，故由调用方传入，
+                用于把命令运行期输出增量广播调度回循环线程。缺省时禁用该实时通道。
 
         返回:
             工具观察结果与供下一步模型使用的消息。
@@ -334,6 +339,7 @@ class RuntimeOperations:
             calls=calls,
             execution_context=self._execution_context,
             write_event=write_event,
+            running_loop=running_loop,
         )
 
         self._post_process_turn(task_id=task_id, step_id=step_id, result=result)

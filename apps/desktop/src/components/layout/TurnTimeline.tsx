@@ -214,6 +214,7 @@ const TimelineEntry = memo(function TimelineEntry({
       args={tool.arguments}
       display={tool.display}
       result={tool.result}
+      output={tool.output}
       error={tool.error}
       reason={tool.reason}
       retryable={tool.retryable}

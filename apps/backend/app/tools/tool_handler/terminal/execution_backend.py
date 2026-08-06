@@ -6,8 +6,16 @@
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
+
+OutputSink = Callable[[str, bool], None]
+"""实时输出片段回调契约：``(text, truncated) -> None``。
+
+``text`` 为已脱敏的增量文本片段；``truncated=True`` 表示实时通道预算已耗尽、
+后续不再回传。该通道是**旁路**能力，不影响 ``ExecutionResult`` 的最终完整输出。
+"""
 
 
 class ExecutionBackend(ABC):
@@ -18,7 +26,13 @@ class ExecutionBackend(ABC):
     """
 
     @abstractmethod
-    def execute(self, command: str, cwd: str, timeout: float) -> ExecutionResult:
+    def execute(
+        self,
+        command: str,
+        cwd: str,
+        timeout: float,
+        output_sink: OutputSink | None = None,
+    ) -> ExecutionResult:
         """在宿主机上同步执行一条命令并返回归一化结果。
 
         参数:
@@ -26,6 +40,8 @@ class ExecutionBackend(ABC):
             cwd: 工作目录（绝对路径）。
             timeout: 命令级超时秒数；超时应尽量回收部分输出并返回
                 ``timed_out=True``。
+            output_sink: 可选实时输出回调；传入时实现应在命令运行期间按行回传
+                已脱敏片段。不支持流式的实现可忽略此参数，不得因此改变返回结果。
 
         返回:
             ``ExecutionResult``，含合并输出、退出码、截断与超时标记。
@@ -35,5 +51,6 @@ class ExecutionBackend(ABC):
             ``ExecutionResult``（如 ``exit_code=-1``）。
 
         副作用:
-            在宿主机派生进程执行命令；实现须保证超时强杀进程树、不残留孤儿。
+            在宿主机派生进程执行命令；实现须保证超时强杀进程树、不残留孤儿；
+            传入 ``output_sink`` 时会在读取线程中回调它。
         """

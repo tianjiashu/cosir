@@ -23,9 +23,7 @@ class CodegraphCallersArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    symbol: str = Field(
-        description="Name of the function, method, or class to find callers for."
-    )
+    symbol: str = Field(description="Name of the function, method, or class to find callers for.")
     file: str | None = Field(
         default=None,
         description=(
