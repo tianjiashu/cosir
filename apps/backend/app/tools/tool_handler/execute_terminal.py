@@ -23,6 +23,7 @@ from app.tools.tool_handler.terminal import (
     create_backend,
     detect_dangerous_command,
 )
+from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import ExecuteTerminalArgs
 from app.utils.trace_infra.redaction import redact_terminal_output
@@ -40,13 +41,13 @@ _EXECUTE_TERMINAL_DESCRIPTION = (
 class ExecuteTerminalTool(HandlerBase):
     """在本机 shell 中同步执行一条终端命令的工具。
 
-    严格对齐现状 7 个文件工具的既定范式：类属性契约 + ``execute`` 实例方法 +
+    严格对齐现状文件工具的既定范式：类属性契约 + ``execute`` 实例方法 +
     类内 ``to_definition()`` 构造 ``ToolDefinition`` + 模块级
     ``build_execute_terminal_definition`` 薄封装。
 
-    参数:
-        project_root: 本工具允许执行命令的默认工作根目录（应为任务所属 workspace
-            的 ``root_path``，由运行时按 task → workspace 解析后注入）。
+    本工具不持有任何工作根目录状态；命令执行时的允许作用域由运行时经
+    ``execution_context.workspace_root`` 注入（``execute`` 的
+    ``execution_context`` 关键字参数），而非构造参数。
 
     返回:
         ``ExecuteTerminalTool`` 实例。
@@ -55,7 +56,7 @@ class ExecuteTerminalTool(HandlerBase):
         初始化阶段不主动抛出业务异常。
 
     副作用:
-        仅保存 ``project_root``；不执行命令、不读取文件系统。
+        无（实例构造不执行命令、不读取文件系统、不保存状态）。
     """
 
     name = "execute_terminal"
@@ -97,21 +98,25 @@ class ExecuteTerminalTool(HandlerBase):
             command: 待执行命令。
             timeout: 命令级超时秒数；缺省 ``default_command_timeout``，钳制到
                 ``max_command_timeout``。
-            workdir: 工作目录；缺省 ``project_root``；相对路径相对 ``project_root``
-                解析；绝对路径直接使用。
+            workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
+                该根解析；绝对路径直接使用。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
                 在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
                 ``ToolExecutor._execute_handler`` 调用约定；本工具为命令执行入口且用户已
-                注入时作为 workdir 的解析边界。此工具当前不对模型可见，且不依靠
-                cwd/deny-list 宣称可以约束命令的全部文件系统副作用。
+                注入时作为 workdir 的解析边界。本工具对模型可见（已在 agent profile
+                工具集中登记），命令的全部文件系统副作用由 workdir 边界与 deny-list
+                共同约束，而非仅靠 cwd 宣称。
             output_sink: 可选实时输出回调；由 ``ToolExecutor`` 在子进程内注入，
                 透传给执行后端，使命令输出可在运行期回传父进程做实时展示。
                 为 None 时行为与流式接入前完全一致。
 
         返回:
             ``ToolObservation``。灾难级命令/工作目录不存在/后端异常为
-            ``status="error"``；命令正常执行（含非零退出码）为 ``status="success"``，
-            ``data`` 回传 ``exit_code`` / ``truncated`` / ``timed_out``。
+            ``status="error"``；命令正常执行（含非零退出码）为 ``status="success"``。
+            退出码、超时、截断等结构性事实经 ``_render_content`` 并入 ``content``
+            的 ``[exit_code=N]`` / ``[output truncated]`` 标记，供模型消费（``data``
+            通道仅供前端展示，会在序列化前被清除，不回传模型）。命令因超时强杀时
+            返回 ``status="error"`` 且 ``retryable=True``，明确告知命令未正常结束。
 
         异常:
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
@@ -170,9 +175,26 @@ class ExecuteTerminalTool(HandlerBase):
             },
         )
 
+        redacted_output = redact_terminal_output(result.output)
+        content = self._render_content(redacted_output, result)
+        # 超时强杀意味着命令未正常结束，模型无法从退出码判断成败，按瞬态故障
+        # 返回 error（retryable=True），避免把被截断的半截输出误判为成功结果。
+        if result.timed_out:
+            return tool_error(
+                self.name,
+                content,
+                reason=(
+                    "the command was killed because it exceeded the command-level "
+                    f"timeout ({effective:.0f}s). Its output above is partial and the "
+                    "exit code is meaningless; rerun with a larger `timeout` if the "
+                    "command is legitimately slow, or split it into smaller steps."
+                ),
+                retryable=True,
+                permission=self.permission,
+            )
         return tool_success(
             tool_name=self.name,
-            content=redact_terminal_output(result.output),
+            content=content,
             permission=self.permission,
         )
 
@@ -260,6 +282,32 @@ class ExecuteTerminalTool(HandlerBase):
             permission=self.permission,
         )
 
+    @staticmethod
+    def _render_content(output: str, result: ExecutionResult) -> str:
+        """把命令输出与机器可读的执行元数据拼成模型可见文本。
+
+        参数:
+            output: 已脱敏的命令输出文本。
+            result: 后端归一化的执行结果（含退出码 / 超时 / 截断标记）。
+
+        返回:
+            前缀了 ``[exit_code=N]`` 等机器可读标记的文本。``content`` 是模型
+            唯一可消费文本通道（``data`` 会在序列化前被清除，仅供前端），因此
+            退出码、超时、截断这些结构性事实必须并入 ``content``，否则模型无法
+            区分「命令成功但无输出」与「命令失败但无 stderr」。
+
+        异常:
+            无。
+
+        副作用:
+            无（纯字符串拼接）。
+        """
+        markers = [f"[exit_code={result.exit_code}]"]
+        if result.truncated:
+            markers.append("[output truncated]")
+        prefix = "".join(markers)
+        return f"{prefix}\n{output}" if output else prefix
+
     def _workdir_error_observation(self, err: str) -> ToolObservation:
         """构造工作目录错误的观测。"""
         return tool_error(
@@ -276,12 +324,10 @@ class ExecuteTerminalTool(HandlerBase):
 
 
 def build_execute_terminal_definition() -> ToolDefinition:
-    """构造绑定到指定工作区根目录（workspace.root_path）的 execute_terminal 定义。
+    """构造 execute_terminal 工具定义。
 
-    参数:
-        project_root: 任务所属 workspace 的 ``root_path``（遵循「工作区即根目录」
-            约束，非全局 ``settings.project_root``），由运行时按 task → workspace
-            解析后传入。
+    命令执行时的允许作用域（工作区根）由运行时经 ``execution_context.workspace_root``
+    注入，不在此处绑定到任何具体工作区根目录，因此该工厂无参数。
 
     返回:
         ``ToolDefinition``，供 ``ToolRegistry`` 注册。
