@@ -30,7 +30,7 @@ from app.tools.guard.file_resource_paths import (
 )
 from app.tools.guard.file_tool_state_coordinator import FileToolStateCoordinator
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
-from app.tools.tool_handler.file_state import (
+from app.tools.guard.file_state import (
     FileFingerprint,
     FilePathLockRegistry,
     FileRevisionRegistry,

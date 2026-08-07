@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.tools.tool_handler.file_state.file_revision_registry import (
+from app.tools.guard.file_state.file_revision_registry import (
     FileRevisionRegistry,
 )
 

@@ -1,4 +1,25 @@
-"""协调文件 revision、重复只读调用和写路径锁。"""
+"""协调文件 revision、重复只读调用和写路径锁。
+
+本协调器是 ToolScheduler 的窄协作者，把三套独立的状态机制（revision / 重复只读调用 /
+写路径锁）统一编排成调度链上的四步时序：
+
+    prepare -> lock -> check_stale -> (执行 handler) -> complete
+
+- ``prepare``：执行前只读阶段。解析本次调用的读写/锁定路径（委托
+  ``resolve_file_resource_paths``），并做重复只读调用检测；命中重复时直接产出一个
+  ``early_observation`` 提前返回，不再真正执行 handler。
+- ``lock``：对写路径持进程内锁（``FilePathLockRegistry``），串行化同一 task/path 的写。
+- ``check_stale``：在持锁后、执行 handler 前，检测待写文件是否自上次观察以来已被外部
+  改动（stale revision），是则产出 stale_file/stale_patch 错误，避免基于过期内容写入。
+- ``complete``：handler 成功后，把本次观察到的文件快照和写路径记入 revision registry，
+  并把重复调用签名标记为可用基线，供下一次 ``prepare`` 复用。
+
+对非文件工具（如 execute_terminal，无 ``filesystem`` 资源键），``prepare`` 返回空计划，
+使后续 ``lock`` / ``check_stale`` / ``complete`` 全部短路为 no-op，保持统一管线。
+
+三个 registry 均为进程内、按 task 隔离、LRU 有界的有状态容器，协调器只负责编排与读写，
+不持有任何文件内容。
+"""
 
 from __future__ import annotations
 
@@ -14,7 +35,7 @@ from typing import Any
 from app.tools.guard.file_resource_paths import FileResourcePaths, resolve_file_resource_paths
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
-from app.tools.tool_handler.file_state import (
+from app.tools.guard.file_state import (
     FileFingerprint,
     FilePathLockRegistry,
     FileRevisionRegistry,
@@ -115,7 +136,11 @@ class FileToolExecutionPlan:
 
 
 class FileToolStateCoordinator:
-    """把文件协作状态机制收口为 ToolScheduler 的窄协作者。"""
+    """把文件协作状态机制收口为 ToolScheduler 的窄协作者。
+
+    对外只暴露调度链需要的 4 个编排方法（``prepare`` / ``lock`` / ``check_stale`` /
+    ``complete``），内部状态全部收敛到三个可注入的 registry；协调器自身无状态。
+    """
 
     def __init__(
         self,
@@ -183,10 +208,16 @@ class FileToolStateCoordinator:
                 observed_paths=(),
             )
 
+        # 第一步：把「工具名 + 已校验参数」解析为本次调用的 read/write/lock 路径与搜索范围。
         resources = resolve_file_resource_paths(tool.name, arguments, execution_context)
 
+        # 第二步：取本次调用「观察到的」路径集合（read 路径 + 目录遍历范围）及其 fingerprint
+        # 快照。这份快照会在 complete 时回写，作为后续重复调用检测与 stale 判定的基线。
         observed_paths, snapshot_complete = self._observed_paths(resources)
         observed_snapshot = self._revisions.snapshot_token(observed_paths)
+        # 仅 read_file/search_files 参与重复调用检测；若目录遍历超容量导致快照不完整，
+        # 也跳过重复检测（避免「未看全却判重复」误拦截）。其余工具直接返回计划，交由
+        # lock/check_stale/complete 走状态协调，但跳过重复拦截。
         if tool.name not in _REPEATED_TOOLS or not snapshot_complete:
             return FileToolExecutionPlan(
                 resources=resources,
@@ -195,6 +226,8 @@ class FileToolStateCoordinator:
                 snapshot_complete=snapshot_complete,
             )
 
+        # 第三步（仅 read_file/search_files）：构造归一化调用签名并查询重复调用 registry。
+        # 签名含路径归一（等价路径映射到同一键）；快照参与比对，文件变了就不算重复。
         signature = self._signature(
             tool.name,
             normalize_repeated_call_arguments(
@@ -249,14 +282,18 @@ class FileToolStateCoordinator:
             仅读取 revision registry 和当前文件元数据。
         """
 
+        # 无执行上下文，或本次没有待写路径（只读工具）时无需 stale 检查。
         if execution_context is None or not plan.resources.write_paths:
             return None
+        # 把「写路径当前 fingerprint」与 revision registry 里上次观察到的基线比对，
+        # 找出被外部改动过的路径（从未记录过的路径不算 stale）。
         stale_paths = self._revisions.stale_paths(
             execution_context.task_id,
             plan.resources.write_paths,
         )
         if not stale_paths:
             return None
+        # patch 对文本敏感用 stale_patch 语义，其余写工具统一 stale_file。
         reason = "stale_patch" if tool.name == "patch" else "stale_file"
         path_text = ", ".join(str(path) for path in stale_paths)
         return tool_error(
@@ -289,9 +326,12 @@ class FileToolStateCoordinator:
             获取并释放 task/path 锁。
         """
 
+        # 无上下文或无待锁路径时是空持锁：直接放行，不做任何锁操作。
         if execution_context is None or not plan.resources.lock_paths:
             yield
             return
+        # 对本次写路径（含 workspace 祖先链）按稳定顺序获取进程内 RLock，保证同一
+        # task 下对相同路径的并发写被串行化；退出 with 块时逆序释放。
         with self._path_locks.acquire(
             execution_context.task_id,
             plan.resources.lock_paths,
@@ -323,18 +363,23 @@ class FileToolStateCoordinator:
 
         if execution_context is None:
             return
+        # 只在整个调用成功（而非失败/取消）时才回写状态，避免把「失败尝试」当成可复用基线。
         if observation.status != "success":
             return
+        # 回写一：把本次观察到的文件快照记入 revision，作为后续 stale 判定的新基线。
         if plan.observed_snapshot:
             self._revisions.record_snapshots(
                 execution_context.task_id,
                 plan.observed_snapshot,
             )
+        # 回写二：把本次写入的文件路径记入 revision，使「自己刚写的文件」不再被判 stale。
         if plan.resources.write_paths:
             self._revisions.record(
                 execution_context.task_id,
                 plan.resources.write_paths,
             )
+        # 回写三：把本次成功的重复调用签名登记为可复用基线；下一次相同签名 + 相同
+        # 快照的调用会被判为 unchanged/warning/block。
         if plan.repeated_signature:
             self._repeated_calls.record_success(
                 execution_context.task_id,
@@ -382,6 +427,7 @@ class FileToolStateCoordinator:
 
         paths = list(resources.read_paths)
         scope_root = resources.scope_root
+        # 无搜索范围（如 read_file 单文件）时，观察集合就是 read 路径本身。
         if scope_root is None:
             return tuple(paths), True
         paths.append(scope_root)
@@ -389,18 +435,26 @@ class FileToolStateCoordinator:
         # 避免模型输入触发目录遍历 DoS；此时仅保留 scope 根本身，不做重复检测。
         if resources.scope_escapes_workspace:
             return tuple(paths), True
+        # 正常路径：在容量上限内采样目录内容作为「观察集合」。采样结果用于重复调用
+        # 检测；采样不完整（超容量 / 遍历失败）时返回 snapshot_complete=False，调用方
+        # 据此跳过重复检测。
         snapshot_complete = True
         try:
             if resources.scope_recursive:
+                # list_directory/search_files：递归遍历 scope 下所有文件，最多取 max 个。
                 sampled = list(islice(iter_files(scope_root), self._max_scope_paths))
             elif scope_root.is_dir():
+                # list_directory 顶层：仅列一层子项。
                 sampled = list(islice(scope_root.iterdir(), self._max_scope_paths))
             else:
                 sampled = []
+            # scope_root 本身已占 1 个名额，故采样最多再补 (max-1) 个。
             available = self._max_scope_paths - 1
             paths.extend(sampled[:available])
+            # 采到的数量不超过可用额度才算「看全」，否则标记不完整。
             snapshot_complete = len(sampled) <= available
         except OSError:
+            # 目录遍历失败（权限/不存在）：保留 scope 根本身，标记不完整，跳过重复检测。
             snapshot_complete = False
         return tuple(paths[: self._max_scope_paths]), snapshot_complete
 
@@ -449,6 +503,11 @@ class FileToolStateCoordinator:
             无。
         """
 
+        # registry 判定的四种动作：
+        # - execute：允许真正执行，无需拦截（返回 None）。
+        # - block：search_files 连续重复（>=2 次未变），硬阻断为 error。
+        # - warning：search_files 首次重复，跳过但给 warning（success + 提示）。
+        # - unchanged：read_file 重复（每次重复都跳过），成功但提示复用上次结果。
         if action == "execute":
             return None
         if action == "block":

@@ -49,42 +49,6 @@ from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.patch_args import PatchArgs
 
-
-def _format_multi_file_syntax_reason(diagnostics: list[SyntaxDiagnostic]) -> str:
-    """聚合多个文件的语法诊断为英文 reason（patch 模式多文件自修复引导）。
-
-    参数:
-        diagnostics: 各文件语法诊断的扁平集合（含 ``language`` / ``row`` /
-            ``column`` / ``expected`` 字段）。
-
-    返回:
-        面向模型的英文 ``reason``：列出每个语法错误的位置与缺失 token，引导
-        Agent 逐文件二次编辑覆盖修复。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-    if not diagnostics:
-        return (
-            "the patched file(s) have syntax errors; fix them with follow-up edits "
-            "(write_file or patch_tool)."
-        )
-    parts = [
-        f"line {d.row} col {d.column}"
-        + (f" missing '{d.expected}'" if d.expected else " unexpected token")
-        for d in diagnostics
-    ]
-    return (
-        "the patched file(s) have syntax errors ("
-        + "; ".join(parts)
-        + "); the files have been written but are not valid. Fix each with a follow-up "
-        "edit (write_file or patch_tool) that corrects the syntax at the reported location."
-    )
-
-
 PATCH_DESCRIPTION = (
     "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "
     "Uses fuzzy matching (9 strategies) so minor whitespace/indentation "
@@ -137,14 +101,14 @@ class PatchTool(HandlerBase):
         """
 
     def execute(
-        self,
-        execution_context: ToolExecutionContext,
-        mode: str = "replace",
-        path: str | None = None,
-        old_string: str | None = None,
-        new_string: str | None = None,
-        replace_all: bool = False,
-        patch: str | None = None,
+            self,
+            execution_context: ToolExecutionContext,
+            mode: str = "replace",
+            path: str | None = None,
+            old_string: str | None = None,
+            new_string: str | None = None,
+            replace_all: bool = False,
+            patch: str | None = None,
     ) -> ToolObservation:
         """按 mode 分流执行 replace 或 patch，统一收口成功/失败观察。
 
@@ -188,12 +152,12 @@ class PatchTool(HandlerBase):
         )
 
     def _execute_replace(
-        self,
-        path: str | None,
-        old_string: str | None,
-        new_string: str | None,
-        replace_all: bool,
-        resolver: PathResolver,
+            self,
+            path: str | None,
+            old_string: str | None,
+            new_string: str | None,
+            replace_all: bool,
+            resolver: PathResolver,
     ) -> ToolObservation:
         """replace 模式：单文件模糊查找替换，复刻原 edit_file 逻辑。
 
@@ -439,15 +403,15 @@ class PatchTool(HandlerBase):
                 self.name,
                 f"patch apply failed: {exc}",
                 reason=(
-                    "the patch could not be fully applied"
-                    + (
-                        " (some operations were already applied before the failure)"
-                        if exc.partial_applied
-                        else ""
-                    )
-                    + ". This is usually a transient write/lock issue or a conflicting "
-                    "concurrent edit. Resolve the conflict or free the file, then retry "
-                    "the same patch."
+                        "the patch could not be fully applied"
+                        + (
+                            " (some operations were already applied before the failure)"
+                            if exc.partial_applied
+                            else ""
+                        )
+                        + ". This is usually a transient write/lock issue or a conflicting "
+                          "concurrent edit. Resolve the conflict or free the file, then retry "
+                          "the same patch."
                 ),
                 retryable=True,
                 permission=self.permission,
@@ -476,7 +440,7 @@ class PatchTool(HandlerBase):
             return tool_error(
                 tool_name=self.name,
                 error="syntax error detected in patched file(s)",
-                reason=_format_multi_file_syntax_reason(diagnostics_all),
+                reason=self._format_multi_file_syntax_reason(diagnostics_all),
                 permission=self.permission,
                 display_data={"syntax_errors": syntax_errors},
             )
@@ -485,6 +449,40 @@ class PatchTool(HandlerBase):
             permission=self.permission,
             content=format_patch_diff(results),
             data=build_file_change_display_data(results),
+        )
+
+    def _format_multi_file_syntax_reason(c, diagnostics: list[SyntaxDiagnostic]) -> str:
+        """聚合多个文件的语法诊断为英文 reason（patch 模式多文件自修复引导）。
+
+        参数:
+            diagnostics: 各文件语法诊断的扁平集合（含 ``language`` / ``row`` /
+                ``column`` / ``expected`` 字段）。
+
+        返回:
+            面向模型的英文 ``reason``：列出每个语法错误的位置与缺失 token，引导
+            Agent 逐文件二次编辑覆盖修复。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        if not diagnostics:
+            return (
+                "the patched file(s) have syntax errors; fix them with follow-up edits "
+                "(write_file or patch_tool)."
+            )
+        parts = [
+            f"line {d.row} col {d.column}"
+            + (f" missing '{d.expected}'" if d.expected else " unexpected token")
+            for d in diagnostics
+        ]
+        return (
+                "the patched file(s) have syntax errors ("
+                + "; ".join(parts)
+                + "); the files have been written but are not valid. Fix each with a follow-up "
+                  "edit (write_file or patch_tool) that corrects the syntax at the reported location."
         )
 
     def to_definition(self) -> ToolDefinition:
