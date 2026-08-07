@@ -19,6 +19,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import ToolCall as LangChainToolCall
 
+from app.config.logging.logger import log
 from app.models.runtime_message import RuntimeMessage
 from app.tools.schemas import ToolCall, ToolDefinition
 
@@ -26,20 +27,41 @@ from app.tools.schemas import ToolCall, ToolDefinition
 def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
     """将运行时消息转换为 LangChain 消息。
 
+    作为 ``RuntimeMessage`` ↔ LangChain 的唯一转换点，额外承担一道防御性清洗：
+    先收集全部 ``tool`` 消息的 ``tool_call_id``，重建 ``assistant`` 的 ``AIMessage``
+    时仅保留有对应 ``ToolMessage`` 配对的 ``tool_calls``，剥离无配对的悬空调用。
+    历史脏数据（如旧版 ``tool_error_limit`` 分支曾丢弃本批次响应）会导致 assistant
+    的 ``tool_calls`` 缺少对应 ``ToolMessage``，若直接提交 OpenAI 会触发协议校验失败
+    （"assistant message with tool_calls must be followed by tool messages"），剥离
+    可保证发往模型的消息序列始终闭合。
+
     参数:
         messages: 与模型无关的运行时消息列表。
 
     返回:
-        可直接交给 LangChain chat model 的 ``BaseMessage`` 列表。
+        可直接交给 LangChain chat model 的 ``BaseMessage`` 列表；其中 assistant 的
+        ``tool_calls`` 已剔除无配对 ``ToolMessage`` 的悬空项。
 
     异常:
         无。
 
     副作用:
-        无。
+        当检测到悬空 ``tool_calls`` 被剥离时，经项目标准 ``log`` 单例写一条 ``warning``
+        （事件 ``assistant_tool_calls_orphaned``），记录被剥离的 ``tool_call_id`` 列表以
+        便追溯脏数据来源；不写入任何业务数据。
     """
 
     converted: list[BaseMessage] = []
+    # 先收集所有 tool 消息的 tool_call_id 集合：assistant 的 tool_calls 若没有对应
+    # ToolMessage 配对，提交给 OpenAI 会触发协议校验失败（"assistant message with
+    # tool_calls must be followed by tool messages"）。历史脏数据（如旧版 tool_error_limit
+    # 分支曾丢弃本批次响应）可能出现悬空 tool_calls，此处剥离无配对的调用，保证发往
+    # 模型的消息序列始终闭合。
+    responded_ids = {
+        message.metadata.get("tool_call_id")
+        for message in messages
+        if message.role == "tool" and message.metadata.get("tool_call_id")
+    }
     for message in messages:
         if message.role == "system":
             converted.append(SystemMessage(content=message.content_text))
@@ -47,6 +69,24 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
             converted.append(HumanMessage(content=message.content_text))
         elif message.role == "assistant":
             tool_calls_meta = _tool_calls_from_metadata(message.metadata.get("tool_calls"))
+            orphan_calls = [
+                call.get("id") or "<missing-id>"
+                for call in tool_calls_meta
+                if call.get("id") not in responded_ids
+            ]
+            if orphan_calls:
+                # 历史脏数据导致 assistant 的 tool_calls 缺少对应 ToolMessage，已在本函数
+                # 内剥离，避免提交 OpenAI 触发协议校验失败；记录以追溯脏数据来源。
+                log.warning(
+                    "assistant_tool_calls_orphaned",
+                    extra={
+                        "msg": (
+                            f"检测到 {len(orphan_calls)} 个无配对 ToolMessage 的悬空 tool_calls，"
+                            "已剥离以免触发 OpenAI 协议校验失败"
+                        ),
+                        "data": {"orphan_tool_call_ids": orphan_calls},
+                    },
+                )
             langchain_tool_calls = [
                 {
                     "name": call["name"],
@@ -54,6 +94,7 @@ def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
                     "id": call.get("id") or "",
                 }
                 for call in tool_calls_meta
+                if call.get("id") in responded_ids
             ]
             converted.append(
                 AIMessage(
