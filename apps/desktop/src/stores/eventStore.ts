@@ -19,6 +19,7 @@ import { create } from "zustand";
 import type { RuntimeEvent } from "@shared/events";
 import { SSEConnectionState } from "../services/sse";
 import { logWarn } from "../lib/logger";
+import { PerfTrace } from "../lib/perf";
 
 /**
  * 模块级空事件常量，复用同一引用，避免每次 `?? []` 产生新数组字面量
@@ -139,6 +140,11 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
       return;
     }
     set((state) => {
+      PerfTrace.markCurrent("eventStore:appendEvents-batch-start", {
+        incoming: incoming.length,
+        task_id: incoming[0]?.task_id,
+        turn_id: incoming[0]?.turn_id,
+      });
       const eventsByTaskId = { ...state.eventsByTaskId };
       const eventsByTurnId = { ...state.eventsByTurnId };
       const processedEventIds = new Set(state.processedEventIds);
@@ -174,6 +180,13 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
       for (const event of deduped) {
         events = appendOrderedShard(events, event);
       }
+      const targetTaskId = deduped[0]?.task_id;
+      const taskTotal = targetTaskId ? eventsByTaskId[targetTaskId]?.length ?? 0 : 0;
+      PerfTrace.markCurrent("eventStore:appendEvents-batch-committed", {
+        accepted: deduped.length,
+        task_total_events: taskTotal,
+        turn_id: deduped[0]?.turn_id,
+      });
       return { events, eventsByTaskId, eventsByTurnId, processedEventIds };
     });
   },

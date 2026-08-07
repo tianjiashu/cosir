@@ -25,6 +25,16 @@ interface TurnActions {
   upsertTurn: (turn: TurnRecord) => void;
   /** 按 task_id/turn_id 局部更新一个轮次。 */
   updateTurn: (taskId: string, turnId: string, updates: Partial<TurnRecord>) => void;
+  /**
+   * 用真实轮次整体替换临时轮次（乐观更新回写）。
+   *
+   * 前端在用户输入后先用临时 turn_id 乐观插入以便立即渲染，待后端返回真实
+   * turn 后调用本方法把临时记录整条替换为真实记录，保证 turn_id 与后续 SSE
+   * 事件流对齐。临时与真实记录的 input_text 保持一致，渲染层无感知。
+   */
+  replaceTurnId: (taskId: string, oldTurnId: string, realTurn: TurnRecord) => void;
+  /** 按 task_id/turn_id 移除一个轮次（乐观更新失败回滚）。 */
+  removeTurnId: (taskId: string, turnId: string) => void;
   /** 设置当前 streaming turn。 */
   setStreamingTurn: (turnId: string | null) => void;
 }
@@ -73,5 +83,30 @@ export const useTurnStore = create<TurnState & TurnActions>((set) => ({
 
   setStreamingTurn: (turnId) => {
     set({ streamingTurnId: turnId });
+  },
+
+  replaceTurnId: (taskId, oldTurnId, realTurn) => {
+    set((state) => {
+      const current = state.turnsByTaskId[taskId] ?? [];
+      const filtered = current.filter((item) => item.turn_id !== oldTurnId);
+      return {
+        turnsByTaskId: {
+          ...state.turnsByTaskId,
+          [taskId]: [...filtered, realTurn],
+        },
+      };
+    });
+  },
+
+  removeTurnId: (taskId, turnId) => {
+    set((state) => {
+      const current = state.turnsByTaskId[taskId] ?? [];
+      return {
+        turnsByTaskId: {
+          ...state.turnsByTaskId,
+          [taskId]: current.filter((item) => item.turn_id !== turnId),
+        },
+      };
+    });
   },
 }));

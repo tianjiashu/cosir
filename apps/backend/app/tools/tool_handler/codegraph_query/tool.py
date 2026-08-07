@@ -9,12 +9,13 @@ method 的 params（含 workspace_path），经 ``CodeGraphKernelClient.query`` 
 - 每个工具对应 vendor ``QUERY_METHODS`` 中一个 method（explore/search/node/...）。
 - 参数名从模型的 snake_case 映射为 vendor 的 camelCase（如 max_files→maxFiles）。
 - workspace_path 从 ``execution_context.workspace_root`` 注入，跨 workspace 隔离。
-- 第一版透传 vendor 文本输出（``QueryResult.content`` 聚合为文本）。
+- 给模型的 ``content`` 恒为 vendor 原始文本（不因展示结构化而改变模型可见内容）。
 
 职责边界：
 - 负责：参数→vendor params 组装、Kernel 调用、文本聚合、成功/失败观察构造。
-- 不负责：索引生命周期（status/init/sync 归后端自动管理，不暴露）、结果结构化解析
-  （第一版透传文本）、同步触发（索引新鲜度由 turn 前 ensure_ready 保证）。
+- 不负责：索引生命周期（status/init/sync 归后端自动管理，不暴露）、结果文本的解析
+  （委托 ``result_parser``）、渲染（客户端负责）、同步触发（索引新鲜度由 turn 前
+  ensure_ready 保证）。
 """
 
 from typing import Any, ClassVar
@@ -30,6 +31,7 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_success import tool_success
+from app.tools.tool_handler.codegraph_query.result_parser import parse_tool_result
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models import (
     CodegraphCalleesArgs,
@@ -44,7 +46,7 @@ from app.tools.tool_models import (
 # 工具描述（面向模型，先讲何时用再讲怎么用，明确回退）
 # ----------------------------------------------------------------------
 
-_CODE_GRAPH_EXPLORE_DESCRIPTION = (
+_CODE_GRAPH_EXPLORE_DESCRIPTION: str = (
     "Understand code structure, locate implementations, trace call paths, or assess impact — "
     "the PRIMARY tool, call FIRST for almost any code question or before an edit. "
     "Query can be a natural-language question OR a bag of symbol/file names. "
@@ -175,20 +177,23 @@ class CodegraphQueryTool(HandlerBase):
     def execute(self, *args: Any, **kwargs: Any) -> ToolObservation:
         """执行 CodeGraph 查询，返回结构化观测结果。
 
-        处理顺序：无 workspace → Kernel 不可用 → 组装 params → client.query → 聚合文本。
+        处理顺序：无 workspace → Kernel 不可用 → 组装 params → client.query → 聚合文本
+        → 解析为展示用结构化数据。
 
         参数:
             args / kwargs: 由 ToolExecutor 按 args_model 解包后的参数（snake_case）
                 与 execution_context（最后注入）。
 
         返回:
-            成功/失败均归一化为 ToolObservation。
+            成功/失败均归一化为 ToolObservation。成功时 ``content`` 为 vendor 原始文本
+            （模型消费），``data["codegraph"]`` 为展示用结构化数据（客户端消费，
+            解析失败自动降级为 ``{"raw": ...}``，不影响 content）。
 
         异常:
             不主动抛出；Kernel 错误归一化为 tool_error。
 
         副作用:
-            发起一次 CodeGraph 查询 RPC。
+            发起一次 CodeGraph 查询 RPC；结果解析失败时经 result_parser 写 warn 日志。
         """
         execution_context: ToolExecutionContext | None = kwargs.pop("execution_context", None)
 
@@ -246,11 +251,14 @@ class CodegraphQueryTool(HandlerBase):
         )
         if not content:
             content = "No results from CodeGraph query."
+        # 5. 展示用结构化：仅进 data（客户端渲染），content 保持原文供模型消费。
+        # data 仅保留 codegraph 子结构：旧方案中的 tool/query_params 为无用透传，
+        # 前端只读 data.codegraph.items / data.codegraph.notice，保留会累积 SSE 载荷技术债，故删除。
         return tool_success(
             self.name,
             self.permission,
             content=content,
-            data={"tool": self.name, "query_params": kwargs},
+            data={"codegraph": parse_tool_result(self.name, content)},
         )
 
     def to_definition(self) -> ToolDefinition:

@@ -43,10 +43,11 @@ class ListDirectoryTool(HandlerBase):
 
     name = "list_directory"
     description = (
-        "List entries of a directory: name, type (file|dir), size, mtime. Read-only: "
-        "relative paths resolve against the workspace root, and paths outside it are allowed. "
-        "Hidden (dot) entries are skipped unless include_hidden is true; entries whose name "
-        "matches any ignore_globs pattern are also excluded."
+        "List entries of a directory: name, type (file|dir), size, mtime. Read-only. "
+        "Relative paths resolve against the workspace root, and paths outside it are allowed. "
+        'To list the workspace root itself, pass path="." (a single dot); an empty string is '
+        "not a valid directory path. Hidden (dot) entries are skipped unless include_hidden is "
+        "true; entries whose name matches any ignore_globs pattern are also excluded."
     )
     permission = "file_search"
     args_model = ListDirectoryArgs
@@ -105,6 +106,10 @@ class ListDirectoryTool(HandlerBase):
         副作用:
             只读目录结构，不修改文件系统。
         """
+        # 模型常把根目录误解为空字符串；这里安全归一化为 "."，既兼容 LLM 输入，
+        # 又不影响安全校验（PathResolver 随后仍会解析 "."）。
+        if path == "":
+            path = "."
         root = execution_context.workspace_root
         resolver = PathResolver(root)
         device_error = resolver.blocked_device_reason(path)

@@ -26,6 +26,8 @@ import { useTaskStore } from "@/stores/taskStore";
 import { useTurnStore } from "@/stores/turnStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { beginClientTrace, endClientTrace } from "@/services/tracePropagation";
+import { useClientTraceStore } from "@/stores/clientTraceStore";
+import { PerfTrace } from "@/lib/perf";
 
 /**
  * InputBar 底部输入区组件。
@@ -56,18 +58,24 @@ export function InputBar() {
 
     const text = trimmedInput;
     beginClientTrace();
-    logInfo("用户提交任务输入", { module: "InputBar", input_preview: text.slice(0, 100) });
+    const perf = PerfTrace.startCurrent("user-input-to-render", useClientTraceStore.getState().currentTrace?.traceId);
+    logInfo("用户提交任务输入", { module: "InputBar", input_preview: text.slice(0, 100), trace_id: perf.traceId });
 
     try {
       let succeeded = false;
       if (activeTaskId) {
+        perf.mark("handleSend:before-createTurn", { task_id: activeTaskId });
         succeeded = await createTurn(text);
+        perf.mark("handleSend:after-createTurn", { task_id: activeTaskId });
       } else if (activeWorkspaceId) {
+        perf.mark("handleSend:before-createTask", { workspace_id: activeWorkspaceId });
         succeeded = await createTask(text, activeWorkspaceId);
+        perf.mark("handleSend:after-createTask", { workspace_id: activeWorkspaceId });
       }
       if (succeeded) {
         setInputValue("");
       }
+      perf.mark("handleSend:done", { succeeded });
     } catch (err) {
       // useTask 内部已通过 logError 记录详细错误并更新 operation.error，
       // 此处仅做防御性日志，避免吞掉异常上下文。

@@ -89,4 +89,23 @@
     background-color: hsl(var(--muted) / 0.3);
     border-radius: 3px;
   }
+
+  /* 模型思考中指示器的三点跳动动效：等错位移相做出依次弹跳，
+     循环表明 Agent 仍在处理、尚未返回首 token。 */
+  .thinking-dot {
+    animation: thinking-dot-bounce 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes thinking-dot-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }

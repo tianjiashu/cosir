@@ -14,6 +14,7 @@ import { memo, useCallback, useEffect, useMemo, useReducer, useRef } from "react
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 import { UserMessage } from "@/components/chat/UserMessage";
+import { ThinkingIndicator } from "@/components/chat/ThinkingIndicator";
 import { AgentMessage } from "@/components/chat/AgentMessage";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
@@ -32,6 +33,7 @@ import {
 } from "@/services/timeline/groupTools";
 import { openFileInEditor } from "@/services/backend";
 import { logInfo, logWarn } from "@/lib/logger";
+import { PerfTrace } from "@/lib/perf";
 
 /** TurnTimeline 的 props。 */
 interface TurnTimelineProps {
@@ -70,11 +72,20 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
   const [renderTick, forceRender] = useReducer((x: number) => x + 1, 0);
 
   useEffect(() => {
+    const t0 = performance.now();
     // 首帧或 turn 切换：重建投影状态（turn 变了，旧累积态无效）。
     if (lastLenRef.current === 0 && events.length > 0) {
       stateRef.current = projectTimelineIncrementally(createTimelineProjectorState(), events);
       lastLenRef.current = events.length;
       lastFirstEventIdRef.current = events[0]?.event_id ?? null;
+      PerfTrace.markCurrent("timeline:project-first-frame", {
+        turn_id: turn.turn_id,
+        events: events.length,
+        project_ms: Number((performance.now() - t0).toFixed(2)),
+      });
+      // 首帧投影完成 = 用户操作链路语义终点：结束当前 PerfTrace 链路，
+      // 避免模块级 currentTrace 残留导致 openTask 等非用户操作渲染误挂旧 traceId。
+      PerfTrace.endCurrent();
       forceRender();
       return;
     }
@@ -88,6 +99,11 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       stateRef.current = projectTimelineIncrementally(createTimelineProjectorState(), events);
       lastLenRef.current = events.length;
       lastFirstEventIdRef.current = firstEventId;
+      PerfTrace.markCurrent("timeline:project-rebuild", {
+        turn_id: turn.turn_id,
+        events: events.length,
+        project_ms: Number((performance.now() - t0).toFixed(2)),
+      });
       forceRender();
       return;
     }
@@ -96,6 +112,12 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       stateRef.current = projectTimelineIncrementally(stateRef.current, delta);
       lastLenRef.current = events.length;
       lastFirstEventIdRef.current = firstEventId;
+      PerfTrace.markCurrent("timeline:project-incremental", {
+        turn_id: turn.turn_id,
+        delta: delta.length,
+        total: events.length,
+        project_ms: Number((performance.now() - t0).toFixed(2)),
+      });
       forceRender();
     }
   }, [events]);
@@ -128,7 +150,20 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
     void openFileInEditor(path);
   }, []);
 
-  if (turnItem.entries.length === 0 && !turn.response_text) {
+  // 「等待首 token」判定：用户已输入（input_text 非空）、请求已提交，但模型首 token
+  // 尚未返回的空窗期——既无投影条目也无最终回复。此时渲染「思考中」指示器，
+  // 填补用户输入与首个 runtime 事件（thinking/assistant/tool）之间的视觉空档。
+  // 注意：判定基于「有输入 + 无条目 + 无回复」而非单纯依赖 turn.status（真实 turn
+  // 回写后可能为 running，而首 token 仍未到达，entries 依旧为空），与下方空态早返回
+  // 条件互斥（空态还要求 input_text 也为空）。
+  const isAwaitingFirstToken =
+    !!turn.input_text && turnItem.entries.length === 0 && !turn.response_text;
+
+  // 空态早返回：仅当「无用户输入、无事件、无最终回复」三者皆空时才视为空白 turn 不渲染。
+  // 注意：有 input_text 的 pending turn（乐观更新插入的临时 turn / 首个 SSE 事件到达前的真实
+  // turn）不能在此被丢弃，否则用户刚输入的指令要等首个事件才出现，违背「立即渲染用户输入」的预期。
+  // 有 input_text 即至少渲染 <UserMessage>，让用户在请求响应前就能看到自己发的消息。
+  if (!turn.input_text && turnItem.entries.length === 0 && !turn.response_text) {
     return null;
   }
 
@@ -137,6 +172,12 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       <div className="mx-auto w-full min-w-0 max-w-content">
         <UserMessage content={turnItem.userText} />
       </div>
+
+      {isAwaitingFirstToken && (
+        <div className="mx-auto w-full min-w-0 max-w-content">
+          <ThinkingIndicator />
+        </div>
+      )}
 
       {turnItem.renderEntries.map((entry) => (
         // 以稳定 key 配合下方 memo 包裹的 TimelineEntry：
@@ -270,6 +311,7 @@ const TimelineEntry = memo(function TimelineEntry({
       requestSummary={tool.requestSummary}
       listEntries={tool.listEntries}
       emptyLabel={tool.emptyLabel}
+      notice={tool.notice}
       resultData={tool.resultData}
       onOpenFile={onOpenFile}
     />

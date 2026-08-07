@@ -72,6 +72,8 @@ interface ToolCallCardProps {
   listEntries?: ToolListEntry[];
   /** list 布局空态文案。 */
   emptyLabel?: string | null;
+  /** 后端剥离的索引降级/陈旧提示；有则在 list 展开态顶部展示，避免信息丢失。 */
+  notice?: string | null;
   /** 执行后结构化载荷（治理标记通道，如 output_truncated / artifact_path）。 */
   resultData?: Record<string, unknown>;
   /** 点击「打开文件」动作的回调。 */
@@ -142,6 +144,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   requestSummary,
   listEntries,
   emptyLabel,
+  notice,
   resultData,
   onOpenFile,
 }: ToolCallCardProps) {
@@ -315,7 +318,18 @@ export const ToolCallCard = memo(function ToolCallCard({
 
           {/* 成功：按 expand_layout 分发差异化展开态（零工具名特化分支） */}
           {status === "completed" && hasResult && expandLayout === "list" && (
-            <ListView entries={listEntries ?? []} emptyLabel={emptyLabel ?? undefined} />
+            <div className="space-y-1">
+              {notice && (
+                <div className={cn(Caption.xs, "rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200")}>
+                  {notice}
+                </div>
+              )}
+              <ListView
+                entries={listEntries ?? []}
+                emptyLabel={emptyLabel ?? undefined}
+                onOpenFile={onOpenFile}
+              />
+            </div>
           )}
           {status === "completed" && hasResult && expandLayout === "diff" && (
             <FileDiffView content={result ?? ""} viewType={diffViewType} />
@@ -399,13 +413,22 @@ const VIRTUAL_LIST_THRESHOLD = 50;
  * 参数:
  *   entries   - 列表条目数组。
  *   emptyLabel - 空态文案；缺省时回退为固定提示。
+ *   onOpenFile - 点击条目打开文件的回调；缺省时条目为纯展示、不可点击。
  *
  * 返回:
  *   React 渲染节点：条目数超过阈值时返回虚拟化列表，否则返回普通 `map` 列表。
  *
- * @sideeffect 无。
+ * @sideeffect 无（点击副作用由调用方传入的 onOpenFile 承担）。
  */
-function ListView({ entries, emptyLabel }: { entries: ToolListEntry[]; emptyLabel?: string }) {
+function ListView({
+  entries,
+  emptyLabel,
+  onOpenFile,
+}: {
+  entries: ToolListEntry[];
+  emptyLabel?: string;
+  onOpenFile?: (path: string) => void;
+}) {
   if (entries.length === 0) {
     return <div className={cn(Caption.xs, "text-muted-foreground")}>{emptyLabel ?? "（无条目）"}</div>;
   }
@@ -418,14 +441,14 @@ function ListView({ entries, emptyLabel }: { entries: ToolListEntry[]; emptyLabe
         items={entries}
         getKey={(entry, idx) => listEntryKey(entry, idx)}
         estimateSize={20}
-        renderItem={(entry) => <div className="py-0.5">{renderListEntry(entry)}</div>}
+        renderItem={(entry) => <div className="py-0.5">{renderListEntry(entry, onOpenFile)}</div>}
       />
     );
   }
   return (
     <div className="space-y-1">
       {entries.map((entry, idx) => (
-        <Fragment key={listEntryKey(entry, idx)}>{renderListEntry(entry)}</Fragment>
+        <Fragment key={listEntryKey(entry, idx)}>{renderListEntry(entry, onOpenFile)}</Fragment>
       ))}
     </div>
   );
@@ -457,13 +480,20 @@ function listEntryKey(entry: ToolListEntry, idx: number): string {
  *
  * 参数:
  *   entry - 列表条目。
+ *   onOpenFile - 点击带文件路径的条目时的打开回调；缺省则条目不可点击。
  *
  * 返回:
  *   单条目的 React 渲染节点。
  *
- * @sideeffect 无。
+ * @sideeffect 无（点击回调的副作用由调用方承担）。
  */
-function renderListEntry(entry: ToolListEntry): ReactNode {
+function renderListEntry(entry: ToolListEntry, onOpenFile?: (path: string) => void): ReactNode {
+  // 代码图谱符号条目：由 kind/edge 的存在与否区分于内容搜索命中（后者携带 content）。
+  if (entry.filePath && (entry.kind || entry.edge)) {
+    return (
+      <SymbolEntry entry={entry} filePath={entry.filePath} onOpenFile={onOpenFile} />
+    );
+  }
   if (entry.filePath) {
     return (
       <div className={cn("flex items-baseline gap-1.5", Caption.mono)}>
@@ -515,6 +545,72 @@ function renderListEntry(entry: ToolListEntry): ReactNode {
       <span>{entry.name}</span>
       <span className="text-muted-foreground">{entry.path}</span>
     </div>
+  );
+}
+
+/**
+ * 渲染单条代码图谱符号条目（符号名 + 类型 + 关系边 + 文件位置）。
+ *
+ * 提供 `onOpenFile` 时整行渲染为按钮，点击打开所在文件；未提供时降级为纯展示行，
+ * 不渲染任何伪可点击样式，避免「看起来能点其实不能点」。
+ *
+ * 本期只打开文件、不定位到具体行（宿主 `open_file_in_editor` 仅接受路径），
+ * 行号仍展示以便用户自行定位；定位到行属后续增强。
+ *
+ * 参数:
+ *   entry      - 列表条目（含 kind/edge/lineNumber 等代码图谱字段）。
+ *   filePath   - 符号所在文件路径（调用方已确认非空）。
+ *   onOpenFile - 打开文件回调；缺省则不可点击。
+ *
+ * 返回:
+ *   单条符号条目的 React 渲染节点。
+ *
+ * @sideeffect 点击时调用 onOpenFile，由其触发宿主打开文件。
+ */
+function SymbolEntry({
+  entry,
+  filePath,
+  onOpenFile,
+}: {
+  entry: ToolListEntry;
+  filePath: string;
+  onOpenFile?: (path: string) => void;
+}) {
+  const location = entry.lineNumber ? `${filePath}:${entry.lineNumber}` : filePath;
+  const body = (
+    <>
+      <Code2 className="h-3 w-3 shrink-0 text-sky-600" />
+      <span className="shrink-0 font-medium">{entry.name}</span>
+      {entry.kind && (
+        <span className={cn("shrink-0 rounded bg-muted px-1 text-muted-foreground", Caption.xs10)}>
+          {entry.kind}
+        </span>
+      )}
+      {entry.edge && (
+        <span className={cn("shrink-0 rounded bg-sky-500/10 px-1 text-sky-600", Caption.xs10)}>
+          {entry.edge}
+        </span>
+      )}
+      <span className="truncate text-muted-foreground" title={location}>
+        {location}
+      </span>
+    </>
+  );
+  if (!onOpenFile) {
+    return <div className={cn("flex items-center gap-1.5", Caption.mono)}>{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded px-1 text-left hover:bg-muted",
+        Caption.mono,
+      )}
+      title={`打开 ${filePath}`}
+      onClick={() => onOpenFile(filePath)}
+    >
+      {body}
+    </button>
   );
 }
 

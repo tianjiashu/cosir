@@ -31,6 +31,10 @@ export interface ToolListEntry {
   content?: string;
   /** 该条目正文是否已被显示预算截断（web_extract 逐项截断标记）。 */
   contentTruncated?: boolean;
+  /** 符号类型，如 `function` / `class` / `import`（代码图谱场景）。 */
+  kind?: string;
+  /** 关系边标签，如 `calls` / `called by` / `import`（代码图谱场景）。 */
+  edge?: string;
 }
 
 /** diff 布局条目（单个文件的变更投影）。 */
@@ -59,6 +63,8 @@ export interface ToolResultProjection {
   emptyLabel: string | null;
   /** diff 布局条目；非 diff 场景为空数组。 */
   diffEntries: ToolDiffEntry[];
+  /** 后端剥离的索引降级/陈旧提示；无时为 null。供结果区顶部展示，避免信息丢失。 */
+  notice: string | null;
 }
 
 /** 空结果投影常量，供无规则命中与非法输入复用。 */
@@ -67,6 +73,7 @@ const EMPTY_PROJECTION: ToolResultProjection = {
   listEntries: [],
   emptyLabel: null,
   diffEntries: [],
+  notice: null,
 };
 
 /**
@@ -187,6 +194,14 @@ const RESULT_RULES: Record<string, (data: ToolDataRecord) => ToolResultProjectio
   // web_extract 后端 expand_layout="list"，展开态由 ListView 列出每个 URL 及其可读正文
   // （content 字段透传自 display_data.web[].content），修复「正文被 JSON 包裹丢弃」缺陷。
   web_extract: (data) => projectWebResult(data, "extracted"),
+  // CodeGraph 只读查询：后端 result_parser 已把 vendor 文本解析为 data.codegraph.items，
+  // 此处只做「结构化数据 → list 条目」的投影。explore 刻意不入表：其输出为大段带源码的
+  // 半结构化文本，本期维持全文展示，走 RESULT_RULES 未命中的空投影分支。
+  codegraph_search: projectCodegraphResult,
+  codegraph_node: projectCodegraphResult,
+  codegraph_callers: projectCodegraphResult,
+  codegraph_callees: projectCodegraphResult,
+  codegraph_impact: projectCodegraphResult,
 };
 
 /**
@@ -262,6 +277,85 @@ function projectWebResult(data: ToolDataRecord, label: string): ToolResultProjec
   }));
   const noun = label === "extracted" ? "extracted pages" : "web results";
   return { ...EMPTY_PROJECTION, summary: `${items.length} ${noun}`, listEntries: entries };
+}
+
+/**
+ * 把 CodeGraph 查询结果投影为 list 条目。
+ *
+ * 消费后端 `result_parser` 产出的 `data.codegraph`：结构化成功时读 `items`（字段已与
+ * `ToolListEntry` 对齐，直接映射）；后端解析失败会降级为 `raw` 全文，此时不产出条目，
+ * 由客户端沿用原有全文展示，避免「解析不了就什么都看不到」。
+ *
+ * @param data - 后端透传的结构化数据，预期含 `codegraph` 子字典。
+ * @returns 含符号条目的结果投影；无结构化条目时返回空投影。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无。
+ */
+function projectCodegraphResult(data: ToolDataRecord): ToolResultProjection {
+  const codegraph = readRecord(data.codegraph);
+  const items = readRecordList(codegraph.items);
+  if (items.length === 0) {
+    // 含 raw 说明后端已降级为全文，不是「查无结果」，不应给出空态文案误导用户；
+    // 但索引降级 notice 仍透传，避免提示丢失（见 projectCodegraphNoticeOnly）。
+    return projectCodegraphNoticeOnly(codegraph);
+  }
+  const entries = items.map(toCodegraphEntry);
+  const noun = items.length === 1 ? "symbol" : "symbols";
+  const notice = readString(codegraph.notice) || null;
+  return {
+    ...EMPTY_PROJECTION,
+    summary: `${items.length} ${noun}`,
+    listEntries: entries,
+    emptyLabel: "（没有结果）",
+    notice,
+  };
+}
+
+/**
+ * 后端降级路径（有 notice + raw、无 items）的投影：保留索引降级提示，不产出条目。
+ *
+ * 与 `projectCodegraphResult` 主路径分离，避免空态分支污染「有条目」投影逻辑；
+ * notice 仍透传，确保「索引可能不是最新的」这类提示不丢失。
+ *
+ * @param codegraph - 后端 `data.codegraph`，含 `notice` 与 `raw`、`items` 为空。
+ * @returns 仅带 notice 的空投影。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无。
+ */
+function projectCodegraphNoticeOnly(codegraph: ToolDataRecord): ToolResultProjection {
+  const notice = readString(codegraph.notice) || null;
+  return { ...EMPTY_PROJECTION, notice };
+}
+
+/**
+ * 把单条 CodeGraph 结构化条目投影为 list 条目。
+ *
+ * `path` 取符号所在文件路径，使条目复用 list 布局既有的「路径 + 点击打开文件」渲染；
+ * `filePath` / `lineNumber` 同时保留，供客户端定位与后续跳转增强使用。
+ *
+ * @param item - 后端 `codegraph.items` 中的单条数据。
+ * @returns list 条目。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无。
+ */
+function toCodegraphEntry(item: ToolDataRecord): ToolListEntry {
+  const filePath = readString(item.filePath);
+  const lineNumber = readNumber(item.lineNumber);
+  return {
+    name: readString(item.name),
+    path: filePath,
+    type: "file",
+    filePath: filePath || undefined,
+    lineNumber: lineNumber ?? undefined,
+    kind: readString(item.kind) || undefined,
+    edge: readString(item.edge) || undefined,
+  };
 }
 
 /**
@@ -427,4 +521,21 @@ function readRecordList(value: unknown): ToolDataRecord[] {
     return [];
   }
   return value.filter((item): item is ToolDataRecord => typeof item === "object" && item !== null);
+}
+
+/**
+ * 把任意值读成字典。
+ *
+ * @param value - 待读取值。
+ * @returns 字典本身；非字典（含 null 与数组）时返回空字典。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无。
+ */
+function readRecord(value: unknown): ToolDataRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  return value as ToolDataRecord;
 }

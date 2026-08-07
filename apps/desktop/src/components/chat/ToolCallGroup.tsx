@@ -148,6 +148,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
                 requestSummary={item.requestSummary}
                 listEntries={item.listEntries}
                 emptyLabel={item.emptyLabel}
+                notice={item.notice}
                 resultData={item.resultData}
                 onOpenFile={onOpenFile}
               />

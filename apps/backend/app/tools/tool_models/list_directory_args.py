@@ -19,7 +19,12 @@ class ListDirectoryArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    path: str = Field(description="Directory path relative to the project root.")
+    path: str = Field(
+        description=(
+            'Directory path relative to the project root. Use "." for the workspace root; '
+            'do not leave it empty (e.g. "apps/backend" for a subfolder, "." for root).'
+        )
+    )
     offset: int = Field(default=0, ge=0, description="Skip first N entries for pagination.")
     limit: int = Field(
         default=200,

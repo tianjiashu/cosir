@@ -61,6 +61,8 @@ export interface TimelineToolItem {
   listEntries?: ToolListEntry[];
   /** list 布局空态文案。 */
   emptyLabel?: string | null;
+  /** 后端剥离的索引降级/陈旧提示；有则在结果区顶部展示，避免信息丢失。 */
+  notice?: string | null;
   /** diff 布局条目。 */
   diffEntries?: ToolDiffEntry[];
   /** 执行后结构化载荷（治理标记通道，如 output_truncated / artifact_path）。 */
@@ -487,6 +489,7 @@ function projectTool(event: RuntimeEvent): TimelineToolItem | null {
       retryable: typeof payload.retryable === "boolean" ? payload.retryable : undefined,
       listEntries: projection.listEntries,
       emptyLabel: projection.emptyLabel,
+      notice: projection.notice,
       diffEntries: projection.diffEntries,
       resultData: payload.data && typeof payload.data === "object" ? payload.data : undefined,
     };

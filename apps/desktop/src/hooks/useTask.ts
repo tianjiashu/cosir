@@ -13,8 +13,10 @@ import { useEventStore } from "../stores/eventStore";
 import { useTurnStore } from "../stores/turnStore";
 import { useSSE } from "./useSSE";
 import * as api from "../services/api";
+import type { TurnRecord } from "@shared/turn";
 import { logError } from "../lib/logger";
 import { beginClientTrace, endClientTrace, hasClientTrace } from "../services/tracePropagation";
+import { PerfTrace } from "../lib/perf";
 
 /** 任务操作的加载状态。 */
 interface TaskOperationState {
@@ -83,6 +85,8 @@ export function useTask(): UseTaskReturn {
   const setEvents = useEventStore((s) => s.setEvents);
   const setTurnsForTask = useTurnStore((s) => s.setTurnsForTask);
   const upsertTurn = useTurnStore((s) => s.upsertTurn);
+  const replaceTurnId = useTurnStore((s) => s.replaceTurnId);
+  const removeTurnId = useTurnStore((s) => s.removeTurnId);
   const setStreamingTurn = useTurnStore((s) => s.setStreamingTurn);
   const { connect, disconnect } = useSSE();
 
@@ -173,12 +177,22 @@ export function useTask(): UseTaskReturn {
   /**
    * 给当前活跃任务追加新轮次并启动 turn 级 SSE。
    *
+   * 采用乐观更新：先以临时 turn_id（`temp-${Date.now()}`）把用户输入插入 turnStore
+   * 并切换 activeTurnId，使 ChatPanel 立即渲染用户指令，不阻塞在 createTaskTurn 请求上；
+   * 后端返回真实 turn 后用 `replaceTurnId` 整体替换临时记录（turn_id 与后续 SSE 对齐、
+   * input_text 保持一致，渲染层无感知）；若请求失败则用 `removeTurnId` 回滚临时记录并复位
+   * activeTurnId（仅当当前活跃轮仍为该临时 turn 时）。
+   *
    * @param text - 本轮用户输入文本。
    *
+   * @returns 创建成功（含 SSE 连接建立）返回 true；参数缺失或请求失败返回 false。
+   *
    * @sideeffect
-   * - POST /tasks/{task_id}/turns 创建 pending turn
-   * - 更新 taskStore.activeTurnId 和 turnStore
-   * - 连接 /turns/{turn_id}/stream
+   * - 乐观：先 upsertTurn(临时 turn) + setActiveTurn(临时 id)，用户输入立即可见
+   * - POST /tasks/{task_id}/turns 创建 pending turn，成功后 replaceTurnId 回写真实 turn
+   * - 更新 taskStore.activeTurnId / latest_turn_id / 任务预览
+   * - 连接 /turns/{turn_id}/stream（SSE 连接错误由 useSSE 内部 markFailed 处理，不会到达本 catch）
+   * - 失败回滚：removeTurnId(临时 turn) + 复位 activeTurnId（仅覆盖 createTaskTurn 异常路径）
    */
   const createTurn = useCallback(
     async (text: string): Promise<boolean> => {
@@ -192,10 +206,30 @@ export function useTask(): UseTaskReturn {
         beginClientTrace({ taskId: activeTaskId });
       }
 
+      // 乐观更新：先以临时 turn_id 插入用户输入，使 ChatPanel 立即渲染用户指令，
+      // 不等后端 createTaskTurn 返回。后端返回真实 turn 后整体替换临时记录。
+      const temporaryTurnId = `temp-${Date.now()}`;
+      const now = new Date().toISOString();
+      const optimisticTurn: TurnRecord = {
+        turn_id: temporaryTurnId,
+        task_id: activeTaskId,
+        input_text: text,
+        status: "pending",
+        end_reason: null,
+        response_text: null,
+        created_at: now,
+        updated_at: now,
+      };
+      upsertTurn(optimisticTurn);
+      setActiveTurn(temporaryTurnId);
+
       try {
         disconnect();
+        PerfTrace.markCurrent("createTurn:before-post-createTaskTurn", { task_id: activeTaskId });
         const turn = await api.createTaskTurn(activeTaskId, { input_text: text, agent_id: selectedAgentId });
-        upsertTurn(turn);
+        PerfTrace.markCurrent("createTurn:after-post-createTaskTurn", { turn_id: turn.turn_id, status: turn.status });
+        // 后端返回真实 turn：用真实记录整体替换临时记录，turn_id 与后续 SSE 对齐。
+        replaceTurnId(activeTaskId, temporaryTurnId, turn);
         setActiveTurn(turn.turn_id);
         updateTask(activeTaskId, {
           latest_turn_id: turn.turn_id,
@@ -203,10 +237,17 @@ export function useTask(): UseTaskReturn {
           execution_status: turn.status,
         });
         setStreamingTurn(turn.turn_id);
+        PerfTrace.markCurrent("createTurn:before-connect", { turn_id: turn.turn_id });
         await connect(activeTaskId, turn.turn_id);
+        PerfTrace.markCurrent("createTurn:after-connect", { turn_id: turn.turn_id });
         setOperation({ loading: false, error: null, eventsError: null });
         return true;
       } catch (err) {
+        // 回滚乐观插入的临时 turn，避免界面残留一条无后端对应的用户消息。
+        removeTurnId(activeTaskId, temporaryTurnId);
+        if (useTaskStore.getState().activeTurnId === temporaryTurnId) {
+          setActiveTurn(null);
+        }
         const message = err instanceof Error ? err.message : "创建轮次失败";
         logError("createTurn 失败", err, { module: "useTask", task_id: activeTaskId });
         setOperation({ loading: false, error: message, eventsError: null });
@@ -217,7 +258,7 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [activeTaskId, connect, disconnect, selectedAgentId, setActiveTurn, setStreamingTurn, updateTask, upsertTurn],
+    [activeTaskId, connect, disconnect, selectedAgentId, setActiveTurn, setStreamingTurn, updateTask, upsertTurn, replaceTurnId, removeTurnId],
   );
 
   /**

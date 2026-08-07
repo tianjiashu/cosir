@@ -18,8 +18,9 @@ import type { TurnStatus } from "@shared/turn";
 import { useEventStore } from "../stores/eventStore";
 import { useTaskStore } from "../stores/taskStore";
 import { useTurnStore } from "../stores/turnStore";
-import { SSEConnection, type SSEErrorHandler, type SSEConnectionState } from "../services/sse";
+import { SSEConnection, SSEConnectionState, type SSEErrorHandler } from "../services/sse";
 import { logError } from "../lib/logger";
+import { PerfTrace } from "../lib/perf";
 
 /**
  * SSE 事件流 Hook 返回值接口。
@@ -73,6 +74,7 @@ export function useSSE(): UseSSEReturn {
   // 将高频流式下的 set/投影/重渲染压力从「每 delta 一次」降到「每帧一次」，
   // 对高 token 率与长会话（后续迭代常见场景）提供稳定的渲染节奏兜底。
   const pendingEventsRef = useRef<RuntimeEvent[]>([]);
+  const firstEventSeenRef = useRef<boolean>(false);
   const rafRef = useRef<number | null>(null);
   const flushRef = useRef<() => void>(() => {});
 
@@ -85,6 +87,7 @@ export function useSSE(): UseSSEReturn {
    */
   const connect = useCallback(
     async (taskId: string, turnId: string): Promise<void> => {
+      PerfTrace.markCurrent("sse:connect-start", { task_id: taskId, turn_id: turnId });
       // 先 flush 上一连接已入缓冲、尚未到下一动画帧的事件，避免快速重连时静默丢弃
       // （connectionRef 存的是 SSEConnection，其 disconnect 只 abort 不 flush；只有 hook
       // 自身的 disconnect 才 flush，故这里必须显式 flush 而非依赖下方 disconnect）。
@@ -96,6 +99,7 @@ export function useSSE(): UseSSEReturn {
       // 旧连接已断开、不再产生事件；重置共享缓冲，避免新旧连接复用同一数组
       // 造成的事件归属耦合或快速重连场景下的缓冲污染。
       pendingEventsRef.current = [];
+      firstEventSeenRef.current = false;
 
       const markFailed = (error: Error) => {
         const now = new Date().toISOString();
@@ -152,6 +156,10 @@ export function useSSE(): UseSSEReturn {
       };
 
       const onEvent = (event: RuntimeEvent) => {
+        if (!firstEventSeenRef.current) {
+          firstEventSeenRef.current = true;
+          PerfTrace.markCurrent("sse:first-event-received", { event_type: event.event_type, turn_id: event.turn_id });
+        }
         pendingEventsRef.current.push(event);
         scheduleFlush();
       };
@@ -162,6 +170,9 @@ export function useSSE(): UseSSEReturn {
         onEvent,
         onError,
         onStateChange: (state) => {
+          if (state === SSEConnectionState.STREAMING) {
+            PerfTrace.markCurrent("sse:connection-open", { task_id: taskId, turn_id: turnId });
+          }
           // 仅当前活动连接可回写连接状态，避免被已断开的旧连接（竞态）误钉为 CLOSED
           if (connectionRef.current === connection) {
             setConnectionState(state);

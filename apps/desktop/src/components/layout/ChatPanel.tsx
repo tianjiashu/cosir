@@ -16,6 +16,7 @@ import { useEventStore, selectLatestEvent, selectEventsForTask, EMPTY_EVENTS } f
 import { useTaskStore, selectActiveTask } from "@/stores/taskStore";
 import { useTurnStore } from "@/stores/turnStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
+import { PerfTrace } from "@/lib/perf";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
 import type { TurnRecord } from "@shared/turn";
 
@@ -75,6 +76,21 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const turns = useTurnStore(useShallow((s) => (activeTask ? s.turnsByTaskId[activeTask.task_id] ?? [] : [])));
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const renderCountRef = useRef(0);
+  const prevEventsRef = useRef<unknown>(events);
+  renderCountRef.current += 1;
+  const eventsRefChanged = prevEventsRef.current !== events;
+  prevEventsRef.current = events;
+  // 渲染打点（采样）：用于排查「进入新 turn 后 ChatPanel 是否每帧重渲染爆炸」。
+  // 仅当 events 引用真正变化时才打，避免纯内部 state 触发的冗余渲染刷屏淹没关键日志；
+  // events 每帧变化正是要诊断的「渲染风暴」信号，采样后既保留信号又不淹没日志。
+  if (eventsRefChanged) {
+    PerfTrace.markCurrent("chatPanel:render", {
+      render_seq: renderCountRef.current,
+      events_changed: eventsRefChanged,
+      task_id: activeTaskId,
+    });
+  }
 
   // 无任何工作区时的引导空状态（先于「无活跃任务」判断，覆盖删完所有工作区的场景）。
   const noWorkspace = !activeWorkspaceId;
@@ -112,6 +128,20 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
     () => timelineTurns.slice(-visibleTurnCount),
     [timelineTurns, visibleTurnCount],
   );
+  // 视口切片打点：诊断「分片窗口」是否生效——可见 turn 数应远小于总 turn 数，
+  // 若 visibleTurns 接近 timelineTurns 全长，说明分片未生效、首屏渲染压力大。
+  // 采样：仅当 total/visible/window 任一变化时才打，避免每帧无条件打点刷屏淹没关键日志。
+  const lastVisibleMarkRef = useRef<{ total: number; visible: number; window: number } | null>(null);
+  const lv = lastVisibleMarkRef.current;
+  if (!lv || lv.total !== timelineTurns.length || lv.visible !== visibleTurns.length || lv.window !== visibleTurnCount) {
+    lastVisibleMarkRef.current = { total: timelineTurns.length, visible: visibleTurns.length, window: visibleTurnCount };
+    PerfTrace.markCurrent("chatPanel:visible-turns", {
+      task_id: activeTaskId,
+      total_turns: timelineTurns.length,
+      visible_turns: visibleTurns.length,
+      window: visibleTurnCount,
+    });
+  }
   const hasEarlierTurns = timelineTurns.length > visibleTurnCount;
 
   // 单个 turn 渲染：外层包 px-4 py-2 承托内边距与条目垂直节奏（VirtualList 绝对定位条目，
@@ -150,6 +180,11 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
     if (el) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
+    // 渲染完成锚点：本次因 events/最新事件触发的滚动提交完成，即「首帧内容可见」终点。
+    PerfTrace.markCurrent("chatPanel:scroll-committed", {
+      task_id: activeTaskId,
+      events: events.length,
+    });
   }, [events.length, latestEvent]);
 
   return (
