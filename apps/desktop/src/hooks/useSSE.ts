@@ -85,7 +85,11 @@ export function useSSE(): UseSSEReturn {
    */
   const connect = useCallback(
     async (taskId: string, turnId: string): Promise<void> => {
-      // 先断开已有连接（disconnect 内部会兜底 flush 旧缓冲，确保残留事件落盘）
+      // 先 flush 上一连接已入缓冲、尚未到下一动画帧的事件，避免快速重连时静默丢弃
+      // （connectionRef 存的是 SSEConnection，其 disconnect 只 abort 不 flush；只有 hook
+      // 自身的 disconnect 才 flush，故这里必须显式 flush 而非依赖下方 disconnect）。
+      flushRef.current();
+      // 再断开已有连接（SSEConnection.disconnect 仅负责 abort fetch，不再产生事件）
       if (connectionRef.current) {
         connectionRef.current.disconnect();
       }

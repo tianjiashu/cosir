@@ -277,11 +277,16 @@ export function projectTimelineIncrementally(
       if (callId && toolByCallId.has(callId)) {
         const idx = toolByCallId.get(callId)!;
         const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "tool" }>;
+        // 时序保护：若同 callId 的 finished 已先到达（后端保序前提下理论上不应发生，
+        // 但网络重排 / 重连回放可能导致 started 晚到），不得把已完成状态回退为 running。
+        // 仅当当前仍为 running（尚未收到终态）时才允许 started 覆写；已终态时保留
+        // completed / error，仅补充 arguments / display 等 started 携带的元信息。
+        const alreadyTerminal = existing.item.status !== "running";
         const updated: TurnTimelineEntry = {
           kind: "tool",
           item: {
             ...existing.item,
-            status: tool.status,
+            ...(alreadyTerminal ? {} : { status: tool.status }),
             eventId: tool.eventId,
             error: tool.error,
             resultSummary: tool.resultSummary,
@@ -297,6 +302,9 @@ export function projectTimelineIncrementally(
             output: undefined,
             ...(tool.arguments ? { arguments: tool.arguments } : {}),
             ...(tool.display ? { display: tool.display } : {}),
+            // 乱序场景（finished 先到、started 后到）：started 携带的折叠态请求摘要须补全，
+            // 否则该工具条目将永久缺失 requestSummary（finished 分支不产出此字段）。
+            ...(tool.requestSummary ? { requestSummary: tool.requestSummary } : {}),
           },
         };
         entries = entries.slice();

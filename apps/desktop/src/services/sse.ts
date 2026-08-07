@@ -1,13 +1,13 @@
 ﻿/**
- * SSE锛圫erver-Sent Events锛夋祦绠＄悊銆?
+ * SSE（Server-Sent Events）流管理。
  *
- * 浣跨敤 `fetch + ReadableStream` 杩炴帴鍚庣 SSE 绔偣锛?
- * 瑙ｆ瀽 `event:` + `data:` 鏍煎紡鐨勪簨浠舵祦锛屽苟鏀寔锛?
- * - 娴佸紡璇诲彇涓庨€愭潯浜嬩欢鍥炶皟
- * - 涓诲姩鍙栨秷杩炴帴
- * - 閿欒澶勭悊涓庣姸鎬佹姤鍛?
+ * 使用 `fetch + ReadableStream` 连接后端 SSE 端点，
+ * 解析 `event:` + `data:` 格式的事件流，并支持：
+ * - 流式读取与逐条事件回调
+ * - 主动取消连接
+ * - 错误处理与状态报告
  *
- * 涓嶄娇鐢?EventSource锛堜粎鏀寔 GET 涓旀棤娉曟惡甯﹁嚜瀹氫箟 header / 閴存潈锛夈€?
+ * 不使用 EventSource（仅支持 GET 且无法携带自定义 header / 鉴权）。
  *
  * @module services/sse
  */
@@ -23,62 +23,62 @@ import {
 import { parseSSEFrame } from "./sseParser";
 import { useConversationTraceStore } from "@/stores/conversationTraceStore";
 
-/** 鍚庣鍩虹 URL锛屽紑鍙戠幆澧冭蛋 Vite 浠ｇ悊銆?*/
+/** 后端基础 URL，开发环境走 Vite 代理。 */
 const BASE_URL = "";
 
-/** SSE 娴佺殑杩炴帴鐘舵€佹灇涓俱€?*/
+/** SSE 流的连接状态枚举。 */
 export enum SSEConnectionState {
-  /** 绌洪棽锛氭湭杩炴帴鎴栧凡鏂紑 */
+  /** 空闲：未连接或已断开 */
   IDLE = "idle",
-  /** 姝ｅ湪寤虹珛杩炴帴 */
+  /** 正在建立连接 */
   CONNECTING = "connecting",
-  /** 宸茶繛鎺ヤ笖姝ｅ湪鎺ユ敹浜嬩欢娴?*/
+  /** 已连接且正在接收事件流 */
   STREAMING = "streaming",
-  /** 宸插叧闂紙姝ｅ父缁撴潫鎴栦富鍔ㄦ柇寮€锛?*/
+  /** 已关闭（正常结束或主动断开） */
   CLOSED = "closed",
 }
 
-/** SSE 浜嬩欢鍥炶皟绫诲瀷瀹氫箟銆?*/
+/** SSE 事件回调类型定义。 */
 export type SSEEventHandler = (event: RuntimeEvent) => void;
-/** SSE 閿欒鍥炶皟绫诲瀷瀹氫箟銆?*/
+/** SSE 错误回调类型定义。 */
 export type SSEErrorHandler = (error: Error) => void;
-/** SSE 鐘舵€佸彉鏇村洖璋冪被鍨嬪畾涔夈€?*/
+/** SSE 状态变更回调类型定义。 */
 export type SSEStateChangeHandler = (state: SSEConnectionState) => void;
 /**
- * SSE 璇锋眰 trace 鏆撮湶鍥炶皟銆?
+ * SSE 请求 trace 暴露回调。
  *
- * @param traceId - 鏈 `/turns/{turn_id}/stream` 璇锋眰鍐欏叆 `x-trace-id` 鐨勫鎴风 trace銆?
- * @returns 鏃犮€?
+ * @param traceId - 本次 `/turns/{turn_id}/stream` 请求写入 `x-trace-id` 的客户端 trace。
+ * @returns 无。
  *
- * @sideeffect 鐢辫皟鐢ㄦ柟鍐冲畾鏄惁鎶?traceId 鍐欏叆 UI 鐘舵€侊紱SSE service 鑷韩鍚屾椂浼氳褰曞埌 conversationTraceStore銆?
+ * @sideeffect 由调用方决定是否将 traceId 写入 UI 状态；SSE service 自身同时会记录到 conversationTraceStore。
  */
 export type SSETraceHandler = (traceId: string) => void;
 
 /**
- * SSE 杩炴帴绠＄悊鍣ㄩ厤缃€夐」銆?
+ * SSE 连接管理器配置选项。
  *
  * @interface SSEConnectionOptions
  */
 export interface SSEConnectionOptions {
-  /** 鏀跺埌鏂颁簨浠舵椂鐨勫洖璋冿紙蹇呭～锛夈€?*/
+  /** 收到新事件时的回调（必填）。 */
   onEvent: SSEEventHandler;
-  /** 鍙戠敓閿欒鏃剁殑鍥炶皟锛堝彲閫夛級銆?*/
+  /** 发生错误时的回调（可选）。 */
   onError?: SSEErrorHandler;
-  /** 杩炴帴鐘舵€佸彉鏇存椂鐨勫洖璋冿紙鍙€夛級銆?*/
+  /** 连接状态变更时的回调（可选）。 */
   onStateChange?: SSEStateChangeHandler;
-  /** SSE 璇锋眰寤虹珛鍓嶆毚闇叉湰娆¤姹?trace_id 鐨勫洖璋冿紙鍙€夛級銆?*/
+  /** SSE 请求建立前暴露本次请求 trace_id 的回调（可选）。 */
   onTrace?: SSETraceHandler;
-  /** 浠诲姟 ID锛堢敤浜庢棩蹇楀拰閿欒杩借釜锛夈€?*/
+  /** 任务 ID（用于日志和错误追踪）。 */
   taskId: string;
-  /** 杞 ID锛堢敤浜庡缓绔?turn 绾?SSE 娴侊級銆?*/
+  /** 轮次 ID（用于建立 turn 级 SSE 流）。 */
   turnId: string;
 }
 
 /**
- * SSE 杩炴帴绠＄悊鍣ㄣ€?
+ * SSE 连接管理器。
  *
- * 绠＄悊 SSE 娴佺殑鐢熷懡鍛ㄦ湡锛氳繛鎺ャ€佹帴鏀躲€侀敊璇€佸叧闂€?
- * 浣跨敤 AbortController 鏀寔涓诲姩鍙栨秷銆?
+ * 管理 SSE 流的生命周期：连接、接收、错误、关闭。
+ * 使用 AbortController 支持主动取消。
  *
  * @example
  * ```ts
@@ -89,7 +89,7 @@ export interface SSEConnectionOptions {
  *   onStateChange: (state) => onStateChanged(state),
  * });
  * await conn.connect();
- * // ...绋嶅悗
+ * // ...稍后
  * conn.disconnect();
  * ```
  */
@@ -108,24 +108,24 @@ export class SSEConnection {
     this.options = options;
   }
 
-  /** 褰撳墠杩炴帴鐘舵€侊紙鍙锛夈€?*/
+  /** 当前连接状态（只读）。 */
   get state(): SSEConnectionState {
     return this._state;
   }
 
   /**
-   * 寤虹珛 SSE 杩炴帴骞跺紑濮嬫帴鏀朵簨浠舵祦銆?
+   * 建立 SSE 连接并开始接收事件流。
    *
-   * 鍚?GET /turns/{id}/stream 鍙戣捣 fetch 璇锋眰锛?
-   * 閫氳繃 ReadableStream 閫愯瑙ｆ瀽 SSE 鏍煎紡鏁版嵁锛?
-   * 姣忔敹鍒颁竴涓畬鏁翠簨浠跺嵆璋冪敤 onEvent 鍥炶皟銆?
+   * 向 GET /turns/{id}/stream 发起 fetch 请求，
+   * 通过 ReadableStream 逐步解析 SSE 格式数据，
+   * 每收到一个完整事件即调用 onEvent 回调。
    *
-   * @throws {Error} 褰撳凡鍦ㄨ繛鎺ヤ腑鎴栫綉缁滆姹傚け璐ユ椂鎶涘嚭銆?
+   * @throws {Error} 当已在连接中或网络请求失败时抛出。
    *
    * @sideeffect
-   * - 鍙戣捣 HTTP GET 璇锋眰鍒板悗绔?SSE 绔偣
-   * - 鎸佺画璇诲彇鍝嶅簲浣撶洿鍒版祦缁撴潫鎴栬鍙栨秷
-   * - 瑙﹀彂 onStateChange 鍥炶皟鎶ュ憡鐘舵€佸彉鍖?
+   * - 发起 HTTP GET 请求到后端 SSE 端点
+   * - 持续读取响应体直到流结束或被取消
+   * - 触发 onStateChange 回调报告状态变更
    */
   async connect(): Promise<void> {
     if (this._state === SSEConnectionState.CONNECTING || this._state === SSEConnectionState.STREAMING) {
@@ -169,7 +169,7 @@ export class SSEConnection {
       recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
 
       if (!response.ok) {
-        throw new Error(`SSE 璇锋眰澶辫触: HTTP ${response.status} ${response.statusText}`);
+        throw new Error(`SSE 请求失败: HTTP ${response.status} ${response.statusText}`);
       }
 
       if (!response.body) {
@@ -178,7 +178,7 @@ export class SSEConnection {
 
       this._setState(SSEConnectionState.STREAMING);
 
-      // 浣跨敤 ReadableStream 璇诲彇 SSE 鏁版嵁
+      // 使用 ReadableStream 读取 SSE 数据
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -191,9 +191,9 @@ export class SSEConnection {
         }
 
         buffer += decoder.decode(value, { stream: true });
-        // 鎸夊弻鎹㈣鍒嗗壊 SSE 浜嬩欢
+        // 按双换行切分 SSE 事件
         const events = buffer.split("\n\n");
-        // 鏈€鍚庝竴娈靛彲鑳戒笉瀹屾暣锛屼繚鐣欏湪 buffer 涓?
+        // 最后一段可能不完整，保留在 buffer 中
         buffer = events.pop() ?? "";
 
         for (const eventText of events) {
@@ -219,7 +219,7 @@ export class SSEConnection {
         }
       }
 
-      // 澶勭悊 buffer 涓彲鑳藉墿浣欑殑鏈€鍚庝竴鏉′簨浠?
+      // 处理 buffer 中可能残留的最后一个事件
       if (buffer.trim()) {
         const parsed = this.parseSSEEvent(buffer.trim());
         if (parsed) {
@@ -233,45 +233,54 @@ export class SSEConnection {
       logInfo("SSE stream closed", requestContext);
     } catch (err) {
       if ((err as Error).name === "AbortError") {
-        // 涓诲姩鍙栨秷锛屼笉鏄敊璇?
+        // 主动取消，不是错误
         this._setState(SSEConnectionState.CLOSED);
         logInfo("SSE connection aborted", requestContext);
       } else {
-        logError("SSE 杩炴帴澶辫触", err, requestContext);
+        logError("SSE 连接失败", err, requestContext);
         this.options.onError?.(err as Error);
         this._setState(SSEConnectionState.CLOSED);
         throw err;
       }
+    } finally {
+      // 无论正常结束、主动取消还是异常，connect 生命周期结束时统一释放 AbortController，
+      // 避免实例上残留已失效的 controller（重连时状态串扰 / 句柄泄漏）。
+      // disconnect() 只负责 abort + 标记，不在此处置 null，确保 connect 飞行中
+      // 的多次 disconnect 都能通过仍处于存活状态的 controller 兜底中止。
+      this._abortController = null;
     }
   }
 
   /**
-   * 鏂紑 SSE 杩炴帴銆?
+   * 断开 SSE 连接。
    *
-   * 璋冪敤鍚?connect() 杩斿洖鐨?Promise 浼氫互 AbortError 缁撴潫銆?
-   * 鏈€缁堢姸鎬佺敱 connect() 鐨?catch(AbortError) 鍒嗘敮璁剧疆涓?CLOSED锛?
-   * 姝ゆ柟娉曚笉璁剧疆鐘舵€佷互閬垮厤绔炴€佹潯浠躲€?
+   * 调用后 connect() 返回的 Promise 会以 AbortError 结束。
+   * 最终状态由 connect() 的 catch(AbortError) 分支设置为 CLOSED，
+   * 此方法不设置状态以避免竞态条件。
    *
-   * @sideeffect 閫氳繃 AbortController 涓姝ｅ湪杩涜鐨?fetch 璇锋眰銆?
+   * @sideeffect 通过 AbortController 中止正在进行的 fetch 请求。
    */
   disconnect(): void {
     this._aborted = true;
+    // 仅发起 abort；不在此处将 _abortController 置 null。置 null 由 connect() 的
+    // finally 分支在生命周期真正结束时统一回收。这样 connect() 仍在飞行中时，
+    // 连续的多次 disconnect() 仍可通过仍处于存活状态的 controller 兜底中止，
+    // 不会因为首次 disconnect 已置 null 而变成空操作导致无法中止。
     if (this._abortController) {
       this._abortController.abort();
-      this._abortController = null;
     }
-    // 涓嶅湪姝ゅ璁剧疆 IDLE 鐘舵€侊紝閬垮厤涓?connect() catch 鍧椾骇鐢熺珵鎬?
-    // connect() 鐨?AbortError 鍒嗘敮浼氳缃?CLOSED锛岄潪杩炴帴鐘舵€佷笅璋冪敤鍒欎繚鎸佸師鐘舵€?
+    // 不在此处设置 IDLE 状态，避免与 connect() catch 块产生竞态；
+    // connect() 的 AbortError 分支会设置 CLOSED，非连接状态下调用则保持原状态。
   }
 
   /**
-   * 瑙ｆ瀽鍗曟潯 SSE 浜嬩欢鏂囨湰銆?
+   * 解析单条 SSE 事件文本。
    *
-   * 浠?`event:` 琛屾彁鍙栦簨浠剁被鍨嬶紝浠?`data:` 琛屾彁鍙?JSON payload锛?
-   * 鏋勫缓瀹屾暣鐨?RuntimeEvent 瀵硅薄銆?
+   * 从 `event:` 行提取事件类型，从 `data:` 行提取 JSON payload，
+   * 构建完整的 RuntimeEvent 对象。
    *
-   * @param text - 鍗曟潯 SSE 浜嬩欢鍘熷鏂囨湰锛坋vent: + data: 鏍煎紡锛夈€?
-   * @returns 瑙ｆ瀽鎴愬姛杩斿洖 RuntimeEvent锛屾牸寮忔棤鏁堣繑鍥?null銆?
+   * @param text - 单条 SSE 事件原始文本（event: + data: 格式）。
+   * @returns 解析成功返回 RuntimeEvent，格式无效返回 null。
    *
    * @private
    */
@@ -284,7 +293,7 @@ export class SSEConnection {
     try {
       return JSON.parse(frame.data) as RuntimeEvent;
     } catch (parseErr) {
-      logWarn("SSE 浜嬩欢 JSON 瑙ｆ瀽澶辫触", {
+      logWarn("SSE 事件 JSON 解析失败", {
         module: "sse",
         task_id: this.options.taskId,
         turn_id: this.options.turnId,
@@ -297,9 +306,14 @@ export class SSEConnection {
   }
 
   /**
-   * 鏇存柊杩炴帴鐘舵€佸苟閫氱煡瑙傚療鑰呫€?
+   * 标记是否收到终态运行事件。
    *
-   * @param newState - 鏂扮殑杩炴帴鐘舵€佸€笺€?
+   * 识别 run_finished / final_response / run_failed / run_cancelled 四类终态事件，
+   * 命中时置位 `_terminalReceived`，供流结束时的异常判定使用。
+   *
+   * @param event - 待判定的运行时事件。
+   *
+   * @sideeffect 命中终态事件时置 `_terminalReceived = true`。
    *
    * @private
    */
@@ -310,6 +324,18 @@ export class SSEConnection {
     }
   }
 
+  /**
+   * 流异常结束判定与上报。
+   *
+   * 当流正常读完但既未收到终态事件也非主动取消（disconnect）时，
+   * 判定为后端异常结束（如后端崩溃导致流中断），记录 error 日志并回调 onError。
+   *
+   * @param context - 请求上下文（含 task_id / turn_id / trace_id 等），用于日志定位。
+   *
+   * @sideeffect 异常时写 error 日志并调用 onError 回调。
+   *
+   * @private
+   */
   private _reportStreamEndIfAbnormal(context: Record<string, unknown>): void {
     if (this._terminalReceived || this._aborted) {
       return;
@@ -319,6 +345,17 @@ export class SSEConnection {
     this.options.onError?.(err);
   }
 
+  /**
+   * 更新连接状态并通知观察者。
+   *
+   * 仅当状态真正变化时才赋值并触发 onStateChange 回调，避免无变化的重复通知。
+   *
+   * @param newState - 新的连接状态值。
+   *
+   * @sideeffect 状态变化时调用 onStateChange 回调。
+   *
+   * @private
+   */
   private _setState(newState: SSEConnectionState): void {
     if (this._state !== newState) {
       this._state = newState;

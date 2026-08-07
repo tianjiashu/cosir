@@ -17,14 +17,14 @@
 
 import { create } from "zustand";
 import type { RuntimeEvent } from "@shared/events";
+import { SSEConnectionState } from "../services/sse";
+import { logWarn } from "../lib/logger";
 
 /**
  * 模块级空事件常量，复用同一引用，避免每次 `?? []` 产生新数组字面量
  * 导致 useShallow 在任务无缓存时恒定判定为“变化”而触发多余重渲染。
  */
 export const EMPTY_EVENTS: RuntimeEvent[] = [];
-import { SSEConnectionState } from "../services/sse";
-import { logWarn } from "../lib/logger";
 
 /** 事件 Store 的状态接口。 */
 interface EventState {
@@ -114,19 +114,19 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
         return state;
       }
 
-      // 后端 sequence 全局单调，实时事件天然落在各分片数组末尾，直接 push（O(1) 摊还），
-      // 不再对每个事件做三次全量 O(n log n) 排序，避免高频 delta 下大量比较拖慢主线程。
-      const events = state.events.concat(event);
-      const taskEvents = state.eventsByTaskId[event.task_id]
-        ? state.eventsByTaskId[event.task_id].concat(event)
-        : [event];
-      const eventsByTaskId = { ...state.eventsByTaskId, [event.task_id]: taskEvents };
+      // 扁平 events 与两个分片共用 appendOrderedShard，保证三者顺序口径完全同源，
+      // 乱序在 store 层即归位（详见 appendOrderedShard 的契约及其对 TurnTimeline 续算的影响）。
+      const events = appendOrderedShard(state.events, event);
+      const eventsByTaskId = {
+        ...state.eventsByTaskId,
+        [event.task_id]: appendOrderedShard(state.eventsByTaskId[event.task_id], event),
+      };
       let eventsByTurnId = state.eventsByTurnId;
       if (event.turn_id) {
-        const turnEvents = state.eventsByTurnId[event.turn_id]
-          ? state.eventsByTurnId[event.turn_id].concat(event)
-          : [event];
-        eventsByTurnId = { ...state.eventsByTurnId, [event.turn_id]: turnEvents };
+        eventsByTurnId = {
+          ...state.eventsByTurnId,
+          [event.turn_id]: appendOrderedShard(state.eventsByTurnId[event.turn_id], event),
+        };
       }
       const processedEventIds = new Set(state.processedEventIds);
       processedEventIds.add(event.event_id);
@@ -158,24 +158,32 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
         }
         processedEventIds.add(event.event_id);
         deduped.push(event);
-        eventsByTaskId[event.task_id] = eventsByTaskId[event.task_id]
-          ? eventsByTaskId[event.task_id].concat(event)
-          : [event];
+        // 分片逐条经 appendOrderedShard 追加（口径同 appendEvent，见其 JSDoc）。
+        eventsByTaskId[event.task_id] = appendOrderedShard(eventsByTaskId[event.task_id], event);
         if (event.turn_id) {
-          eventsByTurnId[event.turn_id] = eventsByTurnId[event.turn_id]
-            ? eventsByTurnId[event.turn_id].concat(event)
-            : [event];
+          eventsByTurnId[event.turn_id] = appendOrderedShard(eventsByTurnId[event.turn_id], event);
         }
       }
       if (deduped.length === 0) {
         return state;
       }
-      const events = state.events.concat(deduped);
+      // 扁平 events 同样逐条经 appendOrderedShard 追加：批内乱序（如网络重排的
+      // [seq=2, seq=1]）在逐条比对末位时即被归位，结果等价于旧「整批 sort」，且与
+      // 分片、appendEvent 共用同一函数，三处顺序口径单一事实来源，杜绝分歧。
+      let events = state.events;
+      for (const event of deduped) {
+        events = appendOrderedShard(events, event);
+      }
       return { events, eventsByTaskId, eventsByTurnId, processedEventIds };
     });
   },
 
   setEvents: (events: RuntimeEvent[], taskId?: string) => {
+    if (events.length === 0 && taskId == null) {
+      // 空输入且无任务维度时无需任何合并：短路返回，避免无意义的全量重排与引用失效
+      // （与 appendEvents 空输入短路一致，保护下游 memo 跳过重渲染）。
+      return;
+    }
     set((state) => {
       const sorted = [...events].sort(compareRuntimeEvents);
       const incomingIds = new Set(events.map((e) => e.event_id));
@@ -198,11 +206,20 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
         }
       }
 
+      // 扁平 `events` 必须与分片视图保持一致：保留其他任务的事件，当前任务用传入
+      // 排序后的全量覆盖（与其他分片合并口径统一）。直接 `events: sorted` 会丢弃
+      // 其他任务在扁平数组中的事件，导致同一 store 内两份数据自相矛盾。
+      const otherTaskEvents =
+        taskId != null
+          ? state.events.filter((e) => e.task_id !== taskId)
+          : state.events.filter((e) => !incomingIds.has(e.event_id));
+      const mergedEvents = otherTaskEvents.concat(sorted).sort(compareRuntimeEvents);
+
       // 去重集合取并集（历史 + 实时 SSE 共同去重）
       const mergedIds = new Set([...state.processedEventIds, ...incomingIds]);
 
       return {
-        events: sorted,
+        events: mergedEvents,
         eventsByTaskId: mergedByTask,
         eventsByTurnId: mergedByTurn,
         processedEventIds: mergedIds,
@@ -332,6 +349,34 @@ function mergeByEventId(
     return targetArr;
   }
   return [...map.values()].sort(compareRuntimeEvents);
+}
+
+/**
+ * 向有序分片追加单条事件，保持整体按 sequence 有序。
+ *
+ * 性能约定：后端 sequence 通常全局单调，实时事件天然落在分片末尾，
+ * 故正常顺序到达时直接 concat（O(1) 摊还）；仅当新事件相对分片末位「逆序」
+ * （compareRuntimeEvents 全键判定，含 sequence 相等时的 created_at 次级比较，
+ * 与排序口径完全一致）时才整体排序，避免高频 delta 下每事件全量 O(n log n)。
+ *
+ * 该逻辑在扁平 events 与两个分片（eventsByTaskId / eventsByTurnId）上口径一致，
+ * 确保「渲染实际消费的分片」与「扁平数组」顺序同源，乱序在 store 层即被归位，
+ * 不再传导到下游 TurnTimeline 的尾部续算（其假设 append-only 且有序）。
+ *
+ * @param shard - 既有的有序分片（可为 undefined，表示首个事件）。
+ * @param event - 待追加的事件。
+ * @returns 追加并保持有序后的新分片数组。
+ */
+function appendOrderedShard(
+  shard: RuntimeEvent[] | undefined,
+  event: RuntimeEvent,
+): RuntimeEvent[] {
+  if (!shard || shard.length === 0) {
+    return [event];
+  }
+  const lastEvent = shard[shard.length - 1];
+  const needsReorder = compareRuntimeEvents(event, lastEvent) < 0;
+  return needsReorder ? shard.concat(event).sort(compareRuntimeEvents) : shard.concat(event);
 }
 
 /**
