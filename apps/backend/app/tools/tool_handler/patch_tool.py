@@ -451,7 +451,7 @@ class PatchTool(HandlerBase):
             data=build_file_change_display_data(results),
         )
 
-    def _format_multi_file_syntax_reason(c, diagnostics: list[SyntaxDiagnostic]) -> str:
+    def _format_multi_file_syntax_reason(self, diagnostics: list[SyntaxDiagnostic]) -> str:
         """聚合多个文件的语法诊断为英文 reason（patch 模式多文件自修复引导）。
 
         参数:
