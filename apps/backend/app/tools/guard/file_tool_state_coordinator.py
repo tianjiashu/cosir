@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -10,10 +11,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
-from app.tools.guard.file_resource_paths import (
-    FileResourcePaths,
-    resolve_file_resource_paths,
-)
+from app.tools.guard.file_resource_paths import FileResourcePaths, resolve_file_resource_paths
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_handler.file_state import (
@@ -25,6 +23,83 @@ from app.tools.tool_handler.file_state import (
 from app.tools.tool_handler.search.file_walker import iter_files
 
 _REPEATED_TOOLS = frozenset({"read_file", "search_files"})
+
+
+def _canonical_path(root: Path, value: Any) -> Any:
+    """把路径类参数归一为以 workspace 根为基准的稳定键。
+
+    参数:
+        root: 当前 workspace 根目录；相对路径以此为准解析。
+        value: 待归一的任意参数值。
+
+    返回:
+        字符串路径经 ``os.path.normcase`` + 以 ``root`` 为基准的 ``abspath`` 归一后的
+        结果；非字符串原样返回，避免污染非路径字段。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if isinstance(value, str) and value:
+        based = value if os.path.isabs(value) else str(root / value)
+        return os.path.normcase(os.path.abspath(based))
+    return value
+
+
+def normalize_repeated_call_arguments(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    """为重复调用签名提取并归一已知路径字段（公开 API）。
+
+    参数:
+        tool_name: 当前工具名称。
+        arguments: 已校验工具参数。
+        root: 当前 workspace 根目录；路径归一以此为基准，避免 CWD 漂移。
+
+    返回:
+        仅含签名相关字段的字典；路径字段经 :func:`_canonical_path` 归一，
+        非路径字段原样保留，保证等价路径（相对 / 绝对 / 双斜杠）产生相同签名。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if tool_name == "patch":
+        mode = arguments.get("mode", "replace")
+        if mode == "replace":
+            return {"mode": mode, "path": _canonical_path(root, arguments.get("path"))}
+        return {"mode": mode, "patch": arguments.get("patch")}
+    if tool_name == "search_files":
+        # 搜索结果由 pattern/target/file_glob/output_mode/分页等全部参数共同决定，
+        # 仅归一 path 会导致「不同检索词搜索同一范围」被误判为重复而拦截。
+        return {
+            "path": _canonical_path(root, arguments.get("path")),
+            "pattern": arguments.get("pattern"),
+            "target": arguments.get("target"),
+            "file_glob": arguments.get("file_glob"),
+            "output_mode": arguments.get("output_mode"),
+            "limit": arguments.get("limit"),
+            "offset": arguments.get("offset"),
+            "context": arguments.get("context"),
+        }
+    if tool_name == "read_file":
+        # 大文件支持按 offset/limit 分页续读；不同页必须视为不同调用，否则续读
+        # 会被误判为「unchanged」而永远只能看到第一页。
+        return {
+            "path": _canonical_path(root, arguments.get("path")),
+            "offset": arguments.get("offset"),
+            "limit": arguments.get("limit"),
+        }
+    path = arguments.get("path")
+    return {"path": _canonical_path(root, path)}
 
 
 @dataclass(frozen=True)
@@ -79,7 +154,7 @@ class FileToolStateCoordinator:
         self,
         tool: ToolDefinition,
         arguments: Mapping[str, Any],
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
         *,
         tool_call_id: str,
     ) -> FileToolExecutionPlan:
@@ -95,15 +170,20 @@ class FileToolStateCoordinator:
             执行计划；``early_observation`` 非空时调度器应直接返回。
 
         异常:
-            无。
+            FileResourcePathError: 文件路径被安全策略拒绝时抛出。
 
         副作用:
             读取文件元数据，并可能更新重复调用计数。
         """
+        # 非文件工具（execute_terminal 等）无 filesystem 资源，无需 revision/
+        # stale/锁协调：返回空计划，使后续 lock/check_stale/complete 全部 no-op。
+        if "filesystem" not in tool.resource_keys:
+            return FileToolExecutionPlan(
+                resources=FileResourcePaths(),
+                observed_paths=(),
+            )
 
         resources = resolve_file_resource_paths(tool.name, arguments, execution_context)
-        if execution_context is None:
-            return FileToolExecutionPlan(resources=resources, observed_paths=())
 
         observed_paths, snapshot_complete = self._observed_paths(resources)
         observed_snapshot = self._revisions.snapshot_token(observed_paths)
@@ -115,7 +195,14 @@ class FileToolStateCoordinator:
                 snapshot_complete=snapshot_complete,
             )
 
-        signature = self._signature(tool.name, arguments)
+        signature = self._signature(
+            tool.name,
+            normalize_repeated_call_arguments(
+                tool.name,
+                arguments,
+                execution_context.workspace_root,
+            ),
+        )
         action = self._repeated_calls.check(
             execution_context.task_id,
             signature,
@@ -298,6 +385,10 @@ class FileToolStateCoordinator:
         if scope_root is None:
             return tuple(paths), True
         paths.append(scope_root)
+        # 越界只读根（如 C:/Windows/System32）允许读取但禁止 prepare 阶段全量遍历，
+        # 避免模型输入触发目录遍历 DoS；此时仅保留 scope 根本身，不做重复检测。
+        if resources.scope_escapes_workspace:
+            return tuple(paths), True
         snapshot_complete = True
         try:
             if resources.scope_recursive:
