@@ -672,7 +672,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
             "terminal": True,
-            "messages": list(tool_run.messages_for_model),
+            "messages": runtime_to_langchain(tool_run.messages_for_model),
         }
 
     tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
@@ -716,7 +716,11 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "pending_tool_calls": [],
                 "tool_error_count": tool_error_count,
                 "terminal": True,
-                "messages": [],
+                # 即便达到错误上限也要回写本批次已产生的工具响应，否则 checkpoint 中
+                # assistant 的 tool_calls 将缺对应 ToolMessage，下一轮拉回历史触发 OpenAI
+                # 协议校验失败（"assistant message with tool_calls must be followed by
+                # tool messages"）。
+                "messages": runtime_to_langchain(tool_run.messages_for_model),
             }
         log.warning(
             "tools_node_error_limit",
@@ -743,7 +747,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "pending_tool_calls": [],
             "tool_error_count": tool_error_count,
             "terminal": True,  # 失败终态
-            "messages": [],
+            # 达到错误上限同样必须回写本批次工具响应，闭合 assistant 的 tool_calls，
+            # 否则 checkpoint 悬空，下一轮拉回历史触发 OpenAI 协议校验失败。
+            "messages": runtime_to_langchain(tool_run.messages_for_model),
         }
 
     return {
