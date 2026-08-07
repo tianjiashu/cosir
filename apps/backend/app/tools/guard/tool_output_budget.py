@@ -9,7 +9,7 @@ from uuid import uuid4
 from app.config.logging.logger import log
 from app.tools.schemas import ToolExecutionContext, ToolObservation
 from app.tools.tool_handler.file_io.atomic_write import atomic_write_text
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.utils.trace_infra.redaction import redact_terminal_output
 
 
@@ -126,9 +126,9 @@ class ToolOutputBudget:
         if execution_context is None:
             return ""
         relative = Path(".coding-agent") / "tool-artifacts" / f"{uuid4().hex}.txt"
-        resolver = ProjectPathResolver(execution_context.workspace_root)
+        resolver = PathResolver(execution_context.workspace_root)
         try:
-            resolved, error = resolver.resolve(str(relative))
+            resolved, error = resolver.resolve_within_workspace(str(relative))
         except (OSError, RuntimeError, ValueError):
             log.exception(
                 "tool_artifact_path_resolution_failed",

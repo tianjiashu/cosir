@@ -28,6 +28,7 @@ from app.hook.builtins.codegraph_index_prepare_hook import (
 )
 from app.hook.hook_context import HookContext
 from app.hook.hook_event import HookEvent
+from app.hook.hook_interceptor import HookInterceptor
 from app.hook.hook_registry import HookRegistry
 from app.models.enums.event_type import EventType
 from app.models.payload import EVENT_PAYLOAD_MODELS
@@ -231,7 +232,7 @@ def test_hook_allows_on_exception():
 
 
 def test_hook_fires_through_registry_matches_and_executes():
-    """经 HookRegistry.fire → matches 链路（非直调 execute），验证 __init__ 正确
+    """经 HookInterceptor.fire → matches 链路（非直调 execute），验证 __init__ 正确
     固化基类属性，matches 不抛 AttributeError 且 execute 真正执行。回归：缺
     super().__init__ 时 matches 会抛错，导致 Hook 永不执行。"""
     lifecycle = _FakeLifecycle(_readiness(True, action="sync"))
@@ -242,7 +243,7 @@ def test_hook_fires_through_registry_matches_and_executes():
     registry.register(hook)
 
     # fire 必须成功（不抛），且 ensure_ready 被调用（execute 确实执行）。
-    result = registry.fire(_ctx())
+    result = HookInterceptor._fire(_ctx(), registry)
     assert result.decision.value == "allow"
     assert lifecycle.calls == ["/ws/root"]
 

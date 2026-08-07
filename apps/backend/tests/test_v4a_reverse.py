@@ -19,7 +19,7 @@ from app.tools.tool_handler.patch.v4a_reverse import (
     build_forward_operations,
     reverse_v4a_operation,
 )
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 
 
 def test_build_forward_maps_four_statuses() -> None:
@@ -109,7 +109,7 @@ def test_apply_update_reverse_restores_content(tmp_path: Path) -> None:
     before = "line1\nline2\n"
     after = "changed\n"
     target.write_bytes(after.encode("utf-8"))
-    resolver = ProjectPathResolver(workspace)
+    resolver = PathResolver(workspace)
 
     forward = build_forward_operations(
         [{"path": "edit.txt", "status": "modified", "before": before, "after": after}]
@@ -128,7 +128,7 @@ def test_apply_move_reverse_swaps_paths(tmp_path: Path) -> None:
     src = workspace / "src.txt"
     dst = workspace / "dst.txt"
     src.write_bytes(b"content")
-    resolver = ProjectPathResolver(workspace)
+    resolver = PathResolver(workspace)
 
     forward = build_forward_operations(
         [

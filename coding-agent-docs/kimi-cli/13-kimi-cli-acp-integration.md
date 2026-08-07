@@ -677,13 +677,14 @@ async def _handle_approval_request(self, request: ApprovalRequest):
     """处理权限审批请求。"""
     state = self._turn_state.tool_calls.get(request.tool_call_id, None)
     if state is None:
-        request.resolve("reject")
+        request.resolve_within_workspace("reject")
         return
 
     # 构建权限选项
     permission_options = [
         acp.schema.PermissionOption(option_id="approve", name="Approve once", kind="allow_once"),
-        acp.schema.PermissionOption(option_id="approve_for_session", name="Approve for this session", kind="allow_always"),
+        acp.schema.PermissionOption(option_id="approve_for_session", name="Approve for this session",
+                                    kind="allow_always"),
         acp.schema.PermissionOption(option_id="reject", name="Reject", kind="reject_once"),
     ]
 
@@ -697,11 +698,11 @@ async def _handle_approval_request(self, request: ApprovalRequest):
     # 解析响应结果
     if isinstance(response.outcome, acp.schema.AllowedOutcome):
         if response.outcome.option_id == "approve":
-            request.resolve("approve")
+            request.resolve_within_workspace("approve")
         elif response.outcome.option_id == "approve_for_session":
-            request.resolve("approve_for_session")
+            request.resolve_within_workspace("approve_for_session")
         else:
-            request.resolve("reject")
+            request.resolve_within_workspace("reject")
 ```
 
 **设计意图**：

@@ -567,23 +567,23 @@ async def _request_external_tool(self, request: ToolCallRequest) -> None:
 ```python
 # src/kimi_cli/wire/server.py:446-462
 finally:
-    # Clean up any remaining pending requests from this turn.
-    # After run_soul() returns, the soul and all subagents are done,
-    # so any unresolved requests are stale.
-    stale_ids = [k for k, v in self._pending_requests.items() if not v.resolved]
-    for msg_id in stale_ids:
-        request = self._pending_requests.pop(msg_id)
-        match request:
-            case ApprovalRequest():
-                request.resolve("reject")
-            case ToolCallRequest():
-                request.resolve(
-                    ToolError(
-                        message="Agent turn ended before tool result was received.",
-                        brief="Turn ended",
-                    )
+# Clean up any remaining pending requests from this turn.
+# After run_soul() returns, the soul and all subagents are done,
+# so any unresolved requests are stale.
+stale_ids = [k for k, v in self._pending_requests.items() if not v.resolved]
+for msg_id in stale_ids:
+    request = self._pending_requests.pop(msg_id)
+    match request:
+        case ApprovalRequest():
+            request.resolve_within_workspace("reject")
+        case ToolCallRequest():
+            request.resolve_within_workspace(
+                ToolError(
+                    message="Agent turn ended before tool result was received.",
+                    brief="Turn ended",
                 )
-    self._cancel_event = None
+            )
+self._cancel_event = None
 ```
 
 **清理策略**：

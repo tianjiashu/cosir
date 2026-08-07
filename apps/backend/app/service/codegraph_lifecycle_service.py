@@ -101,6 +101,7 @@ class CodeGraphLifecycleService:
             extra={"msg": "开始准备 workspace 索引", "data": {"workspace_path": workspace_path}},
         )
         try:
+            # 先查询状态，再执行 init/sync
             status = self._client.index_status(workspace_path)
         except CodeGraphKernelUnavailableError as exc:
             return self._degraded(

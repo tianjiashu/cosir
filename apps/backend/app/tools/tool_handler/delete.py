@@ -27,7 +27,7 @@ from app.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.tools.tool_execute.tool_success import tool_success
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )
@@ -113,7 +113,7 @@ class DeleteTool(HandlerBase):
         assert execution_context is not None, "delete requires a workspace execution context"
         root = execution_context.workspace_root
         root_resolved = root.resolve()
-        resolver = ProjectPathResolver(root)
+        resolver = PathResolver(root)
         device_error = resolver.blocked_device_reason(path)
         if device_error:
             return tool_error(
@@ -122,7 +122,7 @@ class DeleteTool(HandlerBase):
                 reason=blocked_device_reason("deleted"),
                 permission=self.permission,
             )
-        entry, error = resolver.resolve_entry(path)
+        entry, error = resolver.resolve_entry_within_workspace(path)
         if entry is None:
             return tool_error(
                 self.name,
@@ -160,7 +160,7 @@ class DeleteTool(HandlerBase):
         is_junction = is_windows_directory_reparse_point(entry)
         if is_symlink or is_junction:
             try:
-                current_entry, current_error = resolver.resolve_entry(path)
+                current_entry, current_error = resolver.resolve_entry_within_workspace(path)
                 current_is_link = current_entry is not None and (
                     current_entry.is_symlink() or is_windows_directory_reparse_point(current_entry)
                 )
@@ -201,7 +201,7 @@ class DeleteTool(HandlerBase):
                 ),
                 permission=self.permission,
             )
-        resolved, error = resolver.resolve(path)
+        resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
             return tool_error(
                 self.name,
@@ -229,7 +229,7 @@ class DeleteTool(HandlerBase):
             )
         if resolved.is_dir():
             try:
-                current_resolved, current_error = resolver.resolve(path)
+                current_resolved, current_error = resolver.resolve_within_workspace(path)
                 if (
                     current_resolved != resolved
                     or current_error
@@ -271,7 +271,7 @@ class DeleteTool(HandlerBase):
                 content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
             )
         try:
-            current_resolved, current_error = resolver.resolve(path)
+            current_resolved, current_error = resolver.resolve_within_workspace(path)
             if current_resolved != resolved or current_error:
                 raise OSError(errno.EAGAIN, "delete target changed before unlink")
             # 删除前读取全文，供文件快照采集（Turn 回退可据此重建文件）。

@@ -5,6 +5,6 @@ list_directory 以及重构后的 read_file 复用，
 避免各工具各自内联一套路径防逃逸与设备名拦截逻辑。
 """
 
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 
-__all__ = ["ProjectPathResolver"]
+__all__ = ["PathResolver"]

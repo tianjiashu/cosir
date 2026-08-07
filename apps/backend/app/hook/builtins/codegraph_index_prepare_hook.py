@@ -16,6 +16,7 @@
 """
 
 from app.config.logging.logger import log
+from app.hook import HookContext
 from app.hook.hook_base import HookBase
 from app.hook.hook_event import HookEvent
 from app.hook.hook_result import HookResult
@@ -30,9 +31,9 @@ class CodeGraphIndexPrepareHook(HookBase):
     """
 
     def __init__(
-        self,
-        lifecycle_service: CodeGraphLifecycleService,
-        workspace_service: WorkspaceService,
+            self,
+            lifecycle_service: CodeGraphLifecycleService,
+            workspace_service: WorkspaceService,
     ) -> None:
         """构造索引保活 Hook。
 
@@ -55,7 +56,7 @@ class CodeGraphIndexPrepareHook(HookBase):
         self._lifecycle = lifecycle_service
         self._workspace_service = workspace_service
 
-    def execute(self, context) -> HookResult:
+    def execute(self, context: HookContext) -> HookResult:
         """Turn 前保活 CodeGraph 索引。
 
         流程：无 workspace_id → 跳过；解析 workspace_path；client 不可用 → 跳过
@@ -74,8 +75,8 @@ class CodeGraphIndexPrepareHook(HookBase):
         副作用:
             可能触发 CodeGraph 索引 init/sync（经 lifecycle）；写 info/debug/error 日志。
         """
-        workspace_id = getattr(context, "workspace_id", None)
-        turn_id = getattr(context, "turn_id", None)
+        workspace_id = context.workspace_id
+        turn_id = context.turn_id
 
         if not workspace_id:
             log.debug(

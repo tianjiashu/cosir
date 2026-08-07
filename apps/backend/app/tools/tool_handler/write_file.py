@@ -33,7 +33,7 @@ from app.tools.tool_handler.patch.file_change_display import (
     build_file_change_display_data,
 )
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.write_file_args import WriteFileArgs
 
@@ -106,7 +106,7 @@ class WriteFileTool(HandlerBase):
             可能创建父目录并原子写入目标文件。
         """
         workspace_root = execution_context.workspace_root
-        resolver = ProjectPathResolver(workspace_root)
+        resolver = PathResolver(workspace_root)
         device_error = resolver.blocked_device_reason(path)
         if device_error:
             return tool_error(
@@ -115,7 +115,7 @@ class WriteFileTool(HandlerBase):
                 reason=blocked_device_reason("written"),
                 permission=self.permission,
             )
-        resolved, error = resolver.resolve(path)
+        resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
             return tool_error(
                 self.name,

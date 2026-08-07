@@ -34,7 +34,7 @@ from app.tools.tool_handler.patch.patch_parser import (
     OperationType,
     PatchOperation,
 )
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 
 
 class ChangeSetConflictError(ValueError):
@@ -285,7 +285,7 @@ async def revert_file(
     snapshot = _require_latest_any(task_id, path)
     if workspace_root is None:
         workspace_root = _resolve_workspace_root(task_id)
-    resolver = ProjectPathResolver(workspace_root)
+    resolver = PathResolver(workspace_root)
     for operation in _snapshots_to_operations([snapshot]):
         if _is_already_reverted(operation, resolver):
             continue
@@ -405,7 +405,7 @@ def _cas_update_status(
         raise ChangeSetConflictError(f"change status already mutated, operation rejected: {path}")
 
 
-def _is_already_reverted(operation: PatchOperation, resolver: ProjectPathResolver) -> bool:
+def _is_already_reverted(operation: PatchOperation, resolver: PathResolver) -> bool:
     """判断单个反向操作是否已在上一次（被中断的）回退中完成，可安全跳过。
 
     参数:
@@ -415,7 +415,7 @@ def _is_already_reverted(operation: PatchOperation, resolver: ProjectPathResolve
     返回:
         True 表示该操作目标态已达成（重入时应跳过）；False 表示仍需 apply。
     """
-    resolved, err = resolver.resolve(operation.file_path)
+    resolved, err = resolver.resolve_within_workspace(operation.file_path)
     if resolved is None or err:
         return False
     if operation.operation == OperationType.ADD:
@@ -447,13 +447,13 @@ def _is_already_reverted(operation: PatchOperation, resolver: ProjectPathResolve
         except OSError:
             return False
     else:  # OperationType.MOVE：文件应已移到 new_path 且源不存在
-        dst, dst_err = resolver.resolve(operation.new_path or "")
+        dst, dst_err = resolver.resolve_within_workspace(operation.new_path or "")
         if dst is None or dst_err or not Path(dst).exists():
             return False
         return not Path(resolved).exists()
 
 
-def _is_at_after_state(operation: PatchOperation, resolver: ProjectPathResolver) -> bool:
+def _is_at_after_state(operation: PatchOperation, resolver: PathResolver) -> bool:
     """判断磁盘当前是否处于「Agent 改完态（after）」，即反向操作本应撤销掉的内容。
 
     R6 软冲突防护（解法 A）的对称判定：与 ``_is_already_reverted`` 互补——
@@ -478,7 +478,7 @@ def _is_at_after_state(operation: PatchOperation, resolver: ProjectPathResolver)
     返回:
         True 表示磁盘处于 Agent 改完态（应正常 apply 撤销）；False 表示不是。
     """
-    resolved, err = resolver.resolve(operation.file_path)
+    resolved, err = resolver.resolve_within_workspace(operation.file_path)
     if resolved is None or err:
         return False
     if operation.operation == OperationType.ADD:
@@ -511,7 +511,7 @@ def _is_at_after_state(operation: PatchOperation, resolver: ProjectPathResolver)
             after_content
         ).rstrip("\r\n")
     else:  # OperationType.MOVE：目标已移到 new_path 且源不存在
-        dst, dst_err = resolver.resolve(operation.new_path or "")
+        dst, dst_err = resolver.resolve_within_workspace(operation.new_path or "")
         if dst is None or dst_err or not Path(dst).exists():
             return False
         return not Path(resolved).exists()

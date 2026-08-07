@@ -1314,7 +1314,7 @@ def test_changes_api_revert_file(isolated_storage, api_client):
 
 def test_change_diff_stats_modified():
     """modified 文件按 before/after 逐行 diff 统计增删。"""
-    from app.tools.tool_execute.tool_scheduler import _change_diff_stats
+    from app.hook.builtins.file_snapshot_hook import _change_diff_stats
 
     stats = _change_diff_stats(
         [
@@ -1331,7 +1331,7 @@ def test_change_diff_stats_modified():
 
 def test_change_diff_stats_added_and_deleted():
     """added 全计新增、deleted 全计删除。"""
-    from app.tools.tool_execute.tool_scheduler import _change_diff_stats
+    from app.hook.builtins.file_snapshot_hook import _change_diff_stats
 
     stats = _change_diff_stats(
         [
@@ -1354,7 +1354,7 @@ def test_change_diff_stats_added_and_deleted():
 
 def test_change_diff_stats_moved_is_zero():
     """moved 不计增删（0/0）。"""
-    from app.tools.tool_execute.tool_scheduler import _change_diff_stats
+    from app.hook.builtins.file_snapshot_hook import _change_diff_stats
 
     stats = _change_diff_stats(
         [

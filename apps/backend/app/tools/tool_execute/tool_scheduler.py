@@ -1,15 +1,12 @@
 """工具调度器：对模型请求的工具调用做权限门禁 + 参数校验 + 隔离执行编排。"""
 
 import dataclasses
-import enum
-import json
 from collections.abc import Callable, Collection
 
-from app.config.logging.logger import log
-from app.hook.hook_event import HookDecision
+from app.hook import HookContext
+from app.hook.hook_event import HookDecision, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
-from app.models.file_snapshot_record import FileSnapshotRecord
-from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
+from app.hook.hook_result import HookResult
 from app.tools.guard.display_data_budget import DisplayDataBudget
 from app.tools.guard.file_resource_paths import FileResourcePathError
 from app.tools.guard.file_tool_state_coordinator import (
@@ -24,17 +21,9 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_executor import ToolExecutor
-from app.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
-from app.tools.tool_handler.patch.patch_parser import PatchOperation
-from app.tools.tool_handler.patch.v4a_reverse import (
-    build_forward_operations,
-    reverse_v4a_operation,
-)
 from app.tools.tool_handler.terminal import OutputSink
 from app.tools.tool_registry import ToolRegistry
 from app.tools.validation.arguments import validate_tool_arguments
-
-_WORKSPACE_REQUIRED_PERMISSIONS = frozenset({"file_write", "file_delete"})
 
 
 class ToolScheduler:
@@ -143,6 +132,8 @@ class ToolScheduler:
             委派 :class:`ToolExecutor` 启动子进程执行；可能因权限或参数
             校验失败而短路返回，不进入执行阶段。
         """
+        if execution_context is None:
+            raise ValueError("execution_context is required")
 
         # 检查工具是否存在
         tool = self._registry.get_tool_definition(call.tool_name)
@@ -181,24 +172,6 @@ class ToolScheduler:
                 execution_context,
             )
 
-        # 检查工具是否需要工作区执行上下文
-        if execution_context is None and tool.permission in _WORKSPACE_REQUIRED_PERMISSIONS:
-            return self._apply_output_budget(
-                tool_error(
-                    tool.name,
-                    f"{tool.name} requires a workspace execution context",
-                    reason=(
-                        f"'{tool.name}' requires a workspace execution context "
-                        f"(task/workspace/root path), but none was supplied; this is "
-                        f"deterministic, so run it inside a task that provides a "
-                        f"workspace, otherwise the same call will always fail."
-                    ),
-                    permission=tool.permission,
-                    tool_call_id=call.call_id,
-                ),
-                execution_context,
-            )
-
         # 检查工具参数是否合法
         validation = validate_tool_arguments(
             call.arguments,
@@ -228,7 +201,17 @@ class ToolScheduler:
         # tool_error 且不执行工具、不触发 after_tool_call；改写参数时替换
         # validation.arguments 后再继续。注册表未初始化 / Hook 异常时 HookInterceptor
         # 兜底放行（失败安全）。
-        decision = HookInterceptor.before_tool_call(tool, execution_context, validation.arguments)
+        decision = (
+            HookInterceptor.safe_fire(
+                HookContext.from_locatable(
+                    event=HookEvent.PRE_TOOL_USE,
+                    locatable=execution_context,
+                    tool_name=tool.name,
+                    tool_arguments=validation.arguments,
+                )
+            )
+            or HookResult.allow()
+        )
         if decision.decision == HookDecision.DENY:
             return self._apply_output_budget(
                 tool_error(
@@ -243,202 +226,99 @@ class ToolScheduler:
         if decision.modified_arguments is not None:
             validation = dataclasses.replace(validation, arguments=decision.modified_arguments)
 
-        # 仅触碰文件系统的工具走文件状态协调（revision/stale/锁）；
-        # 非文件工具（如 execute_terminal）直接执行，避免把文件协调机制
-        # 错配到无关资源上。
-        if "filesystem" in tool.resource_keys:
-            try:
-                plan = self._state_coordinator.prepare(
+        # 统一执行管线：文件工具经状态协调（revision/stale/锁）；非文件工具由
+        # 协调器短路为空计划直接执行（lock/check_stale/complete 全 no-op）。
+        # 单一路径避免双分支重复 execute+hook 编排。
+        try:
+            plan = self._state_coordinator.prepare(
+                tool,
+                validation.arguments,
+                execution_context,
+                tool_call_id=call.call_id,
+            )
+        # FileResourcePathError 继承自 ValueError，必须在前面的 except 命中；若被
+        # 调到下方宽泛 (OSError, RuntimeError, ValueError) 分支，将丢失面向模型的
+        # 富文本 reason、退化为泛化文案。此顺序是显式契约，改动前须确认。
+        except FileResourcePathError as exc:
+            return self._apply_output_budget(
+                tool_error(
+                    tool.name,
+                    str(exc),
+                    reason=exc.reason,
+                    permission=tool.permission,
+                    tool_call_id=call.call_id,
+                ),
+                execution_context,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return self._apply_output_budget(
+                tool_error(
+                    tool.name,
+                    f"invalid file path: {exc}",
+                    reason=(
+                        f"the file path is invalid: {exc}; this is deterministic, "
+                        f"so pass a well-formed path inside the project. The same "
+                        f"malformed path will always be rejected."
+                    ),
+                    permission=tool.permission,
+                    tool_call_id=call.call_id,
+                ),
+                execution_context,
+            )
+
+        if plan.early_observation is not None:
+            return self._apply_output_budget(plan.early_observation, execution_context)
+
+        try:
+            with self._state_coordinator.lock(plan, execution_context):
+                stale_observation = self._state_coordinator.check_stale(
+                    plan,
                     tool,
-                    validation.arguments,
                     execution_context,
                     tool_call_id=call.call_id,
                 )
-            except FileResourcePathError as exc:
-                return self._apply_output_budget(
-                    tool_error(
-                        tool.name,
-                        str(exc),
-                        reason=str(exc),
-                        permission=tool.permission,
-                        tool_call_id=call.call_id,
-                    ),
+                if stale_observation is not None:
+                    return self._apply_output_budget(stale_observation, execution_context)
+                observation = self._executor.execute(
+                    tool,
+                    validation.arguments,
+                    execution_context=execution_context,
+                    tool_call_id=call.call_id,
+                    should_cancel=should_cancel,
+                    output_sink=output_sink,
+                )
+                self._state_coordinator.complete(
+                    plan,
+                    observation,
                     execution_context,
                 )
-            except (OSError, RuntimeError, ValueError) as exc:
-                return self._apply_output_budget(
-                    tool_error(
-                        tool.name,
-                        f"invalid file path: {exc}",
-                        reason=(
-                            f"the file path is invalid: {exc}; this is deterministic, "
-                            f"so pass a well-formed path inside the project. The same "
-                            f"malformed path will always be rejected."
-                        ),
-                        permission=tool.permission,
-                        tool_call_id=call.call_id,
+        except RuntimeError as exc:
+            return self._apply_output_budget(
+                tool_error(
+                    tool.name,
+                    str(exc),
+                    reason=(
+                        f"the file state coordinator could not process the "
+                        f"request: {exc}; this is usually transient (e.g. a "
+                        f"temporary capacity or lock limit), so retrying the same "
+                        f"call may succeed once the condition clears."
                     ),
-                    execution_context,
-                )
-
-            if plan.early_observation is not None:
-                return self._apply_output_budget(plan.early_observation, execution_context)
-
-            try:
-                with self._state_coordinator.lock(plan, execution_context):
-                    stale_observation = self._state_coordinator.check_stale(
-                        plan,
-                        tool,
-                        execution_context,
-                        tool_call_id=call.call_id,
-                    )
-                    if stale_observation is not None:
-                        return self._apply_output_budget(stale_observation, execution_context)
-                    observation = self._executor.execute(
-                        tool,
-                        validation.arguments,
-                        execution_context=execution_context,
-                        tool_call_id=call.call_id,
-                        should_cancel=should_cancel,
-                        output_sink=output_sink,
-                    )
-                    self._state_coordinator.complete(
-                        plan,
-                        observation,
-                        execution_context,
-                    )
-                    self._record_file_snapshot(tool, observation, execution_context)
-                    self._fire_after_intercept(tool, execution_context, observation)
-            except RuntimeError as exc:
-                return self._apply_output_budget(
-                    tool_error(
-                        tool.name,
-                        str(exc),
-                        reason=(
-                            f"the file state coordinator could not process the "
-                            f"request: {exc}; this is usually transient (e.g. a "
-                            f"temporary capacity or lock limit), so retrying the same "
-                            f"call may succeed once the condition clears."
-                        ),
-                        retryable=True,
-                        permission=tool.permission,
-                        tool_call_id=call.call_id,
-                    ),
-                    execution_context,
-                )
-        else:
-            observation = self._executor.execute(
-                tool,
-                validation.arguments,
-                execution_context=execution_context,
-                tool_call_id=call.call_id,
-                should_cancel=should_cancel,
-                output_sink=output_sink,
+                    retryable=True,
+                    permission=tool.permission,
+                    tool_call_id=call.call_id,
+                ),
+                execution_context,
             )
-            self._record_file_snapshot(tool, observation, execution_context)
-            self._fire_after_intercept(tool, execution_context, observation)
+
+        HookInterceptor.safe_fire(
+            HookContext.from_locatable(
+                event=HookEvent.POST_TOOL_USE,
+                locatable=execution_context,
+                tool_name=tool.name,
+                tool_observation=observation,
+            )
+        )
         return self._apply_output_budget(observation, execution_context)
-
-    def _fire_after_intercept(
-        self,
-        tool: ToolDefinition,
-        execution_context: ToolExecutionContext | None,
-        observation: ToolObservation,
-    ) -> None:
-        """PostToolUse 拦截点（Hook 机制）：工具真实执行拿到 observation 后触发。
-
-        直接调用 ``HookInterceptor.after_tool_call`` 静态方法（审计切面）。其实现内部已
-        兜底异常（失败安全：审计切面不得影响主流程）。当前 after 决策的拒绝不阻断。
-
-        参数:
-            tool: 已执行工具的定义。
-            execution_context: 工具执行上下文（提供 workspace_id / task_id / turn_id）。
-            observation: 工具执行的归一化结果（``ToolObservation``）。
-
-        返回:
-            无。
-
-        异常:
-            无（异常由 ``HookInterceptor.after_tool_call`` 内部兜底）。
-
-        副作用:
-            触发 ``HookInterceptor.after_tool_call``，进而写入审计日志。
-        """
-        HookInterceptor.after_tool_call(tool, execution_context, observation)
-
-    def _record_file_snapshot(
-        self,
-        tool: ToolDefinition,
-        observation: ToolObservation,
-        execution_context: ToolExecutionContext | None,
-    ) -> None:
-        """在文件工具成功执行后采集反向操作快照，供 Turn 回退按 turn 精准还原。
-
-        采集逻辑（方案 §五）：从 ``observation.data["changes"]``（采集层事实
-        快照）构造正向 V4A，再反转为反向操作；仅落库「碰过文件的 filesystem 工具」
-        且执行成功、且带 ``turn_id`` 的调用。``execute_terminal`` 不产 ``changes``，
-        自然跳过（其副作用不入快照，见方案 D5）。采集失败只记 warning 日志，不阻断
-        工具主流程（方案 §六 可重入要求）。
-
-        参数:
-            tool: 被执行工具的定义（提供 ``name`` 作为快照 ``tool_name``）。
-            observation: 归一化后的工具观察结果。
-            execution_context: 本次执行的运行时边界（取其 ``turn_id``）。
-
-        返回:
-            无。
-
-        异常:
-            内部吞掉并转 warning 日志：采集异常绝不冒泡到工具主流程。
-
-        副作用:
-            向 ``file_snapshots`` 表写入 0~N 条反向操作记录（每个变更文件一条），
-            每条记录同时写入该次变更相对上一次的 diff 增删行数（``additions`` /
-            ``deletions``，moved 计 0/0），供变更集行内展示。
-        """
-        if observation.status != "success":
-            return
-        if execution_context is None or not execution_context.turn_id:
-            return
-        data = observation.data
-        if not data:
-            return
-        changes = data.get("changes")
-        if not changes:
-            return
-        try:
-            forward_ops = build_forward_operations(changes)
-            # 每个文件的 diff 增删行数（顺序与 changes 一致；MOVE 计 0/0）。
-            diff_stats = _change_diff_stats(changes)
-            crud = FileSnapshotCrud()
-            next_seq = crud.next_seq(execution_context.turn_id)
-            for offset, forward in enumerate(forward_ops):
-                reverse_op = reverse_v4a_operation(forward)
-                additions, deletions = diff_stats[offset] if offset < len(diff_stats) else (0, 0)
-                crud.save(
-                    FileSnapshotRecord(
-                        turn_id=execution_context.turn_id,
-                        seq=next_seq + offset,
-                        tool_name=tool.name,
-                        tool_call_id=observation.tool_call_id,
-                        path=forward.file_path,
-                        action=forward.operation.value,
-                        op_json=_reverse_op_to_json(reverse_op),
-                        additions=additions,
-                        deletions=deletions,
-                    )
-                )
-        except Exception:
-            log.exception(
-                "file_snapshot_record_failed",
-                extra={
-                    "msg": "文件快照采集失败，回退时可能丢失该次文件改动还原能力",
-                    "data": {
-                        "turn_id": execution_context.turn_id,
-                        "tool_name": tool.name,
-                    },
-                },
-            )
 
     def _apply_output_budget(
         self,
@@ -467,76 +347,3 @@ class ToolScheduler:
 
         budgeted = self._output_budget.apply(observation, execution_context)
         return self._display_data_budget.apply(budgeted)
-
-
-def _change_diff_stats(changes: list[dict]) -> list[tuple[int, int]]:
-    """计算采集快照中每个文件的 diff 增删行数。
-
-    复用 ``patch_diff.build_diff_stats`` 的 difflib 逐行统计，避免重复实现差异算法：
-    - ``added``：全部 after 行计为新增，deletions 为 0。
-    - ``deleted``：全部 before 行计为删除，additions 为 0。
-    - ``modified``：按 before/after 逐行 diff 统计增删。
-    - ``moved``：计 0/0。
-
-    参数:
-        changes: ``display_data["changes"]`` 中的单文件变更字典列表，每个含
-            ``path`` / ``new_path`` / ``status`` / ``before`` / ``after``。
-
-    返回:
-        与 ``changes`` 顺序一致的 ``(additions, deletions)`` 二元组列表。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-    results = [
-        FileDiffResult(
-            path=change.get("path", ""),
-            status=change.get("status", "modified"),
-            before=change.get("before", ""),
-            after=change.get("after", ""),
-            new_path=change.get("new_path"),
-        )
-        for change in changes
-    ]
-    stats = build_diff_stats(results)
-    return [
-        (int(f.get("insertions", 0)), int(f.get("deletions", 0))) for f in stats.get("files", [])
-    ]
-
-
-def _reverse_op_to_json(reverse_op: "PatchOperation") -> str:
-    """把反向 PatchOperation 投影为可 JSON 序列化的字典字符串。
-
-    采用 ``dataclasses.asdict`` 保留与 ``PatchOperation(**data)`` 兼容的嵌套结构
-    （``hunks`` → ``{"lines": [{"prefix", "content"}]}``），仅把 ``OperationType``
-    枚举落为 ``value`` 字符串以满足 JSON 序列化，确保回退侧可直接
-    ``PatchOperation(**json.loads(op_json))`` 重建。
-
-    参数:
-        reverse_op: 已构造的反向 PatchOperation（含 OperationType 枚举与嵌套 Hunk）。
-
-    返回:
-        JSON 字符串；结构与 ``PatchOperation`` 构造参数一致。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    def _enum_to_value(obj: object) -> object:
-        if isinstance(obj, enum.Enum):
-            return obj.value
-        if isinstance(obj, dict):
-            return {k: _enum_to_value(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_enum_to_value(v) for v in obj]
-        return obj
-
-    raw = dataclasses.asdict(reverse_op)
-    serializable = _enum_to_value(raw)
-    return json.dumps(serializable, ensure_ascii=False)

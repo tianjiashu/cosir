@@ -192,7 +192,7 @@ class ToolExecutionService:
 
             # 运行中实时广播：本工具调用产生文件变更时，广播 FILE_CHANGE_UPDATED 驱动
             # 前端即时展示（不持久化到 runtime_events，数据源仍在 file_snapshots 表）。
-            # 采集在 ToolScheduler._record_file_snapshot 完成（含 stable=0 运行中态）。
+            # 采集在 FileSnapshotHook（POST_TOOL_USE 内置 Hook）完成（含 stable=0 运行中态）。
             # 缺 event_bus 或 loop 时跳过（降级为仅全量查询可见）。
             if (
                 self._event_bus is not None
@@ -338,7 +338,8 @@ class ToolExecutionService:
             return
         try:
             # 复用既有 diff 统计能力计算每文件增删行数，避免重复实现差异算法。
-            # 与采集层 ``_change_diff_stats`` 保持同一语义（status 映射由 build_diff_stats 处理）。
+            # 与采集层 FileSnapshotHook._change_diff_stats 保持同一语义
+            # （status 映射由 build_diff_stats 处理）。
             diff_results = [
                 FileDiffResult(
                     path=str(change.get("path", "")),

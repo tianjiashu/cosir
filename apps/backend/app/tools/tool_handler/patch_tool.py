@@ -45,7 +45,7 @@ from app.tools.tool_handler.patch.file_change_display import (
     build_file_change_display_data,
 )
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.patch_args import PatchArgs
 
@@ -171,7 +171,7 @@ class PatchTool(HandlerBase):
         副作用:
             命中时原子回写目标文件；patch 模式按操作逐文件修改文件系统。
         """
-        resolver = ProjectPathResolver(execution_context.workspace_root)
+        resolver = PathResolver(execution_context.workspace_root)
         if mode == "replace":
             return self._execute_replace(path, old_string, new_string, replace_all, resolver)
         if mode == "patch":
@@ -193,7 +193,7 @@ class PatchTool(HandlerBase):
         old_string: str | None,
         new_string: str | None,
         replace_all: bool,
-        resolver: ProjectPathResolver,
+        resolver: PathResolver,
     ) -> ToolObservation:
         """replace 模式：单文件模糊查找替换，复刻原 edit_file 逻辑。
 
@@ -247,7 +247,7 @@ class PatchTool(HandlerBase):
                 reason=blocked_device_reason("patched"),
                 permission=self.permission,
             )
-        resolved, error = resolver.resolve(path)
+        resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
             return tool_error(
                 self.name,
@@ -351,7 +351,7 @@ class PatchTool(HandlerBase):
             data=build_file_change_display_data([snapshot]),
         )
 
-    def _execute_patch(self, patch: str | None, resolver: ProjectPathResolver) -> ToolObservation:
+    def _execute_patch(self, patch: str | None, resolver: PathResolver) -> ToolObservation:
         """patch 模式：解析并应用 V4A 补丁，复刻原 apply_patch 逻辑。
 
         参数:
@@ -460,7 +460,7 @@ class PatchTool(HandlerBase):
         for r in results:
             if r.status not in ("modified", "added"):
                 continue
-            resolved_path, _ = resolver.resolve(r.path)
+            resolved_path, _ = resolver.resolve_within_workspace(r.path)
             if resolved_path is None:
                 continue
             check = check_source_syntax(str(resolved_path), r.after)

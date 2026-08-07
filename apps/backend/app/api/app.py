@@ -40,6 +40,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
+from app.hook import HookContext, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import close_service_dependencies, initialize_service_dependencies
 from app.tools.tool_system import ToolSystem
@@ -116,14 +117,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
-    HookInterceptor.fire_session_event("SessionStart")
-
+    HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_START))
     _mark_boot_ready()
     try:
         yield
     finally:
         # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
-        HookInterceptor.fire_session_event("SessionEnd")
+        HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
         if _kernel_supervisor is not None:
             _kernel_supervisor.shutdown()
         flush_langfuse()

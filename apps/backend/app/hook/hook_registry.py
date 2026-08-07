@@ -1,20 +1,19 @@
-"""Hook 注册表与执行门面。
+"""Hook 注册表（纯索引，执行编排已迁移至 HookInterceptor）。
 
-单一职责：按 ``event`` 索引已注册的 ``HookBase`` 实例，并在触发时编排执行。
-它兼任「索引」与「执行」两个职责——这是经过方案审查确认的收敛设计
-（``Hook机制技术方案.md`` §二），拆分阈值见下。
+单一职责：按 ``event`` 索引已注册的 ``HookBase`` 实例，只负责「索引」一维
+（``register`` / ``resolve_for`` / ``list``）。「执行编排」已迁至
+``app.hook.hook_interceptor.HookInterceptor.fire``（即 Hook 机制的对外拦截收口点），
+本模块不再承担触发时的编排职责（拆分见 ``Hook机制技术方案.md`` §二）。
 
 失败安全语义：任何 Hook 抛异常、超时、或返回非法结果，均不阻断主流程，
-统一兜底为 ``ALLOW`` 并写 error 日志（含 hook 名与事件，便于定位）。
+统一由 ``HookInterceptor.fire`` 兜底为 ``ALLOW`` 并写 error 日志。
 """
 
 from __future__ import annotations
 
 from app.config.logging.logger import log
 from app.hook.hook_base import HookBase
-from app.hook.hook_context import HookContext
-from app.hook.hook_event import HookDecision, HookEvent
-from app.hook.hook_result import HookResult
+from app.hook.hook_event import HookEvent
 
 # 进程级单例。运行期只读（注册只在启动期单线程播种，见 bootstrap_hooks），
 # 因此无需加锁；__init__ 也保持无锁，避免运行期初始化竞态（AGENTS.md 约定）。
@@ -22,15 +21,17 @@ _registry: HookRegistry | None = None
 
 
 class HookRegistry:
-    """按事件索引并编排执行 Hook 的注册表。
+    """按事件索引 Hook 的注册表（纯索引，不负责执行编排）。
 
-    职责边界：索引（register / resolve_for / list）+ 执行（fire）。不持有业务状态、
-    不依赖 service / tools 执行层、不解析配置（本机制无配置层，决策 D3）。
+    职责边界：索引（register / resolve_for / list）。执行编排（``fire`` 的失败安全
+    聚合：matches 过滤、DENY 短路、modified_arguments 合并、additional_context 拼接）
+    已迁至 ``HookInterceptor.fire``，由其对注册表执行 ``resolve_for`` 取 Hook 后编排。
+    本类不持有业务状态、不依赖 service / tools 执行层、不解析配置（本机制无配置层，
+    决策 D3）。
 
-    拆分阈值（``Hook机制技术方案.md`` §二）：当订阅方出现「执行前需做 A、B、C
-    三类横切校验」且逻辑可独立成模块时，把 ``fire`` 中的编排抽成独立的
-    ``HookExecutor``；当注册来源从「启动期硬编码」扩展为「多来源动态注册」时，
-    把索引抽成独立的 ``HookIndex``。当前订阅方仅 1 个内置 Hook，未达阈值。
+    拆分依据（``Hook机制技术方案.md`` §二）：当执行编排需「执行前做 A、B、C 三类
+    横切校验」且逻辑可独立成模块时，把编排从索引抽离成独立的执行器——即
+    ``HookInterceptor``（所有拦截点的统一收口），索引只保留注册与查询。
     """
 
     def __init__(self) -> None:
@@ -108,97 +109,6 @@ class HookRegistry:
         for hooks in self._subs.values():
             result.extend(hooks)
         return result
-
-    def fire(self, context: HookContext) -> HookResult:
-        """触发某事件下所有 Hook，按失败安全语义聚合结果。
-
-        编排规则：
-        - 取 ``context.event`` 下全部 Hook；
-        - 依次 ``matches(context)`` 过滤，未命中跳过；
-        - 命中者 ``execute(context)``；任一抛异常 / 超时 → 兜底 ``ALLOW`` 并记 error；
-        - 首个 ``DENY`` 立即短路返回（后续 Hook 不再执行）；
-        - ``PRE_TOOL_USE`` 下首个 ``modified_arguments`` 生效（覆盖式，后者覆盖前者）；
-        - 空订阅列表 → 直接返回 ``ALLOW``（零开销）。
-
-        参数:
-            context: 触发上下文（只读，Hook 不得修改）。
-
-        返回:
-            聚合后的 ``HookResult``：``decision`` 为首个 DENY 或最终 ALLOW；
-            ``modified_arguments`` 为命中 Hook 中最后一个非空的改写值；
-            ``additional_context`` 为所有命中 Hook 的非空 ``additional_context`` 拼接
-            （换行分隔，首版无消费方，仅作通道占位，见 ``Hook机制技术方案.md`` §6.3）。
-
-        异常:
-            无（任何失败均兜底为 ``ALLOW``）。
-
-        副作用:
-            可能写 error / warning 日志（Hook 异常或 DENY）；不修改 ``context``。
-        """
-        hooks = self.resolve_for(context.event)
-        if not hooks:
-            return HookResult.allow()
-
-        merged_args: dict | None = None
-        context_parts: list[str] = []
-
-        for hook in hooks:
-            if not hook.matches(context):
-                continue
-            try:
-                result = hook.execute(context)
-            except Exception:
-                log.exception(
-                    "hook_execute_failed",
-                    extra={
-                        "msg": "Hook 执行异常，按 ALLOW 兜底放行",
-                        "data": {
-                            "hook_name": hook.name,
-                            "event": context.event.value,
-                            "tool_name": context.tool_name,
-                        },
-                    },
-                )
-                continue
-
-            if result is None or not isinstance(result, HookResult):
-                log.error(
-                    "hook_invalid_result",
-                    extra={
-                        "msg": "Hook 返回非 HookResult，按 ALLOW 兜底放行",
-                        "data": {
-                            "hook_name": hook.name,
-                            "event": context.event.value,
-                        },
-                    },
-                )
-                continue
-
-            if result.decision == HookDecision.DENY:
-                log.warning(
-                    "hook_denied",
-                    extra={
-                        "msg": "Hook 拒绝执行",
-                        "data": {
-                            "hook_name": hook.name,
-                            "event": context.event.value,
-                            "tool_name": context.tool_name,
-                            "reason": result.deny_reason,
-                        },
-                    },
-                )
-                return result
-
-            if result.modified_arguments is not None:
-                merged_args = result.modified_arguments
-            if result.additional_context:
-                context_parts.append(result.additional_context)
-
-        return HookResult(
-            decision=HookDecision.ALLOW,
-            modified_arguments=merged_args,
-            additional_context="\n".join(context_parts) if context_parts else None,
-        )
 
 
 def initialize_hook_registry() -> HookRegistry:

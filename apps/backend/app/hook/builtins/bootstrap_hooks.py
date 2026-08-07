@@ -1,10 +1,10 @@
 """内置 Hook 播种入口。
 
 单一职责：把首版内置 Hook 注册进给定的 ``HookRegistry``。无配置层（决策 D3），
-内置 Hook 在启动期硬编码播种。当前两个内置 Hook：
+内置 Hook 在启动期硬编码播种。当前内置 Hook：
 
-- ``ToolAuditHook``：验证 Hook 机制最小可用性（事件型，无业务副作用）。
 - ``CodeGraphIndexPrepareHook``：每次 turn 前保活 CodeGraph 索引（USER_PROMPT_SUBMIT）。
+- ``FileSnapshotHook``：文件类工具成功后采集回退快照（POST_TOOL_USE）。
 
 CodeGraph 不可用时（Kernel 未就绪 / client 未注入），``CodeGraphIndexPrepareHook``
 的 ``ensure_ready`` 内部降级为 ``ready=False`` 且不抛异常，注册阶段构造失败也应
@@ -17,7 +17,7 @@ from app.config.logging.logger import log
 from app.hook.builtins.codegraph_index_prepare_hook import (
     CodeGraphIndexPrepareHook,
 )
-from app.hook.builtins.tool_audit_hook import ToolAuditHook
+from app.hook.builtins.file_snapshot_hook import FileSnapshotHook
 from app.hook.hook_registry import HookRegistry
 
 
@@ -36,8 +36,35 @@ def bootstrap_hooks(registry: HookRegistry) -> None:
     副作用:
         向 ``registry`` 写入内置 Hook 订阅（运行期只读，仅启动期调用一次）。
     """
-    registry.register(ToolAuditHook())
     _register_codegraph_prepare_hook(registry)
+    _register_file_snapshot_hook(registry)
+
+
+def _register_file_snapshot_hook(registry: HookRegistry) -> None:
+    """注册文件快照采集 Hook（POST_TOOL_USE）。
+
+    该 Hook 为系统内部数据流水线（文件回退快照），无业务副作用、失败安全；
+    作为启动期强制播种的内置 Hook，运行期只读，不会被用户裁剪。
+
+    参数:
+        registry: 待播种的 ``HookRegistry`` 实例。
+
+    返回:
+        无。
+
+    异常:
+        不向外抛出：构造/注册异常一律记 error 日志后吞掉。
+
+    副作用:
+        向 ``registry`` 写入一条 POST_TOOL_USE 订阅。
+    """
+    try:
+        registry.register(FileSnapshotHook())
+    except Exception:
+        log.exception(
+            "file_snapshot_hook_register_failed",
+            extra={"msg": "文件快照 Hook 注册失败，跳过（不影响主流程）"},
+        )
 
 
 def _register_codegraph_prepare_hook(registry: HookRegistry) -> None:

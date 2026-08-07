@@ -22,7 +22,7 @@ from app.tools.tool_handler.patch.patch_parser import (
     OperationType,
     PatchOperation,
 )
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 
 
 class PatchApplyError(RuntimeError):
@@ -49,7 +49,7 @@ class PatchApplyError(RuntimeError):
         self.partial_applied = partial_applied
 
 
-def _resolve_patch_path(resolver: ProjectPathResolver, path: str) -> tuple[Path | None, str]:
+def _resolve_patch_path(resolver: PathResolver, path: str) -> tuple[Path | None, str]:
     """解析并校验 patch header 中的单个路径。
 
     参数:
@@ -69,7 +69,7 @@ def _resolve_patch_path(resolver: ProjectPathResolver, path: str) -> tuple[Path 
     device_error = resolver.blocked_device_reason(path)
     if device_error:
         return None, device_error
-    resolved, error = resolver.resolve(path)
+    resolved, error = resolver.resolve_within_workspace(path)
     if resolved is None:
         return None, error
     device_error = resolver.blocked_device_reason(path, resolved)
@@ -118,7 +118,7 @@ def _hunk_replace(hunk: Hunk) -> str:
 
 def validate_all(
     operations: list[PatchOperation],
-    resolver: ProjectPathResolver,
+    resolver: PathResolver,
 ) -> list[str]:
     """校验全部 patch 操作而不落盘。
 
@@ -203,7 +203,7 @@ def validate_all(
 
 def apply_all(
     operations: list[PatchOperation],
-    resolver: ProjectPathResolver,
+    resolver: PathResolver,
 ) -> None:
     """在校验通过后逐文件应用 patch 操作。
 
@@ -232,7 +232,7 @@ def apply_all(
 
 def apply_all_with_diff(
     operations: list[PatchOperation],
-    resolver: ProjectPathResolver,
+    resolver: PathResolver,
 ) -> list[FileDiffResult]:
     """在校验通过后逐文件应用 patch 操作并捕获 before/after 快照。
 
@@ -263,7 +263,7 @@ def apply_all_with_diff(
     return results
 
 
-def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -> FileDiffResult:
+def _apply_operation(operation: PatchOperation, resolver: PathResolver) -> FileDiffResult:
     """应用单个已校验的 patch 操作并返回差异快照。
 
     参数:
@@ -282,7 +282,7 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
     """
 
     if operation.operation == OperationType.ADD:
-        resolved, _ = resolver.resolve(operation.file_path)
+        resolved, _ = resolver.resolve_within_workspace(operation.file_path)
         assert resolved is not None
         if os.path.lexists(resolved):
             raise RuntimeError(f"{operation.file_path}: destination already exists")
@@ -310,7 +310,7 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
         )
 
     if operation.operation == OperationType.DELETE:
-        resolved, _ = resolver.resolve(operation.file_path)
+        resolved, _ = resolver.resolve_within_workspace(operation.file_path)
         assert resolved is not None
         before = Path(resolved).read_text(encoding="utf-8")
         _require_same_resolution(resolver, operation.file_path, resolved)
@@ -323,8 +323,8 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
         )
 
     if operation.operation == OperationType.MOVE:
-        src, _ = resolver.resolve(operation.file_path)
-        dst, _ = resolver.resolve(operation.new_path or "")
+        src, _ = resolver.resolve_within_workspace(operation.file_path)
+        dst, _ = resolver.resolve_within_workspace(operation.new_path or "")
         assert src is not None and dst is not None
         if os.path.lexists(dst):
             raise RuntimeError(f"{operation.new_path}: destination already exists")
@@ -340,7 +340,7 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
             new_path=operation.new_path or "",
         )
 
-    resolved, _ = resolver.resolve(operation.file_path)
+    resolved, _ = resolver.resolve_within_workspace(operation.file_path)
     assert resolved is not None
     # 显式完整内容（content，整文件目标态）优先：直接覆盖还原，绕开 fuzzy 行匹配，
     # 正确处理「after 为空（清空）/ before 为空（整文件新增）」等整文件变更场景，
@@ -393,7 +393,7 @@ def _apply_operation(operation: PatchOperation, resolver: ProjectPathResolver) -
 
 
 def _require_same_resolution(
-    resolver: ProjectPathResolver,
+    resolver: PathResolver,
     path: str,
     expected: Path,
 ) -> None:
@@ -414,6 +414,6 @@ def _require_same_resolution(
         仅读取路径元数据。
     """
 
-    current, error = resolver.resolve(path)
+    current, error = resolver.resolve_within_workspace(path)
     if current is None or error or current != expected:
         raise RuntimeError(f"{path}: path changed before mutation")

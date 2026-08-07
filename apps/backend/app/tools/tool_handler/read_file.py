@@ -23,7 +23,7 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_error import os_error_message, tool_error
 from app.tools.tool_execute.tool_success import tool_success
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
@@ -157,7 +157,7 @@ class ReadFileTool(HandlerBase):
             只读文件系统，不写入任何文件。
         """
         root = execution_context.workspace_root
-        resolver = ProjectPathResolver(root)
+        resolver = PathResolver(root)
         ## 阶段1：对原始字符串做设备名/posix 禁止路径的 fail-fast 拦截
         device_error = resolver.blocked_device_reason(path)
         if device_error:
@@ -169,7 +169,7 @@ class ReadFileTool(HandlerBase):
             )
 
         # 解析路径、相对路径转绝对路径
-        resolved, error = resolver.resolve_unrestricted(path)
+        resolved, error = resolver.resolve_without_boundary(path)
         if resolved is None:
             return tool_error(
                 self.name,

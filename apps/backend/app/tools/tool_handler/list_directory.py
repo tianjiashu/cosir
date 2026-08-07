@@ -22,7 +22,7 @@ from app.tools.schemas import (
 )
 from app.tools.tool_execute.tool_error import blocked_device_reason, tool_error
 from app.tools.tool_execute.tool_success import tool_success
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.list_directory_args import ListDirectoryArgs
 
@@ -106,7 +106,7 @@ class ListDirectoryTool(HandlerBase):
             只读目录结构，不修改文件系统。
         """
         root = execution_context.workspace_root
-        resolver = ProjectPathResolver(root)
+        resolver = PathResolver(root)
         device_error = resolver.blocked_device_reason(path)
         if device_error:
             return tool_error(
@@ -115,7 +115,7 @@ class ListDirectoryTool(HandlerBase):
                 reason=blocked_device_reason("listed"),
                 permission=self.permission,
             )
-        resolved, error = resolver.resolve_unrestricted(path)
+        resolved, error = resolver.resolve_without_boundary(path)
         if resolved is None:
             return tool_error(
                 self.name,

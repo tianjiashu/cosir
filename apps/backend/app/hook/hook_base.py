@@ -1,8 +1,9 @@
 """Hook 基类（内置与未来 Hook 的共同抽象）。
 
 单一职责：定义「一个 Hook 是什么、如何被触发、如何被匹配」的抽象契约。
-它不持有注册表、不负责执行编排（那是 ``HookRegistry`` 的职责），也不依赖任何
-业务层。子类只需实现 ``execute`` 并声明 ``event`` / ``matcher`` / ``name``。
+它不持有注册表、不负责执行编排（那是 ``HookInterceptor.fire`` 的职责，
+索引归 ``HookRegistry``），也不依赖任何业务层。子类只需实现 ``execute`` 并声明
+``event`` / ``matcher`` / ``name``。
 """
 
 from __future__ import annotations
@@ -121,7 +122,7 @@ class HookBase(ABC):
 
         异常:
             子类应自行捕获内部异常并返回 ``HookResult.allow()``（失败安全）；
-            基类不强制，但抛出未捕获异常会被 ``HookRegistry.fire`` 兜底为 ALLOW。
+            基类不强制，但抛出未捕获异常会被 ``HookInterceptor.fire`` 兜底为 ALLOW。
 
         副作用:
             允许写日志（禁止记录 secret / 敏感个人信息）；不得修改 ``context``。

@@ -63,8 +63,8 @@ def main() -> None:
     """
 
     args = _parse_args()
-    source = args.source.expanduser().resolve()
-    output_dir = args.output.expanduser().resolve()
+    source = args.source.expanduser().resolve_within_workspace()
+    output_dir = args.output.expanduser().resolve_within_workspace()
     _validate_inputs(source)
     output_dir.mkdir(parents=True, exist_ok=True)
 

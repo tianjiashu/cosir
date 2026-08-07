@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.config.settings import Settings
+from app.hook.hook_registry import initialize_hook_registry
 from app.service.depends import reset_service_dependencies
 from app.storage.store_engines import close_storage, init_storage
 
@@ -46,6 +47,7 @@ def isolated_storage(tmp_path: Path) -> Iterator[dict[str, Any]]:
     )
     init_storage()
     reset_service_dependencies()
+    initialize_hook_registry()
     yield {"tmp_path": tmp_path}
     close_storage()
     reset_service_dependencies()

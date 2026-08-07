@@ -26,7 +26,7 @@ from app.tools.tool_handler.search.error_prefixes import (
     INVALID_REGEX_PREFIX,
     PATH_NOT_FOUND_PREFIX,
 )
-from app.tools.tool_handler.security.project_path import ProjectPathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.tool_base import HandlerBase
 from app.tools.tool_models.search_files_args import SearchFilesArgs
 
@@ -118,7 +118,7 @@ class SearchFilesTool(HandlerBase):
             只读文件系统（搜索引擎内部）。
         """
         workspace_root = execution_context.workspace_root
-        resolver = ProjectPathResolver(workspace_root)
+        resolver = PathResolver(workspace_root)
         search_path = path or "."
         device_error = resolver.blocked_recursive_search_reason(search_path)
         if device_error:
@@ -128,7 +128,7 @@ class SearchFilesTool(HandlerBase):
                 reason=blocked_device_reason("searched recursively"),
                 permission=self.permission,
             )
-        resolved_path, path_error = resolver.resolve_unrestricted(search_path)
+        resolved_path, path_error = resolver.resolve_without_boundary(search_path)
         if resolved_path is None:
             return tool_error(
                 self.name,

@@ -199,7 +199,7 @@ def build_tool_system(
 # api/app.py（api 层，lifespan 内），当前 :89~:106 段落
 _kernel_supervisor = await _start_codegraph_kernel()
 
-initialize_hook_registry()          # 新增：必须早于任何 fire 与 interceptor 构造
+initialize_hook_registry()  # 新增：必须早于任何 fire 与 interceptor 构造
 
 if runtime_override is None:
     tool_system = tool_system or ToolSystem.build_tool_system(
@@ -207,9 +207,9 @@ if runtime_override is None:
     )
     ...
 else:
-    ...                             # 覆写分支不注入 interceptor，见下
+    ...  # 覆写分支不注入 interceptor，见下
 
-get_hook_registry().fire(HookContext(event=HookEvent.SESSION_START))   # 新增
+get_hook_registry()._fire(HookContext(event=HookEvent.SESSION_START))  # 新增
 _mark_boot_ready()
 ```
 
