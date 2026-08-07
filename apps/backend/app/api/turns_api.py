@@ -72,9 +72,9 @@ _TERMINAL_EVENT_TYPES = {
 
 @app.post("/tasks/{task_id}/turns")
 async def create_turn(
-    task_id: str,
-    payload: CreateTurnRequest,
-    turn_service: TurnService = Depends(get_turn_service),
+        task_id: str,
+        payload: CreateTurnRequest,
+        turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
     """为已有任务追加一个 pending 轮次。
 
@@ -110,10 +110,10 @@ async def create_turn(
 
 @app.get("/turns/{turn_id}/stream")
 async def stream_turn(
-    turn_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
-    turn_service: TurnService = Depends(get_turn_service),
-    event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
+        turn_id: str,
+        runtime: AgentRuntime = Depends(get_runtime),
+        turn_service: TurnService = Depends(get_turn_service),
+        event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
@@ -174,9 +174,9 @@ async def stream_turn(
 
 @app.post("/turns/{turn_id}/cancel")
 async def cancel_turn(
-    turn_id: str,
-    runtime: AgentRuntime = Depends(get_runtime),
-    turn_service: TurnService = Depends(get_turn_service),
+        turn_id: str,
+        runtime: AgentRuntime = Depends(get_runtime),
+        turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
     """取消指定轮次并中止其运行。
 
@@ -209,11 +209,11 @@ async def cancel_turn(
 
 
 async def _sse_turn_events(
-    runtime: AgentRuntime,
-    turn_id: str,
-    turn: TurnRecord | None = None,
-    event_bus: RuntimeEventBus | None = None,
-    turn_service: TurnService | None = None,
+        runtime: AgentRuntime,
+        turn_id: str,
+        turn: TurnRecord | None = None,
+        event_bus: RuntimeEventBus | None = None,
+        turn_service: TurnService | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
 
@@ -274,7 +274,7 @@ async def _sse_turn_events(
     terminal_received = False
     try:
         async for event in subscription:
-            yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict())}\n\n"
+            yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
             if event.event_type in _TERMINAL_EVENT_TYPES:
                 terminal_received = True
                 # RUN_FINISHED 之后 run_turn 还会发布 file_change_stable（成功路径的
@@ -336,11 +336,11 @@ async def _sse_turn_events(
 
 
 async def _drive_runtime_turn(
-    runtime: AgentRuntime,
-    turn_id: str,
-    turn: TurnRecord | None,
-    event_bus: RuntimeEventBus,
-    turn_service: TurnService | None = None,
+        runtime: AgentRuntime,
+        turn_id: str,
+        turn: TurnRecord | None,
+        event_bus: RuntimeEventBus,
+        turn_service: TurnService | None = None,
 ) -> None:
     """Drive ``run_turn`` as an event producer.
 

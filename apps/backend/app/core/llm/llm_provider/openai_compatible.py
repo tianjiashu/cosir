@@ -20,6 +20,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from app.config.logging.logger import log
+from app.core.llm.model_http_pool import get_shared_model_http_client
 from app.core.llm.model_settings import ModelSettings
 
 
@@ -113,10 +114,14 @@ def build_openai_compatible_chat_model(
             "data": {"model": model_name, "base_url": base_url},
         },
     )
+    # 注入进程级共享 AsyncClient：复用 TCP/TLS 连接，省去每 turn 重复握手；
+    # ChatOpenAI 不会自动关闭传入的客户端，统一由 close_shared_model_http_clients 释放。
+    shared_client = get_shared_model_http_client(base_url)
     return chat_model_class(
         model=model_name,
         base_url=base_url,
         api_key=SecretStr(api_key) if api_key else None,
         streaming=True,
+        http_async_client=shared_client,
         **extra,
     )

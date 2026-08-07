@@ -255,23 +255,6 @@ class AgentRuntime:
                 stamped = event
             self._publish_runtime_event(stamped)
             # 调试：确认思考 delta 确实带内容发射（排除上游 reasoning_content 为空导致的空白）。
-            if event.event_type == EventType.MODEL_THINKING_DELTA:
-                _thinking_text = ""
-                try:
-                    _thinking_text = str(getattr(event.payload, "text", "") or "")
-                except Exception:
-                    _thinking_text = ""
-                log.info(
-                    "thinking_delta_emitted",
-                    extra={
-                        "msg": "思考 delta 已发射",
-                        "data": {
-                            "turn_id": event.turn_id,
-                            "event_id": event.event_id,
-                            "text_len": len(_thinking_text),
-                        },
-                    },
-                )
             return stamped
 
         # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
