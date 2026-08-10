@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import sqlalchemy
@@ -18,11 +19,11 @@ from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
+from app.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
-    from app.service.task.turn_service import TurnService
 
 
 class RuntimeOperations:
@@ -41,6 +42,7 @@ class RuntimeOperations:
         current_workspace: WorkspaceRecord,
         model_tools: list[ToolDefinition] | None = None,
         execution_context: ToolExecutionContext | None = None,
+        runtime_dependencies: ToolRuntimeDependencies | None = None,
         tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
@@ -57,6 +59,8 @@ class RuntimeOperations:
             model_tools: 暴露给模型的工具定义列表。
             execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
                 日志不注入 ``workspace_id``。
+            runtime_dependencies: 可选的本 turn 工具运行期依赖；存在 execution_context 时
+                会合并进 ``ToolExecutionContext.runtime_dependencies`` 透传给 handler。
             tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
                 工具执行不产生 trace，行为与集成前一致。
             should_cancel: 当前 turn 的取消检查回调；为 None 时退化为状态查询。
@@ -78,7 +82,11 @@ class RuntimeOperations:
         self._current_workspace = current_workspace
         self._current_turn = current_turn
         self._current_task = current_task
-        self._execution_context = execution_context
+        self._execution_context = (
+            replace(execution_context, runtime_dependencies=runtime_dependencies)
+            if execution_context is not None and runtime_dependencies is not None
+            else execution_context
+        )
         # 本 turn 内逐条落库的序号计数器；operations 每 turn 新建，天然随 turn 重置。
         # 注意：审批 interrupt()/Command(resume=) 在 graph 节点内就地恢复，不会重新走
         # run_agent 入口，因此不会重置本计数器——重置仅发生在「从头重跑整个 turn」场景，

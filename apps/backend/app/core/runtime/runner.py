@@ -7,6 +7,8 @@ from collections.abc import AsyncGenerator
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
+from app.core.delegation.child_agent_runner import ChildAgentRunner
+from app.core.delegation.delegation_executor import DelegationExecutor
 from app.core.observability import (
     TraceMetadata,
     build_tool_trace_recorder,
@@ -27,6 +29,7 @@ from app.models.payload import (
     RunStartedPayload,
 )
 from app.service.depends import (
+    get_delegation_service,
     get_runtime_event_service,
     get_task_service,
     get_turn_service,
@@ -35,6 +38,7 @@ from app.service.depends import (
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.schemas import ToolExecutionContext
+from app.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 
 
 class AgentRuntime:
@@ -601,6 +605,21 @@ class AgentRuntime:
         """
         model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
         execution_context = self._resolve_execution_context(task, turn_id=turn.turn_id)
+        runtime_dependencies = None
+        if execution_context is not None:
+            delegate_task_executor = DelegationExecutor(
+                agent_registry=self._agent_registry,
+                delegation_service=get_delegation_service(),
+                turn_service=self._turn_service,
+                child_runner=ChildAgentRunner(self.run_agent),
+                parent_profile=agent_profile,
+                parent_turn=turn,
+                parent_task=task,
+                registered_tool_names=(tool.name for tool in self._tool_scheduler.list_tools()),
+            )
+            runtime_dependencies = ToolRuntimeDependencies(
+                delegate_task_executor=delegate_task_executor
+            )
         return RuntimeOperations(
             tool_scheduler=self._tool_scheduler,
             agent_profile=agent_profile,
@@ -609,5 +628,6 @@ class AgentRuntime:
             current_workspace=workspace,
             model_tools=model_tools,
             execution_context=execution_context,
+            runtime_dependencies=runtime_dependencies,
             tool_trace_recorder=tool_trace_recorder,
         )

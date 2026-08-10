@@ -15,6 +15,7 @@ from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 if TYPE_CHECKING:
     from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
     from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
+    from app.service.delegation.delegation_service import DelegationService
     from app.service.log_query_service import LogQueryService
     from app.service.task.task_service import TaskService
     from app.service.task.turn_service import TurnService
@@ -203,6 +204,31 @@ def get_delegation_crud() -> DelegationCrud:
     from app.storage.crud.delegation_crud import DelegationCrud
 
     return DelegationCrud()
+
+
+@lru_cache(maxsize=1)
+def get_delegation_service() -> DelegationService:
+    """Return the process-local DelegationService singleton.
+
+    参数:
+        无。
+
+    返回:
+        DelegationService 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 DelegationService，并复用 delegation CRUD 与 runtime event service。
+    """
+
+    from app.service.delegation.delegation_service import DelegationService
+
+    return DelegationService(
+        delegation_crud=get_delegation_crud(),
+        runtime_event_service=get_runtime_event_service(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -460,6 +486,7 @@ def reset_service_dependencies() -> None:
     get_runtime_event_service.cache_clear()
     get_runtime_event_bus.cache_clear()
     get_log_store.cache_clear()
+    get_delegation_service.cache_clear()
     get_turn_message_crud.cache_clear()
     get_delegation_crud.cache_clear()
     get_runtime_event_crud.cache_clear()
