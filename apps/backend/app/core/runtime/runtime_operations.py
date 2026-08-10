@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import sqlalchemy
 
 from app.config.logging.logger import log
+from app.core.runtime.turn_cancellation_registry import cancellation_registry
 from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
@@ -41,7 +42,6 @@ class RuntimeOperations:
         model_tools: list[ToolDefinition] | None = None,
         execution_context: ToolExecutionContext | None = None,
         tool_trace_recorder: ToolTraceRecorder | None = None,
-        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -79,7 +79,6 @@ class RuntimeOperations:
         self._current_turn = current_turn
         self._current_task = current_task
         self._execution_context = execution_context
-        self._should_cancel = should_cancel
         # 本 turn 内逐条落库的序号计数器；operations 每 turn 新建，天然随 turn 重置。
         # 注意：审批 interrupt()/Command(resume=) 在 graph 节点内就地恢复，不会重新走
         # run_agent 入口，因此不会重置本计数器——重置仅发生在「从头重跑整个 turn」场景，
@@ -263,12 +262,12 @@ class RuntimeOperations:
         副作用:
             可能调用注入的取消检查回调；无回调时读取 turn 状态。
         """
-
-        if self._should_cancel is not None and self._should_cancel():
+        current_turn_id = self._current_turn.turn_id
+        if cancellation_registry.is_cancelled(current_turn_id):
             return True
         if not self._current_turn:
             return False
-        return self.has_turn_status(self._current_turn.turn_id, "cancelled")
+        return self.has_turn_status(current_turn_id, "cancelled")
 
     def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
         """Complete the turn only if it is still running.

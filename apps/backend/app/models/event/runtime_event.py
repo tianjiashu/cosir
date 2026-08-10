@@ -51,7 +51,7 @@ class RuntimeEvent:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
-        """校验运行时事件 payload 实体。
+        """校验运行时事件 payload 实体，并在未显式提供时从 payload 提取 ``tool_call_id``。
 
         参数:
             无。
@@ -64,7 +64,9 @@ class RuntimeEvent:
             KeyError: 当 ``event_type`` 尚未登记 payload 模型时抛出。
 
         副作用:
-            无。
+            当 ``tool_call_id`` 为 ``None`` 且 payload 携带 ``tool_call_id`` 属性时，
+            使用 ``object.__setattr__`` 回填事件级 ``tool_call_id``
+            （frozen dataclass 下唯一安全的字段修改方式）。
         """
 
         from app.models.payload.registry import EVENT_PAYLOAD_MODELS
@@ -72,6 +74,13 @@ class RuntimeEvent:
         payload_model = EVENT_PAYLOAD_MODELS[self.event_type]
         if not isinstance(self.payload, payload_model):
             raise TypeError(f"payload for {self.event_type.value} must be {payload_model.__name__}")
+
+        # tool_call_id 普遍应从 payload 透传；仅在调用方未显式提供时自动提取，
+        # 显式传入的值优先于 payload 内的值。
+        if self.tool_call_id is None:
+            payload_tool_call_id = getattr(self.payload, "tool_call_id", None)
+            if isinstance(payload_tool_call_id, str):
+                object.__setattr__(self, "tool_call_id", payload_tool_call_id)
 
     def to_dict(self) -> dict[str, object]:
         """将事件转换为可序列化为 JSON 的字典。

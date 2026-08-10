@@ -56,18 +56,12 @@ from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models import TurnRecord
-from app.models.enums.event_type import EventType
+from app.models.enums.event_type import EventType, TERMINAL_EVENT_TYPES
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.run_failed_payload import RunFailedPayload
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.turn_service import TurnService
-
-_TERMINAL_EVENT_TYPES = {
-    EventType.RUN_FINISHED,
-    EventType.RUN_FAILED,
-    EventType.RUN_CANCELLED,
-}
 
 
 @app.post("/tasks/{task_id}/turns")
@@ -243,13 +237,8 @@ async def _sse_turn_events(
 
     turn_id = turn.turn_id
 
-    log.info(
-        "turn_stream_started",
-        extra={
-            "msg": f"开始流式推送轮次事件，turn_id={turn_id}",
-            "data": {"turn_id": turn_id},
-        },
-    )
+    log.info("turn_stream_started",
+             extra={"msg": f"开始流式推送轮次事件，turn_id={turn_id}", "data": {"turn_id": turn_id}, })
 
     subscription = event_bus.subscribe(turn_id)
     producer: asyncio.Task[None] | None = None
@@ -262,6 +251,8 @@ async def _sse_turn_events(
                 turn_service=turn_service,
             )
         )
+        log.info("turn_stream_producer_started",
+                 extra={"msg": f"轮次 producer 已启动，turn_id={turn_id}", "data": {"turn_id": turn_id}, })
     else:
         log.info(
             "turn_stream_producer_already_running",
@@ -274,7 +265,7 @@ async def _sse_turn_events(
     try:
         async for event in subscription:
             yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
-            if event.event_type in _TERMINAL_EVENT_TYPES:
+            if event.event_type in TERMINAL_EVENT_TYPES:
                 terminal_received = True
                 # RUN_FINISHED 之后 run_turn 还会发布 file_change_stable（成功路径的
                 # 变更集增量通知）。若立即 break，这些事件会滞留在订阅队列无法送达
@@ -366,21 +357,23 @@ async def _drive_runtime_turn(
     """
 
     entered_run = False
+    turn_id = turn.turn_id
 
     async def execute() -> None:
         """消费 ``run_turn`` 事件并发布到 bus（producer 主体）。"""
         nonlocal entered_run
         entered_run = True
-        events = runtime.run_turn(turn)
+        events = await runtime.run_turn(turn)
+
         try:
             async for event in events:
                 event_bus.publish(event)
         finally:
             try:
                 await events.aclose()
-                event_bus.close_turn(turn.turn_id)
+                event_bus.close_turn(turn_id)
             finally:
-                event_bus.release_turn_producer(turn.turn_id)
+                event_bus.release_turn_producer(turn_id)
 
     try:
         await execute()

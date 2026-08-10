@@ -30,7 +30,7 @@ from app.tools.schemas import ToolCall
 from ...context.runtime_context import RuntimeContext
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
-from .edges import _after_tools, _should_continue
+from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
 
@@ -46,8 +46,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     workflow_id = "react_like_v1"
 
     def __init__(
-            self,
-            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+        self,
+        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化 ReAct-like 工作流。
 
@@ -75,21 +75,25 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 延迟导入节点，打破 nodes 子包与 react 包之间的循环导入：
         # nodes.model_node -> react.state/runtime_config -> react.__init__
         # -> react.workflow -> nodes
-        from ..nodes import _model_node, _tools_node
+        from ..nodes import _model_node, _observe_node, _tools_node
 
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
+        builder.add_node("observe", _observe_node)
         builder.add_edge(START, "model")
         builder.add_conditional_edges("model", _should_continue, {"tools": "tools", END: END})
-        builder.add_conditional_edges("tools", _after_tools, {"model": "model", END: END})
+        # tools 执行后进入 observe（取消/终态分支仍直接 END，不进 observe 避免多余推理）。
+        builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
+        # observe 判定后回 model 继续推理，或达错误上限终态 END。
+        builder.add_conditional_edges("observe", _after_observe, {"model": "model", END: END})
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-            self,
-            operations: RuntimeOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
+        self,
+        operations: RuntimeOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -182,15 +186,16 @@ class ReactLikeWorkflow(AgentWorkflow):
                 pending_tool_calls=[],
                 max_steps=agent_profile.max_steps,
                 final_text="",
+                last_tool_results=[],
             )
 
             sequence = 0
             while True:
                 try:
                     async for mode, data in graph.astream(
-                            input_state,
-                            config,
-                            stream_mode=["custom"],
+                        input_state,
+                        config,
+                        stream_mode=["custom"],
                     ):
                         if mode != "custom":
                             continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）

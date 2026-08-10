@@ -43,6 +43,9 @@ class Settings:
     LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
     MAX_STEPS: ClassVar[int] = 10000
     TOOL_ERROR_LIMIT: ClassVar[int] = 3
+    # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
+    # 避免把大体积工具输出塞进 checkpoint。
+    TOOL_OBSERVATION_CONTEXT_LIMIT: ClassVar[int] = 4000
     MAX_CONTEXT_CHARS: ClassVar[int] = 20000
     MAX_TOOL_OUTPUT_CHARS: ClassVar[int] = 20000
     WEB_SEARCH_BACKEND: ClassVar[str] = ""
@@ -195,6 +198,8 @@ class Settings:
             raise ValueError("WEB_EXTRACT_URL_LIMIT_MAX must be greater than zero")
         if cls.WEB_EXTRACT_CHAR_LIMIT < 1:
             raise ValueError("WEB_EXTRACT_CHAR_LIMIT must be greater than zero")
+        if cls.TOOL_OBSERVATION_CONTEXT_LIMIT < 1:
+            raise ValueError("TOOL_OBSERVATION_CONTEXT_LIMIT must be greater than zero")
 
     @classmethod
     def load(cls, repository_root: Path | None = None) -> None:
@@ -242,6 +247,9 @@ class Settings:
         cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
         cls.MAX_STEPS = int(os.environ.get("CODING_AGENT_MAX_STEPS", "8"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
+        cls.TOOL_OBSERVATION_CONTEXT_LIMIT = int(
+            os.environ.get("CODING_AGENT_TOOL_OBSERVATION_CONTEXT_LIMIT", "4000")
+        )
         cls.MAX_CONTEXT_CHARS = int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000"))
         cls.MAX_TOOL_OUTPUT_CHARS = int(
             os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")

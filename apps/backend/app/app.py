@@ -96,10 +96,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     tool_system = ToolSystem.build_tool_system(_codegraph_client())
     set_tool_system(tool_system)
     set_agent_registry(build_agent_registry())
-    set_runtime(AgentRuntime(
-        tool_scheduler=tool_system.scheduler,
-        agent_registry=get_agent_registry(),
-    ))
+    set_runtime(AgentRuntime())
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。

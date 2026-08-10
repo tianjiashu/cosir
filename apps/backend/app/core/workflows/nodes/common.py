@@ -1,6 +1,6 @@
 """ReAct-like 工作流节点间共享的运行时辅助。
 
-本模块只承载「两个节点（model / tools）都要用」的公共原语，不包含任何单节点专属逻辑：
+本模块只承载「model / tools / observe 三个节点都要用」的公共原语，不包含任何单节点专属逻辑：
 
 - ``write_event`` / ``_make_write_event``：统一的事件写入结构。
 - ``_runtime_config`` / ``_runtime_context``：从 LangGraph 运行上下文取运行时配置与

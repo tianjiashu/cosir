@@ -5,6 +5,7 @@ import os
 from collections.abc import AsyncGenerator
 from functools import partial
 
+from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
@@ -15,7 +16,7 @@ from app.core.observability import (
     turn_trace,
 )
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry
+from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry, cancellation_registry
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
@@ -28,13 +29,15 @@ from app.models.payload import (
     RunFailedPayload,
     RunStartedPayload,
 )
-from app.models.payload.runtime_event_payload import RuntimeEventPayload
-from app.service.depends import get_turn_service, get_task_service, get_runtime_event_service, get_workspace_service
+from app.service.depends import (
+    get_runtime_event_service,
+    get_task_service,
+    get_turn_service,
+    get_workspace_service,
+)
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.schemas import ToolExecutionContext
-from app.tools.tool_execute.tool_scheduler import ToolScheduler
-
 
 class AgentRuntime:
     """Execute tasks and stream runtime events.
@@ -53,11 +56,7 @@ class AgentRuntime:
       service 仅作为本引擎的私有协作者。
     """
 
-    def __init__(
-            self,
-            tool_scheduler: ToolScheduler,
-            agent_registry: AgentProfileRegistry,
-    ) -> None:
+    def __init__(self) -> None:
         """Initialize the execution engine with its private collaborators.
 
         参数:
@@ -85,10 +84,9 @@ class AgentRuntime:
 
         self._task_service = get_task_service()
         self._turn_service = get_turn_service()
-        self._tool_scheduler = tool_scheduler
-        self._agent_registry = agent_registry
+        self._tool_scheduler = get_tool_system().scheduler
+        self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
-        self._cancellation_registry = TurnCancellationRegistry()
         self._runtime_event_service = get_runtime_event_service()
 
     def cancel_turn(self, turn_id: str) -> TurnRecord:
@@ -113,12 +111,12 @@ class AgentRuntime:
 
         before_cancel = self._turn_service.get_turn(turn_id)
         if before_cancel.status == "cancelled":
-            self._cancellation_registry.mark_cancelled(turn_id)
+            cancellation_registry.mark_cancelled(turn_id)
             return before_cancel
         if before_cancel.status not in {"pending", "running"}:
             raise ValueError(f"cannot cancel turn in status {before_cancel.status}")
 
-        self._cancellation_registry.mark_cancelled(turn_id)
+        cancellation_registry.mark_cancelled(turn_id)
         turn = self._turn_service.cancel_turn_if_active(turn_id, "user_cancelled")
         if turn is None:
             after_race = self._turn_service.get_turn(turn_id)
@@ -127,10 +125,10 @@ class AgentRuntime:
             raise ValueError(f"cannot cancel turn in status {after_race.status}")
         try:
             self._save_and_publish_runtime_event(
-                self._record(
-                    EventType.RUN_CANCELLED,
-                    turn.task_id,
-                    RunCancelledPayload(status="cancelled"),
+                RuntimeEvent(
+                    event_type=EventType.RUN_CANCELLED,
+                    task_id=turn.task_id,
+                    payload=RunCancelledPayload(status="cancelled"),
                     turn_id=turn_id,
                 )
             )
@@ -157,7 +155,7 @@ class AgentRuntime:
     async def run_turn(
             self,
             turn: TurnRecord | None = None,
-    ) -> AsyncGenerator[RuntimeEvent, None]:
+    ) -> AsyncGenerator[RuntimeEvent] | None:
         """执行单个 pending 轮次并实时流式产出运行时事件。
 
         只负责「pending → 认领 → 执行 → 流式事件」。逐条事件在 ``yield`` 前经 ``emit``
@@ -210,7 +208,7 @@ class AgentRuntime:
     async def run_agent(self, agent: AgentProfile) -> AsyncGenerator[RuntimeEvent, None]:
 
         if agent.turn is None:
-            raise RuntimeError(f"agent profile unavailable for turn")
+            raise RuntimeError("agent profile unavailable for turn")
 
         turn = agent.turn
         turn_id = turn.turn_id
@@ -230,10 +228,10 @@ class AgentRuntime:
         # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorError），终态都只由本连接决定。
         try:
             yield await self._emit(
-                self._record(
-                    EventType.RUN_STARTED,
-                    task_id,
-                    RunStartedPayload(status="running", agent_id=agent.agent_id),
+                RuntimeEvent(
+                    event_type=EventType.RUN_STARTED,
+                    task_id=task_id,
+                    payload=RunStartedPayload(status="running", agent_id=agent.agent_id),
                     turn_id=turn_id,
                 )
             )
@@ -455,10 +453,10 @@ class AgentRuntime:
                 return
             for snapshot in crud.list_stable_by_turns([turn_id]):
                 self._publish_runtime_event(
-                    self._record(
-                        EventType.FILE_CHANGE_STABLE,
-                        task_id,
-                        FileChangeStablePayload(
+                    RuntimeEvent(
+                        event_type=EventType.FILE_CHANGE_STABLE,
+                        task_id=task_id,
+                        payload=FileChangeStablePayload(
                             task_id=task_id,
                             turn_id=turn_id,
                             path=snapshot.path,
@@ -604,47 +602,6 @@ class AgentRuntime:
             current_task=task,
             current_workspace=workspace,
             model_tools=model_tools,
-            tool_trace_recorder=tool_trace_recorder,
-            should_cancel=partial(self._cancellation_registry.is_cancelled, turn.turn_id),
+            tool_trace_recorder=tool_trace_recorder
         )
-
-    def _record(
-            self,
-            event_type: EventType,
-            task_id: str,
-            payload: RuntimeEventPayload,
-            turn_id: str | None = None,
-    ) -> RuntimeEvent:
-        """创建一条运行时事件。
-
-        参数:
-            event_type: 稳定的、机器可读的事件类型。
-            task_id: 事件关联的任务标识符。
-            payload: 与 ``event_type`` 匹配的 payload 实体。
-            turn_id: 事件关联的轮次标识符。
-
-        返回:
-            构造好的 RuntimeEvent。
-        """
-
-        tool_call_id = getattr(payload, "tool_call_id", None)
-        event = RuntimeEvent(
-            event_type=event_type,
-            task_id=task_id,
-            turn_id=turn_id,
-            tool_call_id=tool_call_id if isinstance(tool_call_id, str) else None,
-            payload=payload,
-        )
-        log.info(
-            "workspace_payload",
-            extra={
-                "msg": "runtime event recorded",
-                "data": {
-                    "task_id": task_id,
-                    "event_type": str(event_type),
-                    "event_id": event.event_id,
-                },
-            },
-        )
-        return event
 

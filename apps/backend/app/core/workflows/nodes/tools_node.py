@@ -1,17 +1,21 @@
 """ReAct-like 工作流的工具节点（``_tools_node``）。
 
-本模块只承载「工具节点」单一职责：在权限审批后执行工具并把观察结果追加回上下文。节点按
-``RuntimeConfig.approval_resolver`` 决定是否需要审批；工具执行通过 ``RuntimeOperations``
+本模块只承载「工具节点」单一职责：在权限审批后执行工具并把观察结果追加回运行时上下文。
+节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批；工具执行通过 ``RuntimeOperations``
 完成，工具生命周期事件经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为
-``BaseMessage`` 存回 state。状态写入 **turn**。
+``BaseMessage`` 经 ``_persist_tool_observations`` 写回 ``RuntimeContext``（**不进 graph state**，
+模型上下文由 RuntimeContext 独占）。状态写入 **turn**。
 
 工具观察的增量落库与写回统一收敛在 ``_persist_tool_observations``：落库一条即写回一条，
 避免「部分落库、零写回」的撕裂状态，闭合上一轮模型节点写入的 ``AIMessage.tool_calls``
-配对。与模型节点共享的运行时原语见 ``common``。
+配对。错误计数与「错误上限」判定已下沉到独立的 ``observe`` 节点（见 ``observation_node``），
+本节点只负责「执行 + 落库写回 + 产出 ``last_tool_results`` 摘要」。与模型节点共享的运行时
+原语见 ``common``。
 """
 
 import asyncio
 import json
+from typing import Any
 
 import sqlalchemy
 from langgraph.types import interrupt
@@ -21,12 +25,11 @@ from app.config.settings import Settings
 from app.core.llm.langchain_bridge import runtime_to_langchain
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import RuntimeMessage
-from app.models.enums.event_type import EventType
-from app.models.payload import RunFailedPayload
-from app.tools.schemas import ToolCall
+from app.tools.schemas import ToolCall, ToolObservation
+from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState
-from .common import _make_write_event, _runtime_config, _runtime_context, write_event
+from .common import _make_write_event, _runtime_config, _runtime_context
 
 
 def _persist_tool_observations(
@@ -38,7 +41,8 @@ def _persist_tool_observations(
     落库与写回逐条配对（落库一条即写回一条），避免「部分落库、零写回」的
     撕裂状态；写回使下一轮模型节点经 ``_runtime_context().load_message()`` 能
     看到本轮工具结果，闭合上一轮 ``_model_node`` 写入的 ``AIMessage.tool_calls``
-    配对，防止悬空 ``tool_calls`` 触发 OpenAI 协议校验失败。
+    配对，防止悬空 ``tool_calls`` 触发 OpenAI 协议校验失败。消息**不进 graph state**，
+    模型上下文由 ``RuntimeContext`` 独占管理。
 
     参数:
         operations: 领域操作门面，提供 ``append_runtime_message`` 增量落库。
@@ -56,7 +60,7 @@ def _persist_tool_observations(
     副作用:
         逐条先把 ``obs_message`` 转为 LangChain 消息（转换失败则在落库前抛出，不污染
         DB），再调用 ``operations.append_runtime_message`` 落库，最后调用
-        ``_runtime_context().add_message`` 将转换后的观察消息写回上下文。
+        ``_runtime_context().add_message`` 将转换后的观察消息写回运行时上下文。
     """
     total = len(obs_messages)
     for index, obs_message in enumerate(obs_messages):
@@ -85,6 +89,51 @@ def _persist_tool_observations(
             raise
 
 
+def _build_tool_result_summaries(
+    observations: list[ToolObservation],
+    instructions: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """把一批工具观察结果压缩为可序列化摘要，供 ``observe`` 节点判定与后续 LLM 观察使用。
+
+    摘要只保留原生类型（dict / str / bool），可直接落入 checkpoint；刻意**不承载**
+    ``data`` 等大体积结构化字段，``content`` 经 ``redact_terminal_output`` 脱敏后截断到
+    ``Settings.TOOL_OBSERVATION_CONTEXT_LIMIT``，既避免明文凭据落盘 checkpoint，也避免撑爆
+    checkpoint，同时保留足够文本供后续「LLM 观察工具结果」推理。脱敏复用 ``utils.trace_infra``
+    既有实现，不自写凭据掩码逻辑。
+
+    参数:
+        observations: 本批次工具观察 ``ToolObservation`` 列表（成功/失败均含）。
+        instructions: 可选，``call_id`` → 模型调工具前说明文本的映射（来自 ``model`` 节点
+            写入 ``pending_tool_calls`` 的 ``instruction`` 键）。提供时一并写入摘要，使
+            ``observe`` 节点在错误上限等分支能看到模型当时的意图。缺省视为空映射。
+
+    返回:
+        dict 列表，每项字段固定为 ``call_id`` / ``tool_name`` / ``status`` / ``error`` /
+        ``reason`` / ``content``（脱敏后截断）/ ``retryable`` / ``instruction``（模型意图，
+        无则空串）；顺序与 ``observations`` 一致。
+    """
+    instructions = instructions or {}
+    limit = Settings.TOOL_OBSERVATION_CONTEXT_LIMIT
+    summaries: list[dict[str, Any]] = []
+    for observation in observations:
+        content = redact_terminal_output(observation.content)
+        if len(content) > limit:
+            content = content[:limit]
+        summaries.append(
+            {
+                "call_id": observation.tool_call_id,
+                "tool_name": observation.tool_name,
+                "status": observation.status,
+                "error": observation.error,
+                "reason": observation.reason,
+                "content": content,
+                "retryable": observation.retryable,
+                "instruction": instructions.get(observation.tool_call_id, ""),
+            }
+        )
+    return summaries
+
+
 async def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：在权限审批后执行工具并把观察结果追加回上下文。
 
@@ -98,7 +147,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
       interrupt→resume 同一工具调用」的死循环。
 
     工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
-    自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。状态写入 **turn**。
+    自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 经 ``_persist_tool_observations``
+    写回 ``RuntimeContext``（**不进 graph state**，模型上下文由 RuntimeContext 独占）。
+    状态写入 **turn**。
 
     本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
     ``execute_terminal`` 会同步阻塞至命令结束（最长 ``max_command_timeout``），
@@ -111,9 +162,11 @@ async def _tools_node(state: ReactGraphState) -> dict:
         state: 当前 graph state，含待执行工具调用。
 
     返回:
-        需要合并回 graph state 的增量。其中 ``messages`` 为 ``list[BaseMessage]``
-        （经 ``runtime_to_langchain`` 转换后的 LangChain 消息），与其他节点返回的
-        消息类型保持一致；取消分支同样返回转换后的占位 ``ToolMessage``。
+        需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具结果摘要
+        （可序列化 dict 列表，供 ``observe`` 节点判定与后续 LLM 观察）；两个取消分支均置
+        ``terminal=True`` 且返回 ``last_tool_results=[]``——因为 ``_after_tools`` 在 ``terminal``
+        时直接 END、不进 observe，返回摘要既无人消费又会撑大 checkpoint。错误计数与「错误上限」
+        判定已下沉到 ``observe`` 节点。
 
     副作用:
         - 经 ``_persist_tool_observations`` 把本批次工具观察消息逐条增量落库，并同步
@@ -183,15 +236,13 @@ async def _tools_node(state: ReactGraphState) -> dict:
         ]
         # 同步写回运行时上下文：占位 ToolMessage 必须写回，否则上一轮 _model_node 写回的
         # AIMessage 的 tool_calls 在上下文中悬空，下次模型节点 load_message() 拉出即触发
-        # OpenAI 协议校验失败。
+        # OpenAI 协议校验失败。消息不进 graph state（由 RuntimeContext 独占）。
         _persist_tool_observations(operations, placeholder_messages)
-        # 仅转换类型供 state reducer 消费，不再写回（写回已在上一行完成）。
-        placeholder_langchain = runtime_to_langchain(placeholder_messages)
         return {
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
             "terminal": True,
-            "messages": placeholder_langchain,
+            "last_tool_results": [],
         }
 
     # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
@@ -205,11 +256,19 @@ async def _tools_node(state: ReactGraphState) -> dict:
     ]
 
     # 真正执行工具（内部会发工具生命周期事件，write_event 作为回调注入）。
+    # 若模型本轮调工具前附带说明文本（instruction），一并带出供排查时看到模型意图。
+    # 经 redact_terminal_output 脱敏，避免说明文本意外含凭据等敏感信息落日志。
+    raw_instruction = (approved_dicts[0].get("instruction", "") if approved_dicts else "")
+    instruction = redact_terminal_output(raw_instruction)
     log.info(
         "tools_node_resumed",
         extra={
             "msg": f"审批已恢复，准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
-            "data": {"step_id": step_id, "approved_count": len(approved_calls)},
+            "data": {
+                "step_id": step_id,
+                "approved_count": len(approved_calls),
+                "instruction": instruction,
+            },
         },
     )
     # 在协程内取出 writer 并闭包捕获：工具批次在工作线程执行，线程内无法再依赖
@@ -238,24 +297,15 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
         )
-        # 关键修复：取消时不能丢弃本批次已产生的工具响应消息，否则 checkpoint 中
-        # assistant 的 tool_calls 将缺少对应 ToolMessage，导致下一轮拉回历史时触发
-        # OpenAI 协议校验失败（"assistant message with tool_calls must be followed by
-        # tool messages"）。已执行的工具（含被取消返回 error 的）其 observation 仍
-        # 在 messages_for_model 中，必须回写 checkpoint 以闭合配对。
+        # 取消时直接终态结束，不进 observe 节点；返回空 last_tool_results，避免无用大字段
+        # 进 checkpoint（消息已写回 RuntimeContext 闭合配对，无需再经 observe 判定）。
+        # 错误计数与错误上限判定下沉到独立的 observe 节点，本节点不再计算。
         return {
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
             "terminal": True,
-            "messages": runtime_to_langchain(tool_run.messages_for_model),
+            "last_tool_results": [],
         }
-
-    tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
-    for observation in observations:
-        if observation.status == "success":
-            tool_error_count = 0  # 成功则清零（连续失败才累计）
-        else:
-            tool_error_count += 1  # 失败 +1
 
     success_count = sum(1 for o in observations if o.status == "success")
     log.info(
@@ -267,69 +317,20 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "tool_count": len(observations),
                 "success_count": success_count,
                 "error_count": len(observations) - success_count,
-                "tool_error_count": tool_error_count,
             },
         },
     )
 
-    if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        failed_turn = operations.fail_turn_if_running(
-            turn.turn_id, end_reason="tool_error_limit_reached"
-        )
-        if failed_turn is None:
-            log.info(
-                "tools_node_error_limit_terminal_race_lost",
-                extra={
-                    "msg": (
-                        f"工具错误上限失败落定时 turn 已非 running，"
-                        f"跳过失败事件，step_id={step_id}"
-                    ),
-                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
-                },
-            )
-            return {
-                "pending_tool_calls": [],
-                "tool_error_count": tool_error_count,
-                "terminal": True,
-                # 即便达到错误上限也要回写本批次已产生的工具响应，否则 checkpoint 中
-                # assistant 的 tool_calls 将缺对应 ToolMessage，下一轮拉回历史触发 OpenAI
-                # 协议校验失败（"assistant message with tool_calls must be followed by
-                # tool messages"）。
-                "messages": runtime_to_langchain(tool_run.messages_for_model),
-            }
-        log.warning(
-            "tools_node_error_limit",
-            extra={
-                "msg": f"连续工具错误达到上限，停止执行，step_id={step_id}",
-                "data": {
-                    "step_id": step_id,
-                    "tool_error_count": tool_error_count,
-                    "limit": Settings.TOOL_ERROR_LIMIT,
-                },
-            },
-        )
-        write_event(
-            EventType.RUN_FAILED,
-            RunFailedPayload(
-                step_id=step_id,
-                status="failed",
-                error="tool_error_limit_reached",
-                tool_name=observations[0].tool_name if observations else "",
-                langfuse_trace_id=rc.langfuse_trace_id,
-            ),
-        )
-        return {
-            "pending_tool_calls": [],
-            "tool_error_count": tool_error_count,
-            "terminal": True,  # 失败终态
-            # 达到错误上限同样必须回写本批次工具响应，闭合 assistant 的 tool_calls，
-            # 否则 checkpoint 悬空，下一轮拉回历史触发 OpenAI 协议校验失败。
-            "messages": runtime_to_langchain(tool_run.messages_for_model),
-        }
-
+    # 把本批工具调用的 instruction（模型调工具前说明）按 call_id 收成映射，写入结果摘要，
+    # 供 observe 节点在错误排查时看到模型意图。
+    instructions = {
+        item.get("call_id", ""): item.get("instruction", "")
+        for item in approved_dicts
+        if item.get("call_id")
+    }
+    # 本节点只负责「执行 + 落库写回 + 产出结果摘要」；连续失败计数与错误上限判定
+    # 下沉到 observe 节点，由它读取 last_tool_results 后决定是否发 RUN_FAILED 并终态。
     return {
         "pending_tool_calls": [],  # 清空待执行工具调用
-        "tool_error_count": tool_error_count,
-        # 观察消息转 LangChain 消息追加进 state
-        "messages": runtime_to_langchain(tool_run.messages_for_model),
+        "last_tool_results": _build_tool_result_summaries(observations, instructions),
     }

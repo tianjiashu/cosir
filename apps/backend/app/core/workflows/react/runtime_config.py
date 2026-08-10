@@ -35,7 +35,8 @@ class RuntimeConfig:
 
     与 ``ReactGraphState`` 的区别：
     - state（graph state）：节点之间传递的**数据流**，会被 LangGraph 持久化进 checkpoint、
-      随执行累积（如 messages、step_count），是可重放的。
+      随执行累积（如 step_count、tool_error_count、terminal），是可重放的。模型上下文不进 state，
+      由 ``RuntimeContext`` 独占管理（持久化事实来源是 SQLite，checkpoint 重放时由编排层重新注入）。
     - 本容器：运行期**依赖注入**，含不可序列化对象（模型实例、操作门面），**不进入 checkpoint**，
       只在本次 graph 执行期间生效，graph 重放时由编排层重新注入。
 

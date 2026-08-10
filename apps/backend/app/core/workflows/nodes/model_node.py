@@ -7,6 +7,13 @@
 事件。根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
 状态写入 **turn**。
 
+关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
+"我先用 grep 查一下文件结构" 再给出一个 ``search_files`` 调用）。此时文本**不计入最终
+回复**（最终回复只来自纯文本分支的 ``FINAL_RESPONSE``），但模型这段说明并非丢弃——
+它会经 ``MODEL_OUTPUT_DELTA`` 流式推给前端、经 ``_ai_to_runtime_message`` 落库进历史上下文，
+并在进入工具分支时作为 ``instruction`` 键随 ``pending_tool_calls`` 下传给 ``tools`` /
+``observe`` 节点，使下游执行与错误排查能看到模型当时的意图。
+
 与工具节点共享的运行时原语见 ``common``；不负责 graph 构建、运行编排或事件翻译。
 """
 
@@ -135,7 +142,7 @@ def _extract_reasoning_content(chunk) -> str:
     return value if isinstance(value, str) else ""  # 非字符串也返回空
 
 
-def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
+def _collect_chunk_to_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     """把累积的 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``。
 
     合并时会保留 ``additional_kwargs``（如 DeepSeek 的 ``reasoning_content`` 思考过程），
@@ -153,6 +160,11 @@ def _finalize_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
         merged = chunk if merged is None else merged + chunk  # LangChain chunk 支持 + 累加
     if merged is None:
         return AIMessage(content="")  # 空输入返回空消息
+
+    log.info("_finalize_ai_message", extra={
+        "data": json.dumps(merged, ensure_ascii=False)
+    })
+
     # 剥离思考字段：思考内容已在流式阶段作为 MODEL_THINKING_DELTA 推送给前端，
     # 不应随消息回灌给模型（推理模型回灌 reasoning_content 易引发重复思考或协议错误）。
     additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
@@ -235,9 +247,10 @@ async def _model_node(state: ReactGraphState) -> dict:
             "requested_tool": False,
             "final_response": False,
             "terminal": True,
-            "messages": [],
             "pending_tool_calls": [],
         }
+    # 消息通道由 RuntimeContext 独占管理（不进 graph state）；提前取历史上下文供日志与事件计数。
+    messages = _runtime_context().load_message()
     log.info(
         "model_node_started",
         extra={
@@ -245,7 +258,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {
                 "step_id": step_id,
                 "step_count": step_count,
-                "message_count": len(state.messages),
+                "message_count": len(messages),
             },
         },
     )
@@ -267,13 +280,12 @@ async def _model_node(state: ReactGraphState) -> dict:
             "requested_tool": False,
             "final_response": False,
             "terminal": True,
-            "messages": [],
             "pending_tool_calls": [],
         }
     write_event(
-        # 请求模型，带上历史消息数
+        # 请求模型，带上历史消息数（消息通道由 RuntimeContext 独占，不经 state 传递）。
         EventType.MODEL_REQUESTED,
-        ModelRequestedPayload(step_id=step_id, message_count=len(state.messages)),
+        ModelRequestedPayload(step_id=step_id, message_count=len(messages)),
     )
 
     # 后端在循环结束后需要"完整文本"来做判断和落库，不是为了发给前端
@@ -281,9 +293,13 @@ async def _model_node(state: ReactGraphState) -> dict:
     chunks: list[AIMessageChunk] = []  # 累积流式分块
     terminal = False  # 是否因取消而提前终止
 
-    # 真正流式调用模型，state.messages 为历史+系统上下文。
-    messages = _runtime_context().load_message()
+    # 真正流式调用模型，messages 为历史+系统上下文（来自 RuntimeContext，不进 state）。
     async for chunk in model.astream(messages):
+
+        # 抽本 chunk 的 token usage。应该先统计token再检查取消
+        chunk_usage = _extract_usage_from_chunk(chunk)
+        rc.usage_stats.add_message_usage(chunk_usage)
+
         # 每收到 chunk 都检查 turn 是否被取消
         if operations.is_current_turn_cancelled():
             terminal = True  # 标记提前终止
@@ -295,7 +311,11 @@ async def _model_node(state: ReactGraphState) -> dict:
                 },
             )
             break  # 跳出流式循环
+
+        # 所有 chunk 都留着，后面合并成完整消息
+        chunks.append(chunk)
         text = _extract_text(chunk.content)  # 抽本 chunk 文本
+        reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
         if text:
             collected_text.append(text)  # 有文本才累积
             write_event(
@@ -304,15 +324,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 EventType.MODEL_OUTPUT_DELTA,
                 ModelOutputDeltaPayload(step_id=step_id, text=text),
             )
-        chunks.append(chunk)  # 所有 chunk 都留着，后面合并成完整消息
-        chunk_usage = _extract_usage_from_chunk(chunk)
-        if chunk_usage is not None:
-            rc.usage_stats.add_message_usage(chunk_usage)
-        reasoning = _extract_reasoning_content(chunk)  # 抽思考片段
-        # 过滤纯空白分片：DeepSeek 推理流会在词间/段间推送单独的空格或换行 token
-        # （如 " "、"\n"、".\n\n"），Python 中非空即 truthy，若仅用 `if reasoning` 判断
-        # 会把纯空白分片当作有效思考发射，前端累积后产出空壳"深度思考"块。
-        # 仅当去空白后仍有内容才发射，避免无效增量与空壳渲染。
         if reasoning and reasoning.strip():
             write_event(
                 # 有思考内容就发思考增量事件，前端可实时渲染“思考中”
@@ -326,19 +337,21 @@ async def _model_node(state: ReactGraphState) -> dict:
             "requested_tool": False,
             "final_response": False,
             "terminal": True,  # 终态
-            "messages": [],  # 不写消息
             "pending_tool_calls": [],
         }
 
-    ai_message = _finalize_ai_message(chunks)  # 分块合并成完整 AIMessage
+    # 分块合并成完整 AIMessage
+    ai_message = _collect_chunk_to_ai_message(chunks)
     # 逐条持久化本轮产生的 assistant 消息（替代 turn 结束后的批落库）。
     # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。
+
     if _has_content(ai_message):
         operations.append_runtime_message(_ai_to_runtime_message(ai_message))
         # 同步写回运行时上下文，使下一模型步经 _runtime_context().load_message()
         # 能读到本轮累积的 assistant 消息，否则模型每步都看到不变的首轮快照，
         # 会陷入「相同上下文→相同输出」的死循环。
         _runtime_context().add_message(ai_message)
+
     # 把 LangChain 的 tool_calls 转成内部 ToolCall 值对象
     tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
     output_text = "".join(collected_text).strip()  # 拼接文本并去首尾空白
@@ -377,7 +390,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "requested_tool": False,
                     "final_response": False,
                     "terminal": True,
-                    "messages": [],
                     "pending_tool_calls": [],
                 }
             log.warning(
@@ -405,28 +417,36 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "requested_tool": False,
                 "final_response": False,
                 "terminal": True,
-                "messages": [ai_message],  # 把 ai_message 写回 state，checkpoint 可保留
                 "pending_tool_calls": [],
             }
         log.info(
             "model_node_tool_branch",
             extra={
                 "msg": f"模型请求调用 {len(tool_calls)} 个工具，进入工具节点，step_id={step_id}",
-                "data": {"step_id": step_id, "tool_count": len(tool_calls)},
+                "data": {
+                    "step_id": step_id,
+                    "tool_count": len(tool_calls),
+                    "has_instruction": bool(output_text),
+                    "instruction_length": len(output_text),
+                },
             },
         )
+        # 模型同时产出文本时，把说明文本作为 instruction 随每个工具调用下传，
+        # 供 tools / observe 节点在执行与错误排查时看到模型意图（ReAct 中「边说明边调工具」合法）。
+        # 无文本时 instruction 缺省为空串，向后兼容。
+        instruction = output_text if output_text else ""
         return {
             "step_count": step_count,
             "requested_tool": True,  # 进入工具分支
             "final_response": False,
             "terminal": False,  # 非终态，graph 会继续到 tools 节点
-            "messages": [ai_message],
             # 待执行工具调用交给 tools 节点
             "pending_tool_calls": [
                 {
                     "tool_name": call.tool_name,
                     "arguments": call.arguments if isinstance(call.arguments, dict) else {},
                     "call_id": call.call_id,
+                    "instruction": instruction,
                 }
                 for call in tool_calls
             ],
@@ -447,7 +467,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "requested_tool": False,
                 "final_response": False,
                 "terminal": True,
-                "messages": [],
                 "pending_tool_calls": [],
             }
         log.info(
@@ -484,7 +503,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             "requested_tool": False,
             "final_response": True,  # 终态最终回复
             "terminal": True,
-            "messages": [ai_message],
             "pending_tool_calls": [],
             "final_text": output_text,  # 供上层取最终回复
         }
@@ -510,7 +528,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             "requested_tool": False,
             "final_response": False,
             "terminal": True,
-            "messages": [],
             "pending_tool_calls": [],
         }
     write_event(  # 既没工具调用也没文本 → 模型输出非法
@@ -526,6 +543,5 @@ async def _model_node(state: ReactGraphState) -> dict:
         "requested_tool": False,
         "final_response": False,
         "terminal": True,
-        "messages": [ai_message],
         "pending_tool_calls": [],
     }

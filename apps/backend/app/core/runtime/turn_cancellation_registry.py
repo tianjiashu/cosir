@@ -96,3 +96,6 @@ class TurnCancellationRegistry:
 
         with self._lock:
             self._cancelled_turn_ids.discard(turn_id)
+
+
+cancellation_registry = TurnCancellationRegistry()
