@@ -50,6 +50,8 @@ class TurnCrud:
         input_text: str,
         status: str = "pending",
         agent_id: str | None = None,
+        parent_turn_id: str | None = None,
+        delegation_id: str | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
@@ -61,6 +63,8 @@ class TurnCrud:
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本次轮次绑定的 agent 标识；为 None 时表示回退到
                 所属任务的 ``agent_id`` 默认归属（由运行时解析）。
+            parent_turn_id: 可选，委派子轮次所属的父 turn 标识。
+            delegation_id: 可选，关联的 delegation 标识。
 
         返回:
             落库成功的 ``TurnRecord``。
@@ -85,6 +89,8 @@ class TurnCrud:
             now,
             response_text=None,
             agent_id=agent_id,
+            parent_turn_id=parent_turn_id,
+            delegation_id=delegation_id,
         )
         with self._session_factory.begin() as session:
             session.add(
@@ -96,6 +102,8 @@ class TurnCrud:
                     end_reason=turn.end_reason,
                     response_text=turn.response_text,
                     agent_id=turn.agent_id,
+                    parent_turn_id=turn.parent_turn_id,
+                    delegation_id=turn.delegation_id,
                     created_at=to_text(turn.created_at),
                     updated_at=to_text(turn.updated_at),
                 )
@@ -482,4 +490,6 @@ class TurnCrud:
             row.end_reason,
             row.response_text,
             row.agent_id,
+            row.parent_turn_id,
+            row.delegation_id,
         )

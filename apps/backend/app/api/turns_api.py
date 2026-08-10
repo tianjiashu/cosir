@@ -46,17 +46,17 @@ from contextlib import suppress
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.app import app
 from app.api.dependencies import (
     get_runtime,
     get_runtime_event_bus,
     get_turn_service,
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
+from app.app import app
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models import TurnRecord
-from app.models.enums.event_type import EventType, TERMINAL_EVENT_TYPES
+from app.models.enums.event_type import TERMINAL_EVENT_TYPES, EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.run_failed_payload import RunFailedPayload
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
@@ -66,9 +66,9 @@ from app.service.task.turn_service import TurnService
 
 @app.post("/tasks/{task_id}/turns")
 async def create_turn(
-        task_id: str,
-        payload: CreateTurnRequest,
-        turn_service: TurnService = Depends(get_turn_service),
+    task_id: str,
+    payload: CreateTurnRequest,
+    turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
     """为已有任务追加一个 pending 轮次。
 
@@ -104,10 +104,10 @@ async def create_turn(
 
 @app.get("/turns/{turn_id}/stream")
 async def stream_turn(
-        turn_id: str,
-        runtime: AgentRuntime = Depends(get_runtime),
-        turn_service: TurnService = Depends(get_turn_service),
-        event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
+    turn_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    turn_service: TurnService = Depends(get_turn_service),
+    event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
@@ -165,11 +165,46 @@ async def stream_turn(
     )
 
 
+@app.get("/turns/{turn_id}/events/stream")
+async def subscribe_turn_events(
+    turn_id: str,
+    turn_service: TurnService = Depends(get_turn_service),
+    event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
+):
+    """订阅已运行委派子轮次的实时事件。
+
+    参数:
+        turn_id: 来自路由的子轮次标识。
+        turn_service: 用于读取轮次并校验其执行状态的领域 service。
+        event_bus: 当前进程的运行时事件总线。
+
+    返回:
+        ``text/event-stream`` 响应，仅转发此后实时发布到该 turn 的事件。
+
+    异常:
+        HTTPException: turn 不存在时为 404；turn 已终态时为 409。
+
+    副作用:
+        请求消费期间注册事件订阅；不认领 producer、不调用运行时，也不在断开时更新 turn 状态。
+    """
+
+    try:
+        turn = turn_service.get_turn(turn_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="turn not found") from exc
+    if turn.status not in ("pending", "running"):
+        raise HTTPException(status_code=409, detail="turn is terminal")
+    return StreamingResponse(
+        _sse_subscribed_turn_events(event_bus, turn_id),
+        media_type="text/event-stream; charset=utf-8",
+    )
+
+
 @app.post("/turns/{turn_id}/cancel")
 async def cancel_turn(
-        turn_id: str,
-        runtime: AgentRuntime = Depends(get_runtime),
-        turn_service: TurnService = Depends(get_turn_service),
+    turn_id: str,
+    runtime: AgentRuntime = Depends(get_runtime),
+    turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
     """取消指定轮次并中止其运行。
 
@@ -202,10 +237,10 @@ async def cancel_turn(
 
 
 async def _sse_turn_events(
-        runtime: AgentRuntime,
-        turn: TurnRecord | None = None,
-        event_bus: RuntimeEventBus | None = None,
-        turn_service: TurnService | None = None,
+    runtime: AgentRuntime,
+    turn: TurnRecord | None = None,
+    event_bus: RuntimeEventBus | None = None,
+    turn_service: TurnService | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
 
@@ -237,8 +272,13 @@ async def _sse_turn_events(
 
     turn_id = turn.turn_id
 
-    log.info("turn_stream_started",
-             extra={"msg": f"开始流式推送轮次事件，turn_id={turn_id}", "data": {"turn_id": turn_id}, })
+    log.info(
+        "turn_stream_started",
+        extra={
+            "msg": f"开始流式推送轮次事件，turn_id={turn_id}",
+            "data": {"turn_id": turn_id},
+        },
+    )
 
     subscription = event_bus.subscribe(turn_id)
     producer: asyncio.Task[None] | None = None
@@ -251,8 +291,13 @@ async def _sse_turn_events(
                 turn_service=turn_service,
             )
         )
-        log.info("turn_stream_producer_started",
-                 extra={"msg": f"轮次 producer 已启动，turn_id={turn_id}", "data": {"turn_id": turn_id}, })
+        log.info(
+            "turn_stream_producer_started",
+            extra={
+                "msg": f"轮次 producer 已启动，turn_id={turn_id}",
+                "data": {"turn_id": turn_id},
+            },
+        )
     else:
         log.info(
             "turn_stream_producer_already_running",
@@ -264,7 +309,7 @@ async def _sse_turn_events(
     terminal_received = False
     try:
         async for event in subscription:
-            yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
+            yield _format_sse_event(event)
             if event.event_type in TERMINAL_EVENT_TYPES:
                 terminal_received = True
                 # RUN_FINISHED 之后 run_turn 还会发布 file_change_stable（成功路径的
@@ -325,11 +370,58 @@ async def _sse_turn_events(
                         )
 
 
+async def _sse_subscribed_turn_events(
+    event_bus: RuntimeEventBus,
+    turn_id: str,
+) -> AsyncIterator[str]:
+    """将仅订阅 SSE 连接中的实时事件格式化为帧。
+
+    参数:
+        event_bus: 当前进程的运行时事件总线。
+        turn_id: 待订阅事件的 turn 标识。
+
+    生成:
+        与执行型 SSE 端点格式一致的实时事件帧。
+
+    异常:
+        无。订阅关闭或客户端断开时正常结束生成器。
+
+    副作用:
+        注册并最终移除事件订阅；不启动、取消或落定 turn。
+    """
+
+    subscription = event_bus.subscribe(turn_id)
+    try:
+        async for event in subscription:
+            yield _format_sse_event(event)
+    finally:
+        event_bus.unsubscribe(subscription)
+
+
+def _format_sse_event(event: RuntimeEvent) -> str:
+    """将运行时事件序列化为共用 SSE 帧格式。
+
+    参数:
+        event: 要发送给 SSE 客户端的运行时事件。
+
+    返回:
+        包含 event 名称、JSON data 和帧分隔空行的 SSE 文本。
+
+    异常:
+        TypeError: 当事件负载无法 JSON 序列化时抛出。
+
+    副作用:
+        无。
+    """
+
+    return f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
+
+
 async def _drive_runtime_turn(
-        runtime: AgentRuntime,
-        turn: TurnRecord | None,
-        event_bus: RuntimeEventBus,
-        turn_service: TurnService | None = None,
+    runtime: AgentRuntime,
+    turn: TurnRecord | None,
+    event_bus: RuntimeEventBus,
+    turn_service: TurnService | None = None,
 ) -> None:
     """Drive ``run_turn`` as an event producer.
 

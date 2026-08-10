@@ -59,6 +59,50 @@ class TurnService:
         self._task.update_latest_turn(task_id, turn.turn_id, preview(input_text))
         return turn
 
+    def create_child_turn(
+        self,
+        task_id: str,
+        input_text: str,
+        agent_id: str,
+        parent_turn_id: str,
+        delegation_id: str,
+    ) -> TurnRecord:
+        """创建委派子轮次且不改变普通任务的最新轮次状态。
+
+        参数:
+            task_id: 子轮次所属任务标识。
+            input_text: 子 Agent 要处理的委派输入。
+            agent_id: 子 Agent 的固定标识，不改写任务默认 Agent。
+            parent_turn_id: 发起委派的父 turn 标识。
+            delegation_id: 委派记录标识。
+
+        返回:
+            已持久化且包含父子关联字段的 pending 子轮次。
+
+        异常:
+            ValueError: 任一必填字符串为空或 ``input_text`` 为空白时抛出。
+
+        副作用:
+            向 ``turns`` 表插入子轮次；不更新任务 ``latest_turn_id`` 或最新消息预览。
+        """
+
+        if not isinstance(input_text, str) or not input_text.strip():
+            raise ValueError("input_text must be a non-empty string")
+        for field_name, value in (
+            ("agent_id", agent_id),
+            ("parent_turn_id", parent_turn_id),
+            ("delegation_id", delegation_id),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
+        return self._turn.create(
+            task_id,
+            input_text,
+            agent_id=agent_id,
+            parent_turn_id=parent_turn_id,
+            delegation_id=delegation_id,
+        )
+
     def get_turn(self, turn_id: str) -> TurnRecord:
         return self._turn.get(turn_id)
 
@@ -182,9 +226,7 @@ class TurnService:
 
         return self._message.load_messages(turn_id)
 
-    def append_turn_message(
-        self, turn_id: str, message: RuntimeMessage, sequence: int
-    ) -> None:
+    def append_turn_message(self, turn_id: str, message: RuntimeMessage, sequence: int) -> None:
         """Incremental single-row append of one runtime message (cross-turn memory).
 
         参数:

@@ -1,0 +1,85 @@
+"""Child turn linkage tests."""
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+from app.config.settings import Settings
+from app.service import depends as service_depends
+from app.service.task.turn_service import TurnService
+from app.storage.model.task_model import TaskModel
+from app.storage.model.workspace_model import WorkspaceModel
+from app.storage.store_engines import close_storage, init_storage, main_session_factory
+from app.utils.datetime_utils import to_text, utc_now
+
+
+@pytest.fixture
+def isolated_storage(tmp_path: Path) -> Iterator[None]:
+    """Initialize an isolated SQLite storage lifecycle for one test."""
+
+    original_database_file = Settings.DATABASE_FILE
+    original_log_database_file = Settings.LOG_DATABASE_FILE
+    original_checkpoint_file = Settings.CHECKPOINT_FILE
+    service_depends.reset_service_dependencies()
+    close_storage()
+    Settings.override(
+        DATABASE_FILE=tmp_path / "app.sqlite3",
+        LOG_DATABASE_FILE=tmp_path / "logs.sqlite3",
+        CHECKPOINT_FILE=tmp_path / "checkpoints.sqlite3",
+    )
+    init_storage()
+    try:
+        yield
+    finally:
+        service_depends.reset_service_dependencies()
+        close_storage()
+        Settings.override(
+            DATABASE_FILE=original_database_file,
+            LOG_DATABASE_FILE=original_log_database_file,
+            CHECKPOINT_FILE=original_checkpoint_file,
+        )
+
+
+def test_create_child_turn_records_parent_and_delegation(isolated_storage):
+    """Create a child turn without changing the task's latest-turn preview."""
+
+    now = to_text(utc_now())
+    with main_session_factory().begin() as session:
+        session.add(
+            WorkspaceModel(
+                workspace_id="workspace_1",
+                root_path="H:/workspace",
+                name="workspace",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.flush()
+        session.add(
+            TaskModel(
+                task_id="task_1",
+                workspace_id="workspace_1",
+                agent_id="developer",
+                input_text="parent task",
+                title="parent task",
+                last_message_preview="parent task",
+                latest_turn_id=None,
+                status="open",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    service = TurnService()
+    child = service.create_child_turn(
+        task_id="task_1",
+        input_text="review this",
+        agent_id="delegate_reviewer",
+        parent_turn_id="turn_parent",
+        delegation_id="del_1",
+    )
+
+    assert child.parent_turn_id == "turn_parent"
+    assert child.delegation_id == "del_1"
+    assert child.agent_id == "delegate_reviewer"
+    assert service_depends.get_task_crud().get("task_1").latest_turn_id is None
