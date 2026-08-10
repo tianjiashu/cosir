@@ -324,7 +324,8 @@ class AgentRuntime:
                     task_id=task_id,
                     payload=RunStartedPayload(status="running", agent_id=agent.agent_id),
                     turn_id=turn_id,
-                )
+                ),
+                agent,
             )
 
             metadata = TraceMetadata(
@@ -351,7 +352,7 @@ class AgentRuntime:
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
                 ):
-                    yield await self._emit(event)
+                    yield await self._emit(event, agent)
             try:
                 recorder.flush()
             except Exception:
@@ -387,7 +388,8 @@ class AgentRuntime:
                     task_id=task_id,
                     turn_id=turn_id,
                     payload=RunFailedPayload(status="failed", error=str(exc)),
-                )
+                ),
+                agent,
             )
         finally:
             # 本连接持有的清理收口：仅当本轮仍卡在 running（客户端断开导致运行被中止、
@@ -458,7 +460,11 @@ class AgentRuntime:
 
         return self._runtime_event_service.save_event(event)
 
-    def _publish_runtime_event(self, event: RuntimeEvent) -> None:
+    def _publish_runtime_event(
+        self,
+        event: RuntimeEvent,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
         """Publish a runtime event through the configured event service.
 
         参数:
@@ -474,9 +480,19 @@ class AgentRuntime:
             向 RuntimeEventBus 订阅队列发布事件。
         """
 
-        self._runtime_event_service.publish_event(event)
+        if runtime_event_loop is None:
+            self._runtime_event_service.publish_event(event)
+            return
+        runtime_event_loop.call_soon_threadsafe(
+            self._runtime_event_service.publish_event,
+            event,
+        )
 
-    def _save_and_publish_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent:
+    def _save_and_publish_runtime_event(
+        self,
+        event: RuntimeEvent,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> RuntimeEvent:
         """Persist and publish a runtime event.
 
         参数:
@@ -492,7 +508,9 @@ class AgentRuntime:
             向 runtime_events 表写入事件，并在可用时广播给当前订阅者。
         """
 
-        return self._runtime_event_service.save_and_publish(event)
+        stamped = self._runtime_event_service.save_event(event)
+        self._publish_runtime_event(stamped, runtime_event_loop)
+        return stamped
 
     def _mark_stable_file_changes(self, turn_id: str) -> None:
         """把某 turn 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。
@@ -629,7 +647,11 @@ class AgentRuntime:
             return None
         return ToolExecutionContext.from_workspace(task.task_id, workspace, turn_id=turn_id)
 
-    async def _emit(self, event: RuntimeEvent) -> RuntimeEvent:
+    async def _emit(
+        self,
+        event: RuntimeEvent,
+        agent_profile: AgentProfile,
+    ) -> RuntimeEvent:
         """落库并透传一条运行时事件（赋唯一递增 sequence）。
 
         在 ``yield`` 前调用：经 ``RuntimeEventService`` 以独立线程写入 ``runtime_events`` 表
@@ -664,7 +686,7 @@ class AgentRuntime:
                 },
             )
             stamped = event
-        self._publish_runtime_event(stamped)
+        self._publish_runtime_event(stamped, agent_profile.runtime_event_loop)
         return stamped
 
     def _build_operations(

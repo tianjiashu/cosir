@@ -16,6 +16,7 @@ class ChildAgentProfileBuilder:
         turn: TurnRecord,
         effective_tools: Iterable[str],
         context_excluded_turn_ids: Iterable[str] = (),
+        runtime_event_loop=None,
     ) -> AgentProfile:
         """构建绑定单次 child turn 与有效工具集的 profile。
 
@@ -24,6 +25,7 @@ class ChildAgentProfileBuilder:
             turn: 当前 child run 对应的轮次记录。
             effective_tools: 已由父级委派边界收窄后的工具名称。
             context_excluded_turn_ids: child runtime 加载 task 历史时需要排除的 turn 标识。
+            runtime_event_loop: child runtime 事件需要投递回的父运行事件循环。
 
         返回:
             独立的、绑定当前 turn 的 AgentProfile 派生副本。
@@ -40,4 +42,5 @@ class ChildAgentProfileBuilder:
             turn=turn,
             allowed_tools=list(effective_tools),
             context_excluded_turn_ids=tuple(context_excluded_turn_ids),
+            runtime_event_loop=runtime_event_loop,
         )

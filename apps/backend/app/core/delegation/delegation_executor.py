@@ -149,6 +149,7 @@ class DelegationExecutor:
                 turn=child_turn,
                 effective_tools=decision.effective_tools,
                 context_excluded_turn_ids=(self._parent_turn.turn_id,),
+                runtime_event_loop=runtime_event_loop,
             )
             result = self._child_runner.run_child(child_profile)
         except Exception as exc:

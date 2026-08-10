@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -93,6 +94,7 @@ class AgentProfile:
     max_steps: int = 1000
     turn: TurnRecord = None
     context_excluded_turn_ids: tuple[str, ...] = ()
+    runtime_event_loop: asyncio.AbstractEventLoop | None = None
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。

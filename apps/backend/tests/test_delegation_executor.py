@@ -17,6 +17,7 @@ from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.final_response_payload import FinalResponsePayload
 from app.models.payload.run_finished_payload import RunFinishedPayload
+from app.models.payload.run_started_payload import RunStartedPayload
 from app.models.turn_record import TurnRecord
 from app.service.delegation.delegation_result import DelegationResult
 from app.service.delegation.delegation_service import DelegationService
@@ -917,6 +918,8 @@ def test_delegation_executor_passes_runtime_event_loop_to_service(executor_depen
         "mark_completed",
         ("delegation_1", "child done", runtime_event_loop),
     ) in delegation_service.calls
+    runner = executor_dependencies["child_runner"]
+    assert runner.child_profiles[0].runtime_event_loop is runtime_event_loop
 
 
 def test_delegation_service_publishes_via_runtime_event_loop():
@@ -1043,6 +1046,48 @@ def test_agent_runtime_cancel_turn_cascades_to_active_child(monkeypatch):
     finally:
         cancellation_registry.clear("parent_turn_1")
         cancellation_registry.clear("child_turn_1")
+
+
+async def test_agent_runtime_emit_schedules_child_event_publish_on_profile_loop():
+    """验证 child runtime 事件会调度回父运行事件循环发布。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当 _emit 直接 publish 或未调度到指定 loop 时由 pytest 抛出。
+
+    副作用:
+        调用 AgentRuntime._emit 并写入 fake runtime event service 记录。
+    """
+
+    runtime = object.__new__(AgentRuntime)
+    runtime_event_service = FakeRuntimeEventService()
+    runtime._runtime_event_service = runtime_event_service
+    runtime_event_loop = Mock()
+    child_profile = replace(
+        default_developer_agent(),
+        runtime_event_loop=runtime_event_loop,
+    )
+    event = RuntimeEvent(
+        event_type=EventType.RUN_STARTED,
+        task_id="task_1",
+        turn_id="child_turn_1",
+        payload=RunStartedPayload(status="running", agent_id="delegate_reviewer"),
+    )
+
+    stamped = await runtime._emit(event, child_profile)
+
+    assert stamped is event
+    assert runtime_event_service.saved == [event]
+    assert runtime_event_service.published == []
+    runtime_event_loop.call_soon_threadsafe.assert_called_once_with(
+        runtime_event_service.publish_event,
+        event,
+    )
 
 
 @pytest.mark.parametrize(
