@@ -4,7 +4,7 @@ from app.core.agents.agent_profile import AgentProfile
 
 
 def delegate_reviewer_agent() -> AgentProfile:
-    """Build the read-only delegate reviewer profile.
+    """构建只读的委派审查 Agent profile。
 
     参数:
         无。
@@ -41,7 +41,7 @@ def delegate_reviewer_agent() -> AgentProfile:
 
 
 def delegate_analyst_agent() -> AgentProfile:
-    """Build the read-only delegate analyst profile.
+    """构建只读的委派分析 Agent profile。
 
     参数:
         无。
@@ -80,7 +80,7 @@ def delegate_analyst_agent() -> AgentProfile:
 
 
 def delegate_coder_agent() -> AgentProfile:
-    """Build the delegate coder profile.
+    """构建委派编码 Agent profile。
 
     参数:
         无。

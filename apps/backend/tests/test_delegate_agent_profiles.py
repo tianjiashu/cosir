@@ -53,6 +53,18 @@ def test_delegate_profile_permissions_match_v1_roles():
 
     assert reviewer is not None
     assert reviewer.role == "delegate-reviewer"
+    assert reviewer.goal == "只做代码审查，指出问题、风险和遗漏；不修改代码，不运行测试。"
+    assert reviewer.allowed_tools == [
+        "read_file",
+        "list_directory",
+        "search_files",
+        "codegraph_explore",
+        "codegraph_search",
+        "codegraph_node",
+        "codegraph_callers",
+        "codegraph_callees",
+        "codegraph_impact",
+    ]
     assert reviewer.model_name == "deepseek-v4-flash"
     assert reviewer.context_policy == "text_only_v1"
     assert reviewer.max_steps == 60
@@ -62,6 +74,20 @@ def test_delegate_profile_permissions_match_v1_roles():
 
     assert analyst is not None
     assert analyst.role == "delegate-analyst"
+    assert analyst.goal == "只做事实、代码和文档分析，形成结论与建议；不修改代码。"
+    assert analyst.allowed_tools == [
+        "read_file",
+        "list_directory",
+        "search_files",
+        "web_search",
+        "web_extract",
+        "codegraph_explore",
+        "codegraph_search",
+        "codegraph_node",
+        "codegraph_callers",
+        "codegraph_callees",
+        "codegraph_impact",
+    ]
     assert analyst.max_steps == 80
     assert "web_search" in analyst.allowed_tools
     assert "web_extract" in analyst.allowed_tools
@@ -69,6 +95,25 @@ def test_delegate_profile_permissions_match_v1_roles():
 
     assert coder is not None
     assert coder.role == "delegate-coder"
+    assert (
+        coder.goal
+        == "在父 Agent 委派范围内进行代码开发、修复和验证，并保持改动聚焦、可测试、可审查。"
+    )
+    assert coder.allowed_tools == [
+        "read_file",
+        "list_directory",
+        "search_files",
+        "write_file",
+        "patch",
+        "delete",
+        "execute_terminal",
+        "codegraph_explore",
+        "codegraph_search",
+        "codegraph_node",
+        "codegraph_callers",
+        "codegraph_callees",
+        "codegraph_impact",
+    ]
     assert coder.max_steps == 120
     assert "write_file" in coder.allowed_tools
     assert "patch" in coder.allowed_tools

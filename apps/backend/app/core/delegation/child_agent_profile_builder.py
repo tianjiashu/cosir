@@ -16,7 +16,7 @@ class ChildAgentProfileBuilder:
         turn: TurnRecord,
         effective_tools: Iterable[str],
     ) -> AgentProfile:
-        """Create a profile bound to one child turn and its effective tool set.
+        """构建绑定单次 child turn 与有效工具集的 profile。
 
         参数:
             registry_profile: 从 AgentProfileRegistry 解析的共享内置 profile。
