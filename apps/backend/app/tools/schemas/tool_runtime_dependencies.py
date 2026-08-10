@@ -1,5 +1,6 @@
-"""Runtime dependencies available to tool handlers."""
+"""工具 handler 可用的运行期依赖。"""
 
+import asyncio
 from dataclasses import dataclass
 
 from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
@@ -7,6 +8,7 @@ from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 
 @dataclass(frozen=True)
 class ToolRuntimeDependencies:
-    """Hold optional runtime capabilities supplied to tool execution contexts."""
+    """承载由 runtime 注入到工具执行上下文的可选能力。"""
 
     delegate_task_executor: DelegateTaskExecutor | None = None
+    runtime_event_loop: asyncio.AbstractEventLoop | None = None

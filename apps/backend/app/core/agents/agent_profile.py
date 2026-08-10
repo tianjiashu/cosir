@@ -92,6 +92,7 @@ class AgentProfile:
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     max_steps: int = 1000
     turn: TurnRecord = None
+    context_excluded_turn_ids: tuple[str, ...] = ()
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。

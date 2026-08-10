@@ -363,10 +363,21 @@ class RuntimeOperations:
 
         self._pre_process_turn(task_id=task_id, calls=calls, step_id=step_id)
 
+        execution_context = self._execution_context
+        if execution_context is not None and running_loop is not None:
+            runtime_dependencies = replace(
+                execution_context.runtime_dependencies,
+                runtime_event_loop=running_loop,
+            )
+            execution_context = replace(
+                execution_context,
+                runtime_dependencies=runtime_dependencies,
+            )
+
         result: ToolRunResult = self._tool_service.run_calls_with_events(
             step_id=step_id or "",
             calls=calls,
-            execution_context=self._execution_context,
+            execution_context=execution_context,
             write_event=write_event,
             running_loop=running_loop,
         )

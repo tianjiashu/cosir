@@ -1,5 +1,6 @@
 """Delegation lifecycle service."""
 
+import asyncio
 from uuid import uuid4
 
 from app.config.logging.logger import log
@@ -75,6 +76,7 @@ class DelegationService:
         prompt: str,
         requested_tools: tuple[str, ...],
         effective_tools: tuple[str, ...],
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> str:
         """创建 pending delegation 并发出 delegation_started 父事件。
 
@@ -129,10 +131,16 @@ class DelegationService:
                 delegation_type=delegation_type,
                 status="pending",
             ),
+            runtime_event_loop=runtime_event_loop,
         )
         return delegation_id
 
-    def mark_child_started(self, delegation_id: str, child_turn_id: str) -> None:
+    def mark_child_started(
+        self,
+        delegation_id: str,
+        child_turn_id: str,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
         """把 delegation 标记为 running 并发出 child_started 父事件。
 
         参数:
@@ -166,9 +174,15 @@ class DelegationService:
                 delegation_type=record.delegation_type,
                 status="running",
             ),
+            runtime_event_loop=runtime_event_loop,
         )
 
-    def mark_completed(self, delegation_id: str, summary: str) -> None:
+    def mark_completed(
+        self,
+        delegation_id: str,
+        summary: str,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
         """把 delegation 标记为 completed 并发出 finished 父事件。
 
         参数:
@@ -203,9 +217,15 @@ class DelegationService:
                 status="completed",
                 summary=summary,
             ),
+            runtime_event_loop=runtime_event_loop,
         )
 
-    def mark_failed(self, delegation_id: str, error: str) -> None:
+    def mark_failed(
+        self,
+        delegation_id: str,
+        error: str,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
         """把 delegation 标记为 failed 并发出 failed 父事件。
 
         参数:
@@ -236,9 +256,15 @@ class DelegationService:
                 status="failed",
                 error=error,
             ),
+            runtime_event_loop=runtime_event_loop,
         )
 
-    def mark_cancelled(self, delegation_id: str, error: str) -> None:
+    def mark_cancelled(
+        self,
+        delegation_id: str,
+        error: str,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
         """把 delegation 标记为 cancelled 并发出 cancelled 父事件。
 
         参数:
@@ -269,13 +295,37 @@ class DelegationService:
                 status="cancelled",
                 error=error,
             ),
+            runtime_event_loop=runtime_event_loop,
         )
+
+    def list_active_by_parent_turn(self, parent_turn_id: str) -> list[DelegationRecord]:
+        """列出某个 parent turn 下仍处于活动状态的 delegation。
+
+        参数:
+            parent_turn_id: parent turn 标识。
+
+        返回:
+            状态为 ``pending`` 或 ``running`` 的 delegation 记录列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询 delegation 记录失败。
+
+        副作用:
+            读取 delegations 表。
+        """
+
+        return [
+            record
+            for record in self._delegation_crud.list_by_parent_turn(parent_turn_id)
+            if record.status in {"pending", "running"}
+        ]
 
     def _emit_event(
         self,
         record: DelegationRecord,
         event_type: EventType,
         payload,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """尽力写入并发布 parent-turn delegation 事件。
 
@@ -295,14 +345,20 @@ class DelegationService:
         """
 
         try:
-            self._runtime_event_service.save_and_publish(
-                RuntimeEvent(
-                    event_type=event_type,
-                    task_id=record.task_id,
-                    turn_id=record.parent_turn_id,
-                    payload=payload,
-                )
+            event = RuntimeEvent(
+                event_type=event_type,
+                task_id=record.task_id,
+                turn_id=record.parent_turn_id,
+                payload=payload,
             )
+            stamped = self._runtime_event_service.save_event(event)
+            if runtime_event_loop is None:
+                self._runtime_event_service.publish_event(stamped)
+            else:
+                runtime_event_loop.call_soon_threadsafe(
+                    self._runtime_event_service.publish_event,
+                    stamped,
+                )
         except Exception:
             log.exception(
                 "delegation_event_emit_failed",

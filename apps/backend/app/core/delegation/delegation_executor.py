@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from typing import Any
 
@@ -94,6 +95,7 @@ class DelegationExecutor:
             可能创建 delegation 记录、child turn，运行 child Agent，并更新 delegation 终态。
         """
 
+        runtime_event_loop = execution_context.runtime_dependencies.runtime_event_loop
         child_template = self._agent_registry.resolve(args.child_agent_id)
         decision = self._policy.resolve(
             DelegationPolicyContext(
@@ -126,6 +128,7 @@ class DelegationExecutor:
                 prompt=args.prompt,
                 requested_tools=tuple(args.requested_tools),
                 effective_tools=decision.effective_tools,
+                runtime_event_loop=runtime_event_loop,
             )
             child_turn = self._turn_service.create_child_turn(
                 task_id=self._parent_task.task_id,
@@ -136,11 +139,16 @@ class DelegationExecutor:
             )
             if not self._turn_service.claim_pending_turn(child_turn.turn_id):
                 raise RuntimeError("child_turn_claim_lost")
-            self._delegation_service.mark_child_started(delegation_id, child_turn.turn_id)
+            self._delegation_service.mark_child_started(
+                delegation_id,
+                child_turn.turn_id,
+                runtime_event_loop=runtime_event_loop,
+            )
             child_profile = ChildAgentProfileBuilder.build(
                 registry_profile=child_template,
                 turn=child_turn,
                 effective_tools=decision.effective_tools,
+                context_excluded_turn_ids=(self._parent_turn.turn_id,),
             )
             result = self._child_runner.run_child(child_profile)
         except Exception as exc:
@@ -156,10 +164,14 @@ class DelegationExecutor:
                 },
             )
             if delegation_id:
-                self._delegation_service.mark_failed(delegation_id, str(exc))
+                self._delegation_service.mark_failed(
+                    delegation_id,
+                    str(exc),
+                    runtime_event_loop=runtime_event_loop,
+                )
             return self._child_error("failed", str(exc))
 
-        return self._finalize_result(delegation_id, result)
+        return self._finalize_result(delegation_id, result, runtime_event_loop)
 
     def _system_allowed_tools(self) -> tuple[str, ...]:
         """返回系统策略允许 child 使用的工具名称。
@@ -220,7 +232,12 @@ class DelegationExecutor:
             permission="delegate_task",
         )
 
-    def _finalize_result(self, delegation_id: str, result: DelegationResult) -> ToolObservation:
+    def _finalize_result(
+        self,
+        delegation_id: str,
+        result: DelegationResult,
+        runtime_event_loop: asyncio.AbstractEventLoop | None,
+    ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 
         参数:
@@ -240,7 +257,11 @@ class DelegationExecutor:
 
         if result.status == "completed":
             summary = result.summary or "child turn completed"
-            self._delegation_service.mark_completed(delegation_id, summary)
+            self._delegation_service.mark_completed(
+                delegation_id,
+                summary,
+                runtime_event_loop=runtime_event_loop,
+            )
             return tool_success(
                 "delegate_task",
                 "delegate_task",
@@ -253,10 +274,18 @@ class DelegationExecutor:
             )
         if result.status == "cancelled":
             error = result.error or "child turn cancelled"
-            self._delegation_service.mark_cancelled(delegation_id, error)
+            self._delegation_service.mark_cancelled(
+                delegation_id,
+                error,
+                runtime_event_loop=runtime_event_loop,
+            )
             return self._child_error("cancelled", error)
         error = result.error or "child turn failed"
-        self._delegation_service.mark_failed(delegation_id, error)
+        self._delegation_service.mark_failed(
+            delegation_id,
+            error,
+            runtime_event_loop=runtime_event_loop,
+        )
         return self._child_error("failed", error)
 
     def _child_error(self, status: str, error: str) -> ToolObservation:

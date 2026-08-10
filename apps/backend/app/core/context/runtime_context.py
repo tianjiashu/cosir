@@ -147,6 +147,7 @@ class RuntimeContext:
         agent_profile: AgentProfile,
         workspace_root: str,
         task_id: str,
+        excluded_turn_ids: tuple[str, ...] = (),
     ) -> RuntimeContext:
         """按 task 加载历史消息并构造运行时上下文（显式 I/O 入口）。
 
@@ -176,9 +177,12 @@ class RuntimeContext:
         # 读路径同样收口到 TurnService 门面（core → service，service → storage），
         # 与写路径（RuntimeOperations 经 TurnService 落库）保持一致，避免 core 直连 storage 层。
         turn_service = TurnService()
+        excluded_turn_id_set = set(excluded_turn_ids)
         turn_list: list[TurnRecord] = turn_service.list_turns_for_task(task_id)
         message_count = 0
         for turn in turn_list:
+            if turn.turn_id in excluded_turn_id_set:
+                continue
             messages: list[RuntimeMessage] = turn_service.load_turn_messages(turn.turn_id)
             ctx.messages.extend(ctx._build_history_messages(messages))
             message_count += len(messages)
@@ -193,6 +197,7 @@ class RuntimeContext:
                     "task_id": task_id,
                     "turn_count": len(turn_list),
                     "message_count": message_count,
+                    "excluded_turn_count": len(excluded_turn_id_set),
                 },
             },
         )

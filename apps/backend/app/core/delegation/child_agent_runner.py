@@ -18,6 +18,7 @@ class ChildAgentRunner:
     def __init__(
         self,
         run_agent: Callable[[AgentProfile], AsyncGenerator[RuntimeEvent, None]],
+        should_cancel: Callable[[str], bool] | None = None,
     ) -> None:
         """初始化 child agent 运行桥接器。
 
@@ -35,6 +36,7 @@ class ChildAgentRunner:
         """
 
         self._run_agent = run_agent
+        self._should_cancel = should_cancel or (lambda _turn_id: False)
 
     def run_child(self, child_profile: AgentProfile) -> DelegationResult:
         """同步运行 child Agent 并返回委派终态。
@@ -83,7 +85,19 @@ class ChildAgentRunner:
         turn_id = child_profile.turn.turn_id if child_profile.turn is not None else ""
         latest_final_text = ""
         try:
+            if self._should_cancel(turn_id):
+                return DelegationResult(
+                    status="cancelled",
+                    child_turn_id=turn_id,
+                    error="child turn cancelled",
+                )
             async for event in self._run_agent(child_profile):
+                if self._should_cancel(turn_id):
+                    return DelegationResult(
+                        status="cancelled",
+                        child_turn_id=turn_id,
+                        error="child turn cancelled",
+                    )
                 if event.event_type == EventType.FINAL_RESPONSE:
                     latest_final_text = str(getattr(event.payload, "text", "") or "")
                     continue
@@ -119,6 +133,12 @@ class ChildAgentRunner:
                 status="failed",
                 child_turn_id=turn_id,
                 error=str(exc) or "child turn failed",
+            )
+        if self._should_cancel(turn_id):
+            return DelegationResult(
+                status="cancelled",
+                child_turn_id=turn_id,
+                error="child turn cancelled",
             )
         return DelegationResult(
             status="failed",

@@ -20,6 +20,7 @@ from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
+from app.models.delegation_record import DelegationRecord
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload import (
@@ -126,6 +127,7 @@ class AgentRuntime:
                 return after_race
             raise ValueError(f"cannot cancel turn in status {after_race.status}")
         try:
+            self._cancel_active_child_turns(turn)
             self._save_and_publish_runtime_event(
                 RuntimeEvent(
                     event_type=EventType.RUN_CANCELLED,
@@ -153,6 +155,94 @@ class AgentRuntime:
             },
         )
         return turn
+
+    def _cancel_active_child_turns(self, parent_turn: TurnRecord) -> None:
+        """取消 parent turn 下仍处于活动状态的 child delegation。
+
+        参数:
+            parent_turn: 已被取消的 parent turn 记录。
+
+        返回:
+            无。
+
+        异常:
+            无；级联取消失败会记录日志并继续父 turn 取消流程。
+
+        副作用:
+            读取 delegation 记录，标记 child turn 取消信号，尽力更新 child turn 与 delegation 终态。
+        """
+
+        try:
+            active_delegations = get_delegation_service().list_active_by_parent_turn(
+                parent_turn.turn_id
+            )
+        except Exception:
+            log.exception(
+                "delegation_child_cancel_scan_failed",
+                extra={
+                    "msg": "父 turn 已取消，但扫描活动 child delegation 失败",
+                    "data": {
+                        "parent_turn_id": parent_turn.turn_id,
+                        "task_id": parent_turn.task_id,
+                    },
+                },
+            )
+            return
+        for delegation in active_delegations:
+            self._cancel_child_delegation(parent_turn, delegation)
+
+    def _cancel_child_delegation(
+        self,
+        parent_turn: TurnRecord,
+        delegation: DelegationRecord,
+    ) -> None:
+        """取消单个 child delegation 及其 child turn。
+
+        参数:
+            parent_turn: 已被取消的 parent turn 记录。
+            delegation: 需要级联取消的 delegation 记录。
+
+        返回:
+            无。
+
+        异常:
+            无；单个 child 取消失败会记录日志并继续处理其他 child。
+
+        副作用:
+            可能更新 child turn 状态、写入 child RUN_CANCELLED 事件、更新 delegation 状态。
+        """
+
+        reason = "parent_turn_cancelled"
+        try:
+            if delegation.child_turn_id:
+                cancellation_registry.mark_cancelled(delegation.child_turn_id)
+                child_turn = self._turn_service.cancel_turn_if_active(
+                    delegation.child_turn_id,
+                    reason,
+                )
+                if child_turn is not None:
+                    self._save_and_publish_runtime_event(
+                        RuntimeEvent(
+                            event_type=EventType.RUN_CANCELLED,
+                            task_id=child_turn.task_id,
+                            payload=RunCancelledPayload(status="cancelled"),
+                            turn_id=child_turn.turn_id,
+                        )
+                    )
+                    self._mark_stable_file_changes(child_turn.turn_id)
+            get_delegation_service().mark_cancelled(delegation.delegation_id, reason)
+        except Exception:
+            log.exception(
+                "delegation_child_cancel_failed",
+                extra={
+                    "msg": "父 turn 已取消，但级联取消 child delegation 失败",
+                    "data": {
+                        "parent_turn_id": parent_turn.turn_id,
+                        "delegation_id": delegation.delegation_id,
+                        "child_turn_id": delegation.child_turn_id,
+                    },
+                },
+            )
 
     async def run_turn(
         self,
@@ -611,7 +701,10 @@ class AgentRuntime:
                 agent_registry=self._agent_registry,
                 delegation_service=get_delegation_service(),
                 turn_service=self._turn_service,
-                child_runner=ChildAgentRunner(self.run_agent),
+                child_runner=ChildAgentRunner(
+                    self.run_agent,
+                    should_cancel=cancellation_registry.is_cancelled,
+                ),
                 parent_profile=agent_profile,
                 parent_turn=turn,
                 parent_task=task,

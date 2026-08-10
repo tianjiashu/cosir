@@ -160,6 +160,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             agent_profile=agent_profile,
             workspace_root=current_workspace.root_path,
             task_id=current_task.task_id,
+            excluded_turn_ids=agent_profile.context_excluded_turn_ids,
         )
 
         config = {
