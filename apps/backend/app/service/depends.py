@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
+    from app.storage.crud.delegation_crud import DelegationCrud
     from app.storage.crud.log_crud import LogStore
     from app.storage.crud.runtime_event_crud import RuntimeEventCrud
     from app.storage.crud.task_crud import TaskCrud
@@ -180,6 +181,28 @@ def get_turn_message_crud() -> TurnMessageCrud:
     from app.storage.crud.turn_message_crud import TurnMessageCrud
 
     return TurnMessageCrud()
+
+
+@lru_cache(maxsize=1)
+def get_delegation_crud() -> DelegationCrud:
+    """Return the process-local DelegationCrud singleton.
+
+    参数:
+        无。
+
+    返回:
+        DelegationCrud 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 DelegationCrud。
+    """
+
+    from app.storage.crud.delegation_crud import DelegationCrud
+
+    return DelegationCrud()
 
 
 @lru_cache(maxsize=1)
@@ -438,6 +461,7 @@ def reset_service_dependencies() -> None:
     get_runtime_event_bus.cache_clear()
     get_log_store.cache_clear()
     get_turn_message_crud.cache_clear()
+    get_delegation_crud.cache_clear()
     get_runtime_event_crud.cache_clear()
     get_workspace_crud.cache_clear()
     get_turn_crud.cache_clear()

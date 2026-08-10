@@ -24,6 +24,7 @@ from sqlalchemy import Engine, Table, inspect, text
 from sqlalchemy.sql.schema import DefaultClause
 
 from app.config.logging.logger import log
+from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.log_model import LogEntryModel
 from app.storage.model.runtime_event_model import RuntimeEventModel
@@ -39,6 +40,7 @@ APP_MODELS = (
     TurnMessageModel,
     RuntimeEventModel,
     FileSnapshotModel,
+    DelegationModel,
 )
 LOG_MODELS = (LogEntryModel,)
 LOG_SCHEMA_VERSION = 2
