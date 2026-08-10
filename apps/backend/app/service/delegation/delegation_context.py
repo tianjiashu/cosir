@@ -14,10 +14,10 @@ class DelegationPolicyContext:
     child_allowed_tools: frozenset[str]
     system_allowed_tools: frozenset[str]
     depth: int
-    max_depth: int
     running_children: int
-    max_concurrency: int
     known_child_agent_ids: frozenset[str]
+    max_depth: int = 1
+    max_concurrency: int = 1
 
 
 @dataclass(frozen=True)

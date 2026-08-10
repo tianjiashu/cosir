@@ -54,6 +54,21 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
 
 
 def test_delegation_crud_create_update_and_list(isolated_storage):
+    """验证 delegation 记录可创建、更新并按父 turn 或活跃状态查询。
+
+    参数:
+        isolated_storage: 已初始化的隔离 SQLite 存储 fixture。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        向隔离数据库写入并更新一条 delegation 记录。
+    """
+
     now = utc_now()
     crud = DelegationCrud()
     record = DelegationRecord(

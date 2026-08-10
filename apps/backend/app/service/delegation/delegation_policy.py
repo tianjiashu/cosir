@@ -32,13 +32,18 @@ class DelegationPolicy:
         if context.running_children >= context.max_concurrency:
             return DelegationPolicyDecision(False, "delegation_concurrency_exceeded", ())
 
-        effective_tools = tuple(
-            tool
-            for tool in context.requested_tools
-            if tool in context.parent_allowed_tools
-            and tool in context.child_allowed_tools
-            and tool in context.system_allowed_tools
-        )
+        effective_tools: list[str] = []
+        seen_tools: set[str] = set()
+        for tool in context.requested_tools:
+            if tool in seen_tools:
+                continue
+            seen_tools.add(tool)
+            if (
+                tool in context.parent_allowed_tools
+                and tool in context.child_allowed_tools
+                and tool in context.system_allowed_tools
+            ):
+                effective_tools.append(tool)
         if not effective_tools:
             return DelegationPolicyDecision(False, "no_effective_tools", ())
-        return DelegationPolicyDecision(True, "", effective_tools)
+        return DelegationPolicyDecision(True, "", tuple(effective_tools))
