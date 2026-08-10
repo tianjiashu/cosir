@@ -18,19 +18,19 @@ class DelegateTaskExecutor(Protocol):
         args: DelegateTaskArgs,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """Execute one child-agent delegation request.
+        """执行一次 child agent 委派请求。
 
-        Args:
-            args: Validated delegate_task request parameters.
-            execution_context: Parent tool execution boundary and runtime dependencies.
+        参数:
+            args: 已校验的 delegate_task 请求参数。
+            execution_context: 父工具执行边界及其运行时依赖。
 
-        Returns:
-            The child delegation result as a normalized tool observation.
+        返回:
+            child delegation 的归一化工具观察结果。
 
-        Raises:
-            Implementation-defined exceptions when runtime delegation cannot complete.
+        异常:
+            当运行时无法完成委派时，由具体实现抛出对应异常。
 
-        Side Effects:
-            Implementations may create and run a child-agent delegation.
+        副作用:
+            具体实现可能创建并运行一次 child agent 委派。
         """
         ...

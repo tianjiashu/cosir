@@ -19,6 +19,20 @@ class FakeDelegateTaskExecutor:
         return tool_success("delegate_task", "write", "child done")
 
 
+def test_delegate_task_requires_execution_context():
+    tool = build_delegate_task_definition()
+
+    result = tool.handler(
+        child_agent_id="delegate_reviewer",
+        delegation_type="review",
+        prompt="review",
+        requested_tools=["read_file"],
+    )
+
+    assert result.status == "error"
+    assert "execution context" in result.content
+
+
 def test_delegate_task_requires_executor(tmp_path):
     tool = build_delegate_task_definition()
     context = ToolExecutionContext(
@@ -64,3 +78,27 @@ def test_delegate_task_delegates_to_injected_executor(tmp_path):
 
     assert result.status == "success"
     assert executor.called is True
+
+
+def test_delegate_task_rejects_invalid_arguments(tmp_path):
+    tool = build_delegate_task_definition()
+    executor = FakeDelegateTaskExecutor()
+    context = ToolExecutionContext(
+        task_id="task_1",
+        workspace_id="workspace_1",
+        workspace_root=tmp_path,
+        turn_id="turn_parent",
+        runtime_dependencies=ToolRuntimeDependencies(delegate_task_executor=executor),
+    )
+
+    result = tool.handler(
+        child_agent_id="delegate_reviewer",
+        delegation_type="review",
+        prompt="review",
+        requested_tools="read_file",
+        execution_context=context,
+    )
+
+    assert result.status == "error"
+    assert "invalid arguments" in result.content
+    assert executor.called is False

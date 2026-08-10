@@ -28,25 +28,23 @@ class DelegateTaskTool(HandlerBase):
         requested_tools: list[str],
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """Delegate a task through the runtime executor attached to the execution context.
+        """通过执行上下文中的运行时执行器委派任务。
 
-        Args:
-            child_agent_id: Identifier of the child agent profile to run.
-            delegation_type: Requested delegation category.
-            prompt: Focused instruction for the child agent.
-            requested_tools: Tool names requested for the child agent.
-            execution_context: Parent tool execution boundary containing runtime dependencies.
+        参数:
+            child_agent_id: 要运行的 child agent profile 标识。
+            delegation_type: 请求的委派类别。
+            prompt: 传递给 child agent 的聚焦指令。
+            requested_tools: 为 child agent 请求的工具名称列表。
+            execution_context: 包含运行时依赖的父工具执行边界。
 
-        Returns:
-            The injected executor's normalized result, or an error observation when the
-            execution context, executor, or arguments are unavailable or invalid.
+        返回:
+            注入执行器的归一化结果；当执行上下文、执行器或参数缺失或无效时，返回错误观察结果。
 
-        Raises:
-            None. Validation failures are returned as error observations; executor errors
-            remain the executor's responsibility.
+        异常:
+            无。参数校验失败会返回错误观察结果；执行器异常由执行器自身负责处理。
 
-        Side Effects:
-            Invokes the injected runtime executor when the request is valid.
+        副作用:
+            当请求有效时调用注入的运行时执行器。
         """
 
         if execution_context is None:
@@ -85,19 +83,19 @@ class DelegateTaskTool(HandlerBase):
         return executor.execute(args, execution_context)
 
     def to_definition(self) -> ToolDefinition:
-        """Build the registry definition for the delegate_task tool.
+        """构建 delegate_task 工具的注册定义。
 
-        Args:
-            None.
+        参数:
+            无。
 
-        Returns:
-            The delegate_task tool definition using in-process thread execution.
+        返回:
+            使用进程内线程执行的 delegate_task 工具定义。
 
-        Raises:
-            None.
+        异常:
+            无。
 
-        Side Effects:
-            None.
+        副作用:
+            无。
         """
 
         return ToolDefinition(
@@ -113,19 +111,19 @@ class DelegateTaskTool(HandlerBase):
 
 
 def build_delegate_task_definition() -> ToolDefinition:
-    """Build the delegate_task tool definition.
+    """构建 delegate_task 工具定义。
 
-    Args:
-        None.
+    参数:
+        无。
 
-    Returns:
-        The delegate_task definition ready for registry registration.
+    返回:
+        可直接注册到工具注册表的 delegate_task 工具定义。
 
-    Raises:
-        None.
+    异常:
+        无。
 
-    Side Effects:
-        Creates a DelegateTaskTool instance without starting a delegation.
+    副作用:
+        创建 DelegateTaskTool 实例，但不会启动委派。
     """
 
     return DelegateTaskTool().to_definition()
