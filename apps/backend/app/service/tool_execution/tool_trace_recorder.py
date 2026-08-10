@@ -60,6 +60,23 @@ class ToolTraceRecorder(Protocol):
         """
         ...
 
+    def flush(self) -> None:
+        """Flush recorder-side buffered trace data if the implementation has any.
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            实现不应向上传播异常；调用方仍会做最终兜底，避免观测失败影响主流程。
+
+        副作用:
+            可能触发外部观测系统的缓冲上报。
+        """
+        ...
+
 
 class _NullToolSpan:
     """空工具 span（降级路径），``record`` 为 no-op。
@@ -111,3 +128,20 @@ class _NullToolTraceRecorder:
             无。
         """
         yield _NullToolSpan()
+
+    def flush(self) -> None:
+        """空实现：无缓冲数据需要上报。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        return None

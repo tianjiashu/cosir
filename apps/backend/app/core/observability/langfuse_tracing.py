@@ -20,14 +20,18 @@ Langfuse 客户端 API 版本：基于 langfuse v4（OpenTelemetry 后端）。�
   ``Langfuse(...)`` 完成全局配置，再创建 ``CallbackHandler``。
 """
 
-from collections.abc import Iterator
+import sys
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_payload
+from app.utils.trace_infra.ids import new_trace_id
+
+_TRACING_WARNING_EVENTS: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -78,26 +82,46 @@ def tracing_enabled() -> bool:
     if not Settings.LANGFUSE_ENABLED:
         return False
     if not Settings.LANGFUSE_PUBLIC_KEY or not Settings.LANGFUSE_SECRET_KEY:
-        log.warning(
+        _warn_once(
             "langfuse_disabled_missing_keys",
-            extra={
-                "msg": "Langfuse 已开启但缺失 public/secret key，降级为不追踪",
-                "data": {"base_url": Settings.LANGFUSE_BASE_URL},
-            },
+            "Langfuse 已开启但缺失 public/secret key，降级为不追踪",
+            {"base_url": Settings.LANGFUSE_BASE_URL},
         )
         return False
     try:
         import langfuse  # noqa: F401
     except ImportError:
-        log.warning(
+        _warn_once(
             "langfuse_not_installed",
-            extra={
-                "msg": "Langfuse 已开启但未安装 langfuse 包，降级为不追踪",
-                "data": {"base_url": Settings.LANGFUSE_BASE_URL},
-            },
+            "Langfuse 已开启但未安装 langfuse 包，降级为不追踪",
+            {"base_url": Settings.LANGFUSE_BASE_URL},
         )
         return False
     return True
+
+
+def _warn_once(event: str, msg: str, data: dict[str, Any] | None = None) -> None:
+    """Log a Langfuse degradation warning once per process.
+
+    参数:
+        event: 稳定日志事件名。
+        msg: 面向人的中文说明。
+        data: 可选结构化定位字段，不得包含 secret 原文。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        首次遇到指定事件时写一条 warning 日志。
+    """
+
+    if event in _TRACING_WARNING_EVENTS:
+        return
+    _TRACING_WARNING_EVENTS.add(event)
+    log.warning(event, extra={"msg": msg, "data": data or {}})
 
 
 def _build_langfuse_client() -> Any:
@@ -126,7 +150,84 @@ def _build_langfuse_client() -> Any:
         public_key=Settings.LANGFUSE_PUBLIC_KEY,
         secret_key=Settings.LANGFUSE_SECRET_KEY,
         base_url=Settings.LANGFUSE_BASE_URL,
+        mask=_mask_langfuse_data,
+        mask_otel_spans=_mask_langfuse_otel_spans,
     )
+
+
+def _mask_langfuse_data(*, data: Any, **kwargs: Any) -> Any:
+    """Mask payloads set through Langfuse SDK APIs.
+
+    参数:
+        data: Langfuse SDK 传入的 input/output/metadata 数据。
+        **kwargs: Langfuse SDK 未来可能传入的上下文字段。
+
+    返回:
+        已脱敏数据。
+
+    异常:
+        无。脱敏失败时返回保守占位，避免异常影响 SDK 主流程。
+
+    副作用:
+        无。
+    """
+
+    try:
+        return sanitize_langfuse_payload(data)
+    except Exception:
+        log.exception(
+            "langfuse_payload_mask_failed",
+            extra={"msg": "Langfuse payload 脱敏失败，使用保守占位"},
+        )
+        return "[REDACTED]"
+
+
+def _mask_langfuse_otel_spans(*, params: Any) -> Any:
+    """Mask OpenTelemetry span attributes before Langfuse exports them.
+
+    参数:
+        params: Langfuse SDK 传入的 ``MaskOtelSpansParams``。
+
+    返回:
+        ``MaskOtelSpansResult`` 或 ``None``。
+
+    异常:
+        无。脱敏失败时返回 ``None``，避免阻断 OTel 导出线程。
+
+    副作用:
+        无。
+    """
+
+    try:
+        from langfuse.types import MaskOtelSpansResult, OtelSpanPatch
+
+        patches: dict[Any, Any] = {}
+        for identifier, span in getattr(params, "spans", {}).items():
+            replacements: dict[str, str | bool | int | float | list[str]] = {}
+            for key, value in getattr(span, "attributes", {}).items():
+                if isinstance(value, str):
+                    masked = sanitize_langfuse_payload({key: value})[key]
+                    if isinstance(masked, str) and masked != value:
+                        replacements[key] = masked
+                elif isinstance(value, int | float | bool):
+                    continue
+                elif isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
+                    masked_sequence = sanitize_langfuse_payload(list(value))
+                    if masked_sequence != value and all(
+                        isinstance(item, str) for item in masked_sequence
+                    ):
+                        replacements[key] = masked_sequence
+            if replacements:
+                patches[identifier] = OtelSpanPatch(set_attributes=replacements)
+        if not patches:
+            return None
+        return MaskOtelSpansResult(span_patches=patches)
+    except Exception:
+        log.exception(
+            "langfuse_otel_mask_failed",
+            extra={"msg": "Langfuse OTel span 脱敏失败，跳过本批次 masking"},
+        )
+        return None
 
 
 @contextmanager
@@ -159,14 +260,14 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
         yield TurnTraceResult(callbacks=[], trace_id=None)
         return
 
-    # 仅包裹「客户端构造 + 根 observation 打开 + CallbackHandler 构造」三段（进入 yield 之前）。
-    # 这一段任何失败都属于「可观测性初始化故障」，降级为不追踪（yield 空结果），绝不中断 turn。
+    # 仅包裹「客户端构造 + 根 observation 上下文构造」阶段；进入 context 和 handler 构造
+    # 需要独立清理已进入的上下文，避免半初始化的 Langfuse 状态泄漏。
     try:
         from langfuse import propagate_attributes
         from langfuse.langchain import CallbackHandler
 
         client = _build_langfuse_client()
-        trace_id = str(uuid4())
+        trace_id = new_trace_id()
         trace_metadata: dict[str, str] = {
             "task_id": metadata.task_id,
             "turn_id": metadata.turn_id,
@@ -191,40 +292,125 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
         yield TurnTraceResult(callbacks=[], trace_id=None)
         return
 
-    # 显式进入根 observation 上下文：若 __enter__ 阶段（可观测性故障）失败，降级为不追踪，
-    # 不中断 turn。yield 期间（turn 真实执行）的异常不属于可观测性故障，不在此捕获，
-    # 交由 runner 的 try/except 落定为 task_failed，避免吞掉 turn 真实错误。
+    root_entered = False
+    attr_entered = False
     try:
         root_span_cm.__enter__()
+        root_entered = True
         attr_cm.__enter__()
+        attr_entered = True
+        handler = CallbackHandler(
+            public_key=Settings.LANGFUSE_PUBLIC_KEY,
+            trace_context={"trace_id": trace_id},
+        )
     except Exception:
         log.exception(
             "langfuse_turn_trace_failed",
             extra={
-                "msg": "Langfuse 根 observation 进入失败，降级为不追踪",
+                "msg": "Langfuse 根 observation 或 CallbackHandler 初始化失败，降级为不追踪",
                 "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
             },
+        )
+        _safe_exit_langfuse_context(
+            attr_cm if attr_entered else None,
+            "langfuse_attributes_exit_failed",
+            metadata,
+        )
+        _safe_exit_langfuse_context(
+            root_span_cm if root_entered else None,
+            "langfuse_root_span_exit_failed",
+            metadata,
         )
         yield TurnTraceResult(callbacks=[], trace_id=None)
         return
 
-    handler = CallbackHandler(
-        public_key=Settings.LANGFUSE_PUBLIC_KEY,
-        trace_context={"trace_id": trace_id},
-    )
     try:
         try:
             yield TurnTraceResult(callbacks=[handler], trace_id=trace_id)
         finally:
-            # 同步 flush：等待 OTel 后台批量上报队列排空；可能短暂阻塞运行循环，属可接受的
-            # 退出成本（不依赖主流程正确性）。
-            client.flush()
+            _safe_flush_langfuse_client(client, metadata, "langfuse_turn_flush_failed")
     finally:
-        # 正常结束根 observation（end span）；异常向上传播（turn 真实错误由 runner 落定）。
-        try:
-            attr_cm.__exit__(None, None, None)
-        finally:
-            root_span_cm.__exit__(None, None, None)
+        exc_info = sys.exc_info()
+        _safe_exit_langfuse_context(
+            attr_cm,
+            "langfuse_attributes_exit_failed",
+            metadata,
+            exc_info,
+        )
+        _safe_exit_langfuse_context(
+            root_span_cm,
+            "langfuse_root_span_exit_failed",
+            metadata,
+            exc_info,
+        )
+
+
+def _safe_flush_langfuse_client(client: Any, metadata: TraceMetadata, event: str) -> None:
+    """Best-effort flush a Langfuse client without affecting turn execution.
+
+    参数:
+        client: Langfuse client 实例。
+        metadata: 当前 turn 的定位元数据。
+        event: flush 失败时使用的稳定日志事件名。
+
+    返回:
+        无。
+
+    异常:
+        无。Langfuse flush 异常被记录后吞掉。
+
+    副作用:
+        触发 Langfuse 后台缓冲 flush；失败时写 error 日志。
+    """
+
+    try:
+        client.flush()
+    except Exception:
+        log.exception(
+            event,
+            extra={
+                "msg": "Langfuse flush 失败，已忽略以避免影响 turn",
+                "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+            },
+        )
+
+
+def _safe_exit_langfuse_context(
+    context_manager: Any | None,
+    event: str,
+    metadata: TraceMetadata,
+    exc_info: tuple[type[BaseException] | None, BaseException | None, Any] | None = None,
+) -> None:
+    """Best-effort exit a Langfuse context manager.
+
+    参数:
+        context_manager: 已进入的 Langfuse context manager；为 ``None`` 时跳过。
+        event: 退出失败时使用的稳定日志事件名。
+        metadata: 当前 turn 的定位元数据。
+        exc_info: 可选的原始业务异常上下文，用于让 Langfuse 正确标记失败 observation。
+
+    返回:
+        无。
+
+    异常:
+        无。退出异常被记录后吞掉。
+
+    副作用:
+        可能结束 Langfuse observation；失败时写 error 日志。
+    """
+
+    if context_manager is None:
+        return
+    try:
+        context_manager.__exit__(*(exc_info or (None, None, None)))
+    except Exception:
+        log.exception(
+            event,
+            extra={
+                "msg": "Langfuse context 退出失败，已忽略以避免影响 turn",
+                "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+            },
+        )
 
 
 def flush_langfuse() -> None:

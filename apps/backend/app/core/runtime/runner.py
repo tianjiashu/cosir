@@ -3,20 +3,17 @@
 import asyncio
 import os
 from collections.abc import AsyncGenerator
-from functools import partial
 
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.observability import (
-    LangfuseToolTraceRecorder,
     TraceMetadata,
-    tracing_enabled,
+    build_tool_trace_recorder,
     turn_trace,
 )
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry, cancellation_registry
+from app.core.runtime.turn_cancellation_registry import cancellation_registry
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
@@ -38,6 +35,7 @@ from app.service.depends import (
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.schemas import ToolExecutionContext
+
 
 class AgentRuntime:
     """Execute tasks and stream runtime events.
@@ -153,8 +151,8 @@ class AgentRuntime:
         return turn
 
     async def run_turn(
-            self,
-            turn: TurnRecord | None = None,
+        self,
+        turn: TurnRecord | None = None,
     ) -> AsyncGenerator[RuntimeEvent] | None:
         """执行单个 pending 轮次并实时流式产出运行时事件。
 
@@ -203,10 +201,7 @@ class AgentRuntime:
         agent_profile.turn = turn
         return self.run_agent(agent_profile)
 
-
-
     async def run_agent(self, agent: AgentProfile) -> AsyncGenerator[RuntimeEvent, None]:
-
         if agent.turn is None:
             raise RuntimeError("agent profile unavailable for turn")
 
@@ -221,7 +216,9 @@ class AgentRuntime:
         # 无内置实现，空订阅下 fire 零开销放行。统一经 HookInterceptor 收口。
 
         await HookInterceptor.async_safe_fire(
-            HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=turn, locatable=None)
+            HookContext.from_locatable(
+                event=HookEvent.USER_PROMPT_SUBMIT, turn=turn, locatable=None
+            )
         )
 
         # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
@@ -241,7 +238,7 @@ class AgentRuntime:
                 turn_id=turn_id,
                 agent_id=agent.agent_id,
             )
-            recorder = LangfuseToolTraceRecorder() if tracing_enabled() else None
+            recorder = build_tool_trace_recorder()
             operations = self._build_operations(
                 workspace, task, turn, agent, tool_trace_recorder=recorder
             )
@@ -256,13 +253,21 @@ class AgentRuntime:
 
             with turn_trace(metadata) as trace_result:
                 async for event in agent.workflow.run(
-                        operations,
-                        callbacks=trace_result.callbacks,
-                        langfuse_trace_id=trace_result.trace_id,
+                    operations,
+                    callbacks=trace_result.callbacks,
+                    langfuse_trace_id=trace_result.trace_id,
                 ):
                     yield await self._emit(event)
-            if recorder is not None:
+            try:
                 recorder.flush()
+            except Exception:
+                log.exception(
+                    "langfuse_recorder_flush_unhandled",
+                    extra={
+                        "msg": "工具 trace recorder flush 未处理异常，已忽略以避免影响 turn",
+                        "data": {"task_id": task_id, "turn_id": turn_id},
+                    },
+                )
             await self._publish_stable_file_changes(task_id, turn_id)
             # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
             # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
@@ -493,7 +498,7 @@ class AgentRuntime:
         }
 
     def _resolve_execution_context(
-            self, task: TaskRecord, turn_id: str = ""
+        self, task: TaskRecord, turn_id: str = ""
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
@@ -569,12 +574,12 @@ class AgentRuntime:
         return stamped
 
     def _build_operations(
-            self,
-            workspace: WorkspaceRecord,
-            task: TaskRecord,
-            turn: TurnRecord,
-            agent_profile: AgentProfile,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
+        self,
+        workspace: WorkspaceRecord,
+        task: TaskRecord,
+        turn: TurnRecord,
+        agent_profile: AgentProfile,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> RuntimeOperations:
         """为单个 turn 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -595,6 +600,7 @@ class AgentRuntime:
             RuntimeOperations 实例。
         """
         model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
+        execution_context = self._resolve_execution_context(task, turn_id=turn.turn_id)
         return RuntimeOperations(
             tool_scheduler=self._tool_scheduler,
             agent_profile=agent_profile,
@@ -602,6 +608,6 @@ class AgentRuntime:
             current_task=task,
             current_workspace=workspace,
             model_tools=model_tools,
-            tool_trace_recorder=tool_trace_recorder
+            execution_context=execution_context,
+            tool_trace_recorder=tool_trace_recorder,
         )
-

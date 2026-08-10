@@ -8,6 +8,7 @@
 - 不负责：直接 SQL 操作（委托给 ``TurnCrud``/``TaskCrud``/``TurnMessageCrud``）。
 """
 
+from app.config.logging.logger import log
 from app.models import RuntimeMessage, TurnRecord
 from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
@@ -142,10 +143,36 @@ class TurnService:
 
         return self._turn.update_response(turn_id, response_text)
 
-    def has_turn_status(self, turn_id: str, status: str) -> bool:
-        """Return whether the turn currently has the requested status."""
+    def has_turn_status(self, turn_id: str | None, status: str) -> bool:
+        """Return whether the turn currently has the requested status.
 
-        return self._turn.get(turn_id).status == status
+        参数:
+            turn_id: 目标轮次标识，允许为 ``None``（调用方缺陷时按非目标状态处理）。
+            status: 待比对的状态字符串（如 ``cancelled`` / ``running``）。
+
+        返回:
+            轮次存在且状态匹配时返回 True；轮次不存在或状态不符时返回 False。
+
+        异常:
+            无。``turn_id`` 为 ``None`` 属于调用方缺陷，记 warn 后返回 False 而非抛错，
+            避免取消检测在非法输入下静默失效；turn 已删除/不存在按「非目标状态」处理
+            （``KeyError`` 转 ``False``），防止取消检测因 ``KeyError`` 被上层吞掉而失效，
+            导致已取消的 turn 仍继续进入工具执行。
+        """
+
+        if turn_id is None:
+            log.warning(
+                "turn_status_null_id",
+                extra={
+                    "msg": "has_turn_status 收到空 turn_id，按非目标状态处理（调用方缺陷）",
+                    "data": {"turn_id": None, "status": status},
+                },
+            )
+            return False
+        try:
+            return self._turn.get(turn_id).status == status
+        except KeyError:
+            return False
 
     def claim_pending_turn(self, turn_id: str) -> bool:
         return self._turn.claim_pending(turn_id)

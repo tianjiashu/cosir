@@ -40,3 +40,17 @@ repos:
         language: system
         pass_filenames: false
         files: ^apps/backend/app/
+  # 运行时事件契约快照：当后端 payload 模型（apps/backend/app/models/payload/）变更时，
+  # 自动重新生成 apps/shared/ts/events.ts，使前后端运行时事件类型始终与代码同步，
+  # 避免契约漂移（与 generate-openapi 同机制）。生成物由本 hook 维护。
+  - repo: local
+    hooks:
+      - id: generate-runtime-event-ts
+        name: 生成运行时事件 TS 类型 (apps/shared/ts/events.ts)
+        description: >-
+          后端运行时事件 payload 模型变更后，从 app.models.payload 重新生成
+          apps/shared/ts/events.ts，供前端消费运行时事件。
+        entry: uv run --project apps/backend python scripts/generate_runtime_event_ts.py
+        language: system
+        pass_filenames: false
+        files: ^apps/backend/app/models/payload/

@@ -56,6 +56,12 @@ class Settings:
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
 
+    # 模型流式 chunk 调试落盘开关：默认关闭。开启后 ``model_node`` 会逐 chunk / 合并后
+    # 把完整消息 JSON 追加到 ``logs/debug_*_chunks.jsonl``，用于本地排查 chunk 结构。
+    # 该通道绕过常规日志预算截断，且每 turn 写盘量较大，常驻生产会损害稳定迭代，故默认关闭，
+    # 仅在需要排查流式 chunk 结构时经环境变量 ``CODING_AGENT_DEBUG_DUMP_CHUNKS=true`` 显式开启。
+    DEBUG_DUMP_CHUNKS: ClassVar[bool] = False
+
     # --- CodeGraph 索引生命周期（见 workspace_payload-workspace-lifecycle-design.md） ---
     # 首次建索引（init）大仓库可能数分钟，需长超时；增量同步（sync）耗时较短。
     CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS: ClassVar[float] = 600.0
@@ -271,6 +277,7 @@ class Settings:
         cls.WEB_EXTRACT_CHAR_LIMIT = int(
             os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
         )
+        cls.DEBUG_DUMP_CHUNKS = cls._env_bool("CODING_AGENT_DEBUG_DUMP_CHUNKS", False)
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
         cls.LANGFUSE_ENABLED = cls._env_bool("CODING_AGENT_LANGFUSE_ENABLED", False)

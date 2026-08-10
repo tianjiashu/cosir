@@ -39,6 +39,11 @@ from app.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.tools.tool_execute.tool_error import (
+    cancel_not_executed_reason,
+    internal_execution_error_reason,
+    tool_error,
+)
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
 from app.tools.tool_handler.terminal import OutputSink
@@ -112,6 +117,13 @@ class ToolExecutionService:
         转为 ``role="tool"`` 的 ``RuntimeMessage`` 供下一步模型消费；若提供 ``write_event``
         回调，则对每个完成的工具调用发出 ``TOOL_CALL_FINISHED`` 事件。
 
+        配对闭合不变量（本方法收口）：``AIMessage.tool_calls`` 的每个 call 必须在返回的
+        模型消息中配对一条 ``role="tool"`` 消息，否则下一轮对话会因协议不匹配崩溃。为此，
+        两类失败来源都会被收口为 ``status="error"`` 的占位观察并序列化进模型消息：
+        （1）协作式取消——在 call 边界检测到取消信号后未执行的 call；
+        （2）执行链内部 bug——``ToolScheduler.execute`` / trace span / 事件构造 / 序列化
+        抛出的非工具语义异常（此时工具本体未运行）。
+
         参数:
             step_id: 请求这些工具调用的步骤标识。
             calls: 模型请求的工具调用列表。
@@ -124,13 +136,19 @@ class ToolExecutionService:
                 缺省时禁用实时输出通道，其余行为不变。
 
         返回:
-            含观察列表与模型消息的 ``ToolRunResult``。
+            含观察列表与模型消息的 ``ToolRunResult``。观察与消息数量恒等于 ``calls``
+            数量，且与入参顺序一致（已执行的在前、因取消跳过而补的占位在后），保证
+            每个 call_id 的 ``tool_calls`` 协议配对闭合。
 
         异常:
-            无（单个工具失败由观察结果的 ``status`` 表达，不向上抛出）。
+            当 ``write_event`` 为 ``None`` 时抛出 ``RuntimeError``（调用方必须提供事件
+            写入回调，否则无法发出生命周期事件）。单个工具失败或执行链内部异常均**不**
+            向上抛出，而是由观察结果的 ``status`` 表达。
 
         副作用:
-            可能通过 ``write_event`` 写入事件；可能记工具执行日志。
+            可能通过 ``write_event`` 写入 ``TOOL_CALL_STARTED`` / ``TOOL_CALL_FINISHED``
+            事件；执行链内部异常时写 error 日志（含堆栈），本批因取消跳过调用时写 warning
+            日志；可能经 ``_publish_file_change_updated`` 广播运行中文件变更。
         """
 
         if write_event is None:
@@ -140,8 +158,9 @@ class ToolExecutionService:
         # 承载本轮的事件循环，故由调用方（异步节点）显式传入，供实时输出通道调度回环。
         loop = running_loop
 
-        observations = []
+        observations: list[ToolObservation] = []
         messages: list[RuntimeMessage] = []
+        executed_call_ids: set[str] = set()
         # 当前串行执行，后续可并行
         for call in calls:
             if self._should_cancel():
@@ -162,17 +181,46 @@ class ToolExecutionService:
             )
 
             # 执行工具调用（包在可选 trace span 内，记录参数/结果/耗时；缺省为空实现）。
-            with self._trace_recorder.span(call, step_id) as tool_span:
-                observation = self._scheduler.execute(
-                    call,
-                    execution_context=execution_context,
-                    allowed_tool_names=self._allowed_tool_names,
-                    should_cancel=self._should_cancel,
-                    output_sink=self._build_output_sink(step_id, call, execution_context, loop),
+            # 捕获执行链自身的意外异常（调度器/事件/trace span/序列化等内部 bug，而非
+            # 工具 handler 主动返回的业务失败）：此时工具本体未运行，须为当前 call 补一个
+            # 结构化 error 占位，让模型感知「内部执行错误」而非悬空崩协议。
+            try:
+                with self._trace_recorder.span(call, step_id) as tool_span:
+                    observation = self._scheduler.execute(
+                        call,
+                        execution_context=execution_context,
+                        allowed_tool_names=self._allowed_tool_names,
+                        should_cancel=self._should_cancel,
+                        output_sink=self._build_output_sink(step_id, call, execution_context, loop),
+                    )
+                    tool_span.record(observation)
+            except Exception as exc:  # 执行链 bug 必须收口为 error 观察
+                log.error(
+                    "tool_call_internal_error",
+                    extra={
+                        "msg": "工具调用执行链内部异常，已收口为 error 观察",
+                        "data": {
+                            "tool_name": call.tool_name,
+                            "tool_call_id": call.call_id,
+                            "step_id": step_id,
+                            "error": str(exc),
+                        },
+                    },
+                    exc_info=True,
                 )
-                tool_span.record(observation)
+                # 仅用异常类型名构造面向模型的说明，避免把未脱敏的 exc 原文（可能含路径 /
+                # 凭据 / 命令行片段）回传模型或事件流；完整原文已由上方 error 日志 exc_info 承载。
+                header = f"internal execution error before the tool ran: {type(exc).__name__}"
+                observation = tool_error(
+                    tool_name=call.tool_name,
+                    error=header,
+                    reason=internal_execution_error_reason(header),
+                    retryable=False,
+                    tool_call_id=call.call_id,
+                )
             # 记录观察结果
             observations.append(observation)
+            executed_call_ids.add(call.call_id)
 
             # 工具执行结束事件：只透传结构化数据，摘要与展示条目由客户端渲染
             write_event(
@@ -203,21 +251,70 @@ class ToolExecutionService:
             ):
                 self._publish_file_change_updated(execution_context, observation, loop)
 
-            # 转为模型消息,display_data 不可以给模型看。
-            observation.clear_display_data()
-            serialized = dataclasses.asdict(observation)
-            serialized["content"] = redact_terminal_output(observation.content)
-            messages.append(
-                RuntimeMessage(
-                    role="tool",
-                    content_text=json.dumps(
-                        {k: v for k, v in serialized.items() if v is not None},
-                        ensure_ascii=False,
-                    ),
-                    metadata={"tool_call_id": observation.tool_call_id},
-                )
+            # 转为模型消息（统一经 _to_model_message，确保 display_data 清空与脱敏一致）。
+            messages.append(self._to_model_message(observation))
+
+        # 配对闭合不变量：对未被执行的 call（取消跳过 / 未进入循环）补占位 error 观察，
+        # 使模型感知「这一步因取消而没有运行」，并闭合 tool_calls 协议避免下一轮对话崩溃。
+        skipped_calls = [c for c in calls if c.call_id not in executed_call_ids]
+        if skipped_calls:
+            log.warning(
+                "tool_calls_cancelled_not_executed",
+                extra={
+                    "msg": "本批工具调用因取消未执行，已补 error 占位闭合协议",
+                    "data": {
+                        "step_id": step_id,
+                        "total": len(calls),
+                        "executed": len(executed_call_ids),
+                        "skipped_call_ids": [c.call_id for c in skipped_calls],
+                    },
+                },
             )
+            for call in skipped_calls:
+                observation = tool_error(
+                    tool_name=call.tool_name,
+                    error="the tool call was cancelled before execution",
+                    reason=cancel_not_executed_reason(),
+                    retryable=False,
+                    tool_call_id=call.call_id,
+                )
+                observations.append(observation)
+                messages.append(self._to_model_message(observation))
         return ToolRunResult(observations=observations, messages_for_model=messages)
+
+    def _to_model_message(self, observation: ToolObservation) -> RuntimeMessage:
+        """把单个工具观察序列化为模型可见的 ``role="tool"`` 消息。
+
+        统一收口所有观察（含正常结果、内部错误占位、取消占位）的序列化逻辑，避免主路径
+        与补占位分支平行复制导致的语义漂移。序列化前清空 ``display_data``（模型不可见
+        通道），并对 ``content`` 做终端输出脱敏；最终仅保留非空字段，确保面向模型的文本
+        与正常失败观察同构。
+
+        参数:
+            observation: 已产出的工具观察（任意来源，含占位）。
+
+        返回:
+            可并入模型上下文的 ``RuntimeMessage``，``metadata.tool_call_id`` 用于与
+            ``AIMessage.tool_calls`` 配对闭合。
+
+        异常:
+            无。
+
+        副作用:
+            调用 ``observation.clear_display_data()`` 清空原观察对象的展示数据（就地修改
+            入参，不另存）。
+        """
+        observation.clear_display_data()
+        serialized = dataclasses.asdict(observation)
+        serialized["content"] = redact_terminal_output(observation.content)
+        return RuntimeMessage(
+            role="tool",
+            content_text=json.dumps(
+                {k: v for k, v in serialized.items() if v is not None},
+                ensure_ascii=False,
+            ),
+            metadata={"tool_call_id": observation.tool_call_id},
+        )
 
     def _build_output_sink(
         self,

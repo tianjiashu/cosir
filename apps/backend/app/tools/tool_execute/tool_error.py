@@ -75,6 +75,61 @@ def blocked_device_reason(action: str) -> str:
     )
 
 
+def cancel_not_executed_reason() -> str:
+    """构造「工具调用因取消而未执行」的富文本 ``reason``（共享助手）。
+
+    执行器在 call 边界检测到取消信号并停止后续调用时，对**尚未执行**的调用复用
+    此模板构造占位观察，使模型感知「这一步没有跑、是被主动取消的」，而不是误以为
+    成功或无响应。与真实失败观察走同一条序列化通道，保证协议配对闭合与语义一致。
+
+    参数:
+        无。
+
+    返回:
+        面向模型的富文本说明（根因是取消 + 这是确定性终态 + 不必重试）。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+    return (
+        "the tool call was cancelled before it started executing and produced no "
+        "result; this is a deterministic terminal state, so do not retry the same "
+        "call. adjust your plan based on the cancellation instead."
+    )
+
+
+def internal_execution_error_reason(header: str) -> str:
+    """构造「执行链内部错误（非工具语义失败）」的富文本 ``reason`` 共享尾部。
+
+    该助手是执行器在调用 ``ToolScheduler.execute`` 时捕获到**非工具语义异常**（即
+    执行链自身 bug：调度器内部、事件构造、trace span、序列化等抛出的意外异常，而非
+    工具 handler 主动返回的业务失败）的唯一收口：区分于工具语义失败，明确告诉模型
+    「工具本体没跑起来，是 runtime 出了内部错误」，并给出确定性失败的重试提示。
+
+    参数:
+        header: 已点明失败位置与人读原因的英文短句（如 ``"internal execution error
+            before the tool ran: ..."``），作为说明前缀。
+
+    返回:
+        面向模型的富文本说明（根因已由 ``header`` 给出 + 修正建议 + 确定性失败
+        的重试提示：需先排查 runtime 内部错误，原样重试无效）。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+    return (
+        f"{header} the tool itself never ran, so this is an internal runtime failure "
+        f"rather than a tool-reported error; retrying with identical arguments will "
+        f"fail again until the runtime issue is fixed."
+    )
+
+
 def handler_exception_reason(header: str) -> str:
     """构造「handler 抛异常 / 进程崩溃」类失败富文本 ``reason`` 的共享尾部。
 

@@ -4,20 +4,20 @@
 import 均为惰性加载，未启用 / 缺密钥 / 未安装时运行时行为与集成前一致。
 """
 
-from app.core.observability.langfuse_tool_trace_recorder import LangfuseToolTraceRecorder
+from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_payload
+from app.core.observability.langfuse_tool_trace_recorder import build_tool_trace_recorder
 from app.core.observability.langfuse_tracing import (
     TraceMetadata,
     TurnTraceResult,
     flush_langfuse,
-    tracing_enabled,
     turn_trace,
 )
 
 __all__ = [
-    "LangfuseToolTraceRecorder",
     "TraceMetadata",
     "TurnTraceResult",
+    "build_tool_trace_recorder",
     "flush_langfuse",
-    "tracing_enabled",
+    "sanitize_langfuse_payload",
     "turn_trace",
 ]

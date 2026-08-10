@@ -1,7 +1,7 @@
 """后端应用启动入口。
 
 通过 ``python -m app`` 从 ``apps/backend`` 目录启动本地开发服务器。
-仅作为开发期启动约定；生产部署应使用外部进程管理器拉起 ``app.main:app``。
+仅作为开发期启动约定；生产部署应使用外部进程管理器拉起 ``app.app:app``。
 
 可通过环境变量覆盖运行参数：
 
@@ -73,7 +73,7 @@ def main() -> None:
         reload_enabled = os.environ.get("CODING_AGENT_RELOAD", "true").lower() == "true"
 
         uvicorn.run(
-            "app.main:app",
+            "app.app:app",
             host=host,
             port=port,
             reload=reload_enabled,

@@ -18,12 +18,14 @@
 """
 
 import json
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.core.llm.langchain_bridge import tool_calls_from_langchain
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
@@ -32,11 +34,13 @@ from app.models.payload import (
     ModelOutputDeltaPayload,
     ModelRequestedPayload,
     ModelThinkingDeltaPayload,
+    RunCancelledPayload,
     RunFailedPayload,
     RunFinishedPayload,
     StepStartedPayload,
 )
 from app.tools.schemas import ToolCall
+from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState
 from .common import _runtime_config, _runtime_context, write_event
@@ -142,17 +146,164 @@ def _extract_reasoning_content(chunk) -> str:
     return value if isinstance(value, str) else ""  # 非字符串也返回空
 
 
+def _dump_merged_chunk_debug(merged: AIMessageChunk) -> None:
+    """把合并后的完整 chunk 结构追加写入调试文件，供本地排查完整字段。
+
+    常规结构化日志通道（JSONL 文件 + SQLite 日志库）对所有 ``data`` 字符串施加
+    ``MAX_LOG_TEXT_LENGTH`` 截断，无法承载完整的消息 JSON；本函数绕过该预算，
+    把 ``merged.model_dump()`` 以单行 JSON 追加到 ``logs/debug_merged_chunks.jsonl``，
+    使开发者能在不被截断的前提下查看 chunk 累计后的完整结构。
+
+    参数:
+        merged: 合并完成后的 ``AIMessageChunk``。
+
+    返回:
+        无。
+
+    异常:
+        无（写入失败仅记录 warning，不影响主流程）。
+
+    副作用:
+        向 ``Settings.LOG_DIR / debug_merged_chunks.jsonl`` 追加一行 JSON；当
+        ``Settings.DEBUG_DUMP_CHUNKS`` 为 ``False`` 时直接返回，不写盘。
+    """
+    if not Settings.DEBUG_DUMP_CHUNKS:
+        return
+    try:
+        debug_path = Settings.LOG_DIR / "debug_merged_chunks.jsonl"
+        record = {
+            "ts": _utc_now_iso(),
+            "merged": merged.model_dump(),
+        }
+        with open(debug_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except OSError as exc:
+        log.warning(
+            "_dump_merged_chunk_debug_failed",
+            extra={
+                "msg": "写入合并 chunk 调试文件失败",
+                "data": {"error": str(exc)},
+            },
+        )
+
+
+def _dump_raw_chunk_debug(chunk: AIMessageChunk, index: int) -> None:
+    """把单次流式产出的原始 chunk 结构追加写入调试文件，供本地逐 chunk 排查。
+
+    与 ``_dump_merged_chunk_debug``（合并后落盘）互补：本函数在 ``model.astream``
+    循环内逐条调用，记录每个原始分块的完整结构，使开发者能看到流式过程中 chunk
+    的形态演变（如 ``content`` 从空到累积、``tool_call_chunks`` 逐片到达、
+    ``usage_metadata`` 仅末 chunk 携带等）。同样绕过常规日志预算截断。
+
+    参数:
+        chunk: 模型 ``astream`` 产出的单个原始消息分块。
+        index: 该 chunk 在流式序列中的序号（从 0 开始），便于定位先后。
+
+    返回:
+        无。
+
+    异常:
+        无（写入失败仅记录 warning，不影响主流程）。
+
+    副作用:
+        向 ``Settings.LOG_DIR / debug_raw_chunks.jsonl`` 追加一行 JSON；当
+        ``Settings.DEBUG_DUMP_CHUNKS`` 为 ``False`` 时直接返回，不写盘。
+    """
+    if not Settings.DEBUG_DUMP_CHUNKS:
+        return
+    try:
+        debug_path = Settings.LOG_DIR / "debug_raw_chunks.jsonl"
+        record = {
+            "ts": _utc_now_iso(),
+            "index": index,
+            "chunk": chunk.model_dump(),
+        }
+        with open(debug_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except OSError as exc:
+        log.warning(
+            "_dump_raw_chunk_debug_failed",
+            extra={
+                "msg": "写入原始 chunk 调试文件失败",
+                "data": {"error": str(exc)},
+            },
+        )
+
+
+def _utc_now_iso() -> str:
+    """返回毫秒精度、``Z`` 后缀的 UTC 时间文本。"""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def _collect_chunk_to_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     """把累积的 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``。
 
     合并时会保留 ``additional_kwargs``（如 DeepSeek 的 ``reasoning_content`` 思考过程），
     否则思考内容会在落库 / 进入 graph state 时被丢弃，导致下游无法将其作为 thinking 事件推送。
 
+    合并后的 ``merged``（``AIMessageChunk``）完整结构经实测（见 ``logs/debug_merged_chunks.jsonl``）
+    形如以下字段，下游消费与调试时应按此契约解读::
+
+        {
+          "content": str,                 # 正文；stop 分支非空，tool_calls 分支可能为空串
+          "additional_kwargs": {          # provider 私有扩展字段
+            "reasoning_content": str      # DeepSeek 思考链；合并后保留，落库前剥离
+          },
+          "response_metadata": {          # 本轮元信息；累加失真细节见下方「注意」段
+            "model_provider": "openai",
+            "finish_reason": "stop" | "tool_calls",
+            "model_name": "deepseek-v4-flash",
+            "system_fingerprint": str
+          },
+          "type": "AIMessageChunk",
+          "name": None,
+          "id": "lc_run--<uuid>",         # 消息运行 ID
+          "tool_calls": [                 # 结构化工具调用；非空表示要调用工具
+            {"name": str, "args": dict, "id": "call_<n>_<hash>", "type": "tool_call"}
+          ],
+          "invalid_tool_calls": [],       # 解析失败/非法的工具调用（通常为空）
+          "usage_metadata": {             # token 用量
+            "input_tokens": int,
+            "output_tokens": int,
+            "total_tokens": int,
+            "input_token_details": {"cache_read": int},   # 命中缓存的 input token 数
+            "output_token_details": {"reasoning": int}    # 推理 token 数
+          },
+          "tool_call_chunks": [           # 流式累积的工具调用分片
+            {"name": str, "args": str(json), "id": str, "index": int, "type": "tool_call_chunk"}
+          ],
+          "chunk_position": "last"        # 标记这是合并后的最终块
+        }
+
+    两种典型分支（由 ``finish_reason`` 区分）：
+    - ``stop`` 分支：``content`` 为完整正文，``tool_calls`` / ``tool_call_chunks`` 均为空列表。
+    - ``tool_calls`` 分支：``content`` 可能为空串，``tool_calls`` 含一个或多个待执行工具调用，
+      ``tool_call_chunks`` 为对应的流式分片（``args`` 为 JSON 字符串、``index`` 为并行调用序号）。
+
+    注意（实测与源码一致）：
+    ``AIMessageChunk`` 累加时 ``response_metadata`` 走 ``merge_dicts``；其中字符串类型的 key
+    （不在白名单内）会被 LangChain 字符串拼接。白名单为：
+    ``index`` / ``id`` / ``output_version`` / ``model_provider``。
+    如 ``finish_reason`` 多 chunk 累加可能拼成 ``"stopstop"``。但流式下 ``finish_reason`` 通常只在
+    最后一个 chunk 出现（前序为空 dict），``merge_dicts`` 取「首个非空值优先」，故合并结果即末 chunk
+    值、并不失真；稳妥可取 ``chunks[-1].response_metadata``。本函数不依赖它做分支判断，无影响。
+
     参数:
         chunks: 模型流式产出的分块列表（可能为空）。
 
     返回:
-        可安全存入 graph state 并交给下一步模型调用的 ``AIMessage``。
+        可安全存入 graph state 并交给下一步模型调用的 ``AIMessage``：
+        - ``content`` 经 ``_extract_text`` 抽为纯文本（防御含 ``tool_call`` block 的 list 形态）；
+        - ``tool_calls`` / ``usage_metadata`` 透传（usage 由 ``add_usage`` 正确累加后的完整统计）；
+        - ``additional_kwargs`` 已剥离 ``reasoning_content``（思考内容已在流式阶段单独推送）；
+        - ``id`` 透传 merged 的消息运行 ID（``lc_run--<uuid>``），供日志与 trace 关联；缺失时为 None。
+
+    异常:
+        无（chunk 合并与调试落盘均不向外抛出；落盘失败已在 ``_dump_merged_chunk_debug`` 内降级为 warning）。
+
+    副作用:
+        经 ``_dump_merged_chunk_debug`` 向 ``Settings.LOG_DIR / debug_merged_chunks.jsonl``
+        追加一行完整 chunk JSON（调试通道，不受常规日志预算截断）。
     """
 
     merged: AIMessageChunk | None = None
@@ -161,18 +312,20 @@ def _collect_chunk_to_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     if merged is None:
         return AIMessage(content="")  # 空输入返回空消息
 
-    log.info("_finalize_ai_message", extra={
-        "data": json.dumps(merged, ensure_ascii=False)
-    })
+    # 完整结构落调试文件（不受日志预算截断），先于常规摘要日志执行。
+    _dump_merged_chunk_debug(merged)
 
     # 剥离思考字段：思考内容已在流式阶段作为 MODEL_THINKING_DELTA 推送给前端，
     # 不应随消息回灌给模型（推理模型回灌 reasoning_content 易引发重复思考或协议错误）。
     additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
     additional.pop("reasoning_content", None)
+    # content 统一抽纯文本：防御 DeepSeek 偶发把工具调用 block 带进 content list 的形态，
+    # 与 _ai_to_runtime_message 落库口径保持一致，避免回灌模型时重复携带工具结构。
     return AIMessage(
-        content=merged.content,  # 合并后的文本
+        content=_extract_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
         tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
         additional_kwargs=additional,  # 仅保留非思考的额外字段
+        usage_metadata=merged.usage_metadata,  # 透传完整 token 统计
         id=getattr(merged, "id", None),  # 消息 id 透传
     )
 
@@ -224,7 +377,12 @@ async def _model_node(state: ReactGraphState) -> dict:
         - 经 ``operations.append_runtime_message`` 把本轮 ``AIMessage`` 逐条增量落库；
         - 同步 ``_runtime_context().add_message`` 写回运行时上下文，使下一轮模型节点
           经 ``load_message()`` 能累积看到本轮输出（否则上下文不增长会陷入死循环）；
-        - 流式 token / 事件经 ``get_stream_writer`` 透传；状态写入 ``turn``。
+        - 流式 token / 事件经 ``get_stream_writer`` 透传；状态写入 ``turn``；
+        - 失败终态（``max_steps_reached`` / ``invalid_model_output``）的 ``RUN_FAILED`` 事件携带
+          ``usage`` token 摘要（可排查本轮已消耗 token）；取消分支不发终态事件，改以 warning 日志
+          记录 usage 摘要；
+        - 模型产出的 ``invalid_tool_calls`` 不执行、不回传模型，仅记 warning 日志（调用被丢弃，
+          属已知限制；其 args 已脱敏以防凭据泄漏）。
     """
 
     rc = _runtime_config()  # 取运行时配置
@@ -288,13 +446,24 @@ async def _model_node(state: ReactGraphState) -> dict:
         ModelRequestedPayload(step_id=step_id, message_count=len(messages)),
     )
 
-    # 后端在循环结束后需要"完整文本"来做判断和落库，不是为了发给前端
-    collected_text: list[str] = []  # 累积输出文本
-    chunks: list[AIMessageChunk] = []  # 累积流式分块
+    # collected_text 与 chunks 职责互补、不可合并：
+    # - collected_text 攒"给人看的文本流"：既驱动流式增量事件 MODEL_OUTPUT_DELTA（边收边发），
+    #   又循环结束后拼成 output_text 供落库判断与日志。仅含 chunk.content 抽出的纯文本片段。
+    # - chunks 攒"给机器解析的结构化对象"：循环结束后合并成完整 AIMessage，供解析
+    #   tool_calls / usage_metadata / finish_reason / invalid_tool_calls 等字段（决定走工具
+    #   分支还是 FINAL_RESPONSE）。collected_text 不是 chunks 的文本副本，二者生命周期与
+    #   粒度都不同，合并会丢失结构信息或重复抽取文本。
+    collected_text: list[str] = []  # 累积输出文本（流式增量 + 最终文本双重来源）
+    chunks: list[AIMessageChunk] = []  # 累积流式分块（合并出结构化 AIMessage）
+    chunk_index = 0  # 流式 chunk 序号（从 0 开始）
     terminal = False  # 是否因取消而提前终止
 
     # 真正流式调用模型，messages 为历史+系统上下文（来自 RuntimeContext，不进 state）。
     async for chunk in model.astream(messages):
+
+        # 逐 chunk 调试落盘：在检查取消前先记录，确保取消场景下也能看到已产出的 chunk。
+        _dump_raw_chunk_debug(chunk, chunk_index)
+        chunk_index += 1
 
         # 抽本 chunk 的 token usage。应该先统计token再检查取消
         chunk_usage = _extract_usage_from_chunk(chunk)
@@ -332,6 +501,32 @@ async def _model_node(state: ReactGraphState) -> dict:
             )
 
     if terminal:  # 因取消而终止
+        # 取消路径不发 RUN_FAILED 终态事件（避免与取消流的其它信号重复），
+        # 但本轮已累计的 token 消耗必须回传前端（StatusBadge 渲染）并可排查：
+        # 同时发 RUN_CANCELLED 终态事件（携带扁平 token 字段）与 warning 日志摘要。
+        usage_summary = rc.usage_stats.to_dict()
+        log.warning(
+            "model_node_cancelled_usage_summary",
+            extra={
+                "msg": f"模型流式因取消提前终止，本轮已消耗 token 摘要，step_id={step_id}",
+                "data": {"step_id": step_id, "usage": usage_summary},
+            },
+        )
+        write_event(
+            EventType.RUN_CANCELLED,
+            RunCancelledPayload(
+                status="cancelled",
+                step_id=step_id,
+                error="turn_cancelled",
+                langfuse_trace_id=rc.langfuse_trace_id,
+                input_tokens=usage_summary["input_tokens"],
+                output_tokens=usage_summary["output_tokens"],
+                total_tokens=usage_summary["total_tokens"],
+                cache_hit_tokens=usage_summary["cache_hit_tokens"],
+                cache_miss_tokens=usage_summary["cache_miss_tokens"],
+                reasoning_tokens=usage_summary["reasoning_tokens"],
+            ),
+        )
         return {
             "step_count": step_count,
             "requested_tool": False,
@@ -354,6 +549,34 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     # 把 LangChain 的 tool_calls 转成内部 ToolCall 值对象
     tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
+    # 解析失败/非法的工具调用不得静默丢弃：记 warning 供排查，下游工具节点不会重试
+    # 这些调用（模型也收不到错误反馈），但至少日志层面可见，避免「调用神秘消失」。
+    invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
+    if invalid_tool_calls:
+        # 解析失败/非法的工具调用不得静默丢弃：记 warning 供排查。args 是模型原始未校验内容
+        # （可能含用户 prompt 片段、粘贴进对话的凭据），必须脱敏 + 截断 + 限条数，并带上
+        # LangChain InvalidToolCall 自带的解析错误原因（排查「为什么失败」的关键字段）。
+        log.warning(
+            "model_node_invalid_tool_calls",
+            extra={
+                "msg": (
+                    f"模型产出 {len(invalid_tool_calls)} 个非法/解析失败工具调用"
+                    f"，将被忽略，step_id={step_id}"
+                ),
+                "data": {
+                    "step_id": step_id,
+                    "invalid_count": len(invalid_tool_calls),
+                    "invalid_tool_calls": [
+                        {
+                            "name": call.get("name"),
+                            "args_preview": redact_terminal_output(str(call.get("args")))[:200],
+                            "error": call.get("error"),
+                        }
+                        for call in invalid_tool_calls[:5]
+                    ],
+                },
+            },
+        )
     output_text = "".join(collected_text).strip()  # 拼接文本并去首尾空白
     requested_tool = bool(tool_calls)  # 是否要调工具
     log.info(
@@ -403,13 +626,21 @@ async def _model_node(state: ReactGraphState) -> dict:
                     },
                 },
             )
-            # 超限失败
+            # 超限失败：携带本轮已消耗 token 摘要，便于排查「跑到上限到底花了多少」。
+            usage_summary = rc.usage_stats.to_dict()
             write_event(
                 EventType.RUN_FAILED,
                 RunFailedPayload(
                     status="failed",
                     error="max_steps_reached",
+                    step_id=step_id,
                     langfuse_trace_id=rc.langfuse_trace_id,
+                    input_tokens=usage_summary["input_tokens"],
+                    output_tokens=usage_summary["output_tokens"],
+                    total_tokens=usage_summary["total_tokens"],
+                    cache_hit_tokens=usage_summary["cache_hit_tokens"],
+                    cache_miss_tokens=usage_summary["cache_miss_tokens"],
+                    reasoning_tokens=usage_summary["reasoning_tokens"],
                 ),
             )
             return {
@@ -530,12 +761,20 @@ async def _model_node(state: ReactGraphState) -> dict:
             "terminal": True,
             "pending_tool_calls": [],
         }
+    usage = rc.usage_stats.to_dict()
     write_event(  # 既没工具调用也没文本 → 模型输出非法
         EventType.RUN_FAILED,
         RunFailedPayload(
             error="invalid_model_output",
             message="Model did not return tool call or final text.",
+            step_id=step_id,
             langfuse_trace_id=rc.langfuse_trace_id,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            total_tokens=usage["total_tokens"],
+            cache_hit_tokens=usage["cache_hit_tokens"],
+            cache_miss_tokens=usage["cache_miss_tokens"],
+            reasoning_tokens=usage["reasoning_tokens"],
         ),
     )
     return {
