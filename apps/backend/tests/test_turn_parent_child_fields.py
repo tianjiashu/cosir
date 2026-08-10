@@ -16,7 +16,20 @@ from app.utils.datetime_utils import to_text, utc_now
 
 @pytest.fixture
 def isolated_storage(tmp_path: Path) -> Iterator[None]:
-    """Initialize an isolated SQLite storage lifecycle for one test."""
+    """为单个测试初始化并清理隔离 SQLite 存储生命周期。
+
+    参数:
+        tmp_path: pytest 提供的测试临时目录。
+
+    返回:
+        已初始化存储的测试上下文。
+
+    异常:
+        OSError: 临时 SQLite 文件无法初始化时抛出。
+
+    副作用:
+        临时覆盖进程存储配置，并在测试结束后关闭存储和恢复原配置。
+    """
 
     original_database_file = Settings.DATABASE_FILE
     original_log_database_file = Settings.LOG_DATABASE_FILE
@@ -42,7 +55,20 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
 
 
 def test_create_child_turn_records_parent_and_delegation(isolated_storage):
-    """Create a child turn without changing the task's latest-turn preview."""
+    """验证子轮次持久化父子关联且不更新任务最新轮次。
+
+    参数:
+        isolated_storage: 已初始化的隔离 SQLite 存储 fixture。
+
+    返回:
+        无。
+
+    异常:
+        无；断言失败时由 pytest 报告。
+
+    副作用:
+        向隔离数据库写入工作区、任务和一个委派子轮次。
+    """
 
     now = to_text(utc_now())
     with main_session_factory().begin() as session:

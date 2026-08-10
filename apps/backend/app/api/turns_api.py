@@ -380,8 +380,8 @@ async def _sse_subscribed_turn_events(
         event_bus: 当前进程的运行时事件总线。
         turn_id: 待订阅事件的 turn 标识。
 
-    生成:
-        与执行型 SSE 端点格式一致的实时事件帧。
+    返回:
+        异步迭代时逐条产生与执行型 SSE 端点格式一致的实时事件帧。
 
     异常:
         无。订阅关闭或客户端断开时正常结束生成器。
