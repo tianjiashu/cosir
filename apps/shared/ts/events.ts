@@ -26,6 +26,11 @@ export type RuntimeEventType =
   | "final_response"
   | "file_change_stable"
   | "file_change_updated"
+  | "delegation_started"
+  | "delegation_child_started"
+  | "delegation_finished"
+  | "delegation_failed"
+  | "delegation_cancelled"
   | "human_input_requested"
   | "human_input_received"
   | "workspace_preparing"
@@ -183,6 +188,54 @@ export interface FileChangeUpdatedPayload extends RuntimeEventPayloadObject {
   after?: string | null;
 }
 
+export interface DelegationStartedPayload extends RuntimeEventPayloadObject {
+  delegation_id: string;
+  parent_turn_id: string;
+  child_turn_id: string;
+  child_agent_id: string;
+  delegation_type: string;
+  status: "pending";
+}
+
+export interface DelegationChildStartedPayload extends RuntimeEventPayloadObject {
+  delegation_id: string;
+  parent_turn_id: string;
+  child_turn_id: string;
+  child_agent_id: string;
+  delegation_type: string;
+  status: "running";
+}
+
+export interface DelegationFinishedPayload extends RuntimeEventPayloadObject {
+  delegation_id: string;
+  parent_turn_id: string;
+  child_turn_id: string;
+  child_agent_id: string;
+  delegation_type: string;
+  status: "completed";
+  summary?: string | null;
+}
+
+export interface DelegationFailedPayload extends RuntimeEventPayloadObject {
+  delegation_id: string;
+  parent_turn_id: string;
+  child_turn_id: string;
+  child_agent_id: string;
+  delegation_type: string;
+  status: "failed";
+  error?: string | null;
+}
+
+export interface DelegationCancelledPayload extends RuntimeEventPayloadObject {
+  delegation_id: string;
+  parent_turn_id: string;
+  child_turn_id: string;
+  child_agent_id: string;
+  delegation_type: string;
+  status: "cancelled";
+  error?: string | null;
+}
+
 export interface HumanInputRequestedPayload extends RuntimeEventPayloadObject {
   prompt: string;
   request_id?: string | null;
@@ -231,6 +284,11 @@ export interface RuntimeEventPayloadMap {
   final_response: FinalResponsePayload;
   file_change_stable: FileChangeStablePayload;
   file_change_updated: FileChangeUpdatedPayload;
+  delegation_started: DelegationStartedPayload;
+  delegation_child_started: DelegationChildStartedPayload;
+  delegation_finished: DelegationFinishedPayload;
+  delegation_failed: DelegationFailedPayload;
+  delegation_cancelled: DelegationCancelledPayload;
   human_input_requested: HumanInputRequestedPayload;
   human_input_received: HumanInputReceivedPayload;
   workspace_preparing: WorkspacePreparingPayload;

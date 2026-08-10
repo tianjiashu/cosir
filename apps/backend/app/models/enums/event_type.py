@@ -27,6 +27,11 @@ class EventType(str, Enum):
     FINAL_RESPONSE = "final_response"
     FILE_CHANGE_STABLE = "file_change_stable"
     FILE_CHANGE_UPDATED = "file_change_updated"
+    DELEGATION_STARTED = "delegation_started"
+    DELEGATION_CHILD_STARTED = "delegation_child_started"
+    DELEGATION_FINISHED = "delegation_finished"
+    DELEGATION_FAILED = "delegation_failed"
+    DELEGATION_CANCELLED = "delegation_cancelled"
 
     # 以下两个成员为 Human-in-Loop 预留（向用户提问 / 用户回复）。
     # 本轮仅定义、不 emit：审批异步持久化暂缓，待后续接 Human-in-Loop 时再接线。

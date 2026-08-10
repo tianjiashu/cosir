@@ -3,6 +3,11 @@
 from collections.abc import Mapping
 
 from app.models.enums.event_type import EventType
+from app.models.payload.delegation_cancelled_payload import DelegationCancelledPayload
+from app.models.payload.delegation_child_started_payload import DelegationChildStartedPayload
+from app.models.payload.delegation_failed_payload import DelegationFailedPayload
+from app.models.payload.delegation_finished_payload import DelegationFinishedPayload
+from app.models.payload.delegation_started_payload import DelegationStartedPayload
 from app.models.payload.file_change_stable_payload import FileChangeStablePayload
 from app.models.payload.file_change_updated_payload import FileChangeUpdatedPayload
 from app.models.payload.final_response_payload import FinalResponsePayload
@@ -43,6 +48,11 @@ EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
     EventType.FINAL_RESPONSE: FinalResponsePayload,
     EventType.FILE_CHANGE_STABLE: FileChangeStablePayload,
     EventType.FILE_CHANGE_UPDATED: FileChangeUpdatedPayload,
+    EventType.DELEGATION_STARTED: DelegationStartedPayload,
+    EventType.DELEGATION_CHILD_STARTED: DelegationChildStartedPayload,
+    EventType.DELEGATION_FINISHED: DelegationFinishedPayload,
+    EventType.DELEGATION_FAILED: DelegationFailedPayload,
+    EventType.DELEGATION_CANCELLED: DelegationCancelledPayload,
     EventType.WORKSPACE_PREPARING: WorkspacePreparingPayload,
     EventType.WORKSPACE_READY: WorkspaceReadyPayload,
     EventType.WORKSPACE_DEGRADED: WorkspaceDegradedPayload,
