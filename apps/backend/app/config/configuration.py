@@ -23,6 +23,11 @@ from app.core.agents.agent_profile import default_developer_agent, developer_age
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
+from app.core.agents.delegate_agent_profiles import (
+    delegate_analyst_agent,
+    delegate_coder_agent,
+    delegate_reviewer_agent,
+)
 from app.tools.tool_system import ToolSystem
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
@@ -93,6 +98,9 @@ def build_agent_registry() -> AgentProfileRegistry:
     registry = AgentProfileRegistry()
     registry.register(default_developer_agent())
     registry.register(developer_agent_pro())
+    registry.register(delegate_reviewer_agent())
+    registry.register(delegate_analyst_agent())
+    registry.register(delegate_coder_agent())
     # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
     return registry
 
