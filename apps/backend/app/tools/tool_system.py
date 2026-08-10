@@ -14,6 +14,7 @@ from app.tools.tool_handler.codegraph_query import (
     build_codegraph_node_definition,
     build_codegraph_search_definition,
 )
+from app.tools.tool_handler.delegation.delegate_task import build_delegate_task_definition
 from app.tools.tool_handler.delete import build_delete_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
@@ -89,6 +90,7 @@ class ToolSystem:
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
+        registry.register(build_delegate_task_definition())
         # CodeGraph 查询工具（client 可为 None，execute 降级）。
         registry.register(build_codegraph_explore_definition(client))
         registry.register(build_codegraph_search_definition(client))

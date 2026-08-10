@@ -5,10 +5,11 @@
 工作区记录的数据库查询（由 WorkspaceService 负责）。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.models.workspace_record import WorkspaceRecord
+from app.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class ToolExecutionContext:
     workspace_id: str
     workspace_root: Path
     turn_id: str = ""
+    runtime_dependencies: ToolRuntimeDependencies = field(default_factory=ToolRuntimeDependencies)
 
     @classmethod
     def from_workspace(
