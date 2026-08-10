@@ -98,6 +98,7 @@ export function ChangesDrawer() {
                 // 注：max-h-[40vh] 为视口相对的自适应上限（非固定 px），全项目唯一一处，
                 // 故意不收口到 tokens.ts 的 Panel.codeBlockMaxHeight（px 固定值），因其含义是
                 // 「不挤压对话流、按视口比例自适应防溢出」，属 UI 规范 §2.1 允许的一次性自适应例外。
+                // eslint-disable-next-line tailwind/no-arbitrary-value
                 className="flex max-h-[40vh] min-h-0 flex-col gap-2 overflow-hidden border-t border-border p-3"
               />
             </CollapsibleContent>

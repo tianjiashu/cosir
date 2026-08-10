@@ -2,6 +2,7 @@
  * 任务容器状态管理（Zustand）。
  *
  * 管理：
+ * - 按 task_id 索引的任务实体缓存（tasksById）
  * - 按 workspace_id 分组的任务列表缓存（tasksByWorkspaceId）
  * - 已加载工作区集合（loadedWorkspaceIds）：加载态与数据态正交，不靠数组是否存在兼职
  * - 当前活跃任务
@@ -84,7 +85,7 @@ function persistActiveTaskId(taskId: string | null): void {
  *
  * 这是「凡改 activeTaskId 必同步 localStorage」这一不变量的唯一出口，避免
  * 各分支用 ``set`` 直写绕过持久化导致内存态与持久化态撕裂。任务记录经
- * ``get().tasksByWorkspaceId`` 跨分组查找，未加载分组中查不到属正常（不影响选中）。
+ * ``get().tasksById`` 查找，未加载分组中查不到不影响选中与主对话区渲染。
  *
  * @param set - Zustand 的 set 函数。
  * @param taskId - 目标活跃任务 ID（可为 null 表示清空）。
@@ -95,7 +96,7 @@ function applyActiveTask(
   taskId: string | null,
   turnId?: string | null,
 ): void {
-  const task = taskId ? findTaskInGroups(useTaskStore.getState().tasksByWorkspaceId, taskId) : undefined;
+  const task = taskId ? useTaskStore.getState().tasksById[taskId] : undefined;
   set({
     activeTaskId: taskId,
     activeTurnId: turnId ?? task?.latest_turn_id ?? null,
@@ -103,26 +104,10 @@ function applyActiveTask(
   persistActiveTaskId(taskId);
 }
 
-/**
- * 在分组缓存中按 task_id 查找任务记录（纯函数，不读全局快照）。
- *
- * 任务按 workspace_id 分组缓存，活跃任务可能落在任一分组中，故提供统一的
- * 跨分组查找纯函数，供选择器（传入 state.tasksByWorkspaceId）与 action 内部复用。
- *
- * @param grouped - 分组缓存。
- * @param taskId - 查找的目标任务 ID。
- * @returns 匹配的任务记录；未找到返回 undefined。
- */
-function findTaskInGroups(grouped: Record<string, TaskRecord[]>, taskId: string): TaskRecord | undefined {
-  for (const list of Object.values(grouped)) {
-    const found = list.find((item) => item.task_id === taskId);
-    if (found) return found;
-  }
-  return undefined;
-}
-
 /** 任务 Store 的状态接口。 */
 interface TaskState {
+  /** 按 task_id 索引的任务实体缓存；主对话区与顶部状态读取该事实源，不依赖 workspace 列表是否已加载。 */
+  tasksById: Record<string, TaskRecord>;
   /** 按 workspace_id 分组缓存的任务列表，每个 workspace 独立维护自身任务。 */
   tasksByWorkspaceId: Record<string, TaskRecord[]>;
   /** 已向后端拉取过任务列表的工作区 ID 集合；不含表示尚未加载（惰性填充）。 */
@@ -175,6 +160,7 @@ interface TaskActions {
  */
 export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   // --- 初始状态 ---
+  tasksById: {},
   tasksByWorkspaceId: {},
   loadedWorkspaceIds: new Set(),
   // 进入应用时优先恢复上次活跃任务（持久化于 localStorage）；无记录时为 null。
@@ -188,14 +174,36 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
     // 纯粹的分组写入并标记已加载。首屏活跃任务恢复由 App 层（resumeAttempted 分支）
     // 单点负责，本 action 不内嵌任何恢复/回退编排，以从结构上杜绝「展开 workspace
     // 意外切走中央对话」这一本次需求明确禁止的行为。
+    const incomingTaskIds = new Set(tasks.map((task) => task.task_id));
+    const removedTaskIds = Object.values(get().tasksById)
+      .filter((task) => task.workspace_id === workspaceId && !incomingTaskIds.has(task.task_id))
+      .map((task) => task.task_id);
+    const activeTaskId = get().activeTaskId;
+    const activeTaskRemoved = activeTaskId !== null && removedTaskIds.includes(activeTaskId);
+
     set((state) => {
       const loaded = new Set(state.loadedWorkspaceIds);
       loaded.add(workspaceId);
+      const tasksById = { ...state.tasksById };
+      for (const taskId of removedTaskIds) {
+        delete tasksById[taskId];
+      }
+      for (const task of tasks) {
+        tasksById[task.task_id] = task;
+      }
       return {
+        tasksById,
         tasksByWorkspaceId: { ...state.tasksByWorkspaceId, [workspaceId]: tasks },
         loadedWorkspaceIds: loaded,
+        ...(activeTaskRemoved ? { activeTaskId: null, activeTurnId: null } : {}),
       };
     });
+    if (activeTaskRemoved) {
+      persistActiveTaskId(null);
+    }
+    for (const taskId of removedTaskIds) {
+      useEventStore.getState().invalidateTask(taskId);
+    }
   },
 
   isWorkspaceLoaded: (workspaceId: string) => {
@@ -207,17 +215,19 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
     // 否则会把「未加载（undefined）」伪造成「已加载且只有 1 条」，导致后续真实拉取
     // 被 isWorkspaceLoaded 判定跳过（见 useWorkspaceTaskLazyLoad）。未加载时仅更新
     // 活跃任务，真实列表交给随后的 ensureLoaded 拉取。
-    if (get().loadedWorkspaceIds.has(task.workspace_id)) {
-      set((state) => {
+    set((state) => {
+      const partial: Partial<TaskState> = {
+        tasksById: { ...state.tasksById, [task.task_id]: task },
+      };
+      if (state.loadedWorkspaceIds.has(task.workspace_id)) {
         const group = state.tasksByWorkspaceId[task.workspace_id] ?? [];
-        return {
-          tasksByWorkspaceId: {
-            ...state.tasksByWorkspaceId,
-            [task.workspace_id]: [task, ...group.filter((item) => item.task_id !== task.task_id)],
-          },
+        partial.tasksByWorkspaceId = {
+          ...state.tasksByWorkspaceId,
+          [task.workspace_id]: [task, ...group.filter((item) => item.task_id !== task.task_id)],
         };
-      });
-    }
+      }
+      return partial;
+    });
     // 若尚无活跃任务，新任务自动成为活跃任务；经统一入口同步持久化。
     if (!get().activeTaskId) {
       applyActiveTask(set, task.task_id, task.latest_turn_id);
@@ -226,20 +236,23 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
 
   replaceTask: (temporaryTaskId: string, task: TaskRecord) => {
     // 同 addTask：仅已加载分组接收注入，避免伪造加载态。
-    if (get().loadedWorkspaceIds.has(task.workspace_id)) {
-      set((state) => {
+    set((state) => {
+      const tasksById = { ...state.tasksById };
+      delete tasksById[temporaryTaskId];
+      tasksById[task.task_id] = task;
+      const partial: Partial<TaskState> = { tasksById };
+      if (state.loadedWorkspaceIds.has(task.workspace_id)) {
         const group = state.tasksByWorkspaceId[task.workspace_id] ?? [];
-        return {
-          tasksByWorkspaceId: {
-            ...state.tasksByWorkspaceId,
-            [task.workspace_id]: [
-              task,
-              ...group.filter((item) => item.task_id !== temporaryTaskId && item.task_id !== task.task_id),
-            ],
-          },
+        partial.tasksByWorkspaceId = {
+          ...state.tasksByWorkspaceId,
+          [task.workspace_id]: [
+            task,
+            ...group.filter((item) => item.task_id !== temporaryTaskId && item.task_id !== task.task_id),
+          ],
         };
-      });
-    }
+      }
+      return partial;
+    });
     // 临时任务转正：活跃 ID 从 temp-x 变为真实 ID 时，必须同步持久化，
     // 否则新建任务重启后无法恢复（与 setActiveTask 共用同一不变式出口）。
     if (get().activeTaskId === temporaryTaskId) {
@@ -250,11 +263,13 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   removeTask: (taskId: string) => {
     const wasActive = get().activeTaskId === taskId;
     set((state) => {
+      const tasksById = { ...state.tasksById };
+      delete tasksById[taskId];
       const next: Record<string, TaskRecord[]> = {};
       for (const [wsId, list] of Object.entries(state.tasksByWorkspaceId)) {
         next[wsId] = list.filter((item) => item.task_id !== taskId);
       }
-      return { tasksByWorkspaceId: next };
+      return { tasksById, tasksByWorkspaceId: next };
     });
     // 删除的是当前活跃任务时同步清除持久化，避免下次启动恢复到一个已删除的任务。
     if (wasActive) {
@@ -266,11 +281,15 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
 
   updateTask: (taskId: string, updates: Partial<TaskRecord>) => {
     set((state) => {
+      const currentTask = state.tasksById[taskId];
+      const tasksById = currentTask
+        ? { ...state.tasksById, [taskId]: { ...currentTask, ...updates } }
+        : state.tasksById;
       const next: Record<string, TaskRecord[]> = {};
       for (const [wsId, list] of Object.entries(state.tasksByWorkspaceId)) {
         next[wsId] = list.map((t) => (t.task_id === taskId ? { ...t, ...updates } : t));
       }
-      return { tasksByWorkspaceId: next };
+      return { tasksById, tasksByWorkspaceId: next };
     });
   },
 
@@ -288,7 +307,7 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   },
 
   clearTasks: () => {
-    set({ tasksByWorkspaceId: {}, loadedWorkspaceIds: new Set(), activeTurnId: null });
+    set({ tasksById: {}, tasksByWorkspaceId: {}, loadedWorkspaceIds: new Set(), activeTurnId: null });
     // 清空活跃任务须同步清除持久化，避免下次启动恢复到一个已不存在的任务。
     applyActiveTask(set, null);
   },
@@ -298,16 +317,24 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
     // 避免 activeTaskId 悬空指向已删工作区的任务（与 removeTask 行为对齐，不泄漏到组件层）。
     // 活跃任务归属判定直接基于 activeTaskId 的 workspace（经 getTaskById），不依赖分组是否
     // 加载——未展开过的 workspace 也照样能清掉幽灵活跃态与事件缓存。
-    const removedTaskIds = (get().tasksByWorkspaceId[workspaceId] ?? []).map((task) => task.task_id);
+    const groupedTaskIds = (get().tasksByWorkspaceId[workspaceId] ?? []).map((task) => task.task_id);
+    const entityTaskIds = Object.values(get().tasksById)
+      .filter((task) => task.workspace_id === workspaceId)
+      .map((task) => task.task_id);
+    const removedTaskIds = [...new Set([...groupedTaskIds, ...entityTaskIds])];
     const activeId = get().activeTaskId;
-    const activeTask = activeId ? findTaskInGroups(get().tasksByWorkspaceId, activeId) : undefined;
+    const activeTask = activeId ? get().tasksById[activeId] : undefined;
     const wasActiveInWorkspace = activeTask?.workspace_id === workspaceId;
     set((state) => {
       const next = { ...state.tasksByWorkspaceId };
       delete next[workspaceId];
+      const tasksById = { ...state.tasksById };
+      for (const taskId of removedTaskIds) {
+        delete tasksById[taskId];
+      }
       const loaded = new Set(state.loadedWorkspaceIds);
       loaded.delete(workspaceId);
-      return { tasksByWorkspaceId: next, loadedWorkspaceIds: loaded };
+      return { tasksById, tasksByWorkspaceId: next, loadedWorkspaceIds: loaded };
     });
     for (const taskId of removedTaskIds) {
       useEventStore.getState().invalidateTask(taskId);
@@ -318,7 +345,7 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   },
 
   getTaskById: (taskId: string) => {
-    return findTaskInGroups(get().tasksByWorkspaceId, taskId);
+    return get().tasksById[taskId];
   },
 }));
 
@@ -330,7 +357,7 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
  */
 export const selectActiveTask = (state: TaskState): TaskRecord | undefined => {
   if (!state.activeTaskId) return undefined;
-  return findTaskInGroups(state.tasksByWorkspaceId, state.activeTaskId);
+  return state.tasksById[state.activeTaskId];
 };
 
 /**
@@ -339,6 +366,6 @@ export const selectActiveTask = (state: TaskState): TaskRecord | undefined => {
  */
 export const selectActiveTaskStatus = (state: TaskState): TaskStatus | null => {
   if (!state.activeTaskId) return null;
-  const task = findTaskInGroups(state.tasksByWorkspaceId, state.activeTaskId);
+  const task = state.tasksById[state.activeTaskId];
   return task?.execution_status ?? task?.status ?? null;
 };

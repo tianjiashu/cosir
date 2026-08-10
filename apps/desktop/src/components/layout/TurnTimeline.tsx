@@ -136,7 +136,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       });
       forceRender();
     }
-  }, [events]);
+  }, [events, turn.turn_id]);
 
   const turnItem = useMemo(() => {
     // turn 处于活动态（pending/running）才允许 pending 块以 streaming 推入；

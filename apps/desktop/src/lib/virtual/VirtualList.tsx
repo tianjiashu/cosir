@@ -98,6 +98,7 @@ export function VirtualList<T>({
     estimateSize: () => estimateSize,
     overscan,
     measureElement: (element) => element.getBoundingClientRect().height,
+    useAnimationFrameWithResizeObserver: true,
   });
 
   const virtualItems = virtualizer.getVirtualItems();

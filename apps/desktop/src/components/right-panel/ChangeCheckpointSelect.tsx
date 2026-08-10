@@ -35,6 +35,8 @@ export function ChangeCheckpointSelect({
       value={value ?? ""}
       onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
       aria-label="变更检查点"
+      // 160px 是检查点下拉控件的紧凑固定宽度，避免长标签挤占操作区。
+      // eslint-disable-next-line tailwind/no-arbitrary-value
       className="h-8 w-[160px] shrink-0 rounded-md border border-input bg-background px-2 text-xs"
     >
       <option value="">最新</option>

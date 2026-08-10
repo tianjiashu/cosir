@@ -250,8 +250,8 @@ export function useChanges(taskId: string | null): UseChangesReturn {
         status: "pending",
         last_tool_call_id: "",
         last_turn_id: payload.turn_id,
-        additions: payload.additions,
-        deletions: payload.deletions,
+        additions: payload.additions ?? 0,
+        deletions: payload.deletions ?? 0,
       };
       if (idx >= 0) {
         files[idx] = { ...files[idx], ...merged };

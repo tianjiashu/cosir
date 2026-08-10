@@ -58,15 +58,15 @@ function makeStreamResponse(chunks: string[], onCancel?: () => void): Response {
 }
 
 /** 构造一条 SSE 帧文本。 */
-function frame(eventType: string, payload: Record<string, unknown>): string {
-  const event: Partial<RuntimeEvent> = {
+function frame(eventType: RuntimeEvent["event_type"], payload: Record<string, unknown>): string {
+  const event = {
     event_id: `evt-${Math.random().toString(36).slice(2)}`,
     task_id: "task-1",
     turn_id: "turn-1",
-    event_type: eventType as RuntimeEvent["event_type"],
+    event_type: eventType,
     payload,
     created_at: new Date().toISOString(),
-  };
+  } as RuntimeEvent;
   return `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 

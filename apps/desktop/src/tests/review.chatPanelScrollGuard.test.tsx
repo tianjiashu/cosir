@@ -49,8 +49,8 @@ function seedStores(events: RuntimeEvent[]) {
   useTaskStore.setState({
     activeTaskId: TASK_ID,
     activeTurnId: null,
-    tasks: [
-      {
+    tasksById: {
+      [TASK_ID]: {
         task_id: TASK_ID,
         workspace_id: "ws-1",
         agent_id: "dev",
@@ -63,7 +63,25 @@ function seedStores(events: RuntimeEvent[]) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } satisfies TaskRecord,
-    ],
+    },
+    tasksByWorkspaceId: {
+      "ws-1": [
+        {
+          task_id: TASK_ID,
+          workspace_id: "ws-1",
+          agent_id: "dev",
+          input_text: "hi",
+          title: "hi",
+          last_message_preview: "",
+          latest_turn_id: "turn-1",
+          status: "running",
+          execution_status: "running",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } satisfies TaskRecord,
+      ],
+    },
+    loadedWorkspaceIds: new Set(["ws-1"]),
   } as never);
   useTurnStore.setState({
     turnsByTaskId: {
@@ -182,6 +200,74 @@ describe("ChatPanel 新事件到达时的滚底守卫", () => {
   // 可能发现的缺陷：无（此用例应 PASS；若失败说明 scrollTo 从未接通，主用例结论无效）。
   it("对照：挂载完成且 totalSize>0 时，滚动 effect 至少执行过一次滚底", () => {
     render(<ChatPanel onPickWorkspace={vi.fn()} />);
+    expect(scrollToSpy).toHaveBeenCalled();
+  });
+
+  it("切换任务时即使处于 200ms 节流窗口内也应滚底", () => {
+    render(<ChatPanel onPickWorkspace={vi.fn()} />);
+    expect(scrollToSpy).toHaveBeenCalled();
+    scrollToSpy.mockClear();
+
+    act(() => {
+      useTaskStore.setState({
+        activeTaskId: "task-scroll-2",
+        activeTurnId: "turn-2",
+        tasksById: {
+          "task-scroll-2": {
+            task_id: "task-scroll-2",
+            workspace_id: "ws-1",
+            agent_id: "dev",
+            input_text: "second task",
+            title: "second task",
+            last_message_preview: "",
+            latest_turn_id: "turn-2",
+            status: "running",
+            execution_status: "running",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          } satisfies TaskRecord,
+        },
+        tasksByWorkspaceId: {
+          "ws-1": [
+            {
+              task_id: "task-scroll-2",
+              workspace_id: "ws-1",
+              agent_id: "dev",
+              input_text: "second task",
+              title: "second task",
+              last_message_preview: "",
+              latest_turn_id: "turn-2",
+              status: "running",
+              execution_status: "running",
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            } satisfies TaskRecord,
+          ],
+        },
+      } as never);
+      useTurnStore.setState({
+        turnsByTaskId: {
+          "task-scroll-2": [
+            {
+              turn_id: "turn-2",
+              task_id: "task-scroll-2",
+              input_text: "second task",
+              status: "running",
+              end_reason: null,
+              response_text: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            } satisfies TurnRecord,
+          ],
+        },
+      } as never);
+      useEventStore.setState({
+        events: [],
+        eventsByTaskId: { "task-scroll-2": [] },
+        eventsByTurnId: { "turn-2": [] },
+      } as never);
+    });
+
     expect(scrollToSpy).toHaveBeenCalled();
   });
 });

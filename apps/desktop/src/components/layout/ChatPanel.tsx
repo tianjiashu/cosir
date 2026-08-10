@@ -186,6 +186,7 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   // 因此滚动目标改为 VirtualList 上报的真实 totalSize（onTotalSizeChange 持久化到 ref），
   // 并去掉 smooth 动画（瞬时跳到最新，避免动画期间虚拟列表重排造成的抖动）。
   const lastScrollAt = useRef(0);
+  const lastScrollTaskIdRef = useRef<string | null>(null);
   const virtualTotalSizeRef = useRef(0);
   const handleTotalSizeChange = useCallback((totalSize: number) => {
     virtualTotalSizeRef.current = totalSize;
@@ -199,16 +200,18 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   }, []);
   useEffect(() => {
     const now = Date.now();
-    if (now - lastScrollAt.current < 200) {
+    const taskChanged = lastScrollTaskIdRef.current !== activeTaskId;
+    if (!taskChanged && now - lastScrollAt.current < 200) {
       return;
     }
     const el = scrollContainerRef.current;
     // 近底守卫：用户已上滚阅读历史时不自动滚底（不打断阅读位置），也不刷新
     // 节流时间戳——用户回到底部后，下一条新事件可立即恢复跟随。
-    if (!isNearBottomRef.current) {
+    if (!taskChanged && !isNearBottomRef.current) {
       return;
     }
     lastScrollAt.current = now;
+    lastScrollTaskIdRef.current = activeTaskId;
     if (el && virtualTotalSizeRef.current > 0) {
       el.scrollTo({ top: virtualTotalSizeRef.current });
     }
@@ -217,7 +220,7 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
       task_id: activeTaskId,
       events: events.length,
     });
-  }, [events.length, latestEvent]);
+  }, [activeTaskId, events.length, latestEvent]);
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden bg-background">

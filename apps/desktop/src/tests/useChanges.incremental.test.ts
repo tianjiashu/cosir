@@ -13,6 +13,7 @@ vi.mock("@/services/api", () => ({
 import * as api from "@/services/api";
 import { useChanges } from "@/hooks/useChanges";
 import { useEventStore } from "@/stores/eventStore";
+import { SSEConnectionState } from "@/services/sse";
 import type { RuntimeEvent } from "@shared/events";
 import type { ChangeSet } from "@shared/api";
 
@@ -85,7 +86,7 @@ function resetStores() {
     events: [],
     eventsByTaskId: {},
     eventsByTurnId: {},
-    connectionState: "idle",
+    connectionState: SSEConnectionState.IDLE,
     processedEventIds: new Set<string>(),
   });
 }

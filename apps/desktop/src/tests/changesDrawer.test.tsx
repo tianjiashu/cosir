@@ -21,28 +21,30 @@ vi.mock("@/components/right-panel/ChangesTab", () => ({
 }));
 
 function setActiveTask(taskId: string | null) {
+  const task = taskId
+    ? ({
+        task_id: taskId,
+        workspace_id: "ws-1",
+        agent_id: "agent-1",
+        input_text: "t",
+        title: "t",
+        last_message_preview: "",
+        latest_turn_id: null,
+        status: "running",
+        execution_status: "running",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } satisfies TaskRecord)
+    : null;
   act(() => {
     useTaskStore.setState({
       activeTaskId: taskId,
       activeTurnId: null,
       selectedAgentId: "developer",
+      tasksById: task ? { [task.task_id]: task } : {},
       tasksByWorkspaceId: taskId
         ? {
-            "ws-1": [
-              {
-                task_id: taskId,
-                workspace_id: "ws-1",
-                agent_id: "agent-1",
-                input_text: "t",
-                title: "t",
-                last_message_preview: "",
-                latest_turn_id: null,
-                status: "running",
-                execution_status: "running",
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              } satisfies TaskRecord,
-            ],
+            "ws-1": [task as TaskRecord],
           }
         : {},
     });

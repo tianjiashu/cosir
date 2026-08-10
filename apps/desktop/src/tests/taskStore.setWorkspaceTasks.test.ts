@@ -46,6 +46,8 @@ describe("taskStore.setWorkspaceTasks + 分组缓存", () => {
 
     expect(useTaskStore.getState().tasksByWorkspaceId["ws-1"]).toEqual(a);
     expect(useTaskStore.getState().tasksByWorkspaceId["ws-2"]).toEqual(b);
+    expect(useTaskStore.getState().tasksById["task-a"]).toEqual(a[0]);
+    expect(useTaskStore.getState().tasksById["task-b"]).toEqual(b[0]);
   });
 
   it("setWorkspaceTasks 是纯写入：无活跃任务时也不自动选中（首屏恢复由 App 层单点负责）", () => {
@@ -69,17 +71,29 @@ describe("taskStore.setWorkspaceTasks + 分组缓存", () => {
 
   it("已有活跃任务（其它 workspace）时不覆盖（点 workspace 不切视图）", () => {
     // 模拟中央正展示 ws-2 的任务 task-b，此时展开 ws-1 不应切走。
-    useTaskStore.setState({
-      activeTaskId: "task-b",
-      activeTurnId: "turn-b",
-      tasksByWorkspaceId: { "ws-2": [makeTask("task-b", "ws-2")] },
-    });
+    useTaskStore.getState().setWorkspaceTasks("ws-2", [makeTask("task-b", "ws-2")]);
+    useTaskStore.setState({ activeTaskId: "task-b", activeTurnId: "turn-b" });
     const tasks = [makeTask("task-a", "ws-1")];
     useTaskStore.getState().setWorkspaceTasks("ws-1", tasks);
 
     expect(useTaskStore.getState().activeTaskId).toBe("task-b");
     expect(useTaskStore.getState().activeTurnId).toBe("turn-b");
     expect(useTaskStore.getState().tasksByWorkspaceId["ws-1"]).toEqual(tasks);
+  });
+
+  it("刷新 workspace 列表会清理同 workspace 已消失的活跃任务实体", () => {
+    const invalidateSpy = vi.spyOn(useEventStore.getState(), "invalidateTask");
+    useTaskStore.getState().setWorkspaceTasks("ws-1", [makeTask("task-a", "ws-1")]);
+    useTaskStore.getState().setActiveTask("task-a");
+
+    useTaskStore.getState().setWorkspaceTasks("ws-1", [makeTask("task-b", "ws-1")]);
+
+    expect(useTaskStore.getState().getTaskById("task-a")).toBeUndefined();
+    expect(useTaskStore.getState().activeTaskId).toBeNull();
+    expect(useTaskStore.getState().activeTurnId).toBeNull();
+    expect(useTaskStore.getState().tasksByWorkspaceId["ws-1"].map((task) => task.task_id)).toEqual(["task-b"]);
+    expect(invalidateSpy).toHaveBeenCalledWith("task-a");
+    invalidateSpy.mockRestore();
   });
 });
 
@@ -91,7 +105,7 @@ describe("taskStore 跨分组查找", () => {
     useTaskStore.getState().clearTasks();
   });
 
-  it("getTaskById 跨分组命中", () => {
+  it("getTaskById 从实体缓存命中", () => {
     useTaskStore.getState().setWorkspaceTasks("ws-1", [makeTask("task-a", "ws-1")]);
     useTaskStore.getState().setWorkspaceTasks("ws-2", [makeTask("task-b", "ws-2")]);
 
@@ -112,8 +126,10 @@ describe("taskStore 跨分组查找", () => {
     // 导致后续 ensureLoaded 跳过真实拉取。活跃任务仍应更新。
     useTaskStore.getState().addTask(makeTask("task-new", "ws-unloaded"));
     expect(useTaskStore.getState().tasksByWorkspaceId["ws-unloaded"]).toBeUndefined();
+    expect(useTaskStore.getState().getTaskById("task-new")?.workspace_id).toBe("ws-unloaded");
     expect(useTaskStore.getState().isWorkspaceLoaded("ws-unloaded")).toBe(false);
     expect(useTaskStore.getState().activeTaskId).toBe("task-new");
+    expect(selectActiveTask(useTaskStore.getState())?.task_id).toBe("task-new");
   });
 
   it("clearWorkspaceTasks 级联清空属该 workspace 的活跃任务", () => {
@@ -127,6 +143,18 @@ describe("taskStore 跨分组查找", () => {
     expect(useTaskStore.getState().activeTaskId).toBeNull();
     expect(useTaskStore.getState().tasksByWorkspaceId["ws-1"]).toBeUndefined();
     expect(useTaskStore.getState().isWorkspaceLoaded("ws-1")).toBe(false);
+    expect(invalidateSpy).toHaveBeenCalledWith("task-a");
+    invalidateSpy.mockRestore();
+  });
+
+  it("clearWorkspaceTasks 会清理由未加载 workspace 新建出的实体任务", () => {
+    const invalidateSpy = vi.spyOn(useEventStore.getState(), "invalidateTask");
+    useTaskStore.getState().addTask(makeTask("task-a", "ws-unloaded"));
+    useTaskStore.getState().setActiveTask("task-a");
+    useTaskStore.getState().clearWorkspaceTasks("ws-unloaded");
+    expect(useTaskStore.getState().activeTaskId).toBeNull();
+    expect(useTaskStore.getState().getTaskById("task-a")).toBeUndefined();
+    expect(useTaskStore.getState().tasksByWorkspaceId["ws-unloaded"]).toBeUndefined();
     expect(invalidateSpy).toHaveBeenCalledWith("task-a");
     invalidateSpy.mockRestore();
   });
