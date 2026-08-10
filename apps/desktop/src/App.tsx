@@ -35,7 +35,9 @@ import { NewTaskPage } from "@/pages/chat/NewTaskPage";
 import * as api from "@/services/api";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { useTaskStore, loadPersistedActiveTaskId } from "@/stores/taskStore";
-import { logError } from "@/lib/logger";
+import { loadWorkspaceTasks } from "@/hooks/useWorkspaceTaskLazyLoad";
+import type { TaskRecord } from "@shared/task";
+import { logError, logInfo } from "@/lib/logger";
 
 /** 工作台主视图。 */
 type WorkspaceView = "chat" | "new-task" | "logs";
@@ -96,7 +98,6 @@ export default function App() {
   const [activeView, setActiveView] = useState<WorkspaceView>("chat");
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const setTasks = useTaskStore((s) => s.setTasks);
   const { openTask } = useTask();
   // 防止重复触发自动恢复：仅首个工作区加载完成时尝试恢复一次。
   const resumeAttempted = useRef(false);
@@ -134,31 +135,48 @@ export default function App() {
     };
   }, [setWorkspaces]);
 
+  // openTask 经 ref 持有最新引用，使其不进入 effect 依赖数组：
+  // 避免 useTask 内部依赖变化导致本 effect 误重跑。effect 触发条件严格等于
+  // 「仅 activeWorkspaceId 变化」（启动 / 增删工作区）；点 workspace 展开/折叠
+  // 不触发（Sidebar 不再改 activeWorkspaceId），「点 workspace 不切走中央对话」诉求天然满足。
+  const openTaskRef = useRef(openTask);
+  openTaskRef.current = openTask;
+
   useEffect(() => {
     let cancelled = false;
     async function loadTasks() {
       if (!activeWorkspaceId) {
-        setTasks([]);
         return;
       }
-      // 必须在 setTasks 之前快照持久化活跃任务：setTasks 的回退分支会改写
-      // activeTaskId，若事后才读会被覆盖成"列表首项"而非"上次活跃任务"。
+      // 复用权威 loader（与 Sidebar 共用模块级去重，不重复发起 HTTP）；
+      // 加载态由 taskStore.loadedWorkspaceIds 维护，与数据态正交。
+      // loader 内部已捕获失败并记日志，成功才返回 true；失败时 tasks 保持空，
+      // 首屏恢复分支据此降级（不消费 resumeAttempted），下次 activeWorkspaceId
+      // 变化时可重试，不静默吞掉恢复机会。
+      // 先快照持久化活跃任务：后续 await 期间可能被其它路径（如新建任务 addTask）
+      // 改写 activeTaskId，提前固定用于首屏恢复判定，避免被覆盖成"列表首项"。
       const persistedId = loadPersistedActiveTaskId();
-      let tasks: Awaited<ReturnType<typeof api.listWorkspaceTasks>> = [];
-      try {
-        tasks = await api.listWorkspaceTasks(activeWorkspaceId);
-        if (!cancelled) {
-          setTasks(tasks);
-        }
-      } catch (err) {
-        logError("加载工作区任务失败", err, { module: "App", workspace_id: activeWorkspaceId });
+      let tasks: TaskRecord[] = [];
+      const loaded = await loadWorkspaceTasks(activeWorkspaceId);
+      if (loaded && !cancelled) {
+        tasks = useTaskStore.getState().tasksByWorkspaceId[activeWorkspaceId] ?? [];
       }
-      // 工作区任务加载完成后，自动恢复上次活跃任务（仅首次），避免每次进入都需手动点击。
-      // 持久化任务已删除时的脏值清理由 taskStore.setTasks 单点负责，表现层不做重复兜底。
-      if (!cancelled && !resumeAttempted.current) {
+      // 首屏自动恢复活跃任务并回放历史（仅首次且本次加载成功）；加载失败时不消费
+      // resumeAttempted，留给后续重试。选中契约与 Sidebar 点击一致：统一经 openTask
+      // （选中 + 拉历史回放），不在 store 层隐式选中后留空白。优先级：持久化任务 > 列表首项；
+      // 二者皆无则不回放（无任务可显示）。持久化脏值清理由 taskStore 单点负责。
+      if (loaded && !cancelled && !resumeAttempted.current) {
         resumeAttempted.current = true;
-        if (persistedId && tasks.some((task) => task.task_id === persistedId)) {
-          await openTask(persistedId);
+        const resumeTaskId = persistedId && tasks.some((task) => task.task_id === persistedId)
+          ? persistedId
+          : tasks[0]?.task_id ?? null;
+        if (resumeTaskId) {
+          logInfo("首屏自动恢复活跃任务并回放历史", {
+            module: "App",
+            task_id: resumeTaskId,
+            from_persisted: resumeTaskId === persistedId,
+          });
+          await openTaskRef.current(resumeTaskId);
         }
       }
     }
@@ -166,7 +184,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, setTasks, openTask]);
+  }, [activeWorkspaceId]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">

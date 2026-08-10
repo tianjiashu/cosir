@@ -26,23 +26,25 @@ function setActiveTask(taskId: string | null) {
       activeTaskId: taskId,
       activeTurnId: null,
       selectedAgentId: "developer",
-      tasks: taskId
-        ? [
-            {
-              task_id: taskId,
-              workspace_id: "ws-1",
-              agent_id: "agent-1",
-              input_text: "t",
-              title: "t",
-              last_message_preview: "",
-              latest_turn_id: null,
-              status: "running",
-              execution_status: "running",
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            } satisfies TaskRecord,
-          ]
-        : [],
+      tasksByWorkspaceId: taskId
+        ? {
+            "ws-1": [
+              {
+                task_id: taskId,
+                workspace_id: "ws-1",
+                agent_id: "agent-1",
+                input_text: "t",
+                title: "t",
+                last_message_preview: "",
+                latest_turn_id: null,
+                status: "running",
+                execution_status: "running",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              } satisfies TaskRecord,
+            ],
+          }
+        : {},
     });
   });
 }

@@ -32,7 +32,7 @@ apps/backend/.env.local
 .workspace_event/
 .workspace_payload/
 # CodeGraph 锁定 node 运行时（随应用分发，不提交仓库）
-apps/backend/.codegraph-node/
+apps/backend/.workspace_payload-node/
 apps/backend/.workspace_payload-node/
 
 # Tauri 生成产物

@@ -54,10 +54,9 @@ def export_openapi(out_path: Path) -> Path:
     # 回引自身。只有当 ``logging`` 包先于 ``settings`` 被导入、且 ``common`` 子模块已就绪时，
     # 回引的 ``settings`` 才能顺利完成（与 ``app.__main__`` 入口先 import logging 的顺序一致，
     # 也与 ``runner.py`` 首行 ``from app.config.logging import ...`` 的导入顺序一致）。
-    import app.config.logging
 
     try:
-        from app.api.app import app
+        from app.app import app
     except Exception as exc:
         raise RuntimeError("无法导入 FastAPI 应用，OpenAPI 导出中止") from exc
 

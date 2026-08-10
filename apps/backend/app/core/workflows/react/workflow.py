@@ -19,19 +19,18 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.llm.factory import build_chat_model
-from app.core.llm.langchain_bridge import model_tools_to_langchain, runtime_to_langchain
-from app.core.runtime.runs.checkpointer import build_checkpointer
-from app.models import TaskRecord
+from app.core.llm.langchain_bridge import model_tools_to_langchain
+from app.core.runtime.checkpointer import build_checkpointer
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
+from ...context.runtime_context import RuntimeContext
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_tools, _should_continue
-from .nodes import _model_node, _tools_node
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
 
@@ -47,8 +46,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     workflow_id = "react_like_v1"
 
     def __init__(
-        self,
-        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+            self,
+            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化 ReAct-like 工作流。
 
@@ -73,6 +72,11 @@ class ReactLikeWorkflow(AgentWorkflow):
             已编译的 StateGraph。
         """
 
+        # 延迟导入节点，打破 nodes 子包与 react 包之间的循环导入：
+        # nodes.model_node -> react.state/runtime_config -> react.__init__
+        # -> react.workflow -> nodes
+        from ..nodes import _model_node, _tools_node
+
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
@@ -82,11 +86,10 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-        self,
-        task: TaskRecord,
-        operations: RuntimeOperations,
-        callbacks: list | None = None,
-        langfuse_trace_id: str | None = None,
+            self,
+            operations: RuntimeOperations,
+            callbacks: list | None = None,
+            langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -139,7 +142,6 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         runtime_config = RuntimeConfig(
             operations=operations,
-            task=task,
             turn=turn,
             model=cast(BaseChatModel, bound_model),
             approval_resolver=self._approval_resolver,
@@ -147,10 +149,22 @@ class ReactLikeWorkflow(AgentWorkflow):
             usage_stats=TurnUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
         )
+        current_task = operations.get_current_task()
+        current_workspace = operations.get_current_workspace()
+        # 按 task 加载历史消息，构造 task 级运行时上下文（构造本身不含 I/O）。
+        runtime_context = RuntimeContext.load_for_task(
+            agent_profile=agent_profile,
+            workspace_root=current_workspace.root_path,
+            task_id=current_task.task_id,
+        )
+
         config = {
             "configurable": {
                 "thread_id": thread_id,
                 "runtime_config": runtime_config,
+                # 与 runtime_config 同口径：经 config 注入 task 上下文，
+                # 不进入 graph state，避免非 list 对象被 _add_messages reducer 错误处理。
+                "runtime_context": runtime_context,
             },
             # LangChain callbacks（如 Langfuse CallbackHandler）经此注入模型调用追踪；
             # 缺省空列表不影响既有行为。
@@ -159,9 +173,7 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
-            runtime_messages = operations.build_messages()
             input_state: ReactGraphState | Command = ReactGraphState(
-                messages=runtime_to_langchain(runtime_messages),
                 step_count=0,
                 tool_error_count=0,
                 requested_tool=False,
@@ -176,9 +188,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             while True:
                 try:
                     async for mode, data in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["custom"],
+                            input_state,
+                            config,
+                            stream_mode=["custom"],
                     ):
                         if mode != "custom":
                             continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）
@@ -189,7 +201,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                             raise TypeError("custom runtime event payload must be a payload entity")
                         event = RuntimeEvent(
                             event_type=event_type,
-                            task_id=task.task_id,
+                            task_id=current_task.task_id,
                             turn_id=turn_id,
                             sequence=sequence,
                             payload=payload,
@@ -206,7 +218,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                         extra={
                             "msg": "langgraph execution failed during workflow run",
                             "data": {
-                                "task_id": task.task_id,
+                                "task_id": current_task.task_id,
                                 "turn_id": getattr(operations, "_current_turn_id", None),
                             },
                         },

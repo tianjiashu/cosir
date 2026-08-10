@@ -42,7 +42,6 @@ class TraceMetadata:
     task_id: str
     turn_id: str
     agent_id: str
-    workspace_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,8 +171,6 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
             "task_id": metadata.task_id,
             "turn_id": metadata.turn_id,
         }
-        if metadata.workspace_id:
-            trace_metadata["workspace_id"] = metadata.workspace_id
         root_span_cm = client.start_as_current_observation(
             as_type="span", name=f"turn {metadata.turn_id}"
         )

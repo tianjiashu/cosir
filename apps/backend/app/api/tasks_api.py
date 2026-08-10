@@ -9,8 +9,8 @@
 
 from fastapi import Depends, HTTPException
 
-from app.api.app import app
-from app.api.depends.dependencies import (
+from app.app import app
+from app.api.dependencies import (
     get_runtime_event_service,
     get_task_service,
     get_turn_service,

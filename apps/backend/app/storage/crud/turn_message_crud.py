@@ -46,14 +46,17 @@ class TurnMessageCrud:
 
         self._session_factory = main_session_factory()
 
-    def save_messages(self, turn_id: str, messages: list[RuntimeMessage]) -> None:
-        """覆盖式保存某 turn 的有序消息轨迹。
+    def append_message(self, turn_id: str, message: RuntimeMessage, sequence: int) -> None:
+        """以单条增量方式持久化某 turn 的一条消息（用于逐条落库，替代批覆盖）。
 
-        先删除该 turn 的既有轨迹，再按 ``sequence`` 顺序插入新轨迹，保证幂等可重放。
+        仅插入一条 ``(turn_id, sequence)`` 记录，不触碰该 turn 的其它行；调用方负责
+        在 turn 开始时先 ``clear_turn_messages`` 清掉上一轮残留（崩溃重跑幂等），并维护
+        ``sequence`` 在 turn 内的自增连续性。
 
         参数:
             turn_id: 所属轮次标识。
-            messages: 有序的运行时消息列表（模型无关）。
+            message: 单条模型无关的运行时消息。
+            sequence: 该消息在本 turn 内的有序序号（从 0 起的连续整数）。
 
         返回:
             无。
@@ -62,23 +65,44 @@ class TurnMessageCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
-            删除并重新插入 ``turn_messages`` 表中该 turn 的对应行。
+            向 ``turn_messages`` 表插入一行。
+        """
+
+        with self._session_factory.begin() as session:
+            session.add(
+                TurnMessageModel(
+                    turn_id=turn_id,
+                    sequence=sequence,
+                    role=message.role,
+                    content_text=message.content_text,
+                    metadata_json=json.dumps(message.metadata, ensure_ascii=False)
+                    if message.metadata
+                    else None,
+                )
+            )
+
+    def clear_turn_messages(self, turn_id: str) -> None:
+        """删除某 turn 的全部消息轨迹（逐条落库前的幂等清理）。
+
+        与 ``append_message`` 配合：turn 开始执行时先调用本方法清掉上一轮残留，之后
+        每条消息经 ``append_message`` 增量写入；历史 turn 的数据因按 ``turn_id`` 隔离
+        而不受影响，跨轮拼装天然成立。
+
+        参数:
+            turn_id: 待清理消息的轮次标识。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            从 ``turn_messages`` 表删除该 turn 的全部行。
         """
 
         with self._session_factory.begin() as session:
             session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id == turn_id))
-            for sequence, message in enumerate(messages):
-                session.add(
-                    TurnMessageModel(
-                        turn_id=turn_id,
-                        sequence=sequence,
-                        role=message.role,
-                        content_text=message.content_text,
-                        metadata_json=json.dumps(message.metadata, ensure_ascii=False)
-                        if message.metadata
-                        else None,
-                    )
-                )
 
     def load_messages(self, turn_id: str) -> list[RuntimeMessage]:
         """按序读取某 turn 的消息轨迹。

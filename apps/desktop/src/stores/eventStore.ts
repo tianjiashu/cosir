@@ -219,14 +219,16 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
         }
       }
 
-      // 扁平 `events` 必须与分片视图保持一致：保留其他任务的事件，当前任务用传入
-      // 排序后的全量覆盖（与其他分片合并口径统一）。直接 `events: sorted` 会丢弃
-      // 其他任务在扁平数组中的事件，导致同一 store 内两份数据自相矛盾。
-      const otherTaskEvents =
-        taskId != null
-          ? state.events.filter((e) => e.task_id !== taskId)
-          : state.events.filter((e) => !incomingIds.has(e.event_id));
-      const mergedEvents = otherTaskEvents.concat(sorted).sort(compareRuntimeEvents);
+      // 扁平 `events` 必须与分片视图保持一致。根因教训：此前用「排除同 task + concat
+      // 传入集」实现全量覆盖，但分片（上面 mergedByTask）走 mergeByEventId **合并保留**
+      // 同 task 旧事件——两条口径矛盾。当调用方以增量方式 setEvents（只传新增子集，
+      // 而非该 task 全量历史）时，扁平数组会丢弃同 task 之前缓存的事件，导致
+      // eventsByTaskId 101 条 / events 只剩 1 条的自相矛盾，且 selectEventCount 少算。
+      // 修复：把**完整**扁平数组作为 mergeByEventId 的 target（不排除同 task），
+      // sorted 作为 incoming——merge 天然按 event_id 去重合并：incoming 覆盖同 task
+      // 旧事件、追加新增、保留不同 task。这与分片 mergedByTask / mergedByTurn 走同一
+      // mergeByEventId，去重与引用稳定语义完全一致。
+      const mergedEvents = mergeByEventId(state.events, sorted).sort(compareRuntimeEvents);
 
       // 去重集合取并集（历史 + 实时 SSE 共同去重）
       const mergedIds = new Set([...state.processedEventIds, ...incomingIds]);

@@ -10,7 +10,7 @@
  * @module components/chat/ThinkingBlock
  */
 
-import { memo, useState, useEffect, useMemo } from "react";
+import { memo, useState, useEffect, useMemo, useRef } from "react";
 import type { Components } from "react-markdown";
 import { ChevronRight } from "lucide-react";
 
@@ -65,7 +65,12 @@ export const ThinkingBlock = memo(function ThinkingBlock({ content, streaming = 
   const components = useMemo<Components>(() => buildMarkdownComponents(streaming), [streaming]);
 
   // 注意：hooks 必须在任何 early return 之前调用，否则违反 React Hooks 规则。
+  // 挂载日志只记录一次：流式期 content 按帧变化，若每次变化都写日志会形成
+  // 「每帧一次 logInfo → Tauri IPC + 落盘」的洪峰，故用 ref 守卫保持 mounted 语义。
+  const mountedLoggedRef = useRef(false);
   useEffect(() => {
+    if (mountedLoggedRef.current) return;
+    mountedLoggedRef.current = true;
     if (isEmpty) return;
     logInfo("thinking_block_mounted", {
       module: "ThinkingBlock",

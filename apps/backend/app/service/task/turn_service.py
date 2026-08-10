@@ -150,12 +150,48 @@ class TurnService:
     def claim_pending_turn(self, turn_id: str) -> bool:
         return self._turn.claim_pending(turn_id)
 
-    def save_turn_messages(self, turn_id: str, messages: list[RuntimeMessage]) -> None:
-        """Persist a turn's ordered message trajectory (cross-turn memory)."""
-
-        self._message.save_messages(turn_id, messages)
-
     def load_turn_messages(self, turn_id: str) -> list[RuntimeMessage]:
         """Load a turn's ordered message trajectory; empty list if none stored."""
 
         return self._message.load_messages(turn_id)
+
+    def append_turn_message(
+        self, turn_id: str, message: RuntimeMessage, sequence: int
+    ) -> None:
+        """Incremental single-row append of one runtime message (cross-turn memory).
+
+        参数:
+            turn_id: 目标轮次标识。
+            message: 单条模型无关的运行时消息（用户提问 / 模型回复 / 工具观察）。
+            sequence: 轮内自增序号，由编排层 ``RuntimeOperations`` 维护。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 写入失败（透传给调用方）。
+
+        副作用:
+            在 ``turn_messages`` 表追加一行，不影响同 turn 已有行（与 ``clear_turn_messages``
+            的整轮清空语义互补，组合实现 turn 重跑幂等）。
+        """
+
+        self._message.append_message(turn_id, message, sequence)
+
+    def clear_turn_messages(self, turn_id: str) -> None:
+        """Delete all stored messages for a turn (used before re-running a turn).
+
+        参数:
+            turn_id: 目标轮次标识。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 删除失败（透传底层 CRUD 异常）。
+
+        副作用:
+            删除 ``turn_messages`` 表中该 turn 的全部行；仅清本 turn，不影响其它 turn。
+        """
+
+        self._message.clear_turn_messages(turn_id)

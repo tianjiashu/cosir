@@ -72,6 +72,10 @@ export function useChanges(taskId: string | null): UseChangesReturn {
   const taskEvents = useEventStore((s) => selectEventsForTask(s, taskId));
   const taskIdRef = useRef<string | null>(taskId);
   taskIdRef.current = taskId;
+  // checkpoint 的镜像 ref：与 taskIdRef 同口径，供 refresh 在 await 之后检测
+  // 「请求在途期间检查点已切换」的过期响应（同任务内 C1→C2 竞态）。
+  const checkpointRef = useRef<string | null>(checkpoint);
+  checkpointRef.current = checkpoint;
   // 已触发 refresh 的 stable 事件 id 集合，避免历史已消费的 stable 重复触发全量刷新。
   // 切 task（taskId 变化）时清空，避免跨 task 无限累积导致内存随会话增长。
   const consumedStableEventIdsRef = useRef<Set<string>>(new Set());
@@ -102,35 +106,60 @@ export function useChanges(taskId: string | null): UseChangesReturn {
 
   /**
    * 全量拉取当前 task 的变更集，整体替换本地状态。
+   *
+   * 过期响应防护：发起时快照 requestTaskId 与 requestCheckpoint，await 之后若
+   * 当前 taskId 已切换（跨任务竞态）或 checkpoint 已切换（同任务内 C1→C2 竞态），
+   * 说明该响应属于旧视图，直接丢弃，不得覆盖新视图的面板状态、错误态与 loading 态。
    */
   const refresh = useCallback(async () => {
-    if (!taskIdRef.current) {
+    const requestTaskId = taskIdRef.current;
+    const requestCheckpoint = checkpointRef.current;
+    if (!requestTaskId) {
       setChangeSet(null);
       return;
     }
+    // 请求在途期间 taskId/checkpoint 是否已偏离发起时的快照。
+    const isStale = () =>
+      taskIdRef.current !== requestTaskId || checkpointRef.current !== requestCheckpoint;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.fetchChangeSet(taskIdRef.current, checkpoint ?? undefined);
+      const data = await api.fetchChangeSet(requestTaskId, requestCheckpoint ?? undefined);
+      if (isStale()) {
+        return;
+      }
       setChangeSet(data);
     } catch (err) {
+      if (isStale()) {
+        return;
+      }
       const message = err instanceof Error ? err.message : "拉取变更集失败";
-      logError("fetchChangeSet 失败", err, { module: "useChanges", taskId: taskIdRef.current });
+      logError("fetchChangeSet 失败", err, { module: "useChanges", taskId: requestTaskId });
       setError(message);
     } finally {
-      setLoading(false);
+      // 仅当本次请求仍是「当前视图」时复位 loading；过期请求的 finally 不得
+      // 清除新任务/新检查点正在进行的加载态。
+      if (!isStale()) {
+        setLoading(false);
+      }
     }
-  }, [checkpoint]);
+    // 全 ref 驱动（taskIdRef/checkpointRef 调用时即时读取），闭包无外部状态依赖，
+    // 故 deps 为空、refresh 身份稳定；checkpoint 变化的触发职责由下方 effect 显式承担。
+  }, []);
 
-  // taskId 或 checkpoint 变化时刷新；taskId 为空则清空状态。
+  // taskId 或 checkpoint 变化时刷新（refresh 身份稳定，checkpoint 是显式触发源）；
+  // taskId 为空则清空状态。
   useEffect(() => {
     if (!taskId) {
       setChangeSet(null);
       setError(null);
+      // 旧任务请求在途时其 finally 会因过期守卫跳过复位，这里兜底清除，
+      // 避免 loading 残留为 true 直至下次有效 refresh。
+      setLoading(false);
       return;
     }
     void refresh();
-  }, [taskId, refresh]);
+  }, [taskId, checkpoint, refresh]);
 
   // 订阅 file_change_stable：turn 结束导致新变更稳定，全量校准。
   // 用 event_id 去重：
@@ -336,20 +365,34 @@ export function useChanges(taskId: string | null): UseChangesReturn {
    * @param paths - 待撤销的文件路径列表。
    */
   const revert = useCallback(async (paths: string[]) => {
-    if (!taskIdRef.current) {
+    const requestTaskId = taskIdRef.current;
+    const requestCheckpoint = checkpointRef.current;
+    if (!requestTaskId) {
       return;
     }
+    // 与 refresh 同口径：taskId 或 checkpoint 任一失配即为过期响应（过期后由
+    // 新视图的 refresh 兜底回填，丢弃安全）。
+    const isStale = () =>
+      taskIdRef.current !== requestTaskId || checkpointRef.current !== requestCheckpoint;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.revertChanges(taskIdRef.current, paths);
+      const data = await api.revertChanges(requestTaskId, paths);
+      if (isStale()) {
+        return;
+      }
       setChangeSet(data);
     } catch (err) {
+      if (isStale()) {
+        return;
+      }
       const message = err instanceof Error ? err.message : "撤销变更失败";
-      logError("revertChanges 失败", err, { module: "useChanges", taskId: taskIdRef.current });
+      logError("revertChanges 失败", err, { module: "useChanges", taskId: requestTaskId });
       setError(message);
     } finally {
-      setLoading(false);
+      if (!isStale()) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -359,20 +402,34 @@ export function useChanges(taskId: string | null): UseChangesReturn {
    * @param paths - 待保留的文件路径列表。
    */
   const keep = useCallback(async (paths: string[]) => {
-    if (!taskIdRef.current) {
+    const requestTaskId = taskIdRef.current;
+    const requestCheckpoint = checkpointRef.current;
+    if (!requestTaskId) {
       return;
     }
+    // 与 refresh 同口径：taskId 或 checkpoint 任一失配即为过期响应（过期后由
+    // 新视图的 refresh 兜底回填，丢弃安全）。
+    const isStale = () =>
+      taskIdRef.current !== requestTaskId || checkpointRef.current !== requestCheckpoint;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.keepChanges(taskIdRef.current, paths);
+      const data = await api.keepChanges(requestTaskId, paths);
+      if (isStale()) {
+        return;
+      }
       setChangeSet(data);
     } catch (err) {
+      if (isStale()) {
+        return;
+      }
       const message = err instanceof Error ? err.message : "保留变更失败";
-      logError("keepChanges 失败", err, { module: "useChanges", taskId: taskIdRef.current });
+      logError("keepChanges 失败", err, { module: "useChanges", taskId: requestTaskId });
       setError(message);
     } finally {
-      setLoading(false);
+      if (!isStale()) {
+        setLoading(false);
+      }
     }
   }, []);
 

@@ -71,8 +71,8 @@ export const TerminalViewer = memo(function TerminalViewer({ output, className }
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const termRef = React.useRef<Terminal | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
-  /** 已写入 xterm 的 output 前缀长度，用于计算增量切片。 */
-  const writtenLenRef = React.useRef(0);
+  /** 已写入 xterm 的 output 前缀全文，用于计算增量切片与检测前缀替换。 */
+  const writtenTextRef = React.useRef("");
 
   React.useEffect(() => {
     const container = containerRef.current;
@@ -97,7 +97,7 @@ export const TerminalViewer = memo(function TerminalViewer({ output, className }
 
     termRef.current = term;
     fitRef.current = fitAddon;
-    writtenLenRef.current = 0;
+    writtenTextRef.current = "";
 
     const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => safeFit(fitAddon)) : null;
     observer?.observe(container);
@@ -115,18 +115,21 @@ export const TerminalViewer = memo(function TerminalViewer({ output, className }
     if (!term) {
       return;
     }
-    const written = writtenLenRef.current;
-    // output 回退（重置/换调用）时整体重写，保证视图与 props 严格一致。
-    if (output.length < written || !output.startsWith(output.slice(0, written))) {
+    const writtenText = writtenTextRef.current;
+    // output 与「上一帧已写入全文」的前缀不一致（变短回退 / 重放重建为不同内容）时
+    // 清屏重写，保证视图与 props 严格一致。注意：变短场景天然被 startsWith 失败覆盖
+    // （更短串不可能以更长串为前缀），无需额外的长度比较；判定必须是上一帧全文，
+    // 不能与 output 自身切片比（恒真死代码，替换场景永远检测不到）。
+    if (!output.startsWith(writtenText)) {
       term.clear();
-      writtenLenRef.current = 0;
+      writtenTextRef.current = "";
     }
-    const delta = output.slice(writtenLenRef.current);
+    const delta = output.slice(writtenTextRef.current.length);
     if (delta.length === 0) {
       return;
     }
     term.write(delta);
-    writtenLenRef.current = output.length;
+    writtenTextRef.current = output;
     term.scrollToBottom();
   }, [output]);
 

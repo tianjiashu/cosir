@@ -7,8 +7,8 @@
 
 from fastapi import Depends
 
-from app.api.app import app
-from app.api.depends.dependencies import get_agent_registry
+from app.app import app
+from app.api.dependencies import get_agent_registry
 from app.api.schemas import AgentProfileResponse, ListAgentsResponse
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID
 from app.core.agents.agent_profile_registry import AgentProfileRegistry

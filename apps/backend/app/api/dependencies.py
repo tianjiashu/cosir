@@ -14,7 +14,6 @@ from app.config.configuration import (
     set_agent_registry,
     set_tool_system,
 )
-from app.core.context import RuntimeContextBuilder
 from app.core.runtime.runner import AgentRuntime
 from app.service import depends as service_depends
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
@@ -39,44 +38,6 @@ __all__ = [
 ]
 
 _RUNTIME: "AgentRuntime | None" = None
-
-
-def build_runtime(
-    tool_system: ToolSystem | None = None,
-) -> AgentRuntime:
-    """Build the default runtime dependency graph.
-
-    Parameters:
-        tool_system: Initialized tool system supplied by application startup.
-
-    Returns:
-        Configured AgentRuntime instance.
-
-    Raises:
-        RuntimeError: If no tool system has been initialized or supplied, or if
-            the agent registry has not been initialized.
-        OSError: If logs or SQLite storage cannot be created.
-
-    Side effects:
-        Backend runtime limits are read from module-level static configuration
-        instead of a passed-in settings object. Storage initialization is owned
-        by application startup before this function is called.
-    """
-
-    tool_system = tool_system or get_tool_system()
-    services = _build_services()
-    # agent registry 由进程级单例提供（启动时经 set_agent_registry 注入），
-    # 与 GET /agents 端点共享同一份目录。
-    agent_registry = get_agent_registry()
-    return AgentRuntime(
-        task_service=services["task_service"],
-        turn_service=services["turn_service"],
-        context_builder=RuntimeContextBuilder(),
-        tool_scheduler=tool_system.scheduler,
-        agent_registry=agent_registry,
-        workspace_service=services["workspace_service"],
-        runtime_event_service=services["runtime_event_service"],
-    )
 
 
 def _build_services() -> dict:

@@ -7,7 +7,7 @@
 
 from fastapi import HTTPException, Query
 
-from app.api.app import app
+from app.app import app
 from app.api.schemas.request.ChangeSetActionRequest import ChangeSetActionRequest
 from app.api.schemas.response.ChangeSetResponse import ChangeSetResponse
 from app.service.task import change_set_service

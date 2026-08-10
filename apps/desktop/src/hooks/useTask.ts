@@ -7,8 +7,9 @@
  * @module hooks/useTask
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTaskStore } from "../stores/taskStore";
+import { loadWorkspaceTasks } from "./useWorkspaceTaskLazyLoad";
 import { useEventStore } from "../stores/eventStore";
 import { useTurnStore } from "../stores/turnStore";
 import { useSSE } from "./useSSE";
@@ -90,6 +91,13 @@ export function useTask(): UseTaskReturn {
   const setStreamingTurn = useTurnStore((s) => s.setStreamingTurn);
   const { connect, disconnect } = useSSE();
 
+  // openTask 竞态防护：单调递增的请求序号。每次 openTask 进入时自增并记录，
+  // 异步 await 之后只有「本次仍是最新一次 openTask」才允许 setActiveTask 切活跃。
+  // 防止快速连点 taskA→taskB 时，慢的 taskA 过期响应后返回把活跃任务覆盖回 taskA
+  // （经典「后发先至」竞态）。事件缓存（setEvents）不受此防护——历史不可变，
+  // 过期响应的事件仍按 taskId 落缓存，下次打开即命中，不浪费。
+  const openTaskSeqRef = useRef(0);
+
   /**
    * 在工作区内创建新任务并启动首个 turn 的 SSE 监听。
    *
@@ -98,7 +106,7 @@ export function useTask(): UseTaskReturn {
    *
    * @sideeffect
    * - POST /workspaces/{workspace_id}/tasks 创建任务与首个 turn
-   * - 更新 taskStore.tasks 和 activeTaskId
+   * - 更新 taskStore.tasksByWorkspaceId（按 workspace 分组）和 activeTaskId
    * - 建立 `/turns/{turn_id}/stream` SSE 连接接收首个 turn 事件流
    */
   const createTask = useCallback(
@@ -150,6 +158,12 @@ export function useTask(): UseTaskReturn {
         replaceTask(temporaryTaskId, taskWithResolvedTurn);
         setTurnsForTask(task.task_id, turns);
         setActiveTask(task.task_id, taskWithResolvedTurn.latest_turn_id);
+        // 若该 workspace 尚未加载任务列表（未展开过），新任务不会被 replaceTask 写入分组
+        // （store 为避免伪造加载态而对未加载分组拒收）。此处显式触发一次加载闭合路径，
+        // 确保新建任务在分组中可见；已加载分组则 loadWorkspaceTasks 去重跳过。
+        if (!useTaskStore.getState().isWorkspaceLoaded(workspaceId)) {
+          void loadWorkspaceTasks(workspaceId);
+        }
 
         // 建立 SSE 连接开始接收事件流
         if (taskWithResolvedTurn.latest_turn_id) {
@@ -279,6 +293,7 @@ export function useTask(): UseTaskReturn {
    */
   const openTask = useCallback(
     async (taskId: string, forceRefresh = false): Promise<void> => {
+      const seq = ++openTaskSeqRef.current;
       setOperation({ loading: true, error: null, eventsError: null });
       try {
         // 先拉 task + turns 并立刻渲染骨架：两者体量与事件流相比很小，能快速出首屏。
@@ -293,7 +308,12 @@ export function useTask(): UseTaskReturn {
         }
         setTurnsForTask(taskId, turns);
         // 关键：先切活跃任务触发 ChatPanel 首屏渲染，不等历史事件全量到达。
-        setActiveTask(taskId, turns.length > 0 ? turns[turns.length - 1].turn_id : null);
+        // 竞态防护：仅当本次 openTask 仍是最新一次时才切活跃；否则说明用户已切到
+        // 更新任务，过期响应的 task/turns 仍可缓存（updateTask/setTurnsForTask 无副作用
+        // 于活跃态），但不得覆盖用户当前所在的活跃任务。
+        if (seq === openTaskSeqRef.current) {
+          setActiveTask(taskId, turns.length > 0 ? turns[turns.length - 1].turn_id : null);
+        }
         setOperation({ loading: false, error: null, eventsError: null });
 
         // 再异步拉历史事件：到达后按 task 分组增量灌入，timeline 自然补全。

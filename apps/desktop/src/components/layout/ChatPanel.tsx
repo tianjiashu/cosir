@@ -7,7 +7,7 @@
  * @module components/layout/ChatPanel
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,12 @@ const INITIAL_TURN_COUNT = 20;
  */
 const LOAD_MORE_TURN_COUNT = 20;
 
+/**
+ * 「用户正在底部」判定阈值（px）：滚动位置距底不超过该值即视为正在跟随最新内容，
+ * 新事件到达时才允许自动滚底；超过该值说明用户已上滚阅读历史，不得打断。
+ */
+const NEAR_BOTTOM_THRESHOLD_PX = 80;
+
 /** ChatPanel 组件属性。 */
 export interface ChatPanelProps {
   /** 点击「选择工作区」引导按钮后的跳转回调。 */
@@ -76,6 +82,9 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const turns = useTurnStore(useShallow((s) => (activeTask ? s.turnsByTaskId[activeTask.task_id] ?? [] : [])));
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // 用户是否正处于（或接近）底部：仅此时新事件到达才自动滚底；
+  // 用户上滚阅读历史时为 false，流式 delta 不得把视口拽回底部。
+  const isNearBottomRef = useRef(true);
   const renderCountRef = useRef(0);
   const prevEventsRef = useRef<unknown>(events);
   renderCountRef.current += 1;
@@ -121,6 +130,8 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURN_COUNT);
   useEffect(() => {
     setVisibleTurnCount(INITIAL_TURN_COUNT);
+    // 切换任务后重新允许自动滚底：打开任务应定位到最新内容，而非沿用上一任务的阅读位置。
+    isNearBottomRef.current = true;
   }, [activeTaskId]);
 
   // 首屏只取最近 visibleTurnCount 个 turn；更早的以折叠入口呈现。
@@ -168,17 +179,38 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   // 当有新事件或新消息时自动滚动到底部。
   // 节流：流式期间事件高频到达，若每次都触发 smooth 滚动动画会导致大量重排重绘而卡顿。
   // 用 rAF + 节流（每 200ms 至多滚动一次），保证跟随最新内容的同时不阻塞渲染。
-  // 虚拟列表下改用滚动容器 scrollTo 到底（锚点 div 在虚拟列表中不保证挂载）。
+  // 关键修正：虚拟列表（VirtualList）内条目为绝对定位 + translateY，滚动容器的
+  // `scrollHeight` 由虚拟器 totalSize 撑起，而 totalSize 随单条动态测量（折叠/展开/流式）
+  // 异步更新——若用 `scrollHeight` 滚底，会在测量滞后窗口内滚不到真底，且 smooth 动画
+  // 在 totalSize 变化的瞬间与 translateY 重排相互打架，视觉上出现条目短暂重叠/跳动。
+  // 因此滚动目标改为 VirtualList 上报的真实 totalSize（onTotalSizeChange 持久化到 ref），
+  // 并去掉 smooth 动画（瞬时跳到最新，避免动画期间虚拟列表重排造成的抖动）。
   const lastScrollAt = useRef(0);
+  const virtualTotalSizeRef = useRef(0);
+  const handleTotalSizeChange = useCallback((totalSize: number) => {
+    virtualTotalSizeRef.current = totalSize;
+  }, []);
+  // 滚动跟随判定：用户在容器上的每一次滚动都刷新「是否近底」状态。
+  // 程序化 scrollTo 同样触发 scroll 事件，故自动滚底后该状态保持为 true。
+  const handleListScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX;
+  }, []);
   useEffect(() => {
     const now = Date.now();
     if (now - lastScrollAt.current < 200) {
       return;
     }
-    lastScrollAt.current = now;
     const el = scrollContainerRef.current;
-    if (el) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    // 近底守卫：用户已上滚阅读历史时不自动滚底（不打断阅读位置），也不刷新
+    // 节流时间戳——用户回到底部后，下一条新事件可立即恢复跟随。
+    if (!isNearBottomRef.current) {
+      return;
+    }
+    lastScrollAt.current = now;
+    if (el && virtualTotalSizeRef.current > 0) {
+      el.scrollTo({ top: virtualTotalSizeRef.current });
     }
     // 渲染完成锚点：本次因 events/最新事件触发的滚动提交完成，即「首帧内容可见」终点。
     PerfTrace.markCurrent("chatPanel:scroll-committed", {
@@ -240,6 +272,9 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
           className="min-w-0 flex-1 scrollbar-thin py-6"
           estimateSize={240}
           overscan={4}
+          onScroll={handleListScroll}
+          onTotalSizeChange={handleTotalSizeChange}
+          containerTestId="chat-turn-scroll-container"
         />
       )}
     </main>

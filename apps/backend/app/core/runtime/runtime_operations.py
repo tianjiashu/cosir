@@ -6,12 +6,13 @@ import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import sqlalchemy
+
 from app.config.logging.logger import log
-from app.core.context.runtime_context_builder import RuntimeContextBuilder
-from app.models import RuntimeMessage, TurnRecord
+from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
-from app.service.depends import get_runtime_event_bus
+from app.service.depends import get_runtime_event_bus, get_turn_service
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
@@ -20,6 +21,7 @@ from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
+    from app.service.task.turn_service import TurnService
 
 
 class RuntimeOperations:
@@ -31,11 +33,11 @@ class RuntimeOperations:
 
     def __init__(
         self,
-        turn_store,
-        context_builder: RuntimeContextBuilder,
         tool_scheduler: ToolScheduler,
         agent_profile: AgentProfile,
-        current_turn_id: str = "",
+        current_turn: TurnRecord,
+        current_task: TaskRecord,
+        current_workspace: WorkspaceRecord,
         model_tools: list[ToolDefinition] | None = None,
         execution_context: ToolExecutionContext | None = None,
         tool_trace_recorder: ToolTraceRecorder | None = None,
@@ -44,11 +46,14 @@ class RuntimeOperations:
         """初始化运行时操作门面及其私有协作者。
 
         参数:
-            turn_store: 轮次存储（私有协作者，不对外暴露）。
-            context_builder: 文本上下文构建器。
+            turn_store: 轮次存储（私有协作者，不对外暴露）；逐条落库经其
+                ``append_turn_message`` / ``clear_turn_messages`` 门面，避免 core 直连
+                storage 层（分层约束：core → service，service → storage）。
             tool_scheduler: 工具调度器（已按 workspace 边界解析或进程级兜底）。
             agent_profile: 驱动本轮执行的 agent profile。
-            current_turn_id: 当前绑定的轮次标识；空串表示尚未绑定。
+            current_turn: 当前绑定的轮次记录（门面状态单一事实来源）。
+            current_task: 当前执行的任务记录。
+            current_workspace: 当前工作区记录。
             model_tools: 暴露给模型的工具定义列表。
             execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
                 日志不注入 ``workspace_id``。
@@ -63,16 +68,23 @@ class RuntimeOperations:
             无。
 
         副作用:
-            构造 ``ToolExecutionService``、存储执行上下文、记初始化日志。
+            构造 ``ToolExecutionService``、存储执行上下文、初始化本 turn 逐条落库
+            序号计数器（``_message_sequence = 0``）、记初始化日志。
         """
 
-        self._turn_store = turn_store
-        self._context_builder = context_builder
+        self._turn_service = get_turn_service()
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
-        self._current_turn_id = current_turn_id
+        self._current_workspace = current_workspace
+        self._current_turn = current_turn
+        self._current_task = current_task
         self._execution_context = execution_context
         self._should_cancel = should_cancel
+        # 本 turn 内逐条落库的序号计数器；operations 每 turn 新建，天然随 turn 重置。
+        # 注意：审批 interrupt()/Command(resume=) 在 graph 节点内就地恢复，不会重新走
+        # run_agent 入口，因此不会重置本计数器——重置仅发生在「从头重跑整个 turn」场景，
+        # 该场景下清掉上一轮残留并重新编号是预期的幂等行为。
+        self._message_sequence = 0
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
@@ -90,8 +102,8 @@ class RuntimeOperations:
                 "data": {
                     "agent_id": agent_profile.agent_id,
                     "model_tools_count": len(self.model_tools),
-                    "current_turn_id": current_turn_id,
-                    "current_turn_bound": bool(current_turn_id),
+                    "current_turn_id": current_turn.turn_id if current_turn else None,
+                    "current_turn_bound": bool(current_turn),
                 },
             },
         )
@@ -99,90 +111,134 @@ class RuntimeOperations:
     def get_current_turn(self) -> TurnRecord:
         """Return the turn identified by ``current_turn_id``.
 
-        用于工作流取「当前要跑的轮」，避免 ``get_turn_for_task`` 总是返回第一轮的历史 bug。
+        用于工作流取「当前要跑的轮」.
         """
 
-        if not self._current_turn_id:
-            log.error(
-                "current_turn_id_missing",
-                extra={
-                    "msg": "runtime operations 未绑定 current_turn_id，无法解析当前轮",
-                    "data": {"agent_id": self.agent_profile.agent_id},
-                },
+        return self._current_turn
+
+    def get_current_task(self) -> TaskRecord:
+        """Return the task identified by ``current_task_id``.
+
+        用于工作流取「当前要跑的任务」.
+        """
+
+        return self._current_task
+
+    def get_current_workspace(self) -> WorkspaceRecord:
+        """Return the workspace identified by ``current_workspace_id``.
+
+        用于工作流取「当前要跑的任务」.
+        """
+
+        return self._current_workspace
+
+    def reset_message_sequence(self) -> None:
+        """清空当前 turn 的消息轨迹并将逐条落库序号归零（turn 开始执行时调用，保证幂等）。
+
+        配合 ``append_runtime_message`` 使用：turn 启动先调用本方法清空当前 turn 在
+        ``turn_messages`` 表的全部残留并复位序号，之后每条消息经 ``append_runtime_message``
+        自增序号落库；历史 turn 因按 ``turn_id`` 隔离不受影响，跨轮拼装仍由
+        ``RuntimeContext.load_for_task`` 从各 turn 读取实现。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果清理失败（由底层 CRUD 透传）。
+
+        副作用:
+            删除当前 turn 在 ``turn_messages`` 表的全部行；``_message_sequence`` 归零。
+        """
+
+        if not self._current_turn:
+            log.warning(
+                "runtime_message_reset_skipped_no_turn",
+                extra={"msg": "reset_message_sequence ignored: no bound current_turn"},
             )
-            raise KeyError("no current turn id bound to runtime operations")
-        log.debug(
-            "current_turn_resolved",
-            extra={
-                "msg": f"解析当前轮，turn_id={self._current_turn_id}",
-                "data": {
-                    "agent_id": self.agent_profile.agent_id,
-                    "turn_id": self._current_turn_id,
-                },
-            },
-        )
-        return self._turn_store.get_turn(self._current_turn_id)
-
-    def get_turn_for_task(self, task_id: str) -> TurnRecord:
-        """Return the latest turn for a task (kept for compatibility)."""
-
-        return self._turn_store.get_latest_turn(task_id)
-
-    def get_latest_turn(self, task_id: str) -> TurnRecord:
-        """Return the latest turn for a task."""
-
-        return self._turn_store.get_latest_turn(task_id)
-
-    def list_turns_for_task(self, task_id: str) -> list[TurnRecord]:
-        """List all turns of a task in creation order."""
-
-        return self._turn_store.list_turns_for_task(task_id)
-
-    def build_messages(self) -> list[RuntimeMessage]:
-        """Build model-independent runtime messages for the current turn.
-
-        完全基于 turn（当前轮 + 前置轮轨迹），不再依赖 task 执行态。
-        """
+            return
         try:
-            turn = self.get_current_turn()
-            turn_history = self._turn_store.list_turns_for_task(turn.task_id)
-            messages = self._context_builder.build_messages(
-                self.agent_profile,
-                turn,
-                turn_history,
-                self._turn_store,
-                execution_context=self._execution_context,
-            )
-            log.info(
-                "messages_built",
+            self._turn_service.clear_turn_messages(self._current_turn.turn_id)
+        except sqlalchemy.exc.SQLAlchemyError:
+            log.exception(
+                "runtime_message_reset_failed",
                 extra={
-                    "msg": (
-                        f"已为 turn_id={turn.turn_id} 构建模型消息，"
-                        f"共 {len(messages)} 条（含 {len(turn_history)} 轮历史）"
-                    ),
+                    "msg": "failed to clear turn messages before sequence reset",
+                    "data": {"turn_id": self._current_turn.turn_id},
+                },
+            )
+            raise
+        self._message_sequence = 0
+
+    def append_runtime_message(self, message: RuntimeMessage) -> None:
+        """逐条持久化一条运行时消息（替代 turn 结束后的批覆盖写入）。
+
+        落库序号由门面内部自增维护，调用方无需关心 ``sequence``；单条写入使每条消息在
+        产生时即落库，turn 中途失败也能保留已产生的轨迹。消息落库经 ``self._turn_store``
+        门面转交 storage 层，core 不直接接触 storage（分层约束：core → service → storage）；
+        工作流节点只调用本方法，不直接接触存储层。
+
+        参数:
+            message: 单条模型无关的运行时消息；本轮生命周期内依次落库的是用户提问
+                （``role="user"``，在 turn 启动时写入）、模型回复（``role="assistant"``，
+                含 ``tool_calls``）、工具观察（``role="tool"``）。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果写入失败（捕获后写 error 日志并重新抛出）。
+
+        副作用:
+            当前 turn 在 ``turn_messages`` 表追加一行；``_message_sequence`` 自增。
+        """
+
+        if not self._current_turn:
+            log.warning(
+                "runtime_message_append_skipped_no_turn",
+                extra={
+                    "msg": "append_runtime_message ignored: no bound current_turn",
+                    "data": {"role": message.role},
+                },
+            )
+            return
+        try:
+            self._turn_service.append_turn_message(
+                self._current_turn.turn_id, message, self._message_sequence
+            )
+        except sqlalchemy.exc.SQLAlchemyError:
+            log.exception(
+                "runtime_message_append_failed",
+                extra={
+                    "msg": "failed to persist runtime message incrementally",
                     "data": {
-                        "turn_id": turn.turn_id,
-                        "task_id": turn.task_id,
-                        "message_count": len(messages),
-                        "history_turn_count": len(turn_history),
+                        "turn_id": self._current_turn.turn_id,
+                        "sequence": self._message_sequence,
+                        "role": message.role,
                     },
                 },
             )
-            return messages
-        except Exception:
-            log.exception(
-                "messages_build_failed",
-                extra={
-                    "msg": f"构建运行时消息失败，turn_id={self._current_turn_id}",
-                    "data": {"turn_id": self._current_turn_id},
+            raise
+        log.debug(
+            "runtime_message_appended",
+            extra={
+                "msg": f"单条运行时消息已落库，turn_id={self._current_turn.turn_id} "
+                f"sequence={self._message_sequence} role={message.role}",
+                "data": {
+                    "turn_id": self._current_turn.turn_id,
+                    "sequence": self._message_sequence,
+                    "role": message.role,
                 },
-            )
-            return []
+            },
+        )
+        self._message_sequence += 1
 
     def has_turn_status(self, turn_id: str, status: str) -> bool:
         """Return whether a turn currently has the requested status."""
 
-        has = self._turn_store.has_turn_status(turn_id, status)
+        has = self._turn_service.has_turn_status(turn_id, status)
         log.debug(
             "turn_status_checked",
             extra={
@@ -210,27 +266,9 @@ class RuntimeOperations:
 
         if self._should_cancel is not None and self._should_cancel():
             return True
-        if not self._current_turn_id:
+        if not self._current_turn:
             return False
-        return self.has_turn_status(self._current_turn_id, "cancelled")
-
-    def update_turn_status(
-        self, turn_id: str, status: str, end_reason: str | None = None
-    ) -> TurnRecord:
-        """Update turn status (and optional end reason) through the turn store."""
-
-        log.info(
-            "turn_status_updated",
-            extra={
-                "msg": f"更新 turn_id={turn_id} 状态为 {status}",
-                "data": {
-                    "turn_id": turn_id,
-                    "status": status,
-                    "end_reason": end_reason,
-                },
-            },
-        )
-        return self._turn_store.update_turn_status(turn_id, status, end_reason)
+        return self.has_turn_status(self._current_turn.turn_id, "cancelled")
 
     def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
         """Complete the turn only if it is still running.
@@ -258,7 +296,7 @@ class RuntimeOperations:
                 "data": {"turn_id": turn_id, "response_length": response_len},
             },
         )
-        return self._turn_store.complete_turn_if_running(turn_id, response_text)
+        return self._turn_service.complete_turn_if_running(turn_id, response_text)
 
     def fail_turn_if_running(
         self, turn_id: str, end_reason: str | None = None
@@ -287,23 +325,7 @@ class RuntimeOperations:
                 "data": {"turn_id": turn_id, "end_reason": end_reason},
             },
         )
-        return self._turn_store.fail_turn_if_running(turn_id, end_reason)
-
-    def update_turn_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
-        """Persist the turn's agent reply text through the turn store."""
-
-        response_len = len(response_text) if response_text else 0
-        log.info(
-            "turn_response_updated",
-            extra={
-                "msg": f"更新 turn_id={turn_id} 的 agent 回复文本，长度 {response_len}",
-                "data": {
-                    "turn_id": turn_id,
-                    "response_length": response_len,
-                },
-            },
-        )
-        return self._turn_store.update_turn_response(turn_id, response_text)
+        return self._turn_service.fail_turn_if_running(turn_id, end_reason)
 
     def run_tool_calls(
         self,
@@ -369,9 +391,7 @@ class RuntimeOperations:
             写入工具批次派发日志。
         """
 
-        workspace_id = (
-            self._execution_context.workspace_id if self._execution_context is not None else None
-        )
+        workspace_id = self._current_workspace.workspace_id if self._current_workspace else None
 
         log.info(
             "tool_calls_dispatched",
@@ -410,9 +430,7 @@ class RuntimeOperations:
             写入工具批次完成日志。
         """
 
-        workspace_id = (
-            self._execution_context.workspace_id if self._execution_context is not None else None
-        )
+        workspace_id = self._current_workspace.workspace_id if self._current_workspace else None
         status_counts: dict[str, int] = {}
         error_count = 0
         for obs in result.observations:

@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { useWorkspaceEventStore } from "@/stores/workspaceEventStore";
 import { useTaskStore } from "@/stores/taskStore";
-import { useEventStore } from "@/stores/eventStore";
+import { useWorkspaceTaskLazyLoad, clearFailedWorkspaceId } from "@/hooks/useWorkspaceTaskLazyLoad";
 import { useTask } from "@/hooks/useTask";
 import * as api from "@/services/api";
 import { deleteTask as deleteTaskApi } from "@/services/api";
@@ -58,11 +58,14 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const collapsedWorkspaceIds = useWorkspaceStore((s) => s.collapsedWorkspaceIds);
-  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
   const toggleWorkspaceCollapsed = useWorkspaceStore((s) => s.toggleWorkspaceCollapsed);
   const removeWorkspace = useWorkspaceStore((s) => s.removeWorkspace);
-  const tasks = useTaskStore((s) => s.tasks);
-  const setTasks = useTaskStore((s) => s.setTasks);
+  // 订阅真正的加载态状态（loadedWorkspaceIds 每次 setWorkspaceTasks/clearWorkspaceTasks
+  // 都创建新 Set，引用变化能正确驱动重渲染）。注意不可订阅 isWorkspaceLoaded 函数引用
+  // （恒定不变，永不触发重渲染），否则加载失败会永久卡在「加载中…」。
+  const loadedWorkspaceIds = useTaskStore((s) => s.loadedWorkspaceIds);
+  const tasksByWorkspaceId = useTaskStore((s) => s.tasksByWorkspaceId);
+  const clearWorkspaceTasks = useTaskStore((s) => s.clearWorkspaceTasks);
   const removeTask = useTaskStore((s) => s.removeTask);
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const { openTask } = useTask();
@@ -71,7 +74,9 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
   // 待删除工作区下的任务数量（用于确认弹窗展示）。
   const pendingDeleteTaskCount =
-    pendingDelete ? tasks.filter((task) => task.workspace_id === pendingDelete.workspace_id).length : 0;
+    pendingDelete
+      ? (tasksByWorkspaceId[pendingDelete.workspace_id] ?? []).length
+      : 0;
   // 待删除工作区是否为当前活跃工作区（用于确认弹窗提示切换/新建行为）。
   const pendingDeleteIsActive = pendingDelete ? activeWorkspaceId === pendingDelete.workspace_id : false;
   // 删除请求进行中标记，用于禁用按钮并展示 loading 文案。
@@ -99,6 +104,10 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     }
   }, [workspaces, startEvent]);
 
+  // 工作区任务列表惰性加载（按 workspace 分组按需拉取并缓存，默认展开态首屏补齐）。
+  // 编排逻辑抽到独立 hook，避免把在途去重/失败日志等业务流程留在表现层组件。
+  const { ensureLoaded, failedWorkspaceIds } = useWorkspaceTaskLazyLoad(workspaces, collapsedWorkspaceIds);
+
   /**
    * 执行工作区删除。
    *
@@ -117,18 +126,16 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     setDeleteError(null);
     try {
       await api.deleteWorkspace(deletedWorkspaceId);
-      const removedTaskIds = tasks
-        .filter((task) => task.workspace_id === deletedWorkspaceId)
-        .map((task) => task.task_id);
       // removeWorkspace 内部会在删除当前活跃区时自动切到剩余列表第一项。
       removeWorkspace(deletedWorkspaceId);
       // 同步清理该工作区的索引任务（断开 SSE）与状态快照。
       removeEvent(deletedWorkspaceId);
-      setTasks(tasks.filter((task) => task.workspace_id !== deletedWorkspaceId));
-      // 同步使被删工作区下各任务的事件缓存失效，避免幽灵 timeline。
-      for (const taskId of removedTaskIds) {
-        useEventStore.getState().invalidateTask(taskId);
-      }
+      // 级联清理该 workspace 的分组任务：事件缓存失效 + 活跃任务悬空清理
+      // 已由 clearWorkspaceTasks 内部单点负责（见 taskStore），组件层不再重复编排。
+      clearWorkspaceTasks(deletedWorkspaceId);
+      // 该工作区已不存在，顺手清掉可能残留的失败标记（属本 ws 的惰性加载失败态
+      // 落点，删除后不应再被 failedWorkspaceIds 持有，否则会污染下次同名/复建判断）。
+      clearFailedWorkspaceId(deletedWorkspaceId);
       setPendingDelete(null);
       // 删的是当前活跃区 → 主视图切回会话页，避免停留在已不存在的对话。
       if (wasActive) {
@@ -213,22 +220,29 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
             工作区
           </div>
           {workspaces.map((workspace) => {
-            const collapsed = collapsedWorkspaceIds.has(workspace.workspace_id);
-            const workspaceTasks = tasks.filter((task) => task.workspace_id === workspace.workspace_id);
+            const workspaceId = workspace.workspace_id;
+            const collapsed = collapsedWorkspaceIds.has(workspaceId);
+            const workspaceLoaded = loadedWorkspaceIds.has(workspaceId);
+            const workspaceFailed = failedWorkspaceIds.has(workspaceId);
+            const workspaceTasks = tasksByWorkspaceId[workspaceId] ?? [];
             return (
-              <div key={workspace.workspace_id}>
+              <div key={workspaceId}>
                 <div
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
-                    activeWorkspaceId === workspace.workspace_id
+                    activeWorkspaceId === workspaceId
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent/50",
                   )}
                 >
                   <button
                     onClick={() => {
-                      setActiveWorkspace(workspace.workspace_id);
-                      toggleWorkspaceCollapsed(workspace.workspace_id);
+                      // 点 workspace 仅展开/折叠其任务列表，不切换活跃工作区，
+                      // 也不触发中央 ChatPanel 的对话切换（需求：点 workspace 不切视图）。
+                      // 展开时立即触发惰性加载；折叠态无需加载，hook 的 effect 也在
+                      // collapsedWorkspaceIds 变化后兜底补拉（判定同一权威入口，不冲突）。
+                      toggleWorkspaceCollapsed(workspaceId);
+                      void ensureLoaded(workspaceId);
                     }}
                     title={`${workspace.name} (${workspace.root_path})`}
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -236,7 +250,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                     <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} />
                     <span className="truncate">{workspace.name}</span>
                   </button>
-                  <WorkspaceEventBadge status={statusByWorkspace[workspace.workspace_id]} />
+                  <WorkspaceEventBadge status={statusByWorkspace[workspaceId]} />
                   <button
                     title="删除工作区"
                     className="ml-auto rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
@@ -251,7 +265,21 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                 </div>
                 {!collapsed && (
                   <div className="ml-5 mt-1 space-y-1">
-                    {workspaceTasks.map((task) => (
+                    {workspaceFailed ? (
+                      // 加载失败优先于加载态：显式呈现并可重试，使失败不被永久隐藏为「加载中…」。
+                      <button
+                        type="button"
+                        onClick={() => void ensureLoaded(workspaceId)}
+                        className="rounded px-2 py-1.5 text-xs text-destructive hover:bg-destructive/10"
+                      >
+                        加载失败，点击重试
+                      </button>
+                    ) : !workspaceLoaded ? (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground/70">加载中…</div>
+                    ) : workspaceTasks.length === 0 ? (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground/70">暂无任务</div>
+                    ) : (
+                      workspaceTasks.map((task) => (
                       <div
                         key={task.task_id}
                         className="flex w-full items-center gap-1 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/50"
@@ -284,7 +312,8 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 )}
               </div>

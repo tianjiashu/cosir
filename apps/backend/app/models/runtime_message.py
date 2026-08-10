@@ -1,6 +1,7 @@
 """运行时使用的与模型无关的消息协议。"""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -24,4 +25,4 @@ class RuntimeMessage:
 
     role: str
     content_text: str
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)

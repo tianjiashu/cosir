@@ -176,117 +176,120 @@ Expected: FAIL，`AttributeError: 'FileSnapshotCrud' object has no attribute 'ma
 
 ```python
     def list_stable_by_turns(self, turn_ids: list[str]) -> list[FileSnapshotRecord]:
-        """按 turn 集合查询全部已稳定快照，按 ``seq`` 升序。
+    """按 turn 集合查询全部已稳定快照，按 ``seq`` 升序。
 
-        升序返回是为了让调用方按顺序覆盖同 path 条目，天然得到「每个 path 的最新变更」。
+    升序返回是为了让调用方按顺序覆盖同 path 条目，天然得到「每个 path 的最新变更」。
 
-        参数:
-            turn_ids: 目标轮次标识列表；为空列表时直接返回空结果，不查库。
+    参数:
+        turn_ids: 目标轮次标识列表；为空列表时直接返回空结果，不查库。
 
-        返回:
-            ``stable == 1`` 的 ``FileSnapshotRecord`` 列表，按 ``seq`` 升序；无记录时为空列表。
+    返回:
+        ``stable == 1`` 的 ``FileSnapshotRecord`` 列表，按 ``seq`` 升序；无记录时为空列表。
 
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
 
-        副作用:
-            打开一次主库只读 session。
-        """
-        if not turn_ids:
-            return []
-        with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(FileSnapshotModel)
-                    .where(FileSnapshotModel.turn_id.in_(turn_ids))
-                    .where(FileSnapshotModel.stable == 1)
-                    .order_by(FileSnapshotModel.seq.asc())
-                )
-                .scalars()
-                .all()
-            )
-        return [FileSnapshotRecord.from_model(row) for row in rows]
-
-    def latest_stable_by_path(self, turn_ids: list[str], path: str) -> FileSnapshotRecord | None:
-        """取给定 turn 集合内某文件路径的最新已稳定快照。
-
-        参数:
-            turn_ids: 目标轮次标识列表；为空列表时返回 None。
-            path: 相对 workspace 的文件路径。
-
-        返回:
-            ``seq`` 最大的已稳定 ``FileSnapshotRecord``；无匹配时为 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-        if not turn_ids:
-            return None
-        with self._session_factory() as session:
-            row = (
-                session.execute(
-                    select(FileSnapshotModel)
-                    .where(FileSnapshotModel.turn_id.in_(turn_ids))
-                    .where(FileSnapshotModel.path == path)
-                    .where(FileSnapshotModel.stable == 1)
-                    .order_by(FileSnapshotModel.seq.desc())
-                    .limit(1)
-                )
-                .scalars()
-                .first()
-            )
-        return None if row is None else FileSnapshotRecord.from_model(row)
-
-    def mark_stable_by_turn(self, turn_id: str) -> int:
-        """把某 turn 的全部快照标记为已稳定（turn 结束时调用，幂等）。
-
-        参数:
-            turn_id: 目标轮次标识。
-
-        返回:
-            本次实际被更新的行数（已稳定的行不重复计入，故重复调用返回 0）。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            把 ``file_snapshots`` 中该 turn 尚未稳定的行 ``stable`` 置 1。
-        """
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                update(FileSnapshotModel)
-                .where(FileSnapshotModel.turn_id == turn_id)
-                .where(FileSnapshotModel.stable == 0)
-                .values(stable=1)
-            )
-        return int(result.rowcount or 0)
-
-    def update_status(self, snapshot_id: int, status: str, reverted_at: str = "") -> None:
-        """按主键更新单条快照的处理态。
-
-        参数:
-            snapshot_id: 快照主键。
-            status: 目标状态，取值 ``pending`` / ``kept`` / ``reverted``。
-            reverted_at: 撤销时间字符串；仅 ``status == "reverted"`` 时有意义，其余传空串。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            改写 ``file_snapshots`` 中一行的 ``status`` 与 ``reverted_at``。
-        """
-        with self._session_factory.begin() as session:
+    副作用:
+        打开一次主库只读 session。
+    """
+    if not turn_ids:
+        return []
+    with self._session_factory() as session:
+        rows = (
             session.execute(
-                update(FileSnapshotModel)
-                .where(FileSnapshotModel.id == snapshot_id)
-                .values(status=status, reverted_at=reverted_at)
+                select(FileSnapshotModel)
+                .where(FileSnapshotModel.current_turn_id.in_(turn_ids))
+                .where(FileSnapshotModel.stable == 1)
+                .order_by(FileSnapshotModel.seq.asc())
             )
+            .scalars()
+            .all()
+        )
+    return [FileSnapshotRecord.from_model(row) for row in rows]
+
+
+def latest_stable_by_path(self, turn_ids: list[str], path: str) -> FileSnapshotRecord | None:
+    """取给定 turn 集合内某文件路径的最新已稳定快照。
+
+    参数:
+        turn_ids: 目标轮次标识列表；为空列表时返回 None。
+        path: 相对 workspace 的文件路径。
+
+    返回:
+        ``seq`` 最大的已稳定 ``FileSnapshotRecord``；无匹配时为 None。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+    副作用:
+        打开一次主库只读 session。
+    """
+    if not turn_ids:
+        return None
+    with self._session_factory() as session:
+        row = (
+            session.execute(
+                select(FileSnapshotModel)
+                .where(FileSnapshotModel.current_turn_id.in_(turn_ids))
+                .where(FileSnapshotModel.path == path)
+                .where(FileSnapshotModel.stable == 1)
+                .order_by(FileSnapshotModel.seq.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+    return None if row is None else FileSnapshotRecord.from_model(row)
+
+
+def mark_stable_by_turn(self, turn_id: str) -> int:
+    """把某 turn 的全部快照标记为已稳定（turn 结束时调用，幂等）。
+
+    参数:
+        turn_id: 目标轮次标识。
+
+    返回:
+        本次实际被更新的行数（已稳定的行不重复计入，故重复调用返回 0）。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+    副作用:
+        把 ``file_snapshots`` 中该 turn 尚未稳定的行 ``stable`` 置 1。
+    """
+    with self._session_factory.begin() as session:
+        result = session.execute(
+            update(FileSnapshotModel)
+            .where(FileSnapshotModel.current_turn_id == turn_id)
+            .where(FileSnapshotModel.stable == 0)
+            .values(stable=1)
+        )
+    return int(result.rowcount or 0)
+
+
+def update_status(self, snapshot_id: int, status: str, reverted_at: str = "") -> None:
+    """按主键更新单条快照的处理态。
+
+    参数:
+        snapshot_id: 快照主键。
+        status: 目标状态，取值 ``pending`` / ``kept`` / ``reverted``。
+        reverted_at: 撤销时间字符串；仅 ``status == "reverted"`` 时有意义，其余传空串。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+    副作用:
+        改写 ``file_snapshots`` 中一行的 ``status`` 与 ``reverted_at``。
+    """
+    with self._session_factory.begin() as session:
+        session.execute(
+            update(FileSnapshotModel)
+            .where(FileSnapshotModel.id == snapshot_id)
+            .values(status=status, reverted_at=reverted_at)
+        )
 ```
 
 - [ ] **Step 4: 运行测试确认通过**
@@ -483,7 +486,7 @@ class ChangeSet:
 
 
 def _turn_ids_until(
-    task_id: str, checkpoint_turn_id: str | None
+        task_id: str, checkpoint_turn_id: str | None
 ) -> tuple[list[str], list[ChangeCheckpoint]]:
     """解析 task 下参与聚合的 turn 列表与检查点列表。
 
@@ -503,10 +506,10 @@ def _turn_ids_until(
     """
     turns = TurnCrud().list_by_task(task_id)
     checkpoints = [
-        ChangeCheckpoint(turn_id=turn.turn_id, turn_seq=index, label=f"检查点 {index}")
+        ChangeCheckpoint(turn_id=turn.current_turn_id, turn_seq=index, label=f"检查点 {index}")
         for index, turn in enumerate(turns, start=1)
     ]
-    turn_ids = [turn.turn_id for turn in turns]
+    turn_ids = [turn.current_turn_id for turn in turns]
     if checkpoint_turn_id is not None:
         if checkpoint_turn_id not in turn_ids:
             raise ValueError(f"checkpoint turn not in task: {checkpoint_turn_id}")
@@ -540,7 +543,7 @@ def query_change_set(task_id: str, checkpoint_turn_id: str | None = None) -> Cha
             action=snap.action,
             status=snap.status,
             last_tool_call_id=snap.tool_call_id,
-            last_turn_id=snap.turn_id,
+            last_turn_id=snap.current_turn_id,
         )
     return ChangeSet(
         task_id=task_id,
@@ -596,7 +599,7 @@ def keep_file(task_id: str, path: str) -> ChangeFileEntry:
         "change_set_file_kept",
         extra={
             "msg": "变更集：文件变更已标记为保留",
-            "data": {"task_id": task_id, "path": path, "turn_id": snapshot.turn_id},
+            "data": {"task_id": task_id, "path": path, "turn_id": snapshot.current_turn_id},
         },
     )
     return ChangeFileEntry(
@@ -604,12 +607,12 @@ def keep_file(task_id: str, path: str) -> ChangeFileEntry:
         action=snapshot.action,
         status="kept",
         last_tool_call_id=snapshot.tool_call_id,
-        last_turn_id=snapshot.turn_id,
+        last_turn_id=snapshot.current_turn_id,
     )
 
 
 async def revert_file(
-    task_id: str, path: str, workspace_root: Path | None = None
+        task_id: str, path: str, workspace_root: Path | None = None
 ) -> ChangeFileEntry:
     """撤销某文件的最新变更，把文件还原到该变更之前。
 
@@ -648,7 +651,7 @@ async def revert_file(
                     "data": {
                         "task_id": task_id,
                         "path": path,
-                        "turn_id": snapshot.turn_id,
+                        "turn_id": snapshot.current_turn_id,
                         "operation": operation.operation.value,
                     },
                 },
@@ -661,7 +664,7 @@ async def revert_file(
         "change_set_file_reverted",
         extra={
             "msg": "变更集：文件变更已撤销",
-            "data": {"task_id": task_id, "path": path, "turn_id": snapshot.turn_id},
+            "data": {"task_id": task_id, "path": path, "turn_id": snapshot.current_turn_id},
         },
     )
     return ChangeFileEntry(
@@ -669,7 +672,7 @@ async def revert_file(
         action=snapshot.action,
         status="reverted",
         last_tool_call_id=snapshot.tool_call_id,
-        last_turn_id=snapshot.turn_id,
+        last_turn_id=snapshot.current_turn_id,
     )
 ```
 
@@ -870,7 +873,7 @@ class ChangeSetResponse(BaseModel):
 
 from fastapi import HTTPException, Query
 
-from app.api.app import app
+from app.app import app
 from app.api.schemas.request.ChangeSetActionRequest import ChangeSetActionRequest
 from app.api.schemas.response.ChangeSetResponse import ChangeSetResponse
 from app.service.task import change_set_service
@@ -879,82 +882,82 @@ from app.tools.tool_handler.patch.patch_apply import PatchApplyError
 
 @app.get("/tasks/{task_id}/changes", response_model=ChangeSetResponse)
 async def get_changes(
-    task_id: str, checkpoint: str | None = Query(default=None)
+        task_id: str, checkpoint: str | None = Query(default=None)
 ) -> ChangeSetResponse:
-    """查询某 task 的累积文件变更集。
+  """查询某 task 的累积文件变更集。
 
-    参数:
-        task_id: 任务标识。
-        checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。
+  参数:
+      task_id: 任务标识。
+      checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。
 
-    返回:
-        ``ChangeSetResponse``。
+  返回:
+      ``ChangeSetResponse``。
 
-    异常:
-        HTTPException(404): 当 checkpoint 不属于该 task 时。
+  异常:
+      HTTPException(404): 当 checkpoint 不属于该 task 时。
 
-    副作用:
-        只读查询。
-    """
-    try:
-        return ChangeSetResponse.from_change_set(
-            change_set_service.query_change_set(task_id, checkpoint)
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+  副作用:
+      只读查询。
+  """
+  try:
+    return ChangeSetResponse.from_change_set(
+      change_set_service.query_change_set(task_id, checkpoint)
+    )
+  except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/tasks/{task_id}/changes/keep", response_model=ChangeSetResponse)
 async def keep_changes(task_id: str, request: ChangeSetActionRequest) -> ChangeSetResponse:
-    """把一批文件的最新变更标记为「保留」。
+  """把一批文件的最新变更标记为「保留」。
 
-    参数:
-        task_id: 任务标识。
-        request: 含 ``paths`` 的请求体。
+  参数:
+      task_id: 任务标识。
+      request: 含 ``paths`` 的请求体。
 
-    返回:
-        操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。
+  返回:
+      操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。
 
-    异常:
-        HTTPException(404): 当任一路径没有已稳定变更时。
+  异常:
+      HTTPException(404): 当任一路径没有已稳定变更时。
 
-    副作用:
-        改写 ``file_snapshots`` 的 status。
-    """
-    try:
-        for path in request.paths:
-            change_set_service.keep_file(task_id, path)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ChangeSetResponse.from_change_set(change_set_service.query_change_set(task_id))
+  副作用:
+      改写 ``file_snapshots`` 的 status。
+  """
+  try:
+    for path in request.paths:
+      change_set_service.keep_file(task_id, path)
+  except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
+  return ChangeSetResponse.from_change_set(change_set_service.query_change_set(task_id))
 
 
 @app.post("/tasks/{task_id}/changes/revert", response_model=ChangeSetResponse)
 async def revert_changes(task_id: str, request: ChangeSetActionRequest) -> ChangeSetResponse:
-    """撤销一批文件的最新变更，把它们还原到变更之前。
+  """撤销一批文件的最新变更，把它们还原到变更之前。
 
-    参数:
-        task_id: 任务标识。
-        request: 含 ``paths`` 的请求体。
+  参数:
+      task_id: 任务标识。
+      request: 含 ``paths`` 的请求体。
 
-    返回:
-        操作后的完整 ``ChangeSetResponse``。
+  返回:
+      操作后的完整 ``ChangeSetResponse``。
 
-    异常:
-        HTTPException(404): 当任一路径没有已稳定变更时。
-        HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。
+  异常:
+      HTTPException(404): 当任一路径没有已稳定变更时。
+      HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。
 
-    副作用:
-        修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at。
-    """
-    try:
-        for path in request.paths:
-            await change_set_service.revert_file(task_id, path)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except PatchApplyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ChangeSetResponse.from_change_set(change_set_service.query_change_set(task_id))
+  副作用:
+      修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at。
+  """
+  try:
+    for path in request.paths:
+      await change_set_service.revert_file(task_id, path)
+  except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
+  except PatchApplyError as exc:
+    raise HTTPException(status_code=409, detail=str(exc)) from exc
+  return ChangeSetResponse.from_change_set(change_set_service.query_change_set(task_id))
 ```
 
 - [ ] **Step 5: 注册路由并删除 rollback**

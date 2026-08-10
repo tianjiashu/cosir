@@ -298,6 +298,10 @@ export function projectTimelineIncrementally(
             listEntries: tool.listEntries,
             emptyLabel: tool.emptyLabel,
             diffEntries: tool.diffEntries,
+            // 索引降级/陈旧提示（notice）仅由 finished 投影产出，合并时必须携带，
+            // 否则正常时序（started 先到）下该提示被静默丢弃；乱序时（finished 先到、
+            // started 后到）started 投影不含 notice（undefined），须跳过以免覆盖既有值。
+            ...(tool.notice !== undefined ? { notice: tool.notice } : {}),
             resultData: tool.resultData,
             // 运行期输出是 xterm 视图的专用通道；进入终态后由静态 <pre> 渲染 result，
             // 此处清空避免两条渲染路径同时持有输出造成重复展示与脏状态。
@@ -352,7 +356,7 @@ export function projectTimelineIncrementally(
 }
 
 /**
- * 读取「可见条目」：已定稿 entries + 仍在累积的 pending 块（标记 streaming）。
+ * 读取「可见条目」：已定稿 entries + 仍在累积的 pending 块（按 turn 状态决定是否标记 streaming）。
  *
  * 目的:
  *   TimelineProjectorState.entries 只保存**已定稿**条目，pending 块不写入；
@@ -360,8 +364,20 @@ export function projectTimelineIncrementally(
  *   （"Hel" / "Hello" / "Hello world" 层层堆叠）。渲染所需的
  *   「定稿 + 进行中」视图在此按需派生，保证累积态干净且幂等。
  *
+ * 契约:
+ *   `isTurnActive` 仅控制 pending 块的 `streaming` 标记：
+ *     - true（默认）= turn 仍在运行，pending 块以 streaming 推入；UI 持续展开 + caret。
+ *     - false = turn 已进入终态（failed / cancelled / completed 等），即便 stateRef
+ *       仍有 pending 残留（典型场景：SSE 客户端断开 → 后端不再投递终态 event 包，
+ *       `flushPending` 永远不被触发；上一轮「思考到一半任务失败」bug 即源于此），
+ *       也以 streaming 缺省推入；UI 按定稿态渲染，自然折叠回「深度思考 ▸」，
+ *       不再与后续 turn 的渲染区重叠挤压空间。
+ *   之所以放在此处而不是组件里：派生语义属于投影层契约，避免上层到处打补丁；
+ *   默认 true 保持向后兼容，4 个既有调用点 + 4 个既有测试无需改动。
+ *
  * 参数:
  *   state - 当前投影状态。
+ *   isTurnActive - turn 是否仍处于运行/挂起态。默认 true。
  *
  * 返回:
  *   渲染用条目数组；无 pending 时直接返回 state.entries 原引用（零分配，引用稳定）。
@@ -371,28 +387,40 @@ export function projectTimelineIncrementally(
  *
  * @sideeffect 无（纯函数）。
  */
-export function selectVisibleEntries(state: TimelineProjectorState): TurnTimelineEntry[] {
+export function selectVisibleEntries(
+  state: TimelineProjectorState,
+  isTurnActive: boolean = true,
+): TurnTimelineEntry[] {
   const { entries, pendingThinking, pendingDelta } = state;
   const hasThinking = Boolean(pendingThinking && pendingThinking.content.trim().length > 0);
   if (!hasThinking && !pendingDelta) {
     return entries;
   }
+  // turn 已终态：pending 块一律按定稿态推入；accumulator 仍按原样保留，
+  // 等待下一次增量投影时被新事件覆盖即可。
+  const markStreaming = isTurnActive ? true : undefined;
   const visible = entries.slice();
   if (pendingThinking && hasThinking) {
-    visible.push({
+    const thinkingEntry: TurnTimelineEntry = {
       kind: "thinking",
       eventId: pendingThinking.eventId,
       content: pendingThinking.content,
-      streaming: true,
-    });
+    };
+    if (markStreaming !== undefined) {
+      thinkingEntry.streaming = markStreaming;
+    }
+    visible.push(thinkingEntry);
   }
   if (pendingDelta) {
-    visible.push({
+    const deltaEntry: TurnTimelineEntry = {
       kind: "assistant",
       eventId: pendingDelta.eventId,
       content: pendingDelta.content,
-      streaming: true,
-    });
+    };
+    if (markStreaming !== undefined) {
+      deltaEntry.streaming = markStreaming;
+    }
+    visible.push(deltaEntry);
   }
   return visible;
 }

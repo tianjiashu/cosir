@@ -177,8 +177,8 @@ def tool_calls_from_langchain(calls: list[LangChainToolCall]) -> list[ToolCall]:
 def _tool_calls_from_metadata(raw: str | None) -> list[dict[str, Any]]:
     """从 ``RuntimeMessage.metadata`` 的 JSON 字符串还原 assistant 的 tool_calls。
 
-    ``runner`` 侧把 langchain ``tool_calls`` 序列化为 JSON 字符串存入 ``metadata``，
-    此处反序列化回 ``list[dict]`` 供 ``AIMessage`` 重建使用。
+    ``workflows/react/nodes._ai_to_runtime_message`` 把 langchain ``tool_calls`` 序列化为
+        JSON 字符串存入 ``metadata``，此处反序列化回 ``list[dict]`` 供 ``AIMessage`` 重建使用。
 
     参数:
         raw: ``metadata.get("tool_calls")`` 的 JSON 字符串，可能为空或非法。

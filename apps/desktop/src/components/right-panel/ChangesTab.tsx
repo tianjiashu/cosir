@@ -101,7 +101,11 @@ export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
         />
       </div>
 
-      {loading && <p className="py-4 text-center text-xs text-muted-foreground">加载中…</p>}
+      {/* 加载占位仅在「没有任何已有内容」时展示；已有列表时刷新不卸载列表，
+          避免运行期去抖刷新每 600ms 闪烁一次并丢失滚动位置。 */}
+      {loading && files.length === 0 && (
+        <p className="py-4 text-center text-xs text-muted-foreground">加载中…</p>
+      )}
 
       {error && (
         <div className="rounded-md border border-dashed border-destructive/50 p-3 text-xs text-destructive">
@@ -113,7 +117,7 @@ export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
         <p className="py-8 text-center text-xs text-muted-foreground">暂无文件变更</p>
       )}
 
-      {!loading && files.length > 0 && (
+      {files.length > 0 && (
         <VirtualList
           items={files}
           getKey={(file) => file.path}

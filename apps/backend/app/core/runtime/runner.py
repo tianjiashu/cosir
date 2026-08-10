@@ -4,30 +4,22 @@ import asyncio
 import os
 from collections.abc import AsyncGenerator
 from functools import partial
-from uuid import uuid4
 
-from langchain_core.messages import BaseMessage
-
-from app.config.logging import (
-    trace_log_extra,
-)
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.context import RuntimeContextBuilder
 from app.core.observability import (
     LangfuseToolTraceRecorder,
     TraceMetadata,
     tracing_enabled,
     turn_trace,
 )
-from app.core.runtime.runs.checkpointer import build_checkpointer
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.core.runtime.turn_cancellation_registry import TurnCancellationRegistry
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
-from app.models import TaskRecord, TurnRecord
+from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload import (
@@ -37,12 +29,7 @@ from app.models.payload import (
     RunStartedPayload,
 )
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
-from app.models.runtime_message import RuntimeMessage
-from app.models.trace_context import TraceContext
-from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
-from app.service.task.task_service import TaskService
-from app.service.task.turn_service import TurnService
-from app.service.task.workspace_service import WorkspaceService
+from app.service.depends import get_turn_service, get_task_service, get_runtime_event_service, get_workspace_service
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.schemas import ToolExecutionContext
@@ -67,15 +54,9 @@ class AgentRuntime:
     """
 
     def __init__(
-        self,
-        task_service: TaskService,
-        turn_service: TurnService,
-        context_builder: RuntimeContextBuilder,
-        tool_scheduler: ToolScheduler,
-        agent_registry: AgentProfileRegistry,
-        runtime_event_service: RuntimeEventService,
-        workspace_service: WorkspaceService | None = None,
-        cancellation_registry: TurnCancellationRegistry | None = None,
+            self,
+            tool_scheduler: ToolScheduler,
+            agent_registry: AgentProfileRegistry,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -102,33 +83,13 @@ class AgentRuntime:
             持有传入协作者引用；缺省时创建一个进程内取消注册表。
         """
 
-        self._task_service = task_service
-        self._turn_service = turn_service
-        self._context_builder = context_builder
+        self._task_service = get_task_service()
+        self._turn_service = get_turn_service()
         self._tool_scheduler = tool_scheduler
         self._agent_registry = agent_registry
-        self._workspace_service = workspace_service
-        self._cancellation_registry = cancellation_registry or TurnCancellationRegistry()
-        self._runtime_event_service = runtime_event_service
-
-    @property
-    def agent_registry(self) -> AgentProfileRegistry:
-        """返回驱动本引擎的进程级 agent profile 目录（只读）。
-
-        参数:
-            无。
-
-        返回:
-            注入的 ``AgentProfileRegistry`` 实例。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return self._agent_registry
+        self._workspace_service = get_workspace_service()
+        self._cancellation_registry = TurnCancellationRegistry()
+        self._runtime_event_service = get_runtime_event_service()
 
     def cancel_turn(self, turn_id: str) -> TurnRecord:
         """Cancel a turn and mark it cancelled.
@@ -194,9 +155,8 @@ class AgentRuntime:
         return turn
 
     async def run_turn(
-        self,
-        turn_id: str,
-        turn: TurnRecord | None = None,
+            self,
+            turn: TurnRecord | None = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """执行单个 pending 轮次并实时流式产出运行时事件。
 
@@ -210,52 +170,7 @@ class AgentRuntime:
             turn_id: 需要运行的轮次标识符。
             turn: 可选的预取轮次记录；缺省时按 ``turn_id`` 读取。
         """
-
-        # 预取轮次记录
-        if turn is None:
-            turn = self._turn_service.get_turn(turn_id)
-        task_id = turn.task_id
-        # 预取任务记录
-        task = self._task_service.get_task(task_id)
-
-        async def emit(event: RuntimeEvent) -> RuntimeEvent:
-            """落库并透传一条运行时事件（赋唯一递增 sequence）。
-
-            在 ``yield`` 前调用：经 ``RuntimeEventService`` 以独立线程写入 ``runtime_events`` 表
-            （避免阻塞 SSE 事件循环），并使用存储层分配的真实 turn-local sequence。
-            持久化失败由存储层记日志，不会中断流式运行。
-
-            参数:
-                event: 待落库并透传的运行时事件。
-
-            返回:
-                已赋序号、可直接 ``yield`` 的事件（与原事件 payload 一致）。
-
-            异常:
-                不向上抛出：落库异常被 ``save_event`` 内部吞掉并记日志。
-
-            副作用:
-                向 ``runtime_events`` 表插入一行（失败仅记日志）。
-            """
-
-            try:
-                stamped = await asyncio.to_thread(self._save_runtime_event, event)
-            except RuntimeError:
-                log.exception(
-                    "runtime_event_emit_persist_failed",
-                    extra={
-                        "msg": "运行时事件持久化失败，继续透传实时事件",
-                        "data": {
-                            "event_id": event.event_id,
-                            "event_type": event.event_type.value,
-                            "turn_id": event.turn_id,
-                        },
-                    },
-                )
-                stamped = event
-            self._publish_runtime_event(stamped)
-            # 调试：确认思考 delta 确实带内容发射（排除上游 reasoning_content 为空导致的空白）。
-            return stamped
+        turn_id = turn.turn_id
 
         # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
         if turn.status != "pending":
@@ -266,42 +181,13 @@ class AgentRuntime:
                     "data": {"turn_id": turn_id, "status": turn.status},
                 },
             )
-            return
+            return None
 
         # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
         # 未绑定时回退到 task.agent_id 默认归属。
-        requested_agent_id = turn.agent_id or task.agent_id
-        agent_profile = self._resolve_agent_profile(requested_agent_id)
+        agent_profile = self._agent_registry.resolve(turn.agent_id)
         if agent_profile is None:
-            self._turn_service.update_turn_status(
-                turn.turn_id, "failed", end_reason="agent_profile_unavailable"
-            )
-            log.error(
-                "agent_profile_unavailable",
-                extra=trace_log_extra(
-                    TraceContext(trace_id=str(uuid4()), task_id=task_id),
-                    msg="agent profile unavailable for task",
-                    data={
-                        "task_id": task_id,
-                        "requested_agent_id": requested_agent_id,
-                        "task_agent_id": task.agent_id,
-                    },
-                ),
-            )
-            yield await emit(
-                self._record(
-                    EventType.RUN_FAILED,
-                    task_id,
-                    RunFailedPayload(
-                        status="failed",
-                        error="agent_profile_unavailable",
-                        requested_agent_id=requested_agent_id,
-                        task_agent_id=task.agent_id,
-                    ),
-                    turn_id=turn.turn_id,
-                )
-            )
-            return
+            raise RuntimeError(f"agent profile unavailable for turn {turn_id}")
 
         if not self._turn_service.claim_pending_turn(turn.turn_id):
             # 已被其它连接抢占（极小概率的竞态）：本轮不再重复驱动，直接退出。
@@ -316,46 +202,70 @@ class AgentRuntime:
             )
             return
 
+        agent_profile.turn = turn
+        return self.run_agent(agent_profile)
+
+
+
+    async def run_agent(self, agent: AgentProfile) -> AsyncGenerator[RuntimeEvent, None]:
+
+        if agent.turn is None:
+            raise RuntimeError(f"agent profile unavailable for turn")
+
+        turn = agent.turn
+        turn_id = turn.turn_id
+        task_id = turn.task_id
+        task = self._task_service.get_task(task_id)
+        workspace = self._workspace_service.get_workspace(task.workspace_id)
+
         # UserPromptSubmit 挂接：本轮已被成功认领后触发。首版 deny 不阻断主流程
         # （turn 已认领，硬中断需额外终态收敛，侵入面过大，见 Hook机制技术方案.md §4.2）；
         # 无内置实现，空订阅下 fire 零开销放行。统一经 HookInterceptor 收口。
-        await HookInterceptor.async_safe_fire(HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, locatable=task, turn=turn))
+
+        await HookInterceptor.async_safe_fire(
+            HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=turn, locatable=None)
+        )
 
         # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
         # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorError），终态都只由本连接决定。
         try:
-            yield await emit(
+            yield await self._emit(
                 self._record(
                     EventType.RUN_STARTED,
                     task_id,
-                    RunStartedPayload(status="running", agent_id=agent_profile.agent_id),
-                    turn_id=turn.turn_id,
+                    RunStartedPayload(status="running", agent_id=agent.agent_id),
+                    turn_id=turn_id,
                 )
             )
 
             metadata = TraceMetadata(
                 task_id=task_id,
-                turn_id=turn.turn_id,
-                agent_id=agent_profile.agent_id,
-                workspace_id=task.workspace_id,
+                turn_id=turn_id,
+                agent_id=agent.agent_id,
             )
             recorder = LangfuseToolTraceRecorder() if tracing_enabled() else None
             operations = self._build_operations(
-                task, turn, agent_profile, tool_trace_recorder=recorder
+                workspace, task, turn, agent, tool_trace_recorder=recorder
+            )
+            # 本轮轨迹改为逐条增量落库（节点产生消息时经 operations.append_runtime_message
+            # 写入）；turn 启动先清掉上一轮残留并复位序号，保证崩溃重跑幂等。
+            operations.reset_message_sequence()
+            # 本轮用户提问同步落库为 role="user" 消息，补齐跨轮历史首条（原批覆盖实现
+            # 由完整 messages 重建，增量路径须显式写入，否则下一轮重建历史会缺 user 提问）。
+            operations.append_runtime_message(
+                RuntimeMessage(role="user", content_text=turn.input_text)
             )
 
             with turn_trace(metadata) as trace_result:
-                async for event in agent_profile.workflow.run(
-                    task,
-                    operations,
-                    callbacks=trace_result.callbacks,
-                    langfuse_trace_id=trace_result.trace_id,
+                async for event in agent.workflow.run(
+                        operations,
+                        callbacks=trace_result.callbacks,
+                        langfuse_trace_id=trace_result.trace_id,
                 ):
-                    yield await emit(event)
+                    yield await self._emit(event)
             if recorder is not None:
                 recorder.flush()
-            await self._persist_turn_trajectory(turn.turn_id)
-            await self._publish_stable_file_changes(task_id, turn.turn_id)
+            await self._publish_stable_file_changes(task_id, turn_id)
             # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
             # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
             await HookInterceptor.async_safe_fire(
@@ -363,10 +273,10 @@ class AgentRuntime:
             )
             return
         except Exception as exc:
-            self._turn_service.update_turn_status(turn.turn_id, "failed", end_reason=str(exc))
+            self._turn_service.update_turn_status(turn_id, "failed", end_reason=str(exc))
             # 失败即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
             # 使运行后变更能展示与撤销。同步调用（此处非 await 上下文）。
-            self._mark_stable_file_changes(turn.turn_id)
+            self._mark_stable_file_changes(turn_id)
             log.exception(
                 "task_failed",
                 extra={
@@ -374,18 +284,18 @@ class AgentRuntime:
                     "data": {"task_id": task_id},
                 },
             )
-            yield await emit(
+            yield await self._emit(
                 RuntimeEvent(
                     event_type=EventType.RUN_FAILED,
                     task_id=task_id,
-                    turn_id=turn.turn_id,
+                    turn_id=turn_id,
                     payload=RunFailedPayload(status="failed", error=str(exc)),
                 )
             )
         finally:
             # 本连接持有的清理收口：仅当本轮仍卡在 running（客户端断开导致运行被中止、
             # 或落终态前异常逃逸）时置 failed；正常完成 / 已失败 / 已取消均为幂等空操作。
-            self._mark_turn_disconnected_if_running(turn.turn_id)
+            self._mark_turn_disconnected_if_running(turn_id)
 
     def _mark_turn_disconnected_if_running(self, turn_id: str) -> None:
         """本连接持有的轮次若仍处于 ``running``，则落定为断开失败。
@@ -487,39 +397,6 @@ class AgentRuntime:
 
         return self._runtime_event_service.save_and_publish(event)
 
-    async def _persist_turn_trajectory(self, turn_id: str) -> None:
-        """Persist the turn's message trajectory for cross-turn memory.
-
-        读取该 turn（thread_id = turn_id）checkpoint 的最终 ``messages``，转换为模型无关的
-        ``RuntimeMessage`` 列表并落库，供下一轮构建上下文时拼回。
-
-        参数:
-            turn_id: 待持久化轨迹的轮次标识（同时作为 checkpoint thread_id）。
-
-        返回:
-            无。
-
-        异常:
-            读取或转换失败时仅记日志，不向上抛出（轨迹持久化失败不应中断运行）。
-        """
-
-        try:
-            async with build_checkpointer() as checkpointer:
-                snapshot = await checkpointer.aget_tuple({"configurable": {"thread_id": turn_id}})
-            if snapshot is None or not snapshot.checkpoint.get("channel_values"):
-                return
-            messages = snapshot.checkpoint["channel_values"].get("messages") or []
-            runtime_messages = _langchain_messages_to_runtime(messages)
-            self._turn_service.save_turn_messages(turn_id, runtime_messages)
-        except Exception:
-            log.exception(
-                "turn_trajectory_persist_failed",
-                extra={
-                    "msg": "failed to persist turn message trajectory",
-                    "data": {"turn_id": turn_id},
-                },
-            )
-
     def _mark_stable_file_changes(self, turn_id: str) -> None:
         """把某 turn 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。
 
@@ -617,30 +494,8 @@ class AgentRuntime:
             "has_model_api_key": bool(api_key_env and os.environ.get(api_key_env)),
         }
 
-    def _resolve_agent_profile(self, agent_id: str) -> AgentProfile | None:
-        """按 ``agent_id`` 从目录解析出本次执行使用的 agent profile。
-
-        引擎不再绑定单一 agent：每次执行都通过 ``agent_id`` 在 ``AgentProfileRegistry``
-        中查找对应的 profile。未命中（目录中不存在该 id）返回 ``None``，由调用方走
-        ``agent_profile_unavailable`` 失败分支。
-
-        参数:
-            agent_id: 待解析的 agent 标识（通常来自请求覆盖或 ``task.agent_id`` 默认归属）。
-
-        返回:
-            命中时返回对应的 ``AgentProfile``；未命中返回 ``None``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return self._agent_registry.resolve(agent_id)
-
     def _resolve_execution_context(
-        self, task: TaskRecord, turn_id: str = ""
+            self, task: TaskRecord, turn_id: str = ""
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
@@ -677,12 +532,51 @@ class AgentRuntime:
             return None
         return ToolExecutionContext.from_workspace(task.task_id, workspace, turn_id=turn_id)
 
+    async def _emit(self, event: RuntimeEvent) -> RuntimeEvent:
+        """落库并透传一条运行时事件（赋唯一递增 sequence）。
+
+        在 ``yield`` 前调用：经 ``RuntimeEventService`` 以独立线程写入 ``runtime_events`` 表
+        （避免阻塞 SSE 事件循环），并使用存储层分配的真实 turn-local sequence。
+        持久化失败由存储层记日志，不会中断流式运行。
+
+        参数:
+            event: 待落库并透传的运行时事件。
+
+        返回:
+            已赋序号、可直接 ``yield`` 的事件（与原事件 payload 一致）。
+
+        异常:
+            不向上抛出：落库异常被 ``save_event`` 内部吞掉并记日志。
+
+        副作用:
+            向 ``runtime_events`` 表插入一行（失败仅记日志）。
+        """
+
+        try:
+            stamped = await asyncio.to_thread(self._save_runtime_event, event)
+        except RuntimeError:
+            log.exception(
+                "runtime_event_emit_persist_failed",
+                extra={
+                    "msg": "运行时事件持久化失败，继续透传实时事件",
+                    "data": {
+                        "event_id": event.event_id,
+                        "event_type": event.event_type.value,
+                        "turn_id": event.turn_id,
+                    },
+                },
+            )
+            stamped = event
+        self._publish_runtime_event(stamped)
+        return stamped
+
     def _build_operations(
-        self,
-        task: TaskRecord,
-        turn: TurnRecord,
-        agent_profile: AgentProfile,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            self,
+            workspace: WorkspaceRecord,
+            task: TaskRecord,
+            turn: TurnRecord,
+            agent_profile: AgentProfile,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> RuntimeOperations:
         """为单个 turn 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -702,27 +596,24 @@ class AgentRuntime:
             已注入正确 tool_scheduler / model_tools / execution_context / trace_recorder 的
             RuntimeOperations 实例。
         """
-
-        execution_context = self._resolve_execution_context(task, turn_id=turn.turn_id)
         model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
         return RuntimeOperations(
-            turn_store=self._turn_service,
-            context_builder=self._context_builder,
             tool_scheduler=self._tool_scheduler,
             agent_profile=agent_profile,
-            current_turn_id=turn.turn_id,
+            current_turn=turn,
+            current_task=task,
+            current_workspace=workspace,
             model_tools=model_tools,
-            execution_context=execution_context,
             tool_trace_recorder=tool_trace_recorder,
             should_cancel=partial(self._cancellation_registry.is_cancelled, turn.turn_id),
         )
 
     def _record(
-        self,
-        event_type: EventType,
-        task_id: str,
-        payload: RuntimeEventPayload,
-        turn_id: str | None = None,
+            self,
+            event_type: EventType,
+            task_id: str,
+            payload: RuntimeEventPayload,
+            turn_id: str | None = None,
     ) -> RuntimeEvent:
         """创建一条运行时事件。
 
@@ -757,75 +648,3 @@ class AgentRuntime:
         )
         return event
 
-
-def _langchain_messages_to_runtime(messages: list[BaseMessage]) -> list[RuntimeMessage]:
-    """把 LangChain checkpoint 消息转换为模型无关的 ``RuntimeMessage`` 列表。
-
-    仅用于把 checkpoint 轨迹落库为跨轮记忆；与 ``runtime_to_langchain`` 方向相反，但作为
-    存储侧私有映射存在，不进入 ``core/llm/langchain_bridge`` 的公共桥接 API（避免凭空造
-    反向转换）。
-
-    参数:
-        messages: LangGraph checkpoint 的 ``messages`` 通道内容。
-
-    返回:
-        可落库、模型无关的运行时消息列表。
-    """
-
-    runtime_messages: list[RuntimeMessage] = []
-    for message in messages:
-        role = _langchain_role(message)
-        content_text = _extract_message_content(message.content)
-        metadata: dict[str, str] = {}
-        tool_calls = getattr(message, "tool_calls", None)
-        if tool_calls:
-            metadata["tool_calls"] = _safe_json(tool_calls)
-        tool_call_id = getattr(message, "tool_call_id", None)
-        if tool_call_id:
-            metadata["tool_call_id"] = str(tool_call_id)
-        runtime_messages.append(
-            RuntimeMessage(role=role, content_text=content_text, metadata=metadata)
-        )
-    return runtime_messages
-
-
-def _langchain_role(message: BaseMessage) -> str:
-    """把 LangChain 消息类型映射为运行时 role 字符串。"""
-
-    name = type(message).__name__
-    if name == "HumanMessage":
-        return "user"
-    if name == "AIMessage":
-        return "assistant"
-    if name == "ToolMessage":
-        return "tool"
-    if name == "SystemMessage":
-        return "system"
-    return "user"
-
-
-def _extract_message_content(content) -> str:
-    """从 LangChain 消息 content 提取纯文本。"""
-
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
-        return "".join(parts)
-    return str(content)
-
-
-def _safe_json(value) -> str:
-    """把任意可序列化对象转为 JSON 字符串（失败则转 str）。"""
-
-    import json
-
-    try:
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        return str(value)

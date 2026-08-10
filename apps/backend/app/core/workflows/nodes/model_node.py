@@ -1,91 +1,38 @@
-"""ReAct-like 工作流的 LangGraph 节点行为。
+"""ReAct-like 工作流的模型节点（``_model_node``）。
 
-本模块只承载节点逻辑，不负责 graph 构建、运行编排或事件翻译。两个节点 ``model`` 与
-``tools`` 均为 LangGraph 原生 callable，通过 ``get_config()`` 从运行上下文取出
-``operations`` / ``task`` / ``turn`` / ``model``；节点的全部运行时事件（含模型回复增量
-``MODEL_OUTPUT_DELTA`` 与思考增量 ``MODEL_THINKING_DELTA``）统一经 ``get_stream_writer()``
-写入 ``custom`` 事件流，由编排层 ``astream(stream_mode=["custom"])`` 透传为 ``RuntimeEvent``；
-token 由 ``model.astream()`` 产出并在节点内就地翻译为增量事件，不再依赖 ``messages`` 流通道。
+本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
+取出 ``operations`` / ``task`` / ``turn`` / ``model``，经 ``get_stream_writer()`` 把业务
+生命周期事件与流式 token 增量写入自定义事件流；用 ``model.astream()`` 累积 ``AIMessage``，
+回复 token 与思考 token 在节点内就地翻译为 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA``
+事件。根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
+状态写入 **turn**。
 
-状态单一事实来源是 ``Turn``：节点经 ``operations`` 写 **turn** 状态，不再写 task 执行态。
+与工具节点共享的运行时原语见 ``common``；不负责 graph 构建、运行编排或事件翻译。
 """
 
-import asyncio
 import json
-from collections.abc import Callable
 from time import perf_counter
+from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk
-from langgraph.config import get_config, get_stream_writer
-from langgraph.types import interrupt
 
 from app.config.logging.logger import log
-from app.config.settings import Settings
-from app.core.llm.langchain_bridge import (
-    runtime_to_langchain,
-    tool_calls_from_langchain,
-)
+from app.core.llm.langchain_bridge import tool_calls_from_langchain
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import (
     FinalResponsePayload,
-    ModelCompletedPayload,
     ModelOutputDeltaPayload,
     ModelRequestedPayload,
     ModelThinkingDeltaPayload,
-    ModelToolCallPayload,
     RunFailedPayload,
     RunFinishedPayload,
     StepStartedPayload,
 )
-from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.tools.schemas import ToolCall
 
-from .runtime_config import RuntimeConfig
-from .state import ReactGraphState
-
-
-# 内部封装：统一事件写入结构。
-def write_event(event_type: EventType, payload: RuntimeEventPayload) -> None:
-    writer = get_stream_writer()  # 自定义事件写入器
-    writer({"event_type": str(event_type), "payload": payload})
-
-
-def _make_write_event() -> Callable[[EventType, RuntimeEventPayload], None]:
-    """在当前 LangGraph 运行上下文中取出 writer，返回可跨线程调用的事件写入回调。
-
-    ``write_event`` 每次调用都现取 ``get_stream_writer()``，只能在持有 LangGraph
-    运行上下文的协程内使用。当节点把工作交给 ``asyncio.to_thread`` 时，需要先在
-    协程内取出 writer 对象并由闭包持有，工作线程才能继续写 ``custom`` 事件流。
-
-    返回:
-        与 ``write_event`` 同签名的回调，内部使用已捕获的 writer。
-
-    异常:
-        RuntimeError: 在无 LangGraph 运行上下文处调用时由 ``get_stream_writer()`` 抛出。
-
-    副作用:
-        无（调用返回的回调时才写入事件流）。
-    """
-    writer = get_stream_writer()
-
-    def _write(event_type: EventType, payload: RuntimeEventPayload) -> None:
-        writer({"event_type": str(event_type), "payload": payload})
-
-    return _write
-
-
-def _runtime_config() -> RuntimeConfig:
-    """从 LangGraph 运行上下文取出 ReAct 工作流注入的运行时配置容器。
-
-    ``ReactLikeWorkflow.run()`` 把 ``RuntimeConfig`` 放入 config 的 ``runtime_config``；
-    节点统一经本函数取出，避免在各节点里用裸字符串 key 重复读取 ``config["configurable"]``。
-
-    返回:
-        当前 graph 执行注入的 ``RuntimeConfig`` 实例。
-    """
-    # 从 LangGraph 注入的 config 中取出预先放好的 RuntimeConfig。
-    return get_config()["configurable"]["runtime_config"]
+from ..react.state import ReactGraphState
+from .common import _runtime_config, _runtime_context, write_event
 
 
 def _extract_text(content) -> str:
@@ -109,6 +56,62 @@ def _extract_text(content) -> str:
                 parts.append(item.get("text", ""))  # 多模态文本块 {"type":"text","text":...}
         return "".join(parts)  # 拼接所有文本片段
     return ""  # 其它类型（如图片）返回空
+
+
+def _has_content(message: AIMessage) -> bool:
+    """判断 LangChain 消息是否含有可落库的有效内容。
+
+    参数:
+        message: LangChain ``BaseMessage``（通常为 ``AIMessage``）。
+
+    返回:
+        消息含非空文本或至少一个工具调用时返回 True，否则返回 False。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if _extract_text(message.content).strip():
+        return True  # 有文本即视为有效
+    tool_calls = getattr(message, "tool_calls", None)
+    return bool(tool_calls)  # 有工具调用也视为有效
+
+
+def _ai_to_runtime_message(ai_message: "AIMessage") -> RuntimeMessage:
+    """把合并后的 ``AIMessage`` 转为内部 ``RuntimeMessage`` 以供增量落库。
+
+    参数:
+        ai_message: 模型节点合并产出、待写入 graph state 的 ``AIMessage``。
+
+    返回:
+        与模型无关的 ``RuntimeMessage``：``metadata`` 中以 **JSON 字符串** 承载
+        ``tool_calls``（键 ``tool_calls``），与
+        :meth:`app.core.context.runtime_context.RuntimeContext._tool_calls_from_metadata`
+        的反序列化契约严格对齐（读取端 ``json.loads``，故此处必须存字符串而非 list）。
+        无工具调用时不写入该键。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    tool_calls = [
+        {"name": call.get("name"), "args": call.get("args", {}), "id": call.get("id")}
+        for call in (ai_message.tool_calls or [])
+    ]
+    metadata: dict[str, Any] = (
+        {"tool_calls": json.dumps(tool_calls, ensure_ascii=False)} if tool_calls else {}
+    )
+    return RuntimeMessage(
+        role="assistant",
+        content_text=_extract_text(ai_message.content),
+        metadata=metadata,
+    )
 
 
 def _extract_reasoning_content(chunk) -> str:
@@ -204,6 +207,12 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     返回:
         需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）。
+
+    副作用:
+        - 经 ``operations.append_runtime_message`` 把本轮 ``AIMessage`` 逐条增量落库；
+        - 同步 ``_runtime_context().add_message`` 写回运行时上下文，使下一轮模型节点
+          经 ``load_message()`` 能累积看到本轮输出（否则上下文不增长会陷入死循环）；
+        - 流式 token / 事件经 ``get_stream_writer`` 透传；状态写入 ``turn``。
     """
 
     rc = _runtime_config()  # 取运行时配置
@@ -273,7 +282,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     terminal = False  # 是否因取消而提前终止
 
     # 真正流式调用模型，state.messages 为历史+系统上下文。
-    async for chunk in model.astream(state.messages):
+    messages = _runtime_context().load_message()
+    async for chunk in model.astream(messages):
         # 每收到 chunk 都检查 turn 是否被取消
         if operations.is_current_turn_cancelled():
             terminal = True  # 标记提前终止
@@ -321,6 +331,14 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     ai_message = _finalize_ai_message(chunks)  # 分块合并成完整 AIMessage
+    # 逐条持久化本轮产生的 assistant 消息（替代 turn 结束后的批落库）。
+    # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。
+    if _has_content(ai_message):
+        operations.append_runtime_message(_ai_to_runtime_message(ai_message))
+        # 同步写回运行时上下文，使下一模型步经 _runtime_context().load_message()
+        # 能读到本轮累积的 assistant 消息，否则模型每步都看到不变的首轮快照，
+        # 会陷入「相同上下文→相同输出」的死循环。
+        _runtime_context().add_message(ai_message)
     # 把 LangChain 的 tool_calls 转成内部 ToolCall 值对象
     tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
     output_text = "".join(collected_text).strip()  # 拼接文本并去首尾空白
@@ -336,22 +354,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "output_text_length": len(output_text),
             },
         },
-    )
-
-    write_event(
-        EventType.MODEL_COMPLETED,  # 模型产出完成事件
-        ModelCompletedPayload(
-            step_id=step_id,
-            text=output_text,
-            tool_calls=[
-                ModelToolCallPayload(
-                    tool_name=call.tool_name,
-                    arguments=call.arguments if isinstance(call.arguments, dict) else {},
-                    call_id=call.call_id,
-                )
-                for call in tool_calls
-            ],
-        ),
     )
 
     if requested_tool:  # 模型要求调用工具
@@ -526,235 +528,4 @@ async def _model_node(state: ReactGraphState) -> dict:
         "terminal": True,
         "messages": [ai_message],
         "pending_tool_calls": [],
-    }
-
-
-async def _tools_node(state: ReactGraphState) -> dict:
-    """ReAct 工具节点：在权限审批后执行工具并把观察结果追加回上下文。
-
-    节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批：
-
-    - 存在 ``approval_resolver``：用 ``interrupt()`` 暂停 graph 等待审批，审批结果
-      （批准的工具调用列表）通过 ``Command(resume=)`` 恢复；随后执行工具。
-    - 不存在 ``approval_resolver``（``None``）：视为「自动放行全部调用」，
-      **不经过 ``interrupt()``**，直接以 ``state.pending_tool_calls`` 作为已批准列表执行工具。
-      这样 graph 不会暂停，编排层循环可正常走到终态，避免「无审批器时反复
-      interrupt→resume 同一工具调用」的死循环。
-
-    工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
-    自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 存回 state。状态写入 **turn**。
-
-    本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
-    ``execute_terminal`` 会同步阻塞至命令结束（最长 ``max_command_timeout``），
-    若在事件循环线程内直跑，会连带卡死 SSE 推送与全部并发请求，运行期增量
-    也就无从实时到达客户端。工作线程内的事件写入使用**闭包捕获的 writer**
-    （见 ``_make_write_event``），因为 ``get_stream_writer()`` 依赖 LangGraph 的
-    运行上下文，需在协程内先取出再带入线程。
-
-    参数:
-        state: 当前 graph state，含待执行工具调用。
-
-    返回:
-        需要合并回 graph state 的增量（工具错误计数、新增观察消息等）。
-    """
-
-    rc = _runtime_config()  # 取运行时配置
-    operations = rc.operations  # 领域操作
-    task = rc.task  # 任务（工具执行需要 task_id）
-    turn = rc.turn  # 当前 turn 记录
-
-    tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
-    step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-
-    # 无审批器（含字段缺失的测试桩）→ 自动放行，不暂停 graph，
-    # 直接用原始 tool_calls 作为已批准列表。
-    if getattr(rc, "approval_resolver", None) is None:
-        log.info(
-            "tools_node_auto_approved",
-            extra={
-                "msg": (
-                    f"无审批器，自动放行 {len(tool_calls)} 个工具调用"
-                    f"（不暂停 graph），step_id={step_id}"
-                ),
-                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
-            },
-        )
-        approved_dicts = tool_calls
-    else:
-        log.info(
-            "tools_node_started",
-            extra={
-                "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
-                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
-            },
-        )
-        # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
-        # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
-        approved = interrupt({"tool_calls": tool_calls})
-        # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
-        approved_dicts = tool_calls if not isinstance(approved, list) else approved
-
-    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行
-    if operations.is_current_turn_cancelled():
-        log.info(
-            "tools_node_cancelled",
-            extra={
-                "msg": f"工具节点恢复后检测到 turn 已取消，跳过工具执行，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
-            },
-        )
-        # 关键修复：跳过工具执行时，必须为 assistant 已写入 checkpoint 的 tool_calls 补占位
-        # ToolMessage，否则下一轮拉回历史会出现悬空 assistant，触发 OpenAI 协议校验失败。
-        placeholder_messages = [
-            RuntimeMessage(
-                role="tool",
-                content_text=json.dumps(
-                    {"content": "工具执行已被取消，未产生响应"}, ensure_ascii=False
-                ),
-                metadata={"tool_call_id": call.get("id", "")},
-            )
-            for call in state.pending_tool_calls
-            if call.get("id")
-        ]
-        return {
-            "pending_tool_calls": [],
-            "tool_error_count": state.tool_error_count,
-            "terminal": True,
-            "messages": placeholder_messages,
-        }
-
-    # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
-    approved_calls = [
-        ToolCall(
-            tool_name=item["tool_name"],
-            arguments=item.get("arguments") or {},
-            call_id=item.get("call_id") or "",
-        )
-        for item in approved_dicts
-    ]
-
-    # 真正执行工具（内部会发工具生命周期事件，write_event 作为回调注入）。
-    log.info(
-        "tools_node_resumed",
-        extra={
-            "msg": f"审批已恢复，准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
-            "data": {"step_id": step_id, "approved_count": len(approved_calls)},
-        },
-    )
-    # 在协程内取出 writer 并闭包捕获：工具批次在工作线程执行，线程内无法再依赖
-    # get_stream_writer() 的运行上下文。同理，事件循环也需在此取出并传入，
-    # 供命令运行期输出增量从工作线程调度回环广播。
-    node_write_event = _make_write_event()
-    tool_run = await asyncio.to_thread(
-        operations.run_tool_calls,
-        task.task_id,
-        approved_calls,
-        step_id,
-        write_event=node_write_event,
-        running_loop=asyncio.get_running_loop(),
-    )
-    observations = tool_run.observations  # 每个工具调用的观察结果
-
-    if operations.is_current_turn_cancelled():
-        log.info(
-            "tools_node_cancelled_after_execution",
-            extra={
-                "msg": f"工具批次执行后检测到 turn 已取消，停止后续模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
-            },
-        )
-        # 关键修复：取消时不能丢弃本批次已产生的工具响应消息，否则 checkpoint 中
-        # assistant 的 tool_calls 将缺少对应 ToolMessage，导致下一轮拉回历史时触发
-        # OpenAI 协议校验失败（"assistant message with tool_calls must be followed by
-        # tool messages"）。已执行的工具（含被取消返回 error 的）其 observation 仍
-        # 在 messages_for_model 中，必须回写 checkpoint 以闭合配对。
-        return {
-            "pending_tool_calls": [],
-            "tool_error_count": state.tool_error_count,
-            "terminal": True,
-            "messages": runtime_to_langchain(tool_run.messages_for_model),
-        }
-
-    tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
-    for observation in observations:
-        if observation.status == "success":
-            tool_error_count = 0  # 成功则清零（连续失败才累计）
-        else:
-            tool_error_count += 1  # 失败 +1
-
-    success_count = sum(1 for o in observations if o.status == "success")
-    log.info(
-        "tools_node_completed",
-        extra={
-            "msg": f"工具执行完成，step_id={step_id}",
-            "data": {
-                "step_id": step_id,
-                "tool_count": len(observations),
-                "success_count": success_count,
-                "error_count": len(observations) - success_count,
-                "tool_error_count": tool_error_count,
-            },
-        },
-    )
-
-    if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        failed_turn = operations.fail_turn_if_running(
-            turn.turn_id, end_reason="tool_error_limit_reached"
-        )
-        if failed_turn is None:
-            log.info(
-                "tools_node_error_limit_terminal_race_lost",
-                extra={
-                    "msg": (
-                        f"工具错误上限失败落定时 turn 已非 running，"
-                        f"跳过失败事件，step_id={step_id}"
-                    ),
-                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
-                },
-            )
-            return {
-                "pending_tool_calls": [],
-                "tool_error_count": tool_error_count,
-                "terminal": True,
-                # 即便达到错误上限也要回写本批次已产生的工具响应，否则 checkpoint 中
-                # assistant 的 tool_calls 将缺对应 ToolMessage，下一轮拉回历史触发 OpenAI
-                # 协议校验失败（"assistant message with tool_calls must be followed by
-                # tool messages"）。
-                "messages": runtime_to_langchain(tool_run.messages_for_model),
-            }
-        log.warning(
-            "tools_node_error_limit",
-            extra={
-                "msg": f"连续工具错误达到上限，停止执行，step_id={step_id}",
-                "data": {
-                    "step_id": step_id,
-                    "tool_error_count": tool_error_count,
-                    "limit": Settings.TOOL_ERROR_LIMIT,
-                },
-            },
-        )
-        write_event(
-            EventType.RUN_FAILED,
-            RunFailedPayload(
-                step_id=step_id,
-                status="failed",
-                error="tool_error_limit_reached",
-                tool_name=observations[0].tool_name if observations else "",
-                langfuse_trace_id=rc.langfuse_trace_id,
-            ),
-        )
-        return {
-            "pending_tool_calls": [],
-            "tool_error_count": tool_error_count,
-            "terminal": True,  # 失败终态
-            # 达到错误上限同样必须回写本批次工具响应，闭合 assistant 的 tool_calls，
-            # 否则 checkpoint 悬空，下一轮拉回历史触发 OpenAI 协议校验失败。
-            "messages": runtime_to_langchain(tool_run.messages_for_model),
-        }
-
-    return {
-        "pending_tool_calls": [],  # 清空待执行工具调用
-        "tool_error_count": tool_error_count,
-        # 观察消息转 LangChain 消息追加进 state
-        "messages": runtime_to_langchain(tool_run.messages_for_model),
     }

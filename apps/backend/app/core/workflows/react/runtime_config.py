@@ -56,7 +56,6 @@ class RuntimeConfig:
     """
 
     operations: RuntimeOperations
-    task: TaskRecord
     turn: TurnRecord
     model: BaseChatModel
     # None 表示自动放行全部调用，且 tools 节点不调用 interrupt()（不暂停 graph）。

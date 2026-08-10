@@ -20,9 +20,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.depends.dependencies import (
+from app.api.dependencies import (
     build_agent_registry,
-    build_runtime,
     set_agent_registry,
     set_runtime,
     set_tool_system,
@@ -35,6 +34,7 @@ from app.bootstate import (
     write_bootstate,
 )
 from app.codegraph import CodeGraphKernelClient, CodeGraphKernelSupervisor
+from app.config.configuration import get_agent_registry
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -65,10 +65,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         释放的资源，故无需对其调用 close。
     """
 
-    runtime: AgentRuntime
-    runtime_override = getattr(_app.state, "runtime_override", None)
-    tool_system = getattr(_app.state, "tool_system_override", None)
-
     # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）初始化存储并配置日志。
     # reload 模式下子进程只执行 lifespan、不会执行 __main__.py，因此日志配置必须放在此处，
     # 否则运行期日志既不落文件也不落 SQLite；同时必须先 init_storage 再挂载 SQLite 日志
@@ -97,24 +93,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     initialize_hook_registry()
 
-    if runtime_override is None:
-        tool_system = tool_system or ToolSystem.build_tool_system(
-            _codegraph_client(),
-        )
-        set_tool_system(tool_system)
-        set_agent_registry(build_agent_registry())
-        runtime = build_runtime(tool_system=tool_system)
-        set_runtime(runtime)
-    else:
-        if tool_system is not None:
-            set_tool_system(tool_system)
-        # 覆写路径（测试专用）：从 runtime_override 取出其持有的 registry 同步到进程级
-        # 单例，保证 GET /agents 与执行引擎共享同一份目录。该分支不调用 build_tool_system，
-        # 但其持有的 ToolScheduler 仍会静态调用 HookInterceptor（注册表已初始化时生效）；
-        # 测试若需验证 Hook 应自行保证 HookRegistry 已初始化。
-        set_agent_registry(runtime_override.agent_registry)
-        set_runtime(runtime_override)
-        runtime = runtime_override
+    tool_system = ToolSystem.build_tool_system(_codegraph_client())
+    set_tool_system(tool_system)
+    set_agent_registry(build_agent_registry())
+    set_runtime(AgentRuntime(
+        tool_scheduler=tool_system.scheduler,
+        agent_registry=get_agent_registry(),
+    ))
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
@@ -139,7 +124,6 @@ app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 install_request_logging(app, log)
 install_http_exception_logging(app, log)
 
-
 # 触发各域路由的模块级装饰器注册到真实 app 上。
 # 这些模块通过 ``from app.api.app import app`` 复用同一单例，因此必须在本模块
 # 已定义 ``app`` 之后再导入，否则会产生未初始化引用。
@@ -152,33 +136,6 @@ importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.agents_api")
-
-
-def create_app(runtime=None, tool_system=None) -> FastAPI:
-    """Return the module-level FastAPI app and store optional overrides.
-
-    参数:
-        runtime: 可选的运行时依赖。省略时会构建默认的本地运行时。
-        tool_system: 可选的工具系统。省略且 runtime 为空时，会在应用装配阶段构建。
-
-    返回:
-        模块级 FastAPI 应用单例。
-
-    异常:
-        RuntimeError: 当当前环境未安装 FastAPI 或运行时构建失败时抛出。
-
-    副作用:
-        构建（或接收）运行时并写入模块级单例，供依赖注入使用。
-    """
-
-    app.state.runtime_override = runtime
-    app.state.tool_system_override = tool_system
-    if runtime is not None:
-        set_agent_registry(runtime.agent_registry)
-        set_runtime(runtime)
-    if tool_system is not None:
-        set_tool_system(tool_system)
-    return app
 
 
 async def _start_codegraph_kernel() -> CodeGraphKernelSupervisor | None:

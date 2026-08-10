@@ -56,6 +56,8 @@ class AgentProfileRegistry:
         副作用:
             无。
         """
+        if not agent_id and agent_id not in self._profiles:
+            return None
 
         return self._profiles.get(agent_id)
 

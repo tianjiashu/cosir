@@ -13,7 +13,6 @@ class AgentWorkflow(Protocol):
 
     def run(
         self,
-        task: TaskRecord,
         operations: RuntimeOperations,
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,

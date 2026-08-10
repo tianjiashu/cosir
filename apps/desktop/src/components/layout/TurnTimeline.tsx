@@ -67,6 +67,11 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
   // （setEvents 经排序/合并后可能在数组头部插入更早的历史事件，此时长度可能不减反增，
   // 仅比长度无法识别，必须靠首事件身份）。身份变化则整体重建而非按尾部切片续算。
   const lastFirstEventIdRef = useRef<string | null>(null);
+  // 已投影 events 的末位 event_id；用于检测「中段插入」式乱序归位
+  // （appendOrderedShard 遇乱序会整体重排，新事件可能落在已投影区间内部，
+  // 此时首事件身份与长度增长方向均不变，纯尾部切片会把中段事件永久漏投）。
+  // 校验点：append-only 时 events[lastLen-1] 必为旧末位；不等于旧末位即发生过中段插入。
+  const lastTailEventIdRef = useRef<string | null>(null);
   // 触发重渲染的轻量信号；renderTick 同时作为下游 useMemo 的显式依赖——
   // ref 的 .current 变化 React 侦测不到，必须靠递增计数传达「投影状态已更新」。
   const [renderTick, forceRender] = useReducer((x: number) => x + 1, 0);
@@ -78,6 +83,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       stateRef.current = projectTimelineIncrementally(createTimelineProjectorState(), events);
       lastLenRef.current = events.length;
       lastFirstEventIdRef.current = events[0]?.event_id ?? null;
+      lastTailEventIdRef.current = events[events.length - 1]?.event_id ?? null;
       PerfTrace.markCurrent("timeline:project-first-frame", {
         turn_id: turn.turn_id,
         events: events.length,
@@ -90,15 +96,24 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       return;
     }
     const firstEventId = events[0]?.event_id ?? null;
+    // 中段插入探测：append-only 语义下，已投影区间的末位（events[lastLen-1]）必然仍是
+    // 上次投影的旧末位；若身份不同，说明乱序归位把新事件插进了已投影区间内部，
+    // 尾部切片会漏投该事件，必须整体重建（projectTimelineIncrementally 幂等，重建安全）。
+    const midInsertDetected =
+      lastLenRef.current > 0 &&
+      events.length >= lastLenRef.current &&
+      (events[lastLenRef.current - 1]?.event_id ?? null) !== lastTailEventIdRef.current;
     if (
       events.length < lastLenRef.current ||
-      (firstEventId !== null && firstEventId !== lastFirstEventIdRef.current)
+      (firstEventId !== null && firstEventId !== lastFirstEventIdRef.current) ||
+      midInsertDetected
     ) {
-      // events 被整体替换（如回放/重连，或头部插入更早历史事件）：重建而非续算，
-      // 避免脏累积或把尾部误当新增；projectTimelineIncrementally 幂等，重建安全。
+      // events 被整体替换（如回放/重连，或头部插入更早历史事件，或中段乱序归位）：
+      // 重建而非续算，避免脏累积或把尾部误当新增。
       stateRef.current = projectTimelineIncrementally(createTimelineProjectorState(), events);
       lastLenRef.current = events.length;
       lastFirstEventIdRef.current = firstEventId;
+      lastTailEventIdRef.current = events[events.length - 1]?.event_id ?? null;
       PerfTrace.markCurrent("timeline:project-rebuild", {
         turn_id: turn.turn_id,
         events: events.length,
@@ -112,6 +127,7 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
       stateRef.current = projectTimelineIncrementally(stateRef.current, delta);
       lastLenRef.current = events.length;
       lastFirstEventIdRef.current = firstEventId;
+      lastTailEventIdRef.current = events[events.length - 1]?.event_id ?? null;
       PerfTrace.markCurrent("timeline:project-incremental", {
         turn_id: turn.turn_id,
         delta: delta.length,
@@ -123,7 +139,12 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
   }, [events]);
 
   const turnItem = useMemo(() => {
-    const entries = selectVisibleEntries(stateRef.current).slice();
+    // turn 处于活动态（pending/running）才允许 pending 块以 streaming 推入；
+    // 终态下即便 stateRef 仍有未 flush 的 pending 残留（典型：SSE 断开 →
+    // 后端不再投递 run_* 终态事件，flushPending 永远不被触发），
+    // 也按定稿态渲染，避免思考块永久展开 + 与后续 turn 渲染区重叠挤压空间。
+    const isTurnActive = turn.status === "pending" || turn.status === "running";
+    const entries = selectVisibleEntries(stateRef.current, isTurnActive).slice();
     if (entries.length === 0 && turn.response_text) {
       entries.push({
         kind: "assistant",
@@ -140,8 +161,9 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
     };
     // renderTick 是「stateRef.current 已更新」的唯一可观测信号；
     // ESLint 无法追踪 ref 读取，故此依赖必要而非冗余。
+    // turn.status 变化需触发重算（活动 → 终态应即时折叠 pending 块）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turn, renderTick]);
+  }, [turn, turn.status, renderTick]);
 
   // 打开文件回调必须保持引用稳定：本组件每帧重渲染都会重建内联箭头函数，
   // 若直接内联传入 ToolCallCard/TerminalCallCard，会击穿其 memo（props 引用变化），

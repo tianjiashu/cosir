@@ -30,26 +30,28 @@ from app.models.payload.workspace_payload.workspace_preparing_payload import (
 from app.models.payload.workspace_payload.workspace_ready_payload import WorkspaceReadyPayload
 
 EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
+    # 以下为前端已语义消费的事件类型（projector / useSSE / useChanges / workspaceEventStore）
     EventType.RUN_STARTED: RunStartedPayload,
     EventType.RUN_FAILED: RunFailedPayload,
     EventType.RUN_CANCELLED: RunCancelledPayload,
     EventType.RUN_FINISHED: RunFinishedPayload,
-    EventType.STEP_STARTED: StepStartedPayload,
-    EventType.MODEL_REQUESTED: ModelRequestedPayload,
     EventType.MODEL_OUTPUT_DELTA: ModelOutputDeltaPayload,
     EventType.MODEL_THINKING_DELTA: ModelThinkingDeltaPayload,
-    EventType.MODEL_COMPLETED: ModelCompletedPayload,
-    EventType.MODEL_FAILED: ModelFailedPayload,
     EventType.TOOL_CALL_STARTED: ToolCallStartedPayload,
     EventType.TOOL_OUTPUT_DELTA: ToolOutputDeltaPayload,
     EventType.TOOL_CALL_FINISHED: ToolCallFinishedPayload,
-    EventType.OBSERVATION_ADDED: ObservationAddedPayload,
     EventType.FINAL_RESPONSE: FinalResponsePayload,
     EventType.FILE_CHANGE_STABLE: FileChangeStablePayload,
     EventType.FILE_CHANGE_UPDATED: FileChangeUpdatedPayload,
-    EventType.HUMAN_INPUT_REQUESTED: HumanInputRequestedPayload,
-    EventType.HUMAN_INPUT_RECEIVED: HumanInputReceivedPayload,
     EventType.WORKSPACE_PREPARING: WorkspacePreparingPayload,
     EventType.WORKSPACE_READY: WorkspaceReadyPayload,
     EventType.WORKSPACE_DEGRADED: WorkspaceDegradedPayload,
+    # 以下为前端尚未语义消费的事件类型（后端仍发射并持久化，前端 eventStore 仅全量存储）
+    EventType.STEP_STARTED: StepStartedPayload,  # 未消费：前端未渲染 step 边界
+    EventType.MODEL_REQUESTED: ModelRequestedPayload,  # 未消费：前端未渲染 model 请求态
+    EventType.MODEL_COMPLETED: ModelCompletedPayload,  # 未消费：projector 仅用 delta/final_response 渲染
+    EventType.MODEL_FAILED: ModelFailedPayload,  # 未消费：前端未渲染 model 失败态（仅 run_failed 驱动状态）
+    EventType.OBSERVATION_ADDED: ObservationAddedPayload,  # 未消费：前端未渲染 observation
+    EventType.HUMAN_INPUT_REQUESTED: HumanInputRequestedPayload,  # 未消费：Human-in-Loop 预留，暂无前端处理
+    EventType.HUMAN_INPUT_RECEIVED: HumanInputReceivedPayload,  # 未消费：Human-in-Loop 预留，暂无前端处理
 }

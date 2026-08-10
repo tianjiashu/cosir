@@ -182,7 +182,8 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") {
+                // IME 组合输入（中文/日文选词上屏）期间的 Enter 不触发创建。
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   void handleCreate();
                 }

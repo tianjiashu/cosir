@@ -4,29 +4,9 @@
 节点、边或编排逻辑。state 是 graph 各节点之间传递的唯一数据通道。
 """
 
-from typing import Annotated, Any
+from typing import Any
 
-from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
-
-
-def _add_messages(
-    existing: list[BaseMessage] | None, new: list[BaseMessage] | None
-) -> list[BaseMessage]:
-    """追加式合并 graph 消息通道。
-
-    每个节点只返回本次新增的消息，reducer 负责把它们追加到已有上下文之后，
-    供后续模型步骤继续推理。
-
-    参数:
-        existing: 通道中已存在的消息列表。
-        new: 节点本次返回的新增消息列表。
-
-    返回:
-        合并后的完整消息列表。
-    """
-
-    return (existing or []) + (new or [])
 
 
 class ReactGraphState(BaseModel):
@@ -38,8 +18,10 @@ class ReactGraphState(BaseModel):
     - **持久化**：state 由 LangGraph 在每次节点返回增量后自动合并，并由 ``AsyncSqliteSaver``
       checkpointer 持久化进 SQLite；graph 因 ``interrupt()`` 暂停或进程崩溃后可从 checkpoint
       重放恢复。
-    - **累积**：消息通道使用追加式 reducer（``_add_messages``），工具观察结果会累加到上下文末端。
+    - **累积**：消息通道使用 LangGraph 内置 ``add_messages`` reducer，工具观察结果会累加到上下文末端。
     - **单一事实来源**：节点只通过 ``return`` 返回增量、由框架合并；节点永不跨节点直接持有彼此数据。
+    - **运行期上下文**：``runtime_context`` 不进入 graph state（非 list 对象不兼容消息 reducer），
+      由编排层经 ``config["configurable"]["runtime_context"]`` 注入，节点通过 ``_runtime_context()`` 读取。
 
     每个字段的边界约定如下（写入方 = 哪个节点 ``return`` 该字段；消费方 = 谁读取它；
     是否持久化 = 是否进入 checkpoint）：
@@ -68,7 +50,6 @@ class ReactGraphState(BaseModel):
             **持久化**：是。
     """
 
-    messages: Annotated[list[BaseMessage], _add_messages]
     step_count: int
     tool_error_count: int
     requested_tool: bool

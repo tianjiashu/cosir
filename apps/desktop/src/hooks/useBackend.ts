@@ -107,11 +107,16 @@ export function useBackend(): UseBackendReturn {
   /**
    * 刷新当前后端状态。
    *
+   * 状态查询不是生命周期命令，不预设过渡状态（保持当前 status 原样写入，避免一次纯查询
+   * 让 TopBar 闪烁「后端启动中」）；当前状态经 getState() 即时读取而非闭包捕获，
+   * 使本回调引用稳定——否则 status 每次变化都会重建 refreshStatus → ensureRunning →
+   * 级联重触发 useBackendBootstrap 的挂载 effect，导致重复 backend_start。
+   *
    * @returns 最新状态快照。
    */
   const refreshStatus = useCallback(async (): Promise<BackendStatusResponse> => {
-    return runCommand(status === "running" ? "running" : "starting", "backend_status", getBackendStatus);
-  }, [runCommand, status]);
+    return runCommand(useBackendStore.getState().status, "backend_status", getBackendStatus);
+  }, [runCommand]);
 
   /**
    * 主动启动本地后端。

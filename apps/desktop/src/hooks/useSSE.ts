@@ -112,9 +112,17 @@ export function useSSE(): UseSSEReturn {
         setStreamingTurn(null);
       };
 
+      // 延迟应用到终态的错误。onError 在流读完时被 SSEConnection **同步**触发，
+      // 而此时 run_started 等事件仍滞留在 pendingEventsRef 等待 rAF 攒批 flush；
+      // 若在此立即 markFailed，随后 connect().finally() 的兜底 flush 会用
+      // syncRuntimeStatus(run_started) 把 turn 覆盖回 running —— 终态被迟到 flush 覆盖，
+      // 思考块永不折叠（isTurnActive 恒为 true）。故先记录错误，待残留事件 flush 完
+      // 再应用 markFailed，保证「终态写序在最后」。正常收尾（_terminalReceived）或
+      // 主动取消（_aborted）时 onError 不会被触发，此变量恒为 null，不影响正常路径。
+      let pendingError: Error | null = null;
       const onError: SSEErrorHandler = (error: Error) => {
         logError("SSE 连接错误", error, { module: "useSSE" });
-        markFailed(error);
+        pendingError = error;
       };
 
       // 把缓冲事件一次性提交：单次 appendEvents（单次 set、单次渲染）+ 逐事件同步运行态。
@@ -183,11 +191,23 @@ export function useSSE(): UseSSEReturn {
       connectionRef.current = connection;
       void connection.connect()
         .finally(() => {
-          if (connectionRef.current === connection) {
+          // 仅当前活动连接可接管清理与终态回写：极边缘场景下旧连接自然异常结束、同时
+          // 用户已重连新连接时，旧连接 finally 不得 flush 共享缓冲（会误提新连接事件）
+          // 也不得把新进行中的任务误标 failed。
+          const isActive = connectionRef.current === connection;
+          if (isActive) {
             connectionRef.current = null;
+            // 流结束后兜底 flush 残留事件，避免最后若干 delta 不落盘 / 状态不更新
+            // （此时 run_started 可能被映射回 running）。调用本次闭包捕获的 flush，
+            // 而非跨连接共享的 flushRef.current()，避免借用新连接的缓冲语义。
+            flush();
+            // 再应用延迟的错误终态：保证 markFailed 写在残留事件 flush 之后，
+            // 终态不被迟到的 run_started 覆盖。正常完成时 pendingError 为 null，无副作用。
+            if (pendingError) {
+              markFailed(pendingError);
+              pendingError = null;
+            }
           }
-          // 流结束后兜底 flush 残留事件，避免最后若干 delta 不落盘 / 状态不更新
-          flushRef.current();
         })
         .catch(() => {
           // SSEConnection 已通过 onError、状态回写和内部日志记录错误，这里只负责避免未处理 Promise。

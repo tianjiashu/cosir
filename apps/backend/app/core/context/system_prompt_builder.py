@@ -1,22 +1,31 @@
 """构建面向模型的中文系统提示词。"""
 
+from datetime import date
+from pathlib import Path
+from platform import system
+
 from app.core.agents.agent_profile import AgentProfile
-from app.core.context.system_prompt_context import SystemPromptContext
 from app.utils.file_utils import read_text_file
 
 
+def _default_coding_rule_dir() -> str:
+    """返回默认编码规则的绝对路径。"""
+    return str(Path(__file__).resolve().parent / "rules" / "default-coding-rules.md")
+
+
 class SystemPromptBuilder:
-    """按固定分层构建本地 coding-agent 的系统提示词。"""
+    """按固定分层构建本地 coding-agent 的系统提示词。
 
-    system_prompt_context: SystemPromptContext
-    agent_profile: AgentProfile
+    本类为无状态工具类，所有构建逻辑均为静态方法，不持有实例状态。
+    """
 
-    def build(self, agent_profile: AgentProfile, context: SystemPromptContext) -> str:
+    @staticmethod
+    def build(agent_profile: AgentProfile, workspace_root: str) -> str:
         """构建完整系统提示词文本。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
-            context: 当前轮次的运行时上下文事实。
+            workspace_root: 当前工作区根目录。
 
         返回:
             由固定 section 顺序拼接出的中文系统提示词。
@@ -27,23 +36,33 @@ class SystemPromptBuilder:
         副作用:
             无。
         """
-        self.system_prompt_context = context
-        self.agent_profile = agent_profile
+        language = "zh"
+        coding_rule_dir = _default_coding_rule_dir()
 
         sections = [
-            self._agent_identity(agent_profile, context),
-            self._engineering_principles(),
-            self._workflow_contract(),
-            self._tool_use_policy(agent_profile),
+            SystemPromptBuilder._agent_identity(
+                agent_profile, workspace_root, language
+            ),
+            SystemPromptBuilder._engineering_principles(coding_rule_dir),
+            SystemPromptBuilder._workflow_contract(),
+            SystemPromptBuilder._tool_use_policy(agent_profile),
         ]
         return "\n\n".join(sections)
 
-    def _agent_identity(self, agent_profile: AgentProfile, context: SystemPromptContext) -> str:
+    @staticmethod
+    def _agent_identity(
+            agent_profile: AgentProfile,
+            workspace_root: str,
+            language: str,
+    ) -> str:
         """构建 Agent 身份 section。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
-            context: 当前轮次的运行时上下文事实。
+            os_name: 当前操作系统名称。
+            workspace_root: 当前工作区根目录。
+            today: 当前日期字符串。
+            language: 面向用户的语言。
 
         返回:
             描述身份和基础运行环境的 section 文本。
@@ -61,29 +80,30 @@ class SystemPromptBuilder:
                 f"你是一个运行在用户本机的 {agent_profile.role}，主要职责是{agent_profile.goal}。",
                 f"Agent ID: {agent_profile.agent_id}",
                 f"Role: {agent_profile.role}",
-                f"当前所处于的操作系统: {context.os_name}",
+                f"当前所处于的操作系统: {system()}",
                 (
-                    f"当前工作区根目录: {context.workspace_root},你所有的代码都在这个目录下，"
+                    f"当前工作区根目录: {workspace_root},你所有的代码都在这个目录下，"
                     f"且写、编辑、删除操作将被系统限制在这个目录下，"
                     f"超出这个目录范围的操作将被系统拒绝"
                 ),
-                f"今天日期: {context.today}",
+                f"今天日期: {date.today().isoformat()}",
                 f"所拥有的工具集合: {', '.join(agent_profile.allowed_tools) or 'none'}",
                 (
-                    f"你所面向的用户所使用的语言: {context.language},"
+                    f"你所面向的用户所使用的语言: {language},"
                     f"请使用友好的语言和用户交流。除非用户要求，不要使用emjio表情回复。"
                 ),
                 "</agent_identity>",
             ]
         )
 
-    def _engineering_principles(self) -> str:
+    @staticmethod
+    def _engineering_principles(coding_rule_dir: str) -> str:
         """构建整洁代码开发原则 section。
 
         从 ``coding_rule_dir`` 指向的文件读取内容；文件不存在时返回兜底占位文本。
 
         参数:
-            无。
+            coding_rule_dir: 编码规则 Markdown 文件的绝对路径。
 
         返回:
             描述代码质量原则的 section 文本。
@@ -98,12 +118,13 @@ class SystemPromptBuilder:
         return "\n".join(
             [
                 "<engineering_principles>",
-                read_text_file(self.system_prompt_context.coding_rule_dir),
+                read_text_file(coding_rule_dir),
                 "</engineering_principles>",
             ]
         )
 
-    def _workflow_contract(self) -> str:
+    @staticmethod
+    def _workflow_contract() -> str:
         """构建工作流契约 section。
 
         参数:
@@ -131,7 +152,8 @@ class SystemPromptBuilder:
             ]
         )
 
-    def _tool_use_policy(self, agent_profile: AgentProfile) -> str:
+    @staticmethod
+    def _tool_use_policy(agent_profile: AgentProfile) -> str:
         """构建工具使用策略 section。
 
         参数:

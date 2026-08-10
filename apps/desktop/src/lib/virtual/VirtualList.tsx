@@ -18,7 +18,7 @@
  * @module lib/virtual/VirtualList
  */
 
-import { useRef, type ReactNode, type UIEvent, type Ref } from "react";
+import { useEffect, useRef, type ReactNode, type UIEvent, type Ref } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +51,17 @@ export interface VirtualListProps<T> {
    * （如流式期「滚动到底部」），不影响内部 `useVirtualizer` 测量。
    */
   scrollContainerRef?: Ref<HTMLDivElement>;
+  /**
+   * 虚拟列表真实总高度（px）变化的回调。`totalSize` 是虚拟器对已渲染条目实际高度的
+   * 累加（随 `measureElement` 的动态测量同步更新），而非容器 `scrollHeight`。
+   *
+   * 用途：调用方需要「滚到底部」时，应依据此值而不是 `scrollHeight`——虚拟列表内条目为
+   * 绝对定位 + `translateY`，`scrollHeight` 不反映未渲染条目，流式/折叠等高度变化会
+   * 导致滚不到真底或视觉跳动。典型调用方：ChatPanel 流式自动滚底。
+   */
+  onTotalSizeChange?: (totalSize: number) => void;
+  /** 滚动容器的 data-testid（可选），供测试稳定定位容器并 stub 滚动度量。 */
+  containerTestId?: string;
 }
 
 /**
@@ -76,6 +87,8 @@ export function VirtualList<T>({
   onScroll,
   estimateSize = 80,
   scrollContainerRef,
+  onTotalSizeChange,
+  containerTestId,
 }: VirtualListProps<T>) {
   const parentRef = useRef<HTMLDivElement | null>(null);
 
@@ -90,10 +103,38 @@ export function VirtualList<T>({
   const virtualItems = virtualizer.getVirtualItems();
   const totalSize = virtualizer.getTotalSize();
 
+  // 数据量变化（首帧 / 增删 / 切换任务）后主动重测一次：
+  // @tanstack/react-virtual 的 measureElement 已内置 ResizeObserver 监听单条高度变化，
+  // 但 items.length 变化时（尤其由空转非空、切任务），旧测量缓存可能残留导致首帧
+  // translateY 错位。此处显式 measure() 让虚拟器在渲染后重排，避免后续条目与
+  // 已折叠/展开的相邻条目重叠（本组件早期仅靠首帧 estimateSize，正是重叠复现点）。
+  useEffect(() => {
+    if (items.length > 0) {
+      virtualizer.measure();
+    }
+  }, [items.length, virtualizer]);
+
+  // 真实总高度变化回调：供调用方替代 scrollHeight 做「滚到底部」，见 props 注释。
+  // 契约：仅在 totalSize > 0 时上报（调用方滚底只需正高度，0 高度无意义且会被 ChatPanel
+  // 的 `virtualTotalSizeRef.current > 0` 守卫二次忽略）。首次渲染若 totalSize 为正
+  // 也必须上报，否则新会话第一条消息无法滚到底。
+  const prevTotalSizeRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (totalSize <= 0) {
+      // 0 高度（空列表 / 测量前占位）不参与滚底上报。
+      return;
+    }
+    if (totalSize === prevTotalSizeRef.current) {
+      return;
+    }
+    prevTotalSizeRef.current = totalSize;
+    onTotalSizeChange?.(totalSize);
+  }, [totalSize, onTotalSizeChange]);
+
   // 空数据：直接渲染占位，不挂载虚拟列表的滚动容器与 0 高占位 div。
   if (items.length === 0) {
     return (
-      <div ref={mergeRefs(parentRef, scrollContainerRef)} className={cn("overflow-auto", className)} onScroll={onScroll}>
+      <div ref={mergeRefs(parentRef, scrollContainerRef)} className={cn("overflow-auto", className)} onScroll={onScroll} data-testid={containerTestId}>
         {emptyState ?? null}
       </div>
     );
@@ -104,6 +145,7 @@ export function VirtualList<T>({
       ref={mergeRefs(parentRef, scrollContainerRef)}
       className={cn("overflow-auto", className)}
       onScroll={onScroll}
+      data-testid={containerTestId}
     >
       <div style={{ height: totalSize, position: "relative", width: "100%" }}>
         {virtualItems.map((virtualItem) => (

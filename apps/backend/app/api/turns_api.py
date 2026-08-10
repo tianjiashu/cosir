@@ -46,8 +46,8 @@ from contextlib import suppress
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.app import app
-from app.api.depends.dependencies import (
+from app.app import app
+from app.api.dependencies import (
     get_runtime,
     get_runtime_event_bus,
     get_turn_service,
@@ -163,7 +163,6 @@ async def stream_turn(
     return StreamingResponse(
         _sse_turn_events(
             runtime,
-            turn_id,
             turn,
             event_bus,
             turn_service=turn_service,
@@ -210,7 +209,6 @@ async def cancel_turn(
 
 async def _sse_turn_events(
         runtime: AgentRuntime,
-        turn_id: str,
         turn: TurnRecord | None = None,
         event_bus: RuntimeEventBus | None = None,
         turn_service: TurnService | None = None,
@@ -240,6 +238,10 @@ async def _sse_turn_events(
         运行生成器，触发 ``run_turn`` 的断开兜底（仅当本连接成功认领且轮次仍 ``running`` 时
         标记 ``failed``），避免孤儿 ``running``。
     """
+    if event_bus is None:
+        raise ValueError("event_bus is None")
+
+    turn_id = turn.turn_id
 
     log.info(
         "turn_stream_started",
@@ -248,8 +250,6 @@ async def _sse_turn_events(
             "data": {"turn_id": turn_id},
         },
     )
-    if event_bus is None:
-        raise ValueError("event_bus is None")
 
     subscription = event_bus.subscribe(turn_id)
     producer: asyncio.Task[None] | None = None
@@ -257,7 +257,6 @@ async def _sse_turn_events(
         producer = asyncio.create_task(
             _drive_runtime_turn(
                 runtime,
-                turn_id,
                 turn,
                 event_bus,
                 turn_service=turn_service,
@@ -337,7 +336,6 @@ async def _sse_turn_events(
 
 async def _drive_runtime_turn(
         runtime: AgentRuntime,
-        turn_id: str,
         turn: TurnRecord | None,
         event_bus: RuntimeEventBus,
         turn_service: TurnService | None = None,
@@ -373,16 +371,16 @@ async def _drive_runtime_turn(
         """消费 ``run_turn`` 事件并发布到 bus（producer 主体）。"""
         nonlocal entered_run
         entered_run = True
-        events = runtime.run_turn(turn_id, turn=turn)
+        events = runtime.run_turn(turn)
         try:
             async for event in events:
                 event_bus.publish(event)
         finally:
             try:
                 await events.aclose()
-                event_bus.close_turn(turn_id)
+                event_bus.close_turn(turn.turn_id)
             finally:
-                event_bus.release_turn_producer(turn_id)
+                event_bus.release_turn_producer(turn.turn_id)
 
     try:
         await execute()

@@ -240,7 +240,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                     <span
                       className={cn(
                         "min-w-0 flex-1 truncate font-mono text-xs",
-                        status === "error" ? "text-muted-foreground" : "text-foreground",
+                        status === "error" ? "text-destructive" : "text-foreground",
                       )}
                     >
                       {shortenChangeSummary(summaryText)}
@@ -291,7 +291,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         <span
           className={cn(
             "truncate font-mono text-xs",
-            status === "error" ? "text-muted-foreground" : "text-muted-foreground",
+            status === "error" ? "text-destructive" : "text-muted-foreground",
           )}
         >
           {summaryText}

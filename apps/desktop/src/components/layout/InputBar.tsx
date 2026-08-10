@@ -106,9 +106,9 @@ export function InputBar() {
     }
   }, [cancelTurn, canStop, streamingTurnId]);
 
-  /** 处理键盘事件：Enter 发送，Shift+Enter 换行。 */
+  /** 处理键盘事件：Enter 发送，Shift+Enter 换行；IME 组合输入（中文/日文选词上屏）期间的 Enter 不发送。 */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }

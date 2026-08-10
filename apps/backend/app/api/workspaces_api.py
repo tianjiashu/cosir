@@ -20,8 +20,8 @@ from collections.abc import AsyncIterator
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.app import app
-from app.api.depends.dependencies import (
+from app.app import app
+from app.api.dependencies import (
     get_runtime,
     get_task_service,
     get_workspace_event_bus,

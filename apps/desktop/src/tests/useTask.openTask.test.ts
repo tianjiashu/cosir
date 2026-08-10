@@ -42,7 +42,7 @@ function resetStores() {
     connectionState: SSEConnectionState.IDLE,
     processedEventIds: new Set<string>(),
   });
-  useTaskStore.setState({ tasks: [], activeTaskId: null, activeTurnId: null });
+  useTaskStore.setState({ tasksByWorkspaceId: {}, activeTaskId: null, activeTurnId: null });
   useTurnStore.setState({ turnsByTaskId: {} });
 }
 
@@ -112,5 +112,49 @@ describe("useTask.openTask forceRefresh 行为", () => {
     // 强制刷新 → 忽略缓存，重新拉取历史事件。
     expect(api.listTaskEvents).toHaveBeenCalledTimes(1);
     expect(api.listTaskEvents).toHaveBeenCalledWith(TASK_ID);
+  });
+
+  it("对列表首项调用 openTask 会选中该任务并加载历史（首屏回放契约）", async () => {
+    // 模拟「首屏 setTasks 回退选中列表首项」后，App 对该首项调 openTask 的场景：
+    // 必须真正切换到该任务（activeTaskId）并拉取历史事件，而非留空白。
+    const FIRST_TASK_ID = "task-first-item";
+
+    vi.mocked(api.getTask).mockResolvedValueOnce({
+      task_id: FIRST_TASK_ID,
+      workspace_id: "ws",
+      agent_id: "dev",
+      input_text: "hi",
+      title: "hi",
+      last_message_preview: "hi",
+      latest_turn_id: "turn-1",
+      status: "completed",
+      execution_status: "completed",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as unknown as TaskRecord);
+    vi.mocked(api.listTaskTurns).mockResolvedValueOnce([
+      {
+        turn_id: "turn-1",
+        task_id: FIRST_TASK_ID,
+        input_text: "hi",
+        status: "completed",
+        end_reason: "done",
+        response_text: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as unknown as TurnRecord,
+    ] as unknown as TurnRecord[]);
+    vi.mocked(api.listTaskEvents).mockResolvedValueOnce([makeEvent("e1", 1)]);
+
+    const { result } = renderHook(() => useTask());
+    await act(async () => {
+      await result.current.openTask(FIRST_TASK_ID);
+    });
+
+    // 选中首项：activeTaskId 应切到该任务，避免中央会话区空白。
+    expect(useTaskStore.getState().activeTaskId).toBe(FIRST_TASK_ID);
+    // 回放历史：事件流被拉取并缓存到该 task。
+    expect(api.listTaskEvents).toHaveBeenCalledWith(FIRST_TASK_ID);
+    expect(useEventStore.getState().eventsByTaskId[FIRST_TASK_ID]?.length).toBeGreaterThan(0);
   });
 });

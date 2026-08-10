@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.core.llm.model_settings import ModelSettings
+from app.models import TurnRecord
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
@@ -57,7 +58,7 @@ def _default_workflow() -> AgentWorkflow:
     return ReactLikeWorkflow()
 
 
-@dataclass(frozen=True)
+@dataclass
 class AgentProfile:
     """描述某个任务的 Agent 执行主体。
 
@@ -90,6 +91,7 @@ class AgentProfile:
     model_name: str = "deepseek-v4-flash"
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     max_steps: int = 1000
+    turn: TurnRecord = None
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。
