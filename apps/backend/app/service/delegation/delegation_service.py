@@ -298,6 +298,52 @@ class DelegationService:
             runtime_event_loop=runtime_event_loop,
         )
 
+    def mark_interrupted_delegations_failed(self, reason: str) -> int:
+        """保守落定进程中断遗留的 active delegation。
+
+        参数:
+            reason: 写入 ``error`` 字段和 failed 事件 payload 的恢复审计原因。
+        返回:
+            本次从 ``pending`` 或 ``running`` 标记为 ``failed`` 的 delegation 数量。
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 当查询或更新 delegation 记录失败时抛出。
+            KeyError: 当待恢复记录在更新前被删除时由底层 ``mark_failed`` 抛出。
+        副作用:
+            查询 delegations 表；对每条 ``pending`` / ``running`` 记录复用 ``mark_failed`` 写入
+            failed 终态和错误原因，并尽力发出 delegation_failed 父事件；写入恢复审计日志。
+        """
+
+        interrupted = self._delegation_crud.list_pending_or_running()
+        for record in interrupted:
+            self.mark_failed(record.delegation_id, reason)
+        log.info(
+            "delegation_recovery_audit_completed",
+            extra={
+                "msg": "委派恢复审计完成，已将中断的委派标记为失败",
+                "data": {
+                    "reason": reason,
+                    "recovered_count": len(interrupted),
+                    "delegation_ids": [record.delegation_id for record in interrupted],
+                },
+            },
+        )
+        return len(interrupted)
+
+    def list_by_parent_turn(self, parent_turn_id: str) -> list[DelegationRecord]:
+        """列出某个 parent turn 下的全部 delegation 记录。
+
+        参数:
+            parent_turn_id: parent turn 标识。
+        返回:
+            按创建顺序排列的 delegation 记录列表，包含 active 与终态记录。
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询 delegation 记录失败。
+        副作用:
+            读取 delegations 表。
+        """
+
+        return self._delegation_crud.list_by_parent_turn(parent_turn_id)
+
     def list_active_by_parent_turn(self, parent_turn_id: str) -> list[DelegationRecord]:
         """列出某个 parent turn 下仍处于活动状态的 delegation。
 

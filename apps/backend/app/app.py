@@ -34,7 +34,6 @@ from app.bootstate import (
     write_bootstate,
 )
 from app.codegraph import CodeGraphKernelClient, CodeGraphKernelSupervisor
-from app.config.configuration import get_agent_registry
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -43,7 +42,11 @@ from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.hook import HookContext, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
-from app.service.depends import close_service_dependencies, initialize_service_dependencies
+from app.service.depends import (
+    close_service_dependencies,
+    get_delegation_service,
+    initialize_service_dependencies,
+)
 from app.tools.tool_system import ToolSystem
 
 
@@ -80,6 +83,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         batch_size=Settings.LOG_BATCH_SIZE,
         flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
     )
+    get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
 
     # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
     # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
