@@ -21,6 +21,7 @@ import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { ToolCallGroup } from "@/components/chat/ToolCallGroup";
 import { TerminalCallCard } from "@/components/chat/TerminalCallCard";
 import { StatusBadge } from "@/components/chat/StatusBadge";
+import { DelegationTimelineEntry } from "@/components/chat/DelegationTimelineEntry";
 import {
   createTimelineProjectorState,
   type TimelineProjectorState,
@@ -214,6 +215,8 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
           key={
             entry.kind === "toolGroup"
               ? entry.groupId
+              : entry.kind === "delegation"
+                ? entry.item.delegationId
               : entry.kind === "tool"
                 ? entry.item.callId ?? entry.item.eventId
                 : entry.eventId
@@ -291,6 +294,22 @@ const TimelineEntry = memo(function TimelineEntry({
     return (
       <div className={widthClass}>
         <StatusBadge eventType={entry.eventType} payload={entry.payload} />
+      </div>
+    );
+  }
+  if (entry.kind === "delegation") {
+    const delegation = entry.item;
+    return (
+      <div className={widthClass}>
+        <DelegationTimelineEntry
+          childAgentId={delegation.childAgentId}
+          status={delegation.status}
+          childTurnId={delegation.childTurnId}
+          delegationType={delegation.delegationType}
+          summary={delegation.summary}
+          error={delegation.error}
+          childEntries={[]}
+        />
       </div>
     );
   }

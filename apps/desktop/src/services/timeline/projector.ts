@@ -71,11 +71,37 @@ export interface TimelineToolItem {
   output?: string;
 }
 
+/** Delegation lifecycle status projected for the turn timeline. */
+export type TimelineDelegationStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+/** Delegation lifecycle entry shown in the parent turn timeline. */
+export interface TimelineDelegationItem {
+  /** Source event id for the latest projected lifecycle event. */
+  eventId: string;
+  /** Stable delegation id used to merge lifecycle events. */
+  delegationId: string;
+  /** Parent turn that requested the delegation. */
+  parentTurnId: string;
+  /** Child turn id once the backend creates the child run. */
+  childTurnId?: string;
+  /** Child AgentProfile id. */
+  childAgentId: string;
+  /** Display-only delegation category. */
+  delegationType: string;
+  /** Current lifecycle status. */
+  status: TimelineDelegationStatus;
+  /** Successful terminal summary. */
+  summary?: string;
+  /** Failed or cancelled terminal reason. */
+  error?: string;
+}
+
 /** turn 内按事件顺序渲染的 timeline 条目。 */
 export type TurnTimelineEntry =
   | { kind: "assistant"; eventId: string; content: string; streaming?: boolean }
   | { kind: "thinking"; eventId: string; content: string; streaming?: boolean }
   | { kind: "tool"; item: TimelineToolItem }
+  | { kind: "delegation"; item: TimelineDelegationItem }
   | { kind: "status"; eventId: string; eventType: RuntimeEvent["event_type"]; payload: RuntimeEvent["payload"] };
 
 /** 单个 turn 的 timeline 投影。 */
@@ -111,6 +137,8 @@ export interface TimelineProjectorState {
   hasDeltaStreamed: boolean;
   /** callId → entries 下标，合并同工具调用的 started/finished。 */
   toolByCallId: Map<string, number>;
+  /** delegationId → entries index, used to merge lifecycle events. */
+  delegationById: Map<string, number>;
   /** 已投影 event_id 集合（幂等去重）。 */
   processedEventIds: Set<string>;
 }
@@ -122,6 +150,7 @@ export const EMPTY_PROJECTION_STATE: TimelineProjectorState = {
   pendingThinking: null,
   hasDeltaStreamed: false,
   toolByCallId: new Map(),
+  delegationById: new Map(),
   processedEventIds: new Set(),
 };
 
@@ -137,6 +166,7 @@ export function createTimelineProjectorState(): TimelineProjectorState {
     pendingThinking: null,
     hasDeltaStreamed: false,
     toolByCallId: new Map(),
+    delegationById: new Map(),
     processedEventIds: new Set(),
   };
 }
@@ -185,6 +215,7 @@ export function projectTimelineIncrementally(
   let pendingThinking = prev.pendingThinking;
   let hasDeltaStreamed = prev.hasDeltaStreamed;
   const toolByCallId = new Map(prev.toolByCallId);
+  const delegationById = new Map(prev.delegationById);
   const processedEventIds = new Set(prev.processedEventIds);
 
   const flushPending = () => {
@@ -273,6 +304,20 @@ export function projectTimelineIncrementally(
 
     flushPending();
 
+    const delegation = projectDelegation(event);
+    if (delegation) {
+      const idx = delegationById.get(delegation.delegationId);
+      if (idx !== undefined) {
+        const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "delegation" }>;
+        entries = entries.slice();
+        entries[idx] = { kind: "delegation", item: mergeDelegation(existing.item, delegation) };
+      } else {
+        delegationById.set(delegation.delegationId, entries.length);
+        entries = entries.concat({ kind: "delegation", item: delegation });
+      }
+      continue;
+    }
+
     const tool = projectTool(event);
     if (tool) {
       const callId = tool.callId;
@@ -351,6 +396,7 @@ export function projectTimelineIncrementally(
     pendingThinking,
     hasDeltaStreamed,
     toolByCallId,
+    delegationById,
     processedEventIds,
   };
 }
@@ -471,6 +517,130 @@ export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[])
  * @throws 不抛出异常。
  *
  * @sideeffect 无。
+ */
+/** Runtime event types that describe a delegation lifecycle transition. */
+const DELEGATION_EVENTS = new Set<RuntimeEvent["event_type"]>([
+  "delegation_started",
+  "delegation_child_started",
+  "delegation_finished",
+  "delegation_failed",
+  "delegation_cancelled",
+]);
+
+/**
+ * Projects a delegation lifecycle event into the parent timeline item shape.
+ *
+ * @param event - Runtime event that may describe a delegation lifecycle transition.
+ * @returns A delegation item for supported event types; otherwise null.
+ *
+ * @throws Does not throw; malformed optional fields are normalized to empty strings.
+ *
+ * @sideeffect None.
+ */
+function projectDelegation(event: RuntimeEvent): TimelineDelegationItem | null {
+  if (!DELEGATION_EVENTS.has(event.event_type)) {
+    return null;
+  }
+  const payload = event.payload as {
+    delegation_id?: string;
+    parent_turn_id?: string;
+    child_turn_id?: string | null;
+    child_agent_id?: string;
+    delegation_type?: string;
+    status?: TimelineDelegationStatus;
+    summary?: string | null;
+    error?: string | null;
+  };
+  return {
+    eventId: event.event_id,
+    delegationId: String(payload.delegation_id ?? ""),
+    parentTurnId: String(payload.parent_turn_id ?? event.turn_id ?? ""),
+    childTurnId: payload.child_turn_id ? String(payload.child_turn_id) : undefined,
+    childAgentId: String(payload.child_agent_id ?? ""),
+    delegationType: String(payload.delegation_type ?? ""),
+    status: payload.status ?? delegationStatusFromEvent(event.event_type),
+    summary: payload.summary ? String(payload.summary) : undefined,
+    error: payload.error ? String(payload.error) : undefined,
+  };
+}
+
+/**
+ * Merges an incoming delegation event into an existing lifecycle item.
+ *
+ * @param existing - Previously projected delegation item.
+ * @param incoming - Latest lifecycle event projection for the same delegation id.
+ * @returns Merged item that preserves stable metadata and prevents nonterminal events from
+ *   downgrading a terminal status.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
+ */
+function mergeDelegation(
+  existing: TimelineDelegationItem,
+  incoming: TimelineDelegationItem,
+): TimelineDelegationItem {
+  const keepTerminalStatus = isDelegationTerminal(existing.status) && !isDelegationTerminal(incoming.status);
+  return {
+    ...existing,
+    ...incoming,
+    childTurnId: incoming.childTurnId ?? existing.childTurnId,
+    childAgentId: incoming.childAgentId || existing.childAgentId,
+    delegationType: incoming.delegationType || existing.delegationType,
+    status: keepTerminalStatus ? existing.status : incoming.status,
+    summary: incoming.summary ?? existing.summary,
+    error: incoming.error ?? existing.error,
+  };
+}
+
+/**
+ * Converts a delegation event type into its fallback lifecycle status.
+ *
+ * @param eventType - Runtime event type.
+ * @returns Delegation status implied by the event type.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
+ */
+function delegationStatusFromEvent(eventType: RuntimeEvent["event_type"]): TimelineDelegationStatus {
+  switch (eventType) {
+    case "delegation_child_started":
+      return "running";
+    case "delegation_finished":
+      return "completed";
+    case "delegation_failed":
+      return "failed";
+    case "delegation_cancelled":
+      return "cancelled";
+    default:
+      return "pending";
+  }
+}
+
+/**
+ * Returns whether a delegation status is terminal.
+ *
+ * @param status - Delegation lifecycle status.
+ * @returns True for completed, failed, and cancelled statuses.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
+ */
+function isDelegationTerminal(status: TimelineDelegationStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+/**
+ * Projects a single tool event into a timeline tool item.
+ *
+ * @param event - Runtime event.
+ * @returns Tool display item for tool events; otherwise null.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
  */
 function projectTool(event: RuntimeEvent): TimelineToolItem | null {
   if (event.event_type === "tool_call_started") {
