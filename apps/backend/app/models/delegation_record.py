@@ -19,7 +19,6 @@ class DelegationRecord:
     prompt: str
     summary: str
     error: str
-    requested_tools: tuple[str, ...]
     effective_tools: tuple[str, ...]
     created_at: datetime
     updated_at: datetime

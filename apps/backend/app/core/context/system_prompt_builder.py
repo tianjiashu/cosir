@@ -59,13 +59,12 @@ class SystemPromptBuilder:
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
-            os_name: 当前操作系统名称。
             workspace_root: 当前工作区根目录。
-            today: 当前日期字符串。
             language: 面向用户的语言。
 
         返回:
-            描述身份和基础运行环境的 section 文本。
+            描述身份、职责、能力与约束的 section 文本。capabilities 与 constraints
+            仅在非空时追加对应行，避免空列表产生噪音行。
 
         异常:
             无。
@@ -74,20 +73,30 @@ class SystemPromptBuilder:
             无。
         """
 
-        return "\n".join(
+        identity_lines = [
+            "<agent_identity>",
+            f"你是一个运行在用户本机的 {agent_profile.role}，{agent_profile.description}。",
+            f"Agent ID: {agent_profile.agent_id}",
+            f"Role: {agent_profile.role}",
+            f"当前所处于的操作系统: {system()}",
+            (
+                f"当前工作区根目录: {workspace_root},你所有的代码都在这个目录下，"
+                f"且写、编辑、删除操作将被系统限制在这个目录下，"
+                f"超出这个目录范围的操作将被系统拒绝"
+            ),
+            f"今天日期: {date.today().isoformat()}",
+            f"所拥有的工具集合: {', '.join(agent_profile.allowed_tools) or 'none'}",
+        ]
+        if agent_profile.capabilities:
+            identity_lines.append(
+                f"能力: {', '.join(agent_profile.capabilities)}"
+            )
+        if agent_profile.constraints:
+            identity_lines.append(
+                f"约束: {', '.join(agent_profile.constraints)}"
+            )
+        identity_lines.extend(
             [
-                "<agent_identity>",
-                f"你是一个运行在用户本机的 {agent_profile.role}，主要职责是{agent_profile.goal}。",
-                f"Agent ID: {agent_profile.agent_id}",
-                f"Role: {agent_profile.role}",
-                f"当前所处于的操作系统: {system()}",
-                (
-                    f"当前工作区根目录: {workspace_root},你所有的代码都在这个目录下，"
-                    f"且写、编辑、删除操作将被系统限制在这个目录下，"
-                    f"超出这个目录范围的操作将被系统拒绝"
-                ),
-                f"今天日期: {date.today().isoformat()}",
-                f"所拥有的工具集合: {', '.join(agent_profile.allowed_tools) or 'none'}",
                 (
                     f"你所面向的用户所使用的语言: {language},"
                     f"请使用友好的语言和用户交流。除非用户要求，不要使用emjio表情回复。"
@@ -95,6 +104,7 @@ class SystemPromptBuilder:
                 "</agent_identity>",
             ]
         )
+        return "\n".join(identity_lines)
 
     @staticmethod
     def _engineering_principles(coding_rule_dir: str) -> str:

@@ -74,7 +74,6 @@ class DelegationService:
         child_agent_id: str,
         delegation_type: str,
         prompt: str,
-        requested_tools: tuple[str, ...],
         effective_tools: tuple[str, ...],
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> str:
@@ -85,9 +84,8 @@ class DelegationService:
             parent_turn_id: 发起委派的父 turn 标识。
             parent_agent_id: 发起委派的父 Agent 标识。
             child_agent_id: 目标 child Agent 标识。
-            delegation_type: 委派类型标签。
-            prompt: 传给 child Agent 的任务指令。
-            requested_tools: 请求开放给 child 的工具名称。
+            delegation_type: 委派类型标签（由 child profile 的 delegation_type 派生）。
+            prompt: 传给 child Agent 的任务文本；由 executor 用结构化字段拼装而成。
             effective_tools: 策略收敛后的 child 工具名称。
 
         返回:
@@ -114,7 +112,6 @@ class DelegationService:
             prompt=prompt,
             summary="",
             error="",
-            requested_tools=requested_tools,
             effective_tools=effective_tools,
             created_at=now,
             updated_at=now,

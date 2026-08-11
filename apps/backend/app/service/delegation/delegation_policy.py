@@ -13,10 +13,13 @@ class DelegationPolicy:
         """Evaluate one delegation request against its policy context.
 
         参数:
-            context: 包含 parent、child、深度、并发和工具权限的不可变策略上下文。
+            context: 包含 parent、child、系统三方工具权限、深度、并发的不可变策略上下文。
+                不再包含 requested_tools 维度——有效工具完全由三方权限交集决定。
 
         返回:
-            包含是否允许、拒绝原因和按请求顺序保留的有效工具列表的策略决策。
+            包含是否允许、拒绝原因和有效工具列表的策略决策。有效工具为
+            parent_allowed_tools ∩ child_allowed_tools ∩ system_allowed_tools 的交集，
+            结果按字典序排序后转 tuple，保证跨运行确定性。
 
         异常:
             无。
@@ -32,18 +35,11 @@ class DelegationPolicy:
         if context.running_children >= context.max_concurrency:
             return DelegationPolicyDecision(False, "delegation_concurrency_exceeded", ())
 
-        effective_tools: list[str] = []
-        seen_tools: set[str] = set()
-        for tool in context.requested_tools:
-            if tool in seen_tools:
-                continue
-            seen_tools.add(tool)
-            if (
-                tool in context.parent_allowed_tools
-                and tool in context.child_allowed_tools
-                and tool in context.system_allowed_tools
-            ):
-                effective_tools.append(tool)
+        effective_tools = (
+            context.parent_allowed_tools
+            & context.child_allowed_tools
+            & context.system_allowed_tools
+        )
         if not effective_tools:
             return DelegationPolicyDecision(False, "no_effective_tools", ())
-        return DelegationPolicyDecision(True, "", tuple(effective_tools))
+        return DelegationPolicyDecision(True, "", tuple(sorted(effective_tools)))

@@ -244,7 +244,6 @@ def _create_delegation(
             prompt="review",
             summary=summary,
             error=error,
-            requested_tools=("read_file",),
             effective_tools=("read_file",),
             created_at=now,
             updated_at=now,

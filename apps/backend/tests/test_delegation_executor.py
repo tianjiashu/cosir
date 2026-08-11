@@ -85,7 +85,6 @@ class FakeDelegationService:
         child_agent_id: str,
         delegation_type: str,
         prompt: str,
-        requested_tools: tuple[str, ...],
         effective_tools: tuple[str, ...],
         runtime_event_loop=None,
     ) -> str:
@@ -96,9 +95,8 @@ class FakeDelegationService:
             parent_turn_id: 父 turn 标识。
             parent_agent_id: 父 Agent 标识。
             child_agent_id: child Agent 标识。
-            delegation_type: 委派类型。
-            prompt: 委派指令。
-            requested_tools: 请求工具集合。
+            delegation_type: 委派类型（由 child profile 派生）。
+            prompt: 拼装后的结构化 child 任务文本。
             effective_tools: 策略收敛后的工具集合。
 
         返回:
@@ -122,7 +120,6 @@ class FakeDelegationService:
                     "child_agent_id": child_agent_id,
                     "delegation_type": delegation_type,
                     "prompt": prompt,
-                    "requested_tools": requested_tools,
                     "effective_tools": effective_tools,
                     "runtime_event_loop": runtime_event_loop,
                 },
@@ -346,6 +343,41 @@ class FakeChildRunner:
 
         self.child_profiles.append(child_profile)
         return self.result
+
+
+@dataclass(frozen=True)
+class FakeToolDefinition:
+    """测试用工具定义最小投影。"""
+
+    name: str
+
+
+class FakeToolScheduler:
+    """为 DelegationExecutor 测试提供工具列表。"""
+
+    def list_tools(self) -> list[FakeToolDefinition]:
+        """返回当前测试注册的工具列表。
+        参数:
+            无。
+        返回:
+            包含 read_file 与 delegate_task 的测试工具定义列表。
+        异常:
+            无。
+        副作用:
+            无。
+        """
+
+        return [
+            FakeToolDefinition("read_file"),
+            FakeToolDefinition("delegate_task"),
+        ]
+
+
+@dataclass(frozen=True)
+class FakeToolSystem:
+    """测试用工具系统最小投影。"""
+
+    scheduler: FakeToolScheduler
 
 
 class FakeDelegationCrud:
@@ -623,7 +655,6 @@ class FakeCascadeDelegationService:
             prompt="review",
             summary="",
             error="",
-            requested_tools=("read_file",),
             effective_tools=("read_file",),
             created_at=now,
             updated_at=now,
@@ -724,7 +755,7 @@ def _execution_context(tmp_path: Path) -> ToolExecutionContext:
 
 
 @pytest.fixture
-def executor_dependencies(tmp_path: Path) -> dict[str, object]:
+def executor_dependencies(tmp_path: Path, monkeypatch) -> dict[str, object]:
     """构造 DelegationExecutor 的 fake 协作者。
 
     参数:
@@ -744,10 +775,29 @@ def executor_dependencies(tmp_path: Path) -> dict[str, object]:
         default_developer_agent(),
         allowed_tools=["read_file", "delegate_task"],
     )
+    agent_registry = build_agent_registry()
+    delegation_service = FakeDelegationService()
+    turn_service = FakeTurnService()
+    tool_system = FakeToolSystem(scheduler=FakeToolScheduler())
+    monkeypatch.setattr(
+        "app.core.delegation.delegation_executor.get_agent_registry",
+        lambda: agent_registry,
+    )
+    monkeypatch.setattr(
+        "app.core.delegation.delegation_executor.get_delegation_service",
+        lambda: delegation_service,
+    )
+    monkeypatch.setattr(
+        "app.core.delegation.delegation_executor.get_turn_service",
+        lambda: turn_service,
+    )
+    monkeypatch.setattr(
+        "app.core.delegation.delegation_executor.get_tool_system",
+        lambda: tool_system,
+    )
     return {
-        "agent_registry": build_agent_registry(),
-        "delegation_service": FakeDelegationService(),
-        "turn_service": FakeTurnService(),
+        "delegation_service": delegation_service,
+        "turn_service": turn_service,
         "child_runner": FakeChildRunner(
             DelegationResult(
                 status="completed",
@@ -758,8 +808,27 @@ def executor_dependencies(tmp_path: Path) -> dict[str, object]:
         "parent_profile": parent_profile,
         "parent_turn": _parent_turn(),
         "parent_task": FakeTaskRecord(),
-        "registered_tool_names": ("read_file", "delegate_task"),
         "execution_context": _execution_context(tmp_path),
+    }
+
+
+def _executor_kwargs(executor_dependencies: dict[str, object]) -> dict[str, object]:
+    """提取 DelegationExecutor 构造所需的 turn 级依赖。
+    参数:
+        executor_dependencies: fake executor 协作者集合。
+    返回:
+        可直接展开传入 DelegationExecutor 的构造参数。
+    异常:
+        KeyError: 当 fixture 缺少必要键时由 dict 访问抛出。
+    副作用:
+        无。
+    """
+
+    return {
+        "child_runner": executor_dependencies["child_runner"],
+        "parent_profile": executor_dependencies["parent_profile"],
+        "parent_turn": executor_dependencies["parent_turn"],
+        "parent_task": executor_dependencies["parent_task"],
     }
 
 
@@ -779,19 +848,20 @@ def test_delegation_executor_rejects_unknown_child(executor_dependencies):
         调用 DelegationExecutor.execute。
     """
 
-    executor = DelegationExecutor(**executor_dependencies)
+    executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="missing_agent",
-            delegation_type="review",
-            prompt="review",
-            requested_tools=["read_file"],
+            objective="review selected files",
+            rules=[],
+            references=[],
+            expected_output="review comments",
         ),
         execution_context=executor_dependencies["execution_context"],
     )
 
     assert result.status == "error"
-    assert "unknown_child_agent" in result.content
+    assert "child not found" in result.content
     delegation_service = executor_dependencies["delegation_service"]
     assert not any(call[0] == "create_pending" for call in delegation_service.calls)
 
@@ -813,13 +883,14 @@ def test_delegation_executor_rejects_policy_denial_before_create(executor_depend
     """
 
     executor_dependencies["parent_turn"] = _parent_turn(parent_turn_id="grand_parent")
-    executor = DelegationExecutor(**executor_dependencies)
+    executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
-            delegation_type="review",
-            prompt="review",
-            requested_tools=["read_file"],
+            objective="review selected files",
+            rules=[],
+            references=[],
+            expected_output="review comments",
         ),
         execution_context=executor_dependencies["execution_context"],
     )
@@ -846,13 +917,15 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
         调用 DelegationExecutor.execute。
     """
 
-    executor = DelegationExecutor(**executor_dependencies)
+    executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
-            delegation_type="review",
-            prompt="review selected files",
-            requested_tools=["read_file", "delegate_task"],
+            title="Review diff",
+            objective="review selected files",
+            rules=["do not modify files", "do not run tests"],
+            references=["app/core/runtime/runner.py"],
+            expected_output="a list of review comments",
         ),
         execution_context=executor_dependencies["execution_context"],
     )
@@ -861,13 +934,30 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     assert result.content == "child done"
     delegation_service = executor_dependencies["delegation_service"]
     assert delegation_service.calls[1][0] == "create_pending"
-    assert delegation_service.calls[1][1]["effective_tools"] == ("read_file",)
+    create_call = delegation_service.calls[1][1]
+    assert create_call["effective_tools"] == ("read_file",)
+    # delegation_type 来自 child profile（delegate_reviewer → reviewer），非模型入参
+    assert create_call["delegation_type"] == "reviewer"
+    # 拼装后的结构化 objective 文本应包含各段内容与英文标签
+    prompt_text = create_call["prompt"]
+    assert "# Review diff" in prompt_text
+    assert "## Objective" in prompt_text
+    assert "review selected files" in prompt_text
+    assert "## Rules" in prompt_text
+    assert "- do not modify files" in prompt_text
+    assert "- do not run tests" in prompt_text
+    assert "## References" in prompt_text
+    assert "- app/core/runtime/runner.py" in prompt_text
+    assert "## Expected Output" in prompt_text
+    assert "a list of review comments" in prompt_text
     assert ("mark_child_started", ("delegation_1", "child_turn_1", None)) in (
         delegation_service.calls
     )
     assert ("mark_completed", ("delegation_1", "child done", None)) in delegation_service.calls
     turn_service = executor_dependencies["turn_service"]
     assert turn_service.calls[0][1]["delegation_id"] == "delegation_1"
+    # child turn 的 input_text 使用同一份拼装文本
+    assert turn_service.calls[0][1]["input_text"] == prompt_text
     runner = executor_dependencies["child_runner"]
     assert runner.child_profiles[0].turn.turn_id == "child_turn_1"
     assert runner.child_profiles[0].allowed_tools == ["read_file"]
@@ -897,14 +987,15 @@ def test_delegation_executor_passes_runtime_event_loop_to_service(executor_depen
         runtime_dependencies=ToolRuntimeDependencies(runtime_event_loop=runtime_event_loop),
     )
     executor_dependencies["execution_context"] = execution_context
-    executor = DelegationExecutor(**executor_dependencies)
+    executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
 
     executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
-            delegation_type="review",
-            prompt="review selected files",
-            requested_tools=["read_file"],
+            objective="review selected files",
+            rules=[],
+            references=[],
+            expected_output="review comments",
         ),
         execution_context=execution_context,
     )
@@ -950,7 +1041,6 @@ def test_delegation_service_publishes_via_runtime_event_loop():
         child_agent_id="delegate_reviewer",
         delegation_type="review",
         prompt="review",
-        requested_tools=("read_file",),
         effective_tools=("read_file",),
         runtime_event_loop=runtime_event_loop,
     )
@@ -1142,13 +1232,14 @@ def test_delegation_executor_returns_tool_error_for_child_terminal_failures(
     """
 
     executor_dependencies["child_runner"] = FakeChildRunner(runner_result)
-    executor = DelegationExecutor(**executor_dependencies)
+    executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
-            delegation_type="review",
-            prompt="review",
-            requested_tools=["read_file"],
+            objective="review",
+            rules=[],
+            references=[],
+            expected_output="review comments",
         ),
         execution_context=executor_dependencies["execution_context"],
     )

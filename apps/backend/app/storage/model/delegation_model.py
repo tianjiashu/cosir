@@ -22,7 +22,6 @@ class DelegationModel(StorageBase):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[str] = mapped_column(Text, nullable=False)
-    requested_tools: Mapped[str] = mapped_column(Text, nullable=False)
     effective_tools: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)

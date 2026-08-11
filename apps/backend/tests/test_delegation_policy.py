@@ -7,7 +7,7 @@ from app.service.delegation.delegation_policy import DelegationPolicy
 
 
 def test_effective_tools_are_intersection():
-    """验证有效工具为三方权限交集。
+    """验证有效工具为 parent、child、system 三方权限交集。
 
     参数:
         无。
@@ -16,7 +16,7 @@ def test_effective_tools_are_intersection():
         无。
 
     异常:
-        无。
+        AssertionError: 当交集结果不符合预期时由 pytest 抛出。
 
     副作用:
         构造本地策略上下文并调用策略解析。
@@ -25,7 +25,6 @@ def test_effective_tools_are_intersection():
     context = DelegationPolicyContext(
         parent_agent_id="developer",
         child_agent_id="delegate_reviewer",
-        requested_tools=("read_file", "write_file", "execute_terminal"),
         parent_allowed_tools=frozenset({"read_file", "write_file", "delegate_task"}),
         child_allowed_tools=frozenset({"read_file", "search_files"}),
         system_allowed_tools=frozenset({"read_file", "search_files", "write_file"}),
@@ -56,7 +55,7 @@ def test_policy_rejects_depth_or_concurrency(depth, running_children):
         无。
 
     异常:
-        无。
+        AssertionError: 当策略未拒绝时由 pytest 抛出。
 
     副作用:
         构造本地策略上下文并调用策略解析。
@@ -65,7 +64,6 @@ def test_policy_rejects_depth_or_concurrency(depth, running_children):
     context = DelegationPolicyContext(
         parent_agent_id="developer",
         child_agent_id="delegate_reviewer",
-        requested_tools=("read_file",),
         parent_allowed_tools=frozenset({"read_file", "delegate_task"}),
         child_allowed_tools=frozenset({"read_file"}),
         system_allowed_tools=frozenset({"read_file"}),
@@ -92,7 +90,7 @@ def test_policy_context_defaults_to_v1_limits():
         无。
 
     异常:
-        无。
+        AssertionError: 当默认值不是 1 时由 pytest 抛出。
 
     副作用:
         构造未显式指定限制的本地策略上下文。
@@ -101,7 +99,6 @@ def test_policy_context_defaults_to_v1_limits():
     context = DelegationPolicyContext(
         parent_agent_id="developer",
         child_agent_id="delegate_reviewer",
-        requested_tools=("read_file",),
         parent_allowed_tools=frozenset({"read_file", "delegate_task"}),
         child_allowed_tools=frozenset({"read_file"}),
         system_allowed_tools=frozenset({"read_file"}),
@@ -114,8 +111,8 @@ def test_policy_context_defaults_to_v1_limits():
     assert context.max_concurrency == 1
 
 
-def test_effective_tools_preserve_first_seen_order_without_duplicates():
-    """验证有效工具保留首次请求顺序且去重。
+def test_effective_tools_are_sorted_deterministically():
+    """验证多工具交集结果按字典序排序，保证跨运行确定性。
 
     参数:
         无。
@@ -124,7 +121,7 @@ def test_effective_tools_preserve_first_seen_order_without_duplicates():
         无。
 
     异常:
-        无。
+        AssertionError: 当交集结果顺序不确定时由 pytest 抛出。
 
     副作用:
         构造本地策略上下文并调用策略解析。
@@ -133,10 +130,9 @@ def test_effective_tools_preserve_first_seen_order_without_duplicates():
     context = DelegationPolicyContext(
         parent_agent_id="developer",
         child_agent_id="delegate_reviewer",
-        requested_tools=("read_file", "read_file", "search_files", "read_file"),
-        parent_allowed_tools=frozenset({"read_file", "search_files", "delegate_task"}),
-        child_allowed_tools=frozenset({"read_file", "search_files"}),
-        system_allowed_tools=frozenset({"read_file", "search_files"}),
+        parent_allowed_tools=frozenset({"search_files", "read_file", "delegate_task"}),
+        child_allowed_tools=frozenset({"search_files", "read_file"}),
+        system_allowed_tools=frozenset({"search_files", "read_file"}),
         depth=0,
         max_depth=1,
         running_children=0,
@@ -160,7 +156,7 @@ def test_policy_rejects_unknown_child_agent():
         无。
 
     异常:
-        无。
+        AssertionError: 当拒绝原因不是 unknown_child_agent 时由 pytest 抛出。
 
     副作用:
         构造本地策略上下文并调用策略解析。
@@ -169,7 +165,6 @@ def test_policy_rejects_unknown_child_agent():
     context = DelegationPolicyContext(
         parent_agent_id="developer",
         child_agent_id="unknown_child",
-        requested_tools=("read_file",),
         parent_allowed_tools=frozenset({"read_file", "delegate_task"}),
         child_allowed_tools=frozenset({"read_file"}),
         system_allowed_tools=frozenset({"read_file"}),
@@ -186,8 +181,8 @@ def test_policy_rejects_unknown_child_agent():
     assert decision.reason == "unknown_child_agent"
 
 
-def test_policy_rejects_when_no_requested_tool_is_effective():
-    """验证没有可用工具时返回固定拒绝原因。
+def test_policy_rejects_when_three_way_intersection_is_empty():
+    """验证三方交集为空时返回固定拒绝原因。
 
     参数:
         无。
@@ -196,7 +191,7 @@ def test_policy_rejects_when_no_requested_tool_is_effective():
         无。
 
     异常:
-        无。
+        AssertionError: 当拒绝原因不是 no_effective_tools 时由 pytest 抛出。
 
     副作用:
         构造本地策略上下文并调用策略解析。
@@ -205,10 +200,9 @@ def test_policy_rejects_when_no_requested_tool_is_effective():
     context = DelegationPolicyContext(
         parent_agent_id="developer",
         child_agent_id="delegate_reviewer",
-        requested_tools=("write_file",),
         parent_allowed_tools=frozenset({"write_file", "delegate_task"}),
         child_allowed_tools=frozenset({"read_file"}),
-        system_allowed_tools=frozenset({"write_file"}),
+        system_allowed_tools=frozenset({"write_file", "read_file"}),
         depth=0,
         max_depth=1,
         running_children=0,

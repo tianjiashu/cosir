@@ -83,7 +83,6 @@ def test_delegation_crud_create_update_and_list(isolated_storage):
         prompt="review this",
         summary="",
         error="",
-        requested_tools=("read_file", "search_files"),
         effective_tools=("read_file",),
         created_at=now,
         updated_at=now,
