@@ -1216,6 +1216,48 @@ def test_child_agent_runner_uses_final_response_summary():
     assert result.summary == "review summary"
 
 
+def test_child_agent_runner_drains_runtime_stream_after_terminal_event():
+    """验证 ChildAgentRunner 收到终态后仍会消费完 runtime 事件流。
+    参数:
+        无。
+    返回:
+        无。
+    异常:
+        AssertionError: 当 runner 在终态事件处提前关闭 runtime generator 时由 pytest 抛出。
+    副作用:
+        通过 fake async generator 设置 consumed_after_terminal 标记。
+    """
+
+    child_profile = replace(default_developer_agent(), turn=_parent_turn())
+    consumed_after_terminal = False
+
+    async def fake_run_agent(profile):
+        """生成终态后仍有后置收尾步骤的 fake runtime event 流。
+        参数:
+            profile: child AgentProfile。
+        返回:
+            异步生成器逐个产出 RuntimeEvent。
+        异常:
+            无。
+        副作用:
+            RUN_FINISHED 被消费后设置 consumed_after_terminal 标记。
+        """
+
+        nonlocal consumed_after_terminal
+        yield RuntimeEvent(
+            event_type=EventType.RUN_FINISHED,
+            task_id=profile.turn.task_id,
+            turn_id=profile.turn.turn_id,
+            payload=RunFinishedPayload(status="completed"),
+        )
+        consumed_after_terminal = True
+
+    result = ChildAgentRunner(fake_run_agent).run_child(child_profile)
+
+    assert result.status == "completed"
+    assert consumed_after_terminal is True
+
+
 async def test_child_agent_runner_fails_fast_inside_running_event_loop():
     """验证 ChildAgentRunner 在已有事件循环线程中确定性失败。
 

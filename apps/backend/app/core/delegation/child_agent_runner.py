@@ -84,6 +84,7 @@ class ChildAgentRunner:
 
         turn_id = child_profile.turn.turn_id if child_profile.turn is not None else ""
         latest_final_text = ""
+        terminal_result: DelegationResult | None = None
         try:
             if self._should_cancel(turn_id):
                 return DelegationResult(
@@ -102,25 +103,32 @@ class ChildAgentRunner:
                     latest_final_text = str(getattr(event.payload, "text", "") or "")
                     continue
                 if event.event_type == EventType.RUN_FINISHED:
-                    return DelegationResult(
+                    terminal_result = DelegationResult(
                         status="completed",
                         child_turn_id=turn_id,
                         summary=latest_final_text or "child turn completed",
                     )
+                    continue
                 if event.event_type == EventType.RUN_FAILED:
                     error = str(
                         getattr(event.payload, "error", None)
                         or getattr(event.payload, "message", None)
                         or "child turn failed"
                     )
-                    return DelegationResult(status="failed", child_turn_id=turn_id, error=error)
+                    terminal_result = DelegationResult(
+                        status="failed",
+                        child_turn_id=turn_id,
+                        error=error,
+                    )
+                    continue
                 if event.event_type == EventType.RUN_CANCELLED:
                     error = str(getattr(event.payload, "error", None) or "child turn cancelled")
-                    return DelegationResult(
+                    terminal_result = DelegationResult(
                         status="cancelled",
                         child_turn_id=turn_id,
                         error=error,
                     )
+                    continue
         except Exception as exc:
             log.exception(
                 "delegation_child_run_failed",
@@ -140,6 +148,8 @@ class ChildAgentRunner:
                 child_turn_id=turn_id,
                 error="child turn cancelled",
             )
+        if terminal_result is not None:
+            return terminal_result
         return DelegationResult(
             status="failed",
             child_turn_id=turn_id,

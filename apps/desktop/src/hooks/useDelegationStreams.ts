@@ -34,7 +34,6 @@ const TERMINAL_DELEGATION_EVENT_TYPES = new Set<RuntimeEvent["event_type"]>([
 /** child run 终态事件类型。 */
 const TERMINAL_CHILD_EVENT_TYPES = new Set<RuntimeEvent["event_type"]>([
   "run_finished",
-  "final_response",
   "run_failed",
   "run_cancelled",
 ]);

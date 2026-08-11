@@ -1,9 +1,43 @@
 """delegate AgentProfile tests."""
 
+from pydantic import BaseModel
+
 from app.config.configuration import build_agent_registry
+from app.core.agents.agent_profile import default_developer_agent, developer_agent_pro
 from app.core.delegation.child_agent_profile_builder import ChildAgentProfileBuilder
 from app.models.turn_record import TurnRecord
+from app.tools.schemas.tool_definition import ToolDefinition
 from app.utils.datetime_utils import utc_now
+
+
+class EmptyToolArgs(BaseModel):
+    """测试用空工具参数模型。
+
+    参数:
+        无。
+    返回:
+        无。
+    异常:
+        无。
+    副作用:
+        无。
+    """
+
+
+def _noop_tool_handler():
+    """测试用空工具处理器。
+
+    参数:
+        无。
+    返回:
+        None。
+    异常:
+        无。
+    副作用:
+        无。
+    """
+
+    return None
 
 
 def test_delegate_profiles_are_registered():
@@ -121,6 +155,53 @@ def test_delegate_profile_permissions_match_v1_roles():
 
     for profile in (reviewer, analyst, coder):
         assert "delegate_task" not in profile.allowed_tools
+
+
+def test_default_parent_profiles_can_see_delegate_task_but_children_cannot():
+    """Verify that production parent profiles expose delegation without enabling recursion.
+
+    参数:
+        无。
+    返回:
+        无。
+    异常:
+        AssertionError: 当默认父 profile 缺失 delegate_task 或 child profile 暴露递归委派时抛出。
+    副作用:
+        构造内存 ToolDefinition 列表用于权限筛选断言。
+    """
+
+    tools = [
+        ToolDefinition(
+            name="read_file",
+            description="read",
+            permission="never",
+            handler=_noop_tool_handler,
+            args_model=EmptyToolArgs,
+            risk_level="read",
+        ),
+        ToolDefinition(
+            name="delegate_task",
+            description="delegate",
+            permission="ask",
+            handler=_noop_tool_handler,
+            args_model=EmptyToolArgs,
+            risk_level="medium",
+        ),
+    ]
+
+    for parent_profile in (default_developer_agent(), developer_agent_pro()):
+        assert "delegate_task" in parent_profile.allowed_tools
+        assert [tool.name for tool in parent_profile.select_tools(tools)] == [
+            "read_file",
+            "delegate_task",
+        ]
+
+    registry = build_agent_registry()
+    for child_agent_id in ("delegate_reviewer", "delegate_analyst", "delegate_coder"):
+        child_profile = registry.resolve(child_agent_id)
+        assert child_profile is not None
+        assert "delegate_task" not in child_profile.allowed_tools
+        assert [tool.name for tool in child_profile.select_tools(tools)] == ["read_file"]
 
 
 def test_child_profile_builder_does_not_mutate_registry_profile():

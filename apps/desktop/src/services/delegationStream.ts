@@ -59,12 +59,12 @@ function childTurnEventsStreamPath(childTurnId: string): string {
  * 判断事件是否是 child run 终态。
  *
  * @param event - 待判定运行时事件。
- * @returns 命中 run_finished / final_response / run_failed / run_cancelled 时返回 true。
+ * @returns 命中 run_finished / run_failed / run_cancelled 时返回 true。
  *
  * @sideeffect 无。
  */
 function isChildTerminalEvent(event: RuntimeEvent): boolean {
-  return ["run_finished", "final_response", "run_failed", "run_cancelled"].includes(event.event_type);
+  return ["run_finished", "run_failed", "run_cancelled"].includes(event.event_type);
 }
 
 /**

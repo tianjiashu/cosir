@@ -25,6 +25,7 @@ DEFAULT_DEVELOPER_TOOLS = (
     "patch",
     "delete",
     "execute_terminal",
+    "delegate_task",
     "codegraph_explore",
     "codegraph_search",
     "codegraph_node",

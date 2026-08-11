@@ -119,6 +119,46 @@ function streamResponse(chunks: string[]): Response {
 }
 
 /**
+ * 构造可由测试手动推进或取消的 SSE 响应。
+ *
+ * @returns fetch Response 与流控制方法。
+ */
+function controlledStreamResponse(): {
+  response: Response;
+  enqueue: (chunk: string) => void;
+  close: () => void;
+  cancelled: () => boolean;
+} {
+  const encoder = new TextEncoder();
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controllerRef = controller;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return {
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(),
+      body: stream,
+    } as unknown as Response,
+    enqueue: (chunk: string) => {
+      controllerRef?.enqueue(encoder.encode(chunk));
+    },
+    close: () => {
+      controllerRef?.close();
+    },
+    cancelled: () => cancelled,
+  };
+}
+
+/**
  * 构造失败的 SSE 响应。
  *
  * @returns HTTP 500 Response。
@@ -238,6 +278,61 @@ describe("useDelegationStreams", () => {
     await waitFor(() => {
       expect((useEventStore.getState().eventsByTurnId[CHILD_TURN_ID] ?? []).map((event) => event.event_id))
       .toContain("child-terminal-backfill");
+    });
+  });
+
+  it("keeps child stream open when final_response arrives before run_finished", async () => {
+    const stream = controlledStreamResponse();
+    const childFinalResponse = runtimeEvent(
+      "child-final-response",
+      "final_response",
+      CHILD_TURN_ID,
+      { step_id: "step-1", status: "completed", text: "child final" },
+      2,
+    );
+    const childFinished = runtimeEvent(
+      "child-finished",
+      "run_finished",
+      CHILD_TURN_ID,
+      { status: "completed" },
+      3,
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => stream.response));
+
+    renderHook(() => useDelegationStreams(TASK_ID));
+    act(() => {
+      useEventStore.getState().appendEvent(delegationChildStartedEvent());
+    });
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        `/turns/${CHILD_TURN_ID}/events/stream`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ Accept: "text/event-stream" }),
+        }),
+      );
+    });
+
+    await act(async () => {
+      stream.enqueue(sseFrame(childFinalResponse));
+    });
+
+    await waitFor(() => {
+      expect(
+        (useEventStore.getState().eventsByTurnId[CHILD_TURN_ID] ?? []).map((event) => event.event_id),
+      ).toContain("child-final-response");
+    });
+    expect(stream.cancelled()).toBe(false);
+
+    await act(async () => {
+      stream.enqueue(sseFrame(childFinished));
+      stream.close();
+    });
+
+    await waitFor(() => {
+      expect(
+        (useEventStore.getState().eventsByTurnId[CHILD_TURN_ID] ?? []).map((event) => event.event_id),
+      ).toContain("child-finished");
     });
   });
 });
