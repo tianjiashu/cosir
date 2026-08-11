@@ -29,6 +29,7 @@ import { InputBar } from "@/components/layout/InputBar";
 import { BackendErrorBanner } from "@/components/backend/BackendErrorBanner";
 import { useBackendBootstrap } from "@/hooks/useBackendBootstrap";
 import { useTask } from "@/hooks/useTask";
+import { useDelegationStreams } from "@/hooks/useDelegationStreams";
 import { PanelDragHandle } from "@/components/layout/PanelDragHandle";
 import { LogsPage } from "@/pages/logs/LogsPage";
 import { NewTaskPage } from "@/pages/chat/NewTaskPage";
@@ -98,7 +99,9 @@ export default function App() {
   const [activeView, setActiveView] = useState<WorkspaceView>("chat");
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const { openTask } = useTask();
+  useDelegationStreams(activeTaskId);
   // 防止重复触发自动恢复：仅首个工作区加载完成时尝试恢复一次。
   const resumeAttempted = useRef(false);
 
