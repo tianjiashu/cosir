@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.core.agents.prompt_ref import PromptRef
 from app.core.llm.model_settings import ModelSettings
 from app.models import TurnRecord
 
@@ -61,18 +62,60 @@ def _default_workflow() -> AgentWorkflow:
 
 
 @dataclass
+class AgentProfileToolSummary:
+    """子 Agent 工具描述投影（供父 Agent 委派时了解可用子 Agent 能力）。
+
+    仅包含父 Agent 在选择委派目标时需要的能力摘要字段，刻意排除
+    ``workflow``/``context_policy``/``turn``/``runtime_event_loop``/``prompt_ref``
+    等运行时内部字段，避免向模型泄露底层实现细节。
+
+    参数:
+        agent_id: 子 Agent 稳定标识。
+        role: 人类可读角色。
+        description: 子 Agent 职责描述（替代旧 ``goal``）。
+        capabilities: 该子 Agent 具备的能力清单。
+        recommended_use_cases: 推荐使用场景清单。
+        constraints: 该子 Agent 的运行约束清单。
+        tool_capability_summary: 由 ``allowed_tools`` 渲染的可读工具能力摘要。
+
+    返回:
+        不可变的工具描述投影值对象。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    agent_id: str
+    role: str
+    description: str
+    capabilities: list[str]
+    recommended_use_cases: list[str]
+    constraints: list[str]
+    tool_capability_summary: str
+
+
+@dataclass
 class AgentProfile:
-    """描述某个任务的 Agent 执行主体。
+    """描述某个任务的 Agent 执行主体（能力事实源）。
 
     参数:
         agent_id: 持久化在任务和事件上的稳定 Agent 标识。
         role: 人类可读的 Agent 角色。
-        goal: 注入到模型上下文中的运行目标，标明Agent职责。
+        description: 注入到模型上下文中的运行目标与职责描述（替代旧 ``goal``）。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         context_policy: 该 Agent 的上下文处理策略名称。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
         model_name: 该 Agent 使用的模型名称。
         model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
+        delegation_type: 稳定的委派分类（reviewer/analyst/coder）；
+            进 ``to_dict`` 不进 ``to_tool_summary``。
+        capabilities: 该 Agent 具备的能力清单。
+        recommended_use_cases: 推荐使用场景清单。
+        constraints: 该 Agent 的运行约束清单。
+        prompt_ref: 关联的 prompt 引用（第二部分接缝，第一部分不消费）；可为 None。
 
     返回:
         不可变的 Agent profile 值对象。
@@ -86,7 +129,7 @@ class AgentProfile:
 
     agent_id: str
     role: str
-    goal: str
+    description: str
     allowed_tools: list[str]
     context_policy: str
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
@@ -96,6 +139,11 @@ class AgentProfile:
     turn: TurnRecord | None = None
     context_excluded_turn_ids: tuple[str, ...] = ()
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
+    delegation_type: str = ""
+    capabilities: list[str] = field(default_factory=list)
+    recommended_use_cases: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    prompt_ref: PromptRef | None = None
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。
@@ -134,16 +182,61 @@ class AgentProfile:
             无。
         """
 
+        prompt_ref_dict = None
+        if self.prompt_ref is not None:
+            prompt_ref_dict = {
+                "name": self.prompt_ref.name,
+                "label": self.prompt_ref.label,
+                "fallback_path": self.prompt_ref.fallback_path,
+                "variables_schema": self.prompt_ref.variables_schema,
+            }
+
         return {
             "agent_id": self.agent_id,
             "role": self.role,
-            "goal": self.goal,
+            "description": self.description,
             "allowed_tools": self.allowed_tools,
             "context_policy": self.context_policy,
             "workflow": getattr(self.workflow, "workflow_id", "custom"),
             "model_name": self.model_name,
             "max_steps": self.max_steps,
+            "delegation_type": self.delegation_type,
+            "capabilities": self.capabilities,
+            "recommended_use_cases": self.recommended_use_cases,
+            "constraints": self.constraints,
+            "prompt_ref": prompt_ref_dict,
         }
+
+    def to_tool_summary(self) -> AgentProfileToolSummary:
+        """将 Agent profile 投影为面向父 Agent 的工具能力摘要。
+
+        仅暴露父 Agent 选择委派目标所需的能力字段，刻意排除
+        ``workflow``/``context_policy``/``turn``/``runtime_event_loop``/``prompt_ref``
+        等运行时内部字段。``tool_capability_summary`` 由 ``allowed_tools`` 渲染。
+
+        参数:
+            无。
+
+        返回:
+            ``AgentProfileToolSummary`` 投影对象。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        tool_capability_summary = "tools: " + ", ".join(self.allowed_tools)
+        return AgentProfileToolSummary(
+            agent_id=self.agent_id,
+            role=self.role,
+            description=self.description,
+            capabilities=self.capabilities,
+            recommended_use_cases=self.recommended_use_cases,
+            constraints=self.constraints,
+            tool_capability_summary=tool_capability_summary,
+        )
 
 
 def default_developer_agent() -> AgentProfile:
@@ -165,7 +258,7 @@ def default_developer_agent() -> AgentProfile:
     return AgentProfile(
         agent_id=DEFAULT_AGENT_ID,
         role="coding-agent-flush",
-        goal="协助用户完成软件工程项目开发任务",
+        description="协助用户完成软件工程项目开发任务",
         allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
         context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
@@ -173,6 +266,11 @@ def default_developer_agent() -> AgentProfile:
             base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
+        delegation_type="",
+        capabilities=[],
+        recommended_use_cases=[],
+        constraints=[],
+        prompt_ref=None,
     )
 
 
@@ -195,7 +293,7 @@ def developer_agent_pro() -> AgentProfile:
     return AgentProfile(
         agent_id="developer_pro",
         role="coding-agent-pro",
-        goal="协助用户完成软件工程项目开发任务",
+        description="协助用户完成软件工程项目开发任务",
         allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
         context_policy="text_only_v1",
         model_name="deepseek-v4-pro",
@@ -203,4 +301,9 @@ def developer_agent_pro() -> AgentProfile:
             base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
+        delegation_type="",
+        capabilities=[],
+        recommended_use_cases=[],
+        constraints=[],
+        prompt_ref=None,
     )
