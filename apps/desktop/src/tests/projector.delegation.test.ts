@@ -279,4 +279,29 @@ describe("timeline delegation projection", () => {
     expect(delegation.status).toBe("completed");
     expect(delegation.summary).toBe("ok");
   });
+
+  it("preserves existing non-delegation entry references when adding a delegation", () => {
+    let state = projectTimelineIncrementally(createTimelineProjectorState(), [
+      delegationEvent("assistant-1", "final_response", { step_id: "step_1", status: "completed", text: "done" }, 1),
+    ]);
+    const assistantEntry = state.entries[0];
+
+    state = projectTimelineIncrementally(state, [
+      delegationEvent(
+        "e2",
+        "delegation_started",
+        {
+          delegation_id: "del_7",
+          parent_turn_id: "turn_parent",
+          child_agent_id: "delegate_reviewer",
+          delegation_type: "review",
+          status: "pending",
+        },
+        2,
+      ),
+    ]);
+
+    expect(state.entries[0]).toBe(assistantEntry);
+    expect(delegationEntries(state.entries)).toHaveLength(1);
+  });
 });

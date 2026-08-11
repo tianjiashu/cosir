@@ -19,6 +19,7 @@ import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { PerfTrace } from "@/lib/perf";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
 import type { TurnRecord } from "@shared/turn";
+import type { RuntimeEvent } from "@shared/events";
 
 /**
  * 判断当前是否无活跃任务（即空会话）。
@@ -169,9 +170,15 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   }, []);
   const renderTurnItem = useCallback((turn: TurnRecord) => {
     const turnEvents = eventsByTurnIdRef.current[turn.turn_id] ?? EMPTY_EVENTS;
+    const childEventsRevision = buildDelegationChildEventsRevision(turnEvents, eventsByTurnIdRef.current);
     return (
       <div className="px-4 py-2">
-        <TurnTimeline turn={turn} events={turnEvents} getChildEvents={getChildEvents} />
+        <TurnTimeline
+          turn={turn}
+          events={turnEvents}
+          getChildEvents={getChildEvents}
+          childEventsRevision={childEventsRevision}
+        />
       </div>
     );
   }, [getChildEvents]);
@@ -285,4 +292,45 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
       )}
     </main>
   );
+}
+
+/**
+ * Builds a compact revision string for child turns referenced by delegation events in one parent turn.
+ *
+ * @param turnEvents - Parent turn event shard.
+ * @param eventsByTurnId - Current event shards keyed by turn id.
+ * @returns Stable empty string when no child turn is referenced; otherwise a string that changes
+ *   when any referenced child shard length or tail event changes.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
+ */
+function buildDelegationChildEventsRevision(
+  turnEvents: RuntimeEvent[],
+  eventsByTurnId: Record<string, RuntimeEvent[]>,
+): string {
+  const childTurnIds = new Set<string>();
+  for (const event of turnEvents) {
+    if (
+      event.event_type !== "delegation_child_started" &&
+      event.event_type !== "delegation_finished" &&
+      event.event_type !== "delegation_failed" &&
+      event.event_type !== "delegation_cancelled"
+    ) {
+      continue;
+    }
+    const childTurnId = (event.payload as { child_turn_id?: unknown }).child_turn_id;
+    if (typeof childTurnId === "string" && childTurnId.length > 0) {
+      childTurnIds.add(childTurnId);
+    }
+  }
+  if (childTurnIds.size === 0) {
+    return "";
+  }
+  return [...childTurnIds].sort().map((childTurnId) => {
+    const childEvents = eventsByTurnId[childTurnId] ?? EMPTY_EVENTS;
+    const tailEventId = childEvents[childEvents.length - 1]?.event_id ?? "";
+    return `${childTurnId}:${childEvents.length}:${tailEventId}`;
+  }).join("|");
 }

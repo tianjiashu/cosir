@@ -44,6 +44,8 @@ interface TurnTimelineProps {
   events: RuntimeEvent[];
   /** Returns already received child-turn events for expanded delegation rendering. */
   getChildEvents?: (childTurnId: string) => RuntimeEvent[];
+  /** Changes when child-turn event shards referenced by this turn change. */
+  childEventsRevision?: string;
 }
 
 /**
@@ -61,7 +63,7 @@ interface TurnTimelineProps {
  * @param props.turn - 轮次记录。
  * @param props.events - 该轮次事件列表。
  */
-function TurnTimelineImpl({ turn, events, getChildEvents }: TurnTimelineProps) {
+function TurnTimelineImpl({ turn, events, getChildEvents, childEventsRevision }: TurnTimelineProps) {
   // 可续算投影状态（持久引用，跨帧累积；不随 render 重建）。
   const stateRef = useRef<TimelineProjectorState>(createTimelineProjectorState());
   // 已投影到 stateRef 的 events 长度；events 为 append-only，delta = events.slice(lastLen)。
@@ -177,6 +179,7 @@ function TurnTimelineImpl({ turn, events, getChildEvents }: TurnTimelineProps) {
 
   const renderChildEntries = useCallback(
     (childTurnId: string): ReactNode => {
+      void childEventsRevision;
       const childEvents = getChildEvents?.(childTurnId) ?? [];
       if (childEvents.length === 0) {
         return null;
@@ -192,7 +195,7 @@ function TurnTimelineImpl({ turn, events, getChildEvents }: TurnTimelineProps) {
         />
       ));
     },
-    [getChildEvents, handleOpenFile],
+    [childEventsRevision, getChildEvents, handleOpenFile],
   );
 
   // 「等待首 token」判定：用户已输入（input_text 非空）、请求已提交，但模型首 token
