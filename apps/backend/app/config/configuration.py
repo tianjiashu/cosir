@@ -6,6 +6,9 @@
 收口内容（进程级、按需构建、可热替换）：
 - agent profile 目录（``AgentProfileRegistry``）：``set_agent_registry`` /
   ``get_agent_registry`` / ``build_agent_registry``。
+- 委派子 Agent 能力摘要（投影文本）：``set_delegate_agent_summary`` /
+  ``get_delegate_agent_summary``（由 ``build_agent_registry`` 投影注入，
+  供 ``ToolSystem.build_tool_system`` 读取拼入 ``delegate_task`` 描述）。
 - 工具系统（``ToolSystem``）：``set_tool_system`` / ``get_tool_system``。
 
 设计要点：
@@ -23,6 +26,7 @@ from app.core.agents.agent_profile import default_developer_agent, developer_age
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
+from app.core.agents.agent_profile_tool_summary import project_child_agent_summary
 from app.core.agents.delegate_agent_profiles import (
     delegate_analyst_agent,
     delegate_coder_agent,
@@ -32,6 +36,7 @@ from app.tools.tool_system import ToolSystem
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _TOOL_SYSTEM: ToolSystem | None = None
+_DELEGATE_AGENT_SUMMARY: str | None = None
 
 
 def set_agent_registry(registry: AgentProfileRegistry) -> None:
@@ -75,6 +80,52 @@ def get_agent_registry() -> AgentProfileRegistry:
     return _AGENT_REGISTRY
 
 
+def set_delegate_agent_summary(summary: str) -> None:
+    """设置进程级委派子 Agent 能力摘要单例。
+
+    摘要由 ``build_agent_registry`` 在播种完成后经 ``project_child_agent_summary``
+    投影得到，供 ``tools/tool_system.ToolSystem.build_tool_system`` 读取并注入到
+    ``delegate_task`` 工具描述，向父 Agent 暴露可选子 Agent 能力边界。
+
+    参数:
+        summary: 已投影完成的子 Agent 能力摘要文本（可能为空串，表示无可用子 Agent）。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        替换模块级委派子 Agent 摘要单例；``ToolSystem.build_tool_system`` 共享同一份。
+    """
+
+    global _DELEGATE_AGENT_SUMMARY
+    _DELEGATE_AGENT_SUMMARY = summary
+
+
+def get_delegate_agent_summary() -> str:
+    """返回进程级委派子 Agent 能力摘要单例。
+
+    参数:
+        无。
+
+    返回:
+        已初始化的子 Agent 能力摘要文本。
+
+    异常:
+        RuntimeError: 如果摘要尚未初始化（未调用 ``set_delegate_agent_summary``，
+            通常由 ``build_agent_registry`` 负责注入）。
+
+    副作用:
+        无。
+    """
+
+    if _DELEGATE_AGENT_SUMMARY is None:
+        raise RuntimeError("delegate agent summary has not been initialized")
+    return _DELEGATE_AGENT_SUMMARY
+
+
 def build_agent_registry() -> AgentProfileRegistry:
     """构建并播种默认的内置 agent profile 目录。
 
@@ -102,6 +153,7 @@ def build_agent_registry() -> AgentProfileRegistry:
     registry.register(delegate_analyst_agent())
     registry.register(delegate_coder_agent())
     # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
+    set_delegate_agent_summary(project_child_agent_summary(registry))
     return registry
 
 

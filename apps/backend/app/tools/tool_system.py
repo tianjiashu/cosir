@@ -14,7 +14,7 @@ from app.tools.tool_handler.codegraph_query import (
     build_codegraph_node_definition,
     build_codegraph_search_definition,
 )
-from app.tools.tool_handler.delegation.delegate_task import build_delegate_task_definition
+from app.tools.tool_handler.delegate_task import build_delegate_task_definition
 from app.tools.tool_handler.delete import build_delete_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
@@ -74,11 +74,22 @@ class ToolSystem:
             已初始化 registry 与 scheduler 的 ToolSystem。
 
         异常:
-            无（注册过程不抛预期异常）。
+            无（注册过程不抛预期异常；子 Agent 摘要若尚未注入则降级为空串）。
 
         副作用:
-            创建内存工具注册表并注册全部内置工具；创建 ToolScheduler 实例。
+            创建内存工具注册表并注册全部内置工具；创建 ToolScheduler 实例；
+            向 ``delegate_task`` 工具描述注入已投影的子 Agent 能力摘要（未注入时降级空串）。
         """
+
+        # 延迟导入以避免模块级循环：``configuration`` 顶部已 import 本模块（ToolSystem），
+        # 若本模块在顶部 import ``configuration`` 会形成 ``config -> tools -> config`` 循环。
+        # 仅在方法体内导入单例读取函数，符合分层（tools -> config 合法）。
+        from app.config.configuration import get_delegate_agent_summary
+
+        try:
+            _delegate_summary = get_delegate_agent_summary()
+        except RuntimeError:
+            _delegate_summary = ""
 
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
@@ -90,7 +101,9 @@ class ToolSystem:
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
-        registry.register(build_delegate_task_definition())
+        registry.register(
+            build_delegate_task_definition(agent_summary=_delegate_summary)
+        )
         # CodeGraph 查询工具（client 可为 None，execute 降级）。
         registry.register(build_codegraph_explore_definition(client))
         registry.register(build_codegraph_search_definition(client))
