@@ -133,6 +133,19 @@ function failedResponse(): Response {
   } as unknown as Response;
 }
 
+/**
+ * 鍒涘缓鍙墜鍔ㄨВ鍐崇殑 Promise銆?
+ *
+ * @returns Promise 涓庡叾 resolve 鍑芥暟銆?
+ */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("useDelegationStreams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -187,6 +200,7 @@ describe("useDelegationStreams", () => {
   });
 
   it("forces task event backfill when a child stream cannot continue even if task events are cached", async () => {
+    const firstBackfill = deferred<RuntimeEvent[]>();
     const backfilledTerminal = runtimeEvent(
       "child-terminal-backfill",
       "run_failed",
@@ -195,19 +209,35 @@ describe("useDelegationStreams", () => {
       4,
     );
     vi.stubGlobal("fetch", vi.fn(async () => failedResponse()));
-    vi.mocked(api.listTaskEvents).mockResolvedValue([
-      delegationChildStartedEvent(),
-      backfilledTerminal,
-    ]);
+    vi.mocked(api.listTaskEvents)
+      .mockReturnValueOnce(firstBackfill.promise)
+      .mockResolvedValueOnce([delegationChildStartedEvent(), backfilledTerminal]);
 
     useEventStore.getState().setEvents([delegationChildStartedEvent()], TASK_ID);
     renderHook(() => useDelegationStreams(TASK_ID));
 
     await waitFor(() => {
-      expect(api.listTaskEvents).toHaveBeenCalledWith(TASK_ID);
+      expect(fetch).toHaveBeenCalledWith(
+        `/turns/${CHILD_TURN_ID}/events/stream`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ Accept: "text/event-stream" }),
+        }),
+      );
     });
 
+    expect(api.listTaskEvents).toHaveBeenCalledTimes(1);
+    firstBackfill.resolve([delegationChildStartedEvent()]);
+
     expect((useEventStore.getState().eventsByTurnId[CHILD_TURN_ID] ?? []).map((event) => event.event_id))
+      .not.toContain("child-terminal-backfill");
+
+    await waitFor(() => {
+      expect(api.listTaskEvents).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      expect((useEventStore.getState().eventsByTurnId[CHILD_TURN_ID] ?? []).map((event) => event.event_id))
       .toContain("child-terminal-backfill");
+    });
   });
 });

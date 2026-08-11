@@ -158,12 +158,14 @@ export function useDelegationStreams(taskId: string | null): void {
   const failedDelegationsRef = useRef<Set<string>>(new Set());
   const missingTerminalBackfilledRef = useRef<Set<string>>(new Set());
   const backfillInFlightRef = useRef<Set<string>>(new Set());
+  const forcedBackfillPendingRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const connections = connectionsRef.current;
     const failedDelegations = failedDelegationsRef.current;
     const missingTerminalBackfilled = missingTerminalBackfilledRef.current;
     const backfillInFlight = backfillInFlightRef.current;
+    const forcedBackfillPending = forcedBackfillPendingRef.current;
     return () => {
       for (const connection of connections.values()) {
         connection.disconnect();
@@ -172,6 +174,7 @@ export function useDelegationStreams(taskId: string | null): void {
       failedDelegations.clear();
       missingTerminalBackfilled.clear();
       backfillInFlight.clear();
+      forcedBackfillPending.clear();
     };
   }, [taskId]);
 
@@ -180,8 +183,11 @@ export function useDelegationStreams(taskId: string | null): void {
       return;
     }
 
-    const forceBackfill = async (delegationId: string, reason: string): Promise<void> => {
+    const forceBackfill = async (delegationId: string, reason: string, forced = false): Promise<void> => {
       if (backfillInFlightRef.current.has(delegationId)) {
+        if (forced) {
+          forcedBackfillPendingRef.current.set(delegationId, reason);
+        }
         return;
       }
       backfillInFlightRef.current.add(delegationId);
@@ -197,6 +203,11 @@ export function useDelegationStreams(taskId: string | null): void {
         });
       } finally {
         backfillInFlightRef.current.delete(delegationId);
+        const pendingForcedReason = forcedBackfillPendingRef.current.get(delegationId);
+        if (pendingForcedReason) {
+          forcedBackfillPendingRef.current.delete(delegationId);
+          void forceBackfill(delegationId, pendingForcedReason, true);
+        }
       }
     };
 
@@ -241,7 +252,7 @@ export function useDelegationStreams(taskId: string | null): void {
             child_turn_id: descriptor.childTurnId,
             error: error.message,
           });
-          void forceBackfill(descriptor.delegationId, error.message);
+          void forceBackfill(descriptor.delegationId, error.message, true);
         },
       });
 
