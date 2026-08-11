@@ -1,6 +1,6 @@
 """delegation recovery tests."""
 
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -68,6 +68,7 @@ def test_recovery_marks_pending_and_running_delegations_failed(isolated_storage:
     _create_delegation(crud, "delegation_pending", "pending")
     _create_delegation(crud, "delegation_running", "running", child_turn_id="turn_child")
     _create_delegation(crud, "delegation_completed", "completed", summary="done")
+    _create_delegation(crud, "delegation_failed", "failed", error="already_failed")
     _create_delegation(crud, "delegation_cancelled", "cancelled", error="user_cancelled")
     service = get_delegation_service()
 
@@ -81,11 +82,15 @@ def test_recovery_marks_pending_and_running_delegations_failed(isolated_storage:
     assert by_id["delegation_running"].error == "runtime_restarted"
     assert by_id["delegation_completed"].status == "completed"
     assert by_id["delegation_completed"].summary == "done"
+    assert by_id["delegation_failed"].status == "failed"
+    assert by_id["delegation_failed"].error == "already_failed"
     assert by_id["delegation_cancelled"].status == "cancelled"
     assert by_id["delegation_cancelled"].error == "user_cancelled"
 
 
-async def test_lifespan_runs_delegation_recovery_before_runtime_start(monkeypatch) -> None:
+async def test_lifespan_runs_delegation_recovery_before_runtime_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """验证应用启动在 runtime/tool system 启动前执行委派恢复审计。
 
     参数:
@@ -282,7 +287,9 @@ class _FakeDelegationService:
         return 3
 
 
-def _fake_start_codegraph_kernel(calls: list[tuple[str, object | None]]):
+def _fake_start_codegraph_kernel(
+    calls: list[tuple[str, object | None]],
+) -> Callable[[], Awaitable[None]]:
     """构造记录 CodeGraph 启动调用的异步 fake。
 
     参数:
@@ -314,7 +321,9 @@ def _fake_start_codegraph_kernel(calls: list[tuple[str, object | None]]):
     return fake_start_codegraph_kernel
 
 
-def _fake_close_shared_model_http_clients(calls: list[tuple[str, object | None]]):
+def _fake_close_shared_model_http_clients(
+    calls: list[tuple[str, object | None]],
+) -> Callable[[], Awaitable[None]]:
     """构造记录模型 HTTP 客户端关闭调用的异步 fake。
 
     参数:
