@@ -1,5 +1,7 @@
 """Runtime event payload model registry."""
 
+# ruff: noqa: E501
+
 from collections.abc import Mapping
 
 from app.models.enums.event_type import EventType

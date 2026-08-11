@@ -260,6 +260,16 @@ class AgentRuntime:
             turn_id: 需要运行的轮次标识符。
             turn: 可选的预取轮次记录；缺省时按 ``turn_id`` 读取。
         """
+        if turn is None:
+            log.warning(
+                "run_turn_missing_turn",
+                extra={
+                    "msg": "run_turn called without a turn; refusing to execute",
+                    "data": {},
+                },
+            )
+            return None
+
         turn_id = turn.turn_id
 
         # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
@@ -275,7 +285,7 @@ class AgentRuntime:
 
         # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
         # 未绑定时回退到 task.agent_id 默认归属。
-        agent_profile = self._agent_registry.resolve(turn.agent_id)
+        agent_profile = self._agent_registry.resolve(turn.agent_id or DEFAULT_AGENT_ID)
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for turn {turn_id}")
 
@@ -290,7 +300,7 @@ class AgentRuntime:
                     "data": {"turn_id": turn.turn_id},
                 },
             )
-            return
+            return None
 
         agent_profile.turn = turn
         return self.run_agent(agent_profile)
@@ -632,8 +642,6 @@ class AgentRuntime:
             workspace 不存在时记 warning 日志。
         """
 
-        if self._workspace_service is None:
-            return None
         try:
             workspace = self._workspace_service.get_workspace(task.workspace_id)
         except KeyError:

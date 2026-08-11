@@ -45,6 +45,8 @@ def test_build_operations_injects_resolved_execution_context() -> None:
     # 绕过 __init__，仅 stub 本测试所需内部依赖。
     runtime = object.__new__(AgentRuntime)
     runtime._tool_scheduler = SimpleNamespace(list_tools=lambda: [])
+    runtime._agent_registry = SimpleNamespace()
+    runtime._turn_service = SimpleNamespace()
 
     # stub workspace_service：让 _resolve_execution_context 命中并返回非 None。
     def _get_workspace(workspace_id: str):
@@ -65,8 +67,9 @@ def test_build_operations_injects_resolved_execution_context() -> None:
             captured.update(kwargs)
         return SimpleNamespace(**kwargs)
 
-    with mock.patch.object(
-        runner_module, "RuntimeOperations", side_effect=_fake_runtime_operations
+    with (
+        mock.patch.object(runner_module, "RuntimeOperations", side_effect=_fake_runtime_operations),
+        mock.patch.object(runner_module, "get_delegation_service", return_value=SimpleNamespace()),
     ):
         runtime._build_operations(
             workspace=workspace,
@@ -81,9 +84,9 @@ def test_build_operations_injects_resolved_execution_context() -> None:
         "execution_context 为 None：runner 未把 _resolve_execution_context 结果注入门面，"
         "将复现 'execution_context is required'"
     )
-    assert isinstance(captured["execution_context"], ToolExecutionContext), (
-        "注入的 execution_context 类型不符，下游工具执行会因契约不匹配而失败"
-    )
-    assert captured["execution_context"].turn_id == "turn-1", (
-        "execution_context 未携带当前 turn_id，取消/回退关联会错位"
-    )
+    assert isinstance(
+        captured["execution_context"], ToolExecutionContext
+    ), "注入的 execution_context 类型不符，下游工具执行会因契约不匹配而失败"
+    assert (
+        captured["execution_context"].turn_id == "turn-1"
+    ), "execution_context 未携带当前 turn_id，取消/回退关联会错位"

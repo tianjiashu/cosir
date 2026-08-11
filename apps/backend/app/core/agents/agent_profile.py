@@ -92,7 +92,7 @@ class AgentProfile:
     model_name: str = "deepseek-v4-flash"
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     max_steps: int = 1000
-    turn: TurnRecord = None
+    turn: TurnRecord | None = None
     context_excluded_turn_ids: tuple[str, ...] = ()
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
 

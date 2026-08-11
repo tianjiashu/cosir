@@ -238,8 +238,8 @@ async def cancel_turn(
 
 async def _sse_turn_events(
     runtime: AgentRuntime,
-    turn: TurnRecord | None = None,
-    event_bus: RuntimeEventBus | None = None,
+    turn: TurnRecord,
+    event_bus: RuntimeEventBus,
     turn_service: TurnService | None = None,
 ) -> AsyncIterator[str]:
     """将轮次运行时事件转换为 SSE 传输格式字符串。
@@ -419,7 +419,7 @@ def _format_sse_event(event: RuntimeEvent) -> str:
 
 async def _drive_runtime_turn(
     runtime: AgentRuntime,
-    turn: TurnRecord | None,
+    turn: TurnRecord,
     event_bus: RuntimeEventBus,
     turn_service: TurnService | None = None,
 ) -> None:
@@ -456,6 +456,9 @@ async def _drive_runtime_turn(
         nonlocal entered_run
         entered_run = True
         events = await runtime.run_turn(turn)
+        if events is None:
+            event_bus.close_turn(turn_id)
+            return
 
         try:
             async for event in events:

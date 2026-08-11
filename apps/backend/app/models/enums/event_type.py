@@ -1,8 +1,6 @@
 from enum import Enum
 
 
-
-
 class EventType(str, Enum):
     """运行时事件类型枚举。
 
@@ -61,6 +59,7 @@ class EventType(str, Enum):
         """
 
         return self.value
+
 
 TERMINAL_EVENT_TYPES = {
     EventType.RUN_FINISHED,
