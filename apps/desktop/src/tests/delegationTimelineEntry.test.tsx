@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DelegationTimelineEntry } from "@/components/chat/DelegationTimelineEntry";
 
@@ -43,5 +43,23 @@ describe("DelegationTimelineEntry", () => {
     expect(screen.getByText(LONG_SUMMARY).className).toMatch(/break-words|break-all/);
     expect(container.firstElementChild?.className).toContain("min-w-0");
     expect(container.innerHTML).not.toMatch(/w-\[[^\]]+\]|max-w-\[[^\]]+\]/);
+  });
+
+  it("expands delegated child entries when provided", () => {
+    render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+        childEntries={<div>child timeline output</div>}
+      />,
+    );
+
+    expect(screen.queryByText("child timeline output")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Expand delegated child events"));
+
+    expect(screen.getByText("child timeline output")).toBeTruthy();
   });
 });

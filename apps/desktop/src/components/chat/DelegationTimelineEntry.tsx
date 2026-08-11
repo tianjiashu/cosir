@@ -40,6 +40,7 @@ const STATUS_CONFIG: Record<
 > = {
   pending: { variant: "outline", Icon: Clock },
   running: { variant: "secondary", Icon: Loader2 },
+  waiting_approval: { variant: "warning", Icon: Clock },
   completed: { variant: "success", Icon: CheckCircle2 },
   failed: { variant: "destructive", Icon: XCircle },
   cancelled: { variant: "outline", Icon: Ban },

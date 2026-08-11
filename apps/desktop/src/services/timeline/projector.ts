@@ -72,7 +72,13 @@ export interface TimelineToolItem {
 }
 
 /** Delegation lifecycle status projected for the turn timeline. */
-export type TimelineDelegationStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type TimelineDelegationStatus =
+  | "pending"
+  | "running"
+  | "waiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 /** Delegation lifecycle entry shown in the parent turn timeline. */
 export interface TimelineDelegationItem {
@@ -505,19 +511,6 @@ export function projectTurnTimeline(turns: TurnRecord[], events: RuntimeEvent[])
   });
 }
 
-/**
- * 投影单个工具事件。
- *
- * 工具相关的摘要与条目委托给共享渲染层（`projectToolRequestSummary` /
- * `projectToolResult`），本函数只装配事件数据并回填渲染结果，不含渲染分支。
- *
- * @param event - runtime event。
- * @returns 工具显示项；非工具事件返回 null。
- *
- * @throws 不抛出异常。
- *
- * @sideeffect 无。
- */
 /** Runtime event types that describe a delegation lifecycle transition. */
 const DELEGATION_EVENTS = new Set<RuntimeEvent["event_type"]>([
   "delegation_started",
@@ -533,9 +526,9 @@ const DELEGATION_EVENTS = new Set<RuntimeEvent["event_type"]>([
  * @param event - Runtime event that may describe a delegation lifecycle transition.
  * @returns A delegation item for supported event types; otherwise null.
  *
- * @throws Does not throw; malformed optional fields are normalized to empty strings.
+ * @throws Does not throw; malformed optional fields are normalized or skipped.
  *
- * @sideeffect None.
+ * @sideeffect Emits a warning when a malformed delegation event cannot be safely keyed.
  */
 function projectDelegation(event: RuntimeEvent): TimelineDelegationItem | null {
   if (!DELEGATION_EVENTS.has(event.event_type)) {
@@ -547,18 +540,30 @@ function projectDelegation(event: RuntimeEvent): TimelineDelegationItem | null {
     child_turn_id?: string | null;
     child_agent_id?: string;
     delegation_type?: string;
-    status?: TimelineDelegationStatus;
+    status?: unknown;
     summary?: string | null;
     error?: string | null;
   };
+  const delegationId = typeof payload.delegation_id === "string" ? payload.delegation_id.trim() : "";
+  if (!delegationId) {
+    logWarn("delegation_event_missing_id", {
+      module: "projector",
+      event_id: event.event_id,
+      event_type: event.event_type,
+      task_id: event.task_id,
+      turn_id: event.turn_id,
+      reason: "delegation_id is required to merge lifecycle events safely",
+    });
+    return null;
+  }
   return {
     eventId: event.event_id,
-    delegationId: String(payload.delegation_id ?? ""),
+    delegationId,
     parentTurnId: String(payload.parent_turn_id ?? event.turn_id ?? ""),
     childTurnId: payload.child_turn_id ? String(payload.child_turn_id) : undefined,
     childAgentId: String(payload.child_agent_id ?? ""),
     delegationType: String(payload.delegation_type ?? ""),
-    status: payload.status ?? delegationStatusFromEvent(event.event_type),
+    status: normalizeDelegationStatus(payload.status, event.event_type),
     summary: payload.summary ? String(payload.summary) : undefined,
     error: payload.error ? String(payload.error) : undefined,
   };
@@ -619,6 +624,34 @@ function delegationStatusFromEvent(eventType: RuntimeEvent["event_type"]): Timel
 }
 
 /**
+ * Normalizes backend-provided delegation status into UI-supported status values.
+ *
+ * @param rawStatus - Raw payload status value.
+ * @param eventType - Runtime event type used as the fallback source of truth.
+ * @returns A supported timeline status.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
+ */
+function normalizeDelegationStatus(
+  rawStatus: unknown,
+  eventType: RuntimeEvent["event_type"],
+): TimelineDelegationStatus {
+  if (
+    rawStatus === "pending" ||
+    rawStatus === "running" ||
+    rawStatus === "waiting_approval" ||
+    rawStatus === "completed" ||
+    rawStatus === "failed" ||
+    rawStatus === "cancelled"
+  ) {
+    return rawStatus;
+  }
+  return delegationStatusFromEvent(eventType);
+}
+
+/**
  * Returns whether a delegation status is terminal.
  *
  * @param status - Delegation lifecycle status.
@@ -633,14 +666,17 @@ function isDelegationTerminal(status: TimelineDelegationStatus): boolean {
 }
 
 /**
- * Projects a single tool event into a timeline tool item.
+ * 投影单个工具事件。
  *
- * @param event - Runtime event.
- * @returns Tool display item for tool events; otherwise null.
+ * 工具相关的摘要与条目委托给共享渲染层（`projectToolRequestSummary` /
+ * `projectToolResult`），本函数只装配事件数据并回填渲染结果，不含渲染分支。
  *
- * @throws Does not throw.
+ * @param event - runtime event。
+ * @returns 工具显示项；非工具事件返回 null。
  *
- * @sideeffect None.
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无。
  */
 function projectTool(event: RuntimeEvent): TimelineToolItem | null {
   if (event.event_type === "tool_call_started") {

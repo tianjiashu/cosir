@@ -174,4 +174,109 @@ describe("timeline delegation projection", () => {
     expect(delegations[0].item.status).toBe("cancelled");
     expect(delegations[0].item.error).toBe("parent turn cancelled");
   });
+
+  it("returns the previous state when repeated event ids are replayed", () => {
+    const event = delegationEvent(
+      "e1",
+      "delegation_started",
+      {
+        delegation_id: "del_4",
+        parent_turn_id: "turn_parent",
+        child_agent_id: "delegate_reviewer",
+        delegation_type: "review",
+        status: "pending",
+      },
+      1,
+    );
+    const state = projectTimelineIncrementally(createTimelineProjectorState(), [event]);
+    const replayed = projectTimelineIncrementally(state, [event]);
+
+    expect(replayed).toBe(state);
+  });
+
+  it("falls back to event type status for unknown payload status", () => {
+    const state = projectTimelineIncrementally(createTimelineProjectorState(), [
+      delegationEvent(
+        "e1",
+        "delegation_finished",
+        {
+          delegation_id: "del_5",
+          parent_turn_id: "turn_parent",
+          child_turn_id: "turn_child_5",
+          child_agent_id: "delegate_reviewer",
+          delegation_type: "review",
+          status: "future_status",
+          summary: "ok",
+        },
+        1,
+      ),
+    ]);
+
+    expect(delegationEntries(state.entries)[0].item.status).toBe("completed");
+  });
+
+  it("skips malformed delegation events without delegation id", () => {
+    const state = projectTimelineIncrementally(createTimelineProjectorState(), [
+      delegationEvent(
+        "e1",
+        "delegation_started",
+        {
+          parent_turn_id: "turn_parent",
+          child_agent_id: "delegate_reviewer",
+          delegation_type: "review",
+          status: "pending",
+        },
+        1,
+      ),
+      delegationEvent(
+        "e2",
+        "delegation_started",
+        {
+          parent_turn_id: "turn_parent",
+          child_agent_id: "delegate_analyst",
+          delegation_type: "analysis",
+          status: "pending",
+        },
+        2,
+      ),
+    ]);
+
+    expect(delegationEntries(state.entries)).toHaveLength(0);
+  });
+
+  it("does not downgrade a terminal delegation when nonterminal event arrives later", () => {
+    const state = projectTimelineIncrementally(createTimelineProjectorState(), [
+      delegationEvent(
+        "e1",
+        "delegation_finished",
+        {
+          delegation_id: "del_6",
+          parent_turn_id: "turn_parent",
+          child_turn_id: "turn_child_6",
+          child_agent_id: "delegate_reviewer",
+          delegation_type: "review",
+          status: "completed",
+          summary: "ok",
+        },
+        1,
+      ),
+      delegationEvent(
+        "e2",
+        "delegation_child_started",
+        {
+          delegation_id: "del_6",
+          parent_turn_id: "turn_parent",
+          child_turn_id: "turn_child_6",
+          child_agent_id: "delegate_reviewer",
+          delegation_type: "review",
+          status: "running",
+        },
+        2,
+      ),
+    ]);
+
+    const delegation = delegationEntries(state.entries)[0].item;
+    expect(delegation.status).toBe("completed");
+    expect(delegation.summary).toBe("ok");
+  });
 });

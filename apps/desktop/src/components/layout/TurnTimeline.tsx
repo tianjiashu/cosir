@@ -10,7 +10,7 @@
  * @module components/layout/TurnTimeline
  */
 
-import { memo, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 import { UserMessage } from "@/components/chat/UserMessage";
@@ -42,6 +42,8 @@ interface TurnTimelineProps {
   turn: TurnRecord;
   /** 该轮次自身的运行时事件（已按 turn_id 分片，引用在其它 turn 收事件时保持不变）。 */
   events: RuntimeEvent[];
+  /** Returns already received child-turn events for expanded delegation rendering. */
+  getChildEvents?: (childTurnId: string) => RuntimeEvent[];
 }
 
 /**
@@ -59,7 +61,7 @@ interface TurnTimelineProps {
  * @param props.turn - 轮次记录。
  * @param props.events - 该轮次事件列表。
  */
-function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
+function TurnTimelineImpl({ turn, events, getChildEvents }: TurnTimelineProps) {
   // 可续算投影状态（持久引用，跨帧累积；不随 render 重建）。
   const stateRef = useRef<TimelineProjectorState>(createTimelineProjectorState());
   // 已投影到 stateRef 的 events 长度；events 为 append-only，delta = events.slice(lastLen)。
@@ -173,6 +175,26 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
     void openFileInEditor(path);
   }, []);
 
+  const renderChildEntries = useCallback(
+    (childTurnId: string): ReactNode => {
+      const childEvents = getChildEvents?.(childTurnId) ?? [];
+      if (childEvents.length === 0) {
+        return null;
+      }
+      const childState = projectTimelineIncrementally(createTimelineProjectorState(), childEvents);
+      const childEntries = groupConsecutiveTools(selectVisibleEntries(childState));
+      return childEntries.map((entry) => (
+        <TimelineEntry
+          key={timelineEntryKey(entry)}
+          entry={entry}
+          onOpenFile={handleOpenFile}
+          renderChildEntries={renderChildEntries}
+        />
+      ));
+    },
+    [getChildEvents, handleOpenFile],
+  );
+
   // 「等待首 token」判定：用户已输入（input_text 非空）、请求已提交，但模型首 token
   // 尚未返回的空窗期——既无投影条目也无最终回复。此时渲染「思考中」指示器，
   // 填补用户输入与首个 runtime 事件（thinking/assistant/tool）之间的视觉空档。
@@ -212,21 +234,37 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
         // 用 callId 可保证 key 在条目整个生命周期内恒定；
         // toolGroup 用聚合 groupId 作 key，保证流式期组引用稳定、不重置展开态。
         <TimelineEntry
-          key={
-            entry.kind === "toolGroup"
-              ? entry.groupId
-              : entry.kind === "delegation"
-                ? entry.item.delegationId
-              : entry.kind === "tool"
-                ? entry.item.callId ?? entry.item.eventId
-                : entry.eventId
-          }
+          key={timelineEntryKey(entry)}
           entry={entry}
           onOpenFile={handleOpenFile}
+          renderChildEntries={renderChildEntries}
         />
       ))}
     </div>
   );
+}
+
+/**
+ * Builds a stable React key for a renderable timeline entry.
+ *
+ * @param entry - Render entry produced by the timeline projector and tool grouping layer.
+ * @returns Stable key for preserving expansion state across lifecycle updates.
+ *
+ * @throws Does not throw.
+ *
+ * @sideeffect None.
+ */
+function timelineEntryKey(entry: RenderEntry): string {
+  if (entry.kind === "toolGroup") {
+    return entry.groupId;
+  }
+  if (entry.kind === "tool") {
+    return entry.item.callId ?? entry.item.eventId;
+  }
+  if (entry.kind === "delegation") {
+    return entry.item.delegationId;
+  }
+  return entry.eventId;
 }
 
 /**
@@ -241,9 +279,11 @@ function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
 const TimelineEntry = memo(function TimelineEntry({
   entry,
   onOpenFile,
+  renderChildEntries,
 }: {
   entry: RenderEntry;
   onOpenFile: (path: string) => void;
+  renderChildEntries?: (childTurnId: string) => ReactNode;
 }) {
   // 所有 timeline 条目统一限宽 content 令牌，与用户消息、输入栏保持宽度对齐，
   // 避免 diff/write 工具卡片单独 breakout 导致右侧参差不齐。
@@ -308,7 +348,7 @@ const TimelineEntry = memo(function TimelineEntry({
           delegationType={delegation.delegationType}
           summary={delegation.summary}
           error={delegation.error}
-          childEntries={[]}
+          childEntries={delegation.childTurnId ? renderChildEntries?.(delegation.childTurnId) : undefined}
         />
       </div>
     );

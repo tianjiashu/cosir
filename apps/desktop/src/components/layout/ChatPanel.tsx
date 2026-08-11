@@ -164,14 +164,17 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   // 决定是否重渲染（由 eventStore.mergeByEventId 的引用稳定性保证），无需在此感知全局映射。
   const eventsByTurnIdRef = useRef(eventsByTurnId);
   eventsByTurnIdRef.current = eventsByTurnId;
+  const getChildEvents = useCallback((childTurnId: string) => {
+    return eventsByTurnIdRef.current[childTurnId] ?? EMPTY_EVENTS;
+  }, []);
   const renderTurnItem = useCallback((turn: TurnRecord) => {
     const turnEvents = eventsByTurnIdRef.current[turn.turn_id] ?? EMPTY_EVENTS;
     return (
       <div className="px-4 py-2">
-        <TurnTimeline turn={turn} events={turnEvents} />
+        <TurnTimeline turn={turn} events={turnEvents} getChildEvents={getChildEvents} />
       </div>
     );
-  }, []);
+  }, [getChildEvents]);
 
   // 是否显示空状态（仅取决于是否有活跃任务；具体空态由 timelineTurns 决定）
   const emptySession = isNoActiveTask(activeTask);
