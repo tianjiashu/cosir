@@ -59,3 +59,4 @@ apps/backend/.workspace_event-node/
 # CodeGraph Kernel 运行/构建产物（运行时生成，不应提交）
 third_party/codegraph/dist/
 third_party/codegraph/node_modules/
+/apps/backend/_probe_atomic_tmp/

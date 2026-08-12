@@ -250,7 +250,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                     {summaryText}
                   </TooltipContent>
                 </Tooltip>
-                {expandable && status !== "error" && (
+                {expandable && (
                   <ChevronRight
                     className={cn(
                       "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
@@ -266,6 +266,13 @@ export const ToolCallCard = memo(function ToolCallCard({
               <FileDiffView content={result ?? ""} viewType={diffViewType} />
             </div>
           )}
+          {isOpen && status === "error" && (
+            <div className="px-2 pb-2">
+              <p className="max-w-md whitespace-pre-wrap break-all rounded border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+                {error ?? "工具调用失败"}
+              </p>
+            </div>
+          )}
         </div>
       </TooltipProvider>
     );
@@ -279,7 +286,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         onClick={() => expandable && setIsOpen((prev) => !prev)}
         className="flex w-full cursor-pointer items-center gap-1.5 rounded px-1 py-1 text-left text-sm hover:bg-accent/30 focus-visible:bg-accent/30 hover:text-foreground transition-colors"
       >
-        {expandable && status !== "error" && (
+        {expandable && (
           <ChevronRight
             className={cn(
               "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",

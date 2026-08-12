@@ -141,6 +141,8 @@ export interface TimelineProjectorState {
   pendingThinking: { eventId: string; content: string } | null;
   /** 本轮是否出现过 model_output_delta（用于判断 final_response 是否冗余）。 */
   hasDeltaStreamed: boolean;
+  /** 终态回复（final_response）是否已到达并被权威定稿。 */
+  finalResponseReceived: boolean;
   /** callId → entries 下标，合并同工具调用的 started/finished。 */
   toolByCallId: Map<string, number>;
   /** delegationId → entries index, used to merge lifecycle events. */
@@ -155,6 +157,7 @@ export const EMPTY_PROJECTION_STATE: TimelineProjectorState = {
   pendingDelta: null,
   pendingThinking: null,
   hasDeltaStreamed: false,
+  finalResponseReceived: false,
   toolByCallId: new Map(),
   delegationById: new Map(),
   processedEventIds: new Set(),
@@ -171,6 +174,7 @@ export function createTimelineProjectorState(): TimelineProjectorState {
     pendingDelta: null,
     pendingThinking: null,
     hasDeltaStreamed: false,
+    finalResponseReceived: false,
     toolByCallId: new Map(),
     delegationById: new Map(),
     processedEventIds: new Set(),
@@ -220,6 +224,7 @@ export function projectTimelineIncrementally(
   let pendingDelta = prev.pendingDelta;
   let pendingThinking = prev.pendingThinking;
   let hasDeltaStreamed = prev.hasDeltaStreamed;
+  let finalResponseReceived = prev.finalResponseReceived;
   const toolByCallId = new Map(prev.toolByCallId);
   const delegationById = new Map(prev.delegationById);
   const processedEventIds = new Set(prev.processedEventIds);
@@ -271,6 +276,12 @@ export function projectTimelineIncrementally(
     }
 
     if (event.event_type === "model_output_delta") {
+      // 终态回复已被 final_response 权威定稿（典型：网络重排下 final_response 先到、
+      // 段末 delta 迟到）。此时 final_response 文本已是完整回复，迟到 delta 为冗余，
+      // 直接丢弃，避免「final_response 完整文本 + 迟到 delta 累积文本」两段重复展示。
+      if (finalResponseReceived) {
+        continue;
+      }
       const text = String(event.payload.text ?? "");
       if (pendingThinking) {
         entries = entries.concat({ kind: "thinking", eventId: pendingThinking.eventId, content: pendingThinking.content });
@@ -378,7 +389,8 @@ export function projectTimelineIncrementally(
     if (
       event.event_type === "run_finished" ||
       event.event_type === "run_failed" ||
-      event.event_type === "run_cancelled"
+      event.event_type === "run_cancelled" ||
+      event.event_type === "client_disconnected"
     ) {
       entries = entries.concat({
         kind: "status",
@@ -389,6 +401,9 @@ export function projectTimelineIncrementally(
     }
 
     if (event.event_type === "final_response") {
+      // 终态回复到达即标记权威定稿，使后续迟到 delta 被丢弃（见 model_output_delta 分支），
+      // 防止重排场景下与 final_response 文本重复展示。
+      finalResponseReceived = true;
       const text = String((event.payload as { text?: unknown }).text ?? "");
       if (text.length > 0 && !hasDeltaStreamed) {
         entries = entries.concat({ kind: "assistant", eventId: event.event_id, content: text });
@@ -401,6 +416,7 @@ export function projectTimelineIncrementally(
     pendingDelta,
     pendingThinking,
     hasDeltaStreamed,
+    finalResponseReceived,
     toolByCallId,
     delegationById,
     processedEventIds,

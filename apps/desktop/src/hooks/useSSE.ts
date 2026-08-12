@@ -274,10 +274,18 @@ function syncRuntimeStatus(
 /**
  * 从 runtime event 推导 task/turn 状态。
  *
+ * 终态事件识别范围：run_finished / run_failed / run_cancelled / client_disconnected。
+ * 对 run_failed 与 client_disconnected 的语义差异处理：
+ *   - run_failed 优先采用 payload.end_reason 作为 endReason（如
+ *     "client_disconnected"），其次回退到 payload.error 文案，最后回退枚举值
+ *     "run_failed"，使上层 UI 能区分「客户端连接断开」与「Agent 真实执行失败」。
+ *   - client_disconnected 裸事件直接识别为终态 failed，endReason="client_disconnected"，
+ *     避免 SSE 断开时 UI 永远停在 running/active 误导用户。
+ *
  * @param event - 后端 SSE 运行事件。
- * @returns 可同步状态；非运行态事件返回 null。
+ * @returns 可同步状态（含终态标记与 endReason）；非运行态事件返回 null。
  */
-function runtimeStatusFromEvent(
+export function runtimeStatusFromEvent(
   event: RuntimeEvent,
 ): { taskStatus: TaskStatus; turnStatus: TurnStatus; terminal: boolean; endReason: string | null } | null {
   if (event.event_type === "run_started") {
@@ -287,15 +295,21 @@ function runtimeStatusFromEvent(
     return { taskStatus: "completed", turnStatus: "completed", terminal: true, endReason: null };
   }
   if (event.event_type === "run_failed") {
-    return {
-      taskStatus: "failed",
-      turnStatus: "failed",
-      terminal: true,
-      endReason: typeof event.payload.error === "string" ? event.payload.error : "run_failed",
-    };
+    // 优先保留后端下发的 end_reason（如 client_disconnected），否则用 error 文案兜底，
+    // 最后回退到枚举值 "run_failed"。这样 UI 能区分「客户端断开」与「真实执行失败」。
+    const payloadEndReason =
+      typeof event.payload.end_reason === "string" ? event.payload.end_reason : null;
+    const endReason =
+      payloadEndReason ?? (typeof event.payload.error === "string" ? event.payload.error : "run_failed");
+    return { taskStatus: "failed", turnStatus: "failed", terminal: true, endReason };
   }
   if (event.event_type === "run_cancelled") {
     return { taskStatus: "cancelled", turnStatus: "cancelled", terminal: true, endReason: "run_cancelled" };
+  }
+  // 客户端连接断开：后端经 finally 兜底标记 turn failed 并下发该事件时，需被识别为终态，
+  // 否则 UI 会永远停在 running/active，用户误以为对话仍在进行。
+  if (event.event_type === "client_disconnected") {
+    return { taskStatus: "failed", turnStatus: "failed", terminal: true, endReason: "client_disconnected" };
   }
   return null;
 }

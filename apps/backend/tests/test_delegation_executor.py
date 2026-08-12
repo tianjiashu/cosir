@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.config.configuration import build_agent_registry
-from app.core.agents.agent_profile import default_developer_agent
+from app.core.agents.define_agents import default_developer_agent
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
 from app.core.runtime.runner import AgentRuntime
@@ -19,6 +19,7 @@ from app.models.payload.final_response_payload import FinalResponsePayload
 from app.models.payload.run_finished_payload import RunFinishedPayload
 from app.models.payload.run_started_payload import RunStartedPayload
 from app.models.turn_record import TurnRecord
+from app.service.delegation.delegation_acquire_result import DelegationAcquireResult
 from app.service.delegation.delegation_result import DelegationResult
 from app.service.delegation.delegation_service import DelegationService
 from app.tools.schemas import ToolExecutionContext
@@ -58,26 +59,7 @@ class FakeDelegationService:
         self.calls: list[tuple[str, object]] = []
         self.created_delegation_id = ""
 
-    def count_active_children(self, parent_turn_id: str) -> int:
-        """返回指定 parent turn 的活跃 child 数量。
-
-        参数:
-            parent_turn_id: 父 turn 标识。
-
-        返回:
-            测试构造时指定的活跃 child 数量。
-
-        异常:
-            无。
-
-        副作用:
-            记录本次查询调用。
-        """
-
-        self.calls.append(("count_active_children", parent_turn_id))
-        return self.active_children
-
-    def create_pending(
+    def try_create_pending(
         self,
         task_id: str,
         parent_turn_id: str,
@@ -86,9 +68,13 @@ class FakeDelegationService:
         delegation_type: str,
         prompt: str,
         effective_tools: tuple[str, ...],
+        max_concurrency: int,
         runtime_event_loop=None,
-    ) -> str:
-        """记录 pending 委派并返回固定 delegation_id。
+    ) -> DelegationAcquireResult:
+        """执行原子 acquire 并返回委派获取结果。
+
+        ``acquired`` 由构造时 ``active_children >= max_concurrency`` 决定；测试可借此
+        模拟并发额度已满的拒绝路径。
 
         参数:
             task_id: 所属任务标识。
@@ -98,21 +84,47 @@ class FakeDelegationService:
             delegation_type: 委派类型（由 child profile 派生）。
             prompt: 拼装后的结构化 child 任务文本。
             effective_tools: 策略收敛后的工具集合。
+            max_concurrency: 并发上限。
 
         返回:
-            固定 delegation 标识。
+            成功时 ``acquired=True`` 的固定 delegation 标识；额度满时 ``acquired=False``。
 
         异常:
             无。
 
         副作用:
-            记录 create_pending 调用及其关键参数。
+            记录 try_create_pending 调用及其关键参数。
         """
 
+        if self.active_children >= max_concurrency:
+            self.calls.append(
+                (
+                    "try_create_pending",
+                    {
+                        "task_id": task_id,
+                        "parent_turn_id": parent_turn_id,
+                        "parent_agent_id": parent_agent_id,
+                        "child_agent_id": child_agent_id,
+                        "delegation_type": delegation_type,
+                        "prompt": prompt,
+                        "effective_tools": effective_tools,
+                        "max_concurrency": max_concurrency,
+                        "runtime_event_loop": runtime_event_loop,
+                    },
+                )
+            )
+            return DelegationAcquireResult(
+                acquired=False,
+                delegation_id="",
+                reason=(
+                    "the concurrency limit for this parent turn was reached; "
+                    "wait for an active child to finish before delegating again."
+                ),
+            )
         self.created_delegation_id = "delegation_1"
         self.calls.append(
             (
-                "create_pending",
+                "try_create_pending",
                 {
                     "task_id": task_id,
                     "parent_turn_id": parent_turn_id,
@@ -121,11 +133,16 @@ class FakeDelegationService:
                     "delegation_type": delegation_type,
                     "prompt": prompt,
                     "effective_tools": effective_tools,
+                    "max_concurrency": max_concurrency,
                     "runtime_event_loop": runtime_event_loop,
                 },
             )
         )
-        return self.created_delegation_id
+        return DelegationAcquireResult(
+            acquired=True,
+            delegation_id=self.created_delegation_id,
+            reason="",
+        )
 
     def mark_child_started(
         self,
@@ -343,41 +360,6 @@ class FakeChildRunner:
 
         self.child_profiles.append(child_profile)
         return self.result
-
-
-@dataclass(frozen=True)
-class FakeToolDefinition:
-    """测试用工具定义最小投影。"""
-
-    name: str
-
-
-class FakeToolScheduler:
-    """为 DelegationExecutor 测试提供工具列表。"""
-
-    def list_tools(self) -> list[FakeToolDefinition]:
-        """返回当前测试注册的工具列表。
-        参数:
-            无。
-        返回:
-            包含 read_file 与 delegate_task 的测试工具定义列表。
-        异常:
-            无。
-        副作用:
-            无。
-        """
-
-        return [
-            FakeToolDefinition("read_file"),
-            FakeToolDefinition("delegate_task"),
-        ]
-
-
-@dataclass(frozen=True)
-class FakeToolSystem:
-    """测试用工具系统最小投影。"""
-
-    scheduler: FakeToolScheduler
 
 
 class FakeDelegationCrud:
@@ -778,7 +760,6 @@ def executor_dependencies(tmp_path: Path, monkeypatch) -> dict[str, object]:
     agent_registry = build_agent_registry()
     delegation_service = FakeDelegationService()
     turn_service = FakeTurnService()
-    tool_system = FakeToolSystem(scheduler=FakeToolScheduler())
     monkeypatch.setattr(
         "app.core.delegation.delegation_executor.get_agent_registry",
         lambda: agent_registry,
@@ -790,10 +771,6 @@ def executor_dependencies(tmp_path: Path, monkeypatch) -> dict[str, object]:
     monkeypatch.setattr(
         "app.core.delegation.delegation_executor.get_turn_service",
         lambda: turn_service,
-    )
-    monkeypatch.setattr(
-        "app.core.delegation.delegation_executor.get_tool_system",
-        lambda: tool_system,
     )
     return {
         "delegation_service": delegation_service,
@@ -852,6 +829,7 @@ def test_delegation_executor_rejects_unknown_child(executor_dependencies):
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="missing_agent",
+            title="Review files",
             objective="review selected files",
             rules=[],
             references=[],
@@ -863,7 +841,7 @@ def test_delegation_executor_rejects_unknown_child(executor_dependencies):
     assert result.status == "error"
     assert "child not found" in result.content
     delegation_service = executor_dependencies["delegation_service"]
-    assert not any(call[0] == "create_pending" for call in delegation_service.calls)
+    assert not any(call[0] == "try_create_pending" for call in delegation_service.calls)
 
 
 def test_delegation_executor_rejects_policy_denial_before_create(executor_dependencies):
@@ -887,6 +865,7 @@ def test_delegation_executor_rejects_policy_denial_before_create(executor_depend
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
+            title="Review files",
             objective="review selected files",
             rules=[],
             references=[],
@@ -898,7 +877,54 @@ def test_delegation_executor_rejects_policy_denial_before_create(executor_depend
     assert result.status == "error"
     assert "delegation_depth_exceeded" in result.content
     delegation_service = executor_dependencies["delegation_service"]
-    assert not any(call[0] == "create_pending" for call in delegation_service.calls)
+    assert not any(call[0] == "try_create_pending" for call in delegation_service.calls)
+
+
+def test_execute_rejects_when_concurrency_limit_reached(executor_dependencies):
+    """验证并发额度已满时 executor 不创建 child turn，返回错误 observation。
+
+    委派并发额度由 storage 层原子 acquire 裁决；本用例通过 Fake service 的
+    ``active_children >= max_concurrency`` 模拟「额度已满」，断言 executor 返回
+    error observation、不创建 child turn，且 try_create_pending 被调用。
+
+    参数:
+        executor_dependencies: fake executor 协作者集合（此处仅借用 execution_context 等）。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当结果或副作用不符合预期时由 pytest 抛出。
+
+    副作用:
+        调用 DelegationExecutor.execute。
+    """
+
+    deps = dict(executor_dependencies)
+    # executor 通过 get_delegation_service() 单例取 service（fixture 已 monkeypatch 指向
+    # executor_dependencies["delegation_service"] 实例），因此必须直接调整该实例的
+    # active_children 来模拟「额度已满」，而不能替换 deps 中未被使用的引用。
+    # 默认 Settings.DELEGATION_MAX_CONCURRENCY == 2，active_children=2 即触发拒绝路径。
+    delegation_service = deps["delegation_service"]
+    delegation_service.active_children = 2
+    executor = DelegationExecutor(**_executor_kwargs(deps))
+    result = executor.execute(
+        DelegateTaskArgs(
+            child_agent_id="delegate_reviewer",
+            title="Review diff",
+            objective="review selected files",
+            rules=["do not modify files"],
+            references=["app/core/runtime/runner.py"],
+            expected_output="a list of review comments",
+        ),
+        execution_context=deps["execution_context"],
+    )
+
+    assert result.status == "error"
+    assert "concurrency" in result.content or "concurrency" in (result.reason or "")
+    assert any(call[0] == "try_create_pending" for call in delegation_service.calls)
+    # 额度已满时不应进入 child turn 创建
+    assert not any(call[0] == "create_child_turn" for call in deps["turn_service"].calls)
 
 
 def test_delegation_executor_runs_child_and_marks_completed(executor_dependencies):
@@ -933,9 +959,20 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     assert result.status == "success"
     assert result.content == "child done"
     delegation_service = executor_dependencies["delegation_service"]
-    assert delegation_service.calls[1][0] == "create_pending"
-    create_call = delegation_service.calls[1][1]
-    assert create_call["effective_tools"] == ("read_file",)
+    # try_create_pending 是 executor 对 delegation service 的首个调用（calls[0]），
+    # 此处不依赖硬编码索引，改为搜索匹配调用条目。
+    pending_call = next(
+        call for call in delegation_service.calls if call[0] == "try_create_pending"
+    )
+    assert pending_call[0] == "try_create_pending"
+    create_call = pending_call[1]
+    # 有效工具为 child profile 自身权限剔除 delegate_task（避免递归委派），
+    # 不再与父/系统权限做交集，故基于真实 child profile 推导期望值，避免硬编码脆弱。
+    expected_child = build_agent_registry().resolve("delegate_reviewer")
+    expected_tools = tuple(
+        sorted(set(expected_child.allowed_tools) - {"delegate_task"})
+    )
+    assert create_call["effective_tools"] == expected_tools
     # delegation_type 来自 child profile（delegate_reviewer → reviewer），非模型入参
     assert create_call["delegation_type"] == "reviewer"
     # 拼装后的结构化 objective 文本应包含各段内容与英文标签
@@ -960,9 +997,53 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     assert turn_service.calls[0][1]["input_text"] == prompt_text
     runner = executor_dependencies["child_runner"]
     assert runner.child_profiles[0].turn.turn_id == "child_turn_1"
-    assert runner.child_profiles[0].allowed_tools == ["read_file"]
+    # child 的 allowed_tools 由策略层收窄为 child profile 自身权限剔除 delegate_task，
+    # 而非旧的三方交集（read_file）。用同一期望值保证 executor 透传一致。
+    assert runner.child_profiles[0].allowed_tools == list(expected_tools)
     assert "delegate_task" not in runner.child_profiles[0].allowed_tools
     assert runner.child_profiles[0].context_excluded_turn_ids == ("parent_turn_1",)
+
+
+def test_delegation_executor_includes_background_section_in_child_input(
+    executor_dependencies,
+):
+    """验证可选的 background 字段会被拼装为 child 输入文本的 Background section。
+
+    参数:
+        executor_dependencies: fake executor 协作者集合。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当 background 未出现在子输入文本或 section 标签缺失时由 pytest 抛出。
+
+    副作用:
+        调用 DelegationExecutor.execute。
+    """
+
+    executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
+
+    executor.execute(
+        DelegateTaskArgs(
+            child_agent_id="delegate_reviewer",
+            title="Review diff",
+            objective="review selected files",
+            rules=["do not modify files", "do not run tests"],
+            references=["app/core/runtime/runner.py"],
+            expected_output="a list of review comments",
+            background="assume the branch is already rebased onto main",
+        ),
+        execution_context=executor_dependencies["execution_context"],
+    )
+
+    delegation_service = executor_dependencies["delegation_service"]
+    prompt_text = next(
+        call for call in delegation_service.calls if call[0] == "try_create_pending"
+    )[1]["prompt"]
+    assert "## Background" in prompt_text
+    assert "assume the branch is already rebased onto main" in prompt_text
+    assert executor_dependencies["turn_service"].calls[0][1]["input_text"] == prompt_text
 
 
 def test_delegation_executor_passes_runtime_event_loop_to_service(executor_dependencies):
@@ -992,6 +1073,7 @@ def test_delegation_executor_passes_runtime_event_loop_to_service(executor_depen
     executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
+            title="Review files",
             objective="review selected files",
             rules=[],
             references=[],
@@ -1001,7 +1083,11 @@ def test_delegation_executor_passes_runtime_event_loop_to_service(executor_depen
     )
 
     delegation_service = executor_dependencies["delegation_service"]
-    assert delegation_service.calls[1][1]["runtime_event_loop"] is runtime_event_loop
+    # 从 calls 中搜索 try_create_pending 条目取 runtime_event_loop，不依赖硬编码索引。
+    pending_call = next(
+        call for call in delegation_service.calls if call[0] == "try_create_pending"
+    )
+    assert pending_call[1]["runtime_event_loop"] is runtime_event_loop
     assert ("mark_child_started", ("delegation_1", "child_turn_1", runtime_event_loop)) in (
         delegation_service.calls
     )
@@ -1236,6 +1322,7 @@ def test_delegation_executor_returns_tool_error_for_child_terminal_failures(
     result = executor.execute(
         DelegateTaskArgs(
             child_agent_id="delegate_reviewer",
+            title="Review",
             objective="review",
             rules=[],
             references=[],
@@ -1445,3 +1532,190 @@ def test_child_agent_runner_classifies_cancelled_without_terminal_event():
 
     assert result.status == "cancelled"
     assert result.error == "child turn cancelled"
+
+
+def test_child_agent_runner_prefers_cancel_over_completed_after_terminal():
+    """验证取消信号晚于终态事件到达时仍归类为 cancelled。
+
+    父 turn 取消可能恰好在 child 产出 RUN_FINISHED 之后、流耗尽之前到达。
+    ``_consume_child_events`` 必须在循环结束后再次检查取消信号（防御性早退分支），
+    优先于已设置的 completed 终态，避免把被取消的 child 误报为成功完成。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当取消信号未被尊重时由 pytest 抛出。
+
+    副作用:
+        通过 asyncio.run 间接消费 fake async generator。
+    """
+
+    child_profile = replace(default_developer_agent(), turn=_parent_turn())
+    cancel_after_first_event = {"fired": False}
+
+    def should_cancel(_turn_id: str) -> bool:
+        """取消信号在首次事件被消费后置位。
+
+        参数:
+            _turn_id: 被查询的 turn 标识（本用例忽略）。
+
+        返回:
+            首次事件消费后置 True，否则 False。
+
+        异常:
+            无。
+
+        副作用:
+            通过闭包翻转 fired 标记。
+        """
+
+        return cancel_after_first_event["fired"]
+
+    async def fake_run_agent(profile):
+        """先产出 RUN_FINISHED，再产一个会被忽略的 FINAL_RESPONSE 推动循环。
+
+        参数:
+            profile: child AgentProfile。
+
+        返回:
+            异步生成器逐个产出 RuntimeEvent。
+
+        异常:
+            无。
+
+        副作用:
+            消费 RUN_FINISHED 后翻转 cancel_after_first_event 闭包标记。
+        """
+
+        yield RuntimeEvent(
+            event_type=EventType.RUN_FINISHED,
+            task_id=profile.turn.task_id,
+            turn_id=profile.turn.turn_id,
+            payload=RunFinishedPayload(status="completed"),
+        )
+        cancel_after_first_event["fired"] = True
+        yield RuntimeEvent(
+            event_type=EventType.FINAL_RESPONSE,
+            task_id=profile.turn.task_id,
+            turn_id=profile.turn.turn_id,
+            payload=FinalResponsePayload(text="late", step_id="step_1", status="completed"),
+        )
+
+    result = ChildAgentRunner(fake_run_agent, should_cancel=should_cancel).run_child(child_profile)
+
+    assert result.status == "cancelled"
+    assert result.error == "child turn cancelled"
+
+
+def test_child_agent_runner_fails_without_terminal_event():
+    """验证 child 事件流无任何 RUN_* 终态时归类为 failed。
+
+    若 child runtime 只产出过程事件（如 FINAL_RESPONSE）却未产出 RUN_FINISHED /
+    RUN_FAILED / RUN_CANCELLED，``_consume_child_events`` 不应把缺失终态误判为完成，
+    而应归类为 failed 并携带可排查的 ``ended without terminal event`` 原因。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当缺失终态被误判为非 failed 时由 pytest 抛出。
+
+    副作用:
+        通过 asyncio.run 间接消费 fake async generator。
+    """
+
+    child_profile = replace(default_developer_agent(), turn=_parent_turn())
+
+    async def fake_run_agent(profile):
+        """只产出 FINAL_RESPONSE、不产出任何 RUN_* 终态的 fake 事件流。
+
+        参数:
+            profile: child AgentProfile。
+
+        返回:
+            异步生成器逐个产出 RuntimeEvent。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        yield RuntimeEvent(
+            event_type=EventType.FINAL_RESPONSE,
+            task_id=profile.turn.task_id,
+            turn_id=profile.turn.turn_id,
+            payload=FinalResponsePayload(text="orphan", step_id="step_1", status="completed"),
+        )
+
+    result = ChildAgentRunner(fake_run_agent).run_child(child_profile)
+
+    assert result.status == "failed"
+    assert result.error == "child turn ended without terminal event"
+
+
+def test_child_agent_runner_runs_on_main_thread_without_running_loop():
+    """验证 ChildAgentRunner 在主线程（无运行中事件循环）能正常驱动 child 成功。
+
+    该测试覆盖事件循环探测的回归面：``_is_running_event_loop_thread`` 必须在不持有
+    运行中 loop 的线程上返回 ``False``，而非抛出 ``RuntimeError`` 破坏主流程。本测试
+    故意置于非 async 上下文（普通函数），模拟正常委派入口的调用线程。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当 runner 在探测处崩溃或未能正常驱动 child 时由 pytest 抛出。
+
+    副作用:
+        通过 asyncio.run 间接消费 fake async generator。
+    """
+
+    child_profile = replace(default_developer_agent(), turn=_parent_turn())
+
+    async def fake_run_agent(profile):
+        """生成成功 child run 的 fake runtime event 流。
+
+        参数:
+            profile: child AgentProfile。
+
+        返回:
+            异步生成器逐个产出 RuntimeEvent。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        yield RuntimeEvent(
+            event_type=EventType.FINAL_RESPONSE,
+            task_id=profile.turn.task_id,
+            turn_id=profile.turn.turn_id,
+            payload=FinalResponsePayload(
+                text="main thread ok", step_id="step_1", status="completed"
+            ),
+        )
+        yield RuntimeEvent(
+            event_type=EventType.RUN_FINISHED,
+            task_id=profile.turn.task_id,
+            turn_id=profile.turn.turn_id,
+            payload=RunFinishedPayload(status="completed"),
+        )
+
+    result = ChildAgentRunner(fake_run_agent).run_child(child_profile)
+
+    assert result.status == "completed"
+    assert result.summary == "main thread ok"

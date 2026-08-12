@@ -1,20 +1,17 @@
 """AgentProfile 作为能力事实源的单元测试。
 
-覆盖 Task 1「AgentProfile 成为能力事实源」的核心契约：
+覆盖的核心契约：
 - ``goal`` 字段已移除；
-- ``to_tool_summary()`` 仅暴露约定的 7 个能力字段，且由 ``allowed_tools`` 渲染工具摘要；
-- ``prompt_ref`` 默认 None，传入时正确存储并序列化；
-- 默认父 profile 的 ``capabilities``/``constraints`` 为 list 而非 None；
-- ``to_dict()`` 含新字段、不含 ``goal``。
+- 所有 agent 描述收敛到 ``description``（不再有 ``capabilities``/``recommended_use_cases``/
+  ``constraints``/``delegation_type`` 等分散字段）；
+- ``to_dict()`` 仅暴露稳定字段，字段集与 ``AgentProfileResponse`` 对齐、不含 ``goal``；
+- ``prompt_ref`` 默认 None，传入时正确存储并序列化。
 """
 
 import pytest
 
-from app.core.agents.agent_profile import (
-    AgentProfile,
-    AgentProfileToolSummary,
-    default_developer_agent,
-)
+from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.define_agents import default_developer_agent
 from app.core.agents.prompt_ref import PromptRef
 
 
@@ -99,8 +96,11 @@ def test_agent_profile_rejects_goal_keyword_on_construction():
         )
 
 
-def test_to_tool_summary_excludes_runtime_fields():
-    """断言 ``to_tool_summary()`` 仅包含约定的 7 个字段，且不含运行时内部字段。
+def test_agent_profile_excludes_split_description_fields():
+    """断言 AgentProfile 不再暴露拆分描述字段。
+
+    所有 agent 描述已收敛到 ``description``，``capabilities``/``recommended_use_cases``/
+    ``constraints``/``delegation_type`` 字段不应存在。
 
     参数:
         无。
@@ -109,58 +109,15 @@ def test_to_tool_summary_excludes_runtime_fields():
         无。
 
     异常:
-        AssertionError: 当投影字段集合不符合约定，或误含 workflow/prompt_ref 时抛出。
+        AssertionError: 当仍暴露任一拆分字段时由 pytest 抛出。
 
     副作用:
         无。
     """
 
-    profile = _make_profile(allowed_tools=["read_file", "write_file"])
-    summary = profile.to_tool_summary()
-
-    assert isinstance(summary, AgentProfileToolSummary)
-    expected_fields = {
-        "agent_id",
-        "role",
-        "description",
-        "capabilities",
-        "recommended_use_cases",
-        "constraints",
-        "tool_capability_summary",
-    }
-    assert set(summary.__dataclass_fields__.keys()) == expected_fields
-    # 刻意排除运行时内部字段。
-    for excluded in ("workflow", "context_policy", "turn", "runtime_event_loop", "prompt_ref"):
-        assert excluded not in summary.__dataclass_fields__
-
-
-def test_to_tool_summary_renders_allowed_tools():
-    """断言 ``tool_capability_summary`` 由构造时传入的 ``allowed_tools`` 渲染。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        AssertionError: 当摘要未按约定形态渲染时由 pytest 抛出。
-
-    副作用:
-        无。
-    """
-
-    allowed_tools = ["read_file", "write_file"]
-    profile = _make_profile(allowed_tools=allowed_tools)
-    summary = profile.to_tool_summary()
-
-    expected = "tools: " + ", ".join(allowed_tools)
-    assert summary.tool_capability_summary == expected
-    assert summary.tool_capability_summary.startswith("tools: ")
-    assert "read_file" in summary.tool_capability_summary
-    assert "write_file" in summary.tool_capability_summary
-    # 摘要确实源自构造时传入的工具清单，而非硬编码。
-    assert summary.tool_capability_summary.endswith("write_file")
+    profile = _make_profile()
+    for removed in ("capabilities", "recommended_use_cases", "constraints", "delegation_type"):
+        assert not hasattr(profile, removed)
 
 
 def test_prompt_ref_defaults_to_none():
@@ -209,31 +166,8 @@ def test_prompt_ref_stored_and_serialized():
     assert data["prompt_ref"]["label"] == "y"
 
 
-def test_default_parent_profile_capabilities_and_constraints_are_lists():
-    """断言默认父 profile 的 ``capabilities``/``constraints`` 不为 None，而是 list。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        AssertionError: 当字段为 None 或类型不符时由 pytest 抛出。
-
-    副作用:
-        无。
-    """
-
-    parent = default_developer_agent()
-    assert parent.capabilities is not None
-    assert parent.constraints is not None
-    assert isinstance(parent.capabilities, list)
-    assert isinstance(parent.constraints, list)
-
-
-def test_to_dict_contains_new_fields_and_excludes_goal():
-    """断言 ``to_dict()`` 含新字段且不再含 ``goal``。
+def test_to_dict_excludes_split_fields_and_goal():
+    """断言 ``to_dict()`` 不含拆分描述字段与 ``goal``，且字段集与响应模型对齐。
 
     参数:
         无。
@@ -251,14 +185,46 @@ def test_to_dict_contains_new_fields_and_excludes_goal():
     profile = _make_profile()
     data = profile.to_dict()
 
-    for field_name in (
+    expected_fields = {
+        "agent_id",
+        "role",
         "description",
+        "allowed_tools",
+        "context_policy",
+        "workflow",
+        "model_name",
+        "max_steps",
+        "prompt_ref",
+    }
+    assert set(data.keys()) == expected_fields
+
+    for excluded in (
+        "goal",
         "delegation_type",
         "capabilities",
         "recommended_use_cases",
         "constraints",
-        "prompt_ref",
     ):
-        assert field_name in data
+        assert excluded not in data
 
-    assert "goal" not in data
+
+def test_default_parent_profile_description_is_nonempty():
+    """断言默认父 profile 的 ``description`` 非空且为收敛后的单一描述字段。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当 description 为空或仍存在拆分字段时由 pytest 抛出。
+
+    副作用:
+        无。
+    """
+
+    parent = default_developer_agent()
+    assert parent.description
+    for removed in ("capabilities", "recommended_use_cases", "constraints", "delegation_type"):
+        assert not hasattr(parent, removed)

@@ -96,3 +96,67 @@ def test_delegation_crud_create_update_and_list(isolated_storage):
     assert loaded.child_turn_id == "turn_child"
     assert crud.list_by_parent_turn("turn_parent")[0].delegation_id == "del_1"
     assert crud.list_pending_or_running()[0].delegation_id == "del_1"
+
+
+def test_delegation_crud_delete_by_task_ids(isolated_storage):
+    """验证 ``delete_by_task_ids`` 仅删除命中的任务 delegation，不影响其他任务。
+
+    参数:
+        isolated_storage: 已初始化的隔离 SQLite 存储 fixture。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        向隔离数据库写入两条分属不同任务的 delegation 记录并删除其一。
+    """
+
+    now = utc_now()
+    crud = DelegationCrud()
+
+    kept = DelegationRecord(
+        delegation_id="del_kept",
+        task_id="task_keep",
+        parent_turn_id="turn_parent_keep",
+        child_turn_id="",
+        parent_agent_id="developer",
+        child_agent_id="delegate_reviewer",
+        delegation_type="review",
+        status="pending",
+        prompt="keep me",
+        summary="",
+        error="",
+        effective_tools=("read_file",),
+        created_at=now,
+        updated_at=now,
+    )
+    removed = DelegationRecord(
+        delegation_id="del_remove",
+        task_id="task_remove",
+        parent_turn_id="turn_parent_remove",
+        child_turn_id="",
+        parent_agent_id="developer",
+        child_agent_id="delegate_reviewer",
+        delegation_type="review",
+        status="pending",
+        prompt="remove me",
+        summary="",
+        error="",
+        effective_tools=("read_file",),
+        created_at=now,
+        updated_at=now,
+    )
+
+    crud.create(kept)
+    crud.create(removed)
+
+    deleted = crud.delete_by_task_ids(["task_remove"])
+    assert deleted == 1
+    assert crud.list_by_parent_turn("turn_parent_remove") == []
+    assert crud.list_by_parent_turn("turn_parent_keep")[0].delegation_id == "del_kept"
+
+    deleted_none = crud.delete_by_task_ids(["task_absent"])
+    assert deleted_none == 0

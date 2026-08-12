@@ -3,7 +3,7 @@
 from pydantic import BaseModel
 
 from app.config.configuration import build_agent_registry
-from app.core.agents.agent_profile import default_developer_agent, developer_agent_pro
+from app.core.agents.define_agents import default_developer_agent, developer_agent_pro
 from app.core.delegation.child_agent_profile_builder import ChildAgentProfileBuilder
 from app.models.turn_record import TurnRecord
 from app.tools.schemas.tool_definition import ToolDefinition

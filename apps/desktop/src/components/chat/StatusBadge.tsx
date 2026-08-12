@@ -1,8 +1,17 @@
 /**
  * 运行状态标签组件。
  *
- * 展示任务终态状态（已完成 / 失败 / 已取消），
- * 包含状态图标、文字描述、耗时与 token 消耗信息。
+ * 当收到终态事件（run_finished / run_failed / run_cancelled / client_disconnected）
+ * 时，展示任务终态状态（已完成 / 失败 / 已取消 / 连接已断开），包含状态图标、文字描述、
+ * 耗时与 token 消耗信息。
+ *
+ * 差异化文案：run_failed 且 payload.end_reason === "client_disconnected"（或裸
+ * client_disconnected 事件）表示客户端连接中断，而非 Agent 真实执行失败，组件会给出
+ * 「连接已中断，内容可能未完整保存，请检查网络或重新连接后重试」的明确提示，避免用户
+ * 将网络/客户端问题误判为执行失败。
+ *
+ * token 展示：input/output/total 任一有值即渲染 token 行；total 缺失时由前端累加
+ * input+output 兜底，避免后端缓存命中场景下整块 token 信息被吞。
  *
  * @module components/chat/StatusBadge
  */
@@ -27,6 +36,7 @@ const FINAL_STATUS_CONFIG: Record<string, { label: string; variant: "success" | 
   run_finished: { label: "任务已完成", variant: "success", Icon: CheckCircle2 },
   run_failed: { label: "任务失败", variant: "destructive", Icon: XCircle },
   run_cancelled: { label: "任务已取消", variant: "outline", Icon: Ban },
+  client_disconnected: { label: "连接已断开", variant: "destructive", Icon: XCircle },
 };
 
 /**
@@ -55,6 +65,13 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
 
   const { label, variant, Icon } = config;
   const error = payload.error as string | undefined;
+  const endReason = payload.end_reason as string | undefined;
+  // 区分「客户端连接断开」与「真实执行失败」：前者给出明确提示与恢复建议，
+  // 避免用户将网络/客户端问题误判为 Agent 执行失败。
+  const isClientDisconnected = endReason === "client_disconnected" || eventType === "client_disconnected";
+  const errorText = isClientDisconnected
+    ? "连接已中断，本次对话可能未完整保存。请检查网络或重新连接后重试。"
+    : error;
 
   const durationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : undefined;
   const inputTokens = typeof payload.input_tokens === "number" ? payload.input_tokens : undefined;
@@ -72,9 +89,9 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
         </Badge>
 
         {/* 错误详情（如有） */}
-        {error && (
+        {errorText && (
           <p className="max-w-md text-center text-xs text-muted-foreground">
-            {error}
+            {errorText}
           </p>
         )}
 
@@ -86,11 +103,13 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
           </span>
         )}
 
-        {/* Token 消耗 */}
-        {(totalTokens !== undefined && totalTokens > 0) && (
+        {/* Token 消耗：后端可能只下发 input/output（如缓存命中场景缺失 total），
+            因此任一字段有值即展示，total 缺失时由前端累加 input+output 兜底。 */}
+        {(inputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined) && (
           <span className={cn("flex items-center gap-1 text-muted-foreground", Caption.xs)}>
             <Cpu className="h-3 w-3" />
-            输入 {inputTokens ?? 0} / 输出 {outputTokens ?? 0} / 总计 {totalTokens} tokens
+            输入 {inputTokens ?? 0} / 输出 {outputTokens ?? 0} / 总计{" "}
+            {totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0)} tokens
           </span>
         )}
 

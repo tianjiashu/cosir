@@ -14,9 +14,11 @@ from app.tools.tool_models.delegate_task_args import DelegateTaskArgs
 class FakeDelegateTaskExecutor:
     def __init__(self):
         self.called = False
+        self.last_args: DelegateTaskArgs | None = None
 
     def execute(self, args: DelegateTaskArgs, execution_context):
         self.called = True
+        self.last_args = args
         from app.tools.tool_execute.tool_success import tool_success
 
         return tool_success("delegate_task", "write", "child done")
@@ -25,6 +27,7 @@ class FakeDelegateTaskExecutor:
 def _valid_kwargs(**overrides):
     base = {
         "child_agent_id": "delegate_reviewer",
+        "title": "Review diff",
         "objective": "review the diff",
         "rules": ["do not modify files"],
         "references": ["src/main.py"],
@@ -32,6 +35,14 @@ def _valid_kwargs(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def test_delegate_task_definition_defaults_to_serial_scheduling():
+    """delegate_task 本轮不参与工具级并行，子 Agent 并发后续单独设计。"""
+    definition = build_delegate_task_definition()
+
+    assert definition.parallel_mode == "serial"
+    assert definition.parallel_group == "default"
 
 
 def test_delegate_task_requires_execution_context():
@@ -78,7 +89,8 @@ def test_delegate_task_delegates_to_injected_executor(tmp_path):
     assert executor.called is True
 
 
-def test_delegate_task_rejects_invalid_arguments(tmp_path):
+def test_delegate_task_handler_passes_background_to_executor(tmp_path):
+    """验证 handler 接收 background 参数并透传给执行器，避免运行时 TypeError。"""
     tool = build_delegate_task_definition()
     executor = FakeDelegateTaskExecutor()
     context = ToolExecutionContext(
@@ -86,22 +98,21 @@ def test_delegate_task_rejects_invalid_arguments(tmp_path):
         workspace_id="workspace_1",
         workspace_root=tmp_path,
         turn_id="turn_parent",
+    )
+    context = replace(
+        context,
         runtime_dependencies=ToolRuntimeDependencies(delegate_task_executor=executor),
     )
 
-    # requested_tools 现在不是合法字段，改为把 rules 传成字符串触发校验失败
     result = tool.handler(
-        child_agent_id="delegate_reviewer",
-        objective="review the diff",
-        rules="not a list",  # type: ignore[arg-type]
-        references=["src/main.py"],
-        expected_output="review comments",
+        **_valid_kwargs(background="branch already rebased"),
         execution_context=context,
     )
 
-    assert result.status == "error"
-    assert "invalid arguments" in result.content
-    assert executor.called is False
+    assert result.status == "success"
+    assert executor.called is True
+    assert executor.last_args is not None
+    assert executor.last_args.background == "branch already rebased"
 
 
 def test_delegate_task_args_requires_objective():
@@ -164,6 +175,26 @@ def test_delegate_task_args_requires_child_agent_id():
         )
 
 
+def test_delegate_task_args_requires_title():
+    with pytest.raises(ValidationError):
+        DelegateTaskArgs.model_validate(
+            {
+                "child_agent_id": "delegate_reviewer",
+                "objective": "review the diff",
+                "rules": ["do not modify files"],
+                "references": ["src/main.py"],
+                "expected_output": "review comments",
+            }
+        )
+
+
+def test_delegate_task_args_rejects_blank_title():
+    with pytest.raises(ValidationError):
+        DelegateTaskArgs.model_validate(
+            _valid_kwargs(title="   ")
+        )
+
+
 def test_delegate_task_args_rejects_too_many_rules():
     with pytest.raises(ValidationError):
         DelegateTaskArgs.model_validate(
@@ -176,6 +207,18 @@ def test_delegate_task_args_rejects_long_objective():
         DelegateTaskArgs.model_validate(
             _valid_kwargs(objective="x" * 2001)
         )
+
+
+def test_delegate_task_args_rejects_long_background():
+    with pytest.raises(ValidationError):
+        DelegateTaskArgs.model_validate(
+            _valid_kwargs(background="x" * 2001)
+        )
+
+
+def test_delegate_task_args_defaults_background_empty():
+    args = DelegateTaskArgs.model_validate(_valid_kwargs())
+    assert args.background == ""
 
 
 def test_delegate_task_schema_describes_model_visible_arguments():
@@ -205,6 +248,7 @@ def test_delegate_task_schema_describes_model_visible_arguments():
     assert "rules" in properties
     assert "references" in properties
     assert "expected_output" in properties
+    assert "background" in properties
 
     # 旧字段已被移除
     assert "delegation_type" not in properties
