@@ -2,12 +2,15 @@
 
 import json
 
-from sqlalchemy import asc, select, update
+from sqlalchemy import asc, func, insert, select, update
 
 from app.models.delegation_record import DelegationRecord
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import from_text, to_text, utc_now
+
+ACTIVE_DELEGATION_STATUSES = ("pending", "running")
+"""视为「活跃」的 delegation 状态集合，用于并发额度统计与活跃列表查询。"""
 
 
 class DelegationCrud:
@@ -48,25 +51,62 @@ class DelegationCrud:
         """
 
         with self._session_factory.begin() as session:
-            session.add(
-                DelegationModel(
-                    delegation_id=record.delegation_id,
-                    task_id=record.task_id,
-                    parent_turn_id=record.parent_turn_id,
-                    child_turn_id=record.child_turn_id,
-                    parent_agent_id=record.parent_agent_id,
-                    child_agent_id=record.child_agent_id,
-                    delegation_type=record.delegation_type,
-                    status=record.status,
-                    prompt=record.prompt,
-                    summary=record.summary,
-                    error=record.error,
-                    effective_tools=_serialize_tools(record.effective_tools),
-                    created_at=to_text(record.created_at),
-                    updated_at=to_text(record.updated_at),
+            session.add(_model_from_record(record))
+        return record
+
+    def create_pending_if_slot_available(
+        self,
+        record: DelegationRecord,
+        max_concurrency: int,
+    ) -> str | None:
+        """在同一事务内按活跃额度原子创建 pending delegation。
+
+        参数:
+            record: 待持久化的 pending delegation 领域值对象。
+            max_concurrency: 同一 parent turn 下允许同时活跃（``pending`` /
+                ``running``）的 child delegation 数量上限。
+
+        返回:
+            额度未满时返回新建 delegation 的标识；额度已满时返回 ``None`` 且不写入记录。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果事务执行失败。
+
+        副作用:
+            通过原生连接执行 ``BEGIN IMMEDIATE`` 取得 SQLite 立即写锁（ORM session 的
+            autobegin 会开 DEFERRED 事务而静默忽略 IMMEDIATE 指令，故此处绕过 ORM 事务
+            管理直接控制连接），使同一 parent turn 的并发 acquire 在「统计活跃数 + 插入」
+            边界排队；同一事务内先统计该 parent turn 下 active 记录数，额度已满则 ``rollback``
+            返回 ``None``，未满则 ``insert`` 后 ``commit``。            本方法是并发安全 acquire 的
+            唯一事务路径；``list_active_by_parent_turn()`` 仅可用于查询展示，不能
+            作为并发安全依据。额度已满被拒时写一条 ``info`` 级日志（含 ``parent_turn_id``、
+            ``active_count``、``max_concurrency``）以便观测并发拒绝频次，不视为错误路径。
+        """
+
+        engine = self._session_factory.kw["bind"]
+        with engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            active_count = conn.scalar(
+                select(func.count(DelegationModel.delegation_id)).where(
+                    DelegationModel.parent_turn_id == record.parent_turn_id,
+                    DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES),
                 )
             )
-        return record
+            if (active_count or 0) >= max_concurrency:
+                from app.config.logging.logger import log
+
+                log.info(
+                    "delegation slot unavailable: parent_turn_id=%s active_count=%s "
+                    "max_concurrency=%s, acquire rejected",
+                    record.parent_turn_id,
+                    active_count or 0,
+                    max_concurrency,
+                )
+                conn.rollback()
+                return None
+            conn.execute(insert(DelegationModel).values(**_model_values(record)))
+            conn.commit()
+        return record.delegation_id
 
     def update_status(
         self,
@@ -163,6 +203,31 @@ class DelegationCrud:
             )
         return [_record_from_model(row) for row in rows]
 
+    def delete_by_task_ids(self, task_ids: list[str]) -> int:
+        """按任务标识批量删除 delegation 记录。
+
+        参数:
+            task_ids: 待清理 delegation 的任务标识列表。
+
+        返回:
+            被删除的 delegation 行数（便于调用方审计日志）。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            从 ``delegations`` 表删除 ``task_id`` 命中的行；仅删除 delegation 自身，
+            不级联其他表（级联编排由上层 service 负责）。
+        """
+
+        from sqlalchemy import delete
+
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                delete(DelegationModel).where(DelegationModel.task_id.in_(task_ids))
+            )
+        return int(result.rowcount or 0)
+
     def list_pending_or_running(self) -> list[DelegationRecord]:
         """List active delegations in creation order.
 
@@ -183,7 +248,7 @@ class DelegationCrud:
             rows = (
                 session.execute(
                     select(DelegationModel)
-                    .where(DelegationModel.status.in_(("pending", "running")))
+                    .where(DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES))
                     .order_by(asc(DelegationModel.created_at), asc(DelegationModel.delegation_id))
                 )
                 .scalars()
@@ -266,3 +331,69 @@ def _record_from_model(row: DelegationModel) -> DelegationRecord:
         created_at=from_text(row.created_at),
         updated_at=from_text(row.updated_at),
     )
+
+
+def _model_from_record(record: DelegationRecord) -> DelegationModel:
+    """从领域值对象构建 ORM 模型实例，统一 create 与 create_pending_if_slot_available 的字段映射。
+
+    参数:
+        record: 待持久化的委派记录值对象。
+
+    返回:
+        未加入 session 的 DelegationModel 实例。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+    return DelegationModel(
+        delegation_id=record.delegation_id,
+        task_id=record.task_id,
+        parent_turn_id=record.parent_turn_id,
+        child_turn_id=record.child_turn_id,
+        parent_agent_id=record.parent_agent_id,
+        child_agent_id=record.child_agent_id,
+        delegation_type=record.delegation_type,
+        status=record.status,
+        prompt=record.prompt,
+        summary=record.summary,
+        error=record.error,
+        effective_tools=_serialize_tools(record.effective_tools),
+        created_at=to_text(record.created_at),
+        updated_at=to_text(record.updated_at),
+    )
+
+
+def _model_values(record: DelegationRecord) -> dict:
+    """从领域值对象提取 ORM 表的列值字典，供 Core ``insert().values(**...)`` 使用。
+
+    参数:
+        record: 待持久化的委派记录值对象。
+
+    返回:
+        键为 ``DelegationModel`` 列名、值为已序列化列的字典。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+    return {
+        "delegation_id": record.delegation_id,
+        "task_id": record.task_id,
+        "parent_turn_id": record.parent_turn_id,
+        "child_turn_id": record.child_turn_id,
+        "parent_agent_id": record.parent_agent_id,
+        "child_agent_id": record.child_agent_id,
+        "delegation_type": record.delegation_type,
+        "status": record.status,
+        "prompt": record.prompt,
+        "summary": record.summary,
+        "error": record.error,
+        "effective_tools": _serialize_tools(record.effective_tools),
+        "created_at": to_text(record.created_at),
+        "updated_at": to_text(record.updated_at),
+    }

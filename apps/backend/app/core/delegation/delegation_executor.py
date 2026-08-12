@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.config.configuration import get_agent_registry, get_tool_system
+from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.delegation.child_agent_profile_builder import ChildAgentProfileBuilder
 from app.models import TaskRecord, TurnRecord
@@ -26,12 +27,12 @@ class DelegationExecutor(DelegateTaskExecutor):
     """Production runtime implementation of the delegate_task execution port."""
 
     def __init__(
-        self,
-        child_runner: Any,
-        parent_profile: AgentProfile,
-        parent_turn: TurnRecord,
-        parent_task: TaskRecord,
-        policy: DelegationPolicy | None = None,
+            self,
+            child_runner: Any,
+            parent_profile: AgentProfile,
+            parent_turn: TurnRecord,
+            parent_task: TaskRecord,
+            policy: DelegationPolicy | None = None,
     ) -> None:
         """初始化委派执行器。
 
@@ -59,9 +60,9 @@ class DelegationExecutor(DelegateTaskExecutor):
         self._policy = policy or DelegationPolicy()
 
     def execute(
-        self,
-        args: DelegateTaskArgs,
-        execution_context: ToolExecutionContext,
+            self,
+            args: DelegateTaskArgs,
+            execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """执行一次委派请求并返回父工具 observation。
 
@@ -85,8 +86,10 @@ class DelegationExecutor(DelegateTaskExecutor):
         agent_registry = get_agent_registry()
         delegation_service = get_delegation_service()
         turn_service = get_turn_service()
-        child_template = agent_registry.resolve(args.child_agent_id)
-        if child_template is None:
+
+        # 获取child agent profile
+        child_agent_profile: AgentProfile = agent_registry.resolve(args.child_agent_id)
+        if child_agent_profile is None:
             log.warning(
                 "delegate_child_resolve_failed",
                 extra={
@@ -108,52 +111,64 @@ class DelegationExecutor(DelegateTaskExecutor):
                 permission="delegate_task",
             )
 
-        objective_text = self._build_objective_text(args)
+        # 构建agent输入文本
+        agent_input_text = self._build_agent_input_text(args)
+
+        # 校验执行策略（深度、已知 child Agent、工具收敛三类）
         decision = self._policy.resolve(
             DelegationPolicyContext(
                 parent_agent_id=self._parent_profile.agent_id,
                 child_agent_id=args.child_agent_id,
-                parent_allowed_tools=frozenset(self._parent_profile.allowed_tools),
-                child_allowed_tools=frozenset(child_template.allowed_tools),
-                system_allowed_tools=frozenset(self._system_allowed_tools()),
+                child_allowed_tools=frozenset(child_agent_profile.allowed_tools),
                 depth=1 if self._parent_turn.parent_turn_id else 0,
-                running_children=delegation_service.count_active_children(
-                    self._parent_turn.turn_id
-                ),
-                known_child_agent_ids=frozenset(agent_registry.list_agent_ids()),
+                known_child_agent_ids=frozenset(agent_registry.child_agent_ids()),
             )
         )
         if not decision.allowed:
             return self._policy_error(args.child_agent_id, decision.reason)
 
-        delegation_id = ""
+        # 原子 acquire 并发额度：额度满时 storage 层在同一事务内拒绝创建
+        acquire = delegation_service.try_create_pending(
+            task_id=self._parent_task.task_id,
+            parent_turn_id=self._parent_turn.turn_id,
+            parent_agent_id=self._parent_profile.agent_id,
+            child_agent_id=args.child_agent_id,
+            delegation_type=self._delegation_type_from_child_agent_id(args.child_agent_id),
+            prompt=agent_input_text,
+            effective_tools=decision.effective_tools,
+            max_concurrency=Settings.DELEGATION_MAX_CONCURRENCY,
+            runtime_event_loop=runtime_event_loop,
+        )
+        if not acquire.acquired:
+            return self._concurrency_exceeded_error(args.child_agent_id, acquire.reason)
+
+        delegation_id = acquire.delegation_id
         try:
-            delegation_id = delegation_service.create_pending(
-                task_id=self._parent_task.task_id,
-                parent_turn_id=self._parent_turn.turn_id,
-                parent_agent_id=self._parent_profile.agent_id,
-                child_agent_id=args.child_agent_id,
-                delegation_type=child_template.delegation_type,
-                prompt=objective_text,
-                effective_tools=decision.effective_tools,
-                runtime_event_loop=runtime_event_loop,
-            )
+            # 创建pending child turn
+
+            # 创建pending child turn
             child_turn = turn_service.create_child_turn(
                 task_id=self._parent_task.task_id,
-                input_text=objective_text,
+                input_text=agent_input_text,
                 agent_id=args.child_agent_id,
                 parent_turn_id=self._parent_turn.turn_id,
                 delegation_id=delegation_id,
             )
+
+            # 确认pending child turn
             if not turn_service.claim_pending_turn(child_turn.turn_id):
                 raise RuntimeError("child_turn_claim_lost")
+
+            # 标记child turn为已开始
             delegation_service.mark_child_started(
                 delegation_id,
                 child_turn.turn_id,
                 runtime_event_loop=runtime_event_loop,
             )
+
+            # 构建child agent profile
             child_profile = ChildAgentProfileBuilder.build(
-                registry_profile=child_template,
+                registry_profile=child_agent_profile,
                 turn=child_turn,
                 effective_tools=decision.effective_tools,
                 context_excluded_turn_ids=(self._parent_turn.turn_id,),
@@ -187,12 +202,12 @@ class DelegationExecutor(DelegateTaskExecutor):
             delegation_service,
         )
 
-    def _build_objective_text(self, args: DelegateTaskArgs) -> str:
+    def _build_agent_input_text(self, args: DelegateTaskArgs) -> str:
         """把结构化参数拼装为面向 child 的英文任务文本。
 
-        拼装格式使用英文 section 标签（Objective / Rules / References / Expected Output），
-        完整保留父 Agent 传入的原文内容。空 rules / references 时省略对应 section，
-        不输出空标题。
+        拼装格式使用英文 section 标签（Objective / Rules / References / Background /
+        Expected Output），完整保留父 Agent 传入的原文内容。空 rules / references /
+        background 时省略对应 section，不输出空标题。
 
         参数:
             args: 已校验的 delegate_task 结构化参数。
@@ -207,7 +222,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             无。
         """
 
-        title = args.title or "Delegated Task"
+        title = args.title
         sections = [f"# {title}", "", "## Objective", args.objective]
         if args.rules:
             rules_block = "\n".join(f"- {rule}" for rule in args.rules)
@@ -215,17 +230,19 @@ class DelegationExecutor(DelegateTaskExecutor):
         if args.references:
             references_block = "\n".join(f"- {ref}" for ref in args.references)
             sections.extend(["", "## References", references_block])
+        if args.background:
+            sections.extend(["", "## Background", args.background])
         sections.extend(["", "## Expected Output", args.expected_output])
         return "\n".join(sections)
 
-    def _system_allowed_tools(self) -> tuple[str, ...]:
-        """返回系统策略允许 child 使用的工具名称。
+    def _delegation_type_from_child_agent_id(self, child_agent_id: str) -> str:
+        """从 child Agent 标识派生稳定的委派类型标签。
 
         参数:
-            无。
+            child_agent_id: child Agent profile 的稳定标识。
 
         返回:
-            当前已注册工具名称中剔除 ``delegate_task`` 后的元组。
+            去掉 ``delegate_`` 前缀后的类型；非约定前缀时原样返回。
 
         异常:
             无。
@@ -233,13 +250,10 @@ class DelegationExecutor(DelegateTaskExecutor):
         副作用:
             无。
         """
-
-        registered_tool_names = tuple(
-            tool.name for tool in get_tool_system().scheduler.list_tools()
-        )
-        return tuple(
-            tool_name for tool_name in registered_tool_names if tool_name != "delegate_task"
-        )
+        prefix = "delegate_"
+        if child_agent_id.startswith(prefix):
+            return child_agent_id[len(prefix):]
+        return child_agent_id
 
     def _policy_error(self, child_agent_id: str, reason: str) -> ToolObservation:
         """构造策略拒绝的工具错误 observation。
@@ -280,12 +294,52 @@ class DelegationExecutor(DelegateTaskExecutor):
             permission="delegate_task",
         )
 
+    def _concurrency_exceeded_error(
+            self, child_agent_id: str, reason: str
+    ) -> ToolObservation:
+        """构造并发额度已满的工具错误 observation。
+
+        并发额度由 storage 层在 ``try_create_pending`` 的原子事务内裁决，本方法仅在
+        acquire 返回 ``acquired=False`` 时调用，把确定性拒绝转换为面向模型的可读错误。
+
+        参数:
+            child_agent_id: 被拒绝的 child Agent 标识。
+            reason: 原子 acquire 返回的拒绝说明（英文富文本，含重试建议）。
+
+        返回:
+            delegate_task error observation（``retryable=False``）。
+
+        异常:
+            无。
+
+        副作用:
+            写入并发拒绝日志。
+        """
+
+        log.info(
+            "delegation_concurrency_exceeded",
+            extra={
+                "msg": "委派被并发额度拒绝",
+                "data": {
+                    "parent_turn_id": self._parent_turn.turn_id,
+                    "child_agent_id": child_agent_id,
+                    "max_concurrency": Settings.DELEGATION_MAX_CONCURRENCY,
+                },
+            },
+        )
+        return tool_error(
+            "delegate_task",
+            f"delegate_task concurrency_exceeded: {child_agent_id}",
+            reason=reason,
+            permission="delegate_task",
+        )
+
     def _finalize_result(
-        self,
-        delegation_id: str,
-        result: DelegationResult,
-        runtime_event_loop: asyncio.AbstractEventLoop | None,
-        delegation_service: DelegationService,
+            self,
+            delegation_id: str,
+            result: DelegationResult,
+            runtime_event_loop: asyncio.AbstractEventLoop | None,
+            delegation_service: DelegationService,
     ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 

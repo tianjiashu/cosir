@@ -45,26 +45,69 @@ class ChildAgentRunner:
             child_profile: 已绑定 child turn 且已收窄工具权限的 AgentProfile。
 
         返回:
-            child 执行的 DelegationResult；如果当前线程已有运行中的事件循环，则返回
-            ``status="failed"`` 且 ``error="delegation_runner_event_loop_thread"``。
+            child 执行的 DelegationResult；如果当前线程已有运行中的事件循环（无法再
+            用 ``asyncio.run`` 驱动 child），则返回 ``status="failed"`` 且
+            ``error="delegation_runner_event_loop_thread"``。
 
         异常:
-            无。run_agent 内部异常会被转换为 failed DelegationResult。
+            无。run_agent 内部异常或事件循环冲突探测异常均会被转换为 failed
+            DelegationResult。
 
         副作用:
-            通过 ``asyncio.run`` 驱动现有 AgentRuntime.run_agent 异步生成器。
+            通过 ``asyncio.run`` 驱动现有 AgentRuntime.run_agent 异步生成器；冲突时
+            写入 error 级日志。
         """
 
         turn_id = child_profile.turn.turn_id if child_profile.turn is not None else ""
+        if self._is_running_event_loop_thread():
+            log.error(
+                "delegation_runner_event_loop_conflict",
+                extra={
+                    "msg": "委派 child 运行桥接在事件循环线程内被调用，无法启动新 loop",
+                    "data": {
+                        "child_turn_id": turn_id,
+                        "error": "delegation_runner_event_loop_thread",
+                    },
+                },
+            )
+            return DelegationResult(
+                status="failed",
+                child_turn_id=turn_id,
+                error="delegation_runner_event_loop_thread",
+            )
+        return asyncio.run(self._consume_child_events(child_profile))
+
+    @staticmethod
+    def _is_running_event_loop_thread() -> bool:
+        """判断当前线程是否已有运行中的事件循环。
+
+        采用 ``asyncio.get_running_loop()`` 探测：当前线程存在运行中事件循环时返回
+        该 loop，否则抛出 ``RuntimeError``。此处用 try/except 捕获 ``RuntimeError``
+        并将其语义唯一地解释为「当前线程无运行中事件循环」，从而返回 ``False``。
+
+        该方式不依赖 ``get_event_loop()``，因此不会在「当前线程无 loop」时抛
+        ``RuntimeError`` 破坏调用方主流程，也不会由事件循环策略新建空闲 loop 污染
+        当前线程（``asyncio.run`` 自行管理 loop 生命周期）。
+
+        参数:
+            无。
+
+        返回:
+            当前线程存在运行中事件循环时为 ``True``，否则 ``False``。
+
+        异常:
+            无。``get_running_loop`` 抛出的 ``RuntimeError`` 在内部被捕获并归一为
+            ``False``。
+
+        副作用:
+            无。纯只读探测，不创建或绑定任何事件循环。
+        """
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self._consume_child_events(child_profile))
-        return DelegationResult(
-            status="failed",
-            child_turn_id=turn_id,
-            error="delegation_runner_event_loop_thread",
-        )
+            return False
+        return True
 
     async def _consume_child_events(self, child_profile: AgentProfile) -> DelegationResult:
         """消费 child runtime event 流并压缩为委派结果。

@@ -12,5 +12,4 @@ class DelegationStartedPayload(RuntimeEventPayload):
     parent_turn_id: str
     child_turn_id: str
     child_agent_id: str
-    delegation_type: str
     status: Literal["pending"]
