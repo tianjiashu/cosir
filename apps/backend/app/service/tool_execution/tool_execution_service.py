@@ -14,8 +14,10 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import Callable, Iterable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
@@ -99,6 +101,9 @@ class ToolExecutionService:
             for definition in (tool_definitions or [])
             if definition.display is not None
         }
+        self._parallel_mode_by_name = {
+            definition.name: definition.parallel_mode for definition in (tool_definitions or [])
+        }
         self._trace_recorder = trace_recorder or _NullToolTraceRecorder()
         self._should_cancel = should_cancel or (lambda: False)
         self._event_bus = event_bus
@@ -116,6 +121,12 @@ class ToolExecutionService:
         每个调用经 ``ToolScheduler.execute`` 执行（其内部完成权限与参数校验），观察结果
         转为 ``role="tool"`` 的 ``RuntimeMessage`` 供下一步模型消费；若提供 ``write_event``
         回调，则对每个完成的工具调用发出 ``TOOL_CALL_FINISHED`` 事件。
+
+        入口按工具声明的调度模式（``ToolDefinition.parallel_mode``）分流：串行调用留在
+        本方法的串行路径逐个执行；声明为 ``parallel`` 的调用统一交给
+        ``_run_calls_with_parallel_modes`` 并发执行（该方法只处理并行组，不再混入串行
+        分支）。两条路径都保留原始 index，最终由 ``_build_result_with_cancel_placeholders``
+        按原始顺序合并、补占位并统一序列化为模型消息。
 
         配对闭合不变量（本方法收口）：``AIMessage.tool_calls`` 的每个 call 必须在返回的
         模型消息中配对一条 ``role="tool"`` 消息，否则下一轮对话会因协议不匹配崩溃。为此，
@@ -137,8 +148,8 @@ class ToolExecutionService:
 
         返回:
             含观察列表与模型消息的 ``ToolRunResult``。观察与消息数量恒等于 ``calls``
-            数量，且与入参顺序一致（已执行的在前、因取消跳过而补的占位在后），保证
-            每个 call_id 的 ``tool_calls`` 协议配对闭合。
+            数量，且按入参原始顺序返回——未执行的 call（取消跳过）在其原始 index
+            位置以取消占位补齐，保证每个 call_id 的 ``tool_calls`` 协议配对闭合。
 
         异常:
             当 ``write_event`` 为 ``None`` 时抛出 ``RuntimeError``（调用方必须提供事件
@@ -158,105 +169,392 @@ class ToolExecutionService:
         # 承载本轮的事件循环，故由调用方（异步节点）显式传入，供实时输出通道调度回环。
         loop = running_loop
 
-        observations: list[ToolObservation] = []
-        messages: list[RuntimeMessage] = []
-        executed_call_ids: set[str] = set()
-        # 当前串行执行，后续可并行
-        for call in calls:
+        # 入口分流：按工具声明的调度模式，把本批调用拆成「串行组」与「并行组」。
+        # 串行组保留原始相对顺序逐个执行；并行组统一交给 _run_calls_with_parallel_modes
+        # 并发执行（该方法只处理并行调用，不再混入串行分支）。两组都保留原始 index，
+        # 最终由 _build_result_with_cancel_placeholders 按原始顺序合并、补占位并统一
+        # 序列化为模型消息（配对闭合单一收口）。
+        serial_calls: list[tuple[int, ToolCall]] = []
+        parallel_calls: list[tuple[int, ToolCall]] = []
+        for index, call in enumerate(calls):
+            if self._is_parallel_call(call):
+                parallel_calls.append((index, call))
+            else:
+                serial_calls.append((index, call))
+
+        indexed_observations: list[tuple[int, ToolObservation]] = []
+
+        # 串行组：逐个执行，取消检查只发生在 call 边界（协作式取消）。
+        # 执行与事件收口复用并行路径同一套辅助方法（_emit_tool_call_started /
+        # _execute_tool_call / _handle_completed_observation），串行/并行行为一致，
+        # 避免平行复制事件载荷、日志格式与广播守卫造成语义漂移。
+        for index, call in serial_calls:
             if self._should_cancel():
                 break
-            display: ToolDisplayHints | None = self._display_by_name.get(call.tool_name)
-            display_payload = dataclasses.asdict(display) if display is not None else None
-
-            # 工具执行开始事件
-            write_event(
-                EventType.TOOL_CALL_STARTED,
-                ToolCallStartedPayload(
-                    tool_name=call.tool_name,
-                    step_id=step_id,
-                    tool_call_id=call.call_id,
-                    arguments=call.arguments if isinstance(call.arguments, dict) else {},
-                    display=display_payload,
-                ),
+            self._emit_tool_call_started(step_id, call, write_event)
+            observation = self._execute_tool_call(step_id, call, execution_context, loop)
+            indexed_observations.append((index, observation))
+            self._handle_completed_observation(
+                step_id, observation, execution_context, write_event, loop
             )
 
-            # 执行工具调用（包在可选 trace span 内，记录参数/结果/耗时；缺省为空实现）。
-            # 捕获执行链自身的意外异常（调度器/事件/trace span/序列化等内部 bug，而非
-            # 工具 handler 主动返回的业务失败）：此时工具本体未运行，须为当前 call 补一个
-            # 结构化 error 占位，让模型感知「内部执行错误」而非悬空崩协议。
-            try:
-                with self._trace_recorder.span(call, step_id) as tool_span:
-                    observation = self._scheduler.execute(
-                        call,
-                        execution_context=execution_context,
-                        allowed_tool_names=self._allowed_tool_names,
-                        should_cancel=self._should_cancel,
-                        output_sink=self._build_output_sink(step_id, call, execution_context, loop),
+        # 并行组：统一交给并行执行器（该方法只处理并行调用）。取消已生效时并行组
+        # 整体跳过，未执行的 call 由 _build_result_with_cancel_placeholders 补占位。
+        if parallel_calls and not self._should_cancel():
+            indexed_observations.extend(
+                self._run_calls_with_parallel_modes(
+                    step_id=step_id,
+                    calls=parallel_calls,
+                    execution_context=execution_context,
+                    write_event=write_event,
+                    loop=loop,
+                )
+            )
+
+        # 配对闭合不变量收口：按原始 index 合并排序、为未执行的 call 补取消占位，
+        # 并统一序列化为 role="tool" 模型消息（单一收口，避免平行复制语义漂移）。
+        return self._build_result_with_cancel_placeholders(step_id, calls, indexed_observations)
+
+    def _run_calls_with_parallel_modes(
+        self,
+        step_id: str,
+        calls: list[tuple[int, ToolCall]],
+        execution_context: ToolExecutionContext | None,
+        write_event: Callable[[EventType, RuntimeEventPayload], None],
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> list[tuple[int, ToolObservation]]:
+        """并发执行一批已声明为可并行调度的工具调用。
+
+        只处理并行组：``run_calls_with_events`` 入口已按工具声明的调度模式完成分流，
+        本方法不再包含串行分支；串行调用始终留在串行路径逐个执行。
+
+        参数:
+            step_id: 请求这些工具调用的步骤标识。
+            calls: 带原始位置的并行工具调用列表（元组 ``(index, call)``）。
+            execution_context: 本次工具执行上下文。
+            write_event: 工具生命周期事件写入回调。
+            loop: 承载实时事件广播的 asyncio 事件循环。
+
+        返回:
+            带原始位置的已执行观察列表（按实际完成顺序）。批次中途取消时可能少于
+            传入数量；未执行部分由调用方经 ``_build_result_with_cancel_placeholders``
+            在原始 index 位置补取消占位。
+
+        异常:
+            无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。
+
+        副作用:
+            启动临时线程池执行工具，并写入 started/finished 生命周期事件。
+        """
+        if not calls or self._should_cancel():
+            return []
+
+        completed: list[tuple[int, ToolObservation]] = []
+        max_workers = min(len(calls), Settings.MAX_PARALLEL_TOOL_CALLS)
+        with ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="tool-parallel",
+        ) as pool:
+            pending_calls = list(calls)
+            future_by_call: dict[Future[ToolObservation], tuple[int, ToolCall]] = {}
+
+            def _submit_until_full() -> None:
+                """提交待执行调用，直到达到 worker 上限或检测到取消。
+
+                参数:
+                    无。
+
+                返回:
+                    无。
+
+                异常:
+                    透传事件写入或线程池提交异常，由外层执行链路收口。
+
+                副作用:
+                    写入 started 事件，并向线程池提交新的工具调用。
+                """
+                while (
+                    pending_calls
+                    and len(future_by_call) < max_workers
+                    and not self._should_cancel()
+                ):
+                    batch_index, batch_call = pending_calls.pop()
+                    self._emit_tool_call_started(step_id, batch_call, write_event)
+                    future_by_call[
+                        pool.submit(
+                            self._execute_tool_call,
+                            step_id,
+                            batch_call,
+                            execution_context,
+                            loop,
+                        )
+                    ] = (batch_index, batch_call)
+
+            _submit_until_full()
+            while future_by_call:
+                done_futures, _ = wait(future_by_call, return_when=FIRST_COMPLETED)
+                for future in done_futures:
+                    index, call = future_by_call.pop(future)
+                    try:
+                        observation = future.result()
+                    except Exception as exc:
+                        observation = self._internal_error_observation(step_id, call, exc)
+                    self._handle_completed_observation(
+                        step_id, observation, execution_context, write_event, loop
                     )
-                    tool_span.record(observation)
-            except Exception as exc:  # 执行链 bug 必须收口为 error 观察
-                log.error(
-                    "tool_call_internal_error",
-                    extra={
-                        "msg": "工具调用执行链内部异常，已收口为 error 观察",
-                        "data": {
-                            "tool_name": call.tool_name,
-                            "tool_call_id": call.call_id,
-                            "step_id": step_id,
-                            "error": str(exc),
-                        },
-                    },
-                    exc_info=True,
-                )
-                # 仅用异常类型名构造面向模型的说明，避免把未脱敏的 exc 原文（可能含路径 /
-                # 凭据 / 命令行片段）回传模型或事件流；完整原文已由上方 error 日志 exc_info 承载。
-                header = f"internal execution error before the tool ran: {type(exc).__name__}"
-                observation = tool_error(
-                    tool_name=call.tool_name,
-                    error=header,
-                    reason=internal_execution_error_reason(header),
-                    retryable=False,
-                    tool_call_id=call.call_id,
-                )
-            # 记录观察结果
-            observations.append(observation)
-            executed_call_ids.add(call.call_id)
+                    completed.append((index, observation))
+                _submit_until_full()
+        return completed
 
-            # 工具执行结束事件：只透传结构化数据，摘要与展示条目由客户端渲染
-            write_event(
-                EventType.TOOL_CALL_FINISHED,
-                ToolCallFinishedPayload(
-                    step_id=step_id,
-                    tool_name=observation.tool_name,
-                    status="success" if observation.status == "success" else "error",
-                    tool_call_id=observation.tool_call_id,
-                    content=observation.content,
-                    error=observation.error,
-                    reason=observation.reason,
-                    retryable=observation.retryable,
-                    data=observation.data or {},
-                ),
+    def _execute_tool_call(
+        self,
+        step_id: str,
+        call: ToolCall,
+        execution_context: ToolExecutionContext | None,
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> ToolObservation:
+        """执行单个工具调用，并把执行链路异常收口为工具观察。
+
+        参数:
+            step_id: 请求该工具调用的步骤标识。
+            call: 当前工具调用。
+            execution_context: 本次工具执行上下文。
+            loop: 承载实时事件广播的 asyncio 事件循环。
+
+        返回:
+            调度器返回的观察，或内部异常对应的 error 观察。
+
+        异常:
+            无。内部异常在本方法内转为 ``ToolObservation``。
+
+        副作用:
+            调用底层 ``ToolScheduler``，并记录可选 trace span。
+        """
+        try:
+            with self._trace_recorder.span(call, step_id) as tool_span:
+                observation = self._scheduler.execute(
+                    call,
+                    execution_context=execution_context,
+                    allowed_tool_names=self._allowed_tool_names,
+                    should_cancel=self._should_cancel,
+                    output_sink=self._build_output_sink(step_id, call, execution_context, loop),
+                )
+                tool_span.record(observation)
+                return observation
+        except Exception as exc:
+            return self._internal_error_observation(step_id, call, exc)
+
+    def _internal_error_observation(
+        self,
+        step_id: str,
+        call: ToolCall,
+        exc: Exception,
+    ) -> ToolObservation:
+        """把工具执行链路内部异常转换为稳定的 error 观察。
+
+        参数:
+            step_id: 请求该工具调用的步骤标识。
+            call: 当前工具调用。
+            exc: 被捕获的执行链路异常。
+
+        返回:
+            面向模型的内部错误观察。
+
+        异常:
+            无。
+
+        副作用:
+            写入带堆栈的 error 日志。
+        """
+        log.error(
+            "tool_call_internal_error",
+            extra={
+                "msg": "工具调用执行链内部异常，已收口为 error 观察",
+                "data": {
+                    "tool_name": call.tool_name,
+                    "tool_call_id": call.call_id,
+                    "step_id": step_id,
+                    "error": str(exc),
+                },
+            },
+            exc_info=True,
+        )
+        header = f"internal execution error before the tool ran: {type(exc).__name__}"
+        return tool_error(
+            tool_name=call.tool_name,
+            error=header,
+            reason=internal_execution_error_reason(header),
+            retryable=False,
+            tool_call_id=call.call_id,
+        )
+
+    def _emit_tool_call_started(
+        self,
+        step_id: str,
+        call: ToolCall,
+        write_event: Callable[[EventType, RuntimeEventPayload], None],
+    ) -> None:
+        """写入工具调用开始事件。
+
+        参数:
+            step_id: 请求该工具调用的步骤标识。
+            call: 当前工具调用。
+            write_event: 工具生命周期事件写入回调。
+
+        返回:
+            无。
+
+        异常:
+            无。``write_event`` 异常由 ``_emit_event_safely`` 收口，不向上抛出。
+
+        副作用:
+            写入一条 ``TOOL_CALL_STARTED`` 事件；写入失败时记 error 日志。
+        """
+        display: ToolDisplayHints | None = self._display_by_name.get(call.tool_name)
+        display_payload = dataclasses.asdict(display) if display is not None else None
+        self._emit_event_safely(
+            step_id,
+            call.call_id,
+            call.tool_name,
+            write_event,
+            EventType.TOOL_CALL_STARTED,
+            ToolCallStartedPayload(
+                tool_name=call.tool_name,
+                step_id=step_id,
+                tool_call_id=call.call_id,
+                arguments=call.arguments,
+                display=display_payload,
+            ),
+        )
+
+    def _handle_completed_observation(
+        self,
+        step_id: str,
+        observation: ToolObservation,
+        execution_context: ToolExecutionContext | None,
+        write_event: Callable[[EventType, RuntimeEventPayload], None],
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> None:
+        """处理单个工具观察的完成侧效应。
+
+        参数:
+            step_id: 请求该工具调用的步骤标识。
+            observation: 工具执行结果观察。
+            execution_context: 本次工具执行上下文。
+            write_event: 工具生命周期事件写入回调。
+            loop: 承载实时事件广播的 asyncio 事件循环。
+
+        返回:
+            无。
+
+        异常:
+            无。``write_event`` 异常由 ``_emit_event_safely`` 收口，不向上抛出。
+
+        副作用:
+            写入 ``TOOL_CALL_FINISHED``，并在成功产生文件变更时广播实时文件变更事件。
+        """
+        self._emit_event_safely(
+            step_id,
+            observation.tool_call_id,
+            observation.tool_name,
+            write_event,
+            EventType.TOOL_CALL_FINISHED,
+            ToolCallFinishedPayload(
+                step_id=step_id,
+                tool_name=observation.tool_name,
+                status="success" if observation.status == "success" else "error",
+                tool_call_id=observation.tool_call_id,
+                content=observation.content,
+                error=observation.error,
+                reason=observation.reason,
+                retryable=observation.retryable,
+                data=observation.data or {},
+            ),
+        )
+        if (
+            self._event_bus is not None
+            and observation.status == "success"
+            and execution_context is not None
+            and execution_context.task_id
+            and execution_context.turn_id
+        ):
+            self._publish_file_change_updated(execution_context, observation, loop)
+
+    def _emit_event_safely(
+        self,
+        step_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        write_event: Callable[[EventType, RuntimeEventPayload], None],
+        event_type: EventType,
+        payload: RuntimeEventPayload,
+    ) -> None:
+        """安全写入工具生命周期事件，事件通道故障不中断工具执行。
+
+        参数:
+            step_id: 请求这些工具调用的步骤标识。
+            tool_call_id: 当前工具调用的协议配对 id（仅用于日志上下文）。
+            tool_name: 当前工具名（仅用于日志上下文）。
+            write_event: 工具生命周期事件写入回调。
+            event_type: 事件类型。
+            payload: 事件载荷。
+
+        返回:
+            无。
+
+        异常:
+            无。``write_event`` 抛出的异常（SSE 断连、载荷序列化失败等）被记入
+            error 日志后吞掉——事件通道故障不应破坏工具执行结果与协议配对闭合。
+
+        副作用:
+            ``write_event`` 成功时写入一条生命周期事件；失败时写 error 日志（含堆栈）。
+        """
+        try:
+            write_event(event_type, payload)
+        except Exception as exc:
+            log.exception(
+                "tool_event_write_failed",
+                extra={
+                    "msg": "工具生命周期事件写入失败，已忽略以保持执行不中断",
+                    "data": {
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "step_id": step_id,
+                        "event_type": event_type.value,
+                        "error": type(exc).__name__,
+                    },
+                },
+                exc_info=True,
             )
 
-            # 运行中实时广播：本工具调用产生文件变更时，广播 FILE_CHANGE_UPDATED 驱动
-            # 前端即时展示（不持久化到 runtime_events，数据源仍在 file_snapshots 表）。
-            # 采集在 FileSnapshotHook（POST_TOOL_USE 内置 Hook）完成（含 stable=0 运行中态）。
-            # 缺 event_bus 或 loop 时跳过（降级为仅全量查询可见）。
-            if (
-                self._event_bus is not None
-                and observation.status == "success"
-                and execution_context is not None
-                and execution_context.task_id
-                and execution_context.turn_id
-            ):
-                self._publish_file_change_updated(execution_context, observation, loop)
+    def _build_result_with_cancel_placeholders(
+        self,
+        step_id: str,
+        calls: list[ToolCall],
+        indexed_observations: list[tuple[int, ToolObservation]],
+    ) -> ToolRunResult:
+        """补齐取消占位并构建返回给模型的工具结果。
 
-            # 转为模型消息（统一经 _to_model_message，确保 display_data 清空与脱敏一致）。
-            messages.append(self._to_model_message(observation))
+        参数:
+            step_id: 请求这些工具调用的步骤标识。
+            calls: 模型请求的工具调用列表。
+            indexed_observations: 已产生观察的原始位置与观察列表。
 
-        # 配对闭合不变量：对未被执行的 call（取消跳过 / 未进入循环）补占位 error 观察，
-        # 使模型感知「这一步因取消而没有运行」，并闭合 tool_calls 协议避免下一轮对话崩溃。
-        skipped_calls = [c for c in calls if c.call_id not in executed_call_ids]
+        返回:
+            按原始 call 顺序排列且协议闭合的 ``ToolRunResult``。
+
+        异常:
+            无。
+
+        副作用:
+            当存在跳过调用时写 warning 日志；序列化模型消息时会清空 display_data。
+        """
+        executed_indices = {index for index, _ in indexed_observations}
+        skipped_calls = [
+            (index, call)
+            for index, call in enumerate(calls)
+            if index not in executed_indices
+        ]
         if skipped_calls:
             log.warning(
                 "tool_calls_cancelled_not_executed",
@@ -265,22 +563,45 @@ class ToolExecutionService:
                     "data": {
                         "step_id": step_id,
                         "total": len(calls),
-                        "executed": len(executed_call_ids),
-                        "skipped_call_ids": [c.call_id for c in skipped_calls],
+                        "executed": len(executed_indices),
+                        "skipped_call_ids": [call.call_id for _, call in skipped_calls],
                     },
                 },
             )
-            for call in skipped_calls:
-                observation = tool_error(
-                    tool_name=call.tool_name,
-                    error="the tool call was cancelled before execution",
-                    reason=cancel_not_executed_reason(),
-                    retryable=False,
-                    tool_call_id=call.call_id,
+            for index, call in skipped_calls:
+                indexed_observations.append(
+                    (
+                        index,
+                        tool_error(
+                            tool_name=call.tool_name,
+                            error="the tool call was cancelled before execution",
+                            reason=cancel_not_executed_reason(),
+                            retryable=False,
+                            tool_call_id=call.call_id,
+                        ),
+                    )
                 )
-                observations.append(observation)
-                messages.append(self._to_model_message(observation))
+        indexed_observations.sort(key=lambda item: item[0])
+        observations = [observation for _, observation in indexed_observations]
+        messages = [self._to_model_message(observation) for observation in observations]
         return ToolRunResult(observations=observations, messages_for_model=messages)
+
+    def _is_parallel_call(self, call: ToolCall) -> bool:
+        """判断工具调用是否声明为可并行调度。
+
+        参数:
+            call: 当前工具调用。
+
+        返回:
+            工具定义存在且 ``parallel_mode`` 为 ``"parallel"`` 时返回 ``True``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        return self._parallel_mode_by_name.get(call.tool_name, "serial") == "parallel"
 
     def _to_model_message(self, observation: ToolObservation) -> RuntimeMessage:
         """把单个工具观察序列化为模型可见的 ``role="tool"`` 消息。
@@ -437,6 +758,10 @@ class ToolExecutionService:
             # 复用既有 diff 统计能力计算每文件增删行数，避免重复实现差异算法。
             # 与采集层 FileSnapshotHook._change_diff_stats 保持同一语义
             # （status 映射由 build_diff_stats 处理）。
+            # 顺序对齐：build_diff_stats 的 files[] 与输入一一对应（不按 path 去重），
+            # 故用「统一过滤后的列表」同时驱动统计与循环，既容忍非 dict 混入，
+            # 也保证同一 path 多次变更时各自取到自己的统计（path 字典会覆盖错配）。
+            valid_changes = [change for change in changes if isinstance(change, dict)]
             diff_results = [
                 FileDiffResult(
                     path=str(change.get("path", "")),
@@ -444,19 +769,15 @@ class ToolExecutionService:
                     before=str(change.get("before") or ""),
                     after=str(change.get("after") or ""),
                 )
-                for change in changes
-                if isinstance(change, dict)
+                for change in valid_changes
             ]
             stats = build_diff_stats(diff_results)
-            stat_by_index = dict(enumerate(stats.get("files", [])))
-            for index, change in enumerate(changes):
-                if not isinstance(change, dict):
-                    continue
+            file_stats = stats.get("files", [])
+            for change, file_stat in zip(valid_changes, file_stats, strict=True):
                 path = change.get("path")
                 action = change.get("action") or change.get("status")
                 if not path or not action:
                     continue
-                file_stat = stat_by_index.get(index, {})
                 event = RuntimeEvent(
                     event_type=EventType.FILE_CHANGE_UPDATED,
                     task_id=execution_context.task_id,

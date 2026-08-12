@@ -28,9 +28,15 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
         无。
     """
 
+    # 顺序对齐：build_diff_stats 的 files[] 与输入一一对应（不按 path 去重），
+    # 故直接按序配对。不能按 path 建字典——同一 path 多次变更时后一条会覆盖
+    # 前一条，导致多条 change 共享最后一条统计。
     stats = build_diff_stats(results)
-    stat_by_path = {str(file_stat.get("path")): file_stat for file_stat in stats.get("files", [])}
-    changes = [_build_file_change(result, stat_by_path.get(result.path, {})) for result in results]
+    file_stats = stats.get("files", [])
+    changes = [
+        _build_file_change(result, file_stat)
+        for result, file_stat in zip(results, file_stats, strict=True)
+    ]
     return {
         "changes": changes,
         "diff_stats": stats,
