@@ -69,6 +69,7 @@ class TaskService:
         self._workspace = service_depends.get_workspace_crud()
         self._runtime_event = service_depends.get_runtime_event_crud()
         self._turn_message = service_depends.get_turn_message_crud()
+        self._delegation = service_depends.get_delegation_crud()
 
     def create_task(
         self,
@@ -169,11 +170,12 @@ class TaskService:
         return self._task.list_by_workspace(workspace_id)
 
     def delete_task(self, task_id: str) -> None:
-        """删除单个任务并级联清理其下轮次、消息轨迹与运行时事件。
+        """删除单个任务并级联清理其下轮次、消息轨迹、运行时事件与委派记录。
 
         删除前先校验任务存在（不存在则抛 ``KeyError``），再按
-        ``runtime_events -> turn_messages -> turns -> task`` 顺序清理，
-        避免外键 / 孤儿数据。
+        ``runtime_events -> turn_messages -> turns -> delegations -> task`` 顺序清理，
+        避免外键 / 孤儿数据。委派子 Agent 产生的 ``delegations`` 行以 ``task_id`` 关联，
+        若不复则删除后成为无法追溯的孤儿记录，因此须在此一并清理。
         删除是高风险操作，保留 start / complete 审计日志。
 
         参数:
@@ -187,8 +189,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
 
         副作用:
-            从 ``runtime_events`` / ``turn_messages`` / ``turns`` / ``tasks``
-            表删除该任务相关数据。
+            从 ``runtime_events`` / ``turn_messages`` / ``turns`` / ``delegations`` /
+            ``tasks`` 表删除该任务相关数据。
         """
 
         self._task.get(task_id)  # 存在性守卫，不存在抛 KeyError
@@ -201,8 +203,16 @@ class TaskService:
             self._runtime_event.delete_by_turn_ids(turn_ids)
             self._turn_message.delete_by_turn_ids(turn_ids)
             self._turn.delete_by_ids(turn_ids)
+        deleted_delegations = self._delegation.delete_by_task_ids([task_id])
         self._task.delete_by_ids([task_id])
         log.info(
             "task_deleted",
-            extra={"msg": "task deleted", "data": {"task_id": task_id, "turn_ids": turn_ids}},
+            extra={
+                "msg": "task deleted",
+                "data": {
+                    "task_id": task_id,
+                    "turn_ids": turn_ids,
+                    "deleted_delegations": deleted_delegations,
+                },
+            },
         )

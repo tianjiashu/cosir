@@ -16,26 +16,6 @@ if TYPE_CHECKING:
     from app.tools.schemas.tool_definition import ToolDefinition
 
 
-# 默认 Agent 标识：前端未显式选择 agent 时回落到该内置 developer。
-DEFAULT_AGENT_ID = "developer"
-DEFAULT_DEVELOPER_TOOLS = (
-    "read_file",
-    "list_directory",
-    "search_files",
-    "write_file",
-    "patch",
-    "delete",
-    "execute_terminal",
-    "delegate_task",
-    "codegraph_explore",
-    "codegraph_search",
-    "codegraph_node",
-    "codegraph_callers",
-    "codegraph_callees",
-    "codegraph_impact",
-)
-
-
 def _default_workflow() -> AgentWorkflow:
     """返回默认 ReAct-like 工作流实例（延迟导入，打破循环依赖）。
 
@@ -62,59 +42,24 @@ def _default_workflow() -> AgentWorkflow:
 
 
 @dataclass
-class AgentProfileToolSummary:
-    """子 Agent 工具描述投影（供父 Agent 委派时了解可用子 Agent 能力）。
-
-    仅包含父 Agent 在选择委派目标时需要的能力摘要字段，刻意排除
-    ``workflow``/``context_policy``/``turn``/``runtime_event_loop``/``prompt_ref``
-    等运行时内部字段，避免向模型泄露底层实现细节。
-
-    参数:
-        agent_id: 子 Agent 稳定标识。
-        role: 人类可读角色。
-        description: 子 Agent 职责描述（替代旧 ``goal``）。
-        capabilities: 该子 Agent 具备的能力清单。
-        recommended_use_cases: 推荐使用场景清单。
-        constraints: 该子 Agent 的运行约束清单。
-        tool_capability_summary: 由 ``allowed_tools`` 渲染的可读工具能力摘要。
-
-    返回:
-        不可变的工具描述投影值对象。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    agent_id: str
-    role: str
-    description: str
-    capabilities: list[str]
-    recommended_use_cases: list[str]
-    constraints: list[str]
-    tool_capability_summary: str
-
-
-@dataclass
 class AgentProfile:
     """描述某个任务的 Agent 执行主体（能力事实源）。
 
     参数:
         agent_id: 持久化在任务和事件上的稳定 Agent 标识。
         role: 人类可读的 Agent 角色。
-        description: 注入到模型上下文中的运行目标与职责描述（替代旧 ``goal``）。
+        description: 该 Agent 的职责、能力、适用场景与约束的**唯一**文本描述
+            （替代旧 ``goal``，并收敛原有 ``capabilities``/``recommended_use_cases``/
+            ``constraints`` 等分散字段）。在 delegate_task 中暴露给父 Agent。
+        can_delegated: 是否允许被委派为子 Agent。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         context_policy: 该 Agent 的上下文处理策略名称。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
         model_name: 该 Agent 使用的模型名称。
         model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
-        delegation_type: 稳定的委派分类（reviewer/analyst/coder）；
-            进 ``to_dict`` 不进 ``to_tool_summary``。
-        capabilities: 该 Agent 具备的能力清单。
-        recommended_use_cases: 推荐使用场景清单。
-        constraints: 该 Agent 的运行约束清单。
+        turn: 该 Agent 当前所属 turn 记录（运行时注入，可为 None）。
+        context_excluded_turn_ids: 构建上下文时需排除的 turn id 元组。
+        runtime_event_loop: 运行时事件循环（可为 None）。
         prompt_ref: 关联的 prompt 引用（第二部分接缝，第一部分不消费）；可为 None。
 
     返回:
@@ -139,11 +84,27 @@ class AgentProfile:
     turn: TurnRecord | None = None
     context_excluded_turn_ids: tuple[str, ...] = ()
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
-    delegation_type: str = ""
-    capabilities: list[str] = field(default_factory=list)
-    recommended_use_cases: list[str] = field(default_factory=list)
-    constraints: list[str] = field(default_factory=list)
     prompt_ref: PromptRef | None = None
+
+    @property
+    def can_delegated(self) -> bool:
+        """是否允许被委派为子 Agent。
+
+        参数:
+            无。
+
+        返回:
+            当 ``description`` 非空时返回 ``True``（有可读职责的 Agent 才可被委派）。
+            注意：空 ``description`` 的 profile 将被视为不可委派，新增无描述子 agent
+            时会因此无法进入 ``child_agent_summary`` 投影。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        return self.description is not None
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。
@@ -173,7 +134,7 @@ class AgentProfile:
             无。
 
         返回:
-            包含稳定 Agent profile 字段的字典。
+            包含稳定 Agent profile 字段的字典；字段集与 ``AgentProfileResponse`` 完全一致。
 
         异常:
             无。
@@ -200,110 +161,5 @@ class AgentProfile:
             "workflow": getattr(self.workflow, "workflow_id", "custom"),
             "model_name": self.model_name,
             "max_steps": self.max_steps,
-            "delegation_type": self.delegation_type,
-            "capabilities": self.capabilities,
-            "recommended_use_cases": self.recommended_use_cases,
-            "constraints": self.constraints,
             "prompt_ref": prompt_ref_dict,
         }
-
-    def to_tool_summary(self) -> AgentProfileToolSummary:
-        """将 Agent profile 投影为面向父 Agent 的工具能力摘要。
-
-        仅暴露父 Agent 选择委派目标所需的能力字段，刻意排除
-        ``workflow``/``context_policy``/``turn``/``runtime_event_loop``/``prompt_ref``
-        等运行时内部字段。``tool_capability_summary`` 由 ``allowed_tools`` 渲染。
-
-        参数:
-            无。
-
-        返回:
-            ``AgentProfileToolSummary`` 投影对象。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        tool_capability_summary = "tools: " + ", ".join(self.allowed_tools)
-        return AgentProfileToolSummary(
-            agent_id=self.agent_id,
-            role=self.role,
-            description=self.description,
-            capabilities=self.capabilities,
-            recommended_use_cases=self.recommended_use_cases,
-            constraints=self.constraints,
-            tool_capability_summary=tool_capability_summary,
-        )
-
-
-def default_developer_agent() -> AgentProfile:
-    """构建第一版默认的开发者 Agent profile。
-
-    参数:
-        无。
-
-    返回:
-        用于内置单 Agent 的 AgentProfile。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return AgentProfile(
-        agent_id=DEFAULT_AGENT_ID,
-        role="coding-agent-flush",
-        description="协助用户完成软件工程项目开发任务",
-        allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
-        context_policy="text_only_v1",
-        model_name="deepseek-v4-flash",
-        model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
-        delegation_type="",
-        capabilities=[],
-        recommended_use_cases=[],
-        constraints=[],
-        prompt_ref=None,
-    )
-
-
-def developer_agent_pro() -> AgentProfile:
-    """构建开发者 Agent profile Pro。
-
-    参数:
-        无。
-
-    返回:
-        用于内置单 Agent 的 AgentProfile。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return AgentProfile(
-        agent_id="developer_pro",
-        role="coding-agent-pro",
-        description="协助用户完成软件工程项目开发任务",
-        allowed_tools=list(DEFAULT_DEVELOPER_TOOLS),
-        context_policy="text_only_v1",
-        model_name="deepseek-v4-pro",
-        model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
-        delegation_type="",
-        capabilities=[],
-        recommended_use_cases=[],
-        constraints=[],
-        prompt_ref=None,
-    )

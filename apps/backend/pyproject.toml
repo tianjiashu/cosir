@@ -110,3 +110,6 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "llm: 真实调用 LLM 的端到端冒烟测试（需要联网与 DEEPSEEK_API_KEY，默认不进普通 pytest）",
+]

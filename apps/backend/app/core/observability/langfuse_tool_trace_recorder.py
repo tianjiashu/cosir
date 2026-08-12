@@ -137,7 +137,7 @@ class LangfuseToolTraceRecorder:
             创建 tool observation（自动挂到当前 OTel 根 observation 下）；退出上下文时
             自动结束并测量耗时。
         """
-        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        arguments = call.arguments
         span_cm = None
         try:
             span_cm = self._client.start_as_current_observation(

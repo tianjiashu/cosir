@@ -675,7 +675,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "pending_tool_calls": [
                 {
                     "tool_name": call.tool_name,
-                    "arguments": call.arguments if isinstance(call.arguments, dict) else {},
+                    "arguments": call.arguments,
                     "call_id": call.call_id,
                     "instruction": instruction,
                 }

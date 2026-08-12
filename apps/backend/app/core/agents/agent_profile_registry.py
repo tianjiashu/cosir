@@ -87,3 +87,46 @@ class AgentProfileRegistry:
             无。
         """
         return set(self._profiles.keys())
+
+    def child_agent_summary(self) -> str:
+        """把注册表中全部委派子 Agent 投影为面向父 Agent 的能力摘要字符串。
+
+        直接基于 ``AgentProfile`` 的 ``description`` 与 ``allowed_tools`` 渲染可读文本，
+        把各子 Agent 摘要拼装为面向父 Agent 的可用目标清单。
+
+        参数:
+            无（方法消费实例自身的 ``list`` 接口返回全部已注册 profile）。
+
+        返回:
+            形如 ``"Available child agents:\\n- agent_id (role): description | tools: ...\\n..."``
+            的摘要文本；若注册表中无任何委派子 Agent，返回空字符串。
+
+        异常:
+            无（纯函数，只读 registry，不抛预期异常）。
+
+        副作用:
+            无（不修改 registry，不写入任何外部状态）。
+        """
+
+        blocks: list[str] = []
+        for profile in self.list():
+            if not profile.can_delegated:
+                continue
+            tool_capability_summary = "tools: " + ", ".join(profile.allowed_tools)
+            blocks.append(
+                f"agent_id: {profile.agent_id} ==> role: {profile.role} ==> "
+                f"description: {profile.description} | {tool_capability_summary}"
+            )
+
+        if not blocks:
+            return ""
+        return "Available child agents:\n" + "\n".join(blocks)
+
+    def child_agent_ids(self) -> set[str]:
+        """
+        列举当前目录中所有已注册的委派子 Agent 的 agent_id。
+
+        参数:
+            无。
+        """
+        return {profile.agent_id for profile in self._profiles.values() if profile.can_delegated}

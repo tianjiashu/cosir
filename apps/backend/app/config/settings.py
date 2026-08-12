@@ -43,6 +43,7 @@ class Settings:
     LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
     MAX_STEPS: ClassVar[int] = 10000
     TOOL_ERROR_LIMIT: ClassVar[int] = 3
+    MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
     # 避免把大体积工具输出塞进 checkpoint。
     TOOL_OBSERVATION_CONTEXT_LIMIT: ClassVar[int] = 4000
@@ -66,6 +67,13 @@ class Settings:
     # 首次建索引（init）大仓库可能数分钟，需长超时；增量同步（sync）耗时较短。
     CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS: ClassVar[float] = 600.0
     CODEGRAPH_INDEX_SYNC_TIMEOUT_SECONDS: ClassVar[float] = 120.0
+
+    # --- 委派子Agent并发执行（见 docs/委派子Agent并发执行技术方案.md §6.1） ---
+    # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
+    # child 委派单次执行的生效超时（async 路径），不等同于线程硬杀，与工具定义
+    # ``timeout_seconds`` 元数据不双轨生效。
+    DELEGATION_MAX_CONCURRENCY: ClassVar[int] = 2
+    DELEGATION_TIMEOUT_SECONDS: ClassVar[float] = 300.0
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
@@ -165,7 +173,7 @@ class Settings:
 
     @classmethod
     def _validate(cls) -> None:
-        """校验数值上限类配置是否合法。
+        """校验数值类配置是否合法。
 
         参数:
             无。
@@ -174,7 +182,7 @@ class Settings:
             无。
 
         异常:
-            ValueError: 如果任一数值上限小于 1。
+            ValueError: 如果任一数值上限小于 1，或任一超时秒数不大于 0。
 
         副作用:
             无。
@@ -184,6 +192,12 @@ class Settings:
             raise ValueError("MAX_STEPS must be greater than zero")
         if cls.TOOL_ERROR_LIMIT < 1:
             raise ValueError("TOOL_ERROR_LIMIT must be greater than zero")
+        if cls.MAX_PARALLEL_TOOL_CALLS < 1:
+            raise ValueError("MAX_PARALLEL_TOOL_CALLS must be greater than zero")
+        if cls.DELEGATION_MAX_CONCURRENCY < 1:
+            raise ValueError("DELEGATION_MAX_CONCURRENCY must be greater than zero")
+        if cls.DELEGATION_TIMEOUT_SECONDS <= 0:
+            raise ValueError("DELEGATION_TIMEOUT_SECONDS must be greater than zero")
         if cls.MAX_CONTEXT_CHARS < 1:
             raise ValueError("MAX_CONTEXT_CHARS must be greater than zero")
         if cls.MAX_TOOL_OUTPUT_CHARS < 1:
@@ -221,7 +235,7 @@ class Settings:
             无。
 
         异常:
-            ValueError: 如果数值上限小于 1。
+            ValueError: 如果数值配置非法（数值上限小于 1，或超时秒数不大于 0）。
 
         副作用:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性。
@@ -253,6 +267,15 @@ class Settings:
         cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
         cls.MAX_STEPS = int(os.environ.get("CODING_AGENT_MAX_STEPS", "8"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
+        cls.MAX_PARALLEL_TOOL_CALLS = int(
+            os.environ.get("CODING_AGENT_MAX_PARALLEL_TOOL_CALLS", "8")
+        )
+        cls.DELEGATION_MAX_CONCURRENCY = int(
+            os.environ.get("CODING_AGENT_DELEGATION_MAX_CONCURRENCY", "2")
+        )
+        cls.DELEGATION_TIMEOUT_SECONDS = float(
+            os.environ.get("CODING_AGENT_DELEGATION_TIMEOUT_SECONDS", "300")
+        )
         cls.TOOL_OBSERVATION_CONTEXT_LIMIT = int(
             os.environ.get("CODING_AGENT_TOOL_OBSERVATION_CONTEXT_LIMIT", "4000")
         )

@@ -6,7 +6,8 @@ from collections.abc import AsyncGenerator
 
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import DEFAULT_AGENT_ID, AgentProfile
+from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.define_agents import DEFAULT_AGENT_ID
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
 from app.core.observability import (
@@ -728,9 +729,6 @@ class AgentRuntime:
         runtime_dependencies = None
         if execution_context is not None:
             delegate_task_executor = DelegationExecutor(
-                agent_registry=self._agent_registry,
-                delegation_service=get_delegation_service(),
-                turn_service=self._turn_service,
                 child_runner=ChildAgentRunner(
                     self.run_agent,
                     should_cancel=cancellation_registry.is_cancelled,
@@ -738,7 +736,6 @@ class AgentRuntime:
                 parent_profile=agent_profile,
                 parent_turn=turn,
                 parent_task=task,
-                registered_tool_names=(tool.name for tool in self._tool_scheduler.list_tools()),
             )
             runtime_dependencies = ToolRuntimeDependencies(
                 delegate_task_executor=delegate_task_executor

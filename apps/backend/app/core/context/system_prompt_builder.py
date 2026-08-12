@@ -87,14 +87,6 @@ class SystemPromptBuilder:
             f"今天日期: {date.today().isoformat()}",
             f"所拥有的工具集合: {', '.join(agent_profile.allowed_tools) or 'none'}",
         ]
-        if agent_profile.capabilities:
-            identity_lines.append(
-                f"能力: {', '.join(agent_profile.capabilities)}"
-            )
-        if agent_profile.constraints:
-            identity_lines.append(
-                f"约束: {', '.join(agent_profile.constraints)}"
-            )
         identity_lines.extend(
             [
                 (
