@@ -2,8 +2,6 @@
 
 from typing import ClassVar
 
-from pydantic import ValidationError
-
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_handler.tool_base import HandlerBase
@@ -19,9 +17,10 @@ _DEFAULT_DESCRIPTION = (
 _STRUCTURED_SCHEMA_HINT = (
     "Provide the task as a structured contract: objective (the single goal), rules "
     "(hard constraints), references (relevant paths or documents), expected_output "
-    "(what the child returns), and an optional title. Budgets: objective and "
-    "expected_output <= 2000 chars; title <= 200 chars; rules and references each "
-    "<= 10 items, each item <= 500 chars, and each list total <= 2000 chars."
+    "(what the child returns), an optional background (extra context, omitted if empty), "
+    "and a required title. Budgets: objective, expected_output, and background each "
+    "<= 2000 chars; title <= 20 chars; rules and references each <= 10 items, "
+    "each item <= 500 chars, and each list total <= 2000 chars."
 )
 
 
@@ -55,14 +54,15 @@ class DelegateTaskTool(HandlerBase):
         self.description = description if description is not None else _DEFAULT_DESCRIPTION
 
     def execute(
-        self,
-        child_agent_id: str,
-        objective: str,
-        rules: list[str],
-        references: list[str],
-        expected_output: str,
-        title: str | None = None,
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            child_agent_id: str,
+            objective: str,
+            rules: list[str],
+            references: list[str],
+            expected_output: str,
+            title: str,
+            background: str = "",
+            execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """通过执行上下文中的运行时执行器委派结构化任务。
 
@@ -72,15 +72,18 @@ class DelegateTaskTool(HandlerBase):
             rules: 子 Agent 必须遵守的约束规则列表。
             references: 子 Agent 应参考的背景/路径条目列表。
             expected_output: 子 Agent 完成时应返回的期望产出说明。
-            title: 可选的任务标题。
+            title: 任务标题，必填，用于展示与可追溯。
+            background: 可选补充背景；非空时作为子 Agent 输入的 Background section。
             execution_context: 包含运行时依赖的父工具执行边界。
 
         返回:
-            注入执行器的归一化结果；当执行上下文、执行器或参数缺失或无效时，
-            返回错误观察结果。
+            注入执行器的归一化结果；当执行上下文或执行器缺失时，返回错误观察结果。
 
         异常:
-            无。参数校验失败会返回错误观察结果；执行器异常由执行器自身负责处理。
+            无。参数校验由 ``ToolScheduler.validate_tool_arguments`` 在调度层统一
+            完成（单一收口），本方法信任已校验入参，不再二次校验；若上游契约被破坏，
+            ``DelegateTaskArgs`` 构造会抛出 ``ValidationError`` 由 ``ToolExecutor``
+            归一化为错误观察。执行器异常由执行器自身负责处理。
 
         副作用:
             当请求有效时调用注入的运行时执行器。
@@ -94,25 +97,6 @@ class DelegateTaskTool(HandlerBase):
                 permission=self.permission,
             )
 
-        try:
-            args = DelegateTaskArgs.model_validate(
-                {
-                    "child_agent_id": child_agent_id,
-                    "title": title,
-                    "objective": objective,
-                    "rules": rules,
-                    "references": references,
-                    "expected_output": expected_output,
-                }
-            )
-        except ValidationError:
-            return tool_error(
-                self.name,
-                "delegate_task received invalid arguments.",
-                reason="Correct the delegate_task arguments, then retry.",
-                permission=self.permission,
-            )
-
         executor = execution_context.runtime_dependencies.delegate_task_executor
         if executor is None:
             return tool_error(
@@ -121,16 +105,29 @@ class DelegateTaskTool(HandlerBase):
                 reason="Configure a delegate_task runtime executor before delegating work.",
                 permission=self.permission,
             )
-        return executor.execute(args, execution_context)
+        return executor.execute(DelegateTaskArgs(
+            child_agent_id=child_agent_id,
+            title=title,
+            objective=objective,
+            rules=rules,
+            references=references,
+            expected_output=expected_output,
+            background=background,
+        ), execution_context)
 
     def to_definition(self) -> ToolDefinition:
         """构建 delegate_task 工具的注册定义。
+
+        delegate_task 的 child 自身不参与工具级并行分组：``parallel_mode`` 固定为
+        ``"serial"``，避免 delegate_task 与外部工具在同一 ``parallel_group`` 下被并发
+        调度执行（child 的并发由 delegation 业务层的并发额度独立裁决）。``parallel_group``
+        仍落入 ``"default"``，以兼容工具调度器的分组契约。
 
         参数:
             无。
 
         返回:
-            使用进程内线程执行的 delegate_task 工具定义。
+            使用进程内线程执行、本轮不参与工具级并行的 delegate_task 工具定义。
 
         异常:
             无。
@@ -148,6 +145,8 @@ class DelegateTaskTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
             execution_mode="thread",
+            parallel_mode="serial",
+            parallel_group="default",
         )
 
 

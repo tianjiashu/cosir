@@ -72,6 +72,10 @@ class ToolDefinition:
     # handler，无子进程/Queue/pickle/日志桥、无硬超时强杀；"process"=子进程隔离 +
     # 硬超时强杀（terminate→kill→进程组/Job Object 树杀）+ 跨进程日志桥。
     execution_mode: Literal["thread", "process"] = "thread"
+    # ToolExecutionService consumes these scheduling fields. They are orthogonal to
+    # execution_mode: execution_mode chooses isolation, parallel_mode chooses batching.
+    parallel_mode: Literal["serial", "parallel"] = "serial"
+    parallel_group: str = "default"
 
     def normalized(self) -> "ToolDefinition":
         """Return a definition with a derived schema when none is supplied."""
@@ -90,6 +94,8 @@ class ToolDefinition:
             resource_keys=self.resource_keys,
             display=self.display,
             execution_mode=self.execution_mode,
+            parallel_mode=self.parallel_mode,
+            parallel_group=self.parallel_group,
         )
 
     def to_model_tool_definition(self) -> dict[str, Any]:

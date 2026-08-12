@@ -12,11 +12,12 @@ from app.config.logging.logger import log
 
 # 预算常量（与计划 Task 2 一致）
 OBJECTIVE_MAX = 2000
-TITLE_MAX = 200
+TITLE_MAX = 20
 LIST_MAX_ITEMS = 10
 LIST_ITEM_MAX = 500
 LIST_TOTAL_MAX = 2000
 EXPECTED_OUTPUT_MAX = 2000
+BACKGROUND_MAX = 2000
 
 
 class DelegateTaskArgs(BaseModel):
@@ -33,11 +34,11 @@ class DelegateTaskArgs(BaseModel):
             "delegate_coder for scoped code changes plus verification."
         )
     )
-    title: str | None = Field(
-        default=None,
+    title: str = Field(
         description=(
-            "Optional short title for the delegated task. Used for display and traceability; "
-            "it must not duplicate the objective or carry secrets."
+            "Short title for the delegated task, used for display and traceability. "
+            "It must not duplicate the objective or carry secrets; it is required and "
+            "must be a non-empty, non-whitespace string."
         ),
     )
     objective: str = Field(
@@ -63,6 +64,15 @@ class DelegateTaskArgs(BaseModel):
             "What the child must return on completion: the format, artifacts, and confirmation "
             "expected from the child agent."
         )
+    )
+    background: str = Field(
+        default="",
+        description=(
+            "Optional free-form context the parent agent adds to supplement the task: "
+            "clarifications, assumptions, environment notes, or anything not fitting "
+            "objective/rules/references/expected_output. Empty by default; when provided it "
+            "is included as a Background section."
+        ),
     )
 
     @model_validator(mode="after")
@@ -103,7 +113,18 @@ class DelegateTaskArgs(BaseModel):
             )
 
         # title
-        if self.title is not None and len(self.title) > TITLE_MAX:
+        if not self.title or not self.title.strip():
+            log.warning(
+                "delegate_task_args_over_budget",
+                extra={
+                    "msg": "delegate_task title 为空或纯空白",
+                    "data": {"field": "title"},
+                },
+            )
+            raise ValueError(
+                "delegate_task.title_required: 任务标题不能为空或纯空白，必须提供简洁的任务标题。"
+            )
+        if len(self.title) > TITLE_MAX:
             log.warning(
                 "delegate_task_args_over_budget",
                 extra={
@@ -236,6 +257,24 @@ class DelegateTaskArgs(BaseModel):
             raise ValueError(
                 "delegate_task.expected_output_over_budget: 期望产出不得超过 "
                 f"{EXPECTED_OUTPUT_MAX} 个字符（当前 {len(self.expected_output)} 字符）。"
+            )
+
+        # background（可选补充，空时跳过）
+        if self.background and len(self.background) > BACKGROUND_MAX:
+            log.warning(
+                "delegate_task_args_over_budget",
+                extra={
+                    "msg": "delegate_task background 超出预算上限",
+                    "data": {
+                        "field": "background",
+                        "limit": BACKGROUND_MAX,
+                        "actual": len(self.background),
+                    },
+                },
+            )
+            raise ValueError(
+                "delegate_task.background_over_budget: 补充背景不得超过 "
+                f"{BACKGROUND_MAX} 个字符（当前 {len(self.background)} 字符）。"
             )
 
         return self

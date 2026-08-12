@@ -81,13 +81,10 @@ class ToolSystem:
             向 ``delegate_task`` 工具描述注入已投影的子 Agent 能力摘要（未注入时降级空串）。
         """
 
-        # 延迟导入以避免模块级循环：``configuration`` 顶部已 import 本模块（ToolSystem），
-        # 若本模块在顶部 import ``configuration`` 会形成 ``config -> tools -> config`` 循环。
-        # 仅在方法体内导入单例读取函数，符合分层（tools -> config 合法）。
-        from app.config.configuration import get_delegate_agent_summary
-
         try:
-            _delegate_summary = get_delegate_agent_summary()
+            from app.config.configuration import get_agent_registry
+
+            _delegate_summary = get_agent_registry().child_agent_summary()
         except RuntimeError:
             _delegate_summary = ""
 
