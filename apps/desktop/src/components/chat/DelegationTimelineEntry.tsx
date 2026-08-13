@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Caption } from "@/components/ui/tokens";
 import { cn } from "@/lib/utils";
 import type { TimelineDelegationStatus } from "@/services/timeline/projector";
+import { useDelegationStore } from "@/stores/delegationStore";
 
 /** Props for rendering a parent-turn delegation lifecycle entry. */
 interface DelegationTimelineEntryProps {
@@ -47,15 +48,22 @@ const STATUS_CONFIG: Record<
 };
 
 /**
- * Renders a delegation lifecycle row inside the parent turn timeline.
+ * 在父 turn timeline 内渲染一行 delegation 生命周期条目。
  *
- * @param props - Delegation metadata and optional expanded child timeline content.
- * @returns A shrink-safe timeline row with status, child identifiers, terminal summary/error,
- *   and optional child entries.
+ * 行为（Task 1 A2）：
+ * - 整行可点击：点击或键盘（Enter/Space）触发 `delegationStore.selectChildTurn(childTurnId)`，
+ *   在右侧面板打开该 child turn 的完整 timeline（仅当 `childTurnId` 存在时）。
+ * - 行支持键盘可达：`role="button"`、`tabIndex={0}`、`onKeyDown`（Enter/Space）。
+ * - 选中态视觉高亮：当 `delegationStore.selectedChildTurnId` 与当前 `childTurnId` 相等时加高亮边框。
+ * - 内联展开能力保留：原 `childEntries` 折叠箭头展开逻辑不受影响，与「侧边栏入口」互补共存。
  *
- * @throws Does not throw.
+ * @param props - 委派元数据与可选的已展开子 timeline 内容。
+ * @returns 可点击/可键盘触发的 timeline 行（含状态、子标识、终态摘要/错误、可选内联展开内容）。
  *
- * @sideeffect Maintains local expand/collapse state for child entries.
+ * @throws 不主动抛出异常。
+ *
+ * @sideeffect 点击/键盘触发会调用 `delegationStore.selectChildTurn`，更新全局委派选中态（副作用跨组件）。
+ *   维护本地展开/折叠状态用于内联 child entries。
  */
 export const DelegationTimelineEntry = memo(function DelegationTimelineEntry({
   childAgentId,
@@ -71,16 +79,52 @@ export const DelegationTimelineEntry = memo(function DelegationTimelineEntry({
   const { variant, Icon } = STATUS_CONFIG[status];
   const detail = status === "failed" || status === "cancelled" ? error : summary;
 
+  // 选中态：读取委派选中 store，与当前 childTurnId 比对决定高亮（单一职责：仅 UI 选中态）。
+  const selectedChildTurnId = useDelegationStore((state) => state.selectedChildTurnId);
+  const selectChildTurn = useDelegationStore((state) => state.selectChildTurn);
+  const isSelected = childTurnId != null && childTurnId === selectedChildTurnId;
+
+  const openSidePanel = () => {
+    if (childTurnId) {
+      selectChildTurn(childTurnId);
+    }
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!childTurnId) return;
+    if (event.key === "Enter" || event.key === " ") {
+      // 阻止空格触发页面滚动，保持与 click 一致的行为。
+      event.preventDefault();
+      openSidePanel();
+    }
+  };
+
   return (
     <div className="w-full min-w-0 border-l border-border pl-3 py-1">
-      <div className="flex w-full min-w-0 items-start gap-2">
+      <div
+        className={cn(
+          "flex w-full min-w-0 cursor-pointer items-start gap-2 rounded-sm outline-none transition-colors",
+          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+          isSelected && "bg-accent/50 ring-1 ring-accent",
+        )}
+        role="button"
+        tabIndex={childTurnId ? 0 : -1}
+        aria-pressed={isSelected}
+        aria-label={childTurnId ? `Open ${childAgentId} child timeline in side panel` : undefined}
+        onClick={openSidePanel}
+        onKeyDown={handleKeyDown}
+      >
         <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             {hasChildEntries && (
               <button
                 type="button"
-                onClick={() => setIsOpen((prev) => !prev)}
+                onClick={(event) => {
+                  // 阻止冒泡：内联展开与「侧边栏入口」是互补的两条路径，互不触发。
+                  event.stopPropagation();
+                  setIsOpen((prev) => !prev);
+                }}
                 className="inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
                 aria-label={isOpen ? "Collapse delegated child events" : "Expand delegated child events"}
               >
