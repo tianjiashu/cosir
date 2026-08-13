@@ -223,6 +223,12 @@ export function createTimelineProjectorState(): TimelineProjectorState {
  * @throws 不抛出异常。
  *
  * @sideeffect 无（纯函数，不修改 prev）。
+ *   对 `prev` 中所有可变结构（entries 数组、pendingDelta/pendingThinking 对象、
+ *   toolByCallId/delegationById/concurrencyByParentTurn 映射、processedEventIds 集合）
+ *   均做拷贝后再改；其中 `concurrencyByParentTurn` 为「外层 Map + 内层 Set」两层结构，
+ *   函数开头仅浅拷贝外层 Map，内层 Set 仍与 prev 共享引用，因此任何对并发集合的修改
+ *   都需先拷贝内层 Set（`new Set(prevSet)`）再 set 回 Map，绝不就地 mutate 内层 Set，
+ *   以保证同一 prev 可被多次安全分叉投影而不互相污染（详见 delegation 分支实现）。
  */
 export function projectTimelineIncrementally(
   prev: TimelineProjectorState,
@@ -347,16 +353,16 @@ export function projectTimelineIncrementally(
       const did = delegation.delegationId;
 
       // 维护并发集合：到达即加入；进入终态则从 running 集合移除（不再并发）。
-      let runningSet = concurrencyByParentTurn.get(parentTurnId);
-      if (!runningSet) {
-        runningSet = new Set<string>();
-        concurrencyByParentTurn.set(parentTurnId, runningSet);
-      }
+      // 不可变更新：从 Map 取到的内层 Set 仍与 prev 共享引用，必须拷贝后再改，
+      // 严禁对原 Set 就地 add/delete，否则会污染调用方仍持有的 prev 状态。
+      const prevRunningSet = concurrencyByParentTurn.get(parentTurnId);
+      const nextRunningSet = new Set(prevRunningSet);
       if (isDelegationTerminal(delegation.status)) {
-        runningSet.delete(did);
+        nextRunningSet.delete(did);
       } else {
-        runningSet.add(did);
+        nextRunningSet.add(did);
       }
+      concurrencyByParentTurn.set(parentTurnId, nextRunningSet);
 
       const idx = delegationById.get(did);
       if (idx !== undefined) {
