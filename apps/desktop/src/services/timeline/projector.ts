@@ -100,6 +100,16 @@ export interface TimelineDelegationItem {
   summary?: string;
   /** Failed or cancelled terminal reason. */
   error?: string;
+  /**
+   * 并发组规模：同 parent turn 下同时处于 running 的 delegation 数量。
+   * 仅当数量 >= 2（构成并发组）时附加；非并发（或组仅 1）时为 undefined。
+   */
+  concurrencyGroupSize?: number;
+  /**
+   * 并发组内序号：该 delegation 在并发组中的稳定位置（从 0 起，按 running 到达顺序）。
+   * 仅当 `concurrencyGroupSize >= 2` 时附加；非并发时为 undefined。
+   */
+  concurrencyIndex?: number;
 }
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
@@ -147,6 +157,13 @@ export interface TimelineProjectorState {
   toolByCallId: Map<string, number>;
   /** delegationId → entries index, used to merge lifecycle events. */
   delegationById: Map<string, number>;
+  /**
+   * parentTurnId → 当前处于 running 的 delegationId 集合。
+   * 用于派生并发组信息：同 parent 下同时 running 的 delegation 数量即集合规模。
+   * 幂等保证：本集合随 delegation 生命周期事件维护（到达即加入、进入终态即移除），
+   * 配合 `processedEventIds` 的 event_id 去重，乱序/回放到达不漂移计数。
+   */
+  concurrencyByParentTurn: Map<string, Set<string>>;
   /** 已投影 event_id 集合（幂等去重）。 */
   processedEventIds: Set<string>;
 }
@@ -160,6 +177,7 @@ export const EMPTY_PROJECTION_STATE: TimelineProjectorState = {
   finalResponseReceived: false,
   toolByCallId: new Map(),
   delegationById: new Map(),
+  concurrencyByParentTurn: new Map(),
   processedEventIds: new Set(),
 };
 
@@ -177,6 +195,7 @@ export function createTimelineProjectorState(): TimelineProjectorState {
     finalResponseReceived: false,
     toolByCallId: new Map(),
     delegationById: new Map(),
+    concurrencyByParentTurn: new Map(),
     processedEventIds: new Set(),
   };
 }
@@ -227,6 +246,7 @@ export function projectTimelineIncrementally(
   let finalResponseReceived = prev.finalResponseReceived;
   const toolByCallId = new Map(prev.toolByCallId);
   const delegationById = new Map(prev.delegationById);
+  const concurrencyByParentTurn = new Map(prev.concurrencyByParentTurn);
   const processedEventIds = new Set(prev.processedEventIds);
 
   const flushPending = () => {
@@ -323,15 +343,41 @@ export function projectTimelineIncrementally(
 
     const delegation = projectDelegation(event);
     if (delegation) {
-      const idx = delegationById.get(delegation.delegationId);
+      const parentTurnId = delegation.parentTurnId;
+      const did = delegation.delegationId;
+
+      // 维护并发集合：到达即加入；进入终态则从 running 集合移除（不再并发）。
+      let runningSet = concurrencyByParentTurn.get(parentTurnId);
+      if (!runningSet) {
+        runningSet = new Set<string>();
+        concurrencyByParentTurn.set(parentTurnId, runningSet);
+      }
+      if (isDelegationTerminal(delegation.status)) {
+        runningSet.delete(did);
+      } else {
+        runningSet.add(did);
+      }
+
+      const idx = delegationById.get(did);
       if (idx !== undefined) {
         const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "delegation" }>;
         entries = entries.slice();
-        entries[idx] = { kind: "delegation", item: mergeDelegation(existing.item, delegation) };
+        entries[idx] = {
+          kind: "delegation",
+          item: attachConcurrency(mergeDelegation(existing.item, delegation), concurrencyByParentTurn),
+        };
       } else {
-        delegationById.set(delegation.delegationId, entries.length);
-        entries = entries.concat({ kind: "delegation", item: delegation });
+        delegationById.set(did, entries.length);
+        entries = entries.concat({
+          kind: "delegation",
+          item: attachConcurrency(delegation, concurrencyByParentTurn),
+        });
       }
+
+      // 当前 delegation 的到达/终态改变了集合规模，需同步重算同 parent 下
+      // 其它已投影 delegation 条目的并发字段（它们可能因此进入或退出并发组）。
+      // 仅当并发字段实际变化时才产生新引用，避免无谓击穿 memo。
+      entries = reattachConcurrencyForParent(entries, parentTurnId, concurrencyByParentTurn);
       continue;
     }
 
@@ -419,6 +465,7 @@ export function projectTimelineIncrementally(
     finalResponseReceived,
     toolByCallId,
     delegationById,
+    concurrencyByParentTurn,
     processedEventIds,
   };
 }
@@ -612,6 +659,80 @@ function mergeDelegation(
     summary: incoming.summary ?? existing.summary,
     error: incoming.error ?? existing.error,
   };
+}
+
+/**
+ * 为 delegation 条目附加并发组字段（并发组规模与组内序号）。
+ *
+ * 逻辑：从 `concurrencyByParentTurn` 取该 delegation 所属 parent turn 当前 running 的
+ * delegation 集合；仅当集合规模 >= 2（构成并发组）时，才在返回副本上附加
+ * `concurrencyGroupSize`（集合规模）与 `concurrencyIndex`（该 delegation 在集合中的插入序，
+ * 因 Set 迭代顺序即插入顺序故序号稳定）。集合规模 < 2 时不附加任何并发字段，保持 undefined。
+ *
+ * @param item - 待附加并发字段的 delegation 条目（不会被修改）。
+ * @param concurrencyByParentTurn - parentTurnId → 当前 running 的 delegationId 集合映射。
+ * @returns 新 delegation 条目：规模 >= 2 时带并发字段，否则沿用原条目的浅拷贝。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无（纯函数，不修改入参与传入的 Map/Set）。
+ */
+function attachConcurrency(
+  item: TimelineDelegationItem,
+  concurrencyByParentTurn: Map<string, Set<string>>,
+): TimelineDelegationItem {
+  const runningSet = concurrencyByParentTurn.get(item.parentTurnId);
+  const groupSize = runningSet ? runningSet.size : 0;
+  // 自身已终态（不再 running）或组规模 < 2：均不计入并发组，显式清除并发字段
+  // （避免沿用上一次投影残留的陈旧值）。
+  if (groupSize < 2 || isDelegationTerminal(item.status)) {
+    return { ...item, concurrencyGroupSize: undefined, concurrencyIndex: undefined };
+  }
+  return {
+    ...item,
+    concurrencyGroupSize: groupSize,
+    concurrencyIndex: [...runningSet].indexOf(item.delegationId),
+  };
+}
+
+/**
+ * 重算指定 parent turn 下所有 delegation 条目的并发字段。
+ *
+ * 用于解决「后到达的 sibling 改变并发组规模、但先到达条目已按旧规模定稿」的问题：
+ * 每次 delegation 事件使某 parent 的 running 集合规模变化时，调用本函数把该 parent 下
+ * 所有已投影 delegation 条目按最新集合重算并发字段。仅当某条目的并发字段（规模/序号）
+ * 实际变化时才生成新引用，未变条目沿用旧引用以保 memo 稳定。
+ *
+ * @param entries - 当前显示条目数组（函数内部只读；仅在需要时返回新数组）。
+ * @param parentTurnId - 集合发生变化的 parent turn 标识。
+ * @param concurrencyByParentTurn - parentTurnId → 当前 running 的 delegationId 集合映射。
+ * @returns 仍含最新并发字段的条目数组；若无任何条目变化则直接返回原 `entries` 引用。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无（纯函数，不修改入参的数组/对象/Map/Set）。
+ */
+function reattachConcurrencyForParent(
+  entries: TurnTimelineEntry[],
+  parentTurnId: string,
+  concurrencyByParentTurn: Map<string, Set<string>>,
+): TurnTimelineEntry[] {
+  let changed = false;
+  const next = entries.map((entry) => {
+    if (entry.kind !== "delegation" || entry.item.parentTurnId !== parentTurnId) {
+      return entry;
+    }
+    const updated = attachConcurrency(entry.item, concurrencyByParentTurn);
+    if (
+      updated.concurrencyGroupSize !== entry.item.concurrencyGroupSize ||
+      updated.concurrencyIndex !== entry.item.concurrencyIndex
+    ) {
+      changed = true;
+      return { kind: "delegation", item: updated } as TurnTimelineEntry;
+    }
+    return entry;
+  });
+  return changed ? next : entries;
 }
 
 /**
