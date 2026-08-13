@@ -75,6 +75,10 @@ export function SubagentPanel() {
 
   // 并发 sibling 派生：从扁平事件流派生当前选中 child 所属并发组的全部 sibling；
   // 仅长度 >= 2 时面板渲染 tab（纯前端推导，复用投影器 deriveSiblingDelegations，不重复造轮子）。
+  // 并发 sibling 列表（同 parent 下全部 delegation，含已终态项，便于历史切换查看）。
+  // 注意口径差异：此处列出「同 parent 全量 delegation」，而 timeline 行左侧泳道
+  // （TurnTimeline 的 concurrencyGroupSize）标注的是「当前仍 running 的并发组」，
+  // 两者刻意不同——已结束的并发仍可在 tab 间切换查看，但不再以泳道归组。
   const siblings = useMemo(
     () => (selectedChildTurnId ? deriveSiblingDelegations(allEvents, selectedChildTurnId) : []),
     [selectedChildTurnId, allEvents],
