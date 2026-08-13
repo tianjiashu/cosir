@@ -682,6 +682,49 @@ function isDelegationTerminal(status: TimelineDelegationStatus): boolean {
 }
 
 /**
+ * 从扁平事件流中派生指定 child turn 的委派终态状态（供表现层复用，避免重复造轮子）。
+ *
+ * delegation 生命周期事件的 `turn_id` 属于父 turn，但其 `payload.child_turn_id`
+ * 指向真实 child turn，故按 payload 反查。取 sequence 最大的有效事件作为当前状态，
+ * 复用本文件既有的 `normalizeDelegationStatus`（payload/事件类型→状态归一）与
+ * `delegationStatusFromEvent`（事件类型兜底推导），保证与投影器其它路径口径完全一致。
+ *
+ * @param childTurnId - 待查询的 child turn 标识。
+ * @param events - 扁平事件流（来自 eventStore.events）。
+ * @returns 派生状态（TimelineDelegationStatus 精确联合类型），或 undefined（尚无委派事件）。
+ *   undefined 与 projector 兜底口径一致，由调用方降级处理（如徽章显示"状态未知"）。
+ *
+ * @throws 不抛出异常；payload 字段缺失或类型异常时安全跳过该事件。
+ *
+ * @sideeffect 无（纯函数，不修改入参）。
+ */
+export function deriveChildDelegationStatus(
+  childTurnId: string,
+  events: RuntimeEvent[],
+): TimelineDelegationStatus | undefined {
+  let best: { sequence: number; status: TimelineDelegationStatus } | undefined;
+  for (const event of events) {
+    // 仅关注 child 生命周期事件；delegation_started（父委派）无 child_turn_id，不会误匹配。
+    if (
+      event.event_type !== "delegation_child_started" &&
+      event.event_type !== "delegation_finished" &&
+      event.event_type !== "delegation_failed" &&
+      event.event_type !== "delegation_cancelled"
+    ) {
+      continue;
+    }
+    const payload = event.payload as { child_turn_id?: string; status?: unknown };
+    if (payload.child_turn_id !== childTurnId) continue;
+    const status = normalizeDelegationStatus(payload.status, event.event_type);
+    const sequence = Number(event.sequence || 0);
+    if (!best || sequence >= best.sequence) {
+      best = { sequence, status };
+    }
+  }
+  return best?.status;
+}
+
+/**
  * 投影单个工具事件。
  *
  * 工具相关的摘要与条目委托给共享渲染层（`projectToolRequestSummary` /

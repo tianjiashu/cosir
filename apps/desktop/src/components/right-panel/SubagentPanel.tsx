@@ -17,99 +17,32 @@
  */
 
 import { useMemo } from "react";
-import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 import { Badge } from "@/components/ui/badge";
 import { Caption } from "@/components/ui/tokens";
 import { cn } from "@/lib/utils";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
-import { projectTurnTimeline } from "@/services/timeline/projector";
+import {
+  deriveChildDelegationStatus,
+  projectTurnTimeline,
+  type TimelineDelegationStatus,
+} from "@/services/timeline/projector";
 import { useDelegationStore } from "@/stores/delegationStore";
-import { useEventStore } from "@/stores/eventStore";
+import { EMPTY_EVENTS, useEventStore } from "@/stores/eventStore";
 import { useTurnStore } from "@/stores/turnStore";
 
-/** 稳定的空事件数组常量：避免 useEventStore 每次返回新 [] 引用触发无限重渲染。 */
-const EMPTY_EVENTS: RuntimeEvent[] = [];
-
-/** 描述委派生命周期的事件类型集合（用于从事件流派生 child 状态徽章）。 */
-const DELEGATION_LIFECYCLE_EVENTS = new Set<RuntimeEvent["event_type"]>([
-  "delegation_child_started",
-  "delegation_finished",
-  "delegation_failed",
-  "delegation_cancelled",
-]);
-
-/** 委派状态到中文徽章文案与变体的映射。 */
+/** 委派状态到中文徽章文案与变体的映射（穷尽 TimelineDelegationStatus 全部取值）。 */
 const DELEGATION_STATUS_BADGE: Record<
-  string,
+  TimelineDelegationStatus,
   { label: string; variant: "outline" | "success" | "destructive" | "warning" | "secondary" }
 > = {
+  pending: { label: "等待中", variant: "outline" },
+  waiting_approval: { label: "待审批", variant: "warning" },
   running: { label: "运行中", variant: "secondary" },
   completed: { label: "已完成", variant: "success" },
   failed: { label: "失败", variant: "destructive" },
   cancelled: { label: "已取消", variant: "outline" },
 };
-
-/**
- * 从扁平事件流中派生指定 child turn 的委派终态状态。
- *
- * delegation 生命周期事件的 `turn_id` 属于父 turn，但其 `payload.child_turn_id`
- * 指向真实 child turn，故按 payload 反查。取 sequence 最大的有效事件作为当前状态。
- *
- * @param childTurnId - 待查询的 child turn 标识。
- * @param events - 扁平事件流（来自 eventStore.events）。
- * @returns 派生状态 key（running/completed/failed/cancelled）或 undefined（尚无委派事件）。
- *
- * @throws 不抛出异常；payload 字段缺失或类型异常时安全跳过。
- *
- * @sideeffect 无。
- */
-function deriveDelegationStatus(
-  childTurnId: string,
-  events: RuntimeEvent[],
-): string | undefined {
-  let best: { sequence: number; status: string } | undefined;
-  for (const event of events) {
-    if (!DELEGATION_LIFECYCLE_EVENTS.has(event.event_type)) continue;
-    const payload = event.payload as { child_turn_id?: string; status?: unknown };
-    if (payload.child_turn_id !== childTurnId) continue;
-    const status = normalizeDelegationStatus(payload.status, event.event_type);
-    if (!status) continue;
-    const sequence = Number(event.sequence || 0);
-    if (!best || sequence >= best.sequence) {
-      best = { sequence, status };
-    }
-  }
-  return best?.status;
-}
-
-/**
- * 将委派状态（事件 payload 或事件类型推导）归一化为统一 key。
- *
- * 与投影器 projectDelegation 的归一逻辑保持口径一致：终态事件直接给终态，
- * delegation_child_started 视为运行中。
- *
- * @param status - 事件 payload 中的 status（可能为任意类型）。
- * @param eventType - 事件类型，用于无显式 status 时兜底推导。
- * @returns 归一化状态 key，或 undefined（无法识别）。
- *
- * @throws 不抛出异常。
- *
- * @sideeffect 无。
- */
-function normalizeDelegationStatus(status: unknown, eventType: RuntimeEvent["event_type"]): string | undefined {
-  if (typeof status === "string" && status.length > 0) {
-    if (["running", "completed", "failed", "cancelled", "pending", "waiting_approval"].includes(status)) {
-      return status;
-    }
-    return undefined;
-  }
-  if (eventType === "delegation_child_started") return "running";
-  if (eventType === "delegation_finished") return "completed";
-  if (eventType === "delegation_failed") return "failed";
-  if (eventType === "delegation_cancelled") return "cancelled";
-  return undefined;
-}
 
 /**
  * 侧边栏子 Agent 面板。
@@ -135,24 +68,29 @@ export function SubagentPanel() {
   const allEvents = useEventStore((state) => state.events);
   const turnsByTaskId = useTurnStore((state) => state.turnsByTaskId);
 
-  const turnRecord = useMemo<TurnRecord>(() => {
-    if (!selectedChildTurnId) return createFallbackTurn("");
+  // 选中态下从事件流派生 child 委派状态，供徽章与兜底 record 的 status 映射共用，
+  // 保证「左侧状态」与「右侧 timeline 口径」同源（复用投影器 deriveChildDelegationStatus）。
+  const delegationStatus = useMemo(
+    () => (selectedChildTurnId ? deriveChildDelegationStatus(selectedChildTurnId, allEvents) : undefined),
+    [selectedChildTurnId, allEvents],
+  );
+
+  // 未选中时返回 null（类型 TurnRecord | null），避免无谓构造兜底 record；
+  // 下方消费点加 null 守卫。
+  const turnRecord = useMemo<TurnRecord | null>(() => {
+    if (!selectedChildTurnId) return null;
     // 优先在 turnStore 中查找真实 TurnRecord，避免捏造不存在的数据。
     for (const turns of Object.values(turnsByTaskId)) {
       const match = turns.find((turn) => turn.turn_id === selectedChildTurnId);
       if (match) return match;
     }
-    return createFallbackTurn(selectedChildTurnId);
-  }, [selectedChildTurnId, turnsByTaskId]);
+    // 无真实记录时构造兜底 record，status 据派生状态映射（详见 createFallbackTurn docstring）。
+    return createFallbackTurn(selectedChildTurnId, delegationStatus);
+  }, [selectedChildTurnId, turnsByTaskId, delegationStatus]);
 
-  const delegationStatus = useMemo(
-    () => (selectedChildTurnId ? deriveDelegationStatus(selectedChildTurnId, allEvents) : undefined),
-    [selectedChildTurnId, allEvents],
-  );
-
-  // 选中态下的派生渲染数据（仅在已选中时计算，减少无谓投影）。
+  // 选中态下的派生渲染数据（仅在已选中且已取到 turnRecord 时计算，减少无谓投影）。
   const childTimelineItem = useMemo(() => {
-    if (!selectedChildTurnId) return null;
+    if (!selectedChildTurnId || !turnRecord) return null;
     const items = projectTurnTimeline([turnRecord], childEvents);
     return items[0] ?? null;
   }, [selectedChildTurnId, turnRecord, childEvents]);
@@ -192,7 +130,7 @@ export function SubagentPanel() {
       {/* timeline 区域：事件未到时显示 loading，已到则复用 TurnTimeline 渲染 */}
       {childEvents.length === 0 ? (
         <p className="text-xs text-muted-foreground">正在等待子 Agent 事件流…</p>
-      ) : childTimelineItem ? (
+      ) : turnRecord && childTimelineItem ? (
         <TurnTimeline turn={turnRecord} events={childEvents} />
       ) : (
         <p className="text-xs text-muted-foreground">该子 Agent 暂无可渲染的时间线条目。</p>
@@ -207,15 +145,32 @@ export function SubagentPanel() {
  * 仅填充业务必需的 turn_id；input/response 留空，由 projectTurnTimeline 在
  * 无条目且有 response_text 时兜底渲染，保证不捏造不存在的内容。
  *
+ * `status` 取值逻辑（正确性优先，不再写死 "completed"）：
+ * - 派生状态为 "running" → "running"；
+ * - 派生状态为 "completed"/"failed"/"cancelled" → 同名（与派生口径一致）；
+ * - 派生状态为 "pending"/"waiting_approval"/undefined → "pending"（尚无明确运行信号）。
+ * 该字段被下游 `TurnTimeline` 用于判定 `isTurnActive`（取 "pending"||"running" 为活跃态）：
+ * 写死 "completed" 会让「正在运行但 turnStore 尚未落库」的 child 被误判为终态，导致
+ * pending/思考块被提前折叠、看不到实时进行态；改用派生映射后，进行态 child 以 streaming
+ * 口径展开，贴合 brief A3「选中但事件未到时显示 loading/进行态」意图。
+ *
  * @param turnId - child turn 标识。
- * @returns 最小可用的 TurnRecord。
+ * @param derived - 从该 child 事件流派生的委派状态（可为 undefined）。
+ * @returns 最小可用的 TurnRecord，其 status 按派生状态映射（见上方取值逻辑）。
  */
-function createFallbackTurn(turnId: string): TurnRecord {
+function createFallbackTurn(turnId: string, derived: TimelineDelegationStatus | undefined): TurnRecord {
+  const status: TurnRecord["status"] =
+    derived === "running" ||
+    derived === "completed" ||
+    derived === "failed" ||
+    derived === "cancelled"
+      ? derived
+      : "pending";
   return {
     turn_id: turnId,
     task_id: "",
     input_text: "",
-    status: "completed",
+    status,
     end_reason: null,
     response_text: null,
     created_at: "",
