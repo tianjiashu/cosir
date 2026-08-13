@@ -84,4 +84,45 @@ describe("DelegationTimelineEntry", () => {
     expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
     expect(screen.getByLabelText("Open delegate_reviewer child timeline in side panel")).toBeTruthy();
   });
+
+  it("传入并发字段（size=2, index=0）时渲染「并发 1/2」文案", () => {
+    render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+        concurrencyGroupSize={2}
+        concurrencyIndex={0}
+      />,
+    );
+
+    // index 从 0 起 → 展示 1/2；非并发场景不渲染该文案。
+    expect(screen.getByText("并发 1 / 2")).toBeTruthy();
+    expect(screen.queryByText("并发 ? / 2")).toBeNull();
+  });
+
+  it("非并发（size 缺失或 < 2）时不渲染并发文案", () => {
+    const { rerender } = render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+      />,
+    );
+    expect(screen.queryByText(/并发/)).toBeNull();
+
+    rerender(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+        concurrencyGroupSize={1}
+        concurrencyIndex={0}
+      />,
+    );
+    expect(screen.queryByText(/并发/)).toBeNull();
+  });
 });

@@ -851,6 +851,95 @@ export function deriveChildDelegationStatus(
   return best?.status;
 }
 
+/** 同一并发组（同 parent turn）下的一个 sibling 子 Agent 派生视图。 */
+export interface SiblingDelegation {
+  /** sibling child turn 标识。 */
+  childTurnId: string;
+  /** sibling child AgentProfile id。 */
+  childAgentId: string;
+  /** 该 sibling 的委派生命周期状态（由最新事件归一）。 */
+  status: TimelineDelegationStatus;
+}
+
+/**
+ * 从扁平事件流中派生指定 child turn 的并发 sibling 列表（供右侧面板以 tab 列出并切换）。
+ *
+ * 逻辑（纯前端推导，零新事件、零后端改动）：
+ * 1. 在 `events` 中找 `delegation_child_started` 事件且 `child_turn_id === selectedChildTurnId`，
+ *    取其 `parent_turn_id`（记为 parentTurnId）；找不到（无选中对、或选中项不是并发 child）返回 `[]`。
+ * 2. 遍历 `events` 中 `DELEGATION_EVENTS` 内、`parent_turn_id === parentTurnId` 的事件，
+ *    按 `delegation_id` 分组；每组取最新状态（复用 `normalizeDelegationStatus` /
+ *    `delegationStatusFromEvent` 口径，不平行重写）与最新 `child_turn_id` / `child_agent_id`，
+ *    构造 `SiblingDelegation[]`。
+ * 3. 返回列表（长度不限）；调用方（SubagentPanel）只在长度 >= 2 时渲染并发 tab。
+ * 注意：同一 delegation_id 的不同事件按 sequence 取最新，保证与投影器其它路径状态口径一致。
+ *
+ * @param events - 扁平事件流（来自 eventStore.events）。
+ * @param selectedChildTurnId - 当前选中的 child turn 标识。
+ * @returns sibling 派生视图数组；无并发关系时返回空数组 `[]`。
+ *
+ * @throws 不抛出异常；payload 字段缺失或类型异常时安全跳过该事件。
+ *
+ * @sideeffect 无（纯函数，不修改入参）。
+ */
+export function deriveSiblingDelegations(
+  events: RuntimeEvent[],
+  selectedChildTurnId: string,
+): SiblingDelegation[] {
+  if (!selectedChildTurnId) return [];
+
+  // 1. 反查选中 child 的 parent turn（仅 delegation_child_started 带 child_turn_id）。
+  let parentTurnId: string | undefined;
+  for (const event of events) {
+    if (event.event_type !== "delegation_child_started") continue;
+    const payload = event.payload as { child_turn_id?: string; parent_turn_id?: string };
+    if (payload.child_turn_id !== selectedChildTurnId) continue;
+    parentTurnId = payload.parent_turn_id ?? event.turn_id;
+    break;
+  }
+  if (parentTurnId == null) return [];
+
+  // 2. 按 delegation_id 分组，取每组最新状态与最新 child/agent 标识。
+  const byDelegation = new Map<
+    string,
+    { sequence: number; status: TimelineDelegationStatus; childTurnId?: string; childAgentId: string }
+  >();
+  for (const event of events) {
+    if (!DELEGATION_EVENTS.has(event.event_type)) continue;
+    const payload = event.payload as {
+      delegation_id?: string;
+      parent_turn_id?: string;
+      child_turn_id?: string | null;
+      child_agent_id?: string;
+      status?: unknown;
+    };
+    if (payload.parent_turn_id !== parentTurnId) continue;
+    const delegationId = typeof payload.delegation_id === "string" ? payload.delegation_id.trim() : "";
+    if (!delegationId) continue;
+    const sequence = Number(event.sequence || 0);
+    const existing = byDelegation.get(delegationId);
+    if (existing && sequence < existing.sequence) continue;
+    byDelegation.set(delegationId, {
+      sequence,
+      status: normalizeDelegationStatus(payload.status, event.event_type),
+      childTurnId: payload.child_turn_id ? String(payload.child_turn_id) : existing?.childTurnId,
+      childAgentId: String(payload.child_agent_id ?? existing?.childAgentId ?? ""),
+    });
+  }
+
+  // 3. 构造派生视图（仅保留有 child_turn_id 的 sibling）。
+  const siblings: SiblingDelegation[] = [];
+  for (const entry of byDelegation.values()) {
+    if (!entry.childTurnId) continue;
+    siblings.push({
+      childTurnId: entry.childTurnId,
+      childAgentId: entry.childAgentId,
+      status: entry.status,
+    });
+  }
+  return siblings;
+}
+
 /**
  * 投影单个工具事件。
  *

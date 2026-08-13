@@ -30,6 +30,16 @@ interface DelegationTimelineEntryProps {
   error?: string;
   /** Render-ready expanded child timeline events. */
   childEntries?: ReactNode;
+  /**
+   * 并发组规模：同 parent turn 下同时处于 running 的 delegation 数量。
+   * 仅当构成并发组（数量 >= 2）时由投影器附加，非并发为 undefined。
+   */
+  concurrencyGroupSize?: number;
+  /**
+   * 并发组内序号：该 delegation 在并发组中的稳定位置（从 0 起）。
+   * 仅当 `concurrencyGroupSize >= 2` 时附加；非并发时为 undefined。
+   */
+  concurrencyIndex?: number;
 }
 
 const STATUS_CONFIG: Record<
@@ -60,6 +70,10 @@ const STATUS_CONFIG: Record<
  *   焦点在展开箭头上按 Enter 只展开、不打开侧边栏（修复原 role=button 嵌套导致的键盘 bug）。
  * - 选中态视觉高亮：当 `delegationStore.selectedChildTurnId` 与当前 `childTurnId` 相等时，
  *   给「打开侧边栏」按钮加高亮边框（aria-current 同步）。
+ * - 并发指示：当 `concurrencyGroupSize` 存在且 >= 2 时，在行内（状态徽章旁）渲染
+ *   `并发 ${concurrencyIndex + 1} / ${concurrencyGroupSize}` 徽章，提示该 delegation 属于
+ *   一个并发组（与同组的其它 delegation 行由 TurnTimeline 的泳道左边框在视觉上归组）。
+ *   非并发（size < 2 或字段缺失）不渲染并发指示。
  * - 内联展开能力保留：`childEntries` 折叠箭头展开逻辑不受影响，与「侧边栏入口」互补共存。
  *
  * @param props - 委派元数据与可选的已展开子 timeline 内容。
@@ -78,11 +92,15 @@ export const DelegationTimelineEntry = memo(function DelegationTimelineEntry({
   summary,
   error,
   childEntries,
+  concurrencyGroupSize,
+  concurrencyIndex,
 }: DelegationTimelineEntryProps) {
   const [isOpen, setIsOpen] = useState(false);
   const hasChildEntries = Children.count(childEntries) > 0;
   const { variant, Icon } = STATUS_CONFIG[status];
   const detail = status === "failed" || status === "cancelled" ? error : summary;
+  // 并发指示：仅当并发组规模 >= 2 时展示「并发 index+1/size」徽章（与同组泳道左边框互补）。
+  const showConcurrency = concurrencyGroupSize != null && concurrencyGroupSize >= 2;
 
   // 选中态：读取委派选中 store，与当前 childTurnId 比对决定高亮（单一职责：仅 UI 选中态）。
   const selectedChildTurnId = useDelegationStore((state) => state.selectedChildTurnId);
@@ -135,6 +153,11 @@ export const DelegationTimelineEntry = memo(function DelegationTimelineEntry({
                 <Icon className={cn("h-3 w-3", status === "running" && "animate-spin")} />
                 {status}
               </Badge>
+              {showConcurrency && (
+                <Badge variant="secondary" className="shrink-0 gap-1 px-2 py-0">
+                  {`并发 ${concurrencyIndex != null ? concurrencyIndex + 1 : "?"} / ${concurrencyGroupSize}`}
+                </Badge>
+              )}
               <span className={cn(Caption.mono, "min-w-0 break-all text-muted-foreground")}>
                 {childAgentId}
               </span>

@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
 import {
   deriveChildDelegationStatus,
+  deriveSiblingDelegations,
   projectTurnTimeline,
   type TimelineDelegationStatus,
 } from "@/services/timeline/projector";
@@ -52,6 +53,9 @@ const DELEGATION_STATUS_BADGE: Record<
  * - 选中但对应 child 事件尚未到达：显示 loading 占位（框架已就绪，等待数据流填充）。
  * - 选中且事件已到：顶部展示 child turn 元信息（id + 委派状态徽章），
  *   下方复用 TurnTimeline 渲染该 child turn 的完整 timeline。
+ * - 并发切换：当前选中的 child 属于某并发组（同 parent turn 下 >= 2 个 running 的 delegation）
+ *   时，面板顶部以 tab 列出全部 sibling 子 Agent（各自状态徽章），点击 tab 调
+ *   `delegationStore.selectChildTurn` 切换选中（复用 Task 1 的选中态通道），下方随之渲染对应 child。
  *
  * @returns 右侧面板中展示选中 child turn 的区块；属于 RightPanel 的 SourcesTab 子树。
  *
@@ -67,6 +71,14 @@ export function SubagentPanel() {
   );
   const allEvents = useEventStore((state) => state.events);
   const turnsByTaskId = useTurnStore((state) => state.turnsByTaskId);
+  const selectChildTurn = useDelegationStore((state) => state.selectChildTurn);
+
+  // 并发 sibling 派生：从扁平事件流派生当前选中 child 所属并发组的全部 sibling；
+  // 仅长度 >= 2 时面板渲染 tab（纯前端推导，复用投影器 deriveSiblingDelegations，不重复造轮子）。
+  const siblings = useMemo(
+    () => (selectedChildTurnId ? deriveSiblingDelegations(allEvents, selectedChildTurnId) : []),
+    [selectedChildTurnId, allEvents],
+  );
 
   // 选中态下从事件流派生 child 委派状态，供徽章与兜底 record 的 status 映射共用，
   // 保证「左侧状态」与「右侧 timeline 口径」同源（复用投影器 deriveChildDelegationStatus）。
@@ -110,6 +122,36 @@ export function SubagentPanel() {
 
   return (
     <div className="space-y-2 rounded-md border border-border p-2">
+      {/* 并发 tab：仅当当前选中 child 属于并发组（siblings.length >= 2）时渲染，
+          每个 tab 显示 childAgentId + 状态徽章，点击切换选中（aria-current 标记当前项）。 */}
+      {siblings.length >= 2 && (
+        <div className="flex min-w-0 flex-wrap gap-1.5" role="tablist" aria-label="并发子 Agent 切换">
+          {siblings.map((sibling) => {
+            const badge = DELEGATION_STATUS_BADGE[sibling.status];
+            const isCurrent = sibling.childTurnId === selectedChildTurnId;
+            return (
+              <button
+                key={sibling.childTurnId}
+                type="button"
+                role="tab"
+                aria-current={isCurrent ? "true" : undefined}
+                onClick={() => selectChildTurn(sibling.childTurnId)}
+                className={cn(
+                  "inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs outline-none transition-colors",
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                  isCurrent ? "bg-accent ring-1 ring-accent" : "hover:bg-accent/40",
+                )}
+              >
+                <span className={cn(Caption.mono, "min-w-0 break-all")}>{sibling.childAgentId}</span>
+                <Badge variant={badge.variant} className="shrink-0 gap-1 px-2 py-0">
+                  {badge.label}
+                </Badge>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* 元信息头部：child turn id + 委派状态徽章 */}
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="text-xs font-medium">Subagent</span>
