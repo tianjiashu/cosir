@@ -34,9 +34,6 @@ class ReactGraphState(BaseModel):
     是否持久化 = 是否进入 checkpoint）：
 
     Attributes:
-        step_count: 已执行的模型步骤数，配合 ``max_steps`` 防无限循环。**写入方**：``model``
-            节点（每步 +1）。**消费方**：``model`` 节点（超步数判定）、``tools`` 节点（生成
-            step_id）。**持久化**：是。
         tool_error_count: 连续工具失败次数，成功即清零。**写入方**：``observe`` 节点（从本批
             ``last_tool_results`` 重算）。**消费方**：``observe`` 节点（超 ``tool_error_limit``
             判定）。**持久化**：是。
@@ -62,8 +59,13 @@ class ReactGraphState(BaseModel):
             ``observe`` 节点做错误计数与错误上限判定、并为后续「LLM 观察工具结果」提供原材料。
             **不承载** ``data`` 等大体积结构化字段，``content`` 已截断到安全长度以防撑爆
             checkpoint。**写入方**：``tools`` 节点。**消费方**：``observe`` 节点。**持久化**：是。
+        continuation_error_data: 终态（如 ``max_steps_node`` 因步数耗尽落定时）携带的排查用
+            错误明细（可序列化 dict，通常含 ``error_kind`` / ``invalid_count`` 等分类字段）。
+            **写入方**：编排层初始化 ``input_state`` 置 ``None``；``model_node`` 在修复回流路径
+            写入结构化明细（Task 2 落地）。**消费方**：``max_steps_node``（读取后并入
+            ``RUN_FAILED`` 事件的 ``data``）。**持久化**：是（进入 checkpoint）。
     """
-
+    repair_requested: str
     step_count: int
     tool_error_count: int
     requested_tool: bool
@@ -74,3 +76,5 @@ class ReactGraphState(BaseModel):
     final_text: str
     # 本批工具执行结果摘要（可序列化），供 observe 节点判定与后续 LLM 观察使用。
     last_tool_results: list[dict[str, Any]]
+    # 终态排查用错误明细（可序列化 dict），默认 None；由 max_steps_node 读取并入失败事件 data。
+    continuation_error_data: Any = None

@@ -75,14 +75,20 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 延迟导入节点，打破 nodes 子包与 react 包之间的循环导入：
         # nodes.model_node -> react.state/runtime_config -> react.__init__
         # -> react.workflow -> nodes
-        from ..nodes import _model_node, _observe_node, _tools_node
+        from ..nodes import _max_steps_node, _model_node, _observe_node, _tools_node
 
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
         builder.add_node("observe", _observe_node)
+        builder.add_node("max_steps", _max_steps_node)
         builder.add_edge(START, "model")
-        builder.add_conditional_edges("model", _should_continue, {"tools": "tools", END: END})
+        builder.add_conditional_edges(
+            "model",
+            _should_continue,
+            {"tools": "tools", "model": "model", "max_steps": "max_steps", END: END},
+        )
+        builder.add_edge("max_steps", END)
         # tools 执行后进入 observe（取消/终态分支仍直接 END，不进 observe 避免多余推理）。
         builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
         # observe 判定后回 model 继续推理，或达错误上限终态 END。
@@ -135,7 +141,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             operations.model_tools, set(agent_profile.allowed_tools)
         )
         try:
-            bound_model = base_model.bind_tools(tool_schemas) if tool_schemas else base_model
+            bound_model = (
+                base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model
+            )
         except NotImplementedError:
             log.warning(
                 "model %s does not support bind_tools; running without tools "
@@ -182,6 +190,8 @@ class ReactLikeWorkflow(AgentWorkflow):
                 step_count=0,
                 tool_error_count=0,
                 requested_tool=False,
+                repair_requested="false",
+                continuation_error_data=None,
                 final_response=False,
                 terminal=False,
                 pending_tool_calls=[],

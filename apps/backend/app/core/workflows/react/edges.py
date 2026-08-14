@@ -21,6 +21,10 @@ def _should_continue(state: ReactGraphState) -> str:
 
     if state.terminal or state.final_response:
         return END
+    if (state.repair_requested or state.requested_tool) and state.step_count >= state.max_steps:
+        return "max_steps"
+    if state.repair_requested:
+        return "model"
     if state.requested_tool:
         return "tools"
     return END
