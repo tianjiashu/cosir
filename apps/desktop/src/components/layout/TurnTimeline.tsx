@@ -342,8 +342,12 @@ const TimelineEntry = memo(function TimelineEntry({
   }
   if (entry.kind === "delegation") {
     const delegation = entry.item;
+    // 并发组泳道：同一并发组（size >= 2）的 delegation 行在左侧用更粗的强调竖线归组，
+    // 与 DelegationTimelineEntry 自身根的细 `border-l` 区分，避免双竖线。
+    const isConcurrencyLane = delegation.concurrencyGroupSize != null && delegation.concurrencyGroupSize >= 2;
+    const laneClass = isConcurrencyLane ? `${widthClass} border-l-2 border-primary/40` : widthClass;
     return (
-      <div className={widthClass}>
+      <div className={laneClass}>
         <DelegationTimelineEntry
           childAgentId={delegation.childAgentId}
           status={delegation.status}
@@ -351,6 +355,8 @@ const TimelineEntry = memo(function TimelineEntry({
           delegationType={delegation.delegationType}
           summary={delegation.summary}
           error={delegation.error}
+          concurrencyGroupSize={delegation.concurrencyGroupSize}
+          concurrencyIndex={delegation.concurrencyIndex}
           childEntries={delegation.childTurnId ? renderChildEntries?.(delegation.childTurnId) : undefined}
         />
       </div>

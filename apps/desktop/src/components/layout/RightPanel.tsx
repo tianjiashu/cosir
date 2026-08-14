@@ -6,11 +6,9 @@
  * - SourcesTab：Sources 列表（引用文档、上下文片段、规则文件）
  * - ContextBlock：上下文引用占位
  * - McpBlock：MCP 入口占位
- * - SubagentBlock：subagent 分组占位
+ * - SubagentPanel：选中委派子 Agent 的 timeline 展示（复用真实 child 事件流）
  *
  * 变更集（Changes）已从右侧栏移出，改由中央对话区上方的 ChangesDrawer 折叠呈现。
- *
- * 第一版使用静态 mock 数据。
  *
  * @module components/layout/RightPanel
  */
@@ -23,7 +21,7 @@ import { OutputsTab, type OutputItem } from "@/components/right-panel/OutputsTab
 import { SourcesTab, type SourceItem } from "@/components/right-panel/SourcesTab";
 import { ContextBlock } from "@/components/right-panel/ContextBlock";
 import { McpBlock } from "@/components/right-panel/McpBlock";
-import { SubagentBlock } from "@/components/right-panel/SubagentBlock";
+import { SubagentPanel } from "@/components/right-panel/SubagentPanel";
 
 /** Mock Outputs 数据（第一版静态数据）。 */
 const MOCK_OUTPUTS: OutputItem[] = [
@@ -109,7 +107,7 @@ export function RightPanel() {
                 {/* 预留扩展区块：使用独立子组件 */}
                 <ContextBlock />
                 <McpBlock />
-                <SubagentBlock />
+                <SubagentPanel />
               </div>
             </ScrollArea>
           </TabsContent>

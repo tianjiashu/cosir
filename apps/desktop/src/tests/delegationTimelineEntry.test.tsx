@@ -2,6 +2,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DelegationTimelineEntry } from "@/components/chat/DelegationTimelineEntry";
+import { useDelegationStore } from "@/stores/delegationStore";
 
 const LONG_ID =
   "delegate_reviewer_with_a_very_long_identifier_that_should_not_force_horizontal_overflow";
@@ -61,5 +62,67 @@ describe("DelegationTimelineEntry", () => {
     fireEvent.click(screen.getByLabelText("Expand delegated child events"));
 
     expect(screen.getByText("child timeline output")).toBeTruthy();
+  });
+
+  it("焦点在展开箭头按钮上按 Enter 不打开侧边栏（兄弟原生 button，无外层 role=button 冒泡键盘 bug）", () => {
+    render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child_kbd_arrow"
+        delegationType="review"
+        status="running"
+        childEntries={<div>child timeline output</div>}
+      />,
+    );
+
+    // 修复前：外层 role=button 的 onKeyDown 会吞掉箭头 Enter 并误触发 openSidePanel。
+    // 修复后：展开箭头与「打开侧边栏」是同级原生 button，焦点在箭头上按 Enter 不应触达侧边栏选中。
+    const arrow = screen.getByLabelText("Expand delegated child events");
+    fireEvent.keyDown(arrow, { key: "Enter" });
+
+    // 关键回归点：选中态未被误写，侧边栏入口按钮仍未被激活。
+    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
+    expect(screen.getByLabelText("Open delegate_reviewer child timeline in side panel")).toBeTruthy();
+  });
+
+  it("传入并发字段（size=2, index=0）时渲染「并发 1/2」文案", () => {
+    render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+        concurrencyGroupSize={2}
+        concurrencyIndex={0}
+      />,
+    );
+
+    // index 从 0 起 → 展示 1/2；非并发场景不渲染该文案。
+    expect(screen.getByText("并发 1 / 2")).toBeTruthy();
+    expect(screen.queryByText("并发 ? / 2")).toBeNull();
+  });
+
+  it("非并发（size 缺失或 < 2）时不渲染并发文案", () => {
+    const { rerender } = render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+      />,
+    );
+    expect(screen.queryByText(/并发/)).toBeNull();
+
+    rerender(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        childTurnId="turn_child"
+        delegationType="review"
+        status="running"
+        concurrencyGroupSize={1}
+        concurrencyIndex={0}
+      />,
+    );
+    expect(screen.queryByText(/并发/)).toBeNull();
   });
 });

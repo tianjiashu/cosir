@@ -100,6 +100,16 @@ export interface TimelineDelegationItem {
   summary?: string;
   /** Failed or cancelled terminal reason. */
   error?: string;
+  /**
+   * 并发组规模：同 parent turn 下同时处于 running 的 delegation 数量。
+   * 仅当数量 >= 2（构成并发组）时附加；非并发（或组仅 1）时为 undefined。
+   */
+  concurrencyGroupSize?: number;
+  /**
+   * 并发组内序号：该 delegation 在并发组中的稳定位置（从 0 起，按 running 到达顺序）。
+   * 仅当 `concurrencyGroupSize >= 2` 时附加；非并发时为 undefined。
+   */
+  concurrencyIndex?: number;
 }
 
 /** turn 内按事件顺序渲染的 timeline 条目。 */
@@ -147,6 +157,13 @@ export interface TimelineProjectorState {
   toolByCallId: Map<string, number>;
   /** delegationId → entries index, used to merge lifecycle events. */
   delegationById: Map<string, number>;
+  /**
+   * parentTurnId → 当前处于 running 的 delegationId 集合。
+   * 用于派生并发组信息：同 parent 下同时 running 的 delegation 数量即集合规模。
+   * 幂等保证：本集合随 delegation 生命周期事件维护（到达即加入、进入终态即移除），
+   * 配合 `processedEventIds` 的 event_id 去重，乱序/回放到达不漂移计数。
+   */
+  concurrencyByParentTurn: Map<string, Set<string>>;
   /** 已投影 event_id 集合（幂等去重）。 */
   processedEventIds: Set<string>;
 }
@@ -160,6 +177,7 @@ export const EMPTY_PROJECTION_STATE: TimelineProjectorState = {
   finalResponseReceived: false,
   toolByCallId: new Map(),
   delegationById: new Map(),
+  concurrencyByParentTurn: new Map(),
   processedEventIds: new Set(),
 };
 
@@ -177,6 +195,7 @@ export function createTimelineProjectorState(): TimelineProjectorState {
     finalResponseReceived: false,
     toolByCallId: new Map(),
     delegationById: new Map(),
+    concurrencyByParentTurn: new Map(),
     processedEventIds: new Set(),
   };
 }
@@ -204,6 +223,12 @@ export function createTimelineProjectorState(): TimelineProjectorState {
  * @throws 不抛出异常。
  *
  * @sideeffect 无（纯函数，不修改 prev）。
+ *   对 `prev` 中所有可变结构（entries 数组、pendingDelta/pendingThinking 对象、
+ *   toolByCallId/delegationById/concurrencyByParentTurn 映射、processedEventIds 集合）
+ *   均做拷贝后再改；其中 `concurrencyByParentTurn` 为「外层 Map + 内层 Set」两层结构，
+ *   函数开头仅浅拷贝外层 Map，内层 Set 仍与 prev 共享引用，因此任何对并发集合的修改
+ *   都需先拷贝内层 Set（`new Set(prevSet)`）再 set 回 Map，绝不就地 mutate 内层 Set，
+ *   以保证同一 prev 可被多次安全分叉投影而不互相污染（详见 delegation 分支实现）。
  */
 export function projectTimelineIncrementally(
   prev: TimelineProjectorState,
@@ -227,6 +252,7 @@ export function projectTimelineIncrementally(
   let finalResponseReceived = prev.finalResponseReceived;
   const toolByCallId = new Map(prev.toolByCallId);
   const delegationById = new Map(prev.delegationById);
+  const concurrencyByParentTurn = new Map(prev.concurrencyByParentTurn);
   const processedEventIds = new Set(prev.processedEventIds);
 
   const flushPending = () => {
@@ -323,15 +349,41 @@ export function projectTimelineIncrementally(
 
     const delegation = projectDelegation(event);
     if (delegation) {
-      const idx = delegationById.get(delegation.delegationId);
+      const parentTurnId = delegation.parentTurnId;
+      const did = delegation.delegationId;
+
+      // 维护并发集合：到达即加入；进入终态则从 running 集合移除（不再并发）。
+      // 不可变更新：从 Map 取到的内层 Set 仍与 prev 共享引用，必须拷贝后再改，
+      // 严禁对原 Set 就地 add/delete，否则会污染调用方仍持有的 prev 状态。
+      const prevRunningSet = concurrencyByParentTurn.get(parentTurnId);
+      const nextRunningSet = new Set(prevRunningSet);
+      if (isDelegationTerminal(delegation.status)) {
+        nextRunningSet.delete(did);
+      } else {
+        nextRunningSet.add(did);
+      }
+      concurrencyByParentTurn.set(parentTurnId, nextRunningSet);
+
+      const idx = delegationById.get(did);
       if (idx !== undefined) {
         const existing = entries[idx] as Extract<TurnTimelineEntry, { kind: "delegation" }>;
         entries = entries.slice();
-        entries[idx] = { kind: "delegation", item: mergeDelegation(existing.item, delegation) };
+        entries[idx] = {
+          kind: "delegation",
+          item: attachConcurrency(mergeDelegation(existing.item, delegation), concurrencyByParentTurn),
+        };
       } else {
-        delegationById.set(delegation.delegationId, entries.length);
-        entries = entries.concat({ kind: "delegation", item: delegation });
+        delegationById.set(did, entries.length);
+        entries = entries.concat({
+          kind: "delegation",
+          item: attachConcurrency(delegation, concurrencyByParentTurn),
+        });
       }
+
+      // 当前 delegation 的到达/终态改变了集合规模，需同步重算同 parent 下
+      // 其它已投影 delegation 条目的并发字段（它们可能因此进入或退出并发组）。
+      // 仅当并发字段实际变化时才产生新引用，避免无谓击穿 memo。
+      entries = reattachConcurrencyForParent(entries, parentTurnId, concurrencyByParentTurn);
       continue;
     }
 
@@ -419,6 +471,7 @@ export function projectTimelineIncrementally(
     finalResponseReceived,
     toolByCallId,
     delegationById,
+    concurrencyByParentTurn,
     processedEventIds,
   };
 }
@@ -615,6 +668,80 @@ function mergeDelegation(
 }
 
 /**
+ * 为 delegation 条目附加并发组字段（并发组规模与组内序号）。
+ *
+ * 逻辑：从 `concurrencyByParentTurn` 取该 delegation 所属 parent turn 当前 running 的
+ * delegation 集合；仅当集合规模 >= 2（构成并发组）时，才在返回副本上附加
+ * `concurrencyGroupSize`（集合规模）与 `concurrencyIndex`（该 delegation 在集合中的插入序，
+ * 因 Set 迭代顺序即插入顺序故序号稳定）。集合规模 < 2 时不附加任何并发字段，保持 undefined。
+ *
+ * @param item - 待附加并发字段的 delegation 条目（不会被修改）。
+ * @param concurrencyByParentTurn - parentTurnId → 当前 running 的 delegationId 集合映射。
+ * @returns 新 delegation 条目：规模 >= 2 时带并发字段，否则沿用原条目的浅拷贝。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无（纯函数，不修改入参与传入的 Map/Set）。
+ */
+function attachConcurrency(
+  item: TimelineDelegationItem,
+  concurrencyByParentTurn: Map<string, Set<string>>,
+): TimelineDelegationItem {
+  const runningSet = concurrencyByParentTurn.get(item.parentTurnId);
+  const groupSize = runningSet ? runningSet.size : 0;
+  // 自身已终态（不再 running）或组规模 < 2：均不计入并发组，显式清除并发字段
+  // （避免沿用上一次投影残留的陈旧值）。
+  if (groupSize < 2 || isDelegationTerminal(item.status)) {
+    return { ...item, concurrencyGroupSize: undefined, concurrencyIndex: undefined };
+  }
+  return {
+    ...item,
+    concurrencyGroupSize: groupSize,
+    concurrencyIndex: [...runningSet].indexOf(item.delegationId),
+  };
+}
+
+/**
+ * 重算指定 parent turn 下所有 delegation 条目的并发字段。
+ *
+ * 用于解决「后到达的 sibling 改变并发组规模、但先到达条目已按旧规模定稿」的问题：
+ * 每次 delegation 事件使某 parent 的 running 集合规模变化时，调用本函数把该 parent 下
+ * 所有已投影 delegation 条目按最新集合重算并发字段。仅当某条目的并发字段（规模/序号）
+ * 实际变化时才生成新引用，未变条目沿用旧引用以保 memo 稳定。
+ *
+ * @param entries - 当前显示条目数组（函数内部只读；仅在需要时返回新数组）。
+ * @param parentTurnId - 集合发生变化的 parent turn 标识。
+ * @param concurrencyByParentTurn - parentTurnId → 当前 running 的 delegationId 集合映射。
+ * @returns 仍含最新并发字段的条目数组；若无任何条目变化则直接返回原 `entries` 引用。
+ *
+ * @throws 不抛出异常。
+ *
+ * @sideeffect 无（纯函数，不修改入参的数组/对象/Map/Set）。
+ */
+function reattachConcurrencyForParent(
+  entries: TurnTimelineEntry[],
+  parentTurnId: string,
+  concurrencyByParentTurn: Map<string, Set<string>>,
+): TurnTimelineEntry[] {
+  let changed = false;
+  const next = entries.map((entry) => {
+    if (entry.kind !== "delegation" || entry.item.parentTurnId !== parentTurnId) {
+      return entry;
+    }
+    const updated = attachConcurrency(entry.item, concurrencyByParentTurn);
+    if (
+      updated.concurrencyGroupSize !== entry.item.concurrencyGroupSize ||
+      updated.concurrencyIndex !== entry.item.concurrencyIndex
+    ) {
+      changed = true;
+      return { kind: "delegation", item: updated } as TurnTimelineEntry;
+    }
+    return entry;
+  });
+  return changed ? next : entries;
+}
+
+/**
  * Converts a delegation event type into its fallback lifecycle status.
  *
  * @param eventType - Runtime event type.
@@ -679,6 +806,138 @@ function normalizeDelegationStatus(
  */
 function isDelegationTerminal(status: TimelineDelegationStatus): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+/**
+ * 从扁平事件流中派生指定 child turn 的委派终态状态（供表现层复用，避免重复造轮子）。
+ *
+ * delegation 生命周期事件的 `turn_id` 属于父 turn，但其 `payload.child_turn_id`
+ * 指向真实 child turn，故按 payload 反查。取 sequence 最大的有效事件作为当前状态，
+ * 复用本文件既有的 `normalizeDelegationStatus`（payload/事件类型→状态归一）与
+ * `delegationStatusFromEvent`（事件类型兜底推导），保证与投影器其它路径口径完全一致。
+ *
+ * @param childTurnId - 待查询的 child turn 标识。
+ * @param events - 扁平事件流（来自 eventStore.events）。
+ * @returns 派生状态（TimelineDelegationStatus 精确联合类型），或 undefined（尚无委派事件）。
+ *   undefined 与 projector 兜底口径一致，由调用方降级处理（如徽章显示"状态未知"）。
+ *
+ * @throws 不抛出异常；payload 字段缺失或类型异常时安全跳过该事件。
+ *
+ * @sideeffect 无（纯函数，不修改入参）。
+ */
+export function deriveChildDelegationStatus(
+  childTurnId: string,
+  events: RuntimeEvent[],
+): TimelineDelegationStatus | undefined {
+  let best: { sequence: number; status: TimelineDelegationStatus } | undefined;
+  for (const event of events) {
+    // 仅关注 child 生命周期事件；delegation_started（父委派）无 child_turn_id，不会误匹配。
+    if (
+      event.event_type !== "delegation_child_started" &&
+      event.event_type !== "delegation_finished" &&
+      event.event_type !== "delegation_failed" &&
+      event.event_type !== "delegation_cancelled"
+    ) {
+      continue;
+    }
+    const payload = event.payload as { child_turn_id?: string; status?: unknown };
+    if (payload.child_turn_id !== childTurnId) continue;
+    const status = normalizeDelegationStatus(payload.status, event.event_type);
+    const sequence = Number(event.sequence || 0);
+    if (!best || sequence >= best.sequence) {
+      best = { sequence, status };
+    }
+  }
+  return best?.status;
+}
+
+/** 同一并发组（同 parent turn）下的一个 sibling 子 Agent 派生视图。 */
+export interface SiblingDelegation {
+  /** sibling child turn 标识。 */
+  childTurnId: string;
+  /** sibling child AgentProfile id。 */
+  childAgentId: string;
+  /** 该 sibling 的委派生命周期状态（由最新事件归一）。 */
+  status: TimelineDelegationStatus;
+}
+
+/**
+ * 从扁平事件流中派生指定 child turn 的并发 sibling 列表（供右侧面板以 tab 列出并切换）。
+ *
+ * 逻辑（纯前端推导，零新事件、零后端改动）：
+ * 1. 在 `events` 中找 `delegation_child_started` 事件且 `child_turn_id === selectedChildTurnId`，
+ *    取其 `parent_turn_id`（记为 parentTurnId）；找不到（无选中对、或选中项不是并发 child）返回 `[]`。
+ * 2. 遍历 `events` 中 `DELEGATION_EVENTS` 内、`parent_turn_id === parentTurnId` 的事件，
+ *    按 `delegation_id` 分组；每组取最新状态（复用 `normalizeDelegationStatus` /
+ *    `delegationStatusFromEvent` 口径，不平行重写）与最新 `child_turn_id` / `child_agent_id`，
+ *    构造 `SiblingDelegation[]`。
+ * 3. 返回列表（长度不限）；调用方（SubagentPanel）只在长度 >= 2 时渲染并发 tab。
+ * 注意：同一 delegation_id 的不同事件按 sequence 取最新，保证与投影器其它路径状态口径一致。
+ *
+ * @param events - 扁平事件流（来自 eventStore.events）。
+ * @param selectedChildTurnId - 当前选中的 child turn 标识。
+ * @returns sibling 派生视图数组；无并发关系时返回空数组 `[]`。
+ *
+ * @throws 不抛出异常；payload 字段缺失或类型异常时安全跳过该事件。
+ *
+ * @sideeffect 无（纯函数，不修改入参）。
+ */
+export function deriveSiblingDelegations(
+  events: RuntimeEvent[],
+  selectedChildTurnId: string,
+): SiblingDelegation[] {
+  if (!selectedChildTurnId) return [];
+
+  // 1. 反查选中 child 的 parent turn（仅 delegation_child_started 带 child_turn_id）。
+  let parentTurnId: string | undefined;
+  for (const event of events) {
+    if (event.event_type !== "delegation_child_started") continue;
+    const payload = event.payload as { child_turn_id?: string; parent_turn_id?: string };
+    if (payload.child_turn_id !== selectedChildTurnId) continue;
+    parentTurnId = payload.parent_turn_id ?? event.turn_id;
+    break;
+  }
+  if (parentTurnId == null) return [];
+
+  // 2. 按 delegation_id 分组，取每组最新状态与最新 child/agent 标识。
+  const byDelegation = new Map<
+    string,
+    { sequence: number; status: TimelineDelegationStatus; childTurnId?: string; childAgentId: string }
+  >();
+  for (const event of events) {
+    if (!DELEGATION_EVENTS.has(event.event_type)) continue;
+    const payload = event.payload as {
+      delegation_id?: string;
+      parent_turn_id?: string;
+      child_turn_id?: string | null;
+      child_agent_id?: string;
+      status?: unknown;
+    };
+    if (payload.parent_turn_id !== parentTurnId) continue;
+    const delegationId = typeof payload.delegation_id === "string" ? payload.delegation_id.trim() : "";
+    if (!delegationId) continue;
+    const sequence = Number(event.sequence || 0);
+    const existing = byDelegation.get(delegationId);
+    if (existing && sequence < existing.sequence) continue;
+    byDelegation.set(delegationId, {
+      sequence,
+      status: normalizeDelegationStatus(payload.status, event.event_type),
+      childTurnId: payload.child_turn_id ? String(payload.child_turn_id) : existing?.childTurnId,
+      childAgentId: String(payload.child_agent_id ?? existing?.childAgentId ?? ""),
+    });
+  }
+
+  // 3. 构造派生视图（仅保留有 child_turn_id 的 sibling）。
+  const siblings: SiblingDelegation[] = [];
+  for (const entry of byDelegation.values()) {
+    if (!entry.childTurnId) continue;
+    siblings.push({
+      childTurnId: entry.childTurnId,
+      childAgentId: entry.childAgentId,
+      status: entry.status,
+    });
+  }
+  return siblings;
 }
 
 /**
