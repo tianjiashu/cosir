@@ -288,6 +288,9 @@ export function useTask(): UseTaskReturn {
    *   用于「后端产生了本会话未缓存的新历史」场景（如其它会话/进程写入了历史）。
    *   默认 false：命中缓存即跳过拉取，复用既有 events 引用避免击穿 TurnTimeline memo。
    *
+   * @throws 拉取 task/turns 失败时 rethrow 原始错误（通常为 ``ServiceError``），
+   *   供调用方区分 404 与网络错误；历史事件回填失败属非致命，被内部单独捕获不抛出。
+   *
    * @sideeffect 从后端读取 task/turns/events 并写入对应 store；历史事件经
    *   eventStore 缓存，跨任务切换不重复拉取（历史对话不可变）。
    */
@@ -343,6 +346,10 @@ export function useTask(): UseTaskReturn {
         const message = err instanceof Error ? err.message : "打开任务失败";
         logError("openTask 失败", err, { module: "useTask", task_id: taskId });
         setOperation({ loading: false, error: message, eventsError: null });
+        // rethrow 原始错误：调用方（如启动恢复 hook）需据此区分 404（清理持久化）
+        // 与网络错误（保留持久化重试），不能只吞掉错误。事件回填失败（第 336-340 行）
+        // 仍属非致命、被单独捕获，不走到这里。
+        throw err;
       }
     },
     [addTask, setActiveTask, setEvents, setTurnsForTask, updateTask],

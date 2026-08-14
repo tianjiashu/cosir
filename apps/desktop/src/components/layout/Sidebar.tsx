@@ -277,7 +277,18 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                     ) : !workspaceLoaded ? (
                       <div className="px-2 py-1.5 text-xs text-muted-foreground/70">加载中…</div>
                     ) : workspaceTasks.length === 0 ? (
-                      <div className="px-2 py-1.5 text-xs text-muted-foreground/70">暂无任务</div>
+                      <div className="space-y-2 px-2 py-1.5">
+                        <div className="text-xs text-muted-foreground">该工作区尚无任务</div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full justify-start gap-2 text-sm"
+                          onClick={onNewTask}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          创建第一个任务
+                        </Button>
+                      </div>
                     ) : (
                       workspaceTasks.map((task) => (
                       <div
@@ -287,7 +298,9 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                         <button
                           onClick={() => {
                             onOpenChat();
-                            void openTask(task.task_id);
+                            // openTask 失败时（如任务已被删除）错误已在 useTask 内部记日志，
+                            // 此处仅捕获避免 rethrow 产生未处理的 Promise 拒绝。
+                            void openTask(task.task_id).catch(() => {});
                           }}
                           title={task.title}
                           className={cn(

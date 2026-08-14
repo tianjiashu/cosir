@@ -16,6 +16,7 @@ import { useEventStore } from "@/stores/eventStore";
 import { useTaskStore } from "@/stores/taskStore";
 import { useTurnStore } from "@/stores/turnStore";
 import { SSEConnectionState } from "@/services/sse";
+import { ServiceError } from "@/services/types";
 import type { RuntimeEvent } from "@shared/events";
 import type { TaskRecord } from "@shared/task";
 import type { TurnRecord } from "@shared/turn";
@@ -156,5 +157,92 @@ describe("useTask.openTask forceRefresh 行为", () => {
     // 回放历史：事件流被拉取并缓存到该 task。
     expect(api.listTaskEvents).toHaveBeenCalledWith(FIRST_TASK_ID);
     expect(useEventStore.getState().eventsByTaskId[FIRST_TASK_ID]?.length).toBeGreaterThan(0);
+  });
+});
+
+describe("useTask.openTask rethrow 回归", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetStores();
+  });
+
+  it("getTask 抛 404 ServiceError：openTask 应向外 reject，而非吞掉", async () => {
+    // 目的：验证 openTask 对「拉取 task/turns 失败」会 rethrow 原始错误，
+    //   使调用方（启动恢复 hook）能据 statusCode 区分 404 与网络错误。
+    // 可能发现的缺陷：若 openTask 内部吞掉错误只 setOperation，调用方将无法区分 404，
+    //   启动恢复无法清理持久化脏值。
+    vi.mocked(api.getTask).mockRejectedValueOnce(new ServiceError("not found", { statusCode: 404 }));
+
+    const { result } = renderHook(() => useTask());
+    let caught: unknown = "not-thrown";
+    await act(async () => {
+      try {
+        await result.current.openTask(TASK_ID);
+      } catch (err) {
+        caught = err;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect((caught as ServiceError).statusCode).toBe(404);
+  });
+
+  it("getTask 抛网络错误（非 404）：openTask 应向外 reject，而非吞掉", async () => {
+    // 目的：验证网络错误同样 rethrow（保持 statusCode=0 可被调用方识别为非 404）。
+    // 可能发现的缺陷：若只对 404 rethrow、对其它错误吞掉，调用方无法触发「保留持久化降级」分支。
+    vi.mocked(api.getTask).mockRejectedValueOnce(new ServiceError("network down", { statusCode: 0 }));
+
+    const { result } = renderHook(() => useTask());
+    let caught: unknown = "not-thrown";
+    await act(async () => {
+      try {
+        await result.current.openTask(TASK_ID);
+      } catch (err) {
+        caught = err;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect((caught as ServiceError).statusCode).toBe(0);
+  });
+
+  it("listTaskTurns 抛错：openTask 同样 rethrow（Promise.all 任一 reject 即整体 reject）", async () => {
+    // 目的：验证 turns 拉取失败也走同一 rethrow 路径，调用方统一处理。
+    // 可能发现的缺陷：若 turns 失败被单独吞掉，任务/turns 骨架未就绪却继续渲染，属契约违背。
+    vi.mocked(api.getTask).mockResolvedValue({
+      task_id: TASK_ID,
+      workspace_id: "ws",
+    } as unknown as TaskRecord);
+    vi.mocked(api.listTaskTurns).mockRejectedValueOnce(new ServiceError("boom", { statusCode: 500 }));
+
+    const { result } = renderHook(() => useTask());
+    let caught: unknown = "not-thrown";
+    await act(async () => {
+      try {
+        await result.current.openTask(TASK_ID);
+      } catch (err) {
+        caught = err;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect((caught as ServiceError).statusCode).toBe(500);
+  });
+
+  it("历史事件回填失败不 rethrow：openTask 仍正常 resolve（非致命分支被单独捕获）", async () => {
+    // 目的：验证事件回填失败属非致命、被内部捕获，openTask 不因此 reject，
+    //   否则启动恢复 hook 会把「事件拉取失败」误判为任务不存在/网络错误而走错误降级。
+    // 可能发现的缺陷：若事件失败被错误地 rethrow，会把非致命错误升级为致命，破坏降级语义。
+    vi.mocked(api.listTaskEvents).mockRejectedValueOnce(new ServiceError("events boom", { statusCode: 0 }));
+
+    const { result } = renderHook(() => useTask());
+    await act(async () => {
+      await result.current.openTask(TASK_ID);
+    });
+
+    // 正常 resolve，且仍完成选中。
+    expect(useTaskStore.getState().activeTaskId).toBe(TASK_ID);
+    // 事件错误仅标记 eventsError，不污染 task/turns 的加载结果。
+    expect(result.current.operation.eventsError).not.toBeNull();
   });
 });
