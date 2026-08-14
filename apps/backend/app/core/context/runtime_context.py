@@ -21,6 +21,7 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_compressor import ContextCompressor
+from app.core.llm.langchain_bridge import sanitize_assistant_messages
 from app.models import RuntimeMessage, TurnRecord
 from app.service.task.turn_service import TurnService
 
@@ -317,7 +318,9 @@ class RuntimeContext:
         """线程安全地读取当前全部消息的拷贝。
 
         说明:
-            返回列表拷贝而非内部引用，避免调用方在锁外修改内部状态。
+            返回列表拷贝而非内部引用，避免调用方在锁外修改内部状态。消息在 :meth:`add_message`
+            入口已被归一化（content 占位 + 非法 tool_calls 过滤 + 丢弃 invalid_tool_calls），
+            此处仅做纯运输，不再重复清洗。
 
         返回:
             当前消息列表的独立拷贝。
@@ -326,14 +329,21 @@ class RuntimeContext:
             return list(self.messages)
 
     def add_message(self, message: BaseMessage) -> None:
-        """线程安全地向上下文追加一条消息。
+        """线程安全地向上下文追加一条消息，并在入口做归一化守卫。
 
         说明:
             使用可重入锁（``RLock``）阻塞获取，模型节点内嵌套调用不会自死锁；
             不采用超时静默丢弃，避免历史上下文在锁竞争时悄然丢失而难以排查。
 
+            守卫收口在入口：消息「写入上下文」这一刻即被 :func:`sanitize_assistant_messages`
+            归一化（assistant 消息 content 空串 → 非空占位、残缺 tool_calls 过滤、丢弃
+            ``invalid_tool_calls`` 这一当轮解析噪声），下游 :meth:`load_message` / :meth:`snapshot`
+            拿到的天然就是干净消息，无需在出口重复清洗。``invalid_tool_calls`` 只服务于
+            ``model_node`` 当轮 REPAIR/IGNORE 决策——从合并出的 ``ai_message`` 直接读取、
+            不经本方法，绝不进入上下文、绝不回灌下一轮对话。
+
         参数:
-            message: 待追加的 langchain 消息。
+            message: 待追加的 langchain 消息（非 assistant 类型原样写入）。
 
         返回:
             无。
@@ -342,16 +352,17 @@ class RuntimeContext:
             无。
 
         副作用:
-            向 ``messages`` 追加消息。
+            向 ``messages`` 追加（已归一化的）消息。
         """
         with self.lock:
-            self.messages.append(message)
+            self.messages.append(sanitize_assistant_messages([message])[0])
 
     def snapshot(self) -> list[BaseMessage]:
         """返回消息列表的一致性快照（独立拷贝）。
 
         与 :meth:`load_message` 语义一致，命名强调「一致性视图」用途，
-        供模型调用在多线程下读取稳定视图。
+        供模型调用在多线程下读取稳定视图。消息在 :meth:`add_message` 入口已归一化，
+        此处仅做纯运输。
 
         返回:
             消息列表的独立拷贝。

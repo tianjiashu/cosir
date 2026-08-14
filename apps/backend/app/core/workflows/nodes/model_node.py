@@ -494,6 +494,8 @@ async def _model_node(state: ReactGraphState) -> dict:
             "pending_tool_calls": [],
         }
     # 消息通道由 RuntimeContext 独占管理（不进 graph state）；提前取历史上下文供日志与事件计数。
+    # 消息经 load_message() 出口已做 assistant 消息归一化（content 占位 + 非法 tool_calls 过滤 +
+    # 丢弃 invalid_tool_calls），此处直接取用，不在调用点重复 sanitize（守卫收口在上下文出口）。
     messages = _runtime_context().load_message()
     log.info(
         "model_node_started",
