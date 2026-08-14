@@ -1224,6 +1224,60 @@ def test_agent_runtime_cancel_turn_cascades_to_active_child(monkeypatch):
         cancellation_registry.clear("child_turn_1")
 
 
+def test_cancel_turn_does_not_emit_parent_run_cancelled(monkeypatch):
+    """验证 ``cancel_turn`` 不再为 parent turn 自身广播空壳 ``RUN_CANCELLED``。
+
+    取消终态事件收口到实际检测到取消的执行节点（model_node / tools_node），
+    由 ``cancel_turn`` 额外广播会导致同一 turn 出现两张「任务已取消」。
+
+    参数:
+        monkeypatch: pytest monkeypatch fixture。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当 parent turn 收到 ``RUN_CANCELLED`` 时抛出。
+    """
+
+    turn_service = FakeCascadeTurnService()
+    delegation_service = FakeCascadeDelegationService()
+    runtime = object.__new__(AgentRuntime)
+    runtime._turn_service = turn_service
+    saved_events = []
+
+    def fake_save_and_publish(event):
+        """记录 runtime event。"""
+        saved_events.append(event)
+        return event
+
+    runtime._save_and_publish_runtime_event = fake_save_and_publish
+    runtime._mark_stable_file_changes = lambda _: None
+    monkeypatch.setattr(
+        "app.core.runtime.runner.get_delegation_service",
+        lambda: delegation_service,
+    )
+
+    try:
+        runtime.cancel_turn("parent_turn_1")
+        parent_cancelled = [
+            event
+            for event in saved_events
+            if event.event_type == EventType.RUN_CANCELLED
+            and event.turn_id == "parent_turn_1"
+        ]
+        assert parent_cancelled == []
+        # child 取消事件仍应正常发出（属于子任务独立终态）
+        assert any(
+            event.event_type == EventType.RUN_CANCELLED
+            and event.turn_id == "child_turn_1"
+            for event in saved_events
+        )
+    finally:
+        cancellation_registry.clear("parent_turn_1")
+        cancellation_registry.clear("child_turn_1")
+
+
 async def test_agent_runtime_emit_schedules_child_event_publish_on_profile_loop():
     """验证 child runtime 事件会调度回父运行事件循环发布。
 
@@ -1285,20 +1339,23 @@ async def test_agent_runtime_emit_schedules_child_event_publish_on_profile_loop(
                 child_turn_id="child_turn_1",
                 error="child cancelled",
             ),
-            "error",
+            "cancelled",
             "mark_cancelled",
             "child cancelled",
         ),
     ],
 )
-def test_delegation_executor_returns_tool_error_for_child_terminal_failures(
+def test_delegation_executor_maps_child_terminal_failures_to_tool_status(
     executor_dependencies,
     runner_result: DelegationResult,
     expected_status: str,
     expected_call: str,
     expected_error: str,
 ):
-    """验证 child failed/cancelled 会落终态并返回工具错误。
+    """验证 child failed/cancelled 会落终态并映射为对应的工具观察状态。
+
+    failed 映射为 ``status="error"``（真实执行故障）；cancelled 映射为 ``status="cancelled"``
+    （用户主动中断的确定性终态，与失败语义不同，不应塌成 error 导致前端误读为执行失败）。
 
     参数:
         executor_dependencies: fake executor 协作者集合。
@@ -1719,3 +1776,363 @@ def test_child_agent_runner_runs_on_main_thread_without_running_loop():
 
     assert result.status == "completed"
     assert result.summary == "main thread ok"
+
+
+# ---------------------------------------------------------------------------
+# 级联取消健壮性：多 child 并发取消 / 单 child 失败隔离 / 扫描失败容错
+# 既有 test_agent_runtime_cancel_turn_cascades_to_active_child 只覆盖「单 child」
+# 主路径；下方三个测试补全 _cancel_active_child_turns / _cancel_child_delegation
+# 的 for 循环与两个 try/except 分支。
+# ---------------------------------------------------------------------------
+
+
+class _MultiChildTurnService:
+    """支持多 child turn 的 fake turn service，供级联取消多分支测试。"""
+
+    def __init__(self) -> None:
+        """初始化 parent 与两个 running child turn。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            创建内存 turn 字典与取消记录列表。
+        """
+        self.parent_turn = _parent_turn()
+        self.child_turns = {
+            "child_turn_1": replace(
+                self.parent_turn, turn_id="child_turn_1", status="running"
+            ),
+            "child_turn_2": replace(
+                self.parent_turn, turn_id="child_turn_2", status="running"
+            ),
+        }
+        self.cancelled_turns: list[tuple[str, str]] = []
+
+    def get_turn(self, turn_id: str) -> TurnRecord:
+        """返回 parent 或指定 child turn。
+
+        参数:
+            turn_id: turn 标识。
+
+        返回:
+            匹配的 TurnRecord；不存在时抛出 KeyError。
+
+        异常:
+            KeyError: 当 turn_id 不在已知集合中时。
+
+        副作用:
+            无。
+        """
+        if turn_id == self.parent_turn.turn_id:
+            return self.parent_turn
+        return self.child_turns[turn_id]
+
+    def cancel_turn_if_active(
+        self, turn_id: str, end_reason: str
+    ) -> TurnRecord | None:
+        """取消 active turn 并记录调用。
+
+        参数:
+            turn_id: turn 标识。
+            end_reason: 取消原因。
+
+        返回:
+            更新后的 turn；已非 active 时返回 None。
+
+        异常:
+            无。
+
+        副作用:
+            写入 cancelled_turns 并将对应 turn 标记为 cancelled。
+        """
+        turn = self.get_turn(turn_id)
+        if turn.status not in {"pending", "running"}:
+            return None
+        cancelled = replace(turn, status="cancelled", end_reason=end_reason)
+        if turn_id == self.parent_turn.turn_id:
+            self.parent_turn = cancelled
+        else:
+            self.child_turns[turn_id] = cancelled
+        self.cancelled_turns.append((turn_id, end_reason))
+        return cancelled
+
+
+class _MultiChildDelegationService:
+    """返回多条 running delegation 的 fake delegation service。"""
+
+    def __init__(self, child_turn_ids: tuple[str, ...]) -> None:
+        """初始化多条 running delegation 记录。
+
+        参数:
+            child_turn_ids: 需要被返回的 child turn 标识集合。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            初始化内存 delegation 记录列表。
+        """
+        now = utc_now()
+        self.records = [
+            DelegationRecord(
+                delegation_id=f"delegation_{i}",
+                task_id="task_1",
+                parent_turn_id="parent_turn_1",
+                child_turn_id=turn_id,
+                parent_agent_id="developer",
+                child_agent_id="delegate_reviewer",
+                delegation_type="review",
+                status="running",
+                prompt="review",
+                summary="",
+                error="",
+                effective_tools=("read_file",),
+                created_at=now,
+                updated_at=now,
+            )
+            for i, turn_id in enumerate(child_turn_ids, start=1)
+        ]
+        self.cancelled: list[tuple[str, str]] = []
+
+    def list_active_by_parent_turn(self, parent_turn_id: str):
+        """返回 parent 下所有 running delegation。
+
+        参数:
+            parent_turn_id: parent turn 标识。
+
+        返回:
+            running delegation 列表；不匹配时返回空列表。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        if parent_turn_id != "parent_turn_1":
+            return []
+        return [r for r in self.records if r.status == "running"]
+
+    def mark_cancelled(self, delegation_id: str, error: str) -> None:
+        """记录 delegation cancelled 终态。
+
+        参数:
+            delegation_id: delegation 标识。
+            error: 取消原因。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 测试可注入以模拟写终态失败。
+
+        副作用:
+            更新内存记录并写入 cancelled 列表。
+        """
+        if getattr(self, "_boom_on", None) == delegation_id:
+            raise RuntimeError("simulated delegation mark_cancelled failure")
+        for idx, record in enumerate(self.records):
+            if record.delegation_id == delegation_id:
+                self.records[idx] = replace(record, status="cancelled", error=error)
+        self.cancelled.append((delegation_id, error))
+
+
+def _cascade_runtime(
+    monkeypatch,
+    turn_service,
+    delegation_service,
+) -> AgentRuntime:
+    """组装仅用于级联取消测试的 AgentRuntime 最小骨架。
+
+    参数:
+        monkeypatch: pytest monkeypatch fixture，替换模块级 service 入口。
+        turn_service: 注入的私有 turn service。
+        delegation_service: 注入的私有 delegation service（经模块级入口替换）。
+
+    返回:
+        已替换协作者的 AgentRuntime 实例（不触发全局 service 初始化）。
+
+    异常:
+        无。
+
+    副作用:
+        替换 ``app.core.runtime.runner.get_delegation_service`` 指向 fake；
+        屏蔽运行时事件持久化与文件稳定标记副作用。
+    """
+    runtime = object.__new__(AgentRuntime)
+    runtime._turn_service = turn_service
+    runtime._save_and_publish_runtime_event = lambda event: event
+    runtime._mark_stable_file_changes = lambda _turn_id: None
+    monkeypatch.setattr(
+        "app.core.runtime.runner.get_delegation_service",
+        lambda: delegation_service,
+    )
+    return runtime
+
+
+def test_cancel_active_child_turns_cascades_to_multiple_children(monkeypatch):
+    """验证父 turn 取消会级联取消所有在跑 child turn，而非仅首个。
+
+    参数:
+        monkeypatch: pytest monkeypatch fixture。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当存在 child 未被取消或取消信号缺失时由 pytest 抛出。
+
+    副作用:
+        标记进程内 cancellation registry；测试结束前清理相关 turn 标识。
+    """
+    turn_service = _MultiChildTurnService()
+    delegation_service = _MultiChildDelegationService(
+        child_turn_ids=("child_turn_1", "child_turn_2")
+    )
+    runtime = _cascade_runtime(monkeypatch, turn_service, delegation_service)
+
+    try:
+        turn = runtime.cancel_turn("parent_turn_1")
+
+        assert turn.status == "cancelled"
+        assert ("child_turn_1", "parent_turn_cancelled") in turn_service.cancelled_turns
+        assert ("child_turn_2", "parent_turn_cancelled") in turn_service.cancelled_turns
+        assert cancellation_registry.is_cancelled("child_turn_1")
+        assert cancellation_registry.is_cancelled("child_turn_2")
+        assert ("delegation_1", "parent_turn_cancelled") in delegation_service.cancelled
+        assert ("delegation_2", "parent_turn_cancelled") in delegation_service.cancelled
+    finally:
+        cancellation_registry.clear("parent_turn_1")
+        cancellation_registry.clear("child_turn_1")
+        cancellation_registry.clear("child_turn_2")
+
+
+def test_cancel_child_delegation_isolates_single_failure(monkeypatch, caplog):
+    """验证单个 child delegation 写终态失败时，其余 child 仍被取消。
+
+    ``_cancel_child_delegation`` 的 try/except 必须吞掉单 child 异常并继续
+    处理循环中的其他 child，否则一个坏 child 会阻断整批级联取消。
+
+    参数:
+        monkeypatch: pytest monkeypatch fixture。
+        caplog: pytest 日志捕获 fixture。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当健康 child 未被取消或未记录失败日志时由 pytest 抛出。
+
+    副作用:
+        标记进程内 cancellation registry；测试结束前清理相关 turn 标识。
+    """
+    turn_service = _MultiChildTurnService()
+    delegation_service = _MultiChildDelegationService(
+        child_turn_ids=("child_turn_1", "child_turn_2")
+    )
+    # 让 delegation_1 写终态失败，验证 delegation_2 不受影响
+    delegation_service._boom_on = "delegation_1"
+    runtime = _cascade_runtime(monkeypatch, turn_service, delegation_service)
+
+    try:
+        runtime.cancel_turn("parent_turn_1")
+
+        # 失败 child 的 turn 取消信号与 cancellation registry 仍应被标记
+        assert cancellation_registry.is_cancelled("child_turn_1")
+        assert cancellation_registry.is_cancelled("child_turn_2")
+        # 健康 child 的 delegation 终态正常写入
+        assert ("delegation_2", "parent_turn_cancelled") in delegation_service.cancelled
+        # 失败 child 的 delegation 终态未写入，但错误被隔离记录
+        assert ("delegation_1", "parent_turn_cancelled") not in delegation_service.cancelled
+        assert any(
+            record.message == "delegation_child_cancel_failed"
+            for record in caplog.records
+        )
+    finally:
+        cancellation_registry.clear("parent_turn_1")
+        cancellation_registry.clear("child_turn_1")
+        cancellation_registry.clear("child_turn_2")
+
+
+def test_cancel_active_child_turns_tolerates_scan_failure(monkeypatch, caplog):
+    """验证扫描活动 child delegation 抛异常时，父 turn 取消流程仍正常完成。
+
+    ``_cancel_active_child_turns`` 的 try/except 捕获扫描异常后只记日志并 return，
+    不应让父 turn 的取消终态失败（否则用户无法取消已派生子任务的父 turn）。
+
+    参数:
+        monkeypatch: pytest monkeypatch fixture。
+        caplog: pytest 日志捕获 fixture。
+
+    返回:
+        无。
+
+    异常:
+        AssertionError: 当父 turn 未被取消或未记录扫描失败日志时由 pytest 抛出。
+
+    副作用:
+        标记进程内 cancellation registry；测试结束前清理相关 turn标识。
+    """
+    turn_service = _MultiChildTurnService()
+
+    class _BoomingDelegationService:
+        """list_active_by_parent_turn 始终抛异常的 fake service。"""
+
+        def list_active_by_parent_turn(self, parent_turn_id: str):
+            """抛出扫描异常以模拟 storage 层故障。
+
+            参数:
+                parent_turn_id: parent turn 标识。
+
+            返回:
+                永不返回。
+
+            异常:
+                RuntimeError: 总是抛出，模拟扫描失败。
+
+            副作用:
+                无。
+            """
+            raise RuntimeError("simulated delegation scan failure")
+
+        def mark_cancelled(self, delegation_id: str, error: str) -> None:
+            """扫描失败时不会被调用的占位。
+
+            参数:
+                delegation_id: delegation 标识。
+                error: 取消原因。
+
+            返回:
+                无。
+
+            异常:
+                无。
+
+            副作用:
+                无。
+            """
+            pytest.fail("mark_cancelled 不应在扫描失败后调用")
+
+    runtime = _cascade_runtime(monkeypatch, turn_service, _BoomingDelegationService())
+
+    try:
+        turn = runtime.cancel_turn("parent_turn_1")
+
+        # 父 turn 取消终态不受影响
+        assert turn.status == "cancelled"
+        assert any(
+            record.message == "delegation_child_cancel_scan_failed"
+            for record in caplog.records
+        )
+    finally:
+        cancellation_registry.clear("parent_turn_1")

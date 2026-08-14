@@ -147,7 +147,7 @@ export interface ToolOutputDeltaPayload extends RuntimeEventPayloadObject {
 export interface ToolCallFinishedPayload extends RuntimeEventPayloadObject {
   step_id: string;
   tool_name: string;
-  status: "success" | "error";
+  status: "success" | "error" | "cancelled";
   tool_call_id: string;
   content?: string | null;
   error?: string;

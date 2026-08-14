@@ -18,7 +18,7 @@ from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_delegation_service, get_turn_service
 from app.tools.schemas import ToolExecutionContext, ToolObservation
 from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
-from app.tools.tool_execute.tool_error import tool_error
+from app.tools.tool_execute.tool_error import tool_cancelled, tool_error
 from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_models.delegate_task_args import DelegateTaskArgs
 
@@ -384,7 +384,17 @@ class DelegationExecutor(DelegateTaskExecutor):
                 error,
                 runtime_event_loop=runtime_event_loop,
             )
-            return self._child_error("cancelled", error)
+            return tool_cancelled(
+                "delegate_task",
+                reason=(
+                    f"the delegated child agent was cancelled: {error}. this is a "
+                    f"deterministic terminal state caused by an explicit user interruption "
+                    f"(e.g. the parent turn was cancelled), so do not retry identical "
+                    f"arguments; adjust your plan based on the cancellation instead."
+                ),
+                error=f"delegate_task child cancelled: {error}",
+                permission="delegate_task",
+            )
         error = result.error or "child turn failed"
         delegation_service.mark_failed(
             delegation_id,
@@ -394,11 +404,15 @@ class DelegationExecutor(DelegateTaskExecutor):
         return self._child_error("failed", error)
 
     def _child_error(self, status: str, error: str) -> ToolObservation:
-        """构造 child 失败或取消对应的工具错误 observation。
+        """构造 child 失败的 delegate_task 工具错误 observation。
+
+        注意：本方法只服务于 child **失败**分支；child **取消**已由 :func:`tool_cancelled`
+        单独处理（``_finalize_result`` 的 cancelled 分支），不再走此路径，以免取消被
+        塌缩成 error。
 
         参数:
-            status: child 委派终态。
-            error: child 失败或取消原因。
+            status: child 委派失败终态。
+            error: child 失败原因。
 
         返回:
             delegate_task error observation。

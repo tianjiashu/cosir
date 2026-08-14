@@ -244,7 +244,7 @@ def test_cancellation_before_parallel_batch_fills_placeholders_without_running_c
 
     assert scheduler.windows == {}
     assert [o.tool_call_id for o in result.observations] == ["p1", "p2"]
-    assert all(o.status == "error" for o in result.observations)
+    assert all(o.status == "cancelled" for o in result.observations)
 
 
 def test_parallel_batch_does_not_start_queued_calls_after_cancellation() -> None:
@@ -282,8 +282,8 @@ def test_parallel_batch_does_not_start_queued_calls_after_cancellation() -> None
     finally:
         Settings.override(MAX_PARALLEL_TOOL_CALLS=original_limit)
 
-    # 取消生效后只应启动一个调用（并发上限为 1），未启动的排队调用补 error 占位。
+    # 取消生效后只应启动一个调用（并发上限为 1），未启动的排队调用补 cancelled 占位。
     # 不绑定具体哪个 call 先启动——并行批的启动顺序由线程池提交次序决定，非契约。
     assert len(scheduler.windows) == 1
     assert [o.tool_call_id for o in result.observations] == ["p1", "p2", "p3"]
-    assert sorted(o.status for o in result.observations) == ["error", "error", "success"]
+    assert sorted(o.status for o in result.observations) == ["cancelled", "cancelled", "success"]

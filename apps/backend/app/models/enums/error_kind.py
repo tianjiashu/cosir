@@ -24,6 +24,7 @@ class ErrorKind(str, Enum):
     UNKNOWN_TOOL = "unknown_tool"
     RUNTIME_FAILED = "runtime_failed"
     PERMISSION_DENIED = "permission_denied"
+    CANCELLED = "cancelled"
 
     def __str__(self) -> str:
         """返回可写入日志与 JSON payload 的稳定字符串值。

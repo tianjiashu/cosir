@@ -26,7 +26,10 @@ class ToolObservation:
       ``clear_display_data()`` 在把观察转模型消息前清空 ``data``（模型不可见通道）；
       除此之外字段应视为只读，调用方不应改写历史观察。
     - 绝不抛异常：所有失败路径都被归一化为 ``status="error"`` 的观察对象，
-      由 :func:`tool_error` 工厂构造，使上层永远拿到可落库/可回传的结果。
+      由 :func:`tool_error` 工厂构造，使上层永远拿到可落库/可回传的结果。用户主动
+      取消（如父 turn 取消导致子 Agent 中止）则归一化为 ``status="cancelled"``，
+      由 :func:`tool_cancelled` 工厂构造——它与 ``error`` 同为确定性终态，但根因是
+      「主动中断」而非「执行失败」，须与 ``error`` 明确区分，避免误读为真实故障。
 
     content 与 data 的区别（易混，单独说明）:
         - ``content`` 是「面向模型的英文人读文本」：给模型/用户看的故事（命令回显、
@@ -43,7 +46,10 @@ class ToolObservation:
 
     字段:
         tool_name: 触发本次观察的工具名称（与 :class:`ToolDefinition.name` 对应）。
-        status: 执行结果状态，仅取 ``"success"`` 或 ``"error"`` 两个值。
+        status: 执行结果状态，取 ``"success"``、``"error"`` 或 ``"cancelled"``：
+            「成功」由 :func:`tool_success` 构造；「失败」由 :func:`tool_error` 构造；
+            「取消」由 :func:`tool_cancelled` 构造，表示用户主动中断导致的确定性终态，
+            与失败语义不同（根因是主动中止而非执行故障）。
         content: 面向模型/用户的可读正文。成功时为工具输出；失败时为可恢复错误
             说明，并同时通过 ``error`` / ``reason`` 提供结构化诊断。
         error: 失败时回答「发生了什么错误」：面向模型的英文描述，点明失败发生在
@@ -76,7 +82,8 @@ class ToolObservation:
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。
     tool_name: str
-    # 执行状态：仅可取 "success" 或 "error"，是上层分流的唯一依据。
+    # 执行状态：可取 "success" / "error" / "cancelled"，是上层分流的唯一依据。
+    # "cancelled" 表示用户主动中断导致的确定性终态，与失败语义不同。
     status: str
     # 面向模型的可读正文：成功时为工具输出，失败时为可恢复错误说明。
     content: str

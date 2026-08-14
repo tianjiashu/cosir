@@ -45,6 +45,7 @@ from app.tools.schemas import (
 from app.tools.tool_execute.tool_error import (
     cancel_not_executed_reason,
     internal_execution_error_reason,
+    tool_cancelled,
     tool_error,
 )
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
@@ -453,8 +454,14 @@ class ToolExecutionService:
             无。``write_event`` 异常由 ``_emit_event_safely`` 收口，不向上抛出。
 
         副作用:
-            写入 ``TOOL_CALL_FINISHED``，并在成功产生文件变更时广播实时文件变更事件。
+            写入 ``TOOL_CALL_FINISHED``（其 ``status`` 透传观察的终态：
+            ``"success"``/``"cancelled"`` 原样透传，其余一律 ``"error"``，使取消态
+            不再被塌缩成失败），并在成功产生文件变更时广播实时文件变更事件。
         """
+        # 透传成功/取消终态，其余（含未知状态）归一为 error，避免取消态在前端被误读为失败。
+        event_status = (
+            observation.status if observation.status in ("success", "cancelled") else "error"
+        )
         self._emit_event_safely(
             step_id,
             observation.tool_call_id,
@@ -464,7 +471,7 @@ class ToolExecutionService:
             ToolCallFinishedPayload(
                 step_id=step_id,
                 tool_name=observation.tool_name,
-                status="success" if observation.status == "success" else "error",
+                status=event_status,
                 tool_call_id=observation.tool_call_id,
                 content=observation.content,
                 error=observation.error,
@@ -561,7 +568,7 @@ class ToolExecutionService:
             log.warning(
                 "tool_calls_cancelled_not_executed",
                 extra={
-                    "msg": "本批工具调用因取消未执行，已补 error 占位闭合协议",
+                    "msg": "本批工具调用因取消未执行，已补 cancelled 占位闭合协议",
                     "data": {
                         "step_id": step_id,
                         "total": len(calls),
@@ -574,11 +581,10 @@ class ToolExecutionService:
                 indexed_observations.append(
                     (
                         index,
-                        tool_error(
+                        tool_cancelled(
                             tool_name=call.tool_name,
-                            error="the tool call was cancelled before execution",
                             reason=cancel_not_executed_reason(),
-                            retryable=False,
+                            error="the tool call was cancelled before execution",
                             tool_call_id=call.call_id,
                         ),
                     )

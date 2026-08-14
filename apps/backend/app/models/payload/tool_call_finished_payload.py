@@ -18,7 +18,7 @@ class ToolCallFinishedPayload(RuntimeEventPayload):
 
     step_id: str
     tool_name: str
-    status: Literal["success", "error"]
+    status: Literal["success", "error", "cancelled"]
     tool_call_id: str
     content: str | None = None
     error: str = ""

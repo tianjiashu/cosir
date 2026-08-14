@@ -2,9 +2,11 @@
 
 设计目标：``ToolExecutionService.run_calls_with_events`` 是对 ``AIMessage.tool_calls``
 配对闭合的硬不变量收口点。无论失败来自「协作式取消」还是「执行链自身 bug（非工具
-语义失败）」，都必须为每个未真正产出观察的 call 补一个 ``status="error"`` 的
-``ToolObservation``，并序列化为 ``role="tool"`` 消息，使模型感知失败语义、协议不崩。
-占位的 ``display_data`` 必须在序列化前清空，模型只看到 ``content``/``error``/``reason``。
+语义失败）」，都必须为每个未真正产出观察的 call 补一个占位 ``ToolObservation`` 并序列化为
+``role="tool"`` 消息，使模型感知语义、协议不崩。其中「协作式取消」补 ``status="cancelled"``
+的占位（根因是用户主动中断，与 ``status="error"`` 的真实执行故障语义不同）；「执行链 bug」
+补 ``status="error"`` 的占位。占位的 ``display_data`` 必须在序列化前清空，模型只看到
+``content``/``error``/``reason``。
 """
 
 import json
@@ -17,10 +19,12 @@ from pydantic import BaseModel
 
 from app.models import RuntimeMessage
 from app.models.enums.error_kind import ErrorKind
+from app.models.enums.event_type import EventType
+from app.models.payload.tool_call_finished_payload import ToolCallFinishedPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.tools.schemas import ToolCall, ToolDefinition, ToolObservation
-from app.tools.tool_execute.tool_error import tool_error
+from app.tools.tool_execute.tool_error import tool_cancelled, tool_error
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_registry import ToolRegistry
 
@@ -101,7 +105,7 @@ def _assert_all_calls_have_placeholder(calls: list[ToolCall], result: ToolRunRes
 
 
 def test_cancellation_before_first_call_fills_placeholders_for_all() -> None:
-    """取消信号在执行前即生效：所有 call 都应补取消占位，且均 status=error。"""
+    """取消信号在执行前即生效：所有 call 都应补取消占位，且均 status=cancelled。"""
     calls = [_make_call("c1"), _make_call("c2"), _make_call("c3")]
     scheduler = MagicMock(spec=ToolScheduler)
     service = _make_service(scheduler, should_cancel=lambda: True)
@@ -115,8 +119,26 @@ def test_cancellation_before_first_call_fills_placeholders_for_all() -> None:
     # 调度器从未被调用（全部跳过）
     scheduler.execute.assert_not_called()
     _assert_all_calls_have_placeholder(calls, result)
-    assert all(o.status == "error" for o in result.observations)
+    assert all(o.status == "cancelled" for o in result.observations)
+    assert all(o.retryable is False for o in result.observations)
     assert len(result.observations) == len(calls)
+
+
+def test_tool_cancelled_factory_produces_cancelled_terminal_observation() -> None:
+    """tool_cancelled 工厂产出规范的取消态观察：确定性终态、不可重试、error_kind=cancelled。"""
+    observation = tool_cancelled(
+        tool_name="delegate_task",
+        reason="the parent turn was cancelled; do not retry identical arguments.",
+        error="delegate_task child cancelled: parent turn cancelled",
+        tool_call_id="call-1",
+    )
+
+    assert observation.status == "cancelled"
+    assert observation.tool_name == "delegate_task"
+    assert observation.retryable is False
+    assert observation.error == "delegate_task child cancelled: parent turn cancelled"
+    assert observation.data is not None
+    assert observation.data["error_kind"] == "cancelled"
 
 
 def test_cancellation_mid_batch_fills_placeholders_for_remaining() -> None:
@@ -148,7 +170,7 @@ def test_cancellation_mid_batch_fills_placeholders_for_remaining() -> None:
     statuses = [o.status for o in result.observations]
     # 第一个成功，其余两个为取消占位
     assert statuses[0] == "success"
-    assert statuses[1:] == ["error", "error"]
+    assert statuses[1:] == ["cancelled", "cancelled"]
     _assert_all_calls_have_placeholder(calls, result)
     assert len(result.observations) == len(calls)
 
@@ -332,7 +354,7 @@ def test_cancel_placeholder_reason_is_deterministic_non_retryable() -> None:
     )
 
     obs = result.observations[0]
-    assert obs.status == "error"
+    assert obs.status == "cancelled"
     assert obs.retryable is False
     assert "cancelled" in obs.reason
     assert "do not retry" in obs.reason
@@ -387,7 +409,7 @@ def test_duplicate_call_id_still_closes_pairing_when_second_skipped() -> None:
         calls
     ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
     _assert_all_calls_have_placeholder(calls, result)
-    assert [o.status for o in result.observations] == ["success", "error"]
+    assert [o.status for o in result.observations] == ["success", "cancelled"]
 
 
 def test_write_event_exception_is_contained_without_breaking_execution() -> None:
@@ -512,7 +534,7 @@ def test_mixed_parallel_serial_cancel_after_serial_keeps_pairing() -> None:
     )
 
     assert [o.tool_call_id for o in result.observations] == ["p1", "s1", "p2"]
-    assert [o.status for o in result.observations] == ["error", "success", "error"]
+    assert [o.status for o in result.observations] == ["cancelled", "success", "cancelled"]
     assert executed == ["s1"]
     _assert_all_calls_have_placeholder(calls, result)
 
@@ -560,7 +582,7 @@ def test_mixed_parallel_serial_duplicate_call_id_keeps_pairing() -> None:
     assert len(result.observations) == len(
         calls
     ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
-    assert [o.status for o in result.observations] == ["error", "success", "error"]
+    assert [o.status for o in result.observations] == ["cancelled", "success", "cancelled"]
 
 
 def test_mixed_parallel_serial_write_event_exception_is_contained() -> None:
@@ -600,3 +622,67 @@ def test_mixed_parallel_serial_write_event_exception_is_contained() -> None:
     ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
     _assert_all_calls_have_placeholder(calls, result)
     assert all(o.status == "success" for o in result.observations)
+
+
+def test_cancelled_observation_emit_status_kept_as_cancelled_not_collapsed_to_error() -> None:
+    """经过执行的取消观察发出 TOOL_CALL_FINISHED 事件时，payload.status 须透传 cancelled。
+
+    回归防护：``_handle_completed_observation`` 历史上把非 success 一律塌缩成 error，
+    会让前端取消态仍显示「失败」、与本次修复目标矛盾。此测试固化「取消不塌缩」契约——
+    注意取消占位（call 边界前跳过）不 emit 事件只落库配对，故此处直接驱动已执行路径。
+    """
+    from app.tools.tool_execute.tool_error import tool_cancelled
+
+    scheduler = MagicMock(spec=ToolScheduler)
+    service = _make_service(scheduler)
+    events: list[tuple[object, object]] = []
+    cancelled = tool_cancelled(
+        tool_name="delegate_task",
+        reason="the delegated child agent was cancelled; do not retry identical arguments.",
+        error="delegate_task child cancelled: parent turn cancelled",
+        tool_call_id="c1",
+    )
+    service._handle_completed_observation(
+        "s1",
+        cancelled,
+        execution_context=None,
+        write_event=lambda event_type, payload: events.append((event_type, payload)),
+        loop=None,
+    )
+
+    finished = [
+        payload
+        for event_type, payload in events
+        if event_type == EventType.TOOL_CALL_FINISHED
+    ]
+    assert len(finished) == 1
+    payload = finished[0]
+    assert isinstance(payload, ToolCallFinishedPayload)
+    assert payload.tool_call_id == "c1"
+    assert payload.status == "cancelled"
+    assert payload.retryable is False
+    assert "cancelled" in (payload.reason or "")
+
+    # 对照：error 观察仍透传 error，不被本次改动波及。
+    from app.tools.tool_execute.tool_error import tool_error
+
+    events.clear()
+    failed = tool_error(
+        tool_name="read_file",
+        error="permission denied",
+        reason="access denied by workspace boundary.",
+        tool_call_id="c2",
+    )
+    service._handle_completed_observation(
+        "s1",
+        failed,
+        execution_context=None,
+        write_event=lambda event_type, payload: events.append((event_type, payload)),
+        loop=None,
+    )
+    finished_err = [
+        payload
+        for event_type, payload in events
+        if event_type == EventType.TOOL_CALL_FINISHED
+    ]
+    assert finished_err[0].status == "error"

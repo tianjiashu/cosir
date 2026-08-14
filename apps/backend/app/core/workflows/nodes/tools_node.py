@@ -26,6 +26,8 @@ from app.config.settings import Settings
 from app.core.llm.langchain_bridge import runtime_to_langchain
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import RuntimeMessage
+from app.models.enums.event_type import EventType
+from app.models.payload import RunCancelledPayload
 from app.tools.schemas import ToolCall, ToolObservation
 from app.utils.trace_infra.redaction import redact_terminal_output
 
@@ -185,6 +187,10 @@ async def _tools_node(state: ReactGraphState) -> dict:
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
+    # 在 LangGraph 运行上下文内取出 writer 并闭包捕获：取消分支与工作线程均复用，
+    # 避免取消分支晚于 writer 定义而取不到运行上下文。
+    node_write_event = _make_write_event()
+
     # 无审批器（含字段缺失的测试桩）→ 自动放行，不暂停 graph，
     # 直接用原始 tool_calls 作为已批准列表。
     if getattr(rc, "approval_resolver", None) is None:
@@ -239,6 +245,13 @@ async def _tools_node(state: ReactGraphState) -> dict:
         # AIMessage 的 tool_calls 在上下文中悬空，下次模型节点 load_message() 拉出即触发
         # OpenAI 协议校验失败。消息不进 graph state（由 RuntimeContext 独占）。
         _persist_tool_observations(operations, placeholder_messages)
+        # 收口取消终态事件：本分支是实际检测到 turn 取消的执行点，须发出
+        # RUN_CANCELLED 供前端 StatusBadge 渲染；此处工具尚未执行无 token 累积，
+        # 与 model_node 取消分支（携带 usage）保持同类型、零值字段一致。
+        node_write_event(
+            EventType.RUN_CANCELLED,
+            RunCancelledPayload(status="cancelled", step_id=step_id, error="turn_cancelled"),
+        )
         return {
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
@@ -272,10 +285,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    # 在协程内取出 writer 并闭包捕获：工具批次在工作线程执行，线程内无法再依赖
-    # get_stream_writer() 的运行上下文。同理，事件循环也需在此取出并传入，
-    # 供命令运行期输出增量从工作线程调度回环广播。
-    node_write_event = _make_write_event()
+    # node_write_event 已在函数顶部（LangGraph 运行上下文内）取出并闭包捕获：
+    # 工具批次在工作线程执行，线程内无法再依赖 get_stream_writer() 的运行上下文。
+    # 事件循环也需在此取出并传入，供命令运行期输出增量从工作线程调度回环广播。
     tool_run = await asyncio.to_thread(
         operations.run_tool_calls,
         task.task_id,
