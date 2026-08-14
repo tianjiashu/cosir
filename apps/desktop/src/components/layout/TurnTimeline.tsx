@@ -10,7 +10,7 @@
  * @module components/layout/TurnTimeline
  */
 
-import { memo, useCallback, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { RuntimeEvent } from "@shared/events";
 import type { TurnRecord } from "@shared/turn";
 import { UserMessage } from "@/components/chat/UserMessage";
@@ -42,10 +42,6 @@ interface TurnTimelineProps {
   turn: TurnRecord;
   /** 该轮次自身的运行时事件（已按 turn_id 分片，引用在其它 turn 收事件时保持不变）。 */
   events: RuntimeEvent[];
-  /** Returns already received child-turn events for expanded delegation rendering. */
-  getChildEvents?: (childTurnId: string) => RuntimeEvent[];
-  /** Changes when child-turn event shards referenced by this turn change. */
-  childEventsRevision?: string;
 }
 
 /**
@@ -60,10 +56,15 @@ interface TurnTimelineProps {
  * 投影结果 `entries` 引用稳定（未变项沿用旧引用），使下游 `memo` 精确跳过未变化项，
  * 把「每帧 O(n) 全量重投影」降为「每帧 O(delta)」，彻底消除流式期整棵 timeline 重算卡顿。
  *
+ * 投影态生命周期绑定 turn（正确性核心）：投影态（stateRef / 各 last*Ref）随组件实例跨帧累积，
+ * 若跨 turn 复用（VirtualList 实例复用、乐观临时 turn 快速 replace 真实 turn）会串味，
+ * 表现为「新一轮 turn 与上一轮消息重叠」。故以 `turn.turn_id` 为硬不变量，其变化时
+ * 由 reset effect 清空累积态并 forceRender，确保新 turn 从空态首帧全量重建，绝不残留旧 entries。
+ *
  * @param props.turn - 轮次记录。
  * @param props.events - 该轮次事件列表。
  */
-function TurnTimelineImpl({ turn, events, getChildEvents, childEventsRevision }: TurnTimelineProps) {
+function TurnTimelineImpl({ turn, events }: TurnTimelineProps) {
   // 可续算投影状态（持久引用，跨帧累积；不随 render 重建）。
   const stateRef = useRef<TimelineProjectorState>(createTimelineProjectorState());
   // 已投影到 stateRef 的 events 长度；events 为 append-only，delta = events.slice(lastLen)。
@@ -80,6 +81,27 @@ function TurnTimelineImpl({ turn, events, getChildEvents, childEventsRevision }:
   // 触发重渲染的轻量信号；renderTick 同时作为下游 useMemo 的显式依赖——
   // ref 的 .current 变化 React 侦测不到，必须靠递增计数传达「投影状态已更新」。
   const [renderTick, forceRender] = useReducer((x: number) => x + 1, 0);
+
+  // turn 切换硬不变量：任何 turn_id 变化都先清空累积投影态，
+  // 避免 VirtualList 实例复用 / 乐观临时 turn 快速 replace 真实 turn 时，
+  // 上一轮的 entries 残留串入新一轮（表现为「新 turn 与上一轮消息重叠」）。
+  // 重置后下一帧 events effect 走 lastLenRef===0 的首帧全量重建分支，自然归位。
+  // forceRender 双保险：即便 events 引用恰未变（少数批处理边界），turn 切换也必重渲染，
+  // 不依赖 events effect 的兜底触发，杜绝旧 entries 滞留一帧。
+  useEffect(() => {
+    stateRef.current = createTimelineProjectorState();
+    lastLenRef.current = 0;
+    lastFirstEventIdRef.current = null;
+    lastTailEventIdRef.current = null;
+    PerfTrace.markCurrent("timeline:project-reset", {
+      module: "TurnTimeline",
+      turn_id: turn.turn_id,
+      task_id: turn.task_id,
+    });
+    forceRender();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // task_id 与 turn_id 绑定于同一 turn 对象，turn_id 变化即整体切换，无需单独列入依赖。
+  }, [turn.turn_id]);
 
   useEffect(() => {
     const t0 = performance.now();
@@ -177,27 +199,6 @@ function TurnTimelineImpl({ turn, events, getChildEvents, childEventsRevision }:
     void openFileInEditor(path);
   }, []);
 
-  const renderChildEntries = useCallback(
-    (childTurnId: string): ReactNode => {
-      void childEventsRevision;
-      const childEvents = getChildEvents?.(childTurnId) ?? [];
-      if (childEvents.length === 0) {
-        return null;
-      }
-      const childState = projectTimelineIncrementally(createTimelineProjectorState(), childEvents);
-      const childEntries = groupConsecutiveTools(selectVisibleEntries(childState));
-      return childEntries.map((entry) => (
-        <TimelineEntry
-          key={timelineEntryKey(entry)}
-          entry={entry}
-          onOpenFile={handleOpenFile}
-          renderChildEntries={renderChildEntries}
-        />
-      ));
-    },
-    [childEventsRevision, getChildEvents, handleOpenFile],
-  );
-
   // 「等待首 token」判定：用户已输入（input_text 非空）、请求已提交，但模型首 token
   // 尚未返回的空窗期——既无投影条目也无最终回复。此时渲染「思考中」指示器，
   // 填补用户输入与首个 runtime 事件（thinking/assistant/tool）之间的视觉空档。
@@ -240,7 +241,6 @@ function TurnTimelineImpl({ turn, events, getChildEvents, childEventsRevision }:
           key={timelineEntryKey(entry)}
           entry={entry}
           onOpenFile={handleOpenFile}
-          renderChildEntries={renderChildEntries}
         />
       ))}
     </div>
@@ -282,11 +282,9 @@ function timelineEntryKey(entry: RenderEntry): string {
 const TimelineEntry = memo(function TimelineEntry({
   entry,
   onOpenFile,
-  renderChildEntries,
 }: {
   entry: RenderEntry;
   onOpenFile: (path: string) => void;
-  renderChildEntries?: (childTurnId: string) => ReactNode;
 }) {
   // 所有 timeline 条目统一限宽 content 令牌，与用户消息、输入栏保持宽度对齐，
   // 避免 diff/write 工具卡片单独 breakout 导致右侧参差不齐。
@@ -357,7 +355,6 @@ const TimelineEntry = memo(function TimelineEntry({
           error={delegation.error}
           concurrencyGroupSize={delegation.concurrencyGroupSize}
           concurrencyIndex={delegation.concurrencyIndex}
-          childEntries={delegation.childTurnId ? renderChildEntries?.(delegation.childTurnId) : undefined}
         />
       </div>
     );

@@ -335,4 +335,59 @@ describe("useDelegationStreams", () => {
       ).toContain("child-finished");
     });
   });
+
+  it("keeps child stream open after delegation terminal and only disconnects on child run terminal", async () => {
+    const stream = controlledStreamResponse();
+    const delegationFinished = runtimeEvent(
+      "delegation-finished",
+      "delegation_finished",
+      PARENT_TURN_ID,
+      { delegation_id: DELEGATION_ID, status: "completed" },
+      2,
+    );
+    const childFinished = runtimeEvent(
+      "child-finished",
+      "run_finished",
+      CHILD_TURN_ID,
+      { status: "completed" },
+      3,
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => stream.response));
+
+    renderHook(() => useDelegationStreams(TASK_ID));
+    act(() => {
+      useEventStore.getState().appendEvent(delegationChildStartedEvent());
+    });
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        `/turns/${CHILD_TURN_ID}/events/stream`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ Accept: "text/event-stream" }),
+        }),
+      );
+    });
+
+    await act(async () => {
+      useEventStore.getState().appendEvent(delegationFinished);
+    });
+
+    await waitFor(() => {
+      expect(
+        (useEventStore.getState().eventsByTaskId[TASK_ID] ?? []).map((event) => event.event_id),
+      ).toContain("delegation-finished");
+    });
+    expect(stream.cancelled()).toBe(false);
+
+    await act(async () => {
+      stream.enqueue(sseFrame(childFinished));
+      stream.close();
+    });
+
+    await waitFor(() => {
+      expect(
+        (useEventStore.getState().eventsByTurnId[CHILD_TURN_ID] ?? []).map((event) => event.event_id),
+      ).toContain("child-finished");
+    });
+  });
 });

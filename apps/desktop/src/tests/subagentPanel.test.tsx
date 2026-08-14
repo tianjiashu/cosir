@@ -137,4 +137,20 @@ describe("delegation 行点击 → 侧边栏选中联动", () => {
     expect(screen.queryByText("状态未知")).toBeNull();
     expect(screen.getByText("等待中")).toBeTruthy();
   });
+
+  it("空 childTurnId 的 delegation 行点击不派发选中态（守卫）", () => {
+    render(
+      <DelegationTimelineEntry
+        childAgentId="delegate_reviewer"
+        delegationType="review"
+        status="running"
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: /delegate_reviewer/ });
+    expect(button.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(button);
+    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
+  });
 });

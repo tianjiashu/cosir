@@ -17,6 +17,7 @@ import type { ComponentType, ReactNode, SyntheticEvent } from "react";
 import { Fragment, memo, useMemo, useState } from "react";
 import {
   AlertCircle,
+  Ban,
   ChevronRight,
   Code2,
   Columns2,
@@ -43,8 +44,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Caption, Panel } from "@/components/ui/tokens";
 
-/** 工具调用状态枚举。 */
-type ToolCallStatus = "running" | "completed" | "error";
+/** 工具调用状态枚举。cancelled 表示用户主动中断导致的确定性终态，与 error 语义不同。 */
+type ToolCallStatus = "running" | "completed" | "error" | "cancelled";
 
 /** 工具调用卡片属性。 */
 interface ToolCallCardProps {
@@ -152,8 +153,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   // diff/write 两态共享的视图模式；提升到这里避免两个分支重复声明 hook。
   const [diffViewType, setDiffViewType] = useState<"unified" | "split">("unified");
   const IconComponent = resolveIcon(display?.icon);
-  // 错误态使用圆圈内叹号图标，与成功/运行态的工具图标做视觉区分。
-  const StatusIcon = status === "error" ? AlertCircle : IconComponent;
+  // 错误态使用圆圈内叹号图标，取消态使用禁止图标，与成功/运行态的工具图标做视觉区分。
+  const StatusIcon = status === "error" ? AlertCircle : status === "cancelled" ? Ban : IconComponent;
   // 展开态声明式信号：前端仅按布局字符串分发布局，不按工具名写特化分支。
   const expandable = display?.expandable ?? true;
   const expandLayout = display?.expandLayout ?? "details";
@@ -172,6 +173,11 @@ export const ToolCallCard = memo(function ToolCallCard({
     // 保证失败态折叠行始终有红色高亮的失败信息。
     const failureText = error || reason || "执行失败";
     summaryText = display?.verb ? `${display.verb} ${failureText}` : `${toolName} ${failureText}`;
+  } else if (status === "cancelled") {
+    // 取消态以中性灰色文案呈现「已取消」，不与失败态红色高亮混淆；
+    // error 字段携带「发生了什么」的英文描述，reason 携带是否值得重试的富文本。
+    const cancelledText = error || reason || "已取消";
+    summaryText = display?.verb ? `${display.verb} ${cancelledText}` : `${toolName} ${cancelledText}`;
   } else if (status === "completed" && resultSummary) {
     summaryText = display?.verb ? `${display.verb} ${resultSummary}` : resultSummary;
   }
@@ -240,7 +246,11 @@ export const ToolCallCard = memo(function ToolCallCard({
                     <span
                       className={cn(
                         "min-w-0 flex-1 truncate font-mono text-xs",
-                        status === "error" ? "text-destructive" : "text-foreground",
+                        status === "error"
+                          ? "text-destructive"
+                          : status === "cancelled"
+                            ? "text-muted-foreground"
+                            : "text-foreground",
                       )}
                     >
                       {shortenChangeSummary(summaryText)}
@@ -273,6 +283,13 @@ export const ToolCallCard = memo(function ToolCallCard({
               </p>
             </div>
           )}
+          {isOpen && status === "cancelled" && (
+            <div className="px-2 pb-2">
+              <p className="max-w-md whitespace-pre-wrap break-all rounded border border-border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+                {error ?? reason ?? "工具调用已取消"}
+              </p>
+            </div>
+          )}
         </div>
       </TooltipProvider>
     );
@@ -298,7 +315,11 @@ export const ToolCallCard = memo(function ToolCallCard({
         <span
           className={cn(
             "truncate font-mono text-xs",
-            status === "error" ? "text-destructive" : "text-muted-foreground",
+            status === "error"
+              ? "text-destructive"
+              : status === "cancelled"
+                ? "text-muted-foreground"
+                : "text-muted-foreground",
           )}
         >
           {summaryText}
@@ -398,6 +419,35 @@ export const ToolCallCard = memo(function ToolCallCard({
                   )}
                 >
                   {retryable ? "可重试" : "需先修正参数"}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* 取消：以中性色呈现取消原因，明确与失败态区分（根因是主动中断而非执行故障）。 */}
+          {status === "cancelled" && (error || reason) && (
+            <div className="space-y-1">
+              {error && (
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground shrink-0">取消:</span>
+                  <span className="text-muted-foreground">{error}</span>
+                </div>
+              )}
+              {reason && (
+                <div className="flex gap-2">
+                  <span className="text-muted-foreground shrink-0">原因:</span>
+                  <span className="text-muted-foreground">{reason}</span>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <span className="text-muted-foreground shrink-0">重试:</span>
+                <span
+                  className={cn(
+                    "inline-flex items-center rounded border border-border px-1.5 py-0.5 text-muted-foreground",
+                    Caption.xs,
+                  )}
+                >
+                  确定性终态，原样重试无意义
                 </span>
               </div>
             </div>

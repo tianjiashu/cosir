@@ -6,10 +6,9 @@
  *   问题1 键盘行为分离、问题2 无 child 事件不无限重渲染、
  *   问题3 徽章类型穷尽 + 复用投影器、问题4 running 兜底不误判终态。
  */
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RuntimeEvent } from "@shared/events";
-import { DelegationTimelineEntry } from "@/components/chat/DelegationTimelineEntry";
 import { SubagentPanel } from "@/components/right-panel/SubagentPanel";
 import { useDelegationStore } from "@/stores/delegationStore";
 import { useEventStore } from "@/stores/eventStore";
@@ -38,78 +37,6 @@ describe("Task1 审查修复独立验证", () => {
   beforeEach(() => {
     useDelegationStore.getState().clearSelection();
     useEventStore.getState().clearEvents();
-  });
-
-  // ── 问题1：键盘行为分离 ──────────────────────────────────────────────
-  // 测试目的：验证焦点在「展开箭头」兄弟按钮上按 Enter（happy-dom 不模拟原生 Enter→click 默认行为）
-  // 不会写入选中态（selectedChildTurnId 保持 null），即原 role=button 嵌套 onKeyDown 冒泡 bug 已消除。
-  // 可能发现的缺陷：修复不彻底，箭头 Enter 仍误触 openSidePanel。
-  it("问题1 | 展开箭头按 Enter 不写入选中态（selectedChildTurnId 保持 null）", () => {
-    render(
-      <DelegationTimelineEntry
-        childAgentId="delegate_reviewer"
-        childTurnId="turn_child_kbd_arrow"
-        delegationType="review"
-        status="running"
-        childEntries={<div>child timeline output</div>}
-      />,
-    );
-
-    const arrow = screen.getByLabelText("Expand delegated child events");
-    fireEvent.keyDown(arrow, { key: "Enter" });
-
-    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
-    // 侧边栏入口按钮仍独立存在、可点击，未因箭头键盘事件被激活。
-    expect(
-      screen.getByLabelText("Open delegate_reviewer child timeline in side panel"),
-    ).toBeTruthy();
-  });
-
-  // 测试目的：验证「打开侧边栏」按钮自身点击可写入选中态（兄弟原生 button 可达性）。
-  // 可能发现的缺陷：按钮未接 onClick / childTurnId 守卫误判导致无法选中。
-  it("问题1 | 「打开侧边栏」按钮点击写入选中态（与展开箭头互补分离）", () => {
-    render(
-      <DelegationTimelineEntry
-        childAgentId="delegate_reviewer"
-        childTurnId="turn_child_open_btn"
-        delegationType="review"
-        status="running"
-        childEntries={<div>child timeline output</div>}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByLabelText("Open delegate_reviewer child timeline in side panel"),
-    );
-
-    expect(useDelegationStore.getState().selectedChildTurnId).toBe("turn_child_open_btn");
-  });
-
-  // 测试目的：验证多次点击展开箭头只切换内联展开、绝不污染侧边栏选中态（选中态始终为 null），
-  // 且箭头与「打开侧边栏」按钮事件解耦（核心回归点：原 role=button 嵌套 onKeyDown 会串扰）。
-  // 可能发现的缺陷：展开逻辑误写选中态，或箭头与打开按钮事件耦合。
-  it("问题1 | 多次点击展开箭头仅切换内联展开、选中态始终为 null", () => {
-    const { container } = render(
-      <DelegationTimelineEntry
-        childAgentId="delegate_reviewer"
-        childTurnId="turn_child_multi"
-        delegationType="review"
-        status="running"
-        childEntries={<div>child timeline output</div>}
-      />,
-    );
-
-    const arrow = screen.getByLabelText("Expand delegated child events");
-    // 偶数次点击：false→true→false，内联收起。
-    fireEvent.click(arrow);
-    fireEvent.click(arrow);
-    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
-    expect(container.innerHTML).not.toContain("child timeline output");
-
-    // 奇数次点击：false→true，内联展开，但选中态仍不被污染。
-    fireEvent.click(arrow);
-    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
-    expect(container.innerHTML).toContain("child timeline output");
   });
 
   // ── 问题2：无 child 事件时不无限重渲染 ───────────────────────────────

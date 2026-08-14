@@ -6,7 +6,10 @@
  * - SourcesTab：Sources 列表（引用文档、上下文片段、规则文件）
  * - ContextBlock：上下文引用占位
  * - McpBlock：MCP 入口占位
- * - SubagentPanel：选中委派子 Agent 的 timeline 展示（复用真实 child 事件流）
+ * - SubagentPanel：独立 Tab，展示选中委派子 Agent 的 timeline（复用真实 child 事件流）
+ *
+ * Subagent Tab 受控于 `delegationStore.selectedChildTurnId`：父 timeline 点击 delegation 行即选中
+ * child turn，本面板自动切到 Subagent Tab；手动切回 outputs/sources 时清空选中态。
  *
  * 变更集（Changes）已从右侧栏移出，改由中央对话区上方的 ChangesDrawer 折叠呈现。
  *
@@ -16,12 +19,13 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { FileText, Link2 } from "lucide-react";
+import { FileText, Link2, Bot } from "lucide-react";
 import { OutputsTab, type OutputItem } from "@/components/right-panel/OutputsTab";
 import { SourcesTab, type SourceItem } from "@/components/right-panel/SourcesTab";
 import { ContextBlock } from "@/components/right-panel/ContextBlock";
 import { McpBlock } from "@/components/right-panel/McpBlock";
 import { SubagentPanel } from "@/components/right-panel/SubagentPanel";
+import { useDelegationStore } from "@/stores/delegationStore";
 
 /** Mock Outputs 数据（第一版静态数据）。 */
 const MOCK_OUTPUTS: OutputItem[] = [
@@ -60,15 +64,37 @@ const MOCK_SOURCES: SourceItem[] = [
  * 右侧信息面板组件。
  *
  * 宽度由外层可拖拽 Panel 决定（本组件撑满容器），
- * 通过 Tabs 切换 Outputs/Sources，展示各标签页内容。
+ * 通过 Tabs 切换 Outputs/Sources/Subagent，展示各标签页内容。
+ * Subagent Tab 受控于 `delegationStore.selectedChildTurnId`：父 timeline 点击 delegation 行即选中
+ * child turn，本面板自动切到 Subagent Tab；手动切回其它 Tab 时清空选中态。
  * 注意：Changes 已移至中央对话区上方的 ChangesDrawer，本面板不再含 Changes Tab。
  *
  * @returns 右侧信息面板。
  */
 export function RightPanel() {
+  // Subagent Tab 与 delegationStore 选中态双向绑定：选中非空 → 切 Subagent Tab；
+  // 手动切到 outputs/sources → 清空选中，使 Subagent Tab 不被置灰悬停。
+  const selectedChildTurnId = useDelegationStore((state) => state.selectedChildTurnId);
+  const clearSelection = useDelegationStore((state) => state.clearSelection);
+  // Tabs 的 value 语义是 tab 名（"subagent"/"outputs"/"sources"），不是 turn id。
+  // 选中态非空时固定切到 "subagent" Tab，使 <TabsContent value="subagent"> 与
+  // TabsTrigger value="subagent" 匹配、SubagentPanel 正常显示；直接把 turn id 当
+  // value 会导致 Radix 找不到对应 trigger，tab 栏与内容区都不切换（点击 delegation 行「无响应」）。
+  const activeTab = selectedChildTurnId ? "subagent" : "outputs";
+
+  const handleTabChange = (value: string) => {
+    if (value !== "subagent") {
+      clearSelection();
+    }
+  };
+
   return (
     <aside className="flex h-full w-full min-w-0 flex-col bg-background">
-      <Tabs defaultValue="outputs" className="flex h-full flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={handleTabChange}
+        className="flex h-full flex-col"
+      >
         {/* Tab 切换栏 */}
         {/* calc 用于抵消父容器 mx-2 左右外边距，使 Tab 栏宽度与内容区对齐，非通用语义 */}
         {/* eslint-disable-next-line tailwind/no-arbitrary-value */}
@@ -80,6 +106,10 @@ export function RightPanel() {
           <TabsTrigger value="sources" className="min-w-0 flex-1 gap-1.5 truncate text-xs">
             <Link2 className="h-3.5 w-3.5 shrink-0" />
             Sources
+          </TabsTrigger>
+          <TabsTrigger value="subagent" className="min-w-0 flex-1 gap-1.5 truncate text-xs">
+            <Bot className="h-3.5 w-3.5 shrink-0" />
+            Subagent
           </TabsTrigger>
         </TabsList>
 
@@ -107,6 +137,14 @@ export function RightPanel() {
                 {/* 预留扩展区块：使用独立子组件 */}
                 <ContextBlock />
                 <McpBlock />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* Subagent Tab：独立展示选中委派子 Agent 的 timeline（从 SourcesTab 子树移出） */}
+          <TabsContent value="subagent" className="mt-0 h-full">
+            <ScrollArea className="h-full scrollbar-thin">
+              <div className="space-y-1 p-2">
                 <SubagentPanel />
               </div>
             </ScrollArea>

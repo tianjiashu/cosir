@@ -37,8 +37,8 @@ export interface TimelineToolItem {
   eventId: string;
   /** 工具名称。 */
   toolName: string;
-  /** 工具显示状态。 */
-  status: "running" | "completed" | "error";
+  /** 工具显示状态。cancelled 表示用户主动中断导致的确定性终态，与 error 语义不同。 */
+  status: "running" | "completed" | "error" | "cancelled";
   /** 可选错误。 */
   error?: string;
   /** 工具调用参数（来自 `tool_call_started`，用于渲染折叠态摘要与展开态参数）。 */
@@ -79,6 +79,30 @@ export type TimelineDelegationStatus =
   | "completed"
   | "failed"
   | "cancelled";
+
+/**
+ * 委派状态到统一 UI 表现的单一映射（穷尽 TimelineDelegationStatus 全部取值）。
+ *
+ * 收口原因：DelegationTimelineEntry 与 SubagentPanel 此前各维护一份
+ * 「状态 → 徽章 variant / 文案 / 图标」映射，语义重叠、易漂移（改一处忘另一处）。
+ * 本映射统一收口，两组件共同引用，确保「状态 ↔ UI 表现」口径单一事实来源。
+ *
+ * 注意：label 为中文展示文案，icon 由各自组件按需取用（本映射只承载与派生状态
+ * 强绑定的 variant + label，图标因组件库差异留在组件内，避免 projector 反向依赖 UI）。
+ *
+ * @module services/timeline/projector
+ */
+export const DELEGATION_STATUS_UI: Record<
+  TimelineDelegationStatus,
+  { label: string; variant: "outline" | "success" | "destructive" | "warning" | "secondary" }
+> = {
+  pending: { label: "等待中", variant: "outline" },
+  waiting_approval: { label: "待审批", variant: "warning" },
+  running: { label: "运行中", variant: "secondary" },
+  completed: { label: "已完成", variant: "success" },
+  failed: { label: "失败", variant: "destructive" },
+  cancelled: { label: "已取消", variant: "outline" },
+};
 
 /** Delegation lifecycle entry shown in the parent turn timeline. */
 export interface TimelineDelegationItem {
@@ -989,7 +1013,12 @@ function projectTool(event: RuntimeEvent): TimelineToolItem | null {
     return {
       eventId: event.event_id,
       toolName,
-      status: String(payload.status) === "error" ? "error" as const : "completed" as const,
+      status:
+        String(payload.status) === "error"
+          ? ("error" as const)
+          : String(payload.status) === "cancelled"
+            ? ("cancelled" as const)
+            : ("completed" as const),
       error: payload.error ? String(payload.error) : undefined,
       callId: payload.tool_call_id ? String(payload.tool_call_id) : undefined,
       resultSummary: projection.summary ?? undefined,

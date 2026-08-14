@@ -19,7 +19,6 @@ import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { PerfTrace } from "@/lib/perf";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
 import type { TurnRecord } from "@shared/turn";
-import type { RuntimeEvent } from "@shared/events";
 
 /**
  * 判断当前是否无活跃任务（即空会话）。
@@ -105,11 +104,37 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   // 无任何工作区时的引导空状态（先于「无活跃任务」判断，覆盖删完所有工作区的场景）。
   const noWorkspace = !activeWorkspaceId;
 
+  /**
+   * 主 timeline 应渲染的 turn 列表。
+   *
+   * 数据来源优先级：turnStore 中的真实 turn 记录 > activeTask 兜底。
+   *
+   * 关键过滤：child turn（由 delegate_task 创建的子 Agent 轮次）必须从主 timeline
+   * 中排除——它们的 timeline 步骤（工具调用/思考/Changes）应在右侧 SubagentPanel
+   * 中独立渲染，不应混入主聊天区。识别依据：事件流中存在
+   * `delegation_child_started` 事件且其 `payload.child_turn_id` 匹配该 turn 的 turn_id。
+   *
+   * 顺序收口：过滤后按 `created_at` 稳定排序。turnStore 的 upsertTurn/replaceTurnId
+   * 用 push 假定「后到即后置」，但乐观临时 turn（本地时钟）与真实 turn（后端时钟）存在
+   * 同秒/漂移窗口，push 顺序不等于时间序。在此收口使 VirtualList 渲染顺序只由时间决定，
+   * 不依赖数组原序的巧合，修复「新一轮 turn 与上一轮消息重叠」的时序根因之一。
+   */
   const timelineTurns = useMemo(() => {
-    if (turns.length > 0) {
-      return turns;
+    // 从当前 task 的事件流中提取所有 child turn id（delegation 子 Agent 轮次）。
+    const childTurnIds = new Set<string>();
+    for (const event of events) {
+      if (event.event_type === "delegation_child_started") {
+        const payload = event.payload as { child_turn_id?: string };
+        if (payload.child_turn_id) {
+          childTurnIds.add(payload.child_turn_id);
+        }
+      }
     }
-    if (activeTask) {
+
+    let candidateTurns: TurnRecord[];
+    if (turns.length > 0) {
+      candidateTurns = turns;
+    } else if (activeTask) {
       const fallbackTurn: TurnRecord = {
         turn_id: activeTask.latest_turn_id ?? activeTask.task_id,
         task_id: activeTask.task_id,
@@ -120,10 +145,25 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
         created_at: activeTask.created_at,
         updated_at: activeTask.updated_at,
       };
-      return [fallbackTurn];
+      candidateTurns = [fallbackTurn];
+    } else {
+      return [];
     }
-    return [];
-  }, [activeTask, turns]);
+
+    // 过滤掉 child turn：主 timeline 只展示父 Agent 的对话轮次，
+    // child turn 由右侧 SubagentPanel 独立渲染（通过 delegationStore 选中态驱动）。
+    const parentTurns = candidateTurns.filter((t) => !childTurnIds.has(t.turn_id));
+    // 按 created_at 稳定排序：turnStore 的 upsertTurn/replaceTurnId 用 push 假定「后到即后置」，
+    // 但乐观临时 turn（本地时钟）与真实 turn（后端时钟）存在同秒/漂移窗口，push 顺序不等于时间序。
+    // 排序在此收口，使 VirtualList 渲染顺序只由时间决定，不依赖数组原序的巧合。
+    // 用 Date.getTime() 比较而非 localeCompare：对「ISO 字符串 / 非规范格式 / undefined」均稳健，
+    // 解析失败返回 NaN 经 `|| 0` 兜底排到尾部（而非 localeCompare 把 "" 排到头部），语义更明确。
+    return parentTurns.slice().sort((a, b) => {
+      const ta = new Date(a.created_at ?? 0).getTime() || 0;
+      const tb = new Date(b.created_at ?? 0).getTime() || 0;
+      return ta - tb;
+    });
+  }, [activeTask, turns, events]);
 
   // 分片窗口：首屏仅渲染最近若干 turn，更早的由「加载更早对话」按需扩展。
   // 仅当切换任务（activeTaskId 变化）时重置窗口；流式期间 turns 引用变化（新事件到达）
@@ -165,23 +205,17 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   // 决定是否重渲染（由 eventStore.mergeByEventId 的引用稳定性保证），无需在此感知全局映射。
   const eventsByTurnIdRef = useRef(eventsByTurnId);
   eventsByTurnIdRef.current = eventsByTurnId;
-  const getChildEvents = useCallback((childTurnId: string) => {
-    return eventsByTurnIdRef.current[childTurnId] ?? EMPTY_EVENTS;
-  }, []);
   const renderTurnItem = useCallback((turn: TurnRecord) => {
     const turnEvents = eventsByTurnIdRef.current[turn.turn_id] ?? EMPTY_EVENTS;
-    const childEventsRevision = buildDelegationChildEventsRevision(turnEvents, eventsByTurnIdRef.current);
     return (
       <div className="px-4 py-2">
         <TurnTimeline
           turn={turn}
           events={turnEvents}
-          getChildEvents={getChildEvents}
-          childEventsRevision={childEventsRevision}
         />
       </div>
     );
-  }, [getChildEvents]);
+  }, []);
 
   // 是否显示空状态（仅取决于是否有活跃任务；具体空态由 timelineTurns 决定）
   const emptySession = isNoActiveTask(activeTask);
@@ -250,10 +284,11 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
         </div>
       )}
 
-      {/* 空会话提示（已有工作区但无活跃任务） */}
+      {/* 空会话提示（已有工作区但无活跃任务）：给出明确动作引导，避免"死胡同"空态 */}
       {!noWorkspace && emptySession && (
-        <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
-          在下方输入框发送指令开始对话
+        <div className="flex flex-col items-center justify-center gap-2 py-20 text-sm text-muted-foreground">
+          <FolderOpen className="h-8 w-8 opacity-40" />
+          <div>选择左侧任务开始对话，或直接在下方输入框开始新会话</div>
         </div>
       )}
 
@@ -294,43 +329,4 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   );
 }
 
-/**
- * Builds a compact revision string for child turns referenced by delegation events in one parent turn.
- *
- * @param turnEvents - Parent turn event shard.
- * @param eventsByTurnId - Current event shards keyed by turn id.
- * @returns Stable empty string when no child turn is referenced; otherwise a string that changes
- *   when any referenced child shard length or tail event changes.
- *
- * @throws Does not throw.
- *
- * @sideeffect None.
- */
-function buildDelegationChildEventsRevision(
-  turnEvents: RuntimeEvent[],
-  eventsByTurnId: Record<string, RuntimeEvent[]>,
-): string {
-  const childTurnIds = new Set<string>();
-  for (const event of turnEvents) {
-    if (
-      event.event_type !== "delegation_child_started" &&
-      event.event_type !== "delegation_finished" &&
-      event.event_type !== "delegation_failed" &&
-      event.event_type !== "delegation_cancelled"
-    ) {
-      continue;
-    }
-    const childTurnId = (event.payload as { child_turn_id?: unknown }).child_turn_id;
-    if (typeof childTurnId === "string" && childTurnId.length > 0) {
-      childTurnIds.add(childTurnId);
-    }
-  }
-  if (childTurnIds.size === 0) {
-    return "";
-  }
-  return [...childTurnIds].sort().map((childTurnId) => {
-    const childEvents = eventsByTurnId[childTurnId] ?? EMPTY_EVENTS;
-    const tailEventId = childEvents[childEvents.length - 1]?.event_id ?? "";
-    return `${childTurnId}:${childEvents.length}:${tailEventId}`;
-  }).join("|");
-}
+

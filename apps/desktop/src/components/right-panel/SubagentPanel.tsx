@@ -5,45 +5,38 @@
  * 复用既有数据流，不新建 SSE / 投影器 / 投影 hook：
  * - child 事件已由 useDelegationStreams 按 turn_id 分片并入 eventStore
  *   （见 stores/eventStore.ts 的 eventsByTurnId），本组件直接读取该分片；
- * - 复用既有投影器 projectTurnTimeline(turns, events)、既有渲染组件 TurnTimeline
- *   渲染该项目 timeline（零重新实现）。
+ * - child timeline 直接复用既有渲染组件 TurnTimeline（其自身已是增量投影实现，
+ *   projectTimelineIncrementally + stateRef + delta 切片），不再经 projectTurnTimeline
+ *   全量投影（零重新实现，且避免投影结果被丢弃的死代码）。
  *
  * 设计约束（来自 Task 1 brief A3）：
  * - 不新建 useChildTurnTimeline hook（A4 删除项）——直接复用 eventStore 分片。
- * - 构造单元素 TurnRecord[] 喂给 projectTurnTimeline；优先复用 turnStore 中真实
- *   TurnRecord，否则兜底构造空 record，避免捏造不存在的数据。
+ * - 优先复用 turnStore 中真实 TurnRecord，否则兜底构造空 record，避免捏造不存在的数据；
+ *   child timeline 直接以该 record 喂给 TurnTimeline 渲染（不再经 projectTurnTimeline 全量投影）。
  *
  * @module components/right-panel/SubagentPanel
  */
 
-import { useMemo } from "react";
+import { useDeferredValue, useMemo } from "react";
 import type { TurnRecord } from "@shared/turn";
 import { Badge } from "@/components/ui/badge";
 import { Caption } from "@/components/ui/tokens";
 import { cn } from "@/lib/utils";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
 import {
+  DELEGATION_STATUS_UI,
   deriveChildDelegationStatus,
   deriveSiblingDelegations,
-  projectTurnTimeline,
   type TimelineDelegationStatus,
 } from "@/services/timeline/projector";
 import { useDelegationStore } from "@/stores/delegationStore";
 import { EMPTY_EVENTS, useEventStore } from "@/stores/eventStore";
 import { useTurnStore } from "@/stores/turnStore";
+import { logWarn } from "@/lib/logger";
 
-/** 委派状态到中文徽章文案与变体的映射（穷尽 TimelineDelegationStatus 全部取值）。 */
-const DELEGATION_STATUS_BADGE: Record<
-  TimelineDelegationStatus,
-  { label: string; variant: "outline" | "success" | "destructive" | "warning" | "secondary" }
-> = {
-  pending: { label: "等待中", variant: "outline" },
-  waiting_approval: { label: "待审批", variant: "warning" },
-  running: { label: "运行中", variant: "secondary" },
-  completed: { label: "已完成", variant: "success" },
-  failed: { label: "失败", variant: "destructive" },
-  cancelled: { label: "已取消", variant: "outline" },
-};
+// 委派状态 → 徽章 UI 的单一映射收口于 projector.DELEGATION_STATUS_UI，
+// 本组件直接引用 projector 的 DELEGATION_STATUS_UI 单一映射，不再各自维护一份
+// （避免双份穷尽映射漂移，见问题 7 审查结论）。
 
 /**
  * 侧边栏子 Agent 面板。
@@ -57,7 +50,21 @@ const DELEGATION_STATUS_BADGE: Record<
  *   时，面板顶部以 tab 列出全部 sibling 子 Agent（各自状态徽章），点击 tab 调
  *   `delegationStore.selectChildTurn` 切换选中（复用 Task 1 的选中态通道），下方随之渲染对应 child。
  *
- * @returns 右侧面板中展示选中 child turn 的区块；属于 RightPanel 的 SourcesTab 子树。
+ * 性能降频（修复 2）：sibling/status 这两个对全量事件的 O(N) 派生使用
+ * `useDeferredValue` 包裹的 deferred 全量事件，使它们在高频事件流（每帧一次 set）
+ * 下延后到低优先级渲染空闲时才重算，避免每次 store 变更都立即重跑派生扫描。
+ * 注意：child timeline 维度（childEvents）刻意不使用 deferred，以保证选中 child
+ * 事件流的实时响应，不延迟。
+ *
+ * 双层数据契约（重要，避免后续误改）：
+ * - timeline 渲染维度：严格按 child 分片（`eventStore.eventsByTurnId[selectedChildTurnId]`），
+ *   只取该 child 的事件，与主 timeline 及 sibling 完全隔离，杜绝跨 child 数据泄漏。
+ * - sibling/status 派生维度：必须跨 child 聚合（同 parent 下全部 delegation），因此
+ *   显式读取 `eventStore.events`（扁平全量事件）喂给 `deriveSiblingDelegations` /
+ *   `deriveChildDelegationStatus`，而非 child 分片——分片拿不到 sibling 数据，故此处
+ *   用全局事件是设计使然，非「混用数据源」。两层口径不同但各自闭环，请勿强行统一。
+ *
+ * @returns 右侧面板中展示选中 child turn 的区块；作为 RightPanel 的独立 Subagent Tab 渲染（不再嵌套于 SourcesTab 子树）。
  *
  * @throws 不主动抛出异常。
  *
@@ -69,11 +76,18 @@ export function SubagentPanel() {
   const childEvents = useEventStore((state) =>
     selectedChildTurnId ? (state.eventsByTurnId[selectedChildTurnId] ?? EMPTY_EVENTS) : EMPTY_EVENTS,
   );
-  const allEvents = useEventStore((state) => state.events);
+  // 全量事件订阅：先取原始引用，再用 useDeferredValue 派生低优先级副本。
+  // 高频事件流（每帧一次 set）下，deferred 值会在渲染空闲时才更新，
+  // 使下方 sibling/status 两个 O(N) 派生降频重跑（详见组件 docstring 性能降频段）。
+  // 注意：childEvents 分片刻意不用 deferred，需实时响应选中 child 事件流。
+  const rawAllEvents = useEventStore((state) => state.events);
+  const allEvents = useDeferredValue(rawAllEvents);
   const turnsByTaskId = useTurnStore((state) => state.turnsByTaskId);
   const selectChildTurn = useDelegationStore((state) => state.selectChildTurn);
 
-  // 并发 sibling 派生：从扁平事件流派生当前选中 child 所属并发组的全部 sibling；
+  // 并发 sibling 派生：消费 deferred 全量事件（allEvents），依赖其为低优先级值，
+  // store 高频变更时此 O(N) 扫描延后到渲染空闲才重跑（性能降频，不手写节流）。
+  // 从扁平事件流派生当前选中 child 所属并发组的全部 sibling；
   // 仅长度 >= 2 时面板渲染 tab（纯前端推导，复用投影器 deriveSiblingDelegations，不重复造轮子）。
   // 并发 sibling 列表（同 parent 下全部 delegation，含已终态项，便于历史切换查看）。
   // 注意口径差异：此处列出「同 parent 全量 delegation」，而 timeline 行左侧泳道
@@ -84,7 +98,9 @@ export function SubagentPanel() {
     [selectedChildTurnId, allEvents],
   );
 
-  // 选中态下从事件流派生 child 委派状态，供徽章与兜底 record 的 status 映射共用，
+  // 选中态下从事件流派生 child 委派状态：同样消费 deferred 全量事件，随其低优先级更新，
+  // 避免每帧对全量事件重跑 O(N) 状态扫描（性能降频，依赖数组仍为 [selectedChildTurnId, allEvents]）。
+  // 供徽章与兜底 record 的 status 映射共用，
   // 保证「左侧状态」与「右侧 timeline 口径」同源（复用投影器 deriveChildDelegationStatus）。
   const delegationStatus = useMemo(
     () => (selectedChildTurnId ? deriveChildDelegationStatus(selectedChildTurnId, allEvents) : undefined),
@@ -101,15 +117,16 @@ export function SubagentPanel() {
       if (match) return match;
     }
     // 无真实记录时构造兜底 record，status 据派生状态映射（详见 createFallbackTurn docstring）。
+    // 降级日志：turnStore 未落库即进入兜底，属数据流分片异常分支，需可排查线索
+    // （child 事件已到但 turn 记录缺失，可能是 useDelegationStreams 落库延迟或丢事件）。
+    logWarn("subagent panel falls back to synthetic turn record", {
+      module: "SubagentPanel",
+      child_turn_id: selectedChildTurnId,
+      derived_status: delegationStatus ?? "unknown",
+      has_child_events: childEvents.length > 0,
+    });
     return createFallbackTurn(selectedChildTurnId, delegationStatus);
   }, [selectedChildTurnId, turnsByTaskId, delegationStatus]);
-
-  // 选中态下的派生渲染数据（仅在已选中且已取到 turnRecord 时计算，减少无谓投影）。
-  const childTimelineItem = useMemo(() => {
-    if (!selectedChildTurnId || !turnRecord) return null;
-    const items = projectTurnTimeline([turnRecord], childEvents);
-    return items[0] ?? null;
-  }, [selectedChildTurnId, turnRecord, childEvents]);
 
   if (!selectedChildTurnId) {
     return (
@@ -122,7 +139,7 @@ export function SubagentPanel() {
     );
   }
 
-  const statusBadge = delegationStatus ? DELEGATION_STATUS_BADGE[delegationStatus] : undefined;
+  const statusBadge = delegationStatus ? DELEGATION_STATUS_UI[delegationStatus] : undefined;
 
   return (
     <div className="space-y-2 rounded-md border border-border p-2">
@@ -131,7 +148,7 @@ export function SubagentPanel() {
       {siblings.length >= 2 && (
         <div className="flex min-w-0 flex-wrap gap-1.5" role="tablist" aria-label="并发子 Agent 切换">
           {siblings.map((sibling) => {
-            const badge = DELEGATION_STATUS_BADGE[sibling.status];
+            const badge = DELEGATION_STATUS_UI[sibling.status];
             const isCurrent = sibling.childTurnId === selectedChildTurnId;
             return (
               <button
@@ -176,7 +193,7 @@ export function SubagentPanel() {
       {/* timeline 区域：事件未到时显示 loading，已到则复用 TurnTimeline 渲染 */}
       {childEvents.length === 0 ? (
         <p className="text-xs text-muted-foreground">正在等待子 Agent 事件流…</p>
-      ) : turnRecord && childTimelineItem ? (
+      ) : turnRecord && childEvents.length > 0 ? (
         <TurnTimeline turn={turnRecord} events={childEvents} />
       ) : (
         <p className="text-xs text-muted-foreground">该子 Agent 暂无可渲染的时间线条目。</p>
@@ -188,7 +205,7 @@ export function SubagentPanel() {
 /**
  * 构造兜底的空 TurnRecord（仅在 turnStore 无真实记录时使用）。
  *
- * 仅填充业务必需的 turn_id；input/response 留空，由 projectTurnTimeline 在
+ * 仅填充业务必需的 turn_id；input/response 留空，由 TurnTimeline 在
  * 无条目且有 response_text 时兜底渲染，保证不捏造不存在的内容。
  *
  * `status` 取值逻辑（正确性优先，不再写死 "completed"）：

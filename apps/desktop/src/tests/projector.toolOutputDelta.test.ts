@@ -160,4 +160,25 @@ describe("projector tool_output_delta", () => {
     expect(state.pendingDelta?.content).toBe("hello");
     expect(firstToolItem(state.entries).output).toBe("out");
   });
+
+  it("tool_call_finished 携带 status=cancelled 时映射为 cancelled 而非 error", () => {
+    const callId = "call-cancel";
+    const state = projectTimelineIncrementally(createTimelineProjectorState(), [
+      startedEvent(callId),
+      makeEvent("tool_call_finished", {
+        tool_name: "delegate_task",
+        tool_call_id: callId,
+        step_id: "step-1",
+        status: "cancelled",
+        error: "delegate_task child cancelled: parent turn cancelled",
+        reason: "the delegated child agent was cancelled; do not retry identical arguments.",
+        retryable: false,
+      }),
+    ]);
+
+    const item = firstToolItem(state.entries);
+    expect(item.status).toBe("cancelled");
+    expect(item.error).toBe("delegate_task child cancelled: parent turn cancelled");
+    expect(item.retryable).toBe(false);
+  });
 });
