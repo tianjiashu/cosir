@@ -129,6 +129,9 @@ const REQUEST_SUMMARY_RULES: Record<string, (args: ToolDataRecord) => string> = 
   },
   write_file: (args) => readString(args.path) || "write",
   patch: (args) => readString(args.path) || "patch",
+  // apply_patch 为 V4A 多文件补丁，参数只有整段 patch 文本、无单一 path，
+  // 因此折叠态仅给固定动作名，具体变更文件由结果区 diff 条目呈现。
+  apply_patch: () => "apply patch",
   delete: (args) => {
     const path = readString(args.path);
     return args.recursive === true ? `${path} （递归）` : path;
@@ -168,6 +171,9 @@ const RESULT_RULES: Record<string, (data: ToolDataRecord) => ToolResultProjectio
   execute_terminal: () => EMPTY_PROJECTION,
   write_file: projectFileChangeResult,
   patch: projectFileChangeResult,
+  // apply_patch 与 patch 同样透传 data.changes（后端 build_file_change_display_data），
+  // 复用同一 diff 投影，多文件变更自然展开为多条 diff 条目。
+  apply_patch: projectFileChangeResult,
   list_directory: (data) => {
     const entries = readRecordList(data.entries).map(toDirectoryEntry);
     return {

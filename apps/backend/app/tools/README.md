@@ -113,7 +113,7 @@ display=ToolDisplayHints(
 
 关键规则：
 - **所有工具必须有 `display`**，前端依赖它做统一渲染。当前存量工具（write_file / read_file
-  / patch_tool / list_directory / search_files / delete / execute_terminal / web_search /
+  / patch / apply_patch / list_directory / search_files / delete / execute_terminal / web_search /
   web_extract）均已携带。
 - **纯静态、零渲染**：`ToolDisplayHints` 只有字面量字段（`verb` / `icon` / `expandable` /
   `expand_layout`），无 `Callable`、无摘要模板、无 `render_*` 方法。任何摘要文本或条目投影

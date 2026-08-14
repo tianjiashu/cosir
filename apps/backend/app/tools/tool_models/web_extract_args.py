@@ -26,11 +26,11 @@ class WebExtractArgs(BaseModel):
         default=None,
         ge=2000,
         description=(
-            "Optional per-page character budget hint passed to the extraction provider "
-            "(default 15000). The full page text is always returned to the model; when the "
-            "combined output exceeds the global tool output budget it is auto-truncated and "
-            "the full text is saved to disk with a [output truncated; full output: <path>] "
-            "marker you can read_file. Raise this only if your provider uses it for its own "
-            "pre-truncation."
+            "Optional per-page character budget hint passed to the extraction provider. "
+            "Omit (null) to use the global default from Settings.WEB_EXTRACT_CHAR_LIMIT. "
+            "The full page text is always returned to the model; when the combined output "
+            "exceeds the global tool output budget it is auto-truncated and the full text "
+            "is saved to disk with a [output truncated; full output: <path>] marker you can "
+            "read_file. Raise this only if your provider uses it for its own pre-truncation."
         ),
     )

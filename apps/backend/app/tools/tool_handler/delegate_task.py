@@ -146,7 +146,7 @@ class DelegateTaskTool(HandlerBase):
             risk_level=self.risk_level,
             execution_mode="thread",
             parallel_mode="serial",
-            parallel_group="default",
+            parallel_group="delegate_task_group",
         )
 
 

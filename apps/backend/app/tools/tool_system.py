@@ -6,6 +6,7 @@ from app.codegraph import CodeGraphKernelClient
 from app.config.settings import Settings
 from app.tools.guard.tool_output_budget import ToolOutputBudget
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.codegraph_query import (
     build_codegraph_callees_definition,
     build_codegraph_callers_definition,
@@ -18,8 +19,8 @@ from app.tools.tool_handler.delegate_task import build_delegate_task_definition
 from app.tools.tool_handler.delete import build_delete_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
-from app.tools.tool_handler.patch_tool import build_patch_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
+from app.tools.tool_handler.replace_tool import build_replace_definition
 from app.tools.tool_handler.search_files import build_search_files_definition
 from app.tools.tool_handler.web_extract import build_web_extract_definition
 from app.tools.tool_handler.web_search import build_web_search_definition
@@ -59,7 +60,9 @@ class ToolSystem:
     ) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册全部 15 个工具定义（9 个既有 + 6 个 CodeGraph 查询工具），并用
+        按内置清单注册全部 16 个工具定义（10 个既有 + 6 个 CodeGraph 查询工具）。其中
+        原 patch 工具已拆分为 replace(patch) 与 apply_patch(V4A) 两个独立工具，故既有工具
+        由 9 个增至 10 个，总数由 15 个增至 16 个。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
         构造输出预算上限，装配调度器。工具拦截（Pre/PostToolUse）通过
         ``app.hook.hook_interceptor.HookInterceptor`` 静态方法直接收口，
@@ -91,7 +94,9 @@ class ToolSystem:
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
         registry.register(build_write_file_definition())
-        registry.register(build_patch_definition())
+        # patch 工具已拆分为 replace(patch) 与 apply_patch(V4A) 两个独立工具
+        registry.register(build_replace_definition())
+        registry.register(build_apply_patch_definition())
         registry.register(build_search_files_definition())
         registry.register(build_list_directory_definition())
         registry.register(build_delete_definition())

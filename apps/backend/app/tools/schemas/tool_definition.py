@@ -78,16 +78,28 @@ class ToolDefinition:
     parallel_group: str = "default"
 
     def normalized(self) -> "ToolDefinition":
-        """Return a definition with a derived schema when none is supplied."""
+        """Return a definition with a derived schema when none is supplied.
+
+        派生出的 ``parameters_schema`` 直接复用 :meth:`to_model_tool_definition`
+        的产出来源（``args_model.model_json_schema()`` + 本类 name/description），
+        保证模型可见 schema 单一事实来源。
+
+        注意：严格化（强制全 ``required``、递归 ``additionalProperties: false``）
+        不在本方法或 :meth:`to_model_tool_definition` 中完成，而是完全交由下游的
+        ``bind_tools(strict=True)`` 承担；此处只做"投影 + 名称覆盖"，不再重复
+        strict 化（避免与 ``bind_tools`` 的内部 ``convert_to_openai_tool(strict=True)``
+        重复劳动）。
+        """
 
         if self.parameters_schema:
             return self
+        model_def = self.to_model_tool_definition()
         return ToolDefinition(
             name=self.name,
             description=self.description,
             permission=self.permission,
             handler=self.handler,
-            parameters_schema=self.args_model.model_json_schema(),
+            parameters_schema=model_def["parameters"],
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
@@ -99,7 +111,47 @@ class ToolDefinition:
         )
 
     def to_model_tool_definition(self) -> dict[str, Any]:
-        """Return a model-facing tool definition."""
+        """Return a model-facing tool definition (name/description/schema projection).
+
+        职责边界（精简后）：
+        - 仅做**投影**：用本类契约 ``self.name`` / ``self.description`` 覆盖
+          ``args_model.__name__``（如 ``SearchFilesArgs``），保证全链路唯一事实
+          来源（registry / tools_node / 前端）一致，不被 pydantic 类名污染。
+        - 直接返回 ``args_model.model_json_schema()`` 的原始 JSON schema，**不做
+          strict 化**。
+
+        为什么不在本方法内 strict 化：
+        - 下游 ``langchain_bridge.model_tools_to_langchain`` 会把本结果交给
+          ``bind_tools(tool_schemas, strict=True)``，而 ``bind_tools`` 内部对每个
+          tool 再调一次 ``convert_to_openai_tool(..., strict=True)``，强制全
+          ``required`` + 递归 ``additionalProperties: false``。若此处也 strict 化，
+          属于重复劳动且语义重叠。
+        - 因此 strict 化的**唯一事实来源是 ``bind_tools(strict=True)``**，本方法
+          保持为"裸 function 投影出口"，不混入严格化策略，职责更单一。
+
+        返回形状：``{"name": str, "description": str, "parameters": dict[str, Any]}``
+        （裸 OpenAI function 形状，由 ``bind_tools`` 负责最终包裹为
+        ``{"type": "function", "function": {...}}``）。
+
+        参数:
+            无。
+
+        返回:
+            模型可见工具定义（裸 function 形状），``parameters`` 为 ``args_model``
+            的原始 JSON schema（**非** strict 化）。
+
+        异常:
+            无（``model_json_schema()`` 对本类构造期已保证合法的 ``args_model`` 不会失败）。
+
+        副作用:
+            无（纯投影，不触发 IO 或状态变更）。
+        """
+
+        # 名称/描述必须取自本类契约（``self.name`` / ``self.description``），因为
+        # 若直接把 pydantic 类交给 ``bind_tools``，LangChain 会用 ``args_model.__name__``
+        # （如 ``SearchFilesArgs``）覆盖我们既有的注册名（如 ``search_files``），后者才是
+        # registry / tools_node / 前端全链路的唯一事实来源，不可被污染。
+        # strict 化不在此处做，交由下游 ``bind_tools(strict=True)`` 统一承担。
         return {
             "name": self.name,
             "description": self.description,

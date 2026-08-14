@@ -16,10 +16,13 @@ import pytest
 from pydantic import BaseModel
 
 from app.models import RuntimeMessage
+from app.models.enums.error_kind import ErrorKind
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.tools.schemas import ToolCall, ToolDefinition, ToolObservation
+from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.tools.tool_registry import ToolRegistry
 
 
 def _make_call(call_id: str, tool_name: str = "read_file") -> ToolCall:
@@ -63,6 +66,12 @@ class _EmptyArgs(BaseModel):
     """并行调度测试用的最小参数模型（service 层不执行 handler）。"""
 
 
+class _RequiredArgs(BaseModel):
+    """需要必填字段的测试参数模型，用来触发 schema validation 失败。"""
+
+    path: str
+
+
 def _parallel_definition(name: str, parallel: bool) -> ToolDefinition:
     """构造仅声明调度模式的工具定义（handler 不参与 service 层执行）。"""
     return ToolDefinition(
@@ -80,19 +89,15 @@ def _count_tool_messages(result: ToolRunResult) -> list[RuntimeMessage]:
     return [m for m in result.messages_for_model if m.role == "tool"]
 
 
-def _assert_all_calls_have_placeholder(
-    calls: list[ToolCall], result: ToolRunResult
-) -> None:
+def _assert_all_calls_have_placeholder(calls: list[ToolCall], result: ToolRunResult) -> None:
     """断言每个 call 都有一条 tool 消息，且 metadata 的 tool_call_id 配对闭合。"""
     produced_ids = {
-        m.metadata.get("tool_call_id")
-        for m in result.messages_for_model
-        if m.role == "tool"
+        m.metadata.get("tool_call_id") for m in result.messages_for_model if m.role == "tool"
     }
     expected_ids = {c.call_id for c in calls}
-    assert produced_ids == expected_ids, (
-        f"占位不闭合：produced={produced_ids}, expected={expected_ids}"
-    )
+    assert (
+        produced_ids == expected_ids
+    ), f"占位不闭合：produced={produced_ids}, expected={expected_ids}"
 
 
 def test_cancellation_before_first_call_fills_placeholders_for_all() -> None:
@@ -160,11 +165,12 @@ def test_internal_execution_bug_fills_error_placeholder_for_failed_call() -> Non
     scheduler = MagicMock(spec=ToolScheduler)
     scheduler.execute.side_effect = _scheduler_execute
     service = _make_service(scheduler, should_cancel=lambda: False)
+    events: list[tuple[object, object]] = []
 
     result = service.run_calls_with_events(
         step_id="s1",
         calls=calls,
-        write_event=MagicMock(),
+        write_event=lambda event_type, payload: events.append((event_type, payload)),
     )
 
     # 两个 call 都有占位（不悬空、不崩协议）
@@ -173,9 +179,57 @@ def test_internal_execution_bug_fills_error_placeholder_for_failed_call() -> Non
     by_id = {o.tool_call_id: o for o in result.observations}
     assert by_id["c1"].status == "error"
     assert "internal execution error" in by_id["c1"].error
+    finished_by_id = {payload.tool_call_id: payload for _event, payload in events}
+    assert finished_by_id["c1"].data["error_kind"] == "runtime_failed"
     assert by_id["c2"].status == "success"
     # 内部错误不得标记为可重试（确定性 runtime 失败）
     assert by_id["c1"].retryable is False
+
+
+def test_scheduler_unknown_tool_sets_error_kind() -> None:
+    """工具名未注册时，错误分类应标记为 unknown_tool。"""
+    scheduler = ToolScheduler(ToolRegistry())
+    call = ToolCall(call_id="missing", tool_name="missing_tool", arguments={})
+
+    observation = scheduler.execute(call, execution_context=MagicMock())
+
+    assert observation.status == "error"
+    assert observation.data is not None
+    assert observation.data["error_kind"] == "unknown_tool"
+
+
+def test_scheduler_schema_validation_sets_error_kind() -> None:
+    """工具参数不符合 schema 时，错误分类应标记为 schema_invalid。"""
+    definition = ToolDefinition(
+        name="needs_path",
+        description="needs path",
+        permission="read",
+        handler=lambda **_kwargs: None,
+        args_model=_RequiredArgs,
+    )
+    scheduler = ToolScheduler(ToolRegistry([definition]))
+    call = ToolCall(call_id="bad_args", tool_name="needs_path", arguments={})
+
+    observation = scheduler.execute(call, execution_context=MagicMock())
+
+    assert observation.status == "error"
+    assert observation.data is not None
+    assert observation.data["error_kind"] == "schema_invalid"
+
+
+def test_tool_error_kind_cannot_be_overridden_by_display_data() -> None:
+    """展示数据不能覆盖稳定错误分类字段。"""
+    observation = tool_error(
+        tool_name="read_file",
+        error="failed",
+        reason="failed",
+        display_data={"error_kind": "unknown_tool", "detail": "kept"},
+        error_kind=ErrorKind.RUNTIME_FAILED,
+    )
+
+    assert observation.data is not None
+    assert observation.data["error_kind"] == "runtime_failed"
+    assert observation.data["detail"] == "kept"
 
 
 def test_no_cancellation_no_bug_passthrough_success() -> None:
@@ -257,10 +311,7 @@ def test_cancellation_writes_warning_log_with_skipped_ids(caplog: pytest.LogCapt
         calls=calls,
         write_event=MagicMock(),
     )
-    records = [
-        r for r in caplog.records
-        if r.getMessage() == "tool_calls_cancelled_not_executed"
-    ]
+    records = [r for r in caplog.records if r.getMessage() == "tool_calls_cancelled_not_executed"]
     assert records, "取消跳过未记 warning 日志"
     record_data = getattr(records[0], "data", {})
     assert record_data["total"] == 2
@@ -332,9 +383,9 @@ def test_duplicate_call_id_still_closes_pairing_when_second_skipped() -> None:
     )
 
     # 配对闭合不变量：观察与消息必须与 calls 一一对应
-    assert len(result.observations) == len(calls), (
-        f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
-    )
+    assert len(result.observations) == len(
+        calls
+    ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
     _assert_all_calls_have_placeholder(calls, result)
     assert [o.status for o in result.observations] == ["success", "error"]
 
@@ -365,13 +416,13 @@ def test_write_event_exception_is_contained_without_breaking_execution() -> None
     )
 
     # 异常被收口：方法不抛出、工具正常执行、观察与消息配对闭合
-    assert len(result.observations) == len(calls), (
-        f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
-    )
+    assert len(result.observations) == len(
+        calls
+    ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
     _assert_all_calls_have_placeholder(calls, result)
-    assert all(o.status == "success" for o in result.observations), (
-        "事件通道故障不应把正常执行的工具观察降级为 error"
-    )
+    assert all(
+        o.status == "success" for o in result.observations
+    ), "事件通道故障不应把正常执行的工具观察降级为 error"
 
 
 def test_mixed_parallel_and_serial_executes_all_in_original_order() -> None:
@@ -506,9 +557,9 @@ def test_mixed_parallel_serial_duplicate_call_id_keeps_pairing() -> None:
     )
 
     # 三个 call 都有对应观察（重复 id 不导致第二个被误判「已执行」）
-    assert len(result.observations) == len(calls), (
-        f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
-    )
+    assert len(result.observations) == len(
+        calls
+    ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
     assert [o.status for o in result.observations] == ["error", "success", "error"]
 
 
@@ -544,8 +595,8 @@ def test_mixed_parallel_serial_write_event_exception_is_contained() -> None:
         write_event=_exploding_write_event,
     )
 
-    assert len(result.observations) == len(calls), (
-        f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
-    )
+    assert len(result.observations) == len(
+        calls
+    ), f"配对不闭合：observations={len(result.observations)}, calls={len(calls)}"
     _assert_all_calls_have_placeholder(calls, result)
     assert all(o.status == "success" for o in result.observations)

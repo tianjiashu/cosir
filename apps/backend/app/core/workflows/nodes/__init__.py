@@ -9,11 +9,13 @@
 - ``common``：节点共享的运行时原语（事件写入、config/context 取出）。
 """
 
+from app.core.workflows.nodes.max_steps_node import _max_steps_node
 from app.core.workflows.nodes.model_node import _model_node
 from app.core.workflows.nodes.observation_node import _observe_node
 from app.core.workflows.nodes.tools_node import _tools_node
 
 __all__ = [
+    "_max_steps_node",
     "_model_node",
     "_observe_node",
     "_tools_node",

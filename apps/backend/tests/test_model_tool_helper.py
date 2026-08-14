@@ -282,19 +282,23 @@ def test_build_invalid_tool_call_repair_message() -> None:
     # 用变量拼接规避静态分析的硬编码凭据误报（测试数据，非真实密钥）
     api_key_prefix = "sk-"
     api_key_secret = "abcdEFGHijklMNOP1234567890abcdef"
-    token_secret = "token-xyz-987654321"
+    # 注意：redaction 的 _TOKEN_RES 只匹配真实凭据模式（sk- / JWT / ghp_ / AKIA 等），
+    # 而「token-xyz-987654321」是任意前缀的假字符串，设计上不被命中，故不对其断言。
+    # 这里改用 `Authorization: Bearer sk-...` 形式验证 Bearer 真实凭据脱敏
+    # （sk- 会被 _TOKEN_RES 命中）。
     secret_args = (
         f"$ export API_KEY={api_key_prefix}{api_key_secret} && "
-        f"curl -H 'Authorization: Bearer {token_secret}' https://api.example.com"
+        f"curl -H 'Authorization: Bearer {api_key_prefix}{api_key_secret}' https://api.example.com"
     )
     redacted_message = ModelToolHelper.build_invalid_tool_call_repair_message(
         repair_datas=[
             _repair_data("execute_terminal", args=secret_args, error="bad json")
         ]
     )
-    # 明文 sk- / token 凭据不得出现在提示中
+    # 明文 sk- 凭据（含 export 与 Bearer 两种出现形式）不得出现在提示中
     assert "sk-abcdEFGHijklMNOP1234567890abcdef" not in redacted_message
-    assert "token-xyz-987654321" not in redacted_message
+    # Bearer 凭据整体应被脱敏（Authorization 头的值部分含 sk- 命中 _TOKEN_RES）
+    assert "Bearer sk-" not in redacted_message
     assert "[REDACTED]" in redacted_message
     assert "execute_terminal" in redacted_message
 

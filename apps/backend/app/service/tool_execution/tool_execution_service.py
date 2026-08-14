@@ -2,7 +2,7 @@
 
 单一职责：编排一次模型请求的工具调用批次执行，并产出供下一步模型使用的观察结果与消息。
 权限校验委托给 ``ToolScheduler``（其 ``execute`` 已按策略返回 ``permission_denied`` /
-``unknown_tool`` / ``invalid_arguments`` 等观察）。
+``unknown_tool`` / ``schema_invalid`` 等观察）。
 
 职责边界：
 - 负责：批量执行工具调用、发出工具生命周期事件、把观察结果转为模型消息。
@@ -19,6 +19,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.models import RuntimeMessage
+from app.models.enums.error_kind import ErrorKind
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload import (
@@ -371,6 +372,7 @@ class ToolExecutionService:
             extra={
                 "msg": "工具调用执行链内部异常，已收口为 error 观察",
                 "data": {
+                    "error_kind": ErrorKind.RUNTIME_FAILED.value,
                     "tool_name": call.tool_name,
                     "tool_call_id": call.call_id,
                     "step_id": step_id,

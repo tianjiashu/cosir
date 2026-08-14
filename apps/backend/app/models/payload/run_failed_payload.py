@@ -1,6 +1,6 @@
 """Payload model for run_failed events."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 
@@ -34,6 +34,7 @@ class RunFailedPayload(RuntimeEventPayload):
     task_agent_id: str | None = None
     tool_name: str | None = None
     langfuse_trace_id: str | None = None
+    data: dict[str, Any] | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0

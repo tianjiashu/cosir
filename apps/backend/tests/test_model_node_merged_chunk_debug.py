@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from langchain_core.messages import AIMessageChunk
 
 from app.config.settings import Settings
@@ -163,10 +161,6 @@ def test_collect_chunk_extracts_pure_text_from_list_content(tmp_path, monkeypatc
     assert isinstance(result.content, str)
 
 
-@pytest.mark.xfail(
-    reason="langchain 版本聚合差异导致 invalid_tool_calls 合并行为变化，已知历史问题，非本次开关改动引入",
-    strict=False,
-)
 def test_collect_chunk_keeps_invalid_tool_calls_field(tmp_path, monkeypatch):
     """合并结果保留 invalid_tool_calls，供调用方告警（不静默丢弃）。"""
     monkeypatch.setattr(Settings, "LOG_DIR", tmp_path)

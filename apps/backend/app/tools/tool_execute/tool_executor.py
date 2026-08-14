@@ -14,6 +14,7 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
+from app.models.enums.error_kind import ErrorKind
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.tool_execute.tool_error import handler_exception_reason, tool_error
 from app.tools.tool_execute.tool_success import tool_success
@@ -172,6 +173,9 @@ class ToolExecutor:
             # 有界队列：消费端（父进程轮询）跟不上时子进程侧丢片段而非反压命令执行。
             output_queue = multiprocessing.Queue(maxsize=_OUTPUT_QUEUE_MAXSIZE)
             output_queue.cancel_join_thread()
+        process_execution_context = (
+            execution_context.for_process_execution() if execution_context is not None else None
+        )
         process = multiprocessing.Process(
             target=ToolExecutor._execute_handler,
             args=(
@@ -179,7 +183,7 @@ class ToolExecutor:
                 dict(arguments),
                 result_queue,
                 log_queue,
-                execution_context,
+                process_execution_context,
                 output_queue,
             ),
             daemon=True,
@@ -224,7 +228,10 @@ class ToolExecutor:
                 "tool_execution_cancelled",
                 extra={
                     "msg": "工具执行因 turn 取消而中止",
-                    "data": {"tool_name": tool.name},
+                    "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                        "tool_name": tool.name,
+                    },
                 },
             )
             return tool_error(
@@ -237,6 +244,7 @@ class ToolExecutor:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
+                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         except TimeoutError:
             log.warning(
@@ -244,6 +252,7 @@ class ToolExecutor:
                 extra={
                     "msg": "工具执行超时，已返回超时错误",
                     "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
                         "tool_name": tool.name,
                         "timeout_seconds": tool.timeout_seconds,
                     },
@@ -261,6 +270,7 @@ class ToolExecutor:
                 retryable=True,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
+                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         except (OSError, EOFError) as exc:
             # 【Bug 修复】子进程崩溃 / 被外部杀死 / 管道断裂时，父进程 result_queue.get
@@ -274,6 +284,7 @@ class ToolExecutor:
                 extra={
                     "msg": "工具子进程通信异常，已返回错误观察",
                     "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
                         "tool_name": tool.name,
                         "error": str(exc),
                     },
@@ -288,6 +299,7 @@ class ToolExecutor:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
+                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         finally:
             if process.is_alive():
@@ -300,6 +312,7 @@ class ToolExecutor:
                 extra={
                     "msg": "工具 handler 执行抛异常",
                     "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
                         "tool_name": tool.name,
                         "traceback": payload.get("traceback", ""),
                     },
@@ -315,6 +328,7 @@ class ToolExecutor:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
+                error_kind=ErrorKind.RUNTIME_FAILED,
             )
 
         return self._normalize_result(tool, payload, tool_call_id)
@@ -469,7 +483,11 @@ class ToolExecutor:
                 "tool_handler_failed",
                 extra={
                     "msg": "工具 handler 执行抛异常",
-                    "data": {"tool_name": tool.name, "traceback": traceback.format_exc()},
+                    "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                        "tool_name": tool.name,
+                        "traceback": traceback.format_exc(),
+                    },
                 },
             )
             return tool_error(
@@ -479,6 +497,7 @@ class ToolExecutor:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
+                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         return self._normalize_result(tool, result, tool_call_id)
 

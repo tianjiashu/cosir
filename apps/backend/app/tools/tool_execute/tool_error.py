@@ -12,6 +12,7 @@ handler 异常）以及各 handler（路径越界/无匹配等）的失败分支
 import dataclasses
 import errno
 
+from app.models.enums.error_kind import ErrorKind
 from app.tools.schemas import ToolObservation
 
 
@@ -168,6 +169,7 @@ def tool_error(
     permission: str = "",
     tool_call_id: str = "",
     display_data: dict[str, object] | None = None,
+    error_kind: ErrorKind = ErrorKind.RUNTIME_FAILED,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
 
@@ -194,6 +196,9 @@ def tool_error(
             ``ToolObservation.display_data``（不含 ``content`` 副本），**不会回传给
             模型**。为 error 观察携带结构化诊断（如语法检查的 ``syntax_errors``）而
             增补，与 :func:`tool_success` 的 ``display_data`` 语义对称。
+        error_kind: 供日志、运行时事件与回放分析使用的稳定错误分类，例如
+            ``parse_invalid``、``unknown_tool``、``schema_invalid``、``runtime_failed``、
+            ``permission_denied``。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="error"``，``content`` 与
@@ -222,5 +227,6 @@ def tool_error(
     merged.pop("display_data", None)
     if display_data:
         merged.update(display_data)
+    merged["error_kind"] = error_kind.value
     observation.data = merged
     return observation

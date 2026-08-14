@@ -18,6 +18,7 @@ import json
 from typing import Any
 
 import sqlalchemy
+from langchain_core.messages import SystemMessage
 from langgraph.types import interrupt
 
 from app.config.logging.logger import log
@@ -306,6 +307,24 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "terminal": True,
             "last_tool_results": [],
         }
+
+    deferred_repair_message = next(
+        (
+            str(item.get("deferred_repair_message") or "")
+            for item in approved_dicts
+            if item.get("deferred_repair_message")
+        ),
+        "",
+    )
+    if deferred_repair_message:
+        _runtime_context().add_message(SystemMessage(content=deferred_repair_message))
+        log.warning(
+            "tools_node_deferred_repair_message_appended",
+            extra={
+                "msg": f"工具观察写回后已追加延迟修复提示，step_id={step_id}",
+                "data": {"step_id": step_id, "message_length": len(deferred_repair_message)},
+            },
+        )
 
     success_count = sum(1 for o in observations if o.status == "success")
     log.info(

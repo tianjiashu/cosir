@@ -139,6 +139,7 @@ def test_delegate_profile_permissions_match_v1_roles():
         "search_files",
         "write_file",
         "patch",
+        "apply_patch",
         "delete",
         "execute_terminal",
         "codegraph_explore",

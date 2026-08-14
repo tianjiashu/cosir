@@ -60,3 +60,25 @@ apps/backend/.workspace_event-node/
 third_party/codegraph/dist/
 third_party/codegraph/node_modules/
 /apps/backend/_probe_atomic_tmp/
+
+# 临时调试产物（环境重建/测试跑出的零散文件，避免误提交）
+_orig.txt
+apps/backend/_bg_out.txt
+apps/backend/_bnd_out.txt
+apps/backend/_full_out.txt
+apps/backend/_orig_test_tmp.py
+apps/backend/_probe_atomic.py
+apps/backend/_probe_rollback.py
+apps/backend/_reg_out.txt
+task3_pytest*.log
+
+# git worktree 工作目录（由 git worktree 管理，不纳入 main 跟踪）
+.worktrees/
+
+# Langfuse 回放本地产物（运行时下载，不提交）
+storage/langfuse-replays/
+
+# 临时验证程序（调试用，非源码）
+apps/desktop/src-tauri/verify_stem.rs
+apps/desktop/src-tauri/verify_stem.exe
+apps/desktop/src-tauri/verify_stem.pdb

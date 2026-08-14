@@ -33,14 +33,14 @@ from pathlib import Path
 from typing import Any
 
 from app.tools.guard.file_resource_paths import FileResourcePaths, resolve_file_resource_paths
-from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
-from app.tools.tool_execute.tool_error import tool_error
 from app.tools.guard.file_state import (
     FileFingerprint,
     FilePathLockRegistry,
     FileRevisionRegistry,
     RepeatedCallRegistry,
 )
+from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
+from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_handler.search.file_walker import iter_files
 
 _REPEATED_TOOLS = frozenset({"read_file", "search_files"})
@@ -85,6 +85,10 @@ def normalize_repeated_call_arguments(
     返回:
         仅含签名相关字段的字典；路径字段经 :func:`_canonical_path` 归一，
         非路径字段原样保留，保证等价路径（相对 / 绝对 / 双斜杠）产生相同签名。
+        其中 ``mode`` 字段为**工具语义标记**，用于区分 ``patch`` 工具（值
+        ``"replace"``，replace 语义）与 ``apply_patch`` 工具（值 ``"apply_patch"``，
+        V4A 语义）。该 ``mode`` 是内部生成的语义标记，**并非**模型传入的
+        ``arguments["mode"]`` 入参——拆分后的工具已不再接收 ``mode`` 入参。
 
     异常:
         无。
@@ -94,10 +98,13 @@ def normalize_repeated_call_arguments(
     """
 
     if tool_name == "patch":
-        mode = arguments.get("mode", "replace")
-        if mode == "replace":
-            return {"mode": mode, "path": _canonical_path(root, arguments.get("path"))}
-        return {"mode": mode, "patch": arguments.get("patch")}
+        # patch 工具：固定 replace 语义（mode 为工具语义标记，非用户入参），
+        # 以 path 作为重复调用签名键。
+        return {"mode": "replace", "path": _canonical_path(root, arguments.get("path"))}
+    if tool_name == "apply_patch":
+        # apply_patch 工具：固定 V4A 语义（mode 为工具语义标记，非用户入参），
+        # 以 patch 文本作为重复调用签名键。
+        return {"mode": "apply_patch", "patch": arguments.get("patch")}
     if tool_name == "search_files":
         # 搜索结果由 pattern/target/file_glob/output_mode/分页等全部参数共同决定，
         # 仅归一 path 会导致「不同检索词搜索同一范围」被误判为重复而拦截。
@@ -293,8 +300,9 @@ class FileToolStateCoordinator:
         )
         if not stale_paths:
             return None
-        # patch 对文本敏感用 stale_patch 语义，其余写工具统一 stale_file。
-        reason = "stale_patch" if tool.name == "patch" else "stale_file"
+        # patch / apply_patch 对文本敏感用 stale_patch 语义（patch=replace 语义、
+        # apply_patch=V4A 语义），其余写工具统一 stale_file。
+        reason = "stale_patch" if tool.name in ("patch", "apply_patch") else "stale_file"
         path_text = ", ".join(str(path) for path in stale_paths)
         return tool_error(
             tool.name,

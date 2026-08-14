@@ -35,7 +35,7 @@ pub fn run() {
             eprintln!("Tauri 窗口已创建: {:?}", window.label());
             // 打印前端日志落盘路径，便于排查（避免在 src-tauri 内写入触发 dev 重建）
             match commands::logging::get_log_dir(app.handle()) {
-                Ok(dir) => eprintln!("[log_write] 前端日志目录: {}", dir.display()),
+                Ok(dir) => eprintln!("[log_write] 前端日志目录: {}", dir.join("desktop.log").display()),
                 Err(e) => eprintln!("[log_write] 解析日志目录失败: {e}"),
             }
             Ok(())

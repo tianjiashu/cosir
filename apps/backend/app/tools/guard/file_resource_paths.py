@@ -114,6 +114,12 @@ class FileResourceResolver:
         返回:
             用于 revision、重复调用检测和路径锁的资源路径；未知工具返回空资源。
 
+        说明:
+            对 ``patch``（replace 语义）与 ``apply_patch``（V4A 语义）两个工具，
+            直接按 ``tool_name`` 分流，不再依赖 ``arguments["mode"]`` 入参（拆分后工具
+            已无 ``mode`` 入参）；二者分别委托 :meth:`_patch_resources` 并传入
+            ``is_v4a=False`` / ``is_v4a=True``。
+
         异常:
             无。无法解析的 patch 文本交由 handler 返回正式错误。
 
@@ -159,35 +165,51 @@ class FileResourceResolver:
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, (target,)),
             )
         if tool_name == "patch":
-            resources = self._patch_resources(arguments)
+            # patch 工具固定 replace 语义（原 mode=="replace" 分支）。
+            resources = self._patch_resources(arguments, is_v4a=False)
+            return FileResourcePaths(
+                write_paths=resources.write_paths,
+                lock_paths=PathResolver.with_workspace_ancestors(self._root, resources.write_paths),
+            )
+        if tool_name == "apply_patch":
+            # apply_patch 工具固定 V4A 语义（原 mode=="patch" 分支）。
+            resources = self._patch_resources(arguments, is_v4a=True)
             return FileResourcePaths(
                 write_paths=resources.write_paths,
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, resources.write_paths),
             )
         return FileResourcePaths()
 
-    def _patch_resources(self, arguments: Mapping[str, Any]) -> FileResourcePaths:
-        """推导 replace/V4A patch 涉及的写路径。
+    def _patch_resources(self, arguments: Mapping[str, Any], *, is_v4a: bool) -> FileResourcePaths:
+        """推导 replace / V4A patch 涉及的写路径。
 
         参数:
             arguments: 已校验 patch 参数。
+            is_v4a: ``False`` 时为 replace 语义（``patch`` 工具，原 ``mode=="replace"``
+                分支），直接按 ``path`` 推导单文件写路径；``True`` 时为 V4A 语义
+                （``apply_patch`` 工具，原 ``mode=="patch"`` 分支），解析 V4A 文本后
+                提取多个文件写路径。
 
         返回:
-            patch 涉及的去重写路径。
+            patch 涉及的去重写路径；无有效路径时返回空资源。
 
         异常:
-            无。
+            :class:`FileResourcePathError`：写路径解析为空、含 NUL 或越界 workspace
+            时经 :func:`_resolve_containment_path` 抛出。无法解析的 V4A 文本**不**抛
+            出异常，仅返回空资源交由 handler 返回正式错误。
 
         副作用:
             无。
         """
 
-        if arguments.get("mode", "replace") == "replace":
+        if not is_v4a:
+            # replace 语义（patch 工具）：直接按 path 推导单文件写路径，无需解析 V4A。
             path = arguments.get("path")
             if isinstance(path, str) and path:
                 return FileResourcePaths(write_paths=(self._resolve_containment_path(path),))
             return FileResourcePaths()
 
+        # V4A 语义（apply_patch 工具）：解析 V4A 文本后提取多文件写路径。
         patch_text = arguments.get("patch")
         if not isinstance(patch_text, str):
             return FileResourcePaths()

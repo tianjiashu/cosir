@@ -1,8 +1,10 @@
 /**
  * 前端统一日志出口。
  *
- * 开发期：输出到 DevTools console 便于调试。
- * 生产期：通过 Tauri invoke 命令写入 `logs/desktop.log`（与后端日志目录约定一致）。
+ * 开发期（`tauri dev`）：输出到 DevTools console 便于调试，同时通过 Tauri invoke
+ * 写入仓库根 `logs/desktop.log`（与后端日志目录约定一致），关闭窗口后仍可回看排查。
+ * 纯浏览器 `vite dev`：无 Tauri 运行时，仅输出到 DevTools console，不落盘。
+ * 生产期：通过 Tauri invoke 命令写入仓库根 `logs/desktop.log`。
  *
  * 所有前端代码禁止直接使用 `console.log/warn/error` 作为系统日志，
  * 必须经此统一出口，确保异常路径可排查。
@@ -201,18 +203,28 @@ function redactValue(key: string, value: unknown): unknown {
 /**
  * 输出 DEBUG 级别日志。
  *
- * 仅在开发环境（TAURI_ENV_DEBUG）下输出到控制台，
- * 生产环境不输出且不落盘。
+ * 开发环境（`tauri dev`）下输出到 DevTools console 并经 Tauri 落盘到
+ * 仓库根 `logs/desktop.log`，便于关闭窗口后回看排查；纯浏览器 `vite dev`
+ * 下没有 Tauri 运行时，仅输出到 DevTools console 不落盘。
+ * 生产环境不输出也不落盘（避免噪音）。
  *
  * @param message - 日志消息。
  * @param context - 可选附加上下文字典。
  */
 export function logDebug(message: string, context?: Record<string, unknown>): void {
-  // 开发期打 DevTools（同样脱敏，避免敏感字段泄漏到 DevTools）
-  if (import.meta.env?.DEV) {
-    console.debug(`[DEBUG] ${message}`, redactContext(context));
+  if (!import.meta.env?.DEV) return;
+  const safeContext = redactContext(context);
+  console.debug(`[DEBUG] ${message}`, safeContext);
+  // 仅 Tauri 环境下（含 tauri dev）落盘；纯浏览器静默跳过
+  if (isTauriEnv()) {
+    const entry: LogEntry = {
+      level: LogLevel.DEBUG,
+      message,
+      timestamp: new Date().toISOString(),
+      context: safeContext,
+    };
+    writeToDisk(entry).catch(() => {});
   }
-  // debug 级别不落盘
 }
 
 /**

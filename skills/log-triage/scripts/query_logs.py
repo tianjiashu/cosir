@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""本地结构化日志查询 CLI。
+"""本地结构化日志查询 CLI（log-triage skill 内置副本）。
 
 单一职责：以只读方式查询 ``storage/logs.sqlite3`` 的 ``log_entries`` 表，并按开发者
 或 Agent 排查问题所需的过滤条件输出日志。脚本刻意不导入 ``app.*``，避免触发后端初始化。
+
+本文件是 ``scripts/query_logs.py`` 的 skill 内置副本；仅修改了 ``default_db_path``
+以从任意调用位置定位到真正的仓库根（向上查找包含 ``apps/backend`` 的目录），其余逻辑与
+上游保持一致。
 """
 
 from __future__ import annotations
@@ -34,6 +38,27 @@ _COLUMNS = (
 )
 
 
+def repository_root() -> Path:
+    """向上查找真正的仓库根（包含 ``apps/backend`` 的目录）。
+
+    参数:
+        无。
+    返回:
+        仓库根绝对路径。
+    异常:
+        无。
+    副作用:
+        解析当前脚本路径。
+    """
+
+    current = Path(__file__).resolve().parent
+    for candidate in (current, *current.parents):
+        if (candidate / "apps" / "backend").exists():
+            return candidate
+    # 兜底：退回到脚本两级之上的旧假设（与原脚本行为一致），避免在无仓库结构的场景下崩溃。
+    return Path(__file__).resolve().parent.parent
+
+
 def default_db_path() -> Path:
     """推导默认日志数据库路径。
 
@@ -47,7 +72,7 @@ def default_db_path() -> Path:
         解析当前脚本路径。
     """
 
-    return Path(__file__).resolve().parent.parent / "storage" / "logs.sqlite3"
+    return repository_root() / "storage" / "logs.sqlite3"
 
 
 def normalize_level(level: str) -> str:

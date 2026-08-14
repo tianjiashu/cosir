@@ -7,6 +7,7 @@ from app.hook import HookContext
 from app.hook.hook_event import HookDecision, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.hook.hook_result import HookResult
+from app.models.enums.error_kind import ErrorKind
 from app.tools.guard.display_data_budget import DisplayDataBudget
 from app.tools.guard.file_resource_paths import FileResourcePathError
 from app.tools.guard.file_tool_state_coordinator import (
@@ -149,6 +150,7 @@ class ToolScheduler:
                         f"name will always be rejected."
                     ),
                     tool_call_id=call.call_id,
+                    error_kind=ErrorKind.UNKNOWN_TOOL,
                 ),
                 execution_context,
             )
@@ -168,6 +170,7 @@ class ToolScheduler:
                     ),
                     permission=tool.permission,
                     tool_call_id=call.call_id,
+                    error_kind=ErrorKind.PERMISSION_DENIED,
                 ),
                 execution_context,
             )
@@ -193,6 +196,7 @@ class ToolScheduler:
                     ),
                     permission=tool.permission,
                     tool_call_id=call.call_id,
+                    error_kind=ErrorKind.SCHEMA_INVALID,
                 ),
                 execution_context,
             )
@@ -220,6 +224,7 @@ class ToolScheduler:
                     reason=decision.deny_reason,
                     permission=tool.permission,
                     tool_call_id=call.call_id,
+                    error_kind=ErrorKind.PERMISSION_DENIED,
                 ),
                 execution_context,
             )

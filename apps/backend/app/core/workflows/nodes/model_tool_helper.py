@@ -81,10 +81,11 @@ class ModelToolHelper:
         if not invalid_tool_call or not available_tool_names:
             return None
 
-        # 1. 精确 name 优先：最可靠，直接等于某已注册工具名。
-        exact_name = invalid_tool_call.get("name")
-        if isinstance(exact_name, str) and exact_name in available_tool_names:
-            return exact_name
+        if isinstance(invalid_tool_call, dict):
+            # 1. 精确 name 优先：最可靠，直接等于某已注册工具名。
+            exact_name = invalid_tool_call.get("name")
+            if isinstance(exact_name, str) and exact_name in available_tool_names:
+                return exact_name
 
         # 2. 词边界正则兜底：作为独立 token 出现才算命中，避免子串误中。
         invalid_tool_call_str = str(invalid_tool_call)

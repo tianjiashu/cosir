@@ -60,6 +60,7 @@ export interface RunFailedPayload extends RuntimeEventPayloadObject {
   task_agent_id?: string | null;
   tool_name?: string | null;
   langfuse_trace_id?: string | null;
+  data?: Record<string, unknown> | null;
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
@@ -132,7 +133,7 @@ export interface ToolCallStartedPayload extends RuntimeEventPayloadObject {
   tool_name: string;
   step_id?: string | null;
   tool_call_id?: string | null;
-  arguments?: Record<string, unknown> | null;
+  arguments?: Record<string, unknown>;
   display?: Record<string, unknown> | null;
 }
 
@@ -193,7 +194,6 @@ export interface DelegationStartedPayload extends RuntimeEventPayloadObject {
   parent_turn_id: string;
   child_turn_id: string;
   child_agent_id: string;
-  delegation_type: string;
   status: "pending";
 }
 
