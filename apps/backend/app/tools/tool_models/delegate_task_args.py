@@ -50,13 +50,16 @@ class DelegateTaskArgs(BaseModel):
     rules: list[str] = Field(
         description=(
             "Hard constraints the child must follow, e.g. do not modify files outside the "
-            "given scope, do not run destructive commands. Each item is one rule."
+            "given scope, do not run destructive commands. Each item is one rule. "
+            "MAXIMUM 10 items — if you have more, merge or prioritize; exceeding 10 causes "
+            "immediate validation failure and the call will be rejected."
         )
     )
     references: list[str] = Field(
         description=(
             "Background or reference paths the child should consult: file paths, module names, "
-            "or documents relevant to the task."
+            "or documents relevant to the task. MAXIMUM 10 items — pick only the most relevant; "
+            "exceeding 10 causes immediate validation failure and the call will be rejected."
         )
     )
     expected_output: str = Field(

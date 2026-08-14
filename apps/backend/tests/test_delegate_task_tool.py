@@ -37,12 +37,15 @@ def _valid_kwargs(**overrides):
     return base
 
 
-def test_delegate_task_definition_defaults_to_serial_scheduling():
-    """delegate_task 本轮不参与工具级并行，子 Agent 并发后续单独设计。"""
+def test_delegate_task_definition_supports_parallel_scheduling():
+    """delegate_task 同一回复内多个委派可工具级并行，但独立分组不与外部工具混并。
+
+    子 Agent 并发的最终裁决仍在 delegation 业务层并发额度，调度器层并行不绕过该约束。
+    """
     definition = build_delegate_task_definition()
 
-    assert definition.parallel_mode == "serial"
-    assert definition.parallel_group == "default"
+    assert definition.parallel_mode == "parallel"
+    assert definition.parallel_group == "delegate_task_group"
 
 
 def test_delegate_task_requires_execution_context():

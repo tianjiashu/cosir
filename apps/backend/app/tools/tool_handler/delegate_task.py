@@ -11,16 +11,27 @@ _DEFAULT_DESCRIPTION = (
     "Delegate a focused subtask to one child agent profile and return the child result. "
     "Use this when the subtask is separable from the current turn, such as code review, "
     "codebase analysis, or scoped coding work. The child cannot recursively delegate, "
-    "and requested tools are reduced by parent and child permissions."
+    "and requested tools are reduced by parent and child permissions. "
+    "When the user's request decomposes into multiple independent subtasks (e.g. review "
+    "and analysis, or two unrelated changes), emit multiple delegate_task calls in the "
+    "same reply so the child agents run concurrently; each call targets one child profile "
+    "with its own structured contract. "
+    "CRITICAL BUDGET LIMITS: rules and references lists MUST NOT exceed 10 items each; "
+    "if you have more, merge or prioritize to the most important ones. Exceeding this "
+    "limit causes an immediate validation failure — the call will be rejected."
 )
 
 _STRUCTURED_SCHEMA_HINT = (
     "Provide the task as a structured contract: objective (the single goal), rules "
-    "(hard constraints), references (relevant paths or documents), expected_output "
-    "(what the child returns), an optional background (extra context, omitted if empty), "
-    "and a required title. Budgets: objective, expected_output, and background each "
-    "<= 2000 chars; title <= 20 chars; rules and references each <= 10 items, "
-    "each item <= 500 chars, and each list total <= 2000 chars."
+    "(hard constraints, MAX 10 items), references (relevant paths or documents, "
+    "MAX 10 items — pick the most relevant; exceeding 10 causes rejection), "
+    "expected_output (what the child returns), an optional background (extra context, "
+    "omitted if empty), and a required title. "
+    "Budgets: objective, expected_output, and background each <= 2000 chars; "
+    "title <= 20 chars; each rules/references item <= 500 chars, and each list "
+    "total <= 2000 chars. "
+    "To run several child agents in parallel, emit several delegate_task calls in one "
+    "reply, each with a distinct child_agent_id and a self-contained contract."
 )
 
 
@@ -118,16 +129,19 @@ class DelegateTaskTool(HandlerBase):
     def to_definition(self) -> ToolDefinition:
         """构建 delegate_task 工具的注册定义。
 
-        delegate_task 的 child 自身不参与工具级并行分组：``parallel_mode`` 固定为
-        ``"serial"``，避免 delegate_task 与外部工具在同一 ``parallel_group`` 下被并发
-        调度执行（child 的并发由 delegation 业务层的并发额度独立裁决）。``parallel_group``
-        仍落入 ``"default"``，以兼容工具调度器的分组契约。
+        delegate_task 声明为工具级 ``parallel``：当模型在同一回复里发起多个
+        ``delegate_task`` 时，它们进入独立的 ``delegate_task_group`` 并行组并发执行，
+        使多个子 Agent 真正并行。child 并发的最终裁决权仍在 delegation 业务层的
+        并发额度（``DELEGATION_MAX_CONCURRENCY``）——超额的委派会在业务层被拒并回退为
+        错误观察，调度器层并行不绕过该约束。``parallel_group`` 固定为
+        ``"delegate_task_group"``，不与外部工具共享分组，避免 delegate_task 与文件类
+        工具被错误地并发调度。
 
         参数:
             无。
 
         返回:
-            使用进程内线程执行、本轮不参与工具级并行的 delegate_task 工具定义。
+            使用进程内线程执行、同一回复内多个委派可工具级并行的 delegate_task 工具定义。
 
         异常:
             无。
@@ -145,7 +159,7 @@ class DelegateTaskTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
             execution_mode="thread",
-            parallel_mode="serial",
+            parallel_mode="parallel",
             parallel_group="delegate_task_group",
         )
 
