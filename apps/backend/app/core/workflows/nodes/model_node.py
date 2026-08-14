@@ -593,7 +593,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     requested_tool = bool(tool_calls)
 
     repair_message: str | None = None
-    repair_data: list[dict[str, Any]] | None = None
+    repair_data: list[dict[str, Any]] = []
 
     if invalid_tool_calls:
         # 解析失败/非法的工具调用不得静默丢弃：记 warning 供排查。args 是模型原始未校验
@@ -635,9 +635,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             #   确保情形 b 不被误判为非法输出失败（回流可达，靠 max_steps 兜底）。
 
             repair_data = result[InvalidToolOutcome.REPAIR]
-            # 本块由 if result[InvalidToolOutcome.REPAIR] 守卫，repair_data 恒为非空 list；
-            # assert 收窄 mypy 类型，下方调用与工具分支注入均依赖其非 None。
-            assert repair_data is not None
 
             repair_message = ModelToolHelper.build_invalid_tool_call_repair_message(
                 repair_datas=repair_data
@@ -727,9 +724,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         instruction = output_text if output_text else ""
         # build_invalid_tool_call_repair_message 返回值是 str（不是带 .content 的对象），
         # 故直接 str(repair_message)；repair_data 非空才表示确有 REPAIR 项需延后注入。
-        deferred_repair_content = (
-            str(repair_message) if repair_message is not None and repair_data else ""
-        )
+        deferred_repair_content = str(repair_message) if repair_data else ""
         pending_tool_calls = [
             {
                 "tool_name": call.tool_name,
@@ -746,7 +741,18 @@ async def _model_node(state: ReactGraphState) -> dict:
             "step_count": step_count,
             "repair_requested": "false",
             "requested_tool": True,
-            "continuation_error_data": repair_data,
+            # 情形 a：仅回传脱敏后的非法工具调用计数，绝不写入含未脱敏原始
+            # invalid_tool_call 的 list（防止 max_steps_node 以 dict() 展开 list 抛
+            # ValueError，以及未脱敏原文外泄到 RUN_FAILED data）。形状与 test_max_steps_node
+            # 既有 {"error_kind":..., "invalid_count":...} 对齐，供兜底节点安全消费。
+            "continuation_error_data": (
+                {
+                    "error_kind": "invalid_tool_call_repair",
+                    "invalid_count": len(repair_data),
+                }
+                if repair_data
+                else None
+            ),
             "final_response": False,
             "terminal": False,  # 非终态，graph 会继续到 tools 节点
             # 待执行工具调用交给 tools 节点
