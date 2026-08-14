@@ -39,6 +39,7 @@ from app.models.payload import (
     StepStartedPayload,
 )
 from app.tools.schemas import ToolCall
+from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState
 from .common import (
@@ -49,6 +50,40 @@ from .common import (
     write_event,
 )
 from .model_tool_helper import InvalidToolOutcome, ModelToolHelper
+
+
+def _redact_invalid_tool_calls_for_log(raw_list: list[Any]) -> list[Any]:
+    """将 invalid_tool_calls 列表脱敏后转换为可安全写入日志的结构。
+
+    每个非法工具调用可能含模型回显的原始未校验 ``args``（如用户粘贴进对话的
+    凭据、prompt 片段）。为避免 secret 落盘，对每个 ``dict`` 项的 ``args`` 字段经
+    :func:`redact_terminal_output` 脱敏后再组装进日志 ``data``。
+
+    参数:
+        raw_list: 原始 invalid_tool_calls 列表（来自
+            ``ModelToolHelper.decide_invalid_tool_handling`` 的 ``IGNORE`` 结果）。
+
+    返回:
+        脱敏后的列表；非 ``dict`` 元素原样保留，``dict`` 元素的 ``args`` 字段被替换为
+        脱敏后的字符串，其余字段保持不变。
+
+    异常:
+        无（对字段做 ``get`` / ``str`` 容错）。
+
+    副作用:
+        无（纯函数，不改原始入参）。
+    """
+
+    redacted: list[Any] = []
+    for itc in raw_list:
+        if not isinstance(itc, dict):
+            redacted.append(itc)
+            continue
+        item = dict(itc)
+        if "args" in item:
+            item["args"] = redact_terminal_output(str(item["args"]))
+        redacted.append(item)
+    return redacted
 
 
 def _extract_text(content) -> str:
@@ -608,8 +643,8 @@ async def _model_node(state: ReactGraphState) -> dict:
 
         if result[InvalidToolOutcome.IGNORE]:
             # 解析噪声（未命中任何已注册工具名、无法推断真实意图）：仅记录，不修复、不阻塞。
-            # 日志 data 复用 invalid_tool_call_summaries 做脱敏 + 截断，避免把模型原始
-            # 未校验 args（可能含用户 prompt 片段、粘贴进对话的凭据）原文写进日志。
+            # IGNORE 列表经 redact_terminal_output 脱敏 args 后写入日志 data，避免把模型
+            # 原始未校验 args（可能含用户 prompt 片段、粘贴进对话的凭据）原文写进日志。
             # IGNORE 列表只打 warning，不回流、不阻塞（跨情形 a/b 恒打，与 REPAIR 双轨独立）。
             log.warning(
                 "model_node_invalid_tool_calls_ignored",
@@ -620,7 +655,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                     ),
                     "data": {
                         "step_id": step_id,
-                        "invalid_tool_calls": result[InvalidToolOutcome.IGNORE],
+                        "invalid_tool_calls": _redact_invalid_tool_calls_for_log(
+                            result[InvalidToolOutcome.IGNORE]
+                        ),
                     },
                 },
             )
