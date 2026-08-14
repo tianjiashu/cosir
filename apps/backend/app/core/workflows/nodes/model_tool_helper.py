@@ -177,11 +177,13 @@ class ModelToolHelper:
                 "\n[truncated] Further invalid tool calls omitted due to length budget; "
                 "fix the listed calls first and retry."
             )
-            # 末尾说明文本同样计入整体预算：若 body + 说明超出预算，对 body 做最终裁剪，
-            # 保证 header + body + 说明整体不超过 INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS。
+            # 末尾说明文本同样计入整体预算：header 始终保留，body + 说明不得超过
+            # 扣除 header 后的剩余预算，保证 header + body + 说明整体不超过
+            # INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS。
+            remaining = budget - len(header)
             projected = len(body) + len(truncation_note)
-            if projected > budget:
-                overflow = projected - budget
+            if projected > remaining:
+                overflow = projected - remaining
                 body = (
                     body[: len(body) - overflow].rstrip() if len(body) > overflow else ""
                 )
