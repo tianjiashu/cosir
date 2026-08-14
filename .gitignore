@@ -82,3 +82,13 @@ storage/langfuse-replays/
 apps/desktop/src-tauri/verify_stem.rs
 apps/desktop/src-tauri/verify_stem.exe
 apps/desktop/src-tauri/verify_stem.pdb
+
+# Agent 运行时产物
+.coding-agent/
+
+# 桌面端临时调试产物（vitest/tsc 输出、覆盖率缓存、日志转储）
+apps/desktop/coverage-tmp/
+apps/desktop/rp*.txt
+apps/desktop/tsc_err.txt
+apps/desktop/tsc_out.txt
+logs/*.log.*
