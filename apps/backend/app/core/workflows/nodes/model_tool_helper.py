@@ -180,7 +180,7 @@ class ModelToolHelper:
             # 末尾说明文本同样计入整体预算：header 始终保留，body + 说明不得超过
             # 扣除 header 后的剩余预算，保证 header + body + 说明整体不超过
             # INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS。
-            remaining = budget - len(header)
+            remaining = budget - len(header) - 2
             projected = len(body) + len(truncation_note)
             if projected > remaining:
                 overflow = projected - remaining
