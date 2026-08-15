@@ -184,6 +184,7 @@ export function InputBar() {
         ) : (
           <Button
             aria-label="发送"
+            variant="primary"
             onClick={handleSend}
             disabled={!canSend}
             size="icon"

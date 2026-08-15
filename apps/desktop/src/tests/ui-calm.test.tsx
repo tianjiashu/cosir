@@ -182,16 +182,23 @@ describe("UI 克制风格 · 大圆角收口到 4px", () => {
 });
 
 describe("UI 克制风格 · 渲染无回归", () => {
-  // 目的：Button 纯类名清理后仍正常渲染 button 元素并保留圆角与主色。
-  // 可能发现的缺陷：删类名时误删逗号/引号破坏 cva 配置，导致 className 为空或抛错。
-  it("Button 渲染出 button 元素且类名含 rounded-md、无 shadow", () => {
+  // 目的：default（无 variant）渲染后不再带实心蓝 bg-primary，证明「随手写 default 不会抢眼」；
+  // 同时 primary 变体仍产出 bg-primary，证明真主操作锚点保留。
+  // 可能发现的缺陷：B1a 重定义 default 时漏改 cva，导致 default 仍裸蓝；或 primary 没接住蓝。
+  it("Button default 不含 bg-primary，primary 含 bg-primary", () => {
     const { getByRole, unmount } = render(<Button>提交</Button>);
-    const btn = getByRole("button", { name: "提交" });
-    expect(btn.tagName).toBe("BUTTON");
-    expect(btn.className).toMatch(/(?<![\w-])rounded-md(?![\w-])/);
-    expect(btn.className).toMatch(/bg-primary/);
-    expect(btn.className).not.toMatch(ANY_SHADOW);
+    const def = getByRole("button", { name: "提交" });
+    expect(def.tagName).toBe("BUTTON");
+    expect(def.className).toMatch(/(?<![\w-])rounded-md(?![\w-])/);
+    expect(def.className).not.toMatch(/bg-primary/);
+    expect(def.className).not.toMatch(ANY_SHADOW);
     unmount();
+
+    const { getByRole: getByRole2, unmount: unmount2 } = render(<Button variant="primary">提交</Button>);
+    const pri = getByRole2("button", { name: "提交" });
+    expect(pri.className).toMatch(/bg-primary/);
+    expect(pri.className).not.toMatch(ANY_SHADOW);
+    unmount2();
   });
 
   // 目的：覆盖 destructive/outline/secondary 三个曾带阴影的 variant 的实际产出类名。

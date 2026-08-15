@@ -17,7 +17,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // default 改为安静的描边态：随手写 default 不再变实心蓝块，消除「次要操作抢眼」噪音。
+        // 真正的主操作必须显式声明 primary 才会获得实心蓝。
+        default: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+        // primary 是唯一的实心蓝变体，仅标在「推进任务前进」的真主操作（发送/创建/提交改动）。
+        primary: "bg-primary text-primary-foreground hover:bg-primary/90",
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
@@ -51,7 +55,7 @@ export interface ButtonProps
 /**
  * Button 基础组件。
  *
- * 支持通过 variant 控制视觉风格（default / destructive / outline / secondary / ghost / link），
+ * 支持通过 variant 控制视觉风格（default / primary / destructive / outline / secondary / ghost / link），
  * 通过 size 控制尺寸（default / sm / lg / icon）。
  * 当 asChild 为 true 时使用 Radix Slot 渲染为传入的子元素。
  */

@@ -192,6 +192,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
               className="h-12"
             />
             <Button
+              variant="primary"
               onClick={handleCreate}
               disabled={!inputValue.trim() || !activeWorkspaceId || operation.loading}
               size="icon"

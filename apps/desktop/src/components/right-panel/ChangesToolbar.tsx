@@ -33,7 +33,7 @@ export function ChangesToolbar({ hasFiles, onKeepAll, onRevertAll }: ChangesTool
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       <Button
-        variant="default"
+        variant="primary"
         size="sm"
         className="h-7 gap-1 text-xs"
         disabled={!hasFiles}
