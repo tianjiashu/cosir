@@ -206,7 +206,7 @@ export const TerminalCallCard = memo(function TerminalCallCard({
   }, [expandable, isRunning]);
 
   return (
-    <div className="w-full overflow-hidden rounded-lg border border-border bg-muted">
+    <div className="w-full overflow-hidden rounded-md border border-border bg-muted">
       {/* Header：折叠态即整个命令行卡片，展开态复用同一 header；展开时加深背景与主体隔离 */}
       <div
         className={cn(

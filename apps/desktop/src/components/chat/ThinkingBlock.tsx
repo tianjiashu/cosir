@@ -32,7 +32,7 @@ interface ThinkingBlockProps {
 }
 
 /** 展开内容区的共用容器样式（流式与折叠展开保持一致视觉）。 */
-const CONTENT_BOX_CLASS = "mt-2 rounded-lg border border-muted bg-muted/50 px-3 py-2.5 text-muted-foreground";
+const CONTENT_BOX_CLASS = "mt-2 rounded-md border border-muted bg-muted/50 px-3 py-2.5 text-muted-foreground";
 
 /**
  * 可折叠的思考过程展示组件。

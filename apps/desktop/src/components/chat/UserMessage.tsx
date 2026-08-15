@@ -35,7 +35,7 @@ export const UserMessage = memo(function UserMessage({ content, className }: Use
     <div className={cn("flex min-w-0 justify-end", className)}>
       <div
         className={cn(
-          "max-w-bubble min-w-0 rounded-lg rounded-br-sm bg-primary px-4 py-2.5 text-primary-foreground shadow-sm",
+          "max-w-bubble min-w-0 rounded-md rounded-br-sm bg-primary px-4 py-2.5 text-primary-foreground",
           MessageTypography.body,
         )}
       >

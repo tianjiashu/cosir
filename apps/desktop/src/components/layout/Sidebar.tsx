@@ -367,7 +367,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
           }}
         >
           <div
-            className="w-80 rounded-lg border border-border bg-background p-4 shadow-lg"
+            className="w-80 rounded-md border border-border bg-background p-4"
             onClick={(event) => event.stopPropagation()}
           >
             <h3 className="text-sm font-semibold text-foreground">删除工作区</h3>
@@ -412,7 +412,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
           }}
         >
           <div
-            className="w-80 rounded-lg border border-border bg-background p-4 shadow-lg"
+            className="w-80 rounded-md border border-border bg-background p-4"
             onClick={(event) => event.stopPropagation()}
           >
             <h3 className="text-sm font-semibold text-foreground">删除任务</h3>

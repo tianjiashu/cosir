@@ -5,58 +5,60 @@
 /*
  * Coding Agent 全局样式变量与基础规则。
  *
- * 主题方向：浅色、克制、工程工具感。
- * 视觉语言：低饱和灰阶、细边框、轻阴影、少量强调色。
+ * 主题方向：浅色、克制、工程工具感（详见 docs/ui-guidelines.md）。
+ * 视觉语言：中性灰阶为主、细边框划分区域、无卡片/按钮阴影、强调色低饱和且稀缺。
  *
- * 对齐 docs/ui-guidelines.md 视觉方向。
+ * 令牌为本文件唯一来源，颜色映射见 tailwind.config.ts；组件不得硬编码视觉值（状态语义色除外）。
  */
 
 @layer base {
   :root {
-    /* 背景与前景 */
+    /* 背景与前景：近白冷灰底 + 近黑冷灰字，避免纯白纯黑的生硬对比 */
     --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --foreground: 222 47% 11%;
 
-    /* 卡片 */
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    /* 卡片：比背景略低明度，用微弱层级而非阴影制造纵深 */
+    --card: 210 40% 98%;
+    --card-foreground: 222 47% 11%;
 
-    /* 弹出层 */
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    /* 弹出层：浮层用极轻阴影区分层级（见 docs/ui-guidelines.md §3），底色取卡片灰 */
+    --popover: 210 40% 99%;
+    --popover-foreground: 222 47% 11%;
 
-    /* 主按钮 / 强调色 */
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
+    /* 主按钮 / 强调色：低饱和石板蓝，全屏唯一实心彩色元素但不跳眼
+       （对比 shadcn 默认 221 83% 53% 高饱和蓝，本值压到 28% 饱和度） */
+    --primary: 215 28% 45%;
+    --primary-foreground: 0 0% 100%;
 
-    /* 次要 */
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* 次要：中性浅灰底，用于非主操作 */
+    --secondary: 210 30% 94%;
+    --secondary-foreground: 222 47% 11%;
 
-    /* 静音文字 */
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* 静音文字：中灰，弱化次要信息 */
+    --muted: 210 30% 94%;
+    --muted-foreground: 215 12% 42%;
 
-    /* 强调（Accent） */
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* 强调（Accent）：hover 态浅底，中性冷灰，不引入彩色 */
+    --accent: 210 30% 92%;
+    --accent-foreground: 222 47% 11%;
 
-    /* 危险 / 错误 */
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    /* 危险 / 错误：克制的红，仅用于破坏性 / 失败状态 */
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
 
-    /* 边框与输入框 */
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    /* 边框与输入框：低对比细线，用线分隔区域而非用块 */
+    --border: 214 20% 88%;
+    --input: 214 20% 88%;
+    /* 聚焦环：与主色同系、降透明，细且弱 */
+    --ring: 215 28% 45%;
 
-    /* 圆角半径 */
-    --radius: 0.5rem;
+    /* 圆角半径：4px，工程工具冷静感（不使用 8px+ 大圆角） */
+    --radius: 0.25rem;
 
-    /* 侧边栏专用变量 */
-    --sidebar-bg: 210 40% 98%;
-    --sidebar-foreground: 222.2 84% 4.9%;
-    --sidebar-border: 214.3 31.8% 91.4%;
+    /* 侧边栏专用变量：比主区更低的明度，制造微弱侧栏纵深 */
+    --sidebar-bg: 210 36% 96%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-border: 214 20% 88%;
   }
 
   /* 全局基础规则 */

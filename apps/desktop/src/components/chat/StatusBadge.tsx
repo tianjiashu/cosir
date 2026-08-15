@@ -81,7 +81,7 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
 
   return (
     <div className="flex justify-center py-2">
-      <div className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card px-6 py-3">
+      <div className="flex flex-col items-center gap-2 rounded-md border border-border bg-card px-6 py-3">
         {/* 状态图标 + 标签 */}
         <Badge variant={variant} className="gap-1.5 px-3 py-1 text-sm">
           <Icon className="h-4 w-4" />

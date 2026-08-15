@@ -44,7 +44,7 @@ const DOT_DELAYS = ["0ms", "150ms", "300ms"] as const;
 export const ThinkingIndicator = memo(function ThinkingIndicator({ className }: ThinkingIndicatorProps) {
   return (
     <div className={cn("flex min-w-0", className)} data-testid="thinking-indicator">
-      <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2 text-muted-foreground">
         <span className={cn(MessageTypography.secondary, "font-medium")}>思考中</span>
         <span className="flex items-center gap-1" aria-hidden data-testid="thinking-dots">
           {DOT_DELAYS.map((delay) => (

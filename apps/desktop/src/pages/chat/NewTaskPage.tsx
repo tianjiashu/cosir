@@ -163,7 +163,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
               onClick={() => void handleSuggestion(label)}
               disabled={!activeWorkspaceId || operation.loading}
               className={cn(
-                "flex flex-col items-start gap-2 rounded-lg border border-border bg-background p-4 text-left transition-colors",
+                "flex flex-col items-start gap-2 rounded-md border border-border bg-background p-4 text-left transition-colors",
                 activeWorkspaceId && !operation.loading
                   ? "hover:bg-accent/50 hover:text-accent-foreground"
                   : "cursor-not-allowed opacity-50",
@@ -218,7 +218,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
             {workspaceError && <p className="mt-1 text-xs text-destructive">{workspaceError}</p>}
 
             {menuOpen && (
-              <div className="absolute left-0 top-full z-40 mt-1 w-72 rounded-lg border border-border bg-background p-1 shadow-lg">
+              <div className="absolute left-0 top-full z-40 mt-1 w-72 rounded-md border border-border bg-background p-1">
                 <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">已有工作区</div>
                 {workspaces.length === 0 && (
                   <div className="px-2 py-2 text-xs text-muted-foreground">暂无工作区</div>

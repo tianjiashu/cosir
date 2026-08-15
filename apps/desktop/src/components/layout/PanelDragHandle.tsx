@@ -50,7 +50,7 @@ export function PanelDragHandle({ className, ariaLabel }: PanelDragHandleProps) 
       <div
         className={cn(
           "pointer-events-none flex h-8 w-3 items-center justify-center",
-          "rounded-sm border border-border bg-background shadow-sm",
+          "rounded-sm border border-border bg-background",
           "opacity-0 transition-opacity",
           "group-data-[separator=hover]:opacity-100",
           "group-data-[separator=focus]:opacity-100",

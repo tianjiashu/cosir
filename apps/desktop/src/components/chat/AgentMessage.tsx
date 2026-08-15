@@ -127,7 +127,7 @@ export const AgentMessage = memo(function AgentMessage({ content, streaming = fa
     <div className={cn("flex min-w-0 justify-start", className)}>
       <div
         className={cn(
-          "max-w-bubble min-w-0 space-y-2 rounded-lg rounded-bl-sm bg-muted/50 px-4 py-2.5",
+          "max-w-bubble min-w-0 space-y-2 rounded-md rounded-bl-sm bg-muted/50 px-4 py-2.5",
           MessageTypography.body,
           CodeLine.minHeight,
         )}
