@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.service.log_query_service import LogQueryService
     from app.service.task.task_service import TaskService
     from app.service.task.turn_service import TurnService
+    from app.service.task.turn_stream_service import TurnStreamService
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
@@ -342,6 +343,33 @@ def get_turn_service() -> TurnService:
 
 
 @lru_cache(maxsize=1)
+def get_turn_stream_service() -> TurnStreamService:
+    """Return the process-local TurnStreamService singleton.
+
+    参数:
+        无。
+
+    返回:
+        TurnStreamService 单例（无状态编排器，事件总线 / 轮次 service /
+        运行时事件 service 三个稳定单例在构造时注入）。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化（经由 turn service / runtime event service）。
+
+    副作用:
+        首次调用时创建 TurnStreamService。
+    """
+
+    from app.service.task.turn_stream_service import TurnStreamService
+
+    return TurnStreamService(
+        event_bus=get_runtime_event_bus(),
+        turn_service=get_turn_service(),
+        runtime_event_service=get_runtime_event_service(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_workspace_service() -> WorkspaceService:
     """Return the process-local WorkspaceService singleton.
 
@@ -482,6 +510,7 @@ def reset_service_dependencies() -> None:
     get_workspace_service.cache_clear()
     get_turn_workspace_resolver.cache_clear()
     get_turn_service.cache_clear()
+    get_turn_stream_service.cache_clear()
     get_task_service.cache_clear()
     get_runtime_event_service.cache_clear()
     get_runtime_event_bus.cache_clear()

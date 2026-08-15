@@ -10,7 +10,8 @@
 workspace 状态事件端点的设计约束（见 design §4.5）：
 - 客户端必须先连 SSE 再触发 prepare，确保订阅先就绪、事件全部可达（bus 无缓冲/重放）。
 - ``_stream_workspace_events`` 独立成模块级函数，保证帧格式/终态 break/
-  finally 退订可被单元测试稳定驱动（对齐 ``turns_api._sse_turn_events`` 范式）。
+  finally 退订可被单元测试稳定驱动（对齐 ``turns_api._sse_frames`` 的「service 产出
+  裸事件、api 层格式化帧」范式）。
 """
 
 import asyncio
@@ -20,7 +21,6 @@ from collections.abc import AsyncIterator
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.app import app
 from app.api.dependencies import (
     get_runtime,
     get_task_service,
@@ -37,6 +37,7 @@ from app.api.schemas import (
     WorkspacePrepareResponse,
     WorkspaceResponse,
 )
+from app.app import app
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models.enums.event_type import EventType

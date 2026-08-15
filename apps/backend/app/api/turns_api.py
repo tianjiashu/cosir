@@ -32,36 +32,37 @@
 ``token`` / ``tool_call`` / ``step`` / ``status`` 等），驱动 UI 的流式
 渲染、工具调用展示与状态推进。
 
-内部辅助
+职责边界
 --------
-``_sse_turn_events`` 负责把 ``runtime.run_turn`` 产出的事件迭代器转换为
-SSE 文本帧；它不直接处理 HTTP，仅做格式适配。
+本模块只做接入层工作：取参数、状态守卫（404/409）、把 ``TurnStreamService`` 产出的
+裸 ``RuntimeEvent`` 迭代器格式化为 SSE 帧。事件流编排（订阅/认领 producer/驱动/
+发布/断连兜底/纯订阅转发）已下沉到
+``app.service.task.turn_stream_service.TurnStreamService``；本模块保留：
+
+- ``_format_sse_event``：把单个 ``RuntimeEvent`` 序列化为共用 SSE 帧（传输格式）。
+- ``_sse_frames``：把 service 产出的裸事件迭代器逐条格式化为 SSE 帧（两端点复用）。
+- ``runtime.run_turn`` 作为 ``TurnRunner`` 注入：api 层持有 ``AgentRuntime``
+  （api → core 合法），把它适配为 service 依赖的轮次执行器协议，维持
+  core → service 单向依赖。
 """
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
-from contextlib import suppress
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import (
     get_runtime,
-    get_runtime_event_bus,
     get_turn_service,
+    get_turn_stream_service,
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.app import app
-from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
-from app.models import TurnRecord
-from app.models.enums.event_type import TERMINAL_EVENT_TYPES, EventType
 from app.models.event.runtime_event import RuntimeEvent
-from app.models.payload.run_failed_payload import RunFailedPayload
-from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
-from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.turn_service import TurnService
+from app.service.task.turn_stream_service import TurnStreamService
 
 
 @app.post("/tasks/{task_id}/turns")
@@ -107,7 +108,7 @@ async def stream_turn(
     turn_id: str,
     runtime: AgentRuntime = Depends(get_runtime),
     turn_service: TurnService = Depends(get_turn_service),
-    event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
+    stream_service: TurnStreamService = Depends(get_turn_stream_service),
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
@@ -131,6 +132,7 @@ async def stream_turn(
         turn_id: 来自路由的轮次标识。
         runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。
         turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。
+        stream_service: 通过依赖注入的轮次事件流编排 service（订阅/认领/驱动/发布/兜底）。
 
     返回:
         发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到
@@ -142,7 +144,7 @@ async def stream_turn(
 
     副作用:
         仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由
-        ``_sse_turn_events`` 转换为 SSE 帧。不回放历史事件。
+        ``_sse_frames`` 转换为 SSE 帧。不回放历史事件。
     """
 
     try:
@@ -155,12 +157,7 @@ async def stream_turn(
             detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
         )
     return StreamingResponse(
-        _sse_turn_events(
-            runtime,
-            turn,
-            event_bus,
-            turn_service=turn_service,
-        ),
+        _sse_frames(stream_service.stream_turn_events(runtime.run_turn, turn)),
         media_type="text/event-stream; charset=utf-8",
     )
 
@@ -169,14 +166,14 @@ async def stream_turn(
 async def subscribe_turn_events(
     turn_id: str,
     turn_service: TurnService = Depends(get_turn_service),
-    event_bus: RuntimeEventBus = Depends(get_runtime_event_bus),
+    stream_service: TurnStreamService = Depends(get_turn_stream_service),
 ):
     """订阅已运行委派子轮次的实时事件。
 
     参数:
         turn_id: 来自路由的子轮次标识。
         turn_service: 用于读取轮次并校验其执行状态的领域 service。
-        event_bus: 当前进程的运行时事件总线。
+        stream_service: 通过依赖注入的轮次事件流编排 service（纯订阅转发）。
 
     返回:
         ``text/event-stream`` 响应，仅转发此后实时发布到该 turn 的事件。
@@ -195,7 +192,7 @@ async def subscribe_turn_events(
     if turn.status not in ("pending", "running"):
         raise HTTPException(status_code=409, detail="turn is terminal")
     return StreamingResponse(
-        _sse_subscribed_turn_events(event_bus, turn_id),
+        _sse_frames(stream_service.stream_subscribed_turn_events(turn_id)),
         media_type="text/event-stream; charset=utf-8",
     )
 
@@ -236,168 +233,6 @@ async def cancel_turn(
     return TurnResponse.from_record(turn)
 
 
-async def _sse_turn_events(
-    runtime: AgentRuntime,
-    turn: TurnRecord,
-    event_bus: RuntimeEventBus,
-    turn_service: TurnService | None = None,
-) -> AsyncIterator[str]:
-    """将轮次运行时事件转换为 SSE 传输格式字符串。
-
-    断开兜底（把孤儿 ``running`` 落定为 ``failed``）已下沉到 ``runtime.run_turn`` 内部，
-    按「本连接是否成功认领本轮」精确判定，避免并发连接互相误标。本函数只负责：把事件
-    翻译为 SSE 帧、记录流式生命周期日志，并在 finally 中**确定性关闭**底层运行生成器，
-    从而在客户端断开时触发 ``run_turn`` 的断开兜底（而非依赖不确定的 GC 回收）。
-
-    参数:
-        runtime: 产生轮次事件的运行时（执行引擎）。
-        turn_id: 待运行的轮次标识（仅 pending 轮次会由 ``runtime.run_turn`` 实际执行）。
-        turn: 可选，调用方已取出的轮次记录，透传给 ``runtime.run_turn``
-            以避免重复查询存储。
-
-    生成:
-        SSE 格式的事件字符串。
-
-    异常:
-        不向上抛出：``KeyError``（轮次在流式开始前消失）与其它未预期异常均在此记录并终止流，
-        避免异常裸奔中断 HTTP 响应；轮次终态由 ``run_turn`` 兜底。
-
-    副作用:
-        执行轮次事件（仅 pending 轮次由 ``runtime.run_turn`` 启动）；在 finally 中关闭底层
-        运行生成器，触发 ``run_turn`` 的断开兜底（仅当本连接成功认领且轮次仍 ``running`` 时
-        标记 ``failed``），避免孤儿 ``running``。
-    """
-    if event_bus is None:
-        raise ValueError("event_bus is None")
-
-    turn_id = turn.turn_id
-
-    log.info(
-        "turn_stream_started",
-        extra={
-            "msg": f"开始流式推送轮次事件，turn_id={turn_id}",
-            "data": {"turn_id": turn_id},
-        },
-    )
-
-    subscription = event_bus.subscribe(turn_id)
-    producer: asyncio.Task[None] | None = None
-    if event_bus.claim_turn_producer(turn_id):
-        producer = asyncio.create_task(
-            _drive_runtime_turn(
-                runtime,
-                turn,
-                event_bus,
-                turn_service=turn_service,
-            )
-        )
-        log.info(
-            "turn_stream_producer_started",
-            extra={
-                "msg": f"轮次 producer 已启动，turn_id={turn_id}",
-                "data": {"turn_id": turn_id},
-            },
-        )
-    else:
-        log.info(
-            "turn_stream_producer_already_running",
-            extra={
-                "msg": f"轮次 producer 已存在，本连接仅订阅事件，turn_id={turn_id}",
-                "data": {"turn_id": turn_id},
-            },
-        )
-    terminal_received = False
-    try:
-        async for event in subscription:
-            yield _format_sse_event(event)
-            if event.event_type in TERMINAL_EVENT_TYPES:
-                terminal_received = True
-                # RUN_FINISHED 之后 run_turn 还会发布 file_change_stable（成功路径的
-                # 变更集增量通知）。若立即 break，这些事件会滞留在订阅队列无法送达
-                # 前端。故等待 producer 结束（run_turn 完全 return、事件已入队、
-                # close_turn 已写入关闭哨兵），再继续消费剩余事件至订阅关闭。
-                if event.event_type == EventType.RUN_FINISHED and producer is not None:
-                    await producer
-                    continue
-                # RUN_FAILED / RUN_CANCELLED 之后无后续事件，保持原立即结束语义。
-                break
-        log.info(
-            "turn_stream_completed",
-            extra={
-                "msg": f"轮次事件流式推送完成，turn_id={turn_id}",
-                "data": {"turn_id": turn_id},
-            },
-        )
-    except KeyError:
-        # run_turn 在流式开始前发现轮次消失（如已被清理），无法继续推送。
-        log.exception(
-            "turn_stream_aborted",
-            extra={
-                "msg": f"轮次在执行前消失，流式中止，turn_id={turn_id}",
-                "data": {"turn_id": turn_id},
-            },
-        )
-    except Exception:
-        # 其它未预期异常：记录后终止流，避免异常裸奔中断响应；轮次终态由 run_turn 兜底。
-        log.exception(
-            "turn_stream_error",
-            extra={
-                "msg": f"轮次事件流式推送异常，turn_id={turn_id}",
-                "data": {"turn_id": turn_id},
-            },
-        )
-    finally:
-        event_bus.unsubscribe(subscription)
-        if producer is not None:
-            if terminal_received and not producer.done():
-                with suppress(Exception):
-                    await producer
-            if not producer.done():
-                producer.cancel()
-                with suppress(asyncio.CancelledError):
-                    await producer
-            if producer.done():
-                with suppress(asyncio.CancelledError):
-                    try:
-                        producer.result()
-                    except Exception:
-                        log.exception(
-                            "turn_stream_producer_failed",
-                            extra={
-                                "msg": f"轮次事件生产任务异常，turn_id={turn_id}",
-                                "data": {"turn_id": turn_id},
-                            },
-                        )
-
-
-async def _sse_subscribed_turn_events(
-    event_bus: RuntimeEventBus,
-    turn_id: str,
-) -> AsyncIterator[str]:
-    """将仅订阅 SSE 连接中的实时事件格式化为帧。
-
-    参数:
-        event_bus: 当前进程的运行时事件总线。
-        turn_id: 待订阅事件的 turn 标识。
-
-    返回:
-        异步迭代时逐条产生与执行型 SSE 端点格式一致的实时事件帧。
-
-    异常:
-        无。订阅关闭或客户端断开时正常结束生成器。
-
-    副作用:
-        注册并最终移除事件订阅；不启动、取消或落定 turn。
-    """
-
-    subscription = event_bus.subscribe(turn_id)
-    try:
-        async for event in subscription:
-            yield _format_sse_event(event)
-    finally:
-        event_bus.unsubscribe(subscription)
-
-
 def _format_sse_event(event: RuntimeEvent) -> str:
     """将运行时事件序列化为共用 SSE 帧格式。
 
@@ -417,107 +252,24 @@ def _format_sse_event(event: RuntimeEvent) -> str:
     return f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
 
 
-async def _drive_runtime_turn(
-    runtime: AgentRuntime,
-    turn: TurnRecord,
-    event_bus: RuntimeEventBus,
-    turn_service: TurnService | None = None,
-) -> None:
-    """Drive ``run_turn`` as an event producer.
+async def _sse_frames(events: AsyncIterator[RuntimeEvent]) -> AsyncIterator[str]:
+    """把 service 产出的裸运行时事件迭代器逐条格式化为 SSE 帧。
 
-    CodeGraph 索引保活（原 prepare 阶段）已迁移到 ``USER_PROMPT_SUBMIT`` Hook，
-    在 ``run_turn`` 内部、本轮认领后、RUN_STARTED 之前触发，本函数不再做任何前置准备
-    （见 CodeGraphIndexPrepareHook）。本函数只负责：启动 ``run_turn`` 并消费其事件
-    发布到 bus，结束时释放 producer 槽位。
+    ``TurnStreamService`` 只产出裸 ``RuntimeEvent``（业务编排不感知传输格式），
+    SSE 帧格式化属于接入层职责，由本函数收口；``stream_turn`` 与
+    ``subscribe_turn_events`` 两个端点共用，避免重复的格式化循环。
 
     参数:
-        runtime: 产生轮次事件的运行时。
-        turn_id: 待运行的轮次标识。
-        turn: 可选预取轮次记录。
-        event_bus: 当前进程 runtime event 广播总线。
-        turn_service: 轮次 service（run 未启动即断开的兜底落 failed 用）。
+        events: 由 ``TurnStreamService`` 产出的裸事件异步迭代器。
 
-    返回:
-        无。
+    生成:
+        与 ``_format_sse_event`` 一致的 SSE 帧文本。
 
     异常:
-        向上透传 ``runtime.run_turn`` 的未预期异常，由持有 producer 的 SSE 层记录；
-        被取消时 re-raise ``CancelledError``（兜底落 failed 后不吞）。
+        透传事件迭代器抛出的异常。
 
     副作用:
-        消费 ``run_turn`` 事件发布到 bus；结束时释放 producer 槽位。
-    """
-
-    entered_run = False
-    turn_id = turn.turn_id
-
-    async def execute() -> None:
-        """消费 ``run_turn`` 事件并发布到 bus（producer 主体）。"""
-        nonlocal entered_run
-        entered_run = True
-        events = await runtime.run_turn(turn)
-        if events is None:
-            event_bus.close_turn(turn_id)
-            return
-
-        try:
-            async for event in events:
-                event_bus.publish(event)
-        finally:
-            try:
-                await events.aclose()
-                event_bus.close_turn(turn_id)
-            finally:
-                event_bus.release_turn_producer(turn_id)
-
-    try:
-        await execute()
-    except asyncio.CancelledError:
-        # 仅 run_turn 尚未启动（turn 仍 pending）时本连接断开需落 failed 兜底；
-        # run 阶段断开由 run_turn 内部 fail_turn_if_running 兜底（§九.3/4）。
-        if not entered_run and turn_service is not None and turn_id:
-            try:
-                # 方法偏离说明（§九.4）：fail_turn_if_running 的 WHERE status="running"
-                # 原子约束对 pending 不生效（turn_crud），而本 producer 已 claim 独占
-                # （无并发认领竞态），故用无条件 update_turn_status 强制落 failed。
-                # 兜底后 emit run_failed 提供终态事件。
-                turn_service.update_turn_status(turn_id, "failed", end_reason="client_disconnected")
-                _emit_run_failed(turn, turn_id)
-            except Exception:
-                log.exception(
-                    "turn_disconnect_failed",
-                    extra={"msg": "run 未启动即断开落 failed 失败", "data": {"turn_id": turn_id}},
-                )
-        raise
-    finally:
-        # 最外层释放 producer 槽位。
-        event_bus.release_turn_producer(turn_id)
-
-
-def _emit_run_failed(turn: TurnRecord | None, turn_id: str) -> None:
-    """prepare 阶段断开兜底时发布一条 run_failed 终态事件。
-
-    与 ``runtime.run_turn`` 内部落 failed 时的终态事件同构，经 ``RuntimeEventService``
-    落库并发布，避免留下无终态事件的孤儿 turn（方案二 §4.2.1 / §六 验收 5）。
-
-    参数:
-        turn: 预取轮次记录（task_id 来源；为 None 时用空串）。
-        turn_id: 待落终态的轮次标识。
-
-    返回:
         无。
-
-    异常:
-        RuntimeError: storage 未初始化时抛出（由调用方兜底捕获）。
-
-    副作用:
-        向 runtime_events 表写入 run_failed 事件并广播。
     """
-    task_id = turn.task_id if turn is not None else ""
-    event = RuntimeEvent(
-        event_type=EventType.RUN_FAILED,
-        task_id=task_id,
-        turn_id=turn_id,
-        payload=RunFailedPayload(error="client_disconnected", status="failed"),
-    )
-    RuntimeEventService().save_and_publish(event)
+    async for event in events:
+        yield _format_sse_event(event)

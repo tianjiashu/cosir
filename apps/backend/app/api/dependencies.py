@@ -21,11 +21,11 @@ from app.service.agent_runtime_event.runtime_event_service import RuntimeEventSe
 from app.service.log_query_service import LogQueryService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
+from app.service.task.turn_stream_service import TurnStreamService
 from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 from app.service.workspace_event.workspace_event_service import WorkspaceEventService
-from app.tools.tool_system import ToolSystem
 
 # 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持
 # ``Depends(get_agent_registry)`` / ``app.py`` 等既有调用点零改动。
@@ -47,7 +47,9 @@ def _build_services() -> dict:
         无。后端运行配置由 ``Settings`` 类级静态属性提供，不以对象传入。
 
     返回:
-        含 ``task_service`` / ``turn_service`` / ``workspace_service`` 的字典。
+        含 ``runtime_event_bus`` / ``runtime_event_service`` / ``task_service`` /
+        ``turn_service`` / ``turn_stream_service`` / ``workspace_service`` /
+        ``log_query_service`` 的字典。
 
     异常:
         RuntimeError: 如果应用启动尚未初始化 storage。
@@ -61,6 +63,7 @@ def _build_services() -> dict:
         "runtime_event_service": service_depends.get_runtime_event_service(),
         "task_service": service_depends.get_task_service(),
         "turn_service": service_depends.get_turn_service(),
+        "turn_stream_service": service_depends.get_turn_stream_service(),
         "workspace_service": service_depends.get_workspace_service(),
         "log_query_service": service_depends.get_log_query_service(),
     }
@@ -121,6 +124,25 @@ def get_turn_service() -> TurnService:
     """
 
     return _build_services()["turn_service"]
+
+
+def get_turn_stream_service() -> TurnStreamService:
+    """返回进程级轮次事件流编排 service 单例。
+
+    参数:
+        无。
+
+    返回:
+        TurnStreamService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return _build_services()["turn_stream_service"]
 
 
 def get_turn_workspace_resolver() -> TurnWorkspaceResolver:
