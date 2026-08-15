@@ -42,10 +42,12 @@ from app.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.tools.tool_execute.tool_error import (
-    cancel_not_executed_reason,
-    internal_execution_error_reason,
+from app.tools.tool_execute.tool_cancelled import (
+    CANCEL_NOT_EXECUTED_REASON,
     tool_cancelled,
+)
+from app.tools.tool_execute.tool_error import (
+    internal_execution_error_reason,
     tool_error,
 )
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
@@ -583,7 +585,7 @@ class ToolExecutionService:
                         index,
                         tool_cancelled(
                             tool_name=call.tool_name,
-                            reason=cancel_not_executed_reason(),
+                            reason=CANCEL_NOT_EXECUTED_REASON,
                             error="the tool call was cancelled before execution",
                             tool_call_id=call.call_id,
                         ),
@@ -593,6 +595,43 @@ class ToolExecutionService:
         observations = [observation for _, observation in indexed_observations]
         messages = [self._to_model_message(observation) for observation in observations]
         return ToolRunResult(observations=observations, messages_for_model=messages)
+
+    def build_cancel_placeholder_messages(
+        self,
+        calls: list[ToolCall],
+    ) -> list[RuntimeMessage]:
+        """为一批未执行的工具调用构造取消占位消息（供执行前分支复用）。
+
+        把「未执行调用 → cancelled 占位观察 → 序列化模型消息」的配对闭合逻辑
+        收敛到 service 单一实现，避免 ``core`` 编排层钻入受保护成员自拼占位。
+        与 ``_build_result_with_cancel_placeholders`` 内部使用的工厂与序列化完全同源，
+        保证正常路径（执行中取消）与 ``tools_node`` 执行前整批取消两条分支产出的
+        协议字段一致。
+
+        参数:
+            calls: 需要补占位的工具调用列表（已确定不会执行）。
+
+        返回:
+            按入参顺序排列、可直接写回运行时上下文的 ``role="tool"`` 消息列表。
+
+        异常:
+            无。
+
+        副作用:
+            序列化时会就地清空每个占位的 ``display_data``（经 ``_to_model_message``）。
+        """
+        placeholders = [
+            self._to_model_message(
+                tool_cancelled(
+                    tool_name=call.tool_name,
+                    reason=CANCEL_NOT_EXECUTED_REASON,
+                    error="the tool call was cancelled before execution",
+                    tool_call_id=call.call_id,
+                )
+            )
+            for call in calls
+        ]
+        return placeholders
 
     def _is_parallel_call(self, call: ToolCall) -> bool:
         """判断工具调用是否声明为可并行调度。

@@ -14,7 +14,6 @@
 """
 
 import asyncio
-import json
 from typing import Any
 
 import sqlalchemy
@@ -174,8 +173,12 @@ async def _tools_node(state: ReactGraphState) -> dict:
     副作用:
         - 经 ``_persist_tool_observations`` 把本批次工具观察消息逐条增量落库，并同步
           ``_runtime_context().add_message`` 写回运行时上下文，闭合上一轮 ``_model_node``
-          写入的 ``AIMessage.tool_calls`` 配对（含被取消时的占位 ``ToolMessage``）；
-        - 被取消分支写回占位后 ``return``，正常分支写回真实观察后继续；
+          写入的 ``AIMessage.tool_calls`` 配对；
+        - 取消分支（执行前/执行后检测到 turn 取消）置 ``terminal=True`` 让 graph 走
+          END、不进 observe；执行前分支因提前 return 不进入 ``run_tool_calls``，由本节点
+          经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面为上一轮
+          ``tool_calls`` 补同构占位并写回（占位字段与序列化逻辑 100% 同源 service，
+          不平行复制），消除 core 对 service 受保护成员的越界访问；
         - 工具生命周期事件经 ``write_event`` 透传；状态写入 **turn**。
     """
 
@@ -219,7 +222,15 @@ async def _tools_node(state: ReactGraphState) -> dict:
         # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
         approved_dicts = tool_calls if not isinstance(approved, list) else approved
 
-    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行
+    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行。
+    # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
+    # ``ToolExecutionService`` 的取消兜底（``_build_result_with_cancel_placeholders``）在此
+    # 不会执行。但上一轮 ``_model_node`` 已把 ``AIMessage.tool_calls`` 写入 ``RuntimeContext``，
+    # 必须在本分支内为它们补同构占位 ``ToolMessage``，否则下一轮模型请求会因悬空 ``tool_calls``
+    # 触发 OpenAI 协议校验失败。为保持与 service 内部协议字段完全同构、避免平行复制语义漂移，
+    # 经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面复用 service 的取消占位
+    # 实现（而非自拼 JSON、不手调 ``tool_cancelled`` 工厂），仅作「配对闭合」这一件职责，
+    # 执行/事件/广播仍由 service 承担。
     if operations.is_current_turn_cancelled():
         log.info(
             "tools_node_cancelled",
@@ -228,25 +239,23 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
         )
-        # 关键修复：跳过工具执行时，必须为 assistant 已写入 checkpoint 的 tool_calls 补占位
-        # ToolMessage，否则下一轮拉回历史会出现悬空 assistant，触发 OpenAI 协议校验失败。
-        placeholder_messages = [
-            RuntimeMessage(
-                role="tool",
-                content_text=json.dumps(
-                    {"content": "工具执行已被取消，未产生响应"}, ensure_ascii=False
-                ),
-                metadata={"tool_call_id": call.get("call_id", "")},
+        # 配对闭合：为上一轮已写出的 tool_calls 补 cancelled 占位。执行前分支提前
+        # return 不进 run_tool_calls，service 的兜底（_build_result_with_cancel_placeholders）
+        # 对此路径不生效，故调用 service 公开能力构造同构占位，保证协议字段与正常
+        # 执行路径（含执行中取消）100% 同源，不平行复制序列化逻辑。
+        cancel_calls = [
+            ToolCall(
+                tool_name=call.get("tool_name", ""),
+                arguments=call.get("arguments") or {},
+                call_id=call.get("call_id") or "",
             )
             for call in state.pending_tool_calls
             if call.get("call_id")
         ]
-        # 同步写回运行时上下文：占位 ToolMessage 必须写回，否则上一轮 _model_node 写回的
-        # AIMessage 的 tool_calls 在上下文中悬空，下次模型节点 load_message() 拉出即触发
-        # OpenAI 协议校验失败。消息不进 graph state（由 RuntimeContext 独占）。
-        _persist_tool_observations(operations, placeholder_messages)
+        cancel_placeholders = operations.build_cancel_placeholder_messages(cancel_calls)
+        _persist_tool_observations(operations, cancel_placeholders)
         # 收口取消终态事件：本分支是实际检测到 turn 取消的执行点，须发出
-        # RUN_CANCELLED 供前端 StatusBadge 渲染；此处工具尚未执行无 token 累积，
+        # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
         # 与 model_node 取消分支（携带 usage）保持同类型、零值字段一致。
         node_write_event(
             EventType.RUN_CANCELLED,

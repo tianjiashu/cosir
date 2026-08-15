@@ -24,7 +24,7 @@ from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.turn_usage_stats import TurnUsageStats
 from app.service.tool_execution.run_result import ToolRunResult
-from app.tools.schemas import ToolObservation
+from app.tools.schemas import ToolCall, ToolObservation
 
 
 class _FakeChatModel:
@@ -531,3 +531,96 @@ def test_build_graph_registers_max_steps_node_and_route() -> None:
     assert "model" in targets
     assert "tools" in targets
     assert END in {edge.target for edge in graph_repr.edges if edge.source == "max_steps"}
+
+
+# =============================================================================
+# 测试点：_tools_node 执行前取消分支的配对闭合（审查回归）
+# =============================================================================
+
+
+async def test_tools_node_cancel_before_execution_closes_pairing(
+    monkeypatch,
+) -> None:
+    """测试目的：审批恢复后、执行前检测到 turn 已取消时，_tools_node 必须仍为本轮已写出的
+    tool_calls 补同构占位 ToolMessage，闭合上一轮 _model_node 落库的 AIMessage.tool_calls 配对。
+
+    可能发现的缺陷：取消分支提前 return 未补占位，导致下一轮模型请求因悬空 tool_calls 触发
+    OpenAI 协议校验失败；或占位协议字段与 ToolExecutionService 内部序列化不一致。
+    """
+    from app.core.workflows.nodes import tools_node as tools_node_mod
+
+    # 取消信号：operations.is_current_turn_cancelled 返回 True。
+    operations = MagicMock()
+    operations.is_current_turn_cancelled.return_value = True
+
+    # 复用 service 公开门面：build_cancel_placeholder_messages 根据传入的 ToolCall
+    # 返回带对应 tool_call_id 的 RuntimeMessage 占位列表（模拟 service 同源序列化）。
+    def _fake_build_placeholders(calls: list[ToolCall]) -> list[RuntimeMessage]:
+        return [
+            RuntimeMessage(
+                role="tool",
+                content_text='{"content": "cancelled"}',
+                metadata={"tool_call_id": call.call_id},
+            )
+            for call in calls
+        ]
+
+    operations.build_cancel_placeholder_messages.side_effect = _fake_build_placeholders
+
+    # RuntimeConfig 持有取消中的 operations。
+    rc = MagicMock()
+    rc.operations = operations
+    rc.approval_resolver = None
+
+    # 隔离 graph 运行上下文依赖：interrupt 直接放行、context/config 返回测试替身、
+    # 事件写入与观察落库可断言。
+    monkeypatch.setattr(tools_node_mod, "interrupt", lambda _: None)
+    monkeypatch.setattr(tools_node_mod, "_runtime_config", lambda: rc)
+    monkeypatch.setattr(tools_node_mod, "_runtime_context", lambda: _FakeRuntimeContext())
+
+    written_events: list[tuple[EventType, Any]] = []
+
+    def _fake_write_event(event_type: EventType, payload: Any) -> None:
+        written_events.append((event_type, payload))
+
+    monkeypatch.setattr(
+        tools_node_mod, "_make_write_event", lambda: _fake_write_event
+    )
+
+    persisted: list[RuntimeMessage] = []
+    monkeypatch.setattr(
+        tools_node_mod,
+        "_persist_tool_observations",
+        lambda _ops, msgs: persisted.extend(msgs),
+    )
+
+    state = ReactGraphState(
+        step_count=2,
+        tool_error_count=0,
+        requested_tool=True,
+        repair_requested="false",
+        continuation_error_data=None,
+        final_response=False,
+        terminal=False,
+        pending_tool_calls=[
+            {"call_id": "call_a", "tool_name": "read_file"},
+            {"call_id": "call_b", "tool_name": "write_file"},
+        ],
+        max_steps=5,
+        final_text="",
+        last_tool_results=[],
+    )
+
+    result = await tools_node_mod._tools_node(state)
+
+    # 占位被写回，覆盖上一轮全部 tool_calls（按 call_id 配对闭合）。
+    persisted_ids = {msg.metadata.get("tool_call_id") for msg in persisted}
+    assert persisted_ids == {"call_a", "call_b"}
+    # graph 走 END，不进 observe（占位由本分支自行补，不依赖 run_tool_calls）。
+    assert result["terminal"] is True
+    assert result["pending_tool_calls"] == []
+    # 取消终态事件已发，供前端 StatusBadge 渲染。
+    assert any(ev[0] == EventType.RUN_CANCELLED for ev in written_events)
+    # run_tool_calls 未被调用（取消分支提前 return）。
+    operations.run_tool_calls.assert_not_called()
+

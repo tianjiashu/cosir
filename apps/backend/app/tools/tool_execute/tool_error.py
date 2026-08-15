@@ -7,6 +7,10 @@
 handler 异常）以及各 handler（路径越界/无匹配等）的失败分支全部经此构造，确保失败
 诊断字段（``error``/``reason``/``retryable``/``permission``）在整个代码库的填充方式
 保持一致。
+
+取消类观察的文案与工厂收口在 :mod:`app.tools.tool_execute.tool_cancelled`，不在本模块——
+取消是「主动中止」而非「执行故障」，其 reason 语义（是否重试由用户指令决定）与失败
+观察不同，单独归口以避免与确定性失败的重试提示混淆。
 """
 
 import dataclasses
@@ -73,32 +77,6 @@ def blocked_device_reason(action: str) -> str:
         f"(e.g. NUL/CON/COM1 on Windows, /dev/* or /proc/* on POSIX) and cannot be "
         f"{action}; pass a regular file path inside the project instead. The same "
         f"path will always be rejected, so choose a different target."
-    )
-
-
-def cancel_not_executed_reason() -> str:
-    """构造「工具调用因取消而未执行」的富文本 ``reason``（共享助手）。
-
-    执行器在 call 边界检测到取消信号并停止后续调用时，对**尚未执行**的调用复用
-    此模板构造占位观察，使模型感知「这一步没有跑、是被主动取消的」，而不是误以为
-    成功或无响应。与真实失败观察走同一条序列化通道，保证协议配对闭合与语义一致。
-
-    参数:
-        无。
-
-    返回:
-        面向模型的富文本说明（根因是取消 + 这是确定性终态 + 不必重试）。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯函数）。
-    """
-    return (
-        "the tool call was cancelled before it started executing and produced no "
-        "result; this is a deterministic terminal state, so do not retry the same "
-        "call. adjust your plan based on the cancellation instead."
     )
 
 
@@ -228,60 +206,5 @@ def tool_error(
     if display_data:
         merged.update(display_data)
     merged["error_kind"] = error_kind.value
-    observation.data = merged
-    return observation
-
-
-def tool_cancelled(
-    tool_name: str,
-    reason: str,
-    error: str = "",
-    permission: str = "",
-    tool_call_id: str = "",
-) -> ToolObservation:
-    """构造取消态的工具观察结果（纯工厂函数）。
-
-    与 :func:`tool_error` 对称，专用于「用户主动中断导致工具未正常完成」的确定性终态，
-    例如父 turn 被取消导致 delegate_task 子 Agent 中止、或执行器在 call 边界检测到取消
-    信号后为未执行的调用补占位。取消与失败语义不同：根因是主动中止而非执行故障，模型
-    不应将其当作「需修正参数后重试」的失败，故 ``retryable`` 固定为 ``False`` 且 ``error``
-    字段携带「发生了什么」的英文描述供模型直接理解。
-
-    参数:
-        tool_name: 被取消的工具名称。
-        reason: 「为什么被取消、是否值得重试」——面向模型的富文本说明，须明确这是
-            确定性终态、原样重试无意义（如 :func:`cancel_not_executed_reason` 的模板）。
-        error: 「发生了什么的取消描述」——面向模型的英文短句（如 ``the delegated child
-            agent was cancelled because the parent turn was cancelled``）；缺省时复用
-            ``reason`` 首句，保证 ``error`` 字段不为空、模型可读。
-        permission: 触发工具所需权限标识（用于审计/展示），默认空字符串。
-        tool_call_id: 关联的模型工具调用 id，默认空字符串。
-
-    返回:
-        不可变的 :class:`ToolObservation`：``status="cancelled"``，``retryable=False``，
-        ``content`` 与 ``error`` 均包含取消描述。
-
-    异常:
-        无。
-
-    副作用:
-        无（仅构造并返回新对象，不修改任何入参、不触发任何执行）。
-    """
-    if not error:
-        error = reason.split(".", 1)[0] if reason else "the tool call was cancelled"
-    observation = ToolObservation(
-        tool_name=tool_name,
-        status="cancelled",
-        content=error,
-        error=error,
-        reason=reason,
-        retryable=False,
-        permission=permission,
-        tool_call_id=tool_call_id,
-    )
-    merged = dataclasses.asdict(observation)
-    merged.pop("content", None)
-    merged.pop("display_data", None)
-    merged["error_kind"] = ErrorKind.CANCELLED.value
     observation.data = merged
     return observation

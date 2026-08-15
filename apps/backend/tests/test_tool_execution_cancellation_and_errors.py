@@ -24,7 +24,8 @@ from app.models.payload.tool_call_finished_payload import ToolCallFinishedPayloa
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.tools.schemas import ToolCall, ToolDefinition, ToolObservation
-from app.tools.tool_execute.tool_error import tool_cancelled, tool_error
+from app.tools.tool_execute.tool_cancelled import tool_cancelled
+from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_registry import ToolRegistry
 
@@ -125,10 +126,14 @@ def test_cancellation_before_first_call_fills_placeholders_for_all() -> None:
 
 
 def test_tool_cancelled_factory_produces_cancelled_terminal_observation() -> None:
-    """tool_cancelled 工厂产出规范的取消态观察：确定性终态、不可重试、error_kind=cancelled。"""
+    """tool_cancelled 工厂产出规范的取消态观察。
+
+    取消态、``retryable=False``（语义为本次未执行、无可重试失败结果而非禁止重试）、
+    ``error_kind=cancelled``。
+    """
     observation = tool_cancelled(
         tool_name="delegate_task",
-        reason="the parent turn was cancelled; do not retry identical arguments.",
+        reason="the parent turn was cancelled; adapt your plan based on the cancellation.",
         error="delegate_task child cancelled: parent turn cancelled",
         tool_call_id="call-1",
     )
@@ -341,8 +346,12 @@ def test_cancellation_writes_warning_log_with_skipped_ids(caplog: pytest.LogCapt
     assert set(record_data["skipped_call_ids"]) == {"c1", "c2"}
 
 
-def test_cancel_placeholder_reason_is_deterministic_non_retryable() -> None:
-    """取消占位的 reason 必须告诉模型这是确定性终态、不必重试。"""
+def test_cancel_placeholder_reason_is_active_stop_not_failure() -> None:
+    """取消占位的 reason 必须说明这是用户/系统主动中止，而非工具失败。
+
+    取消不等于「禁止重试」：reason 不应替用户决定不重试，是否重试由用户后续指令或
+    上下文决定；``retryable=False`` 仅表示本次未执行、无可重试的失败结果。
+    """
     calls = [_make_call("c1")]
     scheduler = MagicMock(spec=ToolScheduler)
     service = _make_service(scheduler, should_cancel=lambda: True)
@@ -357,7 +366,8 @@ def test_cancel_placeholder_reason_is_deterministic_non_retryable() -> None:
     assert obs.status == "cancelled"
     assert obs.retryable is False
     assert "cancelled" in obs.reason
-    assert "do not retry" in obs.reason
+    assert "not a tool failure" in obs.reason or "active stop" in obs.reason
+    assert "do not retry" not in obs.reason
 
 
 def test_missing_write_event_raises_runtime_error() -> None:
@@ -631,14 +641,19 @@ def test_cancelled_observation_emit_status_kept_as_cancelled_not_collapsed_to_er
     会让前端取消态仍显示「失败」、与本次修复目标矛盾。此测试固化「取消不塌缩」契约——
     注意取消占位（call 边界前跳过）不 emit 事件只落库配对，故此处直接驱动已执行路径。
     """
-    from app.tools.tool_execute.tool_error import tool_cancelled
+    from app.tools.tool_execute.tool_cancelled import tool_cancelled
 
     scheduler = MagicMock(spec=ToolScheduler)
-    service = _make_service(scheduler)
+    service = _make_service(
+        scheduler,
+    )
     events: list[tuple[object, object]] = []
     cancelled = tool_cancelled(
         tool_name="delegate_task",
-        reason="the delegated child agent was cancelled; do not retry identical arguments.",
+        reason=(
+            "the delegated child agent was cancelled; adapt your plan based on the "
+            "cancellation."
+        ),
         error="delegate_task child cancelled: parent turn cancelled",
         tool_call_id="c1",
     )

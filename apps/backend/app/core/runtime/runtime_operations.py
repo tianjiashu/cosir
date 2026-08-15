@@ -386,6 +386,30 @@ class RuntimeOperations:
 
         return result
 
+    def build_cancel_placeholder_messages(
+        self,
+        calls: list[ToolCall],
+    ) -> list[RuntimeMessage]:
+        """为执行前已确定取消的工具调用构造配对闭合占位消息。
+
+        转发到 ``ToolExecutionService.build_cancel_placeholder_messages``，使 ``core``
+        编排层无需钻入 ``_tool_service`` 受保护成员即可复用 service 的取消占位实现，
+        保证执行前整批取消分支与正常执行路径（含执行中取消）产出的协议字段完全一致。
+
+        参数:
+            calls: 已确定不会执行的工具调用列表。
+
+        返回:
+            按入参顺序排列、可直接写回运行时上下文的 ``role="tool"`` 消息列表。
+
+        异常:
+            无。
+
+        副作用:
+            无（仅委托 service 构造消息）。
+        """
+        return self._tool_service.build_cancel_placeholder_messages(calls)
+
     def _pre_process_turn(
         self,
         task_id: str,

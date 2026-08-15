@@ -18,7 +18,8 @@ from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_delegation_service, get_turn_service
 from app.tools.schemas import ToolExecutionContext, ToolObservation
 from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
-from app.tools.tool_execute.tool_error import tool_cancelled, tool_error
+from app.tools.tool_execute.tool_cancelled import tool_cancelled
+from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_execute.tool_success import tool_success
 from app.tools.tool_models.delegate_task_args import DelegateTaskArgs
 
@@ -387,10 +388,12 @@ class DelegationExecutor(DelegateTaskExecutor):
             return tool_cancelled(
                 "delegate_task",
                 reason=(
-                    f"the delegated child agent was cancelled: {error}. this is a "
-                    f"deterministic terminal state caused by an explicit user interruption "
-                    f"(e.g. the parent turn was cancelled), so do not retry identical "
-                    f"arguments; adjust your plan based on the cancellation instead."
+                    f"the delegated child agent was cancelled: {error}. this was an active "
+                    f"stop initiated by the user or system (e.g. the parent turn was "
+                    f"cancelled), not a tool failure, so whether to retry is decided by the "
+                    f"user's next instruction or the surrounding context rather than being "
+                    f"assumed non-retryable; adapt your plan based on the cancellation and "
+                    f"any new instruction."
                 ),
                 error=f"delegate_task child cancelled: {error}",
                 permission="delegate_task",
