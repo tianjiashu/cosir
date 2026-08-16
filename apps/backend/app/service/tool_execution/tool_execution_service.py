@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import contextvars
 import dataclasses
 import json
 from collections.abc import Callable, Iterable
@@ -231,6 +232,11 @@ class ToolExecutionService:
 
         只处理并行组：``run_calls_with_events`` 入口已按工具声明的调度模式完成分流，
         本方法不再包含串行分支；串行调用始终留在串行路径逐个执行。
+        每次线程池提交前用 ``contextvars.copy_context()`` 复制当前线程 context（含父
+        turn 根 observation 的 OTel current span），并经 ``ctx.run`` 包装提交，使 worker
+        线程在捕获的 context 里执行工具——并行工具（尤其 ``delegate_task``）的 tool
+        observation 与子 turn 由此正确嵌套在父 turn trace 下，而不是脱离为独立 trace。
+        注意每个任务必须持有独立 context 副本，同一 Context 对象不可被并发进入。
 
         参数:
             step_id: 请求这些工具调用的步骤标识。
@@ -248,7 +254,8 @@ class ToolExecutionService:
             无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。
 
         副作用:
-            启动临时线程池执行工具，并写入 started/finished 生命周期事件。
+            启动临时线程池执行工具，并写入 started/finished 生命周期事件；
+            每任务复制一份 contextvars 快照，不引入跨线程可变状态。
         """
         if not calls or self._should_cancel():
             return []
@@ -284,8 +291,13 @@ class ToolExecutionService:
                 ):
                     batch_index, batch_call = pending_calls.pop()
                     self._emit_tool_call_started(step_id, batch_call, write_event)
+                    # 每次提交前复制当前线程 contextvars（含父 turn 根 observation 的
+                    # OTel current context）。ThreadPoolExecutor worker 默认在全新 context
+                    # 运行，不复制会丢失 current span，导致 delegate 工具 span / 子 turn
+                    # 脱离父 trace；且同一 Context 对象不能并发进入，必须逐任务独立副本。
                     future_by_call[
                         pool.submit(
+                            contextvars.copy_context().run,
                             self._execute_tool_call,
                             step_id,
                             batch_call,
@@ -462,7 +474,7 @@ class ToolExecutionService:
         """
         # 透传成功/取消终态，其余（含未知状态）归一为 error，避免取消态在前端被误读为失败。
         event_status = (
-            observation.status if observation.status in ("success", "cancelled") else "error"
+            observation.status if observation.status and observation.status in ("success", "cancelled") else "error"
         )
         self._emit_event_safely(
             step_id,
@@ -651,15 +663,15 @@ class ToolExecutionService:
         return self._parallel_mode_by_name.get(call.tool_name, "serial") == "parallel"
 
     def _to_model_message(self, observation: ToolObservation) -> RuntimeMessage:
-        """把单个工具观察序列化为模型可见的 ``role="tool"`` 消息。
+        """把工具观察序列化为模型可见的 ``role="tool"`` 消息（markdown 结构）。
 
-        统一收口所有观察（含正常结果、内部错误占位、取消占位）的序列化逻辑，避免主路径
-        与补占位分支平行复制导致的语义漂移。序列化前清空 ``display_data``（模型不可见
-        通道），并对 ``content`` 做终端输出脱敏；最终仅保留非空字段，确保面向模型的文本
-        与正常失败观察同构。
+        ``content_text`` 以 markdown 区块组织**对模型可见**的字段：``## Tool`` 承载
+        ``tool_name`` / ``status`` / ``retryable``，``## Output`` 承载 ``content``，
+        ``## Error`` 承载 ``error``，``## Reason`` 承载 ``reason``；空值跳过对应区块。
+        ``tool_call_id``（置于 ``metadata``）、``data``、``permission`` 对模型不可见。
 
         参数:
-            observation: 已产出的工具观察（任意来源，含占位）。
+            observation: 已产出的工具观察（含正常结果、错误占位、取消占位）。
 
         返回:
             可并入模型上下文的 ``RuntimeMessage``，``metadata.tool_call_id`` 用于与
@@ -669,18 +681,32 @@ class ToolExecutionService:
             无。
 
         副作用:
-            调用 ``observation.clear_display_data()`` 清空原观察对象的展示数据（就地修改
-            入参，不另存）。
+            无（不修改入参观察对象）。
         """
-        observation.clear_display_data()
-        serialized = dataclasses.asdict(observation)
-        serialized["content"] = redact_terminal_output(observation.content)
+        # 仅向模型暴露面向人读的文本通道（content / error / reason）与执行元信息
+        # （tool_name / status / retryable）。tool_call_id / data / permission 对模型不可见
+        # （前者在 metadata、后者转模型前已被 clear_display_data 清空）。None 与空串视为
+        # 无信息，跳过对应区块。其余字段以 markdown 结构组织，使模型能区分「元信息 / 输出 /
+        # 错误 / 修正建议」四个语义维度。
+        sections: list[str] = []
+        meta_lines: list[str] = []
+        if observation.tool_name:
+            meta_lines.append(f"- name: {observation.tool_name}")
+        if observation.status:
+            meta_lines.append(f"- status: {observation.status}")
+        meta_lines.append(f"- retryable: {observation.retryable}")
+        if meta_lines:
+            sections.append("## Tool\n\n" + "\n".join(meta_lines))
+        if observation.content:
+            sections.append(f"## Output\n\n{observation.content}")
+        if observation.error:
+            sections.append(f"## Error\n\n{observation.error}")
+        if observation.reason:
+            sections.append(f"## Reason\n\n{observation.reason}")
+        content_text = "\n\n".join(sections)
         return RuntimeMessage(
             role="tool",
-            content_text=json.dumps(
-                {k: v for k, v in serialized.items() if v is not None},
-                ensure_ascii=False,
-            ),
+            content_text=content_text,
             metadata={"tool_call_id": observation.tool_call_id},
         )
 

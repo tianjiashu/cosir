@@ -29,7 +29,6 @@ from typing import Any
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_payload
-from app.utils.trace_infra.ids import new_trace_id
 
 _TRACING_WARNING_EVENTS: set[str] = set()
 
@@ -52,7 +51,7 @@ class TraceMetadata:
 class TurnTraceResult:
     """``turn_trace`` 上下文管理器的产出结果。
 
-    同时携带注入 workflow 的 LangChain callbacks 与本 turn 预分配的 Langfuse trace_id。
+    同时携带注入 workflow 的 LangChain callbacks 与本 turn 根 observation 的实际 Langfuse trace_id。
     未启用 tracing 时 ``callbacks`` 为空列表、``trace_id`` 为 None。
     """
 
@@ -235,25 +234,28 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
     """打开 turn 级根 observation，并产出待注入 workflow 的 LangChain callbacks 列表与 trace_id。
 
     未启用 → yield ``TurnTraceResult([], None)``，完全空操作（零开销路径）。启用 → 构造 Langfuse
-    客户端，预分配一个稳定的 ``trace_id`` 并经 ``CallbackHandler(trace_context=...)`` 注入，再经
-    ``start_as_current_observation(as_type="span")`` 建立 turn 根 observation（OTel current
-    context 自然传播，使 ``CallbackHandler`` 的 generation observation 自动挂到该根下），用
-    ``propagate_attributes`` 写 trace 级属性（session/user/tags/metadata），在该上下文内构造
-    ``CallbackHandler`` 后 yield ``TurnTraceResult([handler], trace_id)``。任何 Langfuse 侧异常 →
-    ``log.exception`` 后降级为 yield ``TurnTraceResult([], None)``，绝不中断 turn 执行。
+    客户端，经 ``start_as_current_observation(as_type="span")`` 建立 turn 根 observation（该 span
+    由 OTel 自动生成 trace_id 并成为 current context），用 ``propagate_attributes`` 写 trace 级
+    属性（session/user/tags/metadata），再在该上下文内构造 ``CallbackHandler``——不传
+    ``trace_context``，使 LLM generation observation 经 OTel current context 自然传播自动挂到该
+    根下（同一 trace），随后 yield ``TurnTraceResult([handler], root_span.trace_id)``。任何
+    Langfuse 侧异常 → ``log.exception`` 后降级为 yield ``TurnTraceResult([], None)``，绝不中断
+    turn 执行。
 
     参数:
         metadata: 本次 turn 的可观测元数据（task/turn/agent/workspace 标识）。
 
     生成:
-        ``TurnTraceResult``：callbacks 列表与本 turn 预分配的 Langfuse trace_id（未启用时为 None）。
+        ``TurnTraceResult``：callbacks 列表与本 turn 根 observation 的实际 Langfuse trace_id
+        （未启用或根 observation 无 trace_id 时为 None；后者同时记 warning 以便排查）。
 
     异常:
         不向上抛出：Langfuse 客户端/observation 异常被内部捕获并记日志。
 
     副作用:
         创建 Langfuse 客户端与根 observation、写 trace 属性、构造 CallbackHandler；
-        退出上下文时自动结束根 observation 并 ``flush``。
+        退出上下文时自动结束根 observation 并 ``flush``；根 observation 无 trace_id
+        时记一条 warning。
     """
 
     if not tracing_enabled():
@@ -267,7 +269,6 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
         from langfuse.langchain import CallbackHandler
 
         client = _build_langfuse_client()
-        trace_id = new_trace_id()
         trace_metadata: dict[str, str] = {
             "task_id": metadata.task_id,
             "turn_id": metadata.turn_id,
@@ -295,13 +296,12 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
     root_entered = False
     attr_entered = False
     try:
-        root_span_cm.__enter__()
+        root_span = root_span_cm.__enter__()
         root_entered = True
         attr_cm.__enter__()
         attr_entered = True
         handler = CallbackHandler(
             public_key=Settings.LANGFUSE_PUBLIC_KEY,
-            trace_context={"trace_id": trace_id},
         )
     except Exception:
         log.exception(
@@ -326,7 +326,19 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
 
     try:
         try:
-            yield TurnTraceResult(callbacks=[handler], trace_id=trace_id)
+            root_trace_id = getattr(root_span, "trace_id", None)
+            if root_trace_id is None:
+                log.warning(
+                    "langfuse_turn_trace_missing_root_trace_id",
+                    extra={
+                        "msg": "turn 根 observation 无 trace_id，上层无法关联 trace",
+                        "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+                    },
+                )
+            yield TurnTraceResult(
+                callbacks=[handler],
+                trace_id=root_trace_id,
+            )
         finally:
             _safe_flush_langfuse_client(client, metadata, "langfuse_turn_flush_failed")
     finally:

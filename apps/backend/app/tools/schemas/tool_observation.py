@@ -97,18 +97,10 @@ class ToolObservation:
     # 须先按 error 中的建议修正参数再调用。
     retryable: bool = False
     # 触发工具所需权限标识，透传自 ToolDefinition，便于审计与展示。
-    permission: str = ""
+    permission: str | None = ""
     # 对应的模型工具调用 id，透传自 ToolCall，用于observation回绑；缺失为空。
     tool_call_id: str = ""
     # 面向客户端的结构化机读字典（计算数据 + 治理标记），仅前端渲染消费，
     # 不到模型；工具逻辑内部数据一律由 content/error/reason 承载。
-    # 类型含 None：clear_display_data() 在转模型消息前会置 None，消费方须容忍 None。
+    # 类型含 None：clear() 在转模型消息前会置 None，消费方须容忍 None。
     data: dict[str, Any] | None = field(default_factory=dict)
-
-    def clear_display_data(self) -> None:
-        """清空 ``data``（模型不可见通道），供转模型消息前调用。
-
-        历史命名保留 ``clear_display_data``（与 ``display_data`` 时代语义一致），
-        未随字段更名 ``data`` 同步，避免破坏 ``ToolExecutionService`` 等调用方。
-        """
-        self.data = None
