@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from sqlalchemy import asc, select, update
 
+from app.config.logging.logger import log
 from app.models import TurnRecord
 from app.storage.model.turn_model import TurnModel
 from app.storage.store_engines import main_session_factory
@@ -50,8 +51,6 @@ class TurnCrud:
         input_text: str,
         status: str = "pending",
         agent_id: str | None = None,
-        parent_turn_id: str | None = None,
-        delegation_id: str | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
@@ -61,10 +60,9 @@ class TurnCrud:
             task_id: 所属任务标识。
             input_text: 本轮输入文本；不能为空白。
             status: 初始状态，默认 ``"pending"``。
-            agent_id: 可选，本次轮次绑定的 agent 标识；为 None 时表示回退到
-                所属任务的 ``agent_id`` 默认归属（由运行时解析）。
-            parent_turn_id: 可选，委派子轮次所属的父 turn 标识。
-            delegation_id: 可选，关联的 delegation 标识。
+            agent_id: 可选，本次轮次绑定的 agent 标识；仅写入应用层 ``TurnRecord``
+                值对象（供上层 / 运行时消费），当前 ``turns`` 表模型在重构过渡期尚未
+                恢复 ``agent_id`` 列，故不持久化到库。
 
         返回:
             落库成功的 ``TurnRecord``。
@@ -74,7 +72,7 @@ class TurnCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
-            向 ``turns`` 表插入一行。
+            向 ``turns`` 表插入一行（不含 ``agent_id`` 列）。
         """
 
         if not input_text.strip():
@@ -89,25 +87,30 @@ class TurnCrud:
             now,
             response_text=None,
             agent_id=agent_id,
-            parent_turn_id=parent_turn_id,
-            delegation_id=delegation_id,
         )
-        with self._session_factory.begin() as session:
-            session.add(
-                TurnModel(
-                    turn_id=turn.turn_id,
-                    task_id=turn.task_id,
-                    input_text=turn.input_text,
-                    status=turn.status,
-                    end_reason=turn.end_reason,
-                    response_text=turn.response_text,
-                    agent_id=turn.agent_id,
-                    parent_turn_id=turn.parent_turn_id,
-                    delegation_id=turn.delegation_id,
-                    created_at=to_text(turn.created_at),
-                    updated_at=to_text(turn.updated_at),
+        try:
+            with self._session_factory.begin() as session:
+                session.add(
+                    TurnModel(
+                        turn_id=turn.turn_id,
+                        task_id=turn.task_id,
+                        input_text=turn.input_text,
+                        status=turn.status,
+                        end_reason=turn.end_reason,
+                        response_text=turn.response_text,
+                        created_at=to_text(turn.created_at),
+                        updated_at=to_text(turn.updated_at),
+                    )
                 )
+        except Exception:
+            log.error(
+                "failed to persist turn %s for task %s",
+                turn.turn_id,
+                turn.task_id,
+                exc_info=True,
             )
+            raise
+        log.info("persisted turn %s for task %s", turn.turn_id, turn.task_id)
         return turn
 
     def get(self, turn_id: str) -> TurnRecord:

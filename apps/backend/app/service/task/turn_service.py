@@ -56,64 +56,13 @@ class TurnService:
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
         turn = self._turn.create(task_id, input_text, status, agent_id=agent_id)
-        self._task.update_latest_turn(task_id, turn.turn_id, preview(input_text))
         return turn
-
-    def create_child_turn(
-        self,
-        task_id: str,
-        input_text: str,
-        agent_id: str,
-        parent_turn_id: str,
-        delegation_id: str,
-    ) -> TurnRecord:
-        """创建委派子轮次且不改变普通任务的最新轮次状态。
-
-        参数:
-            task_id: 子轮次所属任务标识。
-            input_text: 子 Agent 要处理的委派输入。
-            agent_id: 子 Agent 的固定标识，不改写任务默认 Agent。
-            parent_turn_id: 发起委派的父 turn 标识。
-            delegation_id: 委派记录标识。
-
-        返回:
-            已持久化且包含父子关联字段的 pending 子轮次。
-
-        异常:
-            ValueError: 任一必填字符串为空或 ``input_text`` 为空白时抛出。
-
-        副作用:
-            向 ``turns`` 表插入子轮次；不更新任务 ``latest_turn_id`` 或最新消息预览。
-        """
-
-        if not isinstance(input_text, str) or not input_text.strip():
-            raise ValueError("input_text must be a non-empty string")
-        for field_name, value in (
-            ("agent_id", agent_id),
-            ("parent_turn_id", parent_turn_id),
-            ("delegation_id", delegation_id),
-        ):
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{field_name} must be a non-empty string")
-        return self._turn.create(
-            task_id,
-            input_text,
-            agent_id=agent_id,
-            parent_turn_id=parent_turn_id,
-            delegation_id=delegation_id,
-        )
 
     def get_turn(self, turn_id: str) -> TurnRecord:
         return self._turn.get(turn_id)
 
     def list_turns_for_task(self, task_id: str) -> list[TurnRecord]:
         return self._turn.list_by_task(task_id)
-
-    def get_turn_for_task(self, task_id: str) -> TurnRecord:
-        return self._turn.get_latest_turn(task_id)
-
-    def get_latest_turn(self, task_id: str) -> TurnRecord:
-        return self._turn.get_latest_turn(task_id)
 
     def update_turn_status(
         self, turn_id: str, status: str, end_reason: str | None = None
@@ -226,13 +175,20 @@ class TurnService:
 
         return self._message.load_messages(turn_id)
 
-    def append_turn_message(self, turn_id: str, message: RuntimeMessage, sequence: int) -> None:
+    def append_turn_message(
+        self,
+        turn_id: str,
+        message: RuntimeMessage,
+        sequence: int,
+        in_context: bool = True,
+    ) -> None:
         """Incremental single-row append of one runtime message (cross-turn memory).
 
         参数:
             turn_id: 目标轮次标识。
             message: 单条模型无关的运行时消息（用户提问 / 模型回复 / 工具观察）。
             sequence: 轮内自增序号，由编排层 ``RuntimeOperations`` 维护。
+            in_context: 是纳入模型在上下文内。（默认 True）。
 
         返回:
             无。
@@ -245,7 +201,7 @@ class TurnService:
             的整轮清空语义互补，组合实现 turn 重跑幂等）。
         """
 
-        self._message.append_message(turn_id, message, sequence)
+        self._message.append_message(turn_id, message, sequence, in_context=in_context)
 
     def clear_turn_messages(self, turn_id: str) -> None:
         """Delete all stored messages for a turn (used before re-running a turn).

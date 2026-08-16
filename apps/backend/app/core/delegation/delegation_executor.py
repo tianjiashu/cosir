@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -83,10 +85,13 @@ class DelegationExecutor(DelegateTaskExecutor):
             可能创建 delegation 记录、child turn，运行 child Agent，并更新 delegation 终态。
         """
 
+        from app.service.depends import get_task_service
+
         runtime_event_loop = execution_context.runtime_dependencies.runtime_event_loop
         agent_registry = get_agent_registry()
         delegation_service = get_delegation_service()
         turn_service = get_turn_service()
+        task_service = get_task_service()
 
         # 获取child agent profile
         child_agent_profile: AgentProfile = agent_registry.resolve(args.child_agent_id)
@@ -121,7 +126,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 parent_agent_id=self._parent_profile.agent_id,
                 child_agent_id=args.child_agent_id,
                 child_allowed_tools=frozenset(child_agent_profile.allowed_tools),
-                depth=1 if self._parent_turn.parent_turn_id else 0,
+                depth=1 if self._parent_profile.main_agent else 0,
                 known_child_agent_ids=frozenset(agent_registry.child_agent_ids()),
             )
         )
@@ -145,15 +150,46 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         delegation_id = acquire.delegation_id
         try:
-            # 创建pending child turn
+            # 先创建委派子任务（只建 task，不建 turn；并发重入由 delegation_id 唯一索引兜底）。
+            try:
+                child_task = task_service.create_child_task(
+                    parent_task_id=self._parent_task.task_id,
+                    parent_turn_id=self._parent_turn.turn_id,
+                    delegation_id=delegation_id,
+                    workspace_id=self._parent_task.workspace_id,
+                    agent_id=args.child_agent_id,
+                    title=args.title,
+                )
+            except IntegrityError:
+                # delegation_id 唯一索引冲突：同一 delegation 已被并发重入创建过子 task。
+                log.error(
+                    "delegation_child_task_conflict",
+                    extra={
+                        "msg": "委派子任务创建冲突（delegation_id 已存在子任务）",
+                        "data": {
+                            "delegation_id": delegation_id,
+                            "parent_turn_id": self._parent_turn.turn_id,
+                        },
+                    },
+                )
+                return tool_error(
+                    "delegate_task",
+                    f"delegate_task child task already exists: {delegation_id}",
+                    reason=(
+                        f"a child task for delegation '{delegation_id}' already exists; "
+                        f"this delegation was already acquired and its child task created, "
+                        f"so retrying identical arguments is deterministic and will fail "
+                        f"again. Inspect the existing child task instead of re-delegating."
+                    ),
+                    retryable=False,
+                    permission="delegate_task",
+                )
 
-            # 创建pending child turn
-            child_turn = turn_service.create_child_turn(
-                task_id=self._parent_task.task_id,
+            # 在子任务下创建 pending child turn（上下文天然隔离，不依赖排除 hack）。
+            child_turn = turn_service.create_turn(
+                task_id=child_task.task_id,
                 input_text=agent_input_text,
-                agent_id=args.child_agent_id,
-                parent_turn_id=self._parent_turn.turn_id,
-                delegation_id=delegation_id,
+                agent_id=args.child_agent_id
             )
 
             # 确认pending child turn
@@ -164,6 +200,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             delegation_service.mark_child_started(
                 delegation_id,
                 child_turn.turn_id,
+                child_task_id=child_task.task_id,
                 runtime_event_loop=runtime_event_loop,
             )
 
@@ -172,10 +209,12 @@ class DelegationExecutor(DelegateTaskExecutor):
                 registry_profile=child_agent_profile,
                 turn=child_turn,
                 effective_tools=decision.effective_tools,
-                context_excluded_turn_ids=(self._parent_turn.turn_id,),
                 runtime_event_loop=runtime_event_loop,
             )
-            result = self._child_runner.run_child(child_profile)
+            result = self._child_runner.run_child(
+                child_profile,
+                delegation_id=delegation_id,
+            )
         except Exception as exc:
             log.exception(
                 "delegation_execution_failed",
@@ -201,6 +240,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             result,
             runtime_event_loop,
             delegation_service,
+            child_task_id=child_task.task_id,
         )
 
     def _build_agent_input_text(self, args: DelegateTaskArgs) -> str:
@@ -341,6 +381,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             result: DelegationResult,
             runtime_event_loop: asyncio.AbstractEventLoop | None,
             delegation_service: DelegationService,
+            child_task_id: str | None = None,
     ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 
@@ -349,6 +390,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             result: child runner 返回的终态结果。
             runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
             delegation_service: 本次执行已解析出的委派生命周期 service。
+            child_task_id: 可选的 child task 标识；传入时一并落库便于前端跳转。
 
         返回:
             success 或 error ToolObservation。
@@ -366,6 +408,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             delegation_service.mark_completed(
                 delegation_id,
                 summary,
+                child_task_id=child_task_id,
                 runtime_event_loop=runtime_event_loop,
             )
             return tool_success(
@@ -375,6 +418,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 data={
                     "delegation_id": delegation_id,
                     "child_turn_id": result.child_turn_id,
+                    "child_task_id": child_task_id,
                     "status": "completed",
                 },
             )
@@ -383,6 +427,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             delegation_service.mark_cancelled(
                 delegation_id,
                 error,
+                child_task_id=child_task_id,
                 runtime_event_loop=runtime_event_loop,
             )
             return tool_cancelled(
@@ -402,6 +447,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         delegation_service.mark_failed(
             delegation_id,
             error,
+            child_task_id=child_task_id,
             runtime_event_loop=runtime_event_loop,
         )
         return self._child_error("failed", error)

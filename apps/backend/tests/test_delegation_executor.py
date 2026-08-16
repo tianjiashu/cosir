@@ -12,6 +12,7 @@ from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
 from app.core.runtime.runner import AgentRuntime
 from app.core.runtime.turn_cancellation_registry import cancellation_registry
+from app.models import TaskRecord
 from app.models.delegation_record import DelegationRecord
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
@@ -148,6 +149,7 @@ class FakeDelegationService:
         self,
         delegation_id: str,
         child_turn_id: str,
+        child_task_id: str | None = None,
         runtime_event_loop=None,
     ) -> None:
         """记录 child turn 已开始。
@@ -155,6 +157,7 @@ class FakeDelegationService:
         参数:
             delegation_id: 委派标识。
             child_turn_id: child turn 标识。
+            child_task_id: 可选的 child task 标识（重构后随子任务模型一并落库）。
 
         返回:
             无。
@@ -167,15 +170,25 @@ class FakeDelegationService:
         """
 
         self.calls.append(
-            ("mark_child_started", (delegation_id, child_turn_id, runtime_event_loop))
+            (
+                "mark_child_started",
+                (delegation_id, child_turn_id, child_task_id, runtime_event_loop),
+            )
         )
 
-    def mark_completed(self, delegation_id: str, summary: str, runtime_event_loop=None) -> None:
+    def mark_completed(
+        self,
+        delegation_id: str,
+        summary: str,
+        child_task_id: str | None = None,
+        runtime_event_loop=None,
+    ) -> None:
         """记录委派成功终态。
 
         参数:
             delegation_id: 委派标识。
             summary: child 执行摘要。
+            child_task_id: 可选的 child task 标识（重构后随子任务模型一并落库）。
 
         返回:
             无。
@@ -187,14 +200,23 @@ class FakeDelegationService:
             记录 mark_completed 调用。
         """
 
-        self.calls.append(("mark_completed", (delegation_id, summary, runtime_event_loop)))
+        self.calls.append(
+            ("mark_completed", (delegation_id, summary, child_task_id, runtime_event_loop))
+        )
 
-    def mark_failed(self, delegation_id: str, error: str, runtime_event_loop=None) -> None:
+    def mark_failed(
+        self,
+        delegation_id: str,
+        error: str,
+        child_task_id: str | None = None,
+        runtime_event_loop=None,
+    ) -> None:
         """记录委派失败终态。
 
         参数:
             delegation_id: 委派标识。
             error: 失败原因。
+            child_task_id: 可选的 child task 标识（重构后随子任务模型一并落库）。
 
         返回:
             无。
@@ -206,14 +228,23 @@ class FakeDelegationService:
             记录 mark_failed 调用。
         """
 
-        self.calls.append(("mark_failed", (delegation_id, error, runtime_event_loop)))
+        self.calls.append(
+            ("mark_failed", (delegation_id, error, child_task_id, runtime_event_loop))
+        )
 
-    def mark_cancelled(self, delegation_id: str, error: str, runtime_event_loop=None) -> None:
+    def mark_cancelled(
+        self,
+        delegation_id: str,
+        error: str,
+        child_task_id: str | None = None,
+        runtime_event_loop=None,
+    ) -> None:
         """记录委派取消终态。
 
         参数:
             delegation_id: 委派标识。
             error: 取消原因。
+            child_task_id: 可选的 child task 标识（重构后随子任务模型一并落库）。
 
         返回:
             无。
@@ -225,7 +256,9 @@ class FakeDelegationService:
             记录 mark_cancelled 调用。
         """
 
-        self.calls.append(("mark_cancelled", (delegation_id, error, runtime_event_loop)))
+        self.calls.append(
+            ("mark_cancelled", (delegation_id, error, child_task_id, runtime_event_loop))
+        )
 
 
 class FakeTurnService:
@@ -320,6 +353,88 @@ class FakeTurnService:
         return True
 
 
+class FakeTaskService:
+    """记录 executor 的 create_child_task 调用的 fake task service（不接触真实存储）。"""
+
+    def __init__(self) -> None:
+        """初始化调用记录与返回的 child task 标识。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            初始化调用列表与计数器。
+        """
+
+        self.calls: list[tuple[str, object]] = []
+        self._child_counter = 0
+
+    def create_child_task(
+        self,
+        *,
+        parent_task_id: str,
+        parent_turn_id: str,
+        delegation_id: str,
+        workspace_id: str,
+        agent_id: str,
+        input_text: str,
+    ) -> TaskRecord:
+        """返回预设的 delegation 类型子任务记录并记录调用。
+
+        参数:
+            parent_task_id: 父任务标识。
+            parent_turn_id: 父 turn 标识。
+            delegation_id: 委派标识。
+            workspace_id: 工作区标识。
+            agent_id: 子 agent 标识。
+            input_text: 委派输入文本。
+
+        返回:
+            带父子关联字段的 ``TaskRecord``（``task_type='delegation'``）。
+
+        异常:
+            无。
+
+        副作用:
+            记录 create_child_task 调用并自增 child 计数。
+        """
+
+        self._child_counter += 1
+        child_task_id = f"child_task_{self._child_counter}"
+        self.calls.append(
+            (
+                "create_child_task",
+                {
+                    "parent_task_id": parent_task_id,
+                    "parent_turn_id": parent_turn_id,
+                    "delegation_id": delegation_id,
+                    "workspace_id": workspace_id,
+                    "agent_id": agent_id,
+                    "input_text": input_text,
+                },
+            )
+        )
+        return TaskRecord(
+            task_id=child_task_id,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            title=input_text[:32],
+            status="open",
+            created_at=utc_now(),
+            updated_at=utc_now(),
+            task_type="delegation",
+            parent_task_id=parent_task_id,
+            parent_turn_id=parent_turn_id,
+            delegation_id=delegation_id,
+        )
+
+
 class FakeChildRunner:
     """返回预设委派结果并记录收到的 child profile。"""
 
@@ -342,11 +457,12 @@ class FakeChildRunner:
         self.result = result
         self.child_profiles = []
 
-    def run_child(self, child_profile):
+    def run_child(self, child_profile, delegation_id=""):
         """返回预设 child 执行结果。
 
         参数:
             child_profile: executor 派生出的本次 child AgentProfile。
+            delegation_id: 透传的委派标识，与生产 ChildAgentRunner.run_child 对齐。
 
         返回:
             预设 DelegationResult。
@@ -640,6 +756,7 @@ class FakeCascadeDelegationService:
             effective_tools=("read_file",),
             created_at=now,
             updated_at=now,
+            child_task_id="",
         )
         self.cancelled = []
 
@@ -760,6 +877,7 @@ def executor_dependencies(tmp_path: Path, monkeypatch) -> dict[str, object]:
     agent_registry = build_agent_registry()
     delegation_service = FakeDelegationService()
     turn_service = FakeTurnService()
+    task_service = FakeTaskService()
     monkeypatch.setattr(
         "app.core.delegation.delegation_executor.get_agent_registry",
         lambda: agent_registry,
@@ -772,9 +890,16 @@ def executor_dependencies(tmp_path: Path, monkeypatch) -> dict[str, object]:
         "app.core.delegation.delegation_executor.get_turn_service",
         lambda: turn_service,
     )
+    # get_task_service 由 executor 在 execute 内通过 ``from app.service.depends
+    # import get_task_service`` 局部导入，因此必须替换 service 依赖入口本身。
+    monkeypatch.setattr(
+        "app.service.depends.get_task_service",
+        lambda: task_service,
+    )
     return {
         "delegation_service": delegation_service,
         "turn_service": turn_service,
+        "task_service": task_service,
         "child_runner": FakeChildRunner(
             DelegationResult(
                 status="completed",
@@ -987,10 +1112,28 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     assert "- app/core/runtime/runner.py" in prompt_text
     assert "## Expected Output" in prompt_text
     assert "a list of review comments" in prompt_text
-    assert ("mark_child_started", ("delegation_1", "child_turn_1", None)) in (
-        delegation_service.calls
-    )
-    assert ("mark_completed", ("delegation_1", "child done", None)) in delegation_service.calls
+    # 第三个位置参数是 executor 透传给 delegation service 的 runtime_event_loop，
+    # 它来自 execution_context 的 runtime_dependencies，非 None。
+    runtime_event_loop = executor_dependencies[
+        "execution_context"
+    ].runtime_dependencies.runtime_event_loop
+    assert (
+        "mark_child_started",
+        ("delegation_1", "child_turn_1", "child_task_1", runtime_event_loop),
+    ) in delegation_service.calls
+    assert (
+        "mark_completed",
+        ("delegation_1", "child done", "child_task_1", runtime_event_loop),
+    ) in delegation_service.calls
+    # 重构核心：executor 在 child turn 之前先经 TaskService 创建独立的 delegation 子任务，
+    # 且子任务挂在 child_task_1 下（task_id 与父 task 解耦），验证父子 task 模型落地。
+    task_service = executor_dependencies["task_service"]
+    assert any(call[0] == "create_child_task" for call in task_service.calls)
+    child_create = next(call for call in task_service.calls if call[0] == "create_child_task")
+    assert child_create[1]["parent_task_id"] == "task_1"
+    assert child_create[1]["delegation_id"] == "delegation_1"
+    assert child_create[1]["agent_id"] == "delegate_reviewer"
+    # child turn 必须挂在子任务（child_task_1）下，而非父 task，以隔离上下文。
     turn_service = executor_dependencies["turn_service"]
     assert turn_service.calls[0][1]["delegation_id"] == "delegation_1"
     # child turn 的 input_text 使用同一份拼装文本
@@ -1001,7 +1144,6 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     # 而非旧的三方交集（read_file）。用同一期望值保证 executor 透传一致。
     assert runner.child_profiles[0].allowed_tools == list(expected_tools)
     assert "delegate_task" not in runner.child_profiles[0].allowed_tools
-    assert runner.child_profiles[0].context_excluded_turn_ids == ("parent_turn_1",)
 
 
 def test_delegation_executor_includes_background_section_in_child_input(
@@ -1088,12 +1230,14 @@ def test_delegation_executor_passes_runtime_event_loop_to_service(executor_depen
         call for call in delegation_service.calls if call[0] == "try_create_pending"
     )
     assert pending_call[1]["runtime_event_loop"] is runtime_event_loop
-    assert ("mark_child_started", ("delegation_1", "child_turn_1", runtime_event_loop)) in (
-        delegation_service.calls
-    )
+    # mark_child_started 调用元组为 (delegation_id, child_turn_id, child_task_id, loop)。
+    assert (
+        "mark_child_started",
+        ("delegation_1", "child_turn_1", "child_task_1", runtime_event_loop),
+    ) in delegation_service.calls
     assert (
         "mark_completed",
-        ("delegation_1", "child done", runtime_event_loop),
+        ("delegation_1", "child done", "child_task_1", runtime_event_loop),
     ) in delegation_service.calls
     runner = executor_dependencies["child_runner"]
     assert runner.child_profiles[0].runtime_event_loop is runtime_event_loop
@@ -1391,7 +1535,10 @@ def test_delegation_executor_maps_child_terminal_failures_to_tool_status(
     assert result.status == expected_status
     assert expected_error in result.content
     delegation_service = executor_dependencies["delegation_service"]
-    assert (expected_call, ("delegation_1", expected_error, None)) in delegation_service.calls
+    assert (
+        expected_call,
+        ("delegation_1", expected_error, "child_task_1", None),
+    ) in delegation_service.calls
 
 
 def test_child_agent_runner_uses_final_response_summary():
@@ -1899,6 +2046,7 @@ class _MultiChildDelegationService:
                 effective_tools=("read_file",),
                 created_at=now,
                 updated_at=now,
+                child_task_id="",
             )
             for i, turn_id in enumerate(child_turn_ids, start=1)
         ]

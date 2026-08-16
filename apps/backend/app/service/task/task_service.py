@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from app.config.configuration import build_agent_registry, get_agent_registry
 from app.config.logging.logger import log
-from app.models import TaskRecord
+from app.models import TaskRecord, TurnRecord
 from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
 
@@ -78,12 +78,12 @@ class TaskService:
         agent_id: str = "developer",
         workspace_id: str | None = None,
     ) -> TaskRecord:
-        """Create a task and its first turn (atomic).
+        """创建任务记录（不含首轮次，首轮次在执行时由 turn 维度创建）。
 
-        ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离；
-        首个轮次固定为 ``pending`` 执行态。因 ``turns.task_id`` 外键指向 ``tasks.task_id``，
-        必须先创建 task（``latest_turn_id`` 暂置空），再创建首 turn 并用真实
-        ``turn_id`` 回写 task 的最新轮次指针，保证 ``latest_turn_id`` 与实际一致。
+        ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离。任务文本
+        ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），任务本身只
+        持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向 ``tasks.task_id``，
+        必须先有 task 才能在执行阶段创建首 turn。
         """
 
         if not isinstance(input_text, str) or not input_text.strip():
@@ -102,26 +102,15 @@ class TaskService:
         title = preview(input_text)
         task_id = str(uuid4())
         # 先创建 task（turns.task_id 外键指向 tasks.task_id，必须先有 task 才能建 turn）。
-        self._task.create(
+        task = self._task.create(
             task_id=task_id,
             workspace_id=resolved_workspace_id,
             agent_id=agent_id,
-            input_text=input_text,
             title=title,
-            last_message_preview=title,
-            latest_turn_id=None,
             status=status,
         )
-        # 再创建首 turn，并用真实 turn_id 回写 task 的最新轮次指针。
-        first_turn = self._turn.create(
-            task_id=task_id,
-            input_text=input_text,
-            status="pending",
-            agent_id=agent_id,
-        )
-        self._task.update_latest_turn(task_id, first_turn.turn_id, title)
-        # 重新取回带最新 latest_turn_id 的 task 记录返回给调用方。
-        return self._task.get(task_id)
+
+        return task
 
     def get_task(self, task_id: str) -> TaskRecord:
         """Return the task with its derived ``execution_status`` attached."""
@@ -169,13 +158,145 @@ class TaskService:
     def list_tasks_for_workspace(self, workspace_id: str) -> list[TaskRecord]:
         return self._task.list_by_workspace(workspace_id)
 
-    def delete_task(self, task_id: str) -> None:
-        """删除单个任务并级联清理其下轮次、消息轨迹、运行时事件与委派记录。
+    def list_child_tasks(self, parent_task_id: str) -> list[TaskRecord]:
+        """列出某父任务下的全部子任务（委派子任务）。
 
-        删除前先校验任务存在（不存在则抛 ``KeyError``），再按
-        ``runtime_events -> turn_messages -> turns -> delegations -> task`` 顺序清理，
-        避免外键 / 孤儿数据。委派子 Agent 产生的 ``delegations`` 行以 ``task_id`` 关联，
-        若不复则删除后成为无法追溯的孤儿记录，因此须在此一并清理。
+        参数:
+            parent_task_id: 父任务标识。
+
+        返回:
+            该父任务的直接子任务列表（``task_type='delegation'``）；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
+
+        副作用:
+            无（仅读取）。
+        """
+
+        return self._task.list_by_parent_task(parent_task_id)
+
+    def create_child_task(
+        self,
+        *,
+        title: str,
+        parent_task_id: str,
+        parent_turn_id: str,
+        delegation_id: str,
+        workspace_id: str,
+        agent_id: str,
+    ) -> TaskRecord:
+        """创建委派子任务（只建 task，不建 turn）。
+
+        与用户任务不同，委派子任务不进侧边栏、无首 turn（turn 由委派执行器单独创建）、
+        不参与 archived 生命周期交互。``task_type`` 固定为 ``"delegation"``，并通过
+        ``parent_task_id`` / ``parent_turn_id`` / ``delegation_id`` 关联父任务与委派记录。
+        ``title`` 使用 ``input_text`` 的预览文本（子任务无侧边栏展示，但保留可读标题便于排查）。
+
+        参数:
+            parent_task_id: 父任务标识。
+            parent_turn_id: 触发委派的父 turn 标识。
+            delegation_id: 关联的委派记录标识（唯一索引兜底并发重入）。
+            workspace_id: 所属工作区标识。
+            agent_id: 执行该子任务的子 Agent 标识（须已注册）。
+            title: 子任务标题（由委派输入文本预览得到，仅用于排查，不进侧边栏）。
+
+        返回:
+            已持久化的子任务 ``TaskRecord``（``task_type='delegation'``，``status='pending'``）。
+
+        异常:
+            ValueError: 如果 ``agent_id`` 未注册或任意必填字段为空。
+            sqlalchemy.exc.IntegrityError: 如果 ``delegation_id`` 重复（并发重入）或外键冲突。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
+
+        副作用:
+            向 ``tasks`` 表插入一行 delegation 类型的子任务记录（不建 turn）。
+        """
+        for field_name, value in (
+            ("parent_task_id", parent_task_id),
+            ("parent_turn_id", parent_turn_id),
+            ("delegation_id", delegation_id),
+            ("workspace_id", workspace_id),
+            ("agent_id", agent_id),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
+        if agent_id not in _registered_agent_ids():
+            raise ValueError(f"agent_id {agent_id} is not registered")
+
+        task_id = str(uuid4())
+        return self._task.create(
+            task_id=task_id,
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            title=title,
+            status="pending",
+            task_type="delegation",
+            parent_task_id=parent_task_id,
+            parent_turn_id=parent_turn_id,
+            delegation_id=delegation_id,
+        )
+
+    def create_task_with_initial_turn(
+        self,
+        workspace_id: str,
+        agent_id: str,
+        input_text: str,
+        status: str = "open",
+    ) -> tuple[TaskRecord, TurnRecord]:
+        """创建任务记录并同时创建其首个 pending 轮次，返回两者。
+
+        这是「新建工作区即创建任务并进入首轮次」场景的单一编排入口：任务层
+        只持有标题等轻量元数据（不含用户输入文本，用户输入文本归属轮次维度），
+        首个轮次立即以 ``pending`` 状态创建，等待前端经
+        ``POST /turns/{turn_id}/stream`` 认领并运行。
+
+        参数:
+            workspace_id: 所属工作区标识。
+            agent_id: 执行该任务的 Agent 标识（须已注册）。
+            input_text: 首个轮次的用户输入文本，同时用于派生任务标题。
+            status: 任务初始状态，默认 ``"open"``。
+
+        返回:
+            ``(task_record, turn_record)`` 二元组，分别对应刚创建的顶层任务与其首个轮次。
+
+        异常:
+            ValueError: 如果 ``input_text`` 为空或全空白，或 ``agent_id`` 未注册。
+            sqlalchemy.exc.IntegrityError: 如果 ``workspace_id`` 指向不存在的工作区
+                （外键约束兜底，由底层 ``create_task`` 触发）。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败（任务或首轮次创建任一失败即抛出）。
+
+        副作用:
+            向 ``tasks`` 表插入一行顶层任务记录；向 ``turns`` 表插入一行 pending 首轮次记录
+            （归属 ``task.task_id``，状态 ``pending``）。若 task 创建成功后首轮次写入失败，
+            已提交的 task 会被显式补偿删除，避免残留孤儿任务。
+        """
+        if not isinstance(input_text, str) or not input_text.strip():
+            raise ValueError("input_text must be a non-empty string")
+
+        task = self.create_task(
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            input_text=input_text,
+            status=status,
+        )
+        # 补偿式原子性：底层 task / turn 各自独立提交，若首轮次写入失败，已提交的 task
+        # 无自动回滚，此处显式删除刚创建的 task，避免残留孤儿任务。极端情况下补偿删除
+        # 自身失败时会保留 task 并向上抛出原始异常（由调用方错误日志捕获）。
+        try:
+            turn = self._turn.create(task.task_id, input_text, "pending")
+        except Exception:
+            self._task.delete_by_ids([task.task_id])
+            raise
+        return task, turn
+
+    def delete_task(self, task_id: str) -> None:
+        """递归删除任务并级联清理其下轮次、消息轨迹、运行时事件、子任务与委派记录。
+
+        删除前先校验任务存在（不存在则抛 ``KeyError``），再递归删除其下全部子任务
+        （委派子任务），然后按 ``runtime_events -> turn_messages -> turns -> delegations -> task``
+        顺序清理自身数据，避免外键 / 孤儿数据。委派子 Agent 产生的 ``delegations`` 行以
+        ``task_id`` 关联，若不复则删除后成为无法追溯的孤儿记录，因此须在此一并清理。
         删除是高风险操作，保留 start / complete 审计日志。
 
         参数:
@@ -190,7 +311,7 @@ class TaskService:
 
         副作用:
             从 ``runtime_events`` / ``turn_messages`` / ``turns`` / ``delegations`` /
-            ``tasks`` 表删除该任务相关数据。
+            ``tasks`` 表删除该任务及其子任务相关数据。
         """
 
         self._task.get(task_id)  # 存在性守卫，不存在抛 KeyError
@@ -198,6 +319,10 @@ class TaskService:
             "task_delete_start",
             extra={"msg": "task delete started", "data": {"task_id": task_id}},
         )
+        # 递归清理子任务（委派子任务），避免孤儿数据。
+        child_tasks = self._task.list_by_parent_task(task_id)
+        for child in child_tasks:
+            self.delete_task(child.task_id)
         turn_ids = self._turn.list_ids_by_task_ids([task_id])
         if turn_ids:
             self._runtime_event.delete_by_turn_ids(turn_ids)

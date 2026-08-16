@@ -11,10 +11,7 @@ class TaskResponse(BaseModel):
         task_id: 任务标识。
         workspace_id: 所属工作区标识。
         agent_id: 驱动该任务的 agent 标识。
-        input_text: 任务的首条用户输入。
         title: 任务标题。
-        last_message_preview: 最近一条消息预览。
-        latest_turn_id: 最近一轮标识，可能为 None。
         status: 任务生命周期状态。
         execution_status: 派生执行状态，可能为 None。
         task_type: 任务类型，``"user"`` 为用户创建，``"delegation"`` 为委派子任务。
@@ -37,10 +34,7 @@ class TaskResponse(BaseModel):
     task_id: str
     workspace_id: str
     agent_id: str
-    input_text: str
     title: str
-    last_message_preview: str
-    latest_turn_id: str | None = None
     status: str
     execution_status: str | None = None
     task_type: str = "user"
@@ -74,10 +68,7 @@ class TaskResponse(BaseModel):
             task_id=record.task_id,
             workspace_id=record.workspace_id,
             agent_id=record.agent_id,
-            input_text=record.input_text,
             title=record.title,
-            last_message_preview=record.last_message_preview,
-            latest_turn_id=record.latest_turn_id,
             status=record.status,
             execution_status=record.execution_status,
             task_type=record.task_type,

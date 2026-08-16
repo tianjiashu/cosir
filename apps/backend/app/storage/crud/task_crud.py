@@ -47,10 +47,7 @@ class TaskCrud:
         task_id: str,
         workspace_id: str,
         agent_id: str,
-        input_text: str,
         title: str,
-        last_message_preview: str,
-        latest_turn_id: str | None = None,
         status: str | None = None,
         task_type: str = "user",
         parent_task_id: str | None = None,
@@ -68,10 +65,7 @@ class TaskCrud:
             task_id: 任务唯一标识（调用方保证全局唯一）。
             workspace_id: 所属工作区标识。
             agent_id: 执行该任务的 agent 标识。
-            input_text: 任务的原始输入文本。
             title: 任务标题。
-            last_message_preview: 最近一条消息的预览文本。
-            latest_turn_id: 最新一轮对话的 turn 标识，允许为 None（task 创建时首 turn 尚未生成）。
             status: 任务初始状态，允许为 None，缺省时回退为 ``"pending"``。
             task_type: 任务类型，``"user"`` 或 ``"delegation"``，缺省为 ``"user"``。
             parent_task_id: 父任务标识，委派子任务必填，用户任务为 None。
@@ -94,10 +88,7 @@ class TaskCrud:
             task_id=task_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            input_text=input_text,
             title=title,
-            last_message_preview=last_message_preview,
-            latest_turn_id=latest_turn_id,
             status=effective_status,
             created_at=now,
             updated_at=now,
@@ -112,10 +103,7 @@ class TaskCrud:
                     task_id=task.task_id,
                     workspace_id=task.workspace_id,
                     agent_id=task.agent_id,
-                    input_text=task.input_text,
                     title=task.title,
-                    last_message_preview=task.last_message_preview,
-                    latest_turn_id=task.latest_turn_id,
                     status=task.status,
                     created_at=to_text(task.created_at),
                     updated_at=to_text(task.updated_at),
@@ -257,37 +245,6 @@ class TaskCrud:
         """
         return self.get(task_id).status == status
 
-    def update_latest_turn(
-        self, task_id: str, latest_turn_id: str, last_message_preview: str
-    ) -> None:
-        """更新 task 的最新 turn 指针与消息预览。
-
-        参数:
-            task_id: 任务标识。
-            latest_turn_id: 最新一轮对话的 turn 标识。
-            last_message_preview: 最近一条消息的预览文本。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            更新 ``tasks`` 表中对应行的 latest_turn_id、last_message_preview 与 updated_at。
-            注意：不校验 task 是否存在，task 不存在时静默无更新。
-        """
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(TaskModel)
-                .where(TaskModel.task_id == task_id)
-                .values(
-                    latest_turn_id=latest_turn_id,
-                    last_message_preview=last_message_preview,
-                    updated_at=to_text(utc_now()),
-                )
-            )
-
     def list_ids_by_workspace(self, workspace_id: str) -> list[str]:
         """仅返回某工作区下全部 task 的标识列表。
 
@@ -358,10 +315,7 @@ class TaskCrud:
             task_id=row.task_id,
             workspace_id=row.workspace_id,
             agent_id=row.agent_id,
-            input_text=row.input_text,
             title=row.title,
-            last_message_preview=row.last_message_preview,
-            latest_turn_id=row.latest_turn_id,
             status=row.status,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),

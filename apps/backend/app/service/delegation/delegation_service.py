@@ -215,6 +215,7 @@ class DelegationService:
             task_id=task_id,
             parent_turn_id=parent_turn_id,
             child_turn_id="",
+            child_task_id="",
             parent_agent_id=parent_agent_id,
             child_agent_id=child_agent_id,
             delegation_type=delegation_type,
@@ -265,6 +266,7 @@ class DelegationService:
         self,
         delegation_id: str,
         child_turn_id: str,
+        child_task_id: str | None = None,
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 running 并发出 child_started 父事件。
@@ -272,6 +274,8 @@ class DelegationService:
         参数:
             delegation_id: 委派标识。
             child_turn_id: 已创建并开始执行的 child turn 标识。
+            child_task_id: 可选的 child task 标识；传入时一并落库以便前端跳转与取消级联。
+            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
 
         返回:
             无。
@@ -288,6 +292,7 @@ class DelegationService:
             delegation_id,
             "running",
             child_turn_id=child_turn_id,
+            child_task_id=child_task_id,
         )
         self._emit_event(
             record,
@@ -307,6 +312,7 @@ class DelegationService:
         self,
         delegation_id: str,
         summary: str,
+        child_task_id: str | None = None,
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 completed 并发出 finished 父事件。
@@ -314,6 +320,8 @@ class DelegationService:
         参数:
             delegation_id: 委派标识。
             summary: child Agent 执行摘要。
+            child_task_id: 可选的 child task 标识；传入时一并落库以便前端跳转与取消级联。
+            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
 
         返回:
             无。
@@ -330,6 +338,7 @@ class DelegationService:
             delegation_id,
             "completed",
             summary=summary,
+            child_task_id=child_task_id,
         )
         self._emit_event(
             record,
@@ -350,6 +359,7 @@ class DelegationService:
         self,
         delegation_id: str,
         error: str,
+        child_task_id: str | None = None,
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 failed 并发出 failed 父事件。
@@ -357,6 +367,8 @@ class DelegationService:
         参数:
             delegation_id: 委派标识。
             error: child Agent 失败原因。
+            child_task_id: 可选的 child task 标识；传入时一并落库以便前端跳转与取消级联。
+            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
 
         返回:
             无。
@@ -369,7 +381,9 @@ class DelegationService:
             更新 delegations 表；尽力持久化并发布 delegation_failed 事件。
         """
 
-        record = self._delegation_crud.update_status(delegation_id, "failed", error=error)
+        record = self._delegation_crud.update_status(
+            delegation_id, "failed", error=error, child_task_id=child_task_id
+        )
         self._emit_event(
             record,
             EventType.DELEGATION_FAILED,
@@ -389,6 +403,7 @@ class DelegationService:
         self,
         delegation_id: str,
         error: str,
+        child_task_id: str | None = None,
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 cancelled 并发出 cancelled 父事件。
@@ -396,6 +411,8 @@ class DelegationService:
         参数:
             delegation_id: 委派标识。
             error: child Agent 取消原因。
+            child_task_id: 可选的 child task 标识；传入时一并落库以便前端跳转与取消级联。
+            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
 
         返回:
             无。
@@ -408,7 +425,9 @@ class DelegationService:
             更新 delegations 表；尽力持久化并发布 delegation_cancelled 事件。
         """
 
-        record = self._delegation_crud.update_status(delegation_id, "cancelled", error=error)
+        record = self._delegation_crud.update_status(
+            delegation_id, "cancelled", error=error, child_task_id=child_task_id
+        )
         self._emit_event(
             record,
             EventType.DELEGATION_CANCELLED,

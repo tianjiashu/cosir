@@ -15,16 +15,17 @@ class ChildAgentProfileBuilder:
         registry_profile: AgentProfile,
         turn: TurnRecord,
         effective_tools: Iterable[str],
-        context_excluded_turn_ids: Iterable[str] = (),
         runtime_event_loop=None,
     ) -> AgentProfile:
         """构建绑定单次 child turn 与有效工具集的 profile。
 
+        委派改造后 child 运行在独立的子任务下，``load_history`` 天然只看到自己的消息，
+        不再需要排除父任务其它轮次的 hack，因此本方法不再接收任何上下文排除参数。
+
         参数:
             registry_profile: 从 AgentProfileRegistry 解析的共享内置 profile。
-            turn: 当前 child run 对应的轮次记录。
+            turn: 当前 child run 对应的轮次记录（位于独立子任务下）。
             effective_tools: 已由父级委派边界收窄后的工具名称。
-            context_excluded_turn_ids: child runtime 加载 task 历史时需要排除的 turn 标识。
             runtime_event_loop: child runtime 事件需要投递回的父运行事件循环。
 
         返回:
@@ -41,6 +42,5 @@ class ChildAgentProfileBuilder:
             registry_profile,
             turn=turn,
             allowed_tools=list(effective_tools),
-            context_excluded_turn_ids=tuple(context_excluded_turn_ids),
             runtime_event_loop=runtime_event_loop,
         )

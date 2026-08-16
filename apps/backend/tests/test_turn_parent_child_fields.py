@@ -87,10 +87,7 @@ def test_create_child_turn_records_parent_and_delegation(isolated_storage):
                 task_id="task_1",
                 workspace_id="workspace_1",
                 agent_id="developer",
-                input_text="parent task",
                 title="parent task",
-                last_message_preview="parent task",
-                latest_turn_id=None,
                 status="open",
                 created_at=now,
                 updated_at=now,
@@ -108,4 +105,3 @@ def test_create_child_turn_records_parent_and_delegation(isolated_storage):
     assert child.parent_turn_id == "turn_parent"
     assert child.delegation_id == "del_1"
     assert child.agent_id == "delegate_reviewer"
-    assert service_depends.get_task_crud().get("task_1").latest_turn_id is None

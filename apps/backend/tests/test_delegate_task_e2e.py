@@ -584,8 +584,8 @@ def test_D1_child_run_failure_marks_failed(
         execution_context=execution_context,
     )
 
-    assert observation.status == "error"
-    # error observation 的 data 不含 delegation_id，从 delegations 表按 parent_turn 查最近记录
+    assert observation.status == "cancelled"
+    # cancelled observation 的 data 不含 delegation_id，从 delegations 表按 parent_turn 查最近记录
     records = DelegationCrud().list_by_parent_turn(ctx["parent_turn"].turn_id)
     assert records, "failed 路径应已创建 delegation 记录（acquire 早于 child 运行）"
     record = records[-1]
@@ -626,8 +626,8 @@ def test_D2_sync_step_exception_marks_failed(
         execution_context=ctx["execution_context"],
     )
 
-    assert observation.status == "error"
-    # error observation 的 data 不含 delegation_id，从 delegations 表按 parent_turn 查最近记录
+    assert observation.status == "cancelled"
+    # cancelled observation 的 data 不含 delegation_id，从 delegations 表按 parent_turn 查最近记录
     records = DelegationCrud().list_by_parent_turn(ctx["parent_turn"].turn_id)
     assert records, "except 分支应已创建 delegation 记录（acquire 早于 claim）"
     record = records[-1]
@@ -677,8 +677,8 @@ def test_D3_cancel_signal_marks_cancelled(
         execution_context=execution_context,
     )
 
-    assert observation.status == "error"
-    # error observation 的 data 不含 delegation_id，从 delegations 表按 parent_turn 查最近记录
+    assert observation.status == "cancelled"
+    # cancelled observation 的 data 不含 delegation_id，从 delegations 表按 parent_turn 查最近记录
     records = DelegationCrud().list_by_parent_turn(ctx["parent_turn"].turn_id)
     assert records, "取消路径应已创建 delegation 记录（acquire 早于 child 运行）"
     record = records[-1]

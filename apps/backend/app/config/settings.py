@@ -84,7 +84,7 @@ class Settings:
     # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
     # child 委派单次执行的生效超时（async 路径），不等同于线程硬杀，与工具定义
     # ``timeout_seconds`` 元数据不双轨生效。
-    DELEGATION_MAX_CONCURRENCY: ClassVar[int] = 2
+    DELEGATION_MAX_CONCURRENCY: ClassVar[int] = 4
     DELEGATION_TIMEOUT_SECONDS: ClassVar[float] = 300.0
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---

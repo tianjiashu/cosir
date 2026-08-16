@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import (
     get_runtime,
@@ -184,7 +185,11 @@ async def create_workspace_task(
     payload: CreateTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
-    """在工作区下创建任务容器和首个 pending turn。
+    """在工作区下创建任务并同时创建其首个 pending 轮次。
+
+    编排逻辑收口在 ``TaskService.create_task_with_initial_turn``（业务层），本端点
+    只做参数透传、异常映射与响应格式化，不持有任何创建 / 运行编排。首轮次以
+    ``pending`` 状态创建，运行由前端经 ``POST /turns/{turn_id}/stream`` 触发。
 
     参数:
         workspace_id: 来自路由的工作区标识。
@@ -192,25 +197,35 @@ async def create_workspace_task(
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        创建后的 ``TaskResponse``。
+        创建后的 ``TaskResponse``（含任务元数据；首轮次标识由前端经
+        ``GET /tasks/{task_id}/turns`` 取得后驱动运行）。
 
     异常:
-        HTTPException: 当工作区不存在或输入非法时抛出。
+        HTTPException: 当工作区不存在、agent 未注册或输入非法时抛出。
 
     副作用:
-        在存储中创建 task 与首个 turn。
+        经业务层在存储中创建 task 与首个 pending turn。
     """
 
     try:
-        task = task_service.create_task(
+        task, _turn = task_service.create_task_with_initial_turn(
             input_text=payload.text,
-            status="pending",
             workspace_id=payload.workspace_id,
             agent_id=payload.agent_id,
         )
-    except KeyError as exc:
+    except IntegrityError as exc:
+        log.error(
+            "create_workspace_task failed: workspace %s not found (foreign key violation)",
+            payload.workspace_id,
+        )
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     except ValueError as exc:
+        log.warning(
+            "create_workspace_task rejected: workspace=%s agent=%s reason=%s",
+            payload.workspace_id,
+            payload.agent_id,
+            exc,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TaskResponse.from_record(task)
 

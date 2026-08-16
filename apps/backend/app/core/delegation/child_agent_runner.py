@@ -38,11 +38,17 @@ class ChildAgentRunner:
         self._run_agent = run_agent
         self._should_cancel = should_cancel or (lambda _turn_id: False)
 
-    def run_child(self, child_profile: AgentProfile) -> DelegationResult:
+    def run_child(
+        self,
+        child_profile: AgentProfile,
+        delegation_id: str = "",
+    ) -> DelegationResult:
         """同步运行 child Agent 并返回委派终态。
 
         参数:
             child_profile: 已绑定 child turn 且已收窄工具权限的 AgentProfile。
+            delegation_id: 本次委派在 ``delegations`` 表中的标识，用于异常日志定位
+                并发重入场景；无上下文时为 ``""``。
 
         返回:
             child 执行的 DelegationResult；如果当前线程已有运行中的事件循环（无法再
@@ -66,6 +72,7 @@ class ChildAgentRunner:
                     "msg": "委派 child 运行桥接在事件循环线程内被调用，无法启动新 loop",
                     "data": {
                         "child_turn_id": turn_id,
+                        "delegation_id": delegation_id,
                         "error": "delegation_runner_event_loop_thread",
                     },
                 },
@@ -75,7 +82,7 @@ class ChildAgentRunner:
                 child_turn_id=turn_id,
                 error="delegation_runner_event_loop_thread",
             )
-        return asyncio.run(self._consume_child_events(child_profile))
+        return asyncio.run(self._consume_child_events(child_profile, delegation_id))
 
     @staticmethod
     def _is_running_event_loop_thread() -> bool:
@@ -109,11 +116,16 @@ class ChildAgentRunner:
             return False
         return True
 
-    async def _consume_child_events(self, child_profile: AgentProfile) -> DelegationResult:
+    async def _consume_child_events(
+        self,
+        child_profile: AgentProfile,
+        delegation_id: str = "",
+    ) -> DelegationResult:
         """消费 child runtime event 流并压缩为委派结果。
 
         参数:
             child_profile: 已绑定 child turn 且已收窄工具权限的 AgentProfile。
+            delegation_id: 本次委派标识，透传给异常日志以提升并发重入排查能力。
 
         返回:
             从 child RUN_* 终态事件压缩出的 DelegationResult。
@@ -177,7 +189,11 @@ class ChildAgentRunner:
                 "delegation_child_run_failed",
                 extra={
                     "msg": "委派 child Agent 运行异常，已转换为委派失败结果",
-                    "data": {"child_turn_id": turn_id, "error": str(exc)},
+                    "data": {
+                        "child_turn_id": turn_id,
+                        "delegation_id": delegation_id,
+                        "error": str(exc),
+                    },
                 },
             )
             return DelegationResult(

@@ -73,6 +73,7 @@ def initialize_app_schema(engine: Engine) -> None:
             cast(Table, model.__table__).create(bind=connection, checkfirst=True)
         _ensure_model_columns(connection, engine)
         _ensure_model_indexes(connection)
+        _drop_orphan_task_columns(connection)
         _drop_orphan_durable_runs(connection)
 
 
@@ -99,6 +100,38 @@ def _drop_orphan_durable_runs(connection) -> None:
     if inspect(connection).has_table("durable_runs"):
         connection.execute(text("DROP TABLE IF EXISTS durable_runs"))
         log.info("dropped orphan table durable_runs")
+
+
+def _drop_orphan_task_columns(connection) -> None:
+    """清理 tasks 表中已移除的孤儿列，使存量库升级后无无人引用的孤儿字段。
+
+    这些列（``input_text`` / ``last_message_preview`` / ``latest_turn_id``）语义上属于轮次
+    维度或已被判定不应由任务持有，已从 ``TaskModel`` 与 ``TaskResponse`` 中移除。存量库升级时
+    这些列可能仍物理存在（保守迁移策略不删列），此处一次性 DROP 收口，与模型现状对齐。
+
+    参数:
+        connection: 当前处于事务中的 SQLAlchemy 连接。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果 DROP COLUMN 执行失败。
+
+    副作用:
+        当 tasks 表存在且含上述孤儿列时逐个删除；每删除一列写一条 info 日志。
+    """
+    _ORPHAN_TASK_COLUMNS = ("input_text", "last_message_preview", "latest_turn_id")
+    if not inspect(connection).has_table("tasks"):
+        return
+    existing = {col["name"] for col in inspect(connection).get_columns("tasks")}
+    for column_name in _ORPHAN_TASK_COLUMNS:
+        if column_name not in existing:
+            continue
+        connection.execute(
+            text(f"ALTER TABLE tasks DROP COLUMN {column_name}")
+        )
+        log.info("dropped orphan column tasks.%s", column_name)
 
 
 def _default_literal_for_type(column_type) -> str:

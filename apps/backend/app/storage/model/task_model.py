@@ -16,10 +16,7 @@ class TaskModel(StorageBase):
         Text, ForeignKey("workspaces.workspace_id"), nullable=False
     )
     agent_id: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'developer'"))
-    input_text: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
-    last_message_preview: Mapped[str] = mapped_column(Text, nullable=False)
-    latest_turn_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
 
     task_type: Mapped[str] = mapped_column(
