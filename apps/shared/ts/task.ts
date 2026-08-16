@@ -12,12 +12,13 @@ export interface TaskRecord {
   task_id: string;
   workspace_id: string;
   agent_id: string;
-  input_text: string;
   title: string;
-  last_message_preview: string;
-  latest_turn_id?: string | null;
   status: TaskStatus;
   execution_status?: TaskStatus | null;
+  task_type?: string;
+  parent_task_id?: string | null;
+  parent_turn_id?: string | null;
+  delegation_id?: string | null;
   created_at: string;
   updated_at: string;
 }

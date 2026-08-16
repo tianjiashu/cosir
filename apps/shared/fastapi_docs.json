@@ -219,6 +219,50 @@
         }
       }
     },
+    "/tasks/{task_id}/children": {
+      "get": {
+        "summary": "List Child Tasks",
+        "description": "列出某任务下的全部子任务（委派子任务）。\n\n子任务不出现在工作区对话列表，但可通过父任务的该端点下钻查看其轨迹。\n\n参数:\n    task_id: 来自路由的父任务标识。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    该父任务的直接子任务 ``TaskResponse`` 列表；无子任务时返回空列表。\n\n异常:\n    HTTPException: 当父任务不存在（级联 KeyError）时抛出。\n\n副作用:\n    无（只读查询）。",
+        "operationId": "list_child_tasks_tasks__task_id__children_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskResponse"
+                  },
+                  "title": "Response List Child Tasks Tasks  Task Id  Children Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{task_id}/turns/{turn_id}/events": {
       "get": {
         "summary": "Replay Turn Events",
@@ -553,8 +597,46 @@
     "/turns/{turn_id}/stream": {
       "get": {
         "summary": "Stream Turn",
-        "description": "通过 SSE 流式返回轮次的运行时事件。\n\n仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending\n轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。\n本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由运行时\n``run_turn`` 的断开兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定\n（``turn.agent_id``），\n运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。\n\n事件以标准 SSE 帧推送，每帧格式为::\n\n    event: <event_type>\n    data: <json 序列化后的 RuntimeEvent>\n\n其中 ``event_type`` 对应 ``RuntimeEvent`` 的种类（如 ``token``、\n``tool_call``、``step``、``status`` 等），``data`` 为该事件的 JSON 负载。\n相邻事件以空行 ``\\n\\n`` 分隔。\n\n参数:\n    turn_id: 来自路由的轮次标识。\n    runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。\n    turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。\n\n返回:\n    发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到\n    轮次运行结束或客户端断开（断开即本轮结束，由运行时 ``run_turn`` 的断开兜底标 failed）。\n\n异常:\n    HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走\n        ``GET /tasks/{task_id}/turns``）时抛出。\n\n副作用:\n    仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由\n    ``_sse_turn_events`` 转换为 SSE 帧。不回放历史事件。",
+        "description": "通过 SSE 流式返回轮次的运行时事件。\n\n仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending\n轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。\n本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由运行时\n``run_turn`` 的断开兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定\n（``turn.agent_id``），\n运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。\n\n事件以标准 SSE 帧推送，每帧格式为::\n\n    event: <event_type>\n    data: <json 序列化后的 RuntimeEvent>\n\n其中 ``event_type`` 对应 ``RuntimeEvent`` 的种类（如 ``token``、\n``tool_call``、``step``、``status`` 等），``data`` 为该事件的 JSON 负载。\n相邻事件以空行 ``\\n\\n`` 分隔。\n\n参数:\n    turn_id: 来自路由的轮次标识。\n    runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。\n    turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。\n    stream_service: 通过依赖注入的轮次事件流编排 service（订阅/认领/驱动/发布/兜底）。\n\n返回:\n    发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到\n    轮次运行结束或客户端断开（断开即本轮结束，由运行时 ``run_turn`` 的断开兜底标 failed）。\n\n异常:\n    HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走\n        ``GET /tasks/{task_id}/turns``）时抛出。\n\n副作用:\n    仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由\n    ``_sse_frames`` 转换为 SSE 帧。不回放历史事件。",
         "operationId": "stream_turn_turns__turn_id__stream_get",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/turns/{turn_id}/events/stream": {
+      "get": {
+        "summary": "Subscribe Turn Events",
+        "description": "订阅已运行委派子轮次的实时事件。\n\n参数:\n    turn_id: 来自路由的子轮次标识。\n    turn_service: 用于读取轮次并校验其执行状态的领域 service。\n    stream_service: 通过依赖注入的轮次事件流编排 service（纯订阅转发）。\n\n返回:\n    ``text/event-stream`` 响应，仅转发此后实时发布到该 turn 的事件。\n\n异常:\n    HTTPException: turn 不存在时为 404；turn 已终态时为 409。\n\n副作用:\n    请求消费期间注册事件订阅；不认领 producer、不调用运行时，也不在断开时更新 turn 状态。",
+        "operationId": "subscribe_turn_events_turns__turn_id__events_stream_get",
         "parameters": [
           {
             "name": "turn_id",
@@ -981,9 +1063,9 @@
             "type": "string",
             "title": "Role"
           },
-          "goal": {
+          "description": {
             "type": "string",
-            "title": "Goal"
+            "title": "Description"
           },
           "allowed_tools": {
             "items": {
@@ -991,10 +1073,6 @@
             },
             "type": "array",
             "title": "Allowed Tools"
-          },
-          "context_policy": {
-            "type": "string",
-            "title": "Context Policy"
           },
           "workflow": {
             "type": "string",
@@ -1007,21 +1085,32 @@
           "max_steps": {
             "type": "integer",
             "title": "Max Steps"
+          },
+          "prompt_ref": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Ref"
           }
         },
         "type": "object",
         "required": [
           "agent_id",
           "role",
-          "goal",
+          "description",
           "allowed_tools",
-          "context_policy",
           "workflow",
           "model_name",
-          "max_steps"
+          "max_steps",
+          "prompt_ref"
         ],
         "title": "AgentProfileResponse",
-        "description": "校验并序列化单个已注册 agent 的元信息。\n\n字段与 ``AgentProfile.to_dict()`` 保持一致，供前端渲染 agent 选择器与说明。\n\n参数:\n    agent_id: 稳定的 Agent 标识。\n    role: 人类可读的 Agent 角色。\n    goal: 注入到模型上下文中的运行目标。\n    allowed_tools: 该 Agent 允许使用的工具名或权限名。\n    context_policy: 该 Agent 的上下文处理策略名称。\n    workflow: 该 Agent 使用的执行策略标识。\n    model_name: 该 Agent 使用的模型名称。\n    max_steps: 单轮最大执行步数。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化单个已注册 agent 的元信息。\n\n字段集与 ``AgentProfile.to_dict()`` 完全一致，供前端渲染 agent 选择器与说明；\n二者任一改动都必须同步（见分层约束）。``goal`` 字段已由 ``description`` 取代，\nAgent 的职责、能力、适用场景与约束统一收敛到 ``description`` 文本。\n\n参数:\n    agent_id: 稳定的 Agent 标识。\n    role: 人类可读的 Agent 角色。\n    description: 注入到模型上下文中的运行目标与职责描述（含能力/场景/约束，替代旧 ``goal``）。\n    allowed_tools: 该 Agent 允许使用的工具名或权限名。\n    workflow: 该 Agent 使用的执行策略标识。\n    model_name: 该 Agent 使用的模型名称。\n    max_steps: 单轮最大执行步数。\n    prompt_ref: 关联的 prompt 引用字典（第二部分接缝，可为 None）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ChangeCheckpointResponse": {
         "properties": {
@@ -1531,6 +1620,44 @@
             ],
             "title": "Execution Status"
           },
+          "task_type": {
+            "type": "string",
+            "title": "Task Type",
+            "default": "user"
+          },
+          "parent_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Task Id"
+          },
+          "parent_turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Turn Id"
+          },
+          "delegation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delegation Id"
+          },
           "created_at": {
             "type": "string",
             "title": "Created At"
@@ -1553,7 +1680,7 @@
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    agent_id: 驱动该任务的 agent 标识。\n    input_text: 任务的首条用户输入。\n    title: 任务标题。\n    last_message_preview: 最近一条消息预览。\n    latest_turn_id: 最近一轮标识，可能为 None。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    agent_id: 驱动该任务的 agent 标识。\n    input_text: 任务的首条用户输入。\n    title: 任务标题。\n    last_message_preview: 最近一条消息预览。\n    latest_turn_id: 最近一轮标识，可能为 None。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_turn_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "TurnResponse": {
         "properties": {

@@ -12,14 +12,9 @@ export interface AgentProfileResponse {
   role: string;
   description: string;
   allowed_tools: string[];
-  context_policy: string;
   workflow: string;
   model_name: string;
   max_steps: number;
-  delegation_type: string;
-  capabilities: string[];
-  recommended_use_cases: string[];
-  constraints: string[];
   prompt_ref: Record<string, unknown> | null;
 }
 

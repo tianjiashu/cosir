@@ -35,7 +35,8 @@ export type RuntimeEventType =
   | "human_input_received"
   | "workspace_preparing"
   | "workspace_ready"
-  | "workspace_degraded";
+  | "workspace_degraded"
+  | "context_usage";
 
 /** 所有运行时事件 payload 都是 JSON object。 */
 export type RuntimeEventPayloadObject = Record<string, unknown>;
@@ -265,6 +266,11 @@ export interface WorkspaceDegradedPayload extends RuntimeEventPayloadObject {
   degraded_reason: string;
 }
 
+export interface ContextUsagePayload extends RuntimeEventPayloadObject {
+  used_tokens: number;
+  total_tokens: number;
+}
+
 /** event_type 到 payload 类型的映射。 */
 export interface RuntimeEventPayloadMap {
   run_started: RunStartedPayload;
@@ -294,6 +300,7 @@ export interface RuntimeEventPayloadMap {
   workspace_preparing: WorkspacePreparingPayload;
   workspace_ready: WorkspaceReadyPayload;
   workspace_degraded: WorkspaceDegradedPayload;
+  context_usage: ContextUsagePayload;
 }
 
 /** SSE 传输的运行时事件信封，对应后端 `RuntimeEvent.to_dict()`。 */

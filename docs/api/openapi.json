@@ -43,6 +43,44 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Delete Task",
+        "description": "删除单个任务及其级联的轮次与运行时事件。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteTaskResponse``。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    级联删除该任务下的轮次、运行时事件与任务自身。",
+        "operationId": "delete_task_tasks__task_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteTaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/tasks/{task_id}/turns": {
@@ -120,6 +158,103 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TurnResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/events": {
+      "get": {
+        "summary": "Replay Task Events",
+        "description": "回放某任务下的完整运行时事件流（按 turn + sequence 升序）。\n\n用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史\n回看与刷新后重连重渲染；只读查询，不重新执行 Agent。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。\n    event_service: 通过依赖注入的运行时事件 service。\n\n返回:\n    按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。\n\n异常:\n    HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。\n\n副作用:\n    无（只读查询）。",
+        "operationId": "replay_task_events_tasks__task_id__events_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuntimeEventResponse"
+                  },
+                  "title": "Response Replay Task Events Tasks  Task Id  Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/turns/{turn_id}/events": {
+      "get": {
+        "summary": "Replay Turn Events",
+        "description": "回放某轮次下的运行时事件流（按 sequence 升序）。\n\n用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需\n隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。\n\n参数:\n    task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。\n    turn_id: 来自路由的轮次标识。\n    event_service: 通过依赖注入的运行时事件 service。\n\n返回:\n    按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。\n\n异常:\n    无。\n\n副作用:\n    无（只读查询）。",
+        "operationId": "replay_turn_events_tasks__task_id__turns__turn_id__events_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuntimeEventResponse"
+                  },
+                  "title": "Response Replay Turn Events Tasks  Task Id  Turns  Turn Id  Events Get"
                 }
               }
             }
@@ -303,17 +438,6 @@
         "summary": "Create Workspace Task",
         "description": "在工作区下创建任务容器和首个 pending turn。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    payload: 包含首条用户输入的请求体。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    创建后的 ``TaskResponse``。\n\n异常:\n    HTTPException: 当工作区不存在或输入非法时抛出。\n\n副作用:\n    在存储中创建 task 与首个 turn。",
         "operationId": "create_workspace_task_workspaces__workspace_id__tasks_post",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Workspace Id"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -348,11 +472,127 @@
         }
       }
     },
+    "/workspaces/{workspace_id}/events/stream": {
+      "get": {
+        "summary": "Stream Workspace Events",
+        "description": "以 SSE 流式返回 workspace 状态事件。\n\n通用 workspace 状态事件通道：当前承载创建时的准备进度（preparing/ready/degraded），\n后续可扩展其他 workspace 状态事件。客户端须先调用本端点建立订阅，再触发 prepare，\n避免错过 preparing 事件。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    event_bus: workspace 级状态事件总线。\n\n返回:\n    text/event-stream 的 StreamingResponse；终态事件（ready/degraded）后结束流。\n\n异常:\n    无（订阅缺失时流自然结束）。\n\n副作用:\n    注册并最终移除一条 workspace 状态事件订阅。",
+        "operationId": "stream_workspace_events_workspaces__workspace_id__events_stream_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/events/prepare": {
+      "post": {
+        "summary": "Prepare Workspace",
+        "description": "同步触发一次 workspace 准备（prepare）。\n\n当前准备动作是 CodeGraph 索引就绪；该端点走通用 workspace 状态事件通道，后续可扩展\n其他 workspace 状态事件的准备动作。客户端应先连 ``/events/stream`` 建立订阅再触发本端点。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。\n    event_service: workspace 状态事件编排 service；Kernel 不可用时为 None（降级）。\n    event_bus: workspace 级状态事件总线（用于 Kernel 不可用时主动发降级终态）。\n\n返回:\n    WorkspacePrepareResponse，含就绪状态与动作摘要。\n\n异常:\n    HTTPException: 当 workspace 不存在（404）时抛出。\n\n副作用:\n    发布 preparing/ready/degraded 工作状态事件到总线。\n\n设计要点:\n    Kernel 不可用时 event_service 为 None，属于设计明确的正常降级场景。此时不仅\n    HTTP 返回 unavailable，还**主动 emit 一条 WORKSPACE_DEGRADED 事件**到总线——\n    因为前端先连 SSE 再 POST prepare，若只靠 HTTP 响应而 SSE 订阅者未收到终态事件，\n    前端会永远停在 preparing（独立审查暴露的时序 bug 的另一半）。",
+        "operationId": "prepare_workspace_workspaces__workspace_id__events_prepare_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspacePrepareResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/turns/{turn_id}/stream": {
       "get": {
         "summary": "Stream Turn",
-        "description": "通过 SSE 流式返回轮次的运行时事件。\n\n仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending\n轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。\n本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由运行时\n``run_turn`` 的断开兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定\n（``turn.agent_id``），\n运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。\n\n事件以标准 SSE 帧推送，每帧格式为::\n\n    event: <event_type>\n    data: <json 序列化后的 RuntimeEvent>\n\n其中 ``event_type`` 对应 ``RuntimeEvent`` 的种类（如 ``token``、\n``tool_call``、``step``、``status`` 等），``data`` 为该事件的 JSON 负载。\n相邻事件以空行 ``\\n\\n`` 分隔。\n\n参数:\n    turn_id: 来自路由的轮次标识。\n    runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。\n    turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。\n\n返回:\n    发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到\n    轮次运行结束或客户端断开（断开即本轮结束，由运行时 ``run_turn`` 的断开兜底标 failed）。\n\n异常:\n    HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走\n        ``GET /tasks/{task_id}/turns``）时抛出。\n\n副作用:\n    仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由\n    ``_sse_turn_events`` 转换为 SSE 帧。不回放历史事件。",
+        "description": "通过 SSE 流式返回轮次的运行时事件。\n\n仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending\n轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。\n本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由运行时\n``run_turn`` 的断开兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定\n（``turn.agent_id``），\n运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。\n\n事件以标准 SSE 帧推送，每帧格式为::\n\n    event: <event_type>\n    data: <json 序列化后的 RuntimeEvent>\n\n其中 ``event_type`` 对应 ``RuntimeEvent`` 的种类（如 ``token``、\n``tool_call``、``step``、``status`` 等），``data`` 为该事件的 JSON 负载。\n相邻事件以空行 ``\\n\\n`` 分隔。\n\n参数:\n    turn_id: 来自路由的轮次标识。\n    runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。\n    turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。\n    stream_service: 通过依赖注入的轮次事件流编排 service（订阅/认领/驱动/发布/兜底）。\n\n返回:\n    发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到\n    轮次运行结束或客户端断开（断开即本轮结束，由运行时 ``run_turn`` 的断开兜底标 failed）。\n\n异常:\n    HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走\n        ``GET /tasks/{task_id}/turns``）时抛出。\n\n副作用:\n    仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由\n    ``_sse_frames`` 转换为 SSE 帧。不回放历史事件。",
         "operationId": "stream_turn_turns__turn_id__stream_get",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/turns/{turn_id}/events/stream": {
+      "get": {
+        "summary": "Subscribe Turn Events",
+        "description": "订阅已运行委派子轮次的实时事件。\n\n参数:\n    turn_id: 来自路由的子轮次标识。\n    turn_service: 用于读取轮次并校验其执行状态的领域 service。\n    stream_service: 通过依赖注入的轮次事件流编排 service（纯订阅转发）。\n\n返回:\n    ``text/event-stream`` 响应，仅转发此后实时发布到该 turn 的事件。\n\n异常:\n    HTTPException: turn 不存在时为 404；turn 已终态时为 409。\n\n副作用:\n    请求消费期间注册事件订阅；不认领 producer、不调用运行时，也不在断开时更新 turn 状态。",
+        "operationId": "subscribe_turn_events_turns__turn_id__events_stream_get",
         "parameters": [
           {
             "name": "turn_id",
@@ -426,10 +666,176 @@
         }
       }
     },
+    "/tasks/{task_id}/changes": {
+      "get": {
+        "summary": "Get Changes",
+        "description": "查询某 task 的累积文件变更集。\n\n参数:\n    task_id: 任务标识。\n    checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。\n    include_running: 是否纳入运行中（``stable=0``）变更；默认 True，使工具执行中\n        产生的变更可被实时展示与撤销。置 False 可回到「仅已稳定」的旧视图。\n\n返回:\n    ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当 checkpoint 不属于该 task 时。\n\n副作用:\n    只读查询。",
+        "operationId": "get_changes_tasks__task_id__changes_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "checkpoint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Checkpoint"
+            }
+          },
+          {
+            "name": "include_running",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Include Running"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/changes/keep": {
+      "post": {
+        "summary": "Keep Changes",
+        "description": "把一批文件的最新变更标记为「保留」。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。\n\n异常:\n    HTTPException(404): 当任一路径没有任何变更快照（含运行中）时。\n    HTTPException(409): 当某快照 ``status`` 已被并发改态（CAS miss，lost update 防护）时。\n\n副作用:\n    改写 ``file_snapshots`` 的 status。",
+        "operationId": "keep_changes_tasks__task_id__changes_keep_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeSetActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/changes/revert": {
+      "post": {
+        "summary": "Revert Changes",
+        "description": "撤销一批文件的最新变更，把它们还原到变更之前。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当任一路径没有任何变更快照时。\n    HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。\n    HTTPException(409): 当某快照 ``status`` 已被并发改态（CAS miss，lost update 防护）时。\n\n副作用:\n    修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at；\n    对每个成功撤销的文件广播 ``file_change_updated`` 事件。",
+        "operationId": "revert_changes_tasks__task_id__changes_revert_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeSetActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/logs/query": {
       "get": {
         "summary": "Query Logs",
-        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
+        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
         "operationId": "query_logs_logs_query_get",
         "parameters": [
           {
@@ -511,7 +917,7 @@
     "/logs/recent": {
       "get": {
         "summary": "Recent Logs",
-        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
+        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
         "operationId": "recent_logs_logs_recent_get",
         "parameters": [
           {
@@ -613,9 +1019,9 @@
             "type": "string",
             "title": "Role"
           },
-          "goal": {
+          "description": {
             "type": "string",
-            "title": "Goal"
+            "title": "Description"
           },
           "allowed_tools": {
             "items": {
@@ -623,10 +1029,6 @@
             },
             "type": "array",
             "title": "Allowed Tools"
-          },
-          "context_policy": {
-            "type": "string",
-            "title": "Context Policy"
           },
           "workflow": {
             "type": "string",
@@ -639,27 +1041,158 @@
           "max_steps": {
             "type": "integer",
             "title": "Max Steps"
+          },
+          "prompt_ref": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Ref"
           }
         },
         "type": "object",
         "required": [
           "agent_id",
           "role",
-          "goal",
+          "description",
           "allowed_tools",
-          "context_policy",
           "workflow",
           "model_name",
-          "max_steps"
+          "max_steps",
+          "prompt_ref"
         ],
         "title": "AgentProfileResponse",
-        "description": "校验并序列化单个已注册 agent 的元信息。\n\n字段与 ``AgentProfile.to_dict()`` 保持一致，供前端渲染 agent 选择器与说明。\n\n参数:\n    agent_id: 稳定的 Agent 标识。\n    role: 人类可读的 Agent 角色。\n    goal: 注入到模型上下文中的运行目标。\n    allowed_tools: 该 Agent 允许使用的工具名或权限名。\n    context_policy: 该 Agent 的上下文处理策略名称。\n    workflow: 该 Agent 使用的执行策略标识。\n    model_name: 该 Agent 使用的模型名称。\n    max_steps: 单轮最大执行步数。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化单个已注册 agent 的元信息。\n\n字段集与 ``AgentProfile.to_dict()`` 完全一致，供前端渲染 agent 选择器与说明；\n二者任一改动都必须同步（见分层约束）。``goal`` 字段已由 ``description`` 取代，\nAgent 的职责、能力、适用场景与约束统一收敛到 ``description`` 文本。\n\n参数:\n    agent_id: 稳定的 Agent 标识。\n    role: 人类可读的 Agent 角色。\n    description: 注入到模型上下文中的运行目标与职责描述（含能力/场景/约束，替代旧 ``goal``）。\n    allowed_tools: 该 Agent 允许使用的工具名或权限名。\n    workflow: 该 Agent 使用的执行策略标识。\n    model_name: 该 Agent 使用的模型名称。\n    max_steps: 单轮最大执行步数。\n    prompt_ref: 关联的 prompt 引用字典（第二部分接缝，可为 None）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "ChangeCheckpointResponse": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "turn_seq": {
+            "type": "integer",
+            "title": "Turn Seq"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "turn_seq",
+          "label"
+        ],
+        "title": "ChangeCheckpointResponse",
+        "description": "检查点响应项。"
+      },
+      "ChangeFileResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "last_tool_call_id": {
+            "type": "string",
+            "title": "Last Tool Call Id"
+          },
+          "last_turn_id": {
+            "type": "string",
+            "title": "Last Turn Id"
+          },
+          "additions": {
+            "type": "integer",
+            "title": "Additions"
+          },
+          "deletions": {
+            "type": "integer",
+            "title": "Deletions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "action",
+          "status",
+          "last_tool_call_id",
+          "last_turn_id",
+          "additions",
+          "deletions"
+        ],
+        "title": "ChangeFileResponse",
+        "description": "文件变更响应项。"
+      },
+      "ChangeSetActionRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paths"
+        ],
+        "title": "ChangeSetActionRequest",
+        "description": "对一批文件执行撤销或保留的请求体。\n\n参数:\n    paths: 相对 workspace 的文件路径列表，至少一项；长度为 1 即单文件操作。"
+      },
+      "ChangeSetResponse": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeCheckpointResponse"
+            },
+            "type": "array",
+            "title": "Checkpoints"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeFileResponse"
+            },
+            "type": "array",
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "checkpoints",
+          "files"
+        ],
+        "title": "ChangeSetResponse",
+        "description": "某 task 的累积变更集响应。"
       },
       "CreateTaskRequest": {
         "properties": {
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
           },
           "workspace_id": {
             "type": "string",
@@ -669,6 +1202,7 @@
         "type": "object",
         "required": [
           "text",
+          "agent_id",
           "workspace_id"
         ],
         "title": "CreateTaskRequest",
@@ -717,6 +1251,25 @@
         ],
         "title": "CreateWorkspaceRequest",
         "description": "校验工作区创建请求体。\n\n参数:\n    name: 非空的工作区名称。\n    root_path: 非空的工作区本地路径。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当名称或路径为空白时抛出。\n\n副作用:\n    无。"
+      },
+      "DeleteTaskResponse": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "deleted"
+        ],
+        "title": "DeleteTaskResponse",
+        "description": "校验并序列化任务删除结果响应。\n\n参数:\n    task_id: 被删除的任务标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "DeleteWorkspaceResponse": {
         "properties": {
@@ -905,6 +1458,72 @@
         "title": "LogQueryResponse",
         "description": "校验并序列化日志查询结果响应（与 ``LogQueryResult.to_dict()`` 对齐）。\n\n参数:\n    entries: 结构化日志记录列表。\n    text: 可直接展示的纯文本日志。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
+      "RuntimeEventResponse": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "payload": {
+            "type": "object",
+            "title": "Payload"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type",
+          "task_id",
+          "turn_id",
+          "sequence",
+          "payload",
+          "created_at"
+        ],
+        "title": "RuntimeEventResponse",
+        "description": "回放用运行时事件响应模型（与持久化事件字典对齐）。\n\n字段对齐 ``RuntimeEventCrud.list_by_task`` / ``list_by_turn`` 返回的事件字典，\n即可直接序列化回前端 ``RuntimeEvent``（思考 / 工具调用 / 状态变更）的回放帧。\n\n参数:\n    event_id: 唯一事件标识。\n    event_type: 稳定的机器可读事件类型字符串。\n    task_id: 关联任务标识。\n    turn_id: 关联轮次标识。\n    sequence: 事件在单次运行流内的排序号。\n    payload: 与 ``event_type`` 匹配的事件负载字典。\n    created_at: 事件创建时间的 UTC 文本。\n    message_id: 可选用户可读消息标识。\n    tool_call_id: 可选工具调用标识。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
       "TaskResponse": {
         "properties": {
           "task_id": {
@@ -1051,7 +1670,7 @@
           "updated_at"
         ],
         "title": "TurnResponse",
-        "description": "校验并序列化轮次状态响应（与 ``TurnRecord.to_dict()`` 对齐）。\n\n参数:\n    turn_id: 轮次标识。\n    task_id: 所属任务标识。\n    input_text: 本轮用户输入。\n    status: 轮次状态。\n    end_reason: 终态原因，可能为 None。\n    response_text: Agent 回复文本，可能为 None。\n    agent_id: 驱动该轮次的 agent 标识，可能为 None。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化轮次状态响应（与 ``TurnRecord`` 字段对齐）。\n\n参数:\n    turn_id: 轮次标识。\n    task_id: 所属任务标识。\n    input_text: 本轮用户输入。\n    status: 轮次状态。\n    end_reason: 终态原因，可能为 None。\n    response_text: Agent 回复文本，可能为 None。\n    agent_id: 驱动该轮次的 agent 标识，可能为 None。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ValidationError": {
         "properties": {
@@ -1085,6 +1704,56 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WorkspacePrepareResponse": {
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "title": "Workspace Id"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "action_taken": {
+            "type": "string",
+            "title": "Action Taken",
+            "default": "none"
+          },
+          "files_changed": {
+            "type": "integer",
+            "title": "Files Changed",
+            "default": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 0
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "ready",
+          "state"
+        ],
+        "title": "WorkspacePrepareResponse",
+        "description": "POST /workspaces/{workspace_id}/events/prepare 的响应。\n\n触发一次 workspace 准备（当前为 CodeGraph 索引就绪）并立即返回；\n准备进度经 ``GET /workspaces/{workspace_id}/events/stream`` SSE 推送。\n\n属性:\n    workspace_id: 触发准备的 workspace 标识。\n    ready: 即时快照中 Kernel 是否已就绪（True / False）。\n    state: 即时状态快照，取值 ``ready`` / ``failed`` / ``unavailable`` /\n        ``unreachable`` / ``timeout``；任何非 ``ready`` 值均表示未就绪，前端应\n        降级到文件搜索但任务可继续。同步阻塞路径下通常为 ``accepted`` 初值，\n        终态以 SSE 事件为准。\n    action_taken: 采取的动作（``init`` / ``sync`` / ``none``）。\n    files_changed: 索引变更文件数（ready 时有效）。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（非 ready 时有效；脱敏，不记录 secret）。"
       },
       "WorkspaceResponse": {
         "properties": {
