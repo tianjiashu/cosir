@@ -49,6 +49,18 @@ class Settings:
     TOOL_OBSERVATION_CONTEXT_LIMIT: ClassVar[int] = 4000
     MAX_CONTEXT_CHARS: ClassVar[int] = 20000
     MAX_TOOL_OUTPUT_CHARS: ClassVar[int] = 20000
+
+    # 面向用户的默认回复语言（如 zh / en）：作为全局配置，统一驱动系统提示词与运行时
+    # 上下文；需要本地化覆盖时经环境变量 ``CODING_AGENT_DEFAULT_LANGUAGE`` 注入。
+    DEFAULT_LANGUAGE: ClassVar[str] = "zh"
+
+    # 上下文窗口软上限（token）：上下文占用圆环 100% 基准的上限之一，与「模型最大窗口」
+    # 取 min 后作为实际上限（分母）。0 表示不设软上限，只用模型自身最大窗口。可由
+    # CODING_AGENT_CONTEXT_WINDOW_TOKENS 经环境变量覆盖（如 32000 以省成本/控延迟）。
+    CONTEXT_WINDOW_TOKENS: ClassVar[int] = 0
+    # 上下文占用重算的最小间隔（秒）：ContextUsageMeter 防抖，避免高频 add_message 触发全量
+    # 估算；该间隔内重复 read 命中缓存，超过则按脏标记重算。
+    CONTEXT_USAGE_MIN_INTERVAL_S: ClassVar[float] = 1.0
     WEB_SEARCH_BACKEND: ClassVar[str] = ""
     WEB_EXTRACT_BACKEND: ClassVar[str] = ""
     WEB_BACKEND: ClassVar[str] = ""
@@ -202,6 +214,10 @@ class Settings:
             raise ValueError("MAX_CONTEXT_CHARS must be greater than zero")
         if cls.MAX_TOOL_OUTPUT_CHARS < 1:
             raise ValueError("MAX_TOOL_OUTPUT_CHARS must be greater than zero")
+        if cls.CONTEXT_WINDOW_TOKENS < 0:
+            raise ValueError("CONTEXT_WINDOW_TOKENS must not be negative")
+        if cls.CONTEXT_USAGE_MIN_INTERVAL_S <= 0:
+            raise ValueError("CONTEXT_USAGE_MIN_INTERVAL_S must be greater than zero")
         if cls.LOG_QUEUE_SIZE < 1:
             raise ValueError("LOG_QUEUE_SIZE must be greater than zero")
         if cls.LOG_BATCH_SIZE < 1:
@@ -282,6 +298,15 @@ class Settings:
         cls.MAX_CONTEXT_CHARS = int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000"))
         cls.MAX_TOOL_OUTPUT_CHARS = int(
             os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")
+        )
+        cls.DEFAULT_LANGUAGE = (
+            os.environ.get("CODING_AGENT_DEFAULT_LANGUAGE", "zh").strip().lower()
+        )
+        cls.CONTEXT_WINDOW_TOKENS = int(
+            os.environ.get("CODING_AGENT_CONTEXT_WINDOW_TOKENS", "0")
+        )
+        cls.CONTEXT_USAGE_MIN_INTERVAL_S = float(
+            os.environ.get("CODING_AGENT_CONTEXT_USAGE_MIN_INTERVAL_S", "1.0")
         )
         cls.WEB_SEARCH_BACKEND = (
             os.environ.get("CODING_AGENT_WEB_SEARCH_BACKEND", "").strip().lower()
