@@ -12,12 +12,13 @@
  */
 
 import { useCallback, useRef } from "react";
-import type { RuntimeEvent } from "@shared/events";
+import type { ContextUsagePayload, RuntimeEvent } from "@shared/events";
 import type { TaskStatus } from "@shared/task";
 import type { TurnStatus } from "@shared/turn";
 import { useEventStore } from "../stores/eventStore";
 import { useTaskStore } from "../stores/taskStore";
 import { useTurnStore } from "../stores/turnStore";
+import { useContextUsageStore } from "../stores/contextUsageStore";
 import { SSEConnection, SSEConnectionState, type SSEErrorHandler } from "../services/sse";
 import { logError } from "../lib/logger";
 import { PerfTrace } from "../lib/perf";
@@ -67,6 +68,7 @@ export function useSSE(): UseSSEReturn {
   const updateTask = useTaskStore((s) => s.updateTask);
   const updateTurn = useTurnStore((s) => s.updateTurn);
   const setStreamingTurn = useTurnStore((s) => s.setStreamingTurn);
+  const setContextUsage = useContextUsageStore((s) => s.setUsage);
 
   // 保持对当前连接实例的引用，避免重复创建
   const connectionRef = useRef<SSEConnection | null>(null);
@@ -143,6 +145,11 @@ export function useSSE(): UseSSEReturn {
         appendEvents(batch);
         for (const event of batch) {
           syncRuntimeStatus(event, updateTask, updateTurn, setStreamingTurn);
+          // 上下文占用为「最新值覆盖」语义，随每帧 flush 的批量事件同步一次，
+          // 不进入事件历史流，避免 InputBar 因订阅全量事件而高频重渲染。
+          if (event.event_type === "context_usage") {
+            setContextUsage(event.payload as ContextUsagePayload, event.created_at);
+          }
         }
       };
       flushRef.current = flush;
@@ -171,6 +178,9 @@ export function useSSE(): UseSSEReturn {
         pendingEventsRef.current.push(event);
         scheduleFlush();
       };
+
+      // 切换 turn/连接时先清除上一个任务的上下文占用，避免圆环短暂显示陈旧值。
+      useContextUsageStore.getState().reset();
 
       const connection = new SSEConnection({
         taskId,
@@ -213,7 +223,7 @@ export function useSSE(): UseSSEReturn {
           // SSEConnection 已通过 onError、状态回写和内部日志记录错误，这里只负责避免未处理 Promise。
         });
     },
-    [appendEvents, setConnectionState, setStreamingTurn, updateTask, updateTurn],
+    [appendEvents, setConnectionState, setStreamingTurn, updateTask, updateTurn, setContextUsage],
   );
 
   /**

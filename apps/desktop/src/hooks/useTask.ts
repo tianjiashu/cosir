@@ -127,10 +127,7 @@ export function useTask(): UseTaskReturn {
           task_id: temporaryTaskId,
           workspace_id: workspaceId,
           agent_id: selectedAgentId,
-          input_text: text,
           title: text.slice(0, 80),
-          last_message_preview: text.slice(0, 80),
-          latest_turn_id: null,
           status: "pending",
           execution_status: "pending",
           created_at: now,
@@ -146,18 +143,11 @@ export function useTask(): UseTaskReturn {
         });
         const turns = await api.listTaskTurns(task.task_id);
         const firstTurn = turns[turns.length - 1] ?? null;
-        const taskWithResolvedTurn = firstTurn
-          ? {
-              ...task,
-              latest_turn_id: firstTurn.turn_id,
-              execution_status: firstTurn.status,
-            }
-          : task;
 
         // 同步到 store
-        replaceTask(temporaryTaskId, taskWithResolvedTurn);
+        replaceTask(temporaryTaskId, task);
         setTurnsForTask(task.task_id, turns);
-        setActiveTask(task.task_id, taskWithResolvedTurn.latest_turn_id);
+        setActiveTask(task.task_id, firstTurn?.turn_id ?? null);
         // 若该 workspace 尚未加载任务列表（未展开过），新任务不会被 replaceTask 写入分组
         // （store 为避免伪造加载态而对未加载分组拒收）。此处显式触发一次加载闭合路径，
         // 确保新建任务在分组中可见；已加载分组则 loadWorkspaceTasks 去重跳过。
@@ -165,10 +155,11 @@ export function useTask(): UseTaskReturn {
           void loadWorkspaceTasks(workspaceId);
         }
 
-        // 建立 SSE 连接开始接收事件流
-        if (taskWithResolvedTurn.latest_turn_id) {
-          setStreamingTurn(taskWithResolvedTurn.latest_turn_id);
-          await connect(task.task_id, taskWithResolvedTurn.latest_turn_id);
+        // 后端已在创建任务时同步建立首个 pending turn；用真实 turn_id 建立 SSE
+        // 连接，驱动该轮次运行（与现有 turn 运行模型一致）。
+        if (firstTurn) {
+          setStreamingTurn(firstTurn.turn_id);
+          await connect(task.task_id, firstTurn.turn_id);
         }
 
         setOperation({ loading: false, error: null, eventsError: null });
@@ -204,7 +195,7 @@ export function useTask(): UseTaskReturn {
    * @sideeffect
    * - 乐观：先 upsertTurn(临时 turn) + setActiveTurn(临时 id)，用户输入立即可见
    * - POST /tasks/{task_id}/turns 创建 pending turn，成功后 replaceTurnId 回写真实 turn
-   * - 更新 taskStore.activeTurnId / latest_turn_id / 任务预览
+   * - 更新 taskStore.activeTurnId / 任务执行态
    * - 连接 /turns/{turn_id}/stream（SSE 连接错误由 useSSE 内部 markFailed 处理，不会到达本 catch）
    * - 失败回滚：removeTurnId(临时 turn) + 复位 activeTurnId（仅覆盖 createTaskTurn 异常路径）
    */
@@ -246,8 +237,6 @@ export function useTask(): UseTaskReturn {
         replaceTurnId(activeTaskId, temporaryTurnId, turn);
         setActiveTurn(turn.turn_id);
         updateTask(activeTaskId, {
-          latest_turn_id: turn.turn_id,
-          last_message_preview: text.slice(0, 80),
           execution_status: turn.status,
         });
         setStreamingTurn(turn.turn_id);

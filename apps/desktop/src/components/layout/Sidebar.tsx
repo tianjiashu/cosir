@@ -311,7 +311,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
                           )}
                         >
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
-                          <span className="truncate">{task.title || task.last_message_preview}</span>
+                          <span className="truncate">{task.title}</span>
                         </button>
                         <button
                           title="删除任务"
@@ -417,7 +417,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
           >
             <h3 className="text-sm font-semibold text-foreground">删除任务</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              确定删除任务「{pendingDeleteTask.title || pendingDeleteTask.last_message_preview}」及其对话记录？此操作不可恢复。
+              确定删除任务「{pendingDeleteTask.title}」及其对话记录？此操作不可恢复。
             </p>
             {deleteTaskError && <p className="mt-2 text-xs text-destructive">{deleteTaskError}</p>}
             <div className="mt-4 flex justify-end gap-2">

@@ -89,17 +89,17 @@ function persistActiveTaskId(taskId: string | null): void {
  *
  * @param set - Zustand 的 set 函数。
  * @param taskId - 目标活跃任务 ID（可为 null 表示清空）。
- * @param turnId - 可选的目标活跃轮次 ID；缺省时按任务 latest_turn_id 推导。
+ * @param turnId - 可选的目标活跃轮次 ID；缺省时置为 null，真实轮次 ID 由调用方
+ *   （useTask）经 turnsByTask 显式设置。
  */
 function applyActiveTask(
   set: (partial: Partial<TaskState>) => void,
   taskId: string | null,
   turnId?: string | null,
 ): void {
-  const task = taskId ? useTaskStore.getState().tasksById[taskId] : undefined;
   set({
     activeTaskId: taskId,
-    activeTurnId: turnId ?? task?.latest_turn_id ?? null,
+    activeTurnId: turnId ?? null,
   });
   persistActiveTaskId(taskId);
 }
@@ -228,9 +228,10 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
       }
       return partial;
     });
-    // 若尚无活跃任务，新任务自动成为活跃任务；经统一入口同步持久化。
+    // 若尚无活跃任务，新任务自动成为活跃任务；活跃轮次由调用方（useTask）
+    // 经 turnsByTask 显式设置，此处不持有任务级 turn 推导。
     if (!get().activeTaskId) {
-      applyActiveTask(set, task.task_id, task.latest_turn_id);
+      applyActiveTask(set, task.task_id, null);
     }
   },
 
@@ -255,8 +256,9 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
     });
     // 临时任务转正：活跃 ID 从 temp-x 变为真实 ID 时，必须同步持久化，
     // 否则新建任务重启后无法恢复（与 setActiveTask 共用同一不变式出口）。
+    // 真实轮次 ID 由调用方（useTask）显式经 setActiveTask 设置，此处传 null。
     if (get().activeTaskId === temporaryTaskId) {
-      applyActiveTask(set, task.task_id, task.latest_turn_id ?? null);
+      applyActiveTask(set, task.task_id, null);
     }
   },
 

@@ -64,7 +64,7 @@ export function TopBar() {
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <span className="text-lg">📋</span>
         <span className="truncate text-sm font-medium">
-          {activeTask?.title ?? activeTask?.last_message_preview ?? "未选择任务"}
+          {activeTask?.title ?? "未选择任务"}
         </span>
       </div>
 

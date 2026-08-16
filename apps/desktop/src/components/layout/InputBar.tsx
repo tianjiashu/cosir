@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentSelector } from "@/components/chat/AgentSelector";
+import { ContextUsageRing } from "@/components/chat/ContextUsageRing";
 import { logInfo, logError } from "@/lib/logger";
 import { useTask } from "@/hooks/useTask";
 import { useTaskStore } from "@/stores/taskStore";
@@ -193,6 +194,11 @@ export function InputBar() {
             <Send className="h-4 w-4" />
           </Button>
         )}
+      </div>
+
+      {/* 上下文占用状态栏：圆环 + token 计数，反映当前任务上下文窗口余量 */}
+      <div className="mx-auto mt-1.5 flex max-w-content items-center justify-start">
+        <ContextUsageRing />
       </div>
 
     </div>

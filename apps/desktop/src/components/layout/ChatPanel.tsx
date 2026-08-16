@@ -136,9 +136,9 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
       candidateTurns = turns;
     } else if (activeTask) {
       const fallbackTurn: TurnRecord = {
-        turn_id: activeTask.latest_turn_id ?? activeTask.task_id,
+        turn_id: activeTask.task_id,
         task_id: activeTask.task_id,
-        input_text: activeTask.input_text,
+        input_text: "",
         status: "pending",
         end_reason: null,
         response_text: null,
