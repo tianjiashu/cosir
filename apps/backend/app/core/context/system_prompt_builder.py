@@ -1,9 +1,10 @@
-"""构建面向模型的中文系统提示词。"""
+"""构建面向模型的系统提示词。"""
 
 from datetime import date
 from pathlib import Path
 from platform import system
 
+from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.utils.file_utils import read_text_file
 
@@ -28,7 +29,7 @@ class SystemPromptBuilder:
             workspace_root: 当前工作区根目录。
 
         返回:
-            由固定 section 顺序拼接出的中文系统提示词。
+            由固定 section 顺序拼接出的系统提示词；回复语言取自 ``Settings.DEFAULT_LANGUAGE``。
 
         异常:
             无。
@@ -36,7 +37,7 @@ class SystemPromptBuilder:
         副作用:
             无。
         """
-        language = "zh"
+        language = Settings.DEFAULT_LANGUAGE
         coding_rule_dir = _default_coding_rule_dir()
 
         sections = [

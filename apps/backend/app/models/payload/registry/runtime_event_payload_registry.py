@@ -5,6 +5,7 @@
 from collections.abc import Mapping
 
 from app.models.enums.event_type import EventType
+from app.models.payload.context_usage_payload import ContextUsagePayload
 from app.models.payload.delegation_cancelled_payload import DelegationCancelledPayload
 from app.models.payload.delegation_child_started_payload import DelegationChildStartedPayload
 from app.models.payload.delegation_failed_payload import DelegationFailedPayload
@@ -66,4 +67,5 @@ EVENT_PAYLOAD_MODELS: Mapping[EventType, type[RuntimeEventPayload]] = {
     EventType.OBSERVATION_ADDED: ObservationAddedPayload,  # 未消费：前端未渲染 observation
     EventType.HUMAN_INPUT_REQUESTED: HumanInputRequestedPayload,  # 未消费：Human-in-Loop 预留，暂无前端处理
     EventType.HUMAN_INPUT_RECEIVED: HumanInputReceivedPayload,  # 未消费：Human-in-Loop 预留，暂无前端处理
+    EventType.CONTEXT_USAGE: ContextUsagePayload,  # 未消费前端语义投影：InputBar 订阅渲染上下文圆环
 }

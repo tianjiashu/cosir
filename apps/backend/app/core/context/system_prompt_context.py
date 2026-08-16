@@ -5,6 +5,8 @@ from datetime import date
 from pathlib import Path
 from platform import system
 
+from app.config.settings import Settings
+
 
 def _default_coding_rule_dir() -> str:
     """返回默认编码规则的绝对路径。"""
@@ -33,7 +35,7 @@ class SystemPromptContext:
     os_name: str
     workspace_root: str
     today: str
-    language: str = "zh"
+    language: str = Settings.DEFAULT_LANGUAGE
     coding_rule_dir: str = field(default_factory=_default_coding_rule_dir)
 
     @classmethod

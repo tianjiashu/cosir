@@ -37,7 +37,6 @@ def _make_profile(allowed_tools=None, prompt_ref=None, **overrides) -> AgentProf
         "agent_id": "test_agent",
         "role": "test-role",
         "description": "test description",
-        "context_policy": "text_only_v1",
         "prompt_ref": prompt_ref,
     }
     base.update(overrides)
@@ -91,7 +90,6 @@ def test_agent_profile_rejects_goal_keyword_on_construction():
             role="x",
             description="x",
             allowed_tools=[],
-            context_policy="text_only_v1",
             goal="legacy goal",
         )
 
@@ -190,7 +188,6 @@ def test_to_dict_excludes_split_fields_and_goal():
         "role",
         "description",
         "allowed_tools",
-        "context_policy",
         "workflow",
         "model_name",
         "max_steps",

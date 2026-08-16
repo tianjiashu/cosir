@@ -7,14 +7,13 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-import sqlalchemy
-
 from app.config.logging.logger import log
 from app.core.runtime.turn_cancellation_registry import cancellation_registry
 from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
 from app.models.enums.event_type import EventType
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.service.depends import get_runtime_event_bus, get_turn_service
+from app.service.turn_runtime_message_store import TurnRuntimeMessageStore
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
@@ -24,6 +23,7 @@ from app.tools.tool_execute.tool_scheduler import ToolScheduler
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
+    from app.core.context.runtime_message_store import RuntimeMessageStore
 
 
 class RuntimeOperations:
@@ -72,11 +72,16 @@ class RuntimeOperations:
             无。
 
         副作用:
-            构造 ``ToolExecutionService``、存储执行上下文、初始化本 turn 逐条落库
-            序号计数器（``_message_sequence = 0``）、记初始化日志。
+            构造 ``ToolExecutionService``、存储执行上下文、构造消息持久化端口
+            （``TurnRuntimeMessageStore``，经 ``message_store`` 属性暴露给 workflow）、
+            记初始化日志。
         """
 
         self._turn_service = get_turn_service()
+        # 消息持久化端口（service 层适配实现）：暴露给 workflow 供 RuntimeContextManager
+        # 注入，使 manager 成为消息读写的唯一事实源。原 append_runtime_message /
+        # reset_message_sequence 逐条落库逻辑退役，改由 manager 经本端口落库。
+        self._message_store = TurnRuntimeMessageStore(self._turn_service)
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
@@ -87,11 +92,6 @@ class RuntimeOperations:
             if execution_context is not None and runtime_dependencies is not None
             else execution_context
         )
-        # 本 turn 内逐条落库的序号计数器；operations 每 turn 新建，天然随 turn 重置。
-        # 注意：审批 interrupt()/Command(resume=) 在 graph 节点内就地恢复，不会重新走
-        # run_agent 入口，因此不会重置本计数器——重置仅发生在「从头重跑整个 turn」场景，
-        # 该场景下清掉上一轮残留并重新编号是预期的幂等行为。
-        self._message_sequence = 0
         self._tool_service = ToolExecutionService(
             scheduler=tool_scheduler,
             agent_id=agent_profile.agent_id,
@@ -139,120 +139,19 @@ class RuntimeOperations:
 
         return self._current_workspace
 
-    def reset_message_sequence(self) -> None:
-        """清空当前 turn 的消息轨迹并将逐条落库序号归零（turn 开始执行时调用，保证幂等）。
-
-        配合 ``append_runtime_message`` 使用：turn 启动先调用本方法清空当前 turn 在
-        ``turn_messages`` 表的全部残留并复位序号，之后每条消息经 ``append_runtime_message``
-        自增序号落库；历史 turn 因按 ``turn_id`` 隔离不受影响，跨轮拼装仍由
-        ``RuntimeContext.load_for_task`` 从各 turn 读取实现。
-
-        参数:
-            无。
+    @property
+    def message_store(self) -> RuntimeMessageStore:
+        """返回本 turn 的消息持久化端口（供 workflow 注入 ``RuntimeContextManager``）。
 
         返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果清理失败（由底层 CRUD 透传）。
-
-        副作用:
-            删除当前 turn 在 ``turn_messages`` 表的全部行；``_message_sequence`` 归零。
+            ``TurnRuntimeMessageStore`` 适配实例，承载 ``turn_messages`` 读写的依赖倒置端口。
         """
-
-        if not self._current_turn:
-            log.warning(
-                "runtime_message_reset_skipped_no_turn",
-                extra={"msg": "reset_message_sequence ignored: no bound current_turn"},
-            )
-            return
-        try:
-            self._turn_service.clear_turn_messages(self._current_turn.turn_id)
-        except sqlalchemy.exc.SQLAlchemyError:
-            log.exception(
-                "runtime_message_reset_failed",
-                extra={
-                    "msg": "failed to clear turn messages before sequence reset",
-                    "data": {"turn_id": self._current_turn.turn_id},
-                },
-            )
-            raise
-        self._message_sequence = 0
-
-    def append_runtime_message(self, message: RuntimeMessage) -> None:
-        """逐条持久化一条运行时消息（替代 turn 结束后的批覆盖写入）。
-
-        落库序号由门面内部自增维护，调用方无需关心 ``sequence``；单条写入使每条消息在
-        产生时即落库，turn 中途失败也能保留已产生的轨迹。消息落库经 ``self._turn_store``
-        门面转交 storage 层，core 不直接接触 storage（分层约束：core → service → storage）；
-        工作流节点只调用本方法，不直接接触存储层。
-
-        参数:
-            message: 单条模型无关的运行时消息；本轮生命周期内依次落库的是用户提问
-                （``role="user"``，在 turn 启动时写入）、模型回复（``role="assistant"``，
-                含 ``tool_calls``）、工具观察（``role="tool"``）。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果写入失败（捕获后写 error 日志并重新抛出）。
-
-        副作用:
-            当前 turn 在 ``turn_messages`` 表追加一行；``_message_sequence`` 自增。
-        """
-
-        if not self._current_turn:
-            log.warning(
-                "runtime_message_append_skipped_no_turn",
-                extra={
-                    "msg": "append_runtime_message ignored: no bound current_turn",
-                    "data": {"role": message.role},
-                },
-            )
-            return
-        try:
-            self._turn_service.append_turn_message(
-                self._current_turn.turn_id, message, self._message_sequence
-            )
-        except sqlalchemy.exc.SQLAlchemyError:
-            log.exception(
-                "runtime_message_append_failed",
-                extra={
-                    "msg": "failed to persist runtime message incrementally",
-                    "data": {
-                        "turn_id": self._current_turn.turn_id,
-                        "sequence": self._message_sequence,
-                        "role": message.role,
-                    },
-                },
-            )
-            raise
-        log.debug(
-            "runtime_message_appended",
-            extra={
-                "msg": f"单条运行时消息已落库，turn_id={self._current_turn.turn_id} "
-                f"sequence={self._message_sequence} role={message.role}",
-                "data": {
-                    "turn_id": self._current_turn.turn_id,
-                    "sequence": self._message_sequence,
-                    "role": message.role,
-                },
-            },
-        )
-        self._message_sequence += 1
+        return self._message_store
 
     def has_turn_status(self, turn_id: str, status: str) -> bool:
         """Return whether a turn currently has the requested status."""
 
         has = self._turn_service.has_turn_status(turn_id, status)
-        log.debug(
-            "turn_status_checked",
-            extra={
-                "msg": f"检查 turn_id={turn_id} 是否处于 {status} 状态：{has}",
-                "data": {"turn_id": turn_id, "status": status, "has_status": has},
-            },
-        )
         return has
 
     def is_current_turn_cancelled(self) -> bool:

@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessageChunk, BaseMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END
 
@@ -96,6 +96,9 @@ class _FakeRuntimeContext:
         """
 
         self.messages: list[BaseMessage] = []
+        # 与真实 RuntimeContextManager 对齐：未挂载计量器时为 None，_emit_context_usage
+        # 会静默跳过（预期路径）。
+        self.usage_meter: Any = None
 
     def load_message(self) -> list[BaseMessage]:
         """返回当前消息列表拷贝。
@@ -115,11 +118,20 @@ class _FakeRuntimeContext:
 
         return list(self.messages)
 
-    def add_message(self, message: BaseMessage) -> None:
+    def add_message(
+        self,
+        message: BaseMessage | RuntimeMessage | str,
+        *,
+        persist: bool = True,
+        write_memory: bool = True,
+    ) -> None:
         """追加一条消息到上下文末端。
 
         参数:
-            message: 待追加的 LangChain 消息。
+            message: 待追加的消息（``BaseMessage`` / ``RuntimeMessage`` / ``str``，
+                与真实 ``RuntimeContextManager.add_message`` 联合类型对齐）。
+            persist: 兼容真实签名；测试替身不落库，被忽略。
+            write_memory: 兼容真实签名；测试替身不写内存时序，被忽略。
 
         返回:
             无。
@@ -128,10 +140,16 @@ class _FakeRuntimeContext:
             无。
 
         副作用:
-            修改内部 ``messages``。
+            修改内部 ``messages``。断言只依赖 SystemMessage 内容，其余形态归一为
+            ``HumanMessage`` 承载即可。
         """
 
-        self.messages.append(message)
+        if isinstance(message, BaseMessage):
+            self.messages.append(message)
+        else:
+            self.messages.append(
+                HumanMessage(content=str(getattr(message, "content_text", message)))
+            )
 
     def system_message_contents(self) -> list[str]:
         """抽取已写入的 SystemMessage 文本。

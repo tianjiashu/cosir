@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from app.core.agents.prompt_ref import PromptRef
 from app.core.llm.model_settings import ModelSettings
-from app.models import TurnRecord
+from app.models import TurnRecord, TaskRecord
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
@@ -53,12 +53,10 @@ class AgentProfile:
             ``constraints`` 等分散字段）。在 delegate_task 中暴露给父 Agent。
         can_delegated: 是否允许被委派为子 Agent。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
-        context_policy: 该 Agent 的上下文处理策略名称。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
         model_name: 该 Agent 使用的模型名称。
         model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
         turn: 该 Agent 当前所属 turn 记录（运行时注入，可为 None）。
-        context_excluded_turn_ids: 构建上下文时需排除的 turn id 元组。
         runtime_event_loop: 运行时事件循环（可为 None）。
         prompt_ref: 关联的 prompt 引用（第二部分接缝，第一部分不消费）；可为 None。
 
@@ -76,13 +74,12 @@ class AgentProfile:
     role: str
     description: str
     allowed_tools: list[str]
-    context_policy: str
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     model_name: str = "deepseek-v4-flash"
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     max_steps: int = 1000
     turn: TurnRecord | None = None
-    context_excluded_turn_ids: tuple[str, ...] = ()
+    main_agent: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     prompt_ref: PromptRef | None = None
 
@@ -157,7 +154,6 @@ class AgentProfile:
             "role": self.role,
             "description": self.description,
             "allowed_tools": self.allowed_tools,
-            "context_policy": self.context_policy,
             "workflow": getattr(self.workflow, "workflow_id", "custom"),
             "model_name": self.model_name,
             "max_steps": self.max_steps,

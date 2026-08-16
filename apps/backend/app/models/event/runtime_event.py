@@ -20,6 +20,7 @@ class RuntimeEvent:
         tool_call_id: 可选的工具调用标识符。
         payload: 与 ``event_type`` 匹配的 payload 实体。
         event_id: 唯一的事件标识符。
+        is_main_agent: 是否为主 Agent发出的事件。
         created_at: 事件创建时的 UTC 时间戳。
 
     返回:
@@ -40,6 +41,7 @@ class RuntimeEvent:
         必须先补对应 payload model，再重新生成前端 TypeScript 类型。
     """
 
+
     event_type: EventType
     task_id: str
     payload: RuntimeEventPayload
@@ -48,6 +50,7 @@ class RuntimeEvent:
     message_id: str | None = None
     tool_call_id: str | None = None
     event_id: str = field(default_factory=lambda: str(uuid4()))
+    is_main_agent: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:

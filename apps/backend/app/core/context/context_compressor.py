@@ -3,6 +3,9 @@ from langchain_core.messages import (
     BaseMessage,
 )
 
+from app.models import RuntimeMessage
+
+
 class ContextCompressor(Protocol):
     """上下文压缩器协议（预留扩展点，暂不实现具体算法）。
 
@@ -14,7 +17,7 @@ class ContextCompressor(Protocol):
         compact: 将输入消息列表压缩为等价但更短的列表。
     """
 
-    def compact(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+    def compact(self, messages: list[RuntimeMessage]) -> list[RuntimeMessage]:
         """将消息列表压缩为更短的等价列表。
 
         参数:

@@ -18,16 +18,19 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.config.logging.logger import log
+from app.core.llm.context_window_resolver import resolve_context_window
 from app.core.llm.factory import build_chat_model
 from app.core.llm.langchain_bridge import model_tools_to_langchain
 from app.core.runtime.checkpointer import build_checkpointer
+from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
-from ...context.runtime_context import RuntimeContext
+from ...context.context_usage_meter import ContextUsageMeter
+from ...context.runtime_context_manager import RuntimeContextManager
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_observe, _after_tools, _should_continue
@@ -46,8 +49,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     workflow_id = "react_like_v1"
 
     def __init__(
-        self,
-        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+            self,
+            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化 ReAct-like 工作流。
 
@@ -96,10 +99,10 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-        self,
-        operations: RuntimeOperations,
-        callbacks: list | None = None,
-        langfuse_trace_id: str | None = None,
+            self,
+            operations: RuntimeOperations,
+            callbacks: list | None = None,
+            langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -163,12 +166,38 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
         current_task = operations.get_current_task()
         current_workspace = operations.get_current_workspace()
-        # 按 task 加载历史消息，构造 task 级运行时上下文（构造本身不含 I/O）。
-        runtime_context = RuntimeContext.load_for_task(
+        # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
+        # 读写的唯一入口。时序：先清空本 turn 残留 → 落 user 基线（add_message
+        # write_memory=False 只落库不写内存）→ 读回完整历史（含刚落的 user 基线）→
+        # 挂载占用计量器。
+        runtime_context_manager = RuntimeContextManager(
             agent_profile=agent_profile,
             workspace_root=current_workspace.root_path,
             task_id=current_task.task_id,
-            excluded_turn_ids=agent_profile.context_excluded_turn_ids,
+            store=operations.message_store,
+            current_turn_id=turn_id,
+        )
+        runtime_context_manager.reset_message_sequence()
+        # turn 启动基线：仅落库当前用户输入，不重复写内存（load_history 会从库统一加载，
+        # 避免同一用户消息在内存中出现两次）。
+        runtime_context_manager.add_message(
+            RuntimeMessage(role="user", content_text=turn.input_text), write_memory=False
+        )
+        # 委派改造后 child 运行在独立子任务下，load_history 天然只看到自己的消息，
+        # 不再需要排除父任务其它轮次的 hack。
+        runtime_context_manager.load_history()
+        # 挂载上下文占用计量器：随消息变化本地估算当前窗口 token 占用，不依赖模型
+        # usage_metadata（turn 取消也不丢）。实际上限 = min(模型最大窗口, 模型覆盖窗口,
+        # 全局软上限)；软上限为 0 表示不设限。
+        # 子 Agent（委派 child turn，parent_turn_id 非空）不统计上下文圆环：其上下文占用
+        # 对用户无直觉价值且会与父 turn 圆环产生视觉歧义，故跳过挂载，meter 保持 None，
+        # model_node._emit_context_usage 会静默不发 CONTEXT_USAGE 事件。
+        runtime_context_manager.attach_usage_meter(
+            ContextUsageMeter(
+                message_provider=runtime_context_manager.load_message,
+                model_name_provider=lambda: agent_profile.model_name,
+                total_tokens_provider=lambda: resolve_context_window(agent_profile.model_name),
+            )
         )
 
         config = {
@@ -177,7 +206,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 "runtime_config": runtime_config,
                 # 与 runtime_config 同口径：经 config 注入 task 上下文，
                 # 不进入 graph state，避免非 list 对象被 _add_messages reducer 错误处理。
-                "runtime_context": runtime_context,
+                "runtime_context": runtime_context_manager,
             },
             # LangChain callbacks（如 Langfuse CallbackHandler）经此注入模型调用追踪；
             # 缺省空列表不影响既有行为。
@@ -190,7 +219,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 step_count=0,
                 tool_error_count=0,
                 requested_tool=False,
-                repair_requested="false",
+                repair_requested=False,
                 continuation_error_data=None,
                 final_response=False,
                 terminal=False,
@@ -204,9 +233,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             while True:
                 try:
                     async for mode, data in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["custom"],
+                            input_state,
+                            config,
+                            stream_mode=["custom"],
                     ):
                         if mode != "custom":
                             continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）
@@ -221,6 +250,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                             turn_id=turn_id,
                             sequence=sequence,
                             payload=payload,
+                            is_main_agent=agent_profile.main_agent,
                         )
                         log.info(
                             "workflow_graph_event",

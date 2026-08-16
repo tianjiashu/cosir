@@ -10,7 +10,8 @@
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_files`` 调用）。此时文本**不计入最终
 回复**（最终回复只来自纯文本分支的 ``FINAL_RESPONSE``），但模型这段说明并非丢弃——
-它会经 ``MODEL_OUTPUT_DELTA`` 流式推给前端、经 ``_ai_to_runtime_message`` 落库进历史上下文，
+它会经 ``MODEL_OUTPUT_DELTA`` 流式推给前端、经 ``RuntimeContextManager.add_message``
+    落库进历史上下文，
 并在进入工具分支时作为 ``instruction`` 键随 ``pending_tool_calls`` 下传给 ``tools`` /
 ``observe`` 节点，使下游执行与错误排查能看到模型当时的意图。
 
@@ -27,9 +28,9 @@ from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.llm.langchain_bridge import tool_calls_from_langchain
-from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import (
+    ContextUsagePayload,
     FinalResponsePayload,
     ModelOutputDeltaPayload,
     ModelRequestedPayload,
@@ -50,6 +51,44 @@ from .common import (
     write_event,
 )
 from .model_tool_helper import InvalidToolOutcome, ModelToolHelper
+
+
+def _emit_context_usage(step_id: str) -> None:
+    """发出当前上下文窗口 token 占用事件（输入侧本地估算）。
+
+    参数:
+        step_id: 当前模型步唯一标识，用于事件关联与排查。
+
+    返回:
+        无。
+
+    异常:
+        无（计量器未挂载或估算失败时记日志，不中断模型节点主流程）。
+
+    副作用:
+        经 ``write_event`` 写入一条 ``EventType.CONTEXT_USAGE`` 事件。
+
+    说明:
+        ``meter is None`` 是预期路径而非异常：计量器仅在 ReactLikeWorkflow 挂载，非 ReAct
+        路径或测试构造的 RuntimeContext 不挂，此时静默跳过、不报错。估算失败用 ``log.exception``
+        保留堆栈以便排查本地估算逻辑缺陷，但绝不抛向上层导致模型调用中断。
+    """
+    runtime_context = _runtime_context()
+    meter = runtime_context.usage_meter
+    if meter is None:
+        return
+    try:
+        usage = meter.read(force=True)
+    except Exception:
+        log.exception(
+            "context_usage_meter_failed",
+            extra={"msg": "上下文估算失败，跳过事件", "data": {"step_id": step_id}},
+        )
+        return
+    write_event(
+        EventType.CONTEXT_USAGE,
+        ContextUsagePayload(used_tokens=usage.used_tokens, total_tokens=usage.total_tokens),
+    )
 
 
 def _redact_invalid_tool_calls_for_log(raw_list: list[Any]) -> list[Any]:
@@ -129,40 +168,6 @@ def _has_content(message: AIMessage) -> bool:
         return True  # 有文本即视为有效
     tool_calls = getattr(message, "tool_calls", None)
     return bool(tool_calls)  # 有工具调用也视为有效
-
-
-def _ai_to_runtime_message(ai_message: "AIMessage") -> RuntimeMessage:
-    """把合并后的 ``AIMessage`` 转为内部 ``RuntimeMessage`` 以供增量落库。
-
-    参数:
-        ai_message: 模型节点合并产出、待写入 graph state 的 ``AIMessage``。
-
-    返回:
-        与模型无关的 ``RuntimeMessage``：``metadata`` 中以 **JSON 字符串** 承载
-        ``tool_calls``（键 ``tool_calls``），与
-        :meth:`app.core.context.runtime_context.RuntimeContext._tool_calls_from_metadata`
-        的反序列化契约严格对齐（读取端 ``json.loads``，故此处必须存字符串而非 list）。
-        无工具调用时不写入该键。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    tool_calls = [
-        {"name": call.get("name"), "args": call.get("args", {}), "id": call.get("id")}
-        for call in (ai_message.tool_calls or [])
-    ]
-    metadata: dict[str, Any] = (
-        {"tool_calls": json.dumps(tool_calls, ensure_ascii=False)} if tool_calls else {}
-    )
-    return RuntimeMessage(
-        role="assistant",
-        content_text=_extract_text(ai_message.content),
-        metadata=metadata,
-    )
 
 
 def _invalid_tool_calls_from_chunks(chunks: list[AIMessageChunk]) -> list[dict[str, Any]]:
@@ -392,7 +397,8 @@ def _collect_chunk_to_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
     additional.pop("reasoning_content", None)
     # content 统一抽纯文本：防御 DeepSeek 偶发把工具调用 block 带进 content list 的形态，
-    # 与 _ai_to_runtime_message 落库口径保持一致，避免回灌模型时重复携带工具结构。
+    # 与 RuntimeContextManager._to_runtime_message 落库口径保持一致，
+    # 避免回灌模型时重复携带工具结构。
     return AIMessage(
         content=_extract_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
         tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
@@ -447,9 +453,10 @@ async def _model_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）。
 
     副作用:
-        - 经 ``operations.append_runtime_message`` 把本轮 ``AIMessage`` 逐条增量落库；
-        - 同步 ``_runtime_context().add_message`` 写回运行时上下文，使下一轮模型节点
-          经 ``load_message()`` 能累积看到本轮输出（否则上下文不增长会陷入死循环）；
+        - 经 ``_runtime_context().add_message`` 把本轮 ``AIMessage`` 逐条增量落库并写回内存
+          （``RuntimeContextManager`` 唯一写入入口）；
+        - 同步写回运行时上下文，使下一轮模型节点经 ``load_message()`` 能累积看到本轮输出
+          （否则上下文不增长会陷入死循环）；
         - 流式 token / 事件经 ``get_stream_writer`` 透传；状态写入 ``turn``；
         - 失败终态（``max_steps_reached`` / ``invalid_model_output``）的 ``RUN_FAILED`` 事件携带
           ``usage`` token 摘要（可排查本轮已消耗 token）；取消分支不发终态事件，改以 warning 日志
@@ -508,6 +515,9 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
+    # 上下文窗口占用：在上下文稳定后（load_message 已归一化）立即按本地估算发出，
+    # 数据来自 RuntimeContext.messages，不依赖模型 usage_metadata，turn 取消也不丢。
+    _emit_context_usage(step_id=step_id)
     # 步开始
     write_event(
         EventType.STEP_STARTED,
@@ -546,6 +556,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     chunks: list[AIMessageChunk] = []  # 累积流式分块（合并出结构化 AIMessage）
     chunk_index = 0  # 流式 chunk 序号（从 0 开始）
     terminal = False  # 是否因取消而提前终止
+
+    log.info(
+        "model_node_model_requested",
+        extra={
+            "msg": f"模型节点请求模型，step_id={step_id}",
+            "data": {"messages": [m.model_dump() for m in messages]},
+        },
+    )
 
     # 真正流式调用模型，messages 为历史+系统上下文（来自 RuntimeContext，不进 state）。
     async for chunk in model.astream(messages):
@@ -639,8 +657,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
         available_tool_names = {tool.name for tool in operations.model_tools}
         result = ModelToolHelper.decide_invalid_tool_handling(
-            invalid_tool_calls=invalid_tool_calls,
-            available_tool_names=available_tool_names
+            invalid_tool_calls=invalid_tool_calls, available_tool_names=available_tool_names
         )
 
         if result[InvalidToolOutcome.IGNORE]:
@@ -709,6 +726,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                         },
                     },
                 )
+                # 崩溃可恢复性，需要落库修复提示
                 _runtime_context().add_message(SystemMessage(content=repair_message))
                 return {
                     "step_count": step_count,
@@ -720,13 +738,12 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "continuation_error_data": None,
                 }
 
-    # 逐条持久化本轮产生的 assistant 消息（替代 turn 结束后的批落库）。
+    # 逐条持久化本轮产生的 assistant 消息（统一经 manager.add_message 落库+写内存）。
     # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。
     if _has_content(ai_message):
-        operations.append_runtime_message(_ai_to_runtime_message(ai_message))
-        # 同步写回运行时上下文，使下一模型步经 _runtime_context().load_message()
-        # 能读到本轮累积的 assistant 消息，否则模型每步都看到不变的首轮快照，
-        # 会陷入「相同上下文→相同输出」的死循环。
+        # 唯一写入入口：manager 先转 RuntimeMessage 落库（persist=True 默认），成功后再
+        # 写回内存，使下一模型步经 _runtime_context().load_message() 能读到本轮累积的
+        # assistant 消息，否则模型每步都看到不变的首轮快照会陷入「相同上下文→相同输出」死循环。
         _runtime_context().add_message(ai_message)
     output_text = "".join(collected_text).strip()  # 拼接文本并去首尾空白
     # requested_tool 已在上方 invalid_tool_calls 消费前计算（供 REPAIR 块分流），

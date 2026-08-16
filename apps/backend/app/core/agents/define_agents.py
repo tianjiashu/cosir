@@ -79,7 +79,6 @@ def developer_agent() -> AgentProfile:
         role="developer_agent",
         description="协助用户完成软件工程项目开发任务",
         allowed_tools=_resolve_all_tool_names(),
-        context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
@@ -116,7 +115,6 @@ def developer_agent_pro() -> AgentProfile:
         role="coding-agent-pro",
         description="协助用户完成软件工程项目开发任务",
         allowed_tools=_resolve_all_tool_names(),
-        context_policy="text_only_v1",
         model_name="deepseek-v4-pro",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
@@ -159,7 +157,6 @@ def reviewer_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
@@ -203,7 +200,6 @@ def analyst_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
@@ -233,7 +229,6 @@ def test_agent() -> AgentProfile:
         role="delegate-tester",
         description="只做代码测试，指出问题、风险和遗漏；不修改代码，不运行测试。",
         allowed_tools=_resolve_all_tool_names(),
-        context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",
@@ -282,7 +277,6 @@ def coder_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        context_policy="text_only_v1",
         model_name="deepseek-v4-flash",
         model_settings=ModelSettings(
             base_url="https://api.deepseek.com",

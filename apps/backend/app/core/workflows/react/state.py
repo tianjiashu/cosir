@@ -65,7 +65,7 @@ class ReactGraphState(BaseModel):
             写入结构化明细（Task 2 落地）。**消费方**：``max_steps_node``（读取后并入
             ``RUN_FAILED`` 事件的 ``data``）。**持久化**：是（进入 checkpoint）。
     """
-    repair_requested: str
+    repair_requested: bool
     step_count: int
     tool_error_count: int
     requested_tool: bool

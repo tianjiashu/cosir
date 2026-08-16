@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import types
@@ -18,40 +19,45 @@ from langchain_core.messages import (
 )
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_compressor import ContextCompressor
 from app.core.context.context_usage_meter import ContextUsageMeter
-from app.core.llm.langchain_bridge import (
-    sanitize_assistant_messages,
-    tool_calls_from_metadata,
-)
 from app.models import RuntimeMessage
 
 if TYPE_CHECKING:
     from app.core.context.runtime_message_store import RuntimeMessageStore
 
 
-def _extract_text(content: Any) -> str:
-    """从 LangChain 消息 content 中提取纯文本分片。
+def _tool_calls_from_metadata(raw: str | None) -> list[dict[str, Any]]:
+    """从 ``RuntimeMessage.metadata`` 的 JSON 字符串还原 assistant 的 tool_calls。
+
+    ``workflows/react/nodes._ai_to_runtime_message`` 把 langchain ``tool_calls`` 序列化为
+        JSON 字符串存入 ``metadata``，此处反序列化回 ``list[dict]`` 供 ``AIMessage`` 重建使用。
+        同时是 ``RuntimeMessage → BaseMessage`` 转换的唯一反序列化收口，供
+        ``runtime_context_manager`` 复用（避免两套几乎一致的实现）。
 
     参数:
-        content: LangChain 消息的 ``content`` 字段（字符串或分块列表）。
+        raw: ``metadata.get("tool_calls")`` 的 JSON 字符串，可能为空或非法。
 
     返回:
-        拼接后的纯文本；无法识别时返回空字符串。
+        tool_calls 字典列表；空串、非法 JSON 或非列表时返回空列表。
+
+    异常:
+        无。
+
+    副作用:
+        无。
     """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text", "")))
-        return "".join(parts)
-    return ""
+
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _default_coding_rule_dir() -> str:
@@ -80,6 +86,7 @@ def _default_today() -> str:
     """
     return date.today().isoformat()
 
+
 @dataclass
 class RuntimeContextManager:
     """单个 task 下的运行时上下文管理器，提供 task 级隔离与上下文管理。
@@ -92,8 +99,10 @@ class RuntimeContextManager:
       一致性快照。
     - **读写唯一入口**：内存形态（``messages``）与持久化形态（``turn_messages``）的
       转换、落库、写内存、序号维护全部在本类内完成，经注入的 ``store`` 端口落库
-      （依赖倒置，避免 ``core/context`` 反向依赖 service）。``add_message(persist=)``
-      是唯一写入 API；``append_startup_user_message`` 承载 turn 启动基线的「只落库不写内存」。
+      （依赖倒置，避免 ``core/context`` 反向依赖 service）。``add_message`` 是唯一写入
+      API，联合类型收口 ``BaseMessage`` / ``RuntimeMessage`` / ``str``，经 ``persist`` /
+      ``write_memory`` 双开关正交控制落库与写内存（``write_memory=False`` 承载 turn
+      启动基线的「只落库不写内存」）。
     - **压缩预留**：通过可选 ``compressor`` 引用 ``ContextCompressor`` 协议与
       :meth:`maybe_compact` 暴露扩展点，暂不实现具体压缩算法。
 
@@ -105,9 +114,9 @@ class RuntimeContextManager:
     task_id: str
     agent_profile: AgentProfile
     # 运行时消息列表（系统提示 + 历史 + 本轮增量）。
-    messages: list[BaseMessage] = field(default_factory=list)
+    messages: list[RuntimeMessage] = field(default_factory=list)
     coding_rule_dir: str = field(default_factory=_default_coding_rule_dir)
-    language: str = "zh"
+    language: str = Settings.DEFAULT_LANGUAGE
     os_name: str = field(default_factory=_default_os_name)
     workspace_root: str = ""
     today: str = field(default_factory=_default_today)
@@ -123,11 +132,11 @@ class RuntimeContextManager:
     # 消息持久化端口（依赖倒置）：由 service 层实现并注入，使 manager 成为读写唯一入口。
     # 为 None 时表示纯内存上下文（无落库能力），persist 落库请求退化为仅写内存。
     store: RuntimeMessageStore | None = None
-    # 当前绑定的 turn 标识：落库（add_message persist=True / append_startup_user_message）
-    # 需要它定位目标 turn；为 None 时表示尚未进入某 turn，落库请求退化为仅写内存。
+    # 当前绑定的 turn 标识：落库（add_message persist=True）需要它定位目标 turn；
+    # 为 None 时表示尚未进入某 turn，落库请求退化为仅写内存。
     current_turn_id: str | None = None
     # 轮内逐条落库序号计数器：由 manager 内部维护（替代原 RuntimeOperations 内部计数），
-    # reset_message_sequence 归零、add_message/append_startup_user_message 自增。
+    # reset_message_sequence 归零、add_message 落库时自增。
     _message_sequence: int = field(default=0, init=False)
 
     def attach_usage_meter(self, meter: ContextUsageMeter) -> None:
@@ -224,51 +233,7 @@ class RuntimeContextManager:
             len(self.messages),
         )
 
-    @classmethod
-    def build_for_task(
-        cls,
-        agent_profile: AgentProfile,
-        workspace_root: str,
-        task_id: str,
-        excluded_turn_ids: tuple[str, ...] = (),
-        store: RuntimeMessageStore | None = None,
-        current_turn_id: str | None = None,
-    ) -> RuntimeContextManager:
-        """按 task 构造运行时上下文，并在注入 store 时加载历史（显式 I/O 入口）。
-
-        与构造分离，使构造保持纯内存、可测试，历史加载成为可独立调用的有副作用操作。
-        读路径走注入的 ``store`` 端口（依赖倒置，避免 ``core/context`` 反向依赖 service），
-        与写路径（``add_message(persist=True)`` 经同一 store 落库）保持同一分层口径。
-
-        参数:
-            agent_profile: 当前 agent 的角色画像。
-            workspace_root: 工作区根目录。
-            task_id: 目标 task 标识。
-            excluded_turn_ids: 需排除的 turn 标识元组（如 child 排除父 turn）。
-            store: 可选消息持久化端口；为 None 时仅构造（纯内存，不加载历史）。
-            current_turn_id: 可选当前绑定 turn 标识（供后续落库定位）。
-
-        返回:
-            已构造的 ``RuntimeContextManager`` 实例；``store`` 注入时已加载该 task 全部历史。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: ``store.build_for_task`` 读取失败会透传。
-
-        副作用:
-            ``store`` 注入时经 ``load_history`` 向 ``messages`` 追加历史转换结果并置脏。
-        """
-        ctx = cls(
-            task_id=task_id,
-            agent_profile=agent_profile,
-            workspace_root=workspace_root,
-            store=store,
-            current_turn_id=current_turn_id,
-        )
-        if store is not None:
-            ctx.load_history(excluded_turn_ids)
-        return ctx
-
-    def load_history(self, excluded_turn_ids: tuple[str, ...] = ()) -> None:
+    def load_history(self) -> None:
         """从注入 store 读回 task 跨轮历史并写回内存（显式 I/O 入口）。
 
         经 ``store.build_for_task`` 读回 ``RuntimeMessage`` 列表，经
@@ -289,21 +254,19 @@ class RuntimeContextManager:
         """
         if self.store is None:
             return
-        history = self.store.build_for_task(self.task_id, tuple(excluded_turn_ids))
+        history = self.store.build_for_task(self.task_id)
         with self.lock:
-            self.messages.extend(self._build_history_messages(history))
+            self.messages.extend(history)
         self.mark_context_changed()
         log.info(
             "runtime_context_loaded",
             extra={
                 "msg": (
                     f"已加载 task 历史上下文，task_id={self.task_id} "
-                    f"消息数={len(history)} 排除 turn 数={len(excluded_turn_ids)}"
                 ),
                 "data": {
                     "task_id": self.task_id,
                     "message_count": len(history),
-                    "excluded_turn_count": len(excluded_turn_ids),
                 },
             },
         )
@@ -368,56 +331,40 @@ class RuntimeContextManager:
         self.mark_context_changed()
         return True
 
-    def _build_system_message(self) -> SystemMessage:
+    def _build_system_message(self) -> RuntimeMessage:
         """构建系统提示消息。
 
         返回:
             含 agent 系统提示的 ``SystemMessage``。
         """
         system_prompt = SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
-        return SystemMessage(content=system_prompt)
+        return self._langraph_message_to_runtime_message(SystemMessage(content=system_prompt))
 
-    def _build_history_messages(self, message_list: list[RuntimeMessage]) -> list[BaseMessage]:
+    def _batch_convert_langraph_messages(self, message_list: list[RuntimeMessage]) -> list[BaseMessage]:
         """将运行时消息列表转换为 langchain 消息列表。
 
         说明:
-            如果 ``ToolCall`` 没有对应的 ``Message`` 模型将异常（沿用既有约束）。
+            逐条委托 :meth:`_runtime_message_to_langraph_message` 完成单条转换，并跳过其
+            返回 ``None`` 的消息（system / 未知 role，历史重放不包含系统提示）。如果
+            ``ToolCall`` 没有对应的 ``Message`` 模型将异常（沿用既有约束）。
 
         参数:
             message_list: 从 ``turn_message_crud`` 读出的运行时消息列表。
 
         返回:
             转换后的 langchain 消息列表。
+
+        异常:
+            无。
+
+        副作用:
+            无（纯转换）。
         """
         converted: list[BaseMessage] = []
-
         for message in message_list:
-            if message.role == "user":
-                converted.append(HumanMessage(content=message.content_text))
-            elif message.role == "assistant":
-                tool_calls_meta = tool_calls_from_metadata(message.metadata.get("tool_calls"))
-                langchain_tool_calls = [
-                    {
-                        "name": call["name"],
-                        "args": call.get("args") if isinstance(call.get("args"), dict) else {},
-                        "id": call.get("id") or "",
-                    }
-                    for call in tool_calls_meta
-                ]
-                converted.append(
-                    AIMessage(
-                        content=message.content_text,
-                        tool_calls=langchain_tool_calls,
-                    )
-                )
-            elif message.role == "tool":
-                converted.append(
-                    ToolMessage(
-                        content=message.content_text,
-                        tool_call_id=message.metadata.get("tool_call_id", ""),
-                    )
-                )
-
+            langchain_message = self._runtime_message_to_langraph_message(message)
+            if langchain_message is not None:
+                converted.append(langchain_message)
         return converted
 
     def load_message(self) -> list[BaseMessage]:
@@ -432,35 +379,48 @@ class RuntimeContextManager:
             当前消息列表的独立拷贝。
         """
         with self.lock:
-            return list(self.messages)
+            return self._batch_convert_langraph_messages(self.messages)
 
     def add_message(
         self,
-        message: BaseMessage,
+        message: BaseMessage | RuntimeMessage,
         *,
         persist: bool = True,
+        write_memory: bool = True,
     ) -> None:
-        """线程安全地向上下文追加一条消息（唯一写入入口），并按需落库。
+        """线程安全地向上下文追加一条消息（唯一写入入口），并按需落库/写内存。
 
         说明:
-            使用可重入锁（``RLock``）阻塞获取，模型节点内嵌套调用不会自死锁。
-            守卫收口在入口：消息「写入上下文」这一刻即被 :func:`sanitize_assistant_messages`
-            归一化（assistant 消息 content 空串 → 非空占位、残缺 tool_calls 过滤、丢弃
-            ``invalid_tool_calls`` 这一当轮解析噪声）。
+            三种输入形态统一收口，消除「``BaseMessage`` / ``RuntimeMessage`` 往返转换」
+            与「启动基线专用方法」的重复：
+            - ``BaseMessage``（模型节点产出、普通消息）：落库前经 :meth:`_to_runtime_message`
+              转换（assistant tool_calls→JSON），写内存前经 :func:`sanitize_assistant_messages`
+              归一化（content 空串占位、残缺 tool_calls 过滤、丢弃 ``invalid_tool_calls``）；
+            - ``RuntimeMessage``（工具观察等已序列化消息）：直接落库原始形态，写内存经
+              :meth:`_runtime_message_to_langraph_message` 转换，保留 ``tool_call_id`` 元数据链路；
+            - ``str``（turn 启动用户基线文本）：构造 ``role="user"`` 的 ``RuntimeMessage``
+              落库，写内存经 ``_runtime_message_to_langraph_message`` 转为 ``HumanMessage``。
 
-            ``persist=True``（默认）时采用「先落库、成功后写内存」的防撕裂语义：先经
-            :meth:`_to_runtime_message` 转为 ``RuntimeMessage``，再经注入 ``store`` 落库，
-            落库失败抛 ``SQLAlchemyError`` 且内存不写（继承 tools_node 既有防撕裂语义）；
-            落库成功后才写内存并自增序号。``persist=False`` 时仅写内存（运行时提示，如
-            repair 话术，无需重放）。
+            ``persist`` 控制落库、``write_memory`` 控制写内存，两者独立正交：
+            - ``persist=True, write_memory=True``（默认）：完整双写；
+            - ``persist=True, write_memory=False``：turn 启动基线专用——先把用户提问落库为
+              ``role="user"`` 基线、不写内存，随后 :meth:`load_history` 从 DB 读回完整历史
+              （含本基线），避免内存双写重复；
+            - ``persist=False, write_memory=True``：仅写内存（运行时提示，如 repair 话术，
+              无需重放）；
+            - ``persist=False, write_memory=False``：空操作。
 
-            当 ``store`` 或 ``current_turn_id`` 未注入（纯内存构造 / 测试场景）时，
-            ``persist=True`` 退化为仅写内存——manager 无落库能力则无法持久化，内存形态
-            仍是最终一致视图。
+            ``persist=True`` 时采用「先落库、成功后写内存」的防撕裂语义：落库失败抛
+            ``SQLAlchemyError`` 且内存不写（继承 tools_node 既有防撕裂语义）；落库成功后才
+            写内存并自增序号。当 ``store`` 或 ``current_turn_id`` 未注入（纯内存构造 / 测试
+            场景）时，``persist=True`` 退化为仅写内存——manager 无落库能力则无法持久化，
+            内存形态仍是最终一致视图。
 
         参数:
-            message: 待追加的 langchain 消息。
-            persist: 是否落库（默认 True）；False 时仅写内存。
+            message: 待追加的消息。``BaseMessage``（langchain 形态）、``RuntimeMessage``
+                （已序列化形态）或 ``str``（user 文本，构造 user 消息）。
+            persist: 是否落库（默认 True）；False 时跳过落库。
+            write_memory: 是否写内存（默认 True）；False 时仅落库（turn 启动基线场景）。
 
         返回:
             无。
@@ -470,87 +430,28 @@ class RuntimeContextManager:
                 时落库失败抛出，此时内存不写（防撕裂）。
 
         副作用:
-            向 ``messages`` 追加（已归一化的）消息；``persist=True`` 且有落库能力时
-            同步向 ``turn_messages`` 表写一行并自增序号。
+            ``write_memory=True`` 时向 ``messages`` 追加（已归一化的）消息并置脏计量器；
+            ``persist=True`` 且有落库能力时同步向 ``turn_messages`` 表写一行并自增序号。
         """
-        if persist:
-            runtime_message = self._to_runtime_message(message)
-            if self.store is not None and self.current_turn_id is not None:
-                self.store.append(self.current_turn_id, runtime_message, self._message_sequence)
-                self._message_sequence += 1
-        with self.lock:
-            self.messages.append(sanitize_assistant_messages([message])[0])
-        self.mark_context_changed()
+        runtime_message = message
+        if not isinstance(runtime_message, RuntimeMessage):
+            runtime_message:RuntimeMessage = self._langraph_message_to_runtime_message(message)
 
-    def add_runtime_message(
-        self,
-        message: RuntimeMessage,
-        *,
-        persist: bool = True,
-    ) -> None:
-        """追加一条已序列化的 ``RuntimeMessage``（工具观察用），并按需落库。
-
-        与 :meth:`add_message`（接收 ``BaseMessage``）互补：本方法接收已经是模型无关的
-        ``RuntimeMessage``（如 ``tool_execution`` 产出的工具观察消息，已含 ``tool_call_id``
-        元数据），避免先转 ``BaseMessage`` 再转回 ``RuntimeMessage`` 的往返转换。
-
-        ``persist=True``（默认）时先落库、成功后经 :meth:`_build_history_messages` 转
-        ``BaseMessage`` 写内存（防撕裂：落库失败抛异常、内存不写）；``persist=False``
-        时仅写内存。无 store / 无 current_turn_id 时退化为仅写内存。
-
-        参数:
-            message: 待追加的 ``RuntimeMessage``。
-            persist: 是否落库（默认 True）；False 时仅写内存。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: ``persist=True`` 且已注入 store/current_turn_id
-                时落库失败抛出，此时内存不写（防撕裂）。
-
-        副作用:
-            向 ``messages`` 追加转换后的 ``BaseMessage``；``persist=True`` 且有落库能力时
-            同步向 ``turn_messages`` 表写一行并自增序号。
-        """
         if persist and self.store is not None and self.current_turn_id is not None:
-            self.store.append(self.current_turn_id, message, self._message_sequence)
+            self.store.append(self.current_turn_id, runtime_message, self._message_sequence)
             self._message_sequence += 1
-        with self.lock:
-            self.messages.extend(self._build_history_messages([message]))
-        self.mark_context_changed()
 
-    def append_startup_user_message(self, text: str) -> None:
-        """turn 启动基线落库专用：仅落库不写内存（供 ``load_history`` 稍后读回历史）。
-
-        本方法是 turn 启动的刻意时序设计：先把用户提问落库为 ``role="user"`` 基线，
-        不写内存，随后经 :meth:`load_history` 从 DB 读回完整历史（含本基线）。保证跨轮
-        重建历史不缺 user 提问首条。无 store / 无 current_turn_id 时为空操作（纯内存）。
-
-        参数:
-            text: 本轮用户输入文本。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 落库失败时抛出。
-
-        副作用:
-            向 ``turn_messages`` 表写入一条 ``role="user"`` 消息并自增序号；不写内存。
-        """
-        if self.store is None or self.current_turn_id is None:
-            return
-        runtime_message = RuntimeMessage(role="user", content_text=text)
-        self.store.append(self.current_turn_id, runtime_message, self._message_sequence)
-        self._message_sequence += 1
+        if write_memory and runtime_message is not None:
+            with self.lock:
+                self.messages.append(runtime_message)
+            self.mark_context_changed()
 
     def reset_message_sequence(self) -> None:
         """清空当前 turn 的消息轨迹并归零序号（turn 开始执行时调用，保证幂等）。
 
         经注入 ``store`` 清空当前 ``turn_id`` 在 ``turn_messages`` 表的全部残留并复位
-        序号，之后每条消息经 :meth:`add_message` / :meth:`append_startup_user_message`
-        自增落库；历史 turn 因按 ``turn_id`` 隔离不受影响。无 store / 无 current_turn_id
+        序号，之后每条消息经 :meth:`add_message` 自增落库；历史 turn 因按 ``turn_id``
+        隔离不受影响。无 store / 无 current_turn_id
         时仅归零序号（纯内存）。
 
         返回:
@@ -577,9 +478,9 @@ class RuntimeContextManager:
             消息列表的独立拷贝。
         """
         with self.lock:
-            return list(self.messages)
+            return self._batch_convert_langraph_messages(self.messages)
 
-    def _to_runtime_message(self, message: BaseMessage) -> RuntimeMessage:
+    def _langraph_message_to_runtime_message(self, message: BaseMessage) -> RuntimeMessage:
         """将 langchain ``BaseMessage`` 转为内部 ``RuntimeMessage``（落库前转换收口）。
 
         ``AIMessage → RuntimeMessage`` 只此一处（收口自原 ``model_node._ai_to_runtime_message``）：
@@ -600,6 +501,7 @@ class RuntimeContextManager:
         副作用:
             无（纯转换）。
         """
+        message = self._sanitize_assistant_messages(message)
         if isinstance(message, AIMessage):
             tool_calls = [
                 {"name": call.get("name"), "args": call.get("args", {}), "id": call.get("id")}
@@ -610,15 +512,87 @@ class RuntimeContextManager:
             )
             return RuntimeMessage(
                 role="assistant",
-                content_text=_extract_text(message.content),
+                content_text=message.content,
                 metadata=metadata,
             )
         if isinstance(message, ToolMessage):
             return RuntimeMessage(
                 role="tool",
-                content_text=_extract_text(message.content),
+                content_text=message.content,
                 metadata={"tool_call_id": message.tool_call_id or ""},
             )
         if isinstance(message, SystemMessage):
-            return RuntimeMessage(role="system", content_text=_extract_text(message.content))
-        return RuntimeMessage(role="user", content_text=_extract_text(message.content))
+            return RuntimeMessage(role="system", content_text=message.content)
+        return RuntimeMessage(role="user", content_text=message.content)
+
+    def _runtime_message_to_langraph_message(self, message: RuntimeMessage) -> BaseMessage | None:
+        """将单条运行时消息转换为 langchain ``BaseMessage``（正向单条转换收口）。
+
+        是 :meth:`_langraph_message_to_runtime_message` 的逆转换：user / assistant / tool
+        三种 role 分别映射 ``HumanMessage`` / ``AIMessage`` / ``ToolMessage``；assistant 的
+        ``metadata["tool_calls"]`` JSON 字符串经 :func:`_tool_calls_from_metadata` 反序列化
+        回 langchain ``tool_calls``，与落库侧序列化契约严格对齐。system 与其他未知 role
+        返回 ``None``（历史重放不包含系统提示，系统提示由构造期 :meth:`_build_system_message`
+        构建，避免重复），由调用方（:meth:`_build_history_messages`）跳过。
+
+        参数:
+            message: 待转换的 ``RuntimeMessage``。
+
+        返回:
+            转换后的 ``BaseMessage``；system / 未知 role 返回 ``None``（跳过语义）。
+
+        异常:
+            无。
+
+        副作用:
+            无（纯转换）。
+        """
+        content_text = message.content_text if message.content_text is not None else ""
+        if message.role == "user":
+            return HumanMessage(content=content_text)
+        if message.role == "assistant":
+            tool_calls_meta = _tool_calls_from_metadata(message.metadata.get("tool_calls"))
+            langchain_tool_calls = [
+                {
+                    "name": call["name"],
+                    "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+                    "id": call.get("id") or "",
+                }
+                for call in tool_calls_meta
+            ]
+            return AIMessage(content=content_text, tool_calls=langchain_tool_calls)
+        if message.role == "tool":
+            return ToolMessage(
+                content=content_text,
+                tool_call_id=message.metadata.get("tool_call_id", ""),
+            )
+        if message.role == "system":
+            return SystemMessage(content=content_text)
+        return None
+
+    def _sanitize_assistant_messages(self, message: BaseMessage) -> BaseMessage:
+        """在消息进入上下文（入口守卫）前对 assistant 消息做最终清洗，避免脏字段回灌下一轮对话。
+
+        重建后只保留安全的 ``content`` + 合法 ``tool_calls`` + ``id``。``ToolMessage`` 及其他
+        角色不受影响（其 content=null 协议允许），保持原对象引用。
+
+        参数:
+            messages: 即将进入上下文的 LangChain 消息列表。
+
+        返回:
+            清洗后的新列表；非 assistant 类消息保持原对象引用不变。
+
+        异常:
+            无。
+
+        副作用:
+            无（不修改入参对象；仅在需要清洗的 assistant 消息时新建对象）。
+        """
+
+        if not isinstance(message, AIMessage):
+            return message
+
+        if message.content is None or message.content.strip() == "":
+            message.content = "(ignore)"
+            log.info("_sanitize_assistant_messages", extra={"msg": f"清洗消息", "data": {"message": message.model_dump()}})
+        return message

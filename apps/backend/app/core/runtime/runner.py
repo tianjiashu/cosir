@@ -20,7 +20,7 @@ from app.core.runtime.turn_cancellation_registry import cancellation_registry
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
-from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
+from app.models import TaskRecord, TurnRecord, WorkspaceRecord
 from app.models.delegation_record import DelegationRecord
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
@@ -281,7 +281,7 @@ class AgentRuntime:
 
         # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
         # 未绑定时回退到 task.agent_id 默认归属。
-        agent_profile = self._agent_registry.resolve(turn.agent_id or DEFAULT_AGENT_ID)
+        agent_profile: AgentProfile | None = self._agent_registry.resolve(turn.agent_id or DEFAULT_AGENT_ID)
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for turn {turn_id}")
 
@@ -310,7 +310,7 @@ class AgentRuntime:
         task_id = turn.task_id
         task = self._task_service.get_task(task_id)
         workspace = self._workspace_service.get_workspace(task.workspace_id)
-
+        agent.main_agent = task.parent_task_id is None
         # UserPromptSubmit 挂接：本轮已被成功认领后触发。首版 deny 不阻断主流程
         # （turn 已认领，硬中断需额外终态收敛，侵入面过大，见 Hook机制技术方案.md §4.2）；
         # 无内置实现，空订阅下 fire 零开销放行。统一经 HookInterceptor 收口。
@@ -330,6 +330,7 @@ class AgentRuntime:
                     task_id=task_id,
                     payload=RunStartedPayload(status="running", agent_id=agent.agent_id),
                     turn_id=turn_id,
+                    is_main_agent=agent.main_agent,
                 ),
                 agent,
             )
@@ -343,14 +344,8 @@ class AgentRuntime:
             operations = self._build_operations(
                 workspace, task, turn, agent, tool_trace_recorder=recorder
             )
-            # 本轮轨迹改为逐条增量落库（节点产生消息时经 operations.append_runtime_message
-            # 写入）；turn 启动先清掉上一轮残留并复位序号，保证崩溃重跑幂等。
-            operations.reset_message_sequence()
-            # 本轮用户提问同步落库为 role="user" 消息，补齐跨轮历史首条（原批覆盖实现
-            # 由完整 messages 重建，增量路径须显式写入，否则下一轮重建历史会缺 user 提问）。
-            operations.append_runtime_message(
-                RuntimeMessage(role="user", content_text=turn.input_text)
-            )
+            # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
+            # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
 
             with turn_trace(metadata) as trace_result:
                 async for event in agent.workflow.run(
@@ -369,7 +364,7 @@ class AgentRuntime:
                         "data": {"task_id": task_id, "turn_id": turn_id},
                     },
                 )
-            await self._publish_stable_file_changes(task_id, turn_id)
+            await self._publish_stable_file_changes(task_id, turn_id, agent.main_agent)
             # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
             # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
             await HookInterceptor.async_safe_fire(
@@ -394,6 +389,7 @@ class AgentRuntime:
                     task_id=task_id,
                     turn_id=turn_id,
                     payload=RunFailedPayload(status="failed", error=str(exc)),
+                    is_main_agent=agent.main_agent,
                 ),
                 agent,
             )
@@ -448,24 +444,6 @@ class AgentRuntime:
                 },
             )
 
-    def _save_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent:
-        """Persist a runtime event through the configured event service.
-
-        参数:
-            event: 待持久化的运行时事件。
-
-        返回:
-            已赋真实 sequence 的 RuntimeEvent。
-
-        异常:
-            RuntimeError: 当 runtime event 持久化失败时抛出。
-
-        副作用:
-            向 runtime_events 表写入一条事件。
-        """
-
-        return self._runtime_event_service.save_event(event)
-
     def _publish_runtime_event(
         self,
         event: RuntimeEvent,
@@ -475,12 +453,16 @@ class AgentRuntime:
 
         参数:
             event: 待发布的运行时事件。
+            runtime_event_loop: 可选的所属事件循环。为 None 时在当前线程直接广播；
+                非 None 时经 ``call_soon_threadsafe`` 调度到该 loop 线程广播（用于
+                非 loop 线程落库后的跨线程发布）。缺省为 None。
 
         返回:
             无。
 
         异常:
-            无。
+            RuntimeError: 当 ``runtime_event_loop`` 已关闭时，``call_soon_threadsafe``
+                会抛出；发布失败由调用方决定是否兜底。
 
         副作用:
             向 RuntimeEventBus 订阅队列发布事件。
@@ -503,15 +485,18 @@ class AgentRuntime:
 
         参数:
             event: 待保存并发布的运行时事件。
+            runtime_event_loop: 可选的所属事件循环，透传给 ``_publish_runtime_event``
+                决定广播方式（None 直发 / 非 None 跨线程调度）。缺省为 None。
 
         返回:
             已赋真实 sequence 的 RuntimeEvent。
 
         异常:
-            RuntimeError: 当 runtime event 持久化失败时抛出。
+            RuntimeError: 当 runtime event 持久化失败，或广播阶段 ``runtime_event_loop``
+                已关闭时抛出。
 
         副作用:
-            向 runtime_events 表写入事件，并在可用时广播给当前订阅者。
+            向 runtime_events 表写入事件，并广播给当前订阅者。
         """
 
         stamped = self._runtime_event_service.save_event(event)
@@ -548,7 +533,9 @@ class AgentRuntime:
                 },
             )
 
-    async def _publish_stable_file_changes(self, task_id: str, turn_id: str) -> None:
+    async def _publish_stable_file_changes(
+        self, task_id: str, turn_id: str, is_main_agent: bool
+    ) -> None:
         """把本 turn 的文件快照标记为已稳定，并逐条广播 file_change_stable 事件。
 
         turn 结束意味着其内所有工具调用已定稿，此时变更才对用户可见、可撤销。
@@ -558,6 +545,8 @@ class AgentRuntime:
         参数:
             task_id: 所属任务标识。
             turn_id: 刚结束的轮次标识。
+            is_main_agent: 是否主 Agent 轮次，透传到每条 file_change_stable 事件供
+                前端区分主/子 Agent 变更。
 
         返回:
             无。
@@ -572,9 +561,10 @@ class AgentRuntime:
         try:
             self._mark_stable_file_changes(turn_id)
             crud = FileSnapshotCrud()
-            if not crud.list_stable_by_turns([turn_id]):
+            snapshots = crud.list_stable_by_turns([turn_id])
+            if not snapshots:
                 return
-            for snapshot in crud.list_stable_by_turns([turn_id]):
+            for snapshot in snapshots:
                 self._publish_runtime_event(
                     RuntimeEvent(
                         event_type=EventType.FILE_CHANGE_STABLE,
@@ -585,6 +575,7 @@ class AgentRuntime:
                             path=snapshot.path,
                             action=snapshot.action,
                         ),
+                        is_main_agent=is_main_agent,
                         turn_id=turn_id,
                     )
                 )
@@ -660,23 +651,26 @@ class AgentRuntime:
 
         在 ``yield`` 前调用：经 ``RuntimeEventService`` 以独立线程写入 ``runtime_events`` 表
         （避免阻塞 SSE 事件循环），并使用存储层分配的真实 turn-local sequence。
-        持久化失败由存储层记日志，不会中断流式运行。
+        落库抛 ``RuntimeError`` 时由本方法记 error 日志并降级透传原事件，不中断流式运行。
 
         参数:
             event: 待落库并透传的运行时事件。
+            agent_profile: 当前 agent profile，其 ``runtime_event_loop`` 非空时经
+                ``call_soon_threadsafe`` 跨线程广播。
 
         返回:
-            已赋序号、可直接 ``yield`` 的事件（与原事件 payload 一致）。
+            已赋序号、可直接 ``yield`` 的事件；落库失败时为原事件。
 
         异常:
-            不向上抛出：落库异常被 ``save_event`` 内部吞掉并记日志。
+            落库抛 ``RuntimeError`` 被本方法吞掉（记日志降级透传）；落库抛其他异常或
+            广播阶段 ``runtime_event_loop`` 已关闭时，异常向上冒泡。
 
         副作用:
-            向 ``runtime_events`` 表插入一行（失败仅记日志）。
+            向 ``runtime_events`` 表插入一行（失败仅记日志）；向事件总线广播。
         """
 
         try:
-            stamped = await asyncio.to_thread(self._save_runtime_event, event)
+            stamped = await asyncio.to_thread(self._runtime_event_service.save_event, event)
         except RuntimeError:
             log.exception(
                 "runtime_event_emit_persist_failed",

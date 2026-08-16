@@ -8,13 +8,11 @@
 from app.core.llm.factory import build_chat_model
 from app.core.llm.langchain_bridge import (
     model_tools_to_langchain,
-    runtime_to_langchain,
     tool_calls_from_langchain,
 )
 
 __all__ = [
     "build_chat_model",
     "model_tools_to_langchain",
-    "runtime_to_langchain",
     "tool_calls_from_langchain",
 ]

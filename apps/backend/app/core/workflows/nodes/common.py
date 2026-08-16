@@ -27,7 +27,7 @@ from app.models.turn_usage_stats import TurnUsageStats
 from ..react.runtime_config import RuntimeConfig
 
 if TYPE_CHECKING:
-    from app.core.context.runtime_context import RuntimeContext
+    from app.core.context.runtime_context_manager import RuntimeContextManager
 
 
 # 内部封装：统一事件写入结构。
@@ -88,7 +88,7 @@ def _runtime_config() -> RuntimeConfig:
     return get_config()["configurable"]["runtime_config"]
 
 
-def _runtime_context() -> "RuntimeContext":
+def _runtime_context() -> "RuntimeContextManager":
     """从 LangGraph 运行上下文取出 task 级运行时上下文。
 
     ``ReactLikeWorkflow.run()`` 把 ``RuntimeContext`` 放入 config 的 ``runtime_context``；

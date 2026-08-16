@@ -100,7 +100,6 @@ def test_delegate_profile_permissions_match_v1_roles():
         "codegraph_impact",
     ]
     assert reviewer.model_name == "deepseek-v4-flash"
-    assert reviewer.context_policy == "text_only_v1"
     assert reviewer.max_steps == 60
     assert "write_file" not in reviewer.allowed_tools
     assert "patch" not in reviewer.allowed_tools

@@ -14,6 +14,7 @@
 """
 
 import asyncio
+import dataclasses
 from typing import Any
 
 import sqlalchemy
@@ -22,11 +23,11 @@ from langgraph.types import interrupt
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.llm.langchain_bridge import runtime_to_langchain
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload
+from app.service.tool_execution.run_result import ToolRunResult
 from app.tools.schemas import ToolCall, ToolObservation
 from app.utils.trace_infra.redaction import redact_terminal_output
 
@@ -35,43 +36,46 @@ from .common import _make_write_event, _runtime_config, _runtime_context
 
 
 def _persist_tool_observations(
-    operations: RuntimeOperations,
-    obs_messages: list[RuntimeMessage],
+        obs_messages: list[RuntimeMessage],
 ) -> None:
-    """将一批工具观察消息落库并同步写回运行时上下文。
+    """将一批工具观察消息经 ``RuntimeContextManager`` 落库并同步写回运行时上下文。
 
     落库与写回逐条配对（落库一条即写回一条），避免「部分落库、零写回」的
     撕裂状态；写回使下一轮模型节点经 ``_runtime_context().load_message()`` 能
     看到本轮工具结果，闭合上一轮 ``_model_node`` 写入的 ``AIMessage.tool_calls``
     配对，防止悬空 ``tool_calls`` 触发 OpenAI 协议校验失败。消息**不进 graph state**，
-    模型上下文由 ``RuntimeContext`` 独占管理。
+    模型上下文由 ``RuntimeContextManager`` 独占管理。
 
     参数:
-        operations: 领域操作门面，提供 ``append_runtime_message`` 增量落库。
+        operations: 领域操作门面（保留签名以对齐调用面；落库实际由
+            ``RuntimeContextManager.add_message`` 经注入 store 端口承担）。
         obs_messages: 本批次工具观察 ``RuntimeMessage`` 列表（已含 ``tool_call_id`` 元数据）。
 
     返回:
         无。
 
     异常:
-        sqlalchemy.exc.SQLAlchemyError: 落库失败时由 ``append_runtime_message`` 透传，
+        sqlalchemy.exc.SQLAlchemyError: 落库失败时由 ``add_message`` 透传，
         此时后续消息不写回（保持 DB 与上下文一致：DB 失败则上下文也不写）。
-        IndexError / ValueError: ``runtime_to_langchain`` 转换异常时抛出，同样不落库、
-        不写回，避免 DB 与上下文撕裂；异常携带 ``tool_call_id`` 与批次进度写入 error 日志。
+        异常携带 ``tool_call_id`` 与批次进度写入 error 日志。
 
     副作用:
-        逐条先把 ``obs_message`` 转为 LangChain 消息（转换失败则在落库前抛出，不污染
-        DB），再调用 ``operations.append_runtime_message`` 落库，最后调用
-        ``_runtime_context().add_message`` 将转换后的观察消息写回运行时上下文。
+        逐条调用 ``_runtime_context().add_message(obs_message)``：先落库（失败抛
+        异常、内存不写），成功后再经 manager 转 ``BaseMessage`` 写回运行时上下文。
     """
     total = len(obs_messages)
     for index, obs_message in enumerate(obs_messages):
         try:
-            langchain_obs = runtime_to_langchain([obs_message])[0]
-            operations.append_runtime_message(obs_message)
-            _runtime_context().add_message(langchain_obs)
+            log.info(
+                "add_tool_observation",
+                extra={
+                    "msg": f"添加工具观察",
+                    "data": {"message": dataclasses.asdict(obs_message)},
+                },
+            )
+            _runtime_context().add_message(obs_message)
         except (sqlalchemy.exc.SQLAlchemyError, IndexError, ValueError, KeyError) as exc:
-            # 仅捕获可预期的落库/转换/上下文异常；其他异常（如编程错误）直接抛出不被吞。
+            # 仅捕获可预期的落库/上下文异常；其他异常（如编程错误）直接抛出不被吞。
             tool_call_id = (obs_message.metadata or {}).get("tool_call_id", "")
             log.exception(
                 "persist_tool_observations_failed",
@@ -92,8 +96,8 @@ def _persist_tool_observations(
 
 
 def _build_tool_result_summaries(
-    observations: list[ToolObservation],
-    instructions: dict[str, str] | None = None,
+        observations: list[ToolObservation],
+        instructions: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """把一批工具观察结果压缩为可序列化摘要，供 ``observe`` 节点判定与后续 LLM 观察使用。
 
@@ -253,7 +257,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             if call.get("call_id")
         ]
         cancel_placeholders = operations.build_cancel_placeholder_messages(cancel_calls)
-        _persist_tool_observations(operations, cancel_placeholders)
+        _persist_tool_observations(cancel_placeholders)
         # 收口取消终态事件：本分支是实际检测到 turn 取消的执行点，须发出
         # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
         # 与 model_node 取消分支（携带 usage）保持同类型、零值字段一致。
@@ -297,7 +301,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # node_write_event 已在函数顶部（LangGraph 运行上下文内）取出并闭包捕获：
     # 工具批次在工作线程执行，线程内无法再依赖 get_stream_writer() 的运行上下文。
     # 事件循环也需在此取出并传入，供命令运行期输出增量从工作线程调度回环广播。
-    tool_run = await asyncio.to_thread(
+    tool_run: ToolRunResult = await asyncio.to_thread(
         operations.run_tool_calls,
         task.task_id,
         approved_calls,
@@ -305,11 +309,18 @@ async def _tools_node(state: ReactGraphState) -> dict:
         write_event=node_write_event,
         running_loop=asyncio.get_running_loop(),
     )
+    log.info(
+        "tools_node_tool_run",
+        extra={
+            "msg": f"工具批次执行结果，step_id={step_id}",
+            "data": {"tool_run": dataclasses.asdict(tool_run)},
+        },
+    )
     observations = tool_run.observations  # 每个工具调用的观察结果
     # 逐条持久化本轮产生的工具观察消息，并同步写回运行时上下文
     # （替代 turn 结束后的批落库；写回使下一轮模型节点能看到工具结果）。
     # 落库与写回逐条配对：落库一条即写回一条，避免「部分落库、零写回」撕裂。
-    _persist_tool_observations(operations, tool_run.messages_for_model)
+    _persist_tool_observations(tool_run.messages_for_model)
 
     if operations.is_current_turn_cancelled():
         log.info(
@@ -338,7 +349,10 @@ async def _tools_node(state: ReactGraphState) -> dict:
         "",
     )
     if deferred_repair_message:
-        _runtime_context().add_message(SystemMessage(content=deferred_repair_message))
+        # REPAIR 情形 a 的延后注入：修复提示是运行时话术，只写内存不落库（persist=False）。
+        _runtime_context().add_message(
+            SystemMessage(content=deferred_repair_message), persist=False
+        )
         log.warning(
             "tools_node_deferred_repair_message_appended",
             extra={

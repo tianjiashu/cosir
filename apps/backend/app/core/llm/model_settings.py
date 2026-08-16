@@ -8,7 +8,14 @@
 from dataclasses import dataclass
 from typing import Any
 
-_FIELDS = ("temperature", "top_p", "max_tokens", "thinking", "base_url", "api_key_env")
+_FIELDS = (
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "thinking",
+    "base_url",
+    "api_key_env",
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +27,11 @@ class ModelSettings:
     - 不负责：模型构建（交给 ``LLMProvider``）、全局默认值（交给 ``app.config.settings``
       模块级静态变量 /
       模型注册表）、字段校验语义（仅做「是否提供」的覆盖判断）。
+
+    说明:
+        上下文窗口上限不在此处（亦无 Agent 级覆盖需求）：模型最大窗口归 ``ModelCatalog``，
+        全局软上限归 ``Settings.CONTEXT_WINDOW_TOKENS``，两者 min 即实际上限
+        （见 ``context_window_resolver.resolve_context_window``）。不为假想需求预留覆盖字段。
     """
 
     temperature: float | None = None
