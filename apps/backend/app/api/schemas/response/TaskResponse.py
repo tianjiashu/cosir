@@ -17,6 +17,10 @@ class TaskResponse(BaseModel):
         latest_turn_id: 最近一轮标识，可能为 None。
         status: 任务生命周期状态。
         execution_status: 派生执行状态，可能为 None。
+        task_type: 任务类型，``"user"`` 为用户创建，``"delegation"`` 为委派子任务。
+        parent_task_id: 父任务标识，仅委派子任务有值。
+        parent_turn_id: 父轮次标识，仅委派子任务有值。
+        delegation_id: 所属委派标识，仅委派子任务有值。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 
@@ -39,6 +43,10 @@ class TaskResponse(BaseModel):
     latest_turn_id: str | None = None
     status: str
     execution_status: str | None = None
+    task_type: str = "user"
+    parent_task_id: str | None = None
+    parent_turn_id: str | None = None
+    delegation_id: str | None = None
     created_at: str
     updated_at: str
 
@@ -72,6 +80,10 @@ class TaskResponse(BaseModel):
             latest_turn_id=record.latest_turn_id,
             status=record.status,
             execution_status=record.execution_status,
+            task_type=record.task_type,
+            parent_task_id=record.parent_task_id,
+            parent_turn_id=record.parent_turn_id,
+            delegation_id=record.delegation_id,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),
         )

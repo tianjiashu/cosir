@@ -15,7 +15,6 @@ class AgentProfileResponse(BaseModel):
         role: 人类可读的 Agent 角色。
         description: 注入到模型上下文中的运行目标与职责描述（含能力/场景/约束，替代旧 ``goal``）。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
-        context_policy: 该 Agent 的上下文处理策略名称。
         workflow: 该 Agent 使用的执行策略标识。
         model_name: 该 Agent 使用的模型名称。
         max_steps: 单轮最大执行步数。
@@ -35,7 +34,6 @@ class AgentProfileResponse(BaseModel):
     role: str
     description: str
     allowed_tools: list[str]
-    context_policy: str
     workflow: str
     model_name: str
     max_steps: int

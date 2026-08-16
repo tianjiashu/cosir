@@ -9,7 +9,6 @@
 
 from fastapi import Depends, HTTPException
 
-from app.app import app
 from app.api.dependencies import (
     get_runtime_event_service,
     get_task_service,
@@ -21,6 +20,7 @@ from app.api.schemas import (
     TaskResponse,
     TurnResponse,
 )
+from app.app import app
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
@@ -141,6 +141,36 @@ async def delete_task(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     return DeleteTaskResponse(task_id=task_id, deleted=True)
+
+
+@app.get("/tasks/{task_id}/children")
+async def list_child_tasks(
+    task_id: str,
+    task_service: TaskService = Depends(get_task_service),
+) -> list[TaskResponse]:
+    """列出某任务下的全部子任务（委派子任务）。
+
+    子任务不出现在工作区对话列表，但可通过父任务的该端点下钻查看其轨迹。
+
+    参数:
+        task_id: 来自路由的父任务标识。
+        task_service: 通过依赖注入的任务 service。
+
+    返回:
+        该父任务的直接子任务 ``TaskResponse`` 列表；无子任务时返回空列表。
+
+    异常:
+        HTTPException: 当父任务不存在（级联 KeyError）时抛出。
+
+    副作用:
+        无（只读查询）。
+    """
+
+    try:
+        children = task_service.list_child_tasks(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    return [TaskResponse.from_record(child) for child in children]
 
 
 @app.get("/tasks/{task_id}/turns/{turn_id}/events")
