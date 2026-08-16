@@ -1,6 +1,6 @@
 """每轮消息轨迹 SQLAlchemy model（跨轮记忆 + 历史回放）。"""
 
-from sqlalchemy import ForeignKey, Integer, Text
+from sqlalchemy import ForeignKey, Integer, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -22,3 +22,6 @@ class TurnMessageModel(StorageBase):
     role: Mapped[str] = mapped_column(Text, nullable=False)
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_json: Mapped[str | None] = mapped_column(Text)
+
+    # 是否纳入Agent上下文
+    in_context: Mapped[bool] = mapped_column(Boolean, default=True)

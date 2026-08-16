@@ -17,8 +17,5 @@ class TurnModel(StorageBase):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     end_reason: Mapped[str | None] = mapped_column(Text)
     response_text: Mapped[str | None] = mapped_column(Text)
-    agent_id: Mapped[str | None] = mapped_column(Text)
-    parent_turn_id: Mapped[str | None] = mapped_column(Text)
-    delegation_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)

@@ -1,6 +1,6 @@
 """任务运行切片 SQLAlchemy model。"""
 
-from sqlalchemy import ForeignKey, Text, text
+from sqlalchemy import ForeignKey, Index, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -21,5 +21,21 @@ class TaskModel(StorageBase):
     last_message_preview: Mapped[str] = mapped_column(Text, nullable=False)
     latest_turn_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
+
+    task_type: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'user'"), default="user"
+    )
+    parent_task_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("tasks.task_id"), nullable=True
+    )
+    parent_turn_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("turns.turn_id"), nullable=True
+    )
+    delegation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index("idx_tasks_parent_task_id", "parent_task_id"),
+        Index("uq_tasks_delegation_id", "delegation_id", unique=True),
+    )

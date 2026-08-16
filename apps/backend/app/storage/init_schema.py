@@ -72,6 +72,7 @@ def initialize_app_schema(engine: Engine) -> None:
         for model in APP_MODELS:
             cast(Table, model.__table__).create(bind=connection, checkfirst=True)
         _ensure_model_columns(connection, engine)
+        _ensure_model_indexes(connection)
         _drop_orphan_durable_runs(connection)
 
 
@@ -171,6 +172,45 @@ def _ensure_model_columns(connection, engine) -> None:
                 column_ddl = f"{column.name} {ddl_type} NOT NULL DEFAULT {default}"
             connection.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {column_ddl}"))
             log.info("added missing column %s.%s", table.name, column.name)
+
+
+def _ensure_model_indexes(connection) -> None:
+    """补齐 model 声明、但存量库里尚未创建的索引。
+
+    迁移补列步骤 ``_ensure_model_columns`` 只负责 ``ALTER TABLE ADD COLUMN``，不会创建
+    ``__table_args__`` 里声明的索引 / 唯一约束（如 ``idx_tasks_parent_task_id``、
+    ``uq_tasks_delegation_id``）。存量库升级时这些索引因此缺失，导致并发重入的唯一索引
+    兜底形同虚设。本函数遍历 ``APP_MODELS`` 每个 table 的声明索引，对库里不存在的同名索引
+    调用 ``index.create(checkfirst=True)`` 补齐。
+
+    必须在 ``_ensure_model_columns`` 之后调用：索引依赖其引用的新列已存在，否则创建会失败。
+
+    参数:
+        connection: 当前处于事务中的 SQLAlchemy 连接。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果读取库结构元数据或创建索引执行失败。
+
+    副作用:
+        可能对已存在的表补建缺失索引；每成功补建一个索引写一条 info 日志。
+    """
+
+    inspector = inspect(connection)
+    for model in APP_MODELS:
+        table = cast(Table, model.__table__)
+        if not inspector.has_table(table.name):
+            continue
+        existing_indexes = {
+            idx["name"] for idx in inspector.get_indexes(table.name)
+        }
+        for index in table.indexes:
+            if index.name in existing_indexes:
+                continue
+            index.create(bind=connection, checkfirst=True)
+            log.info("created missing index %s on %s", index.name, table.name)
 
 
 def initialize_log_schema(engine: Engine) -> None:

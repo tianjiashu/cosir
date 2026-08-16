@@ -15,6 +15,7 @@
 import json
 
 from sqlalchemy import delete, select
+from sqlalchemy.sql.expression import and_
 
 from app.models.runtime_message import RuntimeMessage
 from app.storage.model.turn_message_model import TurnMessageModel
@@ -46,7 +47,7 @@ class TurnMessageCrud:
 
         self._session_factory = main_session_factory()
 
-    def append_message(self, turn_id: str, message: RuntimeMessage, sequence: int) -> None:
+    def append_message(self, turn_id: str, message: RuntimeMessage, sequence: int, in_context: bool = True) -> None:
         """以单条增量方式持久化某 turn 的一条消息（用于逐条落库，替代批覆盖）。
 
         仅插入一条 ``(turn_id, sequence)`` 记录，不触碰该 turn 的其它行；调用方负责
@@ -78,6 +79,7 @@ class TurnMessageCrud:
                     metadata_json=json.dumps(message.metadata, ensure_ascii=False)
                     if message.metadata
                     else None,
+                    in_context=in_context,
                 )
             )
 
@@ -124,7 +126,7 @@ class TurnMessageCrud:
             rows = (
                 session.execute(
                     select(TurnMessageModel)
-                    .where(TurnMessageModel.turn_id == turn_id)
+                    .where(and_(TurnMessageModel.in_context, TurnMessageModel.turn_id == turn_id))
                     .order_by(TurnMessageModel.sequence)
                 )
                 .scalars()

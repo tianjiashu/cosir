@@ -128,7 +128,7 @@ class TurnCrud:
         """
 
         with self._session_factory() as session:
-            row = session.get(TurnModel, turn_id)
+            row: TurnModel | None = session.get(TurnModel, turn_id)
         if row is None:
             raise KeyError(turn_id)
         return self._turn_from_model(row)
@@ -354,62 +354,6 @@ class TurnCrud:
             )
         return bool(result.rowcount)
 
-    def get_first_for_task(self, task_id: str) -> TurnRecord:
-        """返回某任务下创建时间最早的 turn。
-
-        参数:
-            task_id: 任务标识。
-
-        返回:
-            该任务最早创建的 ``TurnRecord``。
-
-        异常:
-            KeyError: 如果该任务下没有任何 turn。
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-
-        with self._session_factory() as session:
-            row = session.execute(
-                select(TurnModel)
-                .where(TurnModel.task_id == task_id)
-                .order_by(asc(TurnModel.created_at))
-                .limit(1)
-            ).scalar_one_or_none()
-        if row is None:
-            raise KeyError(task_id)
-        return self._turn_from_model(row)
-
-    def get_latest_turn(self, task_id: str) -> TurnRecord:
-        """返回某任务下创建时间最新的 turn（跨轮继续对话的当前轮）。
-
-        参数:
-            task_id: 任务标识。
-
-        返回:
-            该任务最新创建的 ``TurnRecord``。
-
-        异常:
-            KeyError: 如果该任务下没有任何 turn。
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-
-        with self._session_factory() as session:
-            row = session.execute(
-                select(TurnModel)
-                .where(TurnModel.task_id == task_id)
-                .order_by(TurnModel.created_at.desc(), TurnModel.turn_id.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-        if row is None:
-            raise KeyError(task_id)
-        return self._turn_from_model(row)
-
     def list_ids_by_task_ids(self, task_ids: list[str]) -> list[str]:
         """返回一批任务下全部 turn 的标识列表。
 
@@ -489,7 +433,4 @@ class TurnCrud:
             from_text(row.updated_at),
             row.end_reason,
             row.response_text,
-            row.agent_id,
-            row.parent_turn_id,
-            row.delegation_id,
         )

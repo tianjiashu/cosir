@@ -52,11 +52,17 @@ class TaskCrud:
         last_message_preview: str,
         latest_turn_id: str | None = None,
         status: str | None = None,
+        task_type: str = "user",
+        parent_task_id: str | None = None,
+        parent_turn_id: str | None = None,
+        delegation_id: str | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
         ``task_id`` 由调用方提供（通常为 UUID），``created_at`` / ``updated_at`` 由本方法以
-        当前 UTC 时间统一填充。
+        当前 UTC 时间统一填充。``task_type`` 区分用户创建任务（``"user"``）与委派子任务
+        （``"delegation"``）；委派子任务通过 ``parent_task_id`` / ``parent_turn_id`` /
+        ``delegation_id`` 关联父任务与委派记录。
 
         参数:
             task_id: 任务唯一标识（调用方保证全局唯一）。
@@ -67,12 +73,16 @@ class TaskCrud:
             last_message_preview: 最近一条消息的预览文本。
             latest_turn_id: 最新一轮对话的 turn 标识，允许为 None（task 创建时首 turn 尚未生成）。
             status: 任务初始状态，允许为 None，缺省时回退为 ``"pending"``。
+            task_type: 任务类型，``"user"`` 或 ``"delegation"``，缺省为 ``"user"``。
+            parent_task_id: 父任务标识，委派子任务必填，用户任务为 None。
+            parent_turn_id: 触发委派的父 turn 标识，委派子任务必填，用户任务为 None。
+            delegation_id: 关联的委派记录标识，委派子任务必填，用户任务为 None。
 
         返回:
             落库成功的 ``TaskRecord``（含填充好的创建 / 更新时间）。
 
         异常:
-            sqlalchemy.exc.IntegrityError: 如果 task_id 冲突或违反约束。
+            sqlalchemy.exc.IntegrityError: 如果 task_id 冲突、违反外键约束或 delegation_id 重复。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
@@ -91,6 +101,10 @@ class TaskCrud:
             status=effective_status,
             created_at=now,
             updated_at=now,
+            task_type=task_type,
+            parent_task_id=parent_task_id,
+            parent_turn_id=parent_turn_id,
+            delegation_id=delegation_id,
         )
         with self._session_factory.begin() as session:
             session.add(
@@ -105,18 +119,25 @@ class TaskCrud:
                     status=task.status,
                     created_at=to_text(task.created_at),
                     updated_at=to_text(task.updated_at),
+                    task_type=task.task_type,
+                    parent_task_id=task.parent_task_id,
+                    parent_turn_id=task.parent_turn_id,
+                    delegation_id=task.delegation_id,
                 )
             )
         return task
 
     def list_by_workspace(self, workspace_id: str) -> list[TaskRecord]:
-        """列出某工作区下的全部 task，按更新时间倒序。
+        """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。
+
+        委派子任务（``task_type='delegation'``）不出现在侧边栏对话列表中，因此本方法仅返回
+        ``task_type='user'`` 的任务。
 
         参数:
             workspace_id: 工作区标识。
 
         返回:
-            该工作区的 task 列表，按 ``updated_at`` 再 ``task_id`` 倒序排列；无匹配时为空列表。
+            该工作区的用户任务列表，按 ``updated_at`` 再 ``task_id`` 倒序排列；无匹配时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -128,8 +149,39 @@ class TaskCrud:
             rows = (
                 session.execute(
                     select(TaskModel)
-                    .where(TaskModel.workspace_id == workspace_id)
+                    .where(
+                        TaskModel.workspace_id == workspace_id,
+                        TaskModel.task_type == "user",
+                    )
                     .order_by(TaskModel.updated_at.desc(), TaskModel.task_id.desc())
+                )
+                .scalars()
+                .all()
+            )
+        return [self._task_from_model(row) for row in rows]
+
+    def list_by_parent_task(self, parent_task_id: str) -> list[TaskRecord]:
+        """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。
+
+        参数:
+            parent_task_id: 父任务标识。
+
+        返回:
+            该父任务的直接子任务列表（``task_type='delegation'`` 且 ``parent_task_id`` 匹配）；
+            无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+        with self._session_factory() as session:
+            rows = (
+                session.execute(
+                    select(TaskModel)
+                    .where(TaskModel.parent_task_id == parent_task_id)
+                    .order_by(TaskModel.created_at.asc(), TaskModel.task_id.asc())
                 )
                 .scalars()
                 .all()
@@ -313,4 +365,8 @@ class TaskCrud:
             status=row.status,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
+            task_type=row.task_type,
+            parent_task_id=row.parent_task_id,
+            parent_turn_id=row.parent_turn_id,
+            delegation_id=row.delegation_id,
         )

@@ -113,6 +113,7 @@ class DelegationCrud:
         delegation_id: str,
         status: str,
         child_turn_id: str | None = None,
+        child_task_id: str | None = None,
         summary: str | None = None,
         error: str | None = None,
     ) -> DelegationRecord:
@@ -122,6 +123,7 @@ class DelegationCrud:
             delegation_id: 待更新 delegation 的标识。
             status: 新的 delegation 状态。
             child_turn_id: 可选的 child turn 标识；传入时覆盖原值。
+            child_task_id: 可选的 child task 标识；传入时覆盖原值。
             summary: 可选的 child 执行摘要；传入时覆盖原值。
             error: 可选的失败信息；传入时覆盖原值。
 
@@ -140,6 +142,8 @@ class DelegationCrud:
         values: dict[str, str] = {"status": status, "updated_at": to_text(utc_now())}
         if child_turn_id is not None:
             values["child_turn_id"] = child_turn_id
+        if child_task_id is not None:
+            values["child_task_id"] = child_task_id
         if summary is not None:
             values["summary"] = summary
         if error is not None:
@@ -320,6 +324,8 @@ def _record_from_model(row: DelegationModel) -> DelegationRecord:
         task_id=row.task_id,
         parent_turn_id=row.parent_turn_id,
         child_turn_id=row.child_turn_id,
+        # 既有数据的 child_task_id 可能为 NULL，统一兜底为空串以匹配 DelegationRecord 的 str 字段。
+        child_task_id=row.child_task_id or "",
         parent_agent_id=row.parent_agent_id,
         child_agent_id=row.child_agent_id,
         delegation_type=row.delegation_type,
@@ -353,6 +359,7 @@ def _model_from_record(record: DelegationRecord) -> DelegationModel:
         task_id=record.task_id,
         parent_turn_id=record.parent_turn_id,
         child_turn_id=record.child_turn_id,
+        child_task_id=record.child_task_id,
         parent_agent_id=record.parent_agent_id,
         child_agent_id=record.child_agent_id,
         delegation_type=record.delegation_type,
@@ -386,6 +393,7 @@ def _model_values(record: DelegationRecord) -> dict:
         "task_id": record.task_id,
         "parent_turn_id": record.parent_turn_id,
         "child_turn_id": record.child_turn_id,
+        "child_task_id": record.child_task_id,
         "parent_agent_id": record.parent_agent_id,
         "child_agent_id": record.child_agent_id,
         "delegation_type": record.delegation_type,

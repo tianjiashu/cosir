@@ -15,6 +15,7 @@ class DelegationModel(StorageBase):
     task_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     parent_turn_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     child_turn_id: Mapped[str] = mapped_column(Text, nullable=False)
+    child_task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     child_agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     delegation_type: Mapped[str] = mapped_column(Text, nullable=False)
