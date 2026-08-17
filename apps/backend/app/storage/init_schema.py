@@ -47,12 +47,17 @@ LOG_SCHEMA_VERSION = 2
 
 
 def initialize_app_schema(engine: Engine) -> None:
-    """初始化主库（业务数据库）schema，并对已存在的表补齐缺失列。
+    """初始化主库（业务数据库）schema，并对已存在的表补齐缺失列与索引。
 
-    对 ``APP_MODELS`` 中的每个 model 执行“存在则跳过、不存在则建表”，随后逐表比对模型定义
-    与实际列，缺失的列以 ``ALTER TABLE ADD COLUMN`` 补齐（保守迁移，不删列、不改列）；最后
-    对已被移除的 ``durable_runs`` 表执行一次性 ``DROP TABLE IF EXISTS``，清理存量库孤儿表。
-    整个过程在单个事务中完成，失败会整体回滚。
+    完整流程（单事务，失败整体回滚）：
+    1) 对 ``APP_MODELS`` 中的每个 model 执行“存在则跳过、不存在则建表”；
+    2) 逐表比对模型定义与实际列，缺失的列以 ``ALTER TABLE ADD COLUMN`` 补齐
+       （保守迁移，不删列、不改列）；
+    3) 对存量 ``file_snapshots`` 执行一次性 seq 迁移（``_backfill_file_snapshot_task_seq``：
+       删除孤儿快照、回填 task_id、按 ``(task_id, created_at, turn_id, seq, id)`` 重排
+       seq），必须早于建索引，否则 ``(task_id, seq)`` 唯一索引在重叠存量数据上建不起来；
+    4) 补建模型声明的新索引（``_ensure_model_indexes``）；
+    5) 清理孤儿列与孤儿表（``_drop_orphan_task_columns`` / ``_drop_orphan_durable_runs``）。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
@@ -61,17 +66,19 @@ def initialize_app_schema(engine: Engine) -> None:
         无。
 
     异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果建表或列迁移执行失败。
+        sqlalchemy.exc.SQLAlchemyError: 如果建表、列迁移或 seq 迁移执行失败。
 
     副作用:
-        创建缺失的业务表；对已存在的表追加缺失列；清理 ``durable_runs`` 孤儿表。已有
-        业务数据原样保留。
+        创建缺失的业务表；对已存在的表追加缺失列、补建索引；清理孤儿列/孤儿表。
+        除一次性 seq 迁移会重排存量快照的 task_id/seq、清理孤儿快照行外，业务数据
+        不丢失。
     """
 
     with engine.begin() as connection:
         for model in APP_MODELS:
             cast(Table, model.__table__).create(bind=connection, checkfirst=True)
         _ensure_model_columns(connection, engine)
+        _backfill_file_snapshot_task_seq(connection)
         _ensure_model_indexes(connection)
         _drop_orphan_task_columns(connection)
         _drop_orphan_durable_runs(connection)
@@ -100,6 +107,71 @@ def _drop_orphan_durable_runs(connection) -> None:
     if inspect(connection).has_table("durable_runs"):
         connection.execute(text("DROP TABLE IF EXISTS durable_runs"))
         log.info("dropped orphan table durable_runs")
+
+
+def _backfill_file_snapshot_task_seq(connection) -> None:
+    """一次性把存量 file_snapshots 迁移到「task 为 seq 命名空间」的新语义。
+
+    旧版（seq 按 turn 内递增且表无 task_id 列）下，同 task 的跨 turn 快照 seq 相互
+    重叠，跨 turn 聚合按 seq 排序时「最新变更」判定错乱，撤销可能还原到旧状态。本
+    迁移做三件事（仅当 file_snapshots 与 turns 表均存在时执行，幂等）：
+
+    1) 删除孤儿快照：所属 turn 已被删除的行无法归因任何 task，直接清理；
+    2) 回填 task_id：每行取所属 turn 的 task_id；
+    3) 重排 seq：按 (task_id, turn 创建顺序, turn_id, 原 seq, 行 id) 稳定排序后，
+       把每个 task 内的快照重编号为连续递增 0..N-1，使 (task_id, seq) 在存量数据
+       上唯一。排序键与 ``TurnCrud.list_by_task`` 对齐，保证迁移排序与运行时回放
+       排序同构。
+
+    必须早于 ``_ensure_model_indexes`` 执行：``uq_file_snapshots_task_seq`` 唯一索引
+    只在存量数据满足唯一性后才能创建，否则建索引抛错导致整个迁移回滚。
+
+    参数:
+        connection: 当前处于事务中的 SQLAlchemy 连接。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果任一 SQL 执行失败。
+
+    副作用:
+        可能删除孤儿快照行、改写存量快照的 task_id 与 seq；写 info 日志。
+    """
+    # 防御：当前初始化流程保证 turns 先于 file_snapshots 建表，但函数被单独调用时
+    # 仍要求两张表都存在，否则 JOIN/DELETE 会报 no such table。
+    if not inspect(connection).has_table("file_snapshots") or not inspect(
+        connection
+    ).has_table("turns"):
+        return
+    deleted = connection.execute(
+        text("DELETE FROM file_snapshots WHERE turn_id NOT IN (SELECT turn_id FROM turns)")
+    )
+    if deleted.rowcount:
+        log.info("deleted %d orphan file_snapshots rows", deleted.rowcount)
+
+    # ORDER BY 与 TurnCrud.list_by_task 的排序键 (created_at, turn_id) 对齐，保持
+    # 「迁移排序」与「运行时回放排序」同构；seq/id 为同 task 内并列时的稳定兜底。
+    rows = connection.execute(
+        text(
+            "SELECT fs.id AS fs_id, t.task_id AS task_id "
+            "FROM file_snapshots fs JOIN turns t ON t.turn_id = fs.turn_id "
+            "ORDER BY t.task_id, t.created_at, t.turn_id, fs.seq, fs.id"
+        )
+    ).fetchall()
+    if not rows:
+        return
+    seq_by_task: dict[str, int] = {}
+    for row in rows:
+        fs_id = row[0]
+        task_id = row[1]
+        nxt = seq_by_task.get(task_id, 0)
+        connection.execute(
+            text("UPDATE file_snapshots SET task_id = :tid, seq = :seq WHERE id = :id"),
+            {"tid": task_id, "seq": nxt, "id": fs_id},
+        )
+        seq_by_task[task_id] = nxt + 1
+    log.info("backfilled file_snapshots task_id/seq for %d rows", len(rows))
 
 
 def _drop_orphan_task_columns(connection) -> None:

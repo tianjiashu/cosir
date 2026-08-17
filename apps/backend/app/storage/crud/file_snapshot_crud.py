@@ -81,14 +81,18 @@ class FileSnapshotCrud:
             )
         return [FileSnapshotRecord.from_model(row) for row in rows]
 
-    def next_seq(self, turn_id: str) -> int:
-        """返回该 turn 下一个可用的全局递增快照序号（MAX(seq)+1）。
+    def next_seq(self, task_id: str) -> int:
+        """返回该 task 下一个可用的快照序号（``MAX(seq)+1``，task 内递增）。
+
+        seq 的命名空间是 **task**：同一 task 下按 turn 执行序单调递增，不同 task
+        各自从 0 开始互不共享。``(task_id, seq)`` 唯一索引作为保险丝，防止未来误用
+        打破命名空间。
 
         参数:
-            turn_id: 目标轮次标识。
+            task_id: 目标任务标识。
 
         返回:
-            下一个 seq；若该 turn 尚无快照则返回 0。
+            下一个 seq；若该 task 尚无快照则返回 0。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -98,17 +102,24 @@ class FileSnapshotCrud:
         """
         with self._session_factory() as session:
             max_seq = session.execute(
-                select(func.max(FileSnapshotModel.seq)).where(FileSnapshotModel.turn_id == turn_id)
+                select(func.max(FileSnapshotModel.seq)).where(
+                    FileSnapshotModel.task_id == task_id
+                )
             ).scalar()
         return 0 if max_seq is None else int(max_seq) + 1
 
-    def list_stable_by_turns(self, turn_ids: list[str]) -> list[FileSnapshotRecord]:
-        """按 turn 集合查询全部已稳定快照，按 ``seq`` 升序。
+    def list_stable_by_task(
+        self, task_id: str, turn_ids: list[str] | None = None
+    ) -> list[FileSnapshotRecord]:
+        """按 task 查询全部已稳定快照，按 ``seq`` 升序。
 
-        升序返回是为了让调用方按顺序覆盖同 path 条目，天然得到「每个 path 的最新变更」。
+        升序返回是为了让调用方按顺序覆盖同 path 条目，天然得到「每个 path 的最新变更」；
+        seq 在 task 内递增，故升序即 turn 执行序。``turn_ids`` 仅作可选子过滤（如
+        checkpoint 截断到某 turn 为止），为 ``None`` 时查询该 task 全部快照。
 
         参数:
-            turn_ids: 目标轮次标识列表；为空列表时直接返回空结果，不查库。
+            task_id: 目标任务标识（seq 命名空间边界）。
+            turn_ids: 可选轮次标识子集；为 ``None`` 时不过滤，为空列表时返回空结果。
 
         返回:
             ``stable == 1`` 的 ``FileSnapshotRecord`` 列表，按 ``seq`` 升序；无记录时为空列表。
@@ -119,29 +130,31 @@ class FileSnapshotCrud:
         副作用:
             打开一次主库只读 session。
         """
-        if not turn_ids:
+        if turn_ids is not None and not turn_ids:
             return []
         with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(FileSnapshotModel)
-                    .where(FileSnapshotModel.turn_id.in_(turn_ids))
-                    .where(FileSnapshotModel.stable == 1)
-                    .order_by(FileSnapshotModel.seq.asc())
-                )
-                .scalars()
-                .all()
+            stmt = (
+                select(FileSnapshotModel)
+                .where(FileSnapshotModel.task_id == task_id)
+                .where(FileSnapshotModel.stable == 1)
             )
+            if turn_ids is not None:
+                stmt = stmt.where(FileSnapshotModel.turn_id.in_(turn_ids))
+            rows = session.execute(stmt.order_by(FileSnapshotModel.seq.asc())).scalars().all()
         return [FileSnapshotRecord.from_model(row) for row in rows]
 
-    def list_any_by_turns(self, turn_ids: list[str]) -> list[FileSnapshotRecord]:
-        """按 turn 集合查询全部快照（含运行中 ``stable=0`` 与已稳定 ``stable=1``）。
+    def list_any_by_task(
+        self, task_id: str, turn_ids: list[str] | None = None
+    ) -> list[FileSnapshotRecord]:
+        """按 task 查询全部快照（含运行中 ``stable=0`` 与已稳定 ``stable=1``）。
 
         升序返回，使调用方按顺序覆盖同 path 条目，得到「每个 path 的最新变更」，
-        无论该变更是否随 turn 结束稳定。用于运行中可撤销查询。
+        无论该变更是否随 turn 结束稳定。用于运行中可撤销查询。``turn_ids`` 仅作
+        可选子过滤（如 checkpoint 截断），为 ``None`` 时查询该 task 全部快照。
 
         参数:
-            turn_ids: 目标轮次标识列表；为空列表时直接返回空结果，不查库。
+            task_id: 目标任务标识（seq 命名空间边界）。
+            turn_ids: 可选轮次标识子集；为 ``None`` 时不过滤，为空列表时返回空结果。
 
         返回:
             所有 ``stable`` 取值的 ``FileSnapshotRecord`` 列表，按 ``seq`` 升序；无记录时为空列表。
@@ -152,26 +165,24 @@ class FileSnapshotCrud:
         副作用:
             打开一次主库只读 session。
         """
-        if not turn_ids:
+        if turn_ids is not None and not turn_ids:
             return []
         with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(FileSnapshotModel)
-                    .where(FileSnapshotModel.turn_id.in_(turn_ids))
-                    .order_by(FileSnapshotModel.seq.asc())
-                )
-                .scalars()
-                .all()
-            )
+            stmt = select(FileSnapshotModel).where(FileSnapshotModel.task_id == task_id)
+            if turn_ids is not None:
+                stmt = stmt.where(FileSnapshotModel.turn_id.in_(turn_ids))
+            rows = session.execute(stmt.order_by(FileSnapshotModel.seq.asc())).scalars().all()
         return [FileSnapshotRecord.from_model(row) for row in rows]
 
-    def latest_stable_by_path(self, turn_ids: list[str], path: str) -> FileSnapshotRecord | None:
-        """取给定 turn 集合内某文件路径的最新已稳定快照。
+    def latest_stable_by_path(
+        self, task_id: str, path: str, turn_ids: list[str] | None = None
+    ) -> FileSnapshotRecord | None:
+        """取给定 task（可选 turn 子集）内某文件路径的最新已稳定快照。
 
         参数:
-            turn_ids: 目标轮次标识列表；为空列表时返回 None。
+            task_id: 目标任务标识（seq 命名空间边界）。
             path: 相对 workspace 的文件路径。
+            turn_ids: 可选轮次标识子集；为 ``None`` 时不过滤，为空列表时返回 None。
 
         返回:
             ``seq`` 最大的已稳定 ``FileSnapshotRecord``；无匹配时为 None。
@@ -182,32 +193,34 @@ class FileSnapshotCrud:
         副作用:
             打开一次主库只读 session。
         """
-        if not turn_ids:
+        if turn_ids is not None and not turn_ids:
             return None
         with self._session_factory() as session:
-            row = (
-                session.execute(
-                    select(FileSnapshotModel)
-                    .where(FileSnapshotModel.turn_id.in_(turn_ids))
-                    .where(FileSnapshotModel.path == path)
-                    .where(FileSnapshotModel.stable == 1)
-                    .order_by(FileSnapshotModel.seq.desc())
-                    .limit(1)
-                )
-                .scalars()
-                .first()
+            stmt = (
+                select(FileSnapshotModel)
+                .where(FileSnapshotModel.task_id == task_id)
+                .where(FileSnapshotModel.path == path)
+                .where(FileSnapshotModel.stable == 1)
             )
+            if turn_ids is not None:
+                stmt = stmt.where(FileSnapshotModel.turn_id.in_(turn_ids))
+            row = session.execute(
+                stmt.order_by(FileSnapshotModel.seq.desc()).limit(1)
+            ).scalars().first()
         return None if row is None else FileSnapshotRecord.from_model(row)
 
-    def latest_any_by_path(self, turn_ids: list[str], path: str) -> FileSnapshotRecord | None:
-        """取给定 turn 集合内某文件路径的最新快照（含运行中 ``stable=0``）。
+    def latest_any_by_path(
+        self, task_id: str, path: str, turn_ids: list[str] | None = None
+    ) -> FileSnapshotRecord | None:
+        """取给定 task（可选 turn 子集）内某文件路径的最新快照（含运行中 ``stable=0``）。
 
         用于运行中可撤销：运行时同 path 的变更可能尚未稳定，但已是该 path 的
         待撤销目标态，必须纳入查询，否则运行中撤销会漏掉最新一条。
 
         参数:
-            turn_ids: 目标轮次标识列表；为空列表时返回 None。
+            task_id: 目标任务标识（seq 命名空间边界）。
             path: 相对 workspace 的文件路径。
+            turn_ids: 可选轮次标识子集；为 ``None`` 时不过滤，为空列表时返回 None。
 
         返回:
             ``seq`` 最大的 ``FileSnapshotRecord``（不限 stable）；无匹配时为 None。
@@ -218,20 +231,19 @@ class FileSnapshotCrud:
         副作用:
             打开一次主库只读 session。
         """
-        if not turn_ids:
+        if turn_ids is not None and not turn_ids:
             return None
         with self._session_factory() as session:
-            row = (
-                session.execute(
-                    select(FileSnapshotModel)
-                    .where(FileSnapshotModel.turn_id.in_(turn_ids))
-                    .where(FileSnapshotModel.path == path)
-                    .order_by(FileSnapshotModel.seq.desc())
-                    .limit(1)
-                )
-                .scalars()
-                .first()
+            stmt = (
+                select(FileSnapshotModel)
+                .where(FileSnapshotModel.task_id == task_id)
+                .where(FileSnapshotModel.path == path)
             )
+            if turn_ids is not None:
+                stmt = stmt.where(FileSnapshotModel.turn_id.in_(turn_ids))
+            row = session.execute(
+                stmt.order_by(FileSnapshotModel.seq.desc()).limit(1)
+            ).scalars().first()
         return None if row is None else FileSnapshotRecord.from_model(row)
 
     def mark_stable_by_turn(self, turn_id: str) -> int:

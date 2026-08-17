@@ -5,8 +5,8 @@
 与既有的审计切面并行触发，互不干扰。
 
 职责边界：
-- 负责：成功判定、turn_id 判定、changes 提取、正向 V4A 构造、反转为反向操作、
-  逐文件落库 file_snapshots、采集异常本地吞 + warning。
+- 负责：成功判定、turn_id / task_id 判定、changes 提取、正向 V4A 构造、反转为
+  反向操作、逐文件落库 file_snapshots、采集异常本地吞 + warning。
 - 不负责：工具执行编排、参数校验、文件状态协调（均归 ToolScheduler / 各 guard）。
 
 失败安全语义：采集失败只记 warning 日志，不阻断工具主流程（方案 §六 可重入要求）；
@@ -37,7 +37,7 @@ class FileSnapshotHook(HookBase):
     """工具成功后采集文件回退快照的内置 Hook。
 
     挂载于 ``HookEvent.POST_TOOL_USE``，对所有工具触发；内部自行判定是否产生
-    可落库快照（仅成功、带 turn_id、且 observation.data 含 changes 的文件工具）。
+    可落库快照（仅成功、带 turn_id / task_id、且 observation.data 含 changes 的文件工具）。
     """
 
     def __init__(self) -> None:
@@ -62,13 +62,14 @@ class FileSnapshotHook(HookBase):
     def execute(self, context: HookContext) -> HookResult:
         """采集文件回退快照。
 
-        流程：非成功观察 → 跳过；无 turn_id → 跳过；无 ``observation.data`` →
-        跳过；无 ``changes`` → 跳过；构造正向 V4A、反转为反向操作、逐文件落库。
+        流程：非成功观察 → 跳过；无 turn_id 或 task_id → 跳过（task_id 缺失时
+        放弃采集，避免快照落入空串归属的 seq 命名空间）；无 ``observation.data``
+        → 跳过；无 ``changes`` → 跳过；构造正向 V4A、反转为反向操作、逐文件落库。
         任何异常 → warning 日志 + ALLOW（不阻断主流程）。
 
         参数:
             context: 运行时注入的 ``HookContext``，含 ``tool_name`` /
-                ``tool_observation`` / ``turn_id``。
+                ``tool_observation`` / ``turn_id`` / ``task_id``。
 
         返回:
             HookResult.allow()：本 Hook 永不阻断主流程（快照是旁路数据副作用，
@@ -84,7 +85,7 @@ class FileSnapshotHook(HookBase):
         observation = context.tool_observation
         if observation is None or observation.status != "success":
             return HookResult.allow()
-        if not context.turn_id:
+        if not context.turn_id or not context.task_id:
             return HookResult.allow()
         data = observation.data
         if not data:
@@ -95,13 +96,17 @@ class FileSnapshotHook(HookBase):
 
         tool_name = context.tool_name or ""
         try:
-            self._record(observation, tool_name, context.turn_id)
+            self._record(observation, tool_name, context.task_id, context.turn_id)
         except Exception:
             log.warning(
                 "file_snapshot_record_failed",
                 extra={
                     "msg": "文件快照采集失败，回退时可能丢失该次文件改动还原能力",
-                    "data": {"turn_id": context.turn_id, "tool_name": tool_name},
+                    "data": {
+                        "task_id": context.task_id,
+                        "turn_id": context.turn_id,
+                        "tool_name": tool_name,
+                    },
                 },
                 exc_info=True,
             )
@@ -111,6 +116,7 @@ class FileSnapshotHook(HookBase):
         self,
         observation: ToolObservation,
         tool_name: str,
+        task_id: str,
         turn_id: str,
     ) -> None:
         """把一次工具观察的 changes 落库为反向操作快照。
@@ -118,6 +124,7 @@ class FileSnapshotHook(HookBase):
         参数:
             observation: 归一化后的工具观察结果（提供 ``tool_call_id`` 与 ``data["changes"]``）。
             tool_name: 被执行工具名（作为快照 ``tool_name``）。
+            task_id: 任务标识（快照归属任务，seq 命名空间边界）。
             turn_id: 轮次标识（快照归属的 turn）。
 
         返回:
@@ -136,19 +143,20 @@ class FileSnapshotHook(HookBase):
                 "file_snapshot_changes_invalid",
                 extra={
                     "msg": "工具观察 data.changes 非 list，跳过文件快照采集",
-                    "data": {"turn_id": turn_id, "tool_name": tool_name},
+                    "data": {"task_id": task_id, "turn_id": turn_id, "tool_name": tool_name},
                 },
             )
             return
         forward_ops = build_forward_operations(changes)
-        diff_stats = _change_diff_stats(changes)
+        diff_stats: list[tuple[int, int]] = _change_diff_stats(changes)
         crud = FileSnapshotCrud()
-        next_seq = crud.next_seq(turn_id)
+        next_seq = crud.next_seq(task_id)
         for offset, forward in enumerate(forward_ops):
             reverse_op = reverse_v4a_operation(forward)
             additions, deletions = diff_stats[offset] if offset < len(diff_stats) else (0, 0)
             crud.save(
                 FileSnapshotRecord(
+                    task_id=task_id,
                     turn_id=turn_id,
                     seq=next_seq + offset,
                     tool_name=tool_name,
@@ -203,16 +211,19 @@ def _change_diff_stats(changes: list[dict]) -> list[tuple[int, int]]:
 def _reverse_op_to_json(reverse_op: "PatchOperation") -> str:
     """把反向 PatchOperation 投影为可 JSON 序列化的字典字符串。
 
-    采用 ``dataclasses.asdict`` 保留与 ``PatchOperation(**data)`` 兼容的嵌套结构
-    （``hunks`` → ``{"lines": [{"prefix", "content"}]}``），仅把 ``OperationType``
-    枚举落为 ``value`` 字符串以满足 JSON 序列化，确保回退侧可直接
-    ``PatchOperation(**json.loads(op_json))`` 重建。
+    采用 ``dataclasses.asdict`` 保留与 ``PatchOperation`` dataclass 字段名/嵌套形状
+    兼容的结构：``operation`` 落为 ``OperationType`` 的 ``value`` 字符串、``hunks``
+    展开为 ``{"lines": [{"prefix", "content"}], "context_hint": null}``，确保
+    ``json.dumps`` 可直接序列化。回退侧不能 ``PatchOperation(**data)`` 直接重建
+    （``operation`` 为字符串、``hunks`` 内 ``HunkLine`` 为 dict，直接构造的对象
+    不可用），须按 ``change_set_service._snapshots_to_operations`` 的方式手动重建：
+    ``OperationType(value)`` 转枚举、逐层构造 ``Hunk``/``HunkLine`` 后再使用。
 
     参数:
         reverse_op: 已构造的反向 PatchOperation（含 OperationType 枚举与嵌套 Hunk）。
 
     返回:
-        JSON 字符串；结构与 ``PatchOperation`` 构造参数一致。
+        JSON 字符串；结构与 ``PatchOperation`` 构造参数兼容（枚举已落为 value）。
 
     异常:
         无。
@@ -222,6 +233,20 @@ def _reverse_op_to_json(reverse_op: "PatchOperation") -> str:
     """
 
     def _enum_to_value(obj: object) -> object:
+        """把对象树中的 Enum 递归转为 ``value`` 字符串，使 asdict 结果可 JSON 序列化。
+
+        参数:
+            obj: ``dataclasses.asdict`` 产出的任意嵌套对象（Enum / dict / list / 叶子）。
+
+        返回:
+            同构对象树，Enum 节点替换为 ``value`` 字符串。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
         if isinstance(obj, enum.Enum):
             return obj.value
         if isinstance(obj, dict):

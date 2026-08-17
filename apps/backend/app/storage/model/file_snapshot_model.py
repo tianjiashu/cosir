@@ -20,12 +20,29 @@ class FileSnapshotModel(StorageBase):
     ``stable`` 标记该变更是否已稳定：所属 turn 运行中落库为 0（不展示、不可撤销），
     turn 结束时置 1 才进入 task 级变更集。``status`` 为用户对该文件最新变更的处理态，
     取 ``pending`` / ``kept`` / ``reverted`` 三态之一。
+
+    ``seq`` 为 **task 内**递增序号：同一 task 下按 turn 执行序单调递增，不同 task
+    各自从 0 开始互不共享命名空间（task 是并发边界）。``task_id`` 列如实表达快照
+    归属；``uq_file_snapshots_task_seq`` 唯一索引作为防御保险丝，防止未来误用把
+    seq 命名空间打破导致跨 task/turn 排序错乱。``idx_file_snapshots_turn_seq`` 供
+    按单 turn 回放查询使用。
     """
 
     __tablename__ = "file_snapshots"
-    __table_args__ = (Index("idx_file_snapshots_turn_seq", "turn_id", "seq"),)
+    __table_args__ = (
+        # 单 turn 回放（list_by_turn）：turn_id + seq 升序。
+        Index("idx_file_snapshots_turn_seq", "turn_id", "seq"),
+        # task 聚合查询（list_*_by_task）与 latest_by_path：task_id + path + seq。
+        Index("idx_file_snapshots_task_path_seq", "task_id", "path", "seq"),
+        # 保险丝：task 内 seq 必须唯一（seq 命名空间 = task）。
+        Index("uq_file_snapshots_task_seq", "task_id", "seq", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 快照归属任务：seq 的命名空间与并发边界，迁移回填见 init_schema。
+    task_id: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("''")
+    )
     turn_id: Mapped[str] = mapped_column(Text, nullable=False)
     tool_call_id: Mapped[str] = mapped_column(Text, nullable=False)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)

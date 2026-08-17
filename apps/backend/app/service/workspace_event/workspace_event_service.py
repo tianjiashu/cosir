@@ -105,9 +105,10 @@ class WorkspaceEventService:
             self._bus.close(workspace_id)
             raise
 
-        # 先发布终态事件，再关闭订阅：close 会把 workspace_id 标记为已关闭，
-        # 其后的 publish 为 noop。若先 close 再 emit ready/degraded，终态事件会被吞掉，
-        # SSE 流只收到 preparing 就终止（独立审查暴露的致命时序 bug）。
+        # 先发布终态事件，再关闭订阅：close 会清空该 workspace 的订阅桶并写关闭
+        # 哨兵（对齐 RuntimeEventBus.close_turn 语义，不再写永久关闭标记）。若先
+        # close 再 emit ready/degraded，订阅桶已空、终态事件无人接收，SSE 流只收到
+        # preparing 就终止（独立审查暴露的致命时序 bug）。
         if readiness.ready:
             self._emit(
                 EventType.WORKSPACE_READY,

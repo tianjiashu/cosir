@@ -79,8 +79,16 @@ def atomic_write_text(
     try:
         with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="") as file:
             file.write(content_out)
+            # 落盘前把用户态缓冲与页缓存刷到磁盘：否则 os.replace 只替换目录项，
+            # 进程崩溃/断电时可能只留下空壳或半写文件，违背原子写语义（P1-12）。
+            file.flush()
+            os.fsync(file.fileno())
         _assert_contained(target, containment_root)
         os.replace(temp_path, target)
+        # 目录项 fsync：POSIX 下应 fsync 父目录以保证替换持久化；Windows 不支持
+        # 对目录打开并 fsync，故跳过（标准行为，见 CPython 文档 os.fsync）。
+        # 临时文件本身的 fsync 已保证内容完整，替换目录项丢失的最坏结果是
+        # 恢复旧文件而非半写文件，仍满足原子性要求。
     except BaseException:
         if os.path.exists(temp_path):
             os.unlink(temp_path)

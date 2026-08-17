@@ -20,9 +20,12 @@ class FileSnapshotRecord:
     最新变更的处理态。``additions`` / ``deletions`` 为该次变更相对上一次的 diff
     增删行数（采集时用 difflib 统计，MOVE 计 0/0），供变更集行内展示。
     ``id`` 为数据库自增主键，构造占位为 -1，落库由存储引擎分配。
+    ``task_id`` 为快照归属任务；``seq`` 为 **task 内**递增序号（不同 task 各自从 0
+    开始，task 是 seq 的命名空间与并发边界）。
     """
 
     id: int = field(default=-1)
+    task_id: str = ""
     turn_id: str = ""
     tool_call_id: str = ""
     tool_name: str = ""
@@ -54,6 +57,7 @@ class FileSnapshotRecord:
         """
         return cls(
             id=row.id,
+            task_id=row.task_id,
             turn_id=row.turn_id,
             tool_call_id=row.tool_call_id,
             tool_name=row.tool_name,
@@ -84,6 +88,7 @@ class FileSnapshotRecord:
             无。
         """
         return {
+            "task_id": self.task_id,
             "turn_id": self.turn_id,
             "tool_call_id": self.tool_call_id,
             "tool_name": self.tool_name,

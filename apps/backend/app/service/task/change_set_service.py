@@ -102,16 +102,20 @@ class ChangeSet:
 
 def _turn_ids_until(
     task_id: str, checkpoint_turn_id: str | None
-) -> tuple[list[str], list[ChangeCheckpoint]]:
-    """解析 task 下参与聚合的 turn 列表与检查点列表。
+) -> tuple[list[str] | None, list[ChangeCheckpoint]]:
+    """解析 task 下参与聚合的 turn 过滤集合与检查点列表。
+
+    seq 命名空间已按 task 隔离（task 内递增），聚合查询默认按 ``task_id`` 直查即可；
+    仅当指定 ``checkpoint_turn_id``（截断到某 turn 为止）时才需要 turn 过滤集合。
 
     参数:
         task_id: 任务标识。
-        checkpoint_turn_id: 检查点轮次标识；为 None 表示取全部 turn。
+        checkpoint_turn_id: 检查点轮次标识；为 None 表示不截断（聚合该 task 全部快照）。
 
     返回:
-        二元组 ``(turn_ids, checkpoints)``：前者为参与变更聚合的 turn 标识（按时间升序，
-        指定检查点时截断到该 turn 含），后者为该 task 全部检查点（不受截断影响，供前端下拉）。
+        二元组 ``(turn_ids, checkpoints)``：前者为参与变更聚合的 turn 过滤集合（按时间升序，
+        指定检查点时截断到该 turn 含，为 None 表示不过滤 turn），后者为该 task 全部检查点
+        （不受截断影响，供前端下拉）。
 
     异常:
         ValueError: 当 ``checkpoint_turn_id`` 不属于该 task 时抛出。
@@ -124,12 +128,12 @@ def _turn_ids_until(
         ChangeCheckpoint(turn_id=turn.turn_id, turn_seq=index, label=f"检查点 {index}")
         for index, turn in enumerate(turns, start=1)
     ]
+    if checkpoint_turn_id is None:
+        return None, checkpoints
     turn_ids = [turn.turn_id for turn in turns]
-    if checkpoint_turn_id is not None:
-        if checkpoint_turn_id not in turn_ids:
-            raise ValueError(f"checkpoint turn not in task: {checkpoint_turn_id}")
-        turn_ids = turn_ids[: turn_ids.index(checkpoint_turn_id) + 1]
-    return turn_ids, checkpoints
+    if checkpoint_turn_id not in turn_ids:
+        raise ValueError(f"checkpoint turn not in task: {checkpoint_turn_id}")
+    return turn_ids[: turn_ids.index(checkpoint_turn_id) + 1], checkpoints
 
 
 def query_change_set(
@@ -159,7 +163,9 @@ def query_change_set(
     turn_ids, checkpoints = _turn_ids_until(task_id, checkpoint_turn_id)
     crud = FileSnapshotCrud()
     snapshots = (
-        crud.list_any_by_turns(turn_ids) if include_running else crud.list_stable_by_turns(turn_ids)
+        crud.list_any_by_task(task_id, turn_ids)
+        if include_running
+        else crud.list_stable_by_task(task_id, turn_ids)
     )
     latest: dict[str, ChangeFileEntry] = {}
     for snap in snapshots:
@@ -198,8 +204,7 @@ def _require_latest_any(task_id: str, path: str) -> FileSnapshotRecord:
     副作用:
         打开主库只读查询。
     """
-    turn_ids, _ = _turn_ids_until(task_id, None)
-    snapshot = FileSnapshotCrud().latest_any_by_path(turn_ids, path)
+    snapshot = FileSnapshotCrud().latest_any_by_path(task_id, path)
     if snapshot is None:
         raise ValueError(f"no change for path: {path}")
     return snapshot
@@ -629,6 +634,12 @@ def _snapshots_to_operations(
 
     返回:
         可直接喂给 ``apply_all_with_diff`` 的反向 PatchOperation 列表。
+
+    异常:
+        无。
+
+    副作用:
+        无。
     """
     operations: list[PatchOperation] = []
     for snap in snapshots:

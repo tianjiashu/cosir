@@ -49,8 +49,9 @@ class RuntimeEventCrud:
 
         参数:
             event_dict: 已序列化的事件字典（来自 ``RuntimeEvent.to_dict()``），
-                必须包含 ``event_id``、``event_type``、``task_id``、``turn_id``、
-                ``sequence``、``payload``、``created_at`` 字段。
+                必须包含 ``event_id``、``event_type``、``task_id``、``sequence``、
+                ``payload``、``created_at`` 字段；``turn_id`` 键必含但值可为
+                None（无 turn 归属的事件，sequence 默认 0）。
 
         返回:
             无。
@@ -96,7 +97,8 @@ class RuntimeEventCrud:
         """Assign and persist the next turn-local runtime event sequence atomically.
 
         参数:
-            event_dict: 已序列化的事件字典，必须包含 ``turn_id``。
+            event_dict: 已序列化的事件字典；``turn_id`` 为 None 或空串时降级走
+                ``save_event``（不分配 turn 内 sequence）。
 
         返回:
             实际写入的 sequence。
