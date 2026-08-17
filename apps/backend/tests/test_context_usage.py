@@ -10,10 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.config.settings import Settings
-from app.core.context.context_usage_meter import (
-    ContextUsageMeter,
-    should_track_context_usage,
-)
+from app.core.context.context_usage_meter import ContextUsageMeter
 from app.core.llm.model_catalog import ModelCatalog
 from app.models.enums.event_type import EventType
 from app.models.payload.registry.runtime_event_payload_registry import (
@@ -238,8 +235,9 @@ def test_runtime_context_attach_meter_marks_dirty() -> None:
         description="test",
         allowed_tools=["read_file", "write_file"],
         model_name="deepseek-v4-flash",
+        main_agent=True,
     )
-    # 直接构造 RuntimeContext（不经 load_for_task，避免测试依赖存储初始化），
+    # 直接构造 RuntimeContextManager（不经 load_history，避免测试依赖存储初始化），
     # 验证挂载计量器后 add_message 触发脏标记重算。
     ctx = RuntimeContextManager(
         agent_profile=profile,
@@ -358,7 +356,7 @@ def test_emit_context_usage_skips_when_meter_absent() -> None:
     mn._runtime_context = lambda: _FakeCtxNoMeter()  # type: ignore[assignment]
     try:
         # 不应抛异常；write_event 未被调用（此处不验证，仅确认不崩）
-        mn._emit_context_usage(step_id="s1")
+        mn._emit_context_usage(step_id="s1", task_id="task-1")
     finally:
         mn._runtime_context = saved  # type: ignore[assignment]
 
@@ -379,19 +377,6 @@ def test_emit_context_usage_swallows_meter_error() -> None:
     mn._runtime_context = lambda: _FakeCtxBoom()  # type: ignore[assignment]
     try:
         # 不应抛；异常被 log.exception 捕获
-        mn._emit_context_usage(step_id="s2")
+        mn._emit_context_usage(step_id="s2", task_id="task-1")
     finally:
         mn._runtime_context = saved  # type: ignore[assignment]
-
-
-# --------------------------------------------------------------------------- #
-# 子 Agent 是否统计上下文圆环
-# --------------------------------------------------------------------------- #
-def test_should_track_context_usage_top_level_turn() -> None:
-    """顶层用户 turn（parent_turn_id 为 None）应统计。"""
-    assert should_track_context_usage(None) is True
-
-
-def test_should_track_context_usage_child_agent_turn() -> None:
-    """委派子 Agent turn（parent_turn_id 非空）不统计。"""
-    assert should_track_context_usage("parent-turn-1") is False

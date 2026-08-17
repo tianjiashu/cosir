@@ -39,6 +39,7 @@ from app.models.payload import (
     RunFinishedPayload,
     StepStartedPayload,
 )
+from app.service.depends import get_task_service
 from app.tools.schemas import ToolCall
 from app.utils.trace_infra.redaction import redact_terminal_output
 
@@ -53,25 +54,29 @@ from .common import (
 from .model_tool_helper import InvalidToolOutcome, ModelToolHelper
 
 
-def _emit_context_usage(step_id: str) -> None:
-    """发出当前上下文窗口 token 占用事件（输入侧本地估算）。
+def _emit_context_usage(step_id: str, task_id: str) -> None:
+    """发出当前上下文窗口 token 占用事件（输入侧本地估算）并回写任务占用。
 
     参数:
         step_id: 当前模型步唯一标识，用于事件关联与排查。
+        task_id: 当前执行任务的标识，用于把占用回写进 ``tasks.context_usage_used``。
 
     返回:
         无。
 
     异常:
-        无（计量器未挂载或估算失败时记日志，不中断模型节点主流程）。
+        无（计量器未挂载、估算失败或回写失败时记日志，均不中断模型节点主流程）。
 
     副作用:
-        经 ``write_event`` 写入一条 ``EventType.CONTEXT_USAGE`` 事件。
+        经 ``write_event`` 写入一条 ``EventType.CONTEXT_USAGE`` 事件；经
+        ``TaskService.update_context_usage`` 持久化该任务最近一次已用 token。
 
     说明:
         ``meter is None`` 是预期路径而非异常：计量器仅在 ReactLikeWorkflow 挂载，非 ReAct
         路径或测试构造的 RuntimeContext 不挂，此时静默跳过、不报错。估算失败用 ``log.exception``
-        保留堆栈以便排查本地估算逻辑缺陷，但绝不抛向上层导致模型调用中断。
+        保留堆栈以便排查本地估算逻辑缺陷，但绝不抛向上层导致模型调用中断。任务回写失败同样
+        只记日志，不影响模型节点（total 不落库，前端打开任务时由 ``resolve_context_window``
+        动态计算）。
     """
     runtime_context = _runtime_context()
     meter = runtime_context.usage_meter
@@ -85,10 +90,27 @@ def _emit_context_usage(step_id: str) -> None:
             extra={"msg": "上下文估算失败，跳过事件", "data": {"step_id": step_id}},
         )
         return
+    if usage is None:
+        # 计量器虽挂载但未能产出占用（如无任何消息可估算），属预期边界，记 warning 而非崩溃。
+        log.warning(
+            "context_usage_meter_empty",
+            extra={"msg": "上下文占用为空，跳过事件与回写", "data": {"step_id": step_id}},
+        )
+        return
     write_event(
         EventType.CONTEXT_USAGE,
         ContextUsagePayload(used_tokens=usage.used_tokens, total_tokens=usage.total_tokens),
     )
+    try:
+        get_task_service().update_context_usage(task_id, usage.used_tokens)
+    except Exception:
+        log.exception(
+            "context_usage_task_persist_failed",
+            extra={
+                "msg": "上下文占用回写任务失败，不影响模型执行",
+                "data": {"task_id": task_id, "step_id": step_id, "used_tokens": usage.used_tokens},
+            },
+        )
 
 
 def _redact_invalid_tool_calls_for_log(raw_list: list[Any]) -> list[Any]:
@@ -203,7 +225,7 @@ def _invalid_tool_calls_from_chunks(chunks: list[AIMessageChunk]) -> list[dict[s
 def _extract_reasoning_content(chunk) -> str:
     """从 LangChain 消息 chunk 的 additional_kwargs 提取 DeepSeek 思考过程分片。
 
-    ``DeepSeekChatOpenAI`` 已把流式分块中的 ``reasoning_content`` 写入
+    ``ChatLiteLLM`` 已把流式分块中的 ``reasoning_content`` 写入
     ``additional_kwargs["reasoning_content"]``；本函数在不支持 thinking 的模型（该字段缺失）
     时安全返回空串。逐 token 流式场景下，每个 chunk 携带的只是思考片段，由调用方累加到客户端。
 
@@ -212,6 +234,12 @@ def _extract_reasoning_content(chunk) -> str:
 
     返回:
         思考过程文本分片；无则空串。
+
+    异常:
+        无（对缺失属性与非字符串值均安全降级为空串）。
+
+    副作用:
+        无（纯读取 chunk 字段，不写任何外部状态）。
     """
 
     additional = getattr(chunk, "additional_kwargs", None)  # 防止无该属性时报错
@@ -397,7 +425,7 @@ def _collect_chunk_to_ai_message(chunks: list[AIMessageChunk]) -> AIMessage:
     additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
     additional.pop("reasoning_content", None)
     # content 统一抽纯文本：防御 DeepSeek 偶发把工具调用 block 带进 content list 的形态，
-    # 与 RuntimeContextManager._to_runtime_message 落库口径保持一致，
+    # 与 RuntimeContextManager._langraph_message_to_runtime_message 落库口径保持一致，
     # 避免回灌模型时重复携带工具结构。
     return AIMessage(
         content=_extract_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
@@ -517,7 +545,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
     # 上下文窗口占用：在上下文稳定后（load_message 已归一化）立即按本地估算发出，
     # 数据来自 RuntimeContext.messages，不依赖模型 usage_metadata，turn 取消也不丢。
-    _emit_context_usage(step_id=step_id)
+    _emit_context_usage(step_id=step_id, task_id=turn.task_id)
     # 步开始
     write_event(
         EventType.STEP_STARTED,
@@ -722,7 +750,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                         ),
                         "data": {
                             "step_id": step_id,
-                            "repair_message_length": len(repair_message),
+                            "repair_message_length": len(repair_message or ""),
                         },
                     },
                 )

@@ -26,6 +26,7 @@ class TaskRecord:
     parent_task_id: str | None = None
     parent_turn_id: str | None = None
     delegation_id: str | None = None
+    context_usage_used: int | None = None
 
     @property
     def is_child(self) -> bool:
@@ -46,7 +47,7 @@ class TaskRecord:
 
         return self.parent_task_id is not None
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, str | int | None]:
         """将任务状态转换为可序列化为 JSON 的字典。
 
         参数:
@@ -54,7 +55,8 @@ class TaskRecord:
 
         返回:
             包含任务字段的字典，``latest_turn_id`` / ``execution_status`` /
-            ``parent_task_id`` / ``parent_turn_id`` / ``delegation_id`` 可能为 None。
+            ``parent_task_id`` / ``parent_turn_id`` / ``delegation_id`` /
+            ``context_usage_used`` 可能为 None。
 
         异常:
             无。
@@ -74,6 +76,7 @@ class TaskRecord:
             "parent_task_id": self.parent_task_id,
             "parent_turn_id": self.parent_turn_id,
             "delegation_id": self.delegation_id,
+            "context_usage_used": self.context_usage_used,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

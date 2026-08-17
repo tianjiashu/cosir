@@ -19,6 +19,8 @@ export interface TaskRecord {
   parent_task_id?: string | null;
   parent_turn_id?: string | null;
   delegation_id?: string | null;
+  context_usage_used?: number | null;
+  context_window_total?: number | null;
   created_at: string;
   updated_at: string;
 }

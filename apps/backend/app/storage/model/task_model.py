@@ -1,6 +1,6 @@
 """任务运行切片 SQLAlchemy model。"""
 
-from sqlalchemy import ForeignKey, Index, Text, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -29,6 +29,11 @@ class TaskModel(StorageBase):
         Text, ForeignKey("turns.turn_id"), nullable=True
     )
     delegation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_usage_used: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="最近一次上下文窗口已用 token（total 由 resolve_context_window 动态计算，不落库）",
+    )
 
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)

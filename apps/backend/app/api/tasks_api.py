@@ -21,6 +21,8 @@ from app.api.schemas import (
     TurnResponse,
 )
 from app.app import app
+from app.config.configuration import get_agent_registry
+from app.core.llm.context_window_resolver import resolve_context_window
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
@@ -31,14 +33,15 @@ async def get_task(
     task_id: str,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
-    """返回任务状态（含生命周期 status 与派生 execution_status）。
+    """返回任务状态（含生命周期 status、上下文窗口占用与派生 execution_status）。
 
     参数:
         task_id: 来自路由的任务标识。
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        ``TaskResponse``：已存储的任务状态（含 ``status`` 与 ``execution_status``）。
+        ``TaskResponse``：已存储的任务状态（含 ``status``/``execution_status``，
+        以及 ``context_usage_used`` 与动态计算的 ``context_window_total``）。
 
     异常:
         HTTPException: 当任务不存在时抛出。
@@ -48,9 +51,20 @@ async def get_task(
     """
 
     try:
-        return TaskResponse.from_record(task_service.get_task(task_id))
+        record = task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
+
+    context_window_total = None
+    try:
+        profile = get_agent_registry().resolve(record.agent_id)
+        if profile is not None:
+            context_window_total = resolve_context_window(profile.model_name)
+    except Exception:
+        # agent 目录未就绪或 model_name 无法解析时，仅缺失 total 不阻断任务返回。
+        context_window_total = None
+
+    return TaskResponse.from_record(record, context_window_total=context_window_total)
 
 
 @app.get("/tasks/{task_id}/turns")

@@ -90,7 +90,8 @@ class ContextUsageMeter:
             ContextUsage 快照（used_tokens / total_tokens）。
 
         异常:
-            无。
+            ValueError: 计量器估算产出非法占用（``used_tokens < 0`` 或 ``total_tokens <= 0``），
+                由 ``ContextUsage.__post_init__`` 校验在构造时拦截并上抛。
 
         副作用:
             更新内部缓存与脏标记。

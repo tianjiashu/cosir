@@ -12,6 +12,7 @@ import { useTaskStore } from "../stores/taskStore";
 import { loadWorkspaceTasks } from "./useWorkspaceTaskLazyLoad";
 import { useEventStore } from "../stores/eventStore";
 import { useTurnStore } from "../stores/turnStore";
+import { useContextUsageStore } from "../stores/contextUsageStore";
 import { useSSE } from "./useSSE";
 import * as api from "../services/api";
 import type { TurnRecord } from "@shared/turn";
@@ -299,6 +300,21 @@ export function useTask(): UseTaskReturn {
           addTask(task);
         }
         setTurnsForTask(taskId, turns);
+
+        // 回填上下文窗口占用：任务级真实占用由后端持久（context_usage_used），
+        // 窗口上限由后端按模型动态计算（context_window_total）。打开已有任务时
+        // 立刻呈现，无需等待下一次 CONTEXT_USAGE 事件；缺失占用时重置为初始态。
+        if (task.context_usage_used == null || task.context_window_total == null) {
+          useContextUsageStore.getState().reset();
+        } else {
+          useContextUsageStore.getState().setUsage(
+            {
+              used_tokens: task.context_usage_used,
+              total_tokens: task.context_window_total,
+            },
+            task.updated_at,
+          );
+        }
         // 关键：先切活跃任务触发 ChatPanel 首屏渲染，不等历史事件全量到达。
         // 竞态防护：仅当本次 openTask 仍是最新一次时才切活跃；否则说明用户已切到
         // 更新任务，过期响应的 task/turns 仍可缓存（updateTask/setTurnsForTask 无副作用

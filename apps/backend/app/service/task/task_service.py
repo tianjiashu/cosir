@@ -123,6 +123,42 @@ class TaskService:
 
         return self._task.update_status(task_id, status)
 
+    def update_context_usage(self, task_id: str, used: int) -> TaskRecord:
+        """持久化任务最近一次上下文窗口已用 token。
+
+        供运行时在每次模型步产出上下文占用事件后调用，使「打开历史任务」时可回显
+        该任务最近一次的真实占用。total 不落库，由 ``resolve_context_window``
+        动态计算（见 ``get_task`` API）。
+
+        参数:
+            task_id: 任务标识。
+            used: 最近一次上下文窗口已用 token 数。
+
+        返回:
+            更新后的 ``TaskRecord``。
+
+        异常:
+            KeyError: 如果指定 task 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            更新 ``tasks`` 表对应行的 context_usage_used 与 updated_at。
+        """
+
+        if used < 0:
+            # 已用 token 不可能为负；调用方传入负数属异常数据，clamp 为 0 并告警，
+            # 避免脏数据落库影响前端占比展示。
+            log.warning(
+                "context_usage_negative_clamped",
+                extra={
+                    "msg": "已用 token 为负，按 0 处理",
+                    "data": {"task_id": task_id, "used": used},
+                },
+            )
+            used = 0
+
+        return self._task.update_context_usage(task_id, used)
+
     def set_lifecycle_status(self, task_id: str, status: str) -> TaskRecord:
         """Set the user-driven lifecycle status (open/archived) only.
 

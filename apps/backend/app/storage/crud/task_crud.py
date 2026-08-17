@@ -111,6 +111,7 @@ class TaskCrud:
                     parent_task_id=task.parent_task_id,
                     parent_turn_id=task.parent_turn_id,
                     delegation_id=task.delegation_id,
+                    context_usage_used=task.context_usage_used,
                 )
             )
         return task
@@ -226,6 +227,36 @@ class TaskCrud:
             )
         return self.get(task_id)
 
+    def update_context_usage(self, task_id: str, used: int) -> TaskRecord:
+        """更新 task 最近一次上下文窗口已用 token 并刷新更新时间。
+
+        先校验 task 存在（不存在则抛出），再更新 ``context_usage_used`` 与 ``updated_at``。
+        供运行时在每次模型步产出上下文占用事件后持久化，使「打开历史任务」时可回显
+        该任务最近一次的真实占用（total 不落库，由 ``resolve_context_window`` 动态计算）。
+
+        参数:
+            task_id: 任务标识。
+            used: 最近一次上下文窗口已用 token 数。
+
+        返回:
+            更新后的 ``TaskRecord``。
+
+        异常:
+            KeyError: 如果指定 task 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            更新 ``tasks`` 表中对应行的 context_usage_used 与 updated_at。
+        """
+        self.get(task_id)
+        with self._session_factory.begin() as session:
+            session.execute(
+                update(TaskModel)
+                .where(TaskModel.task_id == task_id)
+                .values(context_usage_used=used, updated_at=to_text(utc_now()))
+            )
+        return self.get(task_id)
+
     def has_status(self, task_id: str, status: str) -> bool:
         """判断 task 当前状态是否等于给定值。
 
@@ -323,4 +354,5 @@ class TaskCrud:
             parent_task_id=row.parent_task_id,
             parent_turn_id=row.parent_turn_id,
             delegation_id=row.delegation_id,
+            context_usage_used=row.context_usage_used,
         )
