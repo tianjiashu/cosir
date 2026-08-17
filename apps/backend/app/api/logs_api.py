@@ -7,9 +7,9 @@
 from fastapi import Depends, HTTPException
 from pydantic import ValidationError
 
-from app.app import app
 from app.api.dependencies import get_log_query_service
 from app.api.schemas import LogQueryResponse, QueryLogsRequest, RecentLogsRequest
+from app.app import app
 from app.service.log_query_service import LogQueryService
 
 
@@ -21,7 +21,7 @@ async def query_logs(
     """按 trace_id 查询日志。
 
     参数:
-        req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。
+        req: 经依赖注入的查询参数（``trace_id`` / ``level`` / ``keyword`` / 时间区间 / ``limit``）。
         query_service: 通过依赖注入的日志查询 service。
 
     返回:
@@ -39,9 +39,11 @@ async def query_logs(
         result = query_service.query_by_trace(
             trace_id=req.trace_id,
             level=req.level,
+            keyword=req.keyword,
             start_time=req.start_time,
             end_time=req.end_time,
             limit=req.limit,
+            offset=req.offset,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -64,7 +66,7 @@ async def recent_logs(
     """查询最近日志。
 
     参数:
-        req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。
+        req: 经依赖注入的查询参数（``level`` / ``keyword`` / 时间区间 / ``limit``）。
         query_service: 通过依赖注入的日志查询 service。
 
     返回:
@@ -80,9 +82,11 @@ async def recent_logs(
     try:
         result = query_service.recent(
             level=req.level,
+            keyword=req.keyword,
             start_time=req.start_time,
             end_time=req.end_time,
             limit=req.limit,
+            offset=req.offset,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

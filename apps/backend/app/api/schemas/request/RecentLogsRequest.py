@@ -6,9 +6,11 @@ class RecentLogsRequest(BaseModel):
 
     参数:
         level: 可选日志级别。
+        keyword: 可选关键词（对 msg 字段做子串匹配）。
         start_time: 可选起始 UTC RFC3339 时间。
         end_time: 可选结束 UTC RFC3339 时间。
         limit: 最大返回数量（1-1000）。
+        offset: 分页起点（跳过的记录数，>=0）。
 
     返回:
         Pydantic 请求模型（经 ``Depends()`` 作为查询参数注入）。
@@ -21,6 +23,8 @@ class RecentLogsRequest(BaseModel):
     """
 
     level: str = Field(default="", description="可选日志级别")
+    keyword: str = Field(default="", description="可选关键词（对 msg 字段做子串匹配）")
     start_time: str = Field(default="", description="可选起始 UTC RFC3339 时间")
     end_time: str = Field(default="", description="可选结束 UTC RFC3339 时间")
     limit: int = Field(default=200, ge=1, le=1000, description="最大返回数量")
+    offset: int = Field(default=0, ge=0, description="分页起点（跳过记录数）")

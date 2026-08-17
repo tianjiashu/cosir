@@ -295,13 +295,17 @@ def render_logs_types() -> str:
         render_interface(
             LogEntryResponse, field_overrides={"error": "LogError | null"}
         ),
-        render_interface(LogQueryResponse),
+        render_interface(
+            LogQueryResponse, field_overrides={"level_counts": "Record<string, number>"}
+        ),
         """export interface LogQueryRequest {
   trace_id?: string;
   level?: string;
+  keyword?: string;
   start_time?: string;
   end_time?: string;
   limit?: number;
+  offset?: number;
 }""",
     ]
     return "\n\n".join(parts) + "\n"

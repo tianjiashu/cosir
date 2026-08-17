@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
+from app.config.logging.logger import log
 from app.models import LogEntryRecord, LogQuery, LogQueryResult
 from app.service import depends as service_depends
 
@@ -35,24 +36,28 @@ class LogQueryService:
         self,
         trace_id: str,
         level: str = "",
+        keyword: str = "",
         start_time: str = "",
         end_time: str = "",
         limit: int = 200,
+        offset: int = 0,
     ) -> LogQueryResult:
         """按 trace_id 查询完整链路日志。
 
         参数:
             trace_id: 必填 trace 标识（日志层唯一链路键）。
             level: 可选日志级别。
+            keyword: 可选关键词（对 msg 字段做子串匹配）。
             start_time: 可选 UTC RFC3339 起始时间。
             end_time: 可选 UTC RFC3339 结束时间。
             limit: 最大返回数量。
+            offset: 分页起点（跳过的记录数）。
 
         返回:
             包含结构化 entries 和纯文本 text 的结果。
 
         异常:
-            ValueError: 如果 trace_id、limit 或时间格式非法。
+            ValueError: 如果 trace_id、limit、offset 或时间格式非法。
 
         副作用:
             读取日志 SQLite。
@@ -63,9 +68,11 @@ class LogQueryService:
         query = LogQuery(
             trace_id=trace_id.strip(),
             level=self._normalize_level(level),
+            keyword=keyword.strip(),
             start_time=self._normalize_time(start_time),
             end_time=self._normalize_time(end_time),
             limit=self._normalize_limit(limit),
+            offset=offset,
             order="asc",
         )
         return self._query(query)
@@ -73,23 +80,27 @@ class LogQueryService:
     def recent(
         self,
         level: str = "",
+        keyword: str = "",
         start_time: str = "",
         end_time: str = "",
         limit: int = 200,
+        offset: int = 0,
     ) -> LogQueryResult:
         """查询最近日志。
 
         参数:
             level: 可选日志级别。
+            keyword: 可选关键词（对 msg 字段做子串匹配）。
             start_time: 可选 UTC RFC3339 起始时间。
             end_time: 可选 UTC RFC3339 结束时间。
             limit: 最大返回数量。
+            offset: 分页起点（跳过的记录数）。
 
         返回:
             包含结构化 entries 和纯文本 text 的结果。
 
         异常:
-            ValueError: 如果 limit 或时间格式非法。
+            ValueError: 如果 limit、offset 或时间格式非法。
 
         副作用:
             读取日志 SQLite。
@@ -97,9 +108,11 @@ class LogQueryService:
 
         query = LogQuery(
             level=self._normalize_level(level),
+            keyword=keyword.strip(),
             start_time=self._normalize_time(start_time),
             end_time=self._normalize_time(end_time),
             limit=self._normalize_limit(limit),
+            offset=offset,
             order="desc",
         )
         return self._query(query)
@@ -107,21 +120,80 @@ class LogQueryService:
     def _query(self, query: LogQuery) -> LogQueryResult:
         """执行查询并渲染纯文本。
 
+        按 ``query.offset`` / ``query.limit`` 分页拉取当页记录，并依据总记录数与本次偏移量计算
+        ``has_more``，供前端判断是否存在后续页；同时统计当前过滤集下各级别计数（``level_counts``），
+        供前端展示级别分布。
+
         参数:
-            query: 已校验的查询参数。
+            query: 已校验的查询参数（含 offset / limit）。
 
         返回:
-            查询结果。
+            含当页记录、渲染文本、总记录数、``has_more`` 标记与 ``level_counts`` 分布的查询结果。
 
         异常:
-            Exception: 如果底层日志存储查询失败。
+            Exception: 如果底层日志存储查询失败（异常会被记录为 error 日志并原样抛出）。
 
         副作用:
-            读取日志 SQLite。
+            读取日志 SQLite；写入查询入口与异常 error 日志（不含 secret）。
         """
 
-        entries = self._store.query(query)
-        return LogQueryResult(entries=entries, text=LogQueryService.render_log_entries(entries))
+        log.info(
+            "log_query_start",
+            extra={
+                "msg": "日志组合筛选查询开始",
+                "data": {
+                    "trace_id": query.trace_id,
+                    "level": query.level,
+                    "keyword": query.keyword,
+                    "event": query.event_name,
+                    "start_time": query.start_time,
+                    "end_time": query.end_time,
+                    "offset": query.offset,
+                    "limit": query.limit,
+                    "order": query.order,
+                },
+            },
+        )
+        try:
+            entries, total = self._store.query(query)
+            level_counts = self._store.count_by_level(query)
+        except Exception as err:
+            log.error(
+                "log_query_failed",
+                extra={
+                    "msg": "日志组合筛选查询失败",
+                    "data": {
+                        "trace_id": query.trace_id,
+                        "level": query.level,
+                        "keyword": query.keyword,
+                        "start_time": query.start_time,
+                        "end_time": query.end_time,
+                        "error": str(err),
+                    },
+                },
+                exc_info=True,
+            )
+            raise
+        has_more = query.offset + len(entries) < total
+        log.info(
+            "log_query_done",
+            extra={
+                "msg": "日志组合筛选查询完成",
+                "data": {
+                    "returned": len(entries),
+                    "total": total,
+                    "has_more": has_more,
+                    "level_counts": level_counts,
+                },
+            },
+        )
+        return LogQueryResult(
+            entries=entries,
+            text=LogQueryService.render_log_entries(entries),
+            total=total,
+            has_more=has_more,
+            level_counts=level_counts,
+        )
 
     def _normalize_limit(self, limit: int) -> int:
         """校验并归一化 limit。

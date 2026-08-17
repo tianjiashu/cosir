@@ -12,16 +12,20 @@ export type LogLevel = string;
 export interface QueryLogsRequest {
   trace_id: string;
   level?: string;
+  keyword?: string;
   start_time?: string;
   end_time?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface RecentLogsRequest {
   level?: string;
+  keyword?: string;
   start_time?: string;
   end_time?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface LogError extends Record<string, unknown> {
@@ -46,12 +50,17 @@ export interface LogEntryResponse {
 export interface LogQueryResponse {
   entries: LogEntryResponse[];
   text: string;
+  total?: number;
+  has_more?: boolean;
+  level_counts?: Record<string, number>;
 }
 
 export interface LogQueryRequest {
   trace_id?: string;
   level?: string;
+  keyword?: string;
   start_time?: string;
   end_time?: string;
   limit?: number;
+  offset?: number;
 }
