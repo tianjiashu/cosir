@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections import OrderedDict
 from contextlib import suppress
 
 from app.config.logging.logger import log
@@ -21,7 +22,7 @@ class RuntimeEventBus:
         """Initialize an empty in-process event bus.
 
         参数:
-            queue_size: 单个订阅者队列容量。
+            queue_size: 单个订阅者队列容量，同时作为每个 turn 去重窗口的上限。
 
         返回:
             无。
@@ -37,7 +38,9 @@ class RuntimeEventBus:
             raise ValueError("queue_size must be positive")
         self._queue_size = queue_size
         self._subscribers: dict[str, set[asyncio.Queue[RuntimeEvent | object]]] = {}
-        self._published_event_ids_by_turn: dict[str, set[str]] = {}
+        # 每个 turn 的去重窗口为有界 FIFO（OrderedDict 保插入序），容量不超过
+        # queue_size：与订阅队列满时丢最旧事件的语义保持一致。
+        self._published_event_ids_by_turn: dict[str, OrderedDict[str, None]] = {}
         self._producer_turn_ids: set[str] = set()
         self._lock = threading.RLock()
 
@@ -152,19 +155,27 @@ class RuntimeEventBus:
             无。
 
         异常:
-            无。重复 event_id 会被忽略；订阅队列满时丢弃该订阅者最旧事件并记录日志。
+            无。重复 event_id 会被忽略；去重窗口按 queue_size 有界，超出窗口的最旧
+            event_id 会被淘汰，其后的重复发布不再被忽略；订阅队列满时丢弃该订阅者
+            最旧事件并记录日志。
 
         副作用:
-            把事件写入当前订阅者的内存队列。
+            把事件写入当前订阅者的内存队列，并更新该 turn 的去重窗口。
         """
 
         if event.turn_id is None:
             return
         with self._lock:
-            published_ids = self._published_event_ids_by_turn.setdefault(event.turn_id, set())
+            published_ids = self._published_event_ids_by_turn.setdefault(
+                event.turn_id, OrderedDict()
+            )
             if event.event_id in published_ids:
                 return
-            published_ids.add(event.event_id)
+            published_ids[event.event_id] = None
+            # 去重窗口有界：超出 queue_size 即淘汰最旧 event_id，防止活跃 turn
+            # 的事件 ID 集合随发布量无限增长。
+            if len(published_ids) > self._queue_size:
+                published_ids.popitem(last=False)
             queues = list(self._subscribers.get(event.turn_id, set()))
         for queue in queues:
             try:
