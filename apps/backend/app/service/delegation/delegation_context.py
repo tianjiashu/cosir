@@ -13,7 +13,8 @@ class DelegationPolicyContext:
         child_allowed_tools: child Agent profile 声明的可用工具集合。
             ``delegate_task`` 的剔除由 ``DelegationPolicy.resolve`` 在处理过程中完成，
             调用方无需预先过滤，从而避免 child 获得委派能力而产生递归委派。
-        depth: 当前委派链深度（父 turn 无 parent 时为 0）。
+        depth: 发起者所在 task 已处的委派层数——主 Agent 顶层 task 为 0
+            （允许发起第一层委派），委派子 task 为 1（拒绝递归委派）。
         known_child_agent_ids: 注册表中已知 child Agent 标识集合。
         max_depth: 委派链最大允许深度，默认 1。并发额度（``max_concurrency``）
             的实际裁决已下沉到 storage 层的原子 acquire（``try_create_pending``），

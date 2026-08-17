@@ -281,7 +281,9 @@ class AgentRuntime:
 
         # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
         # 未绑定时回退到 task.agent_id 默认归属。
-        agent_profile: AgentProfile | None = self._agent_registry.resolve(turn.agent_id or DEFAULT_AGENT_ID)
+        agent_profile: AgentProfile | None = self._agent_registry.resolve(
+            turn.agent_id or DEFAULT_AGENT_ID
+        )
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for turn {turn_id}")
 
@@ -298,10 +300,32 @@ class AgentRuntime:
             )
             return None
 
-        agent_profile.turn = turn
+        # 派生 per-run 副本承载本轮 turn：共享注册表单例不被原地写，并发 turn 互不串扰。
+        agent_profile = agent_profile.derive_for_turn(turn)
         return self.run_agent(agent_profile)
 
     async def run_agent(self, agent: AgentProfile) -> AsyncGenerator[RuntimeEvent, None]:
+        """驱动一次 agent turn 执行并逐条透传运行时事件。
+
+        参数:
+            agent: 当前 turn 的 Agent profile。**必须是 per-run 派生副本**（经
+                ``AgentProfile.derive_for_turn`` 派生）；禁止传入共享注册表单例，
+                turn 执行期间可安全写入副本上的运行时字段（如 ``main_agent``），
+                不污染共享实例。
+
+        返回:
+            逐条产生的 ``RuntimeEvent`` 异步生成器。
+
+        异常:
+            RuntimeError: 当 ``agent.turn`` 为 None 时抛出。
+
+        副作用:
+            触发 USER_PROMPT_SUBMIT/STOP hook、落库并广播运行时事件、快照收口、
+            断连兜底终态；执行异常仅当 turn 仍处于 running 时条件落定 failed
+            （``fail_turn_if_running``），不覆写已取消/已完成的既有终态；终态已落定
+            时异常以降级 warning 留痕（含堆栈），不改变既有终态。
+        """
+
         if agent.turn is None:
             raise RuntimeError("agent profile unavailable for turn")
 
@@ -372,7 +396,29 @@ class AgentRuntime:
             )
             return
         except Exception as exc:
-            self._turn_service.update_turn_status(turn_id, "failed", end_reason=str(exc))
+            # 真执行异常：仅当本轮仍处于 running 时才条件落定 failed（fail_turn_if_running），
+            # 避免用户取消（cancelled）等已落终态被异常冒泡覆写；end_reason 保持 None
+            # （语义化枚举码，不把自由文本异常塞进枚举字段）。客户端断开由 finally 的
+            # _mark_turn_disconnected_if_running 单独落 end_reason="client_disconnected"
+            # （turn 表），与本 payload 不冲突。
+            failed_turn = self._turn_service.fail_turn_if_running(turn_id, end_reason=None)
+            if failed_turn is None:
+                # 终态已被取消/完成等先行落定：不覆写历史终态，也跳过 RUN_FAILED 投影，
+                # 避免与已有终态事件（如 RUN_CANCELLED）重复矛盾；真实异常仍须留痕
+                # （warning 级，终态非 failed，不打 task_failed 语义）。
+                log.warning(
+                    "task_failed_after_terminal",
+                    extra={
+                        "msg": "turn terminal already settled; exception not overriding",
+                        "data": {
+                            "task_id": task_id,
+                            "turn_id": turn_id,
+                            "exception": str(exc),
+                        },
+                    },
+                    exc_info=True,
+                )
+                return
             # 失败即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
             # 使运行后变更能展示与撤销。同步调用（此处非 await 上下文）。
             self._mark_stable_file_changes(turn_id)
@@ -388,7 +434,7 @@ class AgentRuntime:
                     event_type=EventType.RUN_FAILED,
                     task_id=task_id,
                     turn_id=turn_id,
-                    payload=RunFailedPayload(status="failed", error=str(exc)),
+                    payload=RunFailedPayload(status="failed", error=str(exc), end_reason=None),
                     is_main_agent=agent.main_agent,
                 ),
                 agent,
@@ -561,7 +607,7 @@ class AgentRuntime:
         try:
             self._mark_stable_file_changes(turn_id)
             crud = FileSnapshotCrud()
-            snapshots = crud.list_stable_by_turns([turn_id])
+            snapshots = crud.list_stable_by_task(task_id, [turn_id])
             if not snapshots:
                 return
             for snapshot in snapshots:
@@ -597,7 +643,6 @@ class AgentRuntime:
         return {
             "status": "ok",
             "model_provider": "deepseek",
-            "model_base_url": model_settings.base_url if model_settings is not None else "",
             "model_name": profile.model_name if profile is not None else "",
             "model_thinking_mode": (
                 "enabled" if model_settings is not None and model_settings.thinking else "disabled"
@@ -622,7 +667,7 @@ class AgentRuntime:
 
         异常:
             仅当 workspace 不存在（``KeyError``）时返回 None 并记 warning；
-            数据库层异常（如 SQLAlchemyError）按原样冒泡，由上层 ``run_turn`` 记为
+            数据库层异常（如 SQLAlchemyError）按原样冒泡，由上层 ``run_agent`` 记为
             task_failed，不做静默降级。
 
         副作用:

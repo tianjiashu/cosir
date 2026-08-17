@@ -28,6 +28,11 @@ class RunFailedPayload(RuntimeEventPayload):
 
     error: str
     status: Literal["failed"] | None = None
+    end_reason: str | None = None
+    # end_reason 为语义化枚举码，用于前端区分失败性质：
+    #   - "client_disconnected"：SSE 客户端断开导致 run 中止（turn_stream_service 兜底路径）。
+    #   - None（默认）：真执行失败，无特定语义原因（runner 异常分支）。
+    # 注意：不要把自由文本异常塞进本字段，否则前端分支判断不可枚举、排查困难。
     message: str | None = None
     step_id: str | None = None
     requested_agent_id: str | None = None

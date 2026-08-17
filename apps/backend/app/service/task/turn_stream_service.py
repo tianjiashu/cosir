@@ -24,7 +24,6 @@ from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.run_failed_payload import RunFailedPayload
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
-from app.service.depends import get_turn_service, get_runtime_event_service
 from app.service.task.turn_service import TurnService
 
 # 轮次执行器协议：service 依赖此抽象而非 core.AgentRuntime，维持 core → service 单向依赖。
@@ -331,6 +330,10 @@ class TurnStreamService:
             event_type=EventType.RUN_FAILED,
             task_id=task_id,
             turn_id=turn_id,
-            payload=RunFailedPayload(error="client_disconnected", status="failed"),
+            payload=RunFailedPayload(
+                error="client_disconnected",
+                status="failed",
+                end_reason="client_disconnected",
+            ),
         )
         self._runtime_event_service.save_and_publish(event)

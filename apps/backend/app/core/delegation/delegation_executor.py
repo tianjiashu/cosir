@@ -11,7 +11,6 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
-from app.core.delegation.child_agent_profile_builder import ChildAgentProfileBuilder
 from app.models import TaskRecord, TurnRecord
 from app.service.delegation.delegation_context import DelegationPolicyContext
 from app.service.delegation.delegation_policy import DelegationPolicy
@@ -30,12 +29,12 @@ class DelegationExecutor(DelegateTaskExecutor):
     """Production runtime implementation of the delegate_task execution port."""
 
     def __init__(
-            self,
-            child_runner: Any,
-            parent_profile: AgentProfile,
-            parent_turn: TurnRecord,
-            parent_task: TaskRecord,
-            policy: DelegationPolicy | None = None,
+        self,
+        child_runner: Any,
+        parent_profile: AgentProfile,
+        parent_turn: TurnRecord,
+        parent_task: TaskRecord,
+        policy: DelegationPolicy | None = None,
     ) -> None:
         """初始化委派执行器。
 
@@ -63,9 +62,9 @@ class DelegationExecutor(DelegateTaskExecutor):
         self._policy = policy or DelegationPolicy()
 
     def execute(
-            self,
-            args: DelegateTaskArgs,
-            execution_context: ToolExecutionContext,
+        self,
+        args: DelegateTaskArgs,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """执行一次委派请求并返回父工具 observation。
 
@@ -126,7 +125,11 @@ class DelegationExecutor(DelegateTaskExecutor):
                 parent_agent_id=self._parent_profile.agent_id,
                 child_agent_id=args.child_agent_id,
                 child_allowed_tools=frozenset(child_agent_profile.allowed_tools),
-                depth=1 if self._parent_profile.main_agent else 0,
+                # depth 语义：发起者所在 task 已处的委派层数——主 Agent 顶层 task
+                # 为 0（允许发起第一层委派），委派子 task 为 1（拒绝递归委派）。
+                # 取自 TaskRecord 持久化事实而非 profile 运行时字段，避免共享
+                # profile 实例被并发 turn 改写导致 depth 误判。
+                depth=1 if self._parent_task.is_child else 0,
                 known_child_agent_ids=frozenset(agent_registry.child_agent_ids()),
             )
         )
@@ -189,7 +192,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             child_turn = turn_service.create_turn(
                 task_id=child_task.task_id,
                 input_text=agent_input_text,
-                agent_id=args.child_agent_id
+                agent_id=args.child_agent_id,
             )
 
             # 确认pending child turn
@@ -205,10 +208,9 @@ class DelegationExecutor(DelegateTaskExecutor):
             )
 
             # 构建child agent profile
-            child_profile = ChildAgentProfileBuilder.build(
-                registry_profile=child_agent_profile,
-                turn=child_turn,
-                effective_tools=decision.effective_tools,
+            child_profile = child_agent_profile.derive_for_turn(
+                child_turn,
+                allowed_tools=list(decision.effective_tools),
                 runtime_event_loop=runtime_event_loop,
             )
             result = self._child_runner.run_child(
@@ -293,7 +295,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         """
         prefix = "delegate_"
         if child_agent_id.startswith(prefix):
-            return child_agent_id[len(prefix):]
+            return child_agent_id[len(prefix) :]
         return child_agent_id
 
     def _policy_error(self, child_agent_id: str, reason: str) -> ToolObservation:
@@ -335,9 +337,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             permission="delegate_task",
         )
 
-    def _concurrency_exceeded_error(
-            self, child_agent_id: str, reason: str
-    ) -> ToolObservation:
+    def _concurrency_exceeded_error(self, child_agent_id: str, reason: str) -> ToolObservation:
         """构造并发额度已满的工具错误 observation。
 
         并发额度由 storage 层在 ``try_create_pending`` 的原子事务内裁决，本方法仅在
@@ -376,12 +376,12 @@ class DelegationExecutor(DelegateTaskExecutor):
         )
 
     def _finalize_result(
-            self,
-            delegation_id: str,
-            result: DelegationResult,
-            runtime_event_loop: asyncio.AbstractEventLoop | None,
-            delegation_service: DelegationService,
-            child_task_id: str | None = None,
+        self,
+        delegation_id: str,
+        result: DelegationResult,
+        runtime_event_loop: asyncio.AbstractEventLoop | None,
+        delegation_service: DelegationService,
+        child_task_id: str | None = None,
     ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 

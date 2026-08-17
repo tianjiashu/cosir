@@ -7,7 +7,6 @@ class HealthResponse(BaseModel):
     参数:
         status: 健康状态标识。
         model_provider: 模型提供方。
-        model_base_url: 模型基础地址。
         model_name: 模型名称。
         model_thinking_mode: 模型思考模式。
         model_api_key_env: API Key 所在环境变量名。
@@ -25,7 +24,6 @@ class HealthResponse(BaseModel):
 
     status: str
     model_provider: str
-    model_base_url: str
     model_name: str
     model_thinking_mode: str
     model_api_key_env: str

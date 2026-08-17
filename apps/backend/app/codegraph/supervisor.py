@@ -102,7 +102,12 @@ class CodeGraphKernelSupervisor:
         self._client: CodeGraphKernelClient | None = None
         self._stderr_thread: threading.Thread | None = None
         self._health_thread: threading.Thread | None = None
+        self._restart_thread: threading.Thread | None = None
         self._stop_health = threading.Event()
+        # 停机请求标志：shutdown 置位，退避重启线程 sleep 结束后检查并放弃重启。
+        # 与 _stop_health 分离——_stop_health 在崩溃清理（_cleanup_proc）时也会置位，
+        # 若复用会误取消正常退避重启（P1-11 修复的关键区分）。
+        self._shutdown_requested = threading.Event()
         self._restart_attempts = 0
 
     # ------------------------------------------------------------------
@@ -140,6 +145,9 @@ class CodeGraphKernelSupervisor:
             ):
                 return
             self._state = KernelState.STARTING
+
+        # 手动或退避重启进入启动流程：清除停机信号，允许后续崩溃再次退避重启。
+        self._shutdown_requested.clear()
 
         try:
             self._spawn()
@@ -183,7 +191,8 @@ class CodeGraphKernelSupervisor:
             无（关闭失败仅记录日志，最终仍清理资源）。
 
         副作用:
-            置 stopping；停止 health/stderr 线程；终止子进程。
+            置 stopping；设置停机请求标志 ``_shutdown_requested``（阻断退避重启线程
+            复活 Kernel）；停止 health/stderr/restart 线程；终止子进程。
         """
         with self._state_lock:
             if self._state in (KernelState.STOPPED, KernelState.STOPPING):
@@ -191,6 +200,8 @@ class CodeGraphKernelSupervisor:
             self._state = KernelState.STOPPING
 
         self._stop_health.set()
+        # 置停机请求标志：restart 线程 sleep 结束后据此放弃重启，不复活 Kernel。
+        self._shutdown_requested.set()
         if self._client is not None:
             self._client.shutdown()
             self._client.stop()
@@ -339,19 +350,45 @@ class CodeGraphKernelSupervisor:
                 "codegraph_kernel_restart",
                 extra={"msg": "退避后重启 Kernel", "data": {"backoff_seconds": backoff}},
             )
-            threading.Thread(
+            restart_thread = threading.Thread(
                 target=self._restart_after_backoff,
                 args=(backoff,),
                 name="workspace_payload-kernel-restart",
                 daemon=True,
-            ).start()
+            )
+            self._restart_thread = restart_thread
+            restart_thread.start()
         else:
             self._set_state(target_state)
             log.error("codegraph_kernel_failed", extra={"msg": "Kernel 重启耗尽退避，置 failed"})
 
     def _restart_after_backoff(self, backoff: float) -> None:
-        """退避后重新拉起 Kernel（运行于独立 restart 线程）。"""
+        """退避后重新拉起 Kernel（运行于独立 restart 线程）。
+
+        参数:
+            backoff: 本次退避等待秒数。
+
+        返回:
+            无。
+
+        异常:
+            CodeGraphKernelError（子类）: 重启仍失败时记录 error 日志后吞掉，
+                由后续 health 检查或再次崩溃驱动新一轮退避。
+
+        副作用:
+            sleep 后若无停机信号则调用 ``start`` 重新拉起 Kernel；若
+            ``shutdown`` 已设置停机信号则直接返回，不复活已关停的进程
+            （修复 P1-11：关停后 restart 线程不能在 sleep 结束后无条件 start）。
+        """
         time.sleep(backoff)
+        # shutdown 会置 _shutdown_requested：关停后 sleep 结束不得复活 Kernel。
+        # 不能用 _stop_health——崩溃清理（_cleanup_proc）也会置它，会误取消正常重启。
+        if self._shutdown_requested.is_set():
+            log.info(
+                "codegraph_kernel_restart_aborted",
+                extra={"msg": "停机信号已设置，取消退避重启，不复活 Kernel"},
+            )
+            return
         try:
             self.start()
         except CodeGraphKernelError as exc:
@@ -384,13 +421,28 @@ class CodeGraphKernelSupervisor:
             pass
 
     def _join_threads(self) -> None:
-        """等待 stderr/health 线程退出（daemon，最多等 2s），跳过自身线程。"""
+        """等待 stderr/health/restart 线程退出（daemon，最多等 2s），跳过自身线程。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            置空已 join 的线程引用。restart 线程即使 join 超时，也会在 sleep
+            结束后经停机信号检查自行退出（daemon，不阻止进程退出）。
+        """
         current = threading.current_thread()
-        for thr in (self._stderr_thread, self._health_thread):
+        for thr in (self._stderr_thread, self._health_thread, self._restart_thread):
             if thr is not None and thr.is_alive() and thr is not current:
                 thr.join(timeout=2.0)
         self._stderr_thread = None
         self._health_thread = None
+        self._restart_thread = None
 
     def _set_state(self, state: KernelState) -> None:
         """线程安全地设置进程状态。"""

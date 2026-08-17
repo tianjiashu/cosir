@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from app.core.agents.prompt_ref import PromptRef
@@ -57,7 +57,8 @@ class AgentProfile:
         model_name: 该 Agent 使用的模型名称（默认 ``deepseek/deepseek-v4-flash``，
             带 provider 前缀，透传给 litellm 路由）。
         model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
-        turn: 该 Agent 当前所属 turn 记录（运行时注入，可为 None）。
+        turn: 该 Agent 当前所属 turn 记录（运行时经 ``derive_for_turn`` 注入到
+            per-run 副本；共享注册表单例上不原地写，可为 None）。
         runtime_event_loop: 运行时事件循环（可为 None）。
         prompt_ref: 关联的 prompt 引用（第二部分接缝，第一部分不消费）；可为 None。
 
@@ -104,6 +105,45 @@ class AgentProfile:
             无。
         """
         return self.description is not None
+
+    def derive_for_turn(
+        self,
+        turn: TurnRecord,
+        *,
+        allowed_tools: list[str] | None = None,
+        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+    ) -> AgentProfile:
+        """为一次独立的 turn 执行派生 per-run 副本。
+
+        并发隔离收口：AgentProfile 是注册表共享单例，禁止调用方对其原地写运行时字段
+        （并发 turn 会互相覆盖）。每次 turn 执行必须先经本方法派生独立副本，副本承载
+        本次执行的 ``turn`` 与可选的 ``runtime_event_loop``（及收窄后的 ``allowed_tools``），
+        不同 turn 的副本互不串扰。
+
+        参数:
+            turn: 本次执行的轮次记录（必填，写入副本的 ``turn`` 字段）。
+            allowed_tools: 覆盖工具白名单；为 None 表示沿用当前值（委派子 Agent
+                收窄工具集时传入）。
+            runtime_event_loop: 覆盖事件广播 loop；为 None 表示沿用当前值
+                （主路径缺省 None；委派 child 传入父 loop，child 事件经
+                ``call_soon_threadsafe`` 跨线程投递回父 loop）。
+
+        返回:
+            绑定当前 turn 的独立 ``AgentProfile`` 副本。
+
+        异常:
+            无。
+
+        副作用:
+            无；不修改 ``self`` 原实例，仅构造新副本。
+        """
+
+        changes: dict = {"turn": turn}
+        if allowed_tools is not None:
+            changes["allowed_tools"] = allowed_tools
+        if runtime_event_loop is not None:
+            changes["runtime_event_loop"] = runtime_event_loop
+        return replace(self, **changes)
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。

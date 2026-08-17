@@ -14,8 +14,16 @@ workspace、静态判定作用域不可靠"的前次决策一致。不可逆 git
 （``pip install`` 等）仍放行（免审批模型、本机自担风险）。
 
 抗变形绕过：匹配前先 ``preprocess_command`` 做不可逆形态归一化（NFKC / IFS
-展开 / 续行合并 / 注释剥离 / 命令替换标记），降低经典变形绕过成功率。预处理
-是尽力而为的纵深防御，不宣称能挡住所有变形（见 §11 风险）。
+展开 / 续行合并 / 注释剥离 / 成对引号剥离 / cmd ``^`` 转义剥离），降低经典变形
+绕过成功率；解释器 ``-c``/``-e``/``-r`` 代码串（``python -c "..."`` /
+``node -e "..."`` / ``php -r "..."`` 等）会被提取后递归做同样的 deny 模式检测，
+拦截 ``shutil.rmtree`` / ``fs.rmSync`` / ``os.unlink`` 等代码内删除调用。
+
+**能力边界（重要）**：deny-list 是终端通道的纵深防御层而非完整防线。它只做
+静态文本匹配，挡不住所有间接路径（如「下载 + 执行」拆两条命令、编码执行等），
+也无法可靠判定命令作用域。删除类操作的安全保证依赖更外层：权限审批 +
+workspace 路径边界 + 受控 ``delete`` 工具。本模块**不承诺**能拦截全部危险
+命令，只负责提高攻击成本；被放行的命令仍受审批与隔离约束。
 """
 
 import re
@@ -183,6 +191,11 @@ _DANGEROUS_PATTERNS: tuple[tuple[str, str, str], ...] = (
         "rm_disabled",
         "rm 命令已被禁用，请改用 delete 工具删除文件",
     ),
+    (
+        r"\bunlink\b",
+        "unlink_disabled",
+        "unlink 命令已被禁用，请改用 delete 工具删除文件",
+    ),
 )
 
 # 不可逆 / 越权 git 操作 deny-list：与 ``_DANGEROUS_PATTERNS`` 同构 (regex, key, description)。
@@ -229,10 +242,78 @@ _GIT_DESTRUCTIVE_PATTERNS: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+# 解释器代码串（-c/-e/-r/-Command）内的危险调用 deny-list：与命令级模式同构
+# (regex, key, description)。命令级 ``\brm\b`` 等词边界不命中 ``rmtree`` /
+# ``rmSync`` / ``unlinkSync`` 等代码标识符，故对提取出的代码串单独再跑这一组
+# 模式。只作用于代码串内部，不放入命令级 _DANGEROUS_PATTERNS——避免误伤普通
+# 命令文本中的同形单词（如 ``git rm`` 已由命令级 \brm\b 覆盖，无需在此重复）。
+# 代码串 deny 同样是纵深防御：宁可对删除类调用收紧，也不放行递归删除。
+_CODE_DANGEROUS_CALLS: tuple[tuple[str, str, str], ...] = (
+    (
+        r"\brmtree\b",
+        "code_rmtree",
+        "代码内 rmtree 递归删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\brmSync\b",
+        "code_rm_sync",
+        "代码内 fs.rmSync 递归删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\brmdirSync\b",
+        "code_rmdir_sync",
+        "代码内 fs.rmdirSync 删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\bunlinkSync\b",
+        "code_unlink_sync",
+        "代码内 fs.unlinkSync 删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\bunlink\b",
+        "code_unlink",
+        "代码内 unlink 删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\bremove\b",
+        "code_remove",
+        "代码内 remove 删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\bdelete\b",
+        "code_delete",
+        "代码内 delete 删除已被禁用，请改用 delete 工具",
+    ),
+    (
+        r"\bRemove-Item\b",
+        "code_remove_item",
+        "代码内 Remove-Item 删除已被禁用，请改用 delete 工具",
+    ),
+)
+
+# 解释器 -c/-e/-r/-Command 代码串提取正则。匹配 ``python -c "code"`` /
+# ``node -e 'code'`` / ``php -r "code"`` / ``powershell -Command "code"`` 等。
+# 引号内代码串经 ``(.*?)`` 非贪婪捕获，``(?<!\\)\1`` 拒绝转义引号提前闭合；
+# ``re.DOTALL`` 使 ``.`` 可跨换行（多行代码串）。
+_INTERPRETER_CODE_RE = re.compile(
+    r"\b(?:python(?:[0-9.]*)?|node(?:js)?|ruby|perl|php|bash|sh|zsh|fish|pwsh|powershell)\s+"
+    r"(?:-[cer]\b|-Command\b)\s*"
+    r"(['\"])(.*?)(?<!\\)\1",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# 代码串递归检测的最大嵌套深度：防御 ``python -c "python -c ..."`` 无限递归。
+_MAX_CODE_RECURSION_DEPTH = 3
+
 _COMPILED = tuple(
     (re.compile(pattern, re.IGNORECASE), key, description)
     for patterns in (_DANGEROUS_PATTERNS, _GIT_DESTRUCTIVE_PATTERNS)
     for pattern, key, description in patterns
+)
+
+_CODE_DANGEROUS_CALLS_COMPILED = tuple(
+    (re.compile(pattern, re.IGNORECASE), key, description)
+    for pattern, key, description in _CODE_DANGEROUS_CALLS
 )
 
 
@@ -260,14 +341,19 @@ class DangerousCommandVerdict:
     description: str
 
 
-def detect_dangerous_command(command: str) -> DangerousCommandVerdict:
+def detect_dangerous_command(command: str, _depth: int = 0) -> DangerousCommandVerdict:
     """灾难级命令硬拒绝检测。
 
-    内部先 ``preprocess_command`` 归一化，再匹配约 39 条灾难级模式（含删除类与
-    不可逆 git 操作），其余一律放行。
+    内部先 ``preprocess_command`` 归一化，再匹配灾难级模式（含删除类与不可逆
+    git 操作）；未命中时若命令含解释器 ``-c/-e/-r/-Command`` 代码串（如
+    ``python -c "shutil.rmtree('x')"`` / ``node -e "fs.rmSync('x')"``），提取
+    代码串递归执行同样的 deny 检测（``_detect_code_string``），拦截代码内删除
+    调用（``rmtree`` / ``rmSync`` / ``unlink`` / ``remove`` / ``delete`` 等）。
 
     参数:
         command: 原始命令字符串。
+        _depth: 代码串递归深度（内部使用，公共调用无需传；防止
+            ``python -c "python -c ..."`` 无限递归）。
 
     返回:
         ``DangerousCommandVerdict``：命中即 ``is_dangerous=True`` 且携带稳定
@@ -280,15 +366,24 @@ def detect_dangerous_command(command: str) -> DangerousCommandVerdict:
     副作用:
         无（纯函数、零 I/O）。
     """
-    # 全部判定仅基于归一化串（已做 NFKC / IFS 展开 / 续行合并 / 注释剥离）。
-    # 不在原始 command 上二次兜底匹配：否则注释内的无害危险字样（如
-    # ``git status # rm -rf /``）会被误拒，违背 preprocess_command 的注释剥离语义。
-    # 归一化是「增强」匹配（让变形更易被识别），不会丢失真实危险 token；
-    # 注释剥离的过度问题由 _strip_comments 对 URL 内 # 的特判兜底（见 _strip_comments）。
+    # 全部判定仅基于归一化串（已做 NFKC / IFS 展开 / 续行合并 / 注释剥离 /
+    # 引号剥离 / ^ 剥离）。不在原始 command 上二次兜底匹配：否则注释内的无害
+    # 危险字样（如 ``git status # rm -rf /``）会被误拒，违背 preprocess_command
+    # 的注释剥离语义。归一化是「增强」匹配（让变形更易被识别），不会丢失真实
+    # 危险 token；注释剥离的过度问题由 _strip_comments 对 URL 内 # 的特判兜底
+    # （见 _strip_comments）。
     normalized = preprocess_command(command)
     for regex, key, description in _COMPILED:
         if regex.search(normalized):
             return DangerousCommandVerdict(is_dangerous=True, key=key, description=description)
+    # 代码串递归：命令级未命中时，提取解释器代码串（基于原始 command，保留引号
+    # 边界以便提取）再做代码内危险调用检测。
+    if _depth >= _MAX_CODE_RECURSION_DEPTH:
+        return DangerousCommandVerdict(is_dangerous=False, key="", description="")
+    for code in _extract_interpreter_code(command):
+        inner = _detect_code_string(code, _depth + 1)
+        if inner.is_dangerous:
+            return inner
     return DangerousCommandVerdict(is_dangerous=False, key="", description="")
 
 
@@ -296,7 +391,7 @@ def preprocess_command(command: str) -> str:
     """对命令做不可逆形态归一化，降低经典变形绕过成功率。
 
     步骤：NFKC 归一 → ${IFS}/$IFS 展开 → 反斜杠续行合并 → 引号感知注释剥离 →
-    命令替换标记（保留 ``$(`` / 反引号前缀供替换类规则判定）。
+    成对引号剥离（``d"e"l`` → ``del``）→ cmd ``^`` 转义剥离（``r^m`` → ``rm``）。
 
     参数:
         command: 原始命令字符串。
@@ -318,6 +413,38 @@ def preprocess_command(command: str) -> str:
     text = re.sub(r"\\\r?\n", " ", text)
     # 引号感知注释剥离（http(s):// 中的 # 不视为注释）
     text = _strip_comments(text)
+    # 成对引号剥离 + cmd ^ 转义剥离（放在注释剥离之后，避免破坏 # 的引号感知）
+    text = _strip_balanced_quotes(text)
+    text = text.replace("^", "")
+    return text
+
+
+def _strip_balanced_quotes(text: str) -> str:
+    """剥离成对出现的引号字符（``"`` / ``'`` 各出现偶数次视为成对）。
+
+    cmd 允许 ``d"e"l`` 这类把命令名拆开嵌入引号的变形（cmd 解析时引号被吞掉、
+    实际执行 ``del``）；同样 POSIX 的 ``r'm'`` 等价 ``rm``。归一化时把同种引号
+    出现偶数次（即成对）的引号全部移除，使 ``\bdel\b`` / ``\brm\b`` 等词边界
+    模式能够命中。不成对的引号（奇数个，如 ``don't`` 中的 ``'``）保留原样，
+    避免破坏正常文本。
+
+    参数:
+        text: 待处理的命令字符串。
+
+    返回:
+        移除了成对引号后的字符串。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+    # 按种类统计：偶数次（成对）整类移除，奇数次整类保留。该策略对
+    # 交错引号（``a"b'c"d'``）也能还原为 ``abcd``，且不破坏 ``don't``。
+    for quote in ('"', "'"):
+        if text.count(quote) % 2 == 0:
+            text = text.replace(quote, "")
     return text
 
 
@@ -366,3 +493,63 @@ def _strip_comments(text: str) -> str:
             result.append(ch)
         i += 1
     return "".join(result)
+
+
+def _extract_interpreter_code(command: str) -> list[str]:
+    """提取命令中解释器 ``-c/-e/-r/-Command`` 参数后的引号代码串。
+
+    基于原始 command（保留引号边界）提取，供 ``detect_dangerous_command`` 在
+    命令级模式未命中时对代码串做递归 deny 检测。
+
+    参数:
+        command: 原始命令字符串。
+
+    返回:
+        提取到的代码串列表；无匹配时为空列表。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+    return [match.group(2) for match in _INTERPRETER_CODE_RE.finditer(command)]
+
+
+def _detect_code_string(code: str, depth: int) -> DangerousCommandVerdict:
+    """对解释器代码串执行同样的 deny 模式检测。
+
+    先归一化代码串，再依次匹配代码串专用危险调用模式（``rmtree`` / ``rmSync`` /
+    ``unlink`` / ``remove`` / ``delete`` 等）与命令级模式（代码串内直接出现的
+    ``rm -rf`` / ``git reset --hard`` 等文本）；若代码串内部还嵌套解释器调用
+    （如 ``os.system("python -c ...")``），递归提取并检测。命中即拒绝，返回
+    对应的 ``DangerousCommandVerdict``。
+
+    参数:
+        code: 提取出的解释器代码串（含原始引号边界）。
+        depth: 当前递归深度，超过 ``_MAX_CODE_RECURSION_DEPTH`` 时停止下钻。
+
+    返回:
+        ``DangerousCommandVerdict``：命中即 ``is_dangerous=True``；未命中
+        ``is_dangerous=False``、``key=""``、``description=""``。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯函数）。
+    """
+    normalized = preprocess_command(code)
+    for regex, key, description in _CODE_DANGEROUS_CALLS_COMPILED:
+        if regex.search(normalized):
+            return DangerousCommandVerdict(is_dangerous=True, key=key, description=description)
+    for regex, key, description in _COMPILED:
+        if regex.search(normalized):
+            return DangerousCommandVerdict(is_dangerous=True, key=key, description=description)
+    if depth >= _MAX_CODE_RECURSION_DEPTH:
+        return DangerousCommandVerdict(is_dangerous=False, key="", description="")
+    for nested in _extract_interpreter_code(code):
+        inner = _detect_code_string(nested, depth + 1)
+        if inner.is_dangerous:
+            return inner
+    return DangerousCommandVerdict(is_dangerous=False, key="", description="")
