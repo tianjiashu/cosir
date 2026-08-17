@@ -15,7 +15,7 @@ import {
   readBackendTraceHeaders,
   recordBackendTrace,
 } from "./tracePropagation";
-import { parseSSEFrame } from "./sseParser";
+import { createSSEFrameParser, type ParsedSSEFrame } from "./sseParser";
 import { useConversationTraceStore } from "@/stores/conversationTraceStore";
 
 /** 后端基础 URL，开发环境走 Vite 代理。 */
@@ -176,35 +176,35 @@ export class DelegationStreamConnection {
   private async readEvents(body: ReadableStream<Uint8Array>): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
+    // 流式帧解析器：内部缓冲拼接分片，完整帧同步回调（替代手写 split("\n\n") 切帧）
+    const frameParser = createSSEFrameParser((frame) => {
+      this.handleFrame(frame);
+    });
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
         break;
       }
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frameText of frames) {
-        this.handleFrame(frameText.trim());
-      }
+      frameParser.feed(decoder.decode(value, { stream: true }));
     }
 
-    if (buffer.trim()) {
-      this.handleFrame(buffer.trim());
-    }
+    // EOF：喂入终止空行促使缓冲区内已完整帧被分发（模拟标准流终止），
+    // 随后 reset 释放解析器内部状态。不要用 reset({ consume: true })，
+    // 那会把不完整残片也当完整帧分发，改变语义。
+    frameParser.feed("\n\n");
+    frameParser.reset();
   }
 
   /**
    * 解析并分发单条 SSE 帧。
    *
-   * @param frameText - 原始 SSE 帧文本。
+   * @param frame - 已拆分的 SSE 帧（含 eventType 与原始 data 字符串）。
    *
    * @sideeffect 解析成功时调用 `onEvent`；终态事件会更新实例终态标记。
    */
-  private handleFrame(frameText: string): void {
-    const event = this.parseRuntimeEvent(frameText);
+  private handleFrame(frame: ParsedSSEFrame): void {
+    const event = this.parseRuntimeEvent(frame);
     if (!event) {
       return;
     }
@@ -217,17 +217,14 @@ export class DelegationStreamConnection {
   /**
    * 把 SSE 帧解析为 RuntimeEvent。
    *
-   * @param frameText - 原始 SSE 帧文本。
-   * @returns 解析成功的 RuntimeEvent；帧格式或 JSON 无效时返回 null。
+   * 帧的 event 名与 data 字符串已由 createSSEFrameParser 保证非空（缺 event 名的帧不会分发）。
    *
-   * @sideeffect JSON 解析失败时写 warn 日志。
+   * @param frame - 已拆分的 SSE 帧（含 eventType 与原始 data 字符串）。
+   * @returns 解析成功的 RuntimeEvent；JSON 无效时返回 null。
+   *
+   * @sideeffect JSON 解析失败时写 warn 日志（含定位所需上下文与 data 预览）。
    */
-  private parseRuntimeEvent(frameText: string): RuntimeEvent | null {
-    const frame = parseSSEFrame(frameText);
-    if (!frame) {
-      return null;
-    }
-
+  private parseRuntimeEvent(frame: ParsedSSEFrame): RuntimeEvent | null {
     try {
       return JSON.parse(frame.data) as RuntimeEvent;
     } catch (err) {
@@ -236,7 +233,7 @@ export class DelegationStreamConnection {
         task_id: this.options.taskId,
         delegation_id: this.options.delegationId,
         child_turn_id: this.options.childTurnId,
-        event_type: frame.eventType || "(unknown)",
+        event_type: frame.eventType,
         data_preview: frame.data.slice(0, 200),
         error: err instanceof Error ? err.message : String(err),
       });

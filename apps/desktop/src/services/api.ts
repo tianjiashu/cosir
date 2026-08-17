@@ -30,7 +30,7 @@ import type { WorkspaceEvent } from "@shared/workspaceEvent";
 import { isWorkspaceEventType } from "@shared/workspaceEvent";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
-import { parseSSEFrame } from "./sseParser";
+import { createSSEFrameParser, type ParsedSSEFrame } from "./sseParser";
 import { logError, logWarn } from "../lib/logger";
 import {
   buildTraceHeaders,
@@ -410,7 +410,13 @@ export async function connectWorkspaceEventStream(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  // 流式帧解析器：内部缓冲拼接分片，完整帧同步回调（替代手写 split("\n\n") 切帧）
+  const frameParser = createSSEFrameParser((frame) => {
+    const parsed = parseWorkspaceEvent(frame, workspaceId);
+    if (parsed) {
+      onEvent(parsed);
+    }
+  });
 
   const readLoop = async (): Promise<void> => {
     try {
@@ -419,16 +425,13 @@ export async function connectWorkspaceEventStream(
         if (done) {
           break;
         }
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? "";
-        for (const frameText of frames) {
-          const parsed = parseWorkspaceEvent(frameText.trim());
-          if (parsed) {
-            onEvent(parsed);
-          }
-        }
+        frameParser.feed(decoder.decode(value, { stream: true }));
       }
+      // EOF：喂入终止空行促使缓冲区内已完整帧被分发（模拟标准流终止），
+      // 随后 reset 释放解析器内部状态。不要用 reset({ consume: true })，
+      // 那会把不完整残片也当完整帧分发，改变语义。
+      frameParser.feed("\n\n");
+      frameParser.reset();
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         logError("workspace 状态事件流读取失败", err, requestContext);
@@ -446,14 +449,17 @@ export async function connectWorkspaceEventStream(
 /**
  * 解析单条 workspace 状态事件 SSE 帧。
  *
- * 复用 ``parseSSEFrame`` 做行级拆分，再按 workspace 状态事件类型校验并 JSON.parse。
+ * 对已拆分的 SSE 帧按 workspace 状态事件类型校验并 JSON.parse。
+ * 帧的 event 名与 data 字符串已由 createSSEFrameParser 保证非空（缺 event 名的帧不会分发）。
  *
- * @param text - `event:` + `data:` 格式的原始帧文本。
- * @returns 解析成功返回 WorkspaceEvent；格式无效或事件类型非法返回 null。
+ * @param frame - 已拆分的 SSE 帧（含 eventType 与原始 data 字符串）。
+ * @param workspaceId - 该帧所属的工作区标识，用于失败日志定位。
+ * @returns 解析成功返回 WorkspaceEvent；事件类型非法或 JSON 格式无效返回 null。
+ *
+ * @sideeffect JSON 解析失败时写 warn 日志（含 workspace_id、事件类型与 data 预览）。
  */
-function parseWorkspaceEvent(text: string): WorkspaceEvent | null {
-  const frame = parseSSEFrame(text);
-  if (!frame || !isWorkspaceEventType(frame.eventType)) {
+function parseWorkspaceEvent(frame: ParsedSSEFrame, workspaceId: string): WorkspaceEvent | null {
+  if (!isWorkspaceEventType(frame.eventType)) {
     return null;
   }
   try {
@@ -461,6 +467,7 @@ function parseWorkspaceEvent(text: string): WorkspaceEvent | null {
   } catch (err) {
     logWarn("workspace 状态事件 JSON 解析失败", {
       module: "api",
+      workspace_id: workspaceId,
       event_type: frame.eventType,
       data_preview: frame.data.slice(0, 200),
       error: err instanceof Error ? err.message : String(err),

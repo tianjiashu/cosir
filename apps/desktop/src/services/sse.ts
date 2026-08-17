@@ -20,7 +20,7 @@ import {
   readBackendTraceHeaders,
   recordBackendTrace,
 } from "./tracePropagation";
-import { parseSSEFrame } from "./sseParser";
+import { createSSEFrameParser, type ParsedSSEFrame } from "./sseParser";
 import { useConversationTraceStore } from "@/stores/conversationTraceStore";
 
 /** 后端基础 URL，开发环境走 Vite 代理。 */
@@ -181,7 +181,28 @@ export class SSEConnection {
       // 使用 ReadableStream 读取 SSE 数据
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
+      // 流式帧解析器：内部缓冲拼接分片，完整帧同步回调（替代手写 split("\n\n") 切帧）
+      const frameParser = createSSEFrameParser((frame) => {
+        const parsed = this.parseSSEEvent(frame);
+        if (parsed) {
+          this._markTerminalIfNeeded(parsed);
+          // 调试：单条 SSE 流内若同一 event_id 重复出现，说明后端把同一事件推了两遍。
+          if (parsed.event_id) {
+            if (this._seenEventIds.has(parsed.event_id)) {
+              logWarn("sse_stream_dup_event", {
+                module: "sse",
+                event_id: parsed.event_id,
+                event_type: parsed.event_type,
+                task_id: this.options.taskId,
+                turn_id: this.options.turnId,
+              });
+            } else {
+              this._seenEventIds.add(parsed.event_id);
+            }
+          }
+          this.options.onEvent(parsed);
+        }
+      });
 
       while (true) {
         const { done, value } = await reader.read();
@@ -190,43 +211,14 @@ export class SSEConnection {
           break;
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        // 按双换行切分 SSE 事件
-        const events = buffer.split("\n\n");
-        // 最后一段可能不完整，保留在 buffer 中
-        buffer = events.pop() ?? "";
-
-        for (const eventText of events) {
-          const parsed = this.parseSSEEvent(eventText.trim());
-          if (parsed) {
-            this._markTerminalIfNeeded(parsed);
-            // 调试：单条 SSE 流内若同一 event_id 重复出现，说明后端把同一事件推了两遍。
-            if (parsed.event_id) {
-              if (this._seenEventIds.has(parsed.event_id)) {
-                logWarn("sse_stream_dup_event", {
-                  module: "sse",
-                  event_id: parsed.event_id,
-                  event_type: parsed.event_type,
-                  task_id: this.options.taskId,
-                  turn_id: this.options.turnId,
-                });
-              } else {
-                this._seenEventIds.add(parsed.event_id);
-              }
-            }
-            this.options.onEvent(parsed);
-          }
-        }
+        frameParser.feed(decoder.decode(value, { stream: true }));
       }
 
-      // 处理 buffer 中可能残留的最后一个事件
-      if (buffer.trim()) {
-        const parsed = this.parseSSEEvent(buffer.trim());
-        if (parsed) {
-          this._markTerminalIfNeeded(parsed);
-          this.options.onEvent(parsed);
-        }
-      }
+      // EOF：喂入终止空行促使缓冲区内已完整帧被分发（模拟标准流终止），
+      // 随后 reset 释放解析器内部状态。不要用 reset({ consume: true })，
+      // 那会把不完整残片也当完整帧分发，改变语义。
+      frameParser.feed("\n\n");
+      frameParser.reset();
 
       this._reportStreamEndIfAbnormal(requestContext);
       this._setState(SSEConnectionState.CLOSED);
@@ -274,22 +266,19 @@ export class SSEConnection {
   }
 
   /**
-   * 解析单条 SSE 事件文本。
+   * 解析单条 SSE 事件帧。
    *
-   * 从 `event:` 行提取事件类型，从 `data:` 行提取 JSON payload，
-   * 构建完整的 RuntimeEvent 对象。
+   * 对已拆分的 SSE 帧做 JSON.parse，构建完整的 RuntimeEvent 对象。
+   * 帧的 event 名与 data 字符串已由 createSSEFrameParser 保证非空（缺 event 名的帧不会分发）。
    *
-   * @param text - 单条 SSE 事件原始文本（event: + data: 格式）。
-   * @returns 解析成功返回 RuntimeEvent，格式无效返回 null。
+   * @param frame - 已拆分的 SSE 帧（含 eventType 与原始 data 字符串）。
+   * @returns 解析成功返回 RuntimeEvent，JSON 格式无效返回 null。
+   *
+   * @sideeffect JSON 解析失败时写 warn 日志（含定位所需上下文与 data 预览）。
    *
    * @private
    */
-  private parseSSEEvent(text: string): RuntimeEvent | null {
-    const frame = parseSSEFrame(text);
-    if (!frame) {
-      return null;
-    }
-
+  private parseSSEEvent(frame: ParsedSSEFrame): RuntimeEvent | null {
     try {
       return JSON.parse(frame.data) as RuntimeEvent;
     } catch (parseErr) {
@@ -297,7 +286,7 @@ export class SSEConnection {
         module: "sse",
         task_id: this.options.taskId,
         turn_id: this.options.turnId,
-        event_type: frame.eventType || "(unknown)",
+        event_type: frame.eventType,
         data_preview: frame.data.slice(0, 200),
         error: parseErr instanceof Error ? parseErr.message : String(parseErr),
       });

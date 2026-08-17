@@ -1,59 +1,97 @@
 /**
- * SSE 帧解析纯函数。
+ * SSE 帧流式分发器。
  *
- * 把单条 SSE 帧（``event:`` + ``data:`` 格式的原始文本）拆解为事件类型与
- * data 原始字符串。只做「行级拆分」，不做 JSON 解析——因为不同事件类型的
- * data 结构不同（如 turn 级 ``RuntimeEvent`` 与 workspace 状态事件
- * ``WorkspaceEvent``），由调用方决定如何 parse 成自己的类型。
+ * 基于 Vercel 维护的成熟库 `eventsource-parser`（OpenAI 官方 SDK 同款）实现
+ * W3C SSE 帧解析，替代原手写逐行解析 `parseSSEFrame`。只做「帧 → 事件类型 +
+ * data 字符串」的分发，不做 JSON 解析——因为不同事件类型的 data 结构不同
+ * （如 turn 级 ``RuntimeEvent`` 与 workspace 状态事件 ``WorkspaceEvent``），
+ * 由调用方决定如何 parse 成自己的类型。
  *
- * 单一职责：SSE 帧文本 → 事件类型 + data 字符串。供 ``sse.ts``（turn 级流）与
- * ``api.ts`` 的 ``connectWorkspaceEventStream``（workspace 状态事件流）共用，
- * 避免两处手写重复的逐行解析。
+ * 与旧实现相比的核心改进：`eventsource-parser` 原生处理流分片边界（feed 可
+ * 喂入任意长度的不完整分片，内部缓冲拼接），不再依赖 ``split("\n\n")`` 手动
+ * 切帧与残留 buffer 管理。
  *
- * 遵循 W3C SSE 规范（https://html.spec.whatwg.org/multipage/server-sent-events.html）：
- * - 同一帧内可出现多条 ``data:`` 行，须按 ``\n`` 连接成完整 data 字段（而非后者覆盖前者）。
- *   后端若把含换行的长 JSON（如工具结果 ``content``）拆成多条 data 行，将命中此路径。
- * - ``data:`` 为空串（含 ``data:`` 后无内容）是合法帧，对应心跳 / ping，不得整帧丢弃。
- *   仅当帧完全缺失 ``event:`` 或完全缺失 ``data:`` 行时才返回 null。
+ * 单一职责：SSE 帧文本流 → 事件类型 + data 字符串回调。供 ``sse.ts``（turn
+ * 级流）、``api.ts`` 的 ``connectWorkspaceEventStream``（workspace 状态事件流）
+ * 与 ``delegationStream.ts``（child turn 订阅流）共用。
+ *
+ * 行为对齐旧实现（W3C SSE 规范 https://html.spec.whatwg.org/multipage/server-sent-events.html）：
+ * - 有 ``event:`` 名 + 至少一条 ``data:`` 行 → 分发 ``{ eventType, data }``；
+ * - ``data:`` 为空串（含 ``data:`` 无内容）是合法帧，对应心跳 / ping，不得丢弃；
+ * - 多条 ``data:`` 行按 ``\n`` 拼接（库原生支持）；
+ * - 缺 ``event:`` 名 → 不分发（库对无 event 名的帧也会 dispatch，本工厂内过滤）；
+ * - 缺 ``data:`` 行（只有 event 行）→ 不分发（库原生只对 dataLines > 0 的帧 dispatch）；
+ * - 注释行（``:`` 开头）→ 忽略（库默认行为）；
+ * - 流分片边界 → 库原生缓冲拼接；
+ * - 库内无法识别为合法 SSE 字段的行/字段按规范静默丢弃，与旧实现只识别
+ *   ``event:``/``data:`` 的行为一致。
  *
  * @module services/sseParser
  */
 
+import { createParser } from "eventsource-parser";
+import type { EventSourceMessage } from "eventsource-parser";
+
 /** 单条 SSE 帧的拆分结果。 */
 export interface ParsedSSEFrame {
-  /** ``event:`` 行的值（去空白）。 */
+  /** ``event:`` 行的值（去空白，与旧实现 trim 行为一致）。 */
   eventType: string;
-  /** ``data:`` 行的值（去空白，未做 JSON 解析）；多行按 ``\n`` 拼接。 */
+  /** ``data:`` 行的值（未做 JSON 解析）；多行按 ``\n`` 拼接，空串为合法心跳帧。 */
   data: string;
 }
 
+/** 流式 SSE 帧解析器接口。 */
+export interface SSESingleFrameParser {
+  /**
+   * 喂入解码后的文本分片。
+   *
+   * @param chunk - 任意长度的文本分片，可跨帧边界或只含半行；内部缓冲拼接，
+   *   完整帧解析出来后同步调用构造时传入的 onFrame 回调。
+   *
+   * @sideeffect 每解析出一条完整帧即调用 onFrame 回调。
+   */
+  feed(chunk: string): void;
+
+  /**
+   * 重置内部状态，供流结束后复用同一实例。
+   *
+   * @sideeffect 清空内部缓冲与待分发字段；不消费（consume）缓冲区内的不完整残片，
+   *   调用方应在 EOF 前用 ``feed("\n\n")`` 促使已完整帧被分发。
+   */
+  reset(): void;
+}
+
 /**
- * 解析单条 SSE 帧文本。
+ * 创建流式 SSE 帧解析器。
  *
- * 按 W3C SSE 规范处理：多条 ``data:`` 行以换行拼接；空 data 视为合法帧。
+ * @param onFrame - 每解析出一条完整帧（有 event 名且至少一条 data 行）时同步调用；
+ *   参数为 ``{ eventType, data }``，data 未做 JSON 解析。
+ * @returns 实现了 ``SSESingleFrameParser`` 接口的解析器实例。
+ * @throws 不主动抛出；库内无法识别字段按规范静默忽略。
  *
- * @param text - 单条 SSE 帧原始文本（含 ``event:`` 与 ``data:`` 行）。
- * @returns 解析成功返回 ``{ eventType, data }``；缺 ``event:`` 或完全缺 ``data:`` 行时返回 null。
- *
- * @sideeffect 无。
+ * @sideeffect 构造时创建底层 eventsource-parser 实例；feed 命中完整帧时同步触发 onFrame。
  */
-export function parseSSEFrame(text: string): ParsedSSEFrame | null {
-  let eventType = "";
-  let hasDataLine = false;
-  const dataLines: string[] = [];
-  for (const line of text.split("\n")) {
-    if (line.startsWith("event:")) {
-      eventType = line.slice(6).trim();
-    } else if (line.startsWith("data:")) {
-      // 规范要求只剥离一个前导空格；其余前导空白与全部尾随空白保留，
-      // 避免误删 payload 中作为有效内容的空白。空串（"data:" 后无内容）合法。
-      hasDataLine = true;
-      dataLines.push(line.slice(5).replace(/^ /, ""));
-    }
-  }
-  // 仅当完全缺失 event 或完全缺失 data 行时判定为非法帧；空 data 字符串合法。
-  if (!eventType || !hasDataLine) {
-    return null;
-  }
-  return { eventType, data: dataLines.join("\n") };
+export function createSSEFrameParser(onFrame: (frame: ParsedSSEFrame) => void): SSESingleFrameParser {
+  const parser = createParser({
+    onEvent: (event: EventSourceMessage) => {
+      // eventsource-parser 对无 `event:` 名的帧（仅 data）也会 dispatch（event 为
+      // 空串/undefined），而旧 parseSSEFrame 对缺 event 名的帧返回 null。此处过滤，
+      // 保持旧行为：缺 event 名 → 不分发。
+      if (!event.event) {
+        return;
+      }
+      // 库对 `event:` 值只剥离一个前导空格、不 trim 尾随空白；旧实现做了完整 trim，
+      // 这里补 trim 保持事件类型归一化行为一致。
+      onFrame({ eventType: event.event.trim(), data: event.data });
+    },
+  });
+
+  return {
+    feed: (chunk: string) => {
+      parser.feed(chunk);
+    },
+    reset: () => {
+      parser.reset();
+    },
+  };
 }
