@@ -1,6 +1,6 @@
 """core delegation executor tests."""
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -29,12 +29,33 @@ from app.tools.tool_models.delegate_task_args import DelegateTaskArgs
 from app.utils.datetime_utils import utc_now
 
 
-@dataclass
-class FakeTaskRecord:
-    """测试用任务记录。"""
+def _parent_task(parent_task_id: str | None = None) -> TaskRecord:
+    """构造测试用发起方 task 记录（与生产 TaskRecord 同构，防止 fake 签名漂移）。
 
-    task_id: str = "task_1"
-    workspace_id: str = "workspace_1"
+    参数:
+        parent_task_id: 可选的父 task 标识；非 None 时模拟「发起方自身是委派
+            子 task」的递归委派场景（executor 据此判定 depth=1）。
+
+    返回:
+        测试用 TaskRecord。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return TaskRecord(
+        task_id="task_1",
+        workspace_id="workspace_1",
+        agent_id="developer",
+        title="parent task",
+        status="running",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+        parent_task_id=parent_task_id,
+    )
 
 
 class FakeDelegationService:
@@ -282,42 +303,36 @@ class FakeTurnService:
 
         self.calls: list[tuple[str, object]] = []
 
-    def create_child_turn(
+    def create_turn(
         self,
         task_id: str,
         input_text: str,
         agent_id: str,
-        parent_turn_id: str,
-        delegation_id: str,
     ) -> TurnRecord:
-        """创建测试用 child turn 记录。
+        """创建测试用 child turn 记录（与生产 TurnService.create_turn 签名对齐）。
 
         参数:
             task_id: 所属任务标识。
             input_text: child 输入文本。
             agent_id: child agent 标识。
-            parent_turn_id: 父 turn 标识。
-            delegation_id: 委派标识。
 
         返回:
-            带父子字段的 pending TurnRecord。
+            pending 状态的 TurnRecord。
 
         异常:
             无。
 
         副作用:
-            记录 create_child_turn 调用。
+            记录 create_turn 调用。
         """
 
         self.calls.append(
             (
-                "create_child_turn",
+                "create_turn",
                 {
                     "task_id": task_id,
                     "input_text": input_text,
                     "agent_id": agent_id,
-                    "parent_turn_id": parent_turn_id,
-                    "delegation_id": delegation_id,
                 },
             )
         )
@@ -329,8 +344,6 @@ class FakeTurnService:
             created_at=utc_now(),
             updated_at=utc_now(),
             agent_id=agent_id,
-            parent_turn_id=parent_turn_id,
-            delegation_id=delegation_id,
         )
 
     def claim_pending_turn(self, turn_id: str) -> bool:
@@ -378,22 +391,22 @@ class FakeTaskService:
     def create_child_task(
         self,
         *,
+        title: str,
         parent_task_id: str,
         parent_turn_id: str,
         delegation_id: str,
         workspace_id: str,
         agent_id: str,
-        input_text: str,
     ) -> TaskRecord:
-        """返回预设的 delegation 类型子任务记录并记录调用。
+        """返回预设的 delegation 类型子任务记录并记录调用（与生产签名对齐）。
 
         参数:
+            title: 子任务标题。
             parent_task_id: 父任务标识。
             parent_turn_id: 父 turn 标识。
             delegation_id: 委派标识。
             workspace_id: 工作区标识。
             agent_id: 子 agent 标识。
-            input_text: 委派输入文本。
 
         返回:
             带父子关联字段的 ``TaskRecord``（``task_type='delegation'``）。
@@ -411,12 +424,12 @@ class FakeTaskService:
             (
                 "create_child_task",
                 {
+                    "title": title,
                     "parent_task_id": parent_task_id,
                     "parent_turn_id": parent_turn_id,
                     "delegation_id": delegation_id,
                     "workspace_id": workspace_id,
                     "agent_id": agent_id,
-                    "input_text": input_text,
                 },
             )
         )
@@ -424,8 +437,8 @@ class FakeTaskService:
             task_id=child_task_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
-            title=input_text[:32],
-            status="open",
+            title=title,
+            status="pending",
             created_at=utc_now(),
             updated_at=utc_now(),
             task_type="delegation",
@@ -665,8 +678,6 @@ class FakeCascadeTurnService:
             created_at=utc_now(),
             updated_at=utc_now(),
             agent_id="delegate_reviewer",
-            parent_turn_id=self.parent_turn.turn_id,
-            delegation_id="delegation_1",
         )
         self.cancelled_turns = []
 
@@ -801,11 +812,8 @@ class FakeCascadeDelegationService:
         self.cancelled.append((delegation_id, error))
 
 
-def _parent_turn(parent_turn_id: str | None = None) -> TurnRecord:
+def _parent_turn() -> TurnRecord:
     """构造测试用 parent turn。
-
-    参数:
-        parent_turn_id: 可选的父 turn 标识，用于模拟 child turn 再委派。
 
     返回:
         测试用 TurnRecord。
@@ -825,7 +833,6 @@ def _parent_turn(parent_turn_id: str | None = None) -> TurnRecord:
         created_at=utc_now(),
         updated_at=utc_now(),
         agent_id="developer",
-        parent_turn_id=parent_turn_id,
     )
 
 
@@ -909,7 +916,7 @@ def executor_dependencies(tmp_path: Path, monkeypatch) -> dict[str, object]:
         ),
         "parent_profile": parent_profile,
         "parent_turn": _parent_turn(),
-        "parent_task": FakeTaskRecord(),
+        "parent_task": _parent_task(),
         "execution_context": _execution_context(tmp_path),
     }
 
@@ -985,7 +992,8 @@ def test_delegation_executor_rejects_policy_denial_before_create(executor_depend
         调用 DelegationExecutor.execute。
     """
 
-    executor_dependencies["parent_turn"] = _parent_turn(parent_turn_id="grand_parent")
+    # 发起方 task 自身是委派子 task（parent_task_id 非空）→ depth=1 >= max_depth=1 → 策略拒绝
+    executor_dependencies["parent_task"] = _parent_task(parent_task_id="grand_parent_task")
     executor = DelegationExecutor(**_executor_kwargs(executor_dependencies))
     result = executor.execute(
         DelegateTaskArgs(
@@ -1049,7 +1057,7 @@ def test_execute_rejects_when_concurrency_limit_reached(executor_dependencies):
     assert "concurrency" in result.content or "concurrency" in (result.reason or "")
     assert any(call[0] == "try_create_pending" for call in delegation_service.calls)
     # 额度已满时不应进入 child turn 创建
-    assert not any(call[0] == "create_child_turn" for call in deps["turn_service"].calls)
+    assert not any(call[0] == "create_turn" for call in deps["turn_service"].calls)
 
 
 def test_delegation_executor_runs_child_and_marks_completed(executor_dependencies):
@@ -1094,9 +1102,7 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     # 有效工具为 child profile 自身权限剔除 delegate_task（避免递归委派），
     # 不再与父/系统权限做交集，故基于真实 child profile 推导期望值，避免硬编码脆弱。
     expected_child = build_agent_registry().resolve("delegate_reviewer")
-    expected_tools = tuple(
-        sorted(set(expected_child.allowed_tools) - {"delegate_task"})
-    )
+    expected_tools = tuple(sorted(set(expected_child.allowed_tools) - {"delegate_task"}))
     assert create_call["effective_tools"] == expected_tools
     # delegation_type 来自 child profile（delegate_reviewer → reviewer），非模型入参
     assert create_call["delegation_type"] == "reviewer"
@@ -1135,7 +1141,8 @@ def test_delegation_executor_runs_child_and_marks_completed(executor_dependencie
     assert child_create[1]["agent_id"] == "delegate_reviewer"
     # child turn 必须挂在子任务（child_task_1）下，而非父 task，以隔离上下文。
     turn_service = executor_dependencies["turn_service"]
-    assert turn_service.calls[0][1]["delegation_id"] == "delegation_1"
+    assert turn_service.calls[0][0] == "create_turn"
+    assert turn_service.calls[0][1]["task_id"] == "child_task_1"
     # child turn 的 input_text 使用同一份拼装文本
     assert turn_service.calls[0][1]["input_text"] == prompt_text
     runner = executor_dependencies["child_runner"]
@@ -1407,14 +1414,12 @@ def test_cancel_turn_does_not_emit_parent_run_cancelled(monkeypatch):
         parent_cancelled = [
             event
             for event in saved_events
-            if event.event_type == EventType.RUN_CANCELLED
-            and event.turn_id == "parent_turn_1"
+            if event.event_type == EventType.RUN_CANCELLED and event.turn_id == "parent_turn_1"
         ]
         assert parent_cancelled == []
         # child 取消事件仍应正常发出（属于子任务独立终态）
         assert any(
-            event.event_type == EventType.RUN_CANCELLED
-            and event.turn_id == "child_turn_1"
+            event.event_type == EventType.RUN_CANCELLED and event.turn_id == "child_turn_1"
             for event in saved_events
         )
     finally:
@@ -1953,12 +1958,8 @@ class _MultiChildTurnService:
         """
         self.parent_turn = _parent_turn()
         self.child_turns = {
-            "child_turn_1": replace(
-                self.parent_turn, turn_id="child_turn_1", status="running"
-            ),
-            "child_turn_2": replace(
-                self.parent_turn, turn_id="child_turn_2", status="running"
-            ),
+            "child_turn_1": replace(self.parent_turn, turn_id="child_turn_1", status="running"),
+            "child_turn_2": replace(self.parent_turn, turn_id="child_turn_2", status="running"),
         }
         self.cancelled_turns: list[tuple[str, str]] = []
 
@@ -1981,9 +1982,7 @@ class _MultiChildTurnService:
             return self.parent_turn
         return self.child_turns[turn_id]
 
-    def cancel_turn_if_active(
-        self, turn_id: str, end_reason: str
-    ) -> TurnRecord | None:
+    def cancel_turn_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
         """取消 active turn 并记录调用。
 
         参数:
@@ -2202,10 +2201,7 @@ def test_cancel_child_delegation_isolates_single_failure(monkeypatch, caplog):
         assert ("delegation_2", "parent_turn_cancelled") in delegation_service.cancelled
         # 失败 child 的 delegation 终态未写入，但错误被隔离记录
         assert ("delegation_1", "parent_turn_cancelled") not in delegation_service.cancelled
-        assert any(
-            record.message == "delegation_child_cancel_failed"
-            for record in caplog.records
-        )
+        assert any(record.message == "delegation_child_cancel_failed" for record in caplog.records)
     finally:
         cancellation_registry.clear("parent_turn_1")
         cancellation_registry.clear("child_turn_1")
@@ -2279,8 +2275,7 @@ def test_cancel_active_child_turns_tolerates_scan_failure(monkeypatch, caplog):
         # 父 turn 取消终态不受影响
         assert turn.status == "cancelled"
         assert any(
-            record.message == "delegation_child_cancel_scan_failed"
-            for record in caplog.records
+            record.message == "delegation_child_cancel_scan_failed" for record in caplog.records
         )
     finally:
         cancellation_registry.clear("parent_turn_1")

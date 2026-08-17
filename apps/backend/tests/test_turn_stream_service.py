@@ -508,6 +508,43 @@ async def test_emit_run_failed_with_none_turn_uses_empty_task_id():
     assert failed.event_type is EventType.RUN_FAILED
     assert failed.task_id == ""
     assert failed.payload.error == "client_disconnected"
+    # M1 回归：断连兜底路径必须把 end_reason 填为 client_disconnected，
+    # 否则前端 StatusBadge 永远读到 undefined、无法区分断开与真失败。
+    assert failed.payload.end_reason == "client_disconnected"
+
+
+async def test_emit_run_failed_with_real_turn_sets_end_reason():
+    """_emit_run_failed 收到真实 turn → task_id 取自 turn 且 end_reason 仍为 client_disconnected。
+
+    潜在缺陷类型：若实现把 end_reason 只在 turn=None 分支填充（或 task_id 取错来源），
+    真实断连场景（绝大多数生产路径）前端仍拿不到 client_disconnected。
+    """
+    evt_svc = _RuntimeEventServiceStub()
+    svc = TurnStreamService(_SpyBus(), _TurnServiceStub(), evt_svc)
+
+    svc._emit_run_failed(_turn(), TURN_ID)
+
+    assert len(evt_svc.saved) == 1
+    failed = evt_svc.saved[0]
+    assert failed.event_type is EventType.RUN_FAILED
+    assert failed.task_id == TASK_ID
+    assert failed.turn_id == TURN_ID
+    assert failed.payload.error == "client_disconnected"
+    assert failed.payload.status == "failed"
+    assert failed.payload.end_reason == "client_disconnected"
+
+
+async def test_run_failed_payload_end_reason_defaults_to_none():
+    """RunFailedPayload 仅传 error/status → end_reason 默认 None（向后兼容）。
+
+    潜在缺陷类型：若新增字段被设为必填或默认值写成 "client_disconnected"，
+    runner 真异常分支会被误判为客户端断开。
+    """
+    payload = RunFailedPayload(error="boom", status="failed")
+
+    assert payload.end_reason is None
+    assert payload.error == "boom"
+    assert payload.status == "failed"
 
 
 async def _key_error_runner(_t):

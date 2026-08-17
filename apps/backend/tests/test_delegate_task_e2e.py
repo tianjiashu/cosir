@@ -120,8 +120,8 @@ def trading_agents_workspace(real_runtime_stack: AgentRuntime):
 def parent_turn(real_runtime_stack: AgentRuntime, trading_agents_workspace):
     """构造父 task + 父 turn，并 claim 为 running（DelegationExecutor 依赖边界）。
 
-    默认父 turn 自身不是 child（parent_turn_id 为空）→ depth=0。
-    C2 会单独构造「自身是 child」的父 turn。
+    默认发起方为顶层 task（parent_task_id 为空 → depth=0，主 Agent 允许发起
+    第一层委派）。C2 会单独构造「自身是委派子 task」的发起方。
     """
     task_service = TaskService()
     turn_service = TurnService()
@@ -188,7 +188,7 @@ def injected_execution_context(
     }
 
 
-def _handler() :
+def _handler():
     """返回真实的 delegate_task 工具 handler。"""
     return build_delegate_task_definition().handler
 
@@ -215,12 +215,15 @@ def _cleanup_e2e_scratch():
 # 链路 A：工具入口 → 委派创建 → child 跑通 → 终态回写
 # ---------------------------------------------------------------------------
 
+
 def test_A1_delegate_reviewer_completes_end_to_end(
     injected_execution_context,
 ):
     """测试目的：验证 delegate_task 主路径真实跑通（创建 delegation + child 真实完
-    成 + 终态回写 + runtime 事件落库）。可能发现的缺陷：child 未真实完成 /
-    delegation 终态未回写 / 事件未落库。"""
+    成 + 终态回写 + runtime 事件落库）。该链路同时守护 depth 语义：顶层 task 发起
+    必须放行（depth=0）——depth 判定写反时本用例会以 delegation_depth_exceeded
+    失败。可能发现的缺陷：child 未真实完成 / delegation 终态未回写 / 事件未落库 /
+    主 Agent 委派被误拒。"""
     ctx = injected_execution_context
     handler = _handler()
     observation = handler(
@@ -301,9 +304,10 @@ def test_B1_delegate_reviewer_reads_workspace(
             if ev.get("event_type") == EventType.TOOL_CALL_STARTED.value:
                 payload = ev.get("payload") or {}
                 tool_names.add(payload.get("tool_name"))
-    assert tool_names & {"read_file", "search_files"}, (
-        f"delegate_reviewer 未真实读取工作区，实际工具调用: {sorted(tool_names)}"
-    )
+    assert tool_names & {
+        "read_file",
+        "search_files",
+    }, f"delegate_reviewer 未真实读取工作区，实际工具调用: {sorted(tool_names)}"
 
 
 def test_B2_delegate_coder_writes_file_in_workspace(
@@ -343,9 +347,9 @@ def test_B2_delegate_coder_writes_file_in_workspace(
             name = payload.get("name") or payload.get("tool_name")
             if ev.get("event_type") == EventType.TOOL_CALL_STARTED.value and name:
                 tool_names.append(name)
-        assert any(n in {"write_file", "patch"} for n in tool_names), (
-            f"child 未调用 write_file/patch，实际工具调用：{tool_names}"
-        )
+        assert any(
+            n in {"write_file", "patch"} for n in tool_names
+        ), f"child 未调用 write_file/patch，实际工具调用：{tool_names}"
 
         # 生成文件落在 workspace 边界内（G:\code\TradingAgents\.e2e_scratch）
         scratch = TRADING_AGENTS_ROOT / E2E_SCRATCH_SUBDIR
@@ -395,14 +399,15 @@ def test_B3_delegate_tester_runs_to_terminal(
         name = payload.get("name") or payload.get("tool_name")
         if ev.get("event_type") == EventType.TOOL_CALL_STARTED.value and name:
             tool_names.append(name)
-    assert any(n in {"read_file", "search_files"} for n in tool_names), (
-        f"tester 未调用 read_file/search_files，实际工具调用：{tool_names}"
-    )
+    assert any(
+        n in {"read_file", "search_files"} for n in tool_names
+    ), f"tester 未调用 read_file/search_files，实际工具调用：{tool_names}"
 
 
 # ---------------------------------------------------------------------------
 # 链路 C：策略与边界（真实 DelegationPolicy 生效）
 # ---------------------------------------------------------------------------
+
 
 def test_C1_unknown_child_rejected_before_create(
     injected_execution_context,
@@ -434,38 +439,44 @@ def test_C2_depth_policy_rejects_nested_delegation(
     real_runtime_stack: AgentRuntime,
     trading_agents_workspace,
 ):
-    """测试目的：父 turn 自身已是 child（parent_turn_id 非空 → depth=1 >= max_depth=1）
-    触发策略拒绝，且早于创建 delegation。可能发现的缺陷：深度判定未生效 /
-    仍落库记录。"""
-    # 构造「自身是 child」的父 turn
+    """测试目的：发起方 task 自身是委派子 task（parent_task_id 非空 → depth=1
+    >= max_depth=1）触发策略拒绝，且早于创建 delegation。可能发现的缺陷：深度
+    判定未生效 / 仍落库记录 / 主 Agent 顶层 task 被误拒（depth 语义写反）。"""
     task_service = TaskService()
     turn_service = TurnService()
-    parent_task = task_service.create_task(
+    # 顶层 task + turn 充当「祖父」链路（create_child_task 要求两者非空）
+    grand_task = task_service.create_task(
         input_text="nested parent delegation e2e",
         status="open",
         agent_id="developer",
         workspace_id=trading_agents_workspace.workspace_id,
     )
-    parent_turn_record = turn_service.create_turn(
-        task_id=parent_task.task_id,
-        input_text="nested parent turn",
+    grand_turn = turn_service.create_turn(
+        task_id=grand_task.task_id,
+        input_text="grand parent turn",
         agent_id="developer",
     )
-    turn_service.claim_pending_turn(parent_turn_record.turn_id)
-    # 模拟该父 turn 自身是某委派的 child（parent_turn_id 非空）
-    nested_parent = turn_service.create_child_turn(
-        task_id=parent_task.task_id,
+    turn_service.claim_pending_turn(grand_turn.turn_id)
+
+    # 构造「自身是委派子 task」的发起方（create_child_task 仅校验 delegation_id
+    # 唯一性，不要求 delegation 记录已存在）
+    nested_parent_task = task_service.create_child_task(
+        title="nested parent as child task",
+        parent_task_id=grand_task.task_id,
+        parent_turn_id=grand_turn.turn_id,
+        delegation_id="e2e_c2_preexisting_delegation",
+        workspace_id=trading_agents_workspace.workspace_id,
+        agent_id="developer",
+    )
+    # 发起方已是委派子 task → executor 应判定 depth=1
+    assert nested_parent_task.parent_task_id
+
+    nested_parent = turn_service.create_turn(
+        task_id=nested_parent_task.task_id,
         input_text="nested parent turn as child",
         agent_id="developer",
-        parent_turn_id=parent_turn_record.turn_id,
-        delegation_id="pre_existing_delegation_for_depth",
     )
     turn_service.claim_pending_turn(nested_parent.turn_id)
-    nested_parent = turn_service.get_turn(nested_parent.turn_id)
-
-    # depth 应判定为 1（executor 内逻辑：1 if parent_turn.parent_turn_id else 0）
-    assert nested_parent.parent_turn_id
-    assert (1 if nested_parent.parent_turn_id else 0) == 1
 
     child_runner = ChildAgentRunner(
         real_runtime_stack.run_agent,
@@ -475,10 +486,10 @@ def test_C2_depth_policy_rejects_nested_delegation(
         child_runner=child_runner,
         parent_profile=default_developer_agent(),
         parent_turn=nested_parent,
-        parent_task=parent_task,
+        parent_task=nested_parent_task,
     )
     execution_context = ToolExecutionContext(
-        task_id=parent_task.task_id,
+        task_id=nested_parent_task.task_id,
         workspace_id=trading_agents_workspace.workspace_id,
         workspace_root=TRADING_AGENTS_ROOT,
         runtime_dependencies=ToolRuntimeDependencies(delegate_task_executor=executor),
@@ -495,7 +506,7 @@ def test_C2_depth_policy_rejects_nested_delegation(
     )
 
     assert observation.status == "error"
-    assert observation.reason  # 含策略拒绝信息
+    assert "delegation_depth_exceeded" in observation.content
 
     # 真实 delegations 表无新建记录（策略拒绝早于创建）
     records = DelegationCrud().list_by_parent_turn(nested_parent.turn_id)
@@ -536,6 +547,7 @@ def test_C3_concurrency_limit_rejects(
 # ---------------------------------------------------------------------------
 # 链路 D：失败与取消（真实终态回写）
 # ---------------------------------------------------------------------------
+
 
 def test_D1_child_run_failure_marks_failed(
     injected_execution_context,
@@ -609,7 +621,7 @@ def test_D2_sync_step_exception_marks_failed(
     # executor 内部经 get_turn_service() 单例取 turn_service，须对单例实例打补丁
     turn_service = get_turn_service()
 
-    # spy：create_child_turn 正常，claim_pending_turn 返回 False → executor 内显式 raise
+    # spy：create_turn 正常，claim_pending_turn 返回 False → executor 内显式 raise
     def fake_claim(turn_id: str) -> bool:
         return False
 
@@ -695,6 +707,7 @@ def test_D3_cancel_signal_marks_cancelled(
 # 链路 E：结构化输入拼装（真实 _build_agent_input_text + 透传落库）
 # ---------------------------------------------------------------------------
 
+
 def test_E1_structured_prompt_preserved(
     injected_execution_context,
 ):
@@ -741,6 +754,7 @@ def test_E1_structured_prompt_preserved(
 # ---------------------------------------------------------------------------
 # 链路 F：观察归一化（真实 tool_success / tool_error）
 # ---------------------------------------------------------------------------
+
 
 def test_F1_F2_observation_shape(
     injected_execution_context,

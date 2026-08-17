@@ -220,7 +220,7 @@ class TestPublishStableFileChanges:
         service = MagicMock()
         runner = _make_runner(service)
         crud = crud_cls.return_value
-        crud.list_stable_by_turns.return_value = [
+        crud.list_stable_by_task.return_value = [
             FileSnapshotRecord(path="a.txt", action="modified"),
             FileSnapshotRecord(path="b.txt", action="created"),
         ]
@@ -228,7 +228,7 @@ class TestPublishStableFileChanges:
         await runner._publish_stable_file_changes("t-task", "t-turn", is_main_agent=True)
 
         crud.mark_stable_by_turn.assert_called_once_with("t-turn")
-        crud.list_stable_by_turns.assert_called_once_with(["t-turn"])
+        crud.list_stable_by_task.assert_called_once_with("t-task", ["t-turn"])
         service.save_event.assert_not_called()
         assert service.publish_event.call_count == 2
         calls = service.publish_event.call_args_list
@@ -247,11 +247,11 @@ class TestPublishStableFileChanges:
 
         service = MagicMock()
         runner = _make_runner(service)
-        crud_cls.return_value.list_stable_by_turns.return_value = []
+        crud_cls.return_value.list_stable_by_task.return_value = []
 
         await runner._publish_stable_file_changes("t-task", "t-turn", is_main_agent=False)
 
-        crud_cls.return_value.list_stable_by_turns.assert_called_once_with(["t-turn"])
+        crud_cls.return_value.list_stable_by_task.assert_called_once_with("t-task", ["t-turn"])
         service.save_event.assert_not_called()
         service.publish_event.assert_not_called()
 
@@ -261,7 +261,7 @@ class TestPublishStableFileChanges:
 
         service = MagicMock()
         runner = _make_runner(service)
-        crud_cls.return_value.list_stable_by_turns.return_value = [
+        crud_cls.return_value.list_stable_by_task.return_value = [
             FileSnapshotRecord(path="a.txt", action="modified"),
         ]
 
@@ -277,7 +277,7 @@ class TestPublishStableFileChanges:
         service = MagicMock()
         runner = _make_runner(service)
         crud_cls.return_value.mark_stable_by_turn.side_effect = RuntimeError("mark boom")
-        crud_cls.return_value.list_stable_by_turns.return_value = []
+        crud_cls.return_value.list_stable_by_task.return_value = []
 
         await runner._publish_stable_file_changes("t-task", "t-turn", is_main_agent=True)
 
@@ -292,7 +292,7 @@ class TestPublishStableFileChanges:
 
         service = MagicMock()
         runner = _make_runner(service)
-        crud_cls.return_value.list_stable_by_turns.side_effect = RuntimeError("db boom")
+        crud_cls.return_value.list_stable_by_task.side_effect = RuntimeError("db boom")
 
         await runner._publish_stable_file_changes("t-task", "t-turn", is_main_agent=True)
 
@@ -309,7 +309,7 @@ class TestPublishStableFileChanges:
         service = MagicMock()
         service.publish_event.side_effect = RuntimeError("publish boom")
         runner = _make_runner(service)
-        crud_cls.return_value.list_stable_by_turns.return_value = [
+        crud_cls.return_value.list_stable_by_task.return_value = [
             FileSnapshotRecord(path="a.txt", action="modified"),
         ]
 
