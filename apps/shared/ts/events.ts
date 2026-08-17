@@ -55,6 +55,7 @@ export interface RunStartedPayload extends RuntimeEventPayloadObject {
 export interface RunFailedPayload extends RuntimeEventPayloadObject {
   error: string;
   status?: "failed" | null;
+  end_reason?: string | null;
   message?: string | null;
   step_id?: string | null;
   requested_agent_id?: string | null;

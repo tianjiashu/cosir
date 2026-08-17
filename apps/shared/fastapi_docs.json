@@ -8,7 +8,7 @@
     "/tasks/{task_id}": {
       "get": {
         "summary": "Get Task",
-        "description": "返回任务状态（含生命周期 status 与派生 execution_status）。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    ``TaskResponse``：已存储的任务状态（含 ``status`` 与 ``execution_status``）。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    无。",
+        "description": "返回任务状态（含生命周期 status、上下文窗口占用与派生 execution_status）。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    ``TaskResponse``：已存储的任务状态（含 ``status``/``execution_status``，\n    以及 ``context_usage_used`` 与动态计算的 ``context_window_total``）。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    无。",
         "operationId": "get_task_tasks__task_id__get",
         "parameters": [
           {
@@ -480,7 +480,7 @@
       },
       "post": {
         "summary": "Create Workspace Task",
-        "description": "在工作区下创建任务容器和首个 pending turn。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    payload: 包含首条用户输入的请求体。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    创建后的 ``TaskResponse``。\n\n异常:\n    HTTPException: 当工作区不存在或输入非法时抛出。\n\n副作用:\n    在存储中创建 task 与首个 turn。",
+        "description": "在工作区下创建任务并同时创建其首个 pending 轮次。\n\n编排逻辑收口在 ``TaskService.create_task_with_initial_turn``（业务层），本端点\n只做参数透传、异常映射与响应格式化，不持有任何创建 / 运行编排。首轮次以\n``pending`` 状态创建，运行由前端经 ``POST /turns/{turn_id}/stream`` 触发。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    payload: 包含首条用户输入的请求体。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    创建后的 ``TaskResponse``（含任务元数据；首轮次标识由前端经\n    ``GET /tasks/{task_id}/turns`` 取得后驱动运行）。\n\n异常:\n    HTTPException: 当工作区不存在、agent 未注册或输入非法时抛出。\n\n副作用:\n    经业务层在存储中创建 task 与首个 pending turn。",
         "operationId": "create_workspace_task_workspaces__workspace_id__tasks_post",
         "requestBody": {
           "required": true,
@@ -879,7 +879,7 @@
     "/logs/query": {
       "get": {
         "summary": "Query Logs",
-        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
+        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / ``keyword`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
         "operationId": "query_logs_logs_query_get",
         "parameters": [
           {
@@ -899,6 +899,16 @@
               "type": "string",
               "default": "",
               "title": "Level"
+            }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Keyword"
             }
           },
           {
@@ -931,6 +941,17 @@
               "minimum": 1,
               "default": 200,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
             }
           }
         ],
@@ -961,7 +982,7 @@
     "/logs/recent": {
       "get": {
         "summary": "Recent Logs",
-        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
+        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / ``keyword`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
         "operationId": "recent_logs_logs_recent_get",
         "parameters": [
           {
@@ -972,6 +993,16 @@
               "type": "string",
               "default": "",
               "title": "Level"
+            }
+          },
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Keyword"
             }
           },
           {
@@ -1004,6 +1035,17 @@
               "minimum": 1,
               "default": 200,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
             }
           }
         ],
@@ -1357,10 +1399,6 @@
             "type": "string",
             "title": "Model Provider"
           },
-          "model_base_url": {
-            "type": "string",
-            "title": "Model Base Url"
-          },
           "model_name": {
             "type": "string",
             "title": "Model Name"
@@ -1382,14 +1420,13 @@
         "required": [
           "status",
           "model_provider",
-          "model_base_url",
           "model_name",
           "model_thinking_mode",
           "model_api_key_env",
           "has_model_api_key"
         ],
         "title": "HealthResponse",
-        "description": "校验并序列化后端健康状态响应（与 ``AgentRuntime.backend_health()`` 对齐）。\n\n参数:\n    status: 健康状态标识。\n    model_provider: 模型提供方。\n    model_base_url: 模型基础地址。\n    model_name: 模型名称。\n    model_thinking_mode: 模型思考模式。\n    model_api_key_env: API Key 所在环境变量名。\n    has_model_api_key: 环境变量是否已配置。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化后端健康状态响应（与 ``AgentRuntime.backend_health()`` 对齐）。\n\n参数:\n    status: 健康状态标识。\n    model_provider: 模型提供方。\n    model_name: 模型名称。\n    model_thinking_mode: 模型思考模式。\n    model_api_key_env: API Key 所在环境变量名。\n    has_model_api_key: 环境变量是否已配置。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ListAgentsResponse": {
         "properties": {
@@ -1491,16 +1528,32 @@
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "level_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Level Counts"
           }
         },
-        "additionalProperties": true,
         "type": "object",
         "required": [
           "entries",
           "text"
         ],
         "title": "LogQueryResponse",
-        "description": "校验并序列化日志查询结果响应（与 ``LogQueryResult.to_dict()`` 对齐）。\n\n参数:\n    entries: 结构化日志记录列表。\n    text: 可直接展示的纯文本日志。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化日志查询结果响应（与 ``LogQueryResult.to_dict()`` 对齐）。\n\n参数:\n    entries: 结构化日志记录列表。\n    text: 可直接展示的纯文本日志。\n    total: 满足过滤条件的总记录数（不受 limit/offset 影响）。\n    has_more: 当前页之后是否还有更多记录。\n    level_counts: 各级别日志计数（忽略 level 过滤、含其余过滤条件），供前端展示级别分布。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "RuntimeEventResponse": {
         "properties": {
@@ -1582,28 +1635,9 @@
             "type": "string",
             "title": "Agent Id"
           },
-          "input_text": {
-            "type": "string",
-            "title": "Input Text"
-          },
           "title": {
             "type": "string",
             "title": "Title"
-          },
-          "last_message_preview": {
-            "type": "string",
-            "title": "Last Message Preview"
-          },
-          "latest_turn_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Latest Turn Id"
           },
           "status": {
             "type": "string",
@@ -1658,6 +1692,28 @@
             ],
             "title": "Delegation Id"
           },
+          "context_usage_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Usage Used"
+          },
+          "context_window_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window Total"
+          },
           "created_at": {
             "type": "string",
             "title": "Created At"
@@ -1672,15 +1728,13 @@
           "task_id",
           "workspace_id",
           "agent_id",
-          "input_text",
           "title",
-          "last_message_preview",
           "status",
           "created_at",
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    agent_id: 驱动该任务的 agent 标识。\n    input_text: 任务的首条用户输入。\n    title: 任务标题。\n    last_message_preview: 最近一条消息预览。\n    latest_turn_id: 最近一轮标识，可能为 None。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_turn_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    agent_id: 驱动该任务的 agent 标识。\n    title: 任务标题。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_turn_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "TurnResponse": {
         "properties": {

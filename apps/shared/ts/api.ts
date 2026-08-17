@@ -49,7 +49,6 @@ export interface CreateTurnRequest {
 export interface BackendHealthResponse {
   status: string;
   model_provider: string;
-  model_base_url: string;
   model_name: string;
   model_thinking_mode: string;
   model_api_key_env: string;
