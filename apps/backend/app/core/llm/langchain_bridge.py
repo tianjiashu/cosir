@@ -1,31 +1,21 @@
-"""RuntimeMessage ↔ LangChain 消息 与 工具 schema 的边界转换。
+"""LangChain 消息清洗 与 工具 schema 边界转换。
 
-本模块是 ``context/`` 模型无关层与 LangGraph 之间的唯一转换点：把运行时
-``RuntimeMessage`` 转为 LangChain ``BaseMessage``、把 ``ToolDefinition`` 统一经
-``to_model_tool_definition()`` 投影后转为 ``bind_tools`` 接受的 OpenAI 函数 schema、
-把 LangChain 的 ``tool_calls`` 还原为内部 ``ToolCall``。除本模块外，graph 节点内部
-一律使用 LangChain 类型，不在节点逻辑里散落转换代码。
+本模块是 LangGraph 消息链路上的边界收口：清洗进入上下文的 assistant 消息
+（``sanitize_assistant_messages``）、把内部 ``ToolDefinition`` 投影为 ``bind_tools``
+接受的 OpenAI 函数 schema（``model_tools_to_langchain``）、把 LangChain 的
+``tool_calls`` 还原为内部 ``ToolCall``（``tool_calls_from_langchain``）。
+除本模块外，graph 节点内部一律使用 LangChain 类型，不在节点逻辑里散落转换代码。
 """
 
-import json
 from typing import Any
 
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.messages.tool import ToolCall as LangChainToolCall
 
-from app.config.logging.logger import log
-from app.models.runtime_message import RuntimeMessage
 from app.tools.schemas import ToolCall, ToolDefinition
 
 # DeepSeek 等 OpenAI 兼容端点在 assistant 消息携带 tool_calls 但 content 为空串时，
-# langchain-openai 的序列化层会把 content="" 强制改写为 null，而 DeepSeek 拒绝
+# litellm 的 OpenAI 兼容序列化层会把 content="" 强制改写为 null，而 DeepSeek 拒绝
 # assistant.content 为 null（仅 tool 角色允许 content=null）。用单空格占位符兜底，
 # 保证序列化后 content 为非空字符串，根除整类协议拒绝问题。
 _ASSISTANT_EMPTY_CONTENT_PLACEHOLDER = " "
@@ -34,8 +24,8 @@ _ASSISTANT_EMPTY_CONTENT_PLACEHOLDER = " "
 def sanitize_assistant_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     """在消息进入上下文（入口守卫）前对 assistant 消息做最终清洗，避免脏字段回灌下一轮对话。
 
-    重建后只保留安全的 ``content`` + 合法 ``tool_calls`` + ``id``。``ToolMessage`` 及其他角色不受影响（其 content=null 协议允许），保持
-    原对象引用。
+    重建后只保留安全的 ``content`` + 合法 ``tool_calls`` + ``id``。``ToolMessage`` 及其他
+    角色不受影响（其 content=null 协议允许），保持原对象引用。
 
     参数:
         messages: 即将进入上下文的 LangChain 消息列表。
@@ -56,7 +46,8 @@ def sanitize_assistant_messages(messages: list[BaseMessage]) -> list[BaseMessage
             continue
 
         content = message.content
-        if content is None or content.strip() == "":
+        # content 可能是内容块列表（str | list），仅 str 才有 strip；非 str/空串一律走占位符。
+        if not isinstance(content, str) or content.strip() == "":
             content = _ASSISTANT_EMPTY_CONTENT_PLACEHOLDER
 
         # 重建时不传 invalid_tool_calls / response_metadata：前者是当轮解析噪声，后者是本地元数据，
@@ -69,98 +60,6 @@ def sanitize_assistant_messages(messages: list[BaseMessage]) -> list[BaseMessage
             )
         )
     return normalized
-
-
-# def runtime_to_langchain(messages: list[RuntimeMessage]) -> list[BaseMessage]:
-#     """将运行时消息转换为 LangChain 消息。
-#
-#     作为 ``RuntimeMessage`` ↔ LangChain 的唯一转换点，额外承担一道防御性清洗：
-#     先收集全部 ``tool`` 消息的 ``tool_call_id``，重建 ``assistant`` 的 ``AIMessage``
-#     时仅保留有对应 ``ToolMessage`` 配对的 ``tool_calls``，剥离无配对的悬空调用。
-#     历史脏数据（如旧版 ``tool_error_limit`` 分支曾丢弃本批次响应）会导致 assistant
-#     的 ``tool_calls`` 缺少对应 ``ToolMessage``，若直接提交 OpenAI 会触发协议校验失败
-#     （"assistant message with tool_calls must be followed by tool messages"），剥离
-#     可保证发往模型的消息序列始终闭合。
-#
-#     参数:
-#         messages: 与模型无关的运行时消息列表。
-#
-#     返回:
-#         可直接交给 LangChain chat model 的 ``BaseMessage`` 列表；其中 assistant 的
-#         ``tool_calls`` 已剔除无配对 ``ToolMessage`` 的悬空项。
-#
-#     异常:
-#         无。
-#
-#     副作用:
-#         当检测到悬空 ``tool_calls`` 被剥离时，经项目标准 ``log`` 单例写一条 ``warning``
-#         （事件 ``assistant_tool_calls_orphaned``），记录被剥离的 ``tool_call_id`` 列表以
-#         便追溯脏数据来源；不写入任何业务数据。
-#     """
-#
-#     converted: list[BaseMessage] = []
-#     # 先收集所有 tool 消息的 tool_call_id 集合：assistant 的 tool_calls 若没有对应
-#     # ToolMessage 配对，提交给 OpenAI 会触发协议校验失败（"assistant message with
-#     # tool_calls must be followed by tool messages"）。历史脏数据（如旧版 tool_error_limit
-#     # 分支曾丢弃本批次响应）可能出现悬空 tool_calls，此处剥离无配对的调用，保证发往
-#     # 模型的消息序列始终闭合。
-#     responded_ids = {
-#         message.metadata.get("tool_call_id")
-#         for message in messages
-#         if message.role == "tool" and message.metadata.get("tool_call_id")
-#     }
-#     for message in messages:
-#         if message.role == "system":
-#             converted.append(SystemMessage(content=message.content_text))
-#         elif message.role == "user":
-#             converted.append(HumanMessage(content=message.content_text))
-#         elif message.role == "assistant":
-#             tool_calls_meta = tool_calls_from_metadata(message.metadata.get("tool_calls"))
-#             orphan_calls = [
-#                 call.get("id") or "<missing-id>"
-#                 for call in tool_calls_meta
-#                 if call.get("id") not in responded_ids
-#             ]
-#             if orphan_calls:
-#                 # 历史脏数据导致 assistant 的 tool_calls 缺少对应 ToolMessage，已在本函数
-#                 # 内剥离，避免提交 OpenAI 触发协议校验失败；记录以追溯脏数据来源。
-#                 log.warning(
-#                     "assistant_tool_calls_orphaned",
-#                     extra={
-#                         "msg": (
-#                             f"检测到 {len(orphan_calls)} 个无配对 ToolMessage 的悬空 tool_calls，"
-#                             "已剥离以免触发 OpenAI 协议校验失败"
-#                         ),
-#                         "data": {"orphan_tool_call_ids": orphan_calls},
-#                     },
-#                 )
-#             langchain_tool_calls = [
-#                 {
-#                     "name": call["name"],
-#                     "args": call.get("args") if isinstance(call.get("args"), dict) else {},
-#                     "id": call.get("id") or "",
-#                 }
-#                 for call in tool_calls_meta
-#                 if call.get("id") in responded_ids
-#             ]
-#             converted.append(
-#                 AIMessage(
-#                     content=message.content_text,
-#                     tool_calls=langchain_tool_calls,
-#                 )
-#             )
-#         elif message.role == "tool":
-#             converted.append(
-#                 ToolMessage(
-#                     content=message.content_text,
-#                     tool_call_id=message.metadata.get("tool_call_id", ""),
-#                 )
-#             )
-#         else:
-#             converted.append(HumanMessage(content=message.content_text))
-#     # 出口兜底：assistant 消息 content 为空串时序列化为 null 会被 DeepSeek 拒绝，
-#     # 归一化为非空占位符后再提交给模型。
-#     return sanitize_assistant_messages(converted)
 
 
 def model_tools_to_langchain(

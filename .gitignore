@@ -78,6 +78,10 @@ task3_pytest*.log
 # Langfuse 回放本地产物（运行时下载，不提交）
 storage/langfuse-replays/
 
+# Langfuse trace 调试导出（运行时生成，不提交）
+logs/trace_*.json
+logs/trace_*_raw.txt
+
 # 临时验证程序（调试用，非源码）
 apps/desktop/src-tauri/verify_stem.rs
 apps/desktop/src-tauri/verify_stem.exe

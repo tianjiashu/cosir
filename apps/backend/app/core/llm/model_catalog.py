@@ -27,8 +27,13 @@ class ModelCatalog:
     def max_context_window(cls, model_name: str) -> int:
         """返回模型的最大上下文窗口（token）；未收录模型返回保守兜底值。
 
+        查表前先对 ``model_name`` 做 ``rsplit("/", 1)[-1]`` 归一化取裸名：带 provider
+        前缀名（如 ``deepseek/deepseek-v4-flash``）与裸名（``deepseek-v4-flash``）
+        均命中同一事实表项；未收录时返回 128_000 兜底。
+
         参数:
-            model_name: 模型名（如 ``deepseek-v4-flash``）。
+            model_name: 模型名（带前缀或裸名均可，如 ``deepseek/deepseek-v4-flash``
+                或 ``deepseek-v4-flash``）。
 
         返回:
             该模型的最大上下文窗口 token 数；未收录时返回 128_000 兜底。
@@ -39,4 +44,5 @@ class ModelCatalog:
         副作用:
             无。
         """
-        return _DEFAULT_CONTEXT_WINDOWS.get(model_name, _FALLBACK_CONTEXT_WINDOW)
+        normalized = model_name.rsplit("/", 1)[-1]
+        return _DEFAULT_CONTEXT_WINDOWS.get(normalized, _FALLBACK_CONTEXT_WINDOW)

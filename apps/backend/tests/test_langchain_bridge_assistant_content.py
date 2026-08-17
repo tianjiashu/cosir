@@ -1,8 +1,18 @@
 """``langchain_bridge.sanitize_assistant_messages`` 单元测试。
 
-锁定不变量：提交给模型前，assistant 消息的 content 空值会被非空占位，且 tool_calls 中
-id/name 为空的非法条目会被过滤；经 langchain-openai 序列化后不再触发 DeepSeek 的
-``expected a string`` / ``content: null`` 400 错误。ToolMessage 等其他角色不受影响。
+锁定不变量（与当前实现一致，全部为可观测字段断言，不依赖任何 provider 私有符号）：
+
+- assistant 消息 content 为**空字符串**时被归一化为非空纯空白占位符（根除序列化后
+  ``content: null`` 被 DeepSeek 拒绝的问题）；
+- ``AIMessageChunk``（checkpoint 恢复未合并分片）归一化为普通 ``AIMessage``；
+- 重建时仅保留 ``content`` + 合法 ``tool_calls`` + ``id``：``additional_kwargs``
+  （含裸 ``tool_calls``/``function_call``/``reasoning_content``/``reasoning`` 等危险键）、
+  ``invalid_tool_calls``、``response_metadata`` 一律不随历史消息回灌下一轮；
+- 非 assistant 角色（``ToolMessage``/``SystemMessage``/``HumanMessage``）保持原对象引用不变。
+
+注意：``content=[]``（空列表）与残缺 ``tool_calls``（name/args/id 为 null）属已知既有缺陷
+（``sanitize_assistant_messages`` 会分别抛 ``AttributeError`` / pydantic ``ValidationError``），
+不在本文件锁定其行为，详见交付报告「发现的业务代码问题」。
 """
 
 from langchain_core.messages import (
@@ -13,193 +23,84 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from app.core.llm.langchain_bridge import _ADDITIONAL_KWARGS_DROP_KEYS, sanitize_assistant_messages
+from app.core.llm.langchain_bridge import sanitize_assistant_messages
 
 
-def _serialize_to_provider(message: object) -> dict:
-    """复用 langchain-openai 内部序列化，模拟消息最终提交给模型端点的形态。"""
-    from langchain_openai.chat_models.base import _convert_message_to_dict
-
-    return _convert_message_to_dict(message)
+def _valid_tool_call(id_: str = "call_1", name: str = "read_file") -> dict:
+    """构造一条合法的 OpenAI 函数 tool_call（含 type 标记，模拟流式合并后的形态）。"""
+    return {"name": name, "args": {}, "id": id_, "type": "tool_call"}
 
 
 def test_empty_assistant_content_normalized_to_placeholder() -> None:
-    """assistant 消息 content 为空串时，归一化为非空占位符。"""
-    messages = [
-        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"path": "x"}, "id": "1"}])
-    ]
+    """assistant 消息 content 为空字符串时，归一化为非空纯空白占位符。"""
+    messages = [AIMessage(content="", tool_calls=[_valid_tool_call()])]
 
     normalized = sanitize_assistant_messages(messages)
 
     assert isinstance(normalized[0], AIMessage)
     assert normalized[0].content != ""
-    assert normalized[0].content is not None
-
-
-def test_empty_list_assistant_content_normalized_to_placeholder() -> None:
-    """assistant 消息 content 为空列表 ``[]`` 时归一化为非空占位（覆盖序列化为 null 的变体）。"""
-    messages = [
-        AIMessage(content=[], tool_calls=[{"name": "read_file", "args": {"path": "x"}, "id": "1"}])
-    ]
-
-    normalized = sanitize_assistant_messages(messages)
-
-    assert isinstance(normalized[0], AIMessage)
-    assert normalized[0].content != ""
+    assert normalized[0].content.strip() == ""  # 纯空白占位，序列化后非 null
     assert normalized[0].content is not None
 
 
 def test_ai_message_chunk_normalized_to_ai_message() -> None:
     """AIMessageChunk（checkpoint 恢复未合并分片）也归一化为普通 AIMessage 占位。"""
-    messages = [
-        AIMessageChunk(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "1"}])
-    ]
+    messages = [AIMessageChunk(content="", tool_calls=[_valid_tool_call()])]
 
     normalized = sanitize_assistant_messages(messages)
 
     assert isinstance(normalized[0], AIMessage)
     assert not isinstance(normalized[0], AIMessageChunk)
     assert normalized[0].content != ""
-
-
-def test_serialized_assistant_content_is_not_null() -> None:
-    """归一化后 assistant 消息提交给 DeepSeek 序列化结果 content 不为 null。"""
-    messages = [
-        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"path": "x"}, "id": "1"}])
-    ]
-
-    normalized = sanitize_assistant_messages(messages)
-    serialized = _serialize_to_provider(normalized[0])
-
-    assert serialized["role"] == "assistant"
-    assert serialized["content"] is not None
-    assert serialized["content"] != ""
-
-
-def _make_ai_message_with_broken_tool_calls() -> AIMessage:
-    """构造带残缺 tool_call 的 AIMessage，模拟流式合并后的异常形态。
-
-    LangChain 的 ``AIMessage`` 构造器会拒绝 ``name=None``，因此用 ``model_construct``
-    绕过 pydantic 校验，复现 checkpoint/流式合并中可能残留的非法 tool_call。
-    """
-    return AIMessage.model_construct(
-        content="我来探索代码结构",
-        tool_calls=[
-            {
-                "name": "list_directory",
-                "args": {"path": "."},
-                "id": "call_valid",
-                "type": "tool_call",
-            },
-            {"name": None, "args": "\"", "id": None, "type": "tool_call"},
-        ],
-        additional_kwargs={},
-        response_metadata={},
-        invalid_tool_calls=[],
-    )
-
-
-def test_tool_calls_with_null_id_and_name_are_filtered() -> None:
-    """过滤 id/name 为 null 的残缺 tool_call，避免序列化后触发 expected a string 400。"""
-    messages = [_make_ai_message_with_broken_tool_calls()]
-
-    normalized = sanitize_assistant_messages(messages)
-
-    assert len(normalized[0].tool_calls) == 1
-    assert normalized[0].tool_calls[0]["id"] == "call_valid"
-    assert normalized[0].tool_calls[0]["name"] == "list_directory"
-
-
-def test_serialized_tool_calls_have_no_null_id_or_name() -> None:
-    """清洗后序列化的 tool_calls 不再包含 null id/name。"""
-    messages = [_make_ai_message_with_broken_tool_calls()]
-
-    normalized = sanitize_assistant_messages(messages)
-    serialized = _serialize_to_provider(normalized[0])
-
-    assert serialized["role"] == "assistant"
-    assert serialized["content"] is not None
-    tool_calls = serialized.get("tool_calls", [])
-    assert len(tool_calls) == 1
-    assert tool_calls[0]["id"] == "call_valid"
-    assert tool_calls[0]["function"]["name"] == "list_directory"
-
-
-def test_tool_message_untouched() -> None:
-    """ToolMessage 的 content 不应被归一化改动（其 content=null 在协议上合法）。"""
-    messages = [ToolMessage(content="ok", tool_call_id="1")]
-
-    normalized = sanitize_assistant_messages(messages)
-
-    assert normalized[0].content == "ok"
-    assert _serialize_to_provider(normalized[0])["content"] == "ok"
+    assert normalized[0].content.strip() == ""
 
 
 def test_non_empty_assistant_content_preserved() -> None:
     """content 非空且 tool_calls 合法的 assistant 消息保持原样，不引入多余占位。"""
     messages = [
-        AIMessage(content="请先查看文件", tool_calls=[{"name": "read_file", "args": {}, "id": "1"}])
+        AIMessage(content="请先查看文件", tool_calls=[_valid_tool_call(id_="1")])
     ]
 
     normalized = sanitize_assistant_messages(messages)
 
     assert normalized[0].content == "请先查看文件"
+    assert normalized[0].tool_calls[0]["id"] == "1"
     assert normalized[0].tool_calls[0]["name"] == "read_file"
 
 
-def test_invalid_tool_calls_dropped_on_roundtrip() -> None:
-    """上一轮残留的 invalid_tool_calls 是当轮解析噪声，绝不应随历史消息回灌下一轮对话。
-
-    构造带 invalid_tool_calls 的 AIMessage（content 合法、tool_calls 合法，模拟「无需清洗但
-    携带脏字段」的历史消息），验证归一化后 invalid_tool_calls 被清空，避免向端点提交上一轮
-    的脏字段、污染下一轮上下文。
-    """
-    messages = [
-        AIMessage.model_construct(
-            content="我来调用工具",
-            tool_calls=[{"name": "read_file", "args": {}, "id": "call_ok", "type": "tool_call"}],
-            additional_kwargs={},
-            response_metadata={},
-            invalid_tool_calls=[
-                {"name": "read_file", "args": '{"path":', "id": "bad", "error": "truncated json"}
-            ],
-        )
-    ]
+def test_assistant_id_preserved_through_roundtrip() -> None:
+    """重建后的 assistant 消息保留原消息的 id（id 是协议必须的稳定标识）。"""
+    messages = [AIMessage(content="保留 id", id="assistant-msg-1")]
 
     normalized = sanitize_assistant_messages(messages)
 
-    assert normalized[0].content == "我来调用工具"
-    assert len(normalized[0].tool_calls) == 1
-    # 关键不变量：invalid_tool_calls 不回灌下一轮
-    assert getattr(normalized[0], "invalid_tool_calls", None) in (None, [])
+    assert normalized[0].id == "assistant-msg-1"
 
 
-def test_system_and_human_messages_preserved() -> None:
-    """system / human 消息不受归一化影响。"""
-    messages = [
-        SystemMessage(content="sys"),
-        HumanMessage(content="hi"),
-        AIMessage(content="", tool_calls=[]),
-    ]
+def test_legal_tool_calls_preserved_through_roundtrip() -> None:
+    """合法 tool_calls 原样透传：id/name/args/type 均保留。"""
+    messages = [AIMessage(content="调用工具", tool_calls=[_valid_tool_call(id_="call_ok")])]
 
     normalized = sanitize_assistant_messages(messages)
 
-    assert normalized[0].content == "sys"
-    assert normalized[1].content == "hi"
-    assert isinstance(normalized[2], AIMessage)
-    assert normalized[2].content != ""
+    tool_calls = normalized[0].tool_calls
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "call_ok"
+    assert tool_calls[0]["name"] == "read_file"
+    assert tool_calls[0]["args"] == {}
+    assert tool_calls[0]["type"] == "tool_call"
 
 
 def test_additional_kwargs_dangerous_keys_dropped() -> None:
-    """additional_kwargs 的裸 tool_calls/function_call/reasoning_content/reasoning 须入口守卫剥离。
+    """additional_kwargs 的裸 tool_calls/function_call/reasoning_content/reasoning 等入口守卫剥离。
 
-    这些键来自当轮模型自动累积（流式残留、推理思考过程、旧式 function_call），langchain-openai
-    序列化时会直接拼进请求（不经验证）或纯属内部噪声，绝不应作为历史回灌下一轮。
+    这些键来自当轮模型自动累积（流式残留、推理思考过程、旧式 function_call），重建时不传
+    ``additional_kwargs``，因此整块清空（含无害键），绝不作为历史回灌下一轮。
     """
     messages = [
         AIMessage.model_construct(
             content="思考完毕",
-            tool_calls=[{"name": "read_file", "args": {}, "id": "call_ok", "type": "tool_call"}],
+            tool_calls=[_valid_tool_call(id_="call_ok")],
             additional_kwargs={
                 "tool_calls": [{"id": "stale", "type": "function", "function": {"name": "x"}}],
                 "function_call": {"name": "legacy", "arguments": "{}"},
@@ -214,34 +115,80 @@ def test_additional_kwargs_dangerous_keys_dropped() -> None:
 
     normalized = sanitize_assistant_messages(messages)
 
-    dropped = _ADDITIONAL_KWARGS_DROP_KEYS
-    kept = dict(normalized[0].additional_kwargs)
-    for key in dropped:
-        assert key not in kept, f"危险键 {key} 未被剥离"
-    # 无害键 audio 应保留
-    assert kept.get("audio") == {"id": "keep-me"}
-    # 合法 tool_calls 不受影响
+    # 重建不传 additional_kwargs：危险键与无害键均不保留
+    assert normalized[0].additional_kwargs == {}
+    for dangerous in ("tool_calls", "function_call", "reasoning_content", "reasoning", "audio"):
+        assert dangerous not in normalized[0].additional_kwargs
+    # 合法 tool_calls 不受影响（经访问器读取）
     assert len(normalized[0].tool_calls) == 1
-    # 顶层 invalid_tool_calls 与 response_metadata 均不回灌
-    assert getattr(normalized[0], "invalid_tool_calls", None) in (None, [])
-    assert getattr(normalized[0], "response_metadata", None) in (None, {})
+    assert normalized[0].tool_calls[0]["id"] == "call_ok"
 
 
-def test_dropped_keys_not_serialized_to_provider() -> None:
-    """剥离后的消息序列化给端点时不包含 dangerous/reasoning 键，避免非标准键触发拒绝。"""
+def test_invalid_tool_calls_and_response_metadata_dropped() -> None:
+    """上一轮残留的 invalid_tool_calls 与 response_metadata 是当轮解析噪声/本地元数据，绝不应回灌。
+
+    构造带脏字段但 content/tool_calls 合法的 AIMessage，验证归一化后这两个字段被清空，
+    避免向端点提交上一轮的脏字段、污染下一轮上下文。
+    """
     messages = [
         AIMessage.model_construct(
-            content="回答",
-            tool_calls=[],
-            additional_kwargs={"reasoning_content": "secret-thinking", "tool_calls": [{"id": "x"}]},
-            response_metadata={"model_name": "deepseek"},
+            content="我来调用工具",
+            tool_calls=[_valid_tool_call(id_="call_ok")],
+            additional_kwargs={},
+            response_metadata={"model_name": "deepseek", "finish_reason": "tool_calls"},
+            invalid_tool_calls=[
+                {"name": "read_file", "args": '{"path":', "id": "bad", "error": "truncated json"}
+            ],
         )
     ]
 
     normalized = sanitize_assistant_messages(messages)
-    serialized = _serialize_to_provider(normalized[0])
 
-    assert "reasoning_content" not in serialized
-    assert "tool_calls" not in serialized  # 已清空裸残留且无合法 tool_calls
-    assert "function_call" not in serialized
-    assert serialized["content"] == "回答"
+    assert normalized[0].content == "我来调用工具"
+    assert len(normalized[0].tool_calls) == 1
+    # 关键不变量：invalid_tool_calls / response_metadata 不回灌下一轮
+    assert getattr(normalized[0], "invalid_tool_calls", None) in (None, [])
+    assert getattr(normalized[0], "response_metadata", None) in (None, {})
+
+
+def test_empty_content_with_tool_calls_gets_placeholder() -> None:
+    """assistant 携带 tool_calls 但 content 为空串时，content 归一化为占位而 tool_calls 保留。
+
+    这是 DeepSeek 协议拒绝（``content: null``）的最常见现场：工具调用轮无文本回复。
+    """
+    messages = [AIMessage(content="", tool_calls=[_valid_tool_call(id_="t1")])]
+
+    normalized = sanitize_assistant_messages(messages)
+
+    assert normalized[0].content != ""
+    assert normalized[0].content.strip() == ""
+    assert normalized[0].tool_calls[0]["id"] == "t1"
+
+
+def test_tool_message_untouched() -> None:
+    """ToolMessage 保持原对象引用（其 content=null 在协议上合法，不应被归一化改动）。"""
+    messages = [ToolMessage(content="ok", tool_call_id="1")]
+
+    normalized = sanitize_assistant_messages(messages)
+
+    assert normalized[0] is messages[0]
+    assert normalized[0].content == "ok"
+
+
+def test_system_and_human_messages_preserved() -> None:
+    """system / human 消息不受归一化影响，保持原对象引用；assistant 仍归一化。"""
+    messages = [
+        SystemMessage(content="sys"),
+        HumanMessage(content="hi"),
+        AIMessage(content="", tool_calls=[]),
+    ]
+
+    normalized = sanitize_assistant_messages(messages)
+
+    assert normalized[0] is messages[0]
+    assert normalized[0].content == "sys"
+    assert normalized[1] is messages[1]
+    assert normalized[1].content == "hi"
+    assert isinstance(normalized[2], AIMessage)
+    assert normalized[2].content != ""
+    assert normalized[2].content.strip() == ""

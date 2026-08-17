@@ -178,11 +178,6 @@ async def test_lifespan_runs_delegation_recovery_before_runtime_start(
     )
     monkeypatch.setattr(
         app_module,
-        "close_shared_model_http_clients",
-        _fake_close_shared_model_http_clients(calls),
-    )
-    monkeypatch.setattr(
-        app_module,
         "_mark_boot_stopped",
         lambda: calls.append(("stopped", None)),
     )
@@ -318,36 +313,3 @@ def _fake_start_codegraph_kernel(
         return None
 
     return fake_start_codegraph_kernel
-
-
-def _fake_close_shared_model_http_clients(
-    calls: list[tuple[str, object | None]],
-) -> Callable[[], Awaitable[None]]:
-    """构造记录模型 HTTP 客户端关闭调用的异步 fake。
-
-    参数:
-        calls: 共享调用记录列表。
-    返回:
-        可替换 ``close_shared_model_http_clients`` 的异步函数。
-    异常:
-        无。
-    副作用:
-        无；返回的 fake 被调用时会写入调用记录。
-    """
-
-    async def fake_close_shared_model_http_clients() -> None:
-        """记录模型 HTTP 客户端关闭调用。
-
-        参数:
-            无。
-        返回:
-            无。
-        异常:
-            无。
-        副作用:
-            向共享调用记录列表追加关闭调用。
-        """
-
-        calls.append(("close_model_http_clients", None))
-
-    return fake_close_shared_model_http_clients

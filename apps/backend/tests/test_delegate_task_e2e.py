@@ -75,7 +75,7 @@ def real_runtime_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       1. Settings.override 全部 SQLite/checkpoint/log 库到 tmp_path
       2. init_storage() 建表
       3. initialize_service_dependencies() 装配全局 service 单例
-      4. set_agent_registry(build_agent_registry()) 播种 6 个内置 agent
+      4. set_agent_registry(build_agent_registry()) 播种 5 个内置 agent
       5. AgentRuntime() 取全局单例
     """
     _require_api_key(monkeypatch)

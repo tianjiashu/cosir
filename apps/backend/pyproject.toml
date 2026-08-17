@@ -8,7 +8,12 @@ dependencies = [
     "fastapi==0.115.6",
     "httpx==0.28.1",
     "jsonschema==4.23.0",
-    "langchain-openai==1.2.2 ; python_version >= '3.11'",
+    "langchain-litellm==0.7.0 ; python_version >= '3.11'",
+    # litellm 精确锁 ==1.97.0：规避 pytest-cov 对 litellm/pydantic 动态属性插桩偶发的
+    # import 冲突（range 约束会解析到行为不同的补丁版，破坏插桩时序）。
+    # 注意：不可锁 1.83.14——它硬依赖 python-dotenv==1.2.2，与下方锁定的
+    # python-dotenv==1.0.1 冲突导致 uv 无法解析。1.97.0 为当前实际解析并运行验证过的版本。
+    "litellm==1.97.0",
     "langgraph==1.2.10 ; python_version >= '3.11'",
     "langgraph-checkpoint-sqlite==3.1.0 ; python_version >= '3.11'",
     # Langfuse 可观测性（LLM/工具调用 trace；基于 OpenTelemetry，v4 客户端 API）。
@@ -54,7 +59,8 @@ package = false
 line-length = 100
 target-version = "py311"
 src = ["."]
-# 排除一次性探针/草稿脚本，避免污染首次 lint 结果（应逐步清理）。
+# 历史草稿/探针脚本（技术债）：以 exclude 隐藏而非删除，待清理至 temp/ 或删除后移除本段。
+# 禁止把新草稿加入本白名单——新草稿一律放 apps/backend/temp/（已被 .gitignore 忽略）。
 extend-exclude = [
     "_orig_react.py",
     "_probe_astream.py",
@@ -98,13 +104,37 @@ ignore = [
 quote-style = "double"  # 与现有代码双引号约定一致
 
 [tool.mypy]
+# 强类型官方基线（第零铁律：以长期稳定迭代为最终目标，类型错误应在提交前被抓住）。
+# strict = true 宣示强类型目标（组合 disallow_untyped_defs / disallow_any_generics /
+# no_implicit_optional / strict_equality / warn_return_any 等全部强约束）；
+# 存量代码经下方 [[tool.mypy.overrides]] 临时豁免，随存量分批清理逐步收紧并删除豁免段
+# （迁移计划见 docs/mypy-strict-migration-plan.md，约定见 rules/Python代码开发规范.md
+# 「强类型开发基线」）。
 python_version = "3.11"
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_unreachable = true
-# 渐进式：不卡存量（disallow_untyped_defs=false），新代码约定必须注解且通过。
+strict = true
+warn_unreachable = true   # strict 未含，显式补充
+ignore_missing_imports = true  # 第三方动态库（litellm/langfuse/pydantic）类型不可靠，整包忽略
+
+# 存量豁免：仅关闭下方列出的宽松项（strict 的 11 项强约束 + extra_checks +
+# 显式补充的 warn_unreachable），其余 strict 项对存量仍生效——warn_redundant_casts /
+# warn_unused_ignores 未豁免，存量冗余 cast/ignore 仍会报错。
+# 逐步迁移后删除本段。注意：新增文件不在本豁免生效范围内——pre-commit 的
+# mypy-new-strict hook 用 apps/backend/mypy.strict.ini（无豁免）对新增 app/ 文件强制 strict。
+[[tool.mypy.overrides]]
+module = ["app.*"]
 disallow_untyped_defs = false
-ignore_missing_imports = true
+disallow_incomplete_defs = false
+disallow_any_generics = false
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+check_untyped_defs = false
+no_implicit_optional = false
+strict_equality = false
+warn_return_any = false
+no_implicit_reexport = false
+extra_checks = false
+warn_unreachable = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -112,4 +142,27 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "llm: 真实调用 LLM 的端到端冒烟测试（需要联网与 DEEPSEEK_API_KEY，默认不进普通 pytest）",
+]
+
+[tool.coverage.run]
+# 覆盖率仅聚焦业务代码 app/，排除测试、草稿、虚拟环境与第三方依赖。
+# 排除第三方可规避 pytest-cov 对 litellm/pydantic 等动态属性插桩时偶发的 import 冲突。
+# 覆盖率默认不随 pytest 自动启用（未配 addopts --cov），仅 CI / 显式 `pytest --cov` 时统计，
+# 避免每次本地测试都触发上述插桩竞态。
+source = ["app"]
+omit = [
+    "tests/*",
+    "temp/*",
+    "*/.venv/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+# 不强制 fail_under 门禁：当前全量覆盖率仍低，门禁应由 CI 渐进推进。
+# 先以 omit 收敛统计范围，避免对无关模块插桩引入不稳定。
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
 ]

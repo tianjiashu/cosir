@@ -37,7 +37,6 @@ from app.codegraph import CodeGraphKernelClient, CodeGraphKernelSupervisor
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.llm.model_http_pool import close_shared_model_http_clients
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.hook import HookContext, HookEvent
@@ -115,8 +114,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             _kernel_supervisor.shutdown()
         flush_langfuse()
         close_service_dependencies()
-        # 释放进程级共享模型 HTTP 客户端（复用连接池），避免连接泄漏。
-        await close_shared_model_http_clients()
+        # 模型 HTTP 连接由 litellm 内部管理，无需进程级显式释放。
         _mark_boot_stopped()
 
 

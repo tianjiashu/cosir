@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from app.core.agents.prompt_ref import PromptRef
 from app.core.llm.model_settings import ModelSettings
-from app.models import TurnRecord, TaskRecord
+from app.models import TurnRecord
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
@@ -54,7 +54,8 @@ class AgentProfile:
         can_delegated: 是否允许被委派为子 Agent。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
-        model_name: 该 Agent 使用的模型名称。
+        model_name: 该 Agent 使用的模型名称（默认 ``deepseek/deepseek-v4-flash``，
+            带 provider 前缀，透传给 litellm 路由）。
         model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
         turn: 该 Agent 当前所属 turn 记录（运行时注入，可为 None）。
         runtime_event_loop: 运行时事件循环（可为 None）。
@@ -75,8 +76,9 @@ class AgentProfile:
     description: str
     allowed_tools: list[str]
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    model_name: str = "deepseek-v4-flash"
+    model_name: str = "deepseek/deepseek-v4-flash"
     model_settings: ModelSettings = field(default_factory=ModelSettings)
+    hidden: bool = False
     max_steps: int = 1000
     turn: TurnRecord | None = None
     main_agent: bool = False

@@ -1,6 +1,6 @@
 """单个 Agent 的模型覆盖配置值对象。
 
-单一职责：只承载该 Agent 的模型覆盖配置（生成参数 + 端点覆盖），不参与模型构建。
+单一职责：只承载该 Agent 的模型覆盖配置（生成参数 + 可选 api_base 覆盖），不参与模型构建。
 所有字段均为可选覆盖项：未提供（``None``）时，由全局运行配置（``app.config.settings``
 模块级静态变量）与模型注册表提供缺省值，``ModelSettings`` 仅覆盖显式给出的字段。
 """
@@ -23,10 +23,11 @@ class ModelSettings:
     """单个 Agent 的模型覆盖配置值对象。
 
     职责边界：
-    - 负责：声明 Agent 级别的模型覆盖项（采样参数、thinking 模式、端点与 Key 环境变量）。
-    - 不负责：模型构建（交给 ``LLMProvider``）、全局默认值（交给 ``app.config.settings``
-      模块级静态变量 /
-      模型注册表）、字段校验语义（仅做「是否提供」的覆盖判断）。
+    - 负责：声明 Agent 级别的模型覆盖项（采样参数、thinking 模式、可选 api_base 覆盖
+      与 Key 来源环境变量）。
+    - 不负责：模型构建（交给 ``core.llm.factory.build_chat_model``）、全局默认值
+      （交给 ``app.config.settings`` 模块级静态变量 / 模型注册表）、字段校验语义
+      （仅做「是否提供」的覆盖判断）。
 
     说明:
         上下文窗口上限不在此处（亦无 Agent 级覆盖需求）：模型最大窗口归 ``ModelCatalog``，
@@ -38,6 +39,7 @@ class ModelSettings:
     top_p: float | None = None
     max_tokens: int | None = None
     thinking: bool | None = None
+    # 可选 api_base 覆盖：None 时不传，由 litellm 按模型前缀内置解析端点。
     base_url: str | None = None
     api_key_env: str | None = None
 

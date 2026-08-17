@@ -102,19 +102,17 @@ def build_agent_registry() -> AgentProfileRegistry:
         analyst_agent,
         coder_agent,
         developer_agent,
-        developer_agent_pro,
         reviewer_agent,
         test_agent,
     )
 
     registry = AgentProfileRegistry()
     registry.register(analyst_agent())
-    registry.register(developer_agent_pro())
     registry.register(reviewer_agent())
     registry.register(test_agent())
     registry.register(coder_agent())
     registry.register(developer_agent())
-    # registry.register(xxx_agent())  # 未来扩展点：新增内置 agent 仅多一行
+    # 新增内置 agent 的扩展点：在此追加一行 registry.register(xxx_agent())。
     return registry
 
 
@@ -138,7 +136,23 @@ def set_tool_system(tool_system: ToolSystem) -> None:
     _TOOL_SYSTEM = tool_system
 
 def get_tool_registry() -> ToolRegistry:
+    """返回进程级工具注册表。
 
+    参数:
+        无。
+
+    返回:
+        已初始化的 ``ToolRegistry``。
+
+    异常:
+        RuntimeError: 工具系统尚未初始化（未调用 ``set_tool_system``）。
+
+    副作用:
+        无。
+    """
+
+    if _TOOL_SYSTEM is None:
+        raise RuntimeError("tool system has not been initialized")
     return _TOOL_SYSTEM.registry
 
 

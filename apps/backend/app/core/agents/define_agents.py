@@ -79,9 +79,8 @@ def developer_agent() -> AgentProfile:
         role="developer_agent",
         description="协助用户完成软件工程项目开发任务",
         allowed_tools=_resolve_all_tool_names(),
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
         max_steps=300,
@@ -92,38 +91,6 @@ def developer_agent() -> AgentProfile:
 # 与重构前 ``agent_profile.default_developer_agent`` 保持名称兼容的薄别名，
 # 供测试与历史调用方继续以 ``default_developer_agent()`` 取默认父 profile。
 default_developer_agent = developer_agent
-
-
-def developer_agent_pro() -> AgentProfile:
-    """构建开发者 Agent profile Pro。
-
-    参数:
-        无。
-
-    返回:
-        用于内置单 Agent 的 AgentProfile。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return AgentProfile(
-        agent_id="developer_pro",
-        role="coding-agent-pro",
-        description="协助用户完成软件工程项目开发任务",
-        allowed_tools=_resolve_all_tool_names(),
-        model_name="deepseek-v4-pro",
-        model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
-        max_steps=300,
-        prompt_ref=None,
-    )
-
 
 
 def reviewer_agent() -> AgentProfile:
@@ -145,6 +112,7 @@ def reviewer_agent() -> AgentProfile:
     return AgentProfile(
         agent_id="delegate_reviewer",
         role="delegate-reviewer",
+        hidden=True,
         description="只做代码审查，指出问题、风险和遗漏；不修改代码，不运行测试。",
         allowed_tools=[
             "read_file",
@@ -157,9 +125,8 @@ def reviewer_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
         max_steps=60,
@@ -186,6 +153,7 @@ def analyst_agent() -> AgentProfile:
     return AgentProfile(
         agent_id="delegate_analyst",
         role="delegate-analyst",
+        hidden=True,
         description="只做事实、代码和文档分析，形成结论与建议；不修改代码。",
         allowed_tools=[
             "read_file",
@@ -200,14 +168,14 @@ def analyst_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
         max_steps=80,
         prompt_ref=None,
     )
+
 
 def test_agent() -> AgentProfile:
     """构建代码测试 Agent profile。
@@ -225,13 +193,13 @@ def test_agent() -> AgentProfile:
         无。
     """
     return AgentProfile(
+        hidden=True,
         agent_id="delegate_tester",
         role="delegate-tester",
         description="只做代码测试，指出问题、风险和遗漏；不修改代码，不运行测试。",
         allowed_tools=_resolve_all_tool_names(),
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
         max_steps=80,
@@ -258,8 +226,7 @@ def coder_agent() -> AgentProfile:
         agent_id="delegate_coder",
         role="delegate-coder",
         description=(
-            "在父 Agent 委派范围内进行代码开发、修复和验证，并保持改动聚焦、"
-            "可测试、可审查。"
+            "在父 Agent 委派范围内进行代码开发、修复和验证，并保持改动聚焦、" "可测试、可审查。"
         ),
         allowed_tools=[
             "read_file",
@@ -277,9 +244,8 @@ def coder_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         model_settings=ModelSettings(
-            base_url="https://api.deepseek.com",
             api_key_env="DEEPSEEK_API_KEY",
         ),
         max_steps=120,

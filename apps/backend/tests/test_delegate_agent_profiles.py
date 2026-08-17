@@ -3,7 +3,7 @@
 from pydantic import BaseModel
 
 from app.config.configuration import build_agent_registry
-from app.core.agents.define_agents import default_developer_agent, developer_agent_pro
+from app.core.agents.define_agents import default_developer_agent
 from app.core.delegation.child_agent_profile_builder import ChildAgentProfileBuilder
 from app.models.turn_record import TurnRecord
 from app.tools.schemas.tool_definition import ToolDefinition
@@ -99,7 +99,7 @@ def test_delegate_profile_permissions_match_v1_roles():
         "codegraph_callees",
         "codegraph_impact",
     ]
-    assert reviewer.model_name == "deepseek-v4-flash"
+    assert reviewer.model_name == "deepseek/deepseek-v4-flash"
     assert reviewer.max_steps == 60
     assert "write_file" not in reviewer.allowed_tools
     assert "patch" not in reviewer.allowed_tools
@@ -189,7 +189,7 @@ def test_default_parent_profiles_can_see_delegate_task_but_children_cannot():
         ),
     ]
 
-    for parent_profile in (default_developer_agent(), developer_agent_pro()):
+    for parent_profile in (default_developer_agent(),):
         assert "delegate_task" in parent_profile.allowed_tools
         assert [tool.name for tool in parent_profile.select_tools(tools)] == [
             "read_file",

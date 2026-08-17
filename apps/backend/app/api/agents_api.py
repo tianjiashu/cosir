@@ -35,6 +35,6 @@ async def list_agents(
     """
 
     return ListAgentsResponse(
-        agents=[AgentProfileResponse(**profile.to_dict()) for profile in registry.list()],
+        agents=[AgentProfileResponse(**profile.to_dict()) for profile in registry.list() if not profile.hidden],
         default_agent_id=DEFAULT_AGENT_ID,
     )
