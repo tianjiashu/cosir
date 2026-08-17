@@ -76,7 +76,7 @@ describe("Enter 发送的 IME 组合态防护", () => {
       activeTurnId: null,
       selectedAgentId: "developer",
     } as never);
-    useTurnStore.setState({ streamingTurnId: null } as never);
+    useTurnStore.setState({ streamingTurnIds: {} } as never);
     useWorkspaceStore.setState({
       activeWorkspaceId: "ws-1",
       workspaces: [{ workspace_id: "ws-1", name: "demo", path: "/tmp/demo" }],

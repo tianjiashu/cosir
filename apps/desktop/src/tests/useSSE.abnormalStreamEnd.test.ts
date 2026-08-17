@@ -87,7 +87,7 @@ function seedRunningTurn(): void {
     updated_at: new Date().toISOString(),
   } as unknown as TurnRecord;
   useTurnStore.getState().setTurnsForTask("task-1", [turn]);
-  useTurnStore.getState().setStreamingTurn("turn-1");
+  useTurnStore.getState().setStreamingTurn("task-1", "turn-1");
 }
 
 /** 读取当前 turn-1 的记录。 */
@@ -99,7 +99,7 @@ describe("异常断流 → markFailed 链路（思考块折叠的前提条件）
   beforeEach(() => {
     vi.restoreAllMocks();
     useEventStore.getState().clearEvents();
-    useTurnStore.setState({ turnsByTaskId: {}, streamingTurnId: null });
+    useTurnStore.setState({ turnsByTaskId: {}, streamingTurnIds: {} });
     seedRunningTurn();
   });
 
@@ -130,7 +130,9 @@ describe("异常断流 → markFailed 链路（思考块折叠的前提条件）
     expect(turn?.status).toBe("failed");
     expect(turn?.end_reason).toBe("SSE stream ended without terminal event");
     // 流式标记必须清除，否则上层仍会当作活动 turn 处理。
-    expect(useTurnStore.getState().streamingTurnId).toBeNull();
+    // 使用可选链兼容 H1 落地前的过渡态（streamingTurnIds 尚未存在于 store）。
+    expect(useTurnStore.getState().streamingTurnIds?.["task-1"]).toBeUndefined();
+    expect(useTurnStore.getState().streamingTurnIds).toEqual({});
   });
 
   it("thinking 事件已入 store：断流后事件不丢，仅 turn 状态转终态", async () => {
@@ -184,7 +186,7 @@ describe("异常断流 → markFailed 链路（思考块折叠的前提条件）
     const unsubscribe = useTurnStore.subscribe((s) => {
       writes.push({
         status: s.turnsByTaskId["task-1"]?.[0]?.status,
-        streaming: s.streamingTurnId,
+        streaming: s.streamingTurnIds?.["task-1"] ?? null,
       });
     });
 

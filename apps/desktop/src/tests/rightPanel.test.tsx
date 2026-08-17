@@ -70,3 +70,80 @@ describe("RightPanel 选中委派 → 切到 Subagent Tab", () => {
     expect(screen.queryByText("turn_child_rp2")).toBeNull();
   });
 });
+
+/**
+ * M3 回归：Sources tab 必须可达且可停留。
+ *
+ * 历史 bug：activeTab 原为派生值（selectedChildTurnId ? "subagent" : "outputs"），
+ * 未选中时永远返回 "outputs"，用户点击 Sources 后 handleTabChange 写入 "sources"，
+ * 但下一帧派生值仍强制覆盖回 "outputs"，导致 Sources tab 点击后瞬间跳回 outputs、
+ * Sources 永远不可达。修复后 activeTab 为 useState，点击后停留。
+ *
+ * 注：happy-dom 下 Radix Tabs 的 onValueChange 由 mousedown 链路触发（经诊断，
+ * fireEvent.click / fireEvent.pointerDown 均不触发，fireEvent.mouseDown 可触发并
+ * 使 data-state 变为 active），故本组测试用 fireEvent.mouseDown 模拟真实指针交互。
+ */
+describe("RightPanel Sources tab 可达性 (M3)", () => {
+  beforeEach(() => {
+    useDelegationStore.getState().clearSelection();
+  });
+
+  it("未选中时 Sources tab 触发器存在（证明 tab 可达入口未被移除）", () => {
+    render(<RightPanel />);
+
+    const sourcesTrigger = screen.getByRole("tab", { name: /sources/i });
+    expect(sourcesTrigger).toBeTruthy();
+    // 默认激活 outputs，Sources 为 inactive（Radix 未激活 TabsContent 不挂载）。
+    expect(sourcesTrigger.getAttribute("data-state")).toBe("inactive");
+  });
+
+  it("点击 Sources TabsTrigger 后停留为 sources，且 Sources 专属内容渲染（不再跳回 outputs）", () => {
+    render(<RightPanel />);
+
+    const sourcesTrigger = screen.getByRole("tab", { name: /sources/i });
+    fireEvent.mouseDown(sourcesTrigger);
+
+    // 停留：tab 仍选中 sources，且未被派生逻辑拉回 outputs。
+    expect(sourcesTrigger.getAttribute("data-state")).toBe("active");
+
+    // 激活后 Sources 专属内容（MOCK_SOURCES 的 docs/desktop-client-development-plan.md）
+    // 出现在 DOM 中，证明 Sources tab 真实可达并停留。修复前点击 sources 会被派生
+    // 逻辑拉回 outputs，Sources 内容永不出现。
+    expect(
+      screen.getAllByText("docs/desktop-client-development-plan.md").length,
+    ).toBeGreaterThan(0);
+
+    // 选中态应被清空（手动切到非 subagent tab 触发 clearSelection）。
+    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
+  });
+
+  it("点击 Outputs TabsTrigger 后选中态被清空（手动切 tab 解耦选中态）", () => {
+    // 先选中 child turn（模拟父 timeline 点击 delegation 行）。
+    act(() => {
+      useDelegationStore.getState().selectChildTurn("turn_sel_clear");
+    });
+    expect(useDelegationStore.getState().selectedChildTurnId).toBe("turn_sel_clear");
+
+    render(<RightPanel />);
+
+    const outputsTrigger = screen.getByRole("tab", { name: /outputs/i });
+    fireEvent.mouseDown(outputsTrigger);
+
+    // 手动切到 outputs（非 subagent）→ 选中态应被清空。
+    expect(useDelegationStore.getState().selectedChildTurnId).toBeNull();
+    expect(outputsTrigger.getAttribute("data-state")).toBe("active");
+  });
+
+  it("选中 child turn 后自动切到 subagent（useEffect 派生同步）", () => {
+    render(<RightPanel />);
+
+    act(() => {
+      useDelegationStore.getState().selectChildTurn("turn_auto_sub");
+    });
+
+    // 自动切到 subagent：tab 激活态为 subagent。
+    const subagentTrigger = screen.getByRole("tab", { name: /subagent/i });
+    expect(subagentTrigger.getAttribute("data-state")).toBe("active");
+    expect(useDelegationStore.getState().selectedChildTurnId).toBe("turn_auto_sub");
+  });
+});

@@ -199,7 +199,7 @@ describe("ChatPanel 空态：无活跃任务（已有工作区）", () => {
       activeTurnId: null,
       selectedAgentId: "developer",
     });
-    useTurnStore.setState({ turnsByTaskId: {}, streamingTurnId: null });
+    useTurnStore.setState({ turnsByTaskId: {}, streamingTurnIds: {} });
     useEventStore.setState({
       events: [],
       eventsByTaskId: {},
@@ -292,7 +292,7 @@ describe("ChatPanel 空态：无活跃任务（已有工作区）", () => {
           } as never,
         ],
       },
-      streamingTurnId: null,
+      streamingTurnIds: {},
     });
 
     render(<ChatPanel onPickWorkspace={vi.fn()} />);

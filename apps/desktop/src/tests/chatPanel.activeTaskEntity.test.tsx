@@ -88,7 +88,7 @@ describe("ChatPanel active task 实体缓存渲染", () => {
     });
     useTurnStore.setState({
       turnsByTaskId: { [TASK_ID]: [makeTurn()] },
-      streamingTurnId: null,
+      streamingTurnIds: {},
     });
     useEventStore.setState({
       events: [],
