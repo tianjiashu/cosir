@@ -13,9 +13,9 @@
 import asyncio
 import contextvars
 import dataclasses
-import json
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from typing import Literal, cast
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -54,7 +54,6 @@ from app.tools.tool_execute.tool_error import (
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
 from app.tools.tool_handler.terminal import OutputSink
-from app.utils.trace_infra.redaction import redact_terminal_output
 
 
 class ToolExecutionService:
@@ -473,8 +472,12 @@ class ToolExecutionService:
             不再被塌缩成失败），并在成功产生文件变更时广播实时文件变更事件。
         """
         # 透传成功/取消终态，其余（含未知状态）归一为 error，避免取消态在前端被误读为失败。
-        event_status = (
-            observation.status if observation.status and observation.status in ("success", "cancelled") else "error"
+        # cast 收窄 Literal：mypy 对 `in` 判断不推导字面量联合，需显式声明。
+        status = observation.status
+        event_status: Literal["success", "error", "cancelled"] = (
+            cast(Literal["success", "cancelled"], status)
+            if status in ("success", "cancelled")
+            else "error"
         )
         self._emit_event_safely(
             step_id,

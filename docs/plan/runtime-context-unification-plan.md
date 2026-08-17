@@ -1,6 +1,6 @@
 # RuntimeContextManager 上下文唯一事实源收敛方案
 
-> 状态：待实施（已完成独立审查 Agent 对照真实代码逐条核验并修订；§8 扩查问题已全部回答并回写正文，待复审通过后进入实施）。
+> 状态：**已落地**（2026-08-17 确认：`RuntimeContextManager` 已统一收口上下文读写，`add_message`/`load_message`/`load_history` 为唯一入口，`RuntimeOperations.append_runtime_message` 已退役。本文正文仍含迁移期描述，请以当前代码为准）。
 > 目标：让 `RuntimeContextManager` 成为「模型上下文」的唯一事实源——不仅管理内存上下文，也统一收口数据库上下文的读写，消除散落在节点与 runner 中的多类写路径。
 
 ---

@@ -129,7 +129,17 @@ class FileSnapshotHook(HookBase):
         副作用:
             向 ``file_snapshots`` 表写入 0~N 条反向操作记录。
         """
-        changes = observation.data.get("changes")
+        data = observation.data or {}
+        changes = data.get("changes")
+        if not isinstance(changes, list):
+            log.warning(
+                "file_snapshot_changes_invalid",
+                extra={
+                    "msg": "工具观察 data.changes 非 list，跳过文件快照采集",
+                    "data": {"turn_id": turn_id, "tool_name": tool_name},
+                },
+            )
+            return
         forward_ops = build_forward_operations(changes)
         diff_stats = _change_diff_stats(changes)
         crud = FileSnapshotCrud()

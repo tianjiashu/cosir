@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import json
 import threading
 import types
@@ -24,6 +23,7 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_compressor import ContextCompressor
 from app.core.context.context_usage_meter import ContextUsageMeter
+from app.core.llm.langchain_bridge import sanitize_assistant_messages
 from app.models import RuntimeMessage
 
 if TYPE_CHECKING:
@@ -33,10 +33,10 @@ if TYPE_CHECKING:
 def _tool_calls_from_metadata(raw: str | None) -> list[dict[str, Any]]:
     """从 ``RuntimeMessage.metadata`` 的 JSON 字符串还原 assistant 的 tool_calls。
 
-    ``workflows/react/nodes._ai_to_runtime_message`` 把 langchain ``tool_calls`` 序列化为
-        JSON 字符串存入 ``metadata``，此处反序列化回 ``list[dict]`` 供 ``AIMessage`` 重建使用。
-        同时是 ``RuntimeMessage → BaseMessage`` 转换的唯一反序列化收口，供
-        ``runtime_context_manager`` 复用（避免两套几乎一致的实现）。
+    落库侧 :meth:`RuntimeContextManager._langraph_message_to_runtime_message` 把 langchain
+    ``tool_calls`` 序列化为 JSON 字符串存入 ``metadata``，此处反序列化回 ``list[dict]``
+    供 ``AIMessage`` 重建使用。同时是 ``RuntimeMessage → BaseMessage`` 转换的唯一反序列化
+    收口，供 ``runtime_context_manager`` 复用（避免两套几乎一致的实现）。
 
     参数:
         raw: ``metadata.get("tool_calls")`` 的 JSON 字符串，可能为空或非法。
@@ -87,20 +87,54 @@ def _default_today() -> str:
     return date.today().isoformat()
 
 
+def _content_to_text(content: str | list[str | dict[str, Any]]) -> str:
+    """把 langchain 消息的 content 归一化为纯文本。
+
+    ``BaseMessage.content`` 可能是 ``str`` 或内容块列表（``list[str | dict]``），
+    本函数把两者统一为纯文本：``str`` 原样返回；列表拼接各文本块。
+    注：langchain ``BaseMessageContent`` 类型别名在 mypy 中不可作类型注解
+    （运行时变量），故用等价结构类型。
+
+    参数:
+        content: ``BaseMessage.content`` 字段值。
+
+    返回:
+        归一化后的纯文本字符串。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
 @dataclass
 class RuntimeContextManager:
     """单个 task 下的运行时上下文管理器，提供 task 级隔离与上下文管理。
 
     职责边界：
     - **task 隔离**：每个实例绑定唯一 ``task_id``，``messages`` 与 ``lock`` 独立，
-      不跨 task 共享可变状态；子 task（subAgent）经 :meth:`create_child` 派生的
+      不跨 task 共享可变状态；子 task（subAgent）经 :meth:`create_for_child` 派生的
       上下文继承父系统提示与只读历史快照，但拥有独立可写消息列表。
     - **上下文管理**：线程安全的追加/读取、按 task 显式加载历史、``with`` 生命周期、
       一致性快照。
     - **读写唯一入口**：内存形态（``messages``）与持久化形态（``turn_messages``）的
       转换、落库、写内存、序号维护全部在本类内完成，经注入的 ``store`` 端口落库
       （依赖倒置，避免 ``core/context`` 反向依赖 service）。``add_message`` 是唯一写入
-      API，联合类型收口 ``BaseMessage`` / ``RuntimeMessage`` / ``str``，经 ``persist`` /
+      API，联合类型收口 ``BaseMessage`` / ``RuntimeMessage``，经 ``persist`` /
       ``write_memory`` 双开关正交控制落库与写内存（``write_memory=False`` 承载 turn
       启动基线的「只落库不写内存」）。
     - **压缩预留**：通过可选 ``compressor`` 引用 ``ContextCompressor`` 协议与
@@ -165,7 +199,7 @@ class RuntimeContextManager:
 
         说明:
             所有上下文变化（系统提示、历史加载、本轮增量、工具结果、压缩）最终都经过
-            ``add_message`` / ``load_for_task`` / ``maybe_compact`` 等入口，统一在此通知
+            ``add_message`` / ``load_history`` / ``maybe_compact`` 等入口，统一在此通知
             计量器置脏标记；高频写入只置脏（O(1)），真正的估算在读取时按需、防抖执行。
 
         返回:
@@ -189,7 +223,7 @@ class RuntimeContextManager:
         副作用:
             向 ``messages`` 追加一条系统提示消息（若尚未存在）。
         """
-        # 避免 create_child 已预置系统提示时重复追加。
+        # 避免 create_for_child 已预置系统提示时重复追加。
         if not self.messages or not isinstance(self.messages[0], SystemMessage):
             self.messages.insert(0, self._build_system_message())
 
@@ -197,7 +231,7 @@ class RuntimeContextManager:
         """进入 ``with`` 上下文，返回自身供块内使用。
 
         返回:
-            当前 ``RuntimeContext`` 实例。
+            当前 ``RuntimeContextManager`` 实例。
         """
         return self
 
@@ -236,12 +270,12 @@ class RuntimeContextManager:
     def load_history(self) -> None:
         """从注入 store 读回 task 跨轮历史并写回内存（显式 I/O 入口）。
 
-        经 ``store.build_for_task`` 读回 ``RuntimeMessage`` 列表，经
-        :meth:`_build_history_messages` 转换为 ``BaseMessage`` 追加进 ``messages``。
-        仅当 ``store`` 注入时有效；无 store（纯内存构造）时为空操作。
+        经 ``store.build_for_task`` 读回该 task 的 ``RuntimeMessage`` 列表，直接追加进
+        ``messages``（重放侧无需再转 ``BaseMessage``，快照时统一转换）。仅当 ``store``
+        注入时有效；无 store（纯内存构造）时为空操作。
 
         参数:
-            excluded_turn_ids: 需排除的 turn 标识元组。
+            无。
 
         返回:
             无。
@@ -250,7 +284,7 @@ class RuntimeContextManager:
             sqlalchemy.exc.SQLAlchemyError: ``store.build_for_task`` 读取失败会透传。
 
         副作用:
-            向 ``messages`` 追加历史转换结果；加载完成后写 info 日志并置脏计量器。
+            向 ``messages`` 追加历史消息；加载完成后写 info 日志并置脏计量器。
         """
         if self.store is None:
             return
@@ -288,7 +322,7 @@ class RuntimeContextManager:
             workspace_root: 子工作区根目录，缺省沿用父根目录。
 
         返回:
-            新构造的、已预置系统提示与历史只读快照的子 ``RuntimeContext``。
+            新构造的、已预置系统提示与历史只读快照的子 ``RuntimeContextManager``。
 
         异常:
             无。
@@ -340,16 +374,18 @@ class RuntimeContextManager:
         system_prompt = SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
         return self._langraph_message_to_runtime_message(SystemMessage(content=system_prompt))
 
-    def _batch_convert_langraph_messages(self, message_list: list[RuntimeMessage]) -> list[BaseMessage]:
+    def _batch_convert_langraph_messages(
+        self, message_list: list[RuntimeMessage]
+    ) -> list[BaseMessage]:
         """将运行时消息列表转换为 langchain 消息列表。
 
         说明:
             逐条委托 :meth:`_runtime_message_to_langraph_message` 完成单条转换，并跳过其
-            返回 ``None`` 的消息（system / 未知 role，历史重放不包含系统提示）。如果
-            ``ToolCall`` 没有对应的 ``Message`` 模型将异常（沿用既有约束）。
+            返回 ``None`` 的消息（仅未知 role，跳过语义）。如果 ``ToolCall`` 没有对应的
+            ``Message`` 模型将异常（沿用既有约束）。
 
         参数:
-            message_list: 从 ``turn_message_crud`` 读出的运行时消息列表。
+            message_list: 待转换的运行时消息列表。
 
         返回:
             转换后的 langchain 消息列表。
@@ -372,7 +408,8 @@ class RuntimeContextManager:
 
         说明:
             返回列表拷贝而非内部引用，避免调用方在锁外修改内部状态。消息在 :meth:`add_message`
-            入口已被归一化（content 占位 + 非法 tool_calls 过滤 + 丢弃 invalid_tool_calls），
+            入口已被归一化（assistant 消息经 :func:`sanitize_assistant_messages` 清洗——
+            content 空串占位、丢弃 ``invalid_tool_calls`` 字段，合法 ``tool_calls`` 保留），
             此处仅做纯运输，不再重复清洗。
 
         返回:
@@ -391,15 +428,15 @@ class RuntimeContextManager:
         """线程安全地向上下文追加一条消息（唯一写入入口），并按需落库/写内存。
 
         说明:
-            三种输入形态统一收口，消除「``BaseMessage`` / ``RuntimeMessage`` 往返转换」
+            ``BaseMessage`` / ``RuntimeMessage`` 两种输入形态统一收口，消除「往返转换」
             与「启动基线专用方法」的重复：
-            - ``BaseMessage``（模型节点产出、普通消息）：落库前经 :meth:`_to_runtime_message`
-              转换（assistant tool_calls→JSON），写内存前经 :func:`sanitize_assistant_messages`
-              归一化（content 空串占位、残缺 tool_calls 过滤、丢弃 ``invalid_tool_calls``）；
+            - ``BaseMessage``（模型节点产出、普通消息）：落库前经
+              :meth:`_langraph_message_to_runtime_message` 转换（assistant 消息先经
+              :func:`sanitize_assistant_messages` 清洗——content 空串占位、丢弃
+              ``invalid_tool_calls`` 等脏字段，再 tool_calls→JSON），写内存前经
+              :meth:`_runtime_message_to_langraph_message` 转回 ``BaseMessage``；
             - ``RuntimeMessage``（工具观察等已序列化消息）：直接落库原始形态，写内存经
-              :meth:`_runtime_message_to_langraph_message` 转换，保留 ``tool_call_id`` 元数据链路；
-            - ``str``（turn 启动用户基线文本）：构造 ``role="user"`` 的 ``RuntimeMessage``
-              落库，写内存经 ``_runtime_message_to_langraph_message`` 转为 ``HumanMessage``。
+              :meth:`_runtime_message_to_langraph_message` 转换，保留 ``tool_call_id`` 元数据链路。
 
             ``persist`` 控制落库、``write_memory`` 控制写内存，两者独立正交：
             - ``persist=True, write_memory=True``（默认）：完整双写；
@@ -417,8 +454,8 @@ class RuntimeContextManager:
             内存形态仍是最终一致视图。
 
         参数:
-            message: 待追加的消息。``BaseMessage``（langchain 形态）、``RuntimeMessage``
-                （已序列化形态）或 ``str``（user 文本，构造 user 消息）。
+            message: 待追加的消息。``BaseMessage``（langchain 形态）或 ``RuntimeMessage``
+                （已序列化形态）。
             persist: 是否落库（默认 True）；False 时跳过落库。
             write_memory: 是否写内存（默认 True）；False 时仅落库（turn 启动基线场景）。
 
@@ -433,9 +470,10 @@ class RuntimeContextManager:
             ``write_memory=True`` 时向 ``messages`` 追加（已归一化的）消息并置脏计量器；
             ``persist=True`` 且有落库能力时同步向 ``turn_messages`` 表写一行并自增序号。
         """
-        runtime_message = message
-        if not isinstance(runtime_message, RuntimeMessage):
-            runtime_message:RuntimeMessage = self._langraph_message_to_runtime_message(message)
+        if isinstance(message, RuntimeMessage):
+            runtime_message = message
+        else:
+            runtime_message = self._langraph_message_to_runtime_message(message)
 
         if persist and self.store is not None and self.current_turn_id is not None:
             self.store.append(self.current_turn_id, runtime_message, self._message_sequence)
@@ -467,27 +505,14 @@ class RuntimeContextManager:
             self.store.clear(self.current_turn_id)
         self._message_sequence = 0
 
-    def snapshot(self) -> list[BaseMessage]:
-        """返回消息列表的一致性快照（独立拷贝）。
-
-        与 :meth:`load_message` 语义一致，命名强调「一致性视图」用途，
-        供模型调用在多线程下读取稳定视图。消息在 :meth:`add_message` 入口已归一化，
-        此处仅做纯运输。
-
-        返回:
-            消息列表的独立拷贝。
-        """
-        with self.lock:
-            return self._batch_convert_langraph_messages(self.messages)
-
     def _langraph_message_to_runtime_message(self, message: BaseMessage) -> RuntimeMessage:
         """将 langchain ``BaseMessage`` 转为内部 ``RuntimeMessage``（落库前转换收口）。
 
-        ``AIMessage → RuntimeMessage`` 只此一处（收口自原 ``model_node._ai_to_runtime_message``）：
+        ``AIMessage → RuntimeMessage`` 只此一处：
         assistant 的 ``tool_calls`` 以 **JSON 字符串** 存进 ``metadata["tool_calls"]``，与
-        ``core.llm.langchain_bridge.tool_calls_from_metadata`` 的反序列化契约严格对齐（读取端
-        ``json.loads``，故此处必须存字符串而非 list）。无工具调用时不写入该键。非 assistant
-        消息（user / tool / system）按 role 与文本直接转换。
+        :func:`_tool_calls_from_metadata` 的反序列化契约严格对齐（读取端 ``json.loads``，
+        故此处必须存字符串而非 list）。无工具调用时不写入该键。非 assistant 消息
+        （user / tool / system）按 role 与文本直接转换。
 
         参数:
             message: 待落库的 langchain ``BaseMessage``。
@@ -501,7 +526,9 @@ class RuntimeContextManager:
         副作用:
             无（纯转换）。
         """
-        message = self._sanitize_assistant_messages(message)
+        # assistant 消息统一经 bridge 收口清洗（content 空串占位、丢弃 invalid_tool_calls/
+        # response_metadata 等脏字段），避免两套平行实现分叉（见 langchain_bridge 注释）。
+        message = sanitize_assistant_messages([message])[0]
         if isinstance(message, AIMessage):
             tool_calls = [
                 {"name": call.get("name"), "args": call.get("args", {}), "id": call.get("id")}
@@ -512,18 +539,18 @@ class RuntimeContextManager:
             )
             return RuntimeMessage(
                 role="assistant",
-                content_text=message.content,
+                content_text=_content_to_text(message.content),
                 metadata=metadata,
             )
         if isinstance(message, ToolMessage):
             return RuntimeMessage(
                 role="tool",
-                content_text=message.content,
+                content_text=_content_to_text(message.content),
                 metadata={"tool_call_id": message.tool_call_id or ""},
             )
         if isinstance(message, SystemMessage):
-            return RuntimeMessage(role="system", content_text=message.content)
-        return RuntimeMessage(role="user", content_text=message.content)
+            return RuntimeMessage(role="system", content_text=_content_to_text(message.content))
+        return RuntimeMessage(role="user", content_text=_content_to_text(message.content))
 
     def _runtime_message_to_langraph_message(self, message: RuntimeMessage) -> BaseMessage | None:
         """将单条运行时消息转换为 langchain ``BaseMessage``（正向单条转换收口）。
@@ -531,15 +558,15 @@ class RuntimeContextManager:
         是 :meth:`_langraph_message_to_runtime_message` 的逆转换：user / assistant / tool
         三种 role 分别映射 ``HumanMessage`` / ``AIMessage`` / ``ToolMessage``；assistant 的
         ``metadata["tool_calls"]`` JSON 字符串经 :func:`_tool_calls_from_metadata` 反序列化
-        回 langchain ``tool_calls``，与落库侧序列化契约严格对齐。system 与其他未知 role
-        返回 ``None``（历史重放不包含系统提示，系统提示由构造期 :meth:`_build_system_message`
-        构建，避免重复），由调用方（:meth:`_build_history_messages`）跳过。
+        回 langchain ``tool_calls``，与落库侧序列化契约严格对齐。system 角色映射
+        ``SystemMessage``（系统提示/修复话术可落库重放）；仅未知 role 返回 ``None``
+        （跳过语义），由调用方（:meth:`_batch_convert_langraph_messages`）跳过。
 
         参数:
             message: 待转换的 ``RuntimeMessage``。
 
         返回:
-            转换后的 ``BaseMessage``；system / 未知 role 返回 ``None``（跳过语义）。
+            转换后的 ``BaseMessage``；仅未知 role 返回 ``None``（跳过语义）。
 
         异常:
             无。
@@ -569,30 +596,3 @@ class RuntimeContextManager:
         if message.role == "system":
             return SystemMessage(content=content_text)
         return None
-
-    def _sanitize_assistant_messages(self, message: BaseMessage) -> BaseMessage:
-        """在消息进入上下文（入口守卫）前对 assistant 消息做最终清洗，避免脏字段回灌下一轮对话。
-
-        重建后只保留安全的 ``content`` + 合法 ``tool_calls`` + ``id``。``ToolMessage`` 及其他
-        角色不受影响（其 content=null 协议允许），保持原对象引用。
-
-        参数:
-            messages: 即将进入上下文的 LangChain 消息列表。
-
-        返回:
-            清洗后的新列表；非 assistant 类消息保持原对象引用不变。
-
-        异常:
-            无。
-
-        副作用:
-            无（不修改入参对象；仅在需要清洗的 assistant 消息时新建对象）。
-        """
-
-        if not isinstance(message, AIMessage):
-            return message
-
-        if message.content is None or message.content.strip() == "":
-            message.content = "(ignore)"
-            log.info("_sanitize_assistant_messages", extra={"msg": f"清洗消息", "data": {"message": message.model_dump()}})
-        return message

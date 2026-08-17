@@ -78,10 +78,9 @@ coding-agent/
             formatter/jsonl_formatter.py   # LogRecord → 单行 JSON（9 字段）
             handler/sqlite_handler.py     # 异步写入独立日志库
         core/                 # Agent 运行底座，全基于 LangGraph 体系
-          agents/agent_profile.py / agent_profile_registry.py   # 内置 developer/developer_pro 两个 profile
+          agents/agent_profile.py / agent_profile_registry.py   # 内置 5 个 profile（developer/reviewer/analyst/test/coder）
           context/runtime_context_builder.py（构建 RuntimeMessage）/ system_prompt_builder.py / system_prompt_context.py / rules/default-coding-rules.md
-          llm/factory.py（build_chat_model）/ langchain_bridge.py / model_settings.py
-          llm/llm_provider/base.py / deepseek_provider.py  # OpenAI 协议接入 DeepSeek
+          llm/factory.py（build_chat_model → ChatLiteLLM 单一收口）/ langchain_bridge.py / model_settings.py
           observability/      # Langfuse 可观测性（LLM/工具调用 trace）
             langfuse_tracing.py            # turn_trace 根 observation + CallbackHandler 工厂
             langfuse_tool_trace_recorder.py # 工具调用 → Langfuse tool observation
@@ -162,7 +161,7 @@ coding-agent/
 
 当前已确认的概念边界：
 
-- `Agent` 是执行主体，描述角色、目标、上下文、工具权限、状态和运行记录。内置 `developer`（deepseek-v4-flash）与 `developer_pro`（deepseek-v4-pro）两个 profile。
+- `Agent` 是执行主体，描述角色、目标、上下文、工具权限、状态和运行记录。内置 5 个 profile（developer/reviewer/analyst/test/coder，见 `define_agents.py`），模型统一为 `deepseek/deepseek-v4-flash`。
 - `Workflow` 是执行策略，描述 Agent 如何完成任务，例如 ReAct-like、Plan-and-Execute、Review-Fix。
 - `Runtime` 是执行底座，负责状态管理、模型调用、工具调度、审批、checkpoint、context compaction、事件流、取消、恢复和终止保护。
 - `Subagent` 不应实现成一套平行系统；它应作为 child agent / child run 复用 Agent、Workflow 和 Runtime 能力。

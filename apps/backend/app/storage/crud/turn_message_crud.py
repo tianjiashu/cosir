@@ -5,8 +5,8 @@
 
 职责边界：
 - 负责：turn 消息轨迹单表读写、``TurnMessageModel``↔``RuntimeMessage`` 转换。
-- 不负责：运行时编排、跨表级联、LangChain 消息转换（由 ``core/llm/langchain_bridge``
-  的 ``runtime_to_langchain`` 在构建下一轮上下文时单向完成）。
+- 不负责：运行时编排、跨表级联、LangChain 消息清洗（由 ``core/llm/langchain_bridge``
+  在构建下一轮上下文时完成）。
 
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。

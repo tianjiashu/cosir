@@ -49,8 +49,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     workflow_id = "react_like_v1"
 
     def __init__(
-            self,
-            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+        self,
+        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化 ReAct-like 工作流。
 
@@ -99,17 +99,19 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-            self,
-            operations: RuntimeOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
+        self,
+        operations: RuntimeOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
         方法构建并编译 graph，挂 ``AsyncSqliteSaver`` checkpointer；以
         ``astream(stream_mode=["custom"])`` 单循环驱动 graph，把节点经 ``get_stream_writer()``
         写入的 ``custom`` 业务事件（含 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA`` 等流式
-        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。当存在 ``approval_resolver`` 时，
+        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。模型经 ``build_chat_model`` 构建：
+        缺 Key 在构建期抛错（无 fake 回退）；真实模型不支持 ``bind_tools`` 时降级为
+        不带工具运行（仅作防御，不掩盖配置错误）。当存在 ``approval_resolver`` 时，
         ``tools`` 节点会触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并通过
         ``Command(resume=)`` 恢复 graph；当 ``approval_resolver`` 为 ``None`` 时，``tools`` 节点
         不暂停 graph、直接执行工具（自动放行）。循环直到 graph 无待处理任务或工作流结束。
@@ -148,9 +150,12 @@ class ReactLikeWorkflow(AgentWorkflow):
                 base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model
             )
         except NotImplementedError:
+            # 降级防御：真实模型不支持 bind_tools（未实现工具绑定）时禁用工具继续运行，
+            # 保证非工具场景可用。此分支与缺 Key 无关——缺 Key 在 build_chat_model
+            # 构建期即抛 ValueError（决策 1），不会走到这里。
             log.warning(
                 "model %s does not support bind_tools; running without tools "
-                "(expected when no real API key is configured)",
+                "(degraded: model does not implement tool binding)",
                 type(base_model).__name__,
             )
             bound_model = base_model
@@ -233,9 +238,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             while True:
                 try:
                     async for mode, data in graph.astream(
-                            input_state,
-                            config,
-                            stream_mode=["custom"],
+                        input_state,
+                        config,
+                        stream_mode=["custom"],
                     ):
                         if mode != "custom":
                             continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）

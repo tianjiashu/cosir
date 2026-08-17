@@ -39,7 +39,6 @@ def _make_runtime_config(model: AsyncMock, tool_names: tuple[str, ...] = ()) -> 
 
     operations = MagicMock()
     operations.is_current_turn_cancelled.return_value = False
-    operations.append_runtime_message.return_value = None
     operations.fail_turn_if_running.return_value = MagicMock()
     operations.complete_turn_if_running.return_value = MagicMock()
     tools = []
@@ -716,7 +715,8 @@ async def test_repair_requested_is_str(monkeypatch) -> None:
         # 契约：必须是 "true"/"false" 字符串，不得是 bool（与 state.py 的 str 声明一致）
         value = patch["repair_requested"]
         assert value in {"true", "false"}, (
-            f"repair_requested 必须是 str 字面量 'true'/'false'，实际 {type(value).__name__}={value!r}"
+            "repair_requested 必须是 str 字面量 'true'/'false'，"
+            f"实际 {type(value).__name__}={value!r}"
         )
 
 

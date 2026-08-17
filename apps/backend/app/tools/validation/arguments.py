@@ -4,6 +4,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+# jsonschema 4.x 的 py.typed 为 partial，类型不可靠；已由 mypy 全局
+# ignore_missing_imports（见 pyproject.toml [tool.mypy] 与 mypy.strict.ini）覆盖，
+# 无需局部 ignore。
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError

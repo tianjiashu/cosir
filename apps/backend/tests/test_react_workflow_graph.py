@@ -231,7 +231,6 @@ def _make_runtime_config(model: _FakeChatModel, tool_names: tuple[str, ...]) -> 
 
     operations = MagicMock()
     operations.is_current_turn_cancelled.return_value = False
-    operations.append_runtime_message.return_value = None
     operations.fail_turn_if_running.return_value = MagicMock()
     operations.complete_turn_if_running.return_value = MagicMock()
     tools = []
@@ -609,7 +608,7 @@ async def test_tools_node_cancel_before_execution_closes_pairing(
     monkeypatch.setattr(
         tools_node_mod,
         "_persist_tool_observations",
-        lambda _ops, msgs: persisted.extend(msgs),
+        lambda msgs: persisted.extend(msgs),
     )
 
     state = ReactGraphState(

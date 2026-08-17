@@ -25,7 +25,7 @@
 
 - 行宽 **100**（后端 FastAPI 长类型注解多，比 black 默认 88 更贴合）。
 - 字符串统一 **双引号**（`quote-style = "double"`），与现有代码一致。
-- 目标版本 `py310`。
+- 目标版本 `py311`（`.python-version` 为 3.11）。
 - 启用的规则集（实用组合，不追求最严）：
 
   | 规则 | 含义 |
@@ -48,18 +48,19 @@
   - `tests/**`：`S101` `S603` `S607`（测试允许 assert 与子进程调用类规则）。
   - `app/api/**`：`B008`（FastAPI 用 `Depends()` 作默认参数是惯用法，属误报）。
 
-### 2.3 mypy（渐进式类型检查）
+### 2.3 mypy（强类型基线，渐进收敛）
 
-- `python_version = "3.10"`，`ignore_missing_imports = true`（第三方无 stub 时不阻塞）。
-- `disallow_untyped_defs = false`：**存量**代码未全注解，不卡存量；**新代码必须带类型注解且通过 mypy**。
-- `warn_unused_ignores` / `warn_redundant_casts` / `warn_unreachable` = true，逐步收紧。
-- pre-commit 中 mypy 当前设为 **非阻塞**（`continue-on-error: true`），仅提示不报错；待存量注解补全后移除该设置升级为强制。
+- **官方基线 `strict = true`**（`python_version = "3.11"`）：宣示强类型目标，组合 `disallow_untyped_defs` / `disallow_any_generics` / `no_implicit_optional` / `strict_equality` / `warn_return_any` 等全部强约束（第零铁律：类型错误应在提交前被抓住，而非运行时炸给用户）。
+- **存量豁免**：`[[tool.mypy.overrides]] module = ["app.*"]` 对存量代码临时豁免（仅关闭其中列出的宽松项；`warn_redundant_casts` / `warn_unused_ignores` 等 strict 项对存量仍生效），随存量分批清理逐步收紧并删除豁免段（计划见 `docs/mypy-strict-migration-plan.md`）。**豁免段是待清理债务，不是白名单**。
+- **新增文件强类型门禁（工具强制）**：pre-commit 的 `mypy-new-strict` hook 对本次提交**新增**的 `apps/backend/app/` 下 `.py` 文件跑 `mypy --strict`（`apps/backend/mypy.strict.ini`，无存量豁免），未通过即阻断提交；存量/修改文件由 `mypy_nonblocking.sh` 非阻塞提示。
+- `ignore_missing_imports = true`：第三方动态库（litellm/langfuse/pydantic）类型不可靠，整包忽略。
+- **新代码强类型纪律**：新函数必须有完整参数 + 返回值注解；禁止 `Any` 作为偷懒出口（确需时 `# type: ignore` + 原因注释）。
 
 ### 2.4 pre-commit
 
-- 配置：`apps/backend/.pre-commit-config.yaml`，挂 `ruff-format` + `ruff --fix` + `mypy`。
-- 安装：`uv run pre-commit install`（在 `apps/backend` 下）。
-- 提交前自动格式化、lint、类型提示，避免“规范靠人记”。
+- 配置：仓库根 `.pre-commit-config.yaml`（统一 git 仓库，pre-commit 按 git 根定位配置），挂 `ruff-format` + `ruff --fix` + `mypy`（非阻塞提示）+ `mypy-new-strict`（新增文件强类型门禁）+ 契约快照生成（OpenAPI / 运行时事件 TS）。
+- 安装：`uv run pre-commit install`（在仓库根执行）。
+- 提交前自动格式化、lint、类型检查；**新增业务代码不满足 strict 强类型会被阻断提交**；存量类型问题由非阻塞 mypy 提示，避免“规范靠人记”。
 
 ### 2.5 uv 依赖管理（单一来源）
 
@@ -94,8 +95,9 @@
 
 ## 四、类型注解与运行时约定
 
-- **公共接口（模块对外 API、业务/工具入口、文件/网络/DB 操作、异步函数）必须带完整类型注解**；新代码注解缺失视为不达标。
-- 允许在模块顶部 `from __future__ import annotations`，以便 3.10 使用 `X | None`、`list[int]` 等现代写法。
+- **强类型基线（工具强制）**：项目 mypy 官方基线为 `strict = true`，存量经 overrides 临时豁免、**新增文件由 pre-commit 门禁强制 strict**（见 2.3）。新函数必须有完整参数 + 返回值注解；禁止 `Any` 作为偷懒出口，确需时 `# type: ignore` + 注释说明原因。
+- **公共接口（模块对外 API、业务/工具入口、文件/网络/DB 操作、异步函数）必须带完整类型注解**；新代码注解缺失视为不达标（pre-commit 会阻断）。
+- 允许在模块顶部 `from __future__ import annotations`，以便 3.11 使用 `X | None`、`list[int]` 等现代写法。
 - **异步一致性**：IO 密集路径用 `async/await`，不混用 sync/async 危险模式；FastAPI 路由与 LangGraph node 保持异步一致。
 - **异常**：
   - 建立项目自定义异常层级，抛出具体异常，**不抛裸 `Exception`**。
@@ -119,7 +121,8 @@
 - **uv 单一来源**：依赖只写在 `pyproject.toml`，由 `uv.lock` 锁定版本；不手写未声明依赖。
 - 运行时依赖与开发依赖分组（`[project.dependencies]` vs `[dependency-groups].dev`），开发工具不进入运行时。
 - 新增依赖必须**锁版本**（`==x.y.z`），评估必要性后再引入（通用规范：不重复造轮子 + 锁版本）。
-- 最低运行环境 **Python 3.10+**（与 LangGraph 门控一致），开发目标版本见 `.python-version`。
+- **litellm 精确锁 `==1.97.0`**：规避 pytest-cov 对 litellm/pydantic 插桩竞态；不可锁 1.83.14（其硬依赖 `python-dotenv==1.2.2`，与项目锁定的 `python-dotenv==1.0.1` 冲突导致 uv 无法解析）。依赖锁定时若与既有约束冲突，锁「当前 lock 中实际解析并运行验证过的版本」，不擅自顺带升级其他依赖。
+- 最低运行环境 **Python 3.11+**（与 `pyproject.toml` 的 `requires-python>=3.11`、`.python-version` 一致）。
 
 ---
 
@@ -129,8 +132,9 @@
 - 文件 `test_*.py`，函数 `test_*`（或类 `Test*`），命名清晰表达验证点。
 - `pytest-asyncio` 配 `asyncio_mode = "auto"`，异步测试无需手动标记。
 - 运行：`uv run pytest`（或 `uv run pytest tests/test_xxx.py` 单文件）。
-- **覆盖率**：当前渐进，先不卡死门槛；新功能应补对应测试，关键路径（工具执行、checkpoint、审批、日志）必须有测试。
+- **覆盖率**：当前渐进，先不卡死门槛；新功能应补对应测试，关键路径（工具执行、checkpoint、审批、日志）必须有测试。覆盖率配置位于 `apps/backend/pyproject.toml` 的 `[tool.coverage.run]`/`[tool.coverage.report]`，已 `omit` 排除 `tests/`、`temp/`、第三方以规避 pytest-cov 对 litellm/pydantic 插桩偶发的 import 冲突；`source = ["app"]` 仅统计业务代码，暂不强制 `fail_under` 门禁。
 - 测试须可独立运行、无外部副作用；涉及外部依赖失败时验证日志可排查（见通用规范日志章与测试闭环）。
+- **中文测试文件写入约束**：本机 Windows + cmd 环境下，`write_to_file` 工具与 PowerShell 管道会破坏 UTF-8（产生乱码）。**含中文注释/字符串的测试文件必须用 Python 脚本写入**：`open(path, "w", encoding="utf-8").write(content)`，经 `uv run --project apps/backend python script.py` 触发；禁止直接依赖工具的文件写入或 shell 重定向落中文内容。
 
 ---
 
@@ -155,5 +159,7 @@
 - **`F405`/`F403`（`import *`）114 处**：真实代码质量债，禁止新代码使用，存量按模块逐步改为显式导入。
 - **`S108`/`S105`（硬编码临时文件/密码字符串）**：安全相关，需逐一 review 确认无泄露风险。
 - **`E501`/`E402`/`RUF012`/`UP035`/`B039` 等**：格式与现代化，随改动逐步收敛。
+
+**mypy 强类型存量**：`strict = true` 基线已就位，存量代码经 `[[tool.mypy.overrides]] module = ["app.*"]` 临时豁免（完整豁免清单见 `apps/backend/pyproject.toml`）。豁免段是**待清理债务，不是白名单**，按 `docs/mypy-strict-migration-plan.md` 分批收紧（models → tools → service → core），每批在去除豁免后须全量 `mypy` 干净通过并经独立审查/测试闭环验收；**严禁往豁免段新增内容**。**新增文件不受豁免**，由 pre-commit `mypy-new-strict` 门禁强制 strict。
 
 **原则**：新代码必须 100% 符合本规范（Ruff 通过、新代码注解、无 `import *`）；存量不要求一次性清零，但每次 touching 文件时顺手收敛其 lint 问题（Boy Scout Rule）。

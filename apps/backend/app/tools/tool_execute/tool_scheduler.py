@@ -73,6 +73,21 @@ class ToolScheduler:
         self._display_data_budget = display_data_budget or DisplayDataBudget()
 
     def list_tools(self) -> list[ToolDefinition]:
+        """返回全部已注册工具定义。
+
+        参数:
+            无。
+
+        返回:
+            注册表中全部 :class:`ToolDefinition` 的列表。
+
+        异常:
+            无。
+
+        副作用:
+            无（只读注册表）。
+        """
+
         return self._registry.get_all_definitions()
 
     def get_tool_definition(self, tool_name: str) -> ToolDefinition | None:
@@ -221,7 +236,7 @@ class ToolScheduler:
                 tool_error(
                     tool.name,
                     decision.deny_reason or "blocked by pre-tool-use hook",
-                    reason=decision.deny_reason,
+                    reason=decision.deny_reason or "blocked by pre-tool-use hook",
                     permission=tool.permission,
                     tool_call_id=call.call_id,
                     error_kind=ErrorKind.PERMISSION_DENIED,

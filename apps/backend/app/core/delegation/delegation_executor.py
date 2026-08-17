@@ -94,7 +94,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         task_service = get_task_service()
 
         # 获取child agent profile
-        child_agent_profile: AgentProfile = agent_registry.resolve(args.child_agent_id)
+        child_agent_profile: AgentProfile | None = agent_registry.resolve(args.child_agent_id)
         if child_agent_profile is None:
             log.warning(
                 "delegate_child_resolve_failed",

@@ -18,7 +18,7 @@ class ReactGraphState(BaseModel):
     - **持久化**：state 由 LangGraph 在每次节点返回增量后自动合并，并由 ``AsyncSqliteSaver``
       checkpointer 持久化进 SQLite；graph 因 ``interrupt()`` 暂停或进程崩溃后可从 checkpoint
       重放恢复。
-    - **累积**：模型上下文由 ``RuntimeContext`` 独占管理，工具观察结果经
+    - **累积**：模型上下文由 ``RuntimeContextManager`` 独占管理，工具观察结果经
       ``_runtime_context().add_message()`` 追加到上下文末端（**不进 graph state**）。
     - **单一事实来源**：节点只通过 ``return`` 返回增量、由框架合并；节点永不跨节点直接
       持有彼此数据。
@@ -27,8 +27,8 @@ class ReactGraphState(BaseModel):
       ``_runtime_context()`` 读取。
     - **消息不进 state**：模型推理输入恒来自 ``_runtime_context().load_message()``，节点
       **不得**返回 ``messages`` 字段；消息持久化事实来源是 SQLite（节点经
-      ``append_runtime_message`` 逐条落库），checkpoint 只承载控制流状态。错误恢复时由
-      ``RuntimeContext.load_for_task`` 从 DB 重建上下文。
+      ``RuntimeContextManager.add_message(persist=True)`` 落库），checkpoint 只承载控制流状态。
+      错误恢复时由 ``RuntimeContextManager.load_history`` 从 DB 重建上下文。
 
     每个字段的边界约定如下（写入方 = 哪个节点 ``return`` 该字段；消费方 = 谁读取它；
     是否持久化 = 是否进入 checkpoint）：

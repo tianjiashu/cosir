@@ -3,8 +3,8 @@
 本模块只承载「工具节点」单一职责：在权限审批后执行工具并把观察结果追加回运行时上下文。
 节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批；工具执行通过 ``RuntimeOperations``
 完成，工具生命周期事件经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为
-``BaseMessage`` 经 ``_persist_tool_observations`` 写回 ``RuntimeContext``（**不进 graph state**，
-模型上下文由 RuntimeContext 独占）。状态写入 **turn**。
+``BaseMessage`` 经 ``_persist_tool_observations`` 写回 ``RuntimeContextManager``
+（**不进 graph state**，模型上下文由 RuntimeContextManager 独占）。状态写入 **turn**。
 
 工具观察的增量落库与写回统一收敛在 ``_persist_tool_observations``：落库一条即写回一条，
 避免「部分落库、零写回」的撕裂状态，闭合上一轮模型节点写入的 ``AIMessage.tool_calls``
@@ -23,7 +23,6 @@ from langgraph.types import interrupt
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload
@@ -47,8 +46,6 @@ def _persist_tool_observations(
     模型上下文由 ``RuntimeContextManager`` 独占管理。
 
     参数:
-        operations: 领域操作门面（保留签名以对齐调用面；落库实际由
-            ``RuntimeContextManager.add_message`` 经注入 store 端口承担）。
         obs_messages: 本批次工具观察 ``RuntimeMessage`` 列表（已含 ``tool_call_id`` 元数据）。
 
     返回:
@@ -57,7 +54,9 @@ def _persist_tool_observations(
     异常:
         sqlalchemy.exc.SQLAlchemyError: 落库失败时由 ``add_message`` 透传，
         此时后续消息不写回（保持 DB 与上下文一致：DB 失败则上下文也不写）。
-        异常携带 ``tool_call_id`` 与批次进度写入 error 日志。
+        IndexError / ValueError / KeyError: ``add_message`` 转换/写回路径的
+        数据形态异常（防御性捕获），与 ``SQLAlchemyError`` 同路径处理。
+        上述异常均提取 ``tool_call_id`` 与批次进度写入 error 日志后原样重抛。
 
     副作用:
         逐条调用 ``_runtime_context().add_message(obs_message)``：先落库（失败抛
@@ -69,7 +68,7 @@ def _persist_tool_observations(
             log.info(
                 "add_tool_observation",
                 extra={
-                    "msg": f"添加工具观察",
+                    "msg": "添加工具观察",
                     "data": {"message": dataclasses.asdict(obs_message)},
                 },
             )
@@ -154,7 +153,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
     自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 经 ``_persist_tool_observations``
-    写回 ``RuntimeContext``（**不进 graph state**，模型上下文由 RuntimeContext 独占）。
+    写回 ``RuntimeContextManager``（**不进 graph state**，模型上下文由
+    RuntimeContextManager 独占）。
     状态写入 **turn**。
 
     本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
@@ -229,8 +229,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
     # ``ToolExecutionService`` 的取消兜底（``_build_result_with_cancel_placeholders``）在此
-    # 不会执行。但上一轮 ``_model_node`` 已把 ``AIMessage.tool_calls`` 写入 ``RuntimeContext``，
-    # 必须在本分支内为它们补同构占位 ``ToolMessage``，否则下一轮模型请求会因悬空 ``tool_calls``
+    # 不会执行。但上一轮 ``_model_node`` 已把 ``AIMessage.tool_calls``
+    # 写入 ``RuntimeContextManager``，必须在本分支内为它们补同构占位 ``ToolMessage``，
+    # 否则下一轮模型请求会因悬空 ``tool_calls``
     # 触发 OpenAI 协议校验失败。为保持与 service 内部协议字段完全同构、避免平行复制语义漂移，
     # 经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面复用 service 的取消占位
     # 实现（而非自拼 JSON、不手调 ``tool_cancelled`` 工厂），仅作「配对闭合」这一件职责，
@@ -331,7 +332,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             },
         )
         # 取消时直接终态结束，不进 observe 节点；返回空 last_tool_results，避免无用大字段
-        # 进 checkpoint（消息已写回 RuntimeContext 闭合配对，无需再经 observe 判定）。
+        # 进 checkpoint（消息已写回 RuntimeContextManager 闭合配对，无需再经 observe 判定）。
         # 错误计数与错误上限判定下沉到独立的 observe 节点，本节点不再计算。
         return {
             "pending_tool_calls": [],

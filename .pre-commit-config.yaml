@@ -26,6 +26,22 @@ repos:
         types: [python]
         files: ^apps/backend/app/
         verbose: true
+  # 新增文件强类型门禁：本次提交「新增」的 apps/backend/app/ 下 .py 文件必须通过
+  # mypy --strict（mypy.strict.ini，不含存量豁免），未通过则阻断提交。
+  # 存量/修改文件不受此门禁影响，仍由上方 mypy 非阻塞 hook 提示。
+  - repo: local
+    hooks:
+      - id: mypy-new-strict
+        name: mypy (新增文件强类型，阻塞)
+        description: >-
+          对本次提交新增的 apps/backend/app/ 下 .py 文件强制 mypy --strict
+          （apps/backend/mypy.strict.ini，无 overrides 存量豁免）；未通过则阻断提交。
+          存量文件不在此门禁内，由 mypy 非阻塞 hook 覆盖。
+        entry: bash apps/backend/scripts/mypy_new_strict.sh
+        language: system
+        types: [python]
+        files: ^apps/backend/app/
+        verbose: true
   # 后端 API 契约快照：当 app/ 下代码（路由、schema、模型、服务、运行时等）变更时，
   # 自动重新导出 docs/api/openapi.json，使前端离线查阅与 openapi-typescript 生成的
   # TS 类型始终与代码同步，避免契约漂移。生成物由本 hook 维护。
