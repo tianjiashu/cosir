@@ -1,7 +1,7 @@
 //! 本地后端健康检查器。
 
 use crate::backend::types::{BackendHealthSnapshot, BackendLaunchConfig};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -12,8 +12,6 @@ struct HealthResponsePayload {
     status: String,
     /// 当前模型服务商。
     model_provider: String,
-    /// 当前模型基础地址。
-    model_base_url: String,
     /// 当前模型名称。
     model_name: String,
     /// 当前 thinking 模式。
@@ -22,7 +20,7 @@ struct HealthResponsePayload {
     has_model_api_key: bool,
 }
 
-/// 读取一次后端健康摘要。
+/// 异步读取一次后端健康摘要。
 ///
 /// 参数:
 ///     config: 后端监听配置。
@@ -34,8 +32,8 @@ struct HealthResponsePayload {
 ///     当响应体格式错误时返回错误字符串。
 ///
 /// 副作用:
-///     发起一次本地 HTTP 请求。
-pub fn fetch_backend_health(
+///     发起一次本地 HTTP 请求（异步等待，不阻塞调用线程）。
+pub async fn fetch_backend_health(
     config: &BackendLaunchConfig,
 ) -> Result<Option<BackendHealthSnapshot>, String> {
     let client = Client::builder()
@@ -44,7 +42,7 @@ pub fn fetch_backend_health(
         .map_err(|e| format!("无法创建本地健康检查客户端: {e}"))?;
 
     let url = format!("http://{}:{}/health", config.host, config.port);
-    let response = match client.get(url).send() {
+    let response = match client.get(url).send().await {
         Ok(response) => response,
         Err(_) => return Ok(None),
     };
@@ -55,12 +53,12 @@ pub fn fetch_backend_health(
 
     let payload: HealthResponsePayload = response
         .json()
+        .await
         .map_err(|e| format!("无法解析后端 /health 响应: {e}"))?;
 
     Ok(Some(BackendHealthSnapshot {
         status: payload.status,
         model_provider: payload.model_provider,
-        model_base_url: payload.model_base_url,
         model_name: payload.model_name,
         model_thinking_mode: payload.model_thinking_mode,
         has_model_api_key: payload.has_model_api_key,
@@ -88,10 +86,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_fetch_health_unreachable_returns_none() {
+    #[tokio::test]
+    async fn test_fetch_health_unreachable_returns_none() {
         // 后端不可达时不应返回 Err，而应返回 Ok(None)（静默降级到状态轮询）。
-        let result = fetch_backend_health(&unreachable_config());
+        let result = fetch_backend_health(&unreachable_config()).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
     }

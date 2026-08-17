@@ -19,8 +19,9 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
-reqwest = { version = "0.12.5", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12.5", default-features = false, features = ["json", "rustls-tls"] }
 chrono = { version = "0.4.38", default-features = true, features = ["clock"] }
+tokio = { version = "1", features = ["time", "macros", "rt"] }
 
 # Windows MSVC 链接器对 dev PDB 有体积上限（LNK1318 LIMIT），
 # 完整调试信息会让 coding-agent-desktop 链接失败。dev 构建只保留行号表，

@@ -104,11 +104,19 @@ mod tests {
 
     #[test]
     fn test_resolve_python_binary_present() {
-        // 在临时目录中创建假的 .venv/bin/python，验证能找到。
+        // 在临时目录中创建假 venv 可执行文件，验证能找到（Windows 用 Scripts/python.exe，其余用 bin/python）。
         let dir = std::env::temp_dir().join("coding_agent_test_venv");
-        let venv_bin = dir.join(".venv").join("bin");
+        let venv_bin = if cfg!(target_os = "windows") {
+            dir.join(".venv").join("Scripts")
+        } else {
+            dir.join(".venv").join("bin")
+        };
         std::fs::create_dir_all(&venv_bin).unwrap();
-        let fake = venv_bin.join("python");
+        let fake = if cfg!(target_os = "windows") {
+            venv_bin.join("python.exe")
+        } else {
+            venv_bin.join("python")
+        };
         std::fs::write(&fake, "").unwrap();
 
         let found = resolve_python_binary(&dir).expect("应找到 python");

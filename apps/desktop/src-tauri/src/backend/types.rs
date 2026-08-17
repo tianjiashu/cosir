@@ -29,8 +29,6 @@ pub struct BackendHealthSnapshot {
     pub status: String,
     /// 当前模型服务商。
     pub model_provider: String,
-    /// 当前模型基础地址。
-    pub model_base_url: String,
     /// 当前模型名称。
     pub model_name: String,
     /// 当前 thinking 模式。

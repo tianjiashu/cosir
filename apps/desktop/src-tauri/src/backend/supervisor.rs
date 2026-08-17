@@ -13,8 +13,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 /// 解析后端启动配置；解析失败时尽力将错误写入 supervisor 失败路径日志。
 ///
@@ -94,7 +94,7 @@ impl BackendSupervisorState {
         }
     }
 
-    /// 启动本地后端。
+    /// 异步启动本地后端。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -103,19 +103,16 @@ impl BackendSupervisorState {
     ///     启动后的结构化后端状态。
     ///
     /// 异常:
-    ///     当内部互斥锁中毒时返回错误字符串。
+    ///     锁获取不会失败（tokio Mutex 无 std 中毒语义）；内部操作失败时返回错误字符串。
     ///
     /// 副作用:
-    ///     可能创建 Python 子进程并写入日志文件。
-    pub fn start(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
-        let mut supervisor = self
-            .inner
-            .lock()
-            .map_err(|_| "backend supervisor 锁已中毒".to_string())?;
-        supervisor.start(app)
+    ///     可能创建 Python 子进程、轮询健康检查并写入日志文件；等待期间让出执行权，不阻塞调用线程。
+    pub async fn start(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+        let mut supervisor = self.inner.lock().await;
+        supervisor.start(app).await
     }
 
-    /// 停止本地后端。
+    /// 异步停止本地后端。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -124,19 +121,16 @@ impl BackendSupervisorState {
     ///     停止后的结构化后端状态。
     ///
     /// 异常:
-    ///     当内部互斥锁中毒时返回错误字符串。
+    ///     锁获取不会失败（tokio Mutex 无 std 中毒语义）；内部操作失败时返回错误字符串。
     ///
     /// 副作用:
-    ///     可能终止 Python 子进程。
-    pub fn stop(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
-        let mut supervisor = self
-            .inner
-            .lock()
-            .map_err(|_| "backend supervisor 锁已中毒".to_string())?;
-        supervisor.stop(app)
+    ///     可能终止 Python 子进程并访问 `/health` 确认停止结果。
+    pub async fn stop(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+        let mut supervisor = self.inner.lock().await;
+        supervisor.stop(app).await
     }
 
-    /// 重启本地后端。
+    /// 异步重启本地后端。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -145,19 +139,16 @@ impl BackendSupervisorState {
     ///     重启后的结构化后端状态。
     ///
     /// 异常:
-    ///     当内部互斥锁中毒时返回错误字符串。
+    ///     锁获取不会失败（tokio Mutex 无 std 中毒语义）；内部操作失败时返回错误字符串。
     ///
     /// 副作用:
-    ///     可能终止旧进程并创建新进程。
-    pub fn restart(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
-        let mut supervisor = self
-            .inner
-            .lock()
-            .map_err(|_| "backend supervisor 锁已中毒".to_string())?;
-        supervisor.restart(app)
+    ///     可能终止旧进程、轮询健康检查并创建新进程。
+    pub async fn restart(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+        let mut supervisor = self.inner.lock().await;
+        supervisor.restart(app).await
     }
 
-    /// 查询本地后端状态。
+    /// 异步查询本地后端状态。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -166,19 +157,16 @@ impl BackendSupervisorState {
     ///     当前结构化后端状态。
     ///
     /// 异常:
-    ///     当内部互斥锁中毒时返回错误字符串。
+    ///     锁获取不会失败（tokio Mutex 无 std 中毒语义）；内部操作失败时返回错误字符串。
     ///
     /// 副作用:
     ///     读取当前进程状态并访问 `/health`。
-    pub fn status(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
-        let mut supervisor = self
-            .inner
-            .lock()
-            .map_err(|_| "backend supervisor 锁已中毒".to_string())?;
-        supervisor.status(app)
+    pub async fn status(&self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+        let mut supervisor = self.inner.lock().await;
+        supervisor.status(app).await
     }
 
-    /// 读取后端日志尾部。
+    /// 异步读取后端日志尾部。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -188,19 +176,16 @@ impl BackendSupervisorState {
     ///     日志尾部片段。
     ///
     /// 异常:
-    ///     当内部互斥锁中毒时返回错误字符串。
+    ///     锁获取不会失败（tokio Mutex 无 std 中毒语义）；内部操作失败时返回错误字符串。
     ///
     /// 副作用:
-    ///     读取本地日志文件。
-    pub fn logs_tail(
+    ///     读取本地日志文件；异步持锁期间让出执行权，不阻塞主线程。
+    pub async fn logs_tail(
         &self,
         app: &tauri::AppHandle,
         max_lines: usize,
     ) -> Result<BackendLogsTailResponse, String> {
-        let mut supervisor = self
-            .inner
-            .lock()
-            .map_err(|_| "backend supervisor 锁已中毒".to_string())?;
+        let mut supervisor = self.inner.lock().await;
         supervisor.logs_tail(app, max_lines)
     }
 }
@@ -253,7 +238,7 @@ impl BackendSupervisor {
         }
     }
 
-    /// 启动本地后端。
+    /// 异步启动本地后端。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -265,10 +250,10 @@ impl BackendSupervisor {
     ///     当运行时路径无法解析时返回错误字符串。
     ///
     /// 副作用:
-    ///     可能创建子进程并轮询健康检查。
-    fn start(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+    ///     可能创建子进程并异步轮询健康检查；等待就绪期间让出执行权。
+    async fn start(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
         let config = resolve_config_logged(app)?;
-        self.refresh_with_config(&config);
+        self.refresh_with_config(&config).await;
 
         if self.status == BackendStatus::Running {
             return Ok(self.build_response(&config));
@@ -292,7 +277,7 @@ impl BackendSupervisor {
             started_at,
         });
 
-        match self.wait_for_backend_ready(&config, Duration::from_secs(15)) {
+        match self.wait_for_backend_ready(&config, Duration::from_secs(15)).await {
             Ok(snapshot) => {
                 self.last_health = Some(snapshot);
                 self.last_error = None;
@@ -330,14 +315,14 @@ impl BackendSupervisor {
                     );
                 }
                 self.status = BackendStatus::Failed;
-                self.terminate_managed_process();
+                self.terminate_managed_process("start");
             }
         }
 
         Ok(self.build_response(&config))
     }
 
-    /// 停止当前托管的本地后端。
+    /// 异步停止当前托管的本地后端。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -346,13 +331,13 @@ impl BackendSupervisor {
     ///     停止后的结构化后端状态。
     ///
     /// 异常:
-    ///     当运行时路径无法解析时返回错误字符串。
+    ///     当运行时路径无法解析时返回错误字符串；健康确认失败会记录到错误日志（`record_error`）并收敛状态为 `Stopped`。
     ///
     /// 副作用:
-    ///     可能终止一个已托管子进程。
-    fn stop(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+    ///     可能终止一个已托管子进程，并访问 `/health` 确认停止结果。
+    async fn stop(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
         let config = resolve_config_logged(app)?;
-        self.refresh_with_config(&config);
+        self.refresh_with_config(&config).await;
 
         if self.managed_process.is_none() {
             if self.status == BackendStatus::Running {
@@ -369,17 +354,26 @@ impl BackendSupervisor {
         }
 
         self.status = BackendStatus::Stopping;
-        self.terminate_managed_process();
-        self.last_health = fetch_backend_health(&config)?;
-        self.status = if self.last_health.is_some() {
-            BackendStatus::Running
-        } else {
-            BackendStatus::Stopped
-        };
+        self.terminate_managed_process("stop");
+        match fetch_backend_health(&config).await {
+            Ok(snapshot) => {
+                self.last_health = snapshot;
+                self.status = if self.last_health.is_some() {
+                    BackendStatus::Running
+                } else {
+                    BackendStatus::Stopped
+                };
+            }
+            Err(detail) => {
+                // 进程已终止但健康确认失败：错误落盘，状态收敛到终态，避免卡死在 Stopping。
+                self.record_error("stop", "停止后确认后端健康状态失败", detail, None);
+                self.status = BackendStatus::Stopped;
+            }
+        }
         Ok(self.build_response(&config))
     }
 
-    /// 重启当前托管的本地后端。
+    /// 异步重启当前托管的本地后端。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -391,15 +385,23 @@ impl BackendSupervisor {
     ///     当运行时路径无法解析时返回错误字符串。
     ///
     /// 副作用:
-    ///     可能终止旧进程并创建新进程。
-    fn restart(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+    ///     可能终止旧进程、轮询健康检查并创建新进程。
+    async fn restart(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
         self.status = BackendStatus::Restarting;
-        self.terminate_managed_process();
+        self.terminate_managed_process("restart");
         self.last_health = None;
-        self.start(app)
+        match self.start(app).await {
+            Ok(response) => Ok(response),
+            Err(detail) => {
+                // 配置解析类错误在 start 设置状态前抛出：错误落盘并收敛到 Failed，避免卡死在 Restarting。
+                self.record_error("restart", "重启本地后端失败", detail.clone(), None);
+                self.status = BackendStatus::Failed;
+                Err(detail)
+            }
+        }
     }
 
-    /// 查询当前后端状态。
+    /// 异步查询当前后端状态。
     ///
     /// 参数:
     ///     app: Tauri 应用句柄。
@@ -412,9 +414,9 @@ impl BackendSupervisor {
     ///
     /// 副作用:
     ///     读取当前受管进程状态并访问 `/health`。
-    fn status(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
+    async fn status(&mut self, app: &tauri::AppHandle) -> Result<BackendStatusResponse, String> {
         let config = resolve_config_logged(app)?;
-        self.refresh_with_config(&config);
+        self.refresh_with_config(&config).await;
         Ok(self.build_response(&config))
     }
 
@@ -428,7 +430,7 @@ impl BackendSupervisor {
     ///     多个日志文件的尾部内容。
     ///
     /// 异常:
-    ///     当运行时路径无法解析时返回错误字符串。
+    ///     当运行时路径无法解析或日志文件读取失败时返回错误字符串。
     ///
     /// 副作用:
     ///     读取本地日志文件。
@@ -455,7 +457,7 @@ impl BackendSupervisor {
         Ok(BackendLogsTailResponse { entries })
     }
 
-    /// 等待后端就绪，优先依据启动状态文件做快速失败与就绪判断。
+    /// 异步等待后端就绪，优先依据启动状态文件做快速失败与就绪判断。
     ///
     /// 与单纯轮询 `/health` 不同，本方法在每轮轮询中：
     /// 1. 若受管进程已退出，立即失败（不再傻等固定超时）；
@@ -470,11 +472,12 @@ impl BackendSupervisor {
     ///     超时前探测到健康响应时返回摘要。
     ///
     /// 异常:
-    ///     当超时、进程提前退出或启动状态文件标记为失败时返回错误字符串。
+    ///     当超时、进程提前退出、启动状态文件标记为失败或健康响应解析失败时返回错误字符串。
     ///
     /// 副作用:
-    ///     在等待窗口内重复读取启动状态文件并访问 `/health` 端点。
-    fn wait_for_backend_ready(
+    ///     在等待窗口内重复读取启动状态文件并访问 `/health` 端点；轮询间隔通过
+    ///     `tokio::time::sleep` 让出执行权，不阻塞调用线程。
+    async fn wait_for_backend_ready(
         &mut self,
         config: &BackendLaunchConfig,
         timeout: Duration,
@@ -495,7 +498,7 @@ impl BackendSupervisor {
                         return Err("本地后端启动失败（详见启动状态）".to_string());
                     }
                     crate::backend::boot_state::BootPhase::Ready => {
-                        if let Some(snapshot) = fetch_backend_health(config)? {
+                        if let Some(snapshot) = fetch_backend_health(config).await? {
                             return Ok(snapshot);
                         }
                     }
@@ -503,7 +506,8 @@ impl BackendSupervisor {
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(250));
+            // 让出执行权，避免同步阻塞导致 Tauri 主线程/WebView 事件循环卡死。
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
         Err(format!(
@@ -512,7 +516,7 @@ impl BackendSupervisor {
         ))
     }
 
-    /// 同步受管进程与健康状态。
+    /// 异步同步受管进程与健康状态。
     ///
     /// 参数:
     ///     config: 当前运行时配置。
@@ -521,11 +525,11 @@ impl BackendSupervisor {
     ///     无。
     ///
     /// 异常:
-    ///     无；健康检查失败会被吞掉并反映到状态字段。
+    ///     无；健康检查失败会记录到错误日志（`record_error`）并反映到状态字段。
     ///
     /// 副作用:
-    ///     可能清理已退出的子进程，并刷新最近健康快照。
-    fn refresh_with_config(&mut self, config: &BackendLaunchConfig) {
+    ///     可能清理已退出的子进程，并异步刷新最近健康快照。
+    async fn refresh_with_config(&mut self, config: &BackendLaunchConfig) {
         // 解析失败路径日志落盘位置（与后端应用日志同目录）。
         self.error_log_path = Some(
             config
@@ -539,7 +543,7 @@ impl BackendSupervisor {
             self.managed_process = None;
         }
 
-        match fetch_backend_health(config) {
+        match fetch_backend_health(config).await {
             Ok(Some(snapshot)) => {
                 self.last_health = Some(snapshot);
                 self.status = BackendStatus::Running;
@@ -593,7 +597,7 @@ impl BackendSupervisor {
     /// 终止当前托管子进程。
     ///
     /// 参数:
-    ///     无。
+    ///     stage: 调用方生命周期阶段（`start`/`stop`/`restart`/`drop`，`drop` 用于 `Drop::drop` 清理路径），用于错误日志定位。
     ///
     /// 返回:
     ///     无。
@@ -603,14 +607,14 @@ impl BackendSupervisor {
     ///
     /// 副作用:
     ///     可能向子进程发送 kill 并等待回收。
-    fn terminate_managed_process(&mut self) {
+    fn terminate_managed_process(&mut self, stage: &str) {
         let Some(mut process) = self.managed_process.take() else {
             return;
         };
 
         if let Err(detail) = process.child.kill() {
             self.record_error(
-                "stop",
+                stage,
                 "终止本地后端进程失败",
                 detail.to_string(),
                 None,
@@ -620,7 +624,7 @@ impl BackendSupervisor {
 
         if let Err(detail) = process.child.wait() {
             self.record_error(
-                "stop",
+                stage,
                 "等待本地后端进程退出失败",
                 detail.to_string(),
                 None,
@@ -778,7 +782,7 @@ fn read_tail_lines(path: &std::path::Path, max_lines: usize) -> Result<String, S
     let lines: Vec<&str> = content.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     Ok(lines[start..].join("\n"))
-    }
+}
 
 impl Drop for BackendSupervisor {
     /// 在应用释放 supervisor 时清理子进程。
@@ -795,7 +799,7 @@ impl Drop for BackendSupervisor {
     /// 副作用:
     ///     尝试终止当前受管 Python 子进程。
     fn drop(&mut self) {
-        self.terminate_managed_process();
+        self.terminate_managed_process("drop");
     }
 }
 
@@ -1082,9 +1086,10 @@ mod tests {
 
     #[test]
     fn test_redact_sensitive_text_masks_api_key() {
-        let input = "Connection failed with REDACTED_DEEPSEEK_KEY in trace";
+        // 输入必须是真实 `sk-` 前缀密钥（脱敏只匹配该形态），占位符无法触发脱敏。
+        let input = "Connection failed with sk-4f3k3r3d4ct3d0000000000000000 in trace";
         let out = redact_sensitive_text(input);
-        assert!(!out.contains("REDACTED_DEEPSEEK_KEY"));
+        assert!(!out.contains("sk-4f3k3r3d4ct3d0000000000000000"));
         assert!(out.contains("sk-[REDACTED]"));
     }
 
@@ -1137,10 +1142,10 @@ mod tests {
 
     #[test]
     fn test_redact_sensitive_text_sk_in_assignment_no_malformed() {
-        // `api_key=sk-...` 复合场景应完整脱敏且不产生 `]]` 畸形输出。
-        let input = "auth api_key=REDACTED_DEEPSEEK_KEY extra";
+        // `api_key=sk-...` 复合场景应完整脱敏且不产生 `]]` 畸形输出（输入需为真实 sk- 前缀密钥）。
+        let input = "auth api_key=sk-4f3k3r3d4ct3d0000000000000000 extra";
         let out = redact_sensitive_text(input);
-        assert!(!out.contains("REDACTED_DEEPSEEK_KEY"));
+        assert!(!out.contains("sk-4f3k3r3d4ct3d0000000000000000"));
         assert!(!out.contains("]]"));
         assert!(out.contains("api_key=[REDACTED]"));
         assert!(out.contains("extra"));
@@ -1159,9 +1164,9 @@ mod tests {
     #[test]
     fn test_redact_sensitive_text_masks_trailing_api_key() {
         // 末尾恰为完整 sk- 密钥（无尾随字符）也需脱敏。
-        let input = "leaked key REDACTED_DEEPSEEK_KEY";
+        let input = "leaked key sk-4f3k3r3d4ct3d0000000000000000";
         let out = redact_sensitive_text(input);
-        assert!(!out.contains("REDACTED_DEEPSEEK_KEY"));
+        assert!(!out.contains("sk-4f3k3r3d4ct3d0000000000000000"));
         assert!(out.contains("sk-[REDACTED]"));
     }
 
