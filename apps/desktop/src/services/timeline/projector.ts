@@ -465,8 +465,7 @@ export function projectTimelineIncrementally(
     if (
       event.event_type === "run_finished" ||
       event.event_type === "run_failed" ||
-      event.event_type === "run_cancelled" ||
-      event.event_type === "client_disconnected"
+      event.event_type === "run_cancelled"
     ) {
       entries = entries.concat({
         kind: "status",

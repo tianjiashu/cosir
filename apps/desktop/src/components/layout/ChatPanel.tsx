@@ -90,6 +90,20 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
   renderCountRef.current += 1;
   const eventsRefChanged = prevEventsRef.current !== events;
   prevEventsRef.current = events;
+
+  // childTurnIds 增量缓存：delegation 子 turn 集合只在「新增 delegation_child_started
+  // 事件」时变化，普通 delta 帧不影响它。但 SSE 每帧都让 events 引用变化，若每次都
+  // 全量扫描 events 重建 Set，长会话（数千事件）下是真实的每帧 O(n) 开销。
+  // 这里用 ref 持有上一次的 events 引用、已扫描长度与已算出的 Set：每帧只扫描
+  // 「本次新增的事件尾部切片」（通常仅 1 条 delta），无新增 delegation 事件时直接复用
+  // 旧 Set 引用（引用稳定 → 下游 timelineTurns memo 可精确跳过）。仅当 events 长度
+  // 回退（切换任务 / invalidateTask 清空）时才全量重算，保证与 store 的 append-only
+  // 语义一致。这样把「全量循环」降为「增量尾部扫描」，且不引入任何新依赖。
+  const childTurnIdsCacheRef = useRef<{
+    eventsRef: unknown;
+    scannedLen: number;
+    set: Set<string>;
+  }>({ eventsRef: null, scannedLen: 0, set: new Set<string>() });
   // 渲染打点（采样）：用于排查「进入新 turn 后 ChatPanel 是否每帧重渲染爆炸」。
   // 仅当 events 引用真正变化时才打，避免纯内部 state 触发的冗余渲染刷屏淹没关键日志；
   // events 每帧变化正是要诊断的「渲染风暴」信号，采样后既保留信号又不淹没日志。
@@ -118,19 +132,82 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
    * 用 push 假定「后到即后置」，但乐观临时 turn（本地时钟）与真实 turn（后端时钟）存在
    * 同秒/漂移窗口，push 顺序不等于时间序。在此收口使 VirtualList 渲染顺序只由时间决定，
    * 不依赖数组原序的巧合，修复「新一轮 turn 与上一轮消息重叠」的时序根因之一。
+   *
+   * 性能（M7 修复）：本 memo 依赖 `[activeTask, turns, childTurnIds]` 而非 `events`。
+   * `childTurnIds` 本身由上方独立 memo 经增量缓存计算（仅扫描 events 新增尾部，
+   * 普通 delta 帧复用旧 Set 引用），因此 SSE 每帧变化的是 `events` 引用而非
+   * `childTurnIds`——普通流式帧不再触发本 memo 的「全量循环 + 排序」重算，长会话下
+   * 彻底消除每帧 O(n) 开销。输出与改造前完全一致。
    */
-  const timelineTurns = useMemo(() => {
-    // 从当前 task 的事件流中提取所有 child turn id（delegation 子 Agent 轮次）。
-    const childTurnIds = new Set<string>();
-    for (const event of events) {
+  // 提取当前 task 的 delegation 子 turn id 集合（delegation_child_started 事件
+  // 的 payload.child_turn_id）。该集合只在「新增 delegation 事件」时变化，普通
+  // delta 帧不影响它。因此用增量缓存（childTurnIdsCacheRef）避免每帧全量扫描 events：
+  // 每帧仅扫描本次新增的事件尾部；无新增 delegation 事件时复用旧 Set 引用，使下游
+  // timelineTurns 的 memo 能精确跳过（不依赖 events 引用，从而切断每帧重算链路）。
+  // 这是 M7 性能缺陷的修复点：原实现把「全量循环 events 建 childTurnIds」放在
+  // 依赖 [events] 的 memo 内，导致长会话下每帧 O(n) 开销。
+  const childTurnIds = useMemo<Set<string>>(() => {
+    const cache = childTurnIdsCacheRef.current;
+    const currentLen = events.length;
+
+    // 1) 同一引用（非 SSE 帧触发）：直接复用已缓存集合，零扫描。
+    if (cache.eventsRef === events) {
+      return cache.set;
+    }
+
+    // 2) 长度回退（切换任务 / invalidateTask 清空）：全量重算后建立新引用。
+    if (currentLen < cache.scannedLen) {
+      const next = new Set<string>();
+      for (const event of events) {
+        if (event.event_type === "delegation_child_started") {
+          const payload = event.payload as { child_turn_id?: string };
+          if (payload.child_turn_id) {
+            next.add(payload.child_turn_id);
+          }
+        }
+      }
+      childTurnIdsCacheRef.current = { eventsRef: events, scannedLen: currentLen, set: next };
+      return next;
+    }
+
+    // 3) 增量帧：仅扫描本次新增的事件尾部 [scannedLen, currentLen)，复用旧集合内容。
+    //    只在确实新增了 child_turn_id 时才新建 Set 引用，否则原样复用旧引用。
+    let changed = false;
+    const base = cache.set;
+    for (let i = cache.scannedLen; i < currentLen; i++) {
+      const event = events[i];
       if (event.event_type === "delegation_child_started") {
         const payload = event.payload as { child_turn_id?: string };
-        if (payload.child_turn_id) {
-          childTurnIds.add(payload.child_turn_id);
+        if (payload.child_turn_id && !base.has(payload.child_turn_id)) {
+          if (!changed) {
+            changed = true;
+          }
         }
       }
     }
+    if (!changed) {
+      // 无新增 delegation 子 turn：复用旧引用（下游 memo 可跳过）。
+      childTurnIdsCacheRef.current = { eventsRef: events, scannedLen: currentLen, set: base };
+      return base;
+    }
+    const next = new Set(base);
+    for (let i = cache.scannedLen; i < currentLen; i++) {
+      const event = events[i];
+      if (event.event_type === "delegation_child_started") {
+        const payload = event.payload as { child_turn_id?: string };
+        if (payload.child_turn_id) {
+          next.add(payload.child_turn_id);
+        }
+      }
+    }
+    childTurnIdsCacheRef.current = { eventsRef: events, scannedLen: currentLen, set: next };
+    return next;
+  }, [events]);
 
+  const timelineTurns = useMemo(() => {
+    // 此处不再依赖 events 引用——childTurnIds 已是「仅随 delegation 事件变化」的
+    // 稳定集合（见上方 memo + 增量缓存）。这样普通 delta 帧（events 引用变化但无新
+    // delegation）不会触发本 memo 重算，彻底切断每帧 O(n) 重建链路（M7 修复）。
     let candidateTurns: TurnRecord[];
     if (turns.length > 0) {
       candidateTurns = turns;
@@ -163,7 +240,7 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
       const tb = new Date(b.created_at ?? 0).getTime() || 0;
       return ta - tb;
     });
-  }, [activeTask, turns, events]);
+  }, [activeTask, turns, childTurnIds]);
 
   // 分片窗口：首屏仅渲染最近若干 turn，更早的由「加载更早对话」按需扩展。
   // 仅当切换任务（activeTaskId 变化）时重置窗口；流式期间 turns 引用变化（新事件到达）

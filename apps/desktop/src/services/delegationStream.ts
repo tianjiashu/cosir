@@ -5,21 +5,19 @@
  * 运行时事件。该连接不认领 turn、不启动 Agent、不写全局父 SSE 连接状态；调用方通过
  * 回调把事件合并进同一个 eventStore。
  *
+ * 连接生命周期通用骨架已上提到 SSEConnectionBase；本类保留 child 流的差异化职责：
+ * - 只订阅端点路径与差异化日志字段（delegation_id / child_turn_id）
+ * - 终态判定仅 3 类（run_finished / run_failed / run_cancelled，不含 final_response）
+ * - AbortError 静默 return（不污染父 turn 主 SSE 状态）
+ * - connecting 布尔防重入（不引入状态机）
+ *
  * @module services/delegationStream
  */
 
 import type { RuntimeEvent } from "@shared/events";
-import { logError, logInfo, logWarn } from "@/lib/logger";
-import {
-  buildTraceHeaders,
-  readBackendTraceHeaders,
-  recordBackendTrace,
-} from "./tracePropagation";
-import { createSSEFrameParser, type ParsedSSEFrame } from "./sseParser";
-import { useConversationTraceStore } from "@/stores/conversationTraceStore";
-
-/** 后端基础 URL，开发环境走 Vite 代理。 */
-const BASE_URL = "";
+import { logInfo, logWarn } from "@/lib/logger";
+import { SSEConnectionBase, type SSEBaseConnectionContext, type SSEBaseHooks } from "./sseConnectionBase";
+import { type ParsedSSEFrame } from "./sseParser";
 
 /** child stream 收到运行时事件时的回调。 */
 export type DelegationStreamEventHandler = (event: RuntimeEvent) => void;
@@ -56,36 +54,28 @@ function childTurnEventsStreamPath(childTurnId: string): string {
 }
 
 /**
- * 判断事件是否是 child run 终态。
- *
- * @param event - 待判定运行时事件。
- * @returns 命中 run_finished / run_failed / run_cancelled 时返回 true。
- *
- * @sideeffect 无。
- */
-function isChildTerminalEvent(event: RuntimeEvent): boolean {
-  return ["run_finished", "run_failed", "run_cancelled"].includes(event.event_type);
-}
-
-/**
  * 委派 child turn 只订阅 SSE 连接。
  *
  * 单个实例只管理一个 child turn 的一次连接生命周期。实例状态保持私有，
  * 不读写 `eventStore.connectionState`，避免 child stream 错误污染父 turn 主 SSE 状态。
+ * 通用连接骨架继承自 SSEConnectionBase；本类维护 child 流的终态判定（3 类）、
+ * connecting 防重入布尔与差异化日志字段。
  */
-export class DelegationStreamConnection {
+export class DelegationStreamConnection extends SSEConnectionBase {
   private readonly options: DelegationStreamConnectionOptions;
-  private abortController: AbortController | null = null;
-  private terminalReceived = false;
-  private aborted = false;
+  /** 防重入布尔（替代状态机；child 流无 CONNECTING/STREAMING 细分，无 onStateChange 回调）。 */
   private connecting = false;
 
   constructor(options: DelegationStreamConnectionOptions) {
+    super();
     this.options = options;
   }
 
   /**
    * 建立 child turn subscribe-only SSE 连接。
+   *
+   * 通用 fetch/读取/EOF flush/终态检测由基类 runConnection 承担，本方法仅组织
+   * connecting 防重入与差异化连接上下文（delegation_id / child_turn_id）。
    *
    * @returns 连接生命周期 Promise；流结束、主动断开或异常后 resolve/reject。
    * @throws {Error} 当同一实例已在连接中、HTTP 失败或读取失败时抛出。
@@ -97,121 +87,72 @@ export class DelegationStreamConnection {
       throw new Error("delegation child stream is already connecting");
     }
 
-    this.abortController = new AbortController();
-    this.terminalReceived = false;
-    this.aborted = false;
     this.connecting = true;
 
     const path = childTurnEventsStreamPath(this.options.childTurnId);
-    const requestTrace = buildTraceHeaders({ taskId: this.options.taskId });
-    const requestContext = {
+    const context: SSEBaseConnectionContext = {
+      taskId: this.options.taskId,
       module: "delegationStream",
-      task_id: this.options.taskId,
       delegation_id: this.options.delegationId,
       child_turn_id: this.options.childTurnId,
-      method: "GET",
-      path,
-      trace_id: requestTrace.trace.traceId,
+    };
+    const hooks: SSEBaseHooks = {
+      // child 流不在基类层暴露 onTrace（与原有实现一致：无 onTrace 暴露）。
+      onError: this.options.onError,
     };
 
-    useConversationTraceStore.getState().recordTrace({
-      traceId: requestTrace.trace.traceId,
-      taskId: this.options.taskId,
-      operation: "turn_stream",
-      method: "GET",
-      path,
-    });
-
     try {
-      const response = await fetch(`${BASE_URL}${path}`, {
-        signal: this.abortController.signal,
-        headers: { Accept: "text/event-stream", ...requestTrace.headers },
-      });
-
-      recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
-
-      if (!response.ok) {
-        throw new Error(`delegation child stream failed: HTTP ${response.status} ${response.statusText}`);
-      }
-      if (!response.body) {
-        throw new Error("delegation child stream response body is empty");
-      }
-
-      await this.readEvents(response.body);
-      this.reportAbnormalEndIfNeeded(requestContext);
-      logInfo("delegation child stream closed", requestContext);
-    } catch (err) {
-      if ((err as Error).name === "AbortError") {
-        logInfo("delegation child stream aborted", requestContext);
-        return;
-      }
-      const error = err instanceof Error ? err : new Error(String(err));
-      logError("delegation child stream failed", error, requestContext);
-      this.options.onError?.(error);
-      throw error;
+      await this.runConnection(path, context, hooks);
+      // runConnection 正常 resolve（含 EOF flush + 异常上报）即流已结束。
+      logInfo("delegation child stream closed", context);
     } finally {
       this.connecting = false;
-      this.abortController = null;
     }
   }
 
   /**
-   * 主动断开 child stream。
-   *
-   * @sideeffect 通过 AbortController 中止正在进行的 fetch/read。
-   */
-  disconnect(): void {
-    this.aborted = true;
-    this.abortController?.abort();
-  }
-
-  /**
-   * 读取并解析 SSE 响应体。
-   *
-   * @param body - fetch 返回的 ReadableStream。
-   * @returns 读取完成后 resolve。
-   *
-   * @sideeffect 每解析出一条 RuntimeEvent 即调用 `options.onEvent`。
-   */
-  private async readEvents(body: ReadableStream<Uint8Array>): Promise<void> {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    // 流式帧解析器：内部缓冲拼接分片，完整帧同步回调（替代手写 split("\n\n") 切帧）
-    const frameParser = createSSEFrameParser((frame) => {
-      this.handleFrame(frame);
-    });
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      frameParser.feed(decoder.decode(value, { stream: true }));
-    }
-
-    // EOF：喂入终止空行促使缓冲区内已完整帧被分发（模拟标准流终止），
-    // 随后 reset 释放解析器内部状态。不要用 reset({ consume: true })，
-    // 那会把不完整残片也当完整帧分发，改变语义。
-    frameParser.feed("\n\n");
-    frameParser.reset();
-  }
-
-  /**
-   * 解析并分发单条 SSE 帧。
+   * 帧解析器回调：解析并分发单条 SSE 帧。
    *
    * @param frame - 已拆分的 SSE 帧（含 eventType 与原始 data 字符串）。
    *
-   * @sideeffect 解析成功时调用 `onEvent`；终态事件会更新实例终态标记。
+   * @sideeffect 解析成功时调用 options.onEvent；JSON 无效时写 warn 日志。
    */
-  private handleFrame(frame: ParsedSSEFrame): void {
+  protected handleFrame(frame: ParsedSSEFrame): void {
     const event = this.parseRuntimeEvent(frame);
     if (!event) {
       return;
     }
-    if (isChildTerminalEvent(event)) {
-      this.terminalReceived = true;
-    }
     this.options.onEvent(event);
+  }
+
+  /**
+   * 判断事件是否是 child run 终态。
+   *
+   * child 流终态仅 3 类（run_finished / run_failed / run_cancelled），
+   * 不含 final_response：child turn 的 final_response 不是 child run 结束信号，
+   * run_finished 才是，统一为 4 类会导致 child 流过早误判终态而漏收滞后事件。
+   * 覆盖基类默认 4 类，保留 child 流语义差异（与重构计划 §3「不强行统一」一致）。
+   *
+   * @param event - 待判定运行时事件。
+   * @returns 命中 run_finished / run_failed / run_cancelled 时返回 true。
+   *
+   * @sideeffect 无。
+   */
+  protected isTerminalEvent(event: RuntimeEvent): boolean {
+    return ["run_finished", "run_failed", "run_cancelled"].includes(event.event_type);
+  }
+
+  /**
+   * 主动断开兜底分支：AbortError 静默 return。
+   *
+   * child 流断开不影响父 turn 主 SSE 状态，不置状态、不抛。
+   *
+   * @param context - 请求上下文，用于日志定位。
+   *
+   * @sideeffect 写 info 日志（便于排查断连），不修改任何全局连接状态。
+   */
+  protected onAbort(context: SSEBaseConnectionContext): void {
+    logInfo("delegation child stream aborted", context);
   }
 
   /**
@@ -239,21 +180,5 @@ export class DelegationStreamConnection {
       });
       return null;
     }
-  }
-
-  /**
-   * 订阅流正常 EOF 但没有收到 child 终态时，上报异常结束。
-   *
-   * @param context - 日志上下文。
-   *
-   * @sideeffect 异常结束时写 error 日志并触发 `onError`，供 hook 强制 backfill。
-   */
-  private reportAbnormalEndIfNeeded(context: Record<string, unknown>): void {
-    if (this.terminalReceived || this.aborted) {
-      return;
-    }
-    const error = new Error("delegation child stream ended without terminal event");
-    logError("delegation child stream ended without terminal event", error, context);
-    this.options.onError?.(error);
   }
 }

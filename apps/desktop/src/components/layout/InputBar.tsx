@@ -40,7 +40,10 @@ export function InputBar() {
   const [inputValue, setInputValue] = useState("");
   const { createTask, createTurn, cancelTurn, operation } = useTask();
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
-  const streamingTurnId = useTurnStore((s) => s.streamingTurnId);
+  // 读取当前 active task 维度下的 streaming turn（按 task 隔离，支持多 task 并发流式）。
+  const streamingTurnId = useTurnStore((s) =>
+    s.streamingTurnIds[activeTaskId ?? ""] ?? null,
+  );
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const selectedAgentId = useTaskStore((s) => s.selectedAgentId);
   const setSelectedAgentId = useTaskStore((s) => s.setSelectedAgentId);

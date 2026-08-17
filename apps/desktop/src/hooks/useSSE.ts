@@ -6,7 +6,13 @@
  * - 事件分发到 eventStore（含回放去重）
  * - 错误处理与状态管理
  *
- * 组件只需调用 connect(taskId, turnId) 即可开始接收事件流。
+ * 桌面端支持「task 间并发、同 task turn 串行」语义：本 Hook 不再持有全局唯一连接，
+ * 而是维护一个按 turnId 维度隔离的连接池 `connectionsRef`（Map<turnId, SSEConnection>）。
+ * 每个 turn 拥有独立连接，断开某一 turn 的连接不会影响其它 turn 的实时流，
+ * 从而支撑后台 task 正在流式时前台 task 发消息互不断开。
+ *
+ * 组件只需调用 connect(taskId, turnId) 即可开始接收该轮次的事件流；
+ * 断开某个 turn 用 disconnectTurn(turnId)，全局清理用 disconnectAll()。
  *
  * @module hooks/useSSE
  */
@@ -36,8 +42,11 @@ interface UseSSEReturn {
    */
   connect: (taskId: string, turnId: string) => Promise<void>;
 
-  /** 断开当前 SSE 连接。 */
-  disconnect: () => void;
+  /** 断开指定 turn 的 SSE 连接（不影响其它 turn）。 */
+  disconnectTurn: (turnId: string) => void;
+
+  /** 断开全部 SSE 连接（组件卸载 / 全局清理时使用）。 */
+  disconnectAll: () => void;
 
   /** 当前连接状态（从 eventStore 派生）。 */
   connectionState: SSEConnectionState;
@@ -52,13 +61,16 @@ interface UseSSEReturn {
  *
  * @example
  * ```tsx
- * const { connect, disconnect, connectionState } = useSSE();
+ * const { connect, disconnectTurn, disconnectAll, connectionState } = useSSE();
  *
- * // 开始监听任务事件
- * await connect("task-uuid");
+ * // 开始监听指定轮次事件
+ * await connect("task-uuid", "turn-uuid");
  *
- * // 停止监听
- * disconnect();
+ * // 仅断开该轮次（不影响其它并发轮次）
+ * disconnectTurn("turn-uuid");
+ *
+ * // 组件卸载时清理全部连接
+ * disconnectAll();
  * ```
  */
 export function useSSE(): UseSSEReturn {
@@ -70,8 +82,9 @@ export function useSSE(): UseSSEReturn {
   const setStreamingTurn = useTurnStore((s) => s.setStreamingTurn);
   const setContextUsage = useContextUsageStore((s) => s.setUsage);
 
-  // 保持对当前连接实例的引用，避免重复创建
-  const connectionRef = useRef<SSEConnection | null>(null);
+  // 按 turnId 维度的连接池：同一时刻不同 task 的 turn 可各自持有独立 SSE 连接，
+  // 互不断开，支撑「task 间并发、同 task turn 串行」语义。
+  const connectionsRef = useRef<Map<string, SSEConnection>>(new Map());
   // 攒批缓冲：把同一动画帧内的多个 delta 合并成一次 appendEvents + 一次渲染，
   // 将高频流式下的 set/投影/重渲染压力从「每 delta 一次」降到「每帧一次」，
   // 对高 token 率与长会话（后续迭代常见场景）提供稳定的渲染节奏兜底。
@@ -91,12 +104,15 @@ export function useSSE(): UseSSEReturn {
     async (taskId: string, turnId: string): Promise<void> => {
       PerfTrace.markCurrent("sse:connect-start", { task_id: taskId, turn_id: turnId });
       // 先 flush 上一连接已入缓冲、尚未到下一动画帧的事件，避免快速重连时静默丢弃
-      // （connectionRef 存的是 SSEConnection，其 disconnect 只 abort 不 flush；只有 hook
-      // 自身的 disconnect 才 flush，故这里必须显式 flush 而非依赖下方 disconnect）。
+      // （connectionsRef 存的是 SSEConnection，其 disconnect 只 abort 不 flush；只有 hook
+      // 自身的 disconnectTurn/disconnectAll 才 flush，故这里必须显式 flush）。
       flushRef.current();
-      // 再断开已有连接（SSEConnection.disconnect 仅负责 abort fetch，不再产生事件）
-      if (connectionRef.current) {
-        connectionRef.current.disconnect();
+      // 仅断开「同一 turnId」的旧连接（SSEConnection.disconnect 仅负责 abort fetch，不再产生事件），
+      // 不影响其它 turn 正在进行的连接，从而支撑 task 间并发流式。
+      const existing = connectionsRef.current.get(turnId);
+      if (existing) {
+        existing.disconnect();
+        connectionsRef.current.delete(turnId);
       }
       // 旧连接已断开、不再产生事件；重置共享缓冲，避免新旧连接复用同一数组
       // 造成的事件归属耦合或快速重连场景下的缓冲污染。
@@ -111,7 +127,7 @@ export function useSSE(): UseSSEReturn {
           end_reason: error.message,
           updated_at: now,
         });
-        setStreamingTurn(null);
+        setStreamingTurn(taskId, null);
       };
 
       // 延迟应用到终态的错误。onError 在流读完时被 SSEConnection **同步**触发，
@@ -192,21 +208,21 @@ export function useSSE(): UseSSEReturn {
             PerfTrace.markCurrent("sse:connection-open", { task_id: taskId, turn_id: turnId });
           }
           // 仅当前活动连接可回写连接状态，避免被已断开的旧连接（竞态）误钉为 CLOSED
-          if (connectionRef.current === connection) {
+          if (connectionsRef.current.get(turnId) === connection) {
             setConnectionState(state);
           }
         },
       });
 
-      connectionRef.current = connection;
+      connectionsRef.current.set(turnId, connection);
       void connection.connect()
         .finally(() => {
           // 仅当前活动连接可接管清理与终态回写：极边缘场景下旧连接自然异常结束、同时
           // 用户已重连新连接时，旧连接 finally 不得 flush 共享缓冲（会误提新连接事件）
           // 也不得把新进行中的任务误标 failed。
-          const isActive = connectionRef.current === connection;
+          const isActive = connectionsRef.current.get(turnId) === connection;
           if (isActive) {
-            connectionRef.current = null;
+            connectionsRef.current.delete(turnId);
             // 流结束后兜底 flush 残留事件，避免最后若干 delta 不落盘 / 状态不更新
             // （此时 run_started 可能被映射回 running）。调用本次闭包捕获的 flush，
             // 而非跨连接共享的 flushRef.current()，避免借用新连接的缓冲语义。
@@ -227,18 +243,30 @@ export function useSSE(): UseSSEReturn {
   );
 
   /**
-   * 断开当前活跃的 SSE 连接。
+   * 断开指定 turn 的 SSE 连接（不影响其它 turn 的并发连接）。
+   *
+   * @param turnId - 要断开的轮次标识；若该 turn 无活动连接则为 no-op。
    */
-  const disconnect = useCallback(() => {
-    if (connectionRef.current) {
-      connectionRef.current.disconnect();
-      connectionRef.current = null;
+  const disconnectTurn = useCallback((turnId: string) => {
+    const conn = connectionsRef.current.get(turnId);
+    if (conn) {
+      conn.disconnect();
+      connectionsRef.current.delete(turnId);
     }
     // 主动断开时兜底 flush，保证 UI 与最终状态一致
     flushRef.current();
   }, []);
 
-  return { connect, disconnect, connectionState };
+  /**
+   * 断开全部 SSE 连接（组件卸载 / 全局清理时使用）。
+   */
+  const disconnectAll = useCallback(() => {
+    connectionsRef.current.forEach((conn) => conn.disconnect());
+    connectionsRef.current.clear();
+    flushRef.current();
+  }, []);
+
+  return { connect, disconnectTurn, disconnectAll, connectionState };
 }
 
 type UpdateTask = ReturnType<typeof useTaskStore.getState>["updateTask"];
@@ -276,7 +304,7 @@ function syncRuntimeStatus(
       updated_at: event.created_at,
     });
     if (status.terminal) {
-      setStreamingTurn(null);
+      setStreamingTurn(event.task_id, null);
     }
   }
 }
@@ -284,13 +312,15 @@ function syncRuntimeStatus(
 /**
  * 从 runtime event 推导 task/turn 状态。
  *
- * 终态事件识别范围：run_finished / run_failed / run_cancelled / client_disconnected。
- * 对 run_failed 与 client_disconnected 的语义差异处理：
+ * 终态事件识别范围：run_finished / run_failed / run_cancelled。
+ * 注意：「客户端连接断开」不是一个独立的 event_type（RuntimeEventType 中不存在
+ * client_disconnected），而是 run_failed 事件的 payload 语义：后端经 finally 兜底标记
+ * turn failed 时，会在 run_failed 的 payload 中下发 error/end_reason = "client_disconnected"。
+ * 因此对 run_failed 的语义差异处理：
  *   - run_failed 优先采用 payload.end_reason 作为 endReason（如
  *     "client_disconnected"），其次回退到 payload.error 文案，最后回退枚举值
  *     "run_failed"，使上层 UI 能区分「客户端连接断开」与「Agent 真实执行失败」。
- *   - client_disconnected 裸事件直接识别为终态 failed，endReason="client_disconnected"，
- *     避免 SSE 断开时 UI 永远停在 running/active 误导用户。
+ * 终态本身由 run_failed 承载，不存在独立的 client_disconnected 裸事件分支。
  *
  * @param event - 后端 SSE 运行事件。
  * @returns 可同步状态（含终态标记与 endReason）；非运行态事件返回 null。
@@ -315,11 +345,6 @@ export function runtimeStatusFromEvent(
   }
   if (event.event_type === "run_cancelled") {
     return { taskStatus: "cancelled", turnStatus: "cancelled", terminal: true, endReason: "run_cancelled" };
-  }
-  // 客户端连接断开：后端经 finally 兜底标记 turn failed 并下发该事件时，需被识别为终态，
-  // 否则 UI 会永远停在 running/active，用户误以为对话仍在进行。
-  if (event.event_type === "client_disconnected") {
-    return { taskStatus: "failed", turnStatus: "failed", terminal: true, endReason: "client_disconnected" };
   }
   return null;
 }

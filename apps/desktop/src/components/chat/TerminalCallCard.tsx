@@ -28,8 +28,8 @@ import { memo } from "react";
 import { AlertCircle, Check, ChevronDown, Copy, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Caption } from "@/components/ui/tokens";
-import { logError } from "@/lib/logger";
 import { TerminalViewer } from "@/components/chat/TerminalViewer";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import type { ToolDisplayInfo } from "@/services/timeline/projector";
 
 /** 终端命令卡片状态枚举（与通用工具卡片对齐）。 */
@@ -114,22 +114,13 @@ function CopyButton({
   title?: string;
   children?: React.ReactNode;
 }) {
-  const [copied, setCopied] = React.useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
-  const handleCopy = React.useCallback(
-    async (event: React.MouseEvent) => {
-      event.stopPropagation();
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        // 剪贴板写入失败时经统一日志出口记录，不静默吞错，便于排查环境权限问题。
-        logError("复制命令到剪贴板失败", err, { module: "TerminalCallCard" });
-      }
-    },
-    [text],
-  );
+  const handleCopy = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    // copy 内部已统一经 logError/logWarn 记录失败，此处无需重复 catch。
+    void copy(text);
+  };
 
   return (
     <button

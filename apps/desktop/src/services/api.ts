@@ -7,7 +7,8 @@
  * - GET/POST /tasks/{id}/turns 读取或追加 turn
  * - POST /turns/{id}/cancel 取消当前 turn
  *
- * 使用原生 fetch，不引入 axios 等第三方 HTTP 库。
+ * 普通请求-响应型 API 走 `httpClient.ts` 的 ky 实例（含超时、幂等重试、错误归一为 ServiceError）；
+ * SSE 长连接（connectWorkspaceEventStream）仍走原生 fetch，因 ky 不消费 ReadableStream。
  *
  * @module services/api
  */
@@ -30,6 +31,7 @@ import type { WorkspaceEvent } from "@shared/workspaceEvent";
 import { isWorkspaceEventType } from "@shared/workspaceEvent";
 import { API_PATHS } from "@shared/api";
 import { ServiceError } from "./types";
+import { apiClient } from "./httpClient";
 import { createSSEFrameParser, type ParsedSSEFrame } from "./sseParser";
 import { logError, logWarn } from "../lib/logger";
 import {
@@ -63,53 +65,23 @@ interface TracedJsonResponse<T> {
 }
 
 /**
- * 构建带错误上下文的 ServiceError。
- *
- * @param message - 人类可读的错误描述。
- * @param path - 导致错误的 API 路径。
- * @param response - 可选的 fetch Response 对象。
- * @param taskId - 可选的关联任务 ID。
- * @returns 构建好的 ServiceError 实例。
- */
-async function buildError(
-  message: string,
-  path: string,
-  response?: Response,
-  taskId?: string,
-): Promise<ServiceError> {
-  const statusCode = response?.status ?? 0;
-  let detail = message;
-  try {
-    if (response) {
-      const body = await response.clone().json();
-      if (body.detail) {
-        detail = body.detail;
-      }
-    }
-  } catch (err) {
-    void err;
-    logWarn("解析错误响应体 JSON 失败", {
-      module: "api",
-      path,
-      statusCode: response?.status,
-    });
-    // 非 JSON 响应体，使用原始消息。
-  }
-
-  return new ServiceError(detail, { statusCode, taskId });
-}
-
-/**
  * 发送带 JSON body 的 POST 请求。
  *
  * @param path - API 路径。
  * @param data - 请求体数据。
  * @param taskId - 可选的关联任务 ID，用于错误追踪。
+ * @param options - 可选请求选项。
+ * @param options.timeout - 请求超时时间（毫秒）。省略或传入 `undefined` 时使用 ky 默认超时（30000ms）；
+ *   传入 `false` 可禁用前端超时，交由后端护栏控制（用于首次建索引等可能耗时数分钟的长请求）。
  * @returns 解析后的 JSON 响应。
  * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
-async function post<T>(path: string, data: unknown, taskId?: string): Promise<TracedJsonResponse<T>> {
-  let response: Response;
+async function post<T>(
+  path: string,
+  data: unknown,
+  taskId?: string,
+  options?: { timeout?: number | false },
+): Promise<TracedJsonResponse<T>> {
   const requestTrace = buildTraceHeaders({ taskId });
   const requestContext = {
     module: "api",
@@ -118,30 +90,25 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<Tr
     path,
     trace_id: requestTrace.trace.traceId,
   };
+  let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
-      method: "POST",
+    // ky 在 HTTP 错误时抛经 beforeError 归一后的 ServiceError；此处用标准 Response 读取后端 trace。
+    // timeout 透传：undefined 时 ky 用默认 30000ms；false 时禁用前端超时。
+    response = await apiClient.post(path, {
+      json: data,
       headers: { "Content-Type": "application/json", ...requestTrace.headers },
-      body: JSON.stringify(data),
+      timeout: options?.timeout,
     });
   } catch (err) {
-    logError(`网络请求失败: ${path}`, err, requestContext);
-    throw new ServiceError(`网络请求失败: ${path}`, {
-      taskId,
-      cause: err,
+    // ky 已将网络/超时/非 2xx 统一为 ServiceError，保留带 module/path 上下文的错误日志。
+    logError(`请求失败: POST ${path}`, err, {
+      ...requestContext,
+      status_code: err instanceof ServiceError ? err.statusCode : undefined,
     });
+    throw err;
   }
 
   recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
-
-  if (!response.ok) {
-    const error = await buildError(`POST ${path} 失败 (${response.status})`, path, response, taskId);
-    logError(`HTTP 请求失败: POST ${path}`, error, {
-      ...requestContext,
-      status_code: response.status,
-    });
-    throw error;
-  }
 
   try {
     return {
@@ -167,11 +134,17 @@ async function post<T>(path: string, data: unknown, taskId?: string): Promise<Tr
  *
  * @param path - API 路径。
  * @param taskId - 可选的关联任务 ID，用于错误追踪。
+ * @param options - 可选请求选项。
+ * @param options.timeout - 请求超时时间（毫秒）。省略或传入 `undefined` 时使用 ky 默认超时（30000ms）；
+ *   传入 `false` 可禁用前端超时，交由后端护栏控制（用于可能耗时数分钟的长请求）。
  * @returns 解析后的 JSON 响应。
  * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
-async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse<T>> {
-  let response: Response;
+async function get<T>(
+  path: string,
+  taskId?: string,
+  options?: { timeout?: number | false },
+): Promise<TracedJsonResponse<T>> {
   const requestTrace = buildTraceHeaders({ taskId });
   const requestContext = {
     module: "api",
@@ -180,28 +153,22 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
     path,
     trace_id: requestTrace.trace.traceId,
   };
+  let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
+    // timeout 透传：undefined 时 ky 用默认 30000ms；false 时禁用前端超时。
+    response = await apiClient.get(path, {
       headers: { ...requestTrace.headers },
+      timeout: options?.timeout,
     });
   } catch (err) {
-    logError(`网络请求失败: ${path}`, err, requestContext);
-    throw new ServiceError(`网络请求失败: ${path}`, {
-      taskId,
-      cause: err,
+    logError(`请求失败: GET ${path}`, err, {
+      ...requestContext,
+      status_code: err instanceof ServiceError ? err.statusCode : undefined,
     });
+    throw err;
   }
 
   recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
-
-  if (!response.ok) {
-    const error = await buildError(`GET ${path} 失败 (${response.status})`, path, response, taskId);
-    logError(`HTTP 请求失败: GET ${path}`, error, {
-      ...requestContext,
-      status_code: response.status,
-    });
-    throw error;
-  }
 
   try {
     return {
@@ -226,11 +193,13 @@ async function get<T>(path: string, taskId?: string): Promise<TracedJsonResponse
  * 发送 DELETE 请求。
  *
  * @param path - API 路径。
+ * @param options - 可选请求选项。
+ * @param options.timeout - 请求超时时间（毫秒）。省略或传入 `undefined` 时使用 ky 默认超时（30000ms）；
+ *   传入 `false` 可禁用前端超时，交由后端护栏控制（用于可能耗时数分钟的长请求）。
  * @returns 解析后的 JSON 响应。
  * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
  */
-async function del<T>(path: string): Promise<TracedJsonResponse<T>> {
-  let response: Response;
+async function del<T>(path: string, options?: { timeout?: number | false }): Promise<TracedJsonResponse<T>> {
   const requestTrace = buildTraceHeaders();
   const requestContext = {
     module: "api",
@@ -238,26 +207,22 @@ async function del<T>(path: string): Promise<TracedJsonResponse<T>> {
     path,
     trace_id: requestTrace.trace.traceId,
   };
+  let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
-      method: "DELETE",
+    // timeout 透传：undefined 时 ky 用默认 30000ms；false 时禁用前端超时。
+    response = await apiClient.delete(path, {
       headers: { ...requestTrace.headers },
+      timeout: options?.timeout,
     });
   } catch (err) {
-    logError(`网络请求失败: ${path}`, err, requestContext);
-    throw new ServiceError(`网络请求失败: ${path}`, { cause: err });
+    logError(`请求失败: DELETE ${path}`, err, {
+      ...requestContext,
+      status_code: err instanceof ServiceError ? err.statusCode : undefined,
+    });
+    throw err;
   }
 
   recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
-
-  if (!response.ok) {
-    const error = await buildError(`DELETE ${path} 失败 (${response.status})`, path, response);
-    logError(`HTTP 请求失败: DELETE ${path}`, error, {
-      ...requestContext,
-      status_code: response.status,
-    });
-    throw error;
-  }
 
   try {
     return {
@@ -352,7 +317,12 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  *   CodeGraph init/sync 建索引（大仓库首次可达数分钟）。
  */
 export async function prepareWorkspace(workspaceId: string): Promise<WorkspacePrepareResponse> {
-  const response = await post<WorkspacePrepareResponse>(API_PATHS.WORKSPACE_EVENT_PREPARE(workspaceId), {});
+  const response = await post<WorkspacePrepareResponse>(
+    API_PATHS.WORKSPACE_EVENT_PREPARE(workspaceId),
+    {},
+    undefined,
+    { timeout: false },
+  );
   recordConversationTrace(response.trace, "workspace_event_prepare", "");
   return response.data;
 }

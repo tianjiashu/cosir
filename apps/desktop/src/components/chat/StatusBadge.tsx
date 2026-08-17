@@ -1,14 +1,15 @@
 /**
  * 运行状态标签组件。
  *
- * 当收到终态事件（run_finished / run_failed / run_cancelled / client_disconnected）
- * 时，展示任务终态状态（已完成 / 失败 / 已取消 / 连接已断开），包含状态图标、文字描述、
- * 耗时与 token 消耗信息。
+ * 当收到终态事件（run_finished / run_failed / run_cancelled）时，展示任务终态状态
+ * （已完成 / 失败 / 已取消），包含状态图标、文字描述、耗时与 token 消耗信息。
  *
- * 差异化文案：run_failed 且 payload.end_reason === "client_disconnected"（或裸
- * client_disconnected 事件）表示客户端连接中断，而非 Agent 真实执行失败，组件会给出
+ * 差异化文案：run_failed 且 payload.end_reason === "client_disconnected" 表示客户端
+ * 连接中断（后端经 finally 兜底标记 turn failed 下发 run_failed 并在 payload 中携带该
+ * end_reason），而非 Agent 真实执行失败，组件会给出
  * 「连接已中断，内容可能未完整保存，请检查网络或重新连接后重试」的明确提示，避免用户
- * 将网络/客户端问题误判为执行失败。
+ * 将网络/客户端问题误判为执行失败。注意 client_disconnected 不是独立 event_type，
+ * 因此 FINAL_STATUS_CONFIG 中无该 key，差异化完全由 payload.end_reason 驱动。
  *
  * token 展示：input/output/total 任一有值即渲染 token 行；total 缺失时由前端累加
  * input+output 兜底，避免后端缓存命中场景下整块 token 信息被吞。
@@ -17,10 +18,11 @@
  */
 
 import { CheckCircle2, XCircle, Ban, Clock, Cpu, Copy, Check } from "lucide-react";
-import { memo, useState } from "react";
+import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Caption } from "@/components/ui/tokens";
 import { cn } from "@/lib/utils";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import type { RuntimeEventType } from "@shared/events";
 
 /** 状态标签组件属性。 */
@@ -36,7 +38,6 @@ const FINAL_STATUS_CONFIG: Record<string, { label: string; variant: "success" | 
   run_finished: { label: "任务已完成", variant: "success", Icon: CheckCircle2 },
   run_failed: { label: "任务失败", variant: "destructive", Icon: XCircle },
   run_cancelled: { label: "任务已取消", variant: "outline", Icon: Ban },
-  client_disconnected: { label: "连接已断开", variant: "destructive", Icon: XCircle },
 };
 
 /**
@@ -68,7 +69,7 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
   const endReason = payload.end_reason as string | undefined;
   // 区分「客户端连接断开」与「真实执行失败」：前者给出明确提示与恢复建议，
   // 避免用户将网络/客户端问题误判为 Agent 执行失败。
-  const isClientDisconnected = endReason === "client_disconnected" || eventType === "client_disconnected";
+  const isClientDisconnected = endReason === "client_disconnected";
   const errorText = isClientDisconnected
     ? "连接已中断，本次对话可能未完整保存。请检查网络或重新连接后重试。"
     : error;
@@ -124,16 +125,11 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
 
 /** 可复制展示的 Langfuse trace ID。 */
 function CopyableTraceId({ traceId }: { traceId: string }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(traceId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // 复制失败静默处理，避免打断 UI
-    }
+  const handleCopy = () => {
+    // copy 内部已统一经 logWarn 记录失败，此处无需重复 catch。
+    void copy(traceId);
   };
 
   return (

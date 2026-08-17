@@ -248,7 +248,11 @@ export function LogsPage({ onBack }: LogsPageProps) {
       <div className="min-h-0 flex-1 p-4">
         <VirtualList
           items={logs.entries}
-          getKey={(entry, index) => entry.trace_id || `${entry.ts}::${index}`}
+          // getKey 必须保证同一列表内唯一。LogEntryResponse 无后端唯一 id 字段，
+          // 同一 trace_id 可能对应多条结构化日志，若仅用 trace_id 作 key 会导致
+          // React 复用错误 DOM（展开状态串台、切 trace 残留旧日志、重复 key 警告）。
+          // 因此组合 trace_id + ts + index，始终含 index 兜底面积去重。
+          getKey={(entry, index) => `${entry.trace_id ?? "no-trace"}::${entry.ts}::${index}`}
           renderItem={(entry) => (
             <div className="pb-2">
               <LogEntryCard entry={entry} />

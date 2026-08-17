@@ -90,7 +90,7 @@ export function useTask(): UseTaskReturn {
   const replaceTurnId = useTurnStore((s) => s.replaceTurnId);
   const removeTurnId = useTurnStore((s) => s.removeTurnId);
   const setStreamingTurn = useTurnStore((s) => s.setStreamingTurn);
-  const { connect, disconnect } = useSSE();
+  const { connect, disconnectTurn } = useSSE();
 
   // openTask 竞态防护：单调递增的请求序号。每次 openTask 进入时自增并记录，
   // 异步 await 之后只有「本次仍是最新一次 openTask」才允许 setActiveTask 切活跃。
@@ -117,11 +117,12 @@ export function useTask(): UseTaskReturn {
       if (ownsOperation) {
         beginClientTrace();
       }
-      const temporaryTaskId = `temp-${Date.now()}`;
+      const temporaryTaskId = `temp-${crypto.randomUUID()}`;
 
       try {
-        // 断开旧的 SSE 连接
-        disconnect();
+        // 断开旧的临时 task 的 SSE 连接（仅断该 turn，不影响后台其它 task 的并发连接）。
+        // 若临时 task 尚未建立连接，disconnectTurn 为 no-op，安全。
+        disconnectTurn(temporaryTaskId);
 
         const now = new Date().toISOString();
         addTask({
@@ -159,7 +160,9 @@ export function useTask(): UseTaskReturn {
         // 后端已在创建任务时同步建立首个 pending turn；用真实 turn_id 建立 SSE
         // 连接，驱动该轮次运行（与现有 turn 运行模型一致）。
         if (firstTurn) {
-          setStreamingTurn(firstTurn.turn_id);
+          // 按 task 维度写入 streaming turn，支持多 task 并发流式时各自独立停止，
+          // 不会互相覆盖、也不会被其它 task 终态误清空。
+          setStreamingTurn(task.task_id, firstTurn.turn_id);
           await connect(task.task_id, firstTurn.turn_id);
         }
 
@@ -177,13 +180,13 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [addTask, replaceTask, removeTask, setActiveTask, connect, disconnect, setStreamingTurn, setTurnsForTask, selectedAgentId],
+    [addTask, replaceTask, removeTask, setActiveTask, connect, disconnectTurn, setStreamingTurn, setTurnsForTask, selectedAgentId],
   );
 
   /**
    * 给当前活跃任务追加新轮次并启动 turn 级 SSE。
    *
-   * 采用乐观更新：先以临时 turn_id（`temp-${Date.now()}`）把用户输入插入 turnStore
+   * 采用乐观更新：先以临时 turn_id（`temp-${crypto.randomUUID()}`）把用户输入插入 turnStore
    * 并切换 activeTurnId，使 ChatPanel 立即渲染用户指令，不阻塞在 createTaskTurn 请求上；
    * 后端返回真实 turn 后用 `replaceTurnId` 整体替换临时记录（turn_id 与后续 SSE 对齐、
    * input_text 保持一致，渲染层无感知）；若请求失败则用 `removeTurnId` 回滚临时记录并复位
@@ -214,7 +217,7 @@ export function useTask(): UseTaskReturn {
 
       // 乐观更新：先以临时 turn_id 插入用户输入，使 ChatPanel 立即渲染用户指令，
       // 不等后端 createTaskTurn 返回。后端返回真实 turn 后整体替换临时记录。
-      const temporaryTurnId = `temp-${Date.now()}`;
+      const temporaryTurnId = `temp-${crypto.randomUUID()}`;
       const now = new Date().toISOString();
       const optimisticTurn: TurnRecord = {
         turn_id: temporaryTurnId,
@@ -230,7 +233,9 @@ export function useTask(): UseTaskReturn {
       setActiveTurn(temporaryTurnId);
 
       try {
-        disconnect();
+        // 断开旧的临时 turn 的 SSE 连接（仅断该 turn，不影响后台其它 task 的并发连接）。
+        // 若临时 turn 尚未建立连接，disconnectTurn 为 no-op，安全。
+        disconnectTurn(temporaryTurnId);
         PerfTrace.markCurrent("createTurn:before-post-createTaskTurn", { task_id: activeTaskId });
         const turn = await api.createTaskTurn(activeTaskId, { input_text: text, agent_id: selectedAgentId });
         PerfTrace.markCurrent("createTurn:after-post-createTaskTurn", { turn_id: turn.turn_id, status: turn.status });
@@ -240,7 +245,8 @@ export function useTask(): UseTaskReturn {
         updateTask(activeTaskId, {
           execution_status: turn.status,
         });
-        setStreamingTurn(turn.turn_id);
+        // 按 task 维度写入 streaming turn，支持多 task 并发流式时各自独立停止。
+        setStreamingTurn(activeTaskId, turn.turn_id);
         PerfTrace.markCurrent("createTurn:before-connect", { turn_id: turn.turn_id });
         await connect(activeTaskId, turn.turn_id);
         PerfTrace.markCurrent("createTurn:after-connect", { turn_id: turn.turn_id });
@@ -262,7 +268,7 @@ export function useTask(): UseTaskReturn {
         }
       }
     },
-    [activeTaskId, connect, disconnect, selectedAgentId, setActiveTurn, setStreamingTurn, updateTask, upsertTurn, replaceTurnId, removeTurnId],
+    [activeTaskId, connect, disconnectTurn, selectedAgentId, setActiveTurn, setStreamingTurn, updateTask, upsertTurn, replaceTurnId, removeTurnId],
   );
 
   /**

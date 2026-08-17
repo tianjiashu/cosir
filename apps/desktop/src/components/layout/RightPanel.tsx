@@ -8,8 +8,10 @@
  * - McpBlock：MCP 入口占位
  * - SubagentPanel：独立 Tab，展示选中委派子 Agent 的 timeline（复用真实 child 事件流）
  *
- * Subagent Tab 受控于 `delegationStore.selectedChildTurnId`：父 timeline 点击 delegation 行即选中
- * child turn，本面板自动切到 Subagent Tab；手动切回 outputs/sources 时清空选中态。
+ * activeTab 为组件内受控 state，与 `delegationStore.selectedChildTurnId` 解耦：
+ * 父 timeline 点击 delegation 行即选中 child turn，本面板通过 useEffect 自动切到
+ * Subagent Tab；手动切回 outputs/sources 时清空选中态，并停留在用户所选 Tab（Sources
+ * 因此可独立可达，不再被派生逻辑强制拉回 outputs）。
  *
  * 变更集（Changes）已从右侧栏移出，改由中央对话区上方的 ChangesDrawer 折叠呈现。
  *
@@ -25,6 +27,7 @@ import { SourcesTab, type SourceItem } from "@/components/right-panel/SourcesTab
 import { ContextBlock } from "@/components/right-panel/ContextBlock";
 import { McpBlock } from "@/components/right-panel/McpBlock";
 import { SubagentPanel } from "@/components/right-panel/SubagentPanel";
+import { useEffect, useState } from "react";
 import { useDelegationStore } from "@/stores/delegationStore";
 
 /** Mock Outputs 数据（第一版静态数据）。 */
@@ -65,24 +68,42 @@ const MOCK_SOURCES: SourceItem[] = [
  *
  * 宽度由外层可拖拽 Panel 决定（本组件撑满容器），
  * 通过 Tabs 切换 Outputs/Sources/Subagent，展示各标签页内容。
- * Subagent Tab 受控于 `delegationStore.selectedChildTurnId`：父 timeline 点击 delegation 行即选中
- * child turn，本面板自动切到 Subagent Tab；手动切回其它 Tab 时清空选中态。
+ *
+ * activeTab 为组件内受控 state（与 `delegationStore.selectedChildTurnId` 解耦）：
+ * - 父 timeline 点击 delegation 行选中 child turn 时，useEffect 自动将 activeTab 切到 "subagent"；
+ * - 手动切到 outputs/sources 时清空选中态，并保留用户当前所选 Tab（Sources 因此可独立可达）；
+ * - 选中态清空后不强制改回 outputs，避免覆盖用户手动选择。
+ *
  * 注意：Changes 已移至中央对话区上方的 ChangesDrawer，本面板不再含 Changes Tab。
  *
  * @returns 右侧信息面板。
  */
 export function RightPanel() {
-  // Subagent Tab 与 delegationStore 选中态双向绑定：选中非空 → 切 Subagent Tab；
-  // 手动切到 outputs/sources → 清空选中，使 Subagent Tab 不被置灰悬停。
   const selectedChildTurnId = useDelegationStore((state) => state.selectedChildTurnId);
   const clearSelection = useDelegationStore((state) => state.clearSelection);
-  // Tabs 的 value 语义是 tab 名（"subagent"/"outputs"/"sources"），不是 turn id。
-  // 选中态非空时固定切到 "subagent" Tab，使 <TabsContent value="subagent"> 与
-  // TabsTrigger value="subagent" 匹配、SubagentPanel 正常显示；直接把 turn id 当
-  // value 会导致 Radix 找不到对应 trigger，tab 栏与内容区都不切换（点击 delegation 行「无响应」）。
-  const activeTab = selectedChildTurnId ? "subagent" : "outputs";
 
+  // activeTab 为受控 state，与 selectedChildTurnId 解耦。初始值：选中态非空时落到
+  // "subagent"，否则回落 "outputs"。后续用户手动切换由 handleTabChange 写入 state，
+  // 不再被派生值强制覆盖（修复 Sources tab 不可达：原派生逻辑在未选中时永远返回
+  // "outputs"，导致点击 sources 被 clearSelection 拉回 outputs）。
+  const [activeTab, setActiveTab] = useState<string>(
+    selectedChildTurnId ? "subagent" : "outputs",
+  );
+
+  // 选中态变化时的派生同步：选中 child turn → 自动切到 subagent；
+  // 清空选中态时不强制改回 outputs，保留用户当前所选 Tab（如 sources），
+  // 避免覆盖手动选择。
+  useEffect(() => {
+    if (selectedChildTurnId) {
+      setActiveTab("subagent");
+    }
+  }, [selectedChildTurnId]);
+
+  // Tabs 的 value 语义是 tab 名（"subagent"/"outputs"/"sources"），不是 turn id。
+  // 手动切换时写入 activeTab state；切到非 subagent tab 时清空选中态，使 Subagent
+  // Tab 不被置灰悬停，并保持 tab 与选中态解耦后的用户选择。
   const handleTabChange = (value: string) => {
+    setActiveTab(value);
     if (value !== "subagent") {
       clearSelection();
     }

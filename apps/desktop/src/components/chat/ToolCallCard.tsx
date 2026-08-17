@@ -43,6 +43,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Caption, Panel } from "@/components/ui/tokens";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 /** 工具调用状态枚举。cancelled 表示用户主动中断导致的确定性终态，与 error 语义不同。 */
 type ToolCallStatus = "running" | "completed" | "error" | "cancelled";
@@ -155,6 +156,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   const IconComponent = resolveIcon(display?.icon);
   // 错误态使用圆圈内叹号图标，取消态使用禁止图标，与成功/运行态的工具图标做视觉区分。
   const StatusIcon = status === "error" ? AlertCircle : status === "cancelled" ? Ban : IconComponent;
+  // 复制结果/参数用的剪贴板 hook（统一反馈与失败日志，替换散落的 navigator.clipboard 样板）。
+  const { copy: copyResult } = useCopyToClipboard();
   // 展开态声明式信号：前端仅按布局字符串分发布局，不按工具名写特化分支。
   const expandable = display?.expandable ?? true;
   const expandLayout = display?.expandLayout ?? "details";
@@ -372,7 +375,7 @@ export const ToolCallCard = memo(function ToolCallCard({
                 <button
                   type="button"
                   onClick={() => {
-                    void navigator.clipboard.writeText(result ?? "");
+                    void copyResult(result ?? "");
                   }}
                   className={cn("inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 hover:bg-accent/40 transition-colors", Caption.xs)}
                 >
@@ -772,6 +775,7 @@ function DiffFileHeaderContent({
     : normalized;
   const { added, removed } = countDiffChanges(file);
   const openTarget = openPath && openPath.length > 0 ? openPath : normalized;
+  const { copy: copyDiff } = useCopyToClipboard();
   const isNewFile = file.type === "add";
 
   const wrapHandler =
@@ -821,7 +825,7 @@ function DiffFileHeaderContent({
           className="h-7 w-7"
           title="复制 diff"
           onClick={wrapHandler(() => {
-            void navigator.clipboard.writeText(content);
+            void copyDiff(content);
           })}
         >
           <Copy className="h-3.5 w-3.5" />

@@ -1,7 +1,12 @@
 /**
  * 轮次状态管理（Zustand）。
  *
- * 管理 task 下 turn 列表和当前 streaming turn。
+ * 管理 task 下 turn 列表，以及按 task 维度隔离的当前 streaming turn。
+ *
+ * 设计要点：桌面端支持多 task 并发流式，因此「当前正在接收 SSE 的 turn」不能
+ * 用跨所有 task 共享的单一字段表达，否则并发下一个 task 的写入会覆盖另一个，
+ * 某 task 终态清空还会误清别的仍在跑的 task。故以 Record<taskId, turnId> 按
+ * task 隔离，每个 task 独立记录自己的 streaming turn。
  *
  * @module stores/turnStore
  */
@@ -13,8 +18,14 @@ import type { TurnRecord } from "@shared/turn";
 interface TurnState {
   /** 按 task_id 聚合的轮次列表。 */
   turnsByTaskId: Record<string, TurnRecord[]>;
-  /** 当前正在接收 SSE 的轮次标识。 */
-  streamingTurnId: string | null;
+  /**
+   * 按 task_id 维度隔离的「当前正在接收 SSE 的轮次标识」映射。
+   *
+   * 桌面端支持多 task 并发流式，故不能用单一 cross-task 字段，否则并发下会互相
+   * 覆盖、误清。每个 task 独立记录自己的 streaming turn；未运行的 task 不在此映射
+   * 中（读取时用 `streamingTurnIds[taskId] ?? null`）。
+   */
+  streamingTurnIds: Record<string, string>;
 }
 
 /** 轮次 Store 动作接口。 */
@@ -35,14 +46,22 @@ interface TurnActions {
   replaceTurnId: (taskId: string, oldTurnId: string, realTurn: TurnRecord) => void;
   /** 按 task_id/turn_id 移除一个轮次（乐观更新失败回滚）。 */
   removeTurnId: (taskId: string, turnId: string) => void;
-  /** 设置当前 streaming turn。 */
-  setStreamingTurn: (turnId: string | null) => void;
+  /**
+   * 按 task_id 设置该 task 的当前 streaming turn。
+   *
+   * @param taskId - 目标 task 标识。
+   * @param turnId - 该 task 正在接收 SSE 的 turn 标识；传 null 表示清除该 task 的
+   *   streaming 标记（终态/取消时调用）。其它 task 的 streaming 标记不受影响，
+   *   不会被误清空，从而支持多 task 并发流式时各自独立停止。
+   */
+  setStreamingTurn: (taskId: string, turnId: string | null) => void;
 }
 
 /**
  * 轮次 Zustand Store 实例。
  *
- * @returns Zustand hook；组件调用后可读取 task 下 turn 列表和当前 streaming turn。
+ * @returns Zustand hook；组件调用后可读取 task 下 turn 列表，以及按 task 维度隔离的
+ *   当前 streaming turn。
  *
  * @throws 不主动抛出异常。
  *
@@ -50,7 +69,7 @@ interface TurnActions {
  */
 export const useTurnStore = create<TurnState & TurnActions>((set) => ({
   turnsByTaskId: {},
-  streamingTurnId: null,
+  streamingTurnIds: {},
 
   setTurnsForTask: (taskId, turns) => {
     set((state) => ({
@@ -81,8 +100,16 @@ export const useTurnStore = create<TurnState & TurnActions>((set) => ({
     }));
   },
 
-  setStreamingTurn: (turnId) => {
-    set({ streamingTurnId: turnId });
+  setStreamingTurn: (taskId, turnId) => {
+    set((state) => {
+      if (turnId === null) {
+        if (!(taskId in state.streamingTurnIds)) return state;
+        const next = { ...state.streamingTurnIds };
+        delete next[taskId];
+        return { streamingTurnIds: next };
+      }
+      return { streamingTurnIds: { ...state.streamingTurnIds, [taskId]: turnId } };
+    });
   },
 
   replaceTurnId: (taskId, oldTurnId, realTurn) => {

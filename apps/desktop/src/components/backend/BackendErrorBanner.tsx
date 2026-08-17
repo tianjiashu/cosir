@@ -1,8 +1,12 @@
 /**
- * 后端启动失败错误横幅。
+ * 后端错误横幅。
  *
- * 当本地后端启动失败时，渲染结构化错误卡：展示失败摘要、详细原因、
- * 可展开的 traceback，以及「重启后端 / 查看日志」操作入口。
+ * 渲染两类提示，互不重叠：
+ * 1. 后端启动失败的结构化错误卡（status 为 `failed` 且存在 `snapshot.lastError`）：
+ *    展示失败摘要、详细原因、可展开的 traceback，以及「重启后端 / 查看日志」操作入口。
+ * 2. 传输通道断开的非阻塞告警条（后端处于 `running` 或 `ready` 但 `transportError` 非空）：
+ *    提示 SSE/IPC 通道中断且正在尝试恢复，区别于上面的启动失败错误卡。
+ *
  * 不直连 IPC，状态来自 store，操作来自 `useBackend` Hook。
  *
  * @module components/backend/BackendErrorBanner
@@ -33,18 +37,36 @@ interface BackendErrorBannerProps {
 }
 
 /**
- * 后端启动失败错误横幅组件。
+ * 后端错误横幅组件。
  *
- * 仅在后端状态为 `failed` 且存在结构化错误时渲染；否则返回 `null`。
+ * 渲染优先级与互斥规则：
+ * - 当 `status` 为 `failed` 且存在 `snapshot.lastError` 时，渲染结构化错误卡（致命、阻塞）。
+ * - 当 `status` 为 `running` 或 `ready` 且 `transportError` 非空时，渲染非阻塞告警条，
+ *   提示 SSE/IPC 通道中断；此时后端仍在运行，与启动失败错误卡互不叠加。
+ * - 其余情况返回 `null`。
  *
  * @param props.onViewLogs - 切换到日志诊断页的回调。
- * @returns 结构化错误卡或 `null`。
+ * @returns 结构化错误卡、`transportError` 告警条或 `null`。
  */
 export function BackendErrorBanner({ onViewLogs }: BackendErrorBannerProps) {
   const status = useBackendStore(selectBackendStatus);
   const snapshot = useBackendStore(selectBackendSnapshot);
+  const transportError = useBackendStore((s) => s.transportError);
   const { restart, isBusy } = useBackend();
   const [expanded, setExpanded] = useState(false);
+
+  if (status === "running" || status === "ready") {
+    if (transportError) {
+      return (
+        <div className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2">
+          <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>后端连接中断：{transportError}（正在尝试恢复…）</span>
+          </div>
+        </div>
+      );
+    }
+  }
 
   if (status !== "failed" || !snapshot?.lastError) {
     return null;

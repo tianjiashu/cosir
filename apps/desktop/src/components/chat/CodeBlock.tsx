@@ -8,13 +8,13 @@
  */
 
 import { Copy, Check } from "lucide-react";
-import { useState, useCallback, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { logWarn } from "@/lib/logger";
 import { MessageTypography } from "./messageTypography";
 import { StreamingCaret } from "./StreamingCaret";
 import { highlightCode } from "@/lib/markdown/highlight";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 
 /** 流式期触发折叠的行数阈值（超过则折叠）。 */
 const CODE_FOLD_LINES = 12;
@@ -64,8 +64,8 @@ interface CodeBlockProps {
  * TODO: 后续替换为 Monaco Editor（对齐开发计划 §1.3 预留项）。
  */
 export function CodeBlock({ code, language, streaming = false, isLastLeaf = false, className }: CodeBlockProps) {
-  const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
   // 仅需行数用于折叠判定：直接计数换行符，避免流式每帧 split 出整个行数组（纯垃圾分配）。
   const lineCount = useMemo(() => {
@@ -79,18 +79,9 @@ export function CodeBlock({ code, language, streaming = false, isLastLeaf = fals
   const shouldFold = streaming === true && (lineCount > CODE_FOLD_LINES || code.length > CODE_FOLD_CHARS);
   const folded = shouldFold && !expanded;
 
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      logWarn("代码块复制到剪贴板失败", {
-        module: "CodeBlock",
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }, [code]);
+  const handleCopy = () => {
+    void copy(code);
+  };
 
   return (
     <div className={cn("group relative min-w-0 overflow-hidden rounded-md border border-border bg-slate-950 text-sm", className)}>
