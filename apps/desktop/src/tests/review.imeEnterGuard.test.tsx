@@ -9,7 +9,7 @@
  * 过程中输入被提前发出。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { InputBar } from "@/components/layout/InputBar";
 import { NewTaskPage } from "@/pages/chat/NewTaskPage";
 import { useTaskStore } from "@/stores/taskStore";
@@ -31,8 +31,15 @@ vi.mock("@/hooks/useTask", () => ({
     operation: { loading: false, error: null },
   }),
 }));
-// AgentSelector 挂载即拉取 /agents，替换为空桩避免网络依赖。
-vi.mock("@/components/chat/AgentSelector", () => ({ AgentSelector: () => null }));
+// NewTaskPage 顶部内嵌 TaskHeaderBar（含 AgentSelector + ModelSelector + ProviderSettingsDialog），
+// 挂载时 AgentSelector 会拉取 /agents；本测试聚焦 Enter/IME 发送链路，统一桩化 TaskHeaderBar
+// 为组合层空 stub（与其余 ChatPanel 测试 mock 层级一致），避免引入网络依赖。
+vi.mock("@/components/chat/TaskHeaderBar", () => ({ TaskHeaderBar: () => null }));
+// 本测试聚焦 Enter/IME 发送链路，不关注模型选择语义：发送前模型校验统一放行，
+// 避免 2026-08-18 起「未选择模型即拦截」的 guardSend 干扰对照用例的发送断言。
+vi.mock("@/hooks/useModelSendGuard", () => ({
+  useModelSendGuard: () => ({ guardSend: vi.fn().mockResolvedValue({ ok: true }) }),
+}));
 // 工作区目录选择器依赖 Tauri 对话框，本测试不触达，替换为桩防御导入副作用。
 vi.mock("@/services/workspace", () => ({ pickAndCreateWorkspace: vi.fn() }));
 // 客户端 trace / 性能埋点走 logger→console，mock 掉保持输出干净。
@@ -101,13 +108,15 @@ describe("Enter 发送的 IME 组合态防护", () => {
 
   // 测试目的：正向对照——InputBar 正常 Enter（非组合态）应触发发送（证明键盘链路接通）。
   // 可能发现的缺陷：无（此用例应 PASS；若失败说明发送链路未接通，主用例结论无效）。
-  it("对照：InputBar 正常 Enter（isComposing=false）应调用 createTurn", () => {
+  // 注：handleSend 内部先 `await guardSend()`（发送前模型校验）再调用 createTurn，
+  // 调用发生在 microtask 内，故用 waitFor 异步断言（2026-08-18 起）。
+  it("对照：InputBar 正常 Enter（isComposing=false）应调用 createTurn", async () => {
     render(<InputBar />);
     const input = screen.getByPlaceholderText("给 Agent 下达任务...");
     fireEvent.change(input, { target: { value: "hello" } });
 
     dispatchComposingEnter(input, false);
-    expect(taskMocks.createTurn).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(taskMocks.createTurn).toHaveBeenCalledTimes(1));
   });
 
   // 测试目的：NewTaskPage 中 IME 组合态 Enter 不应触发首条消息创建。
@@ -124,13 +133,14 @@ describe("Enter 发送的 IME 组合态防护", () => {
   });
 
   // 测试目的：正向对照——NewTaskPage 正常 Enter 应触发 createTask。
-  // 可能发现的缺陷：无（此用例应 PASS）。
-  it("对照：NewTaskPage 正常 Enter（isComposing=false）应调用 createTask", () => {
+  // 可能发现的缺陷：无（此用例应 PASS）。await guardSend() 后调用推迟到
+  // microtask，用 waitFor 异步断言（2026-08-18 起）。
+  it("对照：NewTaskPage 正常 Enter（isComposing=false）应调用 createTask", async () => {
     render(<NewTaskPage onCreated={vi.fn()} />);
     const input = screen.getByPlaceholderText("描述这次任务...");
     fireEvent.change(input, { target: { value: "build something" } });
 
     dispatchComposingEnter(input, false);
-    expect(taskMocks.createTask).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(taskMocks.createTask).toHaveBeenCalledTimes(1));
   });
 });

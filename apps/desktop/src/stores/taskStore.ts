@@ -22,6 +22,8 @@
 import { create } from "zustand";
 import type { TaskRecord } from "@shared/task";
 import type { TaskStatus } from "@shared/task";
+import type { ModelEntryRecord } from "@shared/model";
+import { listModels } from "@/services/api";
 import { useEventStore } from "@/stores/eventStore";
 import { logWarn } from "@/lib/logger";
 
@@ -32,6 +34,15 @@ import { logWarn } from "@/lib/logger";
  * 才能加载中央会话区。仅持久化真实任务 ID（"temp-" 前缀的临时任务不持久化）。
  */
 const ACTIVE_TASK_STORAGE_KEY = "coding-agent.activeTaskId";
+
+/**
+ * 当前选中模型名的本地持久化键。
+ *
+ * 用于进入应用时自动恢复上次显式选定的模型。仅持久化非空模型名；
+ * 模型为 null（未选择）时清除持久化值，确保「未选择」语义在重启后保持一致
+ * （设计 §9.1）。
+ */
+const SELECTED_MODEL_STORAGE_KEY = "coding-agent.selectedModelName";
 
 /**
  * 判断任务 ID 是否为可持久化的真实任务（排除 "temp-" 前缀的临时任务）。
@@ -81,6 +92,46 @@ function persistActiveTaskId(taskId: string | null): void {
 }
 
 /**
+ * 读取本地持久化的上次选中模型名。
+ *
+ * localStorage 不可用（如隐私模式）时记录 WARN 日志后仍返回 null（即未选择），
+ * 不影响主流程与发送链路。
+ *
+ * @returns 持久化的模型名；无有效值时返回 null（未选择）。
+ */
+export function loadPersistedSelectedModelName(): string | null {
+  try {
+    const value = localStorage.getItem(SELECTED_MODEL_STORAGE_KEY);
+    return value ? value : null;
+  } catch (err) {
+    logWarn("读取持久化选中模型失败，降级为未选择", { module: "taskStore", error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+/**
+ * 持久化选中模型名到本地存储。
+ *
+ * 显式选择模型时写入；模型为 null（未选择）时清除持久化值。localStorage 不可用时
+ * 记录 WARN 日志，不抛错、不影响内存状态与交互。这是「凡改 selectedModelName
+ * 必同步 localStorage」这一不变量的唯一出口，避免各分支用 set 直写绕过持久化
+ * 导致内存态与持久化态撕裂。
+ *
+ * @param modelName - 待持久化的模型名；null（未选择）时清除持久化值。
+ */
+function persistSelectedModelName(modelName: string | null): void {
+  try {
+    if (modelName) {
+      localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, modelName);
+    } else {
+      localStorage.removeItem(SELECTED_MODEL_STORAGE_KEY);
+    }
+  } catch (err) {
+    logWarn("持久化选中模型失败", { module: "taskStore", model_name: modelName, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
  * 统一设置活跃任务并同步持久化。
  *
  * 这是「凡改 activeTaskId 必同步 localStorage」这一不变量的唯一出口，避免
@@ -118,6 +169,12 @@ interface TaskState {
   activeTurnId: string | null;
   /** 当前选中的 Agent 标识（用于创建任务/轮次时传入后端）。 */
   selectedAgentId: string;
+  /** 当前选中的模型名；null 表示未选择（需显式选择后发送，设计 §9.1）。 */
+  selectedModelName: string | null;
+  /** 后端可用模型列表（来自 /models 聚合端点），供 ModelSelector 下拉渲染。 */
+  availableModels: ModelEntryRecord[];
+  /** 可用模型列表是否已成功加载（避免空数组与未加载态混淆）。 */
+  modelsLoaded: boolean;
 }
 
 /** 任务 Store 的动作接口。 */
@@ -140,6 +197,13 @@ interface TaskActions {
   setActiveTurn: (turnId: string | null) => void;
   /** 设置当前选中的 Agent 标识。 */
   setSelectedAgentId: (agentId: string) => void;
+  /** 设置当前选中的模型名；null 表示未选择。 */
+  setSelectedModelName: (modelName: string | null) => void;
+  /**
+   * 从后端拉取可用模型列表并写入 store（幂等，可重复调用刷新）。
+   * 失败仅记录 WARN 日志，不抛出、不影响主流程。
+   */
+  refreshAvailableModels: () => Promise<boolean>;
   /** 清空所有任务数据。 */
   clearTasks: () => void;
   /** 清理指定 workspace 的分组（删除工作区时级联）。 */
@@ -167,6 +231,10 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   activeTaskId: loadPersistedActiveTaskId(),
   activeTurnId: null,
   selectedAgentId: "developer",
+  // 进入应用时优先恢复上次选中模型（持久化于 localStorage）；无记录时为 null（未选择）。
+  selectedModelName: loadPersistedSelectedModelName(),
+  availableModels: [],
+  modelsLoaded: false,
 
   // --- 动作 ---
 
@@ -306,6 +374,28 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
 
   setSelectedAgentId: (agentId: string) => {
     set({ selectedAgentId: agentId });
+  },
+
+  setSelectedModelName: (modelName: string | null) => {
+    set({ selectedModelName: modelName });
+    // 单一持久化出口：内存态变更必须同步落 localStorage（见 persistSelectedModelName 契约）。
+    persistSelectedModelName(modelName);
+  },
+
+  refreshAvailableModels: async () => {
+    try {
+      const models = await listModels();
+      set({ availableModels: models, modelsLoaded: true });
+      return true;
+    } catch (err) {
+      logWarn("刷新可用模型列表失败", {
+        module: "taskStore",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // 保留旧缓存（availableModels 不覆盖），仅复位加载标志，避免空数组与未加载态混淆。
+      set({ modelsLoaded: false });
+      return false;
+    }
   },
 
   clearTasks: () => {

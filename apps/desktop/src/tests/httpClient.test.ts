@@ -215,6 +215,25 @@ describe("normalizeToServiceError - 非 HTTP 错误（网络/超时）", () => {
   });
 });
 
+describe("apiClient - ky v2 配置项迁移护栏", () => {
+  /**
+   * 回归护栏：ky v2 把 `prefixUrl` 重命名为 `prefix`；若模块仍用旧键名，
+   * 配置静默被忽略，所有相对路径请求会落到页面 origin 根而非 `/api` 前缀，
+   * 导致 `GET /agents`、`GET /workspaces`、`GET /models` 等全部失败。
+   *
+   * 测试手段：读取 mock ky.create 挂载的 options，断言存在 `prefix` 键且值为
+   * 期望的基准路径；同时断言不存在已被废弃的 `prefixUrl` 键（防止回退）。
+   */
+  it("使用 ky v2 的 `prefix` 键注入基础路径，而非废弃的 `prefixUrl`", () => {
+    // 测试目的：锁定 ky v2 破坏性重命名，防止相对路径请求因前缀缺失而全部失败；
+    // 可能发现缺陷：仍写 prefixUrl 导致请求落到错误路径（前端日志大量 404/解析失败）。
+    const options = (apiClient as unknown as { options: Record<string, unknown> }).options;
+    expect("prefix" in options).toBe(true);
+    expect(options["prefix"]).toBe("");
+    expect("prefixUrl" in options).toBe(false);
+  });
+});
+
 describe("apiClient - beforeError 钩子接线与配置", () => {
   it("apiClient 已注册 beforeError 钩子，且钩子调用 normalizeToServiceError", async () => {
     // 测试目的：验证 ky.create 的 hooks.beforeError 真实调用了归一纯函数

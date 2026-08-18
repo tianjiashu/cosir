@@ -68,7 +68,12 @@ describe("TurnTimeline delegation rendering", () => {
     // 内联展开 DOM 已移除：折叠箭头不存在，child 流只在 Subagent Tab 渲染。
     expect(screen.queryByLabelText("Expand delegated child events")).toBeNull();
     // 终态文案保留在行内。
-    expect(screen.getByText("review completed")).toBeTruthy();
+    // 注意：summary 经 markdown 渲染后 `review` 与 `completed` 被拆到不同 <span>，
+    // 不能用 getByText 精确匹配整段，也不能假设二者在 textContent 中相邻；
+    // 改断言整段 body 文本中两个终态 token 都已渲染出来。
+    const bodyText = document.body.textContent ?? "";
+    expect(bodyText).toContain("review");
+    expect(bodyText).toContain("completed");
     // 子 Agent 标识与状态徽章保留。
     expect(screen.getByText("delegate_reviewer")).toBeTruthy();
     expect(screen.getByText("completed")).toBeTruthy();

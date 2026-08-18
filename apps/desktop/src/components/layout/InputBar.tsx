@@ -1,27 +1,40 @@
 /**
  * 底部输入区（InputBar）。
  *
- * 展示：
- * - 纯文本输入框
- * - 发送按钮
- * - 模型/模式选择下拉（占位）
- * - 权限状态指示器（占位）
- * - 语音入口占位
- * - "+" 附件入口（占位，点击提示"即将上线"）
+ * 单一职责：文本输入 + 发送 / 停止 + 上下文占用展示。
  *
- * 第一版仅支持纯文本输入。发送时按当前上下文创建任务或追加 turn，并启动 SSE 流。
+ * 具体能力：
+ * - 纯文本输入框（含 IME 组合态 Enter 防护）。
+ * - 发送按钮（仅在输入框非空且不在加载中且就绪时激活）。
+ * - 停止按钮（出现条件：存在 streaming turn）。
+ * - 附件占位按钮（即将上线）。
+ * - 语音输入占位按钮（即将上线，streaming 期间隐藏）。
+ * - 上下文占用状态栏（ContextUsageRing）。
+ *
+ * 不在职责范围内（已抽离到 `components/chat/TaskHeaderBar.tsx`）：
+ * - Agent 选择器（AgentSelector）。
+ * - 模型选择器（ModelSelector）。
+ * - 模型厂商配置中心（ProviderSettingsDialog）。
+ *
+ * Agent / Model 选择是 task 维度的元数据，应在 task 创建前/期间就显示——
+ * 在 NewTaskPage 顶部（任务创建前）以及 ChatPanel 顶部（追加 turn 前）。
+ * InputBar 仅承担「按下发送时的最终值」，事实源由 useTask 同步读取
+ * `useTaskStore.selectedAgentId` / `selectedModelName`，不在此原地提供选择入口。
+ *
+ * 发送前执行模型校验拦截（`useModelSendGuard.guardSend`）：模型未显式选择或
+ * 厂商未配置时阻止发送，内联展示拦截原因；拦截规则要求打开配置中心时经
+ * `onOpenSettings` 回调联动打开（由宿主在 ChatPanel 顶部的 TaskHeaderBar 上打开）。
  *
  * @module components/layout/InputBar
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Mic, Plus, Send, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { AgentSelector } from "@/components/chat/AgentSelector";
 import { ContextUsageRing } from "@/components/chat/ContextUsageRing";
-import { logInfo, logError } from "@/lib/logger";
+import { logInfo, logError, logWarn } from "@/lib/logger";
 import { useTask } from "@/hooks/useTask";
 import { useTaskStore } from "@/stores/taskStore";
 import { useTurnStore } from "@/stores/turnStore";
@@ -29,14 +42,21 @@ import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { beginClientTrace, endClientTrace } from "@/services/tracePropagation";
 import { useClientTraceStore } from "@/stores/clientTraceStore";
 import { PerfTrace } from "@/lib/perf";
+import { useModelSendGuard } from "@/hooks/useModelSendGuard";
 
 /**
  * InputBar 底部输入区组件。
  *
  * 固定在主会话区底部，包含文本输入和操作按钮。
  * 发送按钮仅在输入框非空且不在加载中时激活。
+ *
+ * Agent / Model 选择已上移到 TaskHeaderBar——本组件不再持有相关 props 或 state。
+ *
+ * @param props - 组件属性。
+ * @param props.onOpenSettings - 可选回调：发送拦截规则要求打开模型厂商配置中心时调用，
+ *   由宿主联动打开 ChatPanel 顶部的 ProviderSettingsDialog。
  */
-export function InputBar() {
+export function InputBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const [inputValue, setInputValue] = useState("");
   const { createTask, createTurn, cancelTurn, operation } = useTask();
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
@@ -45,20 +65,50 @@ export function InputBar() {
     s.streamingTurnIds[activeTaskId ?? ""] ?? null,
   );
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const selectedAgentId = useTaskStore((s) => s.selectedAgentId);
-  const setSelectedAgentId = useTaskStore((s) => s.setSelectedAgentId);
   const trimmedInput = inputValue.trim();
   const canSend = Boolean(trimmedInput) && !operation.loading && !streamingTurnId && Boolean(activeTaskId || activeWorkspaceId);
   const canStop = Boolean(streamingTurnId) && !operation.loading;
+  // 发送前模型校验拦截提示，展示在输入区下方。
+  const [guardMessage, setGuardMessage] = useState<string | null>(null);
+  const selectedModelName = useTaskStore((s) => s.selectedModelName);
+  const { guardSend } = useModelSendGuard();
+  // 用户切换模型（顶部选择器变更 selectedModelName）后清除拦截提示：
+  // 提示「请先选择模型」等已失去意义，避免误导（2026-08-18 无 Auto 语义）。
+  useEffect(() => {
+    setGuardMessage(null);
+  }, [selectedModelName]);
   const placeholder = !activeWorkspaceId
     ? "请先选择工作区再开始对话..."
     : activeTaskId
       ? "给 Agent 下达任务..."
       : "输入任务内容开始对话...";
 
-  /** 处理发送操作：按当前上下文创建任务或追加 turn，并启动 SSE 监听。 */
+  /**
+   * 处理发送操作：先过模型校验拦截（未选择模型 / 厂商未配置时阻止发送），
+   * 通过后按当前上下文创建任务或追加 turn，并启动 SSE 监听。
+   */
   const handleSend = useCallback(async () => {
     if (!canSend) return;
+
+    const guard = await guardSend();
+    if (!guard.ok) {
+      setGuardMessage(guard.block.message);
+      if (guard.block.openSettings) {
+        onOpenSettings?.();
+      }
+      // 发送被模型校验拦截是用户请求入口的关键拒绝路径：记录拦截原因与上下文，
+      // 便于排查「为什么发不出去、被哪条规则拦的」（可排查日志规范）。
+      logWarn("发送被模型校验拦截", {
+        module: "InputBar",
+        reason: guard.block.reason,
+        message: guard.block.message,
+        openSettings: guard.block.openSettings,
+        hasActiveTask: Boolean(activeTaskId),
+        workspace: activeWorkspaceId ?? null,
+      });
+      return;
+    }
+    setGuardMessage(null);
 
     const text = trimmedInput;
     beginClientTrace();
@@ -90,7 +140,7 @@ export function InputBar() {
     } finally {
       endClientTrace();
     }
-  }, [activeTaskId, activeWorkspaceId, canSend, createTask, createTurn, trimmedInput]);
+  }, [activeTaskId, activeWorkspaceId, canSend, createTask, createTurn, guardSend, onOpenSettings, trimmedInput]);
 
   /** 处理停止操作：取消当前正在流式运行的 turn。 */
   const handleStop = useCallback(async () => {
@@ -136,7 +186,7 @@ export function InputBar() {
           </Tooltip>
         </TooltipProvider>
 
-        {/* 文本输入框（与右侧内嵌按钮组同处一个 flex 容器，按钮组自然占位，消除手工预留耦合） */}
+        {/* 文本输入框：Agent / Model 选择已上移，右侧内嵌按钮组仅留语音占位 */}
         <div className="flex min-w-0 flex-1 items-center gap-1">
           <Input
             value={inputValue}
@@ -148,15 +198,8 @@ export function InputBar() {
             className="min-h-[36px] min-w-0 flex-1 resize-none"
           />
 
-          {/* 右侧内嵌按钮组 */}
+          {/* 右侧内嵌按钮组：仅语音占位，Agent / Model 选择器已上移到 TaskHeaderBar */}
           <div className="flex shrink-0 items-center gap-0.5">
-            {/* Agent 选择器 */}
-            <AgentSelector
-              value={selectedAgentId}
-              onChange={setSelectedAgentId}
-              className="h-7"
-            />
-
             {!streamingTurnId && (
               <TooltipProvider>
                 <Tooltip>
@@ -204,6 +247,12 @@ export function InputBar() {
         <ContextUsageRing />
       </div>
 
+      {/* 发送前模型校验拦截提示（如「请先选择模型」） */}
+      {guardMessage && (
+        <div className="mx-auto mt-1.5 max-w-content">
+          <p className="text-sm text-destructive">{guardMessage}</p>
+        </div>
+      )}
     </div>
   );
 }

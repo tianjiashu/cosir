@@ -27,6 +27,17 @@ import type {
   ListAgentsResponse,
   WorkspacePrepareResponse,
 } from "@shared/api";
+import type {
+  ModelCandidate,
+  ModelCreateRequest,
+  ModelEntryRecord,
+  ModelImportResult,
+  ModelUpdateRequest,
+  ProviderCreateRequest,
+  ProviderRecord,
+  ProviderUpdateRequest,
+} from "@shared/model";
+import { MODEL_PROVIDER_PATHS } from "@shared/model";
 import type { WorkspaceEvent } from "@shared/workspaceEvent";
 import { isWorkspaceEventType } from "@shared/workspaceEvent";
 import { API_PATHS } from "@shared/api";
@@ -230,6 +241,62 @@ async function del<T>(path: string, options?: { timeout?: number | false }): Pro
       trace: {
         traceId: requestTrace.trace.traceId,
         method: "DELETE",
+        path,
+      },
+    };
+  } catch (err) {
+    logError(`解析响应 JSON 失败: ${path}`, err, requestContext);
+    throw new ServiceError(`解析响应 JSON 失败: ${path}`, { cause: err });
+  }
+}
+
+/**
+ * 发送 PUT 请求。
+ *
+ * @param path - API 路径。
+ * @param data - 请求体数据。
+ * @param options - 可选请求选项。
+ * @param options.timeout - 请求超时时间（毫秒）。省略或传入 `undefined` 时使用 ky 默认超时（30000ms）；
+ *   传入 `false` 可禁用前端超时，交由后端护栏控制（用于可能耗时数分钟的长请求）。
+ * @returns 解析后的 JSON 响应。
+ * @throws {ServiceError} 当网络请求失败或返回非 2xx 状态码时抛出。
+ */
+async function put<T>(
+  path: string,
+  data: unknown,
+  options?: { timeout?: number | false },
+): Promise<TracedJsonResponse<T>> {
+  const requestTrace = buildTraceHeaders();
+  const requestContext = {
+    module: "api",
+    method: "PUT",
+    path,
+    trace_id: requestTrace.trace.traceId,
+  };
+  let response: Response;
+  try {
+    // timeout 透传：undefined 时 ky 用默认 30000ms；false 时禁用前端超时。
+    response = await apiClient.put(path, {
+      json: data,
+      headers: { "Content-Type": "application/json", ...requestTrace.headers },
+      timeout: options?.timeout,
+    });
+  } catch (err) {
+    logError(`请求失败: PUT ${path}`, err, {
+      ...requestContext,
+      status_code: err instanceof ServiceError ? err.statusCode : undefined,
+    });
+    throw err;
+  }
+
+  recordBackendTrace(readBackendTraceHeaders(response, requestTrace.trace.traceId));
+
+  try {
+    return {
+      data: await response.json(),
+      trace: {
+        traceId: requestTrace.trace.traceId,
+        method: "PUT",
         path,
       },
     };
@@ -639,4 +706,135 @@ function recordConversationTrace(
     method: trace.method,
     path: trace.path,
   });
+}
+
+// ---------- 模型 / 厂商配置中心 API ----------
+
+/**
+ * 获取当前可用模型候选列表（provider 配置中心解析后的最终可选模型）。
+ *
+ * @returns 模型候选列表。
+ * @throws {ServiceError} 当后端不可达或响应异常时抛出。
+ */
+export async function listModels(): Promise<ModelEntryRecord[]> {
+  return (await get<ModelEntryRecord[]>(MODEL_PROVIDER_PATHS.MODELS)).data;
+}
+
+/**
+ * 获取已注册的模型厂商列表。
+ *
+ * @returns 厂商记录列表。
+ * @throws {ServiceError} 当后端不可达或响应异常时抛出。
+ */
+export async function listProviders(): Promise<ProviderRecord[]> {
+  return (await get<ProviderRecord[]>(MODEL_PROVIDER_PATHS.PROVIDERS)).data;
+}
+
+/**
+ * 创建一个新模型厂商。
+ *
+ * @param request - 厂商创建请求体（含类型与连接配置）。
+ * @returns 创建后的厂商记录。
+ * @throws {ServiceError} 当创建失败（如配置校验未过）时抛出。
+ *
+ * @sideeffect 向后端 POST /providers 写入一条新的厂商记录。
+ */
+export async function createProvider(request: ProviderCreateRequest): Promise<ProviderRecord> {
+  const response = await post<ProviderRecord>(MODEL_PROVIDER_PATHS.PROVIDERS, request);
+  recordConversationTrace(response.trace, "provider_create", "");
+  return response.data;
+}
+
+/**
+ * 更新指定模型厂商的配置。
+ *
+ * @param providerId - 待更新的厂商标识。
+ * @param request - 厂商更新请求体。
+ * @returns 更新后的厂商记录。
+ * @throws {ServiceError} 当厂商不存在或更新失败时抛出。
+ *
+ * @sideeffect 向后端 PUT /providers/{id} 更新厂商记录。
+ */
+export async function updateProvider(
+  providerId: string,
+  request: ProviderUpdateRequest,
+): Promise<ProviderRecord> {
+  const response = await put<ProviderRecord>(MODEL_PROVIDER_PATHS.PROVIDER_DETAIL(providerId), request);
+  recordConversationTrace(response.trace, "provider_update", "");
+  return response.data;
+}
+
+/**
+ * 删除指定模型厂商。
+ *
+ * @param providerId - 待删除的厂商标识。
+ * @returns 无。
+ * @throws {ServiceError} 当厂商不存在或删除失败时抛出。
+ *
+ * @sideeffect 向后端 DELETE /providers/{id} 删除厂商记录。
+ */
+export async function deleteProvider(providerId: string): Promise<void> {
+  const response = await del<{ deleted: boolean }>(MODEL_PROVIDER_PATHS.PROVIDER_DETAIL(providerId));
+  recordConversationTrace(response.trace, "provider_delete", "");
+}
+
+/**
+ * 探测指定厂商可获取的模型列表（不写入，仅发现）。
+ *
+ * @param providerId - 待探测的厂商标识。
+ * @returns 探测到的模型候选列表。
+ * @throws {ServiceError} 当厂商不存在或探测失败时抛出。
+ */
+export async function discoverProviderModels(providerId: string): Promise<ModelCandidate[]> {
+  return (await post<ModelCandidate[]>(MODEL_PROVIDER_PATHS.PROVIDER_DISCOVER(providerId), {})).data;
+}
+
+/**
+ * 将模型条目批量导入为可用模型（候选/手动录入均归一为创建请求）。
+ *
+ * @param providerId - 目标厂商标识。
+ * @param models - 待导入的模型创建请求列表。
+ * @returns 导入结果（成功条数、跳过条数等）。
+ * @throws {ServiceError} 当导入失败时抛出。
+ *
+ * @sideeffect 向后端 POST /providers/{id}/models 写入模型条目。
+ */
+export async function importProviderModels(
+  providerId: string,
+  models: ModelCreateRequest[],
+): Promise<ModelImportResult> {
+  return (await post<ModelImportResult>(MODEL_PROVIDER_PATHS.PROVIDER_MODELS(providerId), { models })).data;
+}
+
+/**
+ * 更新单个模型条目的启用状态或别名。
+ *
+ * @param modelId - 待更新的模型标识。
+ * @param request - 模型更新请求体。
+ * @returns 更新后的模型记录。
+ * @throws {ServiceError} 当模型不存在或更新失败时抛出。
+ *
+ * @sideeffect 向后端 PUT /models/{id} 更新模型记录。
+ */
+export async function updateModel(
+  modelId: string,
+  request: ModelUpdateRequest,
+): Promise<ModelEntryRecord> {
+  const response = await put<ModelEntryRecord>(MODEL_PROVIDER_PATHS.MODEL_DETAIL(modelId), request);
+  recordConversationTrace(response.trace, "model_update", "");
+  return response.data;
+}
+
+/**
+ * 删除单个模型条目。
+ *
+ * @param modelId - 待删除的模型标识。
+ * @returns 无。
+ * @throws {ServiceError} 当模型不存在或删除失败时抛出。
+ *
+ * @sideeffect 向后端 DELETE /models/{id} 删除模型记录。
+ */
+export async function deleteModel(modelId: string): Promise<void> {
+  const response = await del<{ deleted: boolean }>(MODEL_PROVIDER_PATHS.MODEL_DETAIL(modelId));
+  recordConversationTrace(response.trace, "model_delete", "");
 }

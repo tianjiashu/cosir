@@ -32,7 +32,12 @@ export type ConversationTraceOperation =
   | "task_changes_keep"
   | "task_changes_revert"
   | "task_delete"
-  | "workspace_event_prepare";
+  | "workspace_event_prepare"
+  | "provider_create"
+  | "provider_update"
+  | "provider_delete"
+  | "model_update"
+  | "model_delete";
 
 /**
  * 涓€娆″璇濈浉鍏宠姹備娇鐢ㄧ殑 trace 璁板綍銆?

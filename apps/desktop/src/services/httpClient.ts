@@ -21,7 +21,7 @@ import { ServiceError } from "./types";
  * 普通请求-响应型 API 的单一 ky 实例。
  *
  * 配置说明：
- * - prefixUrl: "" —— 开发环境走 Vite 代理，生产同源，路径直接相对当前 origin。
+ * - prefix: "" —— 开发环境走 Vite 代理，生产同源，路径直接相对当前 origin。
  * - timeout: 30000 —— 每轮尝试 30s 超时（重试不计入，totalTimeout 另控）。
  * - retry: 仍保留 methods（含 GET/HEAD/OPTIONS/PUT/DELETE）与 limit:2，
  *   但通过 statusCodes:[] 关闭对 HTTP 状态码的重试，并配合 shouldRetry
@@ -63,7 +63,9 @@ export function normalizeToServiceError(error: unknown): ServiceError {
 }
 
 export const apiClient = ky.create({
-  prefixUrl: "",
+  // 注意：ky v2 已将 `prefixUrl` 重命名为 `prefix`，旧键名会被静默忽略，
+  // 导致所有相对路径请求落到页面 origin 根而非 `/api` 前缀。
+  prefix: "",
   timeout: 30000,
   retry: {
     limit: 2,

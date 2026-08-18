@@ -19,6 +19,26 @@ vi.mock("@/lib/perf", () => ({
   },
 }));
 
+// ChatPanel 顶部现内嵌 TaskHeaderBar（含 AgentSelector + ModelSelector + ProviderSettingsDialog）；
+// 本测试关注 active task 实体缓存渲染路径，不展开这些子组件细节，统一桩化为空 stub，
+// 避免触发 listAgents / listModels / listProviders 网络依赖。
+// 防御性同时 mock @/services/api，屏蔽未来 TaskHeaderBar mock 失效时的链式失败。
+vi.mock("@/components/chat/TaskHeaderBar", () => ({
+  TaskHeaderBar: () => null,
+}));
+vi.mock("@/services/api", () => ({
+  listAgents: vi.fn().mockResolvedValue({ agents: [], default_agent_id: "developer" }),
+  listModels: vi.fn().mockResolvedValue([]),
+  listProviders: vi.fn().mockResolvedValue([]),
+}));
+// logger 噪声屏蔽。
+vi.mock("@/lib/logger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/logger")>()),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
 vi.mock("@/lib/virtual/VirtualList", () => ({
   VirtualList: <T,>({
     items,

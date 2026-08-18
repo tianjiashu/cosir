@@ -22,6 +22,7 @@ export interface TurnRecord {
   end_reason?: string | null;
   response_text?: string | null;
   agent_id?: string | null;
+  model_name?: string | null;
   created_at: string;
   updated_at: string;
 }

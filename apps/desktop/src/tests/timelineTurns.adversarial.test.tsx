@@ -45,6 +45,11 @@ vi.mock("@/lib/logger", () => ({
 vi.mock("@/components/ui/button", () => ({
   Button: () => null,
 }));
+// ChatPanel 顶部现内嵌 TaskHeaderBar（含 AgentSelector + ModelSelector + ProviderSettingsDialog）；
+// 本测试关注 timelineTurns 排序，不展开这些子组件细节，统一桩化为空 stub。
+vi.mock("@/components/chat/TaskHeaderBar", () => ({
+  TaskHeaderBar: () => null,
+}));
 
 // ---- store mock：受控的 turns / events / activeTask ----
 let storeState: {

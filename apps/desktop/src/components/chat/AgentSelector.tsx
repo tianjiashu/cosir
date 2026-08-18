@@ -2,7 +2,13 @@
  * Agent 选择器组件。
  *
  * 紧凑的下拉选择器，展示当前选中的 Agent 名称 + chevron；
- * 点击后弹出 Agent 列表供切换。数据来自后端 GET /agents API。
+ * 点击后弹出 Agent 列表供切换。列表数据来自 `stores/agentStore`——Agent 列表的
+ * 单一数据源，与发送前模型校验（useModelSendGuard）共享同一份缓存，避免各自
+ * 拉取造成双请求与数据漂移。
+ *
+ * 状态来源切换：直接读 `useTaskStore.selectedAgentId` / `setSelectedAgentId`，
+ * 不再接受 `value / onChange` props——与 ModelSelector 保持同一事实源
+ * 写入约定，避免不同调用方各自传 props 导致「显示与 store 撕裂」。
  *
  * 样式参考 Codex 桌面端的模型选择器：折叠态为单行 `图标 名 ∨`，
  * 展开态为带圆角的浮层列表，每项含名称与角色描述。
@@ -10,24 +16,16 @@
  * @module components/chat/AgentSelector
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, Check, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logError } from "@/lib/logger";
-import { listAgents } from "@/services/api";
-import type { AgentProfileResponse, ListAgentsResponse } from "@shared/api";
+import { useAgentStore } from "@/stores/agentStore";
+import { useTaskStore } from "@/stores/taskStore";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Caption } from "@/components/ui/tokens";
 
-/** 默认 Agent ID（与后端 DEFAULT_AGENT_ID 对齐）。 */
-const FALLBACK_AGENT_ID = "developer";
-
 /** AgentSelector 组件属性。 */
 interface AgentSelectorProps {
-  /** 当前选中的 agent_id。 */
-  value: string;
-  /** 切换 agent 时的回调。 */
-  onChange: (agentId: string) => void;
   /** 可选的额外 CSS 类名。 */
   className?: string;
 }
@@ -35,35 +33,50 @@ interface AgentSelectorProps {
 /**
  * Agent 下拉选择器。
  *
- * 首次挂载时从 /agents 拉取列表，后续由父组件通过 value/onChange 控制选中态。
- * 网络失败时降级为仅显示默认 developer，不阻塞输入区渲染。
+ * 列表数据消费 `agentStore.agents`（与 useModelSendGuard 共享单一缓存）；首次
+ * 挂载时经 `agentStore.refreshAgents()` 幂等拉取一次（已加载成功则直接跳过，
+ * 多个 TaskHeaderBar 实例并存时也只会发一次 `/agents` 请求）。当前选中态与变更
+ * 回调均直接经 useTaskStore 写入，与 ModelSelector 保持一致
+ * （selectedModelName / setSelectedModelName）。
+ * 网络失败时 store 保留空缓存（defaultAgentId 回退 "developer"），折叠态
+ * 降级为仅显示默认 Agent，不阻塞输入区渲染；展开态按 store.loaded 区分
+ * 「拉取中/失败重试前」与「已加载但列表为空」（分别显示 加载中… / 无可用 Agent）。
+ *
+ * @param props - 组件属性。
+ * @param props.className - 可选的外层类名注入。
+ * @returns AgentSelector 的 React 元素。
+ *
+ * @sideeffect
+ * - 首次挂载时调用 `agentStore.refreshAgents()` 幂等拉取 `GET /agents`；
+ *   失败由 agentStore 记录 error 日志并保留空缓存（本组件降级展示）。
+ *
+ * @example
+ * ```tsx
+ * // 任意 task 维度选择场景：直接读 store
+ * <AgentSelector className="h-7" />
+ * ```
  */
-export function AgentSelector({ value, onChange, className }: AgentSelectorProps) {
-  const [agents, setAgents] = useState<AgentProfileResponse[]>([]);
-  const [defaultId] = useState(FALLBACK_AGENT_ID);
+export function AgentSelector({ className }: AgentSelectorProps) {
   const [open, setOpen] = useState(false);
 
-  /** 从后端拉取已注册 Agent 列表。 */
-  const fetchAgents = useCallback(async () => {
-    try {
-      const response: ListAgentsResponse = await listAgents();
-      setAgents(response.agents);
-    } catch (err) {
-      // 降级：列表为空时 UI 仅显示 fallback，不阻塞输入；失败仍经统一出口记录，便于排查后端/网络问题
-      logError("拉取 Agent 列表失败，降级为 fallback", err, { module: "AgentSelector" });
-      setAgents([]);
-    }
-  }, []);
+  // 直接读 store：与 ModelSelector 同一事实源
+  const value = useTaskStore((s) => s.selectedAgentId);
+  const setValue = useTaskStore((s) => s.setSelectedAgentId);
 
-  // 首次挂载拉取一次（Agent 列表在会话生命周期内不变）
+  // Agent 列表来自 agentStore（单一数据源，与 useModelSendGuard 共享缓存）。
+  const agents = useAgentStore((s) => s.agents);
+  const defaultAgentId = useAgentStore((s) => s.defaultAgentId);
+  const loaded = useAgentStore((s) => s.loaded);
+
+  // 首次挂载幂等拉取一次（Agent 列表在会话生命周期内不变；已加载时直接跳过）。
   useEffect(() => {
-    void fetchAgents();
-  }, [fetchAgents]);
+    void useAgentStore.getState().refreshAgents();
+  }, []);
 
   /** 当前选中项的显示名称（优先用 role，回退到 agent_id）。 */
   const currentLabel =
     agents.find((a) => a.agent_id === value)?.role ??
-    (value === FALLBACK_AGENT_ID ? "Developer" : value);
+    (value === defaultAgentId ? "Developer" : value);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -85,19 +98,19 @@ export function AgentSelector({ value, onChange, className }: AgentSelectorProps
 
       <PopoverContent align="start" className="w-64 p-1">
         {agents.length === 0 ? (
-          /* 加载中或网络失败时的降级展示 */
+          /* 未加载完成（拉取中/失败重试前）显示加载中；已加载但列表为空显示无可用 */
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {agents.length === 0 && value === FALLBACK_AGENT_ID ? "加载中..." : "无可用 Agent"}
+            {loaded ? "无可用 Agent" : "加载中..."}
           </div>
         ) : (
           agents.map((agent) => {
-            const isSelected = agent.agent_id === value || (!value && agent.agent_id === defaultId);
+            const isSelected = agent.agent_id === value || (!value && agent.agent_id === defaultAgentId);
             return (
               <button
                 key={agent.agent_id}
                 type="button"
                 onClick={() => {
-                  onChange(agent.agent_id);
+                  setValue(agent.agent_id);
                   setOpen(false);
                 }}
                 className={cn(

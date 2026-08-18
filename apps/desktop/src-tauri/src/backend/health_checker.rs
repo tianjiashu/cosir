@@ -6,17 +6,24 @@ use serde::Deserialize;
 use std::time::Duration;
 
 /// 后端 `/health` 端点响应体。
+///
+/// 目前 `/health` 仅返回 `status` 字段，其余字段由真实探针服务补齐前缺失。
+/// 通过 `#[serde(default)]` 兼容旧版本/临时占位响应，避免反序列化失败。
 #[derive(Debug, Deserialize)]
 struct HealthResponsePayload {
     /// 健康状态文本。
     status: String,
-    /// 当前模型服务商。
+    /// 当前模型服务商。真实探针落地前可能缺失，缺省为空字符串。
+    #[serde(default)]
     model_provider: String,
-    /// 当前模型名称。
+    /// 当前模型名称。真实探针落地前可能缺失，缺省为空字符串。
+    #[serde(default)]
     model_name: String,
-    /// 当前 thinking 模式。
+    /// 当前 thinking 模式。真实探针落地前可能缺失，缺省为空字符串。
+    #[serde(default)]
     model_thinking_mode: String,
-    /// 当前是否已加载 API Key。
+    /// 当前是否已加载 API Key。真实探针落地前可能缺失，缺省为 false。
+    #[serde(default)]
     has_model_api_key: bool,
 }
 
@@ -27,6 +34,7 @@ struct HealthResponsePayload {
 ///
 /// 返回:
 ///     后端可达且响应可解析时返回健康摘要；不可达时返回 `Ok(None)`。
+///     在真实健康探针落地前，缺失的模型/配置字段以空字符串或 `false` 占位。
 ///
 /// 异常:
 ///     当响应体格式错误时返回错误字符串。

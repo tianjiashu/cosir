@@ -95,6 +95,9 @@ const CENTER_MIN_SIZE = "320px";
 export default function App() {
   useBackendBootstrap();
   const [activeView, setActiveView] = useState<WorkspaceView>("chat");
+  // 厂商配置中心对话框开关：由 InputBar 发送拦截（guardSend openSettings=true）
+  // 联动打开，受控注入 ChatPanel 顶部的 TaskHeaderBar。
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   useStartupTaskResume();
@@ -172,9 +175,13 @@ export default function App() {
           <Panel id={CENTER_PANEL_ID} minSize={CENTER_MIN_SIZE} className="min-w-0 overflow-hidden">
             {/* 中央主会话区 + 底部输入区 */}
             <div className="flex h-full min-w-0 flex-col overflow-hidden">
-              <ChatPanel onPickWorkspace={() => setActiveView("new-task")} />
+              <ChatPanel
+                onPickWorkspace={() => setActiveView("new-task")}
+                settingsOpen={settingsOpen}
+                onSettingsOpenChange={setSettingsOpen}
+              />
               <ChangesDrawer />
-              <InputBar />
+              <InputBar onOpenSettings={() => setSettingsOpen(true)} />
             </div>
           </Panel>
 

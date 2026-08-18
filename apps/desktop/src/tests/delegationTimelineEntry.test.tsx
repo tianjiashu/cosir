@@ -89,7 +89,10 @@ describe("DelegationTimelineEntry", () => {
 
     fireEvent.click(screen.getByText("查看子 Agent 结果"));
     // CodeBlock 富展示：代码文本渲染到 <code> 内。
-    expect(screen.getByText(/const x = 1;/)).toBeTruthy();
+    // 注意：语法高亮会把 `const x = 1;` 拆成多个 <span>，不能用 getByText 精确匹配整段；
+    // 改断言外层 <code> 容器的 textContent 包含该行代码。
+    const codeEl = document.querySelector("code");
+    expect(codeEl?.textContent).toContain("const x = 1;");
   });
 
   it("失败态触发条文案为「查看子 Agent 错误详情」", () => {

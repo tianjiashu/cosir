@@ -36,10 +36,15 @@ vi.mock("@/stores/workspaceEventStore", () => ({
     }),
 }));
 // api 含 deleteWorkspace/deleteTask 等网络调用，mock 成安全桩。
+// 补充 listAgents / listModels / listProviders：ChatPanel 顶部内嵌的 TaskHeaderBar 会调用，
+// 即便 TaskHeaderBar 本身被桩化为空 stub，防御性补齐避免 mock 链式失败。
 vi.mock("@/services/api", () => ({
   deleteWorkspace: vi.fn(),
   deleteTask: vi.fn(),
   listWorkspaceTasks: vi.fn(),
+  listAgents: vi.fn().mockResolvedValue({ agents: [], default_agent_id: "developer" }),
+  listModels: vi.fn().mockResolvedValue([]),
+  listProviders: vi.fn().mockResolvedValue([]),
 }));
 // logger 噪声屏蔽。
 vi.mock("@/lib/logger", async (importOriginal) => ({
@@ -59,6 +64,11 @@ import { SSEConnectionState } from "@/services/sse";
 
 // ChatPanel 的 VirtualList 与 perf 走与现有 ChatPanel 测试一致的 mock，
 // 使空态渲染路径聚焦在文案/图标上。
+// ChatPanel 顶部内嵌 TaskHeaderBar（含 AgentSelector + ModelSelector + ProviderSettingsDialog）；
+// 本测试关注空态文案/图标，不展开这些子组件细节，统一桩化为空 stub。
+vi.mock("@/components/chat/TaskHeaderBar", () => ({
+  TaskHeaderBar: () => null,
+}));
 vi.mock("@/components/layout/TurnTimeline", () => ({
   TurnTimeline: () => <div data-testid="turn-timeline-stub" />,
 }));

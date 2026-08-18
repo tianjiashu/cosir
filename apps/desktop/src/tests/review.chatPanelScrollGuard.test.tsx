@@ -21,6 +21,12 @@ import { useWorkspaceStore } from "@/stores/workspaceStore";
 vi.mock("@/components/layout/TurnTimeline", () => ({
   TurnTimeline: () => <div data-testid="turn-timeline-stub" />,
 }));
+// ChatPanel 顶部内嵌 TaskHeaderBar（含 AgentSelector + ModelSelector + ProviderSettingsDialog）；
+// 本测试聚焦滚底守卫，不展开这些子组件，统一桩化为空 stub，避免挂载真实 AgentSelector
+// 在无后端环境发起 listAgents 网络请求与 logError 噪音。
+vi.mock("@/components/chat/TaskHeaderBar", () => ({
+  TaskHeaderBar: () => null,
+}));
 // 性能埋点走 logger→console，mock 掉保持输出干净。
 vi.mock("@/lib/perf", () => ({
   PerfTrace: {

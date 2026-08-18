@@ -78,6 +78,7 @@ export function useTask(): UseTaskReturn {
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   const activeTurnId = useTaskStore((s) => s.activeTurnId);
   const selectedAgentId = useTaskStore((s) => s.selectedAgentId);
+  const selectedModelName = useTaskStore((s) => s.selectedModelName);
   const addTask = useTaskStore((s) => s.addTask);
   const replaceTask = useTaskStore((s) => s.replaceTask);
   const removeTask = useTaskStore((s) => s.removeTask);
@@ -142,6 +143,7 @@ export function useTask(): UseTaskReturn {
           text,
           workspace_id: workspaceId,
           agent_id: selectedAgentId,
+          model_name: selectedModelName ?? undefined,
         });
         const turns = await api.listTaskTurns(task.task_id);
         const firstTurn = turns[turns.length - 1] ?? null;
@@ -237,7 +239,11 @@ export function useTask(): UseTaskReturn {
         // 若临时 turn 尚未建立连接，disconnectTurn 为 no-op，安全。
         disconnectTurn(temporaryTurnId);
         PerfTrace.markCurrent("createTurn:before-post-createTaskTurn", { task_id: activeTaskId });
-        const turn = await api.createTaskTurn(activeTaskId, { input_text: text, agent_id: selectedAgentId });
+        const turn = await api.createTaskTurn(activeTaskId, {
+          input_text: text,
+          agent_id: selectedAgentId,
+          model_name: selectedModelName ?? undefined,
+        });
         PerfTrace.markCurrent("createTurn:after-post-createTaskTurn", { turn_id: turn.turn_id, status: turn.status });
         // 后端返回真实 turn：用真实记录整体替换临时记录，turn_id 与后续 SSE 对齐。
         replaceTurnId(activeTaskId, temporaryTurnId, turn);

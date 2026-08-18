@@ -4,6 +4,11 @@
  * 展示当前任务下的 turn timeline：用户输入来自 turnStore，
  * assistant/tool/status 项由 timeline projector 按 runtime event 顺序投影。
  *
+ * 顶部内嵌 TaskHeaderBar：与 NewTaskPage 共享同一选择条，强关联「正在聊的
+ * task 用什么配置」。ProviderSettingsDialog 的开关状态默认由该 bar 自治持有；
+ * 也可由宿主（App）受控注入 settingsOpen/onSettingsOpenChange，用于
+ * InputBar 发送拦截（guardSend openSettings=true）联动打开配置中心。
+ *
  * @module components/layout/ChatPanel
  */
 
@@ -18,6 +23,7 @@ import { useTurnStore } from "@/stores/turnStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { PerfTrace } from "@/lib/perf";
 import { TurnTimeline } from "@/components/layout/TurnTimeline";
+import { TaskHeaderBar } from "@/components/chat/TaskHeaderBar";
 import type { TurnRecord } from "@shared/turn";
 
 /**
@@ -56,6 +62,10 @@ const NEAR_BOTTOM_THRESHOLD_PX = 80;
 export interface ChatPanelProps {
   /** 点击「选择工作区」引导按钮后的跳转回调。 */
   onPickWorkspace: () => void;
+  /** 可选：厂商配置中心对话框开关（受控模式，未提供时 TaskHeaderBar 自治）。 */
+  settingsOpen?: boolean;
+  /** 可选：厂商配置中心开关变化回调（受控模式）。 */
+  onSettingsOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -71,7 +81,7 @@ export interface ChatPanelProps {
  * - 用户消息：turnStore 中的 turn.input_text
  * - Agent 输出、工具、状态：timeline projector 按事件顺序投影后的显示项
  */
-export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
+export function ChatPanel({ onPickWorkspace, settingsOpen, onSettingsOpenChange }: ChatPanelProps) {
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   // 按 turn 分片的事件映射：每个 turn 的数组引用在其它 turn 收事件时保持不变，
   // 使 <TurnTimeline> 的 memo 能精确跳过未变化的 turn，只重渲染活跃 turn。
@@ -345,6 +355,14 @@ export function ChatPanel({ onPickWorkspace }: ChatPanelProps) {
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden bg-background">
+      {/* 顶部：task 维度元数据选择条（与 NewTaskPage 共享同一选择条，强关联「正在聊的 task 用什么配置」） */}
+      <div className="flex justify-end px-4 pt-4">
+        <TaskHeaderBar
+          settingsOpen={settingsOpen}
+          onSettingsOpenChange={onSettingsOpenChange}
+        />
+      </div>
+
       {/* 无工作区引导：删除所有工作区后回到会话页时的防御性空状态 */}
       {noWorkspace && (
         <div

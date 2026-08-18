@@ -34,6 +34,7 @@ export interface CreateTaskRequest {
   text: string;
   agent_id: string;
   workspace_id: string;
+  model_name?: string | null;
 }
 
 export interface CreateWorkspaceRequest {
@@ -44,15 +45,11 @@ export interface CreateWorkspaceRequest {
 export interface CreateTurnRequest {
   input_text: string;
   agent_id?: string | null;
+  model_name?: string | null;
 }
 
 export interface BackendHealthResponse {
   status: string;
-  model_provider: string;
-  model_name: string;
-  model_thinking_mode: string;
-  model_api_key_env: string;
-  has_model_api_key: boolean;
 }
 
 export interface DeleteWorkspaceResponse {
