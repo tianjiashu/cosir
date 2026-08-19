@@ -3,12 +3,12 @@
 单一职责：集中创建、缓存、释放两个业务所需的 SQLAlchemy 同步引擎（主库 / 日志库），
 路径全部来自 ``Settings`` 类级静态属性（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）；
 CRUD 不再接收引擎或路径参数，统一通过本模块的访问器取得 session 工厂。
-取得 session 工厂。LangGraph checkpoint 由 ``app.core.runtime.runs.checkpointer`` 经
+LangGraph checkpoint 由 ``app.core.runtime.runs.checkpointer`` 经
 aiosqlite 直连 ``Settings.CHECKPOINT_FILE``，不经过本模块引擎。
 
 职责边界：
-    - 负责：三大引擎的按需创建、进程级缓存复用（委托 ``engine_cache``）、schema 初始化
-      触发（委托 ``init_schema``）、统一释放。
+    - 负责：两个 SQLAlchemy 引擎（主库 / 日志库）的按需创建、进程级缓存复用
+      （委托 ``engine_cache``）、schema 初始化触发（委托 ``init_schema``）、统一释放。
     - 不负责：引擎底层 PRAGMA 与连接池细节（见 ``engine_cache``）、建表与迁移 SQL
       （见 ``init_schema``）、任何业务读写（见 ``crud/``）。
 
@@ -238,8 +238,9 @@ def close_storage() -> None:
         无。
 
     副作用:
-        关闭主库、日志库、checkpoint 三个引擎持有的连接，并清空进程级缓存；
-        用于进程退出或测试拆卸。
+        关闭主库、日志库两个 SQLAlchemy 引擎持有的连接并清空进程级缓存；
+        checkpoint 数据库由 ``app.core.runtime.runs.checkpointer`` 经 aiosqlite
+        直连、不归本模块释放；用于进程退出或测试拆卸。
     """
 
     with _INIT_LOCK:
