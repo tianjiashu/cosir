@@ -12,13 +12,12 @@
 
 from uuid import uuid4
 
-from sqlalchemy import asc, select, update
+from sqlalchemy import asc, delete, select, update
 
-from app.config.logging.logger import log
 from app.models import TurnRecord
 from app.storage.model.turn_model import TurnModel
 from app.storage.store_engines import main_session_factory
-from app.utils.datetime_utils import from_text, to_text, utc_now
+from app.utils.datetime_utils import to_text, utc_now
 
 
 class TurnCrud:
@@ -51,6 +50,7 @@ class TurnCrud:
         input_text: str,
         status: str = "pending",
         agent_id: str | None = None,
+        model_name: str | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
@@ -63,6 +63,9 @@ class TurnCrud:
             agent_id: 可选，本次轮次绑定的 agent 标识；仅写入应用层 ``TurnRecord``
                 值对象（供上层 / 运行时消费），当前 ``turns`` 表模型在重构过渡期尚未
                 恢复 ``agent_id`` 列，故不持久化到库。
+            model_name: 可选，解析后的实际所用模型名（时间线可追溯每轮所用
+                模型）；None 表示创建期未解析（运行期兜底解析后由
+                ``update_model_name`` 回写）。
 
         返回:
             落库成功的 ``TurnRecord``。
@@ -72,7 +75,7 @@ class TurnCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
-            向 ``turns`` 表插入一行（不含 ``agent_id`` 列）。
+            向 ``turns`` 表插入一行（不含 ``agent_id`` 列，含 ``model_name`` 列）。
         """
 
         if not input_text.strip():
@@ -87,30 +90,22 @@ class TurnCrud:
             now,
             response_text=None,
             agent_id=agent_id,
+            model_name=model_name,
         )
-        try:
-            with self._session_factory.begin() as session:
-                session.add(
-                    TurnModel(
-                        turn_id=turn.turn_id,
-                        task_id=turn.task_id,
-                        input_text=turn.input_text,
-                        status=turn.status,
-                        end_reason=turn.end_reason,
-                        response_text=turn.response_text,
-                        created_at=to_text(turn.created_at),
-                        updated_at=to_text(turn.updated_at),
-                    )
+        with self._session_factory.begin() as session:
+            session.add(
+                TurnModel(
+                    turn_id=turn.turn_id,
+                    task_id=turn.task_id,
+                    input_text=turn.input_text,
+                    status=turn.status,
+                    end_reason=turn.end_reason,
+                    response_text=turn.response_text,
+                    model_name=turn.model_name,
+                    created_at=to_text(turn.created_at),
+                    updated_at=to_text(turn.updated_at),
                 )
-        except Exception:
-            log.error(
-                "failed to persist turn %s for task %s",
-                turn.turn_id,
-                turn.task_id,
-                exc_info=True,
             )
-            raise
-        log.info("persisted turn %s for task %s", turn.turn_id, turn.task_id)
         return turn
 
     def get(self, turn_id: str) -> TurnRecord:
@@ -134,7 +129,7 @@ class TurnCrud:
             row: TurnModel | None = session.get(TurnModel, turn_id)
         if row is None:
             raise KeyError(turn_id)
-        return self._turn_from_model(row)
+        return TurnRecord.from_model(row)
 
     def list_by_task(self, task_id: str) -> list[TurnRecord]:
         """列出某任务下的全部 turn，按创建时间升序。
@@ -162,38 +157,7 @@ class TurnCrud:
                 .scalars()
                 .all()
             )
-        return [self._turn_from_model(row) for row in rows]
-
-    def update_status(self, turn_id: str, status: str, end_reason: str | None = None) -> TurnRecord:
-        """更新 turn 状态并刷新更新时间。
-
-        先校验 turn 存在（不存在则抛出），再更新状态与 ``updated_at``；``end_reason``
-        用于承载终态（cancelled / failed）的原因，缺省时保持原值（仅当新值非空才覆盖，
-        避免把已有原因清空为 None）。
-
-        参数:
-            turn_id: turn 标识。
-            status: 新状态值。
-            end_reason: 可选的终态原因；传入非 None 时覆盖，否则保留原值。
-
-        返回:
-            更新后的 ``TurnRecord``。
-
-        异常:
-            KeyError: 如果指定 turn 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            更新 ``turns`` 表中对应行的 status / end_reason 与 updated_at。
-        """
-
-        self.get(turn_id)
-        with self._session_factory.begin() as session:
-            values = {"status": status, "updated_at": to_text(utc_now())}
-            if end_reason is not None:
-                values["end_reason"] = end_reason
-            session.execute(update(TurnModel).where(TurnModel.turn_id == turn_id).values(**values))
-        return self.get(turn_id)
+        return [TurnRecord.from_model(row) for row in rows]
 
     def cancel_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
         """以原子方式把 active turn 取消。
@@ -326,6 +290,36 @@ class TurnCrud:
             )
         return self.get(turn_id)
 
+    def update_model_name(self, turn_id: str, model_name: str) -> TurnRecord:
+        """回写轮次实际所用模型名（运行期兜底解析修正后）。
+
+        仅更新 ``model_name`` 与 ``updated_at``；其余字段保持不变，避免覆盖
+        运行期其它并发写入（如 status）。
+
+        参数:
+            turn_id: turn 标识。
+            model_name: 运行期解析得到的最终模型名。
+
+        返回:
+            更新后的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            更新 ``turns`` 表中对应行的 model_name 与 updated_at。
+        """
+
+        self.get(turn_id)
+        with self._session_factory.begin() as session:
+            session.execute(
+                update(TurnModel)
+                .where(TurnModel.turn_id == turn_id)
+                .values(model_name=model_name, updated_at=to_text(utc_now()))
+            )
+        return self.get(turn_id)
+
     def claim_pending(self, turn_id: str) -> bool:
         """以原子方式把处于 ``pending`` 的 turn 抢占为 ``running``。
 
@@ -375,8 +369,6 @@ class TurnCrud:
             task_ids 非空时打开一次主库只读 session。
         """
 
-        from sqlalchemy import select
-
         if not task_ids:
             return []
         with self._session_factory() as session:
@@ -400,40 +392,12 @@ class TurnCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
 
         副作用:
-            turn_ids 非空时从 ``turns`` 表删除匹配的行。
+            turn_ids 为空时直接返回；对应行不存在时静默无操作。
         """
-
-        from sqlalchemy import delete
 
         if not turn_ids:
             return
         with self._session_factory.begin() as session:
             session.execute(delete(TurnModel).where(TurnModel.turn_id.in_(turn_ids)))
 
-    def _turn_from_model(self, row: TurnModel) -> TurnRecord:
-        """把 ``TurnModel`` ORM 行转换为业务 ``TurnRecord``。
 
-        转换过程把库中存储的文本时间戳还原为 datetime。
-
-        参数:
-            row: 查询得到的 ``TurnModel`` 行。
-
-        返回:
-            对应的 ``TurnRecord``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        return TurnRecord(
-            row.turn_id,
-            row.task_id,
-            row.input_text,
-            row.status,
-            from_text(row.created_at),
-            from_text(row.updated_at),
-            row.end_reason,
-            row.response_text,
-        )

@@ -18,4 +18,5 @@ class TurnModel(StorageBase):
     end_reason: Mapped[str | None] = mapped_column(Text)
     response_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)

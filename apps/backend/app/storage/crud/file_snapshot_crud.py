@@ -4,6 +4,7 @@
 所有方法通过共享的主库 session 工厂访问数据库，必须在 ``init_storage`` 之后实例化。
 """
 
+import threading
 from collections.abc import Sequence
 
 from sqlalchemy import delete, func, select, update
@@ -17,7 +18,16 @@ class FileSnapshotCrud:
     """``file_snapshots`` 表的纯 CRUD。
 
     仅负责单表读写与 model↔``FileSnapshotRecord`` 转换，不依赖 service 层。
+
+    并发约定：seq 在 task 命名空间内由 ``save_batch_with_sequence`` 在进程级锁内
+    原子分配，保证「取 MAX(seq) 基准 + 批量插入」成为单一临界区，避免同一 task
+    下并行快照采集拿到重复 seq。``next_seq`` / ``save`` 仅保留给非并发场景（如
+    单文件测试）与唯一索引保险丝验证，生产采集路径一律走
+    ``save_batch_with_sequence``。
     """
+
+    _sequence_lock = threading.Lock()
+    """进程级 seq 分配锁：串行化同一进程内所有 task 的 seq 基准计算与插入。"""
 
     def __init__(self) -> None:
         """绑定主库共享 session 工厂。
@@ -54,6 +64,74 @@ class FileSnapshotCrud:
         with self._session_factory.begin() as session:
             session.add(FileSnapshotModel(**record.to_row_dict()))
 
+    def save_batch_with_sequence(
+        self, task_id: str, records: list[FileSnapshotRecord]
+    ) -> list[FileSnapshotRecord]:
+        """在进程级锁内原子分配 seq 并批量落库同一 task 的一批快照。
+
+        同一 task 下并行工具调用（不同文件路径不共享路径锁）会并发触发快照采集，
+        若各自「取 MAX(seq) 基准 + 逐条插入」分属独立临界区，会读到相同 MAX 而得到
+        重复 seq，触发 ``(task_id, seq)`` 唯一索引冲突、静默丢失快照。本方法把
+        「计算基准 + 为每条分配 ``base + offset`` + 单事务批量插入」收拢为单一
+        临界区（类级进程锁），保证一次调用占用的 seq 区间与其它调用严格不重叠。
+
+        参数:
+            task_id: 快照归属任务（seq 命名空间边界）。
+            records: 待落库的一批快照值对象；它们的 ``seq`` 字段被忽略并以
+                ``base + offset``（offset 为在列表内的序号）重写。
+
+        返回:
+            分配好实际 ``seq`` 后的 ``FileSnapshotRecord`` 列表（顺序与入参一致）。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果事务执行失败。
+            RuntimeError: 如果锁内查询/写入失败（仅理论上）。
+
+        副作用:
+            向 ``file_snapshots`` 表批量插入 ``len(records)`` 行；空列表时不操作。
+        """
+        if not records:
+            return []
+        with self._sequence_lock:
+            base = self._next_seq_for_task(task_id)
+            for offset, record in enumerate(records):
+                object.__setattr__(
+                    record,
+                    "seq",
+                    base + offset,
+                )
+            with self._session_factory.begin() as session:
+                session.add_all(
+                    FileSnapshotModel(**record.to_row_dict()) for record in records
+                )
+        return records
+
+    def _next_seq_for_task(self, task_id: str) -> int:
+        """返回该 task 当前 ``MAX(seq)+1`` 作为新一批快照的 seq 基准。
+
+        调用方必须在持有 ``_sequence_lock`` 时调用，保证基准在批量插入完成前不被
+        其它调用改写；本方法自身不参与锁管理。
+
+        参数:
+            task_id: 目标任务标识（seq 命名空间边界）。
+
+        返回:
+            下一个可用 seq 基准；该 task 尚无快照时返回 0。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+        with self._session_factory() as session:
+            max_seq = session.execute(
+                select(func.max(FileSnapshotModel.seq)).where(
+                    FileSnapshotModel.task_id == task_id
+                )
+            ).scalar()
+        return 0 if max_seq is None else int(max_seq) + 1
+
     def list_by_turn(self, turn_id: str) -> list[FileSnapshotRecord]:
         """按 turn 查询全部快照，按 ``seq`` 降序（回退时逆序应用）。
 
@@ -80,33 +158,6 @@ class FileSnapshotCrud:
                 .all()
             )
         return [FileSnapshotRecord.from_model(row) for row in rows]
-
-    def next_seq(self, task_id: str) -> int:
-        """返回该 task 下一个可用的快照序号（``MAX(seq)+1``，task 内递增）。
-
-        seq 的命名空间是 **task**：同一 task 下按 turn 执行序单调递增，不同 task
-        各自从 0 开始互不共享。``(task_id, seq)`` 唯一索引作为保险丝，防止未来误用
-        打破命名空间。
-
-        参数:
-            task_id: 目标任务标识。
-
-        返回:
-            下一个 seq；若该 task 尚无快照则返回 0。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-        with self._session_factory() as session:
-            max_seq = session.execute(
-                select(func.max(FileSnapshotModel.seq)).where(
-                    FileSnapshotModel.task_id == task_id
-                )
-            ).scalar()
-        return 0 if max_seq is None else int(max_seq) + 1
 
     def list_stable_by_task(
         self, task_id: str, turn_ids: list[str] | None = None

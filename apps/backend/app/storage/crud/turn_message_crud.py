@@ -58,6 +58,9 @@ class TurnMessageCrud:
             turn_id: 所属轮次标识。
             message: 单条模型无关的运行时消息。
             sequence: 该消息在本 turn 内的有序序号（从 0 起的连续整数）。
+            in_context: 是否纳入后续 Agent 上下文；False 表示仅落库轨迹但不参与
+                下一轮上下文拼装（``load_messages`` 会过滤掉 in_context 为假的行），
+                默认 True。
 
         返回:
             无。
@@ -141,11 +144,11 @@ class TurnMessageCrud:
             for row in rows
         ]
 
-    def delete_by_turn_ids(self, turn_ids: list[str]) -> None:
+    def delete_by_ids(self, ids: list[str]) -> None:
         """按轮次标识批量删除消息轨迹（用于任务 / 工作区级联删除）。
 
         参数:
-            turn_ids: 待清理消息的轮次标识列表；为空时不执行任何操作。
+            ids: 待清理消息的轮次标识列表；为空时不执行任何操作。
 
         返回:
             无。
@@ -154,10 +157,10 @@ class TurnMessageCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
 
         副作用:
-            turn_ids 非空时从 ``turn_messages`` 表删除匹配的行。
+            ids 非空时从 ``turn_messages`` 表删除匹配的行。
         """
 
-        if not turn_ids:
+        if not ids:
             return
         with self._session_factory.begin() as session:
-            session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id.in_(turn_ids)))
+            session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id.in_(ids)))

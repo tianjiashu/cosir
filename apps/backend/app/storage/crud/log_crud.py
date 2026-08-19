@@ -15,16 +15,15 @@
 import json
 from typing import Any
 
-from sqlalchemy import Engine, Select, asc, desc, func, insert, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import Select, asc, desc, func, insert, select
 
 from app.models import LogEntryRecord, LogQuery
 from app.storage.model.log_model import LogEntryModel
-from app.storage.store_engines import log_engine, log_session_factory
+from app.storage.store_engines import log_session_factory
 
 
-class LogStore:
-    """独立日志 SQLite 数据库的读写入口。
+class LogCrud:
+    """独立日志 SQLite 数据库的纯 CRUD。
 
     仅负责日志条目的批量写入与条件查询，不承担日志采集 / 格式化与 schema 初始化；通过共享的日志库
     session 工厂访问数据库。
@@ -105,7 +104,7 @@ class LogStore:
         with self._session_factory() as session:
             rows = session.execute(select_stmt).scalars().all()
             total = session.execute(count_stmt).scalar_one()
-        return [_entry_from_model(row) for row in rows], int(total)
+        return [LogEntryRecord.from_model(row) for row in rows], int(total)
 
     def count_by_level(self, query: LogQuery) -> dict[str, int]:
         """统计各日志级别的记录数（忽略 level 过滤、含其余过滤条件）。
@@ -144,48 +143,6 @@ class LogStore:
             rows = session.execute(statement).all()
         return {str(level): int(count) for level, count in rows}
 
-    @property
-    def engine(self) -> Engine:
-        """返回当前 LogStore 使用的日志库 SQLAlchemy 引擎。
-
-        引擎由 ``app.storage.store_engines`` 统一创建与缓存；本属性通过 ``log_engine()``
-        访问器取得进程内唯一的日志库引擎，本 store 不创建、不持有、不释放引擎。
-
-        参数:
-            无。
-
-        返回:
-            日志库 SQLAlchemy 引擎。
-
-        异常:
-            RuntimeError: 如果 ``init_storage`` 尚未调用（日志库引擎不可用）。
-
-        副作用:
-            无。
-        """
-
-        return log_engine()
-
-    @property
-    def session_factory(self) -> sessionmaker[Session]:
-        """返回当前 LogStore 使用的日志库 session 工厂。
-
-        参数:
-            无。
-
-        返回:
-            日志库 SQLAlchemy session 工厂。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return self._session_factory
-
-
 def _entry_values(entry: LogEntryRecord) -> dict[str, Any]:
     """把日志记录转换为与 ``log_entries`` 列名匹配的 INSERT 参数字典。
 
@@ -217,41 +174,6 @@ def _entry_values(entry: LogEntryRecord) -> dict[str, Any]:
         "error_json": json.dumps(entry.error, ensure_ascii=False) if entry.error else None,
         "truncated": 1 if entry.truncated else 0,
     }
-
-
-def _entry_from_model(row: LogEntryModel) -> LogEntryRecord:
-    """把 ``LogEntryModel`` 行转换为业务 ``LogEntryRecord``。
-
-    ``data_json`` 反序列化后若不是 dict 则回退为空 dict；``error_json`` 为空时 error 记为
-    None，非 dict 时同样回退为 None；可空文本列（trace_id/caller）为 None 时回退为空字符串。
-
-    参数:
-        row: 查询得到的 ``LogEntryModel`` 行。
-
-    返回:
-        对应的 ``LogEntryRecord``。
-
-    异常:
-        json.JSONDecodeError: 如果 data_json 或 error_json 不是合法 JSON。
-
-    副作用:
-        无。
-    """
-
-    data = json.loads(row.data_json or "{}")
-    error = json.loads(row.error_json) if row.error_json else None
-    return LogEntryRecord(
-        ts=row.ts,
-        level=row.level,
-        logger=row.logger,
-        trace_id=row.trace_id or "",
-        caller=row.caller or "",
-        event=row.event,
-        msg=row.msg,
-        data=data if isinstance(data, dict) else {},
-        error=error if isinstance(error, dict) else None,
-        truncated=bool(row.truncated),
-    )
 
 
 def _validate_query(query: LogQuery) -> None:

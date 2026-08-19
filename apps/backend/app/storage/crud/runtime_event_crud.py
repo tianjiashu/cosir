@@ -1,24 +1,22 @@
-"""``runtime_events`` 表的纯 CRUD。
+"""``runtime_events`` 表的纯 CRUD 数据访问层。
 
-仅负责单表读写与 model↔dict 转换，不承担运行时编排；所有操作通过共享的主库
-session 工厂访问数据库。
+单一职责：只提供 ``runtime_events`` 单表的增查与 model↔dict 转换，不承担运行时编排。
 
-参数:
-    无。
+职责边界：
+- 负责：运行时事件单表写入与查询、``RuntimeEventModel``↔事件字典转换、turn 内 sequence
+  原子分配。
+- 不负责：事件发布 / 广播（由 ``RuntimeEventBus`` 负责）、事件构建与 payload 校验
+  （由 ``RuntimeEvent`` 值对象负责）、运行时编排。
 
-异常:
-    无。
-
-副作用:
-    对 ``runtime_events`` 表执行增查操作。
+依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
+``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from __future__ import annotations
-
+import json
 import threading
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.storage.model.runtime_event_model import RuntimeEventModel
@@ -28,21 +26,29 @@ from app.storage.store_engines import main_session_factory
 class RuntimeEventCrud:
     """``runtime_events`` 表的纯 CRUD。
 
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        通过主库 session 执行 runtime_events 的增查操作。
+    仅负责单表增查与 model↔dict 转换，不承担运行时编排；所有方法通过共享的主库
+    session 工厂访问数据库。
     """
 
     _sequence_lock = threading.Lock()
-    _SEQUENCE_RETRY_LIMIT = 5
+    _SEQUENCE_RETRY_LIMIT: int = 5
+
+    def __init__(self) -> None:
+        """绑定主库共享 session 工厂。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 如果 ``init_storage`` 尚未调用（主库 session 工厂不可用）。
+
+        副作用:
+            无（仅复用已初始化的主库 session 工厂）。
+        """
+        self._session_factory = main_session_factory()
 
     def save_event(self, event_dict: dict[str, Any]) -> None:
         """写入一条运行时事件到持久化存储。
@@ -57,7 +63,8 @@ class RuntimeEventCrud:
             无。
 
         异常:
-            无。写入失败仅记日志，不向上抛出（事件持久化失败不应中断运行流）。
+            不向上抛出。任何持久化异常均经 ``log.exception`` 记录后吞掉（事件持久化
+            失败不应中断运行流）。
 
         副作用:
             向 ``runtime_events`` 表插入一行。
@@ -66,7 +73,7 @@ class RuntimeEventCrud:
         from app.config.logging.logger import log
 
         try:
-            payload_json = __import__("json").dumps(
+            payload_json = json.dumps(
                 event_dict.get("payload", {}), ensure_ascii=False, default=str
             )
             model = RuntimeEventModel(
@@ -78,9 +85,8 @@ class RuntimeEventCrud:
                 payload_json=payload_json,
                 created_at=event_dict.get("created_at", ""),
             )
-            with main_session_factory()() as session:
+            with self._session_factory.begin() as session:
                 session.add(model)
-                session.commit()
         except Exception:
             log.exception(
                 "runtime_event_persist_failed",
@@ -94,7 +100,7 @@ class RuntimeEventCrud:
             )
 
     def save_event_with_next_sequence(self, event_dict: dict[str, Any]) -> int:
-        """Assign and persist the next turn-local runtime event sequence atomically.
+        """在同一事务内原子分配并写入下一个 turn 内运行时事件序号。
 
         参数:
             event_dict: 已序列化的事件字典；``turn_id`` 为 None 或空串时降级走
@@ -123,14 +129,14 @@ class RuntimeEventCrud:
         for attempt in range(self._SEQUENCE_RETRY_LIMIT):
             with self._sequence_lock:
                 try:
-                    with main_session_factory().begin() as session:
+                    with self._session_factory.begin() as session:
                         value = session.execute(
                             select(func.max(RuntimeEventModel.sequence)).where(
                                 RuntimeEventModel.turn_id == turn_id
                             )
                         ).scalar_one()
                         sequence = 0 if value is None else int(value) + 1
-                        payload_json = __import__("json").dumps(
+                        payload_json = json.dumps(
                             event_dict.get("payload", {}), ensure_ascii=False, default=str
                         )
                         session.add(
@@ -188,42 +194,6 @@ class RuntimeEventCrud:
         )
         raise RuntimeError("runtime event sequence retry exhausted")
 
-    def next_sequence_for_turn(self, turn_id: str) -> int:
-        """Return the next runtime event sequence for a turn.
-
-        参数:
-            turn_id: 待分配事件序号的轮次标识。
-
-        返回:
-            当前 turn 下一个可用的 sequence。无历史事件时返回 0。
-
-        异常:
-            无。查询失败返回 0 并记日志。
-
-        副作用:
-            无（只读查询）。
-        """
-
-        from app.config.logging.logger import log
-
-        try:
-            with main_session_factory()() as session:
-                value = session.execute(
-                    select(func.max(RuntimeEventModel.sequence)).where(
-                        RuntimeEventModel.turn_id == turn_id
-                    )
-                ).scalar_one()
-                return 0 if value is None else int(value) + 1
-        except Exception:
-            log.exception(
-                "runtime_event_next_sequence_failed",
-                extra={
-                    "msg": "failed to query next runtime event sequence",
-                    "data": {"turn_id": turn_id},
-                },
-            )
-            return 0
-
     def list_by_turn(self, turn_id: str) -> list[dict[str, Any]]:
         """按 turn_id 查询所有已持久化的运行时事件（按 sequence 升序）。
 
@@ -243,33 +213,17 @@ class RuntimeEventCrud:
             无（只读查询）。
         """
 
-        import json
-
         from app.config.logging.logger import log
 
         try:
-            with main_session_factory()() as session:
+            with self._session_factory() as session:
                 stmt = (
                     select(RuntimeEventModel)
                     .where(RuntimeEventModel.turn_id == turn_id)
                     .order_by(RuntimeEventModel.sequence)
                 )
                 rows = session.execute(stmt).scalars().all()
-                result = []
-                for row in rows:
-                    payload = json.loads(row.payload_json) if row.payload_json else {}
-                    result.append(
-                        {
-                            "event_id": row.event_id,
-                            "event_type": row.event_type,
-                            "task_id": row.task_id,
-                            "turn_id": row.turn_id,
-                            "sequence": row.sequence,
-                            "payload": payload,
-                            "created_at": row.created_at,
-                        }
-                    )
-                return result
+                return [_event_dict_from_model(row) for row in rows]
         except Exception:
             log.exception(
                 "runtime_event_query_failed",
@@ -280,11 +234,11 @@ class RuntimeEventCrud:
             )
             return []
 
-    def delete_by_turn_ids(self, turn_ids: list[str]) -> None:
+    def delete_by_ids(self, ids: list[str]) -> None:
         """按轮次标识批量删除运行时事件（用于任务 / 工作区级联删除）。
 
         参数:
-            turn_ids: 待清理事件的轮次标识列表；为空时不执行任何操作。
+            ids: 待清理事件的轮次标识列表；为空时不执行任何操作。
 
         返回:
             无。
@@ -293,16 +247,14 @@ class RuntimeEventCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
 
         副作用:
-            turn_ids 非空时从 ``runtime_events`` 表删除匹配的行。
+            ids 为空时直接返回；对应行不存在时静默无操作。
         """
 
-        from sqlalchemy import delete
-
-        if not turn_ids:
+        if not ids:
             return
-        with main_session_factory().begin() as session:
+        with self._session_factory.begin() as session:
             session.execute(
-                delete(RuntimeEventModel).where(RuntimeEventModel.turn_id.in_(turn_ids))
+                delete(RuntimeEventModel).where(RuntimeEventModel.turn_id.in_(ids))
             )
 
     def list_by_task(self, task_id: str) -> list[dict[str, Any]]:
@@ -325,33 +277,17 @@ class RuntimeEventCrud:
             无（只读查询）。
         """
 
-        import json
-
         from app.config.logging.logger import log
 
         try:
-            with main_session_factory()() as session:
+            with self._session_factory() as session:
                 stmt = (
                     select(RuntimeEventModel)
                     .where(RuntimeEventModel.task_id == task_id)
                     .order_by(RuntimeEventModel.turn_id, RuntimeEventModel.sequence)
                 )
                 rows = session.execute(stmt).scalars().all()
-                result = []
-                for row in rows:
-                    payload = json.loads(row.payload_json) if row.payload_json else {}
-                    result.append(
-                        {
-                            "event_id": row.event_id,
-                            "event_type": row.event_type,
-                            "task_id": row.task_id,
-                            "turn_id": row.turn_id,
-                            "sequence": row.sequence,
-                            "payload": payload,
-                            "created_at": row.created_at,
-                        }
-                    )
-                return result
+                return [_event_dict_from_model(row) for row in rows]
         except Exception:
             log.exception(
                 "runtime_event_query_by_task_failed",
@@ -361,3 +297,32 @@ class RuntimeEventCrud:
                 },
             )
             return []
+
+
+def _event_dict_from_model(row: RuntimeEventModel) -> dict[str, Any]:
+    """把 ``RuntimeEventModel`` ORM 行转换为事件字典（供 ``list_by_turn`` / ``list_by_task`` 复用）。
+
+    ``payload_json`` 反序列化为 dict；为空时回退为空字典。
+
+    参数:
+        row: 查询得到的 ``RuntimeEventModel`` 行。
+
+    返回:
+        与前端 ``RuntimeEvent`` 格式对齐的事件字典。
+
+    异常:
+        json.JSONDecodeError: 如果 ``payload_json`` 不是合法 JSON。
+
+    副作用:
+        无。
+    """
+    payload = json.loads(row.payload_json) if row.payload_json else {}
+    return {
+        "event_id": row.event_id,
+        "event_type": row.event_type,
+        "task_id": row.task_id,
+        "turn_id": row.turn_id,
+        "sequence": row.sequence,
+        "payload": payload,
+        "created_at": row.created_at,
+    }

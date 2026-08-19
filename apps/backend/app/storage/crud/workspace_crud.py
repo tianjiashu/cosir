@@ -11,15 +11,14 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import asc, select
+from sqlalchemy import asc, delete, select
 
 from app.models import WorkspaceRecord
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_session_factory
-from app.utils.datetime_utils import from_text, to_text
+from app.utils.datetime_utils import to_text, utc_now
 
 
 class WorkspaceCrud:
@@ -49,7 +48,7 @@ class WorkspaceCrud:
     def create(self, name: str, root_path: str) -> WorkspaceRecord:
         """新建一个工作区并落库。
 
-        ``workspace_id`` 由本方法生成（UUID4），创建 / 更新时间取本地当前时间；name 与
+        ``workspace_id`` 由本方法生成（UUID4），创建 / 更新时间取当前 UTC 时间；name 与
         root_path 会去除首尾空白后存储。
 
         参数:
@@ -71,7 +70,7 @@ class WorkspaceCrud:
             raise ValueError("workspace name must not be blank")
         if not root_path.strip():
             raise ValueError("workspace root_path must not be blank")
-        now = datetime.now()
+        now = utc_now()
         workspace = WorkspaceRecord(str(uuid4()), name.strip(), root_path.strip(), now, now)
         with self._session_factory.begin() as session:
             session.add(
@@ -111,7 +110,7 @@ class WorkspaceCrud:
                 .scalars()
                 .all()
             )
-        return [self._workspace_from_model(row) for row in rows]
+        return [WorkspaceRecord.from_model(row) for row in rows]
 
     def get(self, workspace_id: str) -> WorkspaceRecord:
         """按标识返回单个工作区。
@@ -131,10 +130,10 @@ class WorkspaceCrud:
         """
 
         with self._session_factory() as session:
-            row = session.get(WorkspaceModel, workspace_id)
+            row: WorkspaceModel | None = session.get(WorkspaceModel, workspace_id)
         if row is None:
             raise KeyError(workspace_id)
-        return self._workspace_from_model(row)
+        return WorkspaceRecord.from_model(row)
 
     def delete(self, workspace_id: str) -> None:
         """删除单个工作区记录。
@@ -155,34 +154,9 @@ class WorkspaceCrud:
             从 ``workspaces`` 表删除匹配的行；工作区不存在时静默无操作。
         """
 
-        from sqlalchemy import delete
-
         with self._session_factory.begin() as session:
             session.execute(
                 delete(WorkspaceModel).where(WorkspaceModel.workspace_id == workspace_id)
             )
 
-    def _workspace_from_model(self, row: WorkspaceModel) -> WorkspaceRecord:
-        """把 ``WorkspaceModel`` ORM 行转换为业务 ``WorkspaceRecord``。
 
-        转换过程把库中存储的文本时间戳还原为 datetime。
-
-        参数:
-            row: 查询得到的 ``WorkspaceModel`` 行。
-
-        返回:
-            对应的 ``WorkspaceRecord``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        return WorkspaceRecord(
-            row.workspace_id,
-            row.name,
-            row.root_path,
-            from_text(row.created_at),
-            from_text(row.updated_at),
-        )

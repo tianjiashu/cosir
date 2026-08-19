@@ -11,12 +11,12 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from app.models import TaskRecord
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import main_session_factory
-from app.utils.datetime_utils import from_text, to_text, utc_now
+from app.utils.datetime_utils import to_text, utc_now
 
 
 class TaskCrud:
@@ -147,7 +147,7 @@ class TaskCrud:
                 .scalars()
                 .all()
             )
-        return [self._task_from_model(row) for row in rows]
+        return [TaskRecord.from_model(row) for row in rows]
 
     def list_by_parent_task(self, parent_task_id: str) -> list[TaskRecord]:
         """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。
@@ -175,7 +175,7 @@ class TaskCrud:
                 .scalars()
                 .all()
             )
-        return [self._task_from_model(row) for row in rows]
+        return [TaskRecord.from_model(row) for row in rows]
 
     def get(self, task_id: str) -> TaskRecord:
         """按标识返回单个 task。
@@ -197,7 +197,7 @@ class TaskCrud:
             row = session.get(TaskModel, task_id)
         if row is None:
             raise KeyError(task_id)
-        return self._task_from_model(row)
+        return TaskRecord.from_model(row)
 
     def update_status(self, task_id: str, status: str) -> TaskRecord:
         """更新 task 状态并刷新更新时间。
@@ -294,8 +294,6 @@ class TaskCrud:
         副作用:
             打开一次主库只读 session。
         """
-        from sqlalchemy import select
-
         with self._session_factory() as session:
             return [
                 row[0]
@@ -318,41 +316,12 @@ class TaskCrud:
 
         副作用:
             从 ``tasks`` 表删除匹配的行。仅删除 task 自身，不级联清理 turn / run / trace
-            （级联由上层 service 编排）。
+            （级联由上层 service 编排）；task_ids 为空或对应行不存在时静默无操作。
         """
-        from sqlalchemy import delete
 
+        if not task_ids:
+            return
         with self._session_factory.begin() as session:
             session.execute(delete(TaskModel).where(TaskModel.task_id.in_(task_ids)))
 
-    def _task_from_model(self, row: TaskModel) -> TaskRecord:
-        """把 ``TaskModel`` ORM 行转换为业务 ``TaskRecord``。
 
-        转换过程把库中存储的文本时间戳还原为 datetime。
-
-        参数:
-            row: 查询得到的 ``TaskModel`` 行。
-
-        返回:
-            对应的 ``TaskRecord``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        return TaskRecord(
-            task_id=row.task_id,
-            workspace_id=row.workspace_id,
-            agent_id=row.agent_id,
-            title=row.title,
-            status=row.status,
-            created_at=from_text(row.created_at),
-            updated_at=from_text(row.updated_at),
-            task_type=row.task_type,
-            parent_task_id=row.parent_task_id,
-            parent_turn_id=row.parent_turn_id,
-            delegation_id=row.delegation_id,
-            context_usage_used=row.context_usage_used,
-        )
