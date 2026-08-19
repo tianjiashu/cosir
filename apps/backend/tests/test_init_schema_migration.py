@@ -1,8 +1,7 @@
 """``init_schema`` 列迁移逻辑测试。
 
-验证 ``_ensure_model_columns`` / ``_drop_orphan_provider_columns`` 对存量旧库的演进：
+验证 ``_ensure_model_columns`` 对存量旧库的演进：
 - providers 表的 ``api_key_env`` 旧列重命名为 ``api_key``；
-- providers 表的废弃孤儿列 ``api_version`` 被清理；
 - 模型新增列能被 ``ADD COLUMN`` 补齐。
 
 这些迁移保证「用户机旧库启动自愈」，不再因 ORM 字段漂移导致 500。
@@ -11,13 +10,10 @@
 import sqlite3
 from pathlib import Path
 
-import pytest
 from sqlalchemy import Engine, create_engine, inspect, text
 
 from app.storage.init_schema import (
     _COLUMN_RENAME_MAP,
-    _ORPHAN_PROVIDER_COLUMNS,
-    _drop_orphan_provider_columns,
     _ensure_model_columns,
     initialize_app_schema,
 )
@@ -55,7 +51,7 @@ def _create_legacy_providers(connection) -> None:
 
 
 def test_legacy_providers_migrated_on_init(tmp_path: Path) -> None:
-    """旧库 providers 表经 initialize_app_schema 后应重命名 api_key_env 并清理 api_version。"""
+    """旧库 providers 表经 initialize_app_schema 后应把 api_key_env 重命名为 api_key。"""
     engine = _make_engine(tmp_path)
     with engine.begin() as connection:
         _create_legacy_providers(connection)
@@ -67,7 +63,6 @@ def test_legacy_providers_migrated_on_init(tmp_path: Path) -> None:
         columns = {col["name"] for col in inspector.get_columns("providers")}
         assert "api_key" in columns, "api_key_env 应被重命名为 api_key"
         assert "api_key_env" not in columns, "旧列名应已消失"
-        assert "api_version" not in columns, "废弃孤儿列应被清理"
         # 存量数据应保留且随重命名迁移到新列
         row = connection.execute(
             text("SELECT name, api_key FROM providers WHERE provider_id = 'p1'")
@@ -80,26 +75,6 @@ def test_legacy_providers_migrated_on_init(tmp_path: Path) -> None:
 def test_rename_map_covers_api_key_env() -> None:
     """_COLUMN_RENAME_MAP 应登记 providers 表的 api_key_env → api_key。"""
     assert _COLUMN_RENAME_MAP.get("providers", {}).get("api_key_env") == "api_key"
-
-
-def test_orphan_provider_columns_covers_api_version() -> None:
-    """_ORPHAN_PROVIDER_COLUMNS 应登记 api_version。"""
-    assert "api_version" in _ORPHAN_PROVIDER_COLUMNS
-
-
-def test_drop_orphan_provider_columns_idempotent(tmp_path: Path) -> None:
-    """_drop_orphan_provider_columns 对无孤儿列的表应是幂等的（不报错）。"""
-    engine = _make_engine(tmp_path)
-    with engine.begin() as connection:
-        _create_legacy_providers(connection)
-    # 先跑一次迁移，使 api_version 已清理
-    with engine.begin() as connection:
-        _drop_orphan_provider_columns(connection)
-    # 再跑一次不应抛错
-    with engine.begin() as connection:
-        _drop_orphan_provider_columns(connection)
-        columns = {col["name"] for col in inspect(connection).get_columns("providers")}
-        assert "api_version" not in columns
 
 
 def test_ensure_model_columns_adds_missing(tmp_path: Path) -> None:

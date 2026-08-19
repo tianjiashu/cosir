@@ -1,21 +1,16 @@
 """file_snapshot seq 命名空间修复——补充边界回归测试（审查后新增）。
 
-在 ``test_file_snapshot_task_seq.py`` 的 7 个用例之外，补齐审查发现的关键边界：
+在 ``test_file_snapshot_task_seq.py`` 用例之外，补齐审查发现的关键边界：
 
-1. **迁移幂等**：``_backfill_file_snapshot_task_seq`` 二次运行不得改变任何行的
-   ``task_id`` / ``seq``（docstring 声明的幂等契约）；
-2. **迁移孤儿清理**：所属 turn 已被删除的快照在迁移时被清理（跨 task 归因前置）；
-3. **并发隔离**：``next_seq``（MAX+1 读改写）非原子，并发下同 task 可能拿到相同
+1. **并发隔离**：``next_seq``（MAX+1 读改写）非原子，并发下同 task 可能拿到相同
    seq——``(task_id, seq)`` 唯一索引作为保险丝拒绝重复落库，库内最终不变量
    「无重复 (task_id, seq)」必须成立；
-4. **checkpoint 非法 turn**：``query_change_set`` 传入不属于该 task 的
+2. **checkpoint 非法 turn**：``query_change_set`` 传入不属于该 task 的
    ``checkpoint_turn_id`` 必须抛 ``ValueError``；
-5. **include_running 分支**：运行中（``stable=0``）快照是否参与「最新变更」聚合；
-6. **CRUD 边界**：空 ``turn_ids`` 短路、单 turn 回放 seq 降序、``mark_stable_by_turn``
-   幂等与跨 turn 隔离、``update_status`` CAS miss、``clear_by_turn`` 范围。
-
-另含迁移防御分支（``file_snapshots`` / ``turns`` 表缺失、空表 noop）与
-``revert_file`` / ``keep_file`` / ``_resolve_workspace_root`` 端到端用例。
+3. **include_running 分支**：运行中（``stable=0``）快照是否参与「最新变更」聚合；
+4. **CRUD 边界**：空 ``turn_ids`` 短路、单 turn 回放 seq 降序、``mark_stable_by_turn``
+   幂等与跨 turn 隔离、``update_status`` CAS miss、``clear_by_turn`` 范围；
+5. **撤销/保留端到端**：``revert_file`` / ``keep_file`` / ``_resolve_workspace_root``。
 
 本文件只包含测试，不修改任何业务代码。
 """
@@ -28,7 +23,6 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy
-from sqlalchemy import text
 
 from app.config.settings import Settings
 from app.models.file_snapshot_record import FileSnapshotRecord
@@ -44,8 +38,7 @@ from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.storage.init_schema import _backfill_file_snapshot_task_seq
-from app.storage.store_engines import close_storage, init_storage, main_engine
+from app.storage.store_engines import close_storage, init_storage
 
 
 @pytest.fixture
@@ -116,78 +109,6 @@ def _create_turns(task_id: str, count: int) -> list[TurnRecord]:
     turns = crud.list_by_task(task_id)
     assert len(turns) == count
     return turns
-
-
-def _simulate_legacy_schema(crud: FileSnapshotCrud, snapshots: list[FileSnapshotRecord]) -> None:
-    """模拟旧 schema：无唯一索引、无 task_id 列（存量行 task_id 抹空）后插入旧数据。"""
-
-    with main_engine().begin() as connection:
-        connection.execute(text("DROP INDEX IF EXISTS uq_file_snapshots_task_seq"))
-    for snap in snapshots:
-        crud.save(snap)
-    with main_engine().begin() as connection:
-        connection.execute(text("UPDATE file_snapshots SET task_id = ''"))
-
-
-def test_backfill_migration_is_idempotent_on_second_run(isolated_storage: None) -> None:
-    """迁移幂等：二次运行 _backfill_file_snapshot_task_seq 不得改变任何行 (task_id, seq)。"""
-    turns = _create_turns("task-1", 2)
-    turn_1, turn_2 = turns[0].turn_id, turns[1].turn_id
-    crud = FileSnapshotCrud()
-    # 旧版语义：同 task 不同 turn 的 seq 都从 0 开始（每 turn 独立递增）。
-    _simulate_legacy_schema(
-        crud,
-        [
-            _snapshot("task-1", turn_1, 0, "a.txt", action="created"),
-            _snapshot("task-1", turn_2, 0, "a.txt", action="modified"),
-            _snapshot("task-1", turn_2, 1, "b.txt", action="created"),
-        ],
-    )
-
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)
-    first = crud.list_any_by_task("task-1")
-    assert [r.seq for r in first] == [0, 1, 2]
-    assert all(r.task_id == "task-1" for r in first)
-    first_state = [(r.id, r.task_id, r.seq, r.path, r.action) for r in first]
-
-    # 二次运行：幂等契约，任何行都不许被重排。
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)
-    second = crud.list_any_by_task("task-1")
-    second_state = [(r.id, r.task_id, r.seq, r.path, r.action) for r in second]
-    assert second_state == first_state
-    assert [r.seq for r in second] == [0, 1, 2]
-
-
-def test_backfill_migration_deletes_orphan_snapshots(isolated_storage: None) -> None:
-    """迁移孤儿清理：所属 turn 已被删除的快照在迁移时被删除，正常行照常回填。"""
-    turns = _create_turns("task-1", 1)
-    turn_1 = turns[0].turn_id
-    crud = FileSnapshotCrud()
-    _simulate_legacy_schema(
-        crud,
-        [
-            _snapshot("task-1", turn_1, 0, "a.txt", action="created"),
-            _snapshot("task-1", turn_1, 0, "b.txt", action="modified"),
-        ],
-    )
-    # 孤儿快照：turn_id 指向不存在的 turn，无法归因任何 task。
-    crud.save(_snapshot("task-1", "no-such-turn", 0, "orphan.txt", action="created"))
-    with main_engine().begin() as connection:
-        connection.execute(text("UPDATE file_snapshots SET task_id = ''"))
-
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)
-
-    rows = crud.list_any_by_task("task-1")
-    assert [r.seq for r in rows] == [0, 1]
-    assert all(r.task_id == "task-1" for r in rows)
-    with main_engine().begin() as connection:
-        count = connection.execute(
-            text("SELECT COUNT(*) FROM file_snapshots WHERE turn_id = 'no-such-turn'")
-        ).scalar_one()
-    assert count == 0
 
 
 def test_concurrent_seq_allocation_unique_index_fuse(isolated_storage: None) -> None:
@@ -358,28 +279,6 @@ def test_latest_by_path_filters_by_turn_ids(isolated_storage: None) -> None:
     assert latest_turn1.action == "created"
     stable_turn1 = crud.latest_stable_by_path("task-1", "a.txt", ["turn-1"])
     assert stable_turn1 is not None and stable_turn1.action == "created"
-
-
-def test_backfill_migration_noop_when_table_missing(isolated_storage: None) -> None:
-    """迁移防御分支：file_snapshots 表不存在时 _backfill 直接返回，不抛错。"""
-    with main_engine().begin() as connection:
-        connection.execute(text("DROP TABLE file_snapshots"))
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)  # 不应抛异常
-
-
-def test_backfill_migration_noop_when_turns_table_missing(isolated_storage: None) -> None:
-    """迁移防御分支：turns 表不存在（file_snapshots 存在）时 _backfill 直接返回，不抛错。"""
-    with main_engine().begin() as connection:
-        connection.execute(text("DROP TABLE turns"))
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)  # 不应抛异常
-
-
-def test_backfill_migration_noop_on_empty_table(isolated_storage: None) -> None:
-    """迁移防御分支：表存在但无任何快照行时 _backfill 直接返回，不抛错。"""
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)
 
 
 def test_keep_file_marks_status_kept(isolated_storage: None) -> None:

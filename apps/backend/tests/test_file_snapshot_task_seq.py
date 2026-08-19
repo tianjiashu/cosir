@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy
-from sqlalchemy import text
 
 from app.config.settings import Settings
 from app.models.file_snapshot_record import FileSnapshotRecord
@@ -25,8 +24,7 @@ from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.storage.init_schema import _backfill_file_snapshot_task_seq
-from app.storage.store_engines import close_storage, init_storage, main_engine
+from app.storage.store_engines import close_storage, init_storage
 
 
 @pytest.fixture
@@ -207,37 +205,3 @@ def test_unique_task_seq_index_guards_duplicate(isolated_storage: None) -> None:
         crud.save(_snapshot("task-1", "turn-2", 0, "b.txt"))
     # 不同 task 同 seq 合法（命名空间隔离）
     crud.save(_snapshot("task-2", "turn-1", 0, "c.txt"))
-
-
-def test_backfill_migration_fixes_legacy_seq(isolated_storage: None) -> None:
-    """存量迁移：回填 task_id + 按 task 重排重叠 seq，使「最新变更」判定在旧数据上同样可靠。"""
-    turns = _create_turns("task-1", 2)
-    turn_1, turn_2 = turns[0].turn_id, turns[1].turn_id
-    # 模拟旧 schema：删除保险丝唯一索引（旧库无该索引），才允许插入重叠 seq 的旧数据。
-    with main_engine().begin() as connection:
-        connection.execute(text("DROP INDEX uq_file_snapshots_task_seq"))
-    crud = FileSnapshotCrud()
-    # 旧版语义：同 task 不同 turn 的 seq 都从 0 开始（每 turn 独立递增）。
-    crud.save(_snapshot("task-1", turn_1, 0, "a.txt", action="created"))
-    crud.save(_snapshot("task-1", turn_2, 0, "a.txt", action="modified"))
-    # 抹掉 task_id，模拟旧表缺该列（存量库回填前所有行 task_id 为空串）。
-    with main_engine().begin() as connection:
-        connection.execute(text("UPDATE file_snapshots SET task_id = ''"))
-    # 运行迁移（真实初始化流程里排在 _ensure_model_indexes 之前）。
-    with main_engine().begin() as connection:
-        _backfill_file_snapshot_task_seq(connection)
-    rows = crud.list_any_by_task("task-1")
-    assert [r.seq for r in rows] == [0, 1]
-    assert all(r.task_id == "task-1" for r in rows)
-    latest = crud.latest_any_by_path("task-1", "a.txt")
-    assert latest is not None
-    assert latest.turn_id == turn_2
-    assert latest.action == "modified"
-    # 迁移后 (task_id, seq) 已唯一，保险丝索引可重建。
-    with main_engine().begin() as connection:
-        connection.execute(
-            text(
-                "CREATE UNIQUE INDEX uq_file_snapshots_task_seq "
-                "ON file_snapshots (task_id, seq)"
-            )
-        )

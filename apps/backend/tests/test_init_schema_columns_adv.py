@@ -1,10 +1,9 @@
 """``init_schema`` 列迁移逻辑进阶 / 对抗性测试。
 
-聚焦 SQLite 主库 ``initialize_app_schema`` / ``_ensure_model_columns`` / ``_drop_orphan_provider_columns``
-对「用户机旧库」的列级演进：
+聚焦 SQLite 主库 ``initialize_app_schema`` / ``_ensure_model_columns`` 对「用户机旧库」
+的列级演进：
 
 - 重命名迁移：providers.api_key_env -> api_key，存量数据保留；
-- 孤儿列清理：providers.api_version 被 DROP；
 - 补列迁移：缺失 ORM 列被 ADD COLUMN，现有列不删；
 - 幂等性：已最新 schema 的库重复调用不报错；
 - NOT NULL 列补列：enabled(NOT NULL DEFAULT 1) 补列不应丢数据；
@@ -16,21 +15,15 @@
 import sqlite3
 from pathlib import Path
 
-import pytest
-from sqlalchemy import Engine, create_engine, inspect, text
-
-from sqlalchemy import Boolean, Float, Integer, Numeric, Text
+from sqlalchemy import Boolean, Engine, Float, Integer, Numeric, Text, create_engine, inspect, text
 
 from app.storage.init_schema import (
     _default_literal_for_type,
-    _drop_orphan_provider_columns,
     _ensure_model_columns,
-    _ORPHAN_PROVIDER_COLUMNS,
     initialize_app_schema,
     initialize_log_schema,
 )
 from app.storage.model.provider_model import ProviderModel
-from app.storage.model.task_model import TaskModel
 
 
 # --------------------------------------------------------------------------- #
@@ -184,50 +177,7 @@ def test_rename_idempotent_when_already_api_key(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 2. 孤儿列清理：api_version 被 DROP
-# --------------------------------------------------------------------------- #
-def test_drop_orphan_api_version(tmp_path: Path) -> None:
-    """目的：providers 含 api_version 孤儿列时被 DROP；潜在缺陷：孤儿列未清理导致 schema 漂移残留。"""
-    engine = _make_engine(tmp_path)
-    with engine.begin() as connection:
-        _create_full_legacy_providers(connection)
-
-    initialize_app_schema(engine)
-
-    cols = _raw_cols(engine, "providers")
-    assert "api_version" not in cols, "废弃孤儿列 api_version 应被 DROP"
-    assert "api_version" in _ORPHAN_PROVIDER_COLUMNS, "孤儿列应在登记表内"
-
-
-def test_drop_orphan_provider_columns_idempotent_no_orphan(tmp_path: Path) -> None:
-    """目的：无孤儿列时直接调用 _drop_orphan_provider_columns 不报错；潜在缺陷：不存在的列 DROP 抛错破坏幂等。"""
-    engine = _make_engine(tmp_path)
-    with engine.begin() as connection:
-        # 全新 providers 表（无孤儿列）
-        _drop_providers(connection)
-        connection.execute(
-            text(
-                "CREATE TABLE providers ("
-                "provider_id TEXT PRIMARY KEY, name TEXT NOT NULL)"
-            )
-        )
-    # 连续两次调用不应抛错
-    with engine.begin() as connection:
-        _drop_orphan_provider_columns(connection)
-    with engine.begin() as connection:
-        _drop_orphan_provider_columns(connection)
-
-
-def test_drop_orphan_no_providers_table(tmp_path: Path) -> None:
-    """目的：providers 表根本不存在时清理函数安全跳过；潜在缺陷：无表时 inspect/has_table 误报抛错。"""
-    engine = _make_engine(tmp_path)
-    with engine.begin() as connection:
-        # 不创建 providers 表
-        _drop_orphan_provider_columns(connection)
-
-
-# --------------------------------------------------------------------------- #
-# 3. 补列迁移：缺失 ORM 列被 ADD，现有列不删
+# 2. 补列迁移：缺失 ORM 列被 ADD，现有列不删
 # --------------------------------------------------------------------------- #
 def test_ensure_model_columns_adds_missing_no_drop(tmp_path: Path) -> None:
     """目的：_ensure_model_columns 补齐缺失 ORM 列（type/api_key 等）且不删除现有列；潜在缺陷：补列误删现有列或遗漏缺失列。"""
@@ -303,7 +253,7 @@ def test_initialize_app_schema_idempotent_fresh_db(tmp_path: Path) -> None:
 
 
 def test_initialize_app_schema_idempotent_after_legacy_migration(tmp_path: Path) -> None:
-    """目的：旧库迁移到最新 schema 后再调用一次不应报错（端到端幂等）；潜在缺陷：重命名/孤儿清理分支在已迁移库上重入报错。"""
+    """目的：旧库迁移到最新 schema 后再调用一次不应报错（端到端幂等）；潜在缺陷：重命名分支在已迁移库上重入报错。"""
     engine = _make_engine(tmp_path)
     with engine.begin() as connection:
         _create_full_legacy_providers(connection)
@@ -313,7 +263,7 @@ def test_initialize_app_schema_idempotent_after_legacy_migration(tmp_path: Path)
     initialize_app_schema(engine)
 
     cols = _raw_cols(engine, "providers")
-    assert "api_key" in cols and "api_key_env" not in cols and "api_version" not in cols
+    assert "api_key" in cols and "api_key_env" not in cols
     rows = _raw_rows(
         engine, "SELECT provider_id, api_key FROM providers ORDER BY provider_id"
     )
@@ -467,58 +417,9 @@ def test_raw_sqlite_rename_drop_syntax(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 补充：覆盖 init_schema 其余分支（孤儿清理 / 日志库迁移 / NOT NULL 零值推导 / 默认参数）
+# 补充：覆盖 init_schema 其余分支（日志库迁移 / NOT NULL 零值推导 / 默认参数）
 # 这些分支与「列迁移」同属 schema 自愈职责，且能暴露潜在缺陷，故一并覆盖至 >80%。
 # --------------------------------------------------------------------------- #
-def test_initialize_app_schema_cleans_orphan_task_columns(tmp_path: Path) -> None:
-    """目的：initialize_app_schema 应清理 tasks 表的孤儿列（input_text/last_message_preview/latest_turn_id）；潜在缺陷：孤儿列残留造成 schema 漂移。"""
-    engine = _make_engine(tmp_path)
-    with engine.begin() as connection:
-        # 手工造一张含孤儿列的 tasks 旧表（此处仅构造最小结构以触发清理分支）
-        connection.execute(text("DROP TABLE IF EXISTS tasks"))
-        connection.execute(
-            text(
-                "CREATE TABLE tasks ("
-                "task_id TEXT PRIMARY KEY, "
-                "title TEXT NOT NULL, "
-                "input_text TEXT, "
-                "last_message_preview TEXT, "
-                "latest_turn_id TEXT"
-                ")"
-            )
-        )
-        connection.execute(
-            text("INSERT INTO tasks (task_id, title) VALUES ('t1', 'demo')")
-        )
-
-    initialize_app_schema(engine)
-
-    cols = _raw_cols(engine, "tasks")
-    for orphan in ("input_text", "last_message_preview", "latest_turn_id"):
-        assert orphan not in cols, f"tasks 孤儿列 {orphan} 应被清理"
-    # 业务行不应丢失
-    rows = _raw_rows(engine, "SELECT task_id, title FROM tasks")
-    assert rows == [("t1", "demo")], f"孤儿列清理后业务行应保留，实际 {rows}"
-
-
-def test_initialize_app_schema_drops_orphan_durable_runs(tmp_path: Path) -> None:
-    """目的：initialize_app_schema 应 DROP 已移除的 durable_runs 孤儿表；潜在缺陷：孤儿表残留。"""
-    engine = _make_engine(tmp_path)
-    with engine.begin() as connection:
-        connection.execute(text("DROP TABLE IF EXISTS durable_runs"))
-        connection.execute(
-            text("CREATE TABLE durable_runs (run_id TEXT PRIMARY KEY, payload TEXT)")
-        )
-
-    initialize_app_schema(engine)
-
-    with engine.connect() as connection:
-        from sqlalchemy import inspect as _inspect
-
-        exists = _inspect(connection).has_table("durable_runs")
-    assert exists is False, "孤儿表 durable_runs 应被 DROP"
-
-
 def test_ensure_model_columns_default_models_arg(tmp_path: Path) -> None:
     """目的：_ensure_model_columns 缺省 models 参数（=APP_MODELS）时仍能补列且跳过不存在的表；潜在缺陷：默认分支/跳过分支未实现。"""
     engine = _make_engine(tmp_path)

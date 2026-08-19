@@ -20,13 +20,14 @@ SQLAlchemy model 为单一事实来源，本模块只做“让数据库结构追
 
 from typing import cast
 
-from sqlalchemy import Engine, Table, inspect, text
+from sqlalchemy import Connection, Engine, Table, inspect, text
 from sqlalchemy.sql.schema import DefaultClause
 
 from app.config.logging.logger import log
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.log_model import LogEntryModel
+from app.storage.model.provider_model import ProviderModel
 from app.storage.model.runtime_event_model import RuntimeEventModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.turn_message_model import TurnMessageModel
@@ -42,22 +43,23 @@ APP_MODELS = (
     FileSnapshotModel,
     DelegationModel,
 )
+
+# 额外的「需要迁移但不属于核心 APP_MODELS 的表」：这些表由各自的 CRUD 负责建表
+# （通过 ``Model.__table__.create(checkfirst=True)``），不纳入 ``APP_MODELS`` 的建表循环，
+# 但仍需在存量库升级时补齐缺失列 / 重命名旧列。当前唯一登记项：providers 表。
+_MIGRATE_ONLY_MODELS = (ProviderModel,)
 LOG_MODELS = (LogEntryModel,)
 LOG_SCHEMA_VERSION = 2
 
 
 def initialize_app_schema(engine: Engine) -> None:
-    """初始化主库（业务数据库）schema，并对已存在的表补齐缺失列与索引。
+    """初始化主库 schema，并对已存在的表补齐缺失列与索引。
 
-    完整流程（单事务，失败整体回滚）：
-    1) 对 ``APP_MODELS`` 中的每个 model 执行“存在则跳过、不存在则建表”；
-    2) 逐表比对模型定义与实际列，缺失的列以 ``ALTER TABLE ADD COLUMN`` 补齐
-       （保守迁移，不删列、不改列）；
-    3) 对存量 ``file_snapshots`` 执行一次性 seq 迁移（``_backfill_file_snapshot_task_seq``：
-       删除孤儿快照、回填 task_id、按 ``(task_id, created_at, turn_id, seq, id)`` 重排
-       seq），必须早于建索引，否则 ``(task_id, seq)`` 唯一索引在重叠存量数据上建不起来；
-    4) 补建模型声明的新索引（``_ensure_model_indexes``）；
-    5) 清理孤儿列与孤儿表（``_drop_orphan_task_columns`` / ``_drop_orphan_durable_runs``）。
+    流程（单事务，失败整体回滚）：①对 ``APP_MODELS`` 逐个建表（存在则跳过）；
+    ②``_ensure_model_columns`` 逐表比对模型与实际列，``ADD COLUMN`` 补齐缺失列
+    （保守迁移不删数据列，仅按 ``_COLUMN_RENAME_MAP`` 做历史重命名）；
+    ③``_ensure_model_indexes`` 补建模型声明的缺失索引。``_MIGRATE_ONLY_MODELS``
+    参与列迁移但不参与建表循环（建表由各自 CRUD 负责）。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
@@ -66,158 +68,33 @@ def initialize_app_schema(engine: Engine) -> None:
         无。
 
     异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果建表、列迁移或 seq 迁移执行失败。
+        sqlalchemy.exc.SQLAlchemyError: 如果建表、列迁移或建索引执行失败。
 
     副作用:
-        创建缺失的业务表；对已存在的表追加缺失列、补建索引；清理孤儿列/孤儿表。
-        除一次性 seq 迁移会重排存量快照的 task_id/seq、清理孤儿快照行外，业务数据
-        不丢失。
+        创建缺失业务表；对已存在表追加缺失列、补建索引。业务数据不丢失。
     """
 
     with engine.begin() as connection:
         for model in APP_MODELS:
             cast(Table, model.__table__).create(bind=connection, checkfirst=True)
-        _ensure_model_columns(connection, engine)
-        _backfill_file_snapshot_task_seq(connection)
+        # 核心表建表后，再对「核心 + 仅迁移」全量做列迁移（含 providers 表的
+        # api_key_env → api_key 重命名）。_MIGRATE_ONLY_MODELS 不在建表循环里，
+        # 建表由各自 CRUD 负责，避免扩大 APP_MODELS 影响范围。
+        _ensure_model_columns(connection, engine, APP_MODELS + _MIGRATE_ONLY_MODELS)
         _ensure_model_indexes(connection)
-        _drop_orphan_task_columns(connection)
-        _drop_orphan_durable_runs(connection)
-
-
-def _drop_orphan_durable_runs(connection) -> None:
-    """清理已被移除的 ``durable_runs`` 孤儿表。
-
-    ``DurableRunModel`` 已从 ``APP_MODELS`` 中移除，因此不会被重建；但存量库升级时该表可能
-    仍物理存在（保守迁移策略不删列、不删表）。此处一次性 ``DROP TABLE IF EXISTS`` 清理它，
-    使存量库升级后无无人引用的孤儿表。该操作幂等、无业务数据损失（运行产物）。
-
-    参数:
-        connection: 当前处于事务中的 SQLAlchemy 连接。
-
-    返回:
-        无。
-
-    异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果 DROP 执行失败。
-
-    副作用:
-        当 ``durable_runs`` 表存在时删除它。
-    """
-
-    if inspect(connection).has_table("durable_runs"):
-        connection.execute(text("DROP TABLE IF EXISTS durable_runs"))
-        log.info("dropped orphan table durable_runs")
-
-
-def _backfill_file_snapshot_task_seq(connection) -> None:
-    """一次性把存量 file_snapshots 迁移到「task 为 seq 命名空间」的新语义。
-
-    旧版（seq 按 turn 内递增且表无 task_id 列）下，同 task 的跨 turn 快照 seq 相互
-    重叠，跨 turn 聚合按 seq 排序时「最新变更」判定错乱，撤销可能还原到旧状态。本
-    迁移做三件事（仅当 file_snapshots 与 turns 表均存在时执行，幂等）：
-
-    1) 删除孤儿快照：所属 turn 已被删除的行无法归因任何 task，直接清理；
-    2) 回填 task_id：每行取所属 turn 的 task_id；
-    3) 重排 seq：按 (task_id, turn 创建顺序, turn_id, 原 seq, 行 id) 稳定排序后，
-       把每个 task 内的快照重编号为连续递增 0..N-1，使 (task_id, seq) 在存量数据
-       上唯一。排序键与 ``TurnCrud.list_by_task`` 对齐，保证迁移排序与运行时回放
-       排序同构。
-
-    必须早于 ``_ensure_model_indexes`` 执行：``uq_file_snapshots_task_seq`` 唯一索引
-    只在存量数据满足唯一性后才能创建，否则建索引抛错导致整个迁移回滚。
-
-    参数:
-        connection: 当前处于事务中的 SQLAlchemy 连接。
-
-    返回:
-        无。
-
-    异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果任一 SQL 执行失败。
-
-    副作用:
-        可能删除孤儿快照行、改写存量快照的 task_id 与 seq；写 info 日志。
-    """
-    # 防御：当前初始化流程保证 turns 先于 file_snapshots 建表，但函数被单独调用时
-    # 仍要求两张表都存在，否则 JOIN/DELETE 会报 no such table。
-    if not inspect(connection).has_table("file_snapshots") or not inspect(
-        connection
-    ).has_table("turns"):
-        return
-    deleted = connection.execute(
-        text("DELETE FROM file_snapshots WHERE turn_id NOT IN (SELECT turn_id FROM turns)")
-    )
-    if deleted.rowcount:
-        log.info("deleted %d orphan file_snapshots rows", deleted.rowcount)
-
-    # ORDER BY 与 TurnCrud.list_by_task 的排序键 (created_at, turn_id) 对齐，保持
-    # 「迁移排序」与「运行时回放排序」同构；seq/id 为同 task 内并列时的稳定兜底。
-    rows = connection.execute(
-        text(
-            "SELECT fs.id AS fs_id, t.task_id AS task_id "
-            "FROM file_snapshots fs JOIN turns t ON t.turn_id = fs.turn_id "
-            "ORDER BY t.task_id, t.created_at, t.turn_id, fs.seq, fs.id"
-        )
-    ).fetchall()
-    if not rows:
-        return
-    seq_by_task: dict[str, int] = {}
-    for row in rows:
-        fs_id = row[0]
-        task_id = row[1]
-        nxt = seq_by_task.get(task_id, 0)
-        connection.execute(
-            text("UPDATE file_snapshots SET task_id = :tid, seq = :seq WHERE id = :id"),
-            {"tid": task_id, "seq": nxt, "id": fs_id},
-        )
-        seq_by_task[task_id] = nxt + 1
-    log.info("backfilled file_snapshots task_id/seq for %d rows", len(rows))
-
-
-def _drop_orphan_task_columns(connection) -> None:
-    """清理 tasks 表中已移除的孤儿列，使存量库升级后无无人引用的孤儿字段。
-
-    这些列（``input_text`` / ``last_message_preview`` / ``latest_turn_id``）语义上属于轮次
-    维度或已被判定不应由任务持有，已从 ``TaskModel`` 与 ``TaskResponse`` 中移除。存量库升级时
-    这些列可能仍物理存在（保守迁移策略不删列），此处一次性 DROP 收口，与模型现状对齐。
-
-    参数:
-        connection: 当前处于事务中的 SQLAlchemy 连接。
-
-    返回:
-        无。
-
-    异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果 DROP COLUMN 执行失败。
-
-    副作用:
-        当 tasks 表存在且含上述孤儿列时逐个删除；每删除一列写一条 info 日志。
-    """
-    _ORPHAN_TASK_COLUMNS = ("input_text", "last_message_preview", "latest_turn_id")
-    if not inspect(connection).has_table("tasks"):
-        return
-    existing = {col["name"] for col in inspect(connection).get_columns("tasks")}
-    for column_name in _ORPHAN_TASK_COLUMNS:
-        if column_name not in existing:
-            continue
-        connection.execute(
-            text(f"ALTER TABLE tasks DROP COLUMN {column_name}")
-        )
-        log.info("dropped orphan column tasks.%s", column_name)
 
 
 def _default_literal_for_type(column_type) -> str:
-    """为“新增的 NOT NULL 列”推导一个 SQLite 默认值字面量。
+    """为新增的 NOT NULL 列推导 SQLite 默认值字面量。
 
-    SQLite 对已存在数据的表新增 NOT NULL 列时必须提供 DEFAULT，否则历史行无法满足非空约束。
-    本函数按列类型给出安全的零值：整型 / 布尔为 ``0``，浮点 / 数值为 ``0.0``，其余（文本等）
-    为空字符串 ``''``。
+    SQLite 对已有数据的表新增 NOT NULL 列必须给 DEFAULT。按列类型返回零值：
+    整型/布尔 ``0``，浮点/数值 ``0.0``，其余 ``''``。
 
     参数:
         column_type: SQLAlchemy 列类型对象。
 
     返回:
-        可直接拼进 ``ALTER TABLE ... DEFAULT`` 的 SQL 字面量字符串。
+        可拼进 ``ALTER TABLE ... DEFAULT`` 的 SQL 字面量字符串。
 
     异常:
         无。
@@ -234,18 +111,29 @@ def _default_literal_for_type(column_type) -> str:
     return "''"
 
 
-def _ensure_model_columns(connection, engine) -> None:
-    """把 model 中新增、但数据库表里尚缺的列补齐到已存在的主库表。
+# 已知历史列名重命名映射（按表名 → {旧列名: 新列名}）。
+# 仅收录经过确认的「重命名类」迁移：普通新增列走 _ensure_model_columns 的 ADD COLUMN，
+# 无需登记；但旧列被改名（而非新增）的场景无法靠补列覆盖，必须显式 RENAME。
+# 当前唯一登记项：providers 表的 api_key_env → api_key（2026-08-18 确认的历史漂移）。
+_COLUMN_RENAME_MAP: dict[str, dict[str, str]] = {
+    "providers": {"api_key_env": "api_key"},
+}
 
-    逐个遍历 ``APP_MODELS``：表不存在则跳过（建表逻辑由 ``initialize_app_schema`` 负责）；
-    表存在则比对实际列与模型列，对每个缺失列拼装 DDL 并执行 ``ALTER TABLE ADD COLUMN``。
-    列是否可空 / 是否有 server_default 决定 DDL 形态：可空列直接加；带 server_default 的
-    NOT NULL 列使用其默认值；无默认值的 NOT NULL 列回退到 ``_default_literal_for_type``
-    推导的零值默认。
+
+def _ensure_model_columns(
+    connection: Connection, engine: Engine, models=None
+) -> None:
+    """补齐已存在主库表中模型新增但库内尚缺的列。
+
+    逐个遍历 ``models``（缺省 ``APP_MODELS``）：表不存在则跳过；存在则比对实际列与模型列，
+    对每个缺失列执行 ``ALTER TABLE ADD COLUMN``。可空列直接加；带 server_default 的
+    NOT NULL 列用其默认值；否则回退 ``_default_literal_for_type`` 的零值默认。
 
     参数:
         connection: 当前处于事务中的 SQLAlchemy 连接。
-        engine: 用于按方言编译列类型 DDL 的 SQLAlchemy 引擎。
+        engine: 用于按方言编译列类型 DDL 的引擎。
+        models: 参与列迁移的 ORM 模型序列，缺省 ``APP_MODELS``；可传
+            ``APP_MODELS + _MIGRATE_ONLY_MODELS`` 覆盖建表循环之外的表。
 
     返回:
         无。
@@ -254,15 +142,29 @@ def _ensure_model_columns(connection, engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 如果 ALTER TABLE 执行失败。
 
     副作用:
-        可能对已存在的表追加列；每追加一列写一条 info 日志。
+        对已存在表追加缺失列；每列一条 info 日志。
     """
 
+    if models is None:
+        models = APP_MODELS
     inspector = inspect(connection)
-    for model in APP_MODELS:
+    for model in models:
         table = cast(Table, model.__table__)
         if not inspector.has_table(table.name):
             continue
         existing = {col["name"] for col in inspector.get_columns(table.name)}
+        # 已知历史列名重命名的预处理：库里是旧列名、ORM 期望新列名时，先把旧列改名，
+        # 使其后续被「列已存在」分支跳过，避免重复 ADD COLUMN。仅收录经过确认的、
+        # 无法用「加列」覆盖的重命名类迁移，集中登记便于审计。
+        old_to_new = _COLUMN_RENAME_MAP.get(table.name, {})
+        for old_name, new_name in old_to_new.items():
+            if old_name in existing and new_name not in existing:
+                connection.execute(
+                    text(f"ALTER TABLE {table.name} RENAME COLUMN {old_name} TO {new_name}")
+                )
+                log.info("renamed column %s.%s -> %s", table.name, old_name, new_name)
+                existing.discard(old_name)
+                existing.add(new_name)
         for column in table.columns:
             if column.name in existing:
                 continue
@@ -280,15 +182,12 @@ def _ensure_model_columns(connection, engine) -> None:
 
 
 def _ensure_model_indexes(connection) -> None:
-    """补齐 model 声明、但存量库里尚未创建的索引。
+    """补齐模型声明但存量库里尚未创建的索引。
 
-    迁移补列步骤 ``_ensure_model_columns`` 只负责 ``ALTER TABLE ADD COLUMN``，不会创建
-    ``__table_args__`` 里声明的索引 / 唯一约束（如 ``idx_tasks_parent_task_id``、
-    ``uq_tasks_delegation_id``）。存量库升级时这些索引因此缺失，导致并发重入的唯一索引
-    兜底形同虚设。本函数遍历 ``APP_MODELS`` 每个 table 的声明索引，对库里不存在的同名索引
-    调用 ``index.create(checkfirst=True)`` 补齐。
-
-    必须在 ``_ensure_model_columns`` 之后调用：索引依赖其引用的新列已存在，否则创建会失败。
+    遍历 ``APP_MODELS`` 每个 table 的声明索引，对库中不存在的同名索引
+    ``index.create(checkfirst=True)`` 补齐（如 ``idx_tasks_parent_task_id``、
+    ``uq_tasks_delegation_id``）。必须在 ``_ensure_model_columns`` 之后调用：索引依赖其
+    引用的新列已存在，否则创建失败。
 
     参数:
         connection: 当前处于事务中的 SQLAlchemy 连接。
@@ -297,10 +196,10 @@ def _ensure_model_indexes(connection) -> None:
         无。
 
     异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果读取库结构元数据或创建索引执行失败。
+        sqlalchemy.exc.SQLAlchemyError: 如果读取元数据或创建索引失败。
 
     副作用:
-        可能对已存在的表补建缺失索引；每成功补建一个索引写一条 info 日志。
+        对已存在表补建缺失索引；每建一个写一条 info 日志。
     """
 
     inspector = inspect(connection)
@@ -319,26 +218,22 @@ def _ensure_model_indexes(connection) -> None:
 
 
 def initialize_log_schema(engine: Engine) -> None:
-    """初始化日志库 schema，必要时按版本号重建。
+    """初始化日志库 schema，按 ``PRAGMA user_version`` 版本号决定建表或重建。
 
-    使用 SQLite 内置的 ``PRAGMA user_version`` 作为日志库结构版本号，按三种情况处理：
-    1. 版本为 0 且已存在旧的 ``log_entries`` 表：视为“无版本号的历史结构”，直接重建到当前版本；
-    2. 版本为 0 且无旧表：首次初始化，建表并写入当前版本号；
-    3. 版本号小于当前目标版本：结构落后，重建到当前版本。
-    日志库允许整表重建是因为历史日志属可丢弃的运行产物（见模块 docstring）。整个过程在单个
-    事务中完成。
+    版本 0：有旧 ``log_entries`` 表则视为无版本历史结构、直接重建；无旧表则首次建表并写版本号。
+    版本小于目标版本：重建到当前版本。日志库可重建因历史日志是可丢弃的运行产物（见模块 docstring）。
 
     参数:
-        engine: 已初始化的日志库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
+        engine: 已初始化的日志库 SQLAlchemy 引擎。
 
     返回:
         无。
 
     异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果建表或重建执行失败。
+        sqlalchemy.exc.SQLAlchemyError: 如果建表或重建失败。
 
     副作用:
-        创建或重建日志表及其索引，并更新 ``PRAGMA user_version``；重建会丢弃旧日志数据。
+        创建或重建日志表及索引并更新版本号；重建丢弃旧日志数据。
     """
 
     with engine.begin() as connection:
@@ -353,20 +248,20 @@ def initialize_log_schema(engine: Engine) -> None:
 
 
 def _has_table(connection, table_name: str) -> bool:
-    """判断当前连接对应的数据库中是否存在指定表。
+    """判断当前连接数据库中是否存在指定表。
 
     参数:
         connection: 活动的 SQLAlchemy 连接。
         table_name: 待检查的表名。
 
     返回:
-        表存在返回 True，否则返回 False。
+        存在返回 True，否则 False。
 
     异常:
         无。
 
     副作用:
-        无（仅读取库结构元数据）。
+        无（仅读库结构元数据）。
     """
 
     return inspect(connection).has_table(table_name)
@@ -375,7 +270,7 @@ def _has_table(connection, table_name: str) -> bool:
 def _create_log_schema(connection) -> None:
     """创建日志库的表与索引。
 
-    对 ``LOG_MODELS`` 中的每个 model 建表（存在则跳过），并逐个创建其声明的索引。
+    对 ``LOG_MODELS`` 每个 model 建表（存在则跳过）并创建其声明索引。
 
     参数:
         connection: 处于事务中的 SQLAlchemy 连接。
@@ -387,7 +282,7 @@ def _create_log_schema(connection) -> None:
         sqlalchemy.exc.SQLAlchemyError: 如果建表或建索引失败。
 
     副作用:
-        在日志库中创建缺失的日志表与索引。
+        创建缺失的日志表与索引。
     """
 
     for model in LOG_MODELS:
@@ -398,24 +293,23 @@ def _create_log_schema(connection) -> None:
 
 
 def _rebuild_log_schema(connection, current_version: int, target_version: int) -> None:
-    """重建日志库 schema：先删旧表再建新表，并写入目标版本号。
+    """重建日志库 schema：删旧表、建新表，并写入目标版本号。
 
-    用于日志库结构落后（或无版本号）时的整表演进。历史日志会被丢弃，这是日志库的既定策略
-    （见模块 docstring）。
+    用于结构落后（或无版本号）时的整表演进；历史日志丢弃（既定策略，见模块 docstring）。
 
     参数:
         connection: 处于事务中的 SQLAlchemy 连接。
-        current_version: 重建前的 ``user_version``，仅用于日志记录。
+        current_version: 重建前 ``user_version``，仅用于日志记录。
         target_version: 重建后写入的目标 ``user_version``。
 
     返回:
         无。
 
     异常:
-        sqlalchemy.exc.SQLAlchemyError: 如果删表 / 建表 / 版本写入失败。
+        sqlalchemy.exc.SQLAlchemyError: 如果删表 / 建表 / 写版本失败。
 
     副作用:
-        删除并重建日志表与索引，更新 ``PRAGMA user_version``，并写一条 info 日志；旧日志数据丢失。
+        重建日志表及索引、更新版本号并写 info 日志；旧日志数据丢失。
     """
 
     for model in LOG_MODELS:
