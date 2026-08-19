@@ -13,7 +13,14 @@ export interface AgentProfileResponse {
   description: string;
   allowed_tools: string[];
   workflow: string;
-  model_name: string;
+  /**
+   * 绑定的模型名（litellm 路由名，如 ``deepseek/deepseek-v4-flash``）。
+   *
+   * ``null`` 表示该 Agent 未配置模型（5 个内置 profile 默认 ``null``，无默认模型
+   * 策略）；前端在 ``selectedModelName=null`` 时禁止发送消息（``useModelSendGuard``
+   * ``no_model_selected`` 拦截），后端 runner 入口兜底 ``ModelNotConfiguredError``。
+   */
+  model_name: string | null;
   max_steps: number;
   prompt_ref: Record<string, unknown> | null;
 }

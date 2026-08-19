@@ -17,17 +17,34 @@ export const MODEL_PROVIDER_PATHS = {
   PROVIDERS: "/providers",
   PROVIDER_DETAIL: (providerId: string) => `/providers/${providerId}`,
   PROVIDER_DISCOVER: (providerId: string) => `/providers/${providerId}/discover`,
+  PROVIDER_TEST: (providerId: string) => `/providers/${providerId}/test`,
   PROVIDER_MODELS: (providerId: string) => `/providers/${providerId}/models`,
   MODELS: "/models",
   MODEL_DETAIL: (modelId: string) => `/models/${modelId}`,
 } as const;
 
-/** 允许的厂商类型枚举（决定 litellm 前缀与默认 base_url，与后端 PROVIDER_TYPES 对齐）。 */
+/**
+ * 允许的厂商类型枚举（决定 litellm 前缀与默认 base_url，与后端 PROVIDER_TYPES 对齐）。
+ *
+ * 15 类与后端 ``app/models/provider_capability.py`` 的 ``PROVIDER_CAPABILITIES``
+ * 注册表键一一对应；新增厂商 = 改后端注册表一行 + 这里加一个联合分支 +
+ * ``shared-model-contract.test.ts`` 契约断言。
+ */
 export type ProviderType =
   | "deepseek"
   | "openai-compatible"
   | "anthropic"
+  | "gemini"
+  | "azure"
+  | "dashscope"
+  | "moonshot"
+  | "zai"
+  | "volcengine"
+  | "tencent"
+  | "minimax"
   | "ollama"
+  | "qianfan"
+  | "xfyun"
   | "custom";
 
 /** 厂商配置记录（GET /providers 响应项，含聚合状态）。 */
@@ -68,8 +85,8 @@ export interface ProviderCreateRequest {
 /**
  * 厂商更新请求体（PUT /providers/{id}）。
  *
- * 仅覆盖显式传入的字段；置空 base_url 须显式传空字符串 ""；api_key 传 null
- * 表示不更新、传 "" 表示清除。
+ * 仅覆盖显式传入的字段；置空 base_url 须显式传空字符串 ""；
+ * api_key 传 null 表示不更新、传 "" 表示清除。
  */
 export interface ProviderUpdateRequest {
   name?: string;
@@ -79,6 +96,20 @@ export interface ProviderUpdateRequest {
   api_key?: string | null;
   enabled?: boolean;
   sort_order?: number;
+}
+
+/** 连通性测试结果（POST /providers/{id}/test 响应，设计文档 §三 用户视角三件套）。 */
+export interface ProviderConnectionTestResult {
+  /** 被测试的厂商标识。 */
+  provider_id: string;
+  /** 测试是否成功（成功时 error_code / error_message 均为 null）。 */
+  success: boolean;
+  /** 测试耗时（毫秒），供 UI 展示「响应速度」。 */
+  elapsed_ms: number;
+  /** 失败时的稳定错误码（与后端 ``ErrorKind`` 枚举对齐；骨架阶段返回 ``unknown_error``）。 */
+  error_code: string | null;
+  /** 失败时面向用户的可读中文消息（前端直接展示）。 */
+  error_message: string | null;
 }
 
 /** 模型条目记录（GET /models 响应项，仅启用模型 + 启用厂商）。 */

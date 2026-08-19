@@ -22,7 +22,6 @@
 - 桌面客户端兼容 Windows 和 Mac。
 - 技术底座：Tauri 2 + React + TypeScript + Vite + Python + FastAPI + LangGraph（强依赖编排底座）+ SQLite。
 - 模型接入：第一阶段优先支持 OpenAI 协议，优先适配 DeepSeek，后续陆续接入其他大模型。
-- UI 风格：参考 Codex 桌面客户端，使用 shadcn/ui + Radix UI + Tailwind CSS + lucide-react。
 - 第一阶段必须覆盖 MCP、工具权限审批、checkpoint、subagent、context compaction、工具系统、任务执行闭环、审查与测试闭环。
 - 桌面端支持并发执行：可同时运行多个 task，不同 task 的 turn 并发执行，无论它们是否属于同一 workspace；同一 task 内 turn 保持串行（pending → 认领乐观锁，任意时刻至多一个 running turn）。
 - MCP、checkpoint、subagent、context compaction 等核心能力第一版必须按生产级深度设计和验收。

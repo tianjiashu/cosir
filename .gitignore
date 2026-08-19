@@ -101,6 +101,9 @@ apps/desktop/dbg.txt
 apps/desktop/vitest_out.txt
 apps/desktop/src/tests/.vitest-full-run.txt
 
+# 仓库根 vitest 运行转储（运行期产物，不提交）
+temp_gen_out.txt
+
 # 本地 IDE 配置（Trae）
 .trae/
 /.uv-cache/

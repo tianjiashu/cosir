@@ -280,11 +280,6 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
             >
               <div className="flex w-full items-start justify-between gap-2">
                 <Icon className="h-5 w-5 text-muted-foreground" />
-                {/* 右下角 agent·model 概要：让用户感知「卡片会用此配置创建」 */}
-                {/* eslint-disable-next-line tailwind/no-arbitrary-value */}
-                <span data-testid="card-agent-model" className="text-[10px] text-muted-foreground">
-                  {agentModelSummary}
-                </span>
               </div>
               <span className="text-sm font-medium">{label}</span>
             </button>

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HTTP API 封装层。
  *
  * 封装与后端 FastAPI 的 HTTP 通信：
@@ -33,6 +33,7 @@ import type {
   ModelEntryRecord,
   ModelImportResult,
   ModelUpdateRequest,
+  ProviderConnectionTestResult,
   ProviderCreateRequest,
   ProviderRecord,
   ProviderUpdateRequest,
@@ -787,6 +788,31 @@ export async function deleteProvider(providerId: string): Promise<void> {
  */
 export async function discoverProviderModels(providerId: string): Promise<ModelCandidate[]> {
   return (await post<ModelCandidate[]>(MODEL_PROVIDER_PATHS.PROVIDER_DISCOVER(providerId), {})).data;
+}
+
+/**
+ * 测试厂商连通性（用已配置参数发起最小 chat 请求，设计文档 §三 用户视角三件套）。
+ *
+ * 与 discover 不同：测试本身就是「试错」语义，失败也是正常结果之一——
+ * 后端返回 200 + ``success=false`` + 稳定 ``error_code`` + 可读 ``error_message``，
+ * 前端据此展示修复引导而非抛错。
+ *
+ * @param providerId - 待测试的厂商标识。
+ * @returns 测试结果值对象（成功时 error_code/error_message 为 null；骨架阶段
+ *   后端可能返回 501 Not Implemented，由 httpClient 抛 ServiceError）。
+ * @throws {ServiceError} 当厂商不存在 / 后端骨架未实现（501） / 网络错误时抛出。
+ *
+ * @sideeffect 向后端 POST /providers/{id}/test 发起一次最小 chat 请求到厂商端点。
+ */
+export async function testProviderConnection(
+  providerId: string,
+): Promise<ProviderConnectionTestResult> {
+  return (
+    await post<ProviderConnectionTestResult>(
+      MODEL_PROVIDER_PATHS.PROVIDER_TEST(providerId),
+      {},
+    )
+  ).data;
 }
 
 /**

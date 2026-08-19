@@ -6,22 +6,19 @@
  *   （未配置显告警色）、编辑（嵌套 ProviderFormDialog）、删除（按钮级二次确认）、
  *   展开的模型管理区（ProviderModelsSection）；
  * - 新增厂商（嵌套 ProviderFormDialog 空表单）；
- * - 空态引导：「一键导入 DeepSeek 官方厂商 + deepseek-v4-flash」（§7.4，
- *   导入后引导在编辑表单填写 API Key）；
- * - 任一变更（启停/保存/删除/导入）成功后刷新厂商列表与 taskStore 可用模型缓存（设计 §9.5）。
+ * - 任一变更（启停/保存/删除）成功后刷新厂商列表与 taskStore 可用模型缓存（设计 §9.5）。
  *
  * @module components/settings/ProviderSettingsDialog
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import type { ProviderRecord } from "@shared/model";
 import { cn } from "@/lib/utils";
 import { logError, logInfo } from "@/lib/logger";
 import {
   createProvider,
   deleteProvider,
-  importProviderModels,
   listProviders,
   updateProvider,
 } from "@/services/api";
@@ -30,21 +27,13 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Caption, Panel } from "@/components/ui/tokens";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   ProviderFormDialog,
   type ProviderFormMeta,
   type ProviderFormValues,
 } from "./ProviderFormDialog";
 import { ProviderModelsSection } from "./ProviderModelsSection";
-
-/** 一键导入的 DeepSeek 默认模型（与后端 define_agents 默认模型对齐）。 */
-const DEEPSEEK_DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
 
 /** ProviderSettingsDialog 组件属性。 */
 interface ProviderSettingsDialogProps {
@@ -57,7 +46,7 @@ interface ProviderSettingsDialogProps {
 /**
  * 厂商配置中心对话框。
  *
- * 打开时拉取厂商列表；所有变更（启停/编辑/删除/导入模型）成功后就地刷新
+ * 打开时拉取厂商列表；所有变更（启停/编辑/删除）成功后就地刷新
  * 列表并同步 taskStore.refreshAvailableModels，保证发送前校验与下拉即时
  * 反映配置变更。
  */
@@ -74,8 +63,6 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   /** 展开模型管理区的厂商 ID（单展开，折叠互斥）。 */
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  /** 一键导入进行中标记。 */
-  const [importingPreset, setImportingPreset] = useState(false);
   /** 删除确认超时句柄（超时自动回退，防止误停留确认态）。 */
   const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -180,80 +167,44 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
    * - 编辑：非空 → 更新；空串 + 显式清除标记 → ""（清空）；空串未标记 → 不更新。
    * base_url 编辑直接透传（后端 "" = 置空回落 litellm 内置解析）。
    *
+   * 错误处理：本函数不在内部吞掉异常——失败时直接向上抛出真实的
+   * ``ServiceError``（含 ``message`` / ``statusCode``），交由嵌套的
+   * ``ProviderFormDialog.handleSubmit`` 统一展示后端返回的真实错误，避免
+   * 出现「保存失败，请检查名称是否重复或网络是否可用」这类与根因无关的
+   * 写死兜底文案（历史上曾因 SQLite 缺列导致 500，却被误导为名称重复）。
+   *
    * @param values - 表单值。
    * @param meta - 提交元信息（clearKey 编辑模式显式清空标记）。
-   * @returns 成功 true；失败 false（错误提示由嵌套表单承接）。
+   * @throws ServiceError - 后端返回的业务/系统错误（含真实 message 与 statusCode）。
+   * @returns 成功时无返回值（失败不返回，直接抛异常）。
    */
   const handleFormSubmit = async (
     values: ProviderFormValues,
     meta: ProviderFormMeta,
-  ): Promise<boolean> => {
-    if (!formState) return false;
+  ): Promise<void> => {
+    if (!formState) throw new Error("表单未处于打开状态");
     const isCreate = formState.mode === "create";
-    try {
-      if (isCreate) {
-        await createProvider({
-          name: values.name,
-          type: values.type,
-          base_url: values.baseUrl === "" ? null : values.baseUrl,
-          api_key: values.apiKey === "" ? null : values.apiKey,
-          enabled: true,
-        });
-      } else if (formState.provider) {
-        await updateProvider(formState.provider.provider_id, {
-          name: values.name,
-          type: values.type,
-          // 后端语义："" = 显式置空，undefined = 不更新。
-          base_url: values.baseUrl,
-          api_key: values.apiKey !== "" ? values.apiKey : meta.clearKey ? "" : undefined,
-        });
-      }
-      setFormState(null);
-      await refreshAll();
-      return true;
-    } catch (err) {
-      logError(isCreate ? "创建厂商失败" : "更新厂商失败", err, {
-        module: "ProviderSettingsDialog",
-        provider_id: formState.provider?.provider_id,
-      });
-      return false;
-    }
-  };
-
-  /**
-   * 一键导入 DeepSeek 官方厂商 + 默认模型（§7.4 引导）。
-   *
-   * 导入不含 API Key（Key 由用户后续在编辑表单中填写，DB 为唯一事实来源）；
-   * 空态引导文案已提示该步骤。
-   */
-  const handleImportDeepSeekPreset = async () => {
-    setImportingPreset(true);
-    setError(null);
-    try {
-      const provider = await createProvider({
-        name: "DeepSeek 官方",
-        type: "deepseek",
+    if (isCreate) {
+      await createProvider({
+        name: values.name,
+        type: values.type,
+        base_url: values.baseUrl === "" ? null : values.baseUrl,
+        api_key: values.apiKey === "" ? null : values.apiKey,
         enabled: true,
       });
-      await importProviderModels(provider.provider_id, [
-        {
-          model_name: DEEPSEEK_DEFAULT_MODEL,
-          display_name: DEEPSEEK_DEFAULT_MODEL.split("/")[1],
-          max_context_window: 128000,
-          supports_thinking: false,
-        },
-      ]);
-      logInfo("一键导入 DeepSeek 预设厂商完成", {
-        module: "ProviderSettingsDialog",
-        provider_id: provider.provider_id,
+    } else if (formState.provider) {
+      await updateProvider(formState.provider.provider_id, {
+        name: values.name,
+        type: values.type,
+        // 后端语义："" = 显式置空，undefined = 不更新。
+        base_url: values.baseUrl,
+        api_key: values.apiKey !== "" ? values.apiKey : meta.clearKey ? "" : undefined,
       });
-      await refreshAll();
-    } catch (err) {
-      logError("一键导入 DeepSeek 预设失败", err, { module: "ProviderSettingsDialog" });
-      setError("导入失败：可能已存在同名厂商，请重试或手动添加");
-    } finally {
-      setImportingPreset(false);
+    } else {
+      throw new Error("编辑模式未指定厂商");
     }
+    setFormState(null);
+    await refreshAll();
   };
 
   return (
@@ -261,9 +212,6 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-2xl">
           <DialogTitle>模型厂商配置</DialogTitle>
-          <DialogDescription>
-            管理模型厂商与模型条目；发送前校验依赖这里的配置（DB 为唯一事实来源）。
-          </DialogDescription>
 
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
@@ -286,25 +234,9 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
               加载厂商列表...
             </div>
           ) : providers.length === 0 ? (
-            /* 空态引导：一键导入 DeepSeek 预设（§7.4） */
+            /* 空态：尚未配置任何厂商，提示用户通过「新增厂商」入口添加。 */
             <div className="flex flex-col items-center gap-3 rounded border border-dashed border-border py-8">
-              <p className="text-sm text-muted-foreground">
-                尚未配置任何厂商。可一键导入 DeepSeek 官方厂商与默认模型，导入后请在编辑中填写 API Key：
-              </p>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                onClick={() => void handleImportDeepSeekPreset()}
-                disabled={importingPreset}
-              >
-                {importingPreset ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Zap className="mr-1 h-3.5 w-3.5" />
-                )}
-                一键导入 DeepSeek 官方 + {DEEPSEEK_DEFAULT_MODEL.split("/")[1]}
-              </Button>
+              <p className="text-sm text-muted-foreground">尚未配置任何厂商</p>
             </div>
           ) : (
             <div className={`${Panel.codeBlockMaxHeight} space-y-2 overflow-y-auto pr-1`}>

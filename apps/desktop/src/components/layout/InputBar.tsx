@@ -25,6 +25,11 @@
  * 厂商未配置时阻止发送，内联展示拦截原因；拦截规则要求打开配置中心时经
  * `onOpenSettings` 回调联动打开（由宿主在 ChatPanel 顶部的 TaskHeaderBar 上打开）。
  *
+ * 按钮置灰语义（方案 §阶段 1.5）：未显式选择模型（selectedModelName=null）时
+ * 发送按钮直接 disabled，并 hover 显示 tooltip「请先选择模型」；guardSend 作为
+ * 防御兜底仍保留——模型被删（model_missing）/ 厂商 Key 未配置（api_key_missing）
+ * 等运行时场景仍由 guardSend 拦截并内联展示原因。
+ *
  * @module components/layout/InputBar
  */
 
@@ -66,11 +71,22 @@ export function InputBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   );
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const trimmedInput = inputValue.trim();
-  const canSend = Boolean(trimmedInput) && !operation.loading && !streamingTurnId && Boolean(activeTaskId || activeWorkspaceId);
+  // 模型未显式选择时禁用发送按钮（方案 §阶段 1.5 / §八：发送按钮 disabled 条件加入
+  // `!selectedModelId`）。按钮置灰为主，guardSend 作为防御兜底仍保留——例如模型在
+  // 选中后被删除（model_missing）或厂商 Key 未配置（api_key_missing）时，按钮仍可点
+  // 但会被 guardSend 在运行时拦截并展示原因。
+  const selectedModelName = useTaskStore((s) => s.selectedModelName);
+  const hasModelSelected = Boolean(selectedModelName);
+  const noModelSelected = !hasModelSelected;
+  const canSend =
+    Boolean(trimmedInput) &&
+    !operation.loading &&
+    !streamingTurnId &&
+    Boolean(activeTaskId || activeWorkspaceId) &&
+    hasModelSelected;
   const canStop = Boolean(streamingTurnId) && !operation.loading;
   // 发送前模型校验拦截提示，展示在输入区下方。
   const [guardMessage, setGuardMessage] = useState<string | null>(null);
-  const selectedModelName = useTaskStore((s) => s.selectedModelName);
   const { guardSend } = useModelSendGuard();
   // 用户切换模型（顶部选择器变更 selectedModelName）后清除拦截提示：
   // 提示「请先选择模型」等已失去意义，避免误导（2026-08-18 无 Auto 语义）。
@@ -229,16 +245,31 @@ export function InputBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
             <Square className="h-4 w-4 fill-current" />
           </Button>
         ) : (
-          <Button
-            aria-label="发送"
-            variant="primary"
-            onClick={handleSend}
-            disabled={!canSend}
-            size="icon"
-            className="h-9 w-9 shrink-0"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    aria-label="发送"
+                    variant="primary"
+                    onClick={handleSend}
+                    disabled={!canSend}
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              {/* 未选模型时按钮置灰并提示「请先选择模型」（方案 §阶段 1.5）。
+               * 其余置灰原因（无输入/加载中/流式中/无上下文）无业务引导，不展示 tooltip。 */}
+              {noModelSelected && (
+                <TooltipContent side="top">
+                  <p>请先选择模型</p>
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
         )}
       </div>
 

@@ -21,6 +21,14 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      "/providers": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/models": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
       "/tasks": {
         target: "http://localhost:8000",
         changeOrigin: true,
