@@ -56,6 +56,39 @@ def _make_workspace(workspace_crud: WorkspaceCrud, name: str = "ws") -> str:
     return record.workspace_id
 
 
+def _seed_minimal_provider_and_model() -> None:
+    """为本组测试播种一行 deepseek 厂商 + 一行可用模型（不联网、不调 LLM）。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无（异常由调用方 fixture 捕获；正常路径下 DB 写入不会失败）。
+
+    副作用:
+        向 ``providers`` 与 ``models`` 表各插入一行；不输出 ``api_key`` 至日志。
+    """
+
+    from app.service.provider.provider_service import ProviderService
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    provider = ProviderService().create_provider(
+        name="DeepSeek 测试",
+        provider_type="deepseek",
+        api_key="sk-test-not-real",
+    )
+    ModelEntryCrud().create(
+        provider_id=provider.provider_id,
+        model_name="deepseek/deepseek-v4-flash",
+        display_name="deepseek-v4-flash",
+        max_context_window=1_000_000,
+        supports_thinking=True,
+    )
+
+
 def _create_parent_task(task_service: TaskService, workspace_id: str) -> TaskRecord:
     """用真实 TaskService 创建一个人类用户任务（task_type='user'）。"""
 
@@ -74,9 +107,19 @@ def _create_turn(
     task_id: str,
     agent_id: str = "developer",
 ) -> object:
-    """用真实 TurnService 创建一条普通父 task 轮次（更新 latest_turn_id）。"""
+    """用真实 TurnService 创建一条普通父 task 轮次（更新 latest_turn_id）。
 
-    return turn_service.create_turn(task_id=task_id, input_text="parent work", agent_id=agent_id)
+    阶段 1.5 后必须传 ``model_name``，否则 ``create_turn`` 经
+    ``ModelResolverService.resolve`` 抛 ``ModelNotConfiguredError``
+    （``REASON_MODEL_NOT_SELECTED``）。
+    """
+
+    return turn_service.create_turn(
+        task_id=task_id,
+        input_text="parent work",
+        agent_id=agent_id,
+        model_name="deepseek/deepseek-v4-flash",
+    )
 
 
 def _create_child_turn(
@@ -127,6 +170,11 @@ def real_services(tmp_path: Path):
         CHECKPOINT_FILE=tmp_path / "langgraph_checkpoints.sqlite",
     )
     initialize_service_dependencies()
+    # 阶段 1.5 后 ``TurnService.create_turn`` 经 ``ModelResolverService.resolve``
+    # 做 service 期预解析（设计 §6.4 两段式 ①），无 provider + model 行时抛
+    # ``ModelNotConfiguredError``。本测试聚焦父子 task 委派编排，不关心模型解析
+    # 细节，但需为解析器播种一行可用模型，使 ``_create_turn`` 不被 None 模型拒绝。
+    _seed_minimal_provider_and_model()
 
     task_service = TaskService()
     turn_service = TurnService()
@@ -406,9 +454,9 @@ def test_concurrent_delegation_over_concurrency_rejected_no_orphan(real_services
     rejected = [r for r in results if not r[0]]
 
     # 额度恰好放行 max_concurrency 个，其余全部被拒。
-    assert len(acquired) == max_concurrency, (
-        f"期望恰好 {max_concurrency} 个 acquire 成功，实际 {len(acquired)}"
-    )
+    assert (
+        len(acquired) == max_concurrency
+    ), f"期望恰好 {max_concurrency} 个 acquire 成功，实际 {len(acquired)}"
     assert len(rejected) == n - max_concurrency
 
     # 被拒的调用绝不能产生孤儿子 task。
@@ -626,9 +674,7 @@ def test_delegation_terminal_record_persists_child_task_id(real_services, monkey
     delegation_service.mark_child_started(
         delegation_id, child_turn.turn_id, child_task_id=child.task_id
     )
-    delegation_service.mark_completed(
-        delegation_id, "child done", child_task_id=child.task_id
-    )
+    delegation_service.mark_completed(delegation_id, "child done", child_task_id=child.task_id)
 
     reloaded = delegation_service._delegation_crud.get(delegation_id)
     assert reloaded.status == "completed"
@@ -677,13 +723,8 @@ def test_initialize_schema_migrates_child_task_columns_and_drops_legacy_columns(
     initialize_app_schema(engine)
 
     with engine.connect() as conn:
-        columns = {
-            row[1] for row in conn.execute(text("PRAGMA table_info(tasks)")).fetchall()
-        }
-        indexes = [
-            row[1]
-            for row in conn.execute(text("PRAGMA index_list(tasks)")).fetchall()
-        ]
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(tasks)")).fetchall()}
+        indexes = [row[1] for row in conn.execute(text("PRAGMA index_list(tasks)")).fetchall()]
 
     # 新列必须全部补齐
     for expected_col in (

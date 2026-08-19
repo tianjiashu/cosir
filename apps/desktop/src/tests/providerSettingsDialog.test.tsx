@@ -6,8 +6,7 @@
  * 1. 打开时拉取并渲染厂商卡片（名称/类型/模型数/Key 状态）；
  * 2. 启用 Switch 即时调用 updateProvider；
  * 3. 删除为按钮级二次确认：第一次点击不发请求，确认提示出现后再点才删除；
- * 4. 空态展示「一键导入 DeepSeek」引导，点击后创建厂商并导入默认模型；
- * 5. 删除/导入成功后刷新可用模型缓存（taskStore.refreshAvailableModels 数据源被重拉）。
+ * 4. 删除成功后刷新可用模型缓存（taskStore.refreshAvailableModels 数据源被重拉）。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -32,20 +31,16 @@ vi.mock("@/lib/logger", async (importOriginal) => ({
 
 import {
   listProviders,
-  createProvider,
   updateProvider,
   deleteProvider,
-  importProviderModels,
   listModels,
 } from "@/services/api";
 import { ProviderSettingsDialog } from "@/components/settings/ProviderSettingsDialog";
 import { useTaskStore } from "@/stores/taskStore";
 
 const mockListProviders = vi.mocked(listProviders);
-const mockCreateProvider = vi.mocked(createProvider);
 const mockUpdateProvider = vi.mocked(updateProvider);
 const mockDeleteProvider = vi.mocked(deleteProvider);
-const mockImportProviderModels = vi.mocked(importProviderModels);
 const mockListModels = vi.mocked(listModels);
 
 function makeProvider(overrides: Partial<ProviderRecord> = {}): ProviderRecord {
@@ -121,43 +116,6 @@ describe("ProviderSettingsDialog", () => {
     fireEvent.click(deleteButton);
     await waitFor(() => {
       expect(mockDeleteProvider).toHaveBeenCalledWith("provider-1");
-    });
-  });
-
-  it("空态展示一键导入引导：创建 DeepSeek 厂商并导入默认模型", async () => {
-    mockListProviders.mockResolvedValue([]);
-    mockCreateProvider.mockResolvedValue(makeProvider({ model_count: 0 }));
-    mockImportProviderModels.mockResolvedValue({
-      provider_id: "provider-1",
-      imported: [],
-      skipped_model_names: [],
-    });
-    render(<ProviderSettingsDialog open onOpenChange={vi.fn()} />);
-
-    // 按角色限定按钮，避免与空态引导段落文案（同样含「一键导入 DeepSeek 官方」）双匹配。
-    const importButton = await screen.findByRole("button", { name: /一键导入 DeepSeek 官方/ });
-    fireEvent.click(importButton);
-
-    await waitFor(() => {
-      // 一键导入不再携带 API Key（Key 由用户在编辑表单中填写，DB 为唯一事实来源）。
-      expect(mockCreateProvider).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "deepseek", name: "DeepSeek 官方" }),
-      );
-      // 显式断言调用参数不含 api_key 键（undefined 匹配有歧义，改用键存在性断言）。
-      const createCall = mockCreateProvider.mock.calls[0]?.[0] as unknown as
-        | Record<string, unknown>
-        | undefined;
-      expect(createCall).not.toHaveProperty("api_key");
-      // 导入请求体为模型创建请求数组（与后端 ModelBulkImportRequest 契约一致）。
-      expect(mockImportProviderModels).toHaveBeenCalledWith(
-        "provider-1",
-        expect.arrayContaining([
-          expect.objectContaining({
-            model_name: "deepseek/deepseek-v4-flash",
-            max_context_window: 128000,
-          }),
-        ]),
-      );
     });
   });
 

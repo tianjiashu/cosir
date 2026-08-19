@@ -56,15 +56,41 @@ E2E_SCRATCH_SUBDIR = ".e2e_scratch"
 pytestmark = pytest.mark.llm
 
 
-def _require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """复用进程环境的 DEEPSEEK_API_KEY；缺失则跳过整组 LLM 测试。
+def _require_api_key() -> str:
+    """读取进程环境的 DEEPSEEK_API_KEY 供落库播种；缺失则跳过整组 LLM 测试。
 
-    不把 key 明文写入任何文件，仅经 monkeypatch.setenv 注入当前进程环境。
+    DB 是 Key 唯一事实来源：fixture 将 key 作为 ``providers.api_key`` 明文落库，
+    模型解析链（``ModelResolverService`` → ``factory.build_chat_model``）从 DB
+    读取，不再注入进程环境变量。
     """
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         pytest.skip("DEEPSEEK_API_KEY 未设置，跳过真实 LLM 端到端测试")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", api_key)
+    return api_key
+
+
+def _seed_provider_and_model(api_key: str) -> None:
+    """在临时库中播种 DeepSeek 厂商与默认模型（DB 是 Key 唯一事实来源）。
+
+    ``ModelResolverService.resolve`` 以 DB 为唯一事实源：无 provider + model
+    行时抛 ``ModelNotConfiguredError``，因此 fixture 必须在
+    ``initialize_service_dependencies`` 之后、构建 runtime 之前完成播种。
+    """
+    from app.service.provider.provider_service import ProviderService
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    provider = ProviderService().create_provider(
+        name="DeepSeek 官方",
+        provider_type="deepseek",
+        api_key=api_key,
+    )
+    ModelEntryCrud().create(
+        provider_id=provider.provider_id,
+        model_name="deepseek/deepseek-v4-flash",
+        display_name="deepseek-v4-flash",
+        max_context_window=1_000_000,
+        supports_thinking=True,
+    )
 
 
 @pytest.fixture
@@ -78,7 +104,7 @@ def real_runtime_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       4. set_agent_registry(build_agent_registry()) 播种 5 个内置 agent
       5. AgentRuntime() 取全局单例
     """
-    _require_api_key(monkeypatch)
+    api_key = _require_api_key()
     db_file = tmp_path / "app.sqlite3"
     log_db_file = tmp_path / "logs.sqlite3"
     checkpoint_file = tmp_path / "langgraph_checkpoints.sqlite"
@@ -91,6 +117,9 @@ def real_runtime_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     init_storage()
     initialize_service_dependencies()
+    # DB 是模型与 Key 唯一事实来源：播种厂商（含 api_key 明文）+ 默认模型条目，
+    # 否则 resolve 直接抛 ModelNotConfiguredError（见 _seed_provider_and_model）。
+    _seed_provider_and_model(api_key)
     set_agent_registry(build_agent_registry())
     # AgentRuntime.__init__ 还需工具系统单例（真实注册全部内置工具，无 mock）
     set_tool_system(ToolSystem.build_tool_system())
@@ -135,6 +164,7 @@ def parent_turn(real_runtime_stack: AgentRuntime, trading_agents_workspace):
         task_id=parent_task.task_id,
         input_text="parent turn for delegation",
         agent_id="developer",
+        model_name="deepseek/deepseek-v4-flash",
     )
     assert turn_service.claim_pending_turn(parent_turn_record.turn_id)
     # 重新读取以拿到 running 终态
@@ -455,6 +485,7 @@ def test_C2_depth_policy_rejects_nested_delegation(
         task_id=grand_task.task_id,
         input_text="grand parent turn",
         agent_id="developer",
+        model_name="deepseek/deepseek-v4-flash",
     )
     turn_service.claim_pending_turn(grand_turn.turn_id)
 
@@ -475,6 +506,7 @@ def test_C2_depth_policy_rejects_nested_delegation(
         task_id=nested_parent_task.task_id,
         input_text="nested parent turn as child",
         agent_id="developer",
+        model_name="deepseek/deepseek-v4-flash",
     )
     turn_service.claim_pending_turn(nested_parent.turn_id)
 

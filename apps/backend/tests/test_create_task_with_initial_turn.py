@@ -48,10 +48,48 @@ def storage_stack(tmp_path: Path):
     init_storage()
     initialize_service_dependencies()
     set_agent_registry(build_agent_registry())
+    # 阶段 1.5 后 ``TurnService.create_turn`` 经 ``ModelResolverService.resolve``
+    # 做 service 期预解析（设计 §6.4 两段式 ①），无 provider + model 行时抛
+    # ``ModelNotConfiguredError``。本测试聚焦 task+turn 编排，不关心模型解析细节，
+    # 但需为解析器播种一行可用模型，使触及 ``create_turn`` 的用例不再被 None 模型拒绝。
+    _seed_minimal_provider_and_model()
     yield
     close_service_dependencies()
     reset_service_dependencies()
     Settings.load()
+
+
+def _seed_minimal_provider_and_model() -> None:
+    """为本组测试播种一行 deepseek 厂商 + 一行可用模型（不联网、不调 LLM）。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无（异常由调用方 fixture 捕获；正常路径下 DB 写入不会失败）。
+
+    副作用:
+        向 ``providers`` 与 ``models`` 表各插入一行；不输出 ``api_key`` 至日志。
+    """
+
+    from app.service.provider.provider_service import ProviderService
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    provider = ProviderService().create_provider(
+        name="DeepSeek 测试",
+        provider_type="deepseek",
+        api_key="sk-test-not-real",
+    )
+    ModelEntryCrud().create(
+        provider_id=provider.provider_id,
+        model_name="deepseek/deepseek-v4-flash",
+        display_name="deepseek-v4-flash",
+        max_context_window=1_000_000,
+        supports_thinking=True,
+    )
 
 
 def _create_workspace() -> str:
@@ -68,10 +106,14 @@ def test_creates_task_and_initial_pending_turn(storage_stack: None) -> None:
     workspace_id = _create_workspace()
     task_service = TaskService()
 
+    # 阶段 1.5 后必须显式传 ``model_name``，否则 ``create_turn`` 经
+    # ``ModelResolverService.resolve`` 抛 ``ModelNotConfiguredError``
+    # （``REASON_MODEL_NOT_SELECTED``）。此处复用 fixture 播种的 deepseek 模型。
     task, turn = task_service.create_task_with_initial_turn(
         workspace_id=workspace_id,
         agent_id="developer",
         input_text="实现登录接口",
+        model_name="deepseek/deepseek-v4-flash",
     )
 
     assert isinstance(task, TaskRecord)
@@ -81,6 +123,8 @@ def test_creates_task_and_initial_pending_turn(storage_stack: None) -> None:
     assert turn.input_text == "实现登录接口"
     # 任务标题应由 input_text 派生，任务层不持有用户输入文本
     assert task.title == "实现登录接口"
+    # 落库 model_name 应为解析后的 litellm 路由名（D11 时间线可追溯）
+    assert turn.model_name == "deepseek/deepseek-v4-flash"
 
 
 def test_requires_non_empty_input_text(storage_stack: None) -> None:
@@ -135,10 +179,16 @@ def test_compensates_orphan_task_on_turn_failure(storage_stack: None) -> None:
     task_service._turn.create = _boom  # type: ignore[assignment]
     try:
         with pytest.raises(RuntimeError):
+            # 阶段 1.5 后 ``create_task_with_initial_turn`` 经
+            # ``service_depends.get_turn_service().create_turn``（共享同一 ``TurnCrud``
+            # 单例），故在此 mock ``task_service._turn.create``（CRUD 层 ``create``）
+            # 仍能拦截到 ``create_turn`` 内的持久化调用。需先传合法 ``model_name``
+            # 越过 ``ModelResolverService.resolve``，方能抵达被 mock 的 CRUD 调用。
             task_service.create_task_with_initial_turn(
                 workspace_id=workspace_id,
                 agent_id="developer",
                 input_text="任意输入",
+                model_name="deepseek/deepseek-v4-flash",
             )
     finally:
         task_service._turn.create = original_create  # type: ignore[assignment]

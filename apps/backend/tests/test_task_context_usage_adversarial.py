@@ -31,6 +31,7 @@ from app.service.depends import (
     reset_service_dependencies,
 )
 from app.service.task.task_service import TaskService
+from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
 from app.storage.store_engines import init_storage
 
@@ -52,10 +53,48 @@ def storage_stack(tmp_path: Path):
     init_storage()
     initialize_service_dependencies()
     set_agent_registry(build_agent_registry())
+    # 阶段 1.5 后 ``TurnService.create_turn`` 经 ``ModelResolverService.resolve``
+    # 做 service 期预解析（设计 §6.4 两段式 ①），无 provider + model 行时抛
+    # ``ModelNotConfiguredError``。本测试聚焦 context_usage，不关心模型解析细节，
+    # 但需为解析器播种一行可用模型，使 ``_create_task`` 不再被 None 模型拒绝。
+    _seed_minimal_provider_and_model()
     yield
     close_service_dependencies()
     reset_service_dependencies()
     Settings.load()
+
+
+def _seed_minimal_provider_and_model() -> None:
+    """为本组测试播种一行 deepseek 厂商 + 一行可用模型（不联网、不调 LLM）。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无（异常由调用方 fixture 捕获；正常路径下 DB 写入不会失败）。
+
+    副作用:
+        向 ``providers`` 与 ``models`` 表各插入一行；不输出 ``api_key`` 至日志。
+    """
+
+    from app.service.provider.provider_service import ProviderService
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    provider = ProviderService().create_provider(
+        name="DeepSeek 测试",
+        provider_type="deepseek",
+        api_key="sk-test-not-real",
+    )
+    ModelEntryCrud().create(
+        provider_id=provider.provider_id,
+        model_name="deepseek/deepseek-v4-flash",
+        display_name="deepseek-v4-flash",
+        max_context_window=1_000_000,
+        supports_thinking=True,
+    )
 
 
 def _create_workspace() -> str:
@@ -68,8 +107,10 @@ def _create_workspace() -> str:
 def _create_task() -> TaskRecord:
     task_service = TaskService()
     task, _ = task_service.create_task_with_initial_turn(
-        workspace_id=_create_workspace(), agent_id="developer",
+        workspace_id=_create_workspace(),
+        agent_id="developer",
         input_text="ctx adversarial task",
+        model_name="deepseek/deepseek-v4-flash",
     )
     return task
 
@@ -366,18 +407,27 @@ def test_emit_context_usage_negative_token_rejected_by_value_object(storage_stac
 # ---------------------------------------------------------------------------
 
 def test_get_task_returns_context_window_total(storage_stack: Path) -> None:
-    # 测试目的：agent profile 命中时 context_window_total 为动态计算的正数；可能发现的缺陷：total 恒为 None。
+    # 测试目的：turn 已绑定 model_name 时 context_window_total 为动态计算的正数；
+    # 可能发现的缺陷：total 恒为 None。
+    # 阶段 1.5 后 5 个内置 profile 不再内置默认模型（``agent.model_name is None``），
+    # context_window_total 改由 turn.model_name 主路径计算（设计 §6.4 任务级口径），
+    # 故本测试改读最近 turn 的 model_name 而非 agent profile 的 model_name。
     task = _create_task()
-    model_name = build_agent_registry().resolve(task.agent_id).model_name
-    expected_total = resolve_context_window(model_name)
-    resp = asyncio.run(get_task(task.task_id, TaskService()))
+    # turn.model_name 由 ``TurnService.create_turn`` 落库为解析后的 litellm 路由名
+    # （D11）；此处直接复用 _create_task 注入的常量，避免再读 DB。
+    expected_total = resolve_context_window("deepseek/deepseek-v4-flash")
+    resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
     assert resp.context_usage_used is None
     assert resp.context_window_total == expected_total
     assert resp.context_window_total is not None
 
 
 def test_get_task_unknown_agent_degrades_to_none_total(storage_stack: Path) -> None:
-    # 测试目的：agent 未命中（resolve 返回 None）时 total 应降级为 None；可能发现的缺陷：None profile 仍尝试 resolve 报错。
+    # 测试目的：agent 未命中（resolve 返回 None）且 turn 无 model_name 时 total 应降级为 None；
+    # 可能发现的缺陷：None profile 仍尝试 resolve 报错。
+    # 阶段 1.5 后 context_window_total 主路径是 turn.model_name；要复现「全空 → None」
+    # 语义需同时让 turn 无 model_name（mock _latest_turn_model_name 返回 None）与
+    # agent resolve 返回 None，否则主路径会从 turn 拿到 model_name 而 bypass 兜底。
     task = _create_task()
     bad_record = TaskRecord(
         task_id=task.task_id, workspace_id=task.workspace_id,
@@ -390,9 +440,10 @@ def test_get_task_unknown_agent_degrades_to_none_total(storage_stack: Path) -> N
     )
     with patch(
         "app.service.task.task_service.TaskService.get_task", return_value=bad_record
-    ), patch("app.config.configuration.get_agent_registry") as mock_registry:
+    ), patch("app.config.configuration.get_agent_registry") as mock_registry, \
+       patch("app.api.tasks_api._latest_turn_model_name", return_value=None):
         mock_registry.return_value.resolve.return_value = None
-        resp = asyncio.run(get_task(task.task_id, TaskService()))
+        resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
         assert resp.context_window_total is None
 
 
@@ -404,7 +455,7 @@ def test_get_task_resolves_to_minuscule_total(storage_stack: Path) -> None:
         profile = MagicMock()
         profile.model_name = "some-model"
         reg.return_value.resolve.return_value = profile
-        resp = asyncio.run(get_task(task.task_id, TaskService()))
+        resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
         assert resp.context_window_total == 1
         assert resp.context_window_total is not None
 
@@ -417,7 +468,7 @@ def test_get_task_resolve_returns_profile_but_total_zero(storage_stack: Path) ->
         profile = MagicMock()
         profile.model_name = "m"
         reg.return_value.resolve.return_value = profile
-        resp = asyncio.run(get_task(task.task_id, TaskService()))
+        resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
         assert resp.context_window_total == 0
         assert resp.context_window_total is not None
 
@@ -430,7 +481,7 @@ def test_get_task_resolve_raises_degrades_to_none(storage_stack: Path) -> None:
          patch("app.api.tasks_api.resolve_context_window") as mock_resolve:
         reg.return_value.resolve.return_value = MagicMock(model_name="m")
         mock_resolve.side_effect = RuntimeError("catalog broken")
-        resp = asyncio.run(get_task(task.task_id, TaskService()))
+        resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
         assert resp.context_window_total is None
         assert resp.task_id == task.task_id
 
@@ -439,14 +490,14 @@ def test_get_task_unknown_task_id_raises_404(storage_stack: Path) -> None:
     # 测试目的：不存在的 task_id 返回 404；可能发现的缺陷：错误状态码或泄露原始 KeyError。
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(get_task("no_such_task_id", TaskService()))
+        asyncio.run(get_task("no_such_task_id", TaskService(), TurnService()))
     assert exc_info.value.status_code == 404
 
 
 def test_get_task_unknown_task_id_does_not_raise_raw_keyerror(storage_stack: Path) -> None:
     # 测试目的：缺失任务时不应向上抛原始 KeyError；可能发现的缺陷：异常类型未转换。
     with pytest.raises(Exception) as exc_info:
-        asyncio.run(get_task("missing_404", TaskService()))
+        asyncio.run(get_task("missing_404", TaskService(), TurnService()))
     assert not isinstance(exc_info.value, KeyError)
 
 

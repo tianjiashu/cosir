@@ -33,7 +33,6 @@ apps/backend/.env.local
 .workspace_payload/
 # CodeGraph 锁定 node 运行时（随应用分发，不提交仓库）
 apps/backend/.workspace_payload-node/
-apps/backend/.workspace_payload-node/
 
 # Tauri 生成产物
 apps/desktop/src-tauri/gen/
@@ -100,6 +99,8 @@ logs/*.log.*
 # 桌面端调试转储与测试输出（运行期产物，不提交）
 apps/desktop/dbg.txt
 apps/desktop/vitest_out.txt
+apps/desktop/src/tests/.vitest-full-run.txt
 
 # 本地 IDE 配置（Trae）
 .trae/
+/.uv-cache/

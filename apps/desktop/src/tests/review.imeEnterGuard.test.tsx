@@ -82,6 +82,9 @@ describe("Enter 发送的 IME 组合态防护", () => {
       activeTaskId: "task-1",
       activeTurnId: null,
       selectedAgentId: "developer",
+      // 2026-08-18 起未选模型时发送按钮置灰（方案 §阶段 1.5），
+      // 正向对照用例须显式选择模型才能验证 Enter/IME 发送链路。
+      selectedModelName: "deepseek/deepseek-v4-flash",
     } as never);
     useTurnStore.setState({ streamingTurnIds: {} } as never);
     useWorkspaceStore.setState({

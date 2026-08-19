@@ -21,6 +21,7 @@ from app.service.depends import (
     reset_service_dependencies,
 )
 from app.service.task.task_service import TaskService
+from app.service.task.turn_service import TurnService
 from app.service.task.workspace_service import WorkspaceService
 from app.storage.store_engines import init_storage
 
@@ -40,10 +41,48 @@ def storage_stack(tmp_path: Path):
     init_storage()
     initialize_service_dependencies()
     set_agent_registry(build_agent_registry())
+    # 阶段 1.5 后 ``TurnService.create_turn`` 经 ``ModelResolverService.resolve``
+    # 做 service 期预解析（设计 §6.4 两段式 ①），无 provider + model 行时抛
+    # ``ModelNotConfiguredError``。本测试聚焦 context_usage，不关心模型解析细节，
+    # 但需为解析器播种一行可用模型，使 ``_create_task`` 不再被 None 模型拒绝。
+    _seed_minimal_provider_and_model()
     yield
     close_service_dependencies()
     reset_service_dependencies()
     Settings.load()
+
+
+def _seed_minimal_provider_and_model() -> None:
+    """为本组测试播种一行 deepseek 厂商 + 一行可用模型（不联网、不调 LLM）。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无（异常由调用方 fixture 捕获；正常路径下 DB 写入不会失败）。
+
+    副作用:
+        向 ``providers`` 与 ``models`` 表各插入一行；不输出 ``api_key`` 至日志。
+    """
+
+    from app.service.provider.provider_service import ProviderService
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    provider = ProviderService().create_provider(
+        name="DeepSeek 测试",
+        provider_type="deepseek",
+        api_key="sk-test-not-real",
+    )
+    ModelEntryCrud().create(
+        provider_id=provider.provider_id,
+        model_name="deepseek/deepseek-v4-flash",
+        display_name="deepseek-v4-flash",
+        max_context_window=1_000_000,
+        supports_thinking=True,
+    )
 
 
 def _create_workspace() -> str:
@@ -56,8 +95,10 @@ def _create_workspace() -> str:
 def _create_task() -> TaskRecord:
     task_service = TaskService()
     task, _ = task_service.create_task_with_initial_turn(
-        workspace_id=_create_workspace(), agent_id="developer",
+        workspace_id=_create_workspace(),
+        agent_id="developer",
         input_text="ctx usage task",
+        model_name="deepseek/deepseek-v4-flash",
     )
     return task
 
@@ -120,15 +161,19 @@ def test_emit_context_usage_service_failure_only_logs(storage_stack: Path) -> No
 
 
 def test_get_task_returns_context_window_total(storage_stack: Path) -> None:
+    # 阶段 1.5 后 5 个内置 profile 不再内置默认模型（``agent.model_name is None``），
+    # context_window_total 改由 turn.model_name 主路径计算（设计 §6.4 任务级口径）。
     task = _create_task()
-    model_name = get_agent_registry().resolve(task.agent_id).model_name
-    expected_total = resolve_context_window(model_name)
-    resp = asyncio.run(get_task(task.task_id, TaskService()))
+    expected_total = resolve_context_window("deepseek/deepseek-v4-flash")
+    resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
     assert resp.context_usage_used is None
     assert resp.context_window_total == expected_total
 
 
 def test_get_task_unknown_agent_degrades_to_none_total(storage_stack: Path) -> None:
+    # 阶段 1.5 后主路径是 turn.model_name；要复现「全空 → None」语义需同时让
+    # turn 无 model_name（mock _latest_turn_model_name 返回 None）与 agent resolve
+    # 返回 None，否则主路径会从 turn 拿到 model_name 而 bypass 兜底。
     task = _create_task()
     bad_record = TaskRecord(
         task_id=task.task_id, workspace_id=task.workspace_id,
@@ -141,7 +186,8 @@ def test_get_task_unknown_agent_degrades_to_none_total(storage_stack: Path) -> N
     )
     with patch(
         "app.service.task.task_service.TaskService.get_task", return_value=bad_record
-    ), patch("app.config.configuration.get_agent_registry") as mock_registry:
+    ), patch("app.config.configuration.get_agent_registry") as mock_registry, \
+       patch("app.api.tasks_api._latest_turn_model_name", return_value=None):
         mock_registry.return_value.resolve.return_value = None
-        resp = asyncio.run(get_task(task.task_id, TaskService()))
+        resp = asyncio.run(get_task(task.task_id, TaskService(), TurnService()))
         assert resp.context_window_total is None

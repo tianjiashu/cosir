@@ -54,10 +54,48 @@ def storage_stack(tmp_path: Path):
     init_storage()
     initialize_service_dependencies()
     set_agent_registry(build_agent_registry())
+    # 阶段 1.5 后 ``TurnService.create_turn`` 经 ``ModelResolverService.resolve``
+    # 做 service 期预解析（设计 §6.4 两段式 ①），无 provider + model 行时抛
+    # ``ModelNotConfiguredError``。本测试聚焦 context_usage 回归，需为解析器
+    # 播种一行可用模型，使 ``_create_task`` 不再被 None 模型拒绝。
+    _seed_minimal_provider_and_model()
     yield
     close_service_dependencies()
     reset_service_dependencies()
     Settings.load()
+
+
+def _seed_minimal_provider_and_model() -> None:
+    """为本组测试播种一行 deepseek 厂商 + 一行可用模型（不联网、不调 LLM）。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无（异常由调用方 fixture 捕获；正常路径下 DB 写入不会失败）。
+
+    副作用:
+        向 ``providers`` 与 ``models`` 表各插入一行；不输出 ``api_key`` 至日志。
+    """
+
+    from app.service.provider.provider_service import ProviderService
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    provider = ProviderService().create_provider(
+        name="DeepSeek 测试",
+        provider_type="deepseek",
+        api_key="sk-test-not-real",
+    )
+    ModelEntryCrud().create(
+        provider_id=provider.provider_id,
+        model_name="deepseek/deepseek-v4-flash",
+        display_name="deepseek-v4-flash",
+        max_context_window=1_000_000,
+        supports_thinking=True,
+    )
 
 
 def _create_workspace() -> str:
@@ -69,8 +107,10 @@ def _create_workspace() -> str:
 
 def _create_task() -> TaskRecord:
     task, _ = TaskService().create_task_with_initial_turn(
-        workspace_id=_create_workspace(), agent_id="developer",
+        workspace_id=_create_workspace(),
+        agent_id="developer",
         input_text="ctx regression task",
+        model_name="deepseek/deepseek-v4-flash",
     )
     return task
 

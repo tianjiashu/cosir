@@ -10,7 +10,7 @@
  * - S5 InputBar api_key_missing 联动 onOpenSettings。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useTaskStore } from "@/stores/taskStore";
 import { useTurnStore } from "@/stores/turnStore";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
@@ -80,6 +80,32 @@ const BLOCK_APIKEY = {
     openSettings: true,
   },
 } as const;
+
+/**
+ * 构造一个已配置 Key 的可用模型条目（guardSend 放行基线）。
+ *
+ * @param overrides - 需要覆盖的字段（如 `api_key_configured: false`）。
+ */
+function makeConfiguredModel(overrides: Record<string, unknown> = {}) {
+  return {
+    model_id: "model-1",
+    provider_id: "provider-1",
+    provider_name: "DeepSeek 官方",
+    model_name: "deepseek/deepseek-v4-flash",
+    display_name: "deepseek-v4-flash",
+    max_context_window: 128000,
+    supports_thinking: false,
+    temperature: null,
+    top_p: null,
+    max_tokens: null,
+    enabled: true,
+    api_key_configured: true,
+    sort_order: 0,
+    created_at: "2026-08-17T00:00:00Z",
+    updated_at: "2026-08-17T00:00:00Z",
+    ...overrides,
+  } as never;
+}
 
 function resetStores() {
   useTaskStore.setState({
@@ -197,7 +223,7 @@ describe("S3/S4 并发与重复 Enter（NewTaskPage）", () => {
   // 测试目的：guardSend 挂起期间快速按两次 Enter，两次都放行 → createTask 被调 2 次。
   // 可能发现的缺陷：放行路径无防抖/in-flight 保护，快速双击会重复创建任务。
   it("快速双击 Enter（guardSend 挂起）→ createTask 被调 2 次（重复创建缺陷）", async () => {
-    let resolvers: Array<(v: { ok: boolean }) => void> = [];
+    const resolvers: Array<(v: { ok: boolean }) => void> = [];
     guardSendMock.mockImplementation(() => new Promise((res) => resolvers.push(res)));
 
     render(<NewTaskPage onCreated={vi.fn()} />);
@@ -229,8 +255,15 @@ describe("S3/S4 并发与重复 Enter（NewTaskPage）", () => {
 });
 
 describe("S5 InputBar 拦截/放行/并发", () => {
+  // 默认选中已配置 Key 的模型（按钮可点，guardSend 运行时路径可达）。
+  // 未选模型时按钮置灰是新的主路径（见 S6），此处的 guardSend 语义作为防御保留。
   function renderInputBar(onOpenSettings = vi.fn()) {
-    useTaskStore.setState({ activeTaskId: "t-1" });
+    useTaskStore.setState({
+      activeTaskId: "t-1",
+      selectedModelName: "deepseek/deepseek-v4-flash",
+      availableModels: [makeConfiguredModel()],
+      modelsLoaded: true,
+    });
     const utils = render(<InputBar onOpenSettings={onOpenSettings} />);
     const input = screen.getByPlaceholderText("给 Agent 下达任务...");
     return { input, onOpenSettings, ...utils };
@@ -238,6 +271,10 @@ describe("S5 InputBar 拦截/放行/并发", () => {
 
   // 测试目的：api_key_missing 拦截 → guardMessage 展示 + onOpenSettings 联动。
   it("api_key_missing 拦截 → guardMessage + onOpenSettings 被调，createTurn 不被调", async () => {
+    // 选中模型存在但厂商 Key 未配置（api_key_configured=false）。
+    useTaskStore.setState({
+      availableModels: [makeConfiguredModel({ api_key_configured: false })],
+    });
     guardSendMock.mockResolvedValue(BLOCK_APIKEY);
     const { input, onOpenSettings } = renderInputBar();
     fireEvent.change(input, { target: { value: "hello" } });
@@ -251,6 +288,9 @@ describe("S5 InputBar 拦截/放行/并发", () => {
 
   // 测试目的：放行 → guardMessage 清除 + createTurn 被调。
   it("放行 → createTurn 被调 + guardMessage 清除", async () => {
+    useTaskStore.setState({
+      availableModels: [makeConfiguredModel({ api_key_configured: false })],
+    });
     guardSendMock
       .mockResolvedValueOnce(BLOCK_APIKEY)
       .mockResolvedValueOnce({ ok: true });
@@ -267,7 +307,7 @@ describe("S5 InputBar 拦截/放行/并发", () => {
   // 测试目的：guardSend 挂起期间快速两次 Enter → createTurn 被调 2 次。
   // 可能发现的缺陷：放行路径无防抖，快速双击重复发送 turn。
   it("快速双击 Enter（guardSend 挂起）→ createTurn 被调 2 次（重复发送缺陷）", async () => {
-    let resolvers: Array<(v: { ok: boolean }) => void> = [];
+    const resolvers: Array<(v: { ok: boolean }) => void> = [];
     guardSendMock.mockImplementation(() => new Promise((res) => resolvers.push(res)));
     const { input } = renderInputBar();
     fireEvent.change(input, { target: { value: "hello" } });
@@ -289,5 +329,47 @@ describe("S5 InputBar 拦截/放行/并发", () => {
     await waitFor(() => expect(guardSendMock).toHaveBeenCalledTimes(2));
     expect(taskMocks.createTurn).not.toHaveBeenCalled();
     expect(onOpenSettings).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("S6 InputBar 未选模型按钮置灰（方案 §阶段 1.5）", () => {
+  // 未选模型（selectedModelName=null）时，发送按钮应 disabled 且 hover 提示
+  // 「请先选择模型」，guardSend 不被调用（主路径由按钮置灰承担，guardSend 仅防御）。
+  function renderWithoutModel(onOpenSettings = vi.fn()) {
+    useTaskStore.setState({
+      activeTaskId: "t-1",
+      selectedModelName: null,
+      availableModels: [makeConfiguredModel()],
+      modelsLoaded: true,
+    });
+    const utils = render(<InputBar onOpenSettings={onOpenSettings} />);
+    const input = screen.getByPlaceholderText("给 Agent 下达任务...");
+    const sendButton = screen.getByRole("button", { name: "发送" });
+    return { input, sendButton, onOpenSettings, ...utils };
+  }
+
+  it("未选模型时发送按钮 disabled，Enter 不触发 guardSend / createTurn", async () => {
+    const { input, sendButton } = renderWithoutModel();
+    expect(sendButton.getAttribute("disabled")).not.toBeNull();
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // canSend=false 使 handleSend 直接返回，guardSend 与 createTurn 均不被调。
+    expect(guardSendMock).not.toHaveBeenCalled();
+    expect(taskMocks.createTurn).not.toHaveBeenCalled();
+  });
+
+  it("选中模型后发送按钮变为可点，Enter 触发 guardSend 放行链路", async () => {
+    guardSendMock.mockResolvedValue({ ok: true });
+    const { input, sendButton } = renderWithoutModel();
+    expect(sendButton.getAttribute("disabled")).not.toBeNull();
+    // 用户通过 ModelSelector 选中模型（store 变更，触发重渲染）。
+    act(() => {
+      useTaskStore.setState({ selectedModelName: "deepseek/deepseek-v4-flash" });
+    });
+    fireEvent.change(input, { target: { value: "hello" } });
+    const sendAfterSelect = screen.getByRole("button", { name: "发送" });
+    expect(sendAfterSelect.getAttribute("disabled")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(taskMocks.createTurn).toHaveBeenCalledTimes(1));
   });
 });
