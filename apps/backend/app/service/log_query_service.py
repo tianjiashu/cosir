@@ -29,7 +29,7 @@ class LogQueryService:
 
         if max_limit < 1:
             raise ValueError("max_limit must be greater than zero")
-        self._store = service_depends.get_log_store()
+        self._crud = service_depends.get_log_crud()
         self._max_limit = max_limit
 
     def query_by_trace(
@@ -155,8 +155,8 @@ class LogQueryService:
             },
         )
         try:
-            entries, total = self._store.query(query)
-            level_counts = self._store.count_by_level(query)
+            entries, total = self._crud.query(query)
+            level_counts = self._crud.count_by_level(query)
         except Exception as err:
             log.error(
                 "log_query_failed",

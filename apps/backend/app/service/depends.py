@@ -16,15 +16,25 @@ if TYPE_CHECKING:
     from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
     from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
     from app.service.delegation.delegation_service import DelegationService
+    from app.service.llm.model_resolver_service import ModelResolverService
     from app.service.log_query_service import LogQueryService
+    from app.service.provider.model_entry_service import ModelEntryService
+    from app.service.provider.provider_connection_test_service import (
+        ProviderConnectionTestService,
+    )
+    from app.service.provider.provider_discover_service import ProviderDiscoverService
+    from app.service.provider.provider_service import ProviderService
     from app.service.task.task_service import TaskService
     from app.service.task.turn_service import TurnService
     from app.service.task.turn_stream_service import TurnStreamService
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
+    from app.storage.cascade_deletion import CascadeDeleter
     from app.storage.crud.delegation_crud import DelegationCrud
-    from app.storage.crud.log_crud import LogStore
+    from app.storage.crud.log_crud import LogCrud
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+    from app.storage.crud.provider_crud import ProviderCrud
     from app.storage.crud.runtime_event_crud import RuntimeEventCrud
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.turn_crud import TurnCrud
@@ -208,6 +218,28 @@ def get_delegation_crud() -> DelegationCrud:
 
 
 @lru_cache(maxsize=1)
+def get_cascade_deleter() -> CascadeDeleter:
+    """Return the process-local CascadeDeleter singleton.
+
+    参数:
+        无。
+
+    返回:
+        CascadeDeleter 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 CascadeDeleter。
+    """
+
+    from app.storage.cascade_deletion import CascadeDeleter
+
+    return CascadeDeleter()
+
+
+@lru_cache(maxsize=1)
 def get_delegation_service() -> DelegationService:
     """Return the process-local DelegationService singleton.
 
@@ -233,25 +265,25 @@ def get_delegation_service() -> DelegationService:
 
 
 @lru_cache(maxsize=1)
-def get_log_store() -> LogStore:
-    """Return the process-local LogStore singleton.
+def get_log_crud() -> LogCrud:
+    """Return the process-local LogCrud singleton.
 
     参数:
         无。
 
     返回:
-        LogStore 单例。
+        LogCrud 单例。
 
     异常:
         RuntimeError: 如果 storage 尚未初始化。
 
     副作用:
-        首次调用时创建 LogStore。
+        首次调用时创建 LogCrud。
     """
 
-    from app.storage.crud.log_crud import LogStore
+    from app.storage.crud.log_crud import LogCrud
 
-    return LogStore()
+    return LogCrud()
 
 
 @lru_cache(maxsize=1)
@@ -489,6 +521,163 @@ def get_log_query_service() -> LogQueryService:
     return LogQueryService()
 
 
+@lru_cache(maxsize=1)
+def get_provider_crud() -> ProviderCrud:
+    """返回进程级 ProviderCrud 单例。
+
+    参数:
+        无。
+
+    返回:
+        ProviderCrud 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 ProviderCrud。
+    """
+
+    from app.storage.crud.provider_crud import ProviderCrud
+
+    return ProviderCrud()
+
+
+@lru_cache(maxsize=1)
+def get_model_entry_crud() -> ModelEntryCrud:
+    """返回进程级 ModelEntryCrud 单例。
+
+    参数:
+        无。
+
+    返回:
+        ModelEntryCrud 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 ModelEntryCrud。
+    """
+
+    from app.storage.crud.model_entry_crud import ModelEntryCrud
+
+    return ModelEntryCrud()
+
+
+@lru_cache(maxsize=1)
+def get_provider_service() -> ProviderService:
+    """返回进程级 ProviderService 单例。
+
+    参数:
+        无。
+
+    返回:
+        ProviderService 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 ProviderService（注入 ProviderCrud 单例）。
+    """
+
+    from app.service.provider.provider_service import ProviderService
+
+    return ProviderService()
+
+
+@lru_cache(maxsize=1)
+def get_provider_discover_service() -> ProviderDiscoverService:
+    """返回进程级 ProviderDiscoverService 单例。
+
+    参数:
+        无。
+
+    返回:
+        ProviderDiscoverService 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 ProviderDiscoverService（注入 ModelEntryCrud 单例）。
+    """
+
+    from app.service.provider.provider_discover_service import ProviderDiscoverService
+
+    return ProviderDiscoverService()
+
+
+@lru_cache(maxsize=1)
+def get_model_entry_service() -> ModelEntryService:
+    """返回进程级 ModelEntryService 单例。
+
+    参数:
+        无。
+
+    返回:
+        ModelEntryService 单例。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 ModelEntryService（注入 ModelEntryCrud 单例）。
+    """
+
+    from app.service.provider.model_entry_service import ModelEntryService
+
+    return ModelEntryService()
+
+
+@lru_cache(maxsize=1)
+def get_model_resolver_service() -> ModelResolverService:
+    """返回进程级 ModelResolverService 单例（依赖 ModelEntryCrud 与 ProviderService 单例）。
+
+    参数:
+        无。
+
+    返回:
+        ModelResolverService 单例（依赖 ModelEntryCrud 与 ProviderService 单例）。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化。
+
+    副作用:
+        首次调用时创建 ModelResolverService。
+    """
+
+    from app.service.llm.model_resolver_service import ModelResolverService
+
+    return ModelResolverService()
+
+
+@lru_cache(maxsize=1)
+def get_provider_connection_test_service() -> ProviderConnectionTestService:
+    """返回进程级 ProviderConnectionTestService 单例（设计文档 §七 阶段 2）。
+
+    参数:
+        无。
+
+    返回:
+        ProviderConnectionTestService 单例（阶段 2 实施时按需注入
+        ProviderService / ModelResolverService 单例，本期骨架无构造依赖）。
+
+    异常:
+        RuntimeError: 如果 storage 尚未初始化（阶段 2 实施后接入）。
+
+    副作用:
+        首次调用时创建 ProviderConnectionTestService。
+    """
+
+    from app.service.provider.provider_connection_test_service import (
+        ProviderConnectionTestService,
+    )
+
+    return ProviderConnectionTestService()
+
+
 def reset_service_dependencies() -> None:
     """Clear service-layer dependency singletons.
 
@@ -514,11 +703,19 @@ def reset_service_dependencies() -> None:
     get_task_service.cache_clear()
     get_runtime_event_service.cache_clear()
     get_runtime_event_bus.cache_clear()
-    get_log_store.cache_clear()
+    get_log_crud.cache_clear()
     get_delegation_service.cache_clear()
     get_turn_message_crud.cache_clear()
     get_delegation_crud.cache_clear()
+    get_cascade_deleter.cache_clear()
     get_runtime_event_crud.cache_clear()
     get_workspace_crud.cache_clear()
     get_turn_crud.cache_clear()
     get_task_crud.cache_clear()
+    get_provider_crud.cache_clear()
+    get_model_entry_crud.cache_clear()
+    get_provider_service.cache_clear()
+    get_provider_discover_service.cache_clear()
+    get_model_entry_service.cache_clear()
+    get_model_resolver_service.cache_clear()
+    get_provider_connection_test_service.cache_clear()
