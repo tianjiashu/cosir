@@ -16,9 +16,14 @@
 from typing import Any
 from uuid import uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import asc, delete, select, update
 
-from app.models import ModelEntryRecord
+from app.models.model_entry_record import (
+    ModelEntryRecord,
+    _normalize_required_text,
+    _positive_context_window,
+)
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text, utc_now
@@ -56,6 +61,8 @@ class ModelEntryCrud:
         display_name: str,
         max_context_window: int,
         supports_thinking: bool = False,
+        supports_image: bool = False,
+        supports_video: bool = False,
         enabled: bool = True,
         sort_order: int = 0,
     ) -> ModelEntryRecord:
@@ -79,7 +86,8 @@ class ModelEntryCrud:
 
         异常:
             ValueError: 如果 model_name / display_name 归一后为空或
-                max_context_window 非正。
+                max_context_window 非正（由 ``ModelEntryRecord`` 校验器判定后
+                经 :meth:`_build_record` 归一抛出）。
             sqlalchemy.exc.IntegrityError: 如果 provider 不存在（FK 约束）或
                 同厂商下 model_name 重名（唯一约束）。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
@@ -87,26 +95,23 @@ class ModelEntryCrud:
         副作用:
             向 ``models`` 表插入一行。
         """
-
-        normalized_name = model_name.strip()
-        normalized_display = display_name.strip()
-        if not normalized_name:
-            raise ValueError("model_name must not be blank")
-        if not normalized_display:
-            raise ValueError("display_name must not be blank")
-        if max_context_window <= 0:
-            raise ValueError("max_context_window must be positive")
-        record = self._build_record(
-            provider_id=provider_id,
-            model_name=normalized_name,
-            display_name=normalized_display,
+        now = utc_now()
+        record = ModelEntryRecord(
+            model_id=str(uuid4()),
+            provider_id=str(provider_id),
+            model_name=model_name,
+            display_name=display_name,
             max_context_window=max_context_window,
+            created_at=now,
+            updated_at=now,
             supports_thinking=supports_thinking,
+            supports_image=supports_image,
+            supports_video=supports_video,
             enabled=enabled,
             sort_order=sort_order,
         )
         with self._session_factory.begin() as session:
-            session.add(self._to_model(record))
+            session.add(record.to_model())
         return record
 
     def bulk_create(self, entries: list[dict[str, Any]]) -> list[ModelEntryRecord]:
@@ -134,20 +139,26 @@ class ModelEntryCrud:
 
         if not entries:
             return []
+        now = utc_now()
         records = [
-            self._build_record(
-                provider_id=entry["provider_id"],
+            ModelEntryRecord(
+                model_id=str(uuid4()),
+                provider_id=str(entry["provider_id"]),
                 model_name=entry["model_name"],
                 display_name=entry["display_name"],
                 max_context_window=entry["max_context_window"],
                 supports_thinking=entry.get("supports_thinking", False),
+                supports_image=entry.get("supports_image", False),
+                supports_video=entry.get("supports_video", False),
                 enabled=entry.get("enabled", True),
                 sort_order=entry.get("sort_order", 0),
+                created_at=now,
+                updated_at=now,
             )
             for entry in entries
         ]
         with self._session_factory.begin() as session:
-            session.add_all([self._to_model(record) for record in records])
+            session.add_all([record.to_model() for record in records])
         return records
 
     def get(self, model_id: str) -> ModelEntryRecord:
@@ -168,7 +179,7 @@ class ModelEntryCrud:
         """
 
         with self._session_factory() as session:
-            row = session.get(ModelEntryModel, model_id)
+            row: ModelEntryModel | None = session.get(ModelEntryModel, model_id)
         if row is None:
             raise KeyError(model_id)
         return ModelEntryRecord.from_model(row)
@@ -283,6 +294,8 @@ class ModelEntryCrud:
         display_name: str | None = None,
         max_context_window: int | None = None,
         supports_thinking: bool | None = None,
+        supports_image: bool | None = None,
+        supports_video: bool | None = None,
         enabled: bool | None = None,
         sort_order: int | None = None,
     ) -> ModelEntryRecord:
@@ -310,16 +323,21 @@ class ModelEntryCrud:
 
         values: dict[str, object] = {"updated_at": to_text(utc_now())}
         if display_name is not None:
-            normalized = display_name.strip()
-            if not normalized:
-                raise ValueError("display_name must not be blank")
-            values["display_name"] = normalized
+            try:
+                values["display_name"] = _normalize_required_text(display_name)
+            except ValueError as exc:
+                raise ValueError(f"display_name {exc}") from exc
         if max_context_window is not None:
-            if max_context_window <= 0:
-                raise ValueError("max_context_window must be positive")
-            values["max_context_window"] = max_context_window
+            try:
+                values["max_context_window"] = _positive_context_window(max_context_window)
+            except ValueError as exc:
+                raise ValueError(f"max_context_window {exc}") from exc
         if supports_thinking is not None:
             values["supports_thinking"] = supports_thinking
+        if supports_image is not None:
+            values["supports_image"] = supports_image
+        if supports_video is not None:
+            values["supports_video"] = supports_video
         if enabled is not None:
             values["enabled"] = enabled
         if sort_order is not None:
@@ -355,87 +373,5 @@ class ModelEntryCrud:
         with self._session_factory.begin() as session:
             session.execute(delete(ModelEntryModel).where(ModelEntryModel.model_id == model_id))
 
-    def _build_record(
-        self,
-        provider_id: str,
-        model_name: str,
-        display_name: str,
-        max_context_window: int,
-        supports_thinking: bool,
-        enabled: bool,
-        sort_order: int,
-    ) -> ModelEntryRecord:
-        """组装待落库的 ``ModelEntryRecord``（生成 UUID 与时间戳）。
-
-        参数:
-            provider_id: 归属厂商标识。
-            model_name: 已归一的 litellm 路由名。
-            display_name: 已归一的展示名。
-            max_context_window: 已校验的上下文窗口。
-            supports_thinking: 推理模型标识。
-            enabled: 启用开关。
-            sort_order: 排序权重。
-
-        返回:
-            未落库的 ``ModelEntryRecord``（调用方负责写入）。
-
-        异常:
-            ValueError: 如果 model_name / display_name 为空或窗口非正
-                （批量路径集中校验，保证整批回滚语义前置）。
-
-        副作用:
-            无。
-        """
-
-        if not str(model_name).strip():
-            raise ValueError("model_name must not be blank")
-        if not str(display_name).strip():
-            raise ValueError("display_name must not be blank")
-        window = int(max_context_window)
-        if window <= 0:
-            raise ValueError("max_context_window must be positive")
-        now = utc_now()
-        return ModelEntryRecord(
-            model_id=str(uuid4()),
-            provider_id=str(provider_id),
-            model_name=str(model_name).strip(),
-            display_name=str(display_name).strip(),
-            max_context_window=window,
-            created_at=now,
-            updated_at=now,
-            supports_thinking=bool(supports_thinking),
-            enabled=bool(enabled),
-            sort_order=int(sort_order),
-        )
-
-    @staticmethod
-    def _to_model(record: ModelEntryRecord) -> ModelEntryModel:
-        """把 ``ModelEntryRecord`` 值对象转换为待插入的 ``ModelEntryModel`` 行。
-
-        参数:
-            record: 模型条目值对象。
-
-        返回:
-            可直接 ``session.add`` 的 ORM 行（时间字段序列化为文本）。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return ModelEntryModel(
-            model_id=record.model_id,
-            provider_id=record.provider_id,
-            model_name=record.model_name,
-            display_name=record.display_name,
-            max_context_window=record.max_context_window,
-            supports_thinking=record.supports_thinking,
-            enabled=record.enabled,
-            sort_order=record.sort_order,
-            created_at=to_text(record.created_at),
-            updated_at=to_text(record.updated_at),
-        )
 
 

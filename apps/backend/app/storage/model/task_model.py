@@ -31,7 +31,7 @@ class TaskModel(StorageBase):
     delegation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_usage_used: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=True,
+        default=0,
         comment="最近一次上下文窗口已用 token（total 由 resolve_context_window 动态计算，不落库）",
     )
 
