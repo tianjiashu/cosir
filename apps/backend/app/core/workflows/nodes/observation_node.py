@@ -23,10 +23,11 @@ from app.config.settings import Settings
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     _runtime_context,
+    emit_run_cancelled,
     write_event,
 )
 from app.models.enums.event_type import EventType
-from app.models.payload import RunCancelledPayload, RunFailedPayload
+from app.models.payload import RunFailedPayload
 
 from ..react.state import ReactGraphState
 
@@ -88,15 +89,9 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": f"step-{state.step_count}"},
             },
         )
-        write_event(
-            EventType.RUN_CANCELLED,
-            RunCancelledPayload(
-                status="cancelled",
-                step_id=f"step-{state.step_count}",
-                error="turn_cancelled",
-            ),
-        )
-        # 取消终态：清空 deferred 避免残留，直接终态结束（不回 model）。
+        # 取消终态：经文统一 emit_run_cancelled 构造（携带 langfuse_trace_id，
+        # 与 model/tools 一致），清空 deferred 避免残留，直接终态结束（不回 model）。
+        emit_run_cancelled(rc, f"step-{state.step_count}")
         return {"terminal": True, "deferred_repair_message": ""}
 
     # 2. 延后 REPAIR 修复提示注入：model 节点 REPAIR 情形 a 经独立 state 字段下传的

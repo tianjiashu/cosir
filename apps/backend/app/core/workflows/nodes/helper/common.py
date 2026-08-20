@@ -7,6 +7,9 @@
   task 级上下文。
 - ``build_run_failed_payload``：统一构造携带 token 摘要的 ``RunFailedPayload``，消除
   各节点重复展开 ``usage_stats.to_dict()`` 六字段的样板。
+- ``emit_run_cancelled``：统一构造并写出 ``RUN_CANCELLED`` 取消终态事件，消除
+  model / tools / observe 三节点各自手写 ``RunCancelledPayload`` 导致字段口径
+  不一致（如遗漏 ``langfuse_trace_id``）的重复与可排查性隐患。
 - ``terminal_state``：统一构造终态 state patch，消除各节点
   重复的 ``{"terminal": True, ...}`` 字典字面量。
 
@@ -21,7 +24,7 @@ from langgraph.config import get_config, get_stream_writer
 
 from app.core.workflows.react.runtime_config import RuntimeConfig
 from app.models.enums.event_type import EventType
-from app.models.payload import RunFailedPayload
+from app.models.payload import RunCancelledPayload, RunFailedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
 
@@ -146,6 +149,45 @@ def build_run_failed_payload(
         cache_hit_tokens=usage_dict["cache_hit_tokens"],
         cache_miss_tokens=usage_dict["cache_miss_tokens"],
         reasoning_tokens=usage_dict["reasoning_tokens"],
+    )
+
+
+def emit_run_cancelled(rc: RuntimeConfig, step_id: str) -> None:
+    """发出 turn 取消终态事件（``RUN_CANCELLED``），携带本轮已消耗 token 摘要与 trace id。
+
+    model / tools / observe 三个节点在检测到 turn 取消时都要发同构的
+    ``RUN_CANCELLED`` 事件。手写会导致两处问题：一是 ``RunCancelledPayload`` 字段
+    在多处分歧（例如漏写 ``langfuse_trace_id`` 造成 Langfuse 追踪断链、可排查性下降），
+    二是未来字段变更需同步多处易漏改。本函数把该构造收口为单一来源，三节点统一调用。
+
+    参数:
+        rc: 当前 ``RuntimeConfig``（取 ``usage_stats`` / ``langfuse_trace_id``）。
+        step_id: 触发取消的步唯一标识，写入事件供前端关联。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        经 ``write_event`` 写入一条 ``EventType.RUN_CANCELLED`` 事件。
+    """
+    usage_summary = rc.usage_stats.to_dict()
+    write_event(
+        EventType.RUN_CANCELLED,
+        RunCancelledPayload(
+            status="cancelled",
+            step_id=step_id,
+            error="turn_cancelled",
+            langfuse_trace_id=rc.langfuse_trace_id,
+            input_tokens=usage_summary["input_tokens"],
+            output_tokens=usage_summary["output_tokens"],
+            total_tokens=usage_summary["total_tokens"],
+            cache_hit_tokens=usage_summary["cache_hit_tokens"],
+            cache_miss_tokens=usage_summary["cache_miss_tokens"],
+            reasoning_tokens=usage_summary["reasoning_tokens"],
+        ),
     )
 
 

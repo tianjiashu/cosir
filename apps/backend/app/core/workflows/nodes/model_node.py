@@ -39,6 +39,7 @@ from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     _runtime_context,
     build_run_failed_payload,
+    emit_run_cancelled,
     terminal_state,
     write_event,
 )
@@ -61,7 +62,6 @@ from app.models.payload import (
     ModelOutputDeltaPayload,
     ModelRequestedPayload,
     ModelThinkingDeltaPayload,
-    RunCancelledPayload,
     RunFinishedPayload,
     StepStartedPayload,
 )
@@ -97,45 +97,6 @@ def _estimate_run_cost(rc, usage: dict[str, int]) -> float | None:
             cache_hit_tokens=usage["cache_hit_tokens"],
         ),
         model_name,
-    )
-
-
-def _emit_run_cancelled(rc, step_id: str) -> None:
-    """发出 turn 取消终态事件（``RUN_CANCELLED``），携带本轮已消耗 token 摘要。
-
-    model 节点的三处取消分支（请求前 ×2、流式中 ×1）都以同构 payload 发
-    ``RUN_CANCELLED``，避免与取消流其它信号重复；本函数收口该构造为单一来源，
-    防止未来 ``RunCancelledPayload`` 字段变更时多处不同步。请求前取消时模型尚未
-    调用，``rc.usage_stats`` 为零值，字段语义仍成立。
-
-    参数:
-        rc: 当前 ``RuntimeConfig``（取 ``usage_stats`` / ``langfuse_trace_id``）。
-        step_id: 当前模型步唯一标识，写入事件供前端关联。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        经 ``write_event`` 写入一条 ``EventType.RUN_CANCELLED`` 事件。
-    """
-    usage_summary = rc.usage_stats.to_dict()
-    write_event(
-        EventType.RUN_CANCELLED,
-        RunCancelledPayload(
-            status="cancelled",
-            step_id=step_id,
-            error="turn_cancelled",
-            langfuse_trace_id=rc.langfuse_trace_id,
-            input_tokens=usage_summary["input_tokens"],
-            output_tokens=usage_summary["output_tokens"],
-            total_tokens=usage_summary["total_tokens"],
-            cache_hit_tokens=usage_summary["cache_hit_tokens"],
-            cache_miss_tokens=usage_summary["cache_miss_tokens"],
-            reasoning_tokens=usage_summary["reasoning_tokens"],
-        ),
     )
 
 
@@ -203,7 +164,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
         # 请求前取消同样走统一终态并发 RUN_CANCELLED，与流式中取消/工具取消保持事件一致，
         # 否则前端 StatusBadge 无法感知取消。请求前未调用模型，usage 为零值。
-        _emit_run_cancelled(rc, step_id)
+        emit_run_cancelled(rc, step_id)
         return terminal_state(step_count)
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages = _runtime_context().load_message()
@@ -232,7 +193,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
         # 请求事件前取消同样走统一终态并发 RUN_CANCELLED（用法与流式中取消同构），
         # 保证取消语义对前端一致。请求前未调用模型，usage 为零值。
-        _emit_run_cancelled(rc, step_id)
+        emit_run_cancelled(rc, step_id)
         return terminal_state(step_count)
     write_event(
         EventType.MODEL_REQUESTED,
@@ -272,7 +233,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": usage_summary},
                 },
             )
-            _emit_run_cancelled(rc, step_id)
+            emit_run_cancelled(rc, step_id)
             return terminal_state(step_count)
 
         chunks.append(chunk)

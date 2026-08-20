@@ -30,10 +30,9 @@ from app.core.workflows.nodes.helper.common import (
     _make_write_event,
     _runtime_config,
     _runtime_context,
+    emit_run_cancelled,
 )
 from app.models import RuntimeMessage
-from app.models.enums.event_type import EventType
-from app.models.payload import RunCancelledPayload
 from app.service.tool_execution.run_result import ToolRunResult
 from app.tools.schemas import ToolCall, ToolObservation
 from app.utils.trace_infra.redaction import redact_terminal_output
@@ -245,11 +244,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
         _persist_tool_observations(cancel_placeholders)
         # 收口取消终态事件：本分支是实际检测到 turn 取消的执行点，须发出
         # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
-        # 与 model_node 取消分支（携带 usage）保持同类型、零值字段一致。
-        node_write_event(
-            EventType.RUN_CANCELLED,
-            RunCancelledPayload(status="cancelled", step_id=step_id, error="turn_cancelled"),
-        )
+        # 经统一 emit_run_cancelled 构造（携带 langfuse_trace_id，与 model/observe 一致）。
+        emit_run_cancelled(rc, step_id)
         return {
             "pending_tool_calls": [],
             "tool_error_count": state.tool_error_count,
