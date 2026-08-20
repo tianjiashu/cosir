@@ -10,8 +10,8 @@
 - ``terminal_state``：统一构造终态 state patch，消除各节点
   重复的 ``{"terminal": True, ...}`` 字典字面量。
 
-节点各自的数据处理辅助（如 ``_extract_text``、``_finalize_ai_message``）不放这里，
-归属见 ``model_node`` / ``tools_node``。
+节点各自的数据处理辅助（如 chunk 组装逻辑 ``_extract_text``）不放这里，归属见
+``chunk_assembler`` / ``model_node`` / ``tools_node``。
 """
 
 from collections.abc import Callable
@@ -19,12 +19,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.config import get_config, get_stream_writer
 
+from app.core.workflows.react.runtime_config import RuntimeConfig
 from app.models.enums.event_type import EventType
 from app.models.payload import RunFailedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
-
-from ..react.runtime_config import RuntimeConfig
 
 if TYPE_CHECKING:
     from app.core.context.runtime_context_manager import RuntimeContextManager
@@ -91,14 +90,14 @@ def _runtime_config() -> RuntimeConfig:
 def _runtime_context() -> "RuntimeContextManager":
     """从 LangGraph 运行上下文取出 task 级运行时上下文。
 
-    ``ReactLikeWorkflow.run()`` 把 ``RuntimeContext`` 放入 config 的 ``runtime_context``；
+    ``ReactLikeWorkflow.run()`` 把 ``RuntimeContextManager`` 放入 config 的 ``runtime_context``；
     节点统一经本函数取出，与 ``_runtime_config`` 同口径，避免裸字符串 key 重复读取
     ``config["configurable"]``，且使上下文对象不进入 graph state（不兼容消息 reducer）。
 
     返回:
-        当前 graph 执行注入的 ``RuntimeContext`` 实例。
+        当前 graph 执行注入的 ``RuntimeContextManager`` 实例。
     """
-    # 从 LangGraph 注入的 config 中取出预先放好的 RuntimeContext。
+    # 从 LangGraph 注入的 config 中取出预先放好的 RuntimeContextManager。
     return get_config()["configurable"]["runtime_context"]
 
 
@@ -165,8 +164,9 @@ def terminal_state(
 
     参数:
         step_count: 当前步编号，直接落入 patch。
-        repair_requested: 是否需要修复重写（debug 用），与 ``ReactGraphState`` 同口径为
-            ``str`` 类型，空串/``"false"`` 表示否，``"true"`` 表示是。默认 ``"false"``。
+        repair_requested: 是否需要修复重写（debug 用），``str`` 类型（空串/``"false"`` 表示
+            否，``"true"`` 表示是），默认 ``"false"``。注意：``ReactGraphState.repair_requested``
+            字段声明为 ``bool``，本函数以 ``str`` 写回，两者类型不一致属历史遗留。
         requested_tool: 本步是否请求了工具，默认 ``False``。
         final_response: 是否产出终态文本，默认 ``False``。
 

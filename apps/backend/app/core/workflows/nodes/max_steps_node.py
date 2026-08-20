@@ -1,15 +1,15 @@
 """ReAct-like 工作流的最大步数终态节点。"""
 
 from app.config.logging.logger import log
-from app.models.enums.event_type import EventType
-
-from ..react.state import ReactGraphState
-from .common import (
+from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     build_run_failed_payload,
     terminal_state,
     write_event,
 )
+from app.models.enums.event_type import EventType
+
+from ..react.state import ReactGraphState
 
 
 async def _max_steps_node(state: ReactGraphState) -> dict[str, object]:

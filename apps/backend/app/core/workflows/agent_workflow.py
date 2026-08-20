@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator
 from typing import Protocol
 
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.models import TaskRecord
 from app.models.event.runtime_event import RuntimeEvent
 
 
@@ -20,11 +19,9 @@ class AgentWorkflow(Protocol):
         """通过一个工作流策略运行一个任务。
 
         参数:
-            task: 由运行时选中的任务记录。
             operations: 暴露给工作流的、运行时拥有的操作。
             callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
-                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
-                缺省为空列表，不影响既有行为。
+                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选的 Langfuse trace 标识；工作流可在终态事件 payload
                 中携带，供前端展示与跳转。未启用 Langfuse 时为 None。
 
@@ -35,7 +32,7 @@ class AgentWorkflow(Protocol):
             Exception: 工作流失败可能传播到运行时包装器。
 
         副作用:
-            使用 ``operations`` 来更新状态、调用模型、执行工具，并记录运行时事件。
+            使用 ``operations`` 更新状态、调用模型、执行工具，并记录运行时事件。
         """
 
         ...

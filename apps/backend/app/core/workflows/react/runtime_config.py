@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from langchain_core.language_models import BaseChatModel
 
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.models import TaskRecord, TurnRecord
+from app.models import LLMRuntimeConfig, TurnRecord
 from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
@@ -36,13 +36,13 @@ class RuntimeConfig:
     与 ``ReactGraphState`` 的区别：
     - state（graph state）：节点之间传递的**数据流**，会被 LangGraph 持久化进 checkpoint、
       随执行累积（如 step_count、tool_error_count、terminal），是可重放的。模型上下文不进 state，
-      由 ``RuntimeContext`` 独占管理（持久化事实来源是 SQLite，checkpoint 重放时由编排层重新注入）。
+      由 ``RuntimeContextManager`` 独占管理（持久化事实来源是 SQLite，checkpoint 重放时由编排层
+      重新注入）。
     - 本容器：运行期**依赖注入**，含不可序列化对象（模型实例、操作门面），**不进入 checkpoint**，
       只在本次 graph 执行期间生效，graph 重放时由编排层重新注入。
 
     Attributes:
         operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
-        task: 当前需要执行的任务记录。
         turn: 当前执行轮次记录，节点经它写入 turn 状态（单一事实来源）。
         model: 已绑定工具的 LangChain chat model 实例，供 model 节点推理。
         approval_resolver: 可选的工具审批解析器；``tools`` 节点因 ``interrupt()`` 暂停时，
@@ -54,13 +54,18 @@ class RuntimeConfig:
             ``usage_metadata`` 累加进来，``run_finished`` 事件读取后下发给前端。
         langfuse_trace_id: 本 turn 的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
             供终态事件 payload 携带给前端展示。未启用 Langfuse 时为 None。
+        llm_config: 本次解析出的 ``LLMRuntimeConfig``（含 provider_type /
+            thinking_channels / thinking_roundtrip），供 model_node 按厂商分派
+            thinking 抽取与剥离；不含 Key 明文。
     """
 
     operations: RuntimeOperations
     turn: TurnRecord
     model: BaseChatModel
-    # None 表示自动放行全部调用，且 tools 节点不调用 interrupt()（不暂停 graph）。
+    # None 表示自动放行（tools 节点不调用 interrupt()）；语义见 docstring Attributes。
     approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None
     start_time: float = 0.0
     usage_stats: TurnUsageStats = field(default_factory=TurnUsageStats)
     langfuse_trace_id: str | None = None
+    # 不含 Key 明文（api_key 已在工厂侧消费）；语义见 docstring Attributes。
+    llm_config: LLMRuntimeConfig | None = None

@@ -10,18 +10,24 @@ from .state import ReactGraphState
 
 
 def _should_continue(state: ReactGraphState) -> str:
-    """条件边：根据 graph state 决定流向 tools 还是结束。
+    """条件边：根据 graph state 决定流向 tools / model / max_steps 还是结束。
 
     参数:
         state: 当前 graph state。
 
     返回:
-        ``"tools"`` 表示进入工具节点；``END`` 表示工作流结束。
+        ``"tools"`` 进入工具节点；``"model"`` 表示 REPAIR 修复回流重试；
+        ``"max_steps"`` 表示超过最大步数进入终态节点；``END`` 表示工作流结束。
     """
 
     if state.terminal or state.final_response:
         return END
-    if (state.repair_requested or state.requested_tool) and state.step_count >= state.max_steps:
+    # max_steps 语义为「本轮允许的最大模型步骤数」（step_count ∈ [1, max_steps] 合法）。
+    # step_count 在 model 节点每次进入时 +1，表示「已完成/本次的模型推理序号」，故仅当
+    # 严格超过 max_steps（下一次推理超配额）才拦截——见设计文档 invalid-tool-calls-repair-plan
+    # 「step 超 max_steps」。用 `>` 而非 `>=`，避免第 max_steps 次推理产生的工具/回流被
+    # 误判为超步数提前终态（off-by-one）。
+    if (state.repair_requested or state.requested_tool) and state.step_count > state.max_steps:
         return "max_steps"
     if state.repair_requested:
         return "model"

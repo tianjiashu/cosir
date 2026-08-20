@@ -34,6 +34,11 @@ class ReactGraphState(BaseModel):
     是否持久化 = 是否进入 checkpoint）：
 
     Attributes:
+        repair_requested: 是否需要修复重写。**写入方**：``model`` 节点（REPAIR 回流时置 True）。
+            **消费方**：条件边 ``_should_continue``（优先走 model 回流）。**持久化**：是。
+        step_count: 当前模型步骤序号（模型节点每次进入时 +1）。**写入方**：``model`` 节点。
+            **消费方**：条件边 ``_should_continue``（``step_count > max_steps`` 判定）。
+            **持久化**：是。
         tool_error_count: 连续工具失败次数，成功即清零。**写入方**：``observe`` 节点（从本批
             ``last_tool_results`` 重算）。**消费方**：``observe`` 节点（超 ``tool_error_limit``
             判定）。**持久化**：是。
@@ -51,7 +56,8 @@ class ReactGraphState(BaseModel):
             ``tools`` / ``observe`` 节点在日志与错误排查时看到模型意图。``instruction`` 缺省
             视为空串，向后兼容无文本的同批调用。**持久化**：是。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。**写入方**：编排层初始化 input_state。
-            **消费方**：``model`` 节点（超步数判定）。**持久化**：是。
+            **消费方**：条件边 ``_should_continue``（``step_count > max_steps`` 时拦截进
+            ``max_steps`` 终态节点）。**持久化**：是。
         final_text: 模型产出的最终回答文本，终态时落库，并在 checkpoint 重放时用于恢复，避免
             重放丢失最终回复。**写入方**：``model`` 节点（终态）。**消费方**：编排层/客户端。
             **持久化**：是。
@@ -64,6 +70,12 @@ class ReactGraphState(BaseModel):
             **写入方**：编排层初始化 ``input_state`` 置 ``None``；``model_node`` 在修复回流路径
             写入结构化明细（Task 2 落地）。**消费方**：``max_steps_node``（读取后并入
             ``RUN_FAILED`` 事件的 ``data``）。**持久化**：是（进入 checkpoint）。
+        deferred_repair_message: 模型级「本轮一次的延后 REPAIR 修复提示」，区别于工具级
+            instruction。REPAIR 情形 a（有合法工具）时模型不立即注入，而是作为独立 state 字段
+            回传，待 ``observe`` 节点工具结果处理后再注入模型并清空，避免挂在工具数组上与
+            单条工具强绑定。**写入方**：``model`` 节点（REPAIR 情形 a 有合法工具时，写本轮延后
+            修复提示）。**消费方**：``observe`` 节点（工具结果处理后注入并清空）。**持久化**：
+            是（但 observe 消费后置空，避免残留）。
     """
     repair_requested: bool
     step_count: int
@@ -78,3 +90,5 @@ class ReactGraphState(BaseModel):
     last_tool_results: list[dict[str, Any]]
     # 终态排查用错误明细（可序列化 dict），默认 None；由 max_steps_node 读取并入失败事件 data。
     continuation_error_data: Any = None
+    # 模型级本轮一次的延后 REPAIR 修复提示；model 写入、observe 消费后置空，默认空串向后兼容。
+    deferred_repair_message: str = ""

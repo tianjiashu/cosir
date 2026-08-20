@@ -19,7 +19,7 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.llm.context_window_resolver import resolve_context_window
-from app.core.llm.factory import build_chat_model
+from app.core.llm.factory import resolve_chat_model
 from app.core.llm.langchain_bridge import model_tools_to_langchain
 from app.core.runtime.checkpointer import build_checkpointer
 from app.models import RuntimeMessage
@@ -27,6 +27,7 @@ from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
+from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolCall
 
 from ...context.context_usage_meter import ContextUsageMeter
@@ -54,10 +55,10 @@ class ReactLikeWorkflow(AgentWorkflow):
     ) -> None:
         """初始化 ReAct-like 工作流。
 
-        Args:
+        参数:
             approval_resolver: 可选的工具审批解析器。当 ``tools`` 节点因 ``interrupt()`` 暂停时，
-                工作流会用它把待审批的工具调用解析为「批准执行的调用列表」并通过
-                ``Command(resume=)`` 恢复 graph。缺省为 ``None``，表示直接批准全部调用。
+                用它把待审批的工具调用解析为「批准执行的调用列表」并通过 ``Command(resume=)``
+                恢复 graph。缺省为 ``None``，表示直接批准全部调用。
         """
 
         self._approval_resolver = approval_resolver
@@ -109,38 +110,58 @@ class ReactLikeWorkflow(AgentWorkflow):
         方法构建并编译 graph，挂 ``AsyncSqliteSaver`` checkpointer；以
         ``astream(stream_mode=["custom"])`` 单循环驱动 graph，把节点经 ``get_stream_writer()``
         写入的 ``custom`` 业务事件（含 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA`` 等流式
-        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。模型经 ``build_chat_model`` 构建：
+        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。模型经 ``resolve_chat_model`` 构建：
         缺 Key 在构建期抛错（无 fake 回退）；真实模型不支持 ``bind_tools`` 时降级为
         不带工具运行（仅作防御，不掩盖配置错误）。当存在 ``approval_resolver`` 时，
         ``tools`` 节点会触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并通过
         ``Command(resume=)`` 恢复 graph；当 ``approval_resolver`` 为 ``None`` 时，``tools`` 节点
         不暂停 graph、直接执行工具（自动放行）。循环直到 graph 无待处理任务或工作流结束。
 
-        Args:
-            task: 当前需要执行的任务记录。
+        参数:
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
             callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
-                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪；
-                缺省为空列表，不影响既有行为。
+                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
                 ``run_finished`` / ``run_failed`` / ``run_cancelled`` 等终态事件 payload
                 会携带该字段供前端展示。未启用 Langfuse 时为 None。
 
-        Yields:
+        生成:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
         """
 
         turn = operations.get_current_turn()
         thread_id = turn.turn_id
         turn_id = turn.turn_id
+        current_task = operations.get_current_task()
 
         # Agent 执行主体
         agent_profile = operations.agent_profile
-        # 构建模型
-        base_model = build_chat_model(
-            agent_profile.model_name,
-            model_settings=agent_profile.model_settings,
-        )
+        # 构建模型：运行期兜底解析（设计 §6 ②），先按 agent profile 兜底，再用
+        # 本 turn 落库的 model_name 覆盖（turn.model_name 为 None 时回退 Auto 即
+        # agent_profile.model_name）。解析失败（模型未收录 / 厂商禁用 / Key 未配置）
+        # 记 error 日志 ``model_resolve_failed`` 后抛出，由外层 graph.astream 的
+        # 异常分支收敛为父 turn RUN_FAILED。
+        try:
+            resolved = resolve_chat_model(
+                requested_model=turn.model_name,
+                task_id=turn.task_id,
+                turn_id=turn.turn_id,
+            )
+        except ModelNotConfiguredError as exc:
+            log.error(
+                "model_resolve_failed",
+                extra={
+                    "msg": f"运行期模型解析失败，turn 进入 RUN_FAILED：{exc}",
+                    "data": {
+                        "task_id": current_task.task_id,
+                        "turn_id": turn.turn_id,
+                        "model": turn.model_name or agent_profile.model_name,
+                        "reason": getattr(exc, "reason", None),
+                    },
+                },
+            )
+            raise
+        base_model = resolved.model
         # 构建工具
         tool_schemas = model_tools_to_langchain(
             operations.model_tools, set(agent_profile.allowed_tools)
@@ -151,7 +172,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
         except NotImplementedError:
             # 降级防御：真实模型不支持 bind_tools（未实现工具绑定）时禁用工具继续运行，
-            # 保证非工具场景可用。此分支与缺 Key 无关——缺 Key 在 build_chat_model
+            # 保证非工具场景可用。此分支与缺 Key 无关——缺 Key 在 resolve_chat_model
             # 构建期即抛 ValueError（决策 1），不会走到这里。
             log.warning(
                 "model %s does not support bind_tools; running without tools "
@@ -168,8 +189,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             start_time=perf_counter(),
             usage_stats=TurnUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
+            llm_config=resolved.config,
         )
-        current_task = operations.get_current_task()
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
         # 读写的唯一入口。时序：先清空本 turn 残留 → 落 user 基线（add_message
@@ -200,8 +221,15 @@ class ReactLikeWorkflow(AgentWorkflow):
         runtime_context_manager.attach_usage_meter(
             ContextUsageMeter(
                 message_provider=runtime_context_manager.load_message,
-                model_name_provider=lambda: agent_profile.model_name,
-                total_tokens_provider=lambda: resolve_context_window(agent_profile.model_name),
+                # agent_profile.model_name 在阶段 1.5 后默认为 None（5 个内置
+                # profile 不再硬编码默认模型）；优先取 turn.model_name（前端
+                # 已选模型，由 resolver 在本行之前保证非 None）。两者均空时
+                # 兜底 ``""``，``resolve_context_window`` 走 ``_FALLBACK`` 路径
+                # 不会抛——但正常路径不该命中此分支（resolver 已先抛）。
+                model_name_provider=lambda: turn.model_name or agent_profile.model_name or "",
+                total_tokens_provider=lambda: resolve_context_window(
+                    turn.model_name or agent_profile.model_name or ""
+                ),
             )
         )
 
@@ -303,6 +331,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                     if isinstance(interrupt_value, dict)
                     else []
                 )
-                resolver = runtime_config.approval_resolver
-                approved = resolver(pending) if resolver is not None else pending
+                approval_resolver = runtime_config.approval_resolver
+                approved = approval_resolver(pending) if approval_resolver is not None else pending
                 input_state = Command(resume=approved)

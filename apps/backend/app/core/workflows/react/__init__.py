@@ -1,7 +1,7 @@
 """ReAct-like 工作流包，基于 LangGraph StateGraph 编排默认 Agent 执行策略。
 
 子模块职责：
-- ``state``：graph state 数据契约（仅承载控制流状态，消息通道由 ``RuntimeContext``
+- ``state``：graph state 数据契约（仅承载控制流状态，消息通道由 ``RuntimeContextManager``
   独占管理，不进 state）。
 - ``nodes``：``model`` / ``tools`` / ``observe`` 节点行为（LangGraph 原生 callable）。
 - ``edges``：``_should_continue`` / ``_after_tools`` / ``_after_observe`` 条件边路由。

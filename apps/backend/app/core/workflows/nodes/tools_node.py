@@ -1,16 +1,19 @@
 """ReAct-like 工作流的工具节点（``_tools_node``）。
 
 本模块只承载「工具节点」单一职责：在权限审批后执行工具并把观察结果追加回运行时上下文。
-节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批；工具执行通过 ``RuntimeOperations``
-完成，工具生命周期事件经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为
-``BaseMessage`` 经 ``_persist_tool_observations`` 写回 ``RuntimeContextManager``
-（**不进 graph state**，模型上下文由 RuntimeContextManager 独占）。状态写入 **turn**。
+审批编排（按 ``RuntimeConfig.approval_resolver`` 决定是否 ``interrupt()`` 暂停等待人工
+审批）已抽离到独立模块 ``approval``（``resolve_approved_calls``），本节点负责审批恢复后
+的取消检查、工具执行与占位闭合配对。工具执行通过 ``RuntimeOperations`` 完成，工具生命
+周期事件经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为 ``BaseMessage``
+经 ``_persist_tool_observations`` 写回 ``RuntimeContextManager``（**不进 graph state**，
+模型上下文由 RuntimeContextManager 独占）。状态写入 **turn**。
 
 工具观察的增量落库与写回统一收敛在 ``_persist_tool_observations``：落库一条即写回一条，
 避免「部分落库、零写回」的撕裂状态，闭合上一轮模型节点写入的 ``AIMessage.tool_calls``
-配对。错误计数与「错误上限」判定已下沉到独立的 ``observe`` 节点（见 ``observation_node``），
-本节点只负责「执行 + 落库写回 + 产出 ``last_tool_results`` 摘要」。与模型节点共享的运行时
-原语见 ``common``。
+配对。执行后取消判断与 ``deferred_repair_message`` 注入已下沉到 ``observe`` 节点
+（见 ``observation_node``），本节点只负责「审批 + 执行 + 配对闭合」，正常返回后经条件边
+进 ``observe`` 做「工具结果观察处理」的单一收口。执行前取消分支（工具尚未执行、无结果可
+观察）仍保留在本节点，补占位落库后直接终态。与模型节点共享的运行时原语见 ``common``。
 """
 
 import asyncio
@@ -18,11 +21,16 @@ import dataclasses
 from typing import Any
 
 import sqlalchemy
-from langchain_core.messages import SystemMessage
 from langgraph.types import interrupt
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.workflows.nodes.helper.approval import resolve_approved_calls
+from app.core.workflows.nodes.helper.common import (
+    _make_write_event,
+    _runtime_config,
+    _runtime_context,
+)
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload
@@ -31,7 +39,6 @@ from app.tools.schemas import ToolCall, ToolObservation
 from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState
-from .common import _make_write_event, _runtime_config, _runtime_context
 
 
 def _persist_tool_observations(
@@ -140,9 +147,10 @@ def _build_tool_result_summaries(
 
 
 async def _tools_node(state: ReactGraphState) -> dict:
-    """ReAct 工具节点：在权限审批后执行工具并把观察结果追加回上下文。
+    """ReAct 工具节点：审批 + 执行 + 配对闭合，产出工具结果摘要供 observe 观察。
 
-    节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批：
+    节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批（审批编排抽离到
+    ``approval.resolve_approved_calls``，行为契约见该模块）：
 
     - 存在 ``approval_resolver``：用 ``interrupt()`` 暂停 graph 等待审批，审批结果
       （批准的工具调用列表）通过 ``Command(resume=)`` 恢复；随后执行工具。
@@ -169,18 +177,19 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     返回:
         需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具结果摘要
-        （可序列化 dict 列表，供 ``observe`` 节点判定与后续 LLM 观察）；两个取消分支均置
-        ``terminal=True`` 且返回 ``last_tool_results=[]``——因为 ``_after_tools`` 在 ``terminal``
-        时直接 END、不进 observe，返回摘要既无人消费又会撑大 checkpoint。错误计数与「错误上限」
-        判定已下沉到 ``observe`` 节点。
+        （可序列化 dict 列表，供 ``observe`` 节点观察判定与后续 LLM 观察），并清空
+        ``pending_tool_calls``；执行前取消分支置 ``terminal=True`` 且返回
+        ``last_tool_results=[]``——因为 ``_after_tools`` 在 ``terminal`` 时直接 END、不进
+        observe，返回摘要既无人消费又会撑大 checkpoint。执行后取消判断、错误计数/上限判定
+        与 ``deferred_repair_message`` 注入均已下沉到 ``observe`` 节点，本节点不再处理。
 
     副作用:
         - 经 ``_persist_tool_observations`` 把本批次工具观察消息逐条增量落库，并同步
           ``_runtime_context().add_message`` 写回运行时上下文，闭合上一轮 ``_model_node``
           写入的 ``AIMessage.tool_calls`` 配对；
-        - 取消分支（执行前/执行后检测到 turn 取消）置 ``terminal=True`` 让 graph 走
-          END、不进 observe；执行前分支因提前 return 不进入 ``run_tool_calls``，由本节点
-          经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面为上一轮
+        - 执行前取消分支（工具尚未执行、无结果可观察，不能下沉 observe）置 ``terminal=True``
+          让 graph 走 END；因提前 return 不进入 ``run_tool_calls``，由本节点经
+          ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面为上一轮
           ``tool_calls`` 补同构占位并写回（占位字段与序列化逻辑 100% 同源 service，
           不平行复制），消除 core 对 service 受保护成员的越界访问；
         - 工具生命周期事件经 ``write_event`` 透传；状态写入 **turn**。
@@ -198,33 +207,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # 避免取消分支晚于 writer 定义而取不到运行上下文。
     node_write_event = _make_write_event()
 
-    # 无审批器（含字段缺失的测试桩）→ 自动放行，不暂停 graph，
-    # 直接用原始 tool_calls 作为已批准列表。
-    if getattr(rc, "approval_resolver", None) is None:
-        log.info(
-            "tools_node_auto_approved",
-            extra={
-                "msg": (
-                    f"无审批器，自动放行 {len(tool_calls)} 个工具调用"
-                    f"（不暂停 graph），step_id={step_id}"
-                ),
-                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
-            },
-        )
-        approved_dicts = tool_calls
-    else:
-        log.info(
-            "tools_node_started",
-            extra={
-                "msg": f"工具节点开始执行，等待审批，step_id={step_id}",
-                "data": {"step_id": step_id, "pending_tool_count": len(tool_calls)},
-            },
-        )
-        # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
-        # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
-        approved = interrupt({"tool_calls": tool_calls})
-        # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
-        approved_dicts = tool_calls if not isinstance(approved, list) else approved
+    # 审批编排（独立模块）：无审批器自动放行，有审批器 interrupt 暂停 + resume。
+    approved_dicts = resolve_approved_calls(rc, tool_calls, step_id, interrupt)
 
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
@@ -255,7 +239,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 call_id=call.get("call_id") or "",
             )
             for call in state.pending_tool_calls
-            if call.get("call_id")
+            # 不过滤call_id未定义的情况，统一补占位，避免不配对
         ]
         cancel_placeholders = operations.build_cancel_placeholder_messages(cancel_calls)
         _persist_tool_observations(cancel_placeholders)
@@ -271,6 +255,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "tool_error_count": state.tool_error_count,
             "terminal": True,
             "last_tool_results": [],
+            # 清空 deferred 防 checkpoint 残留（与 observe 各路径防残留契约一致）；
+            # terminal=True 直接 END 不消费，但避免下一轮/恢复时读到脏值。
+            "deferred_repair_message": "",
         }
 
     # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
@@ -322,45 +309,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # （替代 turn 结束后的批落库；写回使下一轮模型节点能看到工具结果）。
     # 落库与写回逐条配对：落库一条即写回一条，避免「部分落库、零写回」撕裂。
     _persist_tool_observations(tool_run.messages_for_model)
-
-    if operations.is_current_turn_cancelled():
-        log.info(
-            "tools_node_cancelled_after_execution",
-            extra={
-                "msg": f"工具批次执行后检测到 turn 已取消，停止后续模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
-            },
-        )
-        # 取消时直接终态结束，不进 observe 节点；返回空 last_tool_results，避免无用大字段
-        # 进 checkpoint（消息已写回 RuntimeContextManager 闭合配对，无需再经 observe 判定）。
-        # 错误计数与错误上限判定下沉到独立的 observe 节点，本节点不再计算。
-        return {
-            "pending_tool_calls": [],
-            "tool_error_count": state.tool_error_count,
-            "terminal": True,
-            "last_tool_results": [],
-        }
-
-    deferred_repair_message = next(
-        (
-            str(item.get("deferred_repair_message") or "")
-            for item in approved_dicts
-            if item.get("deferred_repair_message")
-        ),
-        "",
-    )
-    if deferred_repair_message:
-        # REPAIR 情形 a 的延后注入：修复提示是运行时话术，只写内存不落库（persist=False）。
-        _runtime_context().add_message(
-            SystemMessage(content=deferred_repair_message), persist=False
-        )
-        log.warning(
-            "tools_node_deferred_repair_message_appended",
-            extra={
-                "msg": f"工具观察写回后已追加延迟修复提示，step_id={step_id}",
-                "data": {"step_id": step_id, "message_length": len(deferred_repair_message)},
-            },
-        )
 
     success_count = sum(1 for o in observations if o.status == "success")
     log.info(
