@@ -16,7 +16,6 @@
 from typing import Any
 from uuid import uuid4
 
-from pydantic import ValidationError
 from sqlalchemy import asc, delete, select, update
 
 from app.models.model_entry_record import (
