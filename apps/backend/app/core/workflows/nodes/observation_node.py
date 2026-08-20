@@ -55,10 +55,11 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     返回:
         需要合并回 graph state 的增量：执行后取消分支返回 ``{"terminal": True,
-        "deferred_repair_message": ""}``；空结果批次且未取消直接返回 ``{}``（不计数、不判定）；
-        错误上限分支返回 ``{"tool_error_count", "terminal": True,
-        "deferred_repair_message": ""}``（先清空 deferred 避免残留）；否则返回
-        ``{"tool_error_count", "deferred_repair_message": ""}``（已注入并清空），
+        "deferred_repair_message": ""}``；空结果批次且未取消返回
+        ``{"deferred_repair_message": ""}``（不计数、不判定，继承的 ``tool_error_count``
+        原样保留——见下方空结果注释）；错误上限分支返回 ``{"tool_error_count",
+        "terminal": True, "deferred_repair_message": ""}``（先清空 deferred 避免残留）；
+        否则返回 ``{"tool_error_count", "deferred_repair_message": ""}``（已注入并清空），
         供 ``_after_observe`` 路由回 ``model``。
 
     副作用:
@@ -120,18 +121,25 @@ async def _observe_node(state: ReactGraphState) -> dict:
             },
         )
 
-    if not results:  # 无结果批次不计数也不判定，避免对无新结果时误发 RUN_FAILED。
+    if not results:
+        # 无本批工具结果：不计数也不判定，避免对无新结果时误发 RUN_FAILED。
+        # 「连续失败计数滞留」是有意为之——本批没有任何 success/error 信号，既无法证明
+        # 连续失败在延续，也无法证明已中断；无信息即不改写，把继承的 tool_error_count
+        # 原样保留，等下一批有实际结果时再按信号重置/累加。deferred 已在上方注入并置空
+        # （若非空），这里同样返回清空状态避免残留。
         log.info(
             "observe_node_no_results",
             extra={
-                "msg": f"无本批工具结果，跳过观察判定，step_id=step-{state.step_count}",
+                "msg": (
+                    f"无本批工具结果，跳过观察判定，保留继承计数，"
+                    f"step_id=step-{state.step_count}"
+                ),
                 "data": {
                     "step_id": f"step-{state.step_count}",
                     "tool_error_count": state.tool_error_count,
                 },
             },
         )
-        # deferred 已在上面注入并置空（若非空），这里同样返回清空状态避免残留。
         return {"deferred_repair_message": ""}
 
     tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数

@@ -152,7 +152,7 @@ def build_run_failed_payload(
 def terminal_state(
     step_count: int,
     *,
-    repair_requested: str = "false",
+    repair_requested: bool = False,
     requested_tool: bool = False,
     final_response: bool = False,
 ) -> dict[str, Any]:
@@ -161,18 +161,19 @@ def terminal_state(
     model / max_steps / observe 多个节点都把「终态」写成一组重复的硬字段字典
     （``step_count`` / ``repair_requested`` / ``requested_tool`` / ``final_response`` /
     ``terminal`` / ``pending_tool_calls``），手写易错且各处分歧。本函数收口为单一来源。
+    终态不再有后续模型步，故统一清空 ``deferred_repair_message``，避免残留进 checkpoint
+    与 observe 节点各分支的手动清空口径保持一致（P2-5 一致性收口）。
 
     参数:
         step_count: 当前步编号，直接落入 patch。
-        repair_requested: 是否需要修复重写（debug 用），``str`` 类型（空串/``"false"`` 表示
-            否，``"true"`` 表示是），默认 ``"false"``。注意：``ReactGraphState.repair_requested``
-            字段声明为 ``bool``，本函数以 ``str`` 写回，两者类型不一致属历史遗留。
+        repair_requested: 是否需要修复重写，``bool`` 类型，与 ``ReactGraphState.repair_requested``
+            声明一致（历史遗留的 ``str`` 三值语义已收敛为纯 ``bool``），默认 ``False``。
         requested_tool: 本步是否请求了工具，默认 ``False``。
         final_response: 是否产出终态文本，默认 ``False``。
 
     返回:
         可直接 ``return`` 给 LangGraph 合并的 state patch 字典
-        （``pending_tool_calls`` 恒为 ``[]``）。
+        （``pending_tool_calls`` 恒为 ``[]``、``deferred_repair_message`` 恒为 ``""``）。
 
     异常:
         无。
@@ -187,4 +188,5 @@ def terminal_state(
         "final_response": final_response,
         "terminal": True,
         "pending_tool_calls": [],
+        "deferred_repair_message": "",
     }

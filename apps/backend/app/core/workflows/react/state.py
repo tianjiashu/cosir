@@ -12,70 +12,44 @@ from pydantic import BaseModel
 class ReactGraphState(BaseModel):
     """ReAct-like 工作流交给 LangGraph 管理的 graph state（节点间唯一数据通道）。
 
-    本 state 是 graph 各节点之间传递的**数据流**，与 ``RuntimeConfig``（运行期依赖注入、
-    不持久化）职责严格分离：
+    与 ``RuntimeConfig``（运行期依赖注入、不持久化）职责分离：state 由 LangGraph 在节点
+    返回增量后自动合并，并经 ``AsyncSqliteSaver`` checkpointer 持久化，用于断点续跑与
+    审批中断后的重放。节点只通过 ``return`` 返回增量、由框架合并，不跨节点直接持有彼此
+    数据；模型消息与运行期 ``runtime_context`` 均**不进 state**（分别归
+    ``RuntimeContextManager`` 与 config 注入）。
 
-    - **持久化**：state 由 LangGraph 在每次节点返回增量后自动合并，并由 ``AsyncSqliteSaver``
-      checkpointer 持久化进 SQLite；graph 因 ``interrupt()`` 暂停或进程崩溃后可从 checkpoint
-      重放恢复。
-    - **累积**：模型上下文由 ``RuntimeContextManager`` 独占管理，工具观察结果经
-      ``_runtime_context().add_message()`` 追加到上下文末端（**不进 graph state**）。
-    - **单一事实来源**：节点只通过 ``return`` 返回增量、由框架合并；节点永不跨节点直接
-      持有彼此数据。
-    - **运行期上下文**：``runtime_context`` 不进入 graph state（非 list 对象不兼容 state
-      reducer），由编排层经 ``config["configurable"]["runtime_context"]`` 注入，节点通过
-      ``_runtime_context()`` 读取。
-    - **消息不进 state**：模型推理输入恒来自 ``_runtime_context().load_message()``，节点
-      **不得**返回 ``messages`` 字段；消息持久化事实来源是 SQLite（节点经
-      ``RuntimeContextManager.add_message(persist=True)`` 落库），checkpoint 只承载控制流状态。
-      错误恢复时由 ``RuntimeContextManager.load_history`` 从 DB 重建上下文。
-
-    每个字段的边界约定如下（写入方 = 哪个节点 ``return`` 该字段；消费方 = 谁读取它；
-    是否持久化 = 是否进入 checkpoint）：
+    各字段契约（写入方 / 消费方 / 是否持久化进 checkpoint）如下：
 
     Attributes:
-        repair_requested: 是否需要修复重写。**写入方**：``model`` 节点（REPAIR 回流时置 True）。
-            **消费方**：条件边 ``_should_continue``（优先走 model 回流）。**持久化**：是。
-        step_count: 当前模型步骤序号（模型节点每次进入时 +1）。**写入方**：``model`` 节点。
-            **消费方**：条件边 ``_should_continue``（``step_count > max_steps`` 判定）。
-            **持久化**：是。
-        tool_error_count: 连续工具失败次数，成功即清零。**写入方**：``observe`` 节点（从本批
-            ``last_tool_results`` 重算）。**消费方**：``observe`` 节点（超 ``tool_error_limit``
-            判定）。**持久化**：是。
-        requested_tool: 当前模型步骤是否请求工具调用。**写入方**：``model`` 节点。**消费方**：
-            条件边 ``_should_continue``（决定走 tools 还是 END）。**持久化**：是。
-        final_response: 当前模型步骤是否已产出最终回答。**写入方**：``model`` 节点。**消费方**：
-            条件边 ``_should_continue``。**持久化**：是。
-        terminal: 工作流是否进入完成/失败/取消等终止态。**写入方**：``model`` / ``tools`` /
-            ``observe`` 节点。**消费方**：编排层 ``while True`` 循环（结合 ``aget_state().tasks``
-            判定是否真结束）。**持久化**：是。
-        pending_tool_calls: 模型请求、待执行的工具调用（可序列化 dict 列表，由 ``model`` 节点
-            写入，``tools`` 节点经 ``interrupt()`` 暂停审批后消费）。每个 dict 固定含
-            ``tool_name`` / ``arguments`` / ``call_id`` 三键；当模型在本轮**同时**产出文本与
-            工具调用时，还会额外带上 ``instruction`` 键（模型调工具前的说明文本），供
-            ``tools`` / ``observe`` 节点在日志与错误排查时看到模型意图。``instruction`` 缺省
-            视为空串，向后兼容无文本的同批调用。**持久化**：是。
-        max_steps: 本轮允许的最大模型步骤数，执行期常量。**写入方**：编排层初始化 input_state。
-            **消费方**：条件边 ``_should_continue``（``step_count > max_steps`` 时拦截进
-            ``max_steps`` 终态节点）。**持久化**：是。
-        final_text: 模型产出的最终回答文本，终态时落库，并在 checkpoint 重放时用于恢复，避免
-            重放丢失最终回复。**写入方**：``model`` 节点（终态）。**消费方**：编排层/客户端。
-            **持久化**：是。
-        last_tool_results: ``tools`` 节点执行后的本批工具结果摘要（可序列化 dict 列表），供
-            ``observe`` 节点做错误计数与错误上限判定、并为后续「LLM 观察工具结果」提供原材料。
-            **不承载** ``data`` 等大体积结构化字段，``content`` 已截断到安全长度以防撑爆
-            checkpoint。**写入方**：``tools`` 节点。**消费方**：``observe`` 节点。**持久化**：是。
-        continuation_error_data: 终态（如 ``max_steps_node`` 因步数耗尽落定时）携带的排查用
-            错误明细（可序列化 dict，通常含 ``error_kind`` / ``invalid_count`` 等分类字段）。
-            **写入方**：编排层初始化 ``input_state`` 置 ``None``；``model_node`` 在修复回流路径
-            写入结构化明细（Task 2 落地）。**消费方**：``max_steps_node``（读取后并入
-            ``RUN_FAILED`` 事件的 ``data``）。**持久化**：是（进入 checkpoint）。
-        deferred_repair_message: 模型级「本轮一次的延后 REPAIR 修复提示」，区别于工具级
-            instruction。REPAIR 情形 a（有合法工具）时模型不立即注入，而是作为独立 state 字段
-            回传，待 ``observe`` 节点工具结果处理后再注入模型并清空，避免挂在工具数组上与
-            单条工具强绑定。**写入方**：``model`` 节点（REPAIR 情形 a 有合法工具时，写本轮延后
-            修复提示）。**消费方**：``observe`` 节点（工具结果处理后注入并清空）。**持久化**：
-            是（但 observe 消费后置空，避免残留）。
+        repair_requested: 是否需修复重写。model 节点 REPAIR 回流置 True；条件边
+            ``_should_continue`` 消费。持久化：是。
+        step_count: 当前模型步骤序号（model 节点进入时 +1）。发起推理前按
+            ``step_count > max_steps`` 拦截，超配额调用 ``_finalize_max_steps`` 收口终态。
+            持久化：是。
+        tool_error_count: 连续工具失败次数，成功即清零。observe 节点从本批
+            ``last_tool_results`` 重算并消费（超 ``tool_error_limit`` 判定）。持久化：是。
+        requested_tool: 当前步骤是否请求工具调用。model 节点写；``_should_continue``
+            消费（决定走 tools 还是 END）。持久化：是。
+        final_response: 当前步骤是否已产出最终回答。model 节点写；``_should_continue``
+            消费。持久化：是。
+        terminal: 是否进入完成/失败/取消等终止态。model / tools / observe 节点写；编排层
+            结合 ``aget_state().tasks`` 判定结束。持久化：是。
+        pending_tool_calls: 待执行的工具调用（可序列化 dict）。model 节点写，tools 节点经
+            ``interrupt()`` 审批后消费。dict 含 ``tool_name`` / ``arguments`` / ``call_id``，
+            模型同时产出文本与工具调用时另带 ``instruction`` 键。持久化：是。
+        max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
+            ``step_count > max_steps`` 判定用。持久化：是。
+        final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
+            写默认失败说明。model 节点（终态）／``_finalize_max_steps`` 写。持久化：是。
+        last_tool_results: 本批工具结果摘要（可序列化 dict，content 已截断）。tools 节点写；
+            observe 节点做错误计数与错误上限判定。不承载大体积 ``data``。持久化：是。
+        continuation_error_data: 终态排查用错误明细（可序列化 dict，通常含 ``error_kind`` /
+            ``invalid_count``）。编排层初始化置 ``None``；model_node 在 REPAIR 情形 a（有合法
+            工具）的工具分支写入脱敏计数，REPAIR 回流（情形 b）置 ``None``；
+            ``_finalize_max_steps`` 消费并并入 ``RUN_FAILED`` 事件 data。持久化：是。
+        deferred_repair_message: 模型级「本轮一次的延后 REPAIR 修复提示」。model 节点在
+            REPAIR 情形 a（有合法工具）写入；observe 节点工具结果处理后注入模型并清空，
+            避免与单条工具强绑定。持久化：是（消费后置空）。
     """
     repair_requested: bool
     step_count: int
@@ -86,9 +60,6 @@ class ReactGraphState(BaseModel):
     pending_tool_calls: list[dict[str, Any]]
     max_steps: int
     final_text: str
-    # 本批工具执行结果摘要（可序列化），供 observe 节点判定与后续 LLM 观察使用。
     last_tool_results: list[dict[str, Any]]
-    # 终态排查用错误明细（可序列化 dict），默认 None；由 max_steps_node 读取并入失败事件 data。
     continuation_error_data: Any = None
-    # 模型级本轮一次的延后 REPAIR 修复提示；model 写入、observe 消费后置空，默认空串向后兼容。
     deferred_repair_message: str = ""

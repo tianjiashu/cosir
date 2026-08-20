@@ -1,10 +1,10 @@
 """默认 ReAct-like 工作流编排，由 LangGraph StateGraph 驱动。
 
-本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` 节点 +
-``should_continue`` 条件边）、以 ``astream(stream_mode=["custom"])`` 单循环
-驱动执行，把节点经 ``get_stream_writer()`` 写入的 ``custom`` 业务事件（含模型回复增量与思考增量）
-统一透传为 ``RuntimeEvent`` 对外流式 ``yield``；graph 编译时挂
-``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状态持久化、断点续跑与审批中断。
+本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` 节点 +
+条件边）、以 ``astream(stream_mode=["custom"])`` 单循环驱动，把节点经 ``get_stream_writer()``
+写入的 ``custom`` 业务事件（含模型回复/思考增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``；
+graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状态持久化、断点续跑与
+审批中断。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
@@ -18,7 +18,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.config.logging.logger import log
-from app.core.llm.context_window_resolver import resolve_context_window
 from app.core.llm.factory import resolve_chat_model
 from app.core.llm.langchain_bridge import model_tools_to_langchain
 from app.core.runtime.checkpointer import build_checkpointer
@@ -27,16 +26,33 @@ from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
+from app.service.depends import get_task_service
 from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolCall
 
-from ...context.context_usage_meter import ContextUsageMeter
-from ...context.runtime_context_manager import RuntimeContextManager
+from app.core.context.runtime_context_manager import RuntimeContextManager
+from ...context.context_listener.context_compress_listener import ContextCompressListener
+from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
+from ...llm.context_window_resolver import resolve_context_window
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
+from ..nodes.helper.common import write_event
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
+
+
+def _update_task_context_usage(task_id: str, used: int) -> None:
+    """回写 task 最近一次上下文已用 token，供上下文占用订阅者回调使用。
+
+    参数:
+        task_id: 目标 task 标识。
+        used: 上下文占用 token 数。
+
+    返回:
+        无（丢弃 service 返回值）。
+    """
+    get_task_service().update_context_usage(task_id, used)
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -56,9 +72,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         """初始化 ReAct-like 工作流。
 
         参数:
-            approval_resolver: 可选的工具审批解析器。当 ``tools`` 节点因 ``interrupt()`` 暂停时，
-                用它把待审批的工具调用解析为「批准执行的调用列表」并通过 ``Command(resume=)``
-                恢复 graph。缺省为 ``None``，表示直接批准全部调用。
+            approval_resolver: 工具审批解析器。``tools`` 节点因 ``interrupt()`` 暂停时，
+                用它解析出「批准执行的调用列表」并经 ``Command(resume=)`` 恢复 graph。
+                缺省 ``None`` 表示自动放行全部调用。
         """
 
         self._approval_resolver = approval_resolver
@@ -66,8 +82,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     def _build_graph(self, checkpointer) -> Any:
         """构建并编译 ReAct StateGraph。
 
-        节点 ``model`` 与 ``tools`` 通过 ``should_continue`` 条件边形成 ReAct 循环；graph 编译时
-        挂入 ``checkpointer`` 以启用 checkpoint 持久化与 ``interrupt`` 恢复。
+        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；graph 编译时挂入
+        ``checkpointer`` 以启用 checkpoint 持久化与 ``interrupt`` 恢复。
 
         参数:
             checkpointer: 已配置好的 LangGraph checkpointer。
@@ -79,21 +95,20 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 延迟导入节点，打破 nodes 子包与 react 包之间的循环导入：
         # nodes.model_node -> react.state/runtime_config -> react.__init__
         # -> react.workflow -> nodes
-        from ..nodes import _max_steps_node, _model_node, _observe_node, _tools_node
+        from ..nodes import _model_node, _observe_node, _tools_node
 
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
         builder.add_node("observe", _observe_node)
-        builder.add_node("max_steps", _max_steps_node)
         builder.add_edge(START, "model")
+        # 超配额拦截收口在 model 节点（发起推理前 step_count > max_steps 直接终态）。
         builder.add_conditional_edges(
             "model",
             _should_continue,
-            {"tools": "tools", "model": "model", "max_steps": "max_steps", END: END},
+            {"tools": "tools", "model": "model", END: END},
         )
-        builder.add_edge("max_steps", END)
-        # tools 执行后进入 observe（取消/终态分支仍直接 END，不进 observe 避免多余推理）。
+        # tools 执行后进入 observe；取消/终态分支直接 END，不进 observe 避免多余推理。
         builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
         # observe 判定后回 model 继续推理，或达错误上限终态 END。
         builder.add_conditional_edges("observe", _after_observe, {"model": "model", END: END})
@@ -107,26 +122,24 @@ class ReactLikeWorkflow(AgentWorkflow):
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
-        方法构建并编译 graph，挂 ``AsyncSqliteSaver`` checkpointer；以
-        ``astream(stream_mode=["custom"])`` 单循环驱动 graph，把节点经 ``get_stream_writer()``
-        写入的 ``custom`` 业务事件（含 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA`` 等流式
-        增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``。模型经 ``resolve_chat_model`` 构建：
-        缺 Key 在构建期抛错（无 fake 回退）；真实模型不支持 ``bind_tools`` 时降级为
-        不带工具运行（仅作防御，不掩盖配置错误）。当存在 ``approval_resolver`` 时，
-        ``tools`` 节点会触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并通过
-        ``Command(resume=)`` 恢复 graph；当 ``approval_resolver`` 为 ``None`` 时，``tools`` 节点
-        不暂停 graph、直接执行工具（自动放行）。循环直到 graph 无待处理任务或工作流结束。
+        构建并编译 graph（挂 ``AsyncSqliteSaver`` checkpointer），以
+        ``astream(stream_mode=["custom"])`` 单循环驱动，把节点经 ``get_stream_writer()``
+        写入的 ``custom`` 业务事件（含模型回复/思考增量）统一透传为 ``RuntimeEvent`` 流式
+        ``yield``。模型经 ``resolve_chat_model`` 构建：缺 Key 在构建期抛错；真实模型不支持
+        ``bind_tools`` 时降级为不带工具运行（仅作防御）。存在 ``approval_resolver`` 时
+        ``tools`` 节点触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并经
+        ``Command(resume=)`` 恢复；为 ``None`` 时不暂停、自动放行。循环直到 graph 无待处理
+        任务或工作流结束。
 
         参数:
-            operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
-            callbacks: 可选的 LangChain callbacks（如 Langfuse ``CallbackHandler``），
-                注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪。
-            langfuse_trace_id: 可选的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
-                ``run_finished`` / ``run_failed`` / ``run_cancelled`` 等终态事件 payload
-                会携带该字段供前端展示。未启用 Langfuse 时为 None。
+            operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
+            callbacks: 可选 LangChain callbacks（如 Langfuse ``CallbackHandler``），注入
+                ``graph.astream`` 的 ``config["callbacks"]`` 使 LLM 调用被自动追踪。
+            langfuse_trace_id: 可选 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
+                终态事件 payload 会携带该字段供前端展示。未启用 Langfuse 时为 None。
 
         生成:
-            RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层继续转换为 SSE 或其他客户端事件。
+            RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层转换为 SSE 或其他客户端事件。
         """
 
         turn = operations.get_current_turn()
@@ -136,11 +149,8 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         # Agent 执行主体
         agent_profile = operations.agent_profile
-        # 构建模型：运行期兜底解析（设计 §6 ②），先按 agent profile 兜底，再用
-        # 本 turn 落库的 model_name 覆盖（turn.model_name 为 None 时回退 Auto 即
-        # agent_profile.model_name）。解析失败（模型未收录 / 厂商禁用 / Key 未配置）
-        # 记 error 日志 ``model_resolve_failed`` 后抛出，由外层 graph.astream 的
-        # 异常分支收敛为父 turn RUN_FAILED。
+        # 构建模型：按 turn.model_name 运行期兜底解析（None 时回退 agent_profile.model_name），
+        # 失败记 ``model_resolve_failed`` 后抛出，由外层 graph.astream 异常分支收敛为 RUN_FAILED。
         try:
             resolved = resolve_chat_model(
                 requested_model=turn.model_name,
@@ -171,9 +181,8 @@ class ReactLikeWorkflow(AgentWorkflow):
                 base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model
             )
         except NotImplementedError:
-            # 降级防御：真实模型不支持 bind_tools（未实现工具绑定）时禁用工具继续运行，
-            # 保证非工具场景可用。此分支与缺 Key 无关——缺 Key 在 resolve_chat_model
-            # 构建期即抛 ValueError（决策 1），不会走到这里。
+            # 降级防御：模型不支持 bind_tools 时禁用工具继续运行（与缺 Key 无关，缺 Key 在
+            # resolve_chat_model 构建期即抛错，不会走到这里）。
             log.warning(
                 "model %s does not support bind_tools; running without tools "
                 "(degraded: model does not implement tool binding)",
@@ -193,56 +202,42 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
-        # 读写的唯一入口。时序：先清空本 turn 残留 → 落 user 基线（add_message
-        # write_memory=False 只落库不写内存）→ 读回完整历史（含刚落的 user 基线）→
-        # 挂载占用计量器。
+        # 读写唯一入口，并挂载上下文占用订阅者。
         runtime_context_manager = RuntimeContextManager(
             agent_profile=agent_profile,
             workspace_root=current_workspace.root_path,
             task_id=current_task.task_id,
             store=operations.message_store,
             current_turn_id=turn_id,
+            total_tokens=resolve_context_window(turn.model_name), #300K
+        ).add_change_listener(
+            ContextUsageComputeListener(
+                write_event=write_event,
+                update_context_usage=(
+                    lambda task_id, used: _update_task_context_usage(task_id, used)
+                ),
+                task_id=current_task.task_id,
+            )
+        ).add_change_listener(
+            ContextCompressListener()
         )
-        runtime_context_manager.reset_message_sequence()
-        # turn 启动基线：仅落库当前用户输入，不重复写内存（load_history 会从库统一加载，
+        # turn 启动基线：仅落库当前用户输入，不写内存（load_history 会从库统一加载，
         # 避免同一用户消息在内存中出现两次）。
         runtime_context_manager.add_message(
             RuntimeMessage(role="user", content_text=turn.input_text), write_memory=False
         )
-        # 委派改造后 child 运行在独立子任务下，load_history 天然只看到自己的消息，
-        # 不再需要排除父任务其它轮次的 hack。
+        # child 运行在独立子任务下，load_history 天然只看到自己的消息，无需排除父任务轮次。
         runtime_context_manager.load_history()
-        # 挂载上下文占用计量器：随消息变化本地估算当前窗口 token 占用，不依赖模型
-        # usage_metadata（turn 取消也不丢）。实际上限 = min(模型最大窗口, 模型覆盖窗口,
-        # 全局软上限)；软上限为 0 表示不设限。
-        # 子 Agent（委派 child turn，parent_turn_id 非空）不统计上下文圆环：其上下文占用
-        # 对用户无直觉价值且会与父 turn 圆环产生视觉歧义，故跳过挂载，meter 保持 None，
-        # model_node._emit_context_usage 会静默不发 CONTEXT_USAGE 事件。
-        runtime_context_manager.attach_usage_meter(
-            ContextUsageMeter(
-                message_provider=runtime_context_manager.load_message,
-                # agent_profile.model_name 在阶段 1.5 后默认为 None（5 个内置
-                # profile 不再硬编码默认模型）；优先取 turn.model_name（前端
-                # 已选模型，由 resolver 在本行之前保证非 None）。两者均空时
-                # 兜底 ``""``，``resolve_context_window`` 走 ``_FALLBACK`` 路径
-                # 不会抛——但正常路径不该命中此分支（resolver 已先抛）。
-                model_name_provider=lambda: turn.model_name or agent_profile.model_name or "",
-                total_tokens_provider=lambda: resolve_context_window(
-                    turn.model_name or agent_profile.model_name or ""
-                ),
-            )
-        )
 
         config = {
             "configurable": {
                 "thread_id": thread_id,
                 "runtime_config": runtime_config,
-                # 与 runtime_config 同口径：经 config 注入 task 上下文，
-                # 不进入 graph state，避免非 list 对象被 _add_messages reducer 错误处理。
+                # 与 runtime_config 同口径经 config 注入，不进入 graph state
+                # （非 list 对象不兼容 state reducer）。
                 "runtime_context": runtime_context_manager,
             },
-            # LangChain callbacks（如 Langfuse CallbackHandler）经此注入模型调用追踪；
-            # 缺省空列表不影响既有行为。
+            # LangChain callbacks（如 Langfuse CallbackHandler）经此注入模型调用追踪。
             "callbacks": callbacks or [],
         }
 

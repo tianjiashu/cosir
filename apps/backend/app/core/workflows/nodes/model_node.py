@@ -16,8 +16,9 @@
 
 模型侧数据处理辅助（思考通道抽取、chunk 组装、chunk debug 落盘）已拆为独立模块
 （``thinking_extractor`` / ``chunk_assembler`` / ``debug_dump``），本模块仅 import 使用；
-与运行上下文强绑定的 ``_estimate_run_cost`` / ``_emit_context_usage`` /
-``_redact_invalid_tool_calls_for_log`` 保留在本模块。节点共享运行时原语见 ``common``。
+与运行上下文强绑定的 ``_estimate_run_cost`` 保留在本模块。上下文占用事件（``CONTEXT_USAGE``）
+已由 ``ContextUsageEventEmitter`` 订阅机制在消息变更时自动发出，本模块不再手动触发。
+节点共享运行时原语见 ``common``。
 """
 
 from time import perf_counter
@@ -27,6 +28,7 @@ from langchain_core.messages import AIMessageChunk, SystemMessage
 
 from app.config.logging.logger import log
 from app.core.llm.langchain_bridge import tool_calls_from_langchain
+from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
     _extract_text,
@@ -55,7 +57,6 @@ from app.core.workflows.nodes.helper.thinking_extractor import (
 )
 from app.models.enums.event_type import EventType
 from app.models.payload import (
-    ContextUsagePayload,
     FinalResponsePayload,
     ModelOutputDeltaPayload,
     ModelRequestedPayload,
@@ -64,10 +65,8 @@ from app.models.payload import (
     RunFinishedPayload,
     StepStartedPayload,
 )
-from app.service.depends import get_task_service
 from app.service.llm.cost_estimator import UsageBreakdown, estimate_cost
 from app.tools.schemas import ToolCall
-from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState
 
@@ -99,59 +98,6 @@ def _estimate_run_cost(rc, usage: dict[str, int]) -> float | None:
         ),
         model_name,
     )
-
-
-def _emit_context_usage(step_id: str, task_id: str) -> None:
-    """发出当前上下文窗口 token 占用事件（输入侧本地估算）并回写任务占用。
-
-    参数:
-        step_id: 当前模型步唯一标识，用于事件关联与排查。
-        task_id: 当前执行任务的标识，用于把占用回写进 ``tasks.context_usage_used``。
-
-    返回:
-        无。
-
-    异常:
-        无（计量器未挂载、估算或回写失败时记日志，均不中断主流程）。
-
-    副作用:
-        经 ``write_event`` 写入一条 ``EventType.CONTEXT_USAGE`` 事件；经
-        ``TaskService.update_context_usage`` 持久化该任务最近一次已用 token。计量器未挂载
-        （非 ReAct 路径）时静默跳过。
-    """
-    runtime_context = _runtime_context()
-    meter = runtime_context.usage_meter
-    if meter is None:
-        return
-    try:
-        usage = meter.read(force=True)
-    except Exception:
-        log.exception(
-            "context_usage_meter_failed",
-            extra={"msg": "上下文估算失败，跳过事件", "data": {"step_id": step_id}},
-        )
-        return
-    if usage is None:
-        # 计量器虽挂载但未能产出占用（如无任何消息可估算），属预期边界，记 warning 而非崩溃。
-        log.warning(
-            "context_usage_meter_empty",
-            extra={"msg": "上下文占用为空，跳过事件与回写", "data": {"step_id": step_id}},
-        )
-        return
-    write_event(
-        EventType.CONTEXT_USAGE,
-        ContextUsagePayload(used_tokens=usage.used_tokens, total_tokens=usage.total_tokens),
-    )
-    try:
-        get_task_service().update_context_usage(task_id, usage.used_tokens)
-    except Exception:
-        log.exception(
-            "context_usage_task_persist_failed",
-            extra={
-                "msg": "上下文占用回写任务失败，不影响模型执行",
-                "data": {"task_id": task_id, "step_id": step_id, "used_tokens": usage.used_tokens},
-            },
-        )
 
 
 def _emit_run_cancelled(rc, step_id: str) -> None:
@@ -193,40 +139,6 @@ def _emit_run_cancelled(rc, step_id: str) -> None:
     )
 
 
-def _redact_invalid_tool_calls_for_log(raw_list: list[Any]) -> list[Any]:
-    """将 invalid_tool_calls 列表脱敏后转换为可安全写入日志的结构。
-
-    每个非法工具调用可能含模型回显的原始未校验 ``args``（如用户粘贴进对话的
-    凭据、prompt 片段）。为避免 secret 落盘，对每个 ``dict`` 项的 ``args`` 字段经
-    :func:`redact_terminal_output` 脱敏后再组装进日志 ``data``。
-
-    参数:
-        raw_list: 原始 invalid_tool_calls 列表（来自
-            ``decide_invalid_tool_handling`` 的 ``IGNORE`` 结果）。
-
-    返回:
-        脱敏后的列表；非 ``dict`` 元素原样保留，``dict`` 元素的 ``args`` 字段被替换为
-        脱敏后的字符串，其余字段保持不变。
-
-    异常:
-        无（对字段做 ``get`` / ``str`` 容错）。
-
-    副作用:
-        无（纯函数，不改原始入参）。
-    """
-
-    redacted: list[Any] = []
-    for itc in raw_list:
-        if not isinstance(itc, dict):
-            redacted.append(itc)
-            continue
-        item = dict(itc)
-        if "args" in item:
-            item["args"] = redact_terminal_output(str(item["args"]))
-        redacted.append(item)
-    return redacted
-
-
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
@@ -240,9 +152,13 @@ async def _model_node(state: ReactGraphState) -> dict:
         state: 当前 graph state。
 
     返回:
-        需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）。
+        需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）；当本次推理
+        已超配额（``step_count > max_steps``）时不发起推理，直接返回
+        ``_finalize_max_steps`` 的终态 patch。
 
     副作用:
+        - 发起推理前若本次已超配额，直接调用 ``_finalize_max_steps`` 收口终态（发
+          ``RUN_FAILED``、把 turn 标 failed），不再触发推理；
         - 经 ``_runtime_context().add_message`` 把本轮 ``AIMessage`` 落库并写回内存
           （``RuntimeContextManager`` 唯一写入入口），使下一模型步能累积看到本轮输出；
         - 流式 token / 事件经 ``get_stream_writer`` 透传；状态写入 ``turn``；
@@ -269,6 +185,13 @@ async def _model_node(state: ReactGraphState) -> dict:
     thinking_roundtrip = llm_config.thinking_roundtrip if llm_config is not None else True
 
     step_count = state.step_count + 1
+    # P1-5 提前拦截：本次推理若已超配额（step_count > max_steps），不发起推理，直接调用
+    # _finalize_max_steps 统一收口终态。这样「超配额」不再触发推理、也不会因该次推理产出
+    # 非法输出而滑落 invalid_model_output / completed 终态——终态分类恒为
+    # max_steps_reached。覆盖所有进入本节点的路径（START / observe 回流 / REPAIR 自回流），
+    # 是唯一拦截点。
+    if step_count > state.max_steps:
+        return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
     if operations.is_current_turn_cancelled():
         log.info(
@@ -295,8 +218,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    # 上下文稳定后即发占用事件，数据不依赖模型 usage_metadata。
-    _emit_context_usage(step_id=step_id, task_id=turn.task_id)
     write_event(
         EventType.STEP_STARTED,
         StepStartedPayload(step_id=step_id, kind="model", index=step_count),
@@ -405,9 +326,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                     ),
                     "data": {
                         "step_id": step_id,
-                        "invalid_tool_calls": _redact_invalid_tool_calls_for_log(
-                            result[InvalidToolOutcome.IGNORE]
-                        ),
+                        "invalid_tool_calls": result[InvalidToolOutcome.IGNORE],
                     },
                 },
             )
@@ -422,18 +341,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 repair_datas=repair_data
             )
 
-            if requested_tool:
-                log.warning(
-                    "model_node_invalid_tool_calls_deferred_repair_requested",
-                    extra={
-                        "msg": (
-                            "非法工具调用命中已注册工具名，合法工具先执行，"
-                            f"修复提示延后追加，step_id={step_id}"
-                        ),
-                        "data": {"step_id": step_id, "repair_data": repair_data},
-                    },
-                )
-            else:
+            if not requested_tool:
                 # 情形 b 须落库修复提示，保证崩溃恢复后仍可重试。
                 # 模型可能已输出部分正文/意图文本，若直接回流重试会把它静默丢弃；这里把非空
                 # output_text 作为「上一轮的部分输出」追加进修复提示，供模型重试时参考保留。
@@ -457,7 +365,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 _runtime_context().add_message(SystemMessage(content=repair_message))
                 return {
                     "step_count": step_count,
-                    "repair_requested": "true",
+                    "repair_requested": True,
                     "requested_tool": False,
                     "final_response": False,
                     "terminal": False,
@@ -514,12 +422,12 @@ async def _model_node(state: ReactGraphState) -> dict:
         ]
         return {
             "step_count": step_count,
-            "repair_requested": "false",
+            "repair_requested": False,
             "requested_tool": True,
             # 延后 REPAIR 修复提示作为独立 state 字段回传（情形 a 有合法工具时非空）；
             # observe 节点工具结果处理后注入并清空。
             "deferred_repair_message": deferred_repair_content,
-            # 仅回传计数而非未脱敏原始 invalid_tool_call，防止原文外泄且避免 max_steps_node
+            # 仅回传计数而非未脱敏原始 invalid_tool_call，防止原文外泄且避免 _finalize_max_steps
             # 以 dict() 展开 list 抛 ValueError。
             "continuation_error_data": (
                 {
