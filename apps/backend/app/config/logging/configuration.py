@@ -14,7 +14,7 @@ from app.config.logging.process_bridge import (
     install_queue_handler,
     stop_queue_listener,
 )
-from app.storage.crud.log_crud import LogStore
+from app.storage.crud.log_crud import LogCrud
 
 
 def configure_logging(
@@ -174,7 +174,7 @@ def _add_sqlite_handler_or_warn(
 
     try:
         sqlite_handler = SQLiteLogHandler(
-            store=LogStore(),
+            store=LogCrud(),
             queue_size=queue_size,
             batch_size=batch_size,
             flush_interval_seconds=flush_interval_ms / 1000,
