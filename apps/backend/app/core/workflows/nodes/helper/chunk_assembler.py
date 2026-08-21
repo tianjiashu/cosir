@@ -1,16 +1,15 @@
 """模型节点「chunk 组装」辅助集。
 
-本模块只承载「chunk → AIMessage + 文本 + usage」组装单一职责：把模型流式产出的
+本模块只承载「chunk → AIMessage + 文本」组装单一职责：把模型流式产出的
 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``，并提供文本抽取、有效性判断、
-usage 提取、非法工具调用收集等配套纯函数。思考回传策略（剥离/保留
+非法工具调用收集等配套纯函数。usage 统计不在此处解析（统一由 ``TurnUsageStats``
+从 ``ai_message.usage_metadata`` 单一来源累加）。思考回传策略（剥离/保留
 ``reasoning_content``）来自 ``thinking_extractor``，chunk 结构 debug 落盘来自
 ``debug_dump``，本模块负责把三者编排成最终的 ``AIMessage``。
 
 与思考提取（``thinking_extractor``）、debug 落盘（``debug_dump``）职责分离；
 无循环导入：本模块不 import ``model_node`` / ``common``。
 """
-
-from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
@@ -62,36 +61,6 @@ def _has_content(message: AIMessage) -> bool:
         return True  # 有文本即视为有效
     tool_calls = getattr(message, "tool_calls", None)
     return bool(tool_calls)  # 有工具调用也视为有效
-
-
-def _invalid_tool_calls_from_chunks(chunks: list[AIMessageChunk]) -> list[dict[str, Any]]:
-    """从原始流式 chunk 中收集非法工具调用。
-
-    参数:
-        chunks: 模型流式产出的原始 chunk 列表。
-
-    返回:
-        去重后的 invalid_tool_calls 列表。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    collected: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for chunk in chunks:
-        for call in getattr(chunk, "invalid_tool_calls", None) or []:
-            call_id = str(call.get("id") or "")
-            name = str(call.get("name") or "")
-            key = (call_id, name)
-            if key in seen:
-                continue
-            seen.add(key)
-            collected.append(dict(call))
-    return collected
 
 
 def _collect_chunk_to_ai_message(
@@ -204,44 +173,18 @@ def _collect_chunk_to_ai_message(
     return AIMessage(
         content=_extract_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
         tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
-        invalid_tool_calls=merged.invalid_tool_calls or _invalid_tool_calls_from_chunks(chunks),
+        invalid_tool_calls=merged.invalid_tool_calls,
         additional_kwargs=additional,  # 保留/剥离 thinking 字段按回传策略
-        usage_metadata=merged.usage_metadata,  # 透传完整 token 统计
+        # usage_metadata 是 LangChain 对各流式 chunk 经 add_usage 求和无重复后的唯一完整
+        # 快照，是下游 TurnUsageStats.add_usage_metadata 的单一来源；不再存在逐 chunk 解析
+        # 的第二口径（L2「重复计数」查证为伪阳性）。
+        usage_metadata=merged.usage_metadata,  # 透传完整 token 统计（唯一来源）
         id=getattr(merged, "id", None),  # 消息 id 透传
     )
-
-
-def _extract_usage_from_chunk(chunk: AIMessageChunk) -> dict[str, int | float] | None:
-    """从模型流式分块中提取可用 token usage 元数据。
-
-    不同 provider/SDK 把 usage 放在不同位置：LangChain 标准 ``usage_metadata``、
-    OpenAI 适配器的 ``response_metadata.token_usage`` / ``response_metadata.usage`` 等。
-    本函数按优先级尝试，返回第一个非空字典；都没有则返回 None。
-
-    参数:
-        chunk: 模型 ``astream`` 产出的单个消息分块。
-
-    返回:
-        可用的 usage 字典；无则 None。
-    """
-
-    usage = getattr(chunk, "usage_metadata", None)
-    if isinstance(usage, dict) and usage:
-        return usage
-    response_metadata = getattr(chunk, "response_metadata", None)
-    if not isinstance(response_metadata, dict):
-        return None
-    for key in ("token_usage", "usage"):
-        candidate = response_metadata.get(key)
-        if isinstance(candidate, dict) and candidate:
-            return candidate
-    return None
 
 
 __all__ = [
     "_collect_chunk_to_ai_message",
     "_extract_text",
-    "_extract_usage_from_chunk",
     "_has_content",
-    "_invalid_tool_calls_from_chunks",
 ]

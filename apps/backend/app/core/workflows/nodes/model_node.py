@@ -32,7 +32,6 @@ from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
     _extract_text,
-    _extract_usage_from_chunk,
     _has_content,
 )
 from app.core.workflows.nodes.helper.common import (
@@ -219,10 +218,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         _dump_raw_chunk_debug(chunk, chunk_index)
         chunk_index += 1
 
-        # 先统计 token 再检查取消，避免取消时丢失本轮计数。
-        chunk_usage = _extract_usage_from_chunk(chunk)
-        rc.usage_stats.add_message_usage(chunk_usage)
-
         if operations.is_current_turn_cancelled():
             # 取消发 RUN_CANCELLED（携带 usage）而非 RUN_FAILED，避免与取消流其它信号重复。
             usage_summary = rc.usage_stats.to_dict()
@@ -257,6 +252,12 @@ async def _model_node(state: ReactGraphState) -> dict:
         thinking_channels=thinking_channels,
         thinking_roundtrip=thinking_roundtrip,
     )
+    # 单一来源：usage 只在模型调用产出 ai_message 后从其 usage_metadata 累加一次。
+    # ai_message.usage_metadata 是 LangChain 对各流式 chunk 求和无重复后的完整快照，
+    # 不再逐 chunk 解析（消除双重口径与键名偏差）。本对象为 turn 级共享累加器，
+    # REPAIR 回流的多次模型调用会依次累加，各步末态快照互不覆盖。
+    rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
+
     tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
     # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
@@ -298,9 +299,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             # SystemMessage 并返回非终态 patch 回流 model 重试（靠 max_steps 兜底）。
             repair_data = result[InvalidToolOutcome.REPAIR]
 
-            repair_message = build_invalid_tool_call_repair_message(
-                repair_datas=repair_data
-            )
+            repair_message = build_invalid_tool_call_repair_message(repair_datas=repair_data)
 
             if not requested_tool:
                 # 情形 b 须落库修复提示，保证崩溃恢复后仍可重试。
@@ -308,7 +307,8 @@ async def _model_node(state: ReactGraphState) -> dict:
                 # output_text 作为「上一轮的部分输出」追加进修复提示，供模型重试时参考保留。
                 if output_text:
                     repair_message = (
-                        f"{repair_message}\n\n上一轮模型的部分输出（请基于此继续完善，勿丢弃）：\n{output_text}"
+                        f"{repair_message}\n\n上一轮模型的部分输出"
+                        f"（请基于此继续完善，勿丢弃）：\n{output_text}"
                     )
                 log.warning(
                     "model_node_invalid_tool_calls_no_tool_deferred",

@@ -17,12 +17,13 @@
 ``chunk_assembler`` / ``model_node`` / ``tools_node``。
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.config import get_config, get_stream_writer
 
-from app.core.workflows.react.runtime_config import RuntimeConfig
 from app.models.enums.event_type import EventType
 from app.models.payload import RunCancelledPayload, RunFailedPayload
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
@@ -30,6 +31,7 @@ from app.models.turn_usage_stats import TurnUsageStats
 
 if TYPE_CHECKING:
     from app.core.context.runtime_context_manager import RuntimeContextManager
+    from app.core.workflows.react.runtime_config import RuntimeConfig
 
 
 # 内部封装：统一事件写入结构。
@@ -90,7 +92,7 @@ def _runtime_config() -> RuntimeConfig:
     return get_config()["configurable"]["runtime_config"]
 
 
-def _runtime_context() -> "RuntimeContextManager":
+def _runtime_context() -> RuntimeContextManager:
     """从 LangGraph 运行上下文取出 task 级运行时上下文。
 
     ``ReactLikeWorkflow.run()`` 把 ``RuntimeContextManager`` 放入 config 的 ``runtime_context``；
