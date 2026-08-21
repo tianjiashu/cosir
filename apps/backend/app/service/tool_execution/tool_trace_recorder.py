@@ -78,7 +78,7 @@ class ToolTraceRecorder(Protocol):
         ...
 
 
-class _NullToolSpan:
+class _NullToolSpan(ToolCallSpan):
     """空工具 span（降级路径），``record`` 为 no-op。
 
     与协议同文件定义、由 service 自消费：未注入真实 recorder 时，``ToolExecutionService``

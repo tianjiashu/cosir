@@ -775,24 +775,67 @@ class ToolExecutionService:
                     truncated=truncated,
                 ),
             )
-            try:
-                loop.call_soon_threadsafe(bus.publish, event)
-            except RuntimeError:
-                # 事件循环已关闭（turn 提前结束/取消）：实时展示降级，命令继续跑完。
-                log.warning(
-                    "tool_output_delta_publish_failed",
-                    extra={
-                        "msg": "工具输出增量广播失败，实时展示降级，不影响工具执行",
-                        "data": {
-                            "tool_name": call.tool_name,
-                            "tool_call_id": call.call_id,
-                            "step_id": step_id,
-                            "turn_id": turn_id,
-                        },
-                    },
-                )
+            self._publish_via_loop(
+                loop,
+                event,
+                "tool_output_delta_publish_failed",
+                {
+                    "tool_name": call.tool_name,
+                    "tool_call_id": call.call_id,
+                    "step_id": step_id,
+                    "turn_id": turn_id,
+                },
+            )
 
         return _sink
+
+    def _publish_via_loop(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        event: RuntimeEvent,
+        log_key: str,
+        context: dict[str, object],
+    ) -> None:
+        """跨线程把一条 RuntimeEvent 经 ``call_soon_threadsafe`` 调度回事件循环广播。
+
+        这是 ``FILE_CHANGE_UPDATED`` 与 ``TOOL_OUTPUT_DELTA`` 两条实时广播通道的
+        统一调度原语，保证两者容错粒度一致、避免各自实现漂移。单条广播**独立容错**
+        （per-call）：``loop.call_soon_threadsafe`` 在事件循环已关闭/正在关闭时抛
+        ``RuntimeError``，本方法仅记录 warning 并降级，不向上抛出、不中断调用方的
+        批量广播循环——从而避免「一个 loop 关闭导致同一批后续事件全部丢失」。
+
+        参数:
+            loop: 承载本轮运行的事件循环；用于把广播动作调度回循环线程。
+            event: 待广播的 RuntimeEvent（不持久化，仅实时展示）。
+            log_key: 失败日志的事件名（区分通道，如 ``file_change_updated_publish_failed``）。
+            context: 失败日志的 ``data`` 上下文（含 task_id / turn_id 等定位信息）。
+
+        返回:
+            无。
+
+        异常:
+            无。广播失败仅记 warning 降级，不向调用方抛出；仅捕获 ``Exception``，
+            ``KeyboardInterrupt`` / ``SystemExit`` 等 ``BaseException`` 不被吞。
+
+        副作用:
+            向事件循环投递一次 ``bus.publish(event)``；失败时写入一条 warning 日志。
+        """
+
+        if self._event_bus is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._event_bus.publish, event)
+        except Exception:
+            # 宽捕获是有意的：广播属展示侧增强，任何失败（loop 关闭的 RuntimeError、
+            # 事件构造/调度的其它异常）都应降级为「丢这一条」，绝不向上抛而中断调用方
+            # 的批量广播循环。
+            log.warning(
+                log_key,
+                extra={
+                    "msg": "实时广播失败，展示降级，不影响工具执行",
+                    "data": context,
+                },
+            )
 
     def _publish_file_change_updated(
         self,
@@ -818,7 +861,9 @@ class ToolExecutionService:
             无。
 
         异常:
-            无。广播属展示侧增强，失败不应影响工具执行主流程，故整体捕获并记 warning。
+            无。广播属展示侧增强：diff 数据准备失败记 exception 后整体跳过；逐条广播
+            经 ``_publish_via_loop`` per-call 容错，单条失败仅记 warning、不中断同批
+            后续文件的广播。
 
         副作用:
             经注入的 ``RuntimeEventBus`` 发布若干条不持久化的 ``FILE_CHANGE_UPDATED`` 事件，
@@ -837,6 +882,7 @@ class ToolExecutionService:
             # 顺序对齐：build_diff_stats 的 files[] 与输入一一对应（不按 path 去重），
             # 故用「统一过滤后的列表」同时驱动统计与循环，既容忍非 dict 混入，
             # 也保证同一 path 多次变更时各自取到自己的统计（path 字典会覆盖错配）。
+            # 此处只负责「数据准备」：统计失败整批无法构造，记 exception 保留堆栈定位根因。
             valid_changes = [change for change in changes if isinstance(change, dict)]
             diff_results = [
                 FileDiffResult(
@@ -849,35 +895,48 @@ class ToolExecutionService:
             ]
             stats = build_diff_stats(diff_results)
             file_stats = stats.get("files", [])
-            for change, file_stat in zip(valid_changes, file_stats, strict=True):
-                path = change.get("path")
-                action = change.get("action") or change.get("status")
-                if not path or not action:
-                    continue
-                event = RuntimeEvent(
-                    event_type=EventType.FILE_CHANGE_UPDATED,
-                    task_id=execution_context.task_id,
-                    turn_id=execution_context.turn_id,
-                    payload=FileChangeUpdatedPayload(
-                        task_id=execution_context.task_id,
-                        turn_id=execution_context.turn_id,
-                        path=str(path),
-                        action=str(action),
-                        additions=int(file_stat.get("insertions") or 0),
-                        deletions=int(file_stat.get("deletions") or 0),
-                        before=change.get("before"),
-                        after=change.get("after"),
-                    ),
-                )
-                loop.call_soon_threadsafe(bus.publish, event)
         except Exception:
             log.exception(
-                "file_change_updated_publish_failed",
+                "file_change_updated_prepare_failed",
                 extra={
-                    "msg": "运行中文件变更实时广播失败，不影响工具执行",
+                    "msg": "运行中文件变更 diff 统计失败，跳过本次广播，不影响工具执行",
                     "data": {
                         "task_id": execution_context.task_id,
                         "turn_id": execution_context.turn_id,
                     },
+                },
+            )
+            return
+        # 广播阶段：逐条 per-call 容错（经 _publish_via_loop）。一条广播因事件循环
+        # 关闭而失败只丢该条，不中断同批后续文件广播；event 构造异常属编码问题，
+        # 自然冒泡暴露而非吞掉。
+        for change, file_stat in zip(valid_changes, file_stats, strict=True):
+            path = change.get("path")
+            action = change.get("action") or change.get("status")
+            if not path or not action:
+                continue
+            event = RuntimeEvent(
+                event_type=EventType.FILE_CHANGE_UPDATED,
+                task_id=execution_context.task_id,
+                turn_id=execution_context.turn_id,
+                payload=FileChangeUpdatedPayload(
+                    task_id=execution_context.task_id,
+                    turn_id=execution_context.turn_id,
+                    path=str(path),
+                    action=str(action),
+                    additions=int(file_stat.get("insertions") or 0),
+                    deletions=int(file_stat.get("deletions") or 0),
+                    before=change.get("before"),
+                    after=change.get("after"),
+                ),
+            )
+            self._publish_via_loop(
+                loop,
+                event,
+                "file_change_updated_publish_failed",
+                {
+                    "task_id": execution_context.task_id,
+                    "turn_id": execution_context.turn_id,
+                    "path": str(path),
                 },
             )
