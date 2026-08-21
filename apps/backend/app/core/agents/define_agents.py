@@ -120,7 +120,9 @@ def reviewer_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        max_steps=60,
+        #子Agent需要指定模型，否则会报错，提示未配置模型
+        model_name = "deepseek-v4-flash",
+        max_steps=50,
         prompt_ref=None,
     )
 
@@ -159,6 +161,7 @@ def analyst_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
+        model_name="deepseek-v4-flash",
         max_steps=80,
         prompt_ref=None,
     )
@@ -185,6 +188,7 @@ def test_agent() -> AgentProfile:
         role="delegate-tester",
         description="只做代码测试，指出问题、风险和遗漏；不修改代码，不运行测试。",
         allowed_tools=_resolve_all_tool_names(),
+        model_name="deepseek-v4-flash",
         max_steps=80,
         prompt_ref=None,
     )
@@ -211,6 +215,7 @@ def coder_agent() -> AgentProfile:
         description=(
             "在父 Agent 委派范围内进行代码开发、修复和验证，并保持改动聚焦、" "可测试、可审查。"
         ),
+        hidden=True,
         allowed_tools=[
             "read_file",
             "list_directory",
@@ -227,6 +232,7 @@ def coder_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
+        model_name="deepseek-v4-flash",
         max_steps=120,
         prompt_ref=None,
     )
