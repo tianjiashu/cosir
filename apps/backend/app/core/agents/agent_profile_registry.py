@@ -110,7 +110,7 @@ class AgentProfileRegistry:
 
         blocks: list[str] = []
         for profile in self.list():
-            if not profile.can_delegated:
+            if not profile.main_agent:
                 continue
             tool_capability_summary = "tools: " + ", ".join(profile.allowed_tools)
             blocks.append(
@@ -129,4 +129,4 @@ class AgentProfileRegistry:
         参数:
             无。
         """
-        return {profile.agent_id for profile in self._profiles.values() if profile.can_delegated}
+        return {profile.agent_id for profile in self._profiles.values() if profile.main_agent}

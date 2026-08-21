@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.core.agents.prompt_ref import PromptRef
+
 from app.core.llm.model_settings import ModelSettings
 from app.models import TurnRecord
 
@@ -87,27 +88,7 @@ class AgentProfile:
     turn: TurnRecord | None = None
     main_agent: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
-    prompt_ref: PromptRef | None = None
-
-    @property
-    def can_delegated(self) -> bool:
-        """是否允许被委派为子 Agent。
-
-        参数:
-            无。
-
-        返回:
-            当 ``description`` 非空时返回 ``True``（有可读职责的 Agent 才可被委派）。
-            注意：空 ``description`` 的 profile 将被视为不可委派，新增无描述子 agent
-            时会因此无法进入 ``child_agent_summary`` 投影。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        return self.description is not None
+    prompt_file_path: Path | None = None
 
     def derive_for_turn(
         self,
@@ -186,12 +167,12 @@ class AgentProfile:
         """
 
         prompt_ref_dict = None
-        if self.prompt_ref is not None:
+        if self.prompt_file_path is not None:
             prompt_ref_dict = {
-                "name": self.prompt_ref.name,
-                "label": self.prompt_ref.label,
-                "fallback_path": self.prompt_ref.fallback_path,
-                "variables_schema": self.prompt_ref.variables_schema,
+                "name": self.prompt_file_path.name,
+                "label": self.prompt_file_path.label,
+                "fallback_path": self.prompt_file_path.fallback_path,
+                "variables_schema": self.prompt_file_path.variables_schema,
             }
 
         return {

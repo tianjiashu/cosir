@@ -79,7 +79,8 @@ def developer_agent() -> AgentProfile:
         description="协助用户完成软件工程项目开发任务",
         allowed_tools=_resolve_all_tool_names(),
         max_steps=300,
-        prompt_ref=None,
+        main_agent=True,
+        prompt_file_path=None,
     )
 
 
@@ -120,10 +121,10 @@ def reviewer_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        #子Agent需要指定模型，否则会报错，提示未配置模型
-        model_name = "deepseek-v4-flash",
+        # 子Agent需要指定模型，否则会报错，提示未配置模型
+        model_name="deepseek/deepseek-v4-flash",
         max_steps=50,
-        prompt_ref=None,
+        prompt_file_path=None,
     )
 
 
@@ -144,9 +145,8 @@ def analyst_agent() -> AgentProfile:
     """
 
     return AgentProfile(
-        agent_id="delegate_analyst",
-        role="delegate-analyst",
-        hidden=True,
+        agent_id="code-spec-reviewer",
+        role="code-spec-reviewer",
         description="只做事实、代码和文档分析，形成结论与建议；不修改代码。",
         allowed_tools=[
             "read_file",
@@ -161,9 +161,9 @@ def analyst_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         max_steps=80,
-        prompt_ref=None,
+        prompt_file_path=None,
     )
 
 
@@ -183,14 +183,28 @@ def test_agent() -> AgentProfile:
         无。
     """
     return AgentProfile(
-        hidden=True,
-        agent_id="delegate_tester",
-        role="delegate-tester",
-        description="只做代码测试，指出问题、风险和遗漏；不修改代码，不运行测试。",
+        agent_id="unit-test-engineer",
+        role="unit-test-engineer",
+        description=(
+            """
+            Use this agent when you need to write comprehensive unit tests for existing production code. 
+            This agent strictly focuses on testing only and will not modify any production code.
+            <example>
+              Context: User has written a TypeScript utility function and needs comprehensive unit tests.
+              user: "Please write unit tests for src/utils/validation.ts"
+              assistant: "I'll use the unit-test-engineer agent to write comprehensive unit tests for this file"
+            </example>
+            <example>
+              Context: Developer wants to check if existing code has sufficient test coverage and potential bugs.
+              user: "Test the new authentication module to find any concurrency or boundary issues"
+              assistant: "Launching unit-test-engineer to perform adversarial testing on the authentication module"
+            </example>
+            """
+        ),
         allowed_tools=_resolve_all_tool_names(),
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         max_steps=80,
-        prompt_ref=None,
+        prompt_file_path=None,
     )
 
 
@@ -210,12 +224,14 @@ def coder_agent() -> AgentProfile:
         无。
     """
     return AgentProfile(
-        agent_id="delegate_coder",
-        role="delegate-coder",
+        agent_id="code-developer",
+        role="code-developer",
         description=(
-            "在父 Agent 委派范围内进行代码开发、修复和验证，并保持改动聚焦、" "可测试、可审查。"
+            "Use this agent when you need to implement new features, refactor existing code, or add functionality to a project."
+            "This agent follows strict coding standards focused on long-term maintainability."
+            "This agent prioritizes structural improvements and mature dependency reuse over minimal, "
+            "patch-style changes when they benefit long-term iteration."
         ),
-        hidden=True,
         allowed_tools=[
             "read_file",
             "list_directory",
@@ -232,7 +248,7 @@ def coder_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek-v4-flash",
+        model_name="deepseek/deepseek-v4-flash",
         max_steps=120,
-        prompt_ref=None,
+        prompt_file_path=None,
     )
