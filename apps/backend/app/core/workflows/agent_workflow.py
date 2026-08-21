@@ -1,7 +1,7 @@
 """运行时与工作流策略共享的工作流协议。"""
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models.event.runtime_event import RuntimeEvent
@@ -9,6 +9,11 @@ from app.models.event.runtime_event import RuntimeEvent
 
 class AgentWorkflow(Protocol):
     """定义面向运行时的、单个 Agent 工作流接口。"""
+
+    # 工作流唯一标识（类级常量）：消费方（如 AgentProfile 导出）以此归类工作流类型。
+    # 声明在 Protocol 中使「漏定义 workflow_id」成为类型错误，杜绝 getattr 静默回退的
+    # 隐式契约（历史 L6 缺陷：消费方曾用 getattr(self.workflow,"workflow_id","custom")）。
+    workflow_id: ClassVar[str]
 
     def run(
         self,

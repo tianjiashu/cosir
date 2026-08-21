@@ -54,8 +54,11 @@ class AgentProfile:
         can_delegated: 是否允许被委派为子 Agent。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
-        model_name: 该 Agent 使用的模型名称（默认 ``deepseek/deepseek-v4-flash``，
-            带 provider 前缀，透传给 litellm 路由）。
+        model_name: 该 Agent 使用的模型名称（带 provider 前缀，透传给 litellm 路由）。
+            2026-08-18 决议：5 个内置 profile **不内置默认模型**，默认 ``None``；
+            ``None`` 表示「该 Agent 未配置模型」，由前端优先校验、后端兜底报错
+            （resolver 见 ``REASON_MODEL_NOT_SELECTED``）。该字段只提供给子 Agent
+            使用，主 Agent 的 model_name 由请求字段（turn.model_name）决定。
         model_settings: 该 Agent 的模型覆盖配置值对象（``ModelSettings``）。
         turn: 该 Agent 当前所属 turn 记录（运行时经 ``derive_for_turn`` 注入到
             per-run 副本；共享注册表单例上不原地写，可为 None）。
@@ -77,7 +80,7 @@ class AgentProfile:
     description: str
     allowed_tools: list[str]
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    model_name: str = "deepseek/deepseek-v4-flash"
+    model_name: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     hidden: bool = False
     max_steps: int = 1000
@@ -196,7 +199,9 @@ class AgentProfile:
             "role": self.role,
             "description": self.description,
             "allowed_tools": self.allowed_tools,
-            "workflow": getattr(self.workflow, "workflow_id", "custom"),
+            # workflow_id 已由 AgentWorkflow Protocol 声明，直接访问；漏定义在实现侧即类型错误，
+            # 不再静默回退 "custom"（历史 L6 隐式契约已根治）。
+            "workflow": self.workflow.workflow_id,
             "model_name": self.model_name,
             "max_steps": self.max_steps,
             "prompt_ref": prompt_ref_dict,
