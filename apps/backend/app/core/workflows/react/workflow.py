@@ -19,7 +19,6 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.llm.factory import resolve_chat_model
-from app.core.llm.langchain_bridge import model_tools_to_langchain
 from app.core.runtime.checkpointer import build_checkpointer
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
@@ -173,9 +172,11 @@ class ReactLikeWorkflow(AgentWorkflow):
             raise
         base_model = resolved.model
         # 构建工具
-        tool_schemas = model_tools_to_langchain(
-            operations.model_tools, set(agent_profile.allowed_tools)
-        )
+        tool_schemas = [
+            tool.to_model_tool_definition()
+            for tool in operations.model_tools
+            if agent_profile.allowed_tools is None or tool.name in agent_profile.allowed_tools
+        ]
         try:
             bound_model = (
                 base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model

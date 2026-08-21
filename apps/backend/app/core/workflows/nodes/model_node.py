@@ -27,7 +27,6 @@ from typing import Any
 from langchain_core.messages import AIMessageChunk, SystemMessage
 
 from app.config.logging.logger import log
-from app.core.llm.langchain_bridge import tool_calls_from_langchain
 from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
@@ -190,8 +189,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.turn_id},
             },
         )
-        # 请求事件前取消同样走统一终态并发 RUN_CANCELLED（用法与流式中取消同构），
-        # 保证取消语义对前端一致。请求前未调用模型，usage 为零值。
+        # 同上一检查点：请求事件前取消走统一终态并发 RUN_CANCELLED。
         emit_run_cancelled(rc, step_id)
         return terminal_state(step_count)
     write_event(
@@ -199,9 +197,9 @@ async def _model_node(state: ReactGraphState) -> dict:
         ModelRequestedPayload(step_id=step_id, message_count=len(messages)),
     )
 
-    # collected_text 攒文本流（驱动流式事件 + 拼 output_text）；chunks 攒结构化分块
-    # （合并成 AIMessage 供解析 tool_calls 等）。二者粒度不同，不可合并。
-    collected_text: list[str] = []
+    # 流式阶段每 chunk 就地翻译为 MODEL_OUTPUT_DELTA 事件（text 取自该 chunk 的
+    # content 增量）；chunks 攒结构化分块合并成 AIMessage 供解析 tool_calls 与
+    # 提取最终正文（output_text 从合并后的 content 统一取，见下）。
     chunks: list[AIMessageChunk] = []
     chunk_index = 0
 
@@ -235,7 +233,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         text = content_to_text(chunk.content)
         reasoning = _extract_reasoning_content(chunk, thinking_channels)
         if text:
-            collected_text.append(text)
             write_event(
                 # 就地翻译为增量事件，避免经 messages 流导致完整回复被重复推送。
                 EventType.MODEL_OUTPUT_DELTA,
@@ -258,20 +255,22 @@ async def _model_node(state: ReactGraphState) -> dict:
     # REPAIR 回流的多次模型调用会依次累加，各步末态快照互不覆盖。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
 
-    tool_calls: list[ToolCall] = tool_calls_from_langchain(ai_message.tool_calls or [])
+    tool_calls: list[ToolCall] = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
     # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
     # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
     requested_tool = bool(tool_calls)
-    # 在 REPAIR 分支之前确定模型已产出的文本，供修复提示携带「上一轮的部分输出」，
-    # 避免 REPAIR 回流重试时把模型已产出的正文/意图静默丢弃。
-    output_text = "".join(collected_text).strip()
+    # 模型已产出的正文统一取合并后 content（与 _has_content 落库判定同源），避免与
+    # 流式阶段就地推送的 MODEL_OUTPUT_DELTA 事件出现两套正文口径。对文本块，逐 chunk
+    # 提取拼接与合并后整体提取等价；末 chunk 一次性给 content 也能被捕获，不会因 delta
+    # 通道未逐 chunk 下传而误判无正文。供修复提示/最终回答/instruction 共用。
+    output_text = content_to_text(ai_message.content).strip()
 
     repair_message: str | None = None
     repair_data: list[dict[str, Any]] = []
 
     if invalid_tool_calls:
-        # 非法工具调用的 args 是模型原始未校验内容，记日志前须脱敏，避免 secret 落盘。
+
         available_tool_names = {tool.name for tool in operations.model_tools}
         result = decide_invalid_tool_handling(
             invalid_tool_calls=invalid_tool_calls, available_tool_names=available_tool_names
