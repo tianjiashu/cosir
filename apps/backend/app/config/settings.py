@@ -7,8 +7,10 @@
 设计边界：
 - 本模块只承载进程级运行配置（日志路径、SQLite 路径、各类数值上限）。模型相关配置不在
   此处，统一收敛到 ``app.core.llm.model_settings``。
-- 数值上限类配置（如 ``Settings.MAX_STEPS`` / ``Settings.TOOL_ERROR_LIMIT``）为全进程共享的
-  静态值，运行时不确、不可变；需要按环境覆盖时经环境变量或 ``Settings.override``（测试）注入。
+- 数值上限类配置（如 ``Settings.TOOL_ERROR_LIMIT``）为全进程共享的静态值，运行时不确、
+  不可变；需要按环境覆盖时经环境变量或 ``Settings.override``（测试）注入。单轮最大步数
+  ``max_steps`` 不再在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
+  ``workflow.py`` 初始化 input_state 注入）。
 - 路径类配置（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）由仓库根目录推导，受
   ``.env`` 覆盖；测试可将临时目录经 ``Settings.override`` 注入以隔离副作用。
 """
@@ -41,7 +43,6 @@ class Settings:
     LOG_BATCH_SIZE: ClassVar[int] = 50
     LOG_FLUSH_INTERVAL_MS: ClassVar[int] = 1000
     LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
-    MAX_STEPS: ClassVar[int] = 10000
     TOOL_ERROR_LIMIT: ClassVar[int] = 3
     MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
@@ -57,7 +58,7 @@ class Settings:
     # 上下文窗口软上限（token）：上下文占用圆环 100% 基准的上限之一，与「模型最大窗口」
     # 取 min 后作为实际上限（分母）。0 表示不设软上限，只用模型自身最大窗口。可由
     # CODING_AGENT_CONTEXT_WINDOW_TOKENS 经环境变量覆盖（如 32000 以省成本/控延迟）。
-    CONTEXT_WINDOW_TOKENS: ClassVar[int] = 0
+    CONTEXT_WINDOW_TOKENS: ClassVar[int] = 200000
     # 上下文占用重算的最小间隔（秒）：ContextUsageMeter 防抖，避免高频 add_message 触发全量
     # 估算；该间隔内重复 read 命中缓存，超过则按脏标记重算。
     CONTEXT_USAGE_MIN_INTERVAL_S: ClassVar[float] = 1.0
@@ -68,6 +69,13 @@ class Settings:
     WEB_SEARCH_LIMIT_MAX: ClassVar[int] = 20
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
+
+    # http_proxy 配置（设计文档阶段 2 用户视角三件套之一，可选）：为 litellm
+    # 访问外网厂商（OpenAI / Anthropic 等）提供代理通道，国内网络必需。
+    # 全可选：任一为 None / 空串时不注入代理，保持既有无代理请求不受影响。
+    # 对应环境变量 ``CODING_AGENT_WEB_PROXY_URL`` / ``CODING_AGENT_WEB_PROXY_API_KEY``。
+    WEB_PROXY_URL: ClassVar[str | None] = None
+    WEB_PROXY_API_KEY: ClassVar[str | None] = None
 
     # 模型流式 chunk 调试落盘开关：默认关闭。开启后 ``model_node`` 会逐 chunk / 合并后
     # 把完整消息 JSON 追加到 ``logs/debug_*_chunks.jsonl``，用于本地排查 chunk 结构。
@@ -200,8 +208,6 @@ class Settings:
             无。
         """
 
-        if cls.MAX_STEPS < 1:
-            raise ValueError("MAX_STEPS must be greater than zero")
         if cls.TOOL_ERROR_LIMIT < 1:
             raise ValueError("TOOL_ERROR_LIMIT must be greater than zero")
         if cls.MAX_PARALLEL_TOOL_CALLS < 1:
@@ -281,7 +287,6 @@ class Settings:
             os.environ.get("CODING_AGENT_LOG_FLUSH_INTERVAL_MS", "1000")
         )
         cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
-        cls.MAX_STEPS = int(os.environ.get("CODING_AGENT_MAX_STEPS", "8"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
         cls.MAX_PARALLEL_TOOL_CALLS = int(
             os.environ.get("CODING_AGENT_MAX_PARALLEL_TOOL_CALLS", "8")
@@ -325,6 +330,8 @@ class Settings:
         cls.WEB_EXTRACT_CHAR_LIMIT = int(
             os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
         )
+        cls.WEB_PROXY_URL = os.environ.get("CODING_AGENT_WEB_PROXY_URL")
+        cls.WEB_PROXY_API_KEY = os.environ.get("CODING_AGENT_WEB_PROXY_API_KEY")
         cls.DEBUG_DUMP_CHUNKS = cls._env_bool("CODING_AGENT_DEBUG_DUMP_CHUNKS", False)
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
