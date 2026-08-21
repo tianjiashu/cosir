@@ -9,7 +9,7 @@ from collections import deque
 
 from app.models import LogEntryRecord
 from app.models.mapped_log_record import LogError, MappedLogRecord
-from app.storage.crud.log_crud import LogStore
+from app.storage.crud.log_crud import LogCrud
 
 HIGH_PRIORITY_LEVELS = {"WARNING", "ERROR", "CRITICAL"}
 
@@ -19,7 +19,7 @@ class SQLiteLogHandler(logging.Handler):
 
     def __init__(
         self,
-        store: LogStore,
+        store: LogCrud,
         queue_size: int = 1000,
         batch_size: int = 50,
         flush_interval_seconds: float = 1.0,
