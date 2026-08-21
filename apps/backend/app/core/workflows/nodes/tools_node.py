@@ -232,11 +232,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         # 对此路径不生效，故调用 service 公开能力构造同构占位，保证协议字段与正常
         # 执行路径（含执行中取消）100% 同源，不平行复制序列化逻辑。
         cancel_calls = [
-            ToolCall(
-                tool_name=call.get("tool_name", ""),
-                arguments=call.get("arguments") or {},
-                call_id=call.get("call_id") or "",
-            )
+            ToolCall.from_dict(call)
             for call in state.pending_tool_calls
             # 不过滤call_id未定义的情况，统一补占位，避免不配对
         ]
@@ -256,15 +252,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "deferred_repair_message": "",
         }
 
-    # 把审批结果 dict 重建为内部 ToolCall 值对象（补全 arguments/call_id 默认值）。
-    approved_calls = [
-        ToolCall(
-            tool_name=item["tool_name"],
-            arguments=item.get("arguments") or {},
-            call_id=item.get("call_id") or "",
-        )
-        for item in approved_dicts
-    ]
+    # 把审批结果 dict 重建为内部 ToolCall 值对象（经 ToolCall.from_dict 统一兜底字段，
+    # 与取消分支同源，避免字段增减时两处分支漂移）。
+    approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
 
     # 真正执行工具（内部会发工具生命周期事件，write_event 作为回调注入）。
     # 若模型本轮调工具前附带说明文本（instruction），一并带出供排查时看到模型意图。
