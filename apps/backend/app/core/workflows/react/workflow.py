@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.config.logging.logger import log
+from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.core.llm.factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
 from app.models import RuntimeMessage
@@ -29,12 +30,12 @@ from app.service.depends import get_task_service
 from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolCall
 
-from app.core.context.runtime_context_manager import RuntimeContextManager
 from ...context.context_listener.context_compress_listener import ContextCompressListener
 from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
 from ...llm.context_window_resolver import resolve_context_window
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
+from ..nodes.helper.approval import APPROVAL_INTERRUPT_KEY
 from ..nodes.helper.common import write_event
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
@@ -323,7 +324,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 # 调用 interrupt()，graph 不会暂停，外层循环已在上面 `not interrupts` 处退出。
                 interrupt_value = interrupts[0].value
                 pending = (
-                    interrupt_value.get("tool_calls", [])
+                    interrupt_value.get(APPROVAL_INTERRUPT_KEY, [])
                     if isinstance(interrupt_value, dict)
                     else []
                 )

@@ -15,11 +15,18 @@
 
 ``interrupt`` 以参数注入，由 ``_tools_node`` 传入其命名空间内的 ``interrupt``（来自
 ``langgraph.types``），以便既有测试对 ``tools_node.interrupt`` 的 monkeypatch 仍能生效。
+
+interrupt 载荷结构跨模块共享：产生端（本模块）以 ``{"tool_calls": [...]}`` 交给
+``interrupt()``，消费端（``react/workflow.py``）从 ``interrupts[0].value`` 按同键取出。
+键名收敛为 :data:`APPROVAL_INTERRUPT_KEY` 单一事实来源，杜绝两处裸键字面量漂移。
 """
 
 from typing import Any
 
 from app.config.logging.logger import log
+
+# interrupt 载荷中「待审批工具调用」的键名（跨模块共享契约，产生端/消费端同用）。
+APPROVAL_INTERRUPT_KEY: str = "tool_calls"
 
 
 def resolve_approved_calls(
@@ -76,9 +83,9 @@ def resolve_approved_calls(
     )
     # 核心：interrupt 暂停 graph，把待审批工具调用交出去；外部审批后用
     # Command(resume=approved_list) 恢复，approved 即为恢复时传入的审批结果。
-    approved = interrupt_fn({"tool_calls": tool_calls})
+    approved = interrupt_fn({APPROVAL_INTERRUPT_KEY: tool_calls})
     # 兼容两种恢复值：直接 list 用 list，否则（如误传）回退到原始 tool_calls。
     return tool_calls if not isinstance(approved, list) else approved
 
 
-__all__ = ["resolve_approved_calls"]
+__all__ = ["APPROVAL_INTERRUPT_KEY", "resolve_approved_calls"]

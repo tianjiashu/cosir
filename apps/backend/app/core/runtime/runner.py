@@ -133,9 +133,6 @@ class AgentRuntime:
             # 取消终态事件不由本方法广播：实际检测到取消的执行节点
             # （model_node 流式中断 / tools_node 执行前检查）才发出携带 token 的
             # RUN_CANCELLED，避免与执行节点的终态事件重复投影成两张「任务已取消」。
-            # 取消即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
-            # 使运行后变更能立即展示与撤销。同步调用（cancel_turn 非 async）。
-            self._mark_stable_file_changes(turn_id)
         except RuntimeError:
             log.exception(
                 "turn_cancelled_event_persist_failed",
@@ -226,7 +223,6 @@ class AgentRuntime:
                             turn_id=child_turn.turn_id,
                         )
                     )
-                    self._mark_stable_file_changes(child_turn.turn_id)
             get_delegation_service().mark_cancelled(delegation.delegation_id, reason)
         except Exception:
             log.exception(

@@ -1,6 +1,5 @@
 from app.config.configuration import get_tool_registry
 from app.core.agents.agent_profile import AgentProfile
-from app.core.llm.model_settings import ModelSettings
 
 # 默认 Agent 标识：前端未显式选择 agent 时回退到该内置 developer。
 DEFAULT_AGENT_ID = "developer"
@@ -79,10 +78,6 @@ def developer_agent() -> AgentProfile:
         role="developer_agent",
         description="协助用户完成软件工程项目开发任务",
         allowed_tools=_resolve_all_tool_names(),
-        model_name="deepseek/deepseek-v4-flash",
-        model_settings=ModelSettings(
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
         max_steps=300,
         prompt_ref=None,
     )
@@ -125,10 +120,6 @@ def reviewer_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek/deepseek-v4-flash",
-        model_settings=ModelSettings(
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
         max_steps=60,
         prompt_ref=None,
     )
@@ -168,10 +159,6 @@ def analyst_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek/deepseek-v4-flash",
-        model_settings=ModelSettings(
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
         max_steps=80,
         prompt_ref=None,
     )
@@ -198,10 +185,6 @@ def test_agent() -> AgentProfile:
         role="delegate-tester",
         description="只做代码测试，指出问题、风险和遗漏；不修改代码，不运行测试。",
         allowed_tools=_resolve_all_tool_names(),
-        model_name="deepseek/deepseek-v4-flash",
-        model_settings=ModelSettings(
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
         max_steps=80,
         prompt_ref=None,
     )
@@ -244,10 +227,6 @@ def coder_agent() -> AgentProfile:
             "codegraph_callees",
             "codegraph_impact",
         ],
-        model_name="deepseek/deepseek-v4-flash",
-        model_settings=ModelSettings(
-            api_key_env="DEEPSEEK_API_KEY",
-        ),
         max_steps=120,
         prompt_ref=None,
     )

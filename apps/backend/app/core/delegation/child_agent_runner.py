@@ -9,7 +9,7 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
-from app.service.delegation.delegation_result import DelegationResult
+from app.models.result.delegation_result import DelegationResult
 
 
 class ChildAgentRunner:
@@ -165,11 +165,21 @@ class ChildAgentRunner:
                     )
                     continue
                 if event.event_type == EventType.RUN_FAILED:
-                    error = str(
-                        getattr(event.payload, "error", None)
-                        or getattr(event.payload, "message", None)
-                        or "child turn failed"
-                    )
+                    # end_reason 为语义化枚举码时（如 max_steps_reached），把它转成父
+                    # Agent 可读的中文说明，避免父 Agent 只拿到 "max_steps_reached" 枚举码
+                    # 而无法感知 child 因步数耗尽而停止（对齐 StatusBadge 的前端文案）。
+                    end_reason = str(getattr(event.payload, "end_reason", None) or "")
+                    if end_reason == "max_steps_reached":
+                        error = (
+                            "子 Agent 已达到最大步骤数，未产出最终回答，"
+                            "请精简任务范围或拆分重试。"
+                        )
+                    else:
+                        error = str(
+                            getattr(event.payload, "error", None)
+                            or getattr(event.payload, "message", None)
+                            or "child turn failed"
+                        )
                     terminal_result = DelegationResult(
                         status="failed",
                         child_turn_id=turn_id,

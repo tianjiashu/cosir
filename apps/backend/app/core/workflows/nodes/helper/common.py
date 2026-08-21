@@ -115,6 +115,7 @@ def build_run_failed_payload(
     langfuse_trace_id: str | None,
     status: Literal["failed"] | None = "failed",
     data: dict[str, Any] | None = None,
+    end_reason: str | None = None,
 ) -> RunFailedPayload:
     """统一构造携带 token 摘要的 ``RunFailedPayload``。
 
@@ -129,6 +130,9 @@ def build_run_failed_payload(
         langfuse_trace_id: 关联的 Langfuse trace id，无则传 ``None``（不写占位串）。
         status: 事件状态字段，默认 ``"failed"``；非默认分支（如非法工具分类）可显式传入。
         data: 可选附加数据（如非法工具调用的分类明细），无则不写 ``data`` 字段。
+        end_reason: 语义化失败原因枚举码（如 ``"max_steps_reached"``），透传进 payload
+            供前端 / 父 Agent 按枚举分类给出可读文案；无则传 ``None``。不得把自由文本
+            塞进本字段（否则前端分支判断不可枚举）。
 
     返回:
         字段完整、可直接发 ``RUN_FAILED`` 事件的 ``RunFailedPayload`` 实例。
@@ -144,6 +148,7 @@ def build_run_failed_payload(
         step_id=step_id,
         error=error,
         status=status,
+        end_reason=end_reason,
         langfuse_trace_id=langfuse_trace_id,
         data=data,
         input_tokens=usage_dict["input_tokens"],

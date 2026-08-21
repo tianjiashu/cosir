@@ -14,9 +14,10 @@ from app.core.agents.agent_profile import AgentProfile
 from app.models import TaskRecord, TurnRecord
 from app.service.delegation.delegation_context import DelegationPolicyContext
 from app.service.delegation.delegation_policy import DelegationPolicy
-from app.service.delegation.delegation_result import DelegationResult
+from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_delegation_service, get_turn_service
+from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolExecutionContext, ToolObservation
 from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 from app.tools.tool_execute.tool_cancelled import tool_cancelled
@@ -189,11 +190,57 @@ class DelegationExecutor(DelegateTaskExecutor):
                 )
 
             # 在子任务下创建 pending child turn（上下文天然隔离，不依赖排除 hack）。
-            child_turn = turn_service.create_turn(
-                task_id=child_task.task_id,
-                input_text=agent_input_text,
-                agent_id=args.child_agent_id,
-            )
+            # ① service 期预解析（设计 §6.4）：create_turn 内部会把 child 请求的 /
+            # 此处捕获后把 delegation 置 failed（child 无 HTTP 上下文，无法回 422），
+            # 成对记 warn model_resolve_rejected(child=true) + error，父收失败 DelegationResult。
+            try:
+                child_turn = turn_service.create_turn(
+                    task_id=child_task.task_id,
+                    input_text=agent_input_text,
+                    agent_id=args.child_agent_id,
+                    model_name=child_agent_profile.model_name
+                )
+            except ModelNotConfiguredError as exc:
+                log.warning(
+                    "model_resolve_rejected",
+                    extra={
+                        "msg": (
+                            f"委派 child 模型解析被拒绝，"
+                            f"model={exc.model_name}，reason={exc.reason}"
+                        ),
+                        "data": {
+                            "delegation_id": delegation_id,
+                            "child_agent_id": args.child_agent_id,
+                            "model": exc.model_name,
+                            "reason": exc.reason,
+                            "child": True,
+                        },
+                    },
+                )
+                log.error(
+                    "child_delegation_model_resolve_failed",
+                    extra={
+                        "msg": f"委派 child 预解析模型失败，delegation 置 failed：{exc}",
+                        "data": {
+                            "delegation_id": delegation_id,
+                            "parent_turn_id": self._parent_turn.turn_id,
+                            "child_agent_id": args.child_agent_id,
+                            "model": exc.model_name,
+                            "reason": exc.reason,
+                        },
+                    },
+                )
+                if delegation_id:
+                    delegation_service.mark_failed(
+                        delegation_id,
+                        f"model not configured: {exc.model_name} ({exc.reason})",
+                        runtime_event_loop=runtime_event_loop,
+                    )
+                return self._child_error(
+                    "failed",
+                    f"child agent '{args.child_agent_id}' cannot run: model "
+                    f"'{exc.model_name}' is not configured ({exc.reason}). {exc.guidance}",
+                )
 
             # 确认pending child turn
             if not turn_service.claim_pending_turn(child_turn.turn_id):

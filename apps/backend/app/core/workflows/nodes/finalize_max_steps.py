@@ -37,9 +37,11 @@ async def _finalize_max_steps(
     后不再发起推理、终态分类恒为 ``max_steps_reached``。``step_count`` 缺省时回退读
     ``state.step_count``（主要供测试直接调用；生产路径 ``model_node`` 恒显式传入）。
 
-    终态 patch 与 ``RUN_FAILED.data`` 都会携带 ``_MAX_STEPS_FINAL_TEXT`` 作为默认
-    ``final_text``：步数耗尽没有最终回答，若不写默认文本，父 Agent（委派场景）与用户
-    将无法感知子/主 Agent 因步数耗尽而停止。
+    终态 patch 会把 ``_MAX_STEPS_FINAL_TEXT`` 写入 ``final_text``（供 checkpoint 留存），
+    且 ``RUN_FAILED`` 事件经 ``end_reason="max_steps_reached"`` 透传语义化枚举码，使前端
+    （``StatusBadge``）与父 Agent（``ChildAgentRunner``）能按枚举分类渲染「因步数耗尽而
+    停止」的可读说明；否则用户 / 父 Agent 只能看到 ``error="max_steps_reached"`` 枚举码，
+    无法感知子/主 Agent 因步数耗尽而停止。
 
     参数:
         state: 当前 graph state。
@@ -92,6 +94,9 @@ async def _finalize_max_steps(
             usage=rc.usage_stats,
             langfuse_trace_id=rc.langfuse_trace_id,
             data=event_data or None,
+            # 语义化枚举码透传给前端 / 父 Agent，使其能按枚举分类渲染「因步数耗尽而停止」
+            # 的可读文案（对齐 client_disconnected 的差异化文案模式）。
+            end_reason="max_steps_reached",
         ),
     )
     return _terminal_state(effective_step_count)
