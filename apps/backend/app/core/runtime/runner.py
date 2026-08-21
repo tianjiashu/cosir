@@ -10,6 +10,7 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.define_agents import DEFAULT_AGENT_ID
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
+from app.service.llm.model_error_mapper import map_litellm_error
 from app.core.observability import (
     TraceMetadata,
     build_tool_trace_recorder,
@@ -422,11 +423,18 @@ class AgentRuntime:
             # 失败即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
             # 使运行后变更能展示与撤销。同步调用（此处非 await 上下文）。
             self._mark_stable_file_changes(turn_id)
+            # 把 litellm 异常归一为稳定错误码（设计文档阶段 4），供前端按
+            # error_code 给出修复引导；非模型异常归一为 MODEL_UNKNOWN 兜底。
+            mapped = map_litellm_error(exc)
             log.exception(
                 "task_failed",
                 extra={
                     "msg": "task execution failed",
-                    "data": {"task_id": task_id},
+                    "data": {
+                        "task_id": task_id,
+                        "error_code": mapped.error_code.value,
+                        "retryable": mapped.retryable,
+                    },
                 },
             )
             yield await self._emit(
@@ -434,7 +442,13 @@ class AgentRuntime:
                     event_type=EventType.RUN_FAILED,
                     task_id=task_id,
                     turn_id=turn_id,
-                    payload=RunFailedPayload(status="failed", error=str(exc), end_reason=None),
+                    payload=RunFailedPayload(
+                        status="failed",
+                        error=str(exc),
+                        end_reason=None,
+                        error_code=mapped.error_code.value,
+                        guidance=mapped.guidance,
+                    ),
                     is_main_agent=agent.main_agent,
                 ),
                 agent,
@@ -633,23 +647,6 @@ class AgentRuntime:
                     "data": {"task_id": task_id, "turn_id": turn_id},
                 },
             )
-
-    def backend_health(self) -> dict:
-        """Return backend model configuration and availability summary."""
-
-        profile = self._agent_registry.resolve(DEFAULT_AGENT_ID)
-        model_settings = profile.model_settings if profile is not None else None
-        api_key_env = model_settings.api_key_env if model_settings is not None else ""
-        return {
-            "status": "ok",
-            "model_provider": "deepseek",
-            "model_name": profile.model_name if profile is not None else "",
-            "model_thinking_mode": (
-                "enabled" if model_settings is not None and model_settings.thinking else "disabled"
-            ),
-            "model_api_key_env": api_key_env,
-            "has_model_api_key": bool(api_key_env and os.environ.get(api_key_env)),
-        }
 
     def _resolve_execution_context(
         self, task: TaskRecord, turn_id: str = ""
