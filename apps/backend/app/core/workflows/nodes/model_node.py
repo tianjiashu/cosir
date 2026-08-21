@@ -31,7 +31,6 @@ from app.core.llm.langchain_bridge import tool_calls_from_langchain
 from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
-    _extract_text,
     _has_content,
 )
 from app.core.workflows.nodes.helper.common import (
@@ -66,6 +65,7 @@ from app.models.payload import (
 )
 from app.service.llm.cost_estimator import UsageBreakdown, estimate_cost
 from app.tools.schemas import ToolCall
+from app.utils.message_content import content_to_text
 
 from ..react.state import ReactGraphState
 
@@ -232,7 +232,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             return terminal_state(step_count)
 
         chunks.append(chunk)
-        text = _extract_text(chunk.content)
+        text = content_to_text(chunk.content)
         reasoning = _extract_reasoning_content(chunk, thinking_channels)
         if text:
             collected_text.append(text)

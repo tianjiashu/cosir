@@ -13,8 +13,9 @@
 - ``terminal_state``：统一构造终态 state patch，消除各节点
   重复的 ``{"terminal": True, ...}`` 字典字面量。
 
-节点各自的数据处理辅助（如 chunk 组装逻辑 ``_extract_text``）不放这里，归属见
-``chunk_assembler`` / ``model_node`` / ``tools_node``。
+节点各自的数据处理辅助不放这里；``content → text`` 归一统一收口于
+``app.utils.message_content.content_to_text``（原 ``chunk_assembler._extract_text``
+与 ``runtime_context_manager._content_to_text`` 两套同构口径已合并至此）。
 """
 
 from __future__ import annotations

@@ -14,31 +14,9 @@
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.core.workflows.nodes.helper.thinking_extractor import _should_strip_reasoning_content
+from app.utils.message_content import content_to_text
 
 from .debug_dump import _dump_merged_chunk_debug
-
-
-def _extract_text(content) -> str:
-    """从 LangChain 消息 content 中提取纯文本分片。
-
-    参数:
-        content: LangChain 消息的 ``content`` 字段（字符串或分块列表）。
-
-    返回:
-        拼接后的纯文本；无法识别时返回空字符串。
-    """
-
-    if isinstance(content, str):
-        return content  # 普通字符串直接返回
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)  # 列表里直接是字符串
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))  # 多模态文本块 {"type":"text","text":...}
-        return "".join(parts)  # 拼接所有文本片段
-    return ""  # 其它类型（如图片）返回空
 
 
 def _has_content(message: AIMessage) -> bool:
@@ -57,7 +35,7 @@ def _has_content(message: AIMessage) -> bool:
         无。
     """
 
-    if _extract_text(message.content).strip():
+    if content_to_text(message.content).strip():
         return True  # 有文本即视为有效
     tool_calls = getattr(message, "tool_calls", None)
     return bool(tool_calls)  # 有工具调用也视为有效
@@ -135,7 +113,7 @@ def _collect_chunk_to_ai_message(
 
     返回:
         可安全存入 graph state 并交给下一步模型调用的 ``AIMessage``：
-        - ``content`` 经 ``_extract_text`` 抽为纯文本（防御含 ``tool_call`` block 的 list 形态）；
+        - ``content`` 经 ``content_to_text`` 抽为纯文本（防御含 ``tool_call`` block 的 list 形态）；
         - ``tool_calls`` / ``usage_metadata`` 透传（usage 由 ``add_usage`` 正确累加后的完整统计）；
         - ``additional_kwargs`` 按回传策略剥离或保留 ``reasoning_content``
           （思考内容已在流式阶段单独推送，剥离仅针对不需回传的厂商）；
@@ -171,7 +149,7 @@ def _collect_chunk_to_ai_message(
     # 与 RuntimeContextManager._langraph_message_to_runtime_message 落库口径保持一致，
     # 避免回灌模型时重复携带工具结构。
     return AIMessage(
-        content=_extract_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
+        content=content_to_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
         tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
         invalid_tool_calls=merged.invalid_tool_calls,
         additional_kwargs=additional,  # 保留/剥离 thinking 字段按回传策略
@@ -185,6 +163,5 @@ def _collect_chunk_to_ai_message(
 
 __all__ = [
     "_collect_chunk_to_ai_message",
-    "_extract_text",
     "_has_content",
 ]
