@@ -9,9 +9,9 @@
 """
 
 from app.config.logging.logger import log
-from app.models import RuntimeMessage, TurnRecord
+from app.models import LLMRuntimeConfig, RuntimeMessage, TurnRecord
 from app.service import depends as service_depends
-from app.utils.datetime_utils import preview
+from app.service.llm.model_resolver_service import ModelNotConfiguredError, ModelResolverService
 
 
 class TurnService:
@@ -43,6 +43,7 @@ class TurnService:
         input_text: str,
         status: str = "pending",
         agent_id: str | None = None,
+        model_name: str | None = None,
     ) -> TurnRecord:
         """Create a turn and update the parent task's latest turn info.
 
@@ -50,12 +51,53 @@ class TurnService:
             task_id: 所属任务标识。
             input_text: 本轮用户输入文本。
             status: 初始状态，默认 ``"pending"``。
-            agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到任务默认归属。
+            agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"developer"``。
+            model_name: 可选，本 turn 请求的模型名（litellm 路由名）；None 表示用户
+                未选择模型（设计阶段 1.5：5 个内置 profile 不再内置默认模型，前端优先
+                校验、后端兜底报错）。
+
+        返回:
+            新创建的 ``TurnRecord``。
+
+        异常:
+            ValueError: 如果 ``input_text`` 为空或全空白。
+            ModelNotConfiguredError: 如果请求模型未选择 / 未收录 / 归属厂商禁用 /
+                Key 未配置（设计 §6.4 两段式 ① service 期预解析，由 API 层捕获为
+                HTTP 422；child 委派路径无 HTTP 上下文，由 ``delegation_executor``
+                捕获并把 delegation 置 failed）。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
+
+        副作用:
+            向 ``turns`` 表插入一行（``model_name`` 落库为解析后的最终模型名
+            ——``LLMRuntimeConfig.model_name``，取自 DB ``models.model_name``，
+            保证时间线可追溯到真实模型，D11）；更新所属任务最新轮次信息。
         """
 
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
-        turn = self._turn.create(task_id, input_text, status, agent_id=agent_id)
+
+        # agent_id 兜底：未显式指定时回退到默认主 agent，避免 None 透传到
+        # ``turns.agent_id`` NOT NULL 列触发 SQLAlchemy IntegrityError。
+        resolved_agent_id = "developer" if agent_id is None else agent_id
+
+        # 设计 §6.4 两段式 ① service 期预解析：``ModelResolverService.resolve``
+        # 把 ``model_name is None`` 早返回拒绝为 ``REASON_MODEL_NOT_SELECTED``
+        # （设计阶段 1.5），未收录 / 厂商禁用 / Key 未配置分别对应
+        # ``model_not_found`` / ``provider_disabled`` / ``api_key_missing``。
+        # 解析成功的 ``LLMRuntimeConfig.model_name`` 为 DB 行最终 litellm 路由名，
+        # 用作 turn 落库值（D11 时间线可追溯）。
+        resolved: LLMRuntimeConfig = service_depends.get_model_resolver_service().resolve(
+            model_name,
+            log_context={"task_id": task_id, "agent_id": resolved_agent_id},
+        )
+
+        turn = self._turn.create(
+            task_id,
+            input_text,
+            status,
+            agent_id=resolved_agent_id,
+            model_name=resolved.model_name,
+        )
         return turn
 
     def get_turn(self, turn_id: str) -> TurnRecord:
@@ -63,11 +105,6 @@ class TurnService:
 
     def list_turns_for_task(self, task_id: str) -> list[TurnRecord]:
         return self._turn.list_by_task(task_id)
-
-    def update_turn_status(
-        self, turn_id: str, status: str, end_reason: str | None = None
-    ) -> TurnRecord:
-        return self._turn.update_status(turn_id, status, end_reason)
 
     def cancel_turn_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
         """Cancel a pending/running turn atomically.
@@ -135,6 +172,26 @@ class TurnService:
         """把轮次的 Agent 回复文本落库，供历史接口直接读取。"""
 
         return self._turn.update_response(turn_id, response_text)
+
+    def update_model_name(self, turn_id: str, model_name: str) -> TurnRecord:
+        """回写轮次实际所用模型名（运行期兜底解析修正后，§6.4）。
+
+        参数:
+            turn_id: 待回写的轮次标识。
+            model_name: 运行期解析得到的最终模型名（litellm 路由名）。
+
+        返回:
+            更新后的 ``TurnRecord``。
+
+        异常:
+            KeyError: 如果指定轮次不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            更新 ``turns`` 表的 ``model_name`` 列与 ``updated_at``。
+        """
+
+        return self._turn.update_model_name(turn_id, model_name)
 
     def has_turn_status(self, turn_id: str | None, status: str) -> bool:
         """Return whether the turn currently has the requested status.

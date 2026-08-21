@@ -288,8 +288,8 @@ class TurnStreamService:
                     # 原子约束对 pending 不生效（turn_crud），而本 producer 已 claim 独占
                     # （无并发认领竞态），故用无条件 update_turn_status 强制落 failed。
                     # 兜底后 emit run_failed 提供终态事件。
-                    self._turn_service.update_turn_status(
-                        turn_id, "failed", end_reason="client_disconnected"
+                    self._turn_service.fail_turn_if_running(
+                        turn_id, end_reason="client_disconnected"
                     )
                     self._emit_run_failed(turn, turn_id)
                 except Exception:

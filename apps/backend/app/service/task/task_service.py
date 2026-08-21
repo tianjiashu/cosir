@@ -3,9 +3,10 @@
 单一职责：编排任务创建（含初始轮次创建）、生命周期管理（open/archived）与执行态派生。
 
 职责边界：
-- 负责：任务创建（同时创建首个轮次）、用户驱动的生命周期状态、从最新 turn 派生执行态。
-- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``TurnCrud``/``WorkspaceCrud``）；
-  不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）。
+- 负责：任务创建（同时创建首个轮次）、用户驱动的生命周期状态、从最新 turn 派生
+  执行态、任务树原子级联删除（委托给 ``CascadeDeleter``）。
+- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``TurnCrud``/``WorkspaceCrud``/
+  ``CascadeDeleter``）；不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）。
 """
 
 from dataclasses import replace
@@ -67,9 +68,7 @@ class TaskService:
         self._task = service_depends.get_task_crud()
         self._turn = service_depends.get_turn_crud()
         self._workspace = service_depends.get_workspace_crud()
-        self._runtime_event = service_depends.get_runtime_event_crud()
-        self._turn_message = service_depends.get_turn_message_crud()
-        self._delegation = service_depends.get_delegation_crud()
+        self._cascade_deleter = service_depends.get_cascade_deleter()
 
     def create_task(
         self,
@@ -84,6 +83,25 @@ class TaskService:
         ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），任务本身只
         持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向 ``tasks.task_id``，
         必须先有 task 才能在执行阶段创建首 turn。
+
+        参数:
+            input_text: 用户输入文本，用于派生任务标题（仅派生 title，原文不落 tasks 表）。
+            status: 任务初始生命周期状态（``open`` / ``archived``）。
+            agent_id: 执行该任务的 Agent 标识，须已注册；默认 ``"developer"``。
+            workspace_id: 所属工作区标识。
+
+        返回:
+            已持久化的 ``TaskRecord``。
+
+        异常:
+            ValueError: 当 ``input_text``/``workspace_id``/``agent_id`` 为空或全空白，
+                或 ``agent_id`` 未注册时抛出。
+            sqlalchemy.exc.IntegrityError: 当 ``workspace_id`` 指向不存在的工作区
+                （外键约束）时抛出。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
+
+        副作用:
+            向 ``tasks`` 表插入一行任务记录（不创建轮次）。
         """
 
         if not isinstance(input_text, str) or not input_text.strip():
@@ -98,13 +116,12 @@ class TaskService:
         if agent_id not in _registered_agent_ids():
             raise ValueError(f"agent_id {agent_id} is not registered")
 
-        resolved_workspace_id = workspace_id
         title = preview(input_text)
         task_id = str(uuid4())
         # 先创建 task（turns.task_id 外键指向 tasks.task_id，必须先有 task 才能建 turn）。
         task = self._task.create(
             task_id=task_id,
-            workspace_id=resolved_workspace_id,
+            workspace_id=workspace_id,
             agent_id=agent_id,
             title=title,
             status=status,
@@ -113,15 +130,24 @@ class TaskService:
         return task
 
     def get_task(self, task_id: str) -> TaskRecord:
-        """Return the task with its derived ``execution_status`` attached."""
+        """按标识取单个任务，并附带派生的执行态。
 
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            对应的 ``TaskRecord``，其 ``execution_status`` 由最新轮次派生
+            （见 ``task_display_status``）。
+
+        异常:
+            KeyError: 如果指定任务不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
+
+        副作用:
+            无（仅读取）。
+        """
         record = self._task.get(task_id)
         return replace(record, execution_status=self.task_display_status(task_id))
-
-    def update_status(self, task_id: str, status: str) -> TaskRecord:
-        """Update the task lifecycle status (open/archived)."""
-
-        return self._task.update_status(task_id, status)
 
     def update_context_usage(self, task_id: str, used: int) -> TaskRecord:
         """持久化任务最近一次上下文窗口已用 token。
@@ -160,26 +186,45 @@ class TaskService:
         return self._task.update_context_usage(task_id, used)
 
     def set_lifecycle_status(self, task_id: str, status: str) -> TaskRecord:
-        """Set the user-driven lifecycle status (open/archived) only.
+        """仅设置用户驱动的生命周期状态（open/archived），不改执行态。
 
         参数:
             task_id: 任务标识。
-            status: ``"open"`` 或 ``"archived"``。
+            status: 目标生命周期状态，取值 ``"open"`` 或 ``"archived"``。
 
         返回:
             更新后的任务记录。
-        """
 
+        异常:
+            ValueError: 当 ``status`` 不属于 ``open``/``archived`` 时抛出。
+            KeyError: 如果指定任务不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            更新 ``tasks`` 表对应行的生命周期状态。
+        """
         if status not in ("open", "archived"):
             raise ValueError("lifecycle status must be 'open' or 'archived'")
         return self._task.update_status(task_id, status)
 
     def task_display_status(self, task_id: str) -> str:
-        """Derive the execution status from the latest turn.
+        """从最新轮次派生任务的执行态。
 
-        running -> "active"；completed/failed/cancelled -> 对应；无 turn -> "empty"。
+        映射规则：最新轮次为 ``running`` → ``"active"``；为
+        ``completed``/``failed``/``cancelled`` 等终态 → 对应状态值；无任何轮次 → ``"empty"``。
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            派生的执行态字符串。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
+
+        副作用:
+            无（仅读取）。
         """
-
         turns = self._turn.list_by_task(task_id)
         if not turns:
             return "empty"
@@ -189,9 +234,42 @@ class TaskService:
         return latest.status
 
     def has_status(self, task_id: str, status: str) -> bool:
+        """判断任务是否处于指定生命周期状态。
+
+        参数:
+            task_id: 任务标识。
+            status: 目标生命周期状态（``open`` / ``archived``）。
+
+        返回:
+            该任务当前生命周期状态等于 ``status`` 时为 True，否则 False。
+
+        异常:
+            KeyError: 如果指定任务不存在（底层 ``TaskCrud.get`` 抛出）。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
+
+        副作用:
+            无（仅读取）。
+        """
         return self._task.has_status(task_id, status)
 
     def list_tasks_for_workspace(self, workspace_id: str) -> list[TaskRecord]:
+        """列出某工作区下的用户任务（排除委派子任务）。
+
+        委派子任务（``task_type='delegation'``）不进侧边栏对话列表，故本方法仅返回
+        ``task_type='user'`` 的任务，按更新时间倒序。
+
+        参数:
+            workspace_id: 工作区标识。
+
+        返回:
+            该工作区下的用户任务记录列表（不含委派子任务）；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
+
+        副作用:
+            无（仅读取）。
+        """
         return self._task.list_by_workspace(workspace_id)
 
     def list_child_tasks(self, parent_task_id: str) -> list[TaskRecord]:
@@ -279,6 +357,7 @@ class TaskService:
         agent_id: str,
         input_text: str,
         status: str = "open",
+        model_name: str | None = None,
     ) -> tuple[TaskRecord, TurnRecord]:
         """创建任务记录并同时创建其首个 pending 轮次，返回两者。
 
@@ -292,20 +371,25 @@ class TaskService:
             agent_id: 执行该任务的 Agent 标识（须已注册）。
             input_text: 首个轮次的用户输入文本，同时用于派生任务标题。
             status: 任务初始状态，默认 ``"open"``。
+            model_name: 可选，首 turn 请求的模型名（设计 §8.3，D1 配套）；None 表示
+                Auto（跟随 Agent 默认模型）。透传至首 turn 落库 ``turns.model_name``，
+                供时间线展示与实际所用模型回溯。
 
         返回:
             ``(task_record, turn_record)`` 二元组，分别对应刚创建的顶层任务与其首个轮次。
 
         异常:
             ValueError: 如果 ``input_text`` 为空或全空白，或 ``agent_id`` 未注册。
+            ModelNotConfiguredError: 如果首轮次请求模型未收录 / 归属厂商禁用 / Key 未配置
+                （由 ``TurnService.create_turn`` 的 service 期预解析抛出，设计 §6.4 两段式 ①）。
             sqlalchemy.exc.IntegrityError: 如果 ``workspace_id`` 指向不存在的工作区
                 （外键约束兜底，由底层 ``create_task`` 触发）。
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败（任务或首轮次创建任一失败即抛出）。
 
         副作用:
             向 ``tasks`` 表插入一行顶层任务记录；向 ``turns`` 表插入一行 pending 首轮次记录
-            （归属 ``task.task_id``，状态 ``pending``）。若 task 创建成功后首轮次写入失败，
-            已提交的 task 会被显式补偿删除，避免残留孤儿任务。
+            （归属 ``task.task_id``，状态 ``pending``，含 ``model_name``）。若 task 创建成功后
+            首轮次写入失败，已提交的 task 会被显式补偿删除，避免残留孤儿任务。
         """
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
@@ -320,20 +404,30 @@ class TaskService:
         # 无自动回滚，此处显式删除刚创建的 task，避免残留孤儿任务。极端情况下补偿删除
         # 自身失败时会保留 task 并向上抛出原始异常（由调用方错误日志捕获）。
         try:
-            turn = self._turn.create(task.task_id, input_text, "pending")
-        except Exception:
+            # 复用 TurnService.create_turn 作为创建 turn 的唯一入口，确保模型预解析
+            # （两段式 ① service 期 _resolve_model_name）在建任务首轮路径上也生效，
+            # 与 POST /turns 路径行为一致；否则首 turn 的 model_name 会原样落库、
+            # workspaces_api 的 ModelNotConfiguredError→422 分支沦为死代码。
+            turn = service_depends.get_turn_service().create_turn(
+                task.task_id,
+                input_text,
+                "pending",
+                agent_id=agent_id,
+                model_name=model_name,
+            )
+        except Exception as e:
             self._task.delete_by_ids([task.task_id])
-            raise
+            raise e
         return task, turn
 
     def delete_task(self, task_id: str) -> None:
-        """递归删除任务并级联清理其下轮次、消息轨迹、运行时事件、子任务与委派记录。
+        """原子删除任务树并级联清理其下全部子产物。
 
-        删除前先校验任务存在（不存在则抛 ``KeyError``），再递归删除其下全部子任务
-        （委派子任务），然后按 ``runtime_events -> turn_messages -> turns -> delegations -> task``
-        顺序清理自身数据，避免外键 / 孤儿数据。委派子 Agent 产生的 ``delegations`` 行以
-        ``task_id`` 关联，若不复则删除后成为无法追溯的孤儿记录，因此须在此一并清理。
-        删除是高风险操作，保留 start / complete 审计日志。
+        删除前先校验任务存在（不存在则抛 ``KeyError``），再通过
+        ``CascadeDeleter.delete_task_tree`` 在单个 ``BEGIN IMMEDIATE`` 写锁事务内
+        递归清理其下全部子任务（委派子任务）及各自轮次、消息轨迹、运行时事件、文件
+        快照与委派记录，保证原子性（全删或全不删）与并发安全（删除期间无并发写插入
+        孤儿数据）。删除是高风险操作，保留 start / complete 审计日志。
 
         参数:
             task_id: 待删除的任务标识。
@@ -346,8 +440,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
 
         副作用:
-            从 ``runtime_events`` / ``turn_messages`` / ``turns`` / ``delegations`` /
-            ``tasks`` 表删除该任务及其子任务相关数据。
+            从 ``runtime_events`` / ``turn_messages`` / ``file_snapshots`` /
+            ``turns`` / ``delegations`` / ``tasks`` 表删除该任务树相关数据。
         """
 
         self._task.get(task_id)  # 存在性守卫，不存在抛 KeyError
@@ -355,25 +449,11 @@ class TaskService:
             "task_delete_start",
             extra={"msg": "task delete started", "data": {"task_id": task_id}},
         )
-        # 递归清理子任务（委派子任务），避免孤儿数据。
-        child_tasks = self._task.list_by_parent_task(task_id)
-        for child in child_tasks:
-            self.delete_task(child.task_id)
-        turn_ids = self._turn.list_ids_by_task_ids([task_id])
-        if turn_ids:
-            self._runtime_event.delete_by_turn_ids(turn_ids)
-            self._turn_message.delete_by_turn_ids(turn_ids)
-            self._turn.delete_by_ids(turn_ids)
-        deleted_delegations = self._delegation.delete_by_task_ids([task_id])
-        self._task.delete_by_ids([task_id])
+        deleted_count = self._cascade_deleter.delete_task_tree(task_id)
         log.info(
             "task_deleted",
             extra={
                 "msg": "task deleted",
-                "data": {
-                    "task_id": task_id,
-                    "turn_ids": turn_ids,
-                    "deleted_delegations": deleted_delegations,
-                },
+                "data": {"task_id": task_id, "deleted_tasks": deleted_count},
             },
         )
