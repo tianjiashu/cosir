@@ -287,9 +287,7 @@ export function ProviderFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogTitle>{isEdit ? "编辑厂商" : "新增厂商"}</DialogTitle>
-        <DialogDescription>
-          厂商决定模型路由前缀与 API Key 读取方式；保存后可在展开区发现 / 导入模型条目。
-        </DialogDescription>
+        <DialogDescription>保存后即可导入该厂商下的模型。</DialogDescription>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
@@ -300,7 +298,7 @@ export function ProviderFormDialog({
                 <FormItem>
                   <FormLabel>名称</FormLabel>
                   <FormControl>
-                    <Input placeholder="如 DeepSeek 官方" {...field} />
+                    <Input placeholder="DeepSeek" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -337,12 +335,9 @@ export function ProviderFormDialog({
               control={form.control}
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>base_url（可选）</FormLabel>
+                  <FormLabel>API 端点（可选）</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="留空使用 litellm 内置解析，如 https://api.example.com/v1"
-                      {...field}
-                    />
+                    <Input placeholder="https://api.example.com/v1" {...field} />
                   </FormControl>
                   {providerHint && (
                     <p className="text-xs text-muted-foreground">{providerHint}</p>
@@ -357,12 +352,12 @@ export function ProviderFormDialog({
               control={form.control}
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>API Key（可选）</FormLabel>
+                  <FormLabel>API Key</FormLabel>
                   <FormControl>
                     <Input
                       type="password"
                       autoComplete="off"
-                      placeholder="本地 Ollama 可留空；保存后不回显明文"
+                      placeholder="选填"
                       {...field}
                     />
                   </FormControl>
@@ -402,8 +397,8 @@ export function ProviderFormDialog({
                   )}
                   <p className="text-xs text-muted-foreground">
                     {isEdit
-                      ? "编辑时留空表示不修改已保存的 Key；Key 明文保存在后端数据库（本地单机），响应与日志不回传明文。"
-                      : "Key 明文保存在后端数据库（本地单机）；不依赖 Key 的厂商（如本地 Ollama）可留空。"}
+                      ? "编辑时留空表示不修改；仅保存在本地数据库。"
+                      : "仅保存在本地数据库；不依赖 Key 的厂商可留空。"}
                   </p>
                   <FormMessage />
                 </FormItem>
@@ -444,9 +439,7 @@ export function ProviderFormDialog({
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  用已配置参数发起一次最小 chat 请求验证凭据 / 端点可用性（骨架阶段可能返回 501）。
-                </p>
+                <p className="text-xs text-muted-foreground">验证当前配置是否可正常连接。</p>
               </div>
             )}
 

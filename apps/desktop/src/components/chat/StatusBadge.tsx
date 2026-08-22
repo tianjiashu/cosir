@@ -4,12 +4,15 @@
  * 当收到终态事件（run_finished / run_failed / run_cancelled）时，展示任务终态状态
  * （已完成 / 失败 / 已取消），包含状态图标、文字描述、耗时与 token 消耗信息。
  *
- * 差异化文案：run_failed 且 payload.end_reason === "client_disconnected" 表示客户端
- * 连接中断（后端经 finally 兜底标记 turn failed 下发 run_failed 并在 payload 中携带该
- * end_reason），而非 Agent 真实执行失败，组件会给出
- * 「连接已中断，内容可能未完整保存，请检查网络或重新连接后重试」的明确提示，避免用户
- * 将网络/客户端问题误判为执行失败。注意 client_disconnected 不是独立 event_type，
- * 因此 FINAL_STATUS_CONFIG 中无该 key，差异化完全由 payload.end_reason 驱动。
+ * 差异化文案：run_failed 时按 payload.end_reason 区分失败性质（两者都不是独立
+ * event_type，FINAL_STATUS_CONFIG 中无对应 key，差异化完全由 payload.end_reason 驱动）：
+ *   - "client_disconnected"：客户端连接中断（后端经 finally 兜底标记 turn failed 下发
+ *     run_failed 并在 payload 中携带该 end_reason），而非 Agent 真实执行失败，给出
+ *     「连接已中断，内容可能未完整保存，请检查网络或重新连接后重试」的明确提示，避免
+ *     将网络/客户端问题误判为执行失败。
+ *   - "max_steps_reached"：Agent 达到最大步骤数但未产出最终回答（model 节点统一收口），
+ *     给出「已达到最大步骤数，未产出最终回答」的说明，避免用户只看到 max_steps_reached
+ *     枚举码而无法理解停止原因。
  *
  * token 展示：input/output/total 任一有值即渲染 token 行；total 缺失时由前端累加
  * input+output 兜底，避免后端缓存命中场景下整块 token 信息被吞。
@@ -41,6 +44,29 @@ const FINAL_STATUS_CONFIG: Record<string, { label: string; variant: "success" | 
 };
 
 /**
+ * 解析 run_failed 事件的错误展示文本。
+ *
+ * 按 payload.end_reason 区分失败性质给出可读文案（区别于原生 error 枚举码）：
+ *   - "client_disconnected"：客户端连接中断，非 Agent 真实执行失败，给出恢复建议；
+ *   - "max_steps_reached"：达到最大步骤数未产出最终回答，说明停止原因；
+ *   - 其余情况原样返回 payload.error。
+ *
+ * @param payload - run_failed 事件载荷（读取 error 与 end_reason）。
+ * @returns 展示用错误文本；error 缺失时为 undefined（调用方决定是否渲染）。
+ */
+export function resolveRunFailedText(payload: Record<string, unknown>): string | undefined {
+  const error = payload.error as string | undefined;
+  const endReason = payload.end_reason as string | undefined;
+  if (endReason === "client_disconnected") {
+    return "连接已中断，本次对话可能未完整保存。请检查网络或重新连接后重试。";
+  }
+  if (endReason === "max_steps_reached") {
+    return "已达到最大步骤数，未产出最终回答。请精简任务范围或重试。";
+  }
+  return error;
+}
+
+/**
  * 格式化毫秒为可读耗时。
  *
  * @param ms - 毫秒数。
@@ -65,14 +91,8 @@ export const StatusBadge = memo(function StatusBadge({ eventType, payload }: Sta
   if (!config) return null;
 
   const { label, variant, Icon } = config;
-  const error = payload.error as string | undefined;
-  const endReason = payload.end_reason as string | undefined;
-  // 区分「客户端连接断开」与「真实执行失败」：前者给出明确提示与恢复建议，
-  // 避免用户将网络/客户端问题误判为 Agent 执行失败。
-  const isClientDisconnected = endReason === "client_disconnected";
-  const errorText = isClientDisconnected
-    ? "连接已中断，本次对话可能未完整保存。请检查网络或重新连接后重试。"
-    : error;
+  // 差异化失败文案判定收敛到 resolveRunFailedText（可单测的纯函数）。
+  const errorText = resolveRunFailedText(payload);
 
   const durationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : undefined;
   const inputTokens = typeof payload.input_tokens === "number" ? payload.input_tokens : undefined;

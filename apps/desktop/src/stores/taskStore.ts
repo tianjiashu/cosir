@@ -45,6 +45,16 @@ const ACTIVE_TASK_STORAGE_KEY = "coding-agent.activeTaskId";
 const SELECTED_MODEL_STORAGE_KEY = "coding-agent.selectedModelName";
 
 /**
+ * 按任务维度持久化输入草稿的本地存储键。
+ *
+ * 草稿以 ``{ [taskId]: string }`` 的 JSON 形式落盘，用于跨 task 切换/刷新后恢复
+ * 未发送的输入内容（借鉴 deepseek-harness 的 per-session 草稿镜像，见
+ * ``docs/输入组件优化.md`` §4.5/§8.6）。空草稿不占用键（写入空字符串即删除该任务条目），
+ * 避免存储随任务数无限膨胀。
+ */
+const INPUT_DRAFTS_STORAGE_KEY = "coding-agent.inputDrafts";
+
+/**
  * 判断任务 ID 是否为可持久化的真实任务（排除 "temp-" 前缀的临时任务）。
  *
  * @param taskId - 待判断的任务 ID。
@@ -132,6 +142,102 @@ function persistSelectedModelName(modelName: string | null): void {
 }
 
 /**
+ * 读取本地持久化的全部任务输入草稿。
+ *
+ * localStorage 不可用或 JSON 损坏时记录 WARN 日志后返回空映射，不影响主流程。
+ *
+ * @returns 按任务 ID 索引的草稿映射；无有效值时返回空对象。
+ */
+function loadPersistedInputDrafts(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(INPUT_DRAFTS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      // 过滤掉非字符串值，避免脏数据污染草稿。
+      const drafts: Record<string, string> = {};
+      for (const [taskId, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof value === "string" && value.length > 0) {
+          drafts[taskId] = value;
+        }
+      }
+      return drafts;
+    }
+    return {};
+  } catch (err) {
+    logWarn("读取持久化输入草稿失败，降级为空", { module: "taskStore", error: err instanceof Error ? err.message : String(err) });
+    return {};
+  }
+}
+
+/**
+ * 草稿落盘节流间隔（毫秒）。
+ *
+ * 高频输入时每次敲击都全量读写 localStorage 会造成无谓 IO；经 trailing debounce
+ * 合并为「停顿后一次性落盘」。清除类写入（空草稿）不节流——它们低频且语义关键
+ * （发送成功清空/任务删除），延迟落盘会在刷新后复活已发送内容。
+ */
+const INPUT_DRAFT_PERSIST_DEBOUNCE_MS = 300;
+
+/** 待落盘的草稿写入（taskId → 定时器），trailing debounce 用。 */
+const pendingDraftPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * 立即把指定任务草稿写入 localStorage（同步落盘，无节流）。
+ *
+ * @param taskId - 目标任务 ID。
+ * @param draft - 草稿内容；空字符串表示删除该任务条目（保持存储精简）。
+ */
+function writeInputDraftToStorage(taskId: string, draft: string): void {
+  try {
+    const drafts = loadPersistedInputDrafts();
+    if (draft.length > 0) {
+      drafts[taskId] = draft;
+    } else {
+      delete drafts[taskId];
+    }
+    localStorage.setItem(INPUT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+  } catch (err) {
+    logWarn("持久化输入草稿失败", { module: "taskStore", task_id: taskId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * 持久化指定任务的输入草稿到本地存储（唯一出口，含节流）。
+ *
+ * 语义：
+ * - 非空草稿：trailing debounce（300ms）后落盘，合并高频输入。
+ * - 空草稿（清除）：立即落盘并取消该任务待执行的去抖写入，防止清除被后续
+ *   trailing 写入覆盖复活。
+ *
+ * localStorage 不可用时记录 WARN 日志，不抛错、不影响内存状态与交互。这是
+ * 「凡改某任务草稿必同步 localStorage」这一不变量的唯一出口，避免组件层各自
+ * 直写绕过持久化。
+ *
+ * @param taskId - 目标任务 ID。
+ * @param draft - 待持久化的草稿内容；空字符串表示清除该任务草稿。
+ */
+function persistInputDraft(taskId: string, draft: string): void {
+  const existing = pendingDraftPersistTimers.get(taskId);
+  if (existing !== undefined) {
+    clearTimeout(existing);
+    pendingDraftPersistTimers.delete(taskId);
+  }
+  if (draft.length === 0) {
+    // 清除语义关键且低频：立即落盘。
+    writeInputDraftToStorage(taskId, draft);
+    return;
+  }
+  const timer = setTimeout(() => {
+    pendingDraftPersistTimers.delete(taskId);
+    writeInputDraftToStorage(taskId, draft);
+  }, INPUT_DRAFT_PERSIST_DEBOUNCE_MS);
+  pendingDraftPersistTimers.set(taskId, timer);
+}
+
+/**
  * 统一设置活跃任务并同步持久化。
  *
  * 这是「凡改 activeTaskId 必同步 localStorage」这一不变量的唯一出口，避免
@@ -175,6 +281,13 @@ interface TaskState {
   availableModels: ModelEntryRecord[];
   /** 可用模型列表是否已成功加载（避免空数组与未加载态混淆）。 */
   modelsLoaded: boolean;
+  /**
+   * 按任务 ID 索引的输入草稿缓存（跨 task 切换/刷新后恢复未发送内容）。
+   *
+   * 键含临时任务（"temp-" 前缀）；临时任务转正时草稿迁移到真实任务 ID
+   * （见 ``replaceTask``）。空草稿不占用键。
+   */
+  drafts: Record<string, string>;
 }
 
 /** 任务 Store 的动作接口。 */
@@ -214,6 +327,11 @@ interface TaskActions {
    * @returns 匹配的任务记录，未找到返回 undefined。
    */
   getTaskById: (taskId: string) => TaskRecord | undefined;
+  /**
+   * 写入指定任务的输入草稿并同步持久化（单一出口）。
+   * 空草稿自动清除该任务条目；持久化失败仅记录 WARN，不影响内存态。
+   */
+  setInputDraft: (taskId: string, draft: string) => void;
 }
 
 /**
@@ -235,6 +353,8 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   selectedModelName: loadPersistedSelectedModelName(),
   availableModels: [],
   modelsLoaded: false,
+  // 进入应用时恢复全部任务的输入草稿（持久化于 localStorage）；无记录时为空对象。
+  drafts: loadPersistedInputDrafts(),
 
   // --- 动作 ---
 
@@ -320,8 +440,22 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
           ],
         };
       }
+      // 临时任务转正：把 temp 任务的输入草稿迁移到真实任务 ID，避免切走后丢失未发送内容。
+      const drafts = { ...state.drafts };
+      const migrated = drafts[temporaryTaskId];
+      if (migrated !== undefined) {
+        drafts[task.task_id] = migrated;
+        delete drafts[temporaryTaskId];
+        partial.drafts = drafts;
+      }
       return partial;
     });
+    // 持久化草稿迁移（内存态已迁移，落盘同步；持久化失败仅记 WARN 不影响内存）。
+    const migratedDraft = get().drafts[task.task_id];
+    if (migratedDraft !== undefined) {
+      persistInputDraft(task.task_id, migratedDraft);
+      persistInputDraft(temporaryTaskId, "");
+    }
     // 临时任务转正：活跃 ID 从 temp-x 变为真实 ID 时，必须同步持久化，
     // 否则新建任务重启后无法恢复（与 setActiveTask 共用同一不变式出口）。
     // 真实轮次 ID 由调用方（useTask）显式经 setActiveTask 设置，此处传 null。
@@ -339,8 +473,13 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
       for (const [wsId, list] of Object.entries(state.tasksByWorkspaceId)) {
         next[wsId] = list.filter((item) => item.task_id !== taskId);
       }
-      return { tasksById, tasksByWorkspaceId: next };
+      // 任务删除即清理其输入草稿，避免草稿随已删任务永久驻留存储。
+      const drafts = { ...state.drafts };
+      delete drafts[taskId];
+      return { tasksById, tasksByWorkspaceId: next, drafts };
     });
+    // 持久化草稿同步清理（持久化失败仅记 WARN 不影响内存）。
+    persistInputDraft(taskId, "");
     // 删除的是当前活跃任务时同步清除持久化，避免下次启动恢复到一个已删除的任务。
     if (wasActive) {
       applyActiveTask(set, null);
@@ -399,9 +538,15 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
   },
 
   clearTasks: () => {
-    set({ tasksById: {}, tasksByWorkspaceId: {}, loadedWorkspaceIds: new Set(), activeTurnId: null });
+    set({ tasksById: {}, tasksByWorkspaceId: {}, loadedWorkspaceIds: new Set(), activeTurnId: null, drafts: {} });
     // 清空活跃任务须同步清除持久化，避免下次启动恢复到一个已不存在的任务。
     applyActiveTask(set, null);
+    // 清空全部任务即清空所有输入草稿持久化（避免下次启动恢复孤儿草稿）。
+    try {
+      localStorage.removeItem(INPUT_DRAFTS_STORAGE_KEY);
+    } catch (err) {
+      logWarn("清空输入草稿持久化失败", { module: "taskStore", error: err instanceof Error ? err.message : String(err) });
+    }
   },
 
   clearWorkspaceTasks: (workspaceId: string) => {
@@ -438,6 +583,20 @@ export const useTaskStore = create<TaskState & TaskActions>((set, get) => ({
 
   getTaskById: (taskId: string) => {
     return get().tasksById[taskId];
+  },
+
+  setInputDraft: (taskId: string, draft: string) => {
+    // 单一出口：内存态与持久化同步更新；持久化失败仅记 WARN 不影响内存。
+    set((state) => {
+      const drafts = { ...state.drafts };
+      if (draft.length > 0) {
+        drafts[taskId] = draft;
+      } else {
+        delete drafts[taskId];
+      }
+      return { drafts };
+    });
+    persistInputDraft(taskId, draft);
   },
 }));
 

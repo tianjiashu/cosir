@@ -64,6 +64,10 @@ const config: Config = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      boxShadow: {
+        // 输入卡片浮层阴影令牌：映射 --shadow-composer（index.css 唯一定义）。
+        composer: "var(--shadow-composer)",
+      },
     },
   },
   plugins: [require("tailwindcss-animate")],

@@ -55,6 +55,14 @@
     /* 圆角半径：4px，工程工具冷静感（不使用 8px+ 大圆角） */
     --radius: 0.25rem;
 
+    /* 输入卡片（composer）阴影：浮于消息列之上的极轻环境影，层级对齐 popover
+       浮层语义（克制原则下仅柔和一层，不使用深色硬影） */
+    --shadow-composer: 0 1px 2px hsl(222 47% 11% / 0.04), 0 4px 16px hsl(222 47% 11% / 0.06);
+
+    /* 滚动条配色令牌（供 .scrollbar-thin 双路径分流引用，hover 提亮） */
+    --scrollbar-thumb: hsl(var(--muted) / 0.3);
+    --scrollbar-thumb-hover: hsl(var(--muted) / 0.55);
+
     /* 侧边栏专用变量：比主区更低的明度，制造微弱侧栏纵深 */
     --sidebar-bg: 210 36% 96%;
     --sidebar-foreground: 222 47% 11%;
@@ -74,22 +82,38 @@
   }
 }
 
-/* 滚动条样式：窄、低存在感，适合工程工具 */
+/* 滚动条样式：窄、低存在感，适合工程工具。
+ * 双路径分流（借鉴 deepseek-harness scrollbar.css）：Firefox 走标准属性、
+ * WebKit/Blink 走伪元素；配色经 --scrollbar-thumb 令牌间接引用，
+ * hover 提亮在两条路径均生效（修复旧实现 hover 无反馈问题）。 */
 @layer utilities {
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted) / 0.3) transparent;
+  /* Firefox 路径：标准 scrollbar-width/scrollbar-color */
+  @supports not selector(::-webkit-scrollbar) {
+    .scrollbar-thin {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
+    .scrollbar-thin:hover {
+      scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+    }
   }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted) / 0.3);
-    border-radius: 3px;
+
+  /* WebKit/Blink 路径：::-webkit-scrollbar 伪元素 */
+  @supports selector(::-webkit-scrollbar) {
+    .scrollbar-thin::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .scrollbar-thin::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .scrollbar-thin::-webkit-scrollbar-thumb {
+      background-color: var(--scrollbar-thumb);
+      border-radius: 3px;
+    }
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb {
+      background-color: var(--scrollbar-thumb-hover);
+    }
   }
 
   /* 模型思考中指示器的三点跳动动效：等错位移相做出依次弹跳，

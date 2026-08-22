@@ -26,7 +26,7 @@ import { useTaskStore } from "../stores/taskStore";
 import { useTurnStore } from "../stores/turnStore";
 import { useContextUsageStore } from "../stores/contextUsageStore";
 import { SSEConnection, SSEConnectionState, type SSEErrorHandler } from "../services/sse";
-import { logError } from "../lib/logger";
+import { logError, logDebug } from "../lib/logger";
 import { PerfTrace } from "../lib/perf";
 
 /**
@@ -158,6 +158,25 @@ export function useSSE(): UseSSEReturn {
           return;
         }
         pendingEventsRef.current = [];
+        // 诊断日志：每个 flush 批次里收到的模型流式事件数量与累计增量长度，
+        // 用于排查「前端是否收到 delta / delta 是否整块到达」的流式问题。
+        const deltaEvents = batch.filter(
+          (e) => e.event_type === "model_output_delta" || e.event_type === "model_thinking_delta",
+        );
+        if (deltaEvents.length > 0) {
+          const totalLen = deltaEvents.reduce((sum, e) => {
+            const text = (e.payload as { text?: string } | undefined)?.text ?? "";
+            return sum + text.length;
+          }, 0);
+          logDebug("sse_model_deltas_received", {
+            module: "useSSE",
+            batchSize: batch.length,
+            deltaCount: deltaEvents.length,
+            outputCount: deltaEvents.filter((e) => e.event_type === "model_output_delta").length,
+            thinkingCount: deltaEvents.filter((e) => e.event_type === "model_thinking_delta").length,
+            totalDeltaChars: totalLen,
+          });
+        }
         appendEvents(batch);
         for (const event of batch) {
           syncRuntimeStatus(event, updateTask, updateTurn, setStreamingTurn);

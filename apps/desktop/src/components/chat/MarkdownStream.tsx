@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
+import { logDebug } from "@/lib/logger";
 
 /** 流式期 markdown 重解析节流间隔（毫秒）。 */
 const REPARSE_INTERVAL_MS = 120;
@@ -85,6 +86,12 @@ export function MarkdownStream({ content, streaming = false, components, caret, 
       setRenderedContent(content);
       return;
     }
+    // 诊断日志：流式 content 每次变化（每次 delta 累加后）打印当前长度，
+    // 用于确认「父层是否逐 delta 更新 content」以及节流是否生效。
+    logDebug("markdown_stream_content_update", {
+      module: "MarkdownStream",
+      contentLen: content.length,
+    });
     const now = Date.now();
     const elapsed = now - lastReparseAtRef.current;
     if (elapsed >= REPARSE_INTERVAL_MS) {

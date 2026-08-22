@@ -85,7 +85,7 @@ coding-agent/
           observability/  # Langfuse 可观测性唯一收口：langfuse_tracing / langfuse_tool_trace_recorder / langfuse_payload_sanitizer
           runtime/        # runner（AgentRuntime 总控）/ runtime_operations / checkpointer（AsyncSqliteSaver）/ turn_cancellation_registry
           workflows/      # agent_workflow（Protocol）
-            nodes/        # 共享节点原语：model_node / tools_node / observation_node / max_steps_node / model_tool_helper / common
+            nodes/        # 共享节点原语：model_node / tools_node / observation_node / max_steps_node；helper/ 子目录承载节点辅助（approval / chunk_assembler / common / debug_dump / invalid_tool_call / thinking_extractor）
             react/        # StateGraph 实现：state / edges / workflow / runtime_config（支持 approval_resolver 审批中断）
         hook/             # Hook 系统（Claude Code 风格 7 类事件，失败安全 ALLOW）
           hook_base.py / hook_event.py（USER_PROMPT_SUBMIT / PRE_TOOL_USE / POST_TOOL_USE / SESSION_START / SESSION_END / STOP / PRE_COMPACT）

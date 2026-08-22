@@ -304,31 +304,34 @@ describe("S5 InputBar 拦截/放行/并发", () => {
     expect(screen.queryByText(/API Key 未配置/)).toBeNull();
   });
 
-  // 测试目的：guardSend 挂起期间快速两次 Enter → createTurn 被调 2 次。
-  // 可能发现的缺陷：放行路径无防抖，快速双击重复发送 turn。
-  it("快速双击 Enter（guardSend 挂起）→ createTurn 被调 2 次（重复发送缺陷）", async () => {
+  // 测试目的：guardSend 挂起期间快速两次 Enter → 提交互斥锁挡下第二次，createTurn 仅被调 1 次。
+  // 重构后行为（P0 同步提交锁）：beginSubmit 同步锁在第二次 Enter 时返回 false，send 直接 return，
+  // 不再重复调 guardSend / createTurn——修复了原「快速双击重复发送」缺陷。
+  it("快速双击 Enter（guardSend 挂起）→ 提交锁挡下第二次，createTurn 仅被调 1 次", async () => {
     const resolvers: Array<(v: { ok: boolean }) => void> = [];
     guardSendMock.mockImplementation(() => new Promise((res) => resolvers.push(res)));
     const { input } = renderInputBar();
     fireEvent.change(input, { target: { value: "hello" } });
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(guardSendMock).toHaveBeenCalledTimes(2);
+    // 第二次 Enter 被同步锁挡下，guardSend 只被第一次调用触发。
+    expect(guardSendMock).toHaveBeenCalledTimes(1);
     resolvers[0]!({ ok: true });
-    resolvers[1]!({ ok: true });
-    await waitFor(() => expect(taskMocks.createTurn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(taskMocks.createTurn).toHaveBeenCalledTimes(1));
   });
 
-  // 测试目的：拦截路径重复 Enter → createTurn 0 次、onOpenSettings 调用次数=拦截次数。
-  it("拦截路径重复 Enter → createTurn 0 次（无副作用）", async () => {
+  // 测试目的：拦截路径快速重复 Enter → 提交锁挡下第二次，createTurn 0 次、guardSend/onOpenSettings 各 1 次。
+  // 重构后行为（P0 同步提交锁）：两次同步连续 Enter，第二次在 beginSubmit 处被挡（submittingRef 仍置位），
+  // 不再重复触发 guardSend 与 onOpenSettings——拦截路径无副作用且防连点。
+  it("拦截路径重复 Enter → 提交锁挡下第二次，createTurn 0 次（无副作用）", async () => {
     guardSendMock.mockResolvedValue(BLOCK_NOMODELS);
     const { input, onOpenSettings } = renderInputBar();
     fireEvent.change(input, { target: { value: "hello" } });
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(guardSendMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(guardSendMock).toHaveBeenCalledTimes(1));
     expect(taskMocks.createTurn).not.toHaveBeenCalled();
-    expect(onOpenSettings).toHaveBeenCalledTimes(2);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });
 

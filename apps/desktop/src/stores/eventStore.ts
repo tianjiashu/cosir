@@ -18,7 +18,7 @@
 import { create } from "zustand";
 import type { RuntimeEvent } from "@shared/events";
 import { SSEConnectionState } from "../services/sse";
-import { logWarn } from "../lib/logger";
+import { logWarn, logDebug } from "../lib/logger";
 import { PerfTrace } from "../lib/perf";
 
 /**
@@ -169,6 +169,18 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
         if (event.turn_id) {
           eventsByTurnId[event.turn_id] = appendOrderedShard(eventsByTurnId[event.turn_id], event);
         }
+      }
+      const deltaCount = deduped.filter(
+        (e) => e.event_type === "model_output_delta" || e.event_type === "model_thinking_delta",
+      ).length;
+      if (deltaCount > 0) {
+        logDebug("event_store_model_deltas_stored", {
+          module: "eventStore",
+          accepted: deduped.length,
+          deltaCount,
+          turn_id: deduped[0]?.turn_id,
+          task_id: deduped[0]?.task_id,
+        });
       }
       if (deduped.length === 0) {
         return state;
