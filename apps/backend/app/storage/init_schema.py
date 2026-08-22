@@ -27,6 +27,7 @@ from app.config.logging.logger import log
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.log_model import LogEntryModel
+from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.runtime_event_model import RuntimeEventModel
 from app.storage.model.task_model import TaskModel
@@ -35,6 +36,9 @@ from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
 
 APP_MODELS = (
+    # providers / models 是模型配置的事实来源，先于业务表创建；models 表外键依赖 providers。
+    ProviderModel,
+    ModelEntryModel,
     WorkspaceModel,
     TaskModel,
     TurnModel,
@@ -44,10 +48,8 @@ APP_MODELS = (
     DelegationModel,
 )
 
-# 额外的「需要迁移但不属于核心 APP_MODELS 的表」：这些表由各自的 CRUD 负责建表
-# （通过 ``Model.__table__.create(checkfirst=True)``），不纳入 ``APP_MODELS`` 的建表循环，
-# 但仍需在存量库升级时补齐缺失列 / 重命名旧列。当前唯一登记项：providers 表。
-_MIGRATE_ONLY_MODELS = (ProviderModel,)
+# 当前没有「仅迁移不建表」的模型：所有业务表统一由 APP_MODELS 负责创建与演进。
+_MIGRATE_ONLY_MODELS = ()
 LOG_MODELS = (LogEntryModel,)
 LOG_SCHEMA_VERSION = 2
 
@@ -58,8 +60,8 @@ def initialize_app_schema(engine: Engine) -> None:
     流程（单事务，失败整体回滚）：①对 ``APP_MODELS`` 逐个建表（存在则跳过）；
     ②``_ensure_model_columns`` 逐表比对模型与实际列，``ADD COLUMN`` 补齐缺失列
     （保守迁移不删数据列，仅按 ``_COLUMN_RENAME_MAP`` 做历史重命名）；
-    ③``_ensure_model_indexes`` 补建模型声明的缺失索引。``_MIGRATE_ONLY_MODELS``
-    参与列迁移但不参与建表循环（建表由各自 CRUD 负责）。
+    ③``_ensure_model_indexes`` 补建模型声明的缺失索引。当前 ``_MIGRATE_ONLY_MODELS``
+    为空，保留该参数仅作为未来「仅迁移不建表」模型的扩展占位。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎（来自 ``engine_cache.create_sqlite_engine``）。
@@ -77,9 +79,8 @@ def initialize_app_schema(engine: Engine) -> None:
     with engine.begin() as connection:
         for model in APP_MODELS:
             cast(Table, model.__table__).create(bind=connection, checkfirst=True)
-        # 核心表建表后，再对「核心 + 仅迁移」全量做列迁移（含 providers 表的
-        # api_key_env → api_key 重命名）。_MIGRATE_ONLY_MODELS 不在建表循环里，
-        # 建表由各自 CRUD 负责，避免扩大 APP_MODELS 影响范围。
+        # 核心表建表后，对 APP_MODELS 全量做列迁移与重命名（含 providers 表的
+        # api_key_env → api_key 历史漂移）。_MIGRATE_ONLY_MODELS 目前为空。
         _ensure_model_columns(connection, engine, APP_MODELS + _MIGRATE_ONLY_MODELS)
         _ensure_model_indexes(connection)
 
@@ -133,7 +134,7 @@ def _ensure_model_columns(
         connection: 当前处于事务中的 SQLAlchemy 连接。
         engine: 用于按方言编译列类型 DDL 的引擎。
         models: 参与列迁移的 ORM 模型序列，缺省 ``APP_MODELS``；可传
-            ``APP_MODELS + _MIGRATE_ONLY_MODELS`` 覆盖建表循环之外的表。
+            ``APP_MODELS + _MIGRATE_ONLY_MODELS`` 覆盖额外需要列迁移的表。
 
     返回:
         无。

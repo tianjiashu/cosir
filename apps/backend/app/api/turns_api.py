@@ -59,8 +59,10 @@ from app.api.dependencies import (
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.app import app
+from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models.event.runtime_event import RuntimeEvent
+from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_stream_service import TurnStreamService
 
@@ -95,11 +97,31 @@ async def create_turn(
     """
 
     try:
-        turn = turn_service.create_turn(task_id, payload.input_text, agent_id=payload.agent_id)
+        turn = turn_service.create_turn(
+            task_id,
+            payload.input_text,
+            agent_id=payload.agent_id,
+            model_name=payload.model_name,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ModelNotConfiguredError as exc:
+        log.warning(
+            "create_turn model not configured: task=%s model=%s reason=%s",
+            task_id,
+            exc.model_name,
+            exc.reason,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "model_name": exc.model_name,
+                "reason": exc.reason,
+                "guidance": exc.guidance,
+            },
+        ) from exc
     return TurnResponse.from_record(turn)
 
 
@@ -232,26 +254,6 @@ async def cancel_turn(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return TurnResponse.from_record(turn)
 
-
-def _format_sse_event(event: RuntimeEvent) -> str:
-    """将运行时事件序列化为共用 SSE 帧格式。
-
-    参数:
-        event: 要发送给 SSE 客户端的运行时事件。
-
-    返回:
-        包含 event 名称、JSON data 和帧分隔空行的 SSE 文本。
-
-    异常:
-        TypeError: 当事件负载无法 JSON 序列化时抛出。
-
-    副作用:
-        无。
-    """
-
-    return f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
-
-
 async def _sse_frames(events: AsyncIterator[RuntimeEvent]) -> AsyncIterator[str]:
     """把 service 产出的裸运行时事件迭代器逐条格式化为 SSE 帧。
 
@@ -272,4 +274,4 @@ async def _sse_frames(events: AsyncIterator[RuntimeEvent]) -> AsyncIterator[str]
         无。
     """
     async for event in events:
-        yield _format_sse_event(event)
+        yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"

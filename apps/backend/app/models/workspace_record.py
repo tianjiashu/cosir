@@ -7,7 +7,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.utils.datetime_utils import to_text
+from app.storage.model.workspace_model import WorkspaceModel
+from app.utils.datetime_utils import from_text, to_text
 
 
 @dataclass
@@ -43,3 +44,27 @@ class WorkspaceRecord:
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
+
+    @classmethod
+    def from_model(cls, row: WorkspaceModel) -> "WorkspaceRecord":
+        """从 ORM 行构造工作区记录值对象。
+
+        参数:
+            row: ``workspaces`` 表的 SQLAlchemy 行对象。
+
+        返回:
+            对应的 ``WorkspaceRecord``；文本时间戳经 ``from_text`` 还原为 datetime。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        return cls(
+            row.workspace_id,
+            row.name,
+            row.root_path,
+            from_text(row.created_at),
+            from_text(row.updated_at),
+        )

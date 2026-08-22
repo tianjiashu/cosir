@@ -5,7 +5,7 @@ from typing import ClassVar
 from app.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.tools.tool_execute.tool_error import tool_error
 from app.tools.tool_handler.tool_base import HandlerBase
-from app.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.tools.tool_models.delegate_task_args import PROMPT_MAX, TITLE_MAX, DelegateTaskArgs
 
 _DEFAULT_DESCRIPTION = (
     "Delegate a focused subtask to one child agent profile and return the child result. "
@@ -16,20 +16,19 @@ _DEFAULT_DESCRIPTION = (
     "and analysis, or two unrelated changes), emit multiple delegate_task calls in the "
     "same reply so the child agents run concurrently; each call targets one child profile "
     "with its own structured contract. "
-    "CRITICAL BUDGET LIMITS: rules and references lists MUST NOT exceed 10 items each; "
-    "if you have more, merge or prioritize to the most important ones. Exceeding this "
-    "limit causes an immediate validation failure — the call will be rejected."
+    f"CRITICAL BUDGET LIMIT: prompt MUST NOT exceed {PROMPT_MAX} chars; if your task is "
+    "larger, trim or split it. Exceeding this limit causes an immediate validation "
+    "failure — the call will be rejected."
 )
 
 _STRUCTURED_SCHEMA_HINT = (
-    "Provide the task as a structured contract: objective (the single goal), rules "
-    "(hard constraints, MAX 10 items), references (relevant paths or documents, "
-    "MAX 10 items — pick the most relevant; exceeding 10 causes rejection), "
-    "expected_output (what the child returns), an optional background (extra context, "
-    "omitted if empty), and a required title. "
-    "Budgets: objective, expected_output, and background each <= 2000 chars; "
-    "title <= 20 chars; each rules/references item <= 500 chars, and each list "
-    "total <= 2000 chars. "
+    "Provide the task as a single free-form prompt structured with markdown sections: "
+    f"# Title (short, <= {TITLE_MAX} chars), ## Objective (the single goal the child must "
+    "achieve), ## Rules (hard constraints, one per line with a leading dash), "
+    "## References (relevant paths or documents, one per line with a leading dash), "
+    "## Expected Output (what the child returns), and an optional ## Background "
+    "(extra context, omit if empty). "
+    f"Budgets: prompt total <= {PROMPT_MAX} chars; title <= {TITLE_MAX} chars. "
     "To run several child agents in parallel, emit several delegate_task calls in one "
     "reply, each with a distinct child_agent_id and a self-contained contract."
 )
@@ -67,24 +66,16 @@ class DelegateTaskTool(HandlerBase):
     def execute(
             self,
             child_agent_id: str,
-            objective: str,
-            rules: list[str],
-            references: list[str],
-            expected_output: str,
             title: str,
-            background: str = "",
+            prompt: str,
             execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """通过执行上下文中的运行时执行器委派结构化任务。
+        """通过执行上下文中的运行时执行器委派自由文本任务。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
-            objective: 子 Agent 需要达成的单一任务目标。
-            rules: 子 Agent 必须遵守的约束规则列表。
-            references: 子 Agent 应参考的背景/路径条目列表。
-            expected_output: 子 Agent 完成时应返回的期望产出说明。
             title: 任务标题，必填，用于展示与可追溯。
-            background: 可选补充背景；非空时作为子 Agent 输入的 Background section。
+            prompt: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
             execution_context: 包含运行时依赖的父工具执行边界。
 
         返回:
@@ -119,11 +110,7 @@ class DelegateTaskTool(HandlerBase):
         return executor.execute(DelegateTaskArgs(
             child_agent_id=child_agent_id,
             title=title,
-            objective=objective,
-            rules=rules,
-            references=references,
-            expected_output=expected_output,
-            background=background,
+            prompt=prompt,
         ), execution_context)
 
     def to_definition(self) -> ToolDefinition:

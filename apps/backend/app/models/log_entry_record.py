@@ -4,8 +4,11 @@
 不负责数据库操作（由 ``storage/crud/log_crud`` 负责）。
 """
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
+
+from app.storage.model.log_model import LogEntryModel
 
 
 @dataclass(frozen=True)
@@ -73,3 +76,38 @@ class LogEntryRecord:
             "error": self.error,
             "truncated": self.truncated,
         }
+
+    @classmethod
+    def from_model(cls, row: LogEntryModel) -> "LogEntryRecord":
+        """从 ORM 行构造日志记录值对象。
+
+        ``data_json`` 反序列化后若不是 dict 则回退为空 dict；``error_json`` 为空时
+        error 记为 None，非 dict 时同样回退为 None；可空文本列（trace_id/caller）
+        为 None 时回退为空字符串。
+
+        参数:
+            row: 查询得到的 ``LogEntryModel`` 行。
+
+        返回:
+            对应的 ``LogEntryRecord``。
+
+        异常:
+            json.JSONDecodeError: 如果 data_json 或 error_json 不是合法 JSON。
+
+        副作用:
+            无。
+        """
+        data = json.loads(row.data_json or "{}")
+        error = json.loads(row.error_json) if row.error_json else None
+        return cls(
+            ts=row.ts,
+            level=row.level,
+            logger=row.logger,
+            trace_id=row.trace_id or "",
+            caller=row.caller or "",
+            event=row.event,
+            msg=row.msg,
+            data=data if isinstance(data, dict) else {},
+            error=error if isinstance(error, dict) else None,
+            truncated=bool(row.truncated),
+        )

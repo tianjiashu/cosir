@@ -46,3 +46,11 @@ class RunFailedPayload(RuntimeEventPayload):
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
     reasoning_tokens: int = 0
+    # 错误细分码（设计文档阶段 1.5 引入，与 ``ErrorKind`` 枚举对齐）。
+    # ``None`` 表示未细分（普通 RUN_FAILED）；``"MODEL_NOT_CONFIGURED"`` 表示
+    # 模型未配置（``agent.model_name`` 为 None 或解析失败），前端据此显示
+    # 引导文案与「前往配置」入口。本期仅此一项细分，其余细分见阶段 4。
+    error_code: str | None = None
+    # 面向用户的修复指引文案（与 ``error_code`` 配对，由异常 mapper 注入）。
+    # 为 ``None`` 表示无指引文案（普通 RUN_FAILED 路径）。
+    guidance: str | None = None

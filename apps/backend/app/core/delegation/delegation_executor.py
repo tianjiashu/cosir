@@ -12,9 +12,9 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.models import TaskRecord, TurnRecord
+from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_context import DelegationPolicyContext
 from app.service.delegation.delegation_policy import DelegationPolicy
-from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_delegation_service, get_turn_service
 from app.service.llm.model_resolver_service import ModelNotConfiguredError
@@ -70,8 +70,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         """执行一次委派请求并返回父工具 observation。
 
         参数:
-            args: 已校验的 delegate_task 工具参数（结构化 objective / rules / references /
-                expected_output）。
+            args: 已校验的 delegate_task 工具参数（child_agent_id / title / prompt 自由文本契约）。
             execution_context: 父工具执行上下文；用于确认 parent turn 边界。
 
         返回:
@@ -166,6 +165,8 @@ class DelegationExecutor(DelegateTaskExecutor):
                 )
             except IntegrityError:
                 # delegation_id 唯一索引冲突：同一 delegation 已被并发重入创建过子 task。
+                # acquire 已插入 pending delegation 并占用 1 个并发额度，必须在此显式终态化，
+                # 否则该 pending 记录永久计入 ACTIVE_DELEGATION_STATUSES，导致父 turn 并发额度泄漏。
                 log.error(
                     "delegation_child_task_conflict",
                     extra={
@@ -175,6 +176,12 @@ class DelegationExecutor(DelegateTaskExecutor):
                             "parent_turn_id": self._parent_turn.turn_id,
                         },
                     },
+                )
+                self._fail_delegation(
+                    delegation_id,
+                    delegation_service,
+                    runtime_event_loop,
+                    "child task already exists (concurrent re-entrancy)",
                 )
                 return tool_error(
                     "delegate_task",
@@ -230,12 +237,12 @@ class DelegationExecutor(DelegateTaskExecutor):
                         },
                     },
                 )
-                if delegation_id:
-                    delegation_service.mark_failed(
-                        delegation_id,
-                        f"model not configured: {exc.model_name} ({exc.reason})",
-                        runtime_event_loop=runtime_event_loop,
-                    )
+                self._fail_delegation(
+                    delegation_id,
+                    delegation_service,
+                    runtime_event_loop,
+                    f"model not configured: {exc.model_name} ({exc.reason})",
+                )
                 return self._child_error(
                     "failed",
                     f"child agent '{args.child_agent_id}' cannot run: model "
@@ -276,12 +283,12 @@ class DelegationExecutor(DelegateTaskExecutor):
                     },
                 },
             )
-            if delegation_id:
-                delegation_service.mark_failed(
-                    delegation_id,
-                    str(exc),
-                    runtime_event_loop=runtime_event_loop,
-                )
+            self._fail_delegation(
+                delegation_id,
+                delegation_service,
+                runtime_event_loop,
+                str(exc),
+            )
             return self._child_error("failed", str(exc))
 
         return self._finalize_result(
@@ -293,17 +300,17 @@ class DelegationExecutor(DelegateTaskExecutor):
         )
 
     def _build_agent_input_text(self, args: DelegateTaskArgs) -> str:
-        """把结构化参数拼装为面向 child 的英文任务文本。
+        """把自由文本 prompt 组装为面向 child 的英文任务文本。
 
-        拼装格式使用英文 section 标签（Objective / Rules / References / Background /
-        Expected Output），完整保留父 Agent 传入的原文内容。空 rules / references /
-        background 时省略对应 section，不输出空标题。
+        任务契约结构（Objective / Rules / References / Background / Expected Output）
+        已由父 Agent 在 ``prompt`` 内以 markdown section 写好，此处原样透传，仅补上
+        标题作为一级标题，保证 child turn 输入可读且可直接追溯。
 
         参数:
-            args: 已校验的 delegate_task 结构化参数。
+            args: 已校验的 delegate_task 自由文本参数。
 
         返回:
-            可直接作为 child turn input_text 的结构化任务文本。
+            可直接作为 child turn input_text 的任务文本。
 
         异常:
             无。
@@ -312,18 +319,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             无。
         """
 
-        title = args.title
-        sections = [f"# {title}", "", "## Objective", args.objective]
-        if args.rules:
-            rules_block = "\n".join(f"- {rule}" for rule in args.rules)
-            sections.extend(["", "## Rules", rules_block])
-        if args.references:
-            references_block = "\n".join(f"- {ref}" for ref in args.references)
-            sections.extend(["", "## References", references_block])
-        if args.background:
-            sections.extend(["", "## Background", args.background])
-        sections.extend(["", "## Expected Output", args.expected_output])
-        return "\n".join(sections)
+        return f"# {args.title}\n\n{args.prompt}"
 
     def _delegation_type_from_child_agent_id(self, child_agent_id: str) -> str:
         """从 child Agent 标识派生稳定的委派类型标签。
@@ -421,6 +417,56 @@ class DelegationExecutor(DelegateTaskExecutor):
             reason=reason,
             permission="delegate_task",
         )
+
+    def _fail_delegation(
+        self,
+        delegation_id: str | None,
+        delegation_service: DelegationService,
+        runtime_event_loop: asyncio.AbstractEventLoop | None,
+        error: str,
+    ) -> None:
+        """把已 acquire 的 delegation 确定性终态化为 failed，释放并发额度。
+
+        并发额度由 storage 层 ``try_create_pending`` 插入的 pending 记录承载：只要该记录
+        仍处于 active（pending/running）状态，就会占用父 turn 的并发槽。因此所有在 acquire
+        成功后、未能通过 ``_finalize_result`` 正常终态化的提前退出路径（并发重入冲突、
+        模型未配置、未预期异常）都必须调用本方法，把 delegation 推进到终态，避免额度泄漏。
+
+        参数:
+            delegation_id: 已 acquire 的 delegation 标识；为 None 时（acquire 失败）直接跳过。
+            delegation_service: 本次执行已解析出的委派生命周期 service。
+            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
+            error: 失败原因（英文，面向日志与模型可读）。
+
+        返回:
+            无。
+
+        异常:
+            无；``mark_failed`` 自身异常被吞掉并记 log.error，避免二次异常掩盖根因。
+
+        副作用:
+            将 delegation 置 failed 并发出对应 runtime event；写入失败日志。
+        """
+
+        if not delegation_id:
+            return
+        try:
+            delegation_service.mark_failed(
+                delegation_id,
+                error,
+                runtime_event_loop=runtime_event_loop,
+            )
+        except Exception:
+            log.exception(
+                "delegation_fail_finalize_error",
+                extra={
+                    "msg": "委派终态化（mark_failed）失败，并发额度可能无法释放",
+                    "data": {
+                        "delegation_id": delegation_id,
+                        "error": error,
+                    },
+                },
+            )
 
     def _finalize_result(
         self,

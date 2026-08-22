@@ -2,8 +2,8 @@
 
 把一次 turn 内文件工具（write_file / patch / delete / move）成功执行产生的
 ``display_data["changes"]``（采集层事实快照）转换为「反向 V4A 操作」列表，落库后
-供 task 级变更集（``change_set_service``）用 ``apply_all_with_diff`` 逆向应用，将文件
-还原到该变更执行前的状态。
+供 task 级变更集（``service.task.change_set``）用 ``apply_all_with_diff`` 逆向应用，
+将文件还原到该变更执行前的状态。
 
 设计边界：
 - 只做「采集快照 → 反向 PatchOperation」的纯转换，不读写文件、不关心工具权限。
@@ -17,6 +17,7 @@ from app.tools.tool_handler.patch.patch_parser import (
     HunkLine,
     OperationType,
     PatchOperation,
+    hunk_content,
 )
 
 
@@ -129,7 +130,9 @@ def reverse_v4a_operation(forward: PatchOperation) -> PatchOperation:
         # 优先用 forward.content（build_forward_operations 已带入完整 before）；Hunk 仅作为
         # 兼容/回显冗余。content 缺失时回退到从 hunks 拼接（不保留尾换行，仅防御）。
         content = (
-            forward.content if forward.content is not None else _hunk_to_content(forward.hunks)
+            forward.content
+            if forward.content is not None
+            else hunk_content(forward.hunks, "+")
         )
         return PatchOperation(
             operation=OperationType.ADD,
@@ -149,7 +152,7 @@ def reverse_v4a_operation(forward: PatchOperation) -> PatchOperation:
     before = (
         forward.reverse_content
         if forward.reverse_content is not None
-        else _hunk_to_content(forward.hunks)
+        else hunk_content(forward.hunks, "+")
     )
     return PatchOperation(
         operation=OperationType.UPDATE,
@@ -178,23 +181,6 @@ def _content_to_hunk(content: str, *, prefix: str) -> Hunk:
         lines = []
     hunk_lines = [HunkLine(prefix=prefix, content=line.rstrip("\n")) for line in lines]
     return Hunk(lines=hunk_lines)
-
-
-def _hunk_to_content(hunks: list[Hunk]) -> str:
-    """从 Hunk 列表提取带 '+' 前缀的行内容拼接为文本。
-
-    参数:
-        hunks: Hunk 列表（通常来自 DELETE 反生的 ADD，仅含 '+' 行）。
-
-    返回:
-        拼接后的文本（不含行尾换行符，由 atomic_write_text 自行处理）。
-    """
-    parts: list[str] = []
-    for hunk in hunks:
-        for line in hunk.lines:
-            if line.prefix == "+":
-                parts.append(line.content)
-    return "\n".join(parts)
 
 
 def _before_after_to_hunk(before: str, after: str) -> Hunk:

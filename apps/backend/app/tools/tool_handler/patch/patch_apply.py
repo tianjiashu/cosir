@@ -21,6 +21,7 @@ from app.tools.tool_handler.patch.patch_parser import (
     Hunk,
     OperationType,
     PatchOperation,
+    hunk_content,
 )
 from app.tools.tool_handler.security.path_resolver import PathResolver
 
@@ -291,12 +292,7 @@ def _apply_operation(operation: PatchOperation, resolver: PathResolver) -> FileD
         if operation.content is not None:
             content = operation.content
         else:
-            content = "\n".join(
-                line.content
-                for hunk in operation.hunks
-                for line in hunk.lines
-                if line.prefix == "+"
-            )
+            content = hunk_content(operation.hunks, "+")
         atomic_write_text(
             Path(resolved),
             content,

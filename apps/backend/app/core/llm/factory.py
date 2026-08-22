@@ -225,6 +225,11 @@ def build_chat_model(
     # api_key 为 None 时 litellm 按前缀自动解析环境变量，请求期失败由 litellm 抛错。
     # drop_params/http_client 是 ChatLiteLLM 透传 litellm 的合法运行
     # 期参数，但其类型桩未声明（langchain_litellm 0.7.0），故忽略 call-arg 检查。
+    # streaming=True 是「真正逐 token 流式」的硬开关：LangChain 的 astream 在
+    # streaming=False 时会退化成 ainvoke + 单次 yield，导致每个模型 step 只产出 1 个
+    # 整块 chunk，前端表现为「整段一次性出现、无流式感」。本工厂产出的模型由
+    # model_node 统一经 astream 消费（见 core/workflows/nodes/model_node.py），
+    # 故默认开启流式；非流式场景（如某些校验调用）仍可在调用方按需覆盖。
     return ChatLiteLLM(
         model=model_name,
         api_key=api_key,
@@ -237,6 +242,7 @@ def build_chat_model(
         max_retries=effective_max_retries,
         drop_params=effective_drop_params,
         http_client=http_client,
+        streaming=True,
     )  # type: ignore[call-arg]
 
 

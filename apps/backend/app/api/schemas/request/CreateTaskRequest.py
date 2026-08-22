@@ -7,6 +7,9 @@ class CreateTaskRequest(BaseModel):
     参数:
         text: 非空的纯文本任务输入。
         workspace_id: 工作区标识。
+        model_name: 可选，本任务首个 turn 请求的模型名（设计 §8.3，D1 配套）；
+            None 表示 Auto（跟随 Agent 默认模型）。该值经
+            ``task_service.create_task_with_initial_turn`` 透传至首 turn 落库。
 
     返回:
         Pydantic 请求模型。
@@ -21,6 +24,7 @@ class CreateTaskRequest(BaseModel):
     text: str
     agent_id: str
     workspace_id: str
+    model_name: str | None = None
 
     @field_validator("text")
     @classmethod

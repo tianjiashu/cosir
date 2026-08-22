@@ -7,7 +7,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.utils.datetime_utils import to_text
+from app.storage.model.task_model import TaskModel
+from app.utils.datetime_utils import from_text, to_text
 
 
 @dataclass
@@ -80,3 +81,34 @@ class TaskRecord:
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
+
+    @classmethod
+    def from_model(cls, row: TaskModel) -> "TaskRecord":
+        """从 ORM 行构造任务记录值对象。
+
+        参数:
+            row: ``tasks`` 表的 SQLAlchemy 行对象。
+
+        返回:
+            对应的 ``TaskRecord``；文本时间戳经 ``from_text`` 还原为 datetime。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+        return cls(
+            task_id=row.task_id,
+            workspace_id=row.workspace_id,
+            agent_id=row.agent_id,
+            title=row.title,
+            status=row.status,
+            created_at=from_text(row.created_at),
+            updated_at=from_text(row.updated_at),
+            task_type=row.task_type,
+            parent_task_id=row.parent_task_id,
+            parent_turn_id=row.parent_turn_id,
+            delegation_id=row.delegation_id,
+            context_usage_used=row.context_usage_used,
+        )

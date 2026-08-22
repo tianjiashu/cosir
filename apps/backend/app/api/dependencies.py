@@ -18,7 +18,14 @@ from app.core.runtime.runner import AgentRuntime
 from app.service import depends as service_depends
 from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
+from app.service.llm.model_resolver_service import ModelResolverService
 from app.service.log_query_service import LogQueryService
+from app.service.provider.model_entry_service import ModelEntryService
+from app.service.provider.provider_connection_test_service import (
+    ProviderConnectionTestService,
+)
+from app.service.provider.provider_discover_service import ProviderDiscoverService
+from app.service.provider.provider_service import ProviderService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_stream_service import TurnStreamService
@@ -32,6 +39,11 @@ from app.service.workspace_event.workspace_event_service import WorkspaceEventSe
 __all__ = [
     "build_agent_registry",
     "get_agent_registry",
+    "get_model_entry_service",
+    "get_model_resolver_service",
+    "get_provider_connection_test_service",
+    "get_provider_discover_service",
+    "get_provider_service",
     "get_tool_system",
     "set_agent_registry",
     "set_tool_system",
@@ -257,6 +269,101 @@ def get_runtime_event_service() -> RuntimeEventService:
     """
 
     return _build_services()["runtime_event_service"]
+
+
+def get_provider_service() -> ProviderService:
+    """返回进程级厂商 service 单例（薄壳转发到 ``app.service.depends``）。
+
+    参数:
+        无。
+
+    返回:
+        ProviderService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return service_depends.get_provider_service()
+
+
+def get_provider_discover_service() -> ProviderDiscoverService:
+    """返回进程级厂商发现 service 单例（薄壳转发到 ``app.service.depends``）。
+
+    参数:
+        无。
+
+    返回:
+        ProviderDiscoverService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return service_depends.get_provider_discover_service()
+
+
+def get_model_entry_service() -> ModelEntryService:
+    """返回进程级模型条目 service 单例（薄壳转发到 ``app.service.depends``）。
+
+    参数:
+        无。
+
+    返回:
+        ModelEntryService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return service_depends.get_model_entry_service()
+
+
+def get_model_resolver_service() -> ModelResolverService:
+    """返回进程级模型解析 service 单例（薄壳转发到 ``app.service.depends``）。
+
+    参数:
+        无。
+
+    返回:
+        ModelResolverService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return service_depends.get_model_resolver_service()
+
+
+def get_provider_connection_test_service() -> ProviderConnectionTestService:
+    """返回进程级厂商连通性测试 service 单例（薄壳转发到 ``app.service.depends``）。
+
+    参数:
+        无。
+
+    返回:
+        ProviderConnectionTestService。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时构建并缓存 service。
+    """
+
+    return service_depends.get_provider_connection_test_service()
 
 
 def set_runtime(runtime: "AgentRuntime") -> None:

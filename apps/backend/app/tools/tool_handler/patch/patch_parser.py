@@ -52,6 +52,30 @@ class PatchOperation:
     reverse_content: str | None = None  # 正向 UPDATE 携带的 before 原文，仅供 reverse 读取
 
 
+def hunk_content(hunks: list[Hunk], prefix: str) -> str:
+    """从 Hunk 列表提取指定前缀行的内容拼接为文本。
+
+    用于从采集/反向操作的 hunks 恢复目标全文（'*' 新增、'-' 删除行），
+    ``v4a_reverse`` 与变更集（change_set）共用，避免重复实现。
+
+    参数:
+        hunks: Hunk 列表。
+        prefix: 要提取的行前缀（``+`` 或 ``-``）。
+
+    返回:
+        按顺序拼接、以换行连接的行内容文本；无匹配行时返回空串。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+    return "\n".join(
+        line.content for hunk in hunks for line in hunk.lines if line.prefix == prefix
+    )
+
+
 def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | None]:
     """解析 V4A 格式 patch。
 

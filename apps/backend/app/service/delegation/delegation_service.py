@@ -13,7 +13,7 @@ from app.models.payload.delegation_failed_payload import DelegationFailedPayload
 from app.models.payload.delegation_finished_payload import DelegationFinishedPayload
 from app.models.payload.delegation_started_payload import DelegationStartedPayload
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
-from app.service.delegation.delegation_acquire_result import (
+from app.models.result.delegation_acquire_result import (
     REASON_CONCURRENCY_EXCEEDED,
     DelegationAcquireResult,
 )
@@ -47,61 +47,6 @@ class DelegationService:
 
         self._delegation_crud = delegation_crud
         self._runtime_event_service = runtime_event_service
-
-    def create_pending(
-        self,
-        task_id: str,
-        parent_turn_id: str,
-        parent_agent_id: str,
-        child_agent_id: str,
-        delegation_type: str,
-        prompt: str,
-        effective_tools: tuple[str, ...],
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
-    ) -> str:
-        """纯创建 pending delegation 并发出 delegation_started 父事件（过渡薄封装，已废弃）。
-
-        参数:
-            task_id: 所属任务标识。
-            parent_turn_id: 发起委派的父 turn 标识。
-            parent_agent_id: 发起委派的父 Agent 标识。
-            child_agent_id: 目标 child Agent 标识。
-            delegation_type: 委派类型标签（由 child profile 的 delegation_type 派生）。
-            prompt: 传给 child Agent 的任务文本；由 executor 用结构化字段拼装而成。
-            effective_tools: 策略收敛后的 child 工具名称。
-            runtime_event_loop: 可选的事件循环；传入时在该循环线程安全地发布事件。
-
-        返回:
-            新建 delegation 的标识。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果 delegation 持久化失败。
-
-        副作用:
-            写入 delegations 表；尽力持久化并发布 delegation_started 事件。
-            本方法不承载并发额度校验，仅供测试、迁移与旧调用点过渡使用；新代码应
-            一律改用 ``try_create_pending``。当所有旧调用点完成迁移后将删除本方法。
-        """
-
-        log.warning(
-            "delegation_service.create_pending 已废弃，仅供过渡使用；"
-            "新代码应使用 try_create_pending（parent_turn_id=%s）",
-            parent_turn_id,
-        )
-        delegation_id = str(uuid4())
-        record = self._build_pending_record(
-            delegation_id=delegation_id,
-            task_id=task_id,
-            parent_turn_id=parent_turn_id,
-            parent_agent_id=parent_agent_id,
-            child_agent_id=child_agent_id,
-            delegation_type=delegation_type,
-            prompt=prompt,
-            effective_tools=effective_tools,
-        )
-        self._delegation_crud.create(record)
-        self._emit_started(record, runtime_event_loop=runtime_event_loop)
-        return delegation_id
 
     def try_create_pending(
         self,

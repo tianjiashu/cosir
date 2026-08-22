@@ -43,6 +43,7 @@ from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models.enums.event_type import EventType
 from app.models.event.workspace_event import WorkspaceEvent
+from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.service.task.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
@@ -51,13 +52,21 @@ from app.service.workspace_event.workspace_event_service import WorkspaceEventSe
 
 @app.get("/health")
 async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> HealthResponse:
-    """返回后端健康状态与当前模型配置摘要。
+    """后端存活探针（liveness check）。
+
+    当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。
+    ``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。
+
+    真实探针（TODO，尚未实现）：聚合 storage 连通性、模型配置中心
+    （默认 Agent 的默认模型是否可解析 + Key 是否就位）、可选 CodeGraph
+    kernel 可达性，产出不含 secret 明文的健康摘要。届时将改为注入
+    ``HealthProbeService`` 并移除无用的 ``runtime`` 参数。
 
     参数:
-        runtime: 通过依赖注入的运行时单例。
+        runtime: 通过依赖注入的运行时单例；当前占位实现未使用。
 
     返回:
-        不含 secret 原文的 ``HealthResponse``。
+        表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。
 
     异常:
         无。
@@ -66,7 +75,7 @@ async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> HealthResp
         无。
     """
 
-    return HealthResponse(**runtime.backend_health())
+    return HealthResponse(status="health")
 
 
 @app.get("/workspaces")
@@ -144,7 +153,9 @@ async def delete_workspace(
     """
 
     try:
-        workspace_service.delete_workspace(workspace_id)
+        # 级联删除是同步 DB 操作（单 BEGIN IMMEDIATE 写锁事务），经 asyncio.to_thread
+        # 移出 event loop，避免冻结其它 task 的 turn 调度。
+        await asyncio.to_thread(workspace_service.delete_workspace, workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     return DeleteWorkspaceResponse(workspace_id=workspace_id, deleted=True)
@@ -212,6 +223,7 @@ async def create_workspace_task(
             input_text=payload.text,
             workspace_id=payload.workspace_id,
             agent_id=payload.agent_id,
+            model_name=payload.model_name,
         )
     except IntegrityError as exc:
         log.error(
@@ -227,6 +239,22 @@ async def create_workspace_task(
             exc,
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ModelNotConfiguredError as exc:
+        log.warning(
+            "create_workspace_task model not configured: workspace=%s agent=%s model=%s reason=%s",
+            payload.workspace_id,
+            payload.agent_id,
+            exc.model_name,
+            exc.reason,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "model_name": exc.model_name,
+                "reason": exc.reason,
+                "guidance": exc.guidance,
+            },
+        ) from exc
     return TaskResponse.from_record(task)
 
 

@@ -15,6 +15,8 @@ class TurnResponse(BaseModel):
         end_reason: 终态原因，可能为 None。
         response_text: Agent 回复文本，可能为 None。
         agent_id: 驱动该轮次的 agent 标识，可能为 None。
+        model_name: 该轮实际所用模型名（解析后落库，D1）；历史 turn 或运行期尚未
+            回写的轮次为 None（不表示 Auto，仅表示未落库）。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 
@@ -35,6 +37,7 @@ class TurnResponse(BaseModel):
     end_reason: str | None = None
     response_text: str | None = None
     agent_id: str | None = None
+    model_name: str | None = None
     created_at: str
     updated_at: str
 
@@ -67,6 +70,7 @@ class TurnResponse(BaseModel):
             end_reason=record.end_reason,
             response_text=record.response_text,
             agent_id=record.agent_id,
+            model_name=record.model_name,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),
         )

@@ -150,24 +150,26 @@ class FileSnapshotHook(HookBase):
         forward_ops = build_forward_operations(changes)
         diff_stats: list[tuple[int, int]] = _change_diff_stats(changes)
         crud = FileSnapshotCrud()
-        next_seq = crud.next_seq(task_id)
-        for offset, forward in enumerate(forward_ops):
-            reverse_op = reverse_v4a_operation(forward)
-            additions, deletions = diff_stats[offset] if offset < len(diff_stats) else (0, 0)
-            crud.save(
+        # seq 由 save_batch_with_sequence 在进程级锁内原子分配（同一次变更的所有
+        # 反向操作占用连续 seq 区间），避免同一 task 下并行工具调用并发快照采集
+        # 读到相同 MAX(seq) 而产生重复 seq（此前 next_seq+逐条 save 存在该竞态）。
+        crud.save_batch_with_sequence(
+            task_id,
+            [
                 FileSnapshotRecord(
                     task_id=task_id,
                     turn_id=turn_id,
-                    seq=next_seq + offset,
                     tool_name=tool_name,
                     tool_call_id=observation.tool_call_id,
                     path=forward.file_path,
                     action=forward.operation.value,
-                    op_json=_reverse_op_to_json(reverse_op),
-                    additions=additions,
-                    deletions=deletions,
+                    op_json=_reverse_op_to_json(reverse_v4a_operation(forward)),
+                    additions=diff_stats[offset][0] if offset < len(diff_stats) else 0,
+                    deletions=diff_stats[offset][1] if offset < len(diff_stats) else 0,
                 )
-            )
+                for offset, forward in enumerate(forward_ops)
+            ],
+        )
 
 
 def _change_diff_stats(changes: list[dict]) -> list[tuple[int, int]]:
@@ -216,7 +218,7 @@ def _reverse_op_to_json(reverse_op: "PatchOperation") -> str:
     展开为 ``{"lines": [{"prefix", "content"}], "context_hint": null}``，确保
     ``json.dumps`` 可直接序列化。回退侧不能 ``PatchOperation(**data)`` 直接重建
     （``operation`` 为字符串、``hunks`` 内 ``HunkLine`` 为 dict，直接构造的对象
-    不可用），须按 ``change_set_service._snapshots_to_operations`` 的方式手动重建：
+    不可用），须按 ``service.task.change_set.snapshot_patch`` 的方式手动重建：
     ``OperationType(value)`` 转枚举、逐层构造 ``Hunk``/``HunkLine`` 后再使用。
 
     参数:

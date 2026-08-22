@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel
 
-from app.service.task.change_set_service import ChangeSet
+from app.models.result.change_set import ChangeSet
 
 
 class ChangeCheckpointResponse(BaseModel):

@@ -7,6 +7,8 @@
 运行时执行 / 生命周期职责，仍依赖 ``AgentRuntime``。
 """
 
+import asyncio
+
 from fastapi import Depends, HTTPException
 
 from app.api.dependencies import (
@@ -22,6 +24,7 @@ from app.api.schemas import (
 )
 from app.app import app
 from app.config.configuration import get_agent_registry
+from app.config.logging.logger import log
 from app.core.llm.context_window_resolver import resolve_context_window
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
@@ -32,6 +35,7 @@ from app.service.task.turn_service import TurnService
 async def get_task(
     task_id: str,
     task_service: TaskService = Depends(get_task_service),
+    turn_service: TurnService = Depends(get_turn_service),
 ) -> TaskResponse:
     """返回任务状态（含生命周期 status、上下文窗口占用与派生 execution_status）。
 
@@ -55,13 +59,22 @@ async def get_task(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
 
+    # context_window_total 任务级口径（§6.4）：优先按该 task 最近一次 turn 的
+    # model_name 计算；无 turn / 无 model_name 时回退 Agent 默认模型名计算。
+    # 该值仅用于前端上下文窗口上限展示，解析失败不阻断任务返回。
     context_window_total = None
     try:
-        profile = get_agent_registry().resolve(record.agent_id)
-        if profile is not None:
-            context_window_total = resolve_context_window(profile.model_name)
-    except Exception:
-        # agent 目录未就绪或 model_name 无法解析时，仅缺失 total 不阻断任务返回。
+        target_model = _latest_turn_model_name(task_id, turn_service)
+        if target_model is not None:
+            context_window_total = resolve_context_window(target_model)
+    except Exception as exc:
+        log.warning(
+            "task_context_window_resolve_failed",
+            extra={
+                "msg": f"按最近 turn model_name 计算 context_window_total 失败，回退 None：{exc}",
+                "data": {"task_id": task_id},
+            },
+        )
         context_window_total = None
 
     return TaskResponse.from_record(record, context_window_total=context_window_total)
@@ -151,7 +164,9 @@ async def delete_task(
     """
 
     try:
-        task_service.delete_task(task_id)
+        # 级联删除是同步 DB 操作（单 BEGIN IMMEDIATE 写锁事务），经 asyncio.to_thread
+        # 移出 event loop，避免冻结其它 task 的 turn 调度。
+        await asyncio.to_thread(task_service.delete_task, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     return DeleteTaskResponse(task_id=task_id, deleted=True)
@@ -215,3 +230,31 @@ async def replay_turn_events(
 
     events = event_service.list_by_turn(turn_id)
     return [RuntimeEventResponse.from_event_dict(e) for e in events]
+
+
+def _latest_turn_model_name(task_id: str, turn_service: TurnService) -> str | None:
+    """取得某任务最近一次 turn 的 ``model_name``（设计 §6.4 任务级口径）。
+
+    按创建时间升序取该 task 的全部 turn，返回最后一个非空 ``model_name``；无 turn
+    或全部 turn 未落库模型名（历史 NULL / Auto 运行期尚未回写）时返回 None，由
+    调用方回退到 Agent 默认模型名。
+
+    参数:
+        task_id: 任务标识。
+        turn_service: 轮次 service（只读查询）。
+
+    返回:
+        最近一次 turn 的 ``model_name``；无可用值时返回 None。
+
+    异常:
+        无（查询失败向上抛出，由调用方 try/except 收敛为 total 缺失）。
+
+    副作用:
+        无（只读查询）。
+    """
+
+    turns = turn_service.list_turns_for_task(task_id)
+    for turn in reversed(turns):
+        if turn.model_name:
+            return turn.model_name
+    return None

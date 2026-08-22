@@ -35,6 +35,8 @@ class AgentProfileResponse(BaseModel):
     description: str
     allowed_tools: list[str]
     workflow: str
-    model_name: str
+    # 阶段 1.5 后允许 None：5 个内置 profile 不内置默认模型，前端据此
+    # 区分「未配置」与「已配置」并强制用户选择。
+    model_name: str | None
     max_steps: int
     prompt_ref: dict[str, Any] | None

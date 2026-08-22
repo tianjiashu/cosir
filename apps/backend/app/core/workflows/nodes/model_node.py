@@ -232,6 +232,26 @@ async def _model_node(state: ReactGraphState) -> dict:
         chunks.append(chunk)
         text = content_to_text(chunk.content)
         reasoning = _extract_reasoning_content(chunk, thinking_channels)
+        # 诊断日志：每个流式 chunk 的增量体量。若多数 chunk 的 content_len=0 仅在末 chunk
+        # 出现整段文本，说明模型/provider 未做逐 token 流式，前端表现为「整块出现、无流式感」。
+        log.info(
+            "model_node_stream_chunk",
+            extra={
+                "msg": (
+                    f"流式 chunk 已处理，chunk_index={chunk_index}，"
+                    f"content_len={len(text)}，reasoning_len={len(reasoning or '')}，"
+                    f"step_id={step_id}"
+                ),
+                "data": {
+                    "step_id": step_id,
+                    "chunk_index": chunk_index,
+                    "content_len": len(text),
+                    "reasoning_len": len(reasoning or ""),
+                    "emitted_output_delta": bool(text),
+                    "emitted_thinking_delta": bool(reasoning and reasoning.strip()),
+                },
+            },
+        )
         if text:
             write_event(
                 # 就地翻译为增量事件，避免经 messages 流导致完整回复被重复推送。

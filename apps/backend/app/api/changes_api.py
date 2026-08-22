@@ -1,17 +1,21 @@
 """Task 级变更集 API（查询累积变更、单/多文件撤销与保留）。
 
-单一职责：把 ``change_set_service`` 的能力暴露为 HTTP 端点，只做入参校验、
+单一职责：把 ``service.task.change_set`` 的能力暴露为 HTTP 端点，只做入参校验、
 异常到状态码的映射与响应投影，不承载业务规则。端点经模块级 ``@app.*``
 装饰器注册到 ``app.api.app.app`` 单例上（与同目录其它域路由一致）。
 """
 
 from fastapi import HTTPException, Query
 
-from app.app import app
 from app.api.schemas.request.ChangeSetActionRequest import ChangeSetActionRequest
 from app.api.schemas.response.ChangeSetResponse import ChangeSetResponse
-from app.service.task import change_set_service
-from app.service.task.change_set_service import ChangeSetConflictError
+from app.app import app
+from app.service.task.change_set import (
+    ChangeSetConflictError,
+    keep_file,
+    query_change_set,
+    revert_file,
+)
 from app.tools.tool_handler.patch.patch_apply import PatchApplyError
 
 
@@ -40,9 +44,7 @@ async def get_changes(
     """
     try:
         return ChangeSetResponse.from_change_set(
-            change_set_service.query_change_set(
-                task_id, checkpoint, include_running=include_running
-            )
+            query_change_set(task_id, checkpoint, include_running=include_running)
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -68,13 +70,13 @@ async def keep_changes(task_id: str, request: ChangeSetActionRequest) -> ChangeS
     """
     try:
         for path in request.paths:
-            change_set_service.keep_file(task_id, path)
+            keep_file(task_id, path)
     except ChangeSetConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ChangeSetResponse.from_change_set(
-        change_set_service.query_change_set(task_id, include_running=True)
+        query_change_set(task_id, include_running=True)
     )
 
 
@@ -100,7 +102,7 @@ async def revert_changes(task_id: str, request: ChangeSetActionRequest) -> Chang
     """
     try:
         for path in request.paths:
-            await change_set_service.revert_file(task_id, path)
+            await revert_file(task_id, path)
     except ChangeSetConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -108,5 +110,5 @@ async def revert_changes(task_id: str, request: ChangeSetActionRequest) -> Chang
     except PatchApplyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ChangeSetResponse.from_change_set(
-        change_set_service.query_change_set(task_id, include_running=True)
+        query_change_set(task_id, include_running=True)
     )
