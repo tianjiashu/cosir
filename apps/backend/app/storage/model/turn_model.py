@@ -24,7 +24,8 @@ class TurnModel(StorageBase):
     - ``response_text``：模型最终回复文本，可选。
     - ``created_at`` / ``updated_at``：时间戳文本（项目约定以文本存储）。
     - ``agent_id``：本轮使用的 Agent 条目标识，可选。
-    - ``model_id``：本轮使用的模型条目标识，可选。
+    - ``product_name``：本轮使用模型的厂商，可选。
+    - ``model_name``：本轮使用的模型条目标识，可选。
     - ``paths``：本轮涉及的文件路径集合（JSON 文本存储），可选。
     - ``thinking``：是否开启推理模式，可选。
     - ``reasoning_effort``：推理强度（``low`` / ``high`` / ``max``），可选。
@@ -56,10 +57,11 @@ class TurnModel(StorageBase):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     end_reason: Mapped[str | None] = mapped_column(Text)
     response_text: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
     agent_id: Mapped[str | None] = mapped_column(Text)
-    model_id: Mapped[str | None] = mapped_column(Text)
+    product_name: Mapped[str | None] = mapped_column(Text)
+    model_name: Mapped[str | None] = mapped_column(Text)
     paths: Mapped[list[str] | None] = mapped_column(Text)
     thinking: Mapped[bool | None] = mapped_column(Boolean)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)  # low/high/max
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
