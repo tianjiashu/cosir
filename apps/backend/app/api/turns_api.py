@@ -100,28 +100,17 @@ async def create_turn(
         turn = turn_service.create_turn(
             task_id,
             payload.input_text,
-            agent_id=payload.agent_id,
-            model_name=payload.model_name,
+            agent_id="main_agent",
+            product_id=payload.product_id,
+            model_id=payload.model_id,
+            thinking=payload.thinking,
+            reasoning_effort=payload.reasoning_effort,
+            paths=payload.paths,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ModelNotConfiguredError as exc:
-        log.warning(
-            "create_turn model not configured: task=%s model=%s reason=%s",
-            task_id,
-            exc.model_name,
-            exc.reason,
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "model_name": exc.model_name,
-                "reason": exc.reason,
-                "guidance": exc.guidance,
-            },
-        ) from exc
     return TurnResponse.from_record(turn)
 
 
