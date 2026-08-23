@@ -24,8 +24,8 @@ class TurnRecord:
     end_reason: str | None = None
     response_text: str | None = None
     agent_id: str | None = None
-    product_name: str | None = None
-    model_name: str | None = None
+    product_id: str | None = None
+    model_id: str | None = None
     paths: list[str] | None = None
     thinking: bool | None = None
     reasoning_effort: str | None = None
@@ -57,8 +57,8 @@ class TurnRecord:
             "thinking": self.thinking,
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
-            "product_name": self.product_name,
-            "model_name": self.model_name,
+            "product_name": self.product_id,
+            "model_name": self.model_id,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -92,6 +92,6 @@ class TurnRecord:
             paths=row.paths,
             thinking=row.thinking,
             reasoning_effort=row.reasoning_effort,
-            model_name=row.model_name,
-            product_name=row.product_name,
+            model_id=row.model_id,
+            product_id=row.product_id,
         )

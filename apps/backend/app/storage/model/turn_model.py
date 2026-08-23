@@ -58,8 +58,8 @@ class TurnModel(StorageBase):
     end_reason: Mapped[str | None] = mapped_column(Text)
     response_text: Mapped[str | None] = mapped_column(Text)
     agent_id: Mapped[str | None] = mapped_column(Text)
-    product_name: Mapped[str | None] = mapped_column(Text)
-    model_name: Mapped[str | None] = mapped_column(Text)
+    product_id: Mapped[str | None] = mapped_column(Text, ForeignKey("products.product_id"), nullable=False)
+    model_id: Mapped[str | None] = mapped_column(Text, ForeignKey("models.model_id"), nullable=False)
     paths: Mapped[list[str] | None] = mapped_column(Text)
     thinking: Mapped[bool | None] = mapped_column(Boolean)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)  # low/high/max
