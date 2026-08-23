@@ -7,11 +7,9 @@
 - 负责：轮次创建（含任务最新轮次更新）、轮次查询与状态更新、消息轨迹读写透传。
 - 不负责：直接 SQL 操作（委托给 ``TurnCrud``/``TaskCrud``/``TurnMessageCrud``）。
 """
-
 from app.config.logging.logger import log
-from app.models import LLMRuntimeConfig, RuntimeMessage, TurnRecord
+from app.models import RuntimeMessage, TurnRecord
 from app.service import depends as service_depends
-from app.service.llm.model_resolver_service import ModelNotConfiguredError, ModelResolverService
 
 
 class TurnService:
@@ -41,9 +39,13 @@ class TurnService:
         self,
         task_id: str,
         input_text: str,
-        status: str = "pending",
         agent_id: str | None = None,
+        status: str = "pending",
+        product_name: str | None = None,
         model_name: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
+        paths: list[str] | None = None,
     ) -> TurnRecord:
         """Create a turn and update the parent task's latest turn info.
 
@@ -52,9 +54,12 @@ class TurnService:
             input_text: 本轮用户输入文本。
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"developer"``。
-            model_name: 可选，本 turn 请求的模型名（litellm 路由名）；None 表示用户
+            model_id: 可选，本 turn 请求的模型名（litellm 路由名）；None 表示用户
                 未选择模型（设计阶段 1.5：5 个内置 profile 不再内置默认模型，前端优先
                 校验、后端兜底报错）。
+            thinking: 可选，是否开启思考模式；None 表示用户未指定。
+            reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
+            paths: 可选，本轮涉及的文件路径集合（JSON 文本存储），None 表示无文件涉及。
 
         返回:
             新创建的 ``TurnRecord``。
@@ -73,30 +78,17 @@ class TurnService:
             保证时间线可追溯到真实模型，D11）；更新所属任务最新轮次信息。
         """
 
-        if not isinstance(input_text, str) or not input_text.strip():
-            raise ValueError("input_text must be a non-empty string")
-
-        # agent_id 兜底：未显式指定时回退到默认主 agent，避免 None 透传到
-        # ``turns.agent_id`` NOT NULL 列触发 SQLAlchemy IntegrityError。
-        resolved_agent_id = "developer" if agent_id is None else agent_id
-
-        # 设计 §6.4 两段式 ① service 期预解析：``ModelResolverService.resolve``
-        # 把 ``model_name is None`` 早返回拒绝为 ``REASON_MODEL_NOT_SELECTED``
-        # （设计阶段 1.5），未收录 / 厂商禁用 / Key 未配置分别对应
-        # ``model_not_found`` / ``provider_disabled`` / ``api_key_missing``。
-        # 解析成功的 ``LLMRuntimeConfig.model_name`` 为 DB 行最终 litellm 路由名，
-        # 用作 turn 落库值（D11 时间线可追溯）。
-        resolved: LLMRuntimeConfig = service_depends.get_model_resolver_service().resolve(
-            model_name,
-            log_context={"task_id": task_id, "agent_id": resolved_agent_id},
-        )
 
         turn = self._turn.create(
             task_id,
             input_text,
             status,
-            agent_id=resolved_agent_id,
-            model_name=resolved.model_name,
+            agent_id=agent_id,
+            product_name=product_name,
+            model_name=model_name,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+            paths=paths,
         )
         return turn
 
@@ -108,6 +100,9 @@ class TurnService:
 
     def cancel_turn_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
         """Cancel a pending/running turn atomically.
+
+        业务语义：仅 ``pending`` / ``running`` 可进入 ``cancelled`` 终态；该约束收敛在
+        本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。
 
         参数:
             turn_id: 待取消的 turn 标识。
@@ -121,13 +116,21 @@ class TurnService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 turn 状态为 cancelled。
+            条件满足时更新 turn 状态为 cancelled 并写入 end_reason。
         """
 
-        return self._turn.cancel_if_active(turn_id, end_reason)
+        return self._turn.update_status_if_in(
+            turn_id,
+            target_status="cancelled",
+            allowed_statuses=("pending", "running"),
+            end_reason=end_reason,
+        )
 
     def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
         """Complete a running turn and persist its response atomically.
+
+        业务语义：仅 ``running`` 可进入 ``completed`` 终态并落库回复文本；约束收敛在
+        本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。
 
         参数:
             turn_id: 待完成的 turn 标识。
@@ -141,15 +144,23 @@ class TurnService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 turn 状态和回复文本。
+            条件满足时更新 turn 状态为 completed 并写入 response_text。
         """
 
-        return self._turn.complete_if_running(turn_id, response_text)
+        return self._turn.update_status_if_in(
+            turn_id,
+            target_status="completed",
+            allowed_statuses=("running",),
+            response_text=response_text,
+        )
 
     def fail_turn_if_running(
         self, turn_id: str, end_reason: str | None = None
     ) -> TurnRecord | None:
         """Fail a running turn atomically.
+
+        业务语义：仅 ``running`` 可进入 ``failed`` 终态；约束收敛在本方法（service 层），
+        CRUD 层只做通用的「状态白名单 + 原子更新」。
 
         参数:
             turn_id: 待失败落定的 turn 标识。
@@ -163,15 +174,15 @@ class TurnService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 turn 状态。
+            条件满足时更新 turn 状态为 failed（并可选写入 end_reason）。
         """
 
-        return self._turn.fail_if_running(turn_id, end_reason)
-
-    def update_turn_response(self, turn_id: str, response_text: str | None) -> TurnRecord:
-        """把轮次的 Agent 回复文本落库，供历史接口直接读取。"""
-
-        return self._turn.update_response(turn_id, response_text)
+        return self._turn.update_status_if_in(
+            turn_id,
+            target_status="failed",
+            allowed_statuses=("running",),
+            end_reason=end_reason,
+        )
 
     def update_model_name(self, turn_id: str, model_name: str) -> TurnRecord:
         """回写轮次实际所用模型名（运行期兜底解析修正后，§6.4）。
@@ -225,7 +236,35 @@ class TurnService:
             return False
 
     def claim_pending_turn(self, turn_id: str) -> bool:
-        return self._turn.claim_pending(turn_id)
+        """以乐观锁方式抢占 pending turn 为 running。
+
+        业务语义：仅 ``pending`` 可抢占为 ``running``，该约束收敛在本方法（service 层），
+        CRUD 层只做通用的「状态白名单 + 原子更新」。返回 ``bool`` 表示本次是否成功抢占，
+        供上层（runner / delegation executor）判断「是否由我执行该 turn」。
+
+        参数:
+            turn_id: 待抢占的 turn 标识。
+
+        返回:
+            抢占成功（本次确实把 pending 更新为 running）返回 True；turn 已被他人抢占或
+            非 pending 状态返回 False。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            条件满足时更新 turn 状态为 running。
+        """
+
+        return (
+            self._turn.update_status_if_in(
+                turn_id,
+                target_status="running",
+                allowed_statuses=("pending",),
+            )
+            is not None
+        )
 
     def load_turn_messages(self, turn_id: str) -> list[RuntimeMessage]:
         """Load a turn's ordered message trajectory; empty list if none stored."""
