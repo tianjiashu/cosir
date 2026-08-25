@@ -11,13 +11,13 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
+from app.llm_provider.model_resolver_service import ModelNotConfiguredError
 from app.models import TaskRecord, TurnRecord
 from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_context import DelegationPolicyContext
 from app.service.delegation.delegation_policy import DelegationPolicy
 from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_delegation_service, get_turn_service
-from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolExecutionContext, ToolObservation
 from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 from app.tools.tool_execute.tool_cancelled import tool_cancelled
@@ -100,7 +100,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 extra={
                     "msg": "委派目标 child Agent 无法解析，返回工具错误",
                     "data": {
-                        "parent_turn_id": self._parent_turn.turn_id,
+                        "parent_turn_id": self._parent_turn.id,
                         "child_agent_id": args.child_agent_id,
                     },
                 },
@@ -138,8 +138,8 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         # 原子 acquire 并发额度：额度满时 storage 层在同一事务内拒绝创建
         acquire = delegation_service.try_create_pending(
-            task_id=self._parent_task.task_id,
-            parent_turn_id=self._parent_turn.turn_id,
+            task_id=self._parent_task.id,
+            parent_turn_id=self._parent_turn.id,
             parent_agent_id=self._parent_profile.agent_id,
             child_agent_id=args.child_agent_id,
             delegation_type=self._delegation_type_from_child_agent_id(args.child_agent_id),
@@ -156,8 +156,8 @@ class DelegationExecutor(DelegateTaskExecutor):
             # 先创建委派子任务（只建 task，不建 turn；并发重入由 delegation_id 唯一索引兜底）。
             try:
                 child_task = task_service.create_child_task(
-                    parent_task_id=self._parent_task.task_id,
-                    parent_turn_id=self._parent_turn.turn_id,
+                    parent_task_id=self._parent_task.id,
+                    parent_turn_id=self._parent_turn.id,
                     delegation_id=delegation_id,
                     workspace_id=self._parent_task.workspace_id,
                     agent_id=args.child_agent_id,
@@ -173,7 +173,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                         "msg": "委派子任务创建冲突（delegation_id 已存在子任务）",
                         "data": {
                             "delegation_id": delegation_id,
-                            "parent_turn_id": self._parent_turn.turn_id,
+                            "parent_turn_id": self._parent_turn.id,
                         },
                     },
                 )
@@ -202,10 +202,10 @@ class DelegationExecutor(DelegateTaskExecutor):
             # 成对记 warn model_resolve_rejected(child=true) + error，父收失败 DelegationResult。
             try:
                 child_turn = turn_service.create_turn(
-                    task_id=child_task.task_id,
+                    task_id=child_task.id,
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,
-                    model_name=child_agent_profile.model_name
+                    model_id=child_agent_profile.model_name
                 )
             except ModelNotConfiguredError as exc:
                 log.warning(
@@ -230,7 +230,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                         "msg": f"委派 child 预解析模型失败，delegation 置 failed：{exc}",
                         "data": {
                             "delegation_id": delegation_id,
-                            "parent_turn_id": self._parent_turn.turn_id,
+                            "parent_turn_id": self._parent_turn.id,
                             "child_agent_id": args.child_agent_id,
                             "model": exc.model_name,
                             "reason": exc.reason,
@@ -250,14 +250,14 @@ class DelegationExecutor(DelegateTaskExecutor):
                 )
 
             # 确认pending child turn
-            if not turn_service.claim_pending_turn(child_turn.turn_id):
+            if not turn_service.claim_pending_turn(child_turn.id):
                 raise RuntimeError("child_turn_claim_lost")
 
             # 标记child turn为已开始
             delegation_service.mark_child_started(
                 delegation_id,
-                child_turn.turn_id,
-                child_task_id=child_task.task_id,
+                child_turn.id,
+                child_task_id=child_task.id,
                 runtime_event_loop=runtime_event_loop,
             )
 
@@ -278,7 +278,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                     "msg": "委派执行异常，已转换为 delegate_task 工具错误",
                     "data": {
                         "delegation_id": delegation_id,
-                        "parent_turn_id": self._parent_turn.turn_id,
+                        "parent_turn_id": self._parent_turn.id,
                         "child_agent_id": args.child_agent_id,
                     },
                 },
@@ -296,7 +296,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             result,
             runtime_event_loop,
             delegation_service,
-            child_task_id=child_task.task_id,
+            child_task_id=child_task.id,
         )
 
     def _build_agent_input_text(self, args: DelegateTaskArgs) -> str:
@@ -363,7 +363,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             extra={
                 "msg": "委派请求被策略拒绝",
                 "data": {
-                    "parent_turn_id": self._parent_turn.turn_id,
+                    "parent_turn_id": self._parent_turn.id,
                     "child_agent_id": child_agent_id,
                     "reason": reason,
                 },
@@ -405,7 +405,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             extra={
                 "msg": "委派被并发额度拒绝",
                 "data": {
-                    "parent_turn_id": self._parent_turn.turn_id,
+                    "parent_turn_id": self._parent_turn.id,
                     "child_agent_id": child_agent_id,
                     "max_concurrency": Settings.DELEGATION_MAX_CONCURRENCY,
                 },

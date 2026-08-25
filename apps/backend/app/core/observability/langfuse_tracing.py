@@ -42,8 +42,8 @@ class TraceMetadata:
     是 session 内一棵独立 trace。
     """
 
-    task_id: str
-    turn_id: str
+    task_id: int
+    turn_id: int
     agent_id: str
 
 

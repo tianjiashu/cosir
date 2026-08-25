@@ -19,7 +19,7 @@ from app.utils.datetime_utils import from_text, to_text
 class ProviderRecord:
     """表示一个模型厂商配置行。"""
 
-    provider_id: str
+    id: int
     name: str
     provider_type: str
     created_at: datetime
@@ -50,7 +50,7 @@ class ProviderRecord:
         """
 
         return {
-            "provider_id": self.provider_id,
+            "id": self.id,
             "name": self.name,
             "type": self.provider_type,
             "base_url": self.base_url,
@@ -77,7 +77,7 @@ class ProviderRecord:
             无。
         """
         return cls(
-            provider_id=row.provider_id,
+            id=row.id,
             name=row.name,
             provider_type=row.provider_type,
             created_at=from_text(row.created_at),

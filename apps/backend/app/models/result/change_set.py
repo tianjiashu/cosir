@@ -78,7 +78,7 @@ class ChangeCheckpoint:
         label: 展示用标签，如 ``检查点 1``。
     """
 
-    turn_id: str
+    turn_id: int
     turn_seq: int
     label: str
 
@@ -93,6 +93,6 @@ class ChangeSet:
         files: 按路径去重后的文件条目列表（每个路径保留最新一条变更）。
     """
 
-    task_id: str
+    task_id: int
     checkpoints: list[ChangeCheckpoint]
     files: list[ChangeFileEntry]

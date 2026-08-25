@@ -1,8 +1,6 @@
 """Delegation lifecycle service."""
 
 import asyncio
-from uuid import uuid4
-
 from app.config.logging.logger import log
 from app.models.delegation_record import DelegationRecord
 from app.models.enums.event_type import EventType
@@ -18,16 +16,15 @@ from app.models.result.delegation_acquire_result import (
     DelegationAcquireResult,
 )
 from app.storage.crud.delegation_crud import ACTIVE_DELEGATION_STATUSES, DelegationCrud
-from app.utils.datetime_utils import utc_now
 
 
 class DelegationService:
     """Persist delegation lifecycle state and parent-turn runtime events."""
 
     def __init__(
-        self,
-        delegation_crud: DelegationCrud,
-        runtime_event_service: RuntimeEventService,
+            self,
+            delegation_crud: DelegationCrud,
+            runtime_event_service: RuntimeEventService,
     ) -> None:
         """初始化委派生命周期 service。
 
@@ -49,17 +46,17 @@ class DelegationService:
         self._runtime_event_service = runtime_event_service
 
     def try_create_pending(
-        self,
-        *,
-        task_id: str,
-        parent_turn_id: str,
-        parent_agent_id: str,
-        child_agent_id: str,
-        delegation_type: str,
-        prompt: str,
-        effective_tools: tuple[str, ...],
-        max_concurrency: int,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            *,
+            task_id: int,
+            parent_turn_id: int,
+            parent_agent_id: str,
+            child_agent_id: str,
+            delegation_type: str,
+            prompt: str,
+            effective_tools: tuple[str, ...],
+            max_concurrency: int,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> DelegationAcquireResult:
         """按并发额度原子地尝试创建 pending delegation 并发出 started 事件。
 
@@ -95,16 +92,19 @@ class DelegationService:
             持久化/发布失败会被记录为 ``delegation_event_emit_failed`` 日志后吞掉，
             不影响 acquire 结果，但事件可能丢失；调用方（executor）不应依赖该事件的可达性。
         """
-
-        delegation_id = str(uuid4())
-        record = self._build_pending_record(
-            delegation_id=delegation_id,
+        record = DelegationRecord(
+            id = None,
             task_id=task_id,
             parent_turn_id=parent_turn_id,
+            child_turn_id=None,
+            child_task_id=None,
             parent_agent_id=parent_agent_id,
             child_agent_id=child_agent_id,
             delegation_type=delegation_type,
+            status="pending",
             prompt=prompt,
+            summary="",
+            error="",
             effective_tools=effective_tools,
         )
         created_id = self._delegation_crud.create_pending_if_slot_available(
@@ -114,69 +114,16 @@ class DelegationService:
         if created_id is None:
             return DelegationAcquireResult(
                 acquired=False,
-                delegation_id="",
+                delegation_id=-1,
                 reason=REASON_CONCURRENCY_EXCEEDED,
             )
         self._emit_started(record, runtime_event_loop=runtime_event_loop)
         return DelegationAcquireResult(acquired=True, delegation_id=created_id, reason="")
 
-    def _build_pending_record(
-        self,
-        *,
-        delegation_id: str,
-        task_id: str,
-        parent_turn_id: str,
-        parent_agent_id: str,
-        child_agent_id: str,
-        delegation_type: str,
-        prompt: str,
-        effective_tools: tuple[str, ...],
-    ) -> DelegationRecord:
-        """构造一条 pending delegation 领域记录。
-
-        参数:
-            delegation_id: 新建 delegation 的标识。
-            task_id: 所属任务标识。
-            parent_turn_id: 发起委派的父 turn 标识。
-            parent_agent_id: 发起委派的父 Agent 标识。
-            child_agent_id: 目标 child Agent 标识。
-            delegation_type: 委派类型标签。
-            prompt: 传给 child Agent 的任务文本。
-            effective_tools: 策略收敛后的 child 工具名称。
-
-        返回:
-            状态为 ``pending``、创建/更新时间一致的 DelegationRecord。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        now = utc_now()
-        return DelegationRecord(
-            delegation_id=delegation_id,
-            task_id=task_id,
-            parent_turn_id=parent_turn_id,
-            child_turn_id="",
-            child_task_id="",
-            parent_agent_id=parent_agent_id,
-            child_agent_id=child_agent_id,
-            delegation_type=delegation_type,
-            status="pending",
-            prompt=prompt,
-            summary="",
-            error="",
-            effective_tools=effective_tools,
-            created_at=now,
-            updated_at=now,
-        )
-
     def _emit_started(
-        self,
-        record: DelegationRecord,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            record: DelegationRecord,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """为新建 delegation 发出 delegation_started 父事件。
 
@@ -198,9 +145,9 @@ class DelegationService:
             record,
             EventType.DELEGATION_STARTED,
             DelegationStartedPayload(
-                delegation_id=record.delegation_id,
+                delegation_id=record.id,
                 parent_turn_id=record.parent_turn_id,
-                child_turn_id="",
+                child_turn_id=None,
                 child_agent_id=record.child_agent_id,
                 status="pending",
             ),
@@ -208,11 +155,11 @@ class DelegationService:
         )
 
     def mark_child_started(
-        self,
-        delegation_id: str,
-        child_turn_id: str,
-        child_task_id: str | None = None,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            delegation_id: int,
+            child_turn_id: int,
+            child_task_id: int | None = None,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 running 并发出 child_started 父事件。
 
@@ -243,7 +190,7 @@ class DelegationService:
             record,
             EventType.DELEGATION_CHILD_STARTED,
             DelegationChildStartedPayload(
-                delegation_id=record.delegation_id,
+                delegation_id=record.id,
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
@@ -254,11 +201,11 @@ class DelegationService:
         )
 
     def mark_completed(
-        self,
-        delegation_id: str,
-        summary: str,
-        child_task_id: str | None = None,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            delegation_id: int,
+            summary: str,
+            child_task_id: int | None = None,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 completed 并发出 finished 父事件。
 
@@ -289,7 +236,7 @@ class DelegationService:
             record,
             EventType.DELEGATION_FINISHED,
             DelegationFinishedPayload(
-                delegation_id=record.delegation_id,
+                delegation_id=record.id,
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
@@ -301,11 +248,11 @@ class DelegationService:
         )
 
     def mark_failed(
-        self,
-        delegation_id: str,
-        error: str,
-        child_task_id: str | None = None,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            delegation_id: int,
+            error: str,
+            child_task_id: str | None = None,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 failed 并发出 failed 父事件。
 
@@ -333,7 +280,7 @@ class DelegationService:
             record,
             EventType.DELEGATION_FAILED,
             DelegationFailedPayload(
-                delegation_id=record.delegation_id,
+                delegation_id=record.id,
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
@@ -345,11 +292,11 @@ class DelegationService:
         )
 
     def mark_cancelled(
-        self,
-        delegation_id: str,
-        error: str,
-        child_task_id: str | None = None,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            delegation_id: int,
+            error: str,
+            child_task_id: str | None = None,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """把 delegation 标记为 cancelled 并发出 cancelled 父事件。
 
@@ -377,7 +324,7 @@ class DelegationService:
             record,
             EventType.DELEGATION_CANCELLED,
             DelegationCancelledPayload(
-                delegation_id=record.delegation_id,
+                delegation_id=record.id,
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
@@ -405,7 +352,7 @@ class DelegationService:
 
         interrupted = self._delegation_crud.list_pending_or_running()
         for record in interrupted:
-            self.mark_failed(record.delegation_id, reason)
+            self.mark_failed(record.id, reason)
         log.info(
             "delegation_recovery_audit_completed",
             extra={
@@ -413,13 +360,13 @@ class DelegationService:
                 "data": {
                     "reason": reason,
                     "recovered_count": len(interrupted),
-                    "delegation_ids": [record.delegation_id for record in interrupted],
+                    "delegation_ids": [record.id for record in interrupted],
                 },
             },
         )
         return len(interrupted)
 
-    def list_by_parent_turn(self, parent_turn_id: str) -> list[DelegationRecord]:
+    def list_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
         """列出某个 parent turn 下的全部 delegation 记录。
 
         参数:
@@ -434,7 +381,7 @@ class DelegationService:
 
         return self._delegation_crud.list_by_parent_turn(parent_turn_id)
 
-    def list_active_by_parent_turn(self, parent_turn_id: str) -> list[DelegationRecord]:
+    def list_active_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
         """列出某个 parent turn 下仍处于活动状态的 delegation。
 
         参数:
@@ -457,11 +404,11 @@ class DelegationService:
         ]
 
     def _emit_event(
-        self,
-        record: DelegationRecord,
-        event_type: EventType,
-        payload,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            record: DelegationRecord,
+            event_type: EventType,
+            payload,
+            runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """尽力写入并发布 parent-turn delegation 事件。
 
@@ -501,7 +448,7 @@ class DelegationService:
                 extra={
                     "msg": "委派状态已持久化，但委派运行时事件写入或发布失败",
                     "data": {
-                        "delegation_id": record.delegation_id,
+                        "delegation_id": record.id,
                         "event_type": event_type.value,
                         "parent_turn_id": record.parent_turn_id,
                     },

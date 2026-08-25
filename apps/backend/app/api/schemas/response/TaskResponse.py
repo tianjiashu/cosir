@@ -34,15 +34,15 @@ class TaskResponse(BaseModel):
         无。
     """
 
-    task_id: str
-    workspace_id: str
+    task_id: int
+    workspace_id: int
     agent_id: str
     title: str
     status: str
     execution_status: str | None = None
     task_type: str = "user"
-    parent_task_id: str | None = None
-    parent_turn_id: str | None = None
+    parent_task_id: int | None = None
+    parent_turn_id: int | None = None
     delegation_id: str | None = None
     context_usage_used: int | None = None
     context_window_total: int | None = None
@@ -78,7 +78,7 @@ class TaskResponse(BaseModel):
             无。
         """
         return cls(
-            task_id=record.task_id,
+            task_id=record.id,
             workspace_id=record.workspace_id,
             agent_id=record.agent_id,
             title=record.title,

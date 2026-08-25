@@ -30,7 +30,7 @@ from app.config.logging.logger import log
 from app.models import LLMRuntimeConfig
 from app.models.enums.error_kind import ErrorKind
 from app.service import depends as service_depends
-from app.service.provider.provider_service import ProviderService
+from app.llm_provider.provider.provider_service import ProviderService
 from app.storage.crud.model_entry_crud import ModelEntryCrud
 
 # 拒绝原因短码：模型未收录于 DB（启用模型查不到）。

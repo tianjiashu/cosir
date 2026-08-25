@@ -59,17 +59,15 @@ from app.api.dependencies import (
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.app import app
-from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models.event.runtime_event import RuntimeEvent
-from app.service.llm.model_resolver_service import ModelNotConfiguredError
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_stream_service import TurnStreamService
 
 
 @app.post("/tasks/{task_id}/turns")
 async def create_turn(
-    task_id: str,
+    task_id: int,
     payload: CreateTurnRequest,
     turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
@@ -116,7 +114,7 @@ async def create_turn(
 
 @app.get("/turns/{turn_id}/stream")
 async def stream_turn(
-    turn_id: str,
+    turn_id: int,
     runtime: AgentRuntime = Depends(get_runtime),
     turn_service: TurnService = Depends(get_turn_service),
     stream_service: TurnStreamService = Depends(get_turn_stream_service),
@@ -175,7 +173,7 @@ async def stream_turn(
 
 @app.get("/turns/{turn_id}/events/stream")
 async def subscribe_turn_events(
-    turn_id: str,
+    turn_id: int,
     turn_service: TurnService = Depends(get_turn_service),
     stream_service: TurnStreamService = Depends(get_turn_stream_service),
 ):
@@ -210,7 +208,7 @@ async def subscribe_turn_events(
 
 @app.post("/turns/{turn_id}/cancel")
 async def cancel_turn(
-    turn_id: str,
+    turn_id: int,
     runtime: AgentRuntime = Depends(get_runtime),
     turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:

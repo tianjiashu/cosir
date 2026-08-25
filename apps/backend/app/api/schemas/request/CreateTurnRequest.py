@@ -2,17 +2,20 @@ from typing import ClassVar
 from pydantic import BaseModel, field_validator
 
 
+
+
 class CreateTurnRequest(BaseModel):
     """校验轮次创建请求体。
 
     参数:
         input_text: 非空的本轮用户输入。
-        agent_id: 可选，指定执行本 turn 的 agent profile id；None 跟随默认。
-        model_name: 可选，本 turn 请求的模型名（设计 §8.3，D1 配套）；None 表示
-            Auto（跟随 Agent 默认模型）。该值经 ``turn_service.create_turn`` 透传
-            落库到 ``turns.model_name``。
+        product_id: 可选，本 turn 关联的产品 id；None 表示无产品关联。
+        model_id: 可选，本 turn 关联的模型 id；None 表示无模型关联。
         paths: 可选，本 turn 关联的本地文件路径列表（仅做输入合法性校验，
             workspace 边界由下游工具层 ``PathResolver`` 强制）。可以是图片、文件、目录等。
+        thinking: 可选，本 turn 是否为思考轮次；None 表示无思考轮次。
+        reasoning_effort: 可选，本 turn 思考努力等级None 表示 max。该值经 ``turn_service.create_turn`` 透传
+            落库到 ``turns.reasoning_effort``。
 
     返回:
         Pydantic 请求模型。
@@ -28,9 +31,12 @@ class CreateTurnRequest(BaseModel):
     MAX_PATH_LEN: ClassVar[int] = 4096
 
     input_text: str
-    agent_id: str | None = None
-    model_name: str | None = None
+    model_id: str | None = None
+    product_id: str | None = None
     paths: list[str] | None = None
+    thinking: bool | None = None
+    #low/high/max
+    reasoning_effort: str | None = None
 
     @field_validator("input_text")
     @classmethod

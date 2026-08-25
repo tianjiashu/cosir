@@ -2,7 +2,6 @@ from pydantic import BaseModel
 
 from app.models.model_entry_record import ModelEntryRecord
 from app.models.provider_record import ProviderRecord
-from app.utils.datetime_utils import to_text
 
 
 class ModelEntryResponse(BaseModel):
@@ -35,8 +34,8 @@ class ModelEntryResponse(BaseModel):
         无。
     """
 
-    model_id: str
-    provider_id: str
+    model_id: int
+    provider_id: int
     provider_name: str
     model_name: str
     display_name: str
@@ -79,7 +78,7 @@ class ModelEntryResponse(BaseModel):
         """
 
         return cls(
-            model_id=model_entry.model_id,
+            model_id=model_entry.id,
             provider_id=model_entry.provider_id,
             provider_name=provider.name,
             model_name=model_entry.model_name,

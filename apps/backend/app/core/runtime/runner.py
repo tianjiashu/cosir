@@ -1,7 +1,6 @@
 """Coordinate task lifecycle and workflow execution."""
 
 import asyncio
-import os
 from collections.abc import AsyncGenerator
 
 from app.config.configuration import get_agent_registry, get_tool_system
@@ -10,7 +9,7 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.define_agents import DEFAULT_AGENT_ID
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
-from app.service.llm.model_error_mapper import map_litellm_error
+from app.llm_provider.model_error_mapper import map_litellm_error
 from app.core.observability import (
     TraceMetadata,
     build_tool_trace_recorder,
@@ -94,7 +93,7 @@ class AgentRuntime:
         self._workspace_service = get_workspace_service()
         self._runtime_event_service = get_runtime_event_service()
 
-    def cancel_turn(self, turn_id: str) -> TurnRecord:
+    def cancel_turn(self, turn_id: int) -> TurnRecord:
         """Cancel a turn and mark it cancelled.
 
         仅允许 ``pending`` / ``running`` 进入 ``cancelled``；已取消轮次幂等返回，已完成 /
@@ -168,7 +167,7 @@ class AgentRuntime:
 
         try:
             active_delegations = get_delegation_service().list_active_by_parent_turn(
-                parent_turn.turn_id
+                parent_turn.id
             )
         except Exception:
             log.exception(
@@ -176,7 +175,7 @@ class AgentRuntime:
                 extra={
                     "msg": "父 turn 已取消，但扫描活动 child delegation 失败",
                     "data": {
-                        "parent_turn_id": parent_turn.turn_id,
+                        "parent_turn_id": parent_turn.id,
                         "task_id": parent_turn.task_id,
                     },
                 },
@@ -220,18 +219,18 @@ class AgentRuntime:
                             event_type=EventType.RUN_CANCELLED,
                             task_id=child_turn.task_id,
                             payload=RunCancelledPayload(status="cancelled"),
-                            turn_id=child_turn.turn_id,
+                            turn_id=child_turn.id,
                         )
                     )
-            get_delegation_service().mark_cancelled(delegation.delegation_id, reason)
+            get_delegation_service().mark_cancelled(delegation.id, reason)
         except Exception:
             log.exception(
                 "delegation_child_cancel_failed",
                 extra={
                     "msg": "父 turn 已取消，但级联取消 child delegation 失败",
                     "data": {
-                        "parent_turn_id": parent_turn.turn_id,
-                        "delegation_id": delegation.delegation_id,
+                        "parent_turn_id": parent_turn.id,
+                        "delegation_id": delegation.id,
                         "child_turn_id": delegation.child_turn_id,
                     },
                 },
@@ -263,7 +262,7 @@ class AgentRuntime:
             )
             return None
 
-        turn_id = turn.turn_id
+        turn_id = turn.id
 
         # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
         if turn.status != "pending":
@@ -279,12 +278,12 @@ class AgentRuntime:
         # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
         # 未绑定时回退到 task.agent_id 默认归属。
         agent_profile: AgentProfile | None = self._agent_registry.resolve(
-            turn.agent_id or DEFAULT_AGENT_ID
+            turn.agent_id or "main_agent"
         )
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for turn {turn_id}")
 
-        if not self._turn_service.claim_pending_turn(turn.turn_id):
+        if not self._turn_service.claim_pending_turn(turn.id):
             # 已被其它连接抢占（极小概率的竞态）：本轮不再重复驱动，直接退出。
             # 关键：未成功认领即在进入下方 try/finally 之前 return，断开兜底只由真正
             # 持有本轮的连接负责，避免落败连接误标他连接正在驱动的 running turn。
@@ -292,7 +291,7 @@ class AgentRuntime:
                 "turn_claim_lost",
                 extra={
                     "msg": "turn already claimed by another connection",
-                    "data": {"turn_id": turn.turn_id},
+                    "data": {"turn_id": turn_id},
                 },
             )
             return None
@@ -327,11 +326,10 @@ class AgentRuntime:
             raise RuntimeError("agent profile unavailable for turn")
 
         turn = agent.turn
-        turn_id = turn.turn_id
+        turn_id = turn.id
         task_id = turn.task_id
         task = self._task_service.get_task(task_id)
         workspace = self._workspace_service.get_workspace(task.workspace_id)
-        agent.main_agent = task.parent_task_id is None
         # UserPromptSubmit 挂接：本轮已被成功认领后触发。首版 deny 不阻断主流程
         # （turn 已认领，硬中断需额外终态收敛，侵入面过大，见 Hook机制技术方案.md §4.2）；
         # 无内置实现，空订阅下 fire 零开销放行。统一经 HookInterceptor 收口。
@@ -454,7 +452,7 @@ class AgentRuntime:
             # 或落终态前异常逃逸）时置 failed；正常完成 / 已失败 / 已取消均为幂等空操作。
             self._mark_turn_disconnected_if_running(turn_id)
 
-    def _mark_turn_disconnected_if_running(self, turn_id: str) -> None:
+    def _mark_turn_disconnected_if_running(self, turn_id: int) -> None:
         """本连接持有的轮次若仍处于 ``running``，则落定为断开失败。
 
         仅在本引擎成功认领（claim）本轮后进入的清理路径（``run_turn`` 的 finally）中调用：
@@ -559,7 +557,7 @@ class AgentRuntime:
         self._publish_runtime_event(stamped, runtime_event_loop)
         return stamped
 
-    def _mark_stable_file_changes(self, turn_id: str) -> None:
+    def _mark_stable_file_changes(self, turn_id: int) -> None:
         """把某 turn 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。
 
         抽离为同步方法，以便终态路径（成功/失败/取消/客户端断开）无论是否处于
@@ -590,7 +588,7 @@ class AgentRuntime:
             )
 
     async def _publish_stable_file_changes(
-        self, task_id: str, turn_id: str, is_main_agent: bool
+        self, task_id: int, turn_id: int, is_main_agent: bool
     ) -> None:
         """把本 turn 的文件快照标记为已稳定，并逐条广播 file_change_stable 事件。
 
@@ -645,7 +643,7 @@ class AgentRuntime:
             )
 
     def _resolve_execution_context(
-        self, task: TaskRecord, turn_id: str = ""
+        self, task: TaskRecord, turn_id: int = 0
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
@@ -674,11 +672,11 @@ class AgentRuntime:
                 "workspace_not_found_for_task",
                 extra={
                     "msg": "任务所属 workspace 不存在，破坏性工具将不可用",
-                    "data": {"task_id": task.task_id, "workspace_id": task.workspace_id},
+                    "data": {"task_id": task.id, "workspace_id": task.workspace_id},
                 },
             )
             return None
-        return ToolExecutionContext.from_workspace(task.task_id, workspace, turn_id=turn_id)
+        return ToolExecutionContext.from_workspace(task.id, workspace, turn_id=turn_id)
 
     async def _emit(
         self,
@@ -752,7 +750,7 @@ class AgentRuntime:
             RuntimeOperations 实例。
         """
         model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
-        execution_context = self._resolve_execution_context(task, turn_id=turn.turn_id)
+        execution_context = self._resolve_execution_context(task, turn_id=turn.id)
         runtime_dependencies = None
         if execution_context is not None:
             delegate_task_executor = DelegationExecutor(

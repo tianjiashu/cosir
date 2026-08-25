@@ -15,15 +15,15 @@ from app.storage.crud.turn_crud import TurnCrud
 
 
 def _turn_ids_until(
-    task_id: str, checkpoint_turn_id: str | None
-) -> tuple[list[str] | None, list[ChangeCheckpoint]]:
+    task_id: int | str, checkpoint_turn_id: int | None
+) -> tuple[list[int] | None, list[ChangeCheckpoint]]:
     """解析 task 下参与聚合的 turn 过滤集合与检查点列表。
 
     seq 命名空间已按 task 隔离（task 内递增），聚合查询默认按 ``task_id`` 直查即可；
     仅当指定 ``checkpoint_turn_id``（截断到某 turn 为止）时才需要 turn 过滤集合。
 
     参数:
-        task_id: 任务标识。
+        task_id: 任务标识（整数主键；允许传入字符串以兼容 API 路径参数，内部收敛为 int）。
         checkpoint_turn_id: 检查点轮次标识；为 None 表示不截断（聚合该 task 全部快照）。
 
     返回:
@@ -37,21 +37,22 @@ def _turn_ids_until(
     副作用:
         打开主库只读查询。
     """
+    task_id = int(task_id)
     turns = TurnCrud().list_by_task(task_id)
     checkpoints = [
-        ChangeCheckpoint(turn_id=turn.turn_id, turn_seq=index, label=f"检查点 {index}")
+        ChangeCheckpoint(turn_id=turn.id, turn_seq=index, label=f"检查点 {index}")
         for index, turn in enumerate(turns, start=1)
     ]
     if checkpoint_turn_id is None:
         return None, checkpoints
-    turn_ids = [turn.turn_id for turn in turns]
+    turn_ids = [turn.id for turn in turns]
     if checkpoint_turn_id not in turn_ids:
         raise ValueError(f"checkpoint turn not in task: {checkpoint_turn_id}")
     return turn_ids[: turn_ids.index(checkpoint_turn_id) + 1], checkpoints
 
 
 def query_change_set(
-    task_id: str,
+    task_id: int | str,
     checkpoint_turn_id: str | None = None,
     include_running: bool = True,
 ) -> ChangeSet:
@@ -60,7 +61,7 @@ def query_change_set(
     同一路径多次变更按 ``seq`` 升序覆盖，最终只保留最新一条对外呈现。
 
     参数:
-        task_id: 任务标识。
+        task_id: 任务标识（整数主键；允许传入字符串以兼容 API 路径参数，内部收敛为 int）。
         checkpoint_turn_id: 只聚合到该 turn（含）为止的变更；为 None 表示全部。
         include_running: 默认 True，纳入运行中（``stable=0``）的变更，用于工具
             执行中的实时展示与撤销；置 False 时只返回已稳定（``stable=1``）条目。
@@ -74,6 +75,7 @@ def query_change_set(
     副作用:
         打开主库只读查询。
     """
+    task_id = int(task_id)
     turn_ids, checkpoints = _turn_ids_until(task_id, checkpoint_turn_id)
     crud = FileSnapshotCrud()
     snapshots = (
@@ -91,7 +93,7 @@ def query_change_set(
     )
 
 
-def _require_latest_any(task_id: str, path: str) -> FileSnapshotRecord:
+def _require_latest_any(task_id: int | str, path: str) -> FileSnapshotRecord:
     """取某 task 下指定路径的最新快照（含运行中 ``stable=0``）。
 
     用于运行中可撤销：运行时同 path 的变更可能尚未稳定，但已是该 path 的
@@ -110,6 +112,7 @@ def _require_latest_any(task_id: str, path: str) -> FileSnapshotRecord:
     副作用:
         打开主库只读查询。
     """
+    task_id = int(task_id)
     snapshot = FileSnapshotCrud().latest_any_by_path(task_id, path)
     if snapshot is None:
         raise ValueError(f"no change for path: {path}")

@@ -134,7 +134,6 @@ importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
-importlib.import_module("app.api.agents_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")
 

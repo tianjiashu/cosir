@@ -47,7 +47,7 @@ class ModelCandidateResponse(BaseModel):
         """
 
         return cls(
-            model_name=candidate.model_name,
+            model_name=candidate.model_id,
             display_name=candidate.display_name,
             max_context_window=candidate.max_context_window,
             supports_thinking=candidate.supports_thinking,

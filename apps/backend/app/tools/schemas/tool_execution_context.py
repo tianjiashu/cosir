@@ -29,10 +29,10 @@ class ToolExecutionContext:
         runtime_dependencies: 同进程工具可用的运行期依赖，跨进程执行时必须清空。
     """
 
-    task_id: str
-    workspace_id: str
+    task_id: int
+    workspace_id: int
     workspace_root: Path
-    turn_id: str = ""
+    turn_id: int = 0
     runtime_dependencies: ToolRuntimeDependencies = field(default_factory=ToolRuntimeDependencies)
 
     def for_process_execution(self) -> "ToolExecutionContext":
@@ -58,7 +58,7 @@ class ToolExecutionContext:
 
     @classmethod
     def from_workspace(
-        cls, task_id: str, workspace: WorkspaceRecord, turn_id: str = ""
+        cls, task_id: int, workspace: WorkspaceRecord, turn_id: int = 0
     ) -> "ToolExecutionContext":
         """从工作区记录与任务标识构造执行上下文。
 
@@ -76,7 +76,7 @@ class ToolExecutionContext:
 
         return cls(
             task_id=task_id,
-            workspace_id=workspace.workspace_id,
+            workspace_id=workspace.id,
             workspace_root=Path(workspace.root_path),
             turn_id=turn_id,
         )

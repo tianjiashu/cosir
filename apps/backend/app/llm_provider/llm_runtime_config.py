@@ -22,7 +22,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.models.provider_capability import get_capability
+from app.llm_provider.provider.provider_capability import get_capability
 
 if TYPE_CHECKING:
     from app.models import ModelEntryRecord, ProviderRecord

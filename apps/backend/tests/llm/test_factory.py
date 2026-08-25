@@ -4,7 +4,7 @@
 ainvoke + 单次 yield，每个模型 step 只产出 1 个整块 chunk，前端无流式感。
 """
 
-from app.core.llm.factory import build_chat_model
+from app.llm_provider.factory import build_chat_model
 
 
 def test_build_chat_model_enables_streaming() -> None:

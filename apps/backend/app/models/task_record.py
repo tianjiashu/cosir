@@ -15,8 +15,8 @@ from app.utils.datetime_utils import from_text, to_text
 class TaskRecord:
     """表示一个 Agent 任务的持久化状态。"""
 
-    task_id: str
-    workspace_id: str
+    id: int
+    workspace_id: int
     agent_id: str
     title: str
     status: str
@@ -24,8 +24,8 @@ class TaskRecord:
     updated_at: datetime
     execution_status: str | None = None
     task_type: str = "user"
-    parent_task_id: str | None = None
-    parent_turn_id: str | None = None
+    parent_task_id: int | None = None
+    parent_turn_id: int | None = None
     delegation_id: str | None = None
     context_usage_used: int | None = None
 
@@ -67,7 +67,7 @@ class TaskRecord:
         """
 
         return {
-            "task_id": self.task_id,
+            "id": self.id,
             "workspace_id": self.workspace_id,
             "agent_id": self.agent_id,
             "title": self.title,
@@ -99,7 +99,7 @@ class TaskRecord:
             无。
         """
         return cls(
-            task_id=row.task_id,
+            id=row.id,
             workspace_id=row.workspace_id,
             agent_id=row.agent_id,
             title=row.title,

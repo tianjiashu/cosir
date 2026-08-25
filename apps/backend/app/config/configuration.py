@@ -101,7 +101,7 @@ def build_agent_registry() -> AgentProfileRegistry:
     from app.core.agents.define_agents import (
         analyst_agent,
         coder_agent,
-        developer_agent,
+        main_agent,
         reviewer_agent,
         test_agent,
     )
@@ -111,7 +111,7 @@ def build_agent_registry() -> AgentProfileRegistry:
     registry.register(reviewer_agent())
     registry.register(test_agent())
     registry.register(coder_agent())
-    registry.register(developer_agent())
+    registry.register(main_agent())
     # 新增内置 agent 的扩展点：在此追加一行 registry.register(xxx_agent())。
     return registry
 

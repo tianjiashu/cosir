@@ -30,8 +30,8 @@ class TurnResponse(BaseModel):
         无。
     """
 
-    turn_id: str
-    task_id: str
+    turn_id: int
+    task_id: int
     input_text: str
     status: str
     end_reason: str | None = None
@@ -63,14 +63,14 @@ class TurnResponse(BaseModel):
         """
 
         return cls(
-            turn_id=record.turn_id,
+            turn_id=record.id,
             task_id=record.task_id,
             input_text=record.input_text,
             status=record.status,
             end_reason=record.end_reason,
             response_text=record.response_text,
             agent_id=record.agent_id,
-            model_name=record.model_name,
+            model_name=record.model_id,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),
         )

@@ -25,8 +25,8 @@ class FileSnapshotRecord:
     """
 
     id: int = field(default=-1)
-    task_id: str = ""
-    turn_id: str = ""
+    task_id: int = 0
+    turn_id: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
     path: str = ""

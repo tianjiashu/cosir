@@ -15,13 +15,13 @@ from app.utils.datetime_utils import from_text, to_text
 class WorkspaceRecord:
     """表示一个本地工作区。"""
 
-    workspace_id: str
+    id: int
     name: str
     root_path: str
     created_at: datetime
     updated_at: datetime
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int]:
         """将工作区状态转换为可序列化为 JSON 的字典。
 
         参数:
@@ -38,7 +38,7 @@ class WorkspaceRecord:
         """
 
         return {
-            "workspace_id": self.workspace_id,
+            "id": self.id,
             "name": self.name,
             "root_path": self.root_path,
             "created_at": to_text(self.created_at),
@@ -62,9 +62,9 @@ class WorkspaceRecord:
             无。
         """
         return cls(
-            row.workspace_id,
-            row.name,
-            row.root_path,
-            from_text(row.created_at),
-            from_text(row.updated_at),
+            id=row.id,
+            name=row.name,
+            root_path=row.root_path,
+            created_at=from_text(row.created_at),
+            updated_at=from_text(row.updated_at),
         )

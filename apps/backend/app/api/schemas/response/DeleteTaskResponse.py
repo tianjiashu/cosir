@@ -18,5 +18,5 @@ class DeleteTaskResponse(BaseModel):
         无。
     """
 
-    task_id: str
+    task_id: int
     deleted: bool

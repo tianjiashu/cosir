@@ -22,16 +22,15 @@ from app.api.schemas.request.ModelUpdateRequest import ModelUpdateRequest
 from app.api.schemas.response.ModelEntryResponse import ModelEntryResponse
 from app.api.schemas.response.ModelImportResponse import ModelImportResponse
 from app.app import app
+from app.llm_provider.provider import ModelEntryService, ProviderService
 from app.models.model_entry_record import ModelEntryRecord
 from app.models.provider_record import ProviderRecord
-from app.service.provider.model_entry_service import ModelEntryService
-from app.service.provider.provider_service import ProviderService
 
 
 @app.get("/models")
 async def list_models(
-    model_entry_service: ModelEntryService = Depends(get_model_entry_service),
-    provider_service: ProviderService = Depends(get_provider_service),
+        model_entry_service: ModelEntryService = Depends(get_model_entry_service),
+        provider_service: ProviderService = Depends(get_provider_service),
 ) -> list[ModelEntryResponse]:
     """返回启用模型扁平列表（模型选择下拉数据源）。
 
@@ -55,16 +54,10 @@ async def list_models(
     """
 
     providers = {
-        record.provider_id: record for record in provider_service.list_providers()
+        provider.id: provider for provider in provider_service.list_providers(enabled=True)
     }
-    enabled_models = [
-        model
-        for model in model_entry_service.list_models()
-        # 归属厂商被禁用或已被删除（防御：FK 级联下不应残留）时不可见。
-        if model.enabled
-        and model.provider_id in providers
-        and providers[model.provider_id].enabled
-    ]
+    models = model_entry_service.list_models(enabled=True)
+
     return [
         ModelEntryResponse.from_records(
             model,
@@ -73,16 +66,16 @@ async def list_models(
                 providers[model.provider_id]
             ),
         )
-        for model in enabled_models
+        for model in models
     ]
 
 
 @app.post("/providers/{provider_id}/models")
 async def import_provider_models(
-    provider_id: str,
-    payload: ModelBulkImportRequest,
-    model_entry_service: ModelEntryService = Depends(get_model_entry_service),
-    provider_service: ProviderService = Depends(get_provider_service),
+        provider_id: str,
+        payload: ModelBulkImportRequest,
+        model_entry_service: ModelEntryService = Depends(get_model_entry_service),
+        provider_service: ProviderService = Depends(get_provider_service),
 ) -> ModelImportResponse:
     """按厂商批量导入模型条目（discover 勾选或手动添加统一入口，D6）。
 
@@ -131,10 +124,10 @@ async def import_provider_models(
 
 @app.put("/models/{model_id}")
 async def update_model(
-    model_id: str,
-    payload: ModelUpdateRequest,
-    model_entry_service: ModelEntryService = Depends(get_model_entry_service),
-    provider_service: ProviderService = Depends(get_provider_service),
+        model_id: str,
+        payload: ModelUpdateRequest,
+        model_entry_service: ModelEntryService = Depends(get_model_entry_service),
+        provider_service: ProviderService = Depends(get_provider_service),
 ) -> ModelEntryResponse:
     """更新模型条目字段（仅覆盖显式传入字段）。
 
@@ -172,8 +165,8 @@ async def update_model(
 
 @app.delete("/models/{model_id}")
 async def delete_model(
-    model_id: str,
-    model_entry_service: ModelEntryService = Depends(get_model_entry_service),
+        model_id: str,
+        model_entry_service: ModelEntryService = Depends(get_model_entry_service),
 ) -> dict[str, object]:
     """删除单个模型条目。
 
@@ -196,8 +189,8 @@ async def delete_model(
 
 
 def _to_response(
-    record: ModelEntryRecord,
-    provider_service: ProviderService,
+        record: ModelEntryRecord,
+        provider_service: ProviderService,
 ) -> ModelEntryResponse:
     """把模型条目记录转换为响应模型（补齐归属厂商聚合信息）。
 
@@ -222,9 +215,9 @@ def _to_response(
         provider = None
     if provider is None:
         return ModelEntryResponse(
-            model_id=record.model_id,
+            model_id=record.id,
             provider_id=record.provider_id,
-            provider_name=record.provider_id,
+            provider_name=str(record.provider_id),
             model_name=record.model_name,
             display_name=record.display_name,
             max_context_window=record.max_context_window,
@@ -232,8 +225,6 @@ def _to_response(
             enabled=record.enabled,
             api_key_configured=True,
             sort_order=record.sort_order,
-            created_at=record.created_at.isoformat(),
-            updated_at=record.updated_at.isoformat(),
         )
     return ModelEntryResponse.from_records(
         record,

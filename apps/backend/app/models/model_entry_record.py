@@ -67,8 +67,8 @@ def _positive_context_window(value: object) -> int:
 class ModelEntryRecord:
     """表示某厂商下的一个可用模型条目。"""
 
-    model_id: str
-    provider_id: str
+    id: int
+    provider_id: int
     model_name: str
     display_name: str
     max_context_window: int
@@ -109,7 +109,7 @@ class ModelEntryRecord:
         """
 
         return {
-            "model_id": self.model_id,
+            "id": self.id,
             "provider_id": self.provider_id,
             "model_name": self.model_name,
             "display_name": self.display_name,
@@ -141,7 +141,7 @@ class ModelEntryRecord:
             无。
         """
         return cls(
-            model_id=row.model_id,
+            id=row.id,
             provider_id=row.provider_id,
             model_name=row.model_name,
             display_name=row.display_name,
@@ -158,6 +158,9 @@ class ModelEntryRecord:
     def to_model(self) -> ModelEntryModel:
         """将模型条目记录值对象转换为 ORM 行对象。
 
+        ``id`` 为自增主键：当值对象尚未分配主键（id 为 0 或 None，即新建态）时省略该列，
+        交由存储引擎自增分配；已分配时（如从 ORM 行回填）原样写入。
+
         参数:
             无。
 
@@ -170,17 +173,19 @@ class ModelEntryRecord:
         副作用:
             无。
         """
-        return ModelEntryModel(
-            model_id=self.model_id,
-            provider_id=self.provider_id,
-            model_name=self.model_name,
-            display_name=self.display_name,
-            max_context_window=self.max_context_window,
-            supports_thinking=self.supports_thinking,
-            enabled=self.enabled,
-            sort_order=self.sort_order,
-            supports_image=self.supports_image,
-            supports_video=self.supports_video,
-            created_at=to_text(self.created_at),
-            updated_at=to_text(self.updated_at),
-        )
+        model_kwargs: dict[str, object] = {
+            "provider_id": self.provider_id,
+            "model_name": self.model_name,
+            "display_name": self.display_name,
+            "max_context_window": self.max_context_window,
+            "supports_thinking": self.supports_thinking,
+            "enabled": self.enabled,
+            "sort_order": self.sort_order,
+            "supports_image": self.supports_image,
+            "supports_video": self.supports_video,
+            "created_at": to_text(self.created_at),
+            "updated_at": to_text(self.updated_at),
+        }
+        if self.id:
+            model_kwargs["id"] = self.id
+        return ModelEntryModel(**model_kwargs)

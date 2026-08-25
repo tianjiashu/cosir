@@ -36,11 +36,11 @@ from app.tools.tool_handler.security.path_resolver import PathResolver
 # 与 tools 层 FilePathLockRegistry（物理文件写入锁）语义不同，故不复用。
 # 条目只增不减（每个 (task_id, path) 一个 threading.Lock，量级为操作过的路径数，
 # 内存可忽略；task 删除后残留条目无害，仅作常驻引用）。
-_PATH_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_PATH_LOCKS: dict[tuple[int, str], threading.Lock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
-def _path_lock(task_id: str, path: str) -> threading.Lock:
+def _path_lock(task_id: int, path: str) -> threading.Lock:
     """取得 (task_id, path) 的进程内互斥锁（惰性创建、常驻）。
 
     参数:
@@ -60,7 +60,7 @@ def _path_lock(task_id: str, path: str) -> threading.Lock:
         return _PATH_LOCKS.setdefault((task_id, path), threading.Lock())
 
 
-def keep_file(task_id: str, path: str) -> ChangeFileEntry:
+def keep_file(task_id: int, path: str) -> ChangeFileEntry:
     """把某文件的最新变更标记为「保留」。
 
     仅改写展示态，不触碰磁盘。运行中的快照（``stable=0``）同样可被保留，与
@@ -97,7 +97,7 @@ def keep_file(task_id: str, path: str) -> ChangeFileEntry:
 
 
 async def revert_file(
-    task_id: str, path: str, workspace_root: Path | None = None
+    task_id: int, path: str, workspace_root: Path | None = None
 ) -> ChangeFileEntry:
     """撤销某文件的最新变更，把文件还原到该变更之前。
 
@@ -217,9 +217,9 @@ async def revert_file(
 def _cas_update_status(
     snapshot_id: int,
     status: str,
-    task_id: str,
+    task_id: int,
     path: str,
-    turn_id: str,
+    turn_id: int,
     reverted_at: str = "",
     expected_statuses: Sequence[str] = ("pending",),
 ) -> None:
@@ -266,7 +266,7 @@ def _cas_update_status(
         raise ChangeSetConflictError(f"change status already mutated, operation rejected: {path}")
 
 
-def _publish_revert_updated(task_id: str, snapshot: FileSnapshotRecord) -> None:
+def _publish_revert_updated(task_id: int, snapshot: FileSnapshotRecord) -> None:
     """撤销成功后广播 ``FILE_CHANGE_UPDATED``，驱动前端实时把该条目从列表中移除。
 
     参数:
@@ -311,7 +311,7 @@ def _publish_revert_updated(task_id: str, snapshot: FileSnapshotRecord) -> None:
         )
 
 
-def _resolve_workspace_root(task_id: str) -> Path:
+def _resolve_workspace_root(task_id: int) -> Path:
     """解析任务所属 workspace 的根路径（兜底路径）。
 
     与 ``turn_workspace_resolver`` 同构的「task → workspace → root_path」解析链，但

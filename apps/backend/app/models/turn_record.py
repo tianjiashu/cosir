@@ -15,8 +15,8 @@ from app.utils.datetime_utils import from_text, to_text
 class TurnRecord:
     """表示一次用户与 Agent 的轮次。"""
 
-    turn_id: str
-    task_id: str
+    id: int
+    task_id: int
     input_text: str
     status: str
     created_at: datetime
@@ -24,8 +24,8 @@ class TurnRecord:
     end_reason: str | None = None
     response_text: str | None = None
     agent_id: str | None = None
-    product_id: str | None = None
-    model_id: str | None = None
+    product_id: int | None = None
+    model_id: int | None = None
     paths: list[str] | None = None
     thinking: bool | None = None
     reasoning_effort: str | None = None
@@ -47,7 +47,7 @@ class TurnRecord:
         """
 
         return {
-            "turn_id": self.turn_id,
+            "id": self.id,
             "task_id": self.task_id,
             "input_text": self.input_text,
             "status": self.status,
@@ -80,7 +80,7 @@ class TurnRecord:
             无。
         """
         return cls(
-            turn_id=row.turn_id,
+            id=row.id,
             task_id=row.task_id,
             input_text=row.input_text,
             status=row.status,

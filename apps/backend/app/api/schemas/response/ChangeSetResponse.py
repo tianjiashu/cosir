@@ -8,7 +8,7 @@ from app.models.result.change_set import ChangeSet
 class ChangeCheckpointResponse(BaseModel):
     """检查点响应项。"""
 
-    turn_id: str
+    turn_id: int
     turn_seq: int
     label: str
 

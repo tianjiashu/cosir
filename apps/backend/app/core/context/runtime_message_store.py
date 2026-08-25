@@ -24,7 +24,7 @@ class RuntimeMessageStore(Protocol):
     （含 excluded_turn_ids 排除项），供 ``RuntimeContextManager`` 重建内存上下文。
     """
 
-    def append(self, turn_id: str, message: RuntimeMessage, sequence: int) -> None:
+    def append(self, turn_id: int, message: RuntimeMessage, sequence: int) -> None:
         """落库一条消息；失败抛 SQLAlchemyError（透传给 manager 决定防撕裂语义）。
 
         参数:
@@ -40,7 +40,7 @@ class RuntimeMessageStore(Protocol):
         """
         ...
 
-    def clear(self, turn_id: str) -> None:
+    def clear(self, turn_id: int) -> None:
         """清空某 turn 的全部消息（turn 启动重置用）。
 
         参数:
@@ -56,7 +56,7 @@ class RuntimeMessageStore(Protocol):
 
     def build_for_task(
         self,
-        task_id: str,
+        task_id: int,
     ) -> list[RuntimeMessage]:
         """按 task 维度读回有序历史（含跨轮），供 build_for_task 重建内存上下文。
 

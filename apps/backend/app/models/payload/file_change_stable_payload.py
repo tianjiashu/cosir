@@ -13,7 +13,7 @@ class FileChangeStablePayload(RuntimeEventPayload):
         action: 变更动作，取值 ``created`` / ``modified`` / ``deleted``。
     """
 
-    task_id: str
-    turn_id: str
+    task_id: int
+    turn_id: int
     path: str
     action: str

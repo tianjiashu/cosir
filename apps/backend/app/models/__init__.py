@@ -4,8 +4,8 @@
 model，文件名与 model 相关。不承载服务、适配或 helper 逻辑。
 """
 
+from app.llm_provider.llm_runtime_config import LLMRuntimeConfig
 from app.models.enums.turn_status import TurnStatus
-from app.models.llm_runtime_config import LLMRuntimeConfig
 from app.models.log_entry_record import LogEntryRecord
 from app.models.log_query import LogQuery, LogSortOrder
 from app.models.log_query_result import LogQueryResult

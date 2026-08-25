@@ -19,7 +19,7 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.core.llm.factory import resolve_chat_model
+from app.llm_provider.factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
@@ -27,12 +27,12 @@ from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
 from app.service.depends import get_task_service
-from app.service.llm.model_resolver_service import ModelNotConfiguredError
+from app.llm_provider.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolCall
 
 from ...context.context_listener.context_compress_listener import ContextCompressListener
 from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
-from ...llm.context_window_resolver import resolve_context_window
+from app.llm_provider.context_window_resolver import resolve_context_window
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
 from ..nodes.helper.approval import APPROVAL_INTERRUPT_KEY
@@ -152,10 +152,10 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 构建模型：按 turn.model_name 运行期兜底解析（None 时回退 agent_profile.model_name），
         # 失败记 ``model_resolve_failed`` 后抛出，由外层 graph.astream 异常分支收敛为 RUN_FAILED。
         try:
-            resolved = resolve_chat_model(
-                requested_model=turn.model_name,
-                task_id=turn.task_id,
-                turn_id=turn.turn_id,
+            base_model = resolve_chat_model(
+                task=current_task,
+                turn=turn,
+                agent_profile=agent_profile,
             )
         except ModelNotConfiguredError as exc:
             log.error(
@@ -165,13 +165,12 @@ class ReactLikeWorkflow(AgentWorkflow):
                     "data": {
                         "task_id": current_task.task_id,
                         "turn_id": turn.turn_id,
-                        "model": turn.model_name or agent_profile.model_name,
+                        "model": turn.model_id or agent_profile.model_id,
                         "reason": getattr(exc, "reason", None),
                     },
                 },
             )
             raise
-        base_model = resolved.model
         # 构建工具
         tool_schemas = [
             tool.to_model_tool_definition()
@@ -211,7 +210,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             task_id=current_task.task_id,
             store=operations.message_store,
             current_turn_id=turn_id,
-            total_tokens=resolve_context_window(turn.model_name), #300K
+            total_tokens=resolve_context_window(turn.model_id), #300K
         ).add_change_listener(
             ContextUsageComputeListener(
                 write_event=write_event,

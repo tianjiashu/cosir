@@ -21,7 +21,7 @@ from app.tools.tool_handler.patch.patch_apply import PatchApplyError
 
 @app.get("/tasks/{task_id}/changes", response_model=ChangeSetResponse)
 async def get_changes(
-    task_id: str,
+    task_id: int,
     checkpoint: str | None = Query(default=None),
     include_running: bool = Query(default=True),
 ) -> ChangeSetResponse:
@@ -51,7 +51,7 @@ async def get_changes(
 
 
 @app.post("/tasks/{task_id}/changes/keep", response_model=ChangeSetResponse)
-async def keep_changes(task_id: str, request: ChangeSetActionRequest) -> ChangeSetResponse:
+async def keep_changes(task_id: int, request: ChangeSetActionRequest) -> ChangeSetResponse:
     """把一批文件的最新变更标记为「保留」。
 
     参数:
@@ -81,7 +81,7 @@ async def keep_changes(task_id: str, request: ChangeSetActionRequest) -> ChangeS
 
 
 @app.post("/tasks/{task_id}/changes/revert", response_model=ChangeSetResponse)
-async def revert_changes(task_id: str, request: ChangeSetActionRequest) -> ChangeSetResponse:
+async def revert_changes(task_id: int, request: ChangeSetActionRequest) -> ChangeSetResponse:
     """撤销一批文件的最新变更，把它们还原到变更之前。
 
     参数:

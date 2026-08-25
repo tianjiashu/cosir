@@ -224,7 +224,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "tools_node_cancelled",
             extra={
                 "msg": f"工具节点恢复后检测到 turn 已取消，跳过工具执行，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                "data": {"step_id": step_id, "turn_id": turn.id},
             },
         )
         # 配对闭合：为上一轮已写出的 tool_calls 补 cancelled 占位。执行前分支提前
@@ -277,7 +277,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # 事件循环也需在此取出并传入，供命令运行期输出增量从工作线程调度回环广播。
     tool_run: ToolRunResult = await asyncio.to_thread(
         operations.run_tool_calls,
-        task.task_id,
+        task.id,
         approved_calls,
         step_id,
         write_event=node_write_event,

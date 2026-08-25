@@ -23,7 +23,7 @@ class CreateTaskRequest(BaseModel):
 
     text: str
     agent_id: str
-    workspace_id: str
+    workspace_id: int
     model_name: str | None = None
 
     @field_validator("text")

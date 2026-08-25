@@ -33,7 +33,7 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
         """
         self._turn_service = turn_service
 
-    def append(self, turn_id: str, message: RuntimeMessage, sequence: int) -> None:
+    def append(self, turn_id: int, message: RuntimeMessage, sequence: int) -> None:
         """落库一条消息（转发到 ``TurnService.append_turn_message``）。
 
         参数:
@@ -49,7 +49,7 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
         """
         self._turn_service.append_turn_message(turn_id, message, sequence)
 
-    def clear(self, turn_id: str) -> None:
+    def clear(self, turn_id: int) -> None:
         """清空某 turn 的全部消息（转发到 ``TurnService.clear_turn_messages``）。
 
         参数:
@@ -65,7 +65,7 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
 
     def build_for_task(
         self,
-        task_id: str,
+        task_id: int,
     ) -> list[RuntimeMessage]:
         """按 task 维度读回有序历史（含跨轮、排除指定 turn）。
 
@@ -83,5 +83,5 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
         """
         messages: list[RuntimeMessage] = []
         for turn in self._turn_service.list_turns_for_task(task_id):
-            messages.extend(self._turn_service.load_turn_messages(turn.turn_id))
+            messages.extend(self._turn_service.load_turn_messages(turn.id))
         return messages

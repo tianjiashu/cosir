@@ -43,7 +43,7 @@ from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models.enums.event_type import EventType
 from app.models.event.workspace_event import WorkspaceEvent
-from app.service.llm.model_resolver_service import ModelNotConfiguredError
+from app.llm_provider.model_resolver_service import ModelNotConfiguredError
 from app.service.task.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus

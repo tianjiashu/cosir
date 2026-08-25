@@ -10,7 +10,7 @@
 """
 
 from dataclasses import replace
-from uuid import uuid4
+from typing import List
 
 from app.config.configuration import build_agent_registry, get_agent_registry
 from app.config.logging.logger import log
@@ -75,13 +75,13 @@ class TaskService:
         input_text: str,
         status: str,
         agent_id: str = "developer",
-        workspace_id: str | None = None,
+        workspace_id: int | None = None,
     ) -> TaskRecord:
         """创建任务记录（不含首轮次，首轮次在执行时由 turn 维度创建）。
 
         ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离。任务文本
         ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），任务本身只
-        持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向 ``tasks.task_id``，
+        持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向 ``tasks.id``，
         必须先有 task 才能在执行阶段创建首 turn。
 
         参数:
@@ -107,8 +107,8 @@ class TaskService:
         if not isinstance(input_text, str) or not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
 
-        if workspace_id is None or not isinstance(workspace_id, str) or not workspace_id.strip():
-            raise ValueError("workspace_id must be a non-empty string")
+        if not isinstance(workspace_id, int) or workspace_id <= 0:
+            raise ValueError("workspace_id must be a positive integer")
 
         if agent_id is None or not isinstance(agent_id, str) or not agent_id.strip():
             raise ValueError("agent_id must be a non-empty string")
@@ -117,10 +117,8 @@ class TaskService:
             raise ValueError(f"agent_id {agent_id} is not registered")
 
         title = preview(input_text)
-        task_id = str(uuid4())
-        # 先创建 task（turns.task_id 外键指向 tasks.task_id，必须先有 task 才能建 turn）。
+        # 先创建 task（turns.task_id 外键指向 tasks.id，必须先有 task 才能建 turn）。
         task = self._task.create(
-            task_id=task_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
             title=title,
@@ -129,7 +127,7 @@ class TaskService:
 
         return task
 
-    def get_task(self, task_id: str) -> TaskRecord:
+    def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
 
         参数:
@@ -149,7 +147,7 @@ class TaskService:
         record = self._task.get(task_id)
         return replace(record, execution_status=self.task_display_status(task_id))
 
-    def update_context_usage(self, task_id: str, used: int) -> TaskRecord:
+    def update_context_usage(self, task_id: int, used: int) -> TaskRecord:
         """持久化任务最近一次上下文窗口已用 token。
 
         供运行时在每次模型步产出上下文占用事件后调用，使「打开历史任务」时可回显
@@ -185,7 +183,7 @@ class TaskService:
 
         return self._task.update_context_usage(task_id, used)
 
-    def set_lifecycle_status(self, task_id: str, status: str) -> TaskRecord:
+    def set_lifecycle_status(self, task_id: int, status: str) -> TaskRecord:
         """仅设置用户驱动的生命周期状态（open/archived），不改执行态。
 
         参数:
@@ -207,7 +205,7 @@ class TaskService:
             raise ValueError("lifecycle status must be 'open' or 'archived'")
         return self._task.update_status(task_id, status)
 
-    def task_display_status(self, task_id: str) -> str:
+    def task_display_status(self, task_id: int) -> str:
         """从最新轮次派生任务的执行态。
 
         映射规则：最新轮次为 ``running`` → ``"active"``；为
@@ -225,7 +223,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        turns = self._turn.list_by_task(task_id)
+        turns:List = self._turn.list_by_task(task_id)
         if not turns:
             return "empty"
         latest = turns[-1]
@@ -233,7 +231,7 @@ class TaskService:
             return "active"
         return latest.status
 
-    def has_status(self, task_id: str, status: str) -> bool:
+    def has_status(self, task_id: int, status: str) -> bool:
         """判断任务是否处于指定生命周期状态。
 
         参数:
@@ -252,7 +250,7 @@ class TaskService:
         """
         return self._task.has_status(task_id, status)
 
-    def list_tasks_for_workspace(self, workspace_id: str) -> list[TaskRecord]:
+    def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务）。
 
         委派子任务（``task_type='delegation'``）不进侧边栏对话列表，故本方法仅返回
@@ -272,7 +270,7 @@ class TaskService:
         """
         return self._task.list_by_workspace(workspace_id)
 
-    def list_child_tasks(self, parent_task_id: str) -> list[TaskRecord]:
+    def list_child_tasks(self, parent_task_id: int) -> list[TaskRecord]:
         """列出某父任务下的全部子任务（委派子任务）。
 
         参数:
@@ -294,10 +292,10 @@ class TaskService:
         self,
         *,
         title: str,
-        parent_task_id: str,
-        parent_turn_id: str,
-        delegation_id: str,
-        workspace_id: str,
+        parent_task_id: int,
+        parent_turn_id: int,
+        delegation_id: int,
+        workspace_id: int,
         agent_id: str,
     ) -> TaskRecord:
         """创建委派子任务（只建 task，不建 turn）。
@@ -329,18 +327,15 @@ class TaskService:
         for field_name, value in (
             ("parent_task_id", parent_task_id),
             ("parent_turn_id", parent_turn_id),
-            ("delegation_id", delegation_id),
             ("workspace_id", workspace_id),
-            ("agent_id", agent_id),
         ):
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{field_name} must be a non-empty string")
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer")
+        
         if agent_id not in _registered_agent_ids():
             raise ValueError(f"agent_id {agent_id} is not registered")
 
-        task_id = str(uuid4())
         return self._task.create(
-            task_id=task_id,
             workspace_id=workspace_id,
             agent_id=agent_id,
             title=title,
@@ -353,7 +348,7 @@ class TaskService:
 
     def create_task_with_initial_turn(
         self,
-        workspace_id: str,
+        workspace_id: int,
         agent_id: str,
         input_text: str,
         status: str = "open",
@@ -388,7 +383,7 @@ class TaskService:
 
         副作用:
             向 ``tasks`` 表插入一行顶层任务记录；向 ``turns`` 表插入一行 pending 首轮次记录
-            （归属 ``task.task_id``，状态 ``pending``，含 ``model_name``）。若 task 创建成功后
+            （归属 ``task.id``，状态 ``pending``，含 ``model_name``）。若 task 创建成功后
             首轮次写入失败，已提交的 task 会被显式补偿删除，避免残留孤儿任务。
         """
         if not isinstance(input_text, str) or not input_text.strip():
@@ -409,18 +404,18 @@ class TaskService:
             # 与 POST /turns 路径行为一致；否则首 turn 的 model_name 会原样落库、
             # workspaces_api 的 ModelNotConfiguredError→422 分支沦为死代码。
             turn = service_depends.get_turn_service().create_turn(
-                task.task_id,
+                task.id,
                 input_text,
-                "pending",
                 agent_id=agent_id,
-                model_name=model_name,
+                status="pending",
+                model_id=model_name,
             )
         except Exception as e:
-            self._task.delete_by_ids([task.task_id])
+            self._task.delete_by_ids([task.id])
             raise e
         return task, turn
 
-    def delete_task(self, task_id: str) -> None:
+    def delete_task(self, task_id: int) -> None:
         """原子删除任务树并级联清理其下全部子产物。
 
         删除前先校验任务存在（不存在则抛 ``KeyError``），再通过

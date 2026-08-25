@@ -95,7 +95,7 @@ class TurnStreamService:
             ``run_turn`` 的断开兜底（仅当本连接成功认领且轮次仍 ``running`` 时标记
             ``failed``），避免孤儿 ``running``。
         """
-        turn_id = turn.turn_id
+        turn_id = turn.id
 
         log.info(
             "turn_stream_started",
@@ -192,7 +192,7 @@ class TurnStreamService:
                                 },
                             )
 
-    async def stream_subscribed_turn_events(self, turn_id: str) -> AsyncIterator[RuntimeEvent]:
+    async def stream_subscribed_turn_events(self, turn_id: int) -> AsyncIterator[RuntimeEvent]:
         """纯订阅转发（委派子轮次实时事件推送），不认领 producer。
 
         参数:
@@ -237,7 +237,7 @@ class TurnStreamService:
             消费 runner 事件发布到 bus；结束时释放 producer 槽位。
         """
         entered_run = False
-        turn_id = turn.turn_id
+        turn_id = turn.id
 
         async def execute() -> None:
             """消费 runner 事件并发布到 bus（producer 主体）。
@@ -305,7 +305,7 @@ class TurnStreamService:
             # 最外层释放 producer 槽位。
             self._event_bus.release_turn_producer(turn_id)
 
-    def _emit_run_failed(self, turn: TurnRecord | None, turn_id: str) -> None:
+    def _emit_run_failed(self, turn: TurnRecord | None, turn_id: int) -> None:
         """run 未启动即断开（本地兜底路径）时发布一条 run_failed 终态事件。
 
         与 ``runtime.run_turn`` 内部落 failed 时的终态事件同构，经注入的

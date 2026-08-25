@@ -62,40 +62,11 @@ from app.models.payload import (
     RunFinishedPayload,
     StepStartedPayload,
 )
-from app.service.llm.cost_estimator import UsageBreakdown, estimate_cost
 from app.tools.schemas import ToolCall
 from app.utils.message_content import content_to_text
 
 from ..react.state import ReactGraphState
 
-
-def _estimate_run_cost(rc, usage: dict[str, int]) -> float | None:
-    """估算本 run 的模型调用成本（美分）；无法估算返回 None。
-
-    参数:
-        rc: 当前 ``RuntimeConfig``（取 ``llm_config.model_name``）。
-        usage: ``TurnUsageStats.to_dict()`` 产出的扁平 token 统计。
-
-    返回:
-        估算成本（美分，浮点）；``llm_config`` 缺失或模型价格不可估算时返回 None。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-    if rc.llm_config is None:
-        return None
-    model_name = rc.llm_config.model_name
-    return estimate_cost(
-        UsageBreakdown(
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            cache_hit_tokens=usage["cache_hit_tokens"],
-        ),
-        model_name,
-    )
 
 
 async def _model_node(state: ReactGraphState) -> dict:
@@ -447,7 +418,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         # 整个 run 结束：计算耗时、汇总 token 并估算成本。
         duration_ms = int((perf_counter() - rc.start_time) * 1000)
         usage = rc.usage_stats.to_dict()
-        cost_cents = _estimate_run_cost(rc, usage)
         write_event(
             EventType.RUN_FINISHED,
             RunFinishedPayload(

@@ -27,16 +27,11 @@ from app.api.schemas.response.ModelCandidateResponse import ModelCandidateRespon
 from app.api.schemas.response.ProviderResponse import ProviderResponse
 from app.app import app
 from app.config.logging.logger import log
-from app.service.provider.model_entry_service import ModelEntryService
-from app.service.provider.provider_connection_test_service import (
-    ConnectionTestResult,
-    ProviderConnectionTestService,
-)
-from app.service.provider.provider_discover_service import (
-    ProviderDiscoverError,
-    ProviderDiscoverService,
-)
-from app.service.provider.provider_service import ProviderService
+from app.llm_provider.provider import ModelEntryService
+from app.llm_provider.provider.provider_connection_test_service import ProviderConnectionTestService, \
+    ConnectionTestResult
+from app.llm_provider.provider import ProviderDiscoverService, ProviderDiscoverError
+from app.llm_provider.provider import ProviderService
 
 
 @app.get("/providers")

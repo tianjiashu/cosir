@@ -163,7 +163,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
     if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
         turn = operations.get_current_turn()  # 当前 turn 记录（仅错误上限分支需要 turn_id）
         failed_turn = operations.fail_turn_if_running(
-            turn.turn_id, end_reason="tool_error_limit_reached"
+            turn.id, end_reason="tool_error_limit_reached"
         )
         if failed_turn is None:
             log.info(
@@ -173,7 +173,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                         f"工具错误上限失败落定时 turn 已非 running，"
                         f"跳过失败事件，step_id=step-{state.step_count}"
                     ),
-                    "data": {"step_id": f"step-{state.step_count}", "turn_id": turn.turn_id},
+                    "data": {"step_id": f"step-{state.step_count}", "turn_id": turn.id},
                 },
             )
             return {

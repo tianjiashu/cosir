@@ -15,7 +15,7 @@
 级响应），不静默返回空列表。
 
 2026-08-18 重构：``PROVIDER_TYPE_PREFIXES`` 硬编码 dict 删除，前缀改由
-``ProviderCapability.litellm_prefix`` 决定（注册表 §三 单一事实源）。
+``ProviderCapability.model_prefix`` 决定（``llm_provider.json`` 唯一真相源）。
 新增厂商无需改本文件——只改注册表一行即可。
 """
 
@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from app.config.logging.logger import log
+from app.llm_provider.provider.provider_capability import get_capability
 from app.models import ProviderRecord
-from app.models.provider_capability import get_capability
 from app.service import depends as service_depends
 from app.storage.crud.model_entry_crud import ModelEntryCrud
 
@@ -81,13 +81,13 @@ class ProviderDiscoverService:
     def discover_models(self, provider: ProviderRecord) -> list[ModelCandidate]:
         """读取 litellm 目录并按厂商类型过滤出候选模型列表。
 
-        前缀由 ``ProviderCapability.litellm_prefix`` 决定（注册表 §三 单一
-        事实源）；``None`` 前缀（如 ``custom``）不过滤，返回全目录由用户
+        前缀由 ``ProviderCapability.model_prefix`` 决定（``llm_provider.json``
+        唯一真相源）；空前缀（如 ``custom``）不过滤，返回全目录由用户
         搜索勾选。候选按模型名升序、已导入项排后，``already_imported`` 以
         该厂商下既有 ``model_name`` 集合标注。
 
         参数:
-            provider: 目标厂商记录（提供 ``provider_type`` 与 ``provider_id``）。
+            provider: 目标厂商记录（提供 ``provider_type`` 与 ``id``）。
 
         返回:
             候选模型列表（可能为空列表：目录中无该前缀的条目属正常结果，
@@ -104,7 +104,7 @@ class ProviderDiscoverService:
 
         started = perf_counter()
         capability = get_capability(provider.provider_type)
-        prefix = capability.litellm_prefix
+        prefix = capability.model_prefix
         try:
             cost_map = _load_litellm_cost_map()
         except Exception as exc:
@@ -114,7 +114,7 @@ class ProviderDiscoverService:
                 extra={
                     "msg": (f"litellm 模型目录读取失败：{type(exc).__name__}: {exc}"),
                     "data": {
-                        "provider_id": provider.provider_id,
+                        "provider_id": provider.id,
                         "type": provider.provider_type,
                         "error_type": type(exc).__name__,
                         "elapsed_ms": elapsed_ms,
@@ -128,7 +128,7 @@ class ProviderDiscoverService:
 
         existing_names = {
             record.model_name
-            for record in self._model_entry_crud.list_by_provider(provider.provider_id)
+            for record in self._model_entry_crud.list_by_provider(provider.id)
         }
         candidates: list[ModelCandidate] = []
         for model_name, entry in cost_map.items():
@@ -152,7 +152,7 @@ class ProviderDiscoverService:
                 )
             )
         # 未导入在前（可勾选主体）、已导入在后；组内按模型名升序稳定排序。
-        candidates.sort(key=lambda item: (item.already_imported, item.model_name))
+        candidates.sort(key=lambda item: (item.already_imported, item.model_id))
 
         elapsed_ms = int((perf_counter() - started) * 1000)
         log.info(

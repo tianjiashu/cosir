@@ -27,8 +27,8 @@ class FileChangeUpdatedPayload(RuntimeEventPayload):
         after: 变更后文件全文；``deleted`` 时为 ``None``。
     """
 
-    task_id: str
-    turn_id: str
+    task_id: int
+    turn_id: int
     path: str
     action: str
     additions: int = 0

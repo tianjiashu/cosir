@@ -23,9 +23,8 @@ from app.api.schemas import (
     TurnResponse,
 )
 from app.app import app
-from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
-from app.core.llm.context_window_resolver import resolve_context_window
+from app.llm_provider.context_window_resolver import resolve_context_window
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
@@ -33,7 +32,7 @@ from app.service.task.turn_service import TurnService
 
 @app.get("/tasks/{task_id}")
 async def get_task(
-    task_id: str,
+    task_id: int,
     task_service: TaskService = Depends(get_task_service),
     turn_service: TurnService = Depends(get_turn_service),
 ) -> TaskResponse:
@@ -82,7 +81,7 @@ async def get_task(
 
 @app.get("/tasks/{task_id}/turns")
 async def list_turns(
-    task_id: str,
+    task_id: int,
     turn_service: TurnService = Depends(get_turn_service),
 ) -> list[TurnResponse]:
     """列出某任务下的全部 turn（支撑多轮历史展示）。
@@ -110,7 +109,7 @@ async def list_turns(
 
 @app.get("/tasks/{task_id}/events")
 async def replay_task_events(
-    task_id: str,
+    task_id: int,
     task_service: TaskService = Depends(get_task_service),
     event_service: RuntimeEventService = Depends(get_runtime_event_service),
 ) -> list[RuntimeEventResponse]:
@@ -144,7 +143,7 @@ async def replay_task_events(
 
 @app.delete("/tasks/{task_id}")
 async def delete_task(
-    task_id: str,
+    task_id: int,
     task_service: TaskService = Depends(get_task_service),
 ) -> DeleteTaskResponse:
     """删除单个任务及其级联的轮次与运行时事件。
@@ -174,7 +173,7 @@ async def delete_task(
 
 @app.get("/tasks/{task_id}/children")
 async def list_child_tasks(
-    task_id: str,
+    task_id: int,
     task_service: TaskService = Depends(get_task_service),
 ) -> list[TaskResponse]:
     """列出某任务下的全部子任务（委派子任务）。
@@ -232,7 +231,7 @@ async def replay_turn_events(
     return [RuntimeEventResponse.from_event_dict(e) for e in events]
 
 
-def _latest_turn_model_name(task_id: str, turn_service: TurnService) -> str | None:
+def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> int | None:
     """取得某任务最近一次 turn 的 ``model_name``（设计 §6.4 任务级口径）。
 
     按创建时间升序取该 task 的全部 turn，返回最后一个非空 ``model_name``；无 turn
@@ -255,6 +254,6 @@ def _latest_turn_model_name(task_id: str, turn_service: TurnService) -> str | No
 
     turns = turn_service.list_turns_for_task(task_id)
     for turn in reversed(turns):
-        if turn.model_name:
-            return turn.model_name
+        if turn.model_id:
+            return turn.model_id
     return None

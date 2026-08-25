@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from app.config.logging.logger import log
+from app.llm_provider.model_error_mapper import map_litellm_error
+from app.llm_provider.provider.provider_capability import get_capability
 from app.models import ProviderRecord
-from app.models.provider_capability import get_capability
-from app.service.llm.model_error_mapper import map_litellm_error
 
 
 @dataclass(frozen=True)
@@ -71,8 +71,8 @@ class ProviderConnectionTestService:
         实现要点：
         - 用 ``provider.base_url`` / ``api_key`` 构造一次最小
           chat 请求（``{"messages": [{"role": "user", "content": "ping"}]}``，
-          ``max_tokens=1``），测试模型名取 ``capability.litellm_prefix + "ping"``
-          占位（无前缀的 custom 厂商回退 ``"ping"``，由 litellm 按
+          ``max_tokens=1``），测试模型名取 ``capability.model_prefix + 占位模型``
+          （无前缀的厂商回退 ``"ping"``，由模型客户端按
           ``api_base`` 实际打到厂商）；
         - 经 litellm ``acompletion`` 发起请求（与 ``factory.build_chat_model``
           相同的 litellm 入口），失败异常经 ``map_litellm_error`` 归一为稳定
@@ -98,10 +98,10 @@ class ProviderConnectionTestService:
             ``provider_connection_test_failed`` 日志。
         """
         capability = get_capability(provider.provider_type)
-        # 测试模型名取 capability.litellm_prefix + 已知存在的最小模型占位。
+        # 测试模型名取 capability.model_prefix + 已知存在的最小模型占位。
         # 各厂商均有一个「通用聊天」模型（如 deepseek-chat / gpt-4o-mini），
         # 用它代替虚构的 "ping" 可避免 "The model rejected the request" 错误。
-        _KNOWN_MINIMAL_MODELS: dict[str | None, str] = {
+        _KNOWN_MINIMAL_MODELS: dict[str, str] = {
             "deepseek/": "deepseek-chat",
             "openai/": "gpt-4o-mini",
             "anthropic/": "claude-3-haiku-20240307",
@@ -115,7 +115,7 @@ class ProviderConnectionTestService:
             "minimax/": "abab6.5s-chat",
             "ollama/": "",  # ollama 无 Key 时跳过连通性测试
         }
-        prefix = capability.litellm_prefix or ""
+        prefix = capability.model_prefix
         minimal_model = _KNOWN_MINIMAL_MODELS.get(prefix, "")
         test_model = f"{prefix}{minimal_model}" if minimal_model else f"{prefix}ping"
 
@@ -139,7 +139,7 @@ class ProviderConnectionTestService:
                         f"（type={provider.provider_type}）"
                     ),
                     "data": {
-                        "provider_id": provider.provider_id,
+                        "provider_id": provider.id,
                         "type": provider.provider_type,
                         "elapsed_ms": elapsed_ms,
                         "error_code": mapped.error_code.value,
@@ -148,7 +148,7 @@ class ProviderConnectionTestService:
                 },
             )
             return ConnectionTestResult(
-                provider_id=provider.provider_id,
+                provider_id=provider.id,
                 success=False,
                 elapsed_ms=elapsed_ms,
                 error_code=mapped.error_code.value,
@@ -164,14 +164,14 @@ class ProviderConnectionTestService:
                     f"（type={provider.provider_type}）"
                 ),
                 "data": {
-                    "provider_id": provider.provider_id,
+                    "provider_id": provider.id,
                     "type": provider.provider_type,
                     "elapsed_ms": elapsed_ms,
                 },
             },
         )
         return ConnectionTestResult(
-            provider_id=provider.provider_id,
+            provider_id=provider.id,
             success=True,
             elapsed_ms=elapsed_ms,
         )
@@ -186,7 +186,7 @@ async def _acompletion_ping(
     """经 litellm 发起一次最小 chat 请求（连通性测试的内部封装）。
 
     参数:
-        model: 测试用模型名（``capability.litellm_prefix + "ping"``）。
+        model: 测试用模型名（``capability.model_prefix + 占位模型``）。
         api_base: 厂商自定义端点（None 时不传，由 litellm 按前缀解析）。
         api_key: 厂商 Key 明文（None 时不传）。
 

@@ -71,7 +71,7 @@ class WorkspaceService:
         """
         return self._workspace.list_all()
 
-    def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
+    def get_workspace(self, workspace_id: int) -> WorkspaceRecord:
         """按标识取单个工作区。
 
         参数:
@@ -89,7 +89,7 @@ class WorkspaceService:
         """
         return self._workspace.get(workspace_id)
 
-    def delete_workspace(self, workspace_id: str) -> None:
+    def delete_workspace(self, workspace_id: int) -> None:
         """原子删除工作区并级联清理其下所有任务树及全部子产物。
 
         删除前先校验工作区存在（不存在则抛 ``KeyError``），再通过

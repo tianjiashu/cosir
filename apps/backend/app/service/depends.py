@@ -16,14 +16,14 @@ if TYPE_CHECKING:
     from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
     from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
     from app.service.delegation.delegation_service import DelegationService
-    from app.service.llm.model_resolver_service import ModelResolverService
+    from app.llm_provider.model_resolver_service import ModelResolverService
     from app.service.log_query_service import LogQueryService
-    from app.service.provider.model_entry_service import ModelEntryService
-    from app.service.provider.provider_connection_test_service import (
+    from app.llm_provider.provider import ModelEntryService
+    from app.llm_provider.provider.provider_connection_test_service import (
         ProviderConnectionTestService,
     )
-    from app.service.provider.provider_discover_service import ProviderDiscoverService
-    from app.service.provider.provider_service import ProviderService
+    from app.llm_provider.provider import ProviderDiscoverService
+    from app.llm_provider.provider import ProviderService
     from app.service.task.task_service import TaskService
     from app.service.task.turn_service import TurnService
     from app.service.task.turn_stream_service import TurnStreamService
@@ -582,7 +582,7 @@ def get_provider_service() -> ProviderService:
         首次调用时创建 ProviderService（注入 ProviderCrud 单例）。
     """
 
-    from app.service.provider.provider_service import ProviderService
+
 
     return ProviderService()
 
@@ -604,7 +604,7 @@ def get_provider_discover_service() -> ProviderDiscoverService:
         首次调用时创建 ProviderDiscoverService（注入 ModelEntryCrud 单例）。
     """
 
-    from app.service.provider.provider_discover_service import ProviderDiscoverService
+
 
     return ProviderDiscoverService()
 
@@ -626,7 +626,7 @@ def get_model_entry_service() -> ModelEntryService:
         首次调用时创建 ModelEntryService（注入 ModelEntryCrud 单例）。
     """
 
-    from app.service.provider.model_entry_service import ModelEntryService
+
 
     return ModelEntryService()
 
@@ -648,7 +648,7 @@ def get_model_resolver_service() -> ModelResolverService:
         首次调用时创建 ModelResolverService。
     """
 
-    from app.service.llm.model_resolver_service import ModelResolverService
+    from app.llm_provider.model_resolver_service import ModelResolverService
 
     return ModelResolverService()
 
@@ -670,10 +670,6 @@ def get_provider_connection_test_service() -> ProviderConnectionTestService:
     副作用:
         首次调用时创建 ProviderConnectionTestService。
     """
-
-    from app.service.provider.provider_connection_test_service import (
-        ProviderConnectionTestService,
-    )
 
     return ProviderConnectionTestService()
 

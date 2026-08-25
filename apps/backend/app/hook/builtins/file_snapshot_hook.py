@@ -96,7 +96,10 @@ class FileSnapshotHook(HookBase):
 
         tool_name = context.tool_name or ""
         try:
-            self._record(observation, tool_name, context.task_id, context.turn_id)
+            # HookContext 携带的 task_id/turn_id 为字符串标识，落库快照层要求整数主键。
+            task_id = int(context.task_id)
+            turn_id = int(context.turn_id)
+            self._record(observation, tool_name, task_id, turn_id)
         except Exception:
             log.warning(
                 "file_snapshot_record_failed",
@@ -116,8 +119,8 @@ class FileSnapshotHook(HookBase):
         self,
         observation: ToolObservation,
         tool_name: str,
-        task_id: str,
-        turn_id: str,
+        task_id: int,
+        turn_id: int,
     ) -> None:
         """把一次工具观察的 changes 落库为反向操作快照。
 

@@ -21,8 +21,8 @@
 """
 
 from app.config.logging.logger import log
+from app.llm_provider.provider.provider_capability import get_capability
 from app.models import ProviderRecord
-from app.models.provider_capability import get_capability
 from app.service import depends as service_depends
 from app.storage.crud.provider_crud import ProviderCrud
 
@@ -48,11 +48,11 @@ class ProviderService:
 
         self._provider_crud: ProviderCrud = service_depends.get_provider_crud()
 
-    def list_providers(self) -> list[ProviderRecord]:
+    def list_providers(self, enabled: bool | None = None) -> list[ProviderRecord]:
         """列出全部厂商，按排序权重升序。
 
         参数:
-            无。
+            enabled: 是否仅返回启用项。
 
         返回:
             全部厂商列表（含禁用项；启用过滤由前端 / API 投影决定）。
@@ -64,7 +64,7 @@ class ProviderService:
             打开一次主库只读 session。
         """
 
-        return self._provider_crud.list_all()
+        return self._provider_crud.list_all(enabled)
 
     def get_provider(self, provider_id: str) -> ProviderRecord:
         """按标识返回单个厂商。
@@ -113,13 +113,13 @@ class ProviderService:
         return bool(provider.api_key)
 
     def create_provider(
-        self,
-        name: str,
-        provider_type: str,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        enabled: bool = True,
-        sort_order: int = 0,
+            self,
+            name: str,
+            provider_type: str,
+            base_url: str | None = None,
+            api_key: str | None = None,
+            enabled: bool = True,
+            sort_order: int = 0,
     ) -> ProviderRecord:
         """新建模型厂商并写 ``provider_created`` 审计日志。
 
@@ -158,7 +158,7 @@ class ProviderService:
             extra={
                 "msg": f"模型厂商已创建：{record.name}",
                 "data": {
-                    "provider_id": record.provider_id,
+                    "provider_id": record.id,
                     "name": record.name,
                     "type": record.provider_type,
                     "enabled": record.enabled,
@@ -168,15 +168,15 @@ class ProviderService:
         return record
 
     def update_provider(
-        self,
-        provider_id: str,
-        *,
-        name: str | None = None,
-        provider_type: str | None = None,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        enabled: bool | None = None,
-        sort_order: int | None = None,
+            self,
+            provider_id: str,
+            *,
+            name: str | None = None,
+            provider_type: str | None = None,
+            base_url: str | None = None,
+            api_key: str | None = None,
+            enabled: bool | None = None,
+            sort_order: int | None = None,
     ) -> ProviderRecord:
         """更新厂商字段并写 ``provider_updated`` 审计日志。
 

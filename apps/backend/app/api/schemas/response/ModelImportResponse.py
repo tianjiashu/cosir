@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from app.api.schemas.response.ModelEntryResponse import ModelEntryResponse
 from app.models.model_entry_record import ModelEntryRecord
 from app.models.provider_record import ProviderRecord
-from app.service.provider.model_entry_service import ModelImportResult
+from app.llm_provider.provider import ModelImportResult
 
 
 class ModelImportResponse(BaseModel):

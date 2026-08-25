@@ -1,0 +1,22 @@
+{
+  "deepseek":{
+    "provider_type": "api",
+    "base_url": "https://api.deepseek.com",
+    "models": [
+      "deepseek-v4-flash-vision-exp",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro"
+    ],
+    "error_code": {
+      "400": "格式错误",
+      "401": "认证失败",
+      "402": "余额不足",
+      "422": "参数错误",
+      "429": "请求速率达到上限",
+      "500": "服务器故障",
+      "503": "服务器繁忙"
+    },
+    "thinking_channels": "reasoning_content",
+    "extra": {}
+  }
+}

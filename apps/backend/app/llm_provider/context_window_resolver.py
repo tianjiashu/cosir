@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.config.settings import Settings
-from app.core.llm.model_catalog import ModelCatalog
+from app.llm_provider.model_catalog import ModelCatalog
 
 
 def resolve_context_window(model_name: str) -> int:

@@ -31,5 +31,5 @@ class DelegationAcquireResult:
     """
 
     acquired: bool
-    delegation_id: str
+    delegation_id: int
     reason: str

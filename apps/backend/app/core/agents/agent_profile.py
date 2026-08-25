@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 
-from app.core.llm.model_settings import ModelSettings
+from app.core.agents.model_settings import ModelSettings
 from app.models import TurnRecord
 
 if TYPE_CHECKING:
@@ -55,6 +55,7 @@ class AgentProfile:
         can_delegated: 是否允许被委派为子 Agent。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 该 Agent 使用的执行策略（默认 ReAct-like）。
+        product_name: 模型厂商名称。
         model_name: 该 Agent 使用的模型名称（带 provider 前缀，透传给 litellm 路由）。
             2026-08-18 决议：5 个内置 profile **不内置默认模型**，默认 ``None``；
             ``None`` 表示「该 Agent 未配置模型」，由前端优先校验、后端兜底报错
@@ -81,7 +82,8 @@ class AgentProfile:
     description: str
     allowed_tools: list[str]
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    model_name: str | None = None
+    product_id: str | None = None
+    model_id: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     hidden: bool = False
     max_steps: int = 1000

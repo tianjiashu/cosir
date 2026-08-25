@@ -37,14 +37,14 @@ class RuntimeEventBus:
         if queue_size < 1:
             raise ValueError("queue_size must be positive")
         self._queue_size = queue_size
-        self._subscribers: dict[str, set[asyncio.Queue[RuntimeEvent | object]]] = {}
+        self._subscribers: dict[int, set[asyncio.Queue[RuntimeEvent | object]]] = {}
         # 每个 turn 的去重窗口为有界 FIFO（OrderedDict 保插入序），容量不超过
         # queue_size：与订阅队列满时丢最旧事件的语义保持一致。
-        self._published_event_ids_by_turn: dict[str, OrderedDict[str, None]] = {}
-        self._producer_turn_ids: set[str] = set()
+        self._published_event_ids_by_turn: dict[int, OrderedDict[str, None]] = {}
+        self._producer_turn_ids: set[int] = set()
         self._lock = threading.RLock()
 
-    def claim_turn_producer(self, turn_id: str) -> bool:
+    def claim_turn_producer(self, turn_id: int) -> bool:
         """Claim the single active producer slot for a turn.
 
         参数:
@@ -68,7 +68,7 @@ class RuntimeEventBus:
             self._producer_turn_ids.add(turn_id)
             return True
 
-    def release_turn_producer(self, turn_id: str) -> None:
+    def release_turn_producer(self, turn_id: int) -> None:
         """Release the active producer slot for a turn.
 
         参数:
@@ -87,7 +87,7 @@ class RuntimeEventBus:
         with self._lock:
             self._producer_turn_ids.discard(turn_id)
 
-    def subscribe(self, turn_id: str) -> RuntimeEventSubscription:
+    def subscribe(self, turn_id: int) -> RuntimeEventSubscription:
         """Subscribe to runtime events for a turn.
 
         参数:
@@ -192,7 +192,7 @@ class RuntimeEventBus:
                     },
                 )
 
-    def close_turn(self, turn_id: str) -> None:
+    def close_turn(self, turn_id: int) -> None:
         """Close all current subscriptions for a turn.
 
         参数:

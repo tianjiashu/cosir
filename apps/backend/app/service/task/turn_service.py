@@ -37,12 +37,12 @@ class TurnService:
 
     def create_turn(
         self,
-        task_id: str,
+        task_id: int,
         input_text: str,
         agent_id: str | None = None,
         status: str = "pending",
-        product_name: str | None = None,
-        model_name: str | None = None,
+        product_id: str | None = None,
+        model_id: str | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
         paths: list[str] | None = None,
@@ -84,21 +84,21 @@ class TurnService:
             input_text,
             status,
             agent_id=agent_id,
-            product_name=product_name,
-            model_name=model_name,
+            product_id=product_id,
+            model_id=model_id,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
             paths=paths,
         )
         return turn
 
-    def get_turn(self, turn_id: str) -> TurnRecord:
+    def get_turn(self, turn_id: int) -> TurnRecord:
         return self._turn.get(turn_id)
 
-    def list_turns_for_task(self, task_id: str) -> list[TurnRecord]:
+    def list_turns_for_task(self, task_id: int) -> list[TurnRecord]:
         return self._turn.list_by_task(task_id)
 
-    def cancel_turn_if_active(self, turn_id: str, end_reason: str) -> TurnRecord | None:
+    def cancel_turn_if_active(self, turn_id: int, end_reason: str) -> TurnRecord | None:
         """Cancel a pending/running turn atomically.
 
         业务语义：仅 ``pending`` / ``running`` 可进入 ``cancelled`` 终态；该约束收敛在
@@ -126,7 +126,7 @@ class TurnService:
             end_reason=end_reason,
         )
 
-    def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
+    def complete_turn_if_running(self, turn_id: int, response_text: str) -> TurnRecord | None:
         """Complete a running turn and persist its response atomically.
 
         业务语义：仅 ``running`` 可进入 ``completed`` 终态并落库回复文本；约束收敛在
@@ -155,7 +155,7 @@ class TurnService:
         )
 
     def fail_turn_if_running(
-        self, turn_id: str, end_reason: str | None = None
+        self, turn_id: int, end_reason: str | None = None
     ) -> TurnRecord | None:
         """Fail a running turn atomically.
 
@@ -184,27 +184,7 @@ class TurnService:
             end_reason=end_reason,
         )
 
-    def update_model_name(self, turn_id: str, model_name: str) -> TurnRecord:
-        """回写轮次实际所用模型名（运行期兜底解析修正后，§6.4）。
-
-        参数:
-            turn_id: 待回写的轮次标识。
-            model_name: 运行期解析得到的最终模型名（litellm 路由名）。
-
-        返回:
-            更新后的 ``TurnRecord``。
-
-        异常:
-            KeyError: 如果指定轮次不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            更新 ``turns`` 表的 ``model_name`` 列与 ``updated_at``。
-        """
-
-        return self._turn.update_model_name(turn_id, model_name)
-
-    def has_turn_status(self, turn_id: str | None, status: str) -> bool:
+    def has_turn_status(self, turn_id: int | None, status: str) -> bool:
         """Return whether the turn currently has the requested status.
 
         参数:
@@ -235,7 +215,7 @@ class TurnService:
         except KeyError:
             return False
 
-    def claim_pending_turn(self, turn_id: str) -> bool:
+    def claim_pending_turn(self, turn_id: int) -> bool:
         """以乐观锁方式抢占 pending turn 为 running。
 
         业务语义：仅 ``pending`` 可抢占为 ``running``，该约束收敛在本方法（service 层），
@@ -266,14 +246,14 @@ class TurnService:
             is not None
         )
 
-    def load_turn_messages(self, turn_id: str) -> list[RuntimeMessage]:
+    def load_turn_messages(self, turn_id: int) -> list[RuntimeMessage]:
         """Load a turn's ordered message trajectory; empty list if none stored."""
 
         return self._message.load_messages(turn_id)
 
     def append_turn_message(
         self,
-        turn_id: str,
+        turn_id: int,
         message: RuntimeMessage,
         sequence: int,
         in_context: bool = True,
@@ -297,9 +277,11 @@ class TurnService:
             的整轮清空语义互补，组合实现 turn 重跑幂等）。
         """
 
-        self._message.append_message(turn_id, message, sequence, in_context=in_context)
+        self._message.append_message(
+            turn_id, message, sequence, in_context=in_context
+        )
 
-    def clear_turn_messages(self, turn_id: str) -> None:
+    def clear_turn_messages(self, turn_id: int) -> None:
         """Delete all stored messages for a turn (used before re-running a turn).
 
         参数:

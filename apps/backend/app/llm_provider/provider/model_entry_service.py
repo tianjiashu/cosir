@@ -55,8 +55,8 @@ class ModelEntryService:
 
         self._model_entry_crud: ModelEntryCrud = service_depends.get_model_entry_crud()
 
-    def list_models(self) -> list[ModelEntryRecord]:
-        """列出全部模型条目，按厂商、排序权重、创建时间升序。
+    def list_models(self, enabled: bool | None = None) -> list[ModelEntryRecord]:
+        """列出全部启用模型条目，按厂商、排序权重、创建时间升序。
 
         参数:
             无。
@@ -71,7 +71,7 @@ class ModelEntryService:
             打开一次主库只读 session。
         """
 
-        return self._model_entry_crud.list_all()
+        return self._model_entry_crud.list_all(enabled)
 
     def list_models_by_provider(self, provider_id: str) -> list[ModelEntryRecord]:
         """列出某厂商下全部模型条目。

@@ -8,9 +8,9 @@ from app.models.payload.runtime_event_payload import RuntimeEventPayload
 class DelegationFailedPayload(RuntimeEventPayload):
     """Failed delegation completion event payload."""
 
-    delegation_id: str
-    parent_turn_id: str
-    child_turn_id: str
+    delegation_id: int
+    parent_turn_id: int
+    child_turn_id: int
     child_agent_id: str
     delegation_type: str
     status: Literal["failed"]

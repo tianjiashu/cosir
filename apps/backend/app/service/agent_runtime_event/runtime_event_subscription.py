@@ -13,7 +13,7 @@ _QUEUE_CLOSED = object()
 class RuntimeEventSubscription:
     """A single turn-scoped runtime event subscription."""
 
-    turn_id: str
+    turn_id: int
     queue: asyncio.Queue[RuntimeEvent | object]
 
     def __aiter__(self) -> Self:
