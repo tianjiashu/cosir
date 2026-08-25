@@ -86,7 +86,7 @@ runtime_context_manager.add_message(RuntimeMessage(role="user", ...), write_memo
 runtime_context_manager.load_history()
 runtime_context_manager.attach_usage_meter(ContextUsageMeter(
    message_provider=runtime_context_manager.load_message,
-   model_name_provider=lambda: turn.model_name or agent_profile.model_name or "",
+   model_name_provider=lambda: turn.model_id or agent_profile.model_id or "",
 ))
 ```
 

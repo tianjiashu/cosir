@@ -1,0 +1,112 @@
+{
+  "deepseek":{
+    "base_url": "https://api.deepseek.com",
+    "base_url2": "https://api.deepseek.com/beta",
+    "models": [
+      "deepseek-v4-flash-vision-exp",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro"
+    ],
+    "error_code": {
+      "400": "格式错误",
+      "401": "认证失败",
+      "402": "余额不足",
+      "422": "参数错误",
+      "429": "请求速率达到上限",
+      "500": "服务器故障",
+      "503": "服务器繁忙"
+    },
+    "note": "思考模式不支持 temperature、top_p、presence_penalty、frequency_penalty 参数。请注意，为了兼容已有软件，设置参数不会报错，但也不会生效。\n\n在思考模式下，思维链内容通过 reasoning_content 参数返回，与 content 同级。在后续的轮次的拼接中，可以选择性地返回 reasoning_content 给 API：\n\n在两个 user 消息之间，如果请求未携带 tools 参数，则中间 assistant 的 reasoning_content 无需参与上下文拼接，在后续轮次中将其传入 API 会被忽略。详见多轮对话拼接。\n在两个 user 消息之间，如果请求携带了 tools 参数，则中间 assistant 的 reasoning_content 需参与上下文拼接，在后续所有 user 交互轮次中必须回传给 API——即使该轮模型未实际进行工具调用，否则 API 会返回 400 错误。详细见：https://api-docs.deepseek.com/zh-cn/guides/thinking_mode ",
+    "json_output": "设置 response_format 参数为 {'type': 'json_object'}。\n用户传入的 system 或 user prompt 中必须含有 json 字样，并给出希望模型输出的 JSON 格式的样例，以指导模型来输出合法 JSON。\n需要合理设置 max_tokens 参数，防止 JSON 字符串被中途截断。\n在使用 JSON Output 功能时，API 有概率会返回空的 content。我们正在积极优化该问题，您可以尝试修改 prompt 以缓解此类问题。",
+    "tool_call": "strict 模式（Beta）\n在 strict 模式下，模型在输出 Function 调用时会严格遵循 Function 的 JSON Schema 的格式要求，以确保模型输出的 Function 符合用户的定义。在思考与非思考模式下的工具调用，均可使用 strict 模式。\n\n要使用 strict 模式，需要：\n\n用户需要设置 base_url=\"https://api.deepseek.com/beta\" 来开启 Beta 功能\n在传入的 tools 列表中，所有 function 均需设置 strict 属性为 true\n服务端会对用户传入的 Function 的 JSON Schema 进行校验，如不符合规范，或遇到服务端不支持的 JSON Schema 类型，将返回错误信息。详细见：https://api-docs.deepseek.com/zh-cn/guides/tool_calls"
+  },
+  "Zhipu":{
+    "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+    "models": [
+      "GLM-5.3",
+      "GLM-5.2",
+      "GLM-5.1",
+      "GLM-5",
+      "GLM-4.7",
+      "GLM-4.6",
+      "GLM-4.5",
+      "GLM-5V-Turbo",
+      "GLM-4.6V",
+      "GLM-4.7-Flash",
+      "GLM-4.6V-Flash"
+    ],
+    "note": "GLM-4.5 及以上 才支持思考模式；GLM-5.2 模型支持 max xhigh high medium low minimal none, 传入 none 或 minimal 模型会放弃思考；传入 low medium 将映射为 high；传入 xhigh 将映射为 max”。\nGLM-5.3 模型仅支持 max high low",
+    "json_output":"指定响应格式，设置为 {\"type\": \"json_object\"} 启用 JSON 模式",
+    "tool_call": "tool_choice: 控制函数调用策略， 默认且仅支持 auto"
+  },
+  "Kimi":{
+    "base_url": "https://api.moonshot.cn",
+    "models": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5"
+    ],
+    "note": ""
+  },
+  "Qwen": {
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "models": [
+      "qwen-3.8-max",
+      "qwen-3.7-max",
+      "qwen-3.7-plus",
+      "qwen-3.7-flash",
+      "qwen-3.6-max",
+      "qwen-3.6-plus",
+      "qwen-3.5-plus",
+      "qwen-3.5-flash",
+      "deepseek-v4-pro-0813",
+      "deepseek-v4-flash-0731",
+      "Kimi-k3",
+      "glm-5.3",
+      "MiniMax-M3"
+    ],
+    "note": ""
+  },
+  "Minimax": {
+    "base_url": "https://api.minimaxi.com/v1",
+    "token_plan_subscribe":"https://platform.minimaxi.com/subscribe/token-plan",
+    "models": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "note": "OpenAI SDK:\n将完整的 response_message 对象（包含 tool_calls 字段）添加到消息历史\n原生的OpenAI API 的 MiniMax-M3 模型 content 字段会包含 <think> 标签内容，需要完整保留\n在 Interleaved Thinking 友好格式中，通过启用额外的参数(reasoning_split=True)，模型思考内容通过 reasoning_details 字段单独提供，同样需要完整保留",
+    "thinking": "对于 M2.x 模型，thinking 无法关闭；即使传入 thinking: {'type': 'disabled'}，thinking 仍会保持开启。"
+  },
+  "volcengine": {
+    "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+    "coding_plan_subscribe":"https://console.volcengine.com/ark/region:cn-beijing/subscription/coding-plan",
+    "models": [
+      "Auto",
+      "Doubao-Seed-2.0-lite",
+      "GLM-5.2",
+      "Kimi-K2.7-Code",
+      "DeepSeek-V4-Pro",
+      "MiniMax-M3",
+      "GLM-5.1",
+      "Doubao-Seed-2.1-turbo",
+      "DeepSeek-V3.2",
+      "GLM-5.3",
+      "Doubao-Seed-Evolving"
+    ],
+    "note": ""
+  },
+  "tencent": {
+    "base_url": "https://api.lkeap.cloud.tencent.com/plan/v3",
+    "models": [
+      "hy3"
+    ]
+  }
+}

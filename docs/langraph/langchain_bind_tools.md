@@ -80,7 +80,7 @@ bind_kwargs = self._filter_disabled_params(
         "tool_choice": tool_choice,
         "parallel_tool_calls": parallel_tool_calls,
         "strict": strict,
-        "ls_model_name": self.model_name,
+        "ls_model_name": self.model_id,
         **kwargs,
     }
 )
