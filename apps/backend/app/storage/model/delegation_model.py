@@ -1,6 +1,6 @@
 """SQLAlchemy mapping for persisted delegations."""
 
-from sqlalchemy import Text
+from sqlalchemy import ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -11,11 +11,18 @@ class DelegationModel(StorageBase):
 
     __tablename__ = "delegations"
 
-    delegation_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    task_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    parent_turn_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    child_turn_id: Mapped[str] = mapped_column(Text, nullable=False)
-    child_task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tasks.id"), nullable=False, index=True
+    )
+    parent_turn_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("turns.id"), nullable=False, index=True
+    )
+    child_turn_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("turns.id"), nullable=False
+    )
+    child_task_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("tasks.id"), nullable=True
+    )
     parent_agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     child_agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     delegation_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -24,5 +31,3 @@ class DelegationModel(StorageBase):
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[str] = mapped_column(Text, nullable=False)
     effective_tools: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)

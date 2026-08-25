@@ -10,8 +10,6 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from uuid import uuid4
-
 from sqlalchemy import asc, delete, select, update
 
 from app.models import TurnRecord
@@ -46,30 +44,30 @@ class TurnCrud:
 
     def create(
         self,
-        task_id: str,
+        task_id: int,
         input_text: str,
         status: str = "pending",
         agent_id: str | None = None,
-        product_id: str | None = None,
-        model_id: str | None = None,
+        product_id: int | None = None,
+        model_id: int | None = None,
         paths: list[str] | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
-        ``turn_id`` 由本方法生成（UUID4），创建 / 更新时间以当前 UTC 时间统一填充。
+        主键 ``id`` 由存储引擎自增分配，调用方不再提供业务标识。``created_at`` /
+        ``updated_at`` 以当前 UTC 时间统一填充。
 
         参数:
-            task_id: 所属任务标识。
+            task_id: 所属任务标识（整数 id）。
             input_text: 本轮输入文本；不能为空白。
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本次轮次绑定的 agent 标识；仅写入应用层 ``TurnRecord``
                 值对象（供上层 / 运行时消费），当前 ``turns`` 表模型不持久化
                 ``agent_id`` 列，故不落库。
-            model_id: 可选，本轮使用的模型条目标识（``ModelEntryRecord.model_id``，
-                UUID 字符串）；None 表示创建期未携带（运行期兜底解析后由
-                ``update_model_id`` 回写）。
+            model_id: 可选，本轮使用的模型条目标识（``ModelEntryRecord.id`` 整数）；
+                None 表示创建期未携带（运行期兜底解析后由 ``update_model_id`` 回写）。
             paths: 可选，本轮输入的路径列表；None 表示无路径关联。
             thinking: 可选，本 turn 是否为思考轮次；None 表示无思考轮次。
             reasoning_effort: 可选，本 turn 思考努力等级；None 表示未指定（由模型侧回退到
@@ -77,7 +75,7 @@ class TurnCrud:
                 ``turns.reasoning_effort``。
 
         返回:
-            落库成功的 ``TurnRecord``。
+            落库成功的 ``TurnRecord``（含自增分配的 id）。
 
         异常:
             ValueError: 如果 input_text 去除首尾空白后为空。
@@ -90,46 +88,31 @@ class TurnCrud:
         if not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
         now = utc_now()
-        turn = TurnRecord(
-            str(uuid4()),
-            task_id,
-            input_text,
-            status,
-            now,
-            now,
-            product_id=product_id,
-            response_text=None,
-            agent_id=agent_id,
-            model_id=model_id,
-            paths=paths,
-            thinking=thinking,
-            reasoning_effort=reasoning_effort,
-        )
         with self._session_factory.begin() as session:
-            session.add(
-                TurnModel(
-                    turn_id=turn.turn_id,
-                    task_id=turn.task_id,
-                    input_text=turn.input_text,
-                    status=turn.status,
-                    end_reason=turn.end_reason,
-                    response_text=turn.response_text,
-                    product_name=turn.product_id,
-                    model_name=turn.model_id,
-                    created_at=to_text(turn.created_at),
-                    updated_at=to_text(turn.updated_at),
-                    paths=turn.paths,
-                    thinking=turn.thinking,
-                    reasoning_effort=turn.reasoning_effort,
-                )
+            model = TurnModel(
+                task_id=task_id,
+                input_text=input_text,
+                status=status,
+                end_reason=None,
+                response_text=None,
+                agent_id=agent_id,
+                product_id=product_id,
+                model_id=model_id,
+                created_at=to_text(now),
+                updated_at=to_text(now),
+                paths=paths,
+                thinking=thinking,
+                reasoning_effort=reasoning_effort,
             )
-        return turn
+            session.add(model)
+            session.flush()
+            return TurnRecord.from_model(model)
 
-    def get(self, turn_id: str) -> TurnRecord:
+    def get(self, turn_id: int) -> TurnRecord:
         """按标识返回单个 turn。
 
         参数:
-            turn_id: turn 标识。
+            turn_id: turn 标识（整数 id）。
 
         返回:
             匹配的 ``TurnRecord``。
@@ -148,14 +131,14 @@ class TurnCrud:
             raise KeyError(turn_id)
         return TurnRecord.from_model(row)
 
-    def list_by_task(self, task_id: str) -> list[TurnRecord]:
+    def list_by_task(self, task_id: int) -> list[TurnRecord]:
         """列出某任务下的全部 turn，按创建时间升序。
 
         参数:
-            task_id: 任务标识。
+            task_id: 任务标识（整数 id）。
 
         返回:
-            该任务的 turn 列表，按 ``created_at`` 再 ``turn_id`` 升序；无匹配时为空列表。
+            该任务的 turn 列表，按 ``created_at`` 再 ``id`` 升序；无匹配时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -169,7 +152,7 @@ class TurnCrud:
                 session.execute(
                     select(TurnModel)
                     .where(TurnModel.task_id == task_id)
-                    .order_by(asc(TurnModel.created_at), asc(TurnModel.turn_id))
+                    .order_by(asc(TurnModel.created_at), asc(TurnModel.id))
                 )
                 .scalars()
                 .all()
@@ -178,7 +161,7 @@ class TurnCrud:
 
     def update_status_if_in(
         self,
-        turn_id: str,
+        turn_id: int,
         target_status: str,
         allowed_statuses: tuple[str, ...],
         end_reason: str | None = None,
@@ -192,7 +175,7 @@ class TurnCrud:
         伴随字段，CRUD 层不判断业务合法性。
 
         参数:
-            turn_id: turn 标识。
+            turn_id: turn 标识（整数 id）。
             target_status: 期望写入的终态状态字符串（如 ``"cancelled"`` / ``"completed"`` /
                 ``"failed"``）。
             allowed_statuses: 允许执行更新的前置状态白名单；turn 当前状态不在此集合时
@@ -225,22 +208,22 @@ class TurnCrud:
         with self._session_factory.begin() as session:
             result = session.execute(
                 update(TurnModel)
-                .where(TurnModel.turn_id == turn_id, TurnModel.status.in_(allowed_statuses))
+                .where(TurnModel.id == turn_id, TurnModel.status.in_(allowed_statuses))
                 .values(**values)
             )
         if not result.rowcount:
             return None
         return self.get(turn_id)
 
-    def update_model_id(self, turn_id: str, model_id: str) -> TurnRecord:
+    def update_model_id(self, turn_id: int, model_id: int) -> TurnRecord:
         """回写轮次实际所用模型条目标识（运行期兜底解析修正后）。
 
         仅更新 ``model_id`` 与 ``updated_at``；其余字段保持不变，避免覆盖
         运行期其它并发写入（如 status）。
 
         参数:
-            turn_id: turn 标识。
-            model_id: 运行期解析得到的最终模型条目标识（``ModelEntryRecord.model_id``）。
+            turn_id: turn 标识（整数 id）。
+            model_id: 运行期解析得到的最终模型条目标识（``ModelEntryRecord.id`` 整数）。
 
         返回:
             更新后的 ``TurnRecord``。
@@ -257,21 +240,21 @@ class TurnCrud:
         with self._session_factory.begin() as session:
             session.execute(
                 update(TurnModel)
-                .where(TurnModel.turn_id == turn_id)
+                .where(TurnModel.id == turn_id)
                 .values(model_id=model_id, updated_at=to_text(utc_now()))
             )
         return self.get(turn_id)
 
-    def list_ids_by_task_ids(self, task_ids: list[str]) -> list[str]:
+    def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:
         """返回一批任务下全部 turn 的标识列表。
 
-        只查 ``turn_id`` 一列，用于跨表级联删除等只需 id 的场景。
+        只查 ``id`` 一列，用于跨表级联删除等只需 id 的场景。
 
         参数:
-            task_ids: 任务标识列表；为空时直接返回空列表。
+            task_ids: 任务标识列表（整数 id）；为空时直接返回空列表。
 
         返回:
-            匹配的 turn_id 列表；无匹配时为空列表。
+            匹配的 turn id 列表；无匹配时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -286,15 +269,15 @@ class TurnCrud:
             return [
                 row[0]
                 for row in session.execute(
-                    select(TurnModel.turn_id).where(TurnModel.task_id.in_(task_ids))
+                    select(TurnModel.id).where(TurnModel.task_id.in_(task_ids))
                 ).all()
             ]
 
-    def delete_by_ids(self, turn_ids: list[str]) -> None:
+    def delete_by_ids(self, turn_ids: list[int]) -> None:
         """按标识批量删除 turn。
 
         参数:
-            turn_ids: 待删除的 turn 标识列表；为空时不执行任何操作。
+            turn_ids: 待删除的 turn 标识列表（整数 id）；为空时不执行任何操作。
 
         返回:
             无。
@@ -309,6 +292,4 @@ class TurnCrud:
         if not turn_ids:
             return
         with self._session_factory.begin() as session:
-            session.execute(delete(TurnModel).where(TurnModel.turn_id.in_(turn_ids)))
-
-
+            session.execute(delete(TurnModel).where(TurnModel.id.in_(turn_ids)))

@@ -1,6 +1,6 @@
 """每轮消息轨迹 SQLAlchemy model（跨轮记忆 + 历史回放）。"""
 
-from sqlalchemy import ForeignKey, Integer, Text, Boolean
+from sqlalchemy import Boolean, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -14,11 +14,14 @@ class TurnMessageModel(StorageBase):
     """
 
     __tablename__ = "turn_messages"
-
-    turn_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("turns.turn_id"), nullable=False, primary_key=True
+    __table_args__ = (
+        UniqueConstraint("turn_id", "sequence", name="uq_turn_messages_turn_sequence"),
     )
-    sequence: Mapped[int] = mapped_column(Integer, nullable=False, primary_key=True)
+
+    turn_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("turns.id"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_json: Mapped[str | None] = mapped_column(Text)

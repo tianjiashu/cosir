@@ -65,7 +65,7 @@ class FileSnapshotCrud:
             session.add(FileSnapshotModel(**record.to_row_dict()))
 
     def save_batch_with_sequence(
-        self, task_id: str, records: list[FileSnapshotRecord]
+        self, task_id: int, records: list[FileSnapshotRecord]
     ) -> list[FileSnapshotRecord]:
         """在进程级锁内原子分配 seq 并批量落库同一 task 的一批快照。
 
@@ -106,7 +106,7 @@ class FileSnapshotCrud:
                 )
         return records
 
-    def _next_seq_for_task(self, task_id: str) -> int:
+    def _next_seq_for_task(self, task_id: int) -> int:
         """返回该 task 当前 ``MAX(seq)+1`` 作为新一批快照的 seq 基准。
 
         调用方必须在持有 ``_sequence_lock`` 时调用，保证基准在批量插入完成前不被
@@ -132,7 +132,7 @@ class FileSnapshotCrud:
             ).scalar()
         return 0 if max_seq is None else int(max_seq) + 1
 
-    def list_by_turn(self, turn_id: str) -> list[FileSnapshotRecord]:
+    def list_by_turn(self, turn_id: int) -> list[FileSnapshotRecord]:
         """按 turn 查询全部快照，按 ``seq`` 降序（回退时逆序应用）。
 
         参数:
@@ -160,7 +160,7 @@ class FileSnapshotCrud:
         return [FileSnapshotRecord.from_model(row) for row in rows]
 
     def list_stable_by_task(
-        self, task_id: str, turn_ids: list[str] | None = None
+        self, task_id: int, turn_ids: list[int] | None = None
     ) -> list[FileSnapshotRecord]:
         """按 task 查询全部已稳定快照，按 ``seq`` 升序。
 
@@ -195,7 +195,7 @@ class FileSnapshotCrud:
         return [FileSnapshotRecord.from_model(row) for row in rows]
 
     def list_any_by_task(
-        self, task_id: str, turn_ids: list[str] | None = None
+        self, task_id: int, turn_ids: list[int] | None = None
     ) -> list[FileSnapshotRecord]:
         """按 task 查询全部快照（含运行中 ``stable=0`` 与已稳定 ``stable=1``）。
 
@@ -226,7 +226,7 @@ class FileSnapshotCrud:
         return [FileSnapshotRecord.from_model(row) for row in rows]
 
     def latest_stable_by_path(
-        self, task_id: str, path: str, turn_ids: list[str] | None = None
+        self, task_id: int, path: str, turn_ids: list[int] | None = None
     ) -> FileSnapshotRecord | None:
         """取给定 task（可选 turn 子集）内某文件路径的最新已稳定快照。
 
@@ -261,7 +261,7 @@ class FileSnapshotCrud:
         return None if row is None else FileSnapshotRecord.from_model(row)
 
     def latest_any_by_path(
-        self, task_id: str, path: str, turn_ids: list[str] | None = None
+        self, task_id: int, path: str, turn_ids: list[int] | None = None
     ) -> FileSnapshotRecord | None:
         """取给定 task（可选 turn 子集）内某文件路径的最新快照（含运行中 ``stable=0``）。
 
@@ -297,7 +297,7 @@ class FileSnapshotCrud:
             ).scalars().first()
         return None if row is None else FileSnapshotRecord.from_model(row)
 
-    def mark_stable_by_turn(self, turn_id: str) -> int:
+    def mark_stable_by_turn(self, turn_id: int) -> int:
         """把某 turn 的全部快照标记为已稳定（turn 结束时调用，幂等）。
 
         参数:
@@ -363,7 +363,7 @@ class FileSnapshotCrud:
             result = session.execute(stmt)
         return int(result.rowcount or 0)
 
-    def clear_by_turn(self, turn_id: str) -> None:
+    def clear_by_turn(self, turn_id: int) -> None:
         """删除某 turn 的全部快照记录。
 
         参数:

@@ -9,8 +9,5 @@ class WorkspaceModel(StorageBase):
 
     __tablename__ = "workspaces"
 
-    workspace_id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     root_path: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)

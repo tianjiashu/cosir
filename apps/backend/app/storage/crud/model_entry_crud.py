@@ -14,7 +14,6 @@
 """
 
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import asc, delete, select, update
 
@@ -55,7 +54,7 @@ class ModelEntryCrud:
 
     def create(
         self,
-        provider_id: str,
+        provider_id: int,
         model_name: str,
         display_name: str,
         max_context_window: int,
@@ -67,11 +66,11 @@ class ModelEntryCrud:
     ) -> ModelEntryRecord:
         """新建一个模型条目并落库。
 
-        ``model_id`` 由本方法生成（UUID4）；model_name / display_name 去除首尾
+        主键 ``id`` 由存储引擎自增分配。model_name / display_name 去除首尾
         空白后存储。
 
         参数:
-            provider_id: 归属厂商标识（FK）。
+            provider_id: 归属厂商整数 id（FK，指向 ``providers.id``）。
             model_name: litellm 路由名（如 ``deepseek/deepseek-v4-flash``）；
                 不能为空白，厂商内唯一。
             display_name: 下拉展示名；不能为空白。
@@ -81,7 +80,7 @@ class ModelEntryCrud:
             sort_order: 组内排序权重，默认 0。
 
         返回:
-            落库成功的 ``ModelEntryRecord``。
+            落库成功的 ``ModelEntryRecord``（含自增分配的 id）。
 
         异常:
             ValueError: 如果 model_name / display_name 归一后为空或
@@ -96,8 +95,8 @@ class ModelEntryCrud:
         """
         now = utc_now()
         record = ModelEntryRecord(
-            model_id=str(uuid4()),
-            provider_id=str(provider_id),
+            id=0,
+            provider_id=provider_id,
             model_name=model_name,
             display_name=display_name,
             max_context_window=max_context_window,
@@ -110,8 +109,10 @@ class ModelEntryCrud:
             sort_order=sort_order,
         )
         with self._session_factory.begin() as session:
-            session.add(record.to_model())
-        return record
+            model = record.to_model()
+            session.add(model)
+            session.flush()
+            return ModelEntryRecord.from_model(model)
 
     def bulk_create(self, entries: list[dict[str, Any]]) -> list[ModelEntryRecord]:
         """批量新建模型条目（discover 勾选导入路径），单事务写入。
@@ -141,8 +142,8 @@ class ModelEntryCrud:
         now = utc_now()
         records = [
             ModelEntryRecord(
-                model_id=str(uuid4()),
-                provider_id=str(entry["provider_id"]),
+                id=0,
+                provider_id=int(entry["provider_id"]),
                 model_name=entry["model_name"],
                 display_name=entry["display_name"],
                 max_context_window=entry["max_context_window"],
@@ -160,11 +161,11 @@ class ModelEntryCrud:
             session.add_all([record.to_model() for record in records])
         return records
 
-    def get(self, model_id: str) -> ModelEntryRecord:
+    def get(self, model_id: int) -> ModelEntryRecord:
         """按标识返回单个模型条目。
 
         参数:
-            model_id: 模型条目标识。
+            model_id: 模型条目整数 id。
 
         返回:
             匹配的 ``ModelEntryRecord``。
@@ -183,14 +184,18 @@ class ModelEntryCrud:
             raise KeyError(model_id)
         return ModelEntryRecord.from_model(row)
 
-    def list_all(self) -> list[ModelEntryRecord]:
+    def list_all(self, enabled: bool | None = None) -> list[ModelEntryRecord]:
         """列出全部模型条目，按厂商、排序权重、创建时间升序。
 
+        ``enabled`` 为筛选开关：``None`` 返回所有模型条目（不区分启用状态）；
+        非 ``None`` 时仅返回 ``enabled`` 等于入参值的条目。
+
         参数:
-            无。
+            enabled: 可选启用状态筛选。``None``（默认）表示不过滤；``True`` 仅返回
+                启用条目；``False`` 仅返回禁用条目。
 
         返回:
-            全部模型条目列表，按 ``provider_id`` 再 ``sort_order`` 再
+            匹配的模型条目列表，按 ``provider_id`` 再 ``sort_order`` 再
             ``created_at`` 再 ``model_id`` 升序；无数据时为空列表。
 
         异常:
@@ -201,25 +206,22 @@ class ModelEntryCrud:
         """
 
         with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(ModelEntryModel).order_by(
-                        asc(ModelEntryModel.provider_id),
-                        asc(ModelEntryModel.sort_order),
-                        asc(ModelEntryModel.created_at),
-                        asc(ModelEntryModel.model_id),
-                    )
-                )
-                .scalars()
-                .all()
+            stmt = select(ModelEntryModel).order_by(
+                asc(ModelEntryModel.provider_id),
+                asc(ModelEntryModel.sort_order),
+                asc(ModelEntryModel.created_at),
+                asc(ModelEntryModel.id),
             )
+            if enabled is not None:
+                stmt = stmt.where(ModelEntryModel.enabled == enabled)
+            rows = session.execute(stmt).scalars().all()
         return [ModelEntryRecord.from_model(row) for row in rows]
 
-    def list_by_provider(self, provider_id: str) -> list[ModelEntryRecord]:
+    def list_by_provider(self, provider_id: int) -> list[ModelEntryRecord]:
         """列出某厂商下全部模型条目，按排序权重、创建时间升序。
 
         参数:
-            provider_id: 厂商标识。
+            provider_id: 厂商整数 id。
 
         返回:
             该厂商的模型条目列表；厂商无模型或不存在时为空列表。
@@ -239,7 +241,7 @@ class ModelEntryCrud:
                     .order_by(
                         asc(ModelEntryModel.sort_order),
                         asc(ModelEntryModel.created_at),
-                        asc(ModelEntryModel.model_id),
+                        asc(ModelEntryModel.id),
                     )
                 )
                 .scalars()
@@ -279,6 +281,7 @@ class ModelEntryCrud:
                         asc(ModelEntryModel.provider_id),
                         asc(ModelEntryModel.sort_order),
                         asc(ModelEntryModel.created_at),
+                        asc(ModelEntryModel.id),
                     )
                     .limit(1)
                 )
@@ -289,7 +292,7 @@ class ModelEntryCrud:
 
     def update(
         self,
-        model_id: str,
+        model_id: int,
         display_name: str | None = None,
         max_context_window: int | None = None,
         supports_thinking: bool | None = None,
@@ -301,7 +304,7 @@ class ModelEntryCrud:
         """更新模型条目字段并刷新更新时间；仅覆盖显式传入的字段。
 
         参数:
-            model_id: 模型条目标识。
+            model_id: 模型条目整数 id。
             display_name: 可选，新展示名。
             max_context_window: 可选，新上下文窗口；必须为正整数。
             supports_thinking: 可选，新推理模型标识。
@@ -344,7 +347,7 @@ class ModelEntryCrud:
         with self._session_factory.begin() as session:
             result = session.execute(
                 update(ModelEntryModel)
-                .where(ModelEntryModel.model_id == model_id)
+                .where(ModelEntryModel.id == model_id)
                 .values(**values)
             )
         # 以 UPDATE 影响行数判定存在性，替代前置独立 session 的 self.get()，消除
@@ -353,11 +356,11 @@ class ModelEntryCrud:
             raise KeyError(model_id)
         return self.get(model_id)
 
-    def delete(self, model_id: str) -> None:
+    def delete(self, model_id: int) -> None:
         """删除单个模型条目。
 
         参数:
-            model_id: 模型条目标识。
+            model_id: 模型条目整数 id。
 
         返回:
             无。
@@ -370,7 +373,7 @@ class ModelEntryCrud:
         """
 
         with self._session_factory.begin() as session:
-            session.execute(delete(ModelEntryModel).where(ModelEntryModel.model_id == model_id))
+            session.execute(delete(ModelEntryModel).where(ModelEntryModel.id == model_id))
 
 
 

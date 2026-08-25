@@ -47,7 +47,9 @@ class TurnMessageCrud:
 
         self._session_factory = main_session_factory()
 
-    def append_message(self, turn_id: str, message: RuntimeMessage, sequence: int, in_context: bool = True) -> None:
+    def append_message(
+        self, turn_id: int, message: RuntimeMessage, sequence: int, in_context: bool = True
+    ) -> None:
         """以单条增量方式持久化某 turn 的一条消息（用于逐条落库，替代批覆盖）。
 
         仅插入一条 ``(turn_id, sequence)`` 记录，不触碰该 turn 的其它行；调用方负责
@@ -86,7 +88,7 @@ class TurnMessageCrud:
                 )
             )
 
-    def clear_turn_messages(self, turn_id: str) -> None:
+    def clear_turn_messages(self, turn_id: int) -> None:
         """删除某 turn 的全部消息轨迹（逐条落库前的幂等清理）。
 
         与 ``append_message`` 配合：turn 开始执行时先调用本方法清掉上一轮残留，之后
@@ -109,7 +111,7 @@ class TurnMessageCrud:
         with self._session_factory.begin() as session:
             session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id == turn_id))
 
-    def load_messages(self, turn_id: str) -> list[RuntimeMessage]:
+    def load_messages(self, turn_id: int) -> list[RuntimeMessage]:
         """按序读取某 turn 的消息轨迹。
 
         参数:
@@ -144,7 +146,7 @@ class TurnMessageCrud:
             for row in rows
         ]
 
-    def delete_by_ids(self, ids: list[str]) -> None:
+    def delete_by_ids(self, ids: list[int]) -> None:
         """按轮次标识批量删除消息轨迹（用于任务 / 工作区级联删除）。
 
         参数:

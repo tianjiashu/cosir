@@ -27,7 +27,6 @@ class ProviderModel(StorageBase):
 
     __tablename__ = "providers"
 
-    provider_id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     provider_type: Mapped[str] = mapped_column("type", Text, nullable=False)
     base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -38,5 +37,3 @@ class ProviderModel(StorageBase):
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)

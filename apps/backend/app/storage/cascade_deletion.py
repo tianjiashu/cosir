@@ -53,7 +53,7 @@ class CascadeDeleter:
         """
         self._engine = main_session_factory().kw["bind"]
 
-    def delete_task_tree(self, root_task_id: str) -> int:
+    def delete_task_tree(self, root_task_id: int) -> int:
         """在单个 ``BEGIN IMMEDIATE`` 事务内原子删除任务树及其全部子产物。
 
         收集 ``root_task_id`` 所在的整棵任务树（含递归委派子任务），再收集其下全部
@@ -90,7 +90,7 @@ class CascadeDeleter:
                 raise
         return len(task_ids)
 
-    def delete_workspace(self, workspace_id: str) -> None:
+    def delete_workspace(self, workspace_id: int) -> None:
         """在单个 ``BEGIN IMMEDIATE`` 事务内原子删除工作区及其下所有任务。
 
         先收集该工作区全部任务标识（含用户根任务与委派子任务），执行与
@@ -118,7 +118,7 @@ class CascadeDeleter:
                 self._delete_all_artifacts(conn, set(workspace_task_ids))
                 conn.execute(
                     delete(WorkspaceModel).where(
-                        WorkspaceModel.workspace_id == workspace_id
+                        WorkspaceModel.id == workspace_id
                     )
                 )
                 conn.commit()
@@ -126,11 +126,11 @@ class CascadeDeleter:
                 conn.rollback()
                 raise
 
-    def _delete_all_artifacts(self, conn, task_ids: set[str]) -> None:
+    def _delete_all_artifacts(self, conn, task_ids: set[int]) -> None:
         """在给定连接上按外键依赖逆序删除一批 task 的全部子产物与 task 自身。
 
-        ``tasks`` 与 ``turns`` 存在双向外键环（``turns.task_id -> tasks.task_id`` 与
-        ``tasks.parent_turn_id -> turns.turn_id``），删除顺序必须先解除 ``tasks`` 对
+        ``tasks`` 与 ``turns`` 存在双向外键环（``turns.task_id -> tasks.id`` 与
+        ``tasks.parent_turn_id -> turns.id``），删除顺序必须先解除 ``tasks`` 对
         ``turns`` 的引用（把本批 ``tasks.parent_turn_id`` 置 NULL），再删 turns；否则
         SQLite 即时外键检查会在删 turns 时因 ``tasks.parent_turn_id`` 引用而报
         ``FOREIGN KEY constraint failed``。其余子产物按被引用方向先删。
@@ -155,7 +155,7 @@ class CascadeDeleter:
         # 解除 tasks.parent_turn_id -> turns 的引用（双向外键环，删 turns 前必须置空）。
         conn.execute(
             update(TaskModel)
-            .where(TaskModel.task_id.in_(task_ids))
+            .where(TaskModel.id.in_(task_ids))
             .values(parent_turn_id=None)
         )
         turn_ids = self._collect_turn_ids(conn, task_ids)
@@ -182,7 +182,7 @@ class CascadeDeleter:
         self._delete_task_tree_layered(conn, task_ids)
 
     @staticmethod
-    def _collect_task_tree_ids(conn, root_task_id: str) -> list[str]:
+    def _collect_task_tree_ids(conn, root_task_id: int) -> list[int]:
         """在给定连接上广度优先收集 ``root_task_id`` 所在任务树的全部 task 标识。
 
         参数:
@@ -198,18 +198,18 @@ class CascadeDeleter:
         副作用:
             无（仅在该连接的当前事务内执行查询）。
         """
-        collected: list[str] = []
+        collected: list[int] = []
         frontier = [root_task_id]
         while frontier:
             rows = conn.execute(
-                select(TaskModel.task_id).where(TaskModel.task_id.in_(frontier))
+                select(TaskModel.id).where(TaskModel.id.in_(frontier))
             ).all()
             if not rows:
                 break
             collected_ids = [row[0] for row in rows]
             collected.extend(collected_ids)
             child_rows = conn.execute(
-                select(TaskModel.task_id).where(
+                select(TaskModel.id).where(
                     TaskModel.parent_task_id.in_(collected_ids)
                 )
             ).all()
@@ -217,7 +217,7 @@ class CascadeDeleter:
         return collected
 
     @staticmethod
-    def _collect_turn_ids(conn, task_ids: set[str]) -> list[str]:
+    def _collect_turn_ids(conn, task_ids: set[int]) -> list[int]:
         """在给定连接上收集一批 task 下全部 turn 标识。
 
         参数:
@@ -234,12 +234,12 @@ class CascadeDeleter:
             无（仅在该连接的当前事务内执行一次查询）。
         """
         rows = conn.execute(
-            select(TurnModel.turn_id).where(TurnModel.task_id.in_(task_ids))
+            select(TurnModel.id).where(TurnModel.task_id.in_(task_ids))
         ).all()
         return [row[0] for row in rows]
 
     @staticmethod
-    def _collect_workspace_task_ids(conn, workspace_id: str) -> list[str]:
+    def _collect_workspace_task_ids(conn, workspace_id: int) -> list[int]:
         """在给定连接上收集某工作区下全部任务标识。
 
         不区分 ``task_type``（含用户根任务与委派子任务），删除工作区即清空其下所有
@@ -260,12 +260,12 @@ class CascadeDeleter:
             无（仅在该连接的当前事务内执行一次查询）。
         """
         rows = conn.execute(
-            select(TaskModel.task_id).where(TaskModel.workspace_id == workspace_id)
+            select(TaskModel.id).where(TaskModel.workspace_id == workspace_id)
         ).all()
         return [row[0] for row in rows]
 
     @staticmethod
-    def _delete_task_tree_layered(conn, task_ids: set[str]) -> None:
+    def _delete_task_tree_layered(conn, task_ids: set[int]) -> None:
         """在给定连接上对任务树分层删除（由叶子向根），规避自引用外键。
 
         单条 ``DELETE ... WHERE task_id IN (...)"`` 无法保证父行在子行之后被删，
@@ -296,5 +296,5 @@ class CascadeDeleter:
             ).all()
             referenced_as_parent = {row[0] for row in child_refs}
             leaves = remaining - referenced_as_parent
-            conn.execute(delete(TaskModel).where(TaskModel.task_id.in_(leaves)))
+            conn.execute(delete(TaskModel).where(TaskModel.id.in_(leaves)))
             remaining -= leaves

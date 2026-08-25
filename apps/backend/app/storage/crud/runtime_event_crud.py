@@ -119,7 +119,7 @@ class RuntimeEventCrud:
         from app.config.logging.logger import log
 
         turn_id = event_dict.get("turn_id")
-        if not isinstance(turn_id, str) or not turn_id:
+        if not turn_id:
             self.save_event(event_dict)
             sequence = event_dict.get("sequence", 0)
             if not isinstance(sequence, int):
@@ -194,7 +194,7 @@ class RuntimeEventCrud:
         )
         raise RuntimeError("runtime event sequence retry exhausted")
 
-    def list_by_turn(self, turn_id: str) -> list[dict[str, Any]]:
+    def list_by_turn(self, turn_id: int) -> list[dict[str, Any]]:
         """按 turn_id 查询所有已持久化的运行时事件（按 sequence 升序）。
 
         参数:
@@ -234,7 +234,7 @@ class RuntimeEventCrud:
             )
             return []
 
-    def delete_by_ids(self, ids: list[str]) -> None:
+    def delete_by_ids(self, ids: list[int]) -> None:
         """按轮次标识批量删除运行时事件（用于任务 / 工作区级联删除）。
 
         参数:
@@ -257,7 +257,7 @@ class RuntimeEventCrud:
                 delete(RuntimeEventModel).where(RuntimeEventModel.turn_id.in_(ids))
             )
 
-    def list_by_task(self, task_id: str) -> list[dict[str, Any]]:
+    def list_by_task(self, task_id: int) -> list[dict[str, Any]]:
         """按 task_id 查询所有已持久化的运行时事件（按 turn + sequence 升序）。
 
         用于打开任务时一次性加载该任务下所有 turn 的完整事件历史，
@@ -300,7 +300,7 @@ class RuntimeEventCrud:
 
 
 def _event_dict_from_model(row: RuntimeEventModel) -> dict[str, Any]:
-    """把 ``RuntimeEventModel`` ORM 行转换为事件字典（供 ``list_by_turn`` / ``list_by_task`` 复用）。
+    """把 ``RuntimeEventModel`` ORM 行转换为事件字典（供按 turn / 按 task 查询复用）。
 
     ``payload_json`` 反序列化为 dict；为空时回退为空字典。
 

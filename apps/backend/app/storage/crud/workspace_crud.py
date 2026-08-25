@@ -11,8 +11,6 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from uuid import uuid4
-
 from sqlalchemy import asc, delete, select
 
 from app.models import WorkspaceRecord
@@ -48,7 +46,7 @@ class WorkspaceCrud:
     def create(self, name: str, root_path: str) -> WorkspaceRecord:
         """新建一个工作区并落库。
 
-        ``workspace_id`` 由本方法生成（UUID4），创建 / 更新时间取当前 UTC 时间；name 与
+        主键 ``id`` 由存储引擎自增分配，创建 / 更新时间取当前 UTC 时间；name 与
         root_path 会去除首尾空白后存储。
 
         参数:
@@ -56,7 +54,7 @@ class WorkspaceCrud:
             root_path: 工作区根路径；不能为空白。
 
         返回:
-            落库成功的 ``WorkspaceRecord``。
+            落库成功的 ``WorkspaceRecord``（含自增分配的 id）。
 
         异常:
             ValueError: 如果 name 或 root_path 去除首尾空白后为空。
@@ -71,18 +69,16 @@ class WorkspaceCrud:
         if not root_path.strip():
             raise ValueError("workspace root_path must not be blank")
         now = utc_now()
-        workspace = WorkspaceRecord(str(uuid4()), name.strip(), root_path.strip(), now, now)
         with self._session_factory.begin() as session:
-            session.add(
-                WorkspaceModel(
-                    workspace_id=workspace.workspace_id,
-                    name=workspace.name,
-                    root_path=workspace.root_path,
-                    created_at=to_text(workspace.created_at),
-                    updated_at=to_text(workspace.updated_at),
-                )
+            model = WorkspaceModel(
+                name=name.strip(),
+                root_path=root_path.strip(),
+                created_at=to_text(now),
+                updated_at=to_text(now),
             )
-        return workspace
+            session.add(model)
+            session.flush()
+            return WorkspaceRecord.from_model(model)
 
     def list_all(self) -> list[WorkspaceRecord]:
         """列出全部工作区，按创建时间升序。
@@ -91,7 +87,7 @@ class WorkspaceCrud:
             无。
 
         返回:
-            全部工作区列表，按 ``created_at`` 再 ``workspace_id`` 升序；无数据时为空列表。
+            全部工作区列表，按 ``created_at`` 再 ``id`` 升序；无数据时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -104,7 +100,7 @@ class WorkspaceCrud:
             rows = (
                 session.execute(
                     select(WorkspaceModel).order_by(
-                        asc(WorkspaceModel.created_at), asc(WorkspaceModel.workspace_id)
+                        asc(WorkspaceModel.created_at), asc(WorkspaceModel.id)
                     )
                 )
                 .scalars()
@@ -112,7 +108,7 @@ class WorkspaceCrud:
             )
         return [WorkspaceRecord.from_model(row) for row in rows]
 
-    def get(self, workspace_id: str) -> WorkspaceRecord:
+    def get(self, workspace_id: int) -> WorkspaceRecord:
         """按标识返回单个工作区。
 
         参数:
@@ -135,7 +131,7 @@ class WorkspaceCrud:
             raise KeyError(workspace_id)
         return WorkspaceRecord.from_model(row)
 
-    def delete(self, workspace_id: str) -> None:
+    def delete(self, workspace_id: int) -> None:
         """删除单个工作区记录。
 
         仅删除 ``workspaces`` 表自身的行，不级联清理该工作区下的 task / turn / run / trace
@@ -156,7 +152,7 @@ class WorkspaceCrud:
 
         with self._session_factory.begin() as session:
             session.execute(
-                delete(WorkspaceModel).where(WorkspaceModel.workspace_id == workspace_id)
+                delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id)
             )
 
 

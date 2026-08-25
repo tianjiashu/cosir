@@ -43,40 +43,38 @@ class TaskCrud:
         self._session_factory = main_session_factory()
 
     def create(
-        self,
-        task_id: str,
-        workspace_id: str,
-        agent_id: str,
-        title: str,
-        status: str | None = None,
-        task_type: str = "user",
-        parent_task_id: str | None = None,
-        parent_turn_id: str | None = None,
-        delegation_id: str | None = None,
+            self,
+            workspace_id: int,
+            agent_id: str,
+            title: str,
+            status: str | None = None,
+            task_type: str = "user",
+            parent_task_id: int | None = None,
+            parent_turn_id: int | None = None,
+            delegation_id: int | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
-        ``task_id`` 由调用方提供（通常为 UUID），``created_at`` / ``updated_at`` 由本方法以
-        当前 UTC 时间统一填充。``task_type`` 区分用户创建任务（``"user"``）与委派子任务
-        （``"delegation"``）；委派子任务通过 ``parent_task_id`` / ``parent_turn_id`` /
-        ``delegation_id`` 关联父任务与委派记录。
+        主键 ``id`` 由存储引擎自增分配，调用方不再提供业务标识。``created_at`` /
+        ``updated_at`` 由本方法以当前 UTC 时间统一填充。``task_type`` 区分用户创建任务
+        （``"user"``）与委派子任务（``"delegation"``）；委派子任务通过 ``parent_task_id`` /
+        ``parent_turn_id`` / ``delegation_id``（均为整数 id）关联父任务与委派记录。
 
         参数:
-            task_id: 任务唯一标识（调用方保证全局唯一）。
-            workspace_id: 所属工作区标识。
+            workspace_id: 所属工作区标识（整数 id）。
             agent_id: 执行该任务的 agent 标识。
             title: 任务标题。
             status: 任务初始状态，允许为 None，缺省时回退为 ``"pending"``。
             task_type: 任务类型，``"user"`` 或 ``"delegation"``，缺省为 ``"user"``。
-            parent_task_id: 父任务标识，委派子任务必填，用户任务为 None。
-            parent_turn_id: 触发委派的父 turn 标识，委派子任务必填，用户任务为 None。
-            delegation_id: 关联的委派记录标识，委派子任务必填，用户任务为 None。
+            parent_task_id: 父任务标识（整数 id），委派子任务必填，用户任务为 None。
+            parent_turn_id: 触发委派的父 turn 标识（整数 id），委派子任务必填，用户任务为 None。
+            delegation_id: 关联的委派记录标识（整数 id），委派子任务必填，用户任务为 None。
 
         返回:
-            落库成功的 ``TaskRecord``（含填充好的创建 / 更新时间）。
+            落库成功的 ``TaskRecord``（含自增分配的 id 与填充的创建 / 更新时间）。
 
         异常:
-            sqlalchemy.exc.IntegrityError: 如果 task_id 冲突、违反外键约束或 delegation_id 重复。
+            sqlalchemy.exc.IntegrityError: 如果违反外键约束或 delegation_id 重复。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
@@ -84,49 +82,35 @@ class TaskCrud:
         """
         now = utc_now()
         effective_status = status or "pending"
-        task = TaskRecord(
-            task_id=task_id,
-            workspace_id=workspace_id,
-            agent_id=agent_id,
-            title=title,
-            status=effective_status,
-            created_at=now,
-            updated_at=now,
-            task_type=task_type,
-            parent_task_id=parent_task_id,
-            parent_turn_id=parent_turn_id,
-            delegation_id=delegation_id,
-        )
         with self._session_factory.begin() as session:
-            session.add(
-                TaskModel(
-                    task_id=task.task_id,
-                    workspace_id=task.workspace_id,
-                    agent_id=task.agent_id,
-                    title=task.title,
-                    status=task.status,
-                    created_at=to_text(task.created_at),
-                    updated_at=to_text(task.updated_at),
-                    task_type=task.task_type,
-                    parent_task_id=task.parent_task_id,
-                    parent_turn_id=task.parent_turn_id,
-                    delegation_id=task.delegation_id,
-                    context_usage_used=task.context_usage_used,
-                )
+            model = TaskModel(
+                workspace_id=workspace_id,
+                agent_id=agent_id,
+                title=title,
+                status=effective_status,
+                created_at=to_text(now),
+                updated_at=to_text(now),
+                task_type=task_type,
+                parent_task_id=parent_task_id,
+                parent_turn_id=parent_turn_id,
+                delegation_id=delegation_id,
+                context_usage_used=0,
             )
-        return task
+            session.add(model)
+            session.flush()
+            return TaskRecord.from_model(model)
 
-    def list_by_workspace(self, workspace_id: str) -> list[TaskRecord]:
+    def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。
 
         委派子任务（``task_type='delegation'``）不出现在侧边栏对话列表中，因此本方法仅返回
         ``task_type='user'`` 的任务。
 
         参数:
-            workspace_id: 工作区标识。
+            workspace_id: 工作区标识（整数 id）。
 
         返回:
-            该工作区的用户任务列表，按 ``updated_at`` 再 ``task_id`` 倒序排列；无匹配时为空列表。
+            该工作区的用户任务列表，按 ``updated_at`` 再 ``id`` 倒序排列；无匹配时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -142,18 +126,18 @@ class TaskCrud:
                         TaskModel.workspace_id == workspace_id,
                         TaskModel.task_type == "user",
                     )
-                    .order_by(TaskModel.updated_at.desc(), TaskModel.task_id.desc())
+                    .order_by(TaskModel.updated_at.desc(), TaskModel.id.desc())
                 )
                 .scalars()
                 .all()
             )
         return [TaskRecord.from_model(row) for row in rows]
 
-    def list_by_parent_task(self, parent_task_id: str) -> list[TaskRecord]:
+    def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
         """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。
 
         参数:
-            parent_task_id: 父任务标识。
+            parent_task_id: 父任务标识（整数 id）。
 
         返回:
             该父任务的直接子任务列表（``task_type='delegation'`` 且 ``parent_task_id`` 匹配）；
@@ -170,18 +154,18 @@ class TaskCrud:
                 session.execute(
                     select(TaskModel)
                     .where(TaskModel.parent_task_id == parent_task_id)
-                    .order_by(TaskModel.created_at.asc(), TaskModel.task_id.asc())
+                    .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
                 )
                 .scalars()
                 .all()
             )
         return [TaskRecord.from_model(row) for row in rows]
 
-    def get(self, task_id: str) -> TaskRecord:
+    def get(self, task_id: int) -> TaskRecord:
         """按标识返回单个 task。
 
         参数:
-            task_id: 任务标识。
+            task_id: 任务标识（整数 id）。
 
         返回:
             匹配的 ``TaskRecord``。
@@ -194,18 +178,18 @@ class TaskCrud:
             打开一次主库只读 session。
         """
         with self._session_factory() as session:
-            row = session.get(TaskModel, task_id)
+            row: TaskModel | None = session.get(TaskModel, task_id)
         if row is None:
             raise KeyError(task_id)
         return TaskRecord.from_model(row)
 
-    def update_status(self, task_id: str, status: str) -> TaskRecord:
+    def update_status(self, task_id: int, status: str) -> TaskRecord:
         """更新 task 状态并刷新更新时间。
 
         先校验 task 存在（不存在则抛出），再更新状态与 ``updated_at``。
 
         参数:
-            task_id: 任务标识。
+            task_id: 任务标识（整数 id）。
             status: 新状态值。
 
         返回:
@@ -222,12 +206,12 @@ class TaskCrud:
         with self._session_factory.begin() as session:
             session.execute(
                 update(TaskModel)
-                .where(TaskModel.task_id == task_id)
+                .where(TaskModel.id == task_id)
                 .values(status=status, updated_at=to_text(utc_now()))
             )
         return self.get(task_id)
 
-    def update_context_usage(self, task_id: str, used: int) -> TaskRecord:
+    def update_context_usage(self, task_id: int, used: int) -> TaskRecord:
         """更新 task 最近一次上下文窗口已用 token 并刷新更新时间。
 
         先校验 task 存在（不存在则抛出），再更新 ``context_usage_used`` 与 ``updated_at``。
@@ -235,7 +219,7 @@ class TaskCrud:
         该任务最近一次的真实占用（total 不落库，由 ``resolve_context_window`` 动态计算）。
 
         参数:
-            task_id: 任务标识。
+            task_id: 任务标识（整数 id）。
             used: 最近一次上下文窗口已用 token 数。
 
         返回:
@@ -252,16 +236,16 @@ class TaskCrud:
         with self._session_factory.begin() as session:
             session.execute(
                 update(TaskModel)
-                .where(TaskModel.task_id == task_id)
+                .where(TaskModel.id == task_id)
                 .values(context_usage_used=used, updated_at=to_text(utc_now()))
             )
         return self.get(task_id)
 
-    def has_status(self, task_id: str, status: str) -> bool:
+    def has_status(self, task_id: int, status: str) -> bool:
         """判断 task 当前状态是否等于给定值。
 
         参数:
-            task_id: 任务标识。
+            task_id: 任务标识（整数 id）。
             status: 待比较的状态值。
 
         返回:
@@ -276,17 +260,17 @@ class TaskCrud:
         """
         return self.get(task_id).status == status
 
-    def list_ids_by_workspace(self, workspace_id: str) -> list[str]:
-        """仅返回某工作区下全部 task 的标识列表。
+    def list_ids_by_workspace(self, workspace_id: int) -> list[int]:
+        """仅返回某工作区下全部 task 的整数 id 列表。
 
-        相比 ``list_by_workspace``，本方法只查 ``task_id`` 一列，用于跨表级联删除等只需 id
+        相比 ``list_by_workspace``，本方法只查 ``id`` 一列，用于跨表级联删除等只需 id
         的场景，避免整行读取。
 
         参数:
-            workspace_id: 工作区标识。
+            workspace_id: 工作区标识（整数 id）。
 
         返回:
-            该工作区的 task_id 列表；无匹配时为空列表。
+            该工作区的 task id 列表；无匹配时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -298,15 +282,15 @@ class TaskCrud:
             return [
                 row[0]
                 for row in session.execute(
-                    select(TaskModel.task_id).where(TaskModel.workspace_id == workspace_id)
+                    select(TaskModel.id).where(TaskModel.workspace_id == workspace_id)
                 ).all()
             ]
 
-    def delete_by_ids(self, task_ids: list[str]) -> None:
+    def delete_by_ids(self, task_ids: list[int]) -> None:
         """按标识批量删除 task。
 
         参数:
-            task_ids: 待删除的 task 标识列表。
+            task_ids: 待删除的 task 整数 id 列表。
 
         返回:
             无。
@@ -322,6 +306,4 @@ class TaskCrud:
         if not task_ids:
             return
         with self._session_factory.begin() as session:
-            session.execute(delete(TaskModel).where(TaskModel.task_id.in_(task_ids)))
-
-
+            session.execute(delete(TaskModel).where(TaskModel.id.in_(task_ids)))

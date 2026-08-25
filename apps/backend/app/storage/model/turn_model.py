@@ -3,7 +3,7 @@
 本模块只定义 ``turns`` 单表的列结构与 StorageBase 继承关系，不含查询逻辑。
 """
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.enums.turn_status import TurnStatus
@@ -16,16 +16,16 @@ class TurnModel(StorageBase):
     """``turns`` 表 ORM 模型，承载单次任务轮次的持久化字段。
 
     字段语义：
-    - ``turn_id``：轮次主键（UUID 文本）。
-    - ``task_id``：归属任务外键（``tasks.task_id``），不可空。
+    - ``id``：整数自增主键（由 StorageBase 提供），轮次唯一标识。
+    - ``task_id``：归属任务外键（``tasks.id``），不可空。
     - ``input_text``：本轮用户输入文本，不可空。
     - ``status``：轮次状态机（运行期枚举，由 TurnStatus 约束）。
     - ``end_reason``：终态原因（客户端断开 / 失败 / 正常完成等），可选。
     - ``response_text``：模型最终回复文本，可选。
     - ``created_at`` / ``updated_at``：时间戳文本（项目约定以文本存储）。
     - ``agent_id``：本轮使用的 Agent 条目标识，可选。
-    - ``product_name``：本轮使用模型的厂商，可选。
-    - ``model_name``：本轮使用的模型条目标识，可选。
+    - ``product_id``：本轮使用模型的厂商（``providers.id`` 外键），可选。
+    - ``model_id``：本轮使用的模型条目标识（``models.id`` 外键），可选。
     - ``paths``：本轮涉及的文件路径集合（JSON 文本存储），可选。
     - ``thinking``：是否开启推理模式，可选。
     - ``reasoning_effort``：推理强度（``low`` / ``high`` / ``max``），可选。
@@ -51,17 +51,18 @@ class TurnModel(StorageBase):
         ),
     )
 
-    turn_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.task_id"), nullable=False)
+    task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
     input_text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     end_reason: Mapped[str | None] = mapped_column(Text)
     response_text: Mapped[str | None] = mapped_column(Text)
     agent_id: Mapped[str | None] = mapped_column(Text)
-    product_id: Mapped[str | None] = mapped_column(Text, ForeignKey("products.product_id"), nullable=False)
-    model_id: Mapped[str | None] = mapped_column(Text, ForeignKey("models.model_id"), nullable=False)
+    product_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("providers.id"), nullable=True
+    )
+    model_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("models.id"), nullable=True
+    )
     paths: Mapped[list[str] | None] = mapped_column(Text)
     thinking: Mapped[bool | None] = mapped_column(Boolean)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)  # low/high/max
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)

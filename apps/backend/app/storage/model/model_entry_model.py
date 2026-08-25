@@ -36,10 +36,9 @@ class ModelEntryModel(StorageBase):
         Index("uq_models_provider_model_name", "provider_id", "model_name", unique=True),
     )
 
-    model_id: Mapped[str] = mapped_column(Text, primary_key=True)
-    provider_id: Mapped[str] = mapped_column(
-        Text,
-        ForeignKey("providers.provider_id", ondelete="CASCADE"),
+    provider_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("providers.id", ondelete="CASCADE"),
         nullable=False,
     )
     model_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -60,5 +59,3 @@ class ModelEntryModel(StorageBase):
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)

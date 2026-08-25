@@ -11,8 +11,6 @@
 必须在 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from uuid import uuid4
-
 from sqlalchemy import asc, delete, select, update
 
 from app.models import ProviderRecord
@@ -57,7 +55,7 @@ class ProviderCrud:
     ) -> ProviderRecord:
         """新建一个模型厂商并落库。
 
-        ``provider_id`` 由本方法生成（UUID4）；name / base_url / api_key /
+        主键 ``id`` 由存储引擎自增分配；name / base_url / api_key /
         去除首尾空白后存储，空白字符串归一为 None。
 
         参数:
@@ -71,7 +69,7 @@ class ProviderCrud:
             sort_order: 排序权重，默认 0。
 
         返回:
-            落库成功的 ``ProviderRecord``。
+            落库成功的 ``ProviderRecord``（含自增分配的 id）。
 
         异常:
             ValueError: 如果 name 或 provider_type 去除首尾空白后为空。
@@ -90,7 +88,7 @@ class ProviderCrud:
             raise ValueError("provider type must not be blank")
         now = utc_now()
         record = ProviderRecord(
-            provider_id=str(uuid4()),
+            id=0,
             name=normalized_name,
             provider_type=normalized_type,
             created_at=now,
@@ -101,17 +99,23 @@ class ProviderCrud:
             sort_order=sort_order,
         )
         with self._session_factory.begin() as session:
-            session.add(self._to_model(record))
-        return record
+            model = self._to_model(record)
+            session.add(model)
+            session.flush()
+            return ProviderRecord.from_model(model)
 
-    def list_all(self) -> list[ProviderRecord]:
+    def list_all(self, enabled: bool | None = None) -> list[ProviderRecord]:
         """列出全部厂商，按排序权重、创建时间升序。
 
+        ``enabled`` 为筛选开关：``None`` 返回所有厂商（不区分启用状态）；
+        非 ``None`` 时仅返回 ``enabled`` 等于入参值的厂商。
+
         参数:
-            无。
+            enabled: 可选启用状态筛选。``None``（默认）表示不过滤；``True`` 仅返回
+                启用厂商；``False`` 仅返回禁用厂商。
 
         返回:
-            全部厂商列表，按 ``sort_order`` 再 ``created_at`` 再 ``provider_id``
+            匹配的厂商列表，按 ``sort_order`` 再 ``created_at`` 再 ``provider_id``
             升序；无数据时为空列表。
 
         异常:
@@ -122,20 +126,17 @@ class ProviderCrud:
         """
 
         with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(ProviderModel).order_by(
-                        asc(ProviderModel.sort_order),
-                        asc(ProviderModel.created_at),
-                        asc(ProviderModel.provider_id),
-                    )
-                )
-                .scalars()
-                .all()
+            stmt = select(ProviderModel).order_by(
+                asc(ProviderModel.sort_order),
+                asc(ProviderModel.created_at),
+                asc(ProviderModel.id),
             )
+            if enabled is not None:
+                stmt = stmt.where(ProviderModel.enabled == enabled)
+            rows = session.execute(stmt).scalars().all()
         return [ProviderRecord.from_model(row) for row in rows]
 
-    def get(self, provider_id: str) -> ProviderRecord:
+    def get(self, provider_id: int) -> ProviderRecord:
         """按标识返回单个厂商。
 
         参数:
@@ -153,14 +154,14 @@ class ProviderCrud:
         """
 
         with self._session_factory() as session:
-            row = session.get(ProviderModel, provider_id)
+            row: ProviderModel | None = session.get(ProviderModel, provider_id)
         if row is None:
             raise KeyError(provider_id)
         return ProviderRecord.from_model(row)
 
     def update(
         self,
-        provider_id: str,
+        provider_id: int,
         name: str | None = None,
         provider_type: str | None = None,
         base_url: str | None = None,
@@ -221,7 +222,7 @@ class ProviderCrud:
         with self._session_factory.begin() as session:
             result = session.execute(
                 update(ProviderModel)
-                .where(ProviderModel.provider_id == provider_id)
+                .where(ProviderModel.id == provider_id)
                 .values(**values)
             )
         # 以 UPDATE 影响行数判定存在性，替代前置独立 session 的 self.get()，消除
@@ -230,7 +231,7 @@ class ProviderCrud:
             raise KeyError(provider_id)
         return self.get(provider_id)
 
-    def delete(self, provider_id: str) -> None:
+    def delete(self, provider_id: int) -> None:
         """删除单个厂商，其下模型行由 FK CASCADE 级联删除。
 
         参数:
@@ -248,7 +249,7 @@ class ProviderCrud:
         """
 
         with self._session_factory.begin() as session:
-            session.execute(delete(ProviderModel).where(ProviderModel.provider_id == provider_id))
+            session.execute(delete(ProviderModel).where(ProviderModel.id == provider_id))
 
     @staticmethod
     def _normalize_optional(value: str | None) -> str | None:
@@ -289,20 +290,20 @@ class ProviderCrud:
             无。
         """
 
-        return ProviderModel(
-            provider_id=record.provider_id,
-            name=record.name,
+        model_kwargs: dict[str, object] = {
+            "name": record.name,
             # ProviderModel 的 Python 属性名是 ``provider_type``（mapped_column 把
             # 列名映射为 ``"type"`` 以避开 Python 内置 ``type`` 遮蔽）；这里必须
             # 用属性名而非列名传参，否则 SQLAlchemy 抛
             # ``TypeError: 'type' is an invalid keyword argument for ProviderModel``。
-            provider_type=record.provider_type,
-            base_url=record.base_url,
-            api_key=record.api_key,
-            enabled=record.enabled,
-            sort_order=record.sort_order,
-            created_at=to_text(record.created_at),
-            updated_at=to_text(record.updated_at),
-        )
+            "provider_type": record.provider_type,
+            "base_url": record.base_url,
+            "api_key": record.api_key,
+            "enabled": record.enabled,
+            "sort_order": record.sort_order,
+            "created_at": to_text(record.created_at),
+            "updated_at": to_text(record.updated_at),
+        }
+        return ProviderModel(**model_kwargs)
 
 

@@ -73,7 +73,7 @@ class DelegationCrud:
         self,
         record: DelegationRecord,
         max_concurrency: int,
-    ) -> str | None:
+    ) -> int | None:
         """在同一事务内按活跃额度原子创建 pending delegation。
 
         参数:
@@ -102,7 +102,7 @@ class DelegationCrud:
         with engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             active_count = conn.scalar(
-                select(func.count(DelegationModel.delegation_id)).where(
+                select(func.count(DelegationModel.id)).where(
                     DelegationModel.parent_turn_id == record.parent_turn_id,
                     DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES),
                 )
@@ -121,21 +121,21 @@ class DelegationCrud:
                 return None
             conn.execute(insert(DelegationModel).values(**_to_model(record)))
             conn.commit()
-        return record.delegation_id
+        return record.id
 
     def update_status(
         self,
-        delegation_id: str,
+        id: int,
         status: str,
-        child_turn_id: str | None = None,
-        child_task_id: str | None = None,
+        child_turn_id: int | None = None,
+        child_task_id: int | None = None,
         summary: str | None = None,
         error: str | None = None,
     ) -> DelegationRecord:
         """更新 delegation 状态及可选的 child 执行字段。
 
         参数:
-            delegation_id: 待更新 delegation 的标识。
+            id: 待更新 delegation 的标识。
             status: 新的 delegation 状态。
             child_turn_id: 可选的 child turn 标识；传入时覆盖原值。
             child_task_id: 可选的 child task 标识；传入时覆盖原值。
@@ -153,8 +153,8 @@ class DelegationCrud:
             更新 ``delegations`` 表的状态、传入的可选字段及更新时间。
         """
 
-        self.get(delegation_id)
-        values: dict[str, str] = {"status": status, "updated_at": to_text(utc_now())}
+        self.get(id)
+        values: dict[str, str | int] = {"status": status, "updated_at": to_text(utc_now())}
         if child_turn_id is not None:
             values["child_turn_id"] = child_turn_id
         if child_task_id is not None:
@@ -166,16 +166,16 @@ class DelegationCrud:
         with self._session_factory.begin() as session:
             session.execute(
                 update(DelegationModel)
-                .where(DelegationModel.delegation_id == delegation_id)
+                .where(DelegationModel.id == id)
                 .values(**values)
             )
-        return self.get(delegation_id)
+        return self.get(id)
 
-    def get(self, delegation_id: str) -> DelegationRecord:
+    def get(self, id: int) -> DelegationRecord:
         """按标识返回单条 delegation 记录。
 
         参数:
-            delegation_id: delegation 标识。
+            id: delegation 主键（整数自增 id）。
 
         返回:
             匹配的 delegation 记录。
@@ -189,12 +189,12 @@ class DelegationCrud:
         """
 
         with self._session_factory() as session:
-            row = session.get(DelegationModel, delegation_id)
+            row:DelegationModel | None = session.get(DelegationModel, id)
         if row is None:
-            raise KeyError(delegation_id)
+            raise KeyError(id)
         return DelegationRecord.from_model(row)
 
-    def list_by_parent_turn(self, parent_turn_id: str) -> list[DelegationRecord]:
+    def list_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
         """列出某 parent turn 下的 delegation，按创建时间升序。
 
         参数:
@@ -215,18 +215,18 @@ class DelegationCrud:
                 session.execute(
                     select(DelegationModel)
                     .where(DelegationModel.parent_turn_id == parent_turn_id)
-                    .order_by(asc(DelegationModel.created_at), asc(DelegationModel.delegation_id))
+                    .order_by(asc(DelegationModel.created_at), asc(DelegationModel.id))
                 )
                 .scalars()
                 .all()
             )
         return [DelegationRecord.from_model(row) for row in rows]
 
-    def delete_by_ids(self, ids: list[str]) -> int:
+    def delete_by_ids(self, ids: list[int]) -> int:
         """按任务标识批量删除 delegation 记录。
 
         参数:
-            ids: 待清理 delegation 的任务标识列表。
+            ids: 待清理 delegation 的任务整数 id 列表。
 
         返回:
             被删除的 delegation 行数（便于调用方审计日志）。
@@ -269,7 +269,7 @@ class DelegationCrud:
                 session.execute(
                     select(DelegationModel)
                     .where(DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES))
-                    .order_by(asc(DelegationModel.created_at), asc(DelegationModel.delegation_id))
+                    .order_by(asc(DelegationModel.created_at), asc(DelegationModel.id))
                 )
                 .scalars()
                 .all()
@@ -314,7 +314,7 @@ def _to_model(record: DelegationRecord) -> dict[str, str]:
         无。
     """
     return {
-        "delegation_id": record.delegation_id,
+        "id": record.id,
         "task_id": record.task_id,
         "parent_turn_id": record.parent_turn_id,
         "child_turn_id": record.child_turn_id,

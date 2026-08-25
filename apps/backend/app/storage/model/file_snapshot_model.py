@@ -5,7 +5,7 @@ CRUD 收口在 ``app.storage.crud.file_snapshot_crud``，值对象在
 ``app.models.file_snapshot_record``。
 """
 
-from sqlalchemy import Index, Integer, Text, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -40,10 +40,10 @@ class FileSnapshotModel(StorageBase):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 快照归属任务：seq 的命名空间与并发边界，迁移回填见 init_schema。
-    task_id: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=text("''")
+    task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tasks.id"), nullable=False, default=0, server_default=text("0")
     )
-    turn_id: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_id: Mapped[int] = mapped_column(Integer, ForeignKey("turns.id"), nullable=False)
     tool_call_id: Mapped[str] = mapped_column(Text, nullable=False)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
