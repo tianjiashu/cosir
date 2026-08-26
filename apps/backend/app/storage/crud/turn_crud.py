@@ -49,9 +49,8 @@ class TurnCrud:
         status: str = "pending",
         agent_id: str | None = None,
         product_id: int | None = None,
-        model_id: int | None = None,
+        model_name: str | None = None,
         paths: list[str] | None = None,
-        thinking: bool | None = None,
         reasoning_effort: str | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
@@ -63,16 +62,14 @@ class TurnCrud:
             task_id: 所属任务标识（整数 id）。
             input_text: 本轮输入文本；不能为空白。
             status: 初始状态，默认 ``"pending"``。
-            agent_id: 可选，本次轮次绑定的 agent 标识；仅写入应用层 ``TurnRecord``
-                值对象（供上层 / 运行时消费），当前 ``turns`` 表模型不持久化
-                ``agent_id`` 列，故不落库。
-            model_id: 可选，本轮使用的模型条目标识（``ModelEntryRecord.id`` 整数）；
-                None 表示创建期未携带（运行期兜底解析后由 ``update_model_id`` 回写）。
+            agent_id: 可选，本次轮次绑定的 agent 标识；落库到 ``turns.agent_id`` 列。
+            model_name: 可选，模型路由名；落库到 ``turns.model_name`` 列。
+            product_id: 可选，模型归属厂商标识（指向 ``providers.id`` 外键）；落库到
+                ``turns.product_id`` 列；None 表示未指定。
             paths: 可选，本轮输入的路径列表；None 表示无路径关联。
-            thinking: 可选，本 turn 是否为思考轮次；None 表示无思考轮次。
             reasoning_effort: 可选，本 turn 思考努力等级；None 表示未指定（由模型侧回退到
-                ``max``）。该值经 ``turn_service.create_turn`` 透传落库到
-                ``turns.reasoning_effort``。
+                ``max``）。落库到 ``turns.reasoning_effort`` 列（DDL 层约束只接受
+                ``low`` / ``high`` / ``max``）。
 
         返回:
             落库成功的 ``TurnRecord``（含自增分配的 id）。
@@ -82,12 +79,11 @@ class TurnCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
-            向 ``turns`` 表插入一行（不含 ``agent_id`` 列，含 ``model_id`` 列）。
+            向 ``turns`` 表插入一行（含 ``agent_id`` / ``model_name`` 列，无 ``model_id`` 列）。
         """
 
         if not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
-        now = utc_now()
         with self._session_factory.begin() as session:
             model = TurnModel(
                 task_id=task_id,
@@ -97,11 +93,8 @@ class TurnCrud:
                 response_text=None,
                 agent_id=agent_id,
                 product_id=product_id,
-                model_id=model_id,
-                created_at=to_text(now),
-                updated_at=to_text(now),
+                model_name=model_name,
                 paths=paths,
-                thinking=thinking,
                 reasoning_effort=reasoning_effort,
             )
             session.add(model)
@@ -213,36 +206,6 @@ class TurnCrud:
             )
         if not result.rowcount:
             return None
-        return self.get(turn_id)
-
-    def update_model_id(self, turn_id: int, model_id: int) -> TurnRecord:
-        """回写轮次实际所用模型条目标识（运行期兜底解析修正后）。
-
-        仅更新 ``model_id`` 与 ``updated_at``；其余字段保持不变，避免覆盖
-        运行期其它并发写入（如 status）。
-
-        参数:
-            turn_id: turn 标识（整数 id）。
-            model_id: 运行期解析得到的最终模型条目标识（``ModelEntryRecord.id`` 整数）。
-
-        返回:
-            更新后的 ``TurnRecord``。
-
-        异常:
-            KeyError: 如果指定 turn 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            更新 ``turns`` 表中对应行的 model_id 与 updated_at。
-        """
-
-        self.get(turn_id)
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(TurnModel)
-                .where(TurnModel.id == turn_id)
-                .values(model_id=model_id, updated_at=to_text(utc_now()))
-            )
         return self.get(turn_id)
 
     def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:

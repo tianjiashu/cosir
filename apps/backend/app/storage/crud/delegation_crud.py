@@ -11,7 +11,7 @@
 必须在 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-import json
+import dataclasses
 
 from sqlalchemy import asc, delete, func, insert, select, update
 
@@ -56,7 +56,9 @@ class DelegationCrud:
             record: 待持久化的 delegation 领域值对象。
 
         返回:
-            原样返回已写入的 delegation 记录。
+            回填数据库自增 id 后的新建 ``DelegationRecord``。原 ``record`` 为不可变
+            dataclass，故通过 ``dataclasses.replace`` 生成新实例携带 ``model.id``；
+            调用方应改用返回值而非传入对象获取新建行主键。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果插入 delegation 记录失败。
@@ -66,8 +68,11 @@ class DelegationCrud:
         """
 
         with self._session_factory.begin() as session:
-            session.add(DelegationModel(**_to_model(record)))
-        return record
+            model = DelegationModel(**record.to_model_dict())
+            session.add(model)
+        # record 是不可变 dataclass，自增 id 需通过 dataclasses.replace 回填后返回，
+        # 否则调用方无法拿到新建行的主键。
+        return dataclasses.replace(record, id=model.id)
 
     def create_pending_if_slot_available(
         self,
@@ -119,7 +124,7 @@ class DelegationCrud:
                 )
                 conn.rollback()
                 return None
-            conn.execute(insert(DelegationModel).values(**_to_model(record)))
+            conn.execute(insert(DelegationModel).values(**record.to_model_dict()))
             conn.commit()
         return record.id
 
@@ -223,10 +228,13 @@ class DelegationCrud:
         return [DelegationRecord.from_model(row) for row in rows]
 
     def delete_by_ids(self, ids: list[int]) -> int:
-        """按任务标识批量删除 delegation 记录。
+        """按 ``task_id`` 批量删除 delegation 记录。
+
+        注意方法名易与「按 delegation 自身 id 删除」混淆：本方法按 ``task_id`` 匹配，
+        传入的是任务 id 列表，会删除这些任务下归属的全部 delegation 行。
 
         参数:
-            ids: 待清理 delegation 的任务整数 id 列表。
+            ids: 用于匹配 ``task_id`` 的任务整数 id 列表（非 delegation 自身 id）。
 
         返回:
             被删除的 delegation 行数（便于调用方审计日志）。
@@ -275,58 +283,3 @@ class DelegationCrud:
                 .all()
             )
         return [DelegationRecord.from_model(row) for row in rows]
-
-
-def _serialize_tools(tools: tuple[str, ...]) -> str:
-    """将工具标识元组序列化为 JSON 数组文本（供 JSON 列存储）。
-
-    参数:
-        tools: 要持久化的工具标识元组。
-
-    返回:
-        JSON 数组文本。
-
-    异常:
-        TypeError: 如果工具集合包含无法 JSON 序列化的值。
-
-    副作用:
-        无。
-    """
-
-    return json.dumps(tools)
-
-
-def _to_model(record: DelegationRecord) -> dict[str, str]:
-    """从领域值对象提取 ORM 表的列值字典。
-
-    统一 create 与 create_pending_if_slot_available 的字段映射。
-
-    参数:
-        record: 待持久化的委派记录值对象。
-
-    返回:
-        键为 ``DelegationModel`` 列名、值为已序列化列的字典。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-    return {
-        "id": record.id,
-        "task_id": record.task_id,
-        "parent_turn_id": record.parent_turn_id,
-        "child_turn_id": record.child_turn_id,
-        "child_task_id": record.child_task_id,
-        "parent_agent_id": record.parent_agent_id,
-        "child_agent_id": record.child_agent_id,
-        "delegation_type": record.delegation_type,
-        "status": record.status,
-        "prompt": record.prompt,
-        "summary": record.summary,
-        "error": record.error,
-        "effective_tools": _serialize_tools(record.effective_tools),
-        "created_at": to_text(record.created_at),
-        "updated_at": to_text(record.updated_at),
-    }

@@ -3,8 +3,9 @@
 本模块只定义 ``turns`` 单表的列结构与 StorageBase 继承关系，不含查询逻辑。
 """
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql.sqltypes import String
 
 from app.models.enums.turn_status import TurnStatus
 from app.storage.model.base import StorageBase
@@ -25,9 +26,9 @@ class TurnModel(StorageBase):
     - ``created_at`` / ``updated_at``：时间戳文本（项目约定以文本存储）。
     - ``agent_id``：本轮使用的 Agent 条目标识，可选。
     - ``product_id``：本轮使用模型的厂商（``providers.id`` 外键），可选。
-    - ``model_id``：本轮使用的模型条目标识（``models.id`` 外键），可选。
+    - ``model_name``：本轮使用的模型 litellm 路由名（如 ``deepseek/deepseek-v4-flash``），
+        可选；非外键，仅作运行期模型标识持久化。
     - ``paths``：本轮涉及的文件路径集合（JSON 文本存储），可选。
-    - ``thinking``：是否开启推理模式，可选。
     - ``reasoning_effort``：推理强度（``low`` / ``high`` / ``max``），可选。
     """
 
@@ -60,9 +61,8 @@ class TurnModel(StorageBase):
     product_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("providers.id"), nullable=True
     )
-    model_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("models.id"), nullable=True
+    model_name: Mapped[str | None] = mapped_column(
+        String,  nullable=True
     )
     paths: Mapped[list[str] | None] = mapped_column(Text)
-    thinking: Mapped[bool | None] = mapped_column(Boolean)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)  # low/high/max
