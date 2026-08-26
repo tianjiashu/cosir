@@ -18,14 +18,13 @@ class DelegationModel(StorageBase):
         Integer, ForeignKey("turns.id"), nullable=False, index=True
     )
     child_turn_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("turns.id"), nullable=False
+        Integer, ForeignKey("turns.id"), nullable=True
     )
     child_task_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=True
     )
     parent_agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     child_agent_id: Mapped[str] = mapped_column(Text, nullable=False)
-    delegation_type: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
