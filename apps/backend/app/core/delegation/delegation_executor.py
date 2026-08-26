@@ -11,7 +11,6 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
-from app.llm_provider.model_resolver_service import ModelNotConfiguredError
 from app.models import TaskRecord, TurnRecord
 from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_context import DelegationPolicyContext
@@ -142,7 +141,6 @@ class DelegationExecutor(DelegateTaskExecutor):
             parent_turn_id=self._parent_turn.id,
             parent_agent_id=self._parent_profile.agent_id,
             child_agent_id=args.child_agent_id,
-            delegation_type=self._delegation_type_from_child_agent_id(args.child_agent_id),
             prompt=agent_input_text,
             effective_tools=decision.effective_tools,
             max_concurrency=Settings.DELEGATION_MAX_CONCURRENCY,
@@ -205,26 +203,10 @@ class DelegationExecutor(DelegateTaskExecutor):
                     task_id=child_task.id,
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,
-                    model_id=child_agent_profile.model_name
+                    model_name=child_agent_profile.model_name
                 )
-            except ModelNotConfiguredError as exc:
-                log.warning(
-                    "model_resolve_rejected",
-                    extra={
-                        "msg": (
-                            f"委派 child 模型解析被拒绝，"
-                            f"model={exc.model_name}，reason={exc.reason}"
-                        ),
-                        "data": {
-                            "delegation_id": delegation_id,
-                            "child_agent_id": args.child_agent_id,
-                            "model": exc.model_name,
-                            "reason": exc.reason,
-                            "child": True,
-                        },
-                    },
-                )
-                log.error(
+            except Exception as exc:
+                log.exception(
                     "child_delegation_model_resolve_failed",
                     extra={
                         "msg": f"委派 child 预解析模型失败，delegation 置 failed：{exc}",
@@ -232,8 +214,6 @@ class DelegationExecutor(DelegateTaskExecutor):
                             "delegation_id": delegation_id,
                             "parent_turn_id": self._parent_turn.id,
                             "child_agent_id": args.child_agent_id,
-                            "model": exc.model_name,
-                            "reason": exc.reason,
                         },
                     },
                 )
@@ -241,12 +221,12 @@ class DelegationExecutor(DelegateTaskExecutor):
                     delegation_id,
                     delegation_service,
                     runtime_event_loop,
-                    f"model not configured: {exc.model_name} ({exc.reason})",
+                    f"child model resolve failed: {exc}",
                 )
                 return self._child_error(
                     "failed",
                     f"child agent '{args.child_agent_id}' cannot run: model "
-                    f"'{exc.model_name}' is not configured ({exc.reason}). {exc.guidance}",
+                    f"child model resolve failed: {exc}",
                 )
 
             # 确认pending child turn
@@ -320,26 +300,6 @@ class DelegationExecutor(DelegateTaskExecutor):
         """
 
         return f"# {args.title}\n\n{args.prompt}"
-
-    def _delegation_type_from_child_agent_id(self, child_agent_id: str) -> str:
-        """从 child Agent 标识派生稳定的委派类型标签。
-
-        参数:
-            child_agent_id: child Agent profile 的稳定标识。
-
-        返回:
-            去掉 ``delegate_`` 前缀后的类型；非约定前缀时原样返回。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        prefix = "delegate_"
-        if child_agent_id.startswith(prefix):
-            return child_agent_id[len(prefix) :]
-        return child_agent_id
 
     def _policy_error(self, child_agent_id: str, reason: str) -> ToolObservation:
         """构造策略拒绝的工具错误 observation。
@@ -420,7 +380,7 @@ class DelegationExecutor(DelegateTaskExecutor):
 
     def _fail_delegation(
         self,
-        delegation_id: str | None,
+        delegation_id: int | None,
         delegation_service: DelegationService,
         runtime_event_loop: asyncio.AbstractEventLoop | None,
         error: str,
@@ -470,11 +430,11 @@ class DelegationExecutor(DelegateTaskExecutor):
 
     def _finalize_result(
         self,
-        delegation_id: str,
+        delegation_id: int,
         result: DelegationResult,
         runtime_event_loop: asyncio.AbstractEventLoop | None,
         delegation_service: DelegationService,
-        child_task_id: str | None = None,
+        child_task_id: int | None = None,
     ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 

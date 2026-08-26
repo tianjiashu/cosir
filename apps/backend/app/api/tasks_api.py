@@ -254,6 +254,6 @@ def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> int | No
 
     turns = turn_service.list_turns_for_task(task_id)
     for turn in reversed(turns):
-        if turn.model_id:
-            return turn.model_id
+        if turn.model_name:
+            return turn.model_name
     return None

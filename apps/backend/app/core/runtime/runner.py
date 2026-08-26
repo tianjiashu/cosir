@@ -6,10 +6,8 @@ from collections.abc import AsyncGenerator
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.define_agents import DEFAULT_AGENT_ID
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
-from app.llm_provider.model_error_mapper import map_litellm_error
 from app.core.observability import (
     TraceMetadata,
     build_tool_trace_recorder,
@@ -417,17 +415,13 @@ class AgentRuntime:
             # 失败即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
             # 使运行后变更能展示与撤销。同步调用（此处非 await 上下文）。
             self._mark_stable_file_changes(turn_id)
-            # 把 litellm 异常归一为稳定错误码（设计文档阶段 4），供前端按
-            # error_code 给出修复引导；非模型异常归一为 MODEL_UNKNOWN 兜底。
-            mapped = map_litellm_error(exc)
+
             log.exception(
                 "task_failed",
                 extra={
                     "msg": "task execution failed",
                     "data": {
                         "task_id": task_id,
-                        "error_code": mapped.error_code.value,
-                        "retryable": mapped.retryable,
                     },
                 },
             )
@@ -440,8 +434,6 @@ class AgentRuntime:
                         status="failed",
                         error=str(exc),
                         end_reason=None,
-                        error_code=mapped.error_code.value,
-                        guidance=mapped.guidance,
                     ),
                     is_main_agent=agent.main_agent,
                 ),

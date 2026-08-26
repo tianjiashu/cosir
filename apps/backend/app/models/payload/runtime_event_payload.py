@@ -1,4 +1,4 @@
-"""Runtime event payload base model."""
+"""Runtime event payload capability model."""
 
 from pydantic import BaseModel, ConfigDict
 

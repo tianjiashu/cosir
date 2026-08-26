@@ -2,7 +2,7 @@
 
 本模块承载「content → text」单一职责，是模型节点与运行时上下文落库两处
 归一逻辑的**唯一事实来源**。语义严格对齐 ``langchain_core.BaseMessage.text``
-（源码 base.py:262-292）：只抽取字符串块与 ``type == "text"`` 的文本块，其它
+（源码 capability.py:262-292）：只抽取字符串块与 ``type == "text"`` 的文本块，其它
 类型块（如 ``image_url``）一律忽略；``text`` 非字符串时跳过，避免 join 报错。
 
 两处旧实现（``chunk_assembler._extract_text`` / ``runtime_context_manager.

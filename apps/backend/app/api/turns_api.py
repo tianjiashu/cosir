@@ -67,9 +67,9 @@ from app.service.task.turn_stream_service import TurnStreamService
 
 @app.post("/tasks/{task_id}/turns")
 async def create_turn(
-    task_id: int,
-    payload: CreateTurnRequest,
-    turn_service: TurnService = Depends(get_turn_service),
+        task_id: int,
+        payload: CreateTurnRequest,
+        turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
     """为已有任务追加一个 pending 轮次。
 
@@ -100,8 +100,7 @@ async def create_turn(
             payload.input_text,
             agent_id="main_agent",
             product_id=payload.product_id,
-            model_id=payload.model_id,
-            thinking=payload.thinking,
+            model_name=payload.model_name,
             reasoning_effort=payload.reasoning_effort,
             paths=payload.paths,
         )
@@ -114,10 +113,10 @@ async def create_turn(
 
 @app.get("/turns/{turn_id}/stream")
 async def stream_turn(
-    turn_id: int,
-    runtime: AgentRuntime = Depends(get_runtime),
-    turn_service: TurnService = Depends(get_turn_service),
-    stream_service: TurnStreamService = Depends(get_turn_stream_service),
+        turn_id: int,
+        runtime: AgentRuntime = Depends(get_runtime),
+        turn_service: TurnService = Depends(get_turn_service),
+        stream_service: TurnStreamService = Depends(get_turn_stream_service),
 ):
     """通过 SSE 流式返回轮次的运行时事件。
 
@@ -173,9 +172,9 @@ async def stream_turn(
 
 @app.get("/turns/{turn_id}/events/stream")
 async def subscribe_turn_events(
-    turn_id: int,
-    turn_service: TurnService = Depends(get_turn_service),
-    stream_service: TurnStreamService = Depends(get_turn_stream_service),
+        turn_id: int,
+        turn_service: TurnService = Depends(get_turn_service),
+        stream_service: TurnStreamService = Depends(get_turn_stream_service),
 ):
     """订阅已运行委派子轮次的实时事件。
 
@@ -208,9 +207,9 @@ async def subscribe_turn_events(
 
 @app.post("/turns/{turn_id}/cancel")
 async def cancel_turn(
-    turn_id: int,
-    runtime: AgentRuntime = Depends(get_runtime),
-    turn_service: TurnService = Depends(get_turn_service),
+        turn_id: int,
+        runtime: AgentRuntime = Depends(get_runtime),
+        turn_service: TurnService = Depends(get_turn_service),
 ) -> TurnResponse:
     """取消指定轮次并中止其运行。
 
@@ -240,6 +239,7 @@ async def cancel_turn(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return TurnResponse.from_record(turn)
+
 
 async def _sse_frames(events: AsyncIterator[RuntimeEvent]) -> AsyncIterator[str]:
     """把 service 产出的裸运行时事件迭代器逐条格式化为 SSE 帧。

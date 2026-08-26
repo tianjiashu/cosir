@@ -6,8 +6,10 @@ import asyncio
 import threading
 from collections import OrderedDict
 from contextlib import suppress
+from typing import Any
 
 from app.config.logging.logger import log
+from app.models.enums.event_type import TERMINAL_EVENT_TYPES
 from app.models.event.runtime_event import RuntimeEvent
 from app.service.agent_runtime_event.runtime_event_subscription import (
     _QUEUE_CLOSED,
@@ -145,6 +147,56 @@ class RuntimeEventBus:
             },
         )
 
+    def _evict_to_make_room(
+        self, queue: asyncio.Queue[Any], keep_priority: bool
+    ) -> None:
+        """队列满时淘汰最旧事件以腾出空间，优先保留终态事件与关闭哨兵。
+
+        当 ``keep_priority`` 为真（发布终态事件或关闭哨兵时），从队头扫描并丢弃
+        第一个非终态事件；仅当队列中全部为终态事件（极端情况）才退化为丢弃最旧。
+        当 ``keep_priority`` 为假（发布普通事件），直接丢弃最旧事件，维持原背压语义。
+
+        参数:
+            queue: 已满的订阅队列。
+            keep_priority: 是否优先保留待入队的关键事件（终态/哨兵）。
+
+        返回:
+            无。
+
+        异常:
+            无。队列为空时不抛出（``get_nowait`` 受 ``suppress`` 保护）。
+
+        副作用:
+            从队列移除一个最旧（或最旧的非终态）事件。
+        """
+
+        if not keep_priority:
+            with suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+            return
+        # 优先丢弃最旧的非终态事件：扫描队头至第一个非终态并移除。
+        evicted = False
+        temp: list[Any] = []
+        try:
+            while True:
+                item = queue.get_nowait()
+                if (
+                    isinstance(item, RuntimeEvent)
+                    and item.event_type in TERMINAL_EVENT_TYPES
+                ):
+                    temp.append(item)
+                else:
+                    evicted = True
+                    break
+        except asyncio.QueueEmpty:
+            pass
+        # 把保留的事件（含终态）按原序放回队列。
+        for item in temp:
+            queue.put_nowait(item)
+        if not evicted:
+            with suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+
     def publish(self, event: RuntimeEvent) -> None:
         """Publish an event to current subscribers of its turn.
 
@@ -156,14 +208,18 @@ class RuntimeEventBus:
 
         异常:
             无。重复 event_id 会被忽略；去重窗口按 queue_size 有界，超出窗口的最旧
-            event_id 会被淘汰，其后的重复发布不再被忽略；订阅队列满时丢弃该订阅者
-            最旧事件并记录日志。
+            event_id 会被淘汰，其后的重复发布不再被忽略；订阅队列满时优先丢弃最旧的
+            非终态事件以保留终态事件入队，并记录日志。
 
         副作用:
             把事件写入当前订阅者的内存队列，并更新该 turn 的去重窗口。
         """
 
         if event.turn_id is None:
+            # by-design：本总线仅服务按 turn 维度建立的订阅通道（subscribe/close_turn
+            # 均以 turn_id 为 key，无 task 级广播能力）。turn_id 缺失的事件（全局/无
+            # turn 归属事件）本就不存在实时订阅者，静默跳过属预期行为，不构成丢事件——
+            # 此类事件由 RuntimeEventService 负责落库，供 list_by_task 历史回看。
             return
         with self._lock:
             published_ids = self._published_event_ids_by_turn.setdefault(
@@ -181,13 +237,19 @@ class RuntimeEventBus:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                with suppress(asyncio.QueueEmpty):
-                    queue.get_nowait()
+                # 背压淘汰：优先丢弃最旧的非终态事件，确保终态事件始终入队。
+                # 否则队列满时若最旧事件恰为 RUN_FINISHED，订阅者会在收到关闭哨兵
+                # 后提前结束流，导致前端收不到完整终态（terminal_received 永不置位）。
+                keep_terminal = event.event_type in TERMINAL_EVENT_TYPES
+                self._evict_to_make_room(queue, keep_priority=keep_terminal)
                 queue.put_nowait(event)
                 log.warning(
                     "runtime_event_subscriber_queue_full",
                     extra={
-                        "msg": "runtime event subscriber queue full; dropped oldest event",
+                        "msg": (
+                            "runtime event subscriber queue full; "
+                            "dropped oldest non-terminal event to keep terminal"
+                        ),
                         "data": {"turn_id": event.turn_id},
                     },
                 )
@@ -205,7 +267,8 @@ class RuntimeEventBus:
             无。
 
         副作用:
-            向当前订阅队列写入关闭哨兵。
+            向当前订阅队列写入关闭哨兵；若队列已满则优先挤掉最旧的非终态事件，
+            确保哨兵入队（否则订阅者收不到 StopAsyncIteration、流不结束）。
         """
 
         with self._lock:
@@ -215,6 +278,7 @@ class RuntimeEventBus:
             try:
                 queue.put_nowait(_QUEUE_CLOSED)
             except asyncio.QueueFull:
-                with suppress(asyncio.QueueEmpty):
-                    queue.get_nowait()
+                # 关闭哨兵必须入队，否则订阅者永不收到 StopAsyncIteration，流不结束。
+                # 满队列时优先挤掉最旧的非终态事件以腾出空间。
+                self._evict_to_make_room(queue, keep_priority=True)
                 queue.put_nowait(_QUEUE_CLOSED)

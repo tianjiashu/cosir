@@ -44,7 +44,7 @@ class HookContext:
     tool_arguments: dict | None = None
     tool_observation: ToolObservation | None = None
     session_id: str | None = None
-    workspace_id: str | None = None
+    workspace_id: int | None = None
     task_id: str | None = None
     turn_id: str | None = None
     metadata: dict = field(default_factory=dict)

@@ -1,6 +1,7 @@
 """Delegation lifecycle service."""
 
 import asyncio
+
 from app.config.logging.logger import log
 from app.models.delegation_record import DelegationRecord
 from app.models.enums.event_type import EventType
@@ -10,11 +11,11 @@ from app.models.payload.delegation_child_started_payload import DelegationChildS
 from app.models.payload.delegation_failed_payload import DelegationFailedPayload
 from app.models.payload.delegation_finished_payload import DelegationFinishedPayload
 from app.models.payload.delegation_started_payload import DelegationStartedPayload
-from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.models.result.delegation_acquire_result import (
     REASON_CONCURRENCY_EXCEEDED,
     DelegationAcquireResult,
 )
+from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.storage.crud.delegation_crud import ACTIVE_DELEGATION_STATUSES, DelegationCrud
 
 
@@ -52,7 +53,6 @@ class DelegationService:
             parent_turn_id: int,
             parent_agent_id: str,
             child_agent_id: str,
-            delegation_type: str,
             prompt: str,
             effective_tools: tuple[str, ...],
             max_concurrency: int,
@@ -100,7 +100,6 @@ class DelegationService:
             child_task_id=None,
             parent_agent_id=parent_agent_id,
             child_agent_id=child_agent_id,
-            delegation_type=delegation_type,
             status="pending",
             prompt=prompt,
             summary="",
@@ -194,7 +193,6 @@ class DelegationService:
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
-                delegation_type=record.delegation_type,
                 status="running",
             ),
             runtime_event_loop=runtime_event_loop,
@@ -240,7 +238,6 @@ class DelegationService:
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
-                delegation_type=record.delegation_type,
                 status="completed",
                 summary=summary,
             ),
@@ -284,7 +281,6 @@ class DelegationService:
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
-                delegation_type=record.delegation_type,
                 status="failed",
                 error=error,
             ),
@@ -328,7 +324,6 @@ class DelegationService:
                 parent_turn_id=record.parent_turn_id,
                 child_turn_id=record.child_turn_id,
                 child_agent_id=record.child_agent_id,
-                delegation_type=record.delegation_type,
                 status="cancelled",
                 error=error,
             ),
@@ -336,35 +331,70 @@ class DelegationService:
         )
 
     def mark_interrupted_delegations_failed(self, reason: str) -> int:
-        """保守落定进程中断遗留的 active delegation。
+        """原子落定进程中断遗留的 active delegation。
+
+        进程级重启恢复入口（由 ``app.py`` 在启动时以 ``reason="runtime_restarted"`` 调用），
+        跨全部 parent turn 恢复。恢复语义：先由数据层用单条
+        ``UPDATE ... WHERE status IN (active) RETURNING id`` 原子地把残留的 ``pending`` /
+        ``running`` 委派直接置为 ``failed``（消除「先 list 快照再逐条 update」的 TOCTOU，
+        以及中途崩溃导致残留记录永久占用并发额度、使新委派被永久拒绝），再仅对真正被改动的
+        记录补发 ``delegation_failed`` 事件。事件补发失败只记 warn 日志、不回滚已置 failed
+        的数据库状态，保证额度回收不受事件通道影响。
 
         参数:
             reason: 写入 ``error`` 字段和 failed 事件 payload 的恢复审计原因。
+
         返回:
-            本次从 ``pending`` 或 ``running`` 标记为 ``failed`` 的 delegation 数量。
+            本次实际从 ``pending`` / ``running`` 置为 ``failed`` 的 delegation 数量。
+
         异常:
-            sqlalchemy.exc.SQLAlchemyError: 当查询或更新 delegation 记录失败时抛出。
-            KeyError: 当待恢复记录在更新前被删除时由底层 ``mark_failed`` 抛出。
+            sqlalchemy.exc.SQLAlchemyError: 当底层原子更新 delegation 记录失败时抛出。
+
         副作用:
-            查询 delegations 表；对每条 ``pending`` / ``running`` 记录复用 ``mark_failed`` 写入
-            failed 终态和错误原因，并尽力发出 delegation_failed 父事件；写入恢复审计日志。
+            更新 delegations 表（仅活跃记录，跨全部 parent turn）；尽力为被改动的记录发出
+            delegation_failed 父事件；写入恢复审计日志。
         """
 
-        interrupted = self._delegation_crud.list_pending_or_running()
-        for record in interrupted:
-            self.mark_failed(record.id, reason)
+        failed_ids = self._delegation_crud.fail_active_delegations(error=reason)
+        for delegation_id in failed_ids:
+            try:
+                record = self._delegation_crud.get(delegation_id)
+            except KeyError:
+                # RETURNING 的 id 理论上必能取到记录；取不到说明已被并发清理，
+                # 属异常路径但不影响额度回收，记录后跳过而非静默吞掉。
+                log.warning(
+                    "delegation_recovery_record_missing",
+                    extra={
+                        "msg": "恢复审计中 RETURNING id 对应的记录已不存在，跳过事件补发",
+                        "data": {"delegation_id": delegation_id, "reason": reason},
+                    },
+                )
+                continue
+            self._emit_event(
+                record,
+                EventType.DELEGATION_FAILED,
+                DelegationFailedPayload(
+                    delegation_id=record.id,
+                    parent_turn_id=record.parent_turn_id,
+                    child_turn_id=record.child_turn_id,
+                    child_agent_id=record.child_agent_id,
+                    status="failed",
+                    error=reason,
+                ),
+                runtime_event_loop=None,
+            )
         log.info(
             "delegation_recovery_audit_completed",
             extra={
                 "msg": "委派恢复审计完成，已将中断的委派标记为失败",
                 "data": {
                     "reason": reason,
-                    "recovered_count": len(interrupted),
-                    "delegation_ids": [record.id for record in interrupted],
+                    "recovered_count": len(failed_ids),
+                    "delegation_ids": failed_ids,
                 },
             },
         )
-        return len(interrupted)
+        return len(failed_ids)
 
     def list_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
         """列出某个 parent turn 下的全部 delegation 记录。

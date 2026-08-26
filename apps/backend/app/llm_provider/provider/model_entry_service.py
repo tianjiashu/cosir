@@ -29,7 +29,7 @@ class ModelImportResult:
         skipped_model_names: 被跳过的模型名列表（该厂商下已存在同名条目）。
     """
 
-    provider_id: str
+    provider_id: int
     imported: list[ModelEntryRecord] = field(default_factory=list)
     skipped_model_names: list[str] = field(default_factory=list)
 
@@ -73,7 +73,7 @@ class ModelEntryService:
 
         return self._model_entry_crud.list_all(enabled)
 
-    def list_models_by_provider(self, provider_id: str) -> list[ModelEntryRecord]:
+    def list_models_by_provider(self, provider_id: int) -> list[ModelEntryRecord]:
         """列出某厂商下全部模型条目。
 
         参数:
@@ -91,7 +91,7 @@ class ModelEntryService:
 
         return self._model_entry_crud.list_by_provider(provider_id)
 
-    def get_model(self, model_id: str) -> ModelEntryRecord:
+    def get_model(self, model_id: int) -> ModelEntryRecord:
         """按标识返回单个模型条目。
 
         参数:
@@ -111,7 +111,7 @@ class ModelEntryService:
 
     def import_models(
         self,
-        provider_id: str,
+        provider_id: int,
         entries: list[dict[str, object]],
     ) -> ModelImportResult:
         """按厂商批量导入模型条目（discover 勾选 / 手动添加统一入口）。
@@ -178,7 +178,7 @@ class ModelEntryService:
 
     def update_model(
         self,
-        model_id: str,
+        model_id: int,
         *,
         display_name: str | None = None,
         max_context_window: int | None = None,
@@ -229,7 +229,7 @@ class ModelEntryService:
         )
         return record
 
-    def delete_model(self, model_id: str) -> None:
+    def delete_model(self, model_id: int) -> None:
         """删除单个模型条目并写 ``model_deleted`` 审计日志。
 
         参数:

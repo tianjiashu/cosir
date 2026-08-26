@@ -22,7 +22,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.llm_provider.provider.provider_capability import get_capability
+from app.llm_provider.capability.provider_capability import ProviderCapability
 
 if TYPE_CHECKING:
     from app.models import ModelEntryRecord, ProviderRecord
@@ -141,7 +141,7 @@ class LLMRuntimeConfig:
         Key 明文自 provider 行透传，仅在此对象内部流动，不进日志 / 事件。
 
         ``provider_type`` 直接取自 provider 行；
-        ``thinking_channels`` 经 ``get_capability(provider.provider_type)``
+        ``thinking_channels`` 经 ``ProviderCapability.get_capability(provider.provider_type)``
         从注册表解析（未知类型回退 custom 语义，通道为空），供
         ``model_node`` 按厂商分派抽取与剥离。
 
@@ -154,13 +154,13 @@ class LLMRuntimeConfig:
             组装后的 ``LLMRuntimeConfig``。
 
         异常:
-            无（``get_capability`` 对未知类型回退而非抛错）。
+            无（``ProviderCapability.get_capability`` 对未知类型回退而非抛错）。
 
         副作用:
             无。
         """
 
-        capability = get_capability(provider.provider_type)
+        capability = ProviderCapability.get_capability(provider.provider_type)
         return cls(
             model_name=model_entry.model_name,
             base_url=provider.base_url,

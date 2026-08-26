@@ -49,7 +49,7 @@ class RuntimeEvent:
     sequence: int = 0
     message_id: str | None = None
     tool_call_id: str | None = None
-    event_id: str = field(default_factory=lambda: int(uuid4()))
+    event_id: str = field(default_factory=lambda: str(uuid4()))
     is_main_agent: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 

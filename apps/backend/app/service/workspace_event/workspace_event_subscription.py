@@ -33,7 +33,7 @@ class WorkspaceEventSubscription:
         无。
     """
 
-    workspace_id: str
+    workspace_id: int
     queue: asyncio.Queue[WorkspaceEvent | object]
 
     def __aiter__(self) -> Self:

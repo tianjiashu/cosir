@@ -25,7 +25,7 @@ class TurnRecord:
     response_text: str | None = None
     agent_id: str | None = None
     product_id: int | None = None
-    model_id: int | None = None
+    model_name: str | None = None
     paths: list[str] | None = None
     thinking: bool | None = None
     reasoning_effort: str | None = None
@@ -58,7 +58,7 @@ class TurnRecord:
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
             "product_name": self.product_id,
-            "model_name": self.model_id,
+            "model_name": self.model_name,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -90,8 +90,7 @@ class TurnRecord:
             response_text=row.response_text,
             agent_id=row.agent_id,
             paths=row.paths,
-            thinking=row.thinking,
             reasoning_effort=row.reasoning_effort,
-            model_id=row.model_id,
+            model_name=row.model_name,
             product_id=row.product_id,
         )

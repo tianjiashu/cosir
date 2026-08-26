@@ -22,7 +22,7 @@ class WorkspacePrepareResponse(BaseModel):
         degraded_reason: 降级原因（非 ready 时有效；脱敏，不记录 secret）。
     """
 
-    workspace_id: str
+    workspace_id: int
     ready: bool
     state: str
     action_taken: str = "none"

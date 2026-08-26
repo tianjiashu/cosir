@@ -36,7 +36,6 @@ class TurnResponse(BaseModel):
     status: str
     end_reason: str | None = None
     response_text: str | None = None
-    agent_id: str | None = None
     model_name: str | None = None
     created_at: str
     updated_at: str
@@ -69,8 +68,7 @@ class TurnResponse(BaseModel):
             status=record.status,
             end_reason=record.end_reason,
             response_text=record.response_text,
-            agent_id=record.agent_id,
-            model_name=record.model_id,
+            model_name=record.model_name,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),
         )

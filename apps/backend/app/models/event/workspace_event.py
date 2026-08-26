@@ -39,7 +39,7 @@ class WorkspaceEvent:
     """
 
     event_type: EventType
-    workspace_id: str
+    workspace_id: int
     workspace_path: str
     payload: dict[str, object]
     event_id: str = field(default_factory=lambda: str(uuid4()))

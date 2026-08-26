@@ -24,7 +24,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
-from app.llm_provider.provider.provider_capability import ProviderCapability, get_capability
+from app.llm_provider.capability.provider_capability import ProviderCapability, get_capability
 from app.models import TurnRecord, TaskRecord
 from app.service.depends import get_provider_service, get_model_entry_service
 
@@ -190,10 +190,10 @@ def resolve_chat_model(
         turn内的为运行时模型参数配置
     """
     model_settings: ModelSettings = agent_profile.model_settings
-    model_id = agent_profile.model_id
+    model_id = agent_profile.model_name
     product_id = agent_profile.product_id
-    if turn.model_id is not None:
-        model_id = turn.model_id
+    if turn.model_name is not None:
+        model_id = turn.model_name
     if turn.product_id is not None:
         product_id = turn.product_id
     if turn.thinking is not None:

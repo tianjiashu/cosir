@@ -91,7 +91,14 @@ class RuntimeEventService:
         self._event_bus.publish(event)
 
     def save_and_publish(self, event: RuntimeEvent) -> RuntimeEvent:
-        """Persist one event and publish the persisted version.
+        """持久化一个事件并向实时订阅者发布持久化后的版本。
+
+        职责边界（与 RuntimeEventBus 对齐）：
+        - 落库：无论 ``turn_id`` 是否为 None 都会写入 ``runtime_events`` 表，
+          供 ``list_by_task`` / ``list_by_turn`` 历史回看（含无 turn 归属的全局事件）。
+        - 实时投递：仅 ``turn_id`` 非 None 的事件会被 RuntimeEventBus 投递给已订阅
+          该 turn 的消费者；``turn_id`` 为 None 的事件无实时订阅通道，bus 会按设计
+          静默跳过，不表示丢事件。
 
         参数:
             event: 待保存并发布的 runtime event。
@@ -103,14 +110,14 @@ class RuntimeEventService:
             RuntimeError: 当 runtime event 持久化失败时抛出。
 
         副作用:
-            向 runtime_events 表写入事件，并向当前进程内订阅者发布事件。
+            向 runtime_events 表写入事件；仅当事件归属某 turn 时向进程内订阅者发布。
         """
 
         stamped = self.save_event(event)
         self.publish_event(stamped)
         return stamped
 
-    def list_by_task(self, task_id: str) -> list[dict[str, object]]:
+    def list_by_task(self, task_id: int) -> list[dict[str, object]]:
         """List persisted runtime events under a task.
 
         参数:
@@ -128,7 +135,7 @@ class RuntimeEventService:
 
         return self._runtime_event_crud.list_by_task(task_id)
 
-    def list_by_turn(self, turn_id: str) -> list[dict[str, object]]:
+    def list_by_turn(self, turn_id: int) -> list[dict[str, object]]:
         """List persisted runtime events under a turn.
 
         参数:

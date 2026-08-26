@@ -19,11 +19,10 @@ from app.utils.datetime_utils import from_text, to_text
 class ProviderRecord:
     """表示一个模型厂商配置行。"""
 
-    id: int
     name: str
-    provider_type: str
-    created_at: datetime
-    updated_at: datetime
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     base_url: str | None = None
     api_key: str | None = None
     enabled: bool = True
@@ -52,7 +51,6 @@ class ProviderRecord:
         return {
             "id": self.id,
             "name": self.name,
-            "type": self.provider_type,
             "base_url": self.base_url,
             "enabled": self.enabled,
             "sort_order": self.sort_order,
@@ -79,11 +77,23 @@ class ProviderRecord:
         return cls(
             id=row.id,
             name=row.name,
-            provider_type=row.provider_type,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             base_url=row.base_url,
             api_key=row.api_key,
             enabled=bool(row.enabled),
             sort_order=row.sort_order,
+        )
+
+    def to_model(self) -> ProviderModel:
+        """将厂商记录值对象转换为 ORM 行。"""
+        return ProviderModel(
+            id=self.id,
+            name=self.name,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            base_url=self.base_url,
+            api_key=self.api_key,
+            enabled=self.enabled,
+            sort_order=self.sort_order,
         )

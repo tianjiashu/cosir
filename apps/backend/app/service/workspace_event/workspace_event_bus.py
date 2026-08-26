@@ -86,20 +86,20 @@ class WorkspaceEventBus:
         if queue_size < 1:
             raise ValueError("queue_size must be positive")
         self._queue_size = queue_size
-        self._subscribers: dict[str, set[_Subscriber]] = {}
+        self._subscribers: dict[int, set[_Subscriber]] = {}
         self._lock = threading.RLock()
 
-    def subscribe(self, workspace_id: str) -> WorkspaceEventSubscription:
+    def subscribe(self, workspace_id: int) -> WorkspaceEventSubscription:
         """订阅指定 workspace 的状态事件。
 
         参数:
-            workspace_id: 需要订阅的 workspace 标识。
+            workspace_id: 需要订阅的 workspace 标识（int，单一事实类型）。
 
         返回:
             可异步迭代的 WorkspaceEventSubscription。
 
         异常:
-            ValueError: 当 workspace_id 为空时抛出。
+            ValueError: 当 workspace_id 非正（<=0）时抛出。
             RuntimeError: 当调用线程没有正在运行的 event loop 时抛出（订阅必须
                 在 async 上下文创建，SSE 端点满足此约束）。
 
@@ -107,8 +107,8 @@ class WorkspaceEventBus:
             在进程内订阅表注册一个队列，并记录其所属 event loop 供跨线程投递。
         """
 
-        if not workspace_id:
-            raise ValueError("workspace_id must be non-empty")
+        if not workspace_id or workspace_id <= 0:
+            raise ValueError("workspace_id must be a positive integer")
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[WorkspaceEvent | object] = asyncio.Queue(maxsize=self._queue_size)
         subscriber = _Subscriber(queue=queue, loop=loop)
@@ -183,7 +183,7 @@ class WorkspaceEventBus:
         for subscriber in subscribers:
             self._dispatch(subscriber, event)
 
-    def close(self, workspace_id: str) -> None:
+    def close(self, workspace_id: int) -> None:
         """关闭指定 workspace 的全部当前订阅（幂等）。
 
         参数:
@@ -243,7 +243,7 @@ class WorkspaceEventBus:
                 "workspace_event_subscriber_loop_closed",
                 extra={
                     "msg": "订阅者所属 event loop 已关闭，跳过投递",
-                    "data": {"workspace_id": getattr(item, "workspace_id", "")},
+                    "data": {"workspace_id": getattr(item, "workspace_id", None)},
                 },
             )
 
@@ -300,6 +300,6 @@ class WorkspaceEventBus:
                 "workspace_event_subscriber_queue_full",
                 extra={
                     "msg": "workspace event subscriber queue full; dropped oldest event",
-                    "data": {"workspace_id": getattr(item, "workspace_id", "")},
+                    "data": {"workspace_id": getattr(item, "workspace_id", None)},
                 },
             )

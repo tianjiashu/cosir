@@ -18,5 +18,5 @@ class DeleteWorkspaceResponse(BaseModel):
         无。
     """
 
-    workspace_id: str
+    workspace_id: int
     deleted: bool

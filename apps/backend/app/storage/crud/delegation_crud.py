@@ -13,7 +13,7 @@
 
 import dataclasses
 
-from sqlalchemy import asc, delete, func, insert, select, update
+from sqlalchemy import ColumnElement, asc, delete, func, insert, select, update
 
 from app.models.delegation_record import DelegationRecord
 from app.storage.model.delegation_model import DelegationModel
@@ -87,7 +87,10 @@ class DelegationCrud:
                 ``running``）的 child delegation 数量上限。
 
         返回:
-            额度未满时返回新建 delegation 的标识；额度已满时返回 ``None`` 且不写入记录。
+            额度未满时返回数据库为该行分配的自增主键标识（``int``，由
+            ``Result.lastrowid`` 取回，而非传入 ``record.id``）；额度已满时返回
+            ``None`` 且不写入记录。调用方应以 ``None`` 唯一判定额度已满，成功路径
+            始终返回正整数标识。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果事务执行失败。
@@ -124,9 +127,12 @@ class DelegationCrud:
                 )
                 conn.rollback()
                 return None
-            conn.execute(insert(DelegationModel).values(**record.to_model_dict()))
+            result = conn.execute(
+                insert(DelegationModel).values(**record.to_model_dict())
+            )
+            created_id: int | None = result.lastrowid
             conn.commit()
-        return record.id
+        return created_id
 
     def update_status(
         self,
@@ -175,6 +181,54 @@ class DelegationCrud:
                 .values(**values)
             )
         return self.get(id)
+
+    def fail_active_delegations(
+        self,
+        error: str,
+        parent_turn_id: int | None = None,
+    ) -> list[int]:
+        """原子地把活跃 delegation 直接置为 failed 并返回受影响 id。
+
+        用于崩溃重启后的残留恢复：把 ``pending`` / ``running`` 状态的委派一次性、原子地
+        标记为 ``failed``，避免「先 list 快照再逐条 update」的 TOCTOU（已在循环外推进为
+        ``succeeded`` 的记录不会被误覆盖），以及中途崩溃导致残留活跃记录永久占用并发额度、
+        使新委派被永久拒绝。
+
+        ``UPDATE ... WHERE status IN (active) [AND parent_turn_id=?] RETURNING id`` 在单条
+        语句内完成条件判定与状态跃迁：已非活跃的记录不会进入更新集；语句要么全成功要么
+        回滚，不存在部分残留。``parent_turn_id`` 为 ``None`` 时跨全部 parent turn 恢复
+        （进程级重启场景），传入时仅恢复单个 parent turn 的残留。
+
+        参数:
+            error: 写入这些委派的统一失败原因（通常为恢复场景说明）。
+            parent_turn_id: 可选的 parent turn 标识；传入时仅恢复该 turn 下残留活跃委派，
+                为 ``None``（默认）时恢复全部 parent turn 的残留活跃委派。
+
+        返回:
+            被本次语句实际置为 ``failed`` 的 delegation 主键 ``id`` 列表；无活跃记录时
+            返回空列表。调用方应仅基于返回列表补发失败事件，避免对未受影响记录误发事件。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            更新 ``delegations`` 表中匹配行的 ``status``、``error``、``updated_at``；
+            不经过逐条 ``update_status``，不触发单条事件（事件由上层据返回 id 统一补发）。
+        """
+
+        conditions: list[ColumnElement[bool]] = [
+            DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES)
+        ]
+        if parent_turn_id is not None:
+            conditions.append(DelegationModel.parent_turn_id == parent_turn_id)
+        with self._session_factory.begin() as session:
+            rows = session.execute(
+                update(DelegationModel)
+                .where(*conditions)
+                .values(status="failed", error=error, updated_at=to_text(utc_now()))
+                .returning(DelegationModel.id)
+            ).all()
+        return [row[0] for row in rows]
 
     def get(self, id: int) -> DelegationRecord:
         """按标识返回单条 delegation 记录。

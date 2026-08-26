@@ -27,7 +27,6 @@ from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
 from app.service.depends import get_task_service
-from app.llm_provider.model_resolver_service import ModelNotConfiguredError
 from app.tools.schemas import ToolCall
 
 from ...context.context_listener.context_compress_listener import ContextCompressListener
@@ -165,7 +164,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     "data": {
                         "task_id": current_task.task_id,
                         "turn_id": turn.turn_id,
-                        "model": turn.model_id or agent_profile.model_id,
+                        "model": turn.model_name or agent_profile.model_name,
                         "reason": getattr(exc, "reason", None),
                     },
                 },
@@ -210,7 +209,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             task_id=current_task.task_id,
             store=operations.message_store,
             current_turn_id=turn_id,
-            total_tokens=resolve_context_window(turn.model_id), #300K
+            total_tokens=resolve_context_window(turn.model_name), #300K
         ).add_change_listener(
             ContextUsageComputeListener(
                 write_event=write_event,

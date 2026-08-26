@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 from app.models.model_entry_record import ModelEntryRecord
@@ -34,60 +36,13 @@ class ModelEntryResponse(BaseModel):
         无。
     """
 
-    model_id: int
     provider_id: int
     provider_name: str
     model_name: str
-    display_name: str
-    max_context_window: int
     supports_thinking: bool
     supports_image: bool
     supports_video: bool
     enabled: bool
     api_key_configured: bool
+    reasoning_effort:dict[str,Any]
     sort_order: int = 0
-
-    @classmethod
-    def from_records(
-        cls,
-        model_entry: ModelEntryRecord,
-        provider: ProviderRecord,
-        *,
-        api_key_configured: bool,
-    ) -> "ModelEntryResponse":
-        """从模型条目 + 归属厂商记录构造响应模型（注入厂商聚合信息）。
-
-        仅投影前端下拉 / 条目管理所需的字段：模型条目字段 + 厂商 ``name`` 与
-        外部传入的 ``api_key_configured`` 聚合状态；不投影审计时间字段
-        （``ModelEntryRecord`` 的 ``created_at`` / ``updated_at``）。
-
-        参数:
-            model_entry: 待转换的模型条目记录（提供除厂商聚合外的全部字段）。
-            provider: 条目归属的厂商记录（提供 ``name`` 展示名）。
-            api_key_configured: 归属厂商的 Key 配置状态（由 ``ProviderService``
-                聚合后传入，发送前校验依据）。
-
-        返回:
-            与记录字段对齐并带厂商聚合信息的 ``ModelEntryResponse`` 实例。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return cls(
-            model_id=model_entry.id,
-            provider_id=model_entry.provider_id,
-            provider_name=provider.name,
-            model_name=model_entry.model_name,
-            display_name=model_entry.display_name,
-            max_context_window=model_entry.max_context_window,
-            supports_thinking=model_entry.supports_thinking,
-            supports_image=model_entry.supports_image,
-            supports_video=model_entry.supports_video,
-            enabled=model_entry.enabled,
-            api_key_configured=api_key_configured,
-            sort_order=model_entry.sort_order,
-        )

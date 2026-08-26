@@ -19,9 +19,11 @@
 改由 ``ProviderCapability.requires_api_key`` 决定（注册表 §三 单一事实源）。
 新增厂商无需改本文件——只改注册表一行即可。
 """
+from time import perf_counter
 
 from app.config.logging.logger import log
-from app.llm_provider.provider.provider_capability import get_capability
+from app.llm_provider.capability.provider_capability import ProviderCapability
+from app.llm_provider.provider.connection_test_result import ConnectionTestResult
 from app.models import ProviderRecord
 from app.service import depends as service_depends
 from app.storage.crud.provider_crud import ProviderCrud
@@ -66,7 +68,7 @@ class ProviderService:
 
         return self._provider_crud.list_all(enabled)
 
-    def get_provider(self, provider_id: str) -> ProviderRecord:
+    def get_provider(self, provider_id: int) -> ProviderRecord:
         """按标识返回单个厂商。
 
         参数:
@@ -106,8 +108,7 @@ class ProviderService:
         副作用:
             无（只读厂商记录内存字段与静态注册表，不读进程环境变量）。
         """
-
-        capability = get_capability(provider.provider_type)
+        capability = ProviderCapability.get_capability(provider.name)
         if not capability.requires_api_key:
             return True
         return bool(provider.api_key)
@@ -115,10 +116,8 @@ class ProviderService:
     def create_provider(
             self,
             name: str,
-            provider_type: str,
             base_url: str | None = None,
             api_key: str | None = None,
-            enabled: bool = True,
             sort_order: int = 0,
     ) -> ProviderRecord:
         """新建模型厂商并写 ``provider_created`` 审计日志。
@@ -147,10 +146,8 @@ class ProviderService:
 
         record = self._provider_crud.create(
             name=name,
-            provider_type=provider_type,
             base_url=base_url,
             api_key=api_key,
-            enabled=enabled,
             sort_order=sort_order,
         )
         log.info(
@@ -160,7 +157,6 @@ class ProviderService:
                 "data": {
                     "provider_id": record.id,
                     "name": record.name,
-                    "type": record.provider_type,
                     "enabled": record.enabled,
                 },
             },
@@ -169,10 +165,8 @@ class ProviderService:
 
     def update_provider(
             self,
-            provider_id: str,
+            provider_id: int,
             *,
-            name: str | None = None,
-            provider_type: str | None = None,
             base_url: str | None = None,
             api_key: str | None = None,
             enabled: bool | None = None,
@@ -185,8 +179,6 @@ class ProviderService:
 
         参数:
             provider_id: 厂商标识。
-            name: 可选，新显示名。
-            provider_type: 可选，新厂商类型。
             base_url: 可选，新接入地址；传 ``""`` 表示清除。
             api_key: 可选，新 API Key 明文；传 ``None`` 不更新、传 ``""``
                 清除（日志与响应不回传明文）。
@@ -208,8 +200,6 @@ class ProviderService:
         provided = {
             key: value
             for key, value in (
-                ("name", name),
-                ("type", provider_type),
                 ("base_url", base_url),
                 ("api_key", api_key),
                 ("enabled", enabled),
@@ -219,8 +209,6 @@ class ProviderService:
         }
         record = self._provider_crud.update(
             provider_id,
-            name=name,
-            provider_type=provider_type,
             base_url=base_url,
             api_key=api_key,
             enabled=enabled,
@@ -239,7 +227,7 @@ class ProviderService:
         )
         return record
 
-    def delete_provider(self, provider_id: str) -> None:
+    def delete_provider(self, provider_id: int) -> None:
         """删除厂商（级联删其下模型）并写 ``provider_deleted`` 审计日志。
 
         参数:
@@ -271,3 +259,110 @@ class ProviderService:
                 },
             },
         )
+
+
+    async def test_connection(self, provider: ProviderRecord) -> ConnectionTestResult:
+        """对厂商发起一次最小 chat 请求以验证凭据与端点可用性。
+
+        实现要点：
+
+        参数:
+            provider: 待测试的厂商记录（提供 base_url / api_key  用于构造请求）。
+
+        返回:
+            ``ConnectionTestResult``：成功时 ``success=True``
+
+        异常:
+            无。
+
+        副作用:
+            发起一次到厂商端点的网络请求；写 info 级
+            ``provider_connection_test_succeeded`` 或
+            ``provider_connection_test_failed`` 日志。
+        """
+        capability = ProviderCapability.get_capability(provider.name)
+
+        test_model = capability.models[0]
+
+        start = perf_counter()
+        try:
+            # 与生产构建一致：显式透传 base_url / api_key 以验证
+            await self._acompletion_ping(
+                model=test_model,
+                api_base=provider.base_url,
+                api_key=provider.api_key,
+            )
+        except Exception as exc:  # 连通性测试需捕获一切外部异常以归一为结果值对象
+            elapsed_ms = int((perf_counter() - start) * 1000)
+
+            log.exception(
+                "provider_connection_test_failed",
+                extra={
+                    "msg": (
+                        f"厂商连通性测试失败：provider={provider.name}"
+                    ),
+                    "data": {
+                        "provider_id": provider.id,
+                        "elapsed_ms": elapsed_ms,
+                    },
+                },
+            )
+            return ConnectionTestResult(
+                provider_id=provider.id,
+                success=False,
+                elapsed_ms=elapsed_ms
+            )
+
+        elapsed_ms = int((perf_counter() - start) * 1000)
+        log.info(
+            "provider_connection_test_succeeded",
+            extra={
+                "msg": (
+                    f"厂商连通性测试成功：provider={provider.name}"
+                ),
+                "data": {
+                    "provider_id": provider.id,
+                    "elapsed_ms": elapsed_ms,
+                },
+            },
+        )
+        return ConnectionTestResult(
+            provider_id=provider.id,
+            success=True,
+            elapsed_ms=elapsed_ms,
+        )
+
+    async def _acompletion_ping(
+            *,
+            model: str,
+            api_base: str | None,
+            api_key: str | None,
+    ) -> None:
+        """经 litellm 发起一次最小 chat 请求（连通性测试的内部封装）。
+
+        参数:
+            model: 测试用模型名（``capability.model_prefix + 占位模型``）。
+            api_base: 厂商自定义端点（None 时不传，由 litellm 按前缀解析）。
+            api_key: 厂商 Key 明文（None 时不传）。
+
+        返回:
+            无。
+
+        异常:
+            litellm 异常透传（由调用方 ``test_connection`` 归一为错误码）。
+
+        副作用:
+            发起一次到厂商端点的网络请求；不写日志（日志统一在调用方收口）。
+        """
+        from litellm import acompletion
+
+        kwargs: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        if api_base:
+            kwargs["api_base"] = api_base
+        if api_key:
+            kwargs["api_key"] = api_key
+        await acompletion(**kwargs)

@@ -31,10 +31,9 @@ class CreateTurnRequest(BaseModel):
     MAX_PATH_LEN: ClassVar[int] = 4096
 
     input_text: str
-    model_id: str | None = None
+    model_name: str | None = None
     product_id: str | None = None
     paths: list[str] | None = None
-    thinking: bool | None = None
     #low/high/max
     reasoning_effort: str | None = None
 

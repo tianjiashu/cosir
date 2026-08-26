@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 #: 默认请求超时秒数（覆盖模型客户端内置默认，避免国内厂商偶发慢响应超时）。
 _DEFAULT_TIMEOUT_SECONDS: float = 120.0
 
@@ -45,8 +44,12 @@ def load_provider_json() -> dict[str, dict[str, Any]]:
         return {}
     return data
 
+
 #: JSON 数据源解析结果（模块级单次加载，避免每次查询重复读盘）。
 _PROVIDER_JSON_DATA: dict[str, dict[str, Any]] = load_provider_json()
+
+_SUPPORT_PROVIDERS: set[str] = set(_PROVIDER_JSON_DATA.keys()).union({"custom", "ollma"})
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderCapability:
@@ -105,35 +108,3 @@ class ProviderCapability:
             models=tuple(raw.get("models", [])),
             extra=raw.get("extra", {}),
         )
-
-
-
-def get_capability(provider_name: str) -> ProviderCapability:
-    """按厂商类型查询能力元数据（JSON 为唯一真相源；缺失回退保守默认）。
-
-    参数:
-        provider_type: 厂商类型字符串（JSON 外层键）。
-
-    返回:
-        JSON 中存在则为其转换后的 ``ProviderCapability``；不存在则返回
-        ``_build_fallback`` 构造的保守默认副本（``provider_type`` 保留调用方传入的
-        原始值，便于排查日志中可见用户误填的类型名）。
-
-    异常:
-        无（永不抛——未知类型回退而非报错，由调用方决定如何提示用户补全 JSON）。
-
-    副作用:
-        无。
-    """
-
-    raw = _PROVIDER_JSON_DATA.get(provider_name)
-    if raw is None:
-        raise ValueError(f"Provider {provider_name} not found")
-    return ProviderCapability(
-        provider_type=raw.get("provider_type","api"),
-        default_base_url=raw.get("base_url"),
-        requires_api_key=True,
-        thinking_channels=raw.get("thinking_channels","reasoning_content"),
-        models=tuple(raw.get("models", [])),
-        extra=raw.get("extra", {}),
-    )

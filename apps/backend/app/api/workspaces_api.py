@@ -43,7 +43,6 @@ from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.models.enums.event_type import EventType
 from app.models.event.workspace_event import WorkspaceEvent
-from app.llm_provider.model_resolver_service import ModelNotConfiguredError
 from app.service.task.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
@@ -133,7 +132,7 @@ async def create_workspace(
 
 @app.delete("/workspaces/{workspace_id}")
 async def delete_workspace(
-    workspace_id: str,
+    workspace_id: int,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> DeleteWorkspaceResponse:
     """删除工作区及其下游任务、轮次与运行记录。
@@ -163,7 +162,7 @@ async def delete_workspace(
 
 @app.get("/workspaces/{workspace_id}/tasks")
 async def list_workspace_tasks(
-    workspace_id: str,
+    workspace_id: int,
     task_service: TaskService = Depends(get_task_service),
 ) -> list[TaskResponse]:
     """返回工作区下的任务列表。
@@ -196,34 +195,15 @@ async def create_workspace_task(
     payload: CreateTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
-    """在工作区下创建任务并同时创建其首个 pending 轮次。
-
-    编排逻辑收口在 ``TaskService.create_task_with_initial_turn``（业务层），本端点
-    只做参数透传、异常映射与响应格式化，不持有任何创建 / 运行编排。首轮次以
-    ``pending`` 状态创建，运行由前端经 ``POST /turns/{turn_id}/stream`` 触发。
-
-    参数:
-        workspace_id: 来自路由的工作区标识。
-        payload: 包含首条用户输入的请求体。
-        task_service: 通过依赖注入的任务 service。
-
-    返回:
-        创建后的 ``TaskResponse``（含任务元数据；首轮次标识由前端经
-        ``GET /tasks/{task_id}/turns`` 取得后驱动运行）。
-
-    异常:
-        HTTPException: 当工作区不存在、agent 未注册或输入非法时抛出。
-
-    副作用:
-        经业务层在存储中创建 task 与首个 pending turn。
+    """在工作区下创建任务，仅仅创建，creatturn 使用/tasks/{task_id}/turns
     """
 
     try:
-        task, _turn = task_service.create_task_with_initial_turn(
+        task, _turn = task_service.create_task(
             input_text=payload.text,
             workspace_id=payload.workspace_id,
             agent_id=payload.agent_id,
-            model_name=payload.model_name,
+            status="pending",
         )
     except IntegrityError as exc:
         log.error(
@@ -239,28 +219,12 @@ async def create_workspace_task(
             exc,
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ModelNotConfiguredError as exc:
-        log.warning(
-            "create_workspace_task model not configured: workspace=%s agent=%s model=%s reason=%s",
-            payload.workspace_id,
-            payload.agent_id,
-            exc.model_name,
-            exc.reason,
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "model_name": exc.model_name,
-                "reason": exc.reason,
-                "guidance": exc.guidance,
-            },
-        ) from exc
     return TaskResponse.from_record(task)
 
 
 @app.get("/workspaces/{workspace_id}/events/stream")
 async def stream_workspace_events(
-    workspace_id: str,
+    workspace_id: int,
     event_bus: WorkspaceEventBus = Depends(get_workspace_event_bus),
 ) -> StreamingResponse:
     """以 SSE 流式返回 workspace 状态事件。
@@ -297,7 +261,7 @@ PREPARE_TIMEOUT_SECONDS: float = 60.0
 
 @app.post("/workspaces/{workspace_id}/events/prepare")
 async def prepare_workspace(
-    workspace_id: str,
+    workspace_id: int,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
     event_service: WorkspaceEventService | None = Depends(get_workspace_event_service),
     event_bus: WorkspaceEventBus = Depends(get_workspace_event_bus),
@@ -409,7 +373,7 @@ async def prepare_workspace(
 
 async def _stream_workspace_events(
     event_bus: WorkspaceEventBus,
-    workspace_id: str,
+    workspace_id: int,
 ) -> AsyncIterator[str]:
     """把 workspace 状态事件转换为 SSE 帧；终态后结束，finally 退订。
 

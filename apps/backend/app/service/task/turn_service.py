@@ -7,7 +7,9 @@
 - 负责：轮次创建（含任务最新轮次更新）、轮次查询与状态更新、消息轨迹读写透传。
 - 不负责：直接 SQL 操作（委托给 ``TurnCrud``/``TaskCrud``/``TurnMessageCrud``）。
 """
+from app.api.dependencies import get_provider_service
 from app.config.logging.logger import log
+from app.llm_provider.capability.provider_capability import ProviderCapability
 from app.models import RuntimeMessage, TurnRecord
 from app.service import depends as service_depends
 
@@ -36,16 +38,15 @@ class TurnService:
         self._message = service_depends.get_turn_message_crud()
 
     def create_turn(
-        self,
-        task_id: int,
-        input_text: str,
-        agent_id: str | None = None,
-        status: str = "pending",
-        product_id: str | None = None,
-        model_id: str | None = None,
-        thinking: bool | None = None,
-        reasoning_effort: str | None = None,
-        paths: list[str] | None = None,
+            self,
+            task_id: int,
+            input_text: str,
+            agent_id: str | None = None,
+            status: str = "pending",
+            product_id: int | None = None,
+            model_name: str | None = None,
+            reasoning_effort: str | None = None,
+            paths: list[str] | None = None,
     ) -> TurnRecord:
         """Create a turn and update the parent task's latest turn info.
 
@@ -77,7 +78,10 @@ class TurnService:
             ——``LLMRuntimeConfig.model_name``，取自 DB ``models.model_name``，
             保证时间线可追溯到真实模型，D11）；更新所属任务最新轮次信息。
         """
-
+        provider = get_provider_service().get_provider(product_id)
+        provider_capability = ProviderCapability.get_capability(provider.name)
+        if model_name not in provider_capability.models:
+            raise ValueError(f"model_name {model_name} not in provider capability {provider_capability.models}")
 
         turn = self._turn.create(
             task_id,
@@ -85,8 +89,7 @@ class TurnService:
             status,
             agent_id=agent_id,
             product_id=product_id,
-            model_id=model_id,
-            thinking=thinking,
+            model_name=model_name,
             reasoning_effort=reasoning_effort,
             paths=paths,
         )
@@ -155,7 +158,7 @@ class TurnService:
         )
 
     def fail_turn_if_running(
-        self, turn_id: int, end_reason: str | None = None
+            self, turn_id: int, end_reason: str | None = None
     ) -> TurnRecord | None:
         """Fail a running turn atomically.
 
@@ -238,12 +241,12 @@ class TurnService:
         """
 
         return (
-            self._turn.update_status_if_in(
-                turn_id,
-                target_status="running",
-                allowed_statuses=("pending",),
-            )
-            is not None
+                self._turn.update_status_if_in(
+                    turn_id,
+                    target_status="running",
+                    allowed_statuses=("pending",),
+                )
+                is not None
         )
 
     def load_turn_messages(self, turn_id: int) -> list[RuntimeMessage]:
@@ -252,11 +255,11 @@ class TurnService:
         return self._message.load_messages(turn_id)
 
     def append_turn_message(
-        self,
-        turn_id: int,
-        message: RuntimeMessage,
-        sequence: int,
-        in_context: bool = True,
+            self,
+            turn_id: int,
+            message: RuntimeMessage,
+            sequence: int,
+            in_context: bool = True,
     ) -> None:
         """Incremental single-row append of one runtime message (cross-turn memory).
 

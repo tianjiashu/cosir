@@ -12,6 +12,5 @@ class DelegationFailedPayload(RuntimeEventPayload):
     parent_turn_id: int
     child_turn_id: int
     child_agent_id: str
-    delegation_type: str
     status: Literal["failed"]
     error: str | None = None

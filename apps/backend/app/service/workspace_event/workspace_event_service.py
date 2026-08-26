@@ -51,7 +51,7 @@ class WorkspaceEventService:
         self._lifecycle = lifecycle
         self._bus = bus
 
-    def prepare(self, workspace_id: str, root_path: str) -> WorkspaceReadiness:
+    def prepare(self, workspace_id: int, root_path: str) -> WorkspaceReadiness:
         """发布 preparing → 健康快检 → ensure_ready → 发布 ready/degraded → close。
 
         参数:
@@ -131,7 +131,7 @@ class WorkspaceEventService:
         self._bus.close(workspace_id)
         return readiness
 
-    def _kernel_reachable(self, workspace_id: str, root_path: str) -> bool:
+    def _kernel_reachable(self, workspace_id: int, root_path: str) -> bool:
         """在 prepare 前快速探测 Kernel 是否可达，避免进入长阻塞 index_init。
 
         参数:
@@ -170,7 +170,7 @@ class WorkspaceEventService:
 
     def _emit_degraded(
         self,
-        workspace_id: str,
+        workspace_id: int,
         workspace_path: str,
         state: str,
         reason: str,
@@ -207,7 +207,7 @@ class WorkspaceEventService:
     def _emit(
         self,
         event_type: EventType,
-        workspace_id: str,
+        workspace_id: int,
         workspace_path: str,
         payload: dict[str, object],
     ) -> None:

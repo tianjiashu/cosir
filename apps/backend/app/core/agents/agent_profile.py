@@ -83,7 +83,7 @@ class AgentProfile:
     allowed_tools: list[str]
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     product_id: str | None = None
-    model_id: str | None = None
+    model_name: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     hidden: bool = False
     max_steps: int = 1000

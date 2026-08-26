@@ -67,13 +67,12 @@ def _positive_context_window(value: object) -> int:
 class ModelEntryRecord:
     """表示某厂商下的一个可用模型条目。"""
 
-    id: int
+    id: int | None
     provider_id: int
     model_name: str
-    display_name: str
     max_context_window: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None
+    updated_at: datetime | None
     supports_thinking: bool = False
     supports_image: bool = False
     supports_video: bool = False

@@ -44,7 +44,7 @@ def iter_files(base: Path, file_glob: str | None = None) -> Iterator[Path]:
     """递归遍历目录下的文件，跳过忽略目录并按 glob 过滤。
 
     参数:
-        base: 遍历根目录。
+        capability: 遍历根目录。
         file_glob: 可选的文件名 glob 模式（如 ``*.py``）；为 None 表示不过滤。
 
     返回:
@@ -79,17 +79,17 @@ def iter_files(base: Path, file_glob: str | None = None) -> Iterator[Path]:
 
 
 def to_relative(base: Path, file_path: Path) -> str:
-    """把文件绝对路径转为对 base 的相对路径（统一用 ``/`` 分隔）。
+    """把文件绝对路径转为对 capability 的相对路径（统一用 ``/`` 分隔）。
 
     参数:
-        base: 基准目录。
+        capability: 基准目录。
         file_path: 目标文件。
 
     返回:
         POSIX 风格相对路径字符串。
 
     异常:
-        ValueError: 当 ``file_path`` 不在 ``base`` 之下（调用方保证不发生）。
+        ValueError: 当 ``file_path`` 不在 ``capability`` 之下（调用方保证不发生）。
 
     副作用:
         无。
