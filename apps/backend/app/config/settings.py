@@ -82,6 +82,10 @@ class Settings:
     # 该通道绕过常规日志预算截断，且每 turn 写盘量较大，常驻生产会损害稳定迭代，故默认关闭，
     # 仅在需要排查流式 chunk 结构时经环境变量 ``CODING_AGENT_DEBUG_DUMP_CHUNKS=true`` 显式开启。
     DEBUG_DUMP_CHUNKS: ClassVar[bool] = False
+    # 模型生成种子：调试阶段用于让模型输出可复现（相同输入 + 相同 seed 尽量得到一致结果）。
+    # 经 ``CODING_AGENT_LLM_SEED`` 覆盖；空串/未设置时取 None（不固定种子，由 API 随机）。
+    # 生产环境应保持 None，避免每次回答高度一致导致体验僵化。
+    LLM_SEED: ClassVar[int | None] = None
 
     # --- CodeGraph 索引生命周期（见 workspace_payload-workspace-lifecycle-design.md） ---
     # 首次建索引（init）大仓库可能数分钟，需长超时；增量同步（sync）耗时较短。
@@ -94,6 +98,14 @@ class Settings:
     # ``timeout_seconds`` 元数据不双轨生效。
     DELEGATION_MAX_CONCURRENCY: ClassVar[int] = 4
     DELEGATION_TIMEOUT_SECONDS: ClassVar[float] = 300.0
+
+    # --- LLM 请求全局默认值（所有模型统一，除非 Agent 级 ModelSettings 显式覆盖） ---
+    # 请求超时：单次 ChatOpenAI HTTP 请求超时（秒），覆盖默认 600s 以更快失败重试；
+    # 经 ``CODING_AGENT_LLM_REQUEST_TIMEOUT_SECONDS`` 覆盖。
+    LLM_REQUEST_TIMEOUT_SECONDS: ClassVar[float] = 120.0
+    # 请求重试次数：SDK 层失败重试上限（不含超时本身的首次尝试）；经
+    # ``CODING_AGENT_LLM_MAX_RETRIES`` 覆盖。0 表示不重试。
+    LLM_MAX_RETRIES: ClassVar[int] = 2
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
@@ -216,6 +228,12 @@ class Settings:
             raise ValueError("DELEGATION_MAX_CONCURRENCY must be greater than zero")
         if cls.DELEGATION_TIMEOUT_SECONDS <= 0:
             raise ValueError("DELEGATION_TIMEOUT_SECONDS must be greater than zero")
+        if cls.LLM_REQUEST_TIMEOUT_SECONDS <= 0:
+            raise ValueError("LLM_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+        if cls.LLM_MAX_RETRIES < 0:
+            raise ValueError("LLM_MAX_RETRIES must be greater than or equal to zero")
+        if cls.LLM_SEED is not None and cls.LLM_SEED < 0:
+            raise ValueError("LLM_SEED must be greater than or equal to zero")
         if cls.MAX_CONTEXT_CHARS < 1:
             raise ValueError("MAX_CONTEXT_CHARS must be greater than zero")
         if cls.MAX_TOOL_OUTPUT_CHARS < 1:
@@ -297,6 +315,14 @@ class Settings:
         cls.DELEGATION_TIMEOUT_SECONDS = float(
             os.environ.get("CODING_AGENT_DELEGATION_TIMEOUT_SECONDS", "300")
         )
+        cls.LLM_REQUEST_TIMEOUT_SECONDS = float(
+            os.environ.get("CODING_AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "120")
+        )
+        cls.LLM_MAX_RETRIES = int(
+            os.environ.get("CODING_AGENT_LLM_MAX_RETRIES", "2")
+        )
+        _raw_seed = os.environ.get("CODING_AGENT_LLM_SEED", "")
+        cls.LLM_SEED = int(_raw_seed) if _raw_seed else None
         cls.TOOL_OBSERVATION_CONTEXT_LIMIT = int(
             os.environ.get("CODING_AGENT_TOOL_OBSERVATION_CONTEXT_LIMIT", "4000")
         )

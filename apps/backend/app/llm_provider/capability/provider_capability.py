@@ -3,16 +3,11 @@
 """
 
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-#: 默认请求超时秒数（覆盖模型客户端内置默认，避免国内厂商偶发慢响应超时）。
-_DEFAULT_TIMEOUT_SECONDS: float = 120.0
-
-#: 默认最大重试次数（覆盖模型客户端内置默认 1）。
-_DEFAULT_MAX_RETRIES: int = 3
 
 #: 厂商能力 JSON 数据源（与注册表同目录，只读，不修改该文件）。
 _PROVIDER_JSON_PATH: Path = Path(__file__).resolve().parent / "llm_provider.json"
@@ -68,30 +63,50 @@ class ProviderCapability:
         thinking_channels: 响应侧 thinking 字段名元组（如 ``("reasoning_content",)``）；
             ``model_node`` 据此从 chunk 提取 thinking 文本。空元组表示不支持 thinking。
         models: 厂商支持的模型名元组（如 ``("deepseek-v4-flash-vision-exp",)``）。
-        extra: 厂商特定字段字典
+        extra_body: 厂商自定义请求参数（透传至 ``ChatOpenAI.extra_body``）。用于承载
+            OpenAI 标准 API 之外的厂商私有参数（如 LM Studio 的 ``ttl``、vLLM 的
+            ``use_beam_search``、各厂商私有开关）；空字典表示无自定义参数。注意：
+            **不要**在此放入 OpenAI 标准参数或 ``model`` 等已由 ``ChatOpenAI`` 顶层
+            字段处理的键，否则会与主请求体冲突。
+        disabled_params: 该厂商/模型应屏蔽的 ``ChatOpenAI`` 客户端参数（透传至
+            ``ChatOpenAI.disabled_params``）。用于老模型不支持某些自动注入参数（如
+            ``parallel_tool_calls`` / ``strict``）时软屏蔽，避免 ``with_structured_output``
+            等内置方法注入导致 400。取值格式见 langchain 文档：``{"param": None}`` 完全禁用、
+            ``{"param": ["v1", "v2"]}`` 仅禁用指定值。空字典表示无屏蔽。
+
+            生成长度上限参数名（``max_tokens`` vs ``max_completion_tokens``）即由本字段控制：
+            工厂会同时设置二者，最终由 ``disabled_params`` 屏蔽其中不需要的一个
+            （如 ``{"max_tokens": None}`` 表示仅用 ``max_completion_tokens``）。
+
+    注 ``llm_provider.json`` 顶层键完整去向（避免后续误判字段归属）：
+    ``provider_type`` / ``base_url`` / ``models`` / ``thinking_channels`` 已建模；
+    ``extra_body`` 透传至请求体（见上）；``disabled_params`` 透传至 ``ChatOpenAI.disabled_params``
+    （见上）；``error_code`` 为厂商错误码→文案映射，属于错误处理层事实数据，**不**经
+    ``ProviderCapability`` 透传，由错误归一模块独立读取。
     """
 
     provider_type: str
     default_base_url: str | None = None
     requires_api_key: bool = True
-    thinking_channels: str = ""
+    thinking_channel: str = ""
     models: tuple[str, ...] = field(default_factory=tuple)
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra_body: dict[str, Any] = field(default_factory=dict)
+    disabled_params: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def get_capability(provider_name: str) -> ProviderCapability:
-        """按厂商类型查询能力元数据（JSON 为唯一真相源；缺失回退保守默认）。
+        """按厂商类型查询能力元数据（JSON 为唯一真相源；未注册则抛错，不静默兜底）。
 
         参数:
-            provider_type: 厂商类型字符串（JSON 外层键）。
+            provider_name: 厂商类型字符串（JSON 外层键）。
 
         返回:
-            JSON 中存在则为其转换后的 ``ProviderCapability``；不存在则返回
-            ``_build_fallback`` 构造的保守默认副本（``provider_type`` 保留调用方传入的
-            原始值，便于排查日志中可见用户误填的类型名）。
+            JSON 中存在则为其转换后的 ``ProviderCapability``。
 
         异常:
-            无（永不抛——未知类型回退而非报错，由调用方决定如何提示用户补全 JSON）。
+            ValueError: 当 ``provider_name`` 未在 ``llm_provider.json`` 注册时抛出；未注册的
+                厂商无法给出可信的 ``base_url`` 等接入元数据，交由调用方收敛为构建期失败，
+                而非返回误导性的保守默认。
 
         副作用:
             无。
@@ -104,7 +119,8 @@ class ProviderCapability:
             provider_type=raw.get("provider_type", "api"),
             default_base_url=raw.get("base_url"),
             requires_api_key=True,
-            thinking_channels=raw.get("thinking_channels", "reasoning_content"),
+            thinking_channel=raw.get("thinking_channel", "reasoning_content"),
             models=tuple(raw.get("models", [])),
-            extra=raw.get("extra", {}),
+            extra_body=raw.get("extra_body", {}),
+            disabled_params=raw.get("disabled_params", {}),
         )

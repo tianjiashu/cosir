@@ -16,7 +16,8 @@
       "500": "服务器故障",
       "503": "服务器繁忙"
     },
-    "thinking_channels": "reasoning_content",
-    "extra": {}
+    "thinking_channel": "reasoning_content",
+    "extra_body": {},
+    "disabled_params":{}
   }
 }

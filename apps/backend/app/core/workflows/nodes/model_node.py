@@ -106,13 +106,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     operations = rc.operations
     turn = rc.turn
     model = rc.model
-
-    # thinking 通道与回传开关来自本次解析的 LLMRuntimeConfig（无则为空通道 + 默认回传）。
-    llm_config = rc.llm_config
-    thinking_channels: tuple[str, ...] = (
-        llm_config.thinking_channels if llm_config is not None else ()
-    )
-    thinking_roundtrip = llm_config.thinking_roundtrip if llm_config is not None else True
+    thinking_channel = rc.thinking_channel
+    thinking_roundtrip = rc.thinking_roundtrip
 
     step_count = state.step_count + 1
     # P1-5 提前拦截：本次推理若已超配额（step_count > max_steps），不发起推理，直接调用
@@ -128,7 +123,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "model_node_cancelled_before_request",
             extra={
                 "msg": f"模型请求前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                "data": {"step_id": step_id, "turn_id": turn.id},
             },
         )
         # 请求前取消同样走统一终态并发 RUN_CANCELLED，与流式中取消/工具取消保持事件一致，
@@ -157,7 +152,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "model_node_cancelled_before_model_requested",
             extra={
                 "msg": f"模型请求事件前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                "data": {"step_id": step_id, "turn_id": turn.id},
             },
         )
         # 同上一检查点：请求事件前取消走统一终态并发 RUN_CANCELLED。
@@ -173,6 +168,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 提取最终正文（output_text 从合并后的 content 统一取，见下）。
     chunks: list[AIMessageChunk] = []
     chunk_index = 0
+    
+    
 
     log.info(
         "model_node_model_requested",
@@ -202,7 +199,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
         chunks.append(chunk)
         text = content_to_text(chunk.content)
-        reasoning = _extract_reasoning_content(chunk, thinking_channels)
+        reasoning = _extract_reasoning_content(chunk, thinking_channel)
         # 诊断日志：每个流式 chunk 的增量体量。若多数 chunk 的 content_len=0 仅在末 chunk
         # 出现整段文本，说明模型/provider 未做逐 token 流式，前端表现为「整块出现、无流式感」。
         log.info(
@@ -237,7 +234,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     ai_message = _collect_chunk_to_ai_message(
         chunks,
-        thinking_channels=thinking_channels,
+        thinking_channel=thinking_channel,
         thinking_roundtrip=thinking_roundtrip,
     )
     # 单一来源：usage 只在模型调用产出 ai_message 后从其 usage_metadata 累加一次。
@@ -394,13 +391,13 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if output_text:  # 没有工具调用但有文本 → 最终回答
-        completed_turn = operations.complete_turn_if_running(turn.turn_id, output_text)
+        completed_turn = operations.complete_turn_if_running(turn.id, output_text)
         if completed_turn is None:
             log.info(
                 "model_node_final_response_terminal_race_lost",
                 extra={
                     "msg": f"最终回复落定时 turn 已非 running，跳过完成事件，step_id={step_id}",
-                    "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                    "data": {"step_id": step_id, "turn_id": turn.id},
                 },
             )
             return terminal_state(step_count)
@@ -430,7 +427,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 cache_hit_tokens=usage["cache_hit_tokens"],
                 cache_miss_tokens=usage["cache_miss_tokens"],
                 reasoning_tokens=usage["reasoning_tokens"],
-                cost_cents=cost_cents,
                 langfuse_trace_id=rc.langfuse_trace_id,
             ),
         )
@@ -446,13 +442,13 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "output_text_length": len(output_text)},
         },
     )
-    failed_turn = operations.fail_turn_if_running(turn.turn_id, end_reason="invalid_model_output")
+    failed_turn = operations.fail_turn_if_running(turn.id, end_reason="invalid_model_output")
     if failed_turn is None:
         log.info(
             "model_node_invalid_output_terminal_race_lost",
             extra={
                 "msg": f"非法模型输出失败落定时 turn 已非 running，跳过失败事件，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.turn_id},
+                "data": {"step_id": step_id, "turn_id": turn.id},
             },
         )
         return terminal_state(step_count)

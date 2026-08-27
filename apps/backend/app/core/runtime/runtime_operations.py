@@ -109,7 +109,7 @@ class RuntimeOperations:
                 "data": {
                     "agent_id": agent_profile.agent_id,
                     "model_tools_count": len(self.model_tools),
-                    "current_turn_id": current_turn.turn_id if current_turn else None,
+                    "current_turn_id": current_turn.id if current_turn else None,
                     "current_turn_bound": bool(current_turn),
                 },
             },
@@ -148,7 +148,7 @@ class RuntimeOperations:
         """
         return self._message_store
 
-    def has_turn_status(self, turn_id: str, status: str) -> bool:
+    def has_turn_status(self, turn_id: int, status: str) -> bool:
         """Return whether a turn currently has the requested status."""
 
         has = self._turn_service.has_turn_status(turn_id, status)
@@ -169,14 +169,14 @@ class RuntimeOperations:
         副作用:
             可能调用注入的取消检查回调；无回调时读取 turn 状态。
         """
-        current_turn_id = self._current_turn.turn_id
+        current_turn_id = self._current_turn.id
         if cancellation_registry.is_cancelled(current_turn_id):
             return True
         if not self._current_turn:
             return False
         return self.has_turn_status(current_turn_id, "cancelled")
 
-    def complete_turn_if_running(self, turn_id: str, response_text: str) -> TurnRecord | None:
+    def complete_turn_if_running(self, turn_id: int, response_text: str) -> TurnRecord | None:
         """Complete the turn only if it is still running.
 
         参数:
@@ -205,7 +205,7 @@ class RuntimeOperations:
         return self._turn_service.complete_turn_if_running(turn_id, response_text)
 
     def fail_turn_if_running(
-        self, turn_id: str, end_reason: str | None = None
+        self, turn_id: int, end_reason: str | None = None
     ) -> TurnRecord | None:
         """Fail the turn only if it is still running.
 
@@ -332,7 +332,7 @@ class RuntimeOperations:
             写入工具批次派发日志。
         """
 
-        workspace_id = self._current_workspace.workspace_id if self._current_workspace else None
+        workspace_id = self._current_workspace.id if self._current_workspace else None
 
         log.info(
             "tool_calls_dispatched",
@@ -371,7 +371,7 @@ class RuntimeOperations:
             写入工具批次完成日志。
         """
 
-        workspace_id = self._current_workspace.workspace_id if self._current_workspace else None
+        workspace_id = self._current_workspace.id if self._current_workspace else None
         status_counts: dict[str, int] = {}
         error_count = 0
         for obs in result.observations:

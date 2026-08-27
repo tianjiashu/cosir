@@ -10,16 +10,8 @@
 无循环导入：本模块不 import ``model_node`` / ``common``。
 """
 
-#: 需要「原样回传」的 thinking 通道（Anthropic signature / Gemini thought /
-#: OpenAI o 系列 encrypted_content 缺失会导致下一轮工具调用 400）。
-#: 仅含 ``reasoning_content`` 通道的厂商（DeepSeek / Kimi / OpenAI 兼容）
-#: 不在此集合——它们剥离即可，无需回传。
-_ROUNDTRIP_REQUIRED_CHANNELS: frozenset[str] = frozenset(
-    {"thinking_blocks", "thought", "reasoning"}
-)
 
-
-def _extract_reasoning_content(chunk, channels: tuple[str, ...]) -> str:
+def _extract_reasoning_content(chunk, channel: str) -> str:
     """从 LangChain 消息 chunk 按厂商 thinking 通道提取思考过程分片。
 
     按 ``LLMRuntimeConfig.thinking_channels`` 顺序尝试各通道（设计文档阶段
@@ -46,24 +38,23 @@ def _extract_reasoning_content(chunk, channels: tuple[str, ...]) -> str:
     """
 
     additional = getattr(chunk, "additional_kwargs", None)  # 防止无该属性时报错
-    for channel in channels:
-        if channel == "reasoning_content":
-            if isinstance(additional, dict):
-                value = additional.get("reasoning_content")
-                if isinstance(value, str) and value:
-                    return value
-        elif channel == "thought":
-            text = _extract_thought_blocks(chunk.content)
-            if text:
-                return text
-        elif channel == "thinking_blocks":
-            text = _extract_thinking_blocks(additional)
-            if text:
-                return text
-        elif channel == "reasoning":
-            text = _extract_reasoning_field(additional)
-            if text:
-                return text
+    if channel == "reasoning_content":
+        if isinstance(additional, dict):
+            value = additional.get("reasoning_content")
+            if isinstance(value, str) and value:
+                return value
+    elif channel == "thought":
+        text = _extract_thought_blocks(chunk.content)
+        if text:
+            return text
+    elif channel == "thinking_blocks":
+        text = _extract_thinking_blocks(additional)
+        if text:
+            return text
+    elif channel == "reasoning":
+        text = _extract_reasoning_field(additional)
+        if text:
+            return text
     return ""
 
 
@@ -154,8 +145,8 @@ def _extract_reasoning_field(additional) -> str:
 
 
 def _should_strip_reasoning_content(
-    channels: tuple[str, ...],
-    thinking_roundtrip: bool,
+        channel: str,
+        thinking_roundtrip: bool,
 ) -> bool:
     """判断是否剥离 assistant 消息中的 ``reasoning_content``（回传策略）。
 
@@ -183,16 +174,12 @@ def _should_strip_reasoning_content(
     if not thinking_roundtrip:
         return True
     # 通道为空（未解析到 LLMRuntimeConfig 的兜底）时保持既有剥离行为（安全）。
-    if not channels:
+    if not channel:
         return True
-    # 仅当通道含 reasoning_content 且不含任何需回传的通道时才剥离。
-    return "reasoning_content" in channels and not (
-        set(channels) & _ROUNDTRIP_REQUIRED_CHANNELS
-    )
+    return False
 
 
 __all__ = [
-    "_ROUNDTRIP_REQUIRED_CHANNELS",
     "_extract_reasoning_content",
     "_extract_reasoning_field",
     "_extract_thinking_blocks",

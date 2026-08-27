@@ -8,11 +8,11 @@
     "need_reasoning_content": true,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      }
     }
   },
   "deepseek-v4-pro": {
@@ -24,11 +24,11 @@
     "need_reasoning_content": true,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      }
     }
   },
   "deepseek-v4-flash-vision-exp": {
@@ -40,11 +40,11 @@
     "need_reasoning_content": true,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      }
     }
   },
   "GLM-5.3": {
@@ -55,11 +55,11 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      }
     }
   },
   "GLM-5.2": {
@@ -70,15 +70,11 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      }
     }
   },
   "GLM-5.1": {
@@ -89,7 +85,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-5": {
@@ -100,7 +96,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-4.7": {
@@ -111,7 +107,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-4.6": {
@@ -122,7 +118,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-4.5": {
@@ -133,7 +129,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-5V-Turbo": {
@@ -144,7 +140,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-4.6V": {
@@ -155,7 +151,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-4.7-Flash": {
@@ -166,7 +162,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "GLM-4.6V-Flash": {
@@ -177,7 +173,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.8-max": {
@@ -188,11 +184,11 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "medium",
+        "max": "xhigh"
+      }
     }
   },
   "qwen-3.7-max": {
@@ -203,7 +199,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.7-plus": {
@@ -214,7 +210,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.7-flash": {
@@ -225,7 +221,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.6-max": {
@@ -236,7 +232,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.6-plus": {
@@ -247,7 +243,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.5-plus": {
@@ -258,7 +254,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "qwen-3.5-flash": {
@@ -269,7 +265,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "kimi-k3": {
@@ -280,11 +276,11 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": true,
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "effort_map": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
+      }
     }
   },
   "kimi-k2.7-code": {
@@ -295,7 +291,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "kimi-k2.7-code-highspeed": {
@@ -306,7 +302,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "kimi-k2.6": {
@@ -317,7 +313,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "kimi-k2.5": {
@@ -328,7 +324,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M3": {
@@ -340,7 +336,7 @@
     "need_reasoning_content": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2.7": {
@@ -351,7 +347,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2.7-highspeed": {
@@ -362,7 +358,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2.5": {
@@ -373,7 +369,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2.5-highspeed": {
@@ -384,7 +380,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2.1": {
@@ -395,7 +391,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2.1-highspeed": {
@@ -406,7 +402,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "MiniMax-M2": {
@@ -417,7 +413,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "Doubao-Seed-2.0-lite": {
@@ -428,7 +424,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "Doubao-Seed-2.1-turbo": {
@@ -439,7 +435,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "Doubao-Seed-Evolving": {
@@ -450,7 +446,7 @@
     "supports_video": true,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   },
   "hy3": {
@@ -461,7 +457,7 @@
     "supports_video": false,
     "supports_reasoning_effort": {
       "supported": false,
-      "efforts": []
+      "effort_map": {}
     }
   }
 }

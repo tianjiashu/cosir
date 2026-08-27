@@ -12,9 +12,8 @@ from .state import ReactGraphState
 def _should_continue(state: ReactGraphState) -> str:
     """条件边：根据 graph state 决定流向 tools / model 还是结束。
 
-    超配额拦截（``step_count > max_steps``）已提前到 ``model_node`` 发起推理之前统一
-    收口，本边不再承担 max_steps 路由——step_count 只在 model 节点递增且该节点每次进入
-    都会先拦截，故此处看到的 step_count 恒合法，路由只区分继续动作。
+    超配额拦截（``step_count > max_steps``）已提前到 ``model_node`` 发起推理前收口，
+    本边不再承担 max_steps 路由，只区分继续动作。
 
     参数:
         state: 当前 graph state。

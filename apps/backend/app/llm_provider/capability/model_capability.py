@@ -66,11 +66,12 @@ class ReasoningEffortCapability:
 
     字段:
         supported: 是否支持推理强度调节。
-        efforts: 支持的强度档位元组（如 ``("low", "high", "max")``）；不支持时为空元组。
+        effort_map: 支持的强度档位映射（如 ``{"low": "low", "high": "high", "max": "max"}``）；
+            不支持时为空字典。键为内部档位名，值为透传给模型的原始档位标识。
     """
 
     supported: bool = False
-    efforts: tuple[str, ...] = field(default_factory=tuple)
+    effort_map: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,30 +106,39 @@ class ModelCapability:
     )
 
     @staticmethod
-    def from_json(model_name: str) -> ModelCapability:
-        """从 JSON 原始条目构造 ``ModelCapability``。
+    def get_capability(model_name: str) -> ModelCapability:
+        """按模型名查询能力元数据（JSON 为唯一真相源；缺失回退保守默认）。
+
+        这是从 JSON 构造 ``ModelCapability`` 的唯一入口。推理强度档位位于 JSON 的
+        ``supports_reasoning_effort`` 子对象内（键 ``effort_map``），需逐层读取并做
+        类型兜底，避免把子对象整体当布尔误判为 ``supported=True``。
 
         参数:
             model_name: 模型名键（与 JSON 外层键对齐）。
 
         返回:
-            字段完整的 ``ModelCapability`` 实例。
+            命中时返回字段完整的 ``ModelCapability``；未命中时返回保守默认实例
+            （所有能力置 False、空档位表、窗口/输出置 0），不抛异常。
 
         异常:
-            无。
+            无（永不抛——未知模型回退而非报错，由调用方决定如何提示用户补全 JSON）。
 
         副作用:
             无。
         """
+
         raw = _MODEL_JSON_DATA.get(model_name)
         if raw is None:
-            raise ValueError(f"model {model_name} not found in JSON")
+            return ModelCapability(model_name=model_name)
         effort_raw = raw.get("supports_reasoning_effort", {})
         if not isinstance(effort_raw, dict):
             effort_raw = {}
+        effort_map_raw = effort_raw.get("effort_map", {})
+        if not isinstance(effort_map_raw, dict):
+            effort_map_raw = {}
         effort = ReasoningEffortCapability(
             supported=bool(effort_raw.get("supported", False)),
-            efforts=tuple(effort_raw.get("efforts", [])),
+            effort_map=dict(effort_map_raw),
         )
         return ModelCapability(
             model_name=model_name,
@@ -139,38 +149,4 @@ class ModelCapability:
             supports_video=bool(raw.get("supports_video", False)),
             need_reasoning_content=bool(raw.get("need_reasoning_content", False)),
             reasoning_effort=effort,
-        )
-
-    @staticmethod
-    def get_capability(model_name: str) -> ModelCapability:
-        """按厂商类型查询能力元数据（JSON 为唯一真相源；缺失回退保守默认）。
-
-        参数:
-            model_name: 模型名键（与 JSON 外层键对齐）。
-
-        返回:
-
-
-        异常:
-            无（永不抛——未知类型回退而非报错，由调用方决定如何提示用户补全 JSON）。
-
-        副作用:
-            无。
-        """
-
-        raw = _MODEL_JSON_DATA.get(model_name)
-        if raw is None:
-            raise ValueError(f"Model {model_name} not found")
-        return ModelCapability(
-            model_name=raw.get("model_name", "default_model"),
-            context_window=raw.get("context_window", 0),
-            max_output_tokens=raw.get("max_output_tokens", 0),
-            supports_thinking=raw.get("supports_thinking", False),
-            supports_image=raw.get("supports_image", False),
-            supports_video=raw.get("supports_video", False),
-            need_reasoning_content=raw.get("need_reasoning_content", False),
-            reasoning_effort=ReasoningEffortCapability(
-                supported=bool(raw.get("supports_reasoning_effort", False)),
-                efforts=tuple(raw.get("reasoning_effort", [])),
-            ),
         )

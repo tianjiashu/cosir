@@ -22,5 +22,4 @@ class RunFinishedPayload(RuntimeEventPayload):
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
     reasoning_tokens: int = 0
-    cost_cents: float | None = None
     langfuse_trace_id: str | None = None

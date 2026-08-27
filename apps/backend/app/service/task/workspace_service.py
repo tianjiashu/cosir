@@ -8,6 +8,8 @@
 - 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``CascadeDeleter``）。
 """
 
+from pathlib import Path
+
 from app.config.logging.logger import log
 from app.models import WorkspaceRecord
 from app.service import depends as service_depends
@@ -36,7 +38,7 @@ class WorkspaceService:
         self._cascade_deleter = service_depends.get_cascade_deleter()
 
     def create_workspace(self, name: str, root_path: str) -> WorkspaceRecord:
-        """创建工作区记录。
+        """创建工作区记录并在其根目录下初始化 ``.cosir`` 元数据区。
 
         参数:
             name: 工作区名称。
@@ -50,9 +52,43 @@ class WorkspaceService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
 
         副作用:
-            向 ``workspaces`` 表插入一行记录。
+            向 ``workspaces`` 表插入一行记录；并在 ``<root_path>/.cosir`` 处创建元数据目录
+            （已存在则幂等跳过）。元数据目录创建失败属于非致命降级：不阻断工作区创建，
+            仅记 error 日志，便于事后排查。
         """
-        return self._workspace.create(name, root_path)
+        record = self._workspace.create(name, root_path)
+
+        cosir_dir = Path(root_path.strip()) / ".cosir"
+        try:
+            cosir_dir.mkdir(parents=True, exist_ok=True)
+            log.info(
+                "workspace_cosir_initialized",
+                extra={
+                    "msg": "workspace metadata dir initialized",
+                    "data": {
+                        "workspace_name": name,
+                        "root_path": root_path,
+                        "cosir_dir": str(cosir_dir),
+                    },
+                },
+            )
+        except OSError as exc:
+            # 元数据目录非运行关键路径：降级处理，避免阻断工作区创建。
+            log.error(
+                "workspace_cosir_init_failed",
+                extra={
+                    "msg": "failed to initialize workspace metadata dir, skipped",
+                    "data": {
+                        "workspace_name": name,
+                        "root_path": root_path,
+                        "cosir_dir": str(cosir_dir),
+                        "error": str(exc),
+                        "errno": getattr(exc, "errno", None),
+                    },
+                },
+            )
+
+        return record
 
     def list_workspaces(self) -> list[WorkspaceRecord]:
         """列出全部工作区。

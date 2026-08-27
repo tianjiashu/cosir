@@ -27,7 +27,6 @@ class TurnRecord:
     product_id: int | None = None
     model_name: str | None = None
     paths: list[str] | None = None
-    thinking: bool | None = None
     reasoning_effort: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
@@ -54,7 +53,6 @@ class TurnRecord:
             "end_reason": self.end_reason,
             "response_text": self.response_text,
             "paths": self.paths,
-            "thinking": self.thinking,
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
             "product_name": self.product_id,

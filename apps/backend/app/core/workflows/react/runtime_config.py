@@ -1,16 +1,9 @@
-"""ReAct 工作流的运行时配置注入容器。
+"""ReAct 工作流的运行时依赖注入容器。
 
-本模块只承载 ReAct 工作流节点共享的运行时依赖注入容器 ``RuntimeConfig``，不依赖任何
-节点、边或编排逻辑。它对应 LangGraph 运行上下文 ``config["configurable"]["runtime_config"]``
-中的运行时依赖，与 ``ReactGraphState``（节点间数据流）职责分离：
-
-- state 是持久化、累积、节点之间传递的**数据流**，由 LangGraph 写入 checkpoint。
-- ``RuntimeConfig`` 是**不进入 checkpoint** 的运行期依赖（含不可序列化的模型实例与操作门面），
-  由编排层在 ``ReactLikeWorkflow.run()`` 时注入，节点经 ``get_config()`` 取出后读取字段。
-
-``RuntimeConfig`` 用 ``@dataclass`` 表达：它不是数据契约（那是 ``ReactGraphState`` 的 pydantic
-职责），而是依赖集合；其字段含不可 JSON 序列化的对象（``BaseChatModel`` / ``RuntimeOperations``），
-因此不纳入 checkpoint 持久化，graph 重放时由编排层重新注入。
+承载节点共享的运行期依赖 ``RuntimeConfig``，不依赖任何节点、边或编排逻辑。它注入到
+``config["configurable"]["runtime_config"]``，与 ``ReactGraphState``（持久化数据流）职责分离：
+state 随执行累积并写入 checkpoint；``RuntimeConfig`` 含不可序列化对象（模型实例、操作门面），
+**不进入 checkpoint**，由编排层在 ``ReactLikeWorkflow.run()`` 时注入、graph 重放时重新注入。
 """
 
 from collections.abc import Callable
@@ -19,7 +12,7 @@ from dataclasses import dataclass, field
 from langchain_core.language_models import BaseChatModel
 
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.models import LLMRuntimeConfig, TurnRecord
+from app.models import TurnRecord
 from app.models.turn_usage_stats import TurnUsageStats
 from app.tools.schemas import ToolCall
 
@@ -29,17 +22,9 @@ class RuntimeConfig:
     """ReAct 工作流节点共享的运行时依赖注入容器。
 
     编排层在 ``ReactLikeWorkflow.run()`` 中把本对象放入
-    ``config["configurable"]["runtime_config"]``，各节点通过
-    ``get_config()["configurable"]["runtime_config"]`` 取出后读取字段，避免在多个节点里用裸
-    字符串 key 从 ``config["configurable"]`` 取值。
-
-    与 ``ReactGraphState`` 的区别：
-    - state（graph state）：节点之间传递的**数据流**，会被 LangGraph 持久化进 checkpoint、
-      随执行累积（如 step_count、tool_error_count、terminal），是可重放的。模型上下文不进 state，
-      由 ``RuntimeContextManager`` 独占管理（持久化事实来源是 SQLite，checkpoint 重放时由编排层
-      重新注入）。
-    - 本容器：运行期**依赖注入**，含不可序列化对象（模型实例、操作门面），**不进入 checkpoint**，
-      只在本次 graph 执行期间生效，graph 重放时由编排层重新注入。
+    ``config["configurable"]["runtime_config"]``，各节点取出后读取字段，避免在多个节点里用裸
+    字符串 key 从 ``config["configurable"]`` 取值。本容器含不可序列化对象，不进入 checkpoint，
+    仅本次 graph 执行期间有效，重放时由编排层重新注入。
 
     Attributes:
         operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
@@ -54,18 +39,19 @@ class RuntimeConfig:
             ``usage_metadata`` 累加进来，``run_finished`` 事件读取后下发给前端。
         langfuse_trace_id: 本 turn 的 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
             供终态事件 payload 携带给前端展示。未启用 Langfuse 时为 None。
-        llm_config: 本次解析出的 ``LLMRuntimeConfig``（含 provider_type /
-            thinking_channels / thinking_roundtrip），供 model_node 按厂商分派
-            thinking 抽取与剥离；不含 Key 明文。
+        thinking_channel: 按厂商分派的 thinking 抽取通道；供 model_node 选择 reasoning 抽取
+            与剥离逻辑。``None`` 表示不抽取独立 thinking 通道。
+        thinking_roundtrip: 是否将 thinking 内容回传模型（多轮推理闭环）；供 model_node 决策。
+            ``None`` 表示未指定。
     """
 
     operations: RuntimeOperations
     turn: TurnRecord
     model: BaseChatModel
-    # None 表示自动放行（tools 节点不调用 interrupt()）；语义见 docstring Attributes。
+    # None 表示自动放行（tools 节点不调用 interrupt()）。
     approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None
     start_time: float = 0.0
     usage_stats: TurnUsageStats = field(default_factory=TurnUsageStats)
     langfuse_trace_id: str | None = None
-    # 不含 Key 明文（api_key 已在工厂侧消费）；语义见 docstring Attributes。
-    llm_config: LLMRuntimeConfig | None = None
+    thinking_channel: str | None = None
+    thinking_roundtrip: bool | None = None

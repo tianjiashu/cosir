@@ -44,7 +44,7 @@ def _has_content(message: AIMessage) -> bool:
 def _collect_chunk_to_ai_message(
     chunks: list[AIMessageChunk],
     *,
-    thinking_channels: tuple[str, ...] = (),
+    thinking_channel: str,
     thinking_roundtrip: bool = True,
 ) -> AIMessage:
     """把累积的 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``。
@@ -143,7 +143,11 @@ def _collect_chunk_to_ai_message(
     # 通道）回灌易引发重复思考故剥离；Anthropic/Gemini/o 系列需保留 thinking 块（含
     # signature）供下一轮原样回传，否则工具调用 400。
     additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
-    if _should_strip_reasoning_content(thinking_channels, thinking_roundtrip):
+
+    #统一为reasoning_content字段
+    reasoning_content = additional.pop(thinking_channel, None)
+    additional["reasoning_content"] = reasoning_content
+    if _should_strip_reasoning_content(thinking_channel, thinking_roundtrip):
         additional.pop("reasoning_content", None)
     # content 统一抽纯文本：防御 DeepSeek 偶发把工具调用 block 带进 content list 的形态，
     # 与 RuntimeContextManager._langraph_message_to_runtime_message 落库口径保持一致，
@@ -153,11 +157,9 @@ def _collect_chunk_to_ai_message(
         tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
         invalid_tool_calls=merged.invalid_tool_calls,
         additional_kwargs=additional,  # 保留/剥离 thinking 字段按回传策略
-        # usage_metadata 是 LangChain 对各流式 chunk 经 add_usage 求和无重复后的唯一完整
-        # 快照，是下游 TurnUsageStats.add_usage_metadata 的单一来源；不再存在逐 chunk 解析
-        # 的第二口径（L2「重复计数」查证为伪阳性）。
         usage_metadata=merged.usage_metadata,  # 透传完整 token 统计（唯一来源）
         id=getattr(merged, "id", None),  # 消息 id 透传
+        response_metadata=merged.response_metadata,
     )
 
 

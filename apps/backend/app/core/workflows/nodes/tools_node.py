@@ -207,6 +207,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
     node_write_event = _make_write_event()
 
     # 审批编排（独立模块）：无审批器自动放行，有审批器 interrupt 暂停 + resume。
+    # 注：interrupt 是「挂起续跑」而非「失败重放」——resume 后从此调用点原地继续，
+    # 本函数体不会从头重跑，故下方 run_tool_calls / _persist_tool_observations 仅执行一次，
+    # 不会因 checkpoint 重放而重复落库（model_node 也无 interrupt，不会被 resume 触发重跑）。
     approved_dicts = resolve_approved_calls(rc, tool_calls, step_id, interrupt)
 
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行。

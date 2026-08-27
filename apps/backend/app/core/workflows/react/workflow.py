@@ -19,8 +19,9 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.llm_provider.factory import resolve_chat_model
+from app.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
+from app.llm_provider.provider.capability_service import CapabilityService
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
 from app.models.event.runtime_event import RuntimeEvent
@@ -41,7 +42,7 @@ from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
 
 
-def _update_task_context_usage(task_id: str, used: int) -> None:
+def _update_task_context_usage(task_id: int, used: int) -> None:
     """回写 task 最近一次上下文已用 token，供上下文占用订阅者回调使用。
 
     参数:
@@ -57,23 +58,22 @@ def _update_task_context_usage(task_id: str, used: int) -> None:
 class ReactLikeWorkflow(AgentWorkflow):
     """基于“模型推理 -> 工具调用 -> 继续推理/最终回答”的默认工作流，由 LangGraph 编排。
 
-    该类只承担执行策略职责，不直接创建模型、工具或数据库连接。所有外部能力都通过
-    ``RuntimeOperations`` 注入；graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph
+    该类只承担执行策略职责，不直接创建模型、工具或数据库连接，所有外部能力都通过
+    ``RuntimeOperations`` 注入。graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph
     负责状态持久化、断点续跑与 ``interrupt()`` 审批中断。
     """
 
     workflow_id = "react_like_v1"
 
     def __init__(
-        self,
-        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+            self,
+            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
-        """初始化 ReAct-like 工作流。
+        """初始化工作流。
 
         参数:
-            approval_resolver: 工具审批解析器。``tools`` 节点因 ``interrupt()`` 暂停时，
-                用它解析出「批准执行的调用列表」并经 ``Command(resume=)`` 恢复 graph。
-                缺省 ``None`` 表示自动放行全部调用。
+            approval_resolver: 工具审批解析器；``None`` 表示自动放行全部调用。
+                详见类 ``run`` 方法中 ``interrupt()`` 暂停与 ``Command(resume=)`` 恢复逻辑。
         """
 
         self._approval_resolver = approval_resolver
@@ -114,21 +114,19 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-        self,
-        operations: RuntimeOperations,
-        callbacks: list | None = None,
-        langfuse_trace_id: str | None = None,
+            self,
+            operations: RuntimeOperations,
+            callbacks: list | None = None,
+            langfuse_trace_id: str | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
-        构建并编译 graph（挂 ``AsyncSqliteSaver`` checkpointer），以
-        ``astream(stream_mode=["custom"])`` 单循环驱动，把节点经 ``get_stream_writer()``
-        写入的 ``custom`` 业务事件（含模型回复/思考增量）统一透传为 ``RuntimeEvent`` 流式
-        ``yield``。模型经 ``resolve_chat_model`` 构建：缺 Key 在构建期抛错；真实模型不支持
-        ``bind_tools`` 时降级为不带工具运行（仅作防御）。存在 ``approval_resolver`` 时
-        ``tools`` 节点触发 ``interrupt()`` 暂停，方法用审批解析器解析出批准的工具调用并经
-        ``Command(resume=)`` 恢复；为 ``None`` 时不暂停、自动放行。循环直到 graph 无待处理
-        任务或工作流结束。
+        以 ``astream(stream_mode=["custom"])`` 单循环驱动已编译 graph，把节点经
+        ``get_stream_writer()`` 写入的 ``custom`` 业务事件（含模型回复/思考增量）统一透传为
+        ``RuntimeEvent`` 流式 ``yield``。模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
+        存在 ``approval_resolver`` 时 ``tools`` 节点触发 ``interrupt()`` 暂停，用审批解析器解析出
+        批准的工具调用并经 ``Command(resume=)`` 恢复；为 ``None`` 时不暂停、自动放行。循环恢复
+        graph 直到无待处理任务或工作流结束。
 
         参数:
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
@@ -142,8 +140,8 @@ class ReactLikeWorkflow(AgentWorkflow):
         """
 
         turn = operations.get_current_turn()
-        thread_id = turn.turn_id
-        turn_id = turn.turn_id
+        thread_id = turn.id
+        turn_id = turn.id
         current_task = operations.get_current_task()
 
         # Agent 执行主体
@@ -156,16 +154,15 @@ class ReactLikeWorkflow(AgentWorkflow):
                 turn=turn,
                 agent_profile=agent_profile,
             )
-        except ModelNotConfiguredError as exc:
-            log.error(
+        except Exception as exc:
+            log.exception(
                 "model_resolve_failed",
                 extra={
                     "msg": f"运行期模型解析失败，turn 进入 RUN_FAILED：{exc}",
                     "data": {
-                        "task_id": current_task.task_id,
-                        "turn_id": turn.turn_id,
+                        "task_id": current_task.id,
+                        "turn_id": turn.id,
                         "model": turn.model_name or agent_profile.model_name,
-                        "reason": getattr(exc, "reason", None),
                     },
                 },
             )
@@ -190,6 +187,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
+        thinking_channel = CapabilityService.get_thinking_channel(turn.product_id)
+
         runtime_config = RuntimeConfig(
             operations=operations,
             turn=turn,
@@ -198,36 +197,31 @@ class ReactLikeWorkflow(AgentWorkflow):
             start_time=perf_counter(),
             usage_stats=TurnUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
-            llm_config=resolved.config,
+            thinking_channel=thinking_channel,
+            thinking_roundtrip=True
         )
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
         # 读写唯一入口，并挂载上下文占用订阅者。
-        runtime_context_manager = RuntimeContextManager(
+        runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
             agent_profile=agent_profile,
-            workspace_root=current_workspace.root_path,
-            task_id=current_task.task_id,
+            write_event=write_event,
+            current_workspace=current_workspace,
+            current_task=current_task,
             store=operations.message_store,
-            current_turn_id=turn_id,
-            total_tokens=resolve_context_window(turn.model_name), #300K
-        ).add_change_listener(
-            ContextUsageComputeListener(
-                write_event=write_event,
-                update_context_usage=(
-                    lambda task_id, used: _update_task_context_usage(task_id, used)
-                ),
-                task_id=current_task.task_id,
-            )
-        ).add_change_listener(
-            ContextCompressListener()
+            turn=turn,
         )
+        # 复用实例时刷新 turn 级执行态（current_turn_id / total_tokens），
+        # 必须在 add_message 之前，否则基线消息会落错 turn。
+        runtime_context_manager.bind_turn(turn)
+
+        runtime_context_manager.set_thinking_channel(thinking_channel)
+
         # turn 启动基线：仅落库当前用户输入，不写内存（load_history 会从库统一加载，
         # 避免同一用户消息在内存中出现两次）。
         runtime_context_manager.add_message(
             RuntimeMessage(role="user", content_text=turn.input_text), write_memory=False
         )
-        # child 运行在独立子任务下，load_history 天然只看到自己的消息，无需排除父任务轮次。
-        runtime_context_manager.load_history()
 
         config = {
             "configurable": {
@@ -261,9 +255,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             while True:
                 try:
                     async for mode, data in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["custom"],
+                            input_state,
+                            config,
+                            stream_mode=["custom"],
                     ):
                         if mode != "custom":
                             continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）
@@ -274,7 +268,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                             raise TypeError("custom runtime event payload must be a payload entity")
                         event = RuntimeEvent(
                             event_type=event_type,
-                            task_id=current_task.task_id,
+                            task_id=current_task.id,
                             turn_id=turn_id,
                             sequence=sequence,
                             payload=payload,
@@ -292,7 +286,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                         extra={
                             "msg": "langgraph execution failed during workflow run",
                             "data": {
-                                "task_id": current_task.task_id,
+                                "task_id": current_task.id,
                                 "turn_id": getattr(operations, "_current_turn_id", None),
                             },
                         },
