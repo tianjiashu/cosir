@@ -28,7 +28,7 @@ class ContextUsageComputeListener(ContextListener):
         self,
         write_event: Callable[[EventType, RuntimeEventPayload], None],
         update_context_usage: Callable[[str, int], None],
-        task_id: str,
+        task_id: int,
     ) -> None:
         """构造订阅者，注入事件写入与占用回写回调及 task 标识。
 
