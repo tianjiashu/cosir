@@ -11,23 +11,24 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from app.config.logging.logger import log
 from app.core.context.context_listener.context_listener import ContextListener
-from app.core.context.context_listener.listener_event import ListenerEvent, ContextEventType
+from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
-from app.models.payload import RuntimeEventPayload, ContextUsagePayload
+from app.models.payload import ContextUsagePayload, RuntimeEventPayload
 
 
 class ContextUsageComputeListener(ContextListener):
 
-    subAgent_need = False
+    main_agent_only = True
     order = 1
 
     def __init__(
         self,
         write_event: Callable[[EventType, RuntimeEventPayload], None],
-        update_context_usage: Callable[[str, int], None],
+        update_context_usage: Callable[[int, int], None],
         task_id: int,
     ) -> None:
         """构造订阅者，注入事件写入与占用回写回调及 task 标识。
@@ -39,6 +40,12 @@ class ContextUsageComputeListener(ContextListener):
 
         返回:
             无。
+
+        异常:
+            无。
+
+        副作用:
+            保存事件写入回调、task 占用回写回调与 task 标识。
         """
         self.write_event = write_event
         self._update_context_usage = update_context_usage
@@ -60,8 +67,11 @@ class ContextUsageComputeListener(ContextListener):
         返回:
             无。
         """
-        if event.type not in [ContextEventType.ADD_MESSAGE, ContextEventType.LOAD_HISTORY,
-                              ContextEventType.CONTEXT_COMPRESSED]:
+        if event.type not in [
+            ContextEventType.ADD_MESSAGE,
+            ContextEventType.LOAD_HISTORY,
+            ContextEventType.CONTEXT_COMPRESSED,
+        ]:
             return
         usage = self._compute(event.messages)
         # 压缩事件占用以压缩后总量为准，其余变更累加本批消息占用。
@@ -69,11 +79,23 @@ class ContextUsageComputeListener(ContextListener):
             result.usage = usage
         else:
             result.usage = event.usage + usage
-        self.write_event(
-            EventType.CONTEXT_USAGE,
-            ContextUsagePayload(used_tokens=result.usage,total_tokens=event.total_tokens)
-        )
+        write_error: RuntimeError | None = None
+        try:
+            self.write_event(
+                EventType.CONTEXT_USAGE,
+                ContextUsagePayload(used_tokens=result.usage, total_tokens=event.total_tokens),
+            )
+        except RuntimeError as exc:
+            if not event.allow_write_event_failure:
+                write_error = exc
+            else:
+                log.debug(
+                    "context_usage_event_writer_unavailable",
+                    extra={"task_id": self.task_id, "context_event_type": event.type.value},
+                )
         self._update_context_usage(self.task_id, result.usage)
+        if write_error is not None:
+            raise write_error
 
     def _compute(self, messages: list[RuntimeMessage]) -> int:
         """对消息列表逐条估算并求和 token 占用。
@@ -83,6 +105,12 @@ class ContextUsageComputeListener(ContextListener):
 
         返回:
             消息列表的 token 占用之和。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
         return sum(self._message_tokens(m) for m in messages)
 
@@ -98,6 +126,12 @@ class ContextUsageComputeListener(ContextListener):
 
         返回:
             单条消息的 token 占用；非 ``RuntimeMessage`` 返回 0。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
         if not isinstance(message, RuntimeMessage):
             return 0

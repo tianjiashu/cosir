@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 import threading
 import weakref
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from platform import system
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -20,17 +20,20 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_compressor.context_compressor import ContextCompressor
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
 from app.core.context.context_listener.context_listener import ContextListener
-from app.core.context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
+from app.core.context.context_listener.context_usage_compute_listener import (
+    ContextUsageComputeListener,
+)
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
 from app.llm_provider.context_window_resolver import resolve_context_window
-from app.models import RuntimeMessage, WorkspaceRecord, TaskRecord, TurnRecord
+from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
 from app.service.depends import get_task_service
 from app.utils.message_content import content_to_text
 
@@ -92,7 +95,6 @@ def _update_task_context_usage(task_id: int, used: int) -> None:
 # 根除「只增不删」的进程级内存泄漏，且无需在 task 删除路径手动 clear。
 _runtime_context_managers: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
 task_runtime_context_managers_lock = threading.Lock()
-log = logging.getLogger("coding_agent.backend")
 
 
 @dataclass
@@ -106,8 +108,8 @@ class RuntimeContextManager:
       转换、落库、写内存、序号维护都在本类内完成，经注入 ``store`` 端口落库
       （依赖倒置，避免 ``core/context`` 反向依赖 service）。``add_message`` 是唯一写入
       API，联合类型收口 ``BaseMessage`` / ``RuntimeMessage``，经 ``persist`` /
-      ``write_memory`` 双开关正交控制落库与写内存（``write_memory=False`` 承载 turn
-      启动基线的「只落库不写内存」）。
+      ``write_memory`` 双开关正交控制落库与写内存（``write_memory=False`` 仅用于明确
+      不进入当前模型上下文的持久化轨迹）。
     - **变化通知**：消息变更经 :meth:`mark_context_changed` 通知已订阅 listener。
     - **压缩预留**：经可选 ``compressor`` 引用 ``ContextCompressor`` 协议与
       :meth:`maybe_compact` 暴露扩展点，暂不实现具体压缩算法。
@@ -140,6 +142,8 @@ class RuntimeContextManager:
     # 当前绑定的 turn 标识：落库（add_message persist=True）需要它定位目标 turn；
     # 为 None 时表示尚未进入某 turn，落库请求退化为仅写内存。
     current_turn_id: int | None = None
+    # 当前 turn 开始前的内存快照：同一 turn 重跑时恢复，避免旧运行轨迹残留。
+    _turn_context_baseline: list[RuntimeMessage] | None = field(default=None, init=False)
     # 轮内逐条落库序号计数器：由 manager 内部维护（替代原 RuntimeOperations 内部计数），
     # reset_message_sequence 归零、add_message 落库时自增。
     _message_sequence: int = field(default=0, init=False)
@@ -149,9 +153,16 @@ class RuntimeContextManager:
     _thinking_channel: str = field(default="reasoning_content", init=False)
 
     @staticmethod
-    def ensure_get_runtime_context_manager(agent_profile: AgentProfile,
-                                           write_event: Callable, current_workspace: WorkspaceRecord,
-                                           current_task: TaskRecord, store: RuntimeMessageStore, turn: TurnRecord):
+    def ensure_get_runtime_context_manager(
+        agent_profile: AgentProfile,
+        write_event: Callable[[Any, Any], None],
+        current_workspace: WorkspaceRecord,
+        current_task: TaskRecord,
+        store: RuntimeMessageStore,
+        turn: TurnRecord,
+        *,
+        update_context_usage: Callable[[int, int], None] | None = None,
+    ) -> RuntimeContextManager:
         """获取或创建指定 task_id 的运行时上下文管理器。
 
         仅负责「获取或创建」task 级配置（agent_profile / listeners / 已加载的
@@ -160,6 +171,7 @@ class RuntimeContextManager:
         显式调用 ``bind_turn`` 绑定，时序清晰、职责单一。
         """
         task_id = current_task.id
+        usage_updater = update_context_usage or _update_task_context_usage
         if task_id in _runtime_context_managers:
             return _runtime_context_managers[task_id]
         with task_runtime_context_managers_lock:
@@ -175,15 +187,13 @@ class RuntimeContextManager:
             ).add_change_listener(
                 ContextUsageComputeListener(
                     write_event=write_event,
-                    update_context_usage=(
-                        lambda task_id, used: _update_task_context_usage(task_id, used)
-                    ),
+                    update_context_usage=usage_updater,
                     task_id=task_id,
                 )
             ).add_change_listener(
                 ContextCompressListener()
             )
-            runtime_context_manager.load_history()
+            runtime_context_manager.load_history(excluded_turn_ids={turn.id})
             _runtime_context_managers[task_id] = runtime_context_manager
             log.info(
                 "runtime_context_manager created",
@@ -206,6 +216,10 @@ class RuntimeContextManager:
         必须在任何 ``add_message`` 之前调用，否则基线消息会落错 turn。
         """
         previous_turn_id = self.current_turn_id
+        if previous_turn_id == turn.id and self._turn_context_baseline is not None:
+            self.messages = copy.deepcopy(self._turn_context_baseline)
+        else:
+            self._turn_context_baseline = copy.deepcopy(self.messages)
         self.current_turn_id = turn.id
         self.total_tokens = resolve_context_window(turn.model_name or "")
         # 归零序号并清空当前 turn 残留，保证新 turn 从 0 计、同 turn_id resume 重试落库幂等
@@ -224,8 +238,8 @@ class RuntimeContextManager:
         """追加上下文变化订阅者，并按 ``order`` 排序。
 
         订阅者经 :meth:`mark_context_changed` 在消息变化时收到通知。守卫语义：
-        当 ``listener.subAgent_need`` 为 ``False`` 且当前为**主 agent** 时直接跳过，
-        即「不需要子 agent 订阅」的监听器只挂到子 task 上。
+        当 ``listener.main_agent_only`` 为 ``True`` 且当前为**子 agent** 时直接跳过，
+        即主 Agent 专属监听器不会挂到委派子 task 上。
 
         参数:
             listener: 实现 ``ContextListener`` 协议的订阅者实例。
@@ -233,14 +247,20 @@ class RuntimeContextManager:
         返回:
             self（供链式调用）。
         """
-        # 不需要子 agent 订阅的监听器，在主 agent 下跳过。
-        if not listener.subAgent_need and self.agent_profile.main_agent:
+        # 主 Agent 专属监听器，在子 Agent 下跳过。
+        if listener.main_agent_only and not self.agent_profile.main_agent:
             return self
         self._listeners.append(listener)
         self._listeners = sorted(self._listeners, key=lambda x: x.order)
         return self
 
-    def mark_context_changed(self, event_type: ContextEventType, messages: list[RuntimeMessage]) -> None:
+    def mark_context_changed(
+        self,
+        event_type: ContextEventType,
+        messages: list[RuntimeMessage],
+        *,
+        allow_write_event_failure: bool = False,
+    ) -> None:
         """标记上下文变化，按 ``order`` 通知所有订阅者并聚合占用结果。
 
         把本次占用 ``used_tokens`` 与窗口上限 ``total_tokens`` 打包进 :class:`ListenerEvent`
@@ -250,18 +270,29 @@ class RuntimeContextManager:
         参数:
             event_type: 变化来源（add / load_history / compress）。
             messages: 本次变化涉及的消息（可为本批新增，也可为完整列表）。
+            allow_write_event_failure: 是否允许事件写入器不可用时继续执行。
 
         返回:
             无。
         """
         listener_order_list = sorted(self._listeners, key=lambda x: x.order)
         result = ListenerResult(self.used_tokens)
-        for listener in listener_order_list:
-            listener.listen(ListenerEvent(event_type, messages, self.used_tokens, self.total_tokens), result)
-        self.used_tokens = result.usage
-
-        if event_type == ContextEventType.CONTEXT_COMPRESSED:
-            self.messages = result.messages_after_compressor
+        try:
+            for listener in listener_order_list:
+                listener.listen(
+                    ListenerEvent(
+                        event_type,
+                        messages,
+                        self.used_tokens,
+                        self.total_tokens,
+                        allow_write_event_failure=allow_write_event_failure,
+                    ),
+                    result,
+                )
+        finally:
+            self.used_tokens = result.usage
+            if event_type == ContextEventType.CONTEXT_COMPRESSED:
+                self.messages = result.messages_after_compressor
 
     def __post_init__(self) -> None:
         """构造后初始化非字段状态（预置系统提示并归零序号）。
@@ -276,14 +307,16 @@ class RuntimeContextManager:
         if not self.messages or not isinstance(self.messages[0], SystemMessage):
             self.messages.insert(0, self._build_system_message())
 
-    def load_history(self) -> None:
-        """从注入 store 读回 task 跨轮历史并追加进 ``messages``。
+    def load_history(self, excluded_turn_ids: Collection[int] | None = None) -> None:
+        """从注入 store 读回历史并追加进 ``messages``。
 
-        经 ``store.build_for_task`` 读回该 task 的 ``RuntimeMessage`` 列表直接追加，
-        并触发一次 ``LOAD_HISTORY`` 通知。无 ``store``（纯内存构造）时为空操作。
+        ``excluded_turn_ids`` 用于排除当前正在执行的 turn，使当前 turn 由后续
+        ``add_message`` 作为运行期增量写入，避免恢复/重跑时把旧轨迹带入上下文。
+        经 ``store.build_for_task`` 读回消息后直接追加，并触发一次 ``LOAD_HISTORY``
+        通知。无 ``store``（纯内存构造）时为空操作。
 
         参数:
-            无。
+            excluded_turn_ids: 需要排除的 turn 标识集合，可选。
 
         返回:
             无。
@@ -296,10 +329,14 @@ class RuntimeContextManager:
         """
         if self.store is None:
             return
-        history = self.store.build_for_task(self.task_id)
+        history = self.store.build_for_task(self.task_id, excluded_turn_ids)
         with self.lock:
             self.messages.extend(history)
-            self.mark_context_changed(ContextEventType.LOAD_HISTORY, copy.deepcopy(history))
+            self.mark_context_changed(
+                ContextEventType.LOAD_HISTORY,
+                copy.deepcopy(history),
+                allow_write_event_failure=True,
+            )
 
     def maybe_compact(self) -> bool:
         """在压缩器已配置时压缩上下文，否则原样返回（压缩预留扩展点）。
@@ -316,7 +353,10 @@ class RuntimeContextManager:
             return False
         with self.lock:
             self.messages = self.compressor.compact(self.messages)
-            self.mark_context_changed(ContextEventType.CONTEXT_COMPRESSED, copy.deepcopy(self.messages))
+            self.mark_context_changed(
+                ContextEventType.CONTEXT_COMPRESSED,
+                copy.deepcopy(self.messages),
+            )
         return True
 
     def _build_system_message(self) -> RuntimeMessage:
@@ -368,13 +408,13 @@ class RuntimeContextManager:
             persist: bool = True,
             write_memory: bool = True,
     ) -> None:
-        """线程安全地向上下文追加一条消息（唯一写入入口），按 ``persist`` / ``write_memory`` 落库与写内存。
+        """线程安全地向上下文追加消息，按 ``persist`` / ``write_memory`` 落库与写内存。
 
         两种输入形态统一收口：``BaseMessage``（模型节点产出）落库前经
         :meth:`_langraph_message_to_runtime_message` 转换（assistant 消息先经
         :meth:`_sanitize_assistant_messages` 清洗，再 tool_calls→JSON）；``RuntimeMessage``
         （工具观察等已序列化消息）直接使用。``persist`` 与 ``write_memory`` 独立正交：
-        ``persist=True, write_memory=False`` 承载 turn 启动基线「只落库不写内存」，
+        ``persist=True, write_memory=False`` 仅适用于明确不进入当前模型上下文的轨迹，
         ``persist=False, write_memory=True`` 仅写内存（无需重放的运行时提示）。
 
         ``persist=True`` 采用「先落库、成功后写内存」防撕裂：落库失败抛
@@ -409,7 +449,10 @@ class RuntimeContextManager:
         if write_memory and runtime_message is not None:
             with self.lock:
                 self.messages.append(runtime_message)
-                self.mark_context_changed(ContextEventType.ADD_MESSAGE, [copy.deepcopy(runtime_message)])
+                self.mark_context_changed(
+                    ContextEventType.ADD_MESSAGE,
+                    [copy.deepcopy(runtime_message)],
+                )
 
     def _reset_message_sequence(self) -> None:
         """清空当前 turn 在 ``turn_messages`` 表的残留并归零序号。
@@ -491,6 +534,13 @@ class RuntimeContextManager:
         """
         content_text = message.content_text if message.content_text is not None else ""
         if message.role == "user":
+            # 多模态：运行期内存态 content_blocks（image_url 等）优先透传为 HumanMessage
+            # 的 list[dict] content；无 block 时退回纯文本。content_blocks 不落库，仅当前轮由
+            # workflow 经 vision_content_blocks 注入，历史轮回放保持纯文本。
+            if message.content_blocks:
+                # content_blocks 运行期由 vision_content_blocks 构造（list[dict]），HumanMessage
+                # 的 content 类型签名为 list[str | dict]，list 不变性导致 mypy 误报，cast 收口。
+                return HumanMessage(content=cast(list, message.content_blocks))
             return HumanMessage(content=content_text)
         if message.role == "assistant":
             tool_calls_meta = _tool_calls_from_metadata(message.metadata.get("tool_calls"))
@@ -502,14 +552,20 @@ class RuntimeContextManager:
                 }
                 for call in tool_calls_meta
             ]
-            return AIMessage(content=content_text, tool_calls=langchain_tool_calls,
-                             additional_kwargs={
-                                 self._thinking_channel: message.metadata.get("reasoning_content", None)})
+            return AIMessage(
+                content=content_text,
+                tool_calls=langchain_tool_calls,
+                additional_kwargs={
+                    self._thinking_channel: message.metadata.get("reasoning_content", None)
+                },
+            )
         if message.role == "tool":
             return ToolMessage(
                 content=content_text,
                 tool_call_id=message.metadata.get("tool_call_id", ""),
-                additional_kwargs={self._thinking_channel: message.metadata.get("reasoning_content", None)}
+                additional_kwargs={
+                    self._thinking_channel: message.metadata.get("reasoning_content", None)
+                },
             )
         if message.role == "system":
             return SystemMessage(content=content_text)

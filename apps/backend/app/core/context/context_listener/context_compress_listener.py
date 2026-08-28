@@ -5,7 +5,7 @@ from app.core.context.context_listener.listener_result import ListenerResult
 
 class ContextCompressListener(ContextListener):
 
-    subAgent_need = True
+    main_agent_only = False
     order = 0
 
     def __init__(self) -> None:

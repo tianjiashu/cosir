@@ -19,8 +19,8 @@ class ContextListener(Protocol):
     仅在 ``mark_context_changed`` 时按 ``order`` 依次通知所有已订阅 listener。
     """
 
-    # 子 Agent 是否需要订阅
-    subAgent_need: bool
+    # 是否只允许主 Agent 订阅
+    main_agent_only: bool
     # 订阅顺序
     order: int
 

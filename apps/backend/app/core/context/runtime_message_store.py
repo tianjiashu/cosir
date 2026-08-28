@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Protocol
 
 from app.models import RuntimeMessage
@@ -57,12 +58,13 @@ class RuntimeMessageStore(Protocol):
     def build_for_task(
         self,
         task_id: int,
+        excluded_turn_ids: Collection[int] | None = None,
     ) -> list[RuntimeMessage]:
-        """按 task 维度读回有序历史（含跨轮），供 build_for_task 重建内存上下文。
+        """按 task 维度读回有序历史，支持排除当前执行 turn。
 
         参数:
             task_id: 目标 task 标识。
-            excluded_turn_ids: 需要排除的 turn 标识元组（如 child 排除父 turn）。
+            excluded_turn_ids: 需要排除的 turn 标识集合，通常用于排除当前执行 turn。
 
         返回:
             按 turn 顺序排列的 ``RuntimeMessage`` 列表；无历史时为空列表。
