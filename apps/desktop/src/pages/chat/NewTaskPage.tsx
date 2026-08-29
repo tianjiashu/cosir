@@ -1,24 +1,25 @@
 /**
  * 新建任务页面。
  *
- * 负责选择 workspace、显示 task 维度元数据选择（Agent / Model，由 TaskHeaderBar 提供）、
- * 输入首条消息并触发 task + first turn 创建。Agent / Model 选择与 Chat 视图共享同一
- * 事实源（useTaskStore.selectedAgentId / selectedModelName），保证「将要创建的任务」
- * 与「已在聊的任务」配置一致时无感知差异。
+ * 负责选择 workspace、显示 task 维度元数据选择（模型选择由 TaskHeaderBar 顶部 +
+ * 底部输入区 ModelSelector 提供）、输入首条消息并触发 task + first turn 创建。
+ * 模型选择与 Chat 视图共享同一事实源（useTaskStore.selectedModel），
+ * 保证「将要创建的任务」与「已在聊的任务」配置一致时无感知差异。前端已无 Agent 选择
+ * UI：useTaskStore 不再持有 selectedAgentId，Agent 标识由后端固定（turns_api 硬编码
+ * main_agent，前端 task 创建不传 agent_id；AgentSelector 已在重构中删除）。
  *
  * 模型必须显式选择（无 Auto 语义）：发送前经 `useModelSendGuard.guardSend()` 拦截，
  * 未配置模型 / 未选择模型时阻止创建任务，并引导打开厂商配置中心或提示选择模型。
  *
- * 布局参考 Codex 风格：顶部 TaskHeaderBar + 居中标题 + 四象限快捷入口卡片
- * （卡片右下角展示当前 agent·model 概要，让用户看到「卡片会用此配置创建」） +
- * 底部输入区 + 工作区选择器。
+ * 布局参考 Codex 风格：顶部 TaskHeaderBar + 居中标题 + 四象限快捷入口卡片 +
+ * 底部输入区 + 工作区选择器。Agent 选择已从 UI 收口移除，卡片不再展示 agent·model 概要。
  *
  * 工作区选择直接调用系统目录选择器，不再要求手动输入路径。
  *
  * @module pages/chat/NewTaskPage
  */
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Send,
   Search,
@@ -36,13 +37,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTask } from "@/hooks/useTask";
 import { useWorkspaceStore } from "@/stores/workspaceStore";
-import { useTaskStore } from "@/stores/taskStore";
 import { logError, logWarn } from "@/lib/logger";
 import { cn } from "@/lib/utils";
 import { pickAndCreateWorkspace } from "@/services/workspace";
 import { TaskHeaderBar } from "@/components/chat/TaskHeaderBar";
+import { ModelSelector } from "@/components/chat/ModelSelector";
 import { useModelSendGuard } from "@/hooks/useModelSendGuard";
-import type { ModelEntryRecord } from "@shared/model";
 
 /** NewTaskPage 组件属性。 */
 interface NewTaskPageProps {
@@ -59,41 +59,10 @@ const SUGGESTIONS = [
 ] as const;
 
 /**
- * 组装 agent·model 概要文本（如 `Developer · 选择模型`），用于 4 象限卡片右下角。
- *
- * 纯函数：不订阅 store、不调用 React hooks；订阅发生在 NewTaskPage 顶层。
- * 该命名刻意去掉 `use` 前缀，避免被识别为 React Hook 触发 lint 误报与规则误用。
- *
- * Agent 折叠标签与 AgentSelector 同源（developer → Developer；其他 agent 默认回显 agent_id）；
- * Model 折叠标签与 ModelSelector 同源（null 固定「选择模型」，否则取 display_name）。
- *
- * @param params - 输入参数集合。
- * @param params.agentId - 当前选中的 agent_id（可能为 null/falsy）。
- * @param params.modelName - 当前选中的模型名（null = 未选择，需显式选择）。
- * @param params.availableModels - 后端可用的模型列表，用于查 display_name。
- * @returns 形如 `Developer · 选择模型` 的概要文本。
- */
-function summarizeAgentModel(params: {
-  agentId: string | null;
-  modelName: string | null;
-  availableModels: ModelEntryRecord[];
-}): string {
-  const { agentId, modelName, availableModels } = params;
-  // Agent 折叠标签与 AgentSelector 同源（developer → Developer；其他 agent 默认回显 agent_id）
-  const agentLabel = agentId === "developer" ? "Developer" : agentId;
-  // Model 显示：null 时固定「选择模型」，否则用 display_name（与 ModelSelector currentLabel 同源）
-  const modelLabel =
-    modelName === null
-      ? "选择模型"
-      : availableModels.find((m) => m.model_name === modelName)?.display_name ?? modelName;
-  return `${agentLabel} · ${modelLabel}`;
-}
-
-/**
  * 新建任务页面组件。
  *
- * 展示 TaskHeaderBar（顶部）+ 居中大标题 + 四象限快捷入口（右下角含 agent·model 概要）
- * + 底部输入区与工作区选择器。
+ * 展示 TaskHeaderBar（顶部）+ 居中大标题 + 四象限快捷入口
+ * + 底部输入区与工作区选择器。Agent 选择已从 UI 收口移除，卡片不再展示 agent·model 概要。
  * 工作区选择器支持在已有工作区继续，或通过系统目录选择器新建/接入工作区。
  *
  * @param props - 组件属性。
@@ -113,20 +82,6 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
 
   const [inputValue, setInputValue] = useState("");
   const { createTask, operation } = useTask();
-  // 在组件顶层完成 store 订阅，参数化传给纯函数 summarizeAgentModel；
-  // 这样 helper 不会触发 React Hooks 规则误判（命名也不再以 use 开头）。
-  const selectedAgentId = useTaskStore((s) => s.selectedAgentId);
-  const selectedModelName = useTaskStore((s) => s.selectedModelName);
-  const availableModels = useTaskStore((s) => s.availableModels);
-  const agentModelSummary = useMemo(
-    () =>
-      summarizeAgentModel({
-        agentId: selectedAgentId,
-        modelName: selectedModelName,
-        availableModels,
-      }),
-    [selectedAgentId, selectedModelName, availableModels],
-  );
 
   // 工作区菜单状态
   const [menuOpen, setMenuOpen] = useState(false);
@@ -233,12 +188,6 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
     }
   };
 
-  // 用户切换模型（顶部选择器变更 selectedModelName）后清除拦截提示：
-  // 提示「请先选择模型」等已失去意义，避免误导（2026-08-18 无 Auto 语义）。
-  useEffect(() => {
-    setGuardMessage(null);
-  }, [selectedModelName]);
-
   // 点击外部关闭工作区菜单。
   useEffect(() => {
     const handler = (event: MouseEvent) => {
@@ -264,7 +213,7 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
           我们应该在 {activeWorkspace ? `「${activeWorkspace.name}」` : "当前工作区"} 中构建什么？
         </h1>
 
-        {/* 四象限快捷入口卡片：右下角显示当前 agent·model 概要 */}
+        {/* 四象限快捷入口卡片：点击填充输入并直接创建任务（先过模型校验拦截） */}
         <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
           {SUGGESTIONS.map(({ icon: Icon, label }) => (
             <button
@@ -288,6 +237,11 @@ export function NewTaskPage({ onCreated }: NewTaskPageProps) {
 
         {/* 底部输入区 + 工作区选择器 */}
         <div className="w-full space-y-3">
+          {/* 模型选择入口（下沉自顶部 TaskHeaderBar）：复用 useTaskStore 单一事实源；
+           * onOpenSettings 经本页已有的受控 settingsOpen/setSettingsOpen 注入，
+           * 与 guardSend 拦截（openSettings=true）联动打开同一配置中心。 */}
+          <ModelSelector onOpenSettings={() => setSettingsOpen(true)} className="h-7" />
+
           <div className="flex gap-2">
             <Input
               value={inputValue}

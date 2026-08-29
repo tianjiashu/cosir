@@ -14,7 +14,6 @@ class TaskModel(StorageBase):
     workspace_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("workspaces.id"), nullable=False
     )
-    agent_id: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'developer'"))
     title: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
 

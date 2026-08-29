@@ -31,10 +31,16 @@ export const EMPTY_EVENTS: RuntimeEvent[] = [];
 interface EventState {
   /** 当前正在查看的任务事件流（按时间排序）。 */
   events: RuntimeEvent[];
-  /** 按 task_id 聚合的客户端内存事件。 */
-  eventsByTaskId: Record<string, RuntimeEvent[]>;
-  /** 按 turn_id 聚合的客户端内存事件。 */
-  eventsByTurnId: Record<string, RuntimeEvent[]>;
+  /**
+   * 按 task_id（后端 int 主键）聚合的客户端内存事件。
+   * 键类型为 number，与 RuntimeEvent.task_id 一致，不再经由 Object.entries 的 string 中间态。
+   */
+  eventsByTaskId: Record<number, RuntimeEvent[]>;
+  /**
+   * 按 turn_id（后端 int 主键）聚合的客户端内存事件。
+   * 键类型为 number，与 RuntimeEvent.turn_id 一致。
+   */
+  eventsByTurnId: Record<number, RuntimeEvent[]>;
   /** SSE 连接的当前状态。 */
   connectionState: SSEConnectionState;
   /** 已处理的 event_id 集合（用于重复事件去重）。 */
@@ -68,8 +74,14 @@ interface EventActions {
    */
   appendEvents: (incoming: RuntimeEvent[]) => void;
 
-  /** 批量设置事件列表（用于切换任务或重置当前客户端事件缓存）。 */
-  setEvents: (events: RuntimeEvent[], taskId?: string) => void;
+  /**
+   * 批量设置事件列表（用于切换任务或重置当前客户端事件缓存）。
+   *
+   * @param events - 待设置（合并）的事件列表。
+   * @param taskId - 可选的目标任务 ID（number，后端 int 主键）；传入时按 task 维度合并缓存，
+   *   保留其它任务历史；缺省时按事件自身 task_id 全量分片。
+   */
+  setEvents: (events: RuntimeEvent[], taskId?: number) => void;
 
 
   /** 更新 SSE 连接状态。 */
@@ -78,8 +90,12 @@ interface EventActions {
   /** 清空当前事件流和去重集合（切换任务时调用）。 */
   clearEvents: () => void;
 
-  /** 使指定任务的历史事件缓存失效（删除任务 / 工作区时调用）。 */
-  invalidateTask: (taskId: string) => void;
+  /**
+   * 使指定任务的历史事件缓存失效（删除任务 / 工作区时调用）。
+   *
+   * @param taskId - 待失效的任务 ID（number，后端 int 主键）。
+   */
+  invalidateTask: (taskId: number) => void;
 }
 
 /**
@@ -203,7 +219,7 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
     });
   },
 
-  setEvents: (events: RuntimeEvent[], taskId?: string) => {
+  setEvents: (events: RuntimeEvent[], taskId?: number) => {
     if (events.length === 0 && taskId == null) {
       // 空输入且无任务维度时无需任何合并：短路返回，避免无意义的全量重排与引用失效
       // （与 appendEvents 空输入短路一致，保护下游 memo 跳过重渲染）。
@@ -268,14 +284,14 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
     });
   },
 
-  invalidateTask: (taskId: string) => {
+  invalidateTask: (taskId: number) => {
     set((state) => {
       const removedEvents = state.eventsByTaskId[taskId] ?? [];
       if (removedEvents.length === 0) {
         return state;
       }
       const removedTurnIds = new Set(
-        removedEvents.map((e) => e.turn_id).filter((id): id is string => Boolean(id)),
+        removedEvents.map((e) => e.turn_id).filter((id): id is number => Boolean(id)),
       );
       const removedIds = new Set(removedEvents.map((e) => e.event_id));
       const eventsByTaskId = { ...state.eventsByTaskId };
@@ -304,11 +320,11 @@ export const useEventStore = create<EventState & EventActions>((set) => ({
  * 严格按 taskId 隔离，避免后台其它任务的 SSE 事件污染当前视图的滚动与派生状态。
  *
  * @param state - 事件 store 状态。
- * @param taskId - 任务标识；为空或非字符串时返回 undefined。
+ * @param taskId - 任务标识（number，后端 int 主键）；为空时返回 undefined。
  * @returns 该任务下最新事件，或 undefined。
  */
-export const selectLatestEvent = (state: EventState, taskId: string | null): RuntimeEvent | undefined => {
-  if (!taskId || typeof taskId !== "string") return undefined;
+export const selectLatestEvent = (state: EventState, taskId: number | null): RuntimeEvent | undefined => {
+  if (taskId === null) return undefined;
   const taskEvents = state.eventsByTaskId[taskId];
   if (!taskEvents || taskEvents.length === 0) return undefined;
   return taskEvents[taskEvents.length - 1];
@@ -326,11 +342,11 @@ export const selectEventCount = (state: EventState): number => {
  * 读取指定任务的事件。
  *
  * @param state - 事件 store 状态。
- * @param taskId - 任务标识。
+ * @param taskId - 任务标识（number，后端 int 主键）。
  * @returns 指定任务下按客户端缓存顺序排序的事件列表。
  */
-export function selectEventsForTask(state: EventState, taskId: string | null): RuntimeEvent[] {
-  if (!taskId) return EMPTY_EVENTS;
+export function selectEventsForTask(state: EventState, taskId: number | null): RuntimeEvent[] {
+  if (taskId === null) return EMPTY_EVENTS;
   return state.eventsByTaskId[taskId] ?? EMPTY_EVENTS;
 }
 

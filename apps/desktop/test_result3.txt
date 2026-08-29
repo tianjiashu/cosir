@@ -1,0 +1,32 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.8 [39m[90mh:/coding-agent/apps/desktop[39m
+
+
+[31m⎯⎯⎯⎯⎯⎯[1m[7m Unhandled Errors [27m[22m⎯⎯⎯⎯⎯⎯[39m
+[31m[1m
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[1m[7m Unhandled Error [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+[31m[1mError[22m: Cannot find package 'jsdom' imported from h:\coding-agent\apps\desktop\node_modules\vitest\dist\chunks\index.K90BXFOx.js[39m
+[90m [2m❯[22m Object.getPackageJSONURL node:internal/modules/package_json_reader:[2m301:9[22m[39m
+[90m [2m❯[22m packageResolve node:internal/modules/esm/resolve:[2m768:81[22m[39m
+[90m [2m❯[22m moduleResolve node:internal/modules/esm/resolve:[2m859:18[22m[39m
+[90m [2m❯[22m defaultResolve node:internal/modules/esm/resolve:[2m991:11[22m[39m
+[90m [2m❯[22m ModuleLoader.#cachedDefaultResolve node:internal/modules/esm/loader:[2m719:20[22m[39m
+[90m [2m❯[22m ModuleLoader.#resolveAndMaybeBlockOnLoaderThread node:internal/modules/esm/loader:[2m736:38[22m[39m
+[90m [2m❯[22m ModuleLoader.resolveSync node:internal/modules/esm/loader:[2m765:52[22m[39m
+[90m [2m❯[22m ModuleLoader.#resolve node:internal/modules/esm/loader:[2m701:17[22m[39m
+[90m [2m❯[22m ModuleLoader.getOrCreateModuleJob node:internal/modules/esm/loader:[2m621:35[22m[39m
+[90m [2m❯[22m onImport.tracePromise.__proto__ node:internal/modules/esm/loader:[2m650:32[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22m[39m
+[31m[1mSerialized Error:[22m[39m [90m{ code: 'ERR_MODULE_NOT_FOUND' }[39m
+[31m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[39m
+
+[2m Test Files [22m [2mno tests[22m
+[2m      Tests [22m [2mno tests[22m
+[2m     Errors [22m [1m[31m1 error[39m[22m
+[2m   Start at [22m 16:28:53
+[2m   Duration [22m 961ms[2m (transform 14ms, setup 0ms, collect 0ms, tests 0ms, environment 0ms, prepare 0ms)[22m
+

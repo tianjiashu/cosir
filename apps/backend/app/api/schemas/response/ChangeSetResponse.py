@@ -20,7 +20,7 @@ class ChangeFileResponse(BaseModel):
     action: str
     status: str
     last_tool_call_id: str
-    last_turn_id: str
+    last_turn_id: int
     additions: int
     deletions: int
 
@@ -28,7 +28,7 @@ class ChangeFileResponse(BaseModel):
 class ChangeSetResponse(BaseModel):
     """某 task 的累积变更集响应。"""
 
-    task_id: str
+    task_id: int
     checkpoints: list[ChangeCheckpointResponse]
     files: list[ChangeFileResponse]
 

@@ -38,7 +38,7 @@ class WorkspaceRecord:
         """
 
         return {
-            "id": self.id,
+            "workspace_id": self.id,
             "name": self.name,
             "root_path": self.root_path,
             "created_at": to_text(self.created_at),

@@ -27,8 +27,8 @@ interface DelegationTimelineEntryProps {
   childAgentId: string;
   /** Current delegation lifecycle status. */
   status: TimelineDelegationStatus;
-  /** Child turn id once the backend has created the child run. */
-  childTurnId?: string;
+  /** Child turn id once the backend has created the child run (number 维度). */
+  childTurnId?: number;
   /** Display-only delegation category. */
   delegationType: string;
   /** Successful terminal summary. */

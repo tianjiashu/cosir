@@ -22,18 +22,16 @@ def _make_executor() -> DelegationExecutor:
     """
 
     parent_turn = TurnRecord(
-        turn_id="parent-turn-1",
+        id=1,
         task_id="task-1",
         input_text="parent",
         status="running",
         created_at=datetime.now(),
         updated_at=datetime.now(),
-        agent_id="developer",
     )
     parent_task = TaskRecord(
-        task_id="task-1",
+        id=1,
         workspace_id="ws-1",
-        agent_id="developer",
         title="parent task",
         status="running",
         created_at=datetime.now(),

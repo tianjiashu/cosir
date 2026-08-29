@@ -23,7 +23,7 @@ const BADGE_CONFIG: Record<
   preparing: { label: "准备中", className: "text-amber-500", icon: "loading" },
   ready: { label: "已就绪", className: "text-emerald-500", icon: "check" },
   degraded: { label: "已降级", className: "text-muted-foreground", icon: "warn" },
-  error: { label: "失败", className: "text-destructive", icon: "error" },
+  failed: { label: "失败", className: "text-destructive", icon: "error" },
 };
 
 /** WorkspaceEventBadge 组件属性。 */
@@ -76,7 +76,7 @@ function statusLabel(status: WorkspaceStatus): string {
       }`;
     case "degraded":
       return `CodeGraph 已降级：${status.degradedReason ?? "未知原因"}`;
-    case "error":
+    case "failed":
       return "workspace 状态事件流连接失败，可尝试重建";
     default:
       return "";

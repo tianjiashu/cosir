@@ -78,15 +78,15 @@
 
 ```python
 runtime_context_manager = RuntimeContextManager(
-   agent_profile=agent_profile, workspace_root=..., task_id=...,
-   store=operations.message_store, current_turn_id=turn_id,
+    agent_profile=agent_profile, workspace_root=..., task_id=...,
+    store=operations.message_store, current_turn_id=turn_id,
 )
 runtime_context_manager._reset_message_sequence()
 runtime_context_manager.add_message(RuntimeMessage(role="user", ...), write_memory=False)
 runtime_context_manager.load_history()
 runtime_context_manager.attach_usage_meter(ContextUsageMeter(
-   message_provider=runtime_context_manager.load_message,
-   model_name_provider=lambda: turn.model_id or agent_profile.model_id or "",
+    message_provider=runtime_context_manager.load_message,
+    model_name_provider=lambda: turn.model_name or agent_profile.model_name or "",
 ))
 ```
 

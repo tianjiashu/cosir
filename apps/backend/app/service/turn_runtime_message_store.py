@@ -1,3 +1,6 @@
+from collections.abc import Collection
+
+from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_store import RuntimeMessageStore
 from app.models import RuntimeMessage
 from app.service.task.turn_service import TurnService
@@ -33,13 +36,20 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
         """
         self._turn_service = turn_service
 
-    def append(self, turn_id: int, message: RuntimeMessage, sequence: int) -> None:
+    def append(
+        self,
+        turn_id: int,
+        message: RuntimeMessage,
+        sequence: int,
+        include_in_context: bool = True,
+    ) -> None:
         """落库一条消息（转发到 ``TurnService.append_turn_message``）。
 
         参数:
             turn_id: 目标 turn 标识。
             message: 单条模型无关的运行时消息。
             sequence: 轮内自增序号（由 manager 维护）。
+            include_in_context: 是否纳入后续模型上下文。
 
         返回:
             无。
@@ -47,7 +57,12 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
         异常:
             sqlalchemy.exc.SQLAlchemyError: 写入失败（透传）。
         """
-        self._turn_service.append_turn_message(turn_id, message, sequence)
+        self._turn_service.append_turn_message(
+            turn_id,
+            message,
+            sequence,
+            in_context=include_in_context,
+        )
 
     def clear(self, turn_id: int) -> None:
         """清空某 turn 的全部消息（转发到 ``TurnService.clear_turn_messages``）。
@@ -66,22 +81,51 @@ class TurnRuntimeMessageStore(RuntimeMessageStore):
     def build_for_task(
         self,
         task_id: int,
-    ) -> list[RuntimeMessage]:
-        """按 task 维度读回有序历史（含跨轮、排除指定 turn）。
+        excluded_turn_ids: Collection[int] | None = None,
+    ) -> list[ContextEntry]:
+        """按 task 维度读回有序历史，并排除指定 turn。
 
         组合 ``TurnService.list_turns_for_task`` 与 ``load_turn_messages``，跳过
         ``excluded_turn_ids`` 中的 turn，按任务内 turn 顺序返回消息列表。
 
         参数:
             task_id: 目标 task 标识。
+            excluded_turn_ids: 需要排除的 turn 标识集合。
 
         返回:
-            按 turn 顺序排列的 ``RuntimeMessage`` 列表；无历史时为空列表。
+            按 turn 顺序排列的 ``ContextEntry`` 列表；无历史时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 数据库读取失败（透传）。
         """
-        messages: list[RuntimeMessage] = []
+        messages: list[ContextEntry] = []
+        excluded = set(excluded_turn_ids or ())
         for turn in self._turn_service.list_turns_for_task(task_id):
-            messages.extend(self._turn_service.load_turn_messages(turn.id))
+            if turn.id in excluded:
+                continue
+            messages.extend(
+                ContextEntry(message=message, turn_id=turn.id)
+                for message in self._turn_service.load_turn_messages(turn.id)
+            )
         return messages
+
+    def build_for_turn(self, turn_id: int) -> list[ContextEntry]:
+        """按 turn 读取有效上下文轨迹并附加 turn 归属。
+
+        参数:
+            turn_id: 目标 turn 标识。
+
+        返回:
+            按 sequence 排序的上下文条目列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 数据库读取失败（透传）。
+        """
+        return [
+            ContextEntry(message=message, turn_id=turn_id)
+            for message in self._turn_service.load_turn_messages(turn_id)
+        ]
+
+    def next_sequence(self, turn_id: int) -> int:
+        """返回指定 turn 下一条消息的持久化序号。"""
+        return self._turn_service.next_turn_message_sequence(turn_id)

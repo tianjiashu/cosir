@@ -42,7 +42,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
        多做一次推理；
     2. **延后 REPAIR 修复提示注入**：读取 ``state.deferred_repair_message``（``model`` 节点
        REPAIR 情形 a 写入的独立 state 字段），若非空则经 ``_runtime_context().add_message``
-       写回模型上下文（``persist=False``，运行时话术只写内存）并清空 state 字段防止残留；
+       写回模型上下文（经 ``add_message`` 落库并进入内存）并清空 state 字段防止残留；
     3. **错误计数与上限判定**：从 ``state.last_tool_results``（``tools`` 节点产出的可序列化
        摘要）重算 ``tool_error_count``：任意一次 ``status == "success"`` 即清零（连续失败才
        累计）；仅 ``status == "error"`` 累加计数。``status == "cancelled"`` 属主动中断
@@ -65,8 +65,8 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     副作用:
         - 执行后取消分支经 ``write_event`` 发 ``RUN_CANCELLED``；
-        - deferred 非空时经 ``_runtime_context().add_message(SystemMessage(...), persist=False)``
-          注入模型上下文（只写内存不落库）；
+        - deferred 非空时经 ``_runtime_context().add_message(SystemMessage(...))``
+          注入模型上下文（落库并进入内存，补全审计轨迹）；
         - 错误上限分支经 ``write_event`` 发 ``RUN_FAILED``，并经 ``operations.fail_turn_if_running``
           标记 turn 失败终态（``get_current_turn`` 仅在该分支内调用，避免无谓的 DB 读）；
         - 阶段二将在此接入 LLM 观察推理并产 ``OBSERVATION_ADDED`` 类事件，不在此写消息通道。
@@ -95,12 +95,13 @@ async def _observe_node(state: ReactGraphState) -> dict:
         return {"terminal": True, "deferred_repair_message": ""}
 
     # 2. 延后 REPAIR 修复提示注入：model 节点 REPAIR 情形 a 经独立 state 字段下传的
-    # 本轮修复提示，在「工具结果后、回 model 前」注入。只写内存不落库（persist=False），
-    # 注入后置空 state 字段防止残留（错误上限分支也需先清空）。
+    # 本轮修复提示，在「工具结果后、回 model 前」注入。经 add_message 落库（补全审计
+    # 轨迹），同时进入内存上下文供模型可见；注入后置空 state 字段防止残留（错误上限
+    # 分支也需先清空）。
     deferred_repair_message = state.deferred_repair_message
     if deferred_repair_message:
         _runtime_context().add_message(
-            SystemMessage(content=deferred_repair_message), persist=False
+            SystemMessage(content=deferred_repair_message)
         )
         log.warning(
             "observe_node_deferred_repair_message_appended",

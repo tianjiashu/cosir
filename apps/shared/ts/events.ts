@@ -174,15 +174,15 @@ export interface FinalResponsePayload extends RuntimeEventPayloadObject {
 }
 
 export interface FileChangeStablePayload extends RuntimeEventPayloadObject {
-  task_id: string;
-  turn_id: string;
+  task_id: number;
+  turn_id: number;
   path: string;
   action: string;
 }
 
 export interface FileChangeUpdatedPayload extends RuntimeEventPayloadObject {
-  task_id: string;
-  turn_id: string;
+  task_id: number;
+  turn_id: number;
   path: string;
   action: string;
   additions?: number;
@@ -192,48 +192,44 @@ export interface FileChangeUpdatedPayload extends RuntimeEventPayloadObject {
 }
 
 export interface DelegationStartedPayload extends RuntimeEventPayloadObject {
-  delegation_id: string;
-  parent_turn_id: string;
-  child_turn_id: string;
+  delegation_id: number;
+  parent_turn_id: number;
+  child_turn_id?: number | null;
   child_agent_id: string;
   status: "pending";
 }
 
 export interface DelegationChildStartedPayload extends RuntimeEventPayloadObject {
-  delegation_id: string;
-  parent_turn_id: string;
-  child_turn_id: string;
+  delegation_id: number;
+  parent_turn_id: number;
+  child_turn_id: number;
   child_agent_id: string;
-  delegation_type: string;
   status: "running";
 }
 
 export interface DelegationFinishedPayload extends RuntimeEventPayloadObject {
-  delegation_id: string;
-  parent_turn_id: string;
-  child_turn_id: string;
+  delegation_id: number;
+  parent_turn_id: number;
+  child_turn_id: number;
   child_agent_id: string;
-  delegation_type: string;
   status: "completed";
   summary?: string | null;
 }
 
 export interface DelegationFailedPayload extends RuntimeEventPayloadObject {
-  delegation_id: string;
-  parent_turn_id: string;
-  child_turn_id: string;
+  delegation_id: number;
+  parent_turn_id: number;
+  child_turn_id: number;
   child_agent_id: string;
-  delegation_type: string;
   status: "failed";
   error?: string | null;
 }
 
 export interface DelegationCancelledPayload extends RuntimeEventPayloadObject {
-  delegation_id: string;
-  parent_turn_id: string;
-  child_turn_id: string;
+  delegation_id: number;
+  parent_turn_id: number;
+  child_turn_id: number;
   child_agent_id: string;
-  delegation_type: string;
   status: "cancelled";
   error?: string | null;
 }
@@ -311,9 +307,9 @@ export interface RuntimeEventEnvelope<T extends RuntimeEventType = RuntimeEventT
   /** 稳定的、机器可读的事件类型。 */
   event_type: T;
   /** 关联的任务标识符。 */
-  task_id: string;
+  task_id: number;
   /** 关联的轮次标识符。 */
-  turn_id?: string | null;
+  turn_id?: number | null;
   /** 当前单次运行流内的排序号；不是 task 级持久序号。 */
   sequence?: number;
   /** 可选的用户可读消息标识符。 */

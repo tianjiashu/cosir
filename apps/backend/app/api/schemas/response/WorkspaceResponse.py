@@ -21,7 +21,7 @@ class WorkspaceResponse(BaseModel):
         无。
     """
 
-    workspace_id: str
+    workspace_id: int
     name: str
     root_path: str
     created_at: str

@@ -13,6 +13,7 @@ export * from "./turn";
 export * from "./workspace";
 export * from "./workspaceEvent";
 export * from "./agents";
+export { type AttachmentRef, type AttachmentKind } from "./attachment";
 export {
   API_BASE,
   API_PATHS,

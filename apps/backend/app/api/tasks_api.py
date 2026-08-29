@@ -24,7 +24,7 @@ from app.api.schemas import (
 )
 from app.app import app
 from app.config.logging.logger import log
-from app.llm_provider.context_window_resolver import resolve_context_window
+from app.llm_provider.provider.capability_service import CapabilityService
 from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
@@ -65,7 +65,7 @@ async def get_task(
     try:
         target_model = _latest_turn_model_name(task_id, turn_service)
         if target_model is not None:
-            context_window_total = resolve_context_window(target_model)
+            context_window_total = CapabilityService.get_model_context_window(target_model)
     except Exception as exc:
         log.warning(
             "task_context_window_resolve_failed",
@@ -204,7 +204,7 @@ async def list_child_tasks(
 @app.get("/tasks/{task_id}/turns/{turn_id}/events")
 async def replay_turn_events(
     task_id: str,
-    turn_id: str,
+    turn_id: int,
     event_service: RuntimeEventService = Depends(get_runtime_event_service),
 ) -> list[RuntimeEventResponse]:
     """回放某轮次下的运行时事件流（按 sequence 升序）。
@@ -231,7 +231,7 @@ async def replay_turn_events(
     return [RuntimeEventResponse.from_event_dict(e) for e in events]
 
 
-def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> int | None:
+def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> str | None:
     """取得某任务最近一次 turn 的 ``model_name``（设计 §6.4 任务级口径）。
 
     按创建时间升序取该 task 的全部 turn，返回最后一个非空 ``model_name``；无 turn

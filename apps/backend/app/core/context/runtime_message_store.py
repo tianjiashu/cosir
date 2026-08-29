@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Protocol
 
+from app.core.context.context_entry import ContextEntry
 from app.models import RuntimeMessage
 
 
@@ -25,13 +26,20 @@ class RuntimeMessageStore(Protocol):
     （含 excluded_turn_ids 排除项），供 ``RuntimeContextManager`` 重建内存上下文。
     """
 
-    def append(self, turn_id: int, message: RuntimeMessage, sequence: int) -> None:
+    def append(
+        self,
+        turn_id: int,
+        message: RuntimeMessage,
+        sequence: int,
+        include_in_context: bool = True,
+    ) -> None:
         """落库一条消息；失败抛 SQLAlchemyError（透传给 manager 决定防撕裂语义）。
 
         参数:
             turn_id: 目标 turn 标识。
             message: 单条模型无关的运行时消息。
             sequence: 轮内自增序号，由 manager 维护并传入。
+            include_in_context: 是否纳入后续模型上下文。
 
         返回:
             无。
@@ -59,7 +67,7 @@ class RuntimeMessageStore(Protocol):
         self,
         task_id: int,
         excluded_turn_ids: Collection[int] | None = None,
-    ) -> list[RuntimeMessage]:
+    ) -> list[ContextEntry]:
         """按 task 维度读回有序历史，支持排除当前执行 turn。
 
         参数:
@@ -67,9 +75,27 @@ class RuntimeMessageStore(Protocol):
             excluded_turn_ids: 需要排除的 turn 标识集合，通常用于排除当前执行 turn。
 
         返回:
-            按 turn 顺序排列的 ``RuntimeMessage`` 列表；无历史时为空列表。
+            按 turn 顺序排列的 ``ContextEntry`` 列表；无历史时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 数据库读取失败时抛出。
         """
+        ...
+
+    def build_for_turn(self, turn_id: int) -> list[ContextEntry]:
+        """按 turn 读取当前 turn 的有效上下文轨迹。
+
+        参数:
+            turn_id: 目标 turn 标识。
+
+        返回:
+            按 sequence 排序的上下文条目列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 数据库读取失败时抛出。
+        """
+        ...
+
+    def next_sequence(self, turn_id: int) -> int:
+        """返回指定 turn 下一条消息可用的 sequence。"""
         ...

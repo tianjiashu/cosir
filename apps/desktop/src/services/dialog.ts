@@ -23,3 +23,24 @@ export async function selectDirectory(): Promise<string | null> {
   });
   return typeof selected === "string" ? selected : null;
 }
+
+/**
+ * 弹出系统附件选择器。
+ *
+ * @returns 用户选中的本地绝对路径列表；用户取消选择时返回空数组。
+ *
+ * @throws 不主动捕获异常；选择器调用失败会向上抛出，由调用方决定如何回显。
+ */
+export async function selectAttachmentPaths(): Promise<string[]> {
+  const selected = await open({
+    directory: false,
+    multiple: true,
+  });
+  if (typeof selected === "string") {
+    return [selected];
+  }
+  if (Array.isArray(selected)) {
+    return selected.filter((item): item is string => typeof item === "string");
+  }
+  return [];
+}

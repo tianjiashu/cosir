@@ -1,7 +1,10 @@
 """任务持久化状态值对象。
 
-单一职责：承载一个 Agent 任务的不可变业务数据并提供序列化（to_dict）。
+单一职责：承载一个任务的不可变业务数据并提供序列化（to_dict）。
 不负责数据库操作（由 ``storage/crud/task_crud`` 负责）。
+
+任务不再绑定 agent：agent 维度由 turn（用户任务首 turn）与 delegation 记录（子任务）
+承载，``TaskRecord`` 仅描述 task 容器自身状态，不含 agent_id。
 """
 
 from dataclasses import dataclass
@@ -13,11 +16,10 @@ from app.utils.datetime_utils import from_text, to_text
 
 @dataclass
 class TaskRecord:
-    """表示一个 Agent 任务的持久化状态。"""
+    """表示一个任务的持久化状态（不含 agent 维度）。"""
 
     id: int
     workspace_id: int
-    agent_id: str
     title: str
     status: str
     created_at: datetime
@@ -26,7 +28,7 @@ class TaskRecord:
     task_type: str = "user"
     parent_task_id: int | None = None
     parent_turn_id: int | None = None
-    delegation_id: str | None = None
+    delegation_id: int | None = None
     context_usage_used: int | None = None
 
     @property
@@ -69,7 +71,6 @@ class TaskRecord:
         return {
             "id": self.id,
             "workspace_id": self.workspace_id,
-            "agent_id": self.agent_id,
             "title": self.title,
             "status": self.status,
             "execution_status": self.execution_status,
@@ -101,7 +102,6 @@ class TaskRecord:
         return cls(
             id=row.id,
             workspace_id=row.workspace_id,
-            agent_id=row.agent_id,
             title=row.title,
             status=row.status,
             created_at=from_text(row.created_at),

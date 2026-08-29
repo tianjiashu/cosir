@@ -50,7 +50,7 @@ ChatOpenAI.bind_tools(tools, tool_choice=..., strict=..., ...)
 ### 3.1 工具列表规范化（核心）
 
 ```python
-# langchain_openai/chat_models/base.py:2171-2173
+# langchain_openai/chat_models/capability.py:2171-2173
 formatted_tools = [
     convert_to_openai_tool(tool, strict=strict) for tool in tools
 ]
@@ -73,14 +73,14 @@ formatted_tools = [
 ### 3.3 `bind_kwargs` 组装
 
 ```python
-# langchain_openai/chat_models/base.py:2269-2295（节选）
+# langchain_openai/chat_models/capability.py:2269-2295（节选）
 bind_kwargs = self._filter_disabled_params(
     **{
         "tools": formatted_tools,
         "tool_choice": tool_choice,
         "parallel_tool_calls": parallel_tool_calls,
         "strict": strict,
-        "ls_model_name": self.model_id,
+        "ls_model_name": self.model_name,
         **kwargs,
     }
 )
@@ -93,7 +93,7 @@ bind_kwargs = self._filter_disabled_params(
 ### 3.4 委托给 `bind`
 
 ```python
-# langchain_openai/chat_models/base.py:2297-2299
+# langchain_openai/chat_models/capability.py:2297-2299
 return super().bind(**bind_kwargs)
 ```
 
@@ -153,7 +153,7 @@ elif isinstance(function, dict) and "name" in function:
 调用绑定后的 Runnable 时，`RunnableBinding.invoke` 的关键逻辑（:5996-6006）：
 
 ```python
-# langchain_core/runnables/base.py:5996-6006
+# langchain_core/runnables/capability.py:5996-6006
 def invoke(self, input, config=None, **kwargs):
     return self.bound.invoke(
         input,
@@ -171,7 +171,7 @@ def invoke(self, input, config=None, **kwargs):
 `ChatOpenAI.with_structured_output(schema, method="function_calling", ...)` 在内部直接复用 `bind_tools`（`langchain_openai/chat_models/base.py:2424`）：
 
 ```python
-# langchain_openai/chat_models/base.py:2410-2424
+# langchain_openai/chat_models/capability.py:2410-2424
 tool_name = convert_to_openai_tool(schema)["function"]["name"]
 bind_kwargs = self._filter_disabled_params(
     **{

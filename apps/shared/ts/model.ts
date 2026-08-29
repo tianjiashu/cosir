@@ -1,30 +1,31 @@
 /**
  * 模型厂商域共享契约（Provider / Model）。
  *
- * 本文件为手写共享类型（非 `scripts/generate_api_ts.py` 生成物）：
- * 后端 providers/models 相关 schema 暂未纳入该生成器，故在此与
- * `apps/backend/app/api/schemas/` 的 request/response 模型人工对齐。
- * 字段命名沿用后端 snake_case（与 task.ts / turn.ts 一致）。
- *
- * 同时承载该域的 API 路径常量（MODEL_PROVIDER_PATHS），避免向生成物
- * api.ts 的 API_PATHS 手工追加（生成器重跑时会丢失）。
+ * 本文件承载手写部分（前端聚合/语义类型与 API 路径常量）；
+ * 派生于后端 schema 的请求体类型（ProviderCreateRequest / ProviderUpdateRequest）
+ * 由 `scripts/generate_api_ts.py` 生成于 `modelRequests.ts`，
+ * 经下方 re-export 透出，避免手写漂移。字段命名沿用后端 snake_case。
  *
  * @module shared/model
  */
 
-/** 模型厂商域 API 路径常量（无 /api 前缀，与 API_PATHS 约定一致）。 */
+/**
+ * 模型厂商域 API 路径常量（无 /api 前缀，与 API_PATHS 约定一致）。
+ *
+ * 仅保留后端真实存在的端点，避免后续开发者误用不存在的路由：
+ * - 保留 PROVIDERS / PROVIDER_DETAIL / PROVIDER_TEST / MODELS（后端存在）；
+ * - 已删除 PROVIDER_DISCOVER / PROVIDER_MODELS / MODEL_DETAIL：后端无对应端点
+ *   （discover/import/PUT|DELETE /models/{id} 均不存在），保留会诱惑误用产生 404。
+ */
 export const MODEL_PROVIDER_PATHS = {
   PROVIDERS: "/providers",
-  PROVIDER_DETAIL: (providerId: string) => `/providers/${providerId}`,
-  PROVIDER_DISCOVER: (providerId: string) => `/providers/${providerId}/discover`,
-  PROVIDER_TEST: (providerId: string) => `/providers/${providerId}/test`,
-  PROVIDER_MODELS: (providerId: string) => `/providers/${providerId}/models`,
+  PROVIDER_DETAIL: (providerId: number | string) => `/providers/${providerId}`,
+  PROVIDER_TEST: (providerId: number | string) => `/providers/${providerId}/test`,
   MODELS: "/models",
-  MODEL_DETAIL: (modelId: string) => `/models/${modelId}`,
 } as const;
 
 /**
- * 允许的厂商类型枚举（决定 litellm 前缀与默认 base_url，与后端 PROVIDER_TYPES 对齐）。
+ * 允许的厂商类型枚举（决定默认 base_url，与后端 PROVIDER_TYPES 对齐）。
  *
  * 15 类与后端 ``app/models/provider_capability.py`` 的 ``PROVIDER_CAPABILITIES``
  * 注册表键一一对应；新增厂商 = 改后端注册表一行 + 这里加一个联合分支 +
@@ -47,61 +48,33 @@ export type ProviderType =
   | "xfyun"
   | "custom";
 
-/** 厂商配置记录（GET /providers 响应项，含聚合状态）。 */
-export interface ProviderRecord {
-  /** 厂商标识。 */
-  provider_id: string;
-  /** 厂商显示名（全局唯一）。 */
-  name: string;
-  /** 厂商类型。 */
+/**
+ * 厂商配置记录（POST /providers 回参与前端本地持久化参考）。
+ *
+ * 由后端 ``ProviderResponse``（``modelResponses.ts``）派生，仅保留前端语义特化：
+ * ``type`` 用字面量联合 ``ProviderType``（后端是宽松 ``string``）。其余字段（含
+ * ``provider_id`` 已对齐后端 int）与后端响应一致，不再手写死字段，避免漂移。
+ */
+export type ProviderRecord = Omit<ProviderResponse, "type"> & {
+  /** 厂商类型（前端字面量联合，后端为宽松 string）。 */
   type: ProviderType;
-  /** 自定义接入地址（可空，空时 litellm 内置解析）。 */
-  base_url: string | null;
-  /** Key 配置状态：不依赖 Key 的厂商类型恒为 true（如本地 Ollama）。 */
-  api_key_configured: boolean;
-  /** 启用开关（禁用厂商下的模型不进入下拉）。 */
-  enabled: boolean;
-  /** 该厂商下模型条目数（含禁用条目）。 */
-  model_count: number;
-  /** 排序权重。 */
-  sort_order: number;
-  /** 创建时间文本。 */
-  created_at: string;
-  /** 更新时间文本。 */
-  updated_at: string;
-}
+};
 
-/** 厂商创建请求体（POST /providers）。 */
-export interface ProviderCreateRequest {
-  name: string;
-  type: ProviderType;
-  base_url?: string | null;
-  /** API Key 明文（DB 唯一事实来源；响应与日志不回传明文）。 */
-  api_key?: string | null;
-  enabled?: boolean;
-  sort_order?: number;
-}
+/** 派生自后端 schema 的请求体类型，由 `modelRequests.ts` 生成（re-export 透出）。 */
+export type {
+  ProviderCreateRequest,
+  ProviderUpdateRequest,
+} from "./modelRequests";
+
+/** 派生自后端 schema 的响应类型，由 `modelResponses.ts` 生成（供前端消费类型派生）。 */
+import type { ModelEntryResponse, ProviderResponse } from "./modelResponses";
 
 /**
- * 厂商更新请求体（PUT /providers/{id}）。
- *
- * 仅覆盖显式传入的字段；置空 base_url 须显式传空字符串 ""；
- * api_key 传 null 表示不更新、传 "" 表示清除。
+ * 连通性测试结果（POST /providers/{id}/test 响应，设计文档 §三 用户视角三件套）。
  */
-export interface ProviderUpdateRequest {
-  name?: string;
-  type?: ProviderType;
-  base_url?: string | null;
-  /** API Key 明文；null 不更新，"" 清除。 */
-  api_key?: string | null;
-  enabled?: boolean;
-  sort_order?: number;
-}
-
-/** 连通性测试结果（POST /providers/{id}/test 响应，设计文档 §三 用户视角三件套）。 */
 export interface ProviderConnectionTestResult {
-  /** 被测试的厂商标识。 */
-  provider_id: string;
+  /** 被测试的厂商标识（后端 int 主键）。 */
+  provider_id: number;
   /** 测试是否成功（成功时 error_code / error_message 均为 null）。 */
   success: boolean;
   /** 测试耗时（毫秒），供 UI 展示「响应速度」。 */
@@ -112,90 +85,106 @@ export interface ProviderConnectionTestResult {
   error_message: string | null;
 }
 
-/** 模型条目记录（GET /models 响应项，仅启用模型 + 启用厂商）。 */
-export interface ModelEntryRecord {
-  /** 模型条目标识。 */
-  model_id: string;
-  /** 归属厂商标识。 */
-  provider_id: string;
-  /** 归属厂商显示名（下拉分组展示用）。 */
-  provider_name: string;
-  /** litellm 路由名（带 provider 前缀，如 `deepseek/deepseek-v4-flash`）。 */
-  model_name: string;
-  /** 下拉展示名（可省略前缀）。 */
-  display_name: string;
-  /** 上下文窗口（token）。 */
-  max_context_window: number;
-  /** 推理模型标识。 */
-  supports_thinking: boolean;
-  /** 默认采样温度（可空）。 */
-  temperature: number | null;
-  /** 默认核采样参数（可空）。 */
-  top_p: number | null;
-  /** 默认最大输出 token 数（可空）。 */
-  max_tokens: number | null;
-  /** 启用开关。 */
-  enabled: boolean;
-  /** 归属厂商的 Key 配置状态（发送前校验依据）。 */
-  api_key_configured: boolean;
-  /** 组内排序权重。 */
-  sort_order: number;
-  /** 创建时间文本。 */
-  created_at: string;
-  /** 更新时间文本。 */
-  updated_at: string;
+/**
+ * 模型推理强度能力（对齐后端 ``ModelCapability.reasoning_effort``）。
+ *
+ * 后端 ``/models`` 端点（``models_api.py``）通过 ``dataclasses.asdict(model_capability.reasoning_effort)``
+ * 填充该字段；``ReasoningEffortCapability`` 默认 ``supported=False``、``effort_map={}``，**永不返回 null**，
+ * 即当前线上 ``/models`` 实际始终返回含 ``supported``/``effort_map`` 的 dict（非 null）。
+ * 前端保留 ``ReasoningEffortInfo | null`` 的可空性仅为**防御性容错**：兼容「旧缓存或后端未返回该字段」
+ * 的历史数据，避免运行时判空崩溃；新契约下消费方仍应以 ``?.supported`` 判空读取
+ * （``supported=false`` 表示模型不支持推理强度档位选择，前端不渲染控件；
+ * ``supported=true`` 时 ``effort_map`` 给出前端可渲染的档位键集合，内部档位名 → 厂商原始档位映射）。
+ */
+export interface ReasoningEffortInfo {
+  /** 模型是否支持推理强度档位选择（后端实际恒非空，前端对旧缓存/缺字段以 null 容错）。 */
+  supported: boolean;
+  /** 内部档位名到厂商原始档位的映射（前端档位控件使用键，如低/高/最大）。 */
+  effort_map: Record<string, string>;
 }
 
-/** 单条模型条目的创建/导入请求体（手动添加与批量导入的条目单元）。 */
-export interface ModelCreateRequest {
-  model_name: string;
-  display_name: string;
-  max_context_window: number;
-  supports_thinking?: boolean;
-  temperature?: number | null;
-  top_p?: number | null;
-  max_tokens?: number | null;
-  enabled?: boolean;
-  sort_order?: number;
+/**
+ * 模型条目记录（由后端 ``ModelEntryResponse`` 派生，``modelResponses.ts`` 为唯一事实来源）。
+ *
+ * 契约收敛说明（重要，避免维护者误引不存在的字段）：
+ * ``GET /models`` 是前端模型数据**唯一且充分的真实数据源**，其实际投影字段见
+ * 后端 ``ModelEntryResponse``（``modelResponses.ts``）。以下字段后端 ``GET /models``
+ * **不返回**，已从派生基类剔除，前端不得消费：``model_id / display_name /
+ * max_context_window / created_at / updated_at``。
+ * 注：后端 ``ModelEntryService`` 模型表确实存在 ``max_context_window`` 列，但端点未投影，
+ * 故前端不渲染窗口徽标（诚实省略，不显示伪造 0），非漏实现。
+ *
+ * 前端语义特化（保留，非漂移）：
+ * - ``reasoning_effort``：后端为宽松 ``Record<string, unknown>``，前端包装为
+ *   ``ReasoningEffortInfo | null``（带 ``supported`` / ``effort_map`` 语义），``null``
+ *   仅防御旧缓存/缺字段。消费方以 ``?.supported`` 判空。
+ * - ``supports_image`` / ``supports_video``：后端为必填 ``boolean``，前端改为可选（旧缓存
+ *   或缺失该字段时视为未声明，前端图片拦截以「明确为 false 才拦截」为准）。
+ */
+/**
+ * 按模型身份二元组在模型列表中定位条目（跨厂商重名安全的唯一匹配方式）。
+ *
+ * 后端以 ``(provider_id, model_name)`` 二元组标识一个可用模型，同一 model_name 可能
+ * 分属不同厂商（如 openai/gpt-4o 与 azure/gpt-4o）。因此凡「判断某模型是否仍是用户
+ * 选中的那个」的场景都必须同时比对两个字段，仅比对 model_name 会把跨厂商同名模型
+ * 误判为命中。
+ *
+ * 本函数用于「从列表中找出选中条目」，供发送前校验、档位校准、折叠态标签等处复用；
+ * 若已有候选条目、只需判等，请改用 ``isModelSelection``（按字段判等，不依赖元素引用
+ * 身份）。两者共同构成二元组判定的唯一收口，避免比对逻辑散落各处。
+ *
+ * @param models - 待搜索的模型列表（通常来自 GET /models）。
+ * @param selection - 目标模型身份二元组；null（未选择）时直接返回 undefined。
+ * @returns 命中返回该模型条目；未命中或未选择返回 undefined。
+ */
+export function findModelBySelection(
+  models: ModelEntryRecord[],
+  selection: { provider_id: number; model_name: string } | null,
+): ModelEntryRecord | undefined {
+  if (selection === null) {
+    return undefined;
+  }
+  return models.find(
+    (model) =>
+      model.model_name === selection.model_name && model.provider_id === selection.provider_id,
+  );
 }
 
-/** 按厂商批量导入模型条目请求体（POST /providers/{id}/models）。 */
-export interface ModelBulkImportRequest {
-  models: ModelCreateRequest[];
+/**
+ * 判定某个模型条目是否正是用户当前选中的那个（二元组字段判等）。
+ *
+ * 与 ``findModelBySelection`` 语义等价，但用于「已有候选条目、只需判等」的场景
+ * （如渲染列表时逐行判断是否高亮）。直接比对字段而非比对数组元素引用身份——
+ * 引用相等要求候选条目与搜索源数组是同一批对象，一旦列表被 map 重建
+ * （如将来加缓存包装或派生字段）就会静默失效，故此处以字段判等为准。
+ *
+ * @param model - 待判定的模型条目。
+ * @param selection - 当前选中的模型身份二元组；null（未选择）时恒返回 false。
+ * @returns 该条目即为选中模型时返回 true；否则返回 false。
+ */
+export function isModelSelection(
+  model: ModelEntryRecord,
+  selection: { provider_id: number; model_name: string } | null,
+): boolean {
+  if (selection === null) {
+    return false;
+  }
+  return model.model_name === selection.model_name && model.provider_id === selection.provider_id;
 }
 
-/** 模型条目更新请求体（PUT /models/{id}，仅覆盖显式传入字段）。 */
-export interface ModelUpdateRequest {
-  display_name?: string;
-  max_context_window?: number;
-  supports_thinking?: boolean;
-  temperature?: number | null;
-  top_p?: number | null;
-  max_tokens?: number | null;
-  enabled?: boolean;
-  sort_order?: number;
-}
-
-/** discover 候选模型（POST /providers/{id}/discover 响应项）。 */
-export interface ModelCandidate {
-  /** litellm 路由名（带 provider 前缀）。 */
-  model_name: string;
-  /** 去前缀后的展示名。 */
-  display_name: string;
-  /** litellm 已知的上下文窗口（token，预填可改）。 */
-  max_context_window: number;
-  /** litellm 目录标注的推理模型标识。 */
-  supports_thinking: boolean;
-  /** 该厂商下是否已存在同名条目（前端置灰依据）。 */
-  already_imported: boolean;
-}
-
-/** 模型批量导入结果（POST /providers/{id}/models 响应）。 */
-export interface ModelImportResult {
-  /** 导入目标厂商标识。 */
-  provider_id: string;
-  /** 成功导入的条目列表（含厂商聚合信息）。 */
-  imported: ModelEntryRecord[];
-  /** 被跳过的模型名列表（该厂商下已存在同名条目）。 */
-  skipped_model_names: string[];
-}
+export type ModelEntryRecord = Omit<
+  ModelEntryResponse,
+  "reasoning_effort" | "supports_image" | "supports_video"
+> & {
+  /**
+   * 模型推理强度能力（来源：后端 ``ModelEntryResponse.reasoning_effort``）。
+   * 类型为 ``ReasoningEffortInfo | null``：后端当前实际始终返回含 ``supported``/``effort_map``
+   * 的非空 dict，``null`` 仅为前端对「旧缓存或后端未返回该字段」的防御性容错。
+   * 消费方必须以 ``?.supported`` 判空后再读。
+   */
+  reasoning_effort: ReasoningEffortInfo | null;
+  /** 模型是否支持图片/视觉输入（可选，缺字段视为未声明）。 */
+  supports_image?: boolean;
+  /** 模型是否支持视频输入（可选，缺字段视为未声明）。 */
+  supports_video?: boolean;
+};

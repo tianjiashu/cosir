@@ -59,7 +59,9 @@ from app.api.dependencies import (
 )
 from app.api.schemas import CreateTurnRequest, TurnResponse
 from app.app import app
+from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
+from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
 from app.models.event.runtime_event import RuntimeEvent
 from app.service.task.turn_service import TurnService
 from app.service.task.turn_stream_service import TurnStreamService
@@ -88,7 +90,7 @@ async def create_turn(
         创建时间等字段，供客户端建立后续 SSE 流使用。
 
     异常:
-        HTTPException: 当任务不存在（404）或输入为空/非法（400）时抛出。
+        HTTPException: 当任务不存在（404）、模型不支持视觉（422）或输入非法（400）时抛出。
 
     副作用:
         在存储中创建 turn 记录，但不启动运行、不产生运行时事件。
@@ -99,13 +101,22 @@ async def create_turn(
             task_id,
             payload.input_text,
             agent_id="main_agent",
-            product_id=payload.product_id,
+            provider_id=payload.provider_id,
             model_name=payload.model_name,
             reasoning_effort=payload.reasoning_effort,
-            paths=payload.paths,
+            attachments=payload.attachments,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
+    except VisionNotSupportedError as exc:
+        log.warning(
+            "create_turn rejected: model does not support vision",
+            extra={"task_id": task_id, "provider_id": payload.provider_id, "reason": str(exc)},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="所选模型不支持图像输入，请更换支持视觉的模型",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TurnResponse.from_record(turn)
@@ -159,10 +170,15 @@ async def stream_turn(
         turn = turn_service.get_turn(turn_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="turn not found") from exc
-    if turn.status != "pending":
+    if turn.agent_id not in {None, "main_agent"}:
         raise HTTPException(
             status_code=409,
-            detail="turn is not pending; fetch history via GET /tasks/{task_id}/turns",
+            detail="delegated turns must use the delegated event stream",
+        )
+    if turn.status not in {"pending", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail="turn is not pending or running; fetch history via GET /tasks/{task_id}/turns",
         )
     return StreamingResponse(
         _sse_frames(stream_service.stream_turn_events(runtime.run_turn, turn)),
@@ -261,4 +277,5 @@ async def _sse_frames(events: AsyncIterator[RuntimeEvent]) -> AsyncIterator[str]
         无。
     """
     async for event in events:
-        yield f"event: {event.event_type}\ndata: {json.dumps(event.to_dict(), ensure_ascii=False)}\n\n"
+        payload = json.dumps(event.to_dict(), ensure_ascii=False)
+        yield f"event: {event.event_type}\ndata: {payload}\n\n"

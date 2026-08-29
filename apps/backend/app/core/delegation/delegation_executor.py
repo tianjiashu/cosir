@@ -158,7 +158,6 @@ class DelegationExecutor(DelegateTaskExecutor):
                     parent_turn_id=self._parent_turn.id,
                     delegation_id=delegation_id,
                     workspace_id=self._parent_task.workspace_id,
-                    agent_id=args.child_agent_id,
                     title=args.title,
                 )
             except IntegrityError:
@@ -203,6 +202,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                     task_id=child_task.id,
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,
+                    provider_id=child_agent_profile.provider_id,
                     model_name=child_agent_profile.model_name
                 )
             except Exception as exc:

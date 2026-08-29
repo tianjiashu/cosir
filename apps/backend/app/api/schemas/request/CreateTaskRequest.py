@@ -2,14 +2,15 @@ from pydantic import BaseModel, field_validator
 
 
 class CreateTaskRequest(BaseModel):
-    """校验任务创建请求体。
+    """校验任务创建请求体（仅建 task 容器，不含首轮次）。
+
+    任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段
+    （``text`` 派生标题、``workspace_id`` 归属工作区）。agent / 模型 / 附件等
+    属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。
 
     参数:
         text: 非空的纯文本任务输入。
         workspace_id: 工作区标识。
-        model_name: 可选，本任务首个 turn 请求的模型名（设计 §8.3，D1 配套）；
-            None 表示 Auto（跟随 Agent 默认模型）。该值经
-            ``task_service.create_task_with_initial_turn`` 透传至首 turn 落库。
 
     返回:
         Pydantic 请求模型。
@@ -22,9 +23,7 @@ class CreateTaskRequest(BaseModel):
     """
 
     text: str
-    agent_id: str
     workspace_id: int
-    model_name: str | None = None
 
     @field_validator("text")
     @classmethod

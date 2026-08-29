@@ -16,8 +16,8 @@ import { create } from "zustand";
 
 /** 委派 UI 选中态。 */
 interface DelegationSelectionState {
-  /** 当前在侧边栏查看的 child turn id；未选中时为 null。 */
-  selectedChildTurnId: string | null;
+  /** 当前在侧边栏查看的 child turn id（真实后端 turn 主键，number 维度）；未选中时为 null。 */
+  selectedChildTurnId: number | null;
 }
 
 /** 委派 UI 选中态动作。 */
@@ -25,11 +25,11 @@ interface DelegationSelectionActions {
   /**
    * 选中某个 child turn，使其在右侧面板展示完整 timeline。
    *
-   * @param childTurnId - 待查看的 child turn 标识；应为非空字符串。
+   * @param childTurnId - 待查看的 child turn 标识（真实后端 turn 主键，number 维度）。
    *
    * @sideeffect 更新 selectedChildTurnId，触发订阅组件（如 SubagentPanel）重渲染。
    */
-  selectChildTurn: (childTurnId: string) => void;
+  selectChildTurn: (childTurnId: number) => void;
 
   /**
    * 清空当前选中态，侧边栏回到未选中空态。
@@ -54,7 +54,7 @@ export const useDelegationStore = create<DelegationSelectionState & DelegationSe
     selectedChildTurnId: null,
 
     // --- 动作 ---
-    selectChildTurn: (childTurnId: string) => {
+    selectChildTurn: (childTurnId: number) => {
       set({ selectedChildTurnId: childTurnId });
     },
 

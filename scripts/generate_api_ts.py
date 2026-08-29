@@ -7,7 +7,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import UnionType
-from typing import Any, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
 
@@ -44,8 +44,11 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from app.api.schemas.request.CreateTaskRequest import CreateTaskRequest  # noqa: E402
 from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest  # noqa: E402
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest  # noqa: E402
+from app.api.schemas.request.ChangeSetActionRequest import ChangeSetActionRequest  # noqa: E402
 from app.api.schemas.request.QueryLogsRequest import QueryLogsRequest  # noqa: E402
 from app.api.schemas.request.RecentLogsRequest import RecentLogsRequest  # noqa: E402
+from app.api.schemas.request.ProviderCreateRequest import ProviderCreateRequest  # noqa: E402
+from app.api.schemas.request.ProviderUpdateRequest import ProviderUpdateRequest  # noqa: E402
 from app.api.schemas.response.AgentProfileResponse import AgentProfileResponse  # noqa: E402
 from app.api.schemas.response.ChangeSetResponse import (  # noqa: E402
     ChangeCheckpointResponse,
@@ -56,6 +59,8 @@ from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse  # no
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse  # noqa: E402
 from app.api.schemas.response.HealthResponse import HealthResponse  # noqa: E402
 from app.api.schemas.response.ListAgentsResponse import ListAgentsResponse  # noqa: E402
+from app.api.schemas.response.ModelEntryResponse import ModelEntryResponse  # noqa: E402
+from app.api.schemas.response.ProviderResponse import ProviderResponse  # noqa: E402
 from app.api.schemas.response.LogEntryResponse import LogEntryResponse  # noqa: E402
 from app.api.schemas.response.LogQueryResponse import LogQueryResponse  # noqa: E402
 from app.api.schemas.response.TaskResponse import TaskResponse  # noqa: E402
@@ -85,6 +90,7 @@ def main() -> None:
 
     write("task.ts", render_task_types())
     write("turn.ts", render_turn_types())
+    write("attachment.ts", render_attachment_types())
     write(
         "workspace.ts",
         render_module(
@@ -101,6 +107,8 @@ def main() -> None:
         "agents.ts", render_module([AgentProfileResponse, ListAgentsResponse], "agents")
     )
     write("changes.ts", render_change_types())
+    write("modelRequests.ts", render_provider_model_types())
+    write("modelResponses.ts", render_provider_model_responses())
     write("api.ts", render_api_types())
 
 
@@ -184,6 +192,41 @@ def render_turn_types() -> str:
     )
 
 
+def render_attachment_types() -> str:
+    """渲染附件引用共享类型（``AttachmentRef``）。
+
+    后端 ``AttachmentRef`` 是 ``dataclasses.dataclass``（非 Pydantic 模型），无法经
+    ``render_interface`` 自动推导，故从 ``dataclasses.fields`` + ``get_type_hints`` 读取
+    真实字段注解生成，避免手写漂移。``kind`` 为 ``Literal[...]`` 字面量联合，``ref`` 为字符串。
+
+    参数:
+        无。
+
+    返回:
+        ``attachment.ts`` 内容。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    from app.models.attachment_ref import AttachmentRef
+
+    hints = get_type_hints(AttachmentRef)
+    kind_type = ts_type(hints["kind"])
+    ref_type = ts_type(hints["ref"])
+    interface = (
+        f"export type AttachmentKind = {kind_type};\n\n"
+        f"export interface AttachmentRef {{\n"
+        f"  kind: AttachmentKind;\n"
+        f"  ref: {ref_type};\n"
+        f"}}"
+    )
+    return generated_header("attachment") + "\n" + interface + "\n"
+
+
 def render_api_types() -> str:
     """渲染 API 路径、请求和响应类型。
 
@@ -205,7 +248,19 @@ def render_api_types() -> str:
             render_api_paths(),
             render_interface(CreateTaskRequest),
             render_interface(CreateWorkspaceRequest),
-            render_interface(CreateTurnRequest),
+            render_interface(ChangeSetActionRequest),
+            render_interface(
+                CreateTurnRequest,
+                field_overrides={"attachments": "AttachmentRef[] | null"},
+                doc_comment=(
+                    "轮次创建请求体。\n"
+                    "\n"
+                    "**配对契约（关键）**：``provider_id`` 与 ``model_name`` 必须成对提交——\n"
+                    "后端 ``turn_service.create_turn`` 对「有 model_name 但 provider_id 为 None」\n"
+                    "直接抛 ``ValueError``（API 层映射 HTTP 400）。两者应同源取自用户选定的\n"
+                    "模型二元组，不可只传其一。"
+                ),
+            ),
             render_interface(HealthResponse, "BackendHealthResponse"),
             render_interface(DeleteWorkspaceResponse),
             render_interface(DeleteTaskResponse),
@@ -221,7 +276,76 @@ def render_api_types() -> str:
             'export type ListAgentsResponse = import("./agents").ListAgentsResponse;',
         ]
     )
-    return generated_header("api") + "\n" + body + "\n"
+    return (
+        generated_header("api")
+        + "\n\nimport type { AttachmentRef } from \"./attachment\";\n\n"
+        + body
+        + "\n"
+    )
+
+
+def render_provider_model_types() -> str:
+    """渲染厂商/模型域的请求体共享类型（``ProviderCreateRequest`` / ``ProviderUpdateRequest``）。
+
+    这两类是 ``app/api/schemas/request/`` 下的 Pydantic 模型，此前由前端
+    ``shared/ts/model.ts`` 手写，存在漂移（如前端 ``ProviderCreateRequest`` 多写了后端
+    并不接收的 ``type`` 字段）。此处统一经 ``render_interface`` 从后端模型生成，作为唯一
+    事实来源；生成结果写入独立的 ``modelRequests.ts``，``model.ts`` 仅 re-export，不再手写。
+
+    参数:
+        无。
+
+    返回:
+        ``modelRequests.ts`` 内容。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    interfaces = "\n\n".join(
+        render_interface(model) for model in (
+            ProviderCreateRequest,
+            ProviderUpdateRequest,
+        )
+    )
+    return generated_header("modelRequests") + "\n" + interfaces + "\n"
+
+
+def render_provider_model_responses() -> str:
+    """渲染厂商/模型域的响应共享类型（``ProviderResponse`` / ``ModelEntryResponse``）。
+
+    这两类是 ``app/api/schemas/response/`` 下的 Pydantic 模型，此前由前端
+    ``shared/ts/model.ts`` 手写（``ProviderRecord`` / ``ModelEntryRecord``），存在与后端
+    漂移的风险（如 ``ProviderResponse.provider_id`` 真实为 ``int`` 却被标 ``str``）。
+    此处统一经 ``render_interface`` 从后端模型生成，作为后端真相的唯一事实来源，写入
+    独立的 ``modelResponses.ts``；前端消费类型（``ProviderRecord`` / ``ModelEntryRecord``）
+    在 ``model.ts`` 中**从本文件派生**（保留前端语义特化，如 ``type`` 字面量联合、
+    ``reasoning_effort`` 语义别名、``supports_image`` / ``supports_video`` 可选容错），
+    不再手写死字段。
+
+    参数:
+        无。
+
+    返回:
+        ``modelResponses.ts`` 内容。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    interfaces = "\n\n".join(
+        render_interface(model) for model in (
+            ProviderResponse,
+            ModelEntryResponse,
+        )
+    )
+    return generated_header("modelResponses") + "\n" + interfaces + "\n"
 
 
 def render_change_types() -> str:
@@ -417,6 +541,7 @@ def render_interface(
     model: type[BaseModel],
     name: str | None = None,
     field_overrides: Mapping[str, str] | None = None,
+    doc_comment: str | None = None,
 ) -> str:
     """渲染 Pydantic 模型为 TypeScript interface。
 
@@ -424,9 +549,12 @@ def render_interface(
         model: 待渲染的 Pydantic 模型。
         name: 可选 TS interface 名；默认使用 Python 类名。
         field_overrides: 字段级 TS 类型覆盖。
+        doc_comment: 可选的 JSDoc 注释正文（不含 ``/**`` 包裹）。用于把 Pydantic
+            schema 无法表达、但前端必须知晓的跨端契约（如字段间配对约束）固化到
+            生成物里，避免前端开发者因类型上看不出约束而误用。
 
     返回:
-        TypeScript interface 文本。
+        TypeScript interface 文本（含可选 JSDoc 前缀）。
 
     异常:
         无。
@@ -442,7 +570,11 @@ def render_interface(
         field_type = overrides.get(field_name) or ts_type(field_info.annotation)
         lines.append(f"  {field_name}{optional}: {field_type};")
     lines.append("}")
-    return "\n".join(lines)
+    interface = "\n".join(lines)
+    if not doc_comment:
+        return interface
+    body = "\n".join(f" * {line}" for line in doc_comment.splitlines()).rstrip()
+    return f"/**\n{body}\n */\n{interface}"
 
 
 def ts_type(annotation: Any) -> str:
@@ -477,6 +609,8 @@ def ts_type(annotation: Any) -> str:
         return f"{ts_type(args[0])}[]"
     if origin is dict:
         return "Record<string, unknown>"
+    if origin is Literal:
+        return " | ".join(repr(arg) for arg in args)
     if origin in (UnionType, getattr(sys.modules["typing"], "Union", object())):
         return " | ".join(ts_type(arg) for arg in args)
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):

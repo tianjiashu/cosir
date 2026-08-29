@@ -147,7 +147,7 @@ def _clean_env_value(value: str) -> str:
 
 
 def resolve_config(args: argparse.Namespace) -> tuple[str, str, str]:
-    """Resolve Langfuse base URL and credentials from CLI args or environment.
+    """Resolve Langfuse capability URL and credentials from CLI args or environment.
 
     Args:
         args: Parsed CLI arguments.
@@ -219,11 +219,11 @@ def build_observations_url(
 
     parsed_base_url = urllib.parse.urlparse(base_url)
     if parsed_base_url.scheme == "http" and not allow_insecure_http:
-        raise LangfuseReplayError("HTTP Langfuse base URL requires --allow-insecure-http")
+        raise LangfuseReplayError("HTTP Langfuse capability URL requires --allow-insecure-http")
     if parsed_base_url.scheme != "https" and not (
         parsed_base_url.scheme == "http" and allow_insecure_http
     ):
-        raise LangfuseReplayError("Langfuse base URL must use https")
+        raise LangfuseReplayError("Langfuse capability URL must use https")
 
     params = {
         "traceId": trace_id,
@@ -534,7 +534,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("trace_id", help="Langfuse trace id to fetch.")
     parser.add_argument("--output", default="", help="Output JSON path.")
-    parser.add_argument("--base-url", default="", help="Langfuse base URL.")
+    parser.add_argument("--capability-url", default="", help="Langfuse capability URL.")
     parser.add_argument("--public-key", default="", help="Langfuse public key.")
     parser.add_argument("--secret-key", default="", help="Langfuse secret key.")
     parser.add_argument("--fields", default=DEFAULT_FIELDS, help="Observation field groups.")

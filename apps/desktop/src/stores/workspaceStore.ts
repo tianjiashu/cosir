@@ -13,10 +13,10 @@ import type { WorkspaceRecord } from "@shared/workspace";
 interface WorkspaceState {
   /** 已加载的工作区列表。 */
   workspaces: WorkspaceRecord[];
-  /** 当前选中的工作区标识。 */
-  activeWorkspaceId: string | null;
-  /** 已折叠的工作区标识集合。 */
-  collapsedWorkspaceIds: Set<string>;
+  /** 当前选中的工作区标识（后端 int 主键，前端以 number 承载）。 */
+  activeWorkspaceId: number | null;
+  /** 已折叠的工作区标识集合（键为后端 int 主键）。 */
+  collapsedWorkspaceIds: Set<number>;
 }
 
 /** 工作区 Store 动作接口。 */
@@ -26,11 +26,11 @@ interface WorkspaceActions {
   /** 添加或替换一个工作区。 */
   upsertWorkspace: (workspace: WorkspaceRecord) => void;
   /** 删除一个工作区。 */
-  removeWorkspace: (workspaceId: string) => void;
+  removeWorkspace: (workspaceId: number) => void;
   /** 设置当前活跃工作区。 */
-  setActiveWorkspace: (workspaceId: string | null) => void;
+  setActiveWorkspace: (workspaceId: number | null) => void;
   /** 切换工作区折叠状态。 */
-  toggleWorkspaceCollapsed: (workspaceId: string) => void;
+  toggleWorkspaceCollapsed: (workspaceId: number) => void;
 }
 
 /**
@@ -45,7 +45,7 @@ interface WorkspaceActions {
 export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>((set) => ({
   workspaces: [],
   activeWorkspaceId: null,
-  collapsedWorkspaceIds: new Set<string>(),
+  collapsedWorkspaceIds: new Set<number>(),
 
   setWorkspaces: (workspaces) => {
     set((state) => ({

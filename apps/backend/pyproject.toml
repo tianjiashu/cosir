@@ -37,6 +37,12 @@ dependencies = [
     "tree-sitter-css==0.25.0",
     "tree-sitter-c==0.23.5",
     "tree-sitter-c-sharp==0.23.1",
+    # 视觉输入（多模态）：用户图片运行期读文件校验尺寸/探测真实格式/防解压炸弹。
+    # 仅用于运行期读文件，不参与多模态序列化（序列化由 LangChain 原生透传）。
+    "pillow==11.3.0",
+    # 显式声明代码直接 import 的包（app/llm_provider/model_factory.py: from langchain_openai
+    # import ChatOpenAI）。此前为 langchain 的传递依赖，现显式化以避免 uv 重解析时丢失。
+    "langchain-openai>=0.3.0",
 ]
 
 [dependency-groups]
@@ -138,6 +144,7 @@ warn_unreachable = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [

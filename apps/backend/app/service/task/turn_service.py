@@ -7,11 +7,20 @@
 - 负责：轮次创建（含任务最新轮次更新）、轮次查询与状态更新、消息轨迹读写透传。
 - 不负责：直接 SQL 操作（委托给 ``TurnCrud``/``TaskCrud``/``TurnMessageCrud``）。
 """
-from app.api.dependencies import get_provider_service
+
 from app.config.logging.logger import log
+from app.llm_provider.capability.model_capability import ModelCapability
 from app.llm_provider.capability.provider_capability import ProviderCapability
 from app.models import RuntimeMessage, TurnRecord
+from app.models.attachment_ref import AttachmentRef
+from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
 from app.service import depends as service_depends
+from app.service.depends import get_provider_service
+from app.utils.file_utils import render_attachment_refs_to_text
+
+# 图片后缀事实源统一收口于 app.utils.constants.IMAGE_EXTENSIONS；本服务不再直接引用，
+# 视觉粗判改由 attachments 的 kind 字段判定。真实格式/体积校验在运行期
+# build_user_content_blocks 完成。
 
 
 class TurnService:
@@ -43,55 +52,113 @@ class TurnService:
             input_text: str,
             agent_id: str | None = None,
             status: str = "pending",
-            product_id: int | None = None,
+            provider_id: int | None = None,
             model_name: str | None = None,
             reasoning_effort: str | None = None,
-            paths: list[str] | None = None,
+            attachments: list[AttachmentRef] | None = None,
     ) -> TurnRecord:
         """Create a turn and update the parent task's latest turn info.
+
+        附件在创建阶段即完成处理：非图片附件（文件 / 目录 / 链接）渲染为文本前缀拼进
+        ``input_text`` 落库，运行期模型用已有工具（read_file / list_directory /
+        search_files / web_extract）按需读取；图片附件单独抽出为 ``image_paths``
+        落库，运行期走多模态 block 通道（build_user_content_blocks）。视觉能力拦截
+        按附件类型判定，模型不支持视觉时提前报错。
 
         参数:
             task_id: 所属任务标识。
             input_text: 本轮用户输入文本。
             status: 初始状态，默认 ``"pending"``。
-            agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"developer"``。
-            model_id: 可选，本 turn 请求的模型名（litellm 路由名）；None 表示用户
-                未选择模型（设计阶段 1.5：5 个内置 profile 不再内置默认模型，前端优先
-                校验、后端兜底报错）。
-            thinking: 可选，是否开启思考模式；None 表示用户未指定。
+            agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"main_agent"``
+                （与接入层 ``turns_api.create_turn`` 的硬编码值一致，非 ``"developer"``）。
+            provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）；None 表示未指定。
+                与 ``model_name`` 配对出现：两者皆非 None 时按厂商能力校验模型；
+                仅 ``model_name`` 非 None 而 ``provider_id`` 为 None 视为契约不完整，
+                抛 ``ValueError``。
+            model_name: 可选，本 turn 请求的模型名（litellm 路由名）；None 表示用户
+                未选择模型（前端优先校验、后端兜底报错）。
             reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
-            paths: 可选，本轮涉及的文件路径集合（JSON 文本存储），None 表示无文件涉及。
+            attachments: 可选，本轮携带的结构化附件列表；None 表示无附件。
 
         返回:
-            新创建的 ``TurnRecord``。
+            新创建的 ``TurnRecord``（``input_text`` 已含附件文本前缀，``image_paths``
+            仅含图片路径）。
 
         异常:
-            ValueError: 如果 ``input_text`` 为空或全空白。
-            ModelNotConfiguredError: 如果请求模型未选择 / 未收录 / 归属厂商禁用 /
-                Key 未配置（设计 §6.4 两段式 ① service 期预解析，由 API 层捕获为
-                HTTP 422；child 委派路径无 HTTP 上下文，由 ``delegation_executor``
-                捕获并把 delegation 置 failed）。
+            ValueError: 如果 ``input_text`` 为空或全空白，或模型不在厂商能力范围内。
+            VisionNotSupportedError: 如果携带图片附件但模型不支持视觉输入。
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
 
         副作用:
-            向 ``turns`` 表插入一行（``model_name`` 落库为解析后的最终模型名
-            ——``LLMRuntimeConfig.model_name``，取自 DB ``models.model_name``，
-            保证时间线可追溯到真实模型，D11）；更新所属任务最新轮次信息。
+            向 ``turns`` 表插入一行（``input_text`` 含附件前缀、``image_paths`` 仅图片、
+            ``model_name`` 落库为解析后的最终模型名）；更新所属任务最新轮次信息；
+            写入创建期附件构成日志。
         """
-        provider = get_provider_service().get_provider(product_id)
-        provider_capability = ProviderCapability.get_capability(provider.name)
-        if model_name not in provider_capability.models:
-            raise ValueError(f"model_name {model_name} not in provider capability {provider_capability.models}")
+        # 厂商-模型契约校验：仅当两者皆非 None 时按厂商能力校验模型归属。
+        # provider_id 为 None 但 model_name 已设，属契约不完整（前端应配对传入），
+        # 显式抛 ValueError（由 API 层映射为 400），避免 get_provider(None) 误报 404。
+        if model_name is not None and provider_id is None:
+            raise ValueError(
+                f"provider_id is required when model_name is set (model_name={model_name})"
+            )
+        if provider_id is not None:
+            provider = get_provider_service().get_provider(provider_id)
+            provider_capability = ProviderCapability.get_capability(provider.name)
+            if model_name not in provider_capability.models:
+                raise ValueError(
+                    f"model_name {model_name} not in provider capability "
+                    f"{provider_capability.models}"
+                )
+
+        attachments = attachments or []
+        image_paths = [att.ref for att in attachments if att.kind == "image"] or None
+
+        # 视觉能力拦截（构建期业务规则）：若本轮携带图片且模型不支持视觉输入，
+        # 提前报错（422 语义，由 API 层映射为 HTTP 422 + 中文引导），避免运行期才失败。
+        if image_paths:
+            model_capability = ModelCapability.get_capability(model_name)
+            if not model_capability.supports_image:
+                log.warning(
+                    "create_turn vision rejected",
+                    extra={
+                        "task_id": task_id,
+                        "provider_id": provider_id,
+                        "model_name": model_name,
+                        "image_count": len(image_paths),
+                        "reason": "model_not_support_image",
+                    },
+                )
+                raise VisionNotSupportedError(
+                    f"model {model_name} does not support image input"
+                )
+
+        # 非图片附件渲染为文本前缀并拼进 input_text；空渲染结果不拼接。
+        attachment_text = render_attachment_refs_to_text(
+            [att for att in attachments if att.kind != "image"]
+        )
+        if attachment_text:
+            input_text = f"{attachment_text}\n\n{input_text}"
+
+        log.info(
+            "create_turn attachments",
+            extra={
+                "task_id": task_id,
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "image_count": len(image_paths or []),
+                "non_image_count": len(attachments) - len(image_paths or []),
+            },
+        )
 
         turn = self._turn.create(
             task_id,
             input_text,
             status,
             agent_id=agent_id,
-            product_id=product_id,
+            provider_id=provider_id,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
-            paths=paths,
+            image_paths=image_paths,
         )
         return turn
 
@@ -187,6 +254,17 @@ class TurnService:
             end_reason=end_reason,
         )
 
+    def fail_turn_if_pending_or_running(
+        self, turn_id: int, end_reason: str | None = None
+    ) -> TurnRecord | None:
+        """将尚未启动或正在执行的 turn 原子落定为 failed。"""
+        return self._turn.update_status_if_in(
+            turn_id,
+            target_status="failed",
+            allowed_statuses=("pending", "running"),
+            end_reason=end_reason,
+        )
+
     def has_turn_status(self, turn_id: int | None, status: str) -> bool:
         """Return whether the turn currently has the requested status.
 
@@ -240,14 +318,7 @@ class TurnService:
             条件满足时更新 turn 状态为 running。
         """
 
-        return (
-                self._turn.update_status_if_in(
-                    turn_id,
-                    target_status="running",
-                    allowed_statuses=("pending",),
-                )
-                is not None
-        )
+        return self._turn.claim_pending_serialized(turn_id) is not None
 
     def load_turn_messages(self, turn_id: int) -> list[RuntimeMessage]:
         """Load a turn's ordered message trajectory; empty list if none stored."""
@@ -301,3 +372,7 @@ class TurnService:
         """
 
         self._message.clear_turn_messages(turn_id)
+
+    def next_turn_message_sequence(self, turn_id: int) -> int:
+        """返回指定 turn 下一条消息可用的 sequence。"""
+        return self._message.next_sequence(turn_id)

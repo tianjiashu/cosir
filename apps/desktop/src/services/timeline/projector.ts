@@ -112,8 +112,8 @@ export interface TimelineDelegationItem {
   delegationId: string;
   /** Parent turn that requested the delegation. */
   parentTurnId: string;
-  /** Child turn id once the backend creates the child run. */
-  childTurnId?: string;
+  /** Child turn id once the backend creates the child run (number 维度). */
+  childTurnId?: number;
   /** Child AgentProfile id. */
   childAgentId: string;
   /** Display-only delegation category. */
@@ -627,16 +627,17 @@ function projectDelegation(event: RuntimeEvent): TimelineDelegationItem | null {
     return null;
   }
   const payload = event.payload as {
-    delegation_id?: string;
-    parent_turn_id?: string;
-    child_turn_id?: string | null;
+    delegation_id?: number | string;
+    parent_turn_id?: number | string;
+    child_turn_id?: number | null;
     child_agent_id?: string;
     delegation_type?: string;
     status?: unknown;
     summary?: string | null;
     error?: string | null;
   };
-  const delegationId = typeof payload.delegation_id === "string" ? payload.delegation_id.trim() : "";
+  const delegationId =
+    payload.delegation_id == null ? "" : String(payload.delegation_id).trim();
   if (!delegationId) {
     logWarn("delegation_event_missing_id", {
       module: "projector",
@@ -652,7 +653,8 @@ function projectDelegation(event: RuntimeEvent): TimelineDelegationItem | null {
     eventId: event.event_id,
     delegationId,
     parentTurnId: String(payload.parent_turn_id ?? event.turn_id ?? ""),
-    childTurnId: payload.child_turn_id ? String(payload.child_turn_id) : undefined,
+    // 真实 id 维度统一 number；child_turn_id 协议层即为 number，无需 String 桥接。
+    childTurnId: payload.child_turn_id ?? undefined,
     childAgentId: String(payload.child_agent_id ?? ""),
     delegationType: String(payload.delegation_type ?? ""),
     status: normalizeDelegationStatus(payload.status, event.event_type),
@@ -849,7 +851,7 @@ function isDelegationTerminal(status: TimelineDelegationStatus): boolean {
  * @sideeffect 无（纯函数，不修改入参）。
  */
 export function deriveChildDelegationStatus(
-  childTurnId: string,
+  childTurnId: number,
   events: RuntimeEvent[],
 ): TimelineDelegationStatus | undefined {
   let best: { sequence: number; status: TimelineDelegationStatus } | undefined;
@@ -863,7 +865,7 @@ export function deriveChildDelegationStatus(
     ) {
       continue;
     }
-    const payload = event.payload as { child_turn_id?: string; status?: unknown };
+    const payload = event.payload as { child_turn_id?: number; status?: unknown };
     if (payload.child_turn_id !== childTurnId) continue;
     const status = normalizeDelegationStatus(payload.status, event.event_type);
     const sequence = Number(event.sequence || 0);
@@ -876,8 +878,8 @@ export function deriveChildDelegationStatus(
 
 /** 同一并发组（同 parent turn）下的一个 sibling 子 Agent 派生视图。 */
 export interface SiblingDelegation {
-  /** sibling child turn 标识。 */
-  childTurnId: string;
+  /** sibling child turn 标识（number 维度）。 */
+  childTurnId: number;
   /** sibling child AgentProfile id。 */
   childAgentId: string;
   /** 该 sibling 的委派生命周期状态（由最新事件归一）。 */
@@ -898,7 +900,7 @@ export interface SiblingDelegation {
  * 注意：同一 delegation_id 的不同事件按 sequence 取最新，保证与投影器其它路径状态口径一致。
  *
  * @param events - 扁平事件流（来自 eventStore.events）。
- * @param selectedChildTurnId - 当前选中的 child turn 标识。
+ * @param selectedChildTurnId - 当前选中的 child turn 标识（number 维度）。
  * @returns sibling 派生视图数组；无并发关系时返回空数组 `[]`。
  *
  * @throws 不抛出异常；payload 字段缺失或类型异常时安全跳过该事件。
@@ -907,15 +909,15 @@ export interface SiblingDelegation {
  */
 export function deriveSiblingDelegations(
   events: RuntimeEvent[],
-  selectedChildTurnId: string,
+  selectedChildTurnId: number,
 ): SiblingDelegation[] {
-  if (!selectedChildTurnId) return [];
+  if (selectedChildTurnId == null) return [];
 
   // 1. 反查选中 child 的 parent turn（仅 delegation_child_started 带 child_turn_id）。
-  let parentTurnId: string | undefined;
+  let parentTurnId: number | null | undefined;
   for (const event of events) {
     if (event.event_type !== "delegation_child_started") continue;
-    const payload = event.payload as { child_turn_id?: string; parent_turn_id?: string };
+    const payload = event.payload as { child_turn_id?: number; parent_turn_id?: number };
     if (payload.child_turn_id !== selectedChildTurnId) continue;
     parentTurnId = payload.parent_turn_id ?? event.turn_id;
     break;
@@ -925,19 +927,20 @@ export function deriveSiblingDelegations(
   // 2. 按 delegation_id 分组，取每组最新状态与最新 child/agent 标识。
   const byDelegation = new Map<
     string,
-    { sequence: number; status: TimelineDelegationStatus; childTurnId?: string; childAgentId: string }
+    { sequence: number; status: TimelineDelegationStatus; childTurnId?: number; childAgentId: string }
   >();
   for (const event of events) {
     if (!DELEGATION_EVENTS.has(event.event_type)) continue;
     const payload = event.payload as {
-      delegation_id?: string;
-      parent_turn_id?: string;
-      child_turn_id?: string | null;
+      delegation_id?: number | string;
+      parent_turn_id?: number;
+      child_turn_id?: number | null;
       child_agent_id?: string;
       status?: unknown;
     };
     if (payload.parent_turn_id !== parentTurnId) continue;
-    const delegationId = typeof payload.delegation_id === "string" ? payload.delegation_id.trim() : "";
+    const delegationId =
+      payload.delegation_id == null ? "" : String(payload.delegation_id).trim();
     if (!delegationId) continue;
     const sequence = Number(event.sequence || 0);
     const existing = byDelegation.get(delegationId);
@@ -945,7 +948,7 @@ export function deriveSiblingDelegations(
     byDelegation.set(delegationId, {
       sequence,
       status: normalizeDelegationStatus(payload.status, event.event_type),
-      childTurnId: payload.child_turn_id ? String(payload.child_turn_id) : existing?.childTurnId,
+      childTurnId: payload.child_turn_id ?? existing?.childTurnId,
       childAgentId: String(payload.child_agent_id ?? existing?.childAgentId ?? ""),
     });
   }

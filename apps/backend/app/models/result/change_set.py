@@ -23,7 +23,7 @@ class ChangeFileEntry:
         action: 变更动作，取值 ``created`` / ``modified`` / ``deleted``。
         status: 用户处理态，取值 ``pending`` / ``kept`` / ``reverted``。
         last_tool_call_id: 产生该最新变更的工具调用标识。
-        last_turn_id: 产生该最新变更的轮次标识。
+        last_turn_id: 产生该最新变更的轮次标识（int，与 ``FileSnapshotRecord.turn_id`` 同维度）。
         additions: 该次变更的 diff 新增行数。
         deletions: 该次变更的 diff 删除行数。
     """
@@ -32,7 +32,7 @@ class ChangeFileEntry:
     action: str
     status: str
     last_tool_call_id: str
-    last_turn_id: str
+    last_turn_id: int
     additions: int = 0
     deletions: int = 0
 

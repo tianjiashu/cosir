@@ -45,7 +45,6 @@ class TaskCrud:
     def create(
             self,
             workspace_id: int,
-            agent_id: str,
             title: str,
             status: str | None = None,
             task_type: str = "user",
@@ -60,9 +59,11 @@ class TaskCrud:
         （``"user"``）与委派子任务（``"delegation"``）；委派子任务通过 ``parent_task_id`` /
         ``parent_turn_id`` / ``delegation_id``（均为整数 id）关联父任务与委派记录。
 
+        任务不再绑定 agent：agent 维度由 turn（用户任务首 turn）与 delegation 记录
+        （子任务）承载，本方法只持久化 task 容器自身字段。
+
         参数:
             workspace_id: 所属工作区标识（整数 id）。
-            agent_id: 执行该任务的 agent 标识。
             title: 任务标题。
             status: 任务初始状态，允许为 None，缺省时回退为 ``"pending"``。
             task_type: 任务类型，``"user"`` 或 ``"delegation"``，缺省为 ``"user"``。
@@ -85,7 +86,6 @@ class TaskCrud:
         with self._session_factory.begin() as session:
             model = TaskModel(
                 workspace_id=workspace_id,
-                agent_id=agent_id,
                 title=title,
                 status=effective_status,
                 created_at=to_text(now),

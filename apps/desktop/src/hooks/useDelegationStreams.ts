@@ -40,10 +40,10 @@ const TERMINAL_CHILD_EVENT_TYPES = new Set<RuntimeEvent["event_type"]>([
 
 /** 从事件流派生出的单个委派订阅描述。 */
 interface DelegationStreamDescriptor {
-  /** 委派记录标识。 */
-  delegationId: string;
-  /** child turn 标识。 */
-  childTurnId: string;
+  /** 委派记录标识（真实后端 delegation 主键，number 维度）。 */
+  delegationId: number;
+  /** child turn 标识（真实后端 turn 主键，number 维度）。 */
+  childTurnId: number;
   /** delegation 自身是否已终态。 */
   delegationTerminal: boolean;
   /** child turn 是否已有 run 终态事件。 */
@@ -63,17 +63,31 @@ function isDelegationEvent(event: RuntimeEvent): boolean {
 }
 
 /**
- * 从未知 payload 字段读取非空字符串。
+ * 从未知 payload 字段读取真实 id（number 维度）。
  *
- * @param payload - 事件 payload。
+ * 真实 id 维度统一为 number（协议层 `delegation_id`/`child_turn_id` 均为 number）。
+ * 对 string 或 number 都先 `Number(v)` 转换；null、undefined、空字符串、纯空白字符串（含
+ * `"  "`）、非有限数字（NaN/Infinity）及无法解析为有限数字的值均返回 null。修复原
+ * `readStringPayload` 对 number 值（如 child_turn_id）一律返回 null 导致委派子流永不创建
+ * 的 bug；并显式拦截纯空白串，避免 `Number("  ")` 误判为有限数字 0 而把空白 id 当作 turn 0。
+ *
+ * @param payload - 事件 payload（字段值类型为 unknown）。
  * @param key - 待读取字段名。
- * @returns 非空字符串字段；不存在或非字符串时返回 null。
- *
+ * @returns 非空有限数字 id；缺失、空、纯空白串或无法解析为有限数字时返回 null。
+ *          注意：空白串（含纯空格 `"  "`）一律返回 null，不会解析为 0。
+ * @throws 不主动抛出；`Number(value)` 对非法输入返回 NaN 后由 `Number.isFinite` 收敛为 null。
  * @sideeffect 无。
  */
-function readStringPayload(payload: Record<string, unknown>, key: string): string | null {
+export function readNumberPayload(payload: Record<string, unknown>, key: string): number | null {
   const value = payload[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
@@ -85,17 +99,17 @@ function readStringPayload(payload: Record<string, unknown>, key: string): strin
  * @sideeffect 无。
  */
 function deriveDelegationStreams(events: RuntimeEvent[]): DelegationStreamDescriptor[] {
-  const descriptors = new Map<string, DelegationStreamDescriptor>();
-  const childTurnIdsByDelegationId = new Map<string, string>();
+  const descriptors = new Map<number, DelegationStreamDescriptor>();
+  const childTurnIdsByDelegationId = new Map<number, number>();
 
   for (const event of events) {
     if (!isDelegationEvent(event)) {
       continue;
     }
     const payload = event.payload as Record<string, unknown>;
-    const delegationId = readStringPayload(payload, "delegation_id");
-    const childTurnId = readStringPayload(payload, "child_turn_id");
-    if (!delegationId || !childTurnId) {
+    const delegationId = readNumberPayload(payload, "delegation_id");
+    const childTurnId = readNumberPayload(payload, "child_turn_id");
+    if (delegationId == null || childTurnId == null) {
       continue;
     }
     childTurnIdsByDelegationId.set(delegationId, childTurnId);
@@ -155,17 +169,17 @@ function isChildRunTerminalDescriptor(descriptor: DelegationStreamDescriptor): b
  * - child SSE 连接的断开以 **child run 终态**（`run_finished/run_failed/run_cancelled`）
  *   为准；delegation 级终态事件（`delegation_finished/failed/cancelled`）是高层汇总事件，
  *   不触发 disconnect，避免丢失其之后滞后到达的 child run 事件
- * - child stream 错误时强制调用 `api.listTaskEvents(taskId)` 并 `setEvents`
+ * - child stream 错误时强制调用 `api.listTaskEvents(String(taskId))` 并 `setEvents`
  */
-export function useDelegationStreams(taskId: string | null): void {
+export function useDelegationStreams(taskId: number | null): void {
   const taskEvents = useEventStore((state) => (taskId ? state.eventsByTaskId[taskId] ?? EMPTY_EVENTS : EMPTY_EVENTS));
   const appendEvents = useEventStore((state) => state.appendEvents);
   const setEvents = useEventStore((state) => state.setEvents);
-  const connectionsRef = useRef<Map<string, DelegationStreamConnection>>(new Map());
-  const failedDelegationsRef = useRef<Set<string>>(new Set());
-  const missingTerminalBackfilledRef = useRef<Set<string>>(new Set());
-  const backfillInFlightRef = useRef<Set<string>>(new Set());
-  const forcedBackfillPendingRef = useRef<Map<string, string>>(new Map());
+  const connectionsRef = useRef<Map<number, DelegationStreamConnection>>(new Map());
+  const failedDelegationsRef = useRef<Set<number>>(new Set());
+  const missingTerminalBackfilledRef = useRef<Set<number>>(new Set());
+  const backfillInFlightRef = useRef<Set<number>>(new Set());
+  const forcedBackfillPendingRef = useRef<Map<number, string>>(new Map());
   // 攒批缓冲：对齐父流 useSSE 的 rAF 攒批模式。把同一动画帧内的多个 child 事件合并成
   // 一次 appendEvents + 一次渲染，将高频 child 流下的 set/投影/重渲染压力从「每事件一次」
   // 降到「每帧一次」。多并发 child 同时流式时，单条直写会让每个 child 事件都触发一次
@@ -258,7 +272,7 @@ export function useDelegationStreams(taskId: string | null): void {
       return;
     }
 
-    const forceBackfill = async (delegationId: string, reason: string, forced = false): Promise<void> => {
+    const forceBackfill = async (delegationId: number, reason: string, forced = false): Promise<void> => {
       if (backfillInFlightRef.current.has(delegationId)) {
         if (forced) {
           forcedBackfillPendingRef.current.set(delegationId, reason);
@@ -267,7 +281,7 @@ export function useDelegationStreams(taskId: string | null): void {
       }
       backfillInFlightRef.current.add(delegationId);
       try {
-        const events = await api.listTaskEvents(taskId);
+        const events = await api.listTaskEvents(String(taskId));
         setEvents(events, taskId);
       } catch (err) {
         logError("delegation child stream backfill failed", err, {
@@ -287,7 +301,7 @@ export function useDelegationStreams(taskId: string | null): void {
     };
 
     const descriptors = deriveDelegationStreams(taskEvents);
-    const activeChildTurnIds = new Set<string>();
+    const activeChildTurnIds = new Set<number>();
 
     for (const descriptor of descriptors) {
       if (isChildRunTerminalDescriptor(descriptor)) {
@@ -312,9 +326,10 @@ export function useDelegationStreams(taskId: string | null): void {
       }
 
       const connection = new DelegationStreamConnection({
-        taskId,
+        taskId: String(taskId),
         delegationId: descriptor.delegationId,
-        childTurnId: descriptor.childTurnId,
+        // URL/SSE 边界保持 string：childTurnId 真实维度为 number，此处桥接 String。
+        childTurnId: String(descriptor.childTurnId),
         onEvent: (event) => {
           pendingEventsRef.current.push(event);
           scheduleFlush();

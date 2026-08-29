@@ -12,19 +12,19 @@ export interface ChangeFile {
   action: string;
   status: 'pending' | 'kept' | 'reverted';
   last_tool_call_id: string;
-  last_turn_id: string;
+  last_turn_id: number;
   additions: number;
   deletions: number;
 }
 
 export interface ChangeCheckpoint {
-  turn_id: string;
+  turn_id: number;
   turn_seq: number;
   label: string;
 }
 
 export interface ChangeSet {
-  task_id: string;
+  task_id: number;
   checkpoints: ChangeCheckpoint[];
   files: ChangeFile[];
 }

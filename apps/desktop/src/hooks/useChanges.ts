@@ -59,10 +59,10 @@ interface UseChangesReturn {
 /**
  * 变更集数据 Hook。
  *
- * @param taskId - 任务标识；为 null 时清空状态且不发起请求。
+ * @param taskId - 任务标识（number，后端 int 主键）；为 null 时清空状态且不发起请求。
  * @returns 变更集、检查点控制、操作与加载/错误状态。
  */
-export function useChanges(taskId: string | null): UseChangesReturn {
+export function useChanges(taskId: number | null): UseChangesReturn {
   const [changeSet, setChangeSet] = useState<ChangeSet | null>(null);
   const [checkpoint, setCheckpointState] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -70,7 +70,7 @@ export function useChanges(taskId: string | null): UseChangesReturn {
 
   // 当前 task 的事件列表（SSE 增量经 eventStore 落地），用于感知 file_change_stable。
   const taskEvents = useEventStore((s) => selectEventsForTask(s, taskId));
-  const taskIdRef = useRef<string | null>(taskId);
+  const taskIdRef = useRef<number | null>(taskId);
   taskIdRef.current = taskId;
   // checkpoint 的镜像 ref：与 taskIdRef 同口径，供 refresh 在 await 之后检测
   // 「请求在途期间检查点已切换」的过期响应（同任务内 C1→C2 竞态）。
@@ -81,7 +81,7 @@ export function useChanges(taskId: string | null): UseChangesReturn {
   const consumedStableEventIdsRef = useRef<Set<string>>(new Set());
   // 标记当前 taskId 是否已完成「历史 stable 消费」：初始 refresh 由 taskId-effect 承担，
   // 因此首次遇到非空事件列表时先把既有 stable 全部消费进 set，此后仅对新增 stable 触发刷新。
-  const initializedTaskIdRef = useRef<string | null>(null);
+  const initializedTaskIdRef = useRef<number | null>(null);
   // 已消费的 file_change_updated 事件 id 集合；该事件不持久化、仅 SSE 实时推送，
   // 每个未消费的 updated 触发一次去抖全量刷新（运行中实时展示增量变更）。
   // 切 task 时清空，避免跨 task 无限累积（event_id 全局唯一，不清空也无害，但为内存考虑清空）。
@@ -89,7 +89,7 @@ export function useChanges(taskId: string | null): UseChangesReturn {
   // 标记当前 taskId 是否已完成「历史 updated 消费」：与 stable 对称。updated 不持久化、历史
   // 回放不含，故正常场景不会命中；但在同 task 内 forceRefresh 补灌且实时已累积较多事件时，
   // 该分支可避免把「游标之前位置的既有 updated」跳过，保证预览/去抖不遗漏。
-  const updatedInitializedTaskIdRef = useRef<string | null>(null);
+  const updatedInitializedTaskIdRef = useRef<number | null>(null);
   // file_change_updated 去抖定时器；避免工具批量执行时高频事件导致连续全量刷新。
   const updatedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // file_change_stable 增量遍历游标：记录上次处理到的 taskEvents 索引，仅遍历新增尾部。
@@ -124,7 +124,7 @@ export function useChanges(taskId: string | null): UseChangesReturn {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.fetchChangeSet(requestTaskId, requestCheckpoint ?? undefined);
+      const data = await api.fetchChangeSet(String(requestTaskId), requestCheckpoint ?? undefined);
       if (isStale()) {
         return;
       }
@@ -377,7 +377,7 @@ export function useChanges(taskId: string | null): UseChangesReturn {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.revertChanges(requestTaskId, paths);
+      const data = await api.revertChanges(String(requestTaskId), paths);
       if (isStale()) {
         return;
       }
@@ -414,7 +414,7 @@ export function useChanges(taskId: string | null): UseChangesReturn {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.keepChanges(requestTaskId, paths);
+      const data = await api.keepChanges(String(requestTaskId), paths);
       if (isStale()) {
         return;
       }

@@ -23,7 +23,7 @@
  * - 模型选择器（ModelSelector）。
  * - 模型厂商配置中心（ProviderSettingsDialog）。
  *
- * 按钮置灰语义（方案 §阶段 1.5）：未显式选择模型（selectedModelName=null）时
+ * 按钮置灰语义（方案 §阶段 1.5）：未显式选择模型（selectedModel=null）时
  * 发送按钮直接 disabled，并 hover 显示 tooltip「请先选择模型」；guardSend 作为
  * 防御兜底仍保留——模型被删（model_missing）/ 厂商 Key 未配置（api_key_missing）
  * 等运行时场景仍由 guardSend 拦截并内联展示原因。
@@ -56,11 +56,12 @@ export function InputBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const { createTask, createTurn, cancelTurn, operation } = useTask();
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
   // 读取当前 active task 维度下的 streaming turn（按 task 隔离，支持多 task 并发流式）。
+  // activeTaskId 为 number（后端 int 主键）；未选中时取负占位键（不会命中真实 streaming 记录）。
   const streamingTurnId = useTurnStore((s) =>
-    s.streamingTurnIds[activeTaskId ?? ""] ?? null,
+    s.streamingTurnIds[activeTaskId ?? -1] ?? null,
   );
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const selectedModelName = useTaskStore((s) => s.selectedModelName);
+  const selectedModel = useTaskStore((s) => s.selectedModel);
   const setInputDraft = useTaskStore((s) => s.setInputDraft);
 
   // 本地输入值：仅作受控渲染与 IME/键盘交互；持久化事实源是 taskStore.drafts。
@@ -73,11 +74,11 @@ export function InputBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   // IME 组合态标记：组合期间 Enter 不触发发送（含 keyCode 229 兜底，借鉴外部三路判定）。
   const composingRef = useRef(false);
   // 上一次活跃任务 ID：用于「切换任务才回灌草稿」，避免输入过程被 store 回写打断。
-  const prevTaskIdRef = useRef<string | null>(activeTaskId);
+  const prevTaskIdRef = useRef<number | null>(activeTaskId);
   const { guardSend } = useModelSendGuard();
 
   const trimmedInput = inputValue.trim();
-  const hasModelSelected = Boolean(selectedModelName);
+  const hasModelSelected = Boolean(selectedModel);
   const noModelSelected = !hasModelSelected;
 
   // 可用性派生 + 提交互斥锁（外置，组件只读快照）。
@@ -120,9 +121,10 @@ export function InputBar({ onOpenSettings }: { onOpenSettings?: () => void }) {
   }, [activeTaskId]);
 
   // 用户切换模型后清除拦截提示（2026-08-18 无 Auto 语义）。
+  // 依赖整条二元组：切换厂商下的同名模型也应清掉「模型已不可用」的旧提示。
   useEffect(() => {
     setGuardMessage(null);
-  }, [selectedModelName]);
+  }, [selectedModel]);
 
   const placeholder = !activeWorkspaceId
     ? "请先选择工作区再开始对话..."

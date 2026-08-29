@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 from types import UnionType
-from typing import Any, Literal, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ OUTPUT_PATH = REPO_ROOT / "apps" / "shared" / "ts" / "events.ts"
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.models.enums.event_type import EventType  # noqa: E402
+from app.models.event.runtime_event import RuntimeEvent  # noqa: E402
 from app.models.payload import EVENT_PAYLOAD_MODELS, ModelToolCallPayload  # noqa: E402
 
 
@@ -47,14 +48,20 @@ def main() -> None:
             f"missing payload models for event types: {', '.join(missing)}"
         )
 
-    OUTPUT_PATH.write_text(render_typescript(event_types), encoding="utf-8")
+    OUTPUT_PATH.write_text(
+        render_typescript(event_types, RuntimeEvent), encoding="utf-8"
+    )
 
 
-def render_typescript(event_types: list[EventType]) -> str:
+def render_typescript(
+    event_types: list[EventType], envelope_model: type[RuntimeEvent]
+) -> str:
     """渲染完整 TypeScript 文件内容。
 
     参数:
         event_types: 后端事件枚举成员，顺序决定生成文件中的类型顺序。
+        envelope_model: 后端 ``RuntimeEvent`` 模型，信封中 ``task_id`` / ``turn_id`` /
+            ``sequence`` 三字段的 TS 类型由该模型推导，避免与后端 ``to_dict()`` 漂移。
 
     返回:
         可直接写入 ``events.ts`` 的文本。
@@ -75,6 +82,7 @@ def render_typescript(event_types: list[EventType]) -> str:
         f"  {event_type.value}: {EVENT_PAYLOAD_MODELS[event_type].__name__};"
         for event_type in event_types
     )
+    envelope = render_envelope(envelope_model)
     return f"""/**
  * 后端运行时事件类型定义。
  *
@@ -98,18 +106,56 @@ export interface RuntimeEventPayloadMap {{
 {payload_map}
 }}
 
-/** SSE 传输的运行时事件信封，对应后端 `RuntimeEvent.to_dict()`。 */
+{envelope}
+
+/** 后端 SSE 运行时事件联合类型。 */
+export type RuntimeEvent = {{
+  [T in RuntimeEventType]: RuntimeEventEnvelope<T>;
+}}[RuntimeEventType];
+"""
+
+
+def render_envelope(model: type[RuntimeEvent]) -> str:
+    """渲染 SSE 事件信封 ``RuntimeEventEnvelope`` 接口。
+
+    ``task_id`` / ``turn_id`` / ``sequence`` 三字段的 TS 类型由后端 ``RuntimeEvent``
+    模型的类型注解推导（``int`` → ``number``），其余信封字段（``event_id`` /
+    ``event_type`` / ``message_id`` / ``tool_call_id`` / ``created_at`` / ``payload``）
+    为 SSE 传输层元数据，不来自该模型，保持手写。
+
+    ``RuntimeEvent`` 是 ``dataclasses.dataclass``（非 Pydantic），类型需经
+    ``typing.get_type_hints`` 解析（``from __future__ import annotations`` 下字段
+    注解是字符串）。
+
+    参数:
+        model: 后端 ``RuntimeEvent`` 模型。
+
+    返回:
+        完整 ``RuntimeEventEnvelope`` TypeScript interface 文本。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    hints = get_type_hints(model)
+    task_id_type = ts_type(hints["task_id"])
+    turn_id_type = ts_type(hints["turn_id"])
+    sequence_type = ts_type(hints["sequence"])
+    return f"""/** SSE 传输的运行时事件信封，对应后端 `RuntimeEvent.to_dict()`。 */
 export interface RuntimeEventEnvelope<T extends RuntimeEventType = RuntimeEventType> {{
   /** 唯一的事件标识符（UUID）。 */
   event_id: string;
   /** 稳定的、机器可读的事件类型。 */
   event_type: T;
   /** 关联的任务标识符。 */
-  task_id: string;
+  task_id: {task_id_type};
   /** 关联的轮次标识符。 */
-  turn_id?: string | null;
+  turn_id?: {turn_id_type};
   /** 当前单次运行流内的排序号；不是 task 级持久序号。 */
-  sequence?: number;
+  sequence?: {sequence_type};
   /** 可选的用户可读消息标识符。 */
   message_id?: string | null;
   /** 可选的工具调用标识符。 */
@@ -118,13 +164,7 @@ export interface RuntimeEventEnvelope<T extends RuntimeEventType = RuntimeEventT
   created_at: string;
   /** 因 event_type 而异的载荷字典。 */
   payload: RuntimeEventPayloadMap[T];
-}}
-
-/** 后端 SSE 运行时事件联合类型。 */
-export type RuntimeEvent = {{
-  [T in RuntimeEventType]: RuntimeEventEnvelope<T>;
-}}[RuntimeEventType];
-"""
+}}"""
 
 
 def unique_models(payload_models: Sequence[type[BaseModel]]) -> list[type[BaseModel]]:

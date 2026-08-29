@@ -5,10 +5,12 @@
 SQLAlchemy model 为单一事实来源，本模块只做“让数据库结构追上 model 定义”的动作。
 
 为什么主库和日志库迁移策略不同：
-    - 主库（业务数据）不能丢数据，因此采用“加列不删列”的保守策略：只对缺失列执行
-      ``ALTER TABLE ADD COLUMN``，历史数据原样保留。
-    - 日志库是可重建的运行产物，历史日志不具备长期价值，因此采用 ``user_version``
-      版本号驱动的“整表重建”策略：版本落后时直接 drop 后重建，简单且无历史包袱。
+- 主库（业务数据）不能丢数据，因此采用“加列不删列”的保守策略：只对缺失列执行
+  ``ALTER TABLE ADD COLUMN``，历史数据原样保留。**例外**：``_COLUMN_DROP_MAP``
+  登记的列属于本次主动契约删除的已知列，会在列迁移前显式 ``DROP COLUMN``
+  （仅删登记项，不做宽泛历史清理）。
+- 日志库是可重建的运行产物，历史日志不具备长期价值，因此采用 ``user_version``
+  版本号驱动的“整表重建”策略：版本落后时直接 drop 后重建，简单且无历史包袱。
 
 职责边界：
     - 负责：建表、缺失列补齐、日志库版本重建。
@@ -58,9 +60,10 @@ def initialize_app_schema(engine: Engine) -> None:
     """初始化主库 schema，并对已存在的表补齐缺失列与索引。
 
     流程（单事务，失败整体回滚）：①对 ``APP_MODELS`` 逐个建表（存在则跳过）；
-    ②``_ensure_model_columns`` 逐表比对模型与实际列，``ADD COLUMN`` 补齐缺失列
+    ②``_ensure_drop_legacy_columns`` 按 ``_COLUMN_DROP_MAP`` 主动删除本次契约变更的已知列；
+    ③``_ensure_model_columns`` 逐表比对模型与实际列，``ADD COLUMN`` 补齐缺失列
     （保守迁移不删数据列，仅按 ``_COLUMN_RENAME_MAP`` 做历史重命名）；
-    ③``_ensure_model_indexes`` 补建模型声明的缺失索引。当前 ``_MIGRATE_ONLY_MODELS``
+    ④``_ensure_model_indexes`` 补建模型声明的缺失索引。当前 ``_MIGRATE_ONLY_MODELS``
     为空，保留该参数仅作为未来「仅迁移不建表」模型的扩展占位。
 
     参数:
@@ -73,14 +76,17 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 如果建表、列迁移或建索引执行失败。
 
     副作用:
-        创建缺失业务表；对已存在表追加缺失列、补建索引。业务数据不丢失。
+        创建缺失业务表；按 ``_COLUMN_DROP_MAP`` 删除主动契约删除的已知列、
+        对已存在表追加缺失列、补建索引。业务数据不丢失（除登记删除的列）。
     """
 
     with engine.begin() as connection:
         for model in APP_MODELS:
             cast(Table, model.__table__).create(bind=connection, checkfirst=True)
-        # 核心表建表后，对 APP_MODELS 全量做列迁移与重命名（含 providers 表的
+        # 建表后，先执行本次主动契约删除的列（如 tasks.agent_id 解耦），
+        # 再对 APP_MODELS 全量做列迁移与重命名（含 providers 表的
         # api_key_env → api_key 历史漂移）。_MIGRATE_ONLY_MODELS 目前为空。
+        _ensure_drop_legacy_columns(connection)
         _ensure_model_columns(connection, engine, APP_MODELS + _MIGRATE_ONLY_MODELS)
         _ensure_model_indexes(connection)
 
@@ -115,10 +121,63 @@ def _default_literal_for_type(column_type) -> str:
 # 已知历史列名重命名映射（按表名 → {旧列名: 新列名}）。
 # 仅收录经过确认的「重命名类」迁移：普通新增列走 _ensure_model_columns 的 ADD COLUMN，
 # 无需登记；但旧列被改名（而非新增）的场景无法靠补列覆盖，必须显式 RENAME。
-# 当前唯一登记项：providers 表的 api_key_env → api_key（2026-08-18 确认的历史漂移）。
+# 当前登记项：
+# - providers 表的 api_key_env → api_key（2026-08-18 确认的历史漂移）。
+# - turns 表的 paths → image_paths（2026-08-27 附件结构化改造：paths 语义收窄为仅图片，
+#   文件/目录/url 已固化进 input_text，故列改名并保留历史图片路径数据）。
+# - turns 表的 product_id → provider_id（2026-08-28 契约对齐：该列指向 providers.id 外键，
+#   product_id 命名易与「产品」混淆，统一为 provider_id，保留历史厂商归属数据）。
 _COLUMN_RENAME_MAP: dict[str, dict[str, str]] = {
     "providers": {"api_key_env": "api_key"},
+    "turns": {"paths": "image_paths", "product_id": "provider_id"},
 }
+
+# 本次主动契约删除的已知列（按表名 → [待删除列名]）。
+# 与 _COLUMN_RENAME_MAP 同级、可控、非宽泛清理：仅收录经过确认的「主动删列」迁移，
+# 区别于未确认的历史孤儿列（孤儿列不在此处、也不走自动删除以免误删数据）。
+# 当前登记项：
+# - tasks 表的 agent_id（2026-09-X 任务/轮次解耦：task 不再绑定 agent，
+#   agent 由 turn 维度承载，故从 tasks 表彻底移除该列）。
+_COLUMN_DROP_MAP: dict[str, list[str]] = {
+    "tasks": ["agent_id"],
+}
+
+
+def _ensure_drop_legacy_columns(connection: Connection) -> None:
+    """按 ``_COLUMN_DROP_MAP`` 主动删除本次契约变更的已知列。
+
+    在列迁移（``_ensure_model_columns``）之前执行，确保被删列不会因模型已不含它
+    而被误判为「缺失列」触发 ``ADD COLUMN`` 回补。每张表先经 inspector 确认存在，
+    SQLite 不支持 ``DROP COLUMN ... IF EXISTS``，故用 ``PRAGMA table_info`` 判断列存在
+    后再删；列已不存在（如全新库或已删过）则安全跳过，不抛错。
+
+    参数:
+        connection: 当前处于事务中的 SQLAlchemy 连接。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 如果 ``ALTER TABLE DROP COLUMN`` 执行失败
+            （列存在但删除失败时，不属于可跳过的场景）。
+
+    副作用:
+        对每张登记表删除登记列（列存在时）；每删一列写一条 info 日志。
+    """
+
+    inspector = inspect(connection)
+    for table_name, columns in _COLUMN_DROP_MAP.items():
+        if not inspector.has_table(table_name):
+            continue
+        existing = {col["name"] for col in inspector.get_columns(table_name)}
+        for column_name in columns:
+            if column_name not in existing:
+                continue
+            connection.execute(
+                text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
+            )
+            log.info("dropped legacy column %s.%s", table_name, column_name)
+
 
 
 def _ensure_model_columns(

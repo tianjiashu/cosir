@@ -15,13 +15,12 @@ export type TurnStatus =
   | "reverted";
 
 export interface TurnRecord {
-  turn_id: string;
-  task_id: string;
+  turn_id: number;
+  task_id: number;
   input_text: string;
   status: TurnStatus;
   end_reason?: string | null;
   response_text?: string | null;
-  agent_id?: string | null;
   model_name?: string | null;
   created_at: string;
   updated_at: string;

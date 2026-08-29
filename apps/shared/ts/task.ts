@@ -9,16 +9,15 @@
 export type TaskStatus = string;
 
 export interface TaskRecord {
-  task_id: string;
-  workspace_id: string;
-  agent_id: string;
+  task_id: number;
+  workspace_id: number;
   title: string;
   status: TaskStatus;
   execution_status?: TaskStatus | null;
   task_type?: string;
-  parent_task_id?: string | null;
-  parent_turn_id?: string | null;
-  delegation_id?: string | null;
+  parent_task_id?: number | null;
+  parent_turn_id?: number | null;
+  delegation_id?: number | null;
   context_usage_used?: number | null;
   context_window_total?: number | null;
   created_at: string;

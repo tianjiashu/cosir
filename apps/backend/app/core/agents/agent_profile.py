@@ -38,7 +38,7 @@ class AgentProfile:
         description: 职责/能力/适用场景与约束的唯一文本描述（delegate_task 中暴露给父 Agent）。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
-        product_id: 模型厂商 id（None 时由 model_name 推导）。
+        provider_id: 模型厂商 id（None 时由 model_name 推导）。
         model_name: 模型名称（可带 provider 前缀）。2026-08-18 决议：内置 profile 不内置
             默认模型，默认 None；None 表示未配置，由前端优先校验、后端兜底报错。
         model_settings: 模型覆盖配置（``ModelSettings``）。
@@ -55,7 +55,7 @@ class AgentProfile:
     description: str
     allowed_tools: list[str]
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    product_id: int | None = None
+    provider_id: int | None = None
     model_name: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     hidden: bool = False

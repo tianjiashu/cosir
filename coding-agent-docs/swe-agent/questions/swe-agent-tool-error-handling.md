@@ -411,7 +411,7 @@ flowchart LR
 ### 5.1 核心数据结构
 
 ```python
-# sweagent/exceptions.py
+# sweagent/llm_provider_exceptions.py
 class FormatError(Exception):
     """模型响应无法正确解析为 thought 和 action 时抛出"""
 

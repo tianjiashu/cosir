@@ -76,3 +76,37 @@ class TokenEstimator:
             or (0x3000 <= code <= 0x303F)  # CJK 全角标点 / 符号
             or (0xFF00 <= code <= 0xFFEF)  # 全角形式（全角标点、全角字母）
         )
+
+    @classmethod
+    def estimate_image(cls, image: dict) -> int:
+        """估算单张多模态图片进入模型上下文后的 token 占用（按厂商上限启发式，零依赖）。
+
+        与编码层同源：读取 ``build_user_content_blocks`` 产出的 ``image_url`` block 中的 base64
+        数据（即运行期实际发给模型的内容），按字节估算 token；并以 DeepSeek 官方每张图 token
+        硬上限 384 封顶。当前轮与历史轮回放均经同一 ``build_user_content_blocks`` 重建 block，
+        故 token 估算必然一致（避免圆环失真）。
+
+        参数:
+            image: 多模态 block（``image_url`` 类型，含 ``data:...;base64,...`` 的 url）。
+
+        返回:
+            估算的 token 数（封顶 384）；block 结构非法时返回 0。
+
+        异常:
+            无（结构缺失/非法时容错返回 0）。
+
+        副作用:
+            无（纯计算）。
+        """
+        try:
+            url = image["image_url"]["url"]
+        except (KeyError, TypeError):
+            return 0
+        if not isinstance(url, str) or "base64," not in url:
+            return 0
+        b64 = url.split("base64,", 1)[1]
+        # base64 末尾 padding 不计入原始字节；近似原始字节 = len * 3/4
+        raw_bytes = int(len(b64) * 3 / 4)
+        # 经验：图片每 ~512 原始字节 ≈ 1 token；DeepSeek 官方每张硬上限 384 token 封顶。
+        tokens = max(1, raw_bytes // 512)
+        return min(tokens, 384)

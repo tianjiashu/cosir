@@ -1,14 +1,14 @@
 # AGENTS.md
 
-本文件是 `coding-agent` 项目的长期 Agent 入口指南。它保留项目愿景、不可变决议、协作原则、当前目录结构与职责，以及**已落地的项目约定**；详细规则放在 `docs/` 和 `rules/` 下。
+本文件是 `cosir` 项目的长期 Agent 入口指南。它保留项目愿景、不可变决议、协作原则、当前目录结构与职责，以及**已落地的项目约定**；详细规则放在 `docs/` 和 `rules/` 下。
 
-> 当前项目处于代码开发阶段（后端 FastAPI + LangGraph 运行时、自定义工具系统（17 个内置工具）、日志子系统、Langfuse 可观测性、Web 工具均已落地；delegation 子 Agent、Hook 系统、CodeGraph 集成、context compaction、file snapshot / change set 检查点、语法检查已落地；桌面端 Tauri 2 + React 前端与 Rust 后端托管 supervisor 已搭起）。本文件的目录结构与约定以**当前真实代码为准**；`rules/目录组织规范.md` 最近一次全量对齐停留在 2026-08-04，**已滞后于当前代码**（仍引用 `main.py`、`api/app.py`、`api/depends/`、`service/runtime_event/`、顶层 `app/trace_infra`、9 工具等旧状态），两者冲突时以真实代码为准，待其重新对齐后同步修订本文件。本文件已于 2026-08-17 与真实代码全量对齐。
+> 当前项目处于代码开发阶段（后端 FastAPI + LangGraph 运行时、自定义工具系统（17 个内置工具）、日志子系统、Langfuse 可观测性、Web 工具均已落地；delegation 子 Agent、Hook 系统、CodeGraph 集成、context compaction、file snapshot / change set 检查点、语法检查已落地；模型厂商配置中心（Provider/ModelEntry CRUD + litellm 目录发现）已落地；桌面端 Tauri 2 + React 前端与 Rust 后端托管 supervisor 已搭起）。本文件的目录结构与约定以**当前真实代码为准**；`rules/目录组织规范.md` 最近一次全量对齐停留在 2026-08-04，**已滞后于当前代码**（仍引用 `main.py`、`api/app.py`、`api/depends/`、`service/runtime_event/`、顶层 `app/trace_infra`、9 工具等旧状态），两者冲突时以真实代码为准，待其重新对齐后同步修订本文件。本文件已于 2026-08-28 与真实代码全量对齐。
 
 ---
 
 ## 一、项目愿景
 
-打造一个面向个人开发者的本地桌面 coding-agent 底座。
+打造一个面向个人开发者的本地桌面 AI 编程助手底座（项目代号 `cosir`）。
 
 它参考成熟 coding-agent 的工程机制，但不绑定单一 Agent 范式；它允许用户持续定制 Workflow、Context、Tool 和开发规则，最终演化成符合个人开发习惯的长期协作型工程伙伴。
 
@@ -46,13 +46,13 @@
 目录结构以**当前真实代码**为准。只有能力进入实现、职责边界明确时才增量创建深层目录；不看代码、只看目录就能知道项目能力模块与职责边界。
 
 ```text
-coding-agent/
+cosir/
   .pre-commit-config.yaml # 仓库根（git 根）pre-commit：ruff-format + ruff --fix + mypy(非阻塞) + mypy-new-strict(新增文件阻塞) + generate-openapi + generate-runtime-event-ts
   package.json            # 仓库根脚本集合（dev:all / dev:client）
   CHANGELOG.md            # 变更记录
   apps/
     backend/
-      pyproject.toml      # 唯一依赖来源（uv）：fastapi/langgraph/langchain/langchain-litellm(经 ChatLiteLLM 接 DeepSeek)/litellm==1.97.0/langfuse/tree-sitter 系列；Ruff/mypy(strict+存量豁免)/pytest/coverage 配置集中于此
+      pyproject.toml      # 唯一依赖来源（uv）：fastapi/langgraph/langchain/langchain-litellm(经 ChatLiteLLM 接 DeepSeek)/litellm/langfuse/tree-sitter 系列；Ruff/mypy(strict+存量豁免)/pytest/coverage 配置集中于此
       uv.lock             # 锁文件，必须提交
       .python-version     # 3.11
       .env.example        # 环境变量样例：CODING_AGENT_MODEL_*（openai-compatible + DeepSeek）、DEEPSEEK_API_KEY、LANGFUSE_*、CODING_AGENT_CODEGRAPH_NODE
@@ -63,55 +63,61 @@ coding-agent/
         app.py            # 进程装配入口（create_app + app 单例 + lifespan + importlib 触发路由注册 + CodeGraph supervisor 生命周期），自 api/app.py 上移至顶层
         bootstate.py      # 启动状态文件写入器（booting/ready/failed/stopped 契约，供桌面端 supervisor 轮询）
         api/              # FastAPI 接入层
-          agents_api.py / tasks_api.py / turns_api.py / workspaces_api.py / changes_api.py / logs_api.py
-          dependencies.py       # FastAPI 依赖接线（re-export config 单例 + 持有 AgentRuntime 单例 set/get/build_runtime）
+          agents_api.py / tasks_api.py / turns_api.py / workspaces_api.py / changes_api.py / logs_api.py / models_api.py / providers_api.py
+          dependencies.py       # FastAPI 依赖接线（re-export config 单例 + 持有 AgentRuntime 单例 set/get/build_runtime + Provider/ModelEntry service）
           middleware/api_logging.py  # 请求/异常日志中间件
-          schemas/request/         # API Pydantic 请求模型（PascalCase 文件名，待确认，见 D12）
-          schemas/response/        # API Pydantic 响应模型（同上）
+          schemas/request/         # API Pydantic 请求模型（PascalCase 文件名，待确认，见 D12）：含 ModelCreateRequest / ProviderCreateRequest / ProviderUpdateRequest
+          schemas/response/        # API Pydantic 响应模型（同上）：含 ModelEntryResponse / ModelImportResponse / ProviderResponse
         codegraph/        # CodeGraph Kernel 子系统（常驻代码智能后端）
           supervisor.py / kernel_client.py / node_resolver.py / protocol.py / exceptions.py
         config/
-          settings.py     # Settings 类级静态命名空间（MAX_*/WEB_*/LANGFUSE_*/CODEGRAPH_*/DELEGATION_*/CONTEXT_* 等，经 CODING_AGENT_* 环境变量覆盖）
+          settings.py     # Settings 类级静态命名空间（MAX_*/WEB_*/LANGFUSE_*/CODEGRAPH_*/DELEGATION_*/CONTEXT_*/LLM_* 等，经 CODING_AGENT_* 环境变量覆盖）
           configuration.py# 进程级轻量单例收口（AgentProfileRegistry / ToolSystem / 委派子 Agent 能力摘要），见 D14
           logging/        # 日志子系统聚合包（特例：允许依赖 storage/trace_infra）
-            logger.py / configuration.py / process_bridge.py / common.py
+            logger.py / configuration.py / process_bridge.py / common.py / log_files_dir_service / record_mapper / text_renderer_service
             context/log_context_store.py、filter/caller_filter.py、filter/log_context_filter.py
-            formatter/jsonl_formatter.py、handler/sqlite_handler.py
+            formatter/jsonl_formatter.py、handler/sqlite_handler.py、save/（jsonl / sqlite_handler 落盘策略）
         core/             # Agent 运行底座，全基于 LangGraph 体系
-          agents/         # agent_profile / agent_profile_registry / define_agents（1 可见 developer + 4 hidden 委派子 profile）/ prompt_ref
-          context/        # 上下文构建与压缩：system_prompt_builder / system_prompt_context / runtime_context_manager / runtime_message_store / context_compressor / context_usage_meter / rules/
-          delegation/     # 子 Agent 委派执行：child_agent_runner / child_agent_profile_builder / delegation_executor（实现 delegate_task 执行端口）
-          llm/            # factory（build_chat_model → ChatLiteLLM 单一收口）/ langchain_bridge / model_settings / model_catalog / context_window_resolver
+          agents/         # agent_profile / agent_profile_registry / define_agents（1 可见 main_agent + 4 hidden 委派子 profile）/ model_settings
+          context/        # 上下文构建与压缩：system_prompt_builder / system_prompt_context / runtime_context_manager / runtime_message_store / context_compressor / context_listener/（context_compress_listener / context_usage_compute_listener / listener_event / listener_result）/ rules/
+          delegation/     # 子 Agent 委派执行：child_agent_runner / delegation_executor（实现 delegate_task 执行端口）
           observability/  # Langfuse 可观测性唯一收口：langfuse_tracing / langfuse_tool_trace_recorder / langfuse_payload_sanitizer
           runtime/        # runner（AgentRuntime 总控）/ runtime_operations / checkpointer（AsyncSqliteSaver）/ turn_cancellation_registry
           workflows/      # agent_workflow（Protocol）
-            nodes/        # 共享节点原语：model_node / tools_node / observation_node / max_steps_node；helper/ 子目录承载节点辅助（approval / chunk_assembler / common / debug_dump / invalid_tool_call / thinking_extractor）
+            nodes/        # 共享节点原语：model_node / tools_node / observation_node / finalize_max_steps；helper/ 子目录承载节点辅助（approval / chunk_assembler / common / debug_dump / invalid_tool_call / thinking_extractor / vision_content_blocks）
             react/        # StateGraph 实现：state / edges / workflow / runtime_config（支持 approval_resolver 审批中断）
         hook/             # Hook 系统（Claude Code 风格 7 类事件，失败安全 ALLOW）
           hook_base.py / hook_event.py（USER_PROMPT_SUBMIT / PRE_TOOL_USE / POST_TOOL_USE / SESSION_START / SESSION_END / STOP / PRE_COMPACT）
           hook_context.py / hook_result.py / hook_registry.py（纯索引）/ hook_interceptor.py（拦截编排收口，Pre/PostToolUse）
           builtins/       # bootstrap_hooks（启动播种）/ file_snapshot_hook（写前文件快照）/ codegraph_index_prepare_hook
+        llm_provider/     # 模型厂商配置中心（自 core/llm 上移为顶层模块）
+          model_factory.py / model_catalog.py / context_window_resolver.py
+          capability/     # model_capability / provider_capability（厂商能力探测）
+          provider/       # provider_service / model_entry_service / capability_service / connection_test_result（厂商 CRUD + 模型条目管理 + 连接测试）
         models/           # 业务层值对象（一文件一 model，文件名=类名）
           enums/          # event_type / turn_status / error_kind / hook_event
+          errors/         # llm_provider_exceptions（厂商层异常）
           event/          # runtime_event（turn 级信封）/ workspace_event（workspace 级，无 task/turn 信封）
-          payload/        # 运行时事件 payload（30+：run_* / step_started / model_*（含 output/thinking delta）/ tool_call_* / tool_output_delta / observation_added / human_input_* / delegation_* / file_change_* / context_usage / final_response）+ registry/ + workspace_payload/
-          task_record / turn_record / runtime_message / trace_context / delegation_record / file_snapshot_record / workspace_record / workspace_readiness / context_usage / turn_usage_stats / log_entry_record / log_query / log_query_result / mapped_log_record
+          payload/        # 运行时事件 payload（27+：run_* / step_started / model_*（含 output/thinking delta）/ tool_call_* / tool_output_delta / observation_added / human_input_* / delegation_* / file_change_* / context_usage / final_response）+ registry/ + workspace_payload/
+          result/         # change_set / delegation_result / delegation_acquire_result（服务层结果值对象）
+          task_record / turn_record / runtime_message / trace_context / delegation_record / file_snapshot_record / workspace_record / workspace_readiness / turn_usage_stats / log_entry_record / log_query / log_query_result / mapped_log_record / model_entry_record / provider_record / attachment_ref
         service/          # 领域服务编排层（仅 xxx_service + 结果值对象）
           depends.py      # service 层依赖装配（storage CRUD + service 单例；initialize/close/reset_service_dependencies）
           agent_runtime_event/  # 运行时事件总线（runtime_event_bus / runtime_event_service / runtime_event_subscription；持久化 + 进程内广播 + SSE 订阅）
-          delegation/     # delegation_service / delegation_policy / delegation_result / delegation_context / delegation_acquire_result（父子 task/turn 委派编排）
-          task/           # task_service / turn_service / turn_prepare_service / turn_stream_service（SSE 流编排：订阅/认领 producer/驱动/发布/兜底）/ turn_workspace_resolver / workspace_service / change_set_service（task 级变更集：累积查询 + 单文件撤销/保留）
+          delegation/     # delegation_service / delegation_policy / delegation_context（父子 task/turn 委派编排）
+          task/           # task_service / turn_service / turn_stream_service（SSE 流编排：订阅/认领 producer/驱动/发布/兜底）/ turn_workspace_resolver / workspace_service
+            change_set/   # change_set 拆分子目录：conflict / errors / operations / query / snapshot_patch（task 级变更集：累积查询 + 单文件撤销/保留）
           tool_execution/ # tool_execution_service / tool_trace_recorder（ToolTraceRecorder 协议）/ run_result
           workspace_event/ # workspace_event_bus / workspace_event_service / workspace_event_subscription（workspace 级 preparing/ready/degraded 事件）
           codegraph_lifecycle_service.py / log_query_service.py / turn_runtime_message_store.py
         storage/          # SQLite 数据层
-          engine_cache.py / init_schema.py / store_engines.py
-          crud/           # log / runtime_event / task / turn / turn_message / workspace / delegation / file_snapshot
-          model/          # 对应 ORM 模型（base + 8 实体）
+          engine_cache.py / init_schema.py / store_engines.py / cascade_deletion.py
+          crud/           # log_crud / runtime_event_crud / task_crud / turn_crud / turn_message_crud / workspace_crud / delegation_crud / file_snapshot_crud / model_entry_crud / provider_crud
+          model/          # 对应 ORM 模型（base + 11 实体：task / turn / turn_message / workspace / runtime_event / delegation / file_snapshot / log / model_entry / provider / trace）
         tools/            # 工具系统（不基于 LangGraph），17 个内置工具
           schemas/        # tool_definition（契约单一事实来源，含 execution_mode 分级隔离）/ tool_call / tool_observation / tool_display / tool_execution_context / delegate_task_executor（委派执行端口）/ tool_runtime_dependencies
           tool_execute/   # tool_scheduler（执行固定入口）/ tool_executor（分级隔离：thread 直跑 / process 子进程+硬超时强杀）/ tool_error / tool_success / tool_cancelled / windows_job_object
-          tool_handler/   # 内置工具 handler：read_file / write_file / replace_tool（原 patch）/ apply_patch_tool（V4A）/ search_files / list_directory / delete / execute_terminal / web_search / web_extract / delegate_task / codegraph_query（6 个查询工具）
+          tool_handler/   # 内置工具 handler：read_file / write_file / replace_tool / apply_patch_tool（V4A）/ search_files / list_directory / delete（合并文件与目录删除）/ execute_terminal / web_search / web_extract / delegate_task / codegraph_query（6 个查询工具）
             tool_base.py # HandlerBase 抽象基类（name/description/permission/args_model/timeout_seconds/risk_level + execute/to_definition）
             file_io/atomic_write.py、patch/（patch_parser / patch_diff / patch_apply / fuzzy_match / v4a_reverse（反向补丁，供快照撤销）/ file_change_display）
             search/、terminal/（危险命令硬拒）、web/（web_provider 协议 + providers/firecrawl + url_safety + web_content_store）
@@ -121,21 +127,21 @@ coding-agent/
           guard/          # 横切子层：display_data_budget / tool_output_budget / file_resource_paths / file_tool_state_coordinator（revision/stale/路径锁/重复调用）/ file_state/ / syntax_check（tree-sitter 多语言语法检查）
           tool_registry.py / tool_system.py
         utils/            # 叶子工具函数（零 app.* 依赖）
-          datetime_utils / file_utils / code_file_utils / inflight_registry / token_estimator
+          datetime_utils / file_utils / code_file_utils / inflight_registry / token_estimator / constants / image_utils / message_content
           trace_infra/    # trace 基础设施原语（ids / redaction），自顶层 app/trace_infra 收拢至 utils 下
-      tests/              # pytest 测试目录（57+ 测试文件：delegation / apply_patch / replace / context_usage / runner 事件 / projector 等）
+      tests/              # pytest 测试目录（20 测试文件：delegation / apply_patch / replace / context_usage / runner 事件 / projector 等）
       temp/               # 临时验证/调试脚本（已被 .gitignore 忽略，按需创建，用完清理）
     desktop/              # Tauri 2 + React + TS 桌面客户端
       src/                # React 前端
-        components/       # chat/（AgentMessage / MarkdownStream / ThinkingBlock / ToolCallCard / TerminalCallCard / ContextUsageRing / FileLink 等）、layout/（Sidebar / ChatPanel / RightPanel / TurnTimeline / ChangesDrawer / InputBar 等）、right-panel/（Changes / Context / Mcp / Outputs / Sources）、sidebar/、logs/、ui/
-        hooks/            # useBackend / useBackendBootstrap / useSSE / useTask / useChanges / useDelegationStreams / useStartupTaskResume / useWorkspaceTaskLazyLoad
-        services/         # api / sse / sseConnectionBase / sseParser / delegationStream / backend / workspace / logs / dialog / tracePropagation / types / timeline/（projector / groupTools）
-        stores/           # zustand：backend / event / task / turn / workspace / workspaceEvent / delegation / contextUsage / clientTrace / conversationTrace
-        lib/、pages/（chat / logs）、tests/（50+ vitest）
+        components/       # chat/（AgentMessage / AgentSelector / ModelSelector / MarkdownStream / ThinkingBlock / ToolCallCard / TerminalCallCard / ContextUsageRing / FileLink / TaskHeaderBar 等）、layout/（Sidebar / ChatPanel / RightPanel / TurnTimeline / ChangesDrawer / InputBar / AttachmentChip 等）、right-panel/（Changes / Context / Mcp / Outputs / Sources / SubagentPanel）、settings/（ProviderFormDialog / ProviderModelsSection / ProviderSettingsDialog）、sidebar/、logs/、ui/
+        hooks/            # useBackend / useBackendBootstrap / useSSE / useTask / useChanges / useDelegationStreams / useStartupTaskResume / useWorkspaceTaskLazyLoad / useModelSendGuard / useCopyToClipboard
+        services/         # api / sse / sseConnectionBase / sseParser / delegationStream / backend / workspace / logs / dialog / tracePropagation / types / httpClient / timeline/（projector / groupTools）
+        stores/           # zustand：backend / event / task / turn / workspace / workspaceEvent / delegation / contextUsage / clientTrace / conversationTrace / agent
+        lib/、pages/（chat / logs）、tests/（100+ vitest）
       src-tauri/          # Rust 宿主（src/lib.rs / main.rs + backend/ supervisor 托管 + commands/）
         src/backend/      # boot_state / health_checker / process_launcher / runtime_locator / supervisor / types
         src/commands/     # backend.rs（start/stop/restart/status/logs_tail）/ fs.rs / logging.rs
-    shared/               # 前后端共享协议（15 个 ts：api / events / task / turn / workspace / workspaceEvent / changes / agents / backend / logs / toolDisplay / toolDisplayRules / toolExecution / tracePropagation / index；events.ts 由 pre-commit 从 payload 模型生成）
+    shared/               # 前后端共享协议（17 个 ts：api / events / task / turn / workspace / workspaceEvent / changes / agents / backend / logs / toolDisplay / toolDisplayRules / toolExecution / tracePropagation / attachment / model / index；events.ts 由 pre-commit 从 payload 模型生成）
   docs/                   # 设计/计划/验收文档：idea-requirements / mypy-strict-migration-plan / delegation-parent-child-task-refactor / sse-connection-refactor-plan / ui-guidelines / ui-refactor-plan / 上下文折叠 / 后端审查报告；api/openapi.json（生成物）；codegraph-docs/；plan/（subagent / langfuse / litellm / startup-resume 等专题计划）；langraph/（LangChain/LangGraph 学习笔记）
   rules/                  # 项目级协作规则、代码开发规范、交互澄清、经验记录、impeccable/（UI 打磨 skill）
   skills/                 # log-triage 日志排障技能（SKILL.md + scripts）
@@ -149,13 +155,14 @@ coding-agent/
 目录职责要点：
 
 - `apps/backend/app/app.py`：进程装配入口（自 `api/app.py` 上移）。**网关约定**：必须用 `importlib.import_module("app.api.xxx")` 触发路由注册，不能用 `import app.api.xxx`，否则顶层包名 `app` 被覆盖为模块对象。lifespan 内完成 `Settings.load`、service 依赖初始化、日志挂载、CodeGraph supervisor 生命周期与 bootstate 写入。
-- `apps/backend/app/api/`：FastAPI 路由、SSE 格式化与依赖组装（接入层）。`turns_api` 只负责执行 `pending` 轮次（pending → 认领 → 实时流，非 pending 返回 409）；SSE 事件流编排（订阅 / 认领 producer / 驱动 / 发布 / 兜底）收口在 `service/task/turn_stream_service.py`，HTTP 连接作为 consumer 订阅自身 turn。`workspaces_api` 提供 workspace prepare / CodeGraph 索引准备端点；`changes_api` 提供变更集查询与撤销/保留端点。
+- `apps/backend/app/api/`：FastAPI 路由、SSE 格式化与依赖组装（接入层）。`turns_api` 只负责执行 `pending` 轮次（pending → 认领 → 实时流，非 pending 返回 409）；SSE 事件流编排（订阅 / 认领 producer / 驱动 / 发布 / 兜底）收口在 `service/task/turn_stream_service.py`，HTTP 连接作为 consumer 订阅自身 turn。`workspaces_api` 提供 workspace prepare / CodeGraph 索引准备端点；`changes_api` 提供变更集查询与撤销/保留端点；`models_api` 提供模型条目扁平列表端点（模型选择下拉数据源）；`providers_api` 提供厂商 CRUD + 连接测试端点。
 - `apps/backend/app/codegraph/`：CodeGraph Kernel 常驻子系统（supervisor 进程管理 + RPC client + 协议 + 异常分层）。6 个 `codegraph_*` 查询工具经 `ToolSystem` 注册，kernel 不可用时 execute 优雅降级。
 - `apps/backend/app/hook/`：Claude Code 风格 Hook 系统。7 类事件（`USER_PROMPT_SUBMIT` / `PRE_TOOL_USE` / `POST_TOOL_USE` / `SESSION_START` / `SESSION_END` / `STOP` / `PRE_COMPACT`）；`HookInterceptor.fire` 是所有拦截点的统一收口，失败安全（异常/超时/非法结果统一兜底 `ALLOW`）；`PRE_TOOL_USE` 返回 `DENY` 为硬拒绝（不走 `interrupt()` 审批）。内置 hook：`file_snapshot_hook`（写工具执行前对目标文件拍反向 V4A 快照）、`codegraph_index_prepare_hook`（workspace 索引准备）。
-- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。`core/delegation/` 承载子 Agent 委派执行（child agent 复用 Agent/Workflow/Runtime，非平行系统）；`core/context/` 承载系统提示词构建、运行时上下文管理与压缩（context compaction 已落地）；`core/llm/factory` 经 langchain-litellm `ChatLiteLLM` 单一收口接入 DeepSeek；`core/observability/` 是所有 langfuse 三方依赖的耦合收口。
-- `apps/backend/app/models/`：业务层值对象。运行时事件定义在 `models/event/runtime_event.py`（payload 在 `models/payload/`，workspace 级事件在 `models/event/workspace_event.py`）。日志查询服务在 `service/log_query_service.py`。
-- `apps/backend/app/service/`：领域服务编排层，只放 `xxx_service`（及结果值对象）。`service/depends.py` 是 service 层内部单例装配入口。`service/delegation/` 承载父子 task/turn 委派编排（并发上限 `DELEGATION_MAX_CONCURRENCY=4`，超时 `DELEGATION_TIMEOUT_SECONDS=300`）；`service/task/change_set_service.py` 把 `file_snapshots` 反向快照聚合为 task 级变更集，检查点粒度为「一个 turn = 一个检查点」。
-- `apps/backend/app/storage/`：SQLite 持久化存储。LangGraph checkpoint 由 `core/runtime/checkpointer` 经 aiosqlite 直连，不经本层引擎。
+- `apps/backend/app/core/`：Agent 运行底座，**全基于 LangGraph 体系**（LangChain 为 LangGraph 的硬依赖基座）。`core/delegation/` 承载子 Agent 委派执行（child agent 复用 Agent/Workflow/Runtime，非平行系统）；`core/context/` 承载系统提示词构建、运行时上下文管理与压缩（context compaction 已落地，含 `context_listener/` 事件驱动压缩与用量计算）；`core/observability/` 是所有 langfuse 三方依赖的耦合收口。
+- `apps/backend/app/llm_provider/`：模型厂商配置中心（自 `core/llm` 上移为顶层模块）。`model_factory` 经 langchain-litellm `ChatLiteLLM` 单一收口接入 DeepSeek 及其他厂商；`provider/` 承载厂商 CRUD（`ProviderService`）、模型条目管理（`ModelEntryService`）、能力探测（`CapabilityService`）与连接测试（`ConnectionTestResult`）；`capability/` 承载厂商/模型能力探测协议。
+- `apps/backend/app/models/`：业务层值对象。运行时事件定义在 `models/event/runtime_event.py`（payload 在 `models/payload/`，workspace 级事件在 `models/event/workspace_event.py`）。`models/errors/` 承载领域异常（如 `llm_provider_exceptions`）。`models/result/` 承载服务层结果值对象。日志查询服务在 `service/log_query_service.py`。
+- `apps/backend/app/service/`：领域服务编排层，只放 `xxx_service`（及结果值对象）。`service/depends.py` 是 service 层内部单例装配入口。`service/delegation/` 承载父子 task/turn 委派编排（并发上限 `DELEGATION_MAX_CONCURRENCY=4`，超时 `DELEGATION_TIMEOUT_SECONDS=300`）；`service/task/change_set/` 子目录把 `file_snapshots` 反向快照聚合为 task 级变更集（conflict / errors / operations / query / snapshot_patch），检查点粒度为「一个 turn = 一个检查点」。
+- `apps/backend/app/storage/`：SQLite 持久化存储。LangGraph checkpoint 由 `core/runtime/checkpointer` 经 aiosqlite 直连，不经本层引擎。`cascade_deletion.py` 承载级联删除逻辑。
 - `apps/backend/app/tools/`：工具系统统一收口，**不基于 LangGraph**；17 个内置工具（10 文件/终端/web + delegate_task + 6 codegraph 查询）经 `core` 调度执行。`ToolDefinition` 是契约单一事实来源；所有工具 handler 继承 `tool_handler/tool_base.HandlerBase`。工具执行**分级隔离**（`execution_mode`：`process` 子进程+硬超时强杀用于 execute_terminal；默认 `thread` 当前线程直跑）。文件路径安全统一收口 `tool_handler/security/path_resolver`。工具拦截（Pre/PostToolUse）经 `hook_interceptor` 静态方法收口。
 - `apps/backend/app/utils/`：叶子工具函数与 `trace_infra/` 原语（ID 生成/校验、payload 脱敏），均为 leaf，零 `app.*` 依赖。
 - `apps/backend/app/bootstate.py`：后端启动状态文件写入器。与桌面端 Rust supervisor 约定 `storage/backend.bootstate.json` 契约（booting/ready/failed/stopped）；错误信息落盘前自动脱敏。
@@ -164,13 +171,13 @@ coding-agent/
 
 当前已确认的概念边界：
 
-- `Agent` 是执行主体。内置 5 个 profile（`define_agents.py`）：1 个可见默认 `developer`（全工具，`max_steps=300`）+ 4 个 `hidden` 委派子 profile（`delegate_reviewer` / `delegate_analyst` / `delegate_tester` / `delegate_coder`），模型统一为 `deepseek/deepseek-v4-flash`（`DEEPSEEK_API_KEY`）。
+- `Agent` 是执行主体。内置 5 个 profile（`define_agents.py`）：1 个可见默认 `main_agent`（全工具，`max_steps=300`，thinking + stream + reasoning_effort=high）+ 4 个 `hidden` 委派子 profile（`delegate_reviewer` / `code-spec-reviewer` / `unit-test-engineer` / `code-developer`），子 Agent 模型统一为 `deepseek/deepseek-v4-flash`（`DEEPSEEK_API_KEY`）。
 - `Workflow` 是执行策略（ReAct-like 已落地：`workflows/react` + 共享 `workflows/nodes`），描述 Agent 如何完成任务；可扩展 Plan-and-Execute、Review-Fix 等。
 - `Runtime` 是执行底座（`core/runtime/runner.AgentRuntime`），负责状态管理、模型调用、工具调度、审批、checkpoint、context compaction、事件流、取消、恢复和终止保护。
 - `Subagent` 已按「child agent / child run 复用 Agent、Workflow 和 Runtime」落地：`delegate_task` 工具 → `tools/schemas/delegate_task_executor` 端口 → `core/delegation/delegation_executor` 生产实现 → `service/delegation` 父子 task/turn 编排，事件流含 `delegation_*` payload。
 - `core` 是 LangGraph 编排内核；`tools` 不基于 LangGraph，由 `core` 调度执行。
 - 工具执行分级隔离：`ToolDefinition.execution_mode` 声明「是否需要 OS 级故障隔离」，`ToolExecutor.execute` 据此分流——`process` 走子进程 + 硬超时强杀 + 树杀（execute_terminal）；`thread`（默认）当前线程直跑。该字段按工具逐个声明。
-- context compaction 已落地：`context_usage_meter` 度量（`CONTEXT_WINDOW_TOKENS` 可配）→ `context_usage` 事件推前端（ContextUsageRing）→ `context_compressor` 压缩，`PRE_COMPACT` hook 可介入。
+- context compaction 已落地：`context_listener/` 事件驱动（`context_usage_compute_listener` 度量 → `context_compress_listener` 触发压缩）→ `context_compressor` 压缩，`PRE_COMPACT` hook 可介入。`CONTEXT_WINDOW_TOKENS` 可配（默认 200000）。
 - 并发执行边界：**并发粒度是 task**——不同 task（同 workspace 或跨 workspace）的 turn 并发执行；同一 task 内 turn 仍串行（pending → 认领乐观锁，一次一个 running turn）。跨 task 共享资源（文件路径锁、`file_snapshots.seq` 分配等）必须按 task/workspace 维度隔离；`file_snapshots.seq` 已改为 task 内递增并加 `(task_id, seq)` 唯一索引兜底。
 
 ## 五、项目约定（已落地、强制）
@@ -187,7 +194,7 @@ coding-agent/
 - **命名禁止模糊词**：`Utils` / `Helper` / `Common` / `Misc` / `Manager` 等笼统命名不允许（约定别名 `log` / `log_query_service` 等除外）。
 
 ### 2. 目录与依赖方向
-- **单向依赖总纲**（详见 `rules/目录组织规范.md` 第一章，注意该文档对齐滞后，以真实代码为准）：`api → core/service`；`core → service/tools/models/config`；`service → storage/models/config/tools`（tool_execution 编排 tools 合法）；`storage → models`；`tools → config/models/utils`（不依赖 service）；`models → utils`（leaf）；`utils`（含 `trace_infra`）为纯 leaf；`config` 通用轻量，`config/logging` 聚合特例允许依赖 `storage`。
+- **单向依赖总纲**（详见 `rules/目录组织规范.md` 第一章，注意该文档对齐滞后，以真实代码为准）：`api → core/service/llm_provider`；`core → service/tools/models/config`；`llm_provider → config/models/storage`（厂商/模型条目持久化）；`service → storage/models/config/tools`（tool_execution 编排 tools 合法）；`storage → models`；`tools → config/models/utils`（不依赖 service）；`models → utils`（leaf）；`utils`（含 `trace_infra`）为纯 leaf；`config` 通用轻量，`config/logging` 聚合特例允许依赖 `storage`。
 - **禁止跳层 / 反向依赖**：如 `api` 直 import `storage`/`tools`、`tools → service`、`models → 编排层` 均为违规（现存例外见第十章 D5/D14）。
 - **依赖倒置范例**：`ToolTraceRecorder` 协议定义在 `service/tool_execution/tool_trace_recorder.py`，实现收口在 `core/observability`，`core → service` 为合法方向。`DelegateTaskExecutor` 端口定义在 `tools/schemas/`，生产实现在 `core/delegation`，同为依赖倒置。
 
@@ -206,7 +213,7 @@ coding-agent/
 
 ### 6. 工具系统约定（强制）
 - **工具契约单一事实来源**：`ToolDefinition`（`schemas/tool_definition.py`）是工具契约的唯一来源，模型可见结构由 `to_model_tool_definition()` 投影，禁止平行类。
-- **内置工具继承 HandlerBase**：17 个内置工具（read_file / write_file / replace（原 patch 拆分）/ apply_patch（V4A）/ search_files / list_directory / delete / execute_terminal / web_search / web_extract / delegate_task + 6 个 codegraph 查询工具）handler 继承 `HandlerBase`，声明类级元数据并实现 `execute`/`to_definition`。
+- **内置工具继承 HandlerBase**：17 个内置工具（read_file / write_file / replace / apply_patch（V4A）/ search_files / list_directory / delete（合并文件与目录删除）/ execute_terminal / web_search / web_extract / delegate_task + 6 个 codegraph 查询工具）handler 继承 `HandlerBase`，声明类级元数据并实现 `execute`/`to_definition`。
 - **分级隔离**：`execution_mode` 声明隔离策略——`process`（子进程 + 硬超时强杀）仅用于 execute_terminal 等需 OS 级隔离的工具；其余默认 `thread`。
 - **Hook 拦截**：工具执行前后经 `hook_interceptor` 触发 `PRE_TOOL_USE` / `POST_TOOL_USE`；`DENY` 硬拒绝；任何 hook 异常不阻断主流程。
 - **文件协作状态**：文件类工具经 `guard/file_tool_state_coordinator` 做 revision/stale/重复调用检测/写路径锁；只读重复调用会被提前拦截。
@@ -258,6 +265,7 @@ coding-agent/
 - delegation 设计与重构：`docs/delegation-parent-child-task-refactor.md`、`docs/plan/`（subagent / langfuse / litellm / startup-resume 等专题）
 - SSE 连接重构：`docs/sse-connection-refactor-plan.md`
 - coding-agent 原理文档：`coding-agent-docs`
+- 模型厂商配置中心设计：`llm_provider/` 模块（Provider CRUD + ModelEntry 管理 + litellm 目录发现 + 连接测试）
 - 后端 API 契约：`docs/api/openapi.json`（生成物）
 
 ## 八、CodeGraph 使用规则
@@ -317,10 +325,12 @@ codegraph sync
 - **D14（配置层下沉，待定性）**：`config/configuration.py` 收口 `AgentProfileRegistry` / `ToolSystem` / 委派摘要进程级单例，构成 `config → core` / `config → tools` 依赖，超出第一章契约；其 docstring 仍引用已不存在的 `api/app.py`、`api/depends/dependencies.py` 路径，属失效 docstring，应一并清理或定性为装配点特例。
 - **D15（空壳文件，待清理或实现）**：`service/workspace_event/workspace_index_service.py` 为 0 字节空壳。
 - **D16（拼写错误，待修正）**：`models/payload/registry/workspace_event_payload_registery.py` 文件名 `registery` 应为 `registry`（及其内部类名，同步修正引用）。
-- **D17（文档滞后，待对齐）**：`rules/目录组织规范.md` 停留在 2026-08-04（仍引用 `main.py`、`api/app.py`、`api/depends/dependencies.py`、`service/runtime_event/`、顶层 `app/trace_infra`、`tools/security/project_path.py`、9 工具等旧状态）；`apps/backend/README.md` 与 `apps/backend/.env.example` 引用的 `docs/Langfuse可观测性集成技术方案.md` 已不在 docs/ 下；`app/tools/tool_system.py` docstring 中「16 个工具」计数与实际注册数（17）不符。均已以真实代码为准，待批量修订。
+- **D17（文档滞后，待对齐）**：`rules/目录组织规范.md` 停留在 2026-08-04（仍引用 `main.py`、`api/app.py`、`api/depends/dependencies.py`、`service/runtime_event/`、顶层 `app/trace_infra`、`tools/security/project_path.py`、9 工具、`core/llm/` 等旧状态）；`apps/backend/README.md` 与 `apps/backend/.env.example` 引用的 `docs/Langfuse可观测性集成技术方案.md` 已不在 docs/ 下；`app/tools/tool_system.py` docstring 中「16 个工具」计数与实际注册数（17）不符。均已以真实代码为准，待批量修订。
+- **D18（core/llm 已迁移）**：`core/llm/` 已整体上移为顶层 `llm_provider/` 模块，原 `core/llm/` 目录不存在；`core/agents/model_settings.py` 仍留在 `core/agents/` 下而非 `llm_provider/`，属职责归属待确认。
+- **D19（Agent profile 重命名）**：`define_agents.py` 主 profile 从 `developer` 更名为 `main_agent`；子 profile `delegate_analyst` 更名为 `code-spec-reviewer`，`delegate_tester` 更名为 `unit-test-engineer`，`delegate_coder` 更名为 `code-developer`；总 profile 数仍为 5（1 可见 + 4 hidden）。
 
 ### 文档待同步
-- 本文件已于 2026-08-17 与真实代码全量对齐（装配入口上移 `app/app.py`、hook / codegraph / delegation / workspace_event / change_set 等新模块、17 工具、models/event 与 utils/trace_infra 归位、pre-commit 双 mypy 门禁与契约生成物）。
+- 本文件已于 2026-08-28 与真实代码全量对齐（项目名 `cosir`、`core/llm` → `llm_provider` 顶层模块、新增 `models_api` / `providers_api`、`delete` 工具合并、`context_listener/` 事件驱动压缩、`workflows/nodes/` 新增 `finalize_max_steps`、`service/task/change_set/` 子目录拆分、`config/logging/save/` 落盘策略、`storage/cascade_deletion`、`models/errors/` / `models/result/`、新增 `model_entry_record` / `provider_record` / `attachment_ref`、shared TS 新增 `attachment.ts` / `model.ts`、desktop 前端新增 settings/ 组件与 AgentSelector / ModelSelector、Agent profile `main_agent` 替代 `developer`、测试数 20 Python / 100+ vitest）。
 - `rules/目录组织规范.md` 需按本次对齐结果重新修订（见 D17）。
 
 ### 开放问题

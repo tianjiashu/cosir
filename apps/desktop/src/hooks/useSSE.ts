@@ -7,12 +7,17 @@
  * - 错误处理与状态管理
  *
  * 桌面端支持「task 间并发、同 task turn 串行」语义：本 Hook 不再持有全局唯一连接，
- * 而是维护一个按 turnId 维度隔离的连接池 `connectionsRef`（Map<turnId, SSEConnection>）。
- * 每个 turn 拥有独立连接，断开某一 turn 的连接不会影响其它 turn 的实时流，
- * 从而支撑后台 task 正在流式时前台 task 发消息互不断开。
+ * 而是操作按 turnId 维度隔离的连接池 ``sseConnectionPool``。每个 turn 拥有独立连接，
+ * 断开某一 turn 的连接不会影响其它 turn 的实时流，从而支撑后台 task 正在流式时前台
+ * task 发消息互不断开。
+ *
+ * 连接池是模块级单例（不放在 useRef 里）：``useTask()`` 在多个组件中各自实例化，
+ * 若池随 hook 实例分裂，Sidebar 的断流将看不到 InputBar 建立的连接而静默失效。
+ * 本 Hook 只负责 React 侧的绑定——攒批调度、状态回写与卸载清理。
  *
  * 组件只需调用 connect(taskId, turnId) 即可开始接收该轮次的事件流；
- * 断开某个 turn 用 disconnectTurn(turnId)，全局清理用 disconnectAll()。
+ * 断开某个 turn 用 disconnectTurn(turnId)，断开某任务全部流用 disconnectTask(taskId)，
+ * 全局清理用 disconnectAll()。
  *
  * @module hooks/useSSE
  */
@@ -26,6 +31,7 @@ import { useTaskStore } from "../stores/taskStore";
 import { useTurnStore } from "../stores/turnStore";
 import { useContextUsageStore } from "../stores/contextUsageStore";
 import { SSEConnection, SSEConnectionState, type SSEErrorHandler } from "../services/sse";
+import { sseConnectionPool } from "../services/sseConnectionPool";
 import { logError, logDebug } from "../lib/logger";
 import { PerfTrace } from "../lib/perf";
 
@@ -36,17 +42,28 @@ interface UseSSEReturn {
   /**
    * 建立 SSE 连接并开始后台接收指定任务的事件流。
    *
-   * @param taskId - 要监听的任务 ID。
-   * @param turnId - 要监听的轮次 ID。
+   * @param taskId - 要监听的任务 ID（number，后端 int 主键）；内部经 `String()` 转为
+   *   SSE URL 层的 string 键（SSEConnection / connectionsRef 的键维度为 string，属 URL 层）。
+   * @param turnId - 要监听的轮次 ID（number，后端 int 主键）；同上经 `String()` 转 URL 键。
    * @returns Promise<void>，连接调度后 resolve；后续流错误通过日志和状态回调处理。
    */
-  connect: (taskId: string, turnId: string) => Promise<void>;
+  connect: (taskId: number, turnId: number) => Promise<void>;
 
   /** 断开指定 turn 的 SSE 连接（不影响其它 turn）。 */
   disconnectTurn: (turnId: string) => void;
 
-  /** 断开全部 SSE 连接（组件卸载 / 全局清理时使用）。 */
-  disconnectAll: () => void;
+  /**
+   * 断开指定 task 下全部 turn 的 SSE 连接（不影响其它 task）。
+   * 删除任务时调用：任务已被后端级联删除，其残留流必须一并断开，否则事件会继续
+   * 投递并在各 store 中重建已删任务的条目。
+   */
+  disconnectTask: (taskId: number) => void;
+
+  /**
+   * 断开指定多个 task 下全部 turn 的 SSE 连接（不影响其它 task）。
+   * 删除工作区时调用，作用域为被级联删除的那组任务。
+   */
+  disconnectTasks: (taskIds: number[]) => number;
 
   /** 当前连接状态（从 eventStore 派生）。 */
   connectionState: SSEConnectionState;
@@ -61,16 +78,19 @@ interface UseSSEReturn {
  *
  * @example
  * ```tsx
- * const { connect, disconnectTurn, disconnectAll, connectionState } = useSSE();
+ * const { connect, disconnectTurn, disconnectTask, disconnectAll, connectionState } = useSSE();
  *
  * // 开始监听指定轮次事件
- * await connect("task-uuid", "turn-uuid");
+ * await connect(taskId, turnId);
  *
  * // 仅断开该轮次（不影响其它并发轮次）
  * disconnectTurn("turn-uuid");
  *
- * // 组件卸载时清理全部连接
- * disconnectAll();
+ * // 删除任务时断开其全部残留流
+ * disconnectTask(taskId);
+ *
+ * // 删除工作区时断开被级联删除的那组任务的残留流
+ * disconnectTasks([taskIdA, taskIdB]);
  * ```
  */
 export function useSSE(): UseSSEReturn {
@@ -80,11 +100,8 @@ export function useSSE(): UseSSEReturn {
   const updateTask = useTaskStore((s) => s.updateTask);
   const updateTurn = useTurnStore((s) => s.updateTurn);
   const setStreamingTurn = useTurnStore((s) => s.setStreamingTurn);
-  const setContextUsage = useContextUsageStore((s) => s.setUsage);
+  const setTaskUsage = useContextUsageStore((s) => s.setUsage);
 
-  // 按 turnId 维度的连接池：同一时刻不同 task 的 turn 可各自持有独立 SSE 连接，
-  // 互不断开，支撑「task 间并发、同 task turn 串行」语义。
-  const connectionsRef = useRef<Map<string, SSEConnection>>(new Map());
   // 攒批缓冲：把同一动画帧内的多个 delta 合并成一次 appendEvents + 一次渲染，
   // 将高频流式下的 set/投影/重渲染压力从「每 delta 一次」降到「每帧一次」，
   // 对高 token 率与长会话（后续迭代常见场景）提供稳定的渲染节奏兜底。
@@ -96,24 +113,21 @@ export function useSSE(): UseSSEReturn {
   /**
    * 建立到指定任务轮次的 SSE 连接。
    *
-   * @param taskId - 要监听的任务标识符。
-   * @param turnId - 要监听的轮次标识符。
+   * @param taskId - 要监听的任务标识（number，后端 int 主键）；内部 `String()` 转为
+   *   SSE URL 层与 connectionsRef 的 string 键（URL/连接池维度，合理为 string）。
+   * @param turnId - 要监听的轮次标识（number，后端 int 主键）；同上经 `String()` 转 URL 键。
    * @returns Promise<void>，连接调度后 resolve；流式消费在后台继续。
    */
   const connect = useCallback(
-    async (taskId: string, turnId: string): Promise<void> => {
+    async (taskId: number, turnId: number): Promise<void> => {
+      // SSE URL 层与连接池键维度为 string（"temp-<uuid>" 或 String(turnId)），
+      // 此处把 number 主键转为 string 键，与 store 的 number 主通道解耦。
+      const connKey = String(turnId);
       PerfTrace.markCurrent("sse:connect-start", { task_id: taskId, turn_id: turnId });
       // 先 flush 上一连接已入缓冲、尚未到下一动画帧的事件，避免快速重连时静默丢弃
-      // （connectionsRef 存的是 SSEConnection，其 disconnect 只 abort 不 flush；只有 hook
-      // 自身的 disconnectTurn/disconnectAll 才 flush，故这里必须显式 flush）。
+      // （连接池存的是 SSEConnection，其 disconnect 只 abort 不 flush；断流时的 flush
+      // 由连接池按条目回调，故这里必须显式 flush 以冲刷本实例缓冲中旧连接的残留事件）。
       flushRef.current();
-      // 仅断开「同一 turnId」的旧连接（SSEConnection.disconnect 仅负责 abort fetch，不再产生事件），
-      // 不影响其它 turn 正在进行的连接，从而支撑 task 间并发流式。
-      const existing = connectionsRef.current.get(turnId);
-      if (existing) {
-        existing.disconnect();
-        connectionsRef.current.delete(turnId);
-      }
       // 旧连接已断开、不再产生事件；重置共享缓冲，避免新旧连接复用同一数组
       // 造成的事件归属耦合或快速重连场景下的缓冲污染。
       pendingEventsRef.current = [];
@@ -182,8 +196,13 @@ export function useSSE(): UseSSEReturn {
           syncRuntimeStatus(event, updateTask, updateTurn, setStreamingTurn);
           // 上下文占用为「最新值覆盖」语义，随每帧 flush 的批量事件同步一次，
           // 不进入事件历史流，避免 InputBar 因订阅全量事件而高频重渲染。
+          //
+          // 按 event.task_id 归属，而非「当前活跃任务」：多个 task 的 turn 会并发
+          // 流式，同一个 flush 批次内可能交错不同 task 的事件。分键写入后每个 task
+          // 各自保留本批次的最后一条，后台 task 不会覆盖用户正在查看的圆环；圆环
+          // 由 ContextUsageRing 按 activeTaskId 选择展示。
           if (event.event_type === "context_usage") {
-            setContextUsage(event.payload as ContextUsagePayload, event.created_at);
+            setTaskUsage(event.task_id, event.payload as ContextUsagePayload, event.created_at);
           }
         }
       };
@@ -214,12 +233,12 @@ export function useSSE(): UseSSEReturn {
         scheduleFlush();
       };
 
-      // 切换 turn/连接时先清除上一个任务的上下文占用，避免圆环短暂显示陈旧值。
-      useContextUsageStore.getState().reset();
+      // 建连不清零任何 task 的占用：占用按 taskId 分键存储，新任务本就没有条目
+      // （缺省即 0/0），而清理会误伤后台并发任务的已缓存值。
 
       const connection = new SSEConnection({
-        taskId,
-        turnId,
+        taskId: String(taskId),
+        turnId: String(turnId),
         onEvent,
         onError,
         onStateChange: (state) => {
@@ -227,21 +246,24 @@ export function useSSE(): UseSSEReturn {
             PerfTrace.markCurrent("sse:connection-open", { task_id: taskId, turn_id: turnId });
           }
           // 仅当前活动连接可回写连接状态，避免被已断开的旧连接（竞态）误钉为 CLOSED
-          if (connectionsRef.current.get(turnId) === connection) {
+          if (sseConnectionPool.get(connKey)?.connection === connection) {
             setConnectionState(state);
           }
         },
       });
 
-      connectionsRef.current.set(turnId, connection);
+      // 放入共享池：同键已有旧连接时先断开它（仅影响该 turn，不动其它 turn）。
+      // 同时登记本连接的 flush，供断开方（可能不是本 hook 实例）精确冲刷本连接的
+      // 缓冲，而非冲刷调用方自己的缓冲。
+      sseConnectionPool.replace(connKey, { connection, taskId, flush });
       void connection.connect()
         .finally(() => {
           // 仅当前活动连接可接管清理与终态回写：极边缘场景下旧连接自然异常结束、同时
           // 用户已重连新连接时，旧连接 finally 不得 flush 共享缓冲（会误提新连接事件）
           // 也不得把新进行中的任务误标 failed。
-          const isActive = connectionsRef.current.get(turnId) === connection;
+          const isActive = sseConnectionPool.get(connKey)?.connection === connection;
           if (isActive) {
-            connectionsRef.current.delete(turnId);
+            sseConnectionPool.remove(connKey);
             // 流结束后兜底 flush 残留事件，避免最后若干 delta 不落盘 / 状态不更新
             // （此时 run_started 可能被映射回 running）。调用本次闭包捕获的 flush，
             // 而非跨连接共享的 flushRef.current()，避免借用新连接的缓冲语义。
@@ -258,7 +280,7 @@ export function useSSE(): UseSSEReturn {
           // SSEConnection 已通过 onError、状态回写和内部日志记录错误，这里只负责避免未处理 Promise。
         });
     },
-    [appendEvents, setConnectionState, setStreamingTurn, updateTask, updateTurn, setContextUsage],
+    [appendEvents, setConnectionState, setStreamingTurn, updateTask, updateTurn, setTaskUsage],
   );
 
   /**
@@ -266,26 +288,40 @@ export function useSSE(): UseSSEReturn {
    *
    * @param turnId - 要断开的轮次标识；若该 turn 无活动连接则为 no-op。
    */
+  // 断开时的 flush 由连接池按条目回调（见 PooledConnection.flush），此处不再调用
+  // flushRef：本 hook 在多个组件中各自实例化，断开方往往不是建立方，调用自己的
+  // flushRef 会冲刷到无关的缓冲，反而漏掉目标连接的残留事件。
   const disconnectTurn = useCallback((turnId: string) => {
-    const conn = connectionsRef.current.get(turnId);
-    if (conn) {
-      conn.disconnect();
-      connectionsRef.current.delete(turnId);
-    }
-    // 主动断开时兜底 flush，保证 UI 与最终状态一致
-    flushRef.current();
+    sseConnectionPool.remove(turnId);
   }, []);
 
   /**
-   * 断开全部 SSE 连接（组件卸载 / 全局清理时使用）。
+   * 断开指定任务下全部 turn 的 SSE 连接（不影响其它任务）。
+   *
+   * 删除任务时调用：后端已级联删除该任务的轮次与事件，其残留流若不断开，会继续
+   * 投递事件并在 eventStore / turnStore / contextUsageStore 中重建已删任务的条目。
+   * 该任务无活动连接时为空操作。
+   *
+   * @param taskId - 待断开连接的任务标识（后端 int 主键）。
    */
-  const disconnectAll = useCallback(() => {
-    connectionsRef.current.forEach((conn) => conn.disconnect());
-    connectionsRef.current.clear();
-    flushRef.current();
+  const disconnectTask = useCallback((taskId: number) => {
+    sseConnectionPool.removeByTask(taskId);
   }, []);
 
-  return { connect, disconnectTurn, disconnectAll, connectionState };
+  /**
+   * 断开指定多个任务下全部 turn 的 SSE 连接（不影响其它任务）。
+   *
+   * 删除工作区时调用：后端级联删除该工作区下的全部任务，其残留流若不断开，会继续
+   * 投递事件并在各 store 中重建已删任务的条目。这些任务无活动连接时为空操作。
+   *
+   * @param taskIds - 待断开连接的任务标识列表（后端 int 主键）。
+   * @returns 本次实际断开的轮次键数量。
+   */
+  const disconnectTasks = useCallback((taskIds: number[]) => {
+    return sseConnectionPool.removeByTasks(taskIds).length;
+  }, []);
+
+  return { connect, disconnectTurn, disconnectTask, disconnectTasks, connectionState };
 }
 
 type UpdateTask = ReturnType<typeof useTaskStore.getState>["updateTask"];

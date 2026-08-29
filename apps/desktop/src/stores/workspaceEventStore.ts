@@ -34,14 +34,14 @@ interface EventTask {
 
 /** workspace 事件 store 状态接口。 */
 interface WorkspaceEventStoreState {
-  /** 按 workspace_id 维护的状态快照。 */
-  statusByWorkspaceId: Record<string, WorkspaceStatus>;
-  /** 正在事件编排中的 workspace 集合（幂等去重）。 */
-  inflightWorkspaceIds: Set<string>;
-  /** 标记 workspace 是否仍应存活（false = 已被删除，在途任务须中止）。 */
-  activeWorkspaceIds: Set<string>;
-  /** 按 workspace_id 维护的活跃 SSE 连接清理任务。 */
-  cleanupByWorkspaceId: Record<string, EventTask>;
+  /** 按 workspace_id（后端 int 主键）维护的状态快照。 */
+  statusByWorkspaceId: Record<number, WorkspaceStatus>;
+  /** 正在事件编排中的 workspace 集合（幂等去重；后端 int 主键）。 */
+  inflightWorkspaceIds: Set<number>;
+  /** 标记 workspace 是否仍应存活（false = 已被删除，在途任务须中止；后端 int 主键）。 */
+  activeWorkspaceIds: Set<number>;
+  /** 按 workspace_id（后端 int 主键）维护的活跃 SSE 连接清理任务。 */
+  cleanupByWorkspaceId: Record<number, EventTask>;
 }
 
 /** workspace 事件 store 动作接口。 */
@@ -51,17 +51,17 @@ interface WorkspaceEventActions {
    *
    * 幂等：同一 workspace 已有活跃任务或已处于终态时直接返回。
    *
-   * @param workspaceId - 需要准备的 workspace 标识。
+   * @param workspaceId - 需要准备的 workspace 标识（后端 int 主键）。
    * @returns 无。
    *
    * @sideeffect 建立一条到后端的 SSE 订阅并触发一次 /events/prepare；
-   *   按事件更新状态；失败时置 error。
+   *   按事件更新状态；失败时置 failed（§3.8 归一，原 error 字面量已移除）。
    */
-  startEvent: (workspaceId: string) => void;
+  startEvent: (workspaceId: number) => void;
   /**
    * 直接置为指定状态（用于错误兜底等外部事件）。
    *
-   * @param workspaceId - workspace 标识。
+   * @param workspaceId - workspace 标识（后端 int 主键）。
    * @param state - 目标归一化状态。
    * @param extra - 可选补充字段（reason / filesChanged 等）。
    * @returns 无。
@@ -69,7 +69,7 @@ interface WorkspaceEventActions {
    * @sideeffect 更新内存状态快照。
    */
   setStatus: (
-    workspaceId: string,
+    workspaceId: number,
     state: WorkspaceState,
     extra?: Partial<WorkspaceStatus>,
   ) => void;
@@ -78,12 +78,12 @@ interface WorkspaceEventActions {
    *
    * 同时把 workspace 标记为非活跃，使在途的 connect/prepare 完成后自中止。
    *
-   * @param workspaceId - workspace 标识。
+   * @param workspaceId - workspace 标识（后端 int 主键）。
    * @returns 无。
    *
    * @sideeffect 断开活跃 SSE 连接、中止在途任务并移除状态快照。
    */
-  removeEvent: (workspaceId: string) => void;
+  removeEvent: (workspaceId: number) => void;
   /**
    * 重置整个事件状态。
    *
@@ -102,11 +102,11 @@ interface WorkspaceEventActions {
 export const useWorkspaceEventStore = create<WorkspaceEventStoreState & WorkspaceEventActions>(
   (set, get) => ({
     statusByWorkspaceId: {},
-    inflightWorkspaceIds: new Set<string>(),
-    activeWorkspaceIds: new Set<string>(),
+    inflightWorkspaceIds: new Set<number>(),
+    activeWorkspaceIds: new Set<number>(),
     cleanupByWorkspaceId: {},
 
-    startEvent: (workspaceId) => {
+    startEvent: (workspaceId: number) => {
       if (!workspaceId) {
         return;
       }
@@ -150,10 +150,10 @@ export const useWorkspaceEventStore = create<WorkspaceEventStoreState & Workspac
       };
 
       const onError = () => {
-        // 仅当状态仍处于 preparing（SSE 未推送终态）时，才用失败结果置 error，
-        // 避免覆盖 SSE 已推进的 ready/degraded 终态。
+        // 仅当状态仍处于 preparing（SSE 未推送终态）时，才用失败结果置 failed，
+        // 避免覆盖 SSE 已推进的 ready/degraded 终态（§3.8：error 已归一为 failed）。
         if (isStillActive() && get().statusByWorkspaceId[workspaceId]?.state === "preparing") {
-          setStatusRef(workspaceId, "error", { degradedReason: "workspace 状态事件流连接失败" });
+          setStatusRef(workspaceId, "failed", { degradedReason: "workspace 状态事件流连接失败" });
         }
         cleanup?.();
         clearInflight(workspaceId);
@@ -168,7 +168,13 @@ export const useWorkspaceEventStore = create<WorkspaceEventStoreState & Workspac
         if (get().statusByWorkspaceId[workspaceId]?.state !== "preparing") {
           return;
         }
-        if (!resp.ready) {
+        // §3.8：prepare 响应 state 可能为 "failed"（索引/准备失败，区别于 degraded 的
+        // 「可用但降级」），须归一落位为 failed，不得被 !ready 的默认分支吞成 degraded。
+        if (resp.state === "failed") {
+          setStatusRef(workspaceId, "failed", {
+            degradedReason: resp.degraded_reason ?? "workspace 准备/索引失败",
+          });
+        } else if (!resp.ready) {
           setStatusRef(workspaceId, "degraded", {
             degradedReason: resp.degraded_reason ?? "workspace event kernel unavailable",
           });
@@ -275,7 +281,7 @@ export const useWorkspaceEventStore = create<WorkspaceEventStoreState & Workspac
 
 /** 直接写指定 workspace 的状态快照（构造显式字段避免类型拓宽）。 */
 function setStatusRef(
-  workspaceId: string,
+  workspaceId: number,
   state: WorkspaceState,
   extra?: Partial<WorkspaceStatus>,
 ): void {
@@ -297,8 +303,8 @@ function setStatusRef(
   });
 }
 
-/** 清除 workspace 的 inflight 标记（幂等）。 */
-function clearInflight(workspaceId: string): void {
+/** 清除 workspace 的 inflight 标记（幂等；workspaceId 为后端 int 主键）。 */
+function clearInflight(workspaceId: number): void {
   useWorkspaceEventStore.setState((state) => {
     if (!state.inflightWorkspaceIds.has(workspaceId)) {
       return state;
@@ -309,9 +315,9 @@ function clearInflight(workspaceId: string): void {
   });
 }
 
-/** 判断状态是否为终态（ready/degraded），终态下不再重复触发事件。 */
+/** 判断状态是否为终态（ready/degraded/failed），终态下不再重复触发事件（§3.8：failed 同为终态）。 */
 function isTerminalState(state: WorkspaceState | undefined): boolean {
-  return state === "ready" || state === "degraded";
+  return state === "ready" || state === "degraded" || state === "failed";
 }
 
 /** 把后端 workspace 状态事件映射为前端归一化状态快照。 */

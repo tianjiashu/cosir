@@ -195,14 +195,31 @@ async def create_workspace_task(
     payload: CreateTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
-    """在工作区下创建任务，仅仅创建，creatturn 使用/tasks/{task_id}/turns
+    """在工作区下创建任务容器（不含首轮次）。
+
+    任务创建与首轮次创建已解耦：本端点只创建 task 容器，首轮次由调用方（前端）显式
+    调 ``POST /tasks/{task_id}/turns`` 创建。这样 task 维度不再耦合 agent / 模型 /
+    附件等仅属于 turn 的字段，agent 由 turn 维度承载。
+
+    参数:
+        payload: 创建任务请求体，含任务文本与 workspace。
+        task_service: 任务 service，用于创建任务容器。
+
+    返回:
+        新建任务记录（含 ``task_id``）。调用方随后创建首 turn 并连接
+        ``/turns/{turn_id}/stream`` 驱动执行。
+
+    异常:
+        HTTPException: workspace 不存在时为 404；输入非法时为 400。
+
+    副作用:
+        向 ``tasks`` 插入一行任务容器；不创建轮次。
     """
 
     try:
-        task, _turn = task_service.create_task(
+        task = task_service.create_task(
             input_text=payload.text,
             workspace_id=payload.workspace_id,
-            agent_id=payload.agent_id,
             status="pending",
         )
     except IntegrityError as exc:
@@ -213,9 +230,8 @@ async def create_workspace_task(
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     except ValueError as exc:
         log.warning(
-            "create_workspace_task rejected: workspace=%s agent=%s reason=%s",
+            "create_workspace_task rejected: workspace=%s reason=%s",
             payload.workspace_id,
-            payload.agent_id,
             exc,
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc

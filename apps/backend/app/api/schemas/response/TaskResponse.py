@@ -7,10 +7,11 @@ from app.utils.datetime_utils import to_text
 class TaskResponse(BaseModel):
     """校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。
 
+    任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。
+
     参数:
         task_id: 任务标识。
         workspace_id: 所属工作区标识。
-        agent_id: 驱动该任务的 agent 标识。
         title: 任务标题。
         status: 任务生命周期状态。
         execution_status: 派生执行状态，可能为 None。
@@ -36,14 +37,13 @@ class TaskResponse(BaseModel):
 
     task_id: int
     workspace_id: int
-    agent_id: str
     title: str
     status: str
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
     parent_turn_id: int | None = None
-    delegation_id: str | None = None
+    delegation_id: int | None = None
     context_usage_used: int | None = None
     context_window_total: int | None = None
     created_at: str
@@ -80,7 +80,6 @@ class TaskResponse(BaseModel):
         return cls(
             task_id=record.id,
             workspace_id=record.workspace_id,
-            agent_id=record.agent_id,
             title=record.title,
             status=record.status,
             execution_status=record.execution_status,

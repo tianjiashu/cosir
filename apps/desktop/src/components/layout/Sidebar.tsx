@@ -30,7 +30,6 @@ import { useTaskStore } from "@/stores/taskStore";
 import { useWorkspaceTaskLazyLoad, clearFailedWorkspaceId } from "@/hooks/useWorkspaceTaskLazyLoad";
 import { useTask } from "@/hooks/useTask";
 import * as api from "@/services/api";
-import { deleteTask as deleteTaskApi } from "@/services/api";
 import { logError } from "@/lib/logger";
 import type { TaskRecord } from "@shared/task";
 import type { WorkspaceRecord } from "@shared/workspace";
@@ -66,9 +65,10 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   const loadedWorkspaceIds = useTaskStore((s) => s.loadedWorkspaceIds);
   const tasksByWorkspaceId = useTaskStore((s) => s.tasksByWorkspaceId);
   const clearWorkspaceTasks = useTaskStore((s) => s.clearWorkspaceTasks);
-  const removeTask = useTaskStore((s) => s.removeTask);
   const activeTaskId = useTaskStore((s) => s.activeTaskId);
-  const { openTask } = useTask();
+  // 删除任务经 useTask.deleteTask 整体收口：SSE 连接池由 useSSE 持有，组件拿不到
+  // disconnectTask，直接调 taskStore.removeTask 会留下正在流式的残留连接。
+  const { openTask, deleteTask, disconnectTasks } = useTask();
 
   // 待删除的工作区（非空时展示应用内确认弹窗）。
   const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
@@ -124,7 +124,13 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     const wasActive = activeWorkspaceId === deletedWorkspaceId;
     setDeleting(true);
     setDeleteError(null);
+    // 断流必须先于后端删除：后端会级联删除这些任务，其残留流若继续投递事件，会在
+    // 各 store 中重建已删任务的条目。任务列表此刻仍在 store 中，正是取 id 的时机。
+    // 必须走 getWorkspaceTaskIds（合并懒加载分组与实体缓存），直接读 tasksByWorkspaceId
+    // 会漏掉「未展开过工作区但正在流式」的任务。
+    const doomedTaskIds = useTaskStore.getState().getWorkspaceTaskIds(deletedWorkspaceId);
     try {
+      disconnectTasks(doomedTaskIds);
       await api.deleteWorkspace(deletedWorkspaceId);
       // removeWorkspace 内部会在删除当前活跃区时自动切到剩余列表第一项。
       removeWorkspace(deletedWorkspaceId);
@@ -142,7 +148,13 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
         onOpenChat();
       }
     } catch (err) {
-      logError("删除工作区失败", err, { module: "Sidebar", workspace_id: deletedWorkspaceId });
+      // 断流先于后端删除，故失败时这些任务的流已被切断且不会自动恢复。这一点必须
+      // 记进日志：否则表现为「删除失败后对话无声卡住」，无任何线索可查。
+      logError("删除工作区失败，该工作区任务的 SSE 流已提前断开且不会自动恢复", err, {
+        module: "Sidebar",
+        workspace_id: deletedWorkspaceId,
+        disconnected_task_ids: doomedTaskIds,
+      });
       setDeleteError(err instanceof Error ? err.message : "删除工作区失败，请检查后端日志");
     } finally {
       setDeleting(false);
@@ -157,7 +169,8 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
   /**
    * 执行单个任务删除。
    *
-   * 调用后端删除接口并级联清理其下轮次 / 事件；成功后同步移除本地任务与其事件缓存。
+   * 经 ``useTask.deleteTask`` 整体收口：先断开该任务的残留 SSE 流，再调后端级联删除
+   * 其轮次 / 事件，最后清理本地缓存（事件 / 上下文占用 / 输入草稿）。
    */
   const handleConfirmDeleteTask = async () => {
     if (!pendingDeleteTask) {
@@ -166,9 +179,7 @@ export function Sidebar({ activeView, onOpenLogs, onOpenChat, onNewTask }: Sideb
     setDeletingTask(true);
     setDeleteTaskError(null);
     try {
-      await deleteTaskApi(pendingDeleteTask.task_id);
-      // removeTask 内部已同步使该任务的事件缓存失效（见 taskStore）。
-      removeTask(pendingDeleteTask.task_id);
+      await deleteTask(pendingDeleteTask.task_id);
       setPendingDeleteTask(null);
     } catch (err) {
       logError("删除任务失败", err, { module: "Sidebar", task_id: pendingDeleteTask.task_id });

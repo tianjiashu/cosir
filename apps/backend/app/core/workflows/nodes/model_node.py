@@ -16,8 +16,6 @@
 
 模型侧数据处理辅助（思考通道抽取、chunk 组装、chunk debug 落盘）已拆为独立模块
 （``thinking_extractor`` / ``chunk_assembler`` / ``debug_dump``），本模块仅 import 使用；
-与运行上下文强绑定的 ``_estimate_run_cost`` 保留在本模块。上下文占用事件（``CONTEXT_USAGE``）
-已由 ``ContextUsageEventEmitter`` 订阅机制在消息变更时自动发出，本模块不再手动触发。
 节点共享运行时原语见 ``common``。
 """
 

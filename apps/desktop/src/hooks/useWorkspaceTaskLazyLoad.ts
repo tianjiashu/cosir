@@ -22,20 +22,22 @@ import type { WorkspaceRecord } from "@shared/workspace";
 
 /**
  * 模块级在途请求去重集合：跨组件实例（App 与 Sidebar）共享，避免双入口并发重复请求。
+ * 键为 workspace_id（后端 int 主键，§3.7 收敛为 number）。
  */
-const inflightLoads = new Set<string>();
+const inflightLoads = new Set<number>();
 
 /**
  * 模块级加载失败集合：记录最近一次请求失败的 workspace，供组件渲染「加载失败·重试」。
  * 成功加载后从集合移除；属可变外部状态，须经 useSyncExternalStore 订阅方可触发重渲染。
+ * 键为 workspace_id（后端 int 主键，§3.7 收敛为 number）。
  */
-const failedWorkspaceIds = new Set<string>();
+const failedWorkspaceIds = new Set<number>();
 /**
  * 版本化不可变快照：useSyncExternalStore 要求 getSnapshot 在同一状态下返回同一引用、
  * 状态变化后返回不同引用（否则 React 用 Object.is 比对会误判无变化而 bail out 不重渲染）。
  * 因此每次变更后重建新 Set 并缓存于此，getSnapshot 返回该缓存而非原地 mutate 的源集合。
  */
-let failedSnapshot: ReadonlySet<string> = new Set(failedWorkspaceIds);
+let failedSnapshot: ReadonlySet<number> = new Set(failedWorkspaceIds);
 /** 订阅失败集合的监听器集合（useSyncExternalStore 要求）。 */
 const failedListeners = new Set<() => void>();
 
@@ -51,12 +53,12 @@ function commitFailedChange(): void {
 }
 
 /** useSyncExternalStore 的 getSnapshot：返回版本化不可变快照。 */
-function getFailedSnapshot(): ReadonlySet<string> {
+function getFailedSnapshot(): ReadonlySet<number> {
   return failedSnapshot;
 }
 
 /** 暴露当前失败 workspace 集合的只读快照（测试/调试用，便于验证加载失败态可见性）。 */
-export function getFailedWorkspaceIds(): ReadonlySet<string> {
+export function getFailedWorkspaceIds(): ReadonlySet<number> {
   return failedSnapshot;
 }
 
@@ -68,10 +70,10 @@ export function getFailedWorkspaceIds(): ReadonlySet<string> {
  * workspace。加载失败仅记错误日志、记入 failedWorkspaceIds、返回 ``false``，不 reject，
  * 调用方可据此重试（ensureLoaded 触发）/ 降级。
  *
- * @param workspaceId - 目标 workspace 标识。
+ * @param workspaceId - 目标 workspace 标识（后端 int 主键）。
  * @returns 加载成功返回 true；已加载（跳过）/在途（跳过）/加载失败返回 false。
  */
-export async function loadWorkspaceTasks(workspaceId: string): Promise<boolean> {
+export async function loadWorkspaceTasks(workspaceId: number): Promise<boolean> {
   if (useTaskStore.getState().isWorkspaceLoaded(workspaceId)) {
     return false;
   }
@@ -102,27 +104,27 @@ function subscribeFailed(callback: () => void): () => void {
 }
 
 /** 清除指定 workspace 的失败标记（如该 workspace 被删除/重建时防止陈旧失败态残留）。 */
-export function clearFailedWorkspaceId(workspaceId: string): void {
+export function clearFailedWorkspaceId(workspaceId: number): void {
   if (failedWorkspaceIds.delete(workspaceId)) {
     commitFailedChange();
   }
 }
 
 /** 确保指定 workspace 的任务列表已加载（未加载则拉取并写入分组缓存）。 */
-type EnsureLoaded = (workspaceId: string) => Promise<void>;
+type EnsureLoaded = (workspaceId: number) => Promise<void>;
 
 /**
  * 工作区任务惰性加载 hook。
  *
  * @param workspaces - 当前工作区列表（来自 workspaceStore）。
- * @param collapsedWorkspaceIds - 折叠状态集合（来自 workspaceStore）。
+ * @param collapsedWorkspaceIds - 折叠状态集合（来自 workspaceStore，键为后端 int 主键）。
  * @returns 命令式触发 ``ensureLoaded(workspaceId)`` 与当前 ``failedWorkspaceIds`` 失败快照。
  */
 export function useWorkspaceTaskLazyLoad(
   workspaces: WorkspaceRecord[],
-  collapsedWorkspaceIds: Set<string>,
-): { ensureLoaded: EnsureLoaded; failedWorkspaceIds: ReadonlySet<string> } {
-  const ensureLoaded = useCallback((workspaceId: string) => loadWorkspaceTasks(workspaceId).then(() => undefined), []);
+  collapsedWorkspaceIds: Set<number>,
+): { ensureLoaded: EnsureLoaded; failedWorkspaceIds: ReadonlySet<number> } {
+  const ensureLoaded = useCallback((workspaceId: number) => loadWorkspaceTasks(workspaceId).then(() => undefined), []);
 
   // 挂载/列表变化时，对「处于展开态且尚未加载」的 workspace 触发惰性加载。
   // 默认展开（collapsedWorkspaceIds 初始为空）的工作区在此补齐首屏加载；

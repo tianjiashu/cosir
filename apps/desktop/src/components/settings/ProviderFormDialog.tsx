@@ -2,7 +2,7 @@
  * 模型厂商新增/编辑表单对话框（配置中心子组件，设计 §10.2）。
  *
  * react-hook-form + zod 校验：名称（必填）、类型（15 预设，与后端注册表对齐）、
- * base_url（选填，空则用 litellm 内置解析）、api_key（选填明文，password 输入框；
+ * base_url（选填，空则由后端按厂商类型内置解析）、api_key（选填明文，password 输入框；
  * Key 明文保存于后端 DB providers.api_key，DB 为唯一事实来源，响应与日志不回传明文）。
  *
  * 编辑模式展示既有厂商的 Key 配置状态（api_key_configured，聚合自后端），
@@ -11,7 +11,7 @@
  * §三 用户视角三件套），用已配置参数发起一次最小 chat 请求验证凭据 / 端点可用性。
  *
  * 厂商类型对应的提示文案：
- * - qianfan / xfyun：提示「litellm 1.97.0 已废弃原生前缀，走 openai/ 兼容组，
+ * - qianfan / xfyun：提示「后端注册表不内置该厂商前缀，走 openai/ 兼容组，
  *   请填官方 base_url」；
  * - moonshot / minimax / zai / dashscope：提示国内 / 国际端点分区域，国内需
  *   在 base_url 切换区域端点；
@@ -80,7 +80,7 @@ const PROVIDER_TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
 /**
  * 厂商表单校验 schema（zod v4）。
  *
- * - ``base_url`` 允许空 = 用 litellm 内置解析；非空时校验为有效 http(s)。
+ * - ``base_url`` 允许空 = 由后端按厂商类型内置解析；非空时校验为有效 http(s)。
  */
 const providerFormSchema = z.object({
   name: z.string().min(1, "请输入厂商名称"),
@@ -146,7 +146,7 @@ interface ProviderFormDialogProps {
 /**
  * 返回厂商类型对应的区域 / 端点提示文案（设计文档 §三）。
  *
- * 用于 base_url 字段下方展示：litellm 已废弃原生前缀的厂商（qianfan / xfyun）
+ * 用于 base_url 字段下方展示：后端注册表不内置前缀的厂商（qianfan / xfyun）
  * 提示走 openai/ 兼容组；国内 / 国际分区域的厂商提示在 base_url 切换区域端点；
  * Azure 提示需在 Portal 创建 deployment 后手填 deployment 名作为模型名。
  *
@@ -156,9 +156,9 @@ interface ProviderFormDialogProps {
 function getProviderHint(type: ProviderType): string {
   switch (type) {
     case "qianfan":
-      return "litellm 1.97.0 已废弃 qianfan 前缀，走 openai/ 兼容组，请填官方 base_url";
+      return "后端注册表不内置 qianfan 前缀，走 openai/ 兼容组，请填官方 base_url";
     case "xfyun":
-      return "litellm 1.97.0 无 xfyun 前缀，走 openai/ 兼容组，请填官方 base_url";
+      return "后端注册表不内置 xfyun 前缀，走 openai/ 兼容组，请填官方 base_url";
     case "moonshot":
     case "minimax":
     case "zai":

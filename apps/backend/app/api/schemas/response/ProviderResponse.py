@@ -30,7 +30,7 @@ class ProviderResponse(BaseModel):
         无。
     """
 
-    provider_id: str
+    provider_id: int
     name: str
     type: str
     base_url: str | None = None

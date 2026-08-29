@@ -43,7 +43,7 @@ class EventType(str, Enum):
     WORKSPACE_DEGRADED = "workspace_degraded"
 
     # 上下文窗口占用事件：每次模型调用前 emit 当前上下文输入侧 token 占用（本地估算），
-    # 用于前端上下文圆环渲染；数据来自 RuntimeContext.messages，turn 取消也不丢。
+    # 用于前端上下文圆环渲染；数据来自有效运行时上下文快照，turn 取消也不丢。
     CONTEXT_USAGE = "context_usage"
 
     def __str__(self) -> str:

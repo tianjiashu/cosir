@@ -11,7 +11,7 @@ graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状�
 
 from collections.abc import AsyncIterator, Callable
 from time import perf_counter
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
@@ -19,20 +19,26 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
+from app.core.workflows.nodes.helper.vision_content_blocks import (
+    build_user_content_blocks,
+)
+from app.llm_provider.model_factory import resolve_chat_model
 from app.llm_provider.provider.capability_service import CapabilityService
 from app.models import RuntimeMessage
 from app.models.enums.event_type import EventType
+from app.models.errors.llm_provider_exceptions import (
+    VisionFormatNotSupportedError,
+    VisionImageError,
+    VisionNotSupportedError,
+)
 from app.models.event.runtime_event import RuntimeEvent
 from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
 from app.service.depends import get_task_service
 from app.tools.schemas import ToolCall
+from app.utils.image_utils import is_image_path
 
-from ...context.context_listener.context_compress_listener import ContextCompressListener
-from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
-from app.llm_provider.context_window_resolver import resolve_context_window
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
 from ..nodes.helper.approval import APPROVAL_INTERRUPT_KEY
@@ -40,20 +46,6 @@ from ..nodes.helper.common import write_event
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
-
-
-def _update_task_context_usage(task_id: int, used: int) -> None:
-    """回写 task 最近一次上下文已用 token，供上下文占用订阅者回调使用。
-
-    参数:
-        task_id: 目标 task 标识。
-        used: 上下文占用 token 数。
-
-    返回:
-        无（丢弃 service 返回值）。
-    """
-    get_task_service().update_context_usage(task_id, used)
-
 
 class ReactLikeWorkflow(AgentWorkflow):
     """基于“模型推理 -> 工具调用 -> 继续推理/最终回答”的默认工作流，由 LangGraph 编排。
@@ -118,6 +110,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             operations: RuntimeOperations,
             callbacks: list | None = None,
             langfuse_trace_id: str | None = None,
+            execution_mode: Literal["fresh", "resume"] = "fresh",
     ) -> AsyncIterator[RuntimeEvent]:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -134,6 +127,8 @@ class ReactLikeWorkflow(AgentWorkflow):
                 ``graph.astream`` 的 ``config["callbacks"]`` 使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
                 终态事件 payload 会携带该字段供前端展示。未启用 Langfuse 时为 None。
+            execution_mode: 当前 turn 的执行模式；``fresh`` 清理当前 turn 后重新执行，
+                ``resume`` 从当前 turn 已持久化轨迹恢复。
 
         生成:
             RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层转换为 SSE 或其他客户端事件。
@@ -187,7 +182,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
-        thinking_channel = CapabilityService.get_thinking_channel(turn.product_id)
+        thinking_channel = CapabilityService.get_thinking_channel(turn.provider_id)
+        vision_input_format = CapabilityService.get_vision_input_format(turn.provider_id)
 
         runtime_config = RuntimeConfig(
             operations=operations,
@@ -198,7 +194,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             usage_stats=TurnUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
             thinking_channel=thinking_channel,
-            thinking_roundtrip=True
+            thinking_roundtrip=True,
+            vision_input_format=vision_input_format,
         )
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
@@ -211,16 +208,46 @@ class ReactLikeWorkflow(AgentWorkflow):
             store=operations.message_store,
             turn=turn,
         )
-        # 复用实例时刷新 turn 级执行态（current_turn_id / total_tokens），
-        # 必须在 add_message 之前，否则基线消息会落错 turn。
-        runtime_context_manager.bind_turn(turn)
+        # 显式初始化 turn 级上下文，避免 fresh 重跑和 checkpoint resume 共享隐式时序。
+        runtime_context_manager.begin_turn(turn, mode=execution_mode)
 
         runtime_context_manager.set_thinking_channel(thinking_channel)
 
-        # turn 启动基线：仅落库当前用户输入，不写内存（load_history 会从库统一加载，
-        # 避免同一用户消息在内存中出现两次）。
-        runtime_context_manager.add_message(
-            RuntimeMessage(role="user", content_text=turn.input_text), write_memory=False
+        # turn 启动基线：构造带多模态 block 的 user 消息并同时写入当前运行期内存与轨迹；
+        # load_history 已排除当前 turn，历史轮回放保持纯文本。图片路径来自 turn.image_paths（已在
+        # create_turn 阶段从附件抽离并落库，仅含图片）；文件/目录/链接已固化进
+        # turn.input_text，无需在此拼接。视觉格式未实现/聚合超限统一转 VisionNotSupportedError。
+        image_paths = [p for p in (turn.image_paths or []) if is_image_path(p)]
+        try:
+            content_blocks, skipped = build_user_content_blocks(
+                turn.input_text,
+                image_paths,
+                vision_input_format,
+                workspace_root=current_workspace.root_path,
+                model_name=turn.model_name,
+            )
+        except (VisionFormatNotSupportedError, VisionImageError) as exc:
+            raise VisionNotSupportedError(str(exc)) from exc
+        if skipped:
+            # 部分图片失效：记 warning 汇总（逐图明细已在 build 内分级记录）
+            log.warning(
+                "vision_images_partially_skipped",
+                extra={
+                    "msg": "some images skipped in this turn",
+                    "data": {
+                        "turn_id": turn.id,
+                        "skipped_count": len(skipped),
+                        "loaded_count": len(content_blocks) - 1,
+                    },
+                },
+            )
+        runtime_context_manager.upsert_current_user_message(
+            RuntimeMessage(
+                role="user",
+                content_text=turn.input_text,
+                content_blocks=content_blocks if len(content_blocks) > 1 else None,
+            ),
+            allow_write_event_failure=True,
         )
 
         config = {
@@ -237,7 +264,7 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
-            input_state: ReactGraphState | Command = ReactGraphState(
+            initial_state = ReactGraphState(
                 step_count=0,
                 tool_error_count=0,
                 requested_tool=False,
@@ -250,6 +277,14 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_text="",
                 last_tool_results=[],
             )
+            input_state: ReactGraphState | Command | None = initial_state
+            if execution_mode == "resume":
+                checkpoint_state = await graph.aget_state(config)
+                input_state = (
+                    None
+                    if checkpoint_state.values or checkpoint_state.next
+                    else initial_state
+                )
 
             sequence = 0
             while True:

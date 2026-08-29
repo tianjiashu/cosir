@@ -9,7 +9,8 @@
  * @module components/chat/ContextUsageRing
  */
 
-import { useContextUsageStore } from "@/stores/contextUsageStore";
+import { EMPTY_USAGE, useContextUsageStore } from "@/stores/contextUsageStore";
+import { useTaskStore } from "@/stores/taskStore";
 
 /** 将 token 数格式化为带一位小数的 K/M 单位（如 66.5K / 1.0M）。 */
 function formatTokens(n: number): string {
@@ -27,8 +28,16 @@ function usageColor(pct: number): string {
 
 /** 上下文占用圆环组件（直径默认 16px，适配输入框底栏）。 */
 export function ContextUsageRing({ size = 16, strokeWidth = 2 }: { size?: number; strokeWidth?: number }) {
-  const usedTokens = useContextUsageStore((s) => s.usedTokens);
-  const totalTokens = useContextUsageStore((s) => s.totalTokens);
+  // 只展示当前活跃任务的占用：后台并发任务的 CONTEXT_USAGE 事件同样会写入 store
+  // （按 taskId 分键），但不得出现在用户当前对话的圆环上。
+  const activeTaskId = useTaskStore((s) => s.activeTaskId);
+  // 缺省值必须用模块级共享常量：zustand 以引用相等判定变更，selector 内新建对象
+  // 会让组件在每次 store 变更下都重渲染。
+  const usage = useContextUsageStore((s) =>
+    activeTaskId === null ? EMPTY_USAGE : s.usageByTaskId[activeTaskId] ?? EMPTY_USAGE,
+  );
+  const usedTokens = usage.usedTokens;
+  const totalTokens = usage.totalTokens;
 
   const pct = totalTokens <= 0 ? 0 : Math.max(0, Math.min(1, usedTokens / totalTokens));
   const radius = (size - strokeWidth) / 2;

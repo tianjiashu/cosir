@@ -18,6 +18,8 @@ const config: Config = {
         content: "48rem",
         // 消息气泡宽度令牌：替换散落的 max-w-[85%]，与列宽体系联动收敛。
         bubble: "85%",
+        // ModelSelector 折叠态名单行截断净空宽度（紧凑态固定宽度，非通用语义）。
+        selectorLabel: "120px",
       },
       colors: {
         border: "hsl(var(--border))",

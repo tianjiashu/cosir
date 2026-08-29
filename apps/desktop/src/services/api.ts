@@ -2,7 +2,7 @@
  * HTTP API 封装层。
  *
  * 封装与后端 FastAPI 的 HTTP 通信：
- * - POST /workspaces/{workspace_id}/tasks 创建任务容器和首个 turn
+ * - POST /workspaces/{workspace_id}/tasks 创建任务容器（仅建 task，首 turn 由前端显式 createTurn 创建）
  * - GET /tasks/{id} 查询任务状态
  * - GET/POST /tasks/{id}/turns 读取或追加 turn
  * - POST /turns/{id}/cancel 取消当前 turn
@@ -24,15 +24,10 @@ import type {
   CreateTurnRequest,
   CreateWorkspaceRequest,
   DeleteTaskResponse,
-  ListAgentsResponse,
   WorkspacePrepareResponse,
 } from "@shared/api";
 import type {
-  ModelCandidate,
-  ModelCreateRequest,
   ModelEntryRecord,
-  ModelImportResult,
-  ModelUpdateRequest,
   ProviderConnectionTestResult,
   ProviderCreateRequest,
   ProviderRecord,
@@ -319,7 +314,7 @@ async function put<T>(
  * @sideeffect 向后端 POST /workspaces/{workspace_id}/tasks 写入一条新的任务记录。
  */
 export async function createTask(request: CreateTaskRequest): Promise<TaskRecord> {
-  const path = API_PATHS.WORKSPACE_TASKS(request.workspace_id);
+  const path = API_PATHS.WORKSPACE_TASKS(String(request.workspace_id));
   const response = await post<TaskRecord>(path, request);
   recordConversationTrace(response.trace, "task_create", response.data.task_id);
   return response.data;
@@ -361,14 +356,14 @@ export async function createWorkspace(request: CreateWorkspaceRequest): Promise<
  * @returns 无。
  * @throws {ServiceError} 当工作区不存在或删除失败时抛出。
  */
-export async function deleteWorkspace(workspaceId: string): Promise<void> {
-  const response = await del<{ deleted: boolean }>(API_PATHS.WORKSPACE_DETAIL(workspaceId));
+export async function deleteWorkspace(workspaceId: number): Promise<void> {
+  const response = await del<{ deleted: boolean }>(API_PATHS.WORKSPACE_DETAIL(String(workspaceId)));
   useConversationTraceStore.getState().recordTrace({
     traceId: response.trace.traceId,
     taskId: "",
     operation: "workspace_delete",
     method: "DELETE",
-    path: API_PATHS.WORKSPACE_DETAIL(workspaceId),
+    path: API_PATHS.WORKSPACE_DETAIL(String(workspaceId)),
   });
 }
 
@@ -384,9 +379,9 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  * @sideeffect 向后端 POST /workspaces/{workspace_id}/events/prepare，可能触发一次
  *   CodeGraph init/sync 建索引（大仓库首次可达数分钟）。
  */
-export async function prepareWorkspace(workspaceId: string): Promise<WorkspacePrepareResponse> {
+export async function prepareWorkspace(workspaceId: number): Promise<WorkspacePrepareResponse> {
   const response = await post<WorkspacePrepareResponse>(
-    API_PATHS.WORKSPACE_EVENT_PREPARE(workspaceId),
+    API_PATHS.WORKSPACE_EVENT_PREPARE(String(workspaceId)),
     {},
     undefined,
     { timeout: false },
@@ -414,7 +409,7 @@ export async function prepareWorkspace(workspaceId: string): Promise<WorkspacePr
  * @sideeffect 建立一条到后端的 SSE 长连接，直至返回的清理函数被调用或后端推送终态。
  */
 export async function connectWorkspaceEventStream(
-  workspaceId: string,
+  workspaceId: number,
   onEvent: (event: WorkspaceEvent) => void,
 ): Promise<() => void> {
   const abortController = new AbortController();
@@ -423,10 +418,10 @@ export async function connectWorkspaceEventStream(
     module: "api",
     workspace_id: workspaceId,
     method: "GET",
-    path: API_PATHS.WORKSPACE_EVENT_STREAM(workspaceId),
+    path: API_PATHS.WORKSPACE_EVENT_STREAM(String(workspaceId)),
     trace_id: requestTrace.trace.traceId,
   };
-  const response = await fetch(`${BASE_URL}${API_PATHS.WORKSPACE_EVENT_STREAM(workspaceId)}`, {
+  const response = await fetch(`${BASE_URL}${API_PATHS.WORKSPACE_EVENT_STREAM(String(workspaceId))}`, {
     signal: abortController.signal,
     headers: { Accept: "text/event-stream", ...requestTrace.headers },
   });
@@ -496,7 +491,7 @@ export async function connectWorkspaceEventStream(
  *
  * @sideeffect JSON 解析失败时写 warn 日志（含 workspace_id、事件类型与 data 预览）。
  */
-function parseWorkspaceEvent(frame: ParsedSSEFrame, workspaceId: string): WorkspaceEvent | null {
+function parseWorkspaceEvent(frame: ParsedSSEFrame, workspaceId: number): WorkspaceEvent | null {
   if (!isWorkspaceEventType(frame.eventType)) {
     return null;
   }
@@ -539,8 +534,8 @@ export async function deleteTask(taskId: string): Promise<void> {
  * @returns 任务记录列表。
  * @throws {ServiceError} 当工作区不存在或请求失败时抛出。
  */
-export async function listWorkspaceTasks(workspaceId: string): Promise<TaskRecord[]> {
-  const response = await get<TaskRecord[]>(API_PATHS.WORKSPACE_TASKS(workspaceId));
+export async function listWorkspaceTasks(workspaceId: number): Promise<TaskRecord[]> {
+  const response = await get<TaskRecord[]>(API_PATHS.WORKSPACE_TASKS(String(workspaceId)));
   useConversationTraceStore.getState().recordTrace({
     traceId: response.trace.traceId,
     taskId: "",
@@ -676,21 +671,14 @@ export async function getBackendHealth(): Promise<BackendHealthResponse> {
 }
 
 /**
- * 获取后端已注册的 Agent profile 列表。
- *
- * @returns Agent profile 列表与默认 agent 标识。
- * @throws {ServiceError} 当后端不可达或返回异常状态时抛出。
- */
-export async function listAgents(): Promise<ListAgentsResponse> {
-  return (await get<ListAgentsResponse>(API_PATHS.AGENTS)).data;
-}
-
-/**
  * 记录对话任务 API 请求使用的 trace。
  *
  * @param trace - HTTP helper 返回的请求 trace 元数据。
  * @param operation - 对话请求类型。
- * @param taskId - 该请求归属的任务标识。
+ * @param taskId - 该请求归属的任务标识。标识符已统一为 number（后端 int 主键），
+ *   但部分调用点持有路由参数形态的 string，故入参接受两者；trace 只作日志聚合
+ *   展示用途，此处统一归一化为 string 后再落 store（store 以 string 为索引键，
+ *   JS 对象键本就是 string，归一化零信息损失）。
  * @returns 无。
  *
  * @sideeffect 写入 conversationTraceStore 内存状态。
@@ -698,11 +686,11 @@ export async function listAgents(): Promise<ListAgentsResponse> {
 function recordConversationTrace(
   trace: RequestTraceMetadata,
   operation: ConversationTraceOperation,
-  taskId: string,
+  taskId: string | number,
 ): void {
   useConversationTraceStore.getState().recordTrace({
     traceId: trace.traceId,
-    taskId,
+    taskId: String(taskId),
     operation,
     method: trace.method,
     path: trace.path,
@@ -719,16 +707,6 @@ function recordConversationTrace(
  */
 export async function listModels(): Promise<ModelEntryRecord[]> {
   return (await get<ModelEntryRecord[]>(MODEL_PROVIDER_PATHS.MODELS)).data;
-}
-
-/**
- * 获取已注册的模型厂商列表。
- *
- * @returns 厂商记录列表。
- * @throws {ServiceError} 当后端不可达或响应异常时抛出。
- */
-export async function listProviders(): Promise<ProviderRecord[]> {
-  return (await get<ProviderRecord[]>(MODEL_PROVIDER_PATHS.PROVIDERS)).data;
 }
 
 /**
@@ -757,10 +735,13 @@ export async function createProvider(request: ProviderCreateRequest): Promise<Pr
  * @sideeffect 向后端 PUT /providers/{id} 更新厂商记录。
  */
 export async function updateProvider(
-  providerId: string,
+  providerId: number,
   request: ProviderUpdateRequest,
 ): Promise<ProviderRecord> {
-  const response = await put<ProviderRecord>(MODEL_PROVIDER_PATHS.PROVIDER_DETAIL(providerId), request);
+  const response = await put<ProviderRecord>(
+    MODEL_PROVIDER_PATHS.PROVIDER_DETAIL(providerId),
+    request,
+  );
   recordConversationTrace(response.trace, "provider_update", "");
   return response.data;
 }
@@ -774,20 +755,9 @@ export async function updateProvider(
  *
  * @sideeffect 向后端 DELETE /providers/{id} 删除厂商记录。
  */
-export async function deleteProvider(providerId: string): Promise<void> {
+export async function deleteProvider(providerId: number): Promise<void> {
   const response = await del<{ deleted: boolean }>(MODEL_PROVIDER_PATHS.PROVIDER_DETAIL(providerId));
   recordConversationTrace(response.trace, "provider_delete", "");
-}
-
-/**
- * 探测指定厂商可获取的模型列表（不写入，仅发现）。
- *
- * @param providerId - 待探测的厂商标识。
- * @returns 探测到的模型候选列表。
- * @throws {ServiceError} 当厂商不存在或探测失败时抛出。
- */
-export async function discoverProviderModels(providerId: string): Promise<ModelCandidate[]> {
-  return (await post<ModelCandidate[]>(MODEL_PROVIDER_PATHS.PROVIDER_DISCOVER(providerId), {})).data;
 }
 
 /**
@@ -805,7 +775,7 @@ export async function discoverProviderModels(providerId: string): Promise<ModelC
  * @sideeffect 向后端 POST /providers/{id}/test 发起一次最小 chat 请求到厂商端点。
  */
 export async function testProviderConnection(
-  providerId: string,
+  providerId: number,
 ): Promise<ProviderConnectionTestResult> {
   return (
     await post<ProviderConnectionTestResult>(
@@ -813,54 +783,4 @@ export async function testProviderConnection(
       {},
     )
   ).data;
-}
-
-/**
- * 将模型条目批量导入为可用模型（候选/手动录入均归一为创建请求）。
- *
- * @param providerId - 目标厂商标识。
- * @param models - 待导入的模型创建请求列表。
- * @returns 导入结果（成功条数、跳过条数等）。
- * @throws {ServiceError} 当导入失败时抛出。
- *
- * @sideeffect 向后端 POST /providers/{id}/models 写入模型条目。
- */
-export async function importProviderModels(
-  providerId: string,
-  models: ModelCreateRequest[],
-): Promise<ModelImportResult> {
-  return (await post<ModelImportResult>(MODEL_PROVIDER_PATHS.PROVIDER_MODELS(providerId), { models })).data;
-}
-
-/**
- * 更新单个模型条目的启用状态或别名。
- *
- * @param modelId - 待更新的模型标识。
- * @param request - 模型更新请求体。
- * @returns 更新后的模型记录。
- * @throws {ServiceError} 当模型不存在或更新失败时抛出。
- *
- * @sideeffect 向后端 PUT /models/{id} 更新模型记录。
- */
-export async function updateModel(
-  modelId: string,
-  request: ModelUpdateRequest,
-): Promise<ModelEntryRecord> {
-  const response = await put<ModelEntryRecord>(MODEL_PROVIDER_PATHS.MODEL_DETAIL(modelId), request);
-  recordConversationTrace(response.trace, "model_update", "");
-  return response.data;
-}
-
-/**
- * 删除单个模型条目。
- *
- * @param modelId - 待删除的模型标识。
- * @returns 无。
- * @throws {ServiceError} 当模型不存在或删除失败时抛出。
- *
- * @sideeffect 向后端 DELETE /models/{id} 删除模型记录。
- */
-export async function deleteModel(modelId: string): Promise<void> {
-  const response = await del<{ deleted: boolean }>(MODEL_PROVIDER_PATHS.MODEL_DETAIL(modelId));
-  recordConversationTrace(response.trace, "model_delete", "");
 }

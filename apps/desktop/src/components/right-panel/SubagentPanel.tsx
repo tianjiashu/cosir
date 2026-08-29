@@ -217,11 +217,11 @@ export function SubagentPanel() {
  * pending/思考块被提前折叠、看不到实时进行态；改用派生映射后，进行态 child 以 streaming
  * 口径展开，贴合 brief A3「选中但事件未到时显示 loading/进行态」意图。
  *
- * @param turnId - child turn 标识。
+ * @param turnId - child turn 标识（真实后端 turn 主键，number 维度）。
  * @param derived - 从该 child 事件流派生的委派状态（可为 undefined）。
  * @returns 最小可用的 TurnRecord，其 status 按派生状态映射（见上方取值逻辑）。
  */
-function createFallbackTurn(turnId: string, derived: TimelineDelegationStatus | undefined): TurnRecord {
+function createFallbackTurn(turnId: number, derived: TimelineDelegationStatus | undefined): TurnRecord {
   const status: TurnRecord["status"] =
     derived === "running" ||
     derived === "completed" ||
@@ -231,7 +231,9 @@ function createFallbackTurn(turnId: string, derived: TimelineDelegationStatus | 
       : "pending";
   return {
     turn_id: turnId,
-    task_id: "",
+    // task_id 为 number 占位：兜底 record 仅用于分片渲染，不回写 store/后端，
+    // 无真实 task 归属时落 0（与 TurnRecord.task_id:number 对齐；原 string 占位编译不过）。
+    task_id: 0,
     input_text: "",
     status,
     end_reason: null,

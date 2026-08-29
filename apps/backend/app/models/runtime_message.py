@@ -31,6 +31,9 @@ class RuntimeMessage:
     role: str
     content_text: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 多模态内容 block（运行期内存，不落库）。user 消息可携带 image_url 等 block，
+    # 由 workflow 在运行期经 vision_content_blocks 构造，仅存在于内存态消息，store 落库时忽略。
+    content_blocks: list[dict] | None = None
 
     def estimate_tokens(self) -> int:
         """估算本条消息进入模型上下文后的 token 数（字符启发式，零依赖）。
@@ -38,6 +41,8 @@ class RuntimeMessage:
         计算口径与 ``runtime_context_manager`` 的消息→模型转换严格对齐（只统计真正
         进入模型上下文的字段）：
         - 所有角色的 ``content_text`` 都作为 ``content`` 进入模型，故全部计入；
+        - user 消息的 ``content_blocks`` 中 image_url 类 block 经 ``TokenEstimator.estimate_image``
+          按厂商上限估算（与编码层同源，避免两处各算一遍导致圆环失真）；
         - ``assistant`` 的 ``metadata["tool_calls"]``（JSON 字符串）会反序列化回
           ``AIMessage.tool_calls``（工具名 + 参数 JSON）进入下一轮 prompt，需额外计入；
         - ``tool`` 的 ``metadata["tool_call_id"]`` 进入 ``ToolMessage.tool_call_id``，需计入；
@@ -57,6 +62,10 @@ class RuntimeMessage:
             无（纯计算）。
         """
         total = TokenEstimator.estimate(self.content_text)
+        if self.content_blocks:
+            for block in self.content_blocks:
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    total += TokenEstimator.estimate_image(block)
         if self.role == "assistant":
             total += self._estimate_tool_calls()
         elif self.role == "tool":

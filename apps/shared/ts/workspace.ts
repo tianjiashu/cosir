@@ -8,7 +8,7 @@
  */
 
 export interface WorkspaceResponse {
-  workspace_id: string;
+  workspace_id: number;
   name: string;
   root_path: string;
   created_at: string;
@@ -16,7 +16,7 @@ export interface WorkspaceResponse {
 }
 
 export interface WorkspacePrepareResponse {
-  workspace_id: string;
+  workspace_id: number;
   ready: boolean;
   state: string;
   action_taken?: string;

@@ -1,49 +1,22 @@
 """Task orchestration service.
 
-单一职责：编排任务创建（含初始轮次创建）、生命周期管理（open/archived）与执行态派生。
+单一职责：编排任务创建（仅建 task 容器，首轮次由调用方显式创建）、生命周期管理
+（open/archived）与执行态派生。
 
 职责边界：
-- 负责：任务创建（同时创建首个轮次）、用户驱动的生命周期状态、从最新 turn 派生
+- 负责：任务容器创建（不含首轮次）、用户驱动的生命周期状态、从最新 turn 派生
   执行态、任务树原子级联删除（委托给 ``CascadeDeleter``）。
 - 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``TurnCrud``/``WorkspaceCrud``/
-  ``CascadeDeleter``）；不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）。
+  ``CascadeDeleter``）；不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）；
+  不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
 
 from dataclasses import replace
-from typing import List
 
-from app.config.configuration import build_agent_registry, get_agent_registry
 from app.config.logging.logger import log
 from app.models import TaskRecord, TurnRecord
 from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
-
-
-def _registered_agent_ids() -> set[str]:
-    """返回当前已注册的 agent_id 集合。
-
-    优先复用进程级 registry 单例（由应用启动经 ``set_agent_registry`` 注入，
-    供 API 层依赖注入与校验共享同一份）；单例未注入（如单元 / 脚本场景）时，
-    回退到 ``build_agent_registry`` 临时构建一份只读目录用于校验，避免模块级
-    缓存导致与运行态不一致。
-
-    参数:
-        无。
-
-    返回:
-        已注册 agent_id 的集合。
-
-    异常:
-        无。
-
-    副作用:
-        单例未注入时临时构造一个 registry 实例（仅用于本次校验，不写入单例）。
-    """
-
-    try:
-        return get_agent_registry().list_agent_ids()
-    except RuntimeError:
-        return build_agent_registry().list_agent_ids()
 
 
 class TaskService:
@@ -74,28 +47,29 @@ class TaskService:
         self,
         input_text: str,
         status: str,
-        agent_id: str = "developer",
         workspace_id: int | None = None,
     ) -> TaskRecord:
-        """创建任务记录（不含首轮次，首轮次在执行时由 turn 维度创建）。
+        """创建任务容器记录（不含首轮次，首轮次由调用方显式调 ``create_turn``）。
 
         ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离。任务文本
         ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），任务本身只
         持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向 ``tasks.id``，
-        必须先有 task 才能在执行阶段创建首 turn。
+        必须先有 task 才能创建首 turn；但 task 创建与首 turn 创建已解耦，本方法只建 task
+        容器，首 turn 由调用方（API/前端）随后显式创建。
+
+        任务不再绑定 agent：agent 维度由 turn（首 turn 的 ``agent_id``）承载，
+        ``create_task`` 不再接收也不校验 agent_id；子任务的 agent 由 delegation 记录承载。
 
         参数:
             input_text: 用户输入文本，用于派生任务标题（仅派生 title，原文不落 tasks 表）。
             status: 任务初始生命周期状态（``open`` / ``archived``）。
-            agent_id: 执行该任务的 Agent 标识，须已注册；默认 ``"developer"``。
             workspace_id: 所属工作区标识。
 
         返回:
             已持久化的 ``TaskRecord``。
 
         异常:
-            ValueError: 当 ``input_text``/``workspace_id``/``agent_id`` 为空或全空白，
-                或 ``agent_id`` 未注册时抛出。
+            ValueError: 当 ``input_text``/``workspace_id`` 为空或全空白时抛出。
             sqlalchemy.exc.IntegrityError: 当 ``workspace_id`` 指向不存在的工作区
                 （外键约束）时抛出。
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
@@ -110,17 +84,11 @@ class TaskService:
         if not isinstance(workspace_id, int) or workspace_id <= 0:
             raise ValueError("workspace_id must be a positive integer")
 
-        if agent_id is None or not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValueError("agent_id must be a non-empty string")
-
-        if agent_id not in _registered_agent_ids():
-            raise ValueError(f"agent_id {agent_id} is not registered")
-
         title = preview(input_text)
         # 先创建 task（turns.task_id 外键指向 tasks.id，必须先有 task 才能建 turn）。
+        # 首 turn 由调用方随后显式创建，本方法不再耦合首 turn 逻辑。
         task = self._task.create(
             workspace_id=workspace_id,
-            agent_id=agent_id,
             title=title,
             status=status,
         )
@@ -223,7 +191,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        turns:List = self._turn.list_by_task(task_id)
+        turns: list[TurnRecord] = self._turn.list_by_task(task_id)
         if not turns:
             return "empty"
         latest = turns[-1]
@@ -296,7 +264,6 @@ class TaskService:
         parent_turn_id: int,
         delegation_id: int,
         workspace_id: int,
-        agent_id: str,
     ) -> TaskRecord:
         """创建委派子任务（只建 task，不建 turn）。
 
@@ -305,19 +272,21 @@ class TaskService:
         ``parent_task_id`` / ``parent_turn_id`` / ``delegation_id`` 关联父任务与委派记录。
         ``title`` 使用 ``input_text`` 的预览文本（子任务无侧边栏展示，但保留可读标题便于排查）。
 
+        子任务不再绑定 agent：agent 关系由 ``DelegationRecord``（``child_agent_id`` /
+        ``parent_agent_id``）承载，本方法不接收也不校验 agent_id，仅建 task 容器。
+
         参数:
             parent_task_id: 父任务标识。
             parent_turn_id: 触发委派的父 turn 标识。
             delegation_id: 关联的委派记录标识（唯一索引兜底并发重入）。
             workspace_id: 所属工作区标识。
-            agent_id: 执行该子任务的子 Agent 标识（须已注册）。
             title: 子任务标题（由委派输入文本预览得到，仅用于排查，不进侧边栏）。
 
         返回:
             已持久化的子任务 ``TaskRecord``（``task_type='delegation'``，``status='pending'``）。
 
         异常:
-            ValueError: 如果 ``agent_id`` 未注册或任意必填字段为空。
+            ValueError: 如果任意必填字段为空或非法。
             sqlalchemy.exc.IntegrityError: 如果 ``delegation_id`` 重复（并发重入）或外键冲突。
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
 
@@ -331,13 +300,9 @@ class TaskService:
         ):
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{field_name} must be a positive integer")
-        
-        if agent_id not in _registered_agent_ids():
-            raise ValueError(f"agent_id {agent_id} is not registered")
 
         return self._task.create(
             workspace_id=workspace_id,
-            agent_id=agent_id,
             title=title,
             status="pending",
             task_type="delegation",

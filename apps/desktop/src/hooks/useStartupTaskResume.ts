@@ -33,7 +33,7 @@ const MODULE = "useStartupTaskResume";
  * 经 ``openTask`` 打开（选中 + 拉取 task/turns + 回填 events）。加载失败、无任务、或
  * ``openTask`` 打开首条 task 失败时，均静默降级到空态（不抛错、不影响主流程）。
  *
- * @param workspaceId - 目标 workspace 标识；为空（无 workspace）时直接返回。
+ * @param workspaceId - 目标 workspace 标识（后端 int 主键）；为空（无 workspace）时直接返回。
  * @param openTask - 打开任务的函数（由 useTask 提供，经 ref 持有最新引用）。
  *
  * @returns 无返回值；以副作用方式驱动 taskStore / turnStore / eventStore。
@@ -45,8 +45,8 @@ const MODULE = "useStartupTaskResume";
  * - openTask(首条 task)：打开列表首条 task 并回填历史事件。
  */
 async function resumeDefaultTask(
-  workspaceId: string | undefined,
-  openTask: (taskId: string) => Promise<void>,
+  workspaceId: number | undefined,
+  openTask: (taskId: number) => Promise<void>,
 ): Promise<void> {
   if (!workspaceId) {
     return;

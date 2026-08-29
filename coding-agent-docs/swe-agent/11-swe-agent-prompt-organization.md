@@ -549,12 +549,12 @@ gitGraph
 ### 7.3 配置继承冲突
 
 ```yaml
-# base.yaml
+# capability.yaml
 templates:
   system: "Base system prompt"
 
 # child.yaml
-extends: base.yaml
+extends: capability.yaml
 templates:
   system: "Override system prompt"  # 覆盖父配置
 ```

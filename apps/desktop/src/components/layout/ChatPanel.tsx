@@ -112,8 +112,8 @@ export function ChatPanel({ onPickWorkspace, settingsOpen, onSettingsOpenChange 
   const childTurnIdsCacheRef = useRef<{
     eventsRef: unknown;
     scannedLen: number;
-    set: Set<string>;
-  }>({ eventsRef: null, scannedLen: 0, set: new Set<string>() });
+    set: Set<number>;
+  }>({ eventsRef: null, scannedLen: 0, set: new Set<number>() });
   // 渲染打点（采样）：用于排查「进入新 turn 后 ChatPanel 是否每帧重渲染爆炸」。
   // 仅当 events 引用真正变化时才打，避免纯内部 state 触发的冗余渲染刷屏淹没关键日志；
   // events 每帧变化正是要诊断的「渲染风暴」信号，采样后既保留信号又不淹没日志。
@@ -156,7 +156,7 @@ export function ChatPanel({ onPickWorkspace, settingsOpen, onSettingsOpenChange 
   // timelineTurns 的 memo 能精确跳过（不依赖 events 引用，从而切断每帧重算链路）。
   // 这是 M7 性能缺陷的修复点：原实现把「全量循环 events 建 childTurnIds」放在
   // 依赖 [events] 的 memo 内，导致长会话下每帧 O(n) 开销。
-  const childTurnIds = useMemo<Set<string>>(() => {
+  const childTurnIds = useMemo<Set<number>>(() => {
     const cache = childTurnIdsCacheRef.current;
     const currentLen = events.length;
 
@@ -167,11 +167,11 @@ export function ChatPanel({ onPickWorkspace, settingsOpen, onSettingsOpenChange 
 
     // 2) 长度回退（切换任务 / invalidateTask 清空）：全量重算后建立新引用。
     if (currentLen < cache.scannedLen) {
-      const next = new Set<string>();
+      const next = new Set<number>();
       for (const event of events) {
         if (event.event_type === "delegation_child_started") {
-          const payload = event.payload as { child_turn_id?: string };
-          if (payload.child_turn_id) {
+          const payload = event.payload as { child_turn_id?: number };
+          if (payload.child_turn_id != null) {
             next.add(payload.child_turn_id);
           }
         }
@@ -187,8 +187,8 @@ export function ChatPanel({ onPickWorkspace, settingsOpen, onSettingsOpenChange 
     for (let i = cache.scannedLen; i < currentLen; i++) {
       const event = events[i];
       if (event.event_type === "delegation_child_started") {
-        const payload = event.payload as { child_turn_id?: string };
-        if (payload.child_turn_id && !base.has(payload.child_turn_id)) {
+        const payload = event.payload as { child_turn_id?: number };
+        if (payload.child_turn_id != null && !base.has(payload.child_turn_id)) {
           if (!changed) {
             changed = true;
           }
@@ -204,8 +204,8 @@ export function ChatPanel({ onPickWorkspace, settingsOpen, onSettingsOpenChange 
     for (let i = cache.scannedLen; i < currentLen; i++) {
       const event = events[i];
       if (event.event_type === "delegation_child_started") {
-        const payload = event.payload as { child_turn_id?: string };
-        if (payload.child_turn_id) {
+        const payload = event.payload as { child_turn_id?: number };
+        if (payload.child_turn_id != null) {
           next.add(payload.child_turn_id);
         }
       }

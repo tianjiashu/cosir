@@ -32,8 +32,8 @@ class RuntimeEventResponse(BaseModel):
 
     event_id: str
     event_type: str
-    task_id: str
-    turn_id: str
+    task_id: int
+    turn_id: int | None = None
     sequence: int
     payload: dict[str, Any]
     created_at: str

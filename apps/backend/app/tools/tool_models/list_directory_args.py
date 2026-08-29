@@ -4,15 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ListDirectoryArgs(BaseModel):
-    """list_directory 工具接受的校验参数。
-
-    字段：
-        path: 待列举的目录路径（相对项目根）。
-        offset: 跳过前 N 个条目。
-        limit: 单页最多返回的条目数。
-        include_hidden: 为 true 时包含 dot 条目，默认跳过以保持清单紧凑。
-        ignore_globs: 匹配条目名即排除的 glob 模式列表（如 ``*.py``、``.git``）；
-            空列表表示不排除任何条目。
+    """list_directory 工具接受的校验参数；详细语义见各字段的 Field 描述。
 
     校验边界：``extra="forbid"`` 拒绝任何多余字段，``strict=True`` 拒绝类型错误。
     """
@@ -30,15 +22,16 @@ class ListDirectoryArgs(BaseModel):
         default=200,
         ge=1,
         le=500,
-        description="Maximum number of directory entries to return.",
+        description="Maximum number of directory entries to return (must be >= 1).",
     )
     include_hidden: bool = Field(
         default=False,
         description="When true, include dot entries (names starting with '.'); "
         "skipped by default to keep directory listings concise.",
     )
-    ignore_globs: list[str] = Field(
+    include_globs: list[str] = Field(
         default_factory=list,
-        description="Glob patterns matched against each entry name; matching entries "
-        "are excluded (e.g. '*.py', '.git'). Empty by default.",
+        description="Only show entries whose NAME matches one of these glob patterns "
+        "(e.g. '*.py', '.git'); others are hidden. Matches names only, not 'src/*.py'. "
+        "Empty = no filtering (all shown, subject to include_hidden).",
     )

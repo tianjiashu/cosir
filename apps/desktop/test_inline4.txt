@@ -1,0 +1,28 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mh:/coding-agent/apps/desktop[39m
+
+ [31m❯[39m src/tests/fixverify_provider_id_turn.test.ts [2m([22m[2m0 test[22m[2m)[22m
+
+[31m⎯⎯⎯⎯⎯⎯[1m[7m Failed Suites 1 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m [ src/tests/fixverify_provider_id_turn.test.ts ][22m
+[31m[1mError[22m: [vitest] There was an error when mocking a module. If you are using "vi.mock" factory, make sure there are no top level variables inside, since this call is hoisted to top of the file. Read more: https://vitest.dev/api/vi.html#vi-mock[39m
+[36m [2m❯[22m src/stores/taskStore.ts:[2m3:31[22m[39m
+    [90m  3| [39m *
+    [90m  4| [39m * 管理：
+    [90m  5| [39m * - 按 task_id 索引的任务实体缓存（tasksById）
+    [90m   | [39m                  [31m^[39m
+    [90m  6| [39m * - 按 workspace_id 分组的任务列表缓存（tasksByWorkspaceId）
+    [90m  7| [39m * - 已加载工作区集合（loadedWorkspaceIds）：加载态与数据态正交，不靠…
+
+[31m[1mCaused by: ReferenceError[22m: Cannot access 'mockSetEvents' before initialization[39m
+[36m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m34:30[22m[39m
+[90m [2m❯[22m src/stores/taskStore.ts:[2m3:31[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [2mno tests[22m
+[2m   Start at [22m 16:39:42
+[2m   Duration [22m 1.13s[2m (transform 127ms, setup 0ms, collect 0ms, tests 0ms, environment 0ms, prepare 124ms)[22m
+

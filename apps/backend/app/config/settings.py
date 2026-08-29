@@ -240,8 +240,6 @@ class Settings:
             raise ValueError("MAX_TOOL_OUTPUT_CHARS must be greater than zero")
         if cls.CONTEXT_WINDOW_TOKENS < 0:
             raise ValueError("CONTEXT_WINDOW_TOKENS must not be negative")
-        if cls.CONTEXT_USAGE_MIN_INTERVAL_S <= 0:
-            raise ValueError("CONTEXT_USAGE_MIN_INTERVAL_S must be greater than zero")
         if cls.LOG_QUEUE_SIZE < 1:
             raise ValueError("LOG_QUEUE_SIZE must be greater than zero")
         if cls.LOG_BATCH_SIZE < 1:
@@ -334,10 +332,7 @@ class Settings:
             os.environ.get("CODING_AGENT_DEFAULT_LANGUAGE", "zh").strip().lower()
         )
         cls.CONTEXT_WINDOW_TOKENS = int(
-            os.environ.get("CODING_AGENT_CONTEXT_WINDOW_TOKENS", "0")
-        )
-        cls.CONTEXT_USAGE_MIN_INTERVAL_S = float(
-            os.environ.get("CODING_AGENT_CONTEXT_USAGE_MIN_INTERVAL_S", "1.0")
+            os.environ.get("CODING_AGENT_CONTEXT_WINDOW_TOKENS", "200000")
         )
         cls.WEB_SEARCH_BACKEND = (
             os.environ.get("CODING_AGENT_WEB_SEARCH_BACKEND", "").strip().lower()

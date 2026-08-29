@@ -28,8 +28,8 @@ import { useTurnStore } from "@/stores/turnStore";
 
 /** ChangesPanel 组件属性。 */
 interface ChangesPanelProps {
-  /** 当前任务标识；为 null 时不加载。 */
-  taskId: string | null;
+  /** 当前任务标识（number，后端 int 主键）；为 null 时不加载。 */
+  taskId: number | null;
   /** 自定义外层容器类名（Drawer 内需要去掉 h-full，改为自适应高度）。 */
   className?: string;
 }
@@ -56,7 +56,8 @@ export function ChangesPanel({ taskId, className }: ChangesPanelProps) {
   // 运行中 turn 集合：用于标记「该变更对应的轮次仍在运行」，此时撤销的是中间态结果。
   // selector 只取 store 中的稳定引用（数组本身），Set 的构造放在 useMemo 里，
   // 避免 selector 每次返回新 Set 引用导致 zustand 无限重渲染。
-  const turns = useTurnStore((s) => s.turnsByTaskId[taskId ?? ""]);
+  // taskId 为 number（后端 int 主键）；未选中时取负占位键（不会命中真实 turn 列表）。
+  const turns = useTurnStore((s) => s.turnsByTaskId[taskId ?? -1]);
   const runningTurnIds = useMemo(
     () =>
       new Set(

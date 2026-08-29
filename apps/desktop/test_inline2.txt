@@ -1,0 +1,97 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mh:/coding-agent/apps/desktop[39m
+
+ [31m❯[39m src/tests/fixverify_provider_id_turn.test.ts [2m([22m[2m16 tests[22m[2m | [22m[31m5 failed[39m[2m)[22m[90m 12[2mms[22m[39m
+[31m   [31m×[31m 缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m选中模型后 createTurn 请求体同时含 provider_id 与 model_name，且来自同一选中条目[90m 5[2mms[22m[31m[39m
+[31m     → default.useDebugValue is not a function[39m
+[31m   [31m×[31m 缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m未选模型（selectedModel=null）时 provider_id 与 model_name 均为 undefined（不抛出，交由后端拦截）[90m 0[2mms[22m[31m[39m
+[31m     → default.useDebugValue is not a function[39m
+[31m   [31m×[31m 缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 完全相同但 provider_id 不同：选中 azure 时请求体 provider_id 必须是 azure 的[90m 0[2mms[22m[31m[39m
+[31m     → default.useDebugValue is not a function[39m
+[31m   [31m×[31m 缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 去前缀后相同（azure/gpt-4o-mini 与 openai/gpt-4o-mini）重名时配对正确[90m 0[2mms[22m[31m[39m
+[31m     → default.useDebugValue is not a function[39m
+[31m   [31m×[31m 缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22m选中 provider_id 较小一方时请求体不会误用另一方的 provider_id[90m 0[2mms[22m[31m[39m
+[31m     → default.useDebugValue is not a function[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 5 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m选中模型后 createTurn 请求体同时含 provider_id 与 model_name，且来自同一选中条目
+[31m[1mTypeError[22m: default.useDebugValue is not a function[39m
+[36m [2m❯[22m useStore node_modules/zustand/esm/react.mjs:[2m13:33[22m[39m
+    [90m 12| [39m  [35mreturn[39m slice[33m;[39m
+    [90m 13| [39m}
+    [90m 14| [39m[35mconst[39m createImpl [33m=[39m (createState) [33m=>[39m {
+    [90m   | [39m                              [31m^[39m
+    [90m 15| [39m  [35mconst[39m api [33m=[39m [34mcreateStore[39m(createState)[33m;[39m
+    [90m 16| [39m  [35mconst[39m useBoundStore [33m=[39m (selector) [33m=>[39m [34museStore[39m(api[33m,[39m selector)[33m;[39m
+[90m [2m❯[22m Module.useBoundStore node_modules/zustand/esm/react.mjs:[2m18:39[22m[39m
+[90m [2m❯[22m Module.useTask src/hooks/useTask.ts:[2m79:24[22m[39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m187:28[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m未选模型（selectedModel=null）时 provider_id 与 model_name 均为 undefined（不抛出，交由后端拦截）
+[31m[1mTypeError[22m: default.useDebugValue is not a function[39m
+[36m [2m❯[22m useStore node_modules/zustand/esm/react.mjs:[2m13:33[22m[39m
+    [90m 12| [39m  [35mreturn[39m slice[33m;[39m
+    [90m 13| [39m}
+    [90m 14| [39m[35mconst[39m createImpl [33m=[39m (createState) [33m=>[39m {
+    [90m   | [39m                              [31m^[39m
+    [90m 15| [39m  [35mconst[39m api [33m=[39m [34mcreateStore[39m(createState)[33m;[39m
+    [90m 16| [39m  [35mconst[39m useBoundStore [33m=[39m (selector) [33m=>[39m [34museStore[39m(api[33m,[39m selector)[33m;[39m
+[90m [2m❯[22m Module.useBoundStore node_modules/zustand/esm/react.mjs:[2m18:39[22m[39m
+[90m [2m❯[22m Module.useTask src/hooks/useTask.ts:[2m79:24[22m[39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m201:28[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 完全相同但 provider_id 不同：选中 azure 时请求体 provider_id 必须是 azure 的
+[31m[1mTypeError[22m: default.useDebugValue is not a function[39m
+[36m [2m❯[22m useStore node_modules/zustand/esm/react.mjs:[2m13:33[22m[39m
+    [90m 12| [39m  [35mreturn[39m slice[33m;[39m
+    [90m 13| [39m}
+    [90m 14| [39m[35mconst[39m createImpl [33m=[39m (createState) [33m=>[39m {
+    [90m   | [39m                              [31m^[39m
+    [90m 15| [39m  [35mconst[39m api [33m=[39m [34mcreateStore[39m(createState)[33m;[39m
+    [90m 16| [39m  [35mconst[39m useBoundStore [33m=[39m (selector) [33m=>[39m [34museStore[39m(api[33m,[39m selector)[33m;[39m
+[90m [2m❯[22m Module.useBoundStore node_modules/zustand/esm/react.mjs:[2m18:39[22m[39m
+[90m [2m❯[22m Module.useTask src/hooks/useTask.ts:[2m79:24[22m[39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m219:28[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 去前缀后相同（azure/gpt-4o-mini 与 openai/gpt-4o-mini）重名时配对正确
+[31m[1mTypeError[22m: default.useDebugValue is not a function[39m
+[36m [2m❯[22m useStore node_modules/zustand/esm/react.mjs:[2m13:33[22m[39m
+    [90m 12| [39m  [35mreturn[39m slice[33m;[39m
+    [90m 13| [39m}
+    [90m 14| [39m[35mconst[39m createImpl [33m=[39m (createState) [33m=>[39m {
+    [90m   | [39m                              [31m^[39m
+    [90m 15| [39m  [35mconst[39m api [33m=[39m [34mcreateStore[39m(createState)[33m;[39m
+    [90m 16| [39m  [35mconst[39m useBoundStore [33m=[39m (selector) [33m=>[39m [34museStore[39m(api[33m,[39m selector)[33m;[39m
+[90m [2m❯[22m Module.useBoundStore node_modules/zustand/esm/react.mjs:[2m18:39[22m[39m
+[90m [2m❯[22m Module.useTask src/hooks/useTask.ts:[2m79:24[22m[39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m230:28[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22m选中 provider_id 较小一方时请求体不会误用另一方的 provider_id
+[31m[1mTypeError[22m: default.useDebugValue is not a function[39m
+[36m [2m❯[22m useStore node_modules/zustand/esm/react.mjs:[2m13:33[22m[39m
+    [90m 12| [39m  [35mreturn[39m slice[33m;[39m
+    [90m 13| [39m}
+    [90m 14| [39m[35mconst[39m createImpl [33m=[39m (createState) [33m=>[39m {
+    [90m   | [39m                              [31m^[39m
+    [90m 15| [39m  [35mconst[39m api [33m=[39m [34mcreateStore[39m(createState)[33m;[39m
+    [90m 16| [39m  [35mconst[39m useBoundStore [33m=[39m (selector) [33m=>[39m [34museStore[39m(api[33m,[39m selector)[33m;[39m
+[90m [2m❯[22m Module.useBoundStore node_modules/zustand/esm/react.mjs:[2m18:39[22m[39m
+[90m [2m❯[22m Module.useTask src/hooks/useTask.ts:[2m79:24[22m[39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m241:28[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m5 failed[39m[22m[2m | [22m[1m[32m11 passed[39m[22m[90m (16)[39m
+[2m   Start at [22m 16:38:50
+[2m   Duration [22m 586ms[2m (transform 100ms, setup 0ms, collect 227ms, tests 12ms, environment 0ms, prepare 116ms)[22m
+

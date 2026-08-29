@@ -1,7 +1,9 @@
 """Coordinate task lifecycle and workflow execution."""
 
 import asyncio
+import threading
 from collections.abc import AsyncGenerator
+from typing import Literal
 
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
@@ -90,6 +92,17 @@ class AgentRuntime:
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
         self._runtime_event_service = get_runtime_event_service()
+        self._task_execution_locks: dict[int, asyncio.Lock] = {}
+        self._task_execution_locks_guard = threading.Lock()
+
+    def _get_task_execution_lock(self, task_id: int) -> asyncio.Lock:
+        """获取 task 级执行锁，保证同一 task 的 turn 串行。"""
+        with self._task_execution_locks_guard:
+            lock = self._task_execution_locks.get(task_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._task_execution_locks[task_id] = lock
+            return lock
 
     def cancel_turn(self, turn_id: int) -> TurnRecord:
         """Cancel a turn and mark it cancelled.
@@ -262,8 +275,10 @@ class AgentRuntime:
 
         turn_id = turn.id
 
-        # 非 pending 轮次不应进入本方法，调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
-        if turn.status != "pending":
+        execution_mode: Literal["fresh", "resume"] = (
+            "resume" if turn.status == "running" else "fresh"
+        )
+        if turn.status not in {"pending", "running"}:
             log.warning(
                 "run_turn_non_pending",
                 extra={
@@ -273,15 +288,44 @@ class AgentRuntime:
             )
             return None
 
-        # 解析本次执行的 agent profile：优先使用轮次创建时绑定的 agent_id，
-        # 未绑定时回退到 task.agent_id 默认归属。
+        task_lock = self._get_task_execution_lock(turn.task_id)
+        await task_lock.acquire()
+        lock_owned = True
+        try:
+            current_turn = self._turn_service.get_turn(turn.id)
+            if current_turn.status not in {"pending", "running"}:
+                task_lock.release()
+                lock_owned = False
+                return None
+            execution_mode = "resume" if current_turn.status == "running" else "fresh"
+            return await self._claim_and_build_turn_generator(
+                current_turn,
+                task_lock,
+                execution_mode,
+            )
+        except Exception:
+            if lock_owned and task_lock.locked():
+                task_lock.release()
+            raise
+
+    async def _claim_and_build_turn_generator(
+        self,
+        turn: TurnRecord,
+        task_lock: asyncio.Lock,
+        execution_mode: Literal["fresh", "resume"],
+    ) -> AsyncGenerator[RuntimeEvent] | None:
+        """在 task 锁内认领 turn，并返回负责释放锁的运行生成器。"""
+        turn_id = turn.id
+
+        # 解析本次执行的 agent profile：使用轮次创建时绑定的 agent_id
+        # （turn 维度承载 agent，task 不再绑定 agent），未绑定时回退到 main_agent。
         agent_profile: AgentProfile | None = self._agent_registry.resolve(
             turn.agent_id or "main_agent"
         )
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for turn {turn_id}")
 
-        if not self._turn_service.claim_pending_turn(turn.id):
+        if execution_mode == "fresh" and not self._turn_service.claim_pending_turn(turn.id):
             # 已被其它连接抢占（极小概率的竞态）：本轮不再重复驱动，直接退出。
             # 关键：未成功认领即在进入下方 try/finally 之前 return，断开兜底只由真正
             # 持有本轮的连接负责，避免落败连接误标他连接正在驱动的 running turn。
@@ -292,13 +336,44 @@ class AgentRuntime:
                     "data": {"turn_id": turn_id},
                 },
             )
+            task_lock.release()
             return None
 
         # 派生 per-run 副本承载本轮 turn：共享注册表单例不被原地写，并发 turn 互不串扰。
-        agent_profile = agent_profile.derive_for_turn(turn)
-        return self.run_agent(agent_profile)
+        try:
+            agent_profile = agent_profile.derive_for_turn(turn)
+        except Exception:
+            log.exception(
+                "turn_agent_profile_derivation_failed",
+                extra={"msg": "派生 turn agent profile 失败", "data": {"turn_id": turn_id}},
+            )
+            self._turn_service.fail_turn_if_running(turn_id, end_reason=None)
+            raise
+        run_generator = self.run_agent(agent_profile, execution_mode=execution_mode)
 
-    async def run_agent(self, agent: AgentProfile) -> AsyncGenerator[RuntimeEvent, None]:
+        async def _run_with_task_lock() -> AsyncGenerator[RuntimeEvent, None]:
+            """执行 turn，并在生成器关闭或结束时释放 task 锁。"""
+            try:
+                async for event in run_generator:
+                    yield event
+            except Exception:
+                self._turn_service.fail_turn_if_running(turn_id, end_reason=None)
+                raise
+            finally:
+                try:
+                    await run_generator.aclose()
+                finally:
+                    if task_lock.locked():
+                        task_lock.release()
+
+        return _run_with_task_lock()
+
+    async def run_agent(
+        self,
+        agent: AgentProfile,
+        *,
+        execution_mode: Literal["fresh", "resume"] = "fresh",
+    ) -> AsyncGenerator[RuntimeEvent, None]:
         """驱动一次 agent turn 执行并逐条透传运行时事件。
 
         参数:
@@ -369,6 +444,7 @@ class AgentRuntime:
                     operations,
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
+                    execution_mode=execution_mode,
                 ):
                     yield await self._emit(event, agent)
             try:

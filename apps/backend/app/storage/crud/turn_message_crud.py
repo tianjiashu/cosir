@@ -14,7 +14,7 @@
 
 import json
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.sql.expression import and_
 
 from app.models.runtime_message import RuntimeMessage
@@ -112,13 +112,17 @@ class TurnMessageCrud:
             session.execute(delete(TurnMessageModel).where(TurnMessageModel.turn_id == turn_id))
 
     def load_messages(self, turn_id: int) -> list[RuntimeMessage]:
-        """按序读取某 turn 的消息轨迹。
+        """按序读取某 turn 的「进模型上下文」消息轨迹。
+
+        仅返回 ``in_context`` 为真的消息（与运行时拼装模型上下文的口径一致），供
+        内存恢复 / 下一轮上下文拼装使用，不承载审计或回放职责。
 
         参数:
             turn_id: 所属轮次标识。
 
         返回:
-            按 ``sequence`` 升序的 ``RuntimeMessage`` 列表；无轨迹时为空列表。
+            按 ``sequence`` 升序、仅含 ``in_context`` 为真消息的 ``RuntimeMessage`` 列表；
+            无轨迹时为空列表。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
@@ -145,6 +149,56 @@ class TurnMessageCrud:
             )
             for row in rows
         ]
+
+    def load_messages_full(self, turn_id: int) -> list[RuntimeMessage]:
+        """按序读取某 turn 的**完整**消息历史（含 ``in_context`` 为假的消息）。
+
+        与 :meth:`load_messages` 不同，本方法不做 ``in_context`` 过滤，返回该 turn 在
+        ``turn_messages`` 表中保存的全部轨迹，供审计、历史回放、change set 等需要完整
+        消息历史的场景使用；不应作为拼装模型上下文的数据源。
+
+        参数:
+            turn_id: 所属轮次标识。
+
+        返回:
+            按 ``sequence`` 升序的 ``RuntimeMessage`` 列表（含全部 ``in_context`` 取值）；
+            无轨迹时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+
+        with self._session_factory() as session:
+            rows = (
+                session.execute(
+                    select(TurnMessageModel)
+                    .where(TurnMessageModel.turn_id == turn_id)
+                    .order_by(TurnMessageModel.sequence)
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            RuntimeMessage(
+                role=row.role,
+                content_text=row.content_text,
+                metadata=json.loads(row.metadata_json) if row.metadata_json else {},
+            )
+            for row in rows
+        ]
+
+    def next_sequence(self, turn_id: int) -> int:
+        """返回指定 turn 下一条消息可用的 sequence，包含隐藏轨迹。"""
+        with self._session_factory() as session:
+            value = session.execute(
+                select(func.max(TurnMessageModel.sequence)).where(
+                    TurnMessageModel.turn_id == turn_id
+                )
+            ).scalar_one()
+        return 0 if value is None else int(value) + 1
 
     def delete_by_ids(self, ids: list[int]) -> None:
         """按轮次标识批量删除消息轨迹（用于任务 / 工作区级联删除）。

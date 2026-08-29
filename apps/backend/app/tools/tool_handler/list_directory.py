@@ -1,7 +1,7 @@
 """list_directory 工具实现。
 
 本模块只承载 list_directory 这一个工具。列出项目内目录条目（名称 / 类型 /
-大小 / mtime），路径安全委托 ``security.ProjectPathResolver``。
+路径），路径安全委托 ``security.ProjectPathResolver``。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``，不内联路径规则。
@@ -10,7 +10,6 @@
 
 import fnmatch
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +42,10 @@ class ListDirectoryTool(HandlerBase):
 
     name = "list_directory"
     description = (
-        "List entries of a directory: name, type (file|dir), size, mtime. Read-only. "
-        "Relative paths resolve against the workspace root, and paths outside it are allowed. "
-        'To list the workspace root itself, pass path="." (a single dot); an empty string is '
-        "not a valid directory path. Hidden (dot) entries are skipped unless include_hidden is "
-        "true; entries whose name matches any ignore_globs pattern are also excluded."
+        "List a directory's entries: name, type (file|dir|link), path. Read-only. "
+        'Pass path="." for the workspace root; relative paths resolve against the root. '
+        "Hidden entries are skipped unless include_hidden is true; use include_globs to show "
+        "only entries whose name matches given patterns."
     )
     permission = "file_search"
     args_model = ListDirectoryArgs
@@ -78,7 +76,7 @@ class ListDirectoryTool(HandlerBase):
         offset: int = 0,
         limit: int = 200,
         include_hidden: bool = False,
-        ignore_globs: list[str] | None = None,
+        include_globs: list[str] | None = None,
     ) -> ToolObservation:
         """列出项目内目录条目，返回结构化观察结果。
 
@@ -89,8 +87,11 @@ class ListDirectoryTool(HandlerBase):
             limit: 单页最多返回的条目数。
             include_hidden: 为 true 时一并列出 dot 条目（名称以 ``.`` 开头），默认跳过
                 以保持目录清单紧凑。
-            ignore_globs: 匹配条目名即排除的 glob 模式列表；``None``/空列表表示不排除。
-                与 ``include_hidden`` 独立叠加（先按可见性过滤，再按本参数排除）。
+            include_globs: 正向白名单 glob 模式列表；仅「条目名」匹配其中任一模式的条目
+                会被展示，其余忽略。``None``/空列表表示不过滤（展示全部，仍受
+                ``include_hidden`` 控制）。``os.scandir`` 仅列直接子项，故 glob 只按条目名
+                匹配（带目录前缀的模式无意义）。与 ``include_hidden`` 独立叠加
+                （先按可见性过滤，再按本参数白名单筛选）。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
                 本工具只读，但解析相对路径仍需工作区根，故消费其 ``workspace_root``。
@@ -101,7 +102,8 @@ class ListDirectoryTool(HandlerBase):
             ``reason``=为什么失败+如何修正+是否重试）。
 
         异常:
-            不主动向上抛出；路径/读取错误归一化为结构化观察。
+            不主动向上抛出；路径解析失败、目录不存在、非目录、以及列举时的
+            ``OSError``（如 TOCTOU 竞态下目录被删除或权限撤销）均归一化为结构化观察。
 
         副作用:
             只读目录结构，不修改文件系统。
@@ -165,40 +167,74 @@ class ListDirectoryTool(HandlerBase):
                 permission=self.permission,
             )
 
-        with os.scandir(resolved) as scan:
-            raw_entries = [
-                entry for entry in scan if include_hidden or not entry.name.startswith(".")
-            ]
-            if ignore_globs:
+        children: list[os.DirEntry[str]] = []
+        try:
+            with os.scandir(resolved) as scan:
                 raw_entries = [
                     entry
-                    for entry in raw_entries
-                    if not any(fnmatch.fnmatch(entry.name, g) for g in ignore_globs)
+                    for entry in scan
+                    if include_hidden or not entry.name.startswith(".")
                 ]
-            children = sorted(raw_entries, key=lambda e: (not e.is_dir(), e.name.lower()))
-            page = children[offset : offset + limit]
-            entries: list[str] = []
-            entry_dicts: list[dict[str, Any]] = []
-            for entry in page:
-                entry_type = "dir" if entry.is_dir() else "file"
-                try:
-                    stat = entry.stat()
-                    size = stat.st_size if entry.is_file() else 0
-                    modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
-                except OSError:
-                    size = 0
-                    modified = "unknown"
-                entries.append(f"{entry_type:4s} {size:>12}  {modified}  {entry.name}")
-                entry_dicts.append(
-                    {
-                        "name": entry.name,
-                        "type": entry_type,
-                        "path": self._display_parent_path(path),
-                        "size": size,
-                        "modified": modified,
-                    }
+                if include_globs:
+                    # os.scandir 只列直接子项，条目相对列举根的 rel 恒等于 entry.name，
+                    # 故 glob 仅按「条目名」匹配（带目录前缀的模式在此单层列举下无意义）。
+                    # 正向白名单：只保留匹配任一模式的条目，其余忽略。
+                    raw_entries = [
+                        entry
+                        for entry in raw_entries
+                        if any(fnmatch.fnmatch(entry.name, g) for g in include_globs)
+                    ]
+                children = sorted(
+                    raw_entries, key=lambda e: (not e.is_dir(), e.name.lower())
                 )
+        except OSError as exc:
+            # exists()/is_dir() 检查与 scandir 之间存在 TOCTOU 窗口：目录可能在检查后被
+            #并发删除、移动或撤销权限，导致 scandir 抛 OSError/FileNotFoundError。
+            # 必须归一化为结构化错误而非让异常逃逸到工具调度层，否则模型会收到未处理的
+            # raw 异常且可能中断 turn 流式。
+            return tool_error(
+                self.name,
+                f"could not list '{resolved}': {exc}",
+                reason=(
+                    "the directory could not be read (it may have been removed, moved, or "
+                    "its permissions changed between the pre-check and reading). Retry the "
+                    "same path; if it persists, the directory is unavailable."
+                ),
+                permission=self.permission,
+            )
+        page = children[offset : offset + limit]
+        entries: list[str] = []
+        entry_dicts: list[dict[str, Any]] = []
+        for entry in page:
+            # 符号链接优先判为 "link"，否则指向目录的链接会被 is_dir() 误判为 file，
+            # 误导模型对链接目录的理解。
+            entry_type = (
+                "link"
+                if entry.is_symlink()
+                else "dir" if entry.is_dir() else "file"
+            )
+            entry_path = self._normalize_posix_path(
+                (resolved / entry.name).as_posix()
+            )
+            entries.append(f"{entry_type:4s}  {entry.name}  ({entry_path})")
+            entry_dicts.append(
+                {
+                    "name": entry.name,
+                    "type": entry_type,
+                    # 条目的真实绝对路径（含文件名），用列举根 + 条目名词法拼接，
+                    # 不解析 symlink，保持用户可见路径；避免相对路径/越界绝对路径
+                    # 在前端拼接后续工具调用时失真。
+                    "path": entry_path,
+                }
+            )
         content = "\n".join(entries) if entries else "(empty directory)"
+        # offset 越界（目录非空但当前页为空）单独提示，避免模型把「越界」误判为「空目录」，
+        # 否则幻觉出的大 offset 会得到与真实空目录无法区分的静默结果。
+        if not entries and children and offset >= len(children):
+            content = (
+                f"(no entries at offset={offset}; directory has {len(children)} "
+                f"entries, valid offset range is 0..{len(children) - 1})"
+            )
         next_offset = offset + len(page) if offset + len(page) < len(children) else None
         if next_offset is not None:
             content += (
@@ -215,14 +251,18 @@ class ListDirectoryTool(HandlerBase):
             },
         )
 
-    def _display_parent_path(self, path: str) -> str:
-        """归一化列表项的父目录展示路径。
+    def _normalize_posix_path(self, path: str) -> str:
+        """把任意路径字符串归一化为 posix 风格（正斜杠）绝对/相对路径。
+
+        仅做 ``Path(path).as_posix()`` 归一化，不推导父目录、不解析符号链接。
+        调用的「条目真实路径」已由调用方完成词法拼接，此处只负责统一分隔符风格，
+        供前端稳定拼接后续工具调用。
 
         参数:
-            path: 用户传入的目录路径。
+            path: 待归一化的路径字符串（已含完整绝对或相对路径）。
 
         返回:
-            用于前端列表副标题的目录路径。
+            posix 风格路径字符串；空串返回 ``"."``。
 
         异常:
             无。

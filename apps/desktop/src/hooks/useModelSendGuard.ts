@@ -7,7 +7,7 @@
  *
  * 校验规则（纯函数 validateModelSend，可独立单测）：
  * 1. 模型缓存为空/未加载 → 拦截（no_models）+ 引导打开配置中心
- * 2. 未显式选择模型（selectedModelName=null）→ 拦截（no_model_selected）
+ * 2. 未显式选择模型（selectedModel=null）→ 拦截（no_model_selected）
  * 3. 显式选择已不可用的模型 → 拦截（model_missing）
  * 4. 目标模型厂商 api_key_configured=false → 拦截（api_key_missing），
  *    引导前往配置中心填写 API Key（不依赖 Key 的厂商后端恒报 true，天然跳过）
@@ -15,12 +15,18 @@
  * 注：2026-08-18 起移除「Auto 跟随 Agent 默认」产品语义，模型必须显式选择；
  * 后端 model_name 仍为 Optional（防御兜底，前端保证总是传非 null）。
  *
+ * 模型身份以 ``(provider_id, model_name)`` 二元组判定（与后端
+ * ``turn_service.create_turn`` 的配对契约一致）：同名不同厂商的模型视为不同模型，
+ * 避免跨厂商重名时误判为「仍可用」。
+ *
  * @module hooks/useModelSendGuard
  */
 
 import { useCallback } from "react";
 import type { ModelEntryRecord } from "@shared/model";
+import { findModelBySelection } from "@shared/model";
 import { useTaskStore } from "@/stores/taskStore";
+import type { SelectedModel } from "@/stores/taskStore";
 
 /** 校验拦截原因（对应设计 §9 四条拦截路径）。 */
 export type ModelSendGuardReason =
@@ -48,23 +54,23 @@ export interface ModelSendGuardInput {
   availableModels: ModelEntryRecord[];
   /** 缓存是否已成功拉取（false 视同空缓存拦截，见 taskStore 契约）。 */
   modelsLoaded: boolean;
-  /** 当前选中模型名（null = 未选择，需显式选择后才能发送）。 */
-  selectedModelName: string | null;
+  /** 当前选中模型身份（provider_id + model_name 二元组；null = 未选择）。 */
+  selectedModel: SelectedModel | null;
 }
 
 /**
  * 按当前选择校验模型可发送性（纯函数，无副作用）。
  *
  * 校验顺序与设计 §9 一致：空缓存 → 未选择模型 → 显式模型存在性 → Key 状态。
- * 产品已移除 Auto 语义：缓存非空时 selectedModelName=null 直接拦截（不静默
+ * 产品已移除 Auto 语义：缓存非空时 selectedModel=null 直接拦截（不静默
  * 回退到任何默认模型），保证「用哪个模型」始终是用户显式决策。
  *
- * @param input - 校验输入（模型缓存、加载态、选中模型名）。
+ * @param input - 校验输入（模型缓存、加载态、选中模型身份）。
  * @returns 全部通过返回 `{ ok: true }`；否则返回 `{ ok: false, block }`，
  *   block 含拦截原因、用户提示文案与是否引导打开配置中心。
  */
 export function validateModelSend(input: ModelSendGuardInput): ModelSendGuardResult {
-  const { availableModels, modelsLoaded, selectedModelName } = input;
+  const { availableModels, modelsLoaded, selectedModel } = input;
 
   // 规则 1：空缓存/未加载拦截（未加载视同空，避免拉取失败误放行——taskStore 契约）。
   if (!modelsLoaded || availableModels.length === 0) {
@@ -78,8 +84,8 @@ export function validateModelSend(input: ModelSendGuardInput): ModelSendGuardRes
     };
   }
 
-  // 规则 2：未显式选择模型拦截（缓存有模型但 selectedModelName=null）。
-  if (selectedModelName === null) {
+  // 规则 2：未显式选择模型拦截（缓存有模型但 selectedModel=null）。
+  if (selectedModel === null) {
     return {
       ok: false,
       block: {
@@ -91,13 +97,15 @@ export function validateModelSend(input: ModelSendGuardInput): ModelSendGuardRes
   }
 
   // 规则 3：显式选择的模型必须仍可用（已删除/禁用的模型不出现在缓存中）。
-  const target = availableModels.find((model) => model.model_name === selectedModelName);
+  // 走共享的二元组匹配：model_name 与 provider_id 同时命中才算同一模型，
+  // 避免跨厂商重名（如 openai/gpt-4o 与 azure/gpt-4o）被误判为仍可用。
+  const target = findModelBySelection(availableModels, selectedModel);
   if (!target) {
     return {
       ok: false,
       block: {
         reason: "model_missing",
-        message: `所选模型（${selectedModelName}）已不可用，请重新选择`,
+        message: `所选模型（${selectedModel.model_name}）已不可用，请重新选择`,
         openSettings: true,
       },
     };
@@ -149,7 +157,7 @@ export function useModelSendGuard() {
     return validateModelSend({
       availableModels: taskState.availableModels,
       modelsLoaded: taskState.modelsLoaded,
-      selectedModelName: taskState.selectedModelName,
+      selectedModel: taskState.selectedModel,
     });
   }, []);
 

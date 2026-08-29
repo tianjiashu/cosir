@@ -43,6 +43,9 @@ class RuntimeConfig:
             与剥离逻辑。``None`` 表示不抽取独立 thinking 通道。
         thinking_roundtrip: 是否将 thinking 内容回传模型（多轮推理闭环）；供 model_node 决策。
             ``None`` 表示未指定。
+        vision_input_format: 按厂商分派的视觉输入格式（如 ``"openai_url"``）；供 workflow 在
+            构造用户消息时选择图片 block 拼装方式。空串表示本期未支持的厂商格式，由 workflow
+            转 ``VisionNotSupportedError``。
     """
 
     operations: RuntimeOperations
@@ -55,3 +58,4 @@ class RuntimeConfig:
     langfuse_trace_id: str | None = None
     thinking_channel: str | None = None
     thinking_roundtrip: bool | None = None
+    vision_input_format: str = ""

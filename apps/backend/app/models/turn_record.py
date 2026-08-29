@@ -6,6 +6,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from app.storage.model.turn_model import TurnModel
 from app.utils.datetime_utils import from_text, to_text
@@ -24,10 +25,11 @@ class TurnRecord:
     end_reason: str | None = None
     response_text: str | None = None
     agent_id: str | None = None
-    product_id: int | None = None
+    provider_id: int | None = None
     model_name: str | None = None
-    paths: list[str] | None = None
+    image_paths: list[str] | None = None
     reasoning_effort: str | None = None
+    extra: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         """将轮次状态转换为可序列化为 JSON 的字典。
@@ -52,11 +54,12 @@ class TurnRecord:
             "status": self.status,
             "end_reason": self.end_reason,
             "response_text": self.response_text,
-            "paths": self.paths,
+            "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
-            "product_name": self.product_id,
+            "provider_id": self.provider_id,
             "model_name": self.model_name,
+            "extra": self.extra,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -87,8 +90,9 @@ class TurnRecord:
             end_reason=row.end_reason,
             response_text=row.response_text,
             agent_id=row.agent_id,
-            paths=row.paths,
+            image_paths=row.image_paths,
             reasoning_effort=row.reasoning_effort,
             model_name=row.model_name,
-            product_id=row.product_id,
+            provider_id=row.provider_id,
+            extra=row.extra,
         )

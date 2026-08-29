@@ -1,0 +1,87 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mh:/coding-agent/apps/desktop[39m
+
+ [31m❯[39m src/tests/fixverify_provider_id_turn.test.ts [2m([22m[2m16 tests[22m[2m | [22m[31m5 failed[39m[2m)[22m[90m 14[2mms[22m[39m
+[31m   [31m×[31m 缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m选中模型后 createTurn 请求体同时含 provider_id 与 model_name，且来自同一选中条目[90m 6[2mms[22m[31m[39m
+[31m     → upsertTurn is not a function[39m
+[31m   [31m×[31m 缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m未选模型（selectedModel=null）时 provider_id 与 model_name 均为 undefined（不抛出，交由后端拦截）[90m 1[2mms[22m[31m[39m
+[31m     → upsertTurn is not a function[39m
+[31m   [31m×[31m 缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 完全相同但 provider_id 不同：选中 azure 时请求体 provider_id 必须是 azure 的[90m 0[2mms[22m[31m[39m
+[31m     → upsertTurn is not a function[39m
+[31m   [31m×[31m 缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 去前缀后相同（azure/gpt-4o-mini 与 openai/gpt-4o-mini）重名时配对正确[90m 0[2mms[22m[31m[39m
+[31m     → upsertTurn is not a function[39m
+[31m   [31m×[31m 缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22m选中 provider_id 较小一方时请求体不会误用另一方的 provider_id[90m 0[2mms[22m[31m[39m
+[31m     → upsertTurn is not a function[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 5 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m选中模型后 createTurn 请求体同时含 provider_id 与 model_name，且来自同一选中条目
+[31m[1mTypeError[22m: upsertTurn is not a function[39m
+[36m [2m❯[22m src/hooks/useTask.ts:[2m163:7[22m[39m
+    [90m161| [39m        updated_at[33m:[39m now[33m,[39m
+    [90m162| [39m      }[33m;[39m
+    [90m163| [39m      [34mupsertTurn[39m(optimisticTurn)[33m;[39m
+    [90m   | [39m      [31m^[39m
+    [90m164| [39m      [34msetActiveTurn[39m(optimisticTurnId)[33m;[39m
+    [90m165| [39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m190:16[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: createTurn 请求体同时含 provider_id 与 model_name（值正确配对）[2m > [22m未选模型（selectedModel=null）时 provider_id 与 model_name 均为 undefined（不抛出，交由后端拦截）
+[31m[1mTypeError[22m: upsertTurn is not a function[39m
+[36m [2m❯[22m src/hooks/useTask.ts:[2m163:7[22m[39m
+    [90m161| [39m        updated_at[33m:[39m now[33m,[39m
+    [90m162| [39m      }[33m;[39m
+    [90m163| [39m      [34mupsertTurn[39m(optimisticTurn)[33m;[39m
+    [90m   | [39m      [31m^[39m
+    [90m164| [39m      [34msetActiveTurn[39m(optimisticTurnId)[33m;[39m
+    [90m165| [39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m203:11[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 完全相同但 provider_id 不同：选中 azure 时请求体 provider_id 必须是 azure 的
+[31m[1mTypeError[22m: upsertTurn is not a function[39m
+[36m [2m❯[22m src/hooks/useTask.ts:[2m163:7[22m[39m
+    [90m161| [39m        updated_at[33m:[39m now[33m,[39m
+    [90m162| [39m      }[33m;[39m
+    [90m163| [39m      [34mupsertTurn[39m(optimisticTurn)[33m;[39m
+    [90m   | [39m      [31m^[39m
+    [90m164| [39m      [34msetActiveTurn[39m(optimisticTurnId)[33m;[39m
+    [90m165| [39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m221:11[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22mmodel_name 去前缀后相同（azure/gpt-4o-mini 与 openai/gpt-4o-mini）重名时配对正确
+[31m[1mTypeError[22m: upsertTurn is not a function[39m
+[36m [2m❯[22m src/hooks/useTask.ts:[2m163:7[22m[39m
+    [90m161| [39m        updated_at[33m:[39m now[33m,[39m
+    [90m162| [39m      }[33m;[39m
+    [90m163| [39m      [34mupsertTurn[39m(optimisticTurn)[33m;[39m
+    [90m   | [39m      [31m^[39m
+    [90m164| [39m      [34msetActiveTurn[39m(optimisticTurnId)[33m;[39m
+    [90m165| [39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m232:11[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/tests/fixverify_provider_id_turn.test.ts[2m > [22m缺陷1: 跨厂商重名场景，选中其一，provider_id 必须是选中那一个[2m > [22m选中 provider_id 较小一方时请求体不会误用另一方的 provider_id
+[31m[1mTypeError[22m: upsertTurn is not a function[39m
+[36m [2m❯[22m src/hooks/useTask.ts:[2m163:7[22m[39m
+    [90m161| [39m        updated_at[33m:[39m now[33m,[39m
+    [90m162| [39m      }[33m;[39m
+    [90m163| [39m      [34mupsertTurn[39m(optimisticTurn)[33m;[39m
+    [90m   | [39m      [31m^[39m
+    [90m164| [39m      [34msetActiveTurn[39m(optimisticTurnId)[33m;[39m
+    [90m165| [39m
+[90m [2m❯[22m src/tests/fixverify_provider_id_turn.test.ts:[2m243:11[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m5 failed[39m[22m[2m | [22m[1m[32m11 passed[39m[22m[90m (16)[39m
+[2m   Start at [22m 16:39:09
+[2m   Duration [22m 597ms[2m (transform 95ms, setup 0ms, collect 198ms, tests 14ms, environment 0ms, prepare 113ms)[22m
+

@@ -3,26 +3,33 @@
  *
  * 编排厂商列表与其全部变更链路：
  * - 厂商卡片：启用 Switch（即时 PUT 生效）、模型数量、base_url、Key 配置徽标
- *   （未配置显告警色）、编辑（嵌套 ProviderFormDialog）、删除（按钮级二次确认）、
- *   展开的模型管理区（ProviderModelsSection）；
+ *   （未配置显告警色）、编辑（嵌套 ProviderFormDialog）、删除（按钮级二次确认）；
  * - 新增厂商（嵌套 ProviderFormDialog 空表单）；
- * - 任一变更（启停/保存/删除）成功后刷新厂商列表与 taskStore 可用模型缓存（设计 §9.5）。
+ * - 任一变更（启停/保存/删除）成功后刷新可用模型缓存（设计 §9.5）。
+ *
+ * 数据源变更（§3.5）：后端无 GET /providers 端点，本对话框不再拉取列表。
+ * 已配置厂商清单直接读 ``providerConfigStore``（新建/编辑/删除成功回参写入，
+ * localStorage 持久化，刷新不丢），避免 404 死路径调用。两类列表职责边界：
+ * - 配置清单（本 store）：用户已配置的全部厂商（含未启用/未配 Key），供配置管理；
+ * - 模型列表（GET /models 子集）：仅已启用且 api_key_configured 的厂商下的模型，
+ *   即 ModelSelector 实际可选模型。二者天然可能不一致（清单有某厂商但其模型不在选择器），
+ *   属后端数据契约的诚实分层，本对话框对该厂商标注「未启用/未配 Key，模型未出现在选择器」。
  *
  * @module components/settings/ProviderSettingsDialog
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
 import type { ProviderRecord } from "@shared/model";
 import { cn } from "@/lib/utils";
 import { logError, logInfo } from "@/lib/logger";
 import {
   createProvider,
   deleteProvider,
-  listProviders,
   updateProvider,
 } from "@/services/api";
 import { useTaskStore } from "@/stores/taskStore";
+import { useProviderConfigStore } from "@/stores/providerConfigStore";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +40,6 @@ import {
   type ProviderFormMeta,
   type ProviderFormValues,
 } from "./ProviderFormDialog";
-import { ProviderModelsSection } from "./ProviderModelsSection";
 
 /** ProviderSettingsDialog 组件属性。 */
 interface ProviderSettingsDialogProps {
@@ -46,50 +52,34 @@ interface ProviderSettingsDialogProps {
 /**
  * 厂商配置中心对话框。
  *
- * 打开时拉取厂商列表；所有变更（启停/编辑/删除）成功后就地刷新
- * 列表并同步 taskStore.refreshAvailableModels，保证发送前校验与下拉即时
- * 反映配置变更。
+ * 已配置厂商清单直接来自 providerConfigStore（不调 GET /providers）。所有变更
+ * （启停/编辑/删除）成功后写回 providerConfigStore 并刷新 taskStore 可用模型缓存，
+ * 保证发送前校验与下拉即时反映配置变更。
  */
 export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsDialogProps) {
-  const [providers, setProviders] = useState<ProviderRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const providers = useProviderConfigStore((s) => s.configuredProviders);
+  const upsertConfiguredProvider = useProviderConfigStore((s) => s.upsertConfiguredProvider);
+  const removeConfiguredProvider = useProviderConfigStore((s) => s.removeConfiguredProvider);
   /** 嵌套表单（新增/编辑）状态：null 关闭；{mode, provider} 打开。 */
   const [formState, setFormState] = useState<{
     mode: "create" | "edit";
     provider: ProviderRecord | null;
   } | null>(null);
   /** 删除二次确认中的厂商 ID（按钮级确认，避免再开一层 Dialog）。 */
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
   /** 展开模型管理区的厂商 ID（单展开，折叠互斥）。 */
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   /** 删除确认超时句柄（超时自动回退，防止误停留确认态）。 */
   const confirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refreshProviders = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await listProviders();
-      setProviders(list);
-    } catch (err) {
-      logError("拉取厂商列表失败", err, { module: "ProviderSettingsDialog" });
-      setError("拉取厂商列表失败，请检查后端是否可用");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // 打开时拉取一次列表；关闭时清理确认与展开态。
+  // 关闭时清理确认与展开态与表单态。
   useEffect(() => {
-    if (open) {
-      void refreshProviders();
-    } else {
+    if (!open) {
       setConfirmingDeleteId(null);
       setExpandedId(null);
       setFormState(null);
     }
-  }, [open, refreshProviders]);
+  }, [open]);
 
   // 卸载清理确认超时句柄。
   useEffect(() => {
@@ -101,31 +91,28 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
   }, []);
 
   /**
-   * 变更成功后的统一刷新：厂商列表 + 可用模型缓存（§9.5）。
+   * 变更成功后的统一刷新：可用模型缓存（§9.5）。
+   * 已配置清单由 providerConfigStore 直接承载，无需在此重新拉取。
    */
-  const refreshAll = useCallback(async () => {
-    await Promise.all([refreshProviders(), useTaskStore.getState().refreshAvailableModels()]);
-  }, [refreshProviders]);
+  const refreshModels = () => {
+    void useTaskStore.getState().refreshAvailableModels();
+  };
 
   /** 启停厂商（Switch 即时生效；失败回滚 UI 由重新拉取保证）。 */
   const handleToggleEnabled = async (provider: ProviderRecord, enabled: boolean) => {
     try {
       const updated = await updateProvider(provider.provider_id, { enabled });
-      setProviders((prev) =>
-        prev.map((item) => (item.provider_id === updated.provider_id ? updated : item)),
-      );
-      void useTaskStore.getState().refreshAvailableModels();
+      upsertConfiguredProvider(updated);
+      refreshModels();
     } catch (err) {
       logError("切换厂商启用状态失败", err, {
         module: "ProviderSettingsDialog",
         provider_id: provider.provider_id,
       });
-      setError("切换失败，请重试");
-      void refreshProviders();
     }
   };
 
-  /** 删除厂商（级联删模型，幂等）；按钮级二次确认防误删。 */
+  /** 删除厂商（幂等）；按钮级二次确认防误删。 */
   const handleDelete = async (provider: ProviderRecord) => {
     if (confirmingDeleteId !== provider.provider_id) {
       // 第一次点击：进入确认态，5 秒未确认自动回退。
@@ -149,13 +136,13 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
       if (expandedId === provider.provider_id) {
         setExpandedId(null);
       }
-      await refreshAll();
+      removeConfiguredProvider(provider.provider_id);
+      refreshModels();
     } catch (err) {
       logError("删除厂商失败", err, {
         module: "ProviderSettingsDialog",
         provider_id: provider.provider_id,
       });
-      setError("删除失败，请重试");
     }
   };
 
@@ -165,7 +152,7 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
    * api_key 归一化语义（与后端 update 契约一致）：
    * - 创建：空串 → null（不设置）；非空 → 明文写入；
    * - 编辑：非空 → 更新；空串 + 显式清除标记 → ""（清空）；空串未标记 → 不更新。
-   * base_url 编辑直接透传（后端 "" = 置空回落 litellm 内置解析）。
+   * base_url 编辑直接透传（后端 "" = 置空回落后端内置解析）。
    *
    * 错误处理：本函数不在内部吞掉异常——失败时直接向上抛出真实的
    * ``ServiceError``（含 ``message`` / ``statusCode``），交由嵌套的
@@ -184,8 +171,9 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
   ): Promise<void> => {
     if (!formState) throw new Error("表单未处于打开状态");
     const isCreate = formState.mode === "create";
+    let saved: ProviderRecord;
     if (isCreate) {
-      await createProvider({
+      saved = await createProvider({
         name: values.name,
         type: values.type,
         base_url: values.baseUrl === "" ? null : values.baseUrl,
@@ -193,7 +181,7 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
         enabled: true,
       });
     } else if (formState.provider) {
-      await updateProvider(formState.provider.provider_id, {
+      saved = await updateProvider(formState.provider.provider_id, {
         name: values.name,
         type: values.type,
         // 后端语义："" = 显式置空，undefined = 不更新。
@@ -203,8 +191,10 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
     } else {
       throw new Error("编辑模式未指定厂商");
     }
+    // 新建/编辑成功：回参写入已配置清单持久化 store（不依赖 GET /providers）。
+    upsertConfiguredProvider(saved);
     setFormState(null);
-    await refreshAll();
+    refreshModels();
   };
 
   return (
@@ -213,9 +203,14 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
         <DialogContent className="max-w-2xl">
           <DialogTitle>模型厂商配置</DialogTitle>
 
+          <p className="text-xs text-muted-foreground">
+            配置厂商并启用、且配置 Key 后，其模型将自动出现在模型选择器；
+            未启用或未配置 Key 的厂商不出现在选择器。配置即生效，无需其它同步操作。
+          </p>
+
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              {providers.length > 0 ? `${providers.length} 个厂商` : ""}
+              {providers.length > 0 ? `${providers.length} 个已配置厂商` : ""}
             </p>
             <Button
               type="button"
@@ -228,12 +223,7 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
             </Button>
           </div>
 
-          {loading && providers.length === 0 ? (
-            <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              加载厂商列表...
-            </div>
-          ) : providers.length === 0 ? (
+          {providers.length === 0 ? (
             /* 空态：尚未配置任何厂商，提示用户通过「新增厂商」入口添加。 */
             <div className="flex flex-col items-center gap-3 rounded border border-dashed border-border py-8">
               <p className="text-sm text-muted-foreground">尚未配置任何厂商</p>
@@ -310,38 +300,26 @@ export function ProviderSettingsDialog({ open, onOpenChange }: ProviderSettingsD
                     >
                       <span>base_url: {provider.base_url || "内置解析"}</span>
                       <span>Key: {provider.api_key_configured ? "已设置" : "未设置"}</span>
+                      {/* 两类列表职责边界提示：配置清单有、但其模型不在选择器（未启用/未配 Key）。 */}
+                      {!provider.enabled && <span className="text-amber-500">未启用，模型未出现在选择器</span>}
+                      {provider.enabled && !provider.api_key_configured && (
+                        <span className="text-amber-500">未配 Key，模型未出现在选择器</span>
+                      )}
                       {confirming && (
                         <span className="text-destructive">
                           再点一次删除按钮确认（级联删除 {provider.model_count} 个模型）
                         </span>
                       )}
                     </div>
-
-                    {/* 展开的模型管理区 */}
-                    {expanded && (
-                      <div className="mt-2">
-                        <ProviderModelsSection
-                          providerId={provider.provider_id}
-                          typePrefix={provider.type === "custom" ? "custom" : provider.type}
-                          onImported={() => void refreshAll()}
-                        />
-                      </div>
-                    )}
                   </div>
                 );
               })}
             </div>
           )}
-
-          {error && (
-            <p className="text-xs text-destructive" role="alert">
-              {error}
-            </p>
-          )}
         </DialogContent>
       </Dialog>
 
-      {/* 嵌套的新增/编辑表单（Radix Dialog 叠加） */}
+      {/* 嵌套的新增/编辑表单（Radix Dialog 叠加，含「测试连接」按钮） */}
       <ProviderFormDialog
         open={formState !== null}
         onOpenChange={(next) => {

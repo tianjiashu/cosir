@@ -9,8 +9,10 @@
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
+from typing import Any
 
-from sqlalchemy import asc, delete, select, update
+from sqlalchemy import asc, delete, exists, select, update
+from sqlalchemy.orm import aliased
 
 from app.models import TurnRecord
 from app.storage.model.turn_model import TurnModel
@@ -48,10 +50,11 @@ class TurnCrud:
         input_text: str,
         status: str = "pending",
         agent_id: str | None = None,
-        product_id: int | None = None,
+        provider_id: int | None = None,
         model_name: str | None = None,
-        paths: list[str] | None = None,
+        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
@@ -64,9 +67,10 @@ class TurnCrud:
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本次轮次绑定的 agent 标识；落库到 ``turns.agent_id`` 列。
             model_name: 可选，模型路由名；落库到 ``turns.model_name`` 列。
-            product_id: 可选，模型归属厂商标识（指向 ``providers.id`` 外键）；落库到
-                ``turns.product_id`` 列；None 表示未指定。
-            paths: 可选，本轮输入的路径列表；None 表示无路径关联。
+            provider_id: 可选，模型归属厂商标识（指向 ``providers.id`` 外键）；落库到
+                ``turns.provider_id`` 列；None 表示未指定。
+            image_paths: 可选，本轮输入的图片路径列表（仅图片，供多模态通道）；
+                None 表示无图片关联。
             reasoning_effort: 可选，本 turn 思考努力等级；None 表示未指定（由模型侧回退到
                 ``max``）。落库到 ``turns.reasoning_effort`` 列（DDL 层约束只接受
                 ``low`` / ``high`` / ``max``）。
@@ -92,10 +96,11 @@ class TurnCrud:
                 end_reason=None,
                 response_text=None,
                 agent_id=agent_id,
-                product_id=product_id,
+                provider_id=provider_id,
                 model_name=model_name,
-                paths=paths,
+                image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
+                extra=extra,
             )
             session.add(model)
             session.flush()
@@ -203,6 +208,29 @@ class TurnCrud:
                 update(TurnModel)
                 .where(TurnModel.id == turn_id, TurnModel.status.in_(allowed_statuses))
                 .values(**values)
+            )
+        if not result.rowcount:
+            return None
+        return self.get(turn_id)
+
+    def claim_pending_serialized(self, turn_id: int) -> TurnRecord | None:
+        """仅在同 task 没有其它 running turn 时原子认领 pending turn。"""
+        self.get(turn_id)
+        running_turn = aliased(TurnModel)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(
+                    TurnModel.id == turn_id,
+                    TurnModel.status == "pending",
+                    ~exists(
+                        select(1).where(
+                            running_turn.task_id == TurnModel.task_id,
+                            running_turn.status == "running",
+                        )
+                    ),
+                )
+                .values(status="running", updated_at=to_text(utc_now()))
             )
         if not result.rowcount:
             return None

@@ -1,13 +1,21 @@
 /**
  * Task 维度元数据选择条（TaskHeaderBar）。
  *
- * 组合 AgentSelector + ModelSelector + ProviderSettingsDialog：
- * - AgentSelector：当前任务创建时使用的 Agent 标识（store: `useTaskStore.selectedAgentId`）。
+ * 组合 ModelSelector + ProviderSettingsDialog：
  * - ModelSelector：当前任务创建/追加时使用的模型（null 表示未选择，需显式选择；
- *   store: `useTaskStore.selectedModelName`，已含 localStorage 持久化）。
+ *   store: `useTaskStore.selectedModel`，provider_id + model_name 二元组，已含
+ *   localStorage 持久化）。
  * - ProviderSettingsDialog：ModelSelector 的「配置模型 / 管理厂商」入口所触发的受控
  *   对话框；局部 useState 自治，**不**下沉到全局 store——该对话框的开关属于组件组合
  *   内部协调，应被具体消费方持有，复用 TaskHeaderBar 的多个调用点天然隔离。
+ *
+ * 收敛说明（UI 收口轮次）：Agent 选择已从顶部栏移除，且前端已无 Agent 选择 UI（AgentSelector
+ * 已删除、useTaskStore 不再持有 selectedAgentId）。Agent 标识由后端固定：turns_api 硬编码
+ * main_agent，前端根本不传 agent_id（task 创建仅传 text/workspace_id，turn 创建由后端固定
+ * main_agent）；前端 taskStore 不再持有 selectedAgentId、useTask 不再读取任何 agent 维度用户选择。
+ * 模型选择入口已下沉到输入层（Chat
+ * 视图 InputBar、NewTaskPage 底部输入区），本组件仅保留 ModelSelector + ProviderSettingsDialog
+ * 入口，作为 Chat 视图顶部的兜底入口。
  *
  * 单一职责边界（明确「不做什么」，约束后续维护者）：
  * - 不负责 workspace 切换（属于 NewTaskPage / Sidebar 各自职责）。
@@ -16,7 +24,7 @@
  * - 不读 activeTaskId / activeWorkspaceId 等上下文，仅暴露「task 创建时的配置入口」，
  *   与「哪个 task 正在聊」解耦——ChatPanel 顶部也展示同一条，复用同一事实源。
  *
- * 视觉：紧凑态 `h-8`，与原 InputBar 内的 AgentSelector / ModelSelector 折叠态同等级；
+ * 视觉：紧凑态 `h-8`，与 ModelSelector 折叠态同等级；
  * 默认右对齐，永远不抢主视觉重心，仅作为「任务维度元数据」入口。
  *
  * 未来工作（不在本组件首次合入范围）：
@@ -28,7 +36,6 @@
  */
 
 import { useState } from "react";
-import { AgentSelector } from "@/components/chat/AgentSelector";
 import { ModelSelector } from "@/components/chat/ModelSelector";
 import { ProviderSettingsDialog } from "@/components/settings/ProviderSettingsDialog";
 import { logInfo } from "@/lib/logger";
@@ -55,10 +62,10 @@ export interface TaskHeaderBarProps {
  * Task 维度元数据选择条组件。
  *
  * 不读取 activeTaskId / activeWorkspaceId：消费方可以是 NewTaskPage（无活跃任务）
- * 也可以是 ChatPanel（有活跃任务），事实源仅来自 `useTaskStore.selectedAgentId` 与
- * `useTaskStore.selectedModelName`——所选配置用于「下一次任务创建 / turn 创建」，
- * 不被当前活跃任务所限定，与「正在聊的任务用什么模型」二者语义重合时也合法（已落
- * 全局 store 一致即可）。
+ * 也可以是 ChatPanel（有活跃任务），事实源仅来自 `useTaskStore.selectedModel`（前端已无
+ * Agent 选择 UI，taskStore 不再持有 selectedAgentId，agent 维度由后端固定 main_agent）。所选
+ * 模型配置用于「下一次任务创建 / turn 创建」，不被当前活跃任务所限定，与「正在聊的任务用
+ * 什么模型」二者语义重合时也合法（已落全局 store 一致即可）。
  *
  * ProviderSettingsDialog 的开关状态默认组件内部协调，不下沉到 store：
  * - 该对话框仅由 ModelSelector 的「配置模型 / 管理厂商」入口触发，无需在
@@ -74,9 +81,10 @@ export interface TaskHeaderBarProps {
  * @returns TaskHeaderBar 的 React 元素。
  *
  * @sideeffect
- * - 渲染时触发 AgentSelector 首次挂载幂等拉取 `GET /agents`（经 agentStore，失败降级，不阻塞渲染）。
  * - 打开 ProviderSettingsDialog 时拉取 `GET /providers`；保存/删除/导入成功后由
  *   ProviderSettingsDialog 内部触发 taskStore.refreshAvailableModels（关闭本身不刷新）。
+ * - 本组件渲染不再挂载 AgentSelector（已由上一轮重构删除），故不再发起 `/agents` 请求；
+ *   前端已无 Agent 选择 UI，Agent 标识由后端固定 main_agent，详见组件级 docstring 收敛说明。
  *
  * @example
  * ```tsx
@@ -143,10 +151,8 @@ export function TaskHeaderBar({ className, settingsOpen: controlledOpen, onSetti
       data-testid="task-header-bar"
       className={cn("flex h-8 items-center gap-0.5", className)}
     >
-      {/* Agent 选择器：直接读 useTaskStore.selectedAgentId / setSelectedAgentId（去掉外部 props） */}
-      <AgentSelector className="h-7" />
-
-      {/* 模型选择器：走 useTaskStore.selectedModelName；onOpenSettings 由本组件持有的 settingsOpen 自治 */}
+      {/* 模型选择器：走 useTaskStore.selectedModel；onOpenSettings 由本组件持有的 settingsOpen 自治。
+       * Agent 选择已移除（见组件 docstring 收敛说明），不再渲染 AgentSelector。 */}
       <ModelSelector
         onOpenSettings={handleOpenSettings}
         className="h-7"

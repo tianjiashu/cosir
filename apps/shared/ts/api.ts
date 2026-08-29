@@ -6,6 +6,9 @@
  *
  * @module shared/api
  */
+
+import type { AttachmentRef } from "./attachment";
+
 export const API_BASE = "/api";
 
 export const API_PATHS = {
@@ -32,9 +35,7 @@ export const API_PATHS = {
 
 export interface CreateTaskRequest {
   text: string;
-  agent_id: string;
-  workspace_id: string;
-  model_name?: string | null;
+  workspace_id: number;
 }
 
 export interface CreateWorkspaceRequest {
@@ -42,10 +43,24 @@ export interface CreateWorkspaceRequest {
   root_path: string;
 }
 
+export interface ChangeSetActionRequest {
+  paths: string[];
+}
+
+/**
+ * 轮次创建请求体。
+ * 
+ * **配对契约（关键）**：``provider_id`` 与 ``model_name`` 必须成对提交——
+ * 后端 ``turn_service.create_turn`` 对「有 model_name 但 provider_id 为 None」
+ * 直接抛 ``ValueError``（API 层映射 HTTP 400）。两者应同源取自用户选定的
+ * 模型二元组，不可只传其一。
+ */
 export interface CreateTurnRequest {
   input_text: string;
-  agent_id?: string | null;
   model_name?: string | null;
+  provider_id?: number | null;
+  attachments?: AttachmentRef[] | null;
+  reasoning_effort?: string | null;
 }
 
 export interface BackendHealthResponse {
@@ -53,12 +68,12 @@ export interface BackendHealthResponse {
 }
 
 export interface DeleteWorkspaceResponse {
-  workspace_id: string;
+  workspace_id: number;
   deleted: boolean;
 }
 
 export interface DeleteTaskResponse {
-  task_id: string;
+  task_id: number;
   deleted: boolean;
 }
 

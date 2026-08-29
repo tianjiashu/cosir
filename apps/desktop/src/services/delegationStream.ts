@@ -31,8 +31,8 @@ export type DelegationStreamErrorHandler = (error: Error) => void;
 export interface DelegationStreamConnectionOptions {
   /** 父任务标识，用于 trace、日志和事件回填。 */
   taskId: string;
-  /** 委派记录标识，用于日志定位。 */
-  delegationId: string;
+  /** 委派记录标识（真实后端 delegation 主键，number 维度），用于日志定位。 */
+  delegationId: number;
   /** 被委派 child turn 标识。 */
   childTurnId: string;
   /** 收到 RuntimeEvent 后调用。 */
