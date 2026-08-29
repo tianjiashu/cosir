@@ -78,6 +78,11 @@ class ProviderCapability:
             工厂会同时设置二者，最终由 ``disabled_params`` 屏蔽其中不需要的一个
             （如 ``{"max_tokens": None}`` 表示仅用 ``max_completion_tokens``）。
 
+        vision_input_format: 视觉输入格式（路由经验值，非模型事实）。本期仅支持
+            ``"openai_url"``（DeepSeek 等 OpenAI 兼容厂商走 ``image_url`` 形式）；
+            其它厂商（Anthropic / Gemini）的视觉格式本期未实现，默认空串由调用方转
+            ``VisionNotSupportedError``。
+
     注 ``llm_provider.json`` 顶层键完整去向（避免后续误判字段归属）：
     ``provider_type`` / ``base_url`` / ``models`` / ``thinking_channels`` 已建模；
     ``extra_body`` 透传至请求体（见上）；``disabled_params`` 透传至 ``ChatOpenAI.disabled_params``
@@ -92,6 +97,7 @@ class ProviderCapability:
     models: tuple[str, ...] = field(default_factory=tuple)
     extra_body: dict[str, Any] = field(default_factory=dict)
     disabled_params: dict[str, Any] = field(default_factory=dict)
+    vision_input_format: str = ""
 
     @staticmethod
     def get_capability(provider_name: str) -> ProviderCapability:
@@ -123,4 +129,5 @@ class ProviderCapability:
             models=tuple(raw.get("models", [])),
             extra_body=raw.get("extra_body", {}),
             disabled_params=raw.get("disabled_params", {}),
+            vision_input_format=raw.get("vision_input_format", ""),
         )

@@ -45,6 +45,19 @@
         "high": "high",
         "max": "max"
       }
+    },
+    "image_limit": {
+      "supported_formats": ["jpeg", "png", "gif", "webp"],
+      "external_url_max_chars": 8192,
+      "request_body_max_bytes": 50331648,
+      "single_image_inline_max_bytes": 33554432,
+      "single_image_file_id_max_bytes": 67108864,
+      "max_images_per_request": 600,
+      "request_total_max_bytes_inline_only": 67108864,
+      "request_total_max_bytes_with_file_id": 209715200,
+      "max_image_side_px": 8192,
+      "max_image_side_px_when_many": 4096,
+      "many_image_threshold": 15
     }
   },
   "GLM-5.3": {

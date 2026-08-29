@@ -17,6 +17,7 @@
       "503": "服务器繁忙"
     },
     "thinking_channel": "reasoning_content",
+    "vision_input_format": "openai_url",
     "extra_body": {},
     "disabled_params":{}
   }

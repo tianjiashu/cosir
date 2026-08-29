@@ -25,6 +25,7 @@ from app.llm_provider.capability.model_capability import (
 from app.llm_provider.capability.provider_capability import (
     ProviderCapability,
 )
+from app.llm_provider.provider.capability_service import CapabilityService
 from app.models import TaskRecord, TurnRecord
 from app.service.depends import get_provider_service
 
@@ -32,26 +33,6 @@ __all__ = [
     "build_chat_model",
     "resolve_chat_model",
 ]
-
-
-def _build_proxy_client() -> httpx.AsyncClient | None:
-    """按 ``Settings.WEB_PROXY_*`` 构造可复用的异步 HTTP 客户端代理。
-
-    仅当 ``WEB_PROXY_URL`` 非空时构造；代理认证（``WEB_PROXY_API_KEY``）以
-    ``Authorization: Bearer`` 头注入。未配置代理时返回 None，保持既有无代理链路。
-    """
-
-    proxy_url = Settings.WEB_PROXY_URL
-    if not proxy_url:
-        return None
-    headers: dict[str, str] = {}
-    if Settings.WEB_PROXY_API_KEY:
-        headers["Authorization"] = f"Bearer {Settings.WEB_PROXY_API_KEY}"
-    return httpx.AsyncClient(
-        proxy=proxy_url,
-        headers=headers,
-        timeout=Settings.WEB_REQUEST_TIMEOUT_SECONDS,
-    )
 
 
 def _resolve_effort(
@@ -89,7 +70,7 @@ def _resolve_effort(
 
 
 def build_chat_model(
-        product_id: int,
+        provider_id: int,
         model_name: str,
         model_settings: ModelSettings,
 ) -> BaseChatModel:
@@ -114,7 +95,7 @@ def build_chat_model(
       未命中映射则跳过注入并记录 warning，不抛错。
 
     参数:
-        product_id: provider 归属标识，用于查询接入配置（base_url / api_key）。
+        provider_id: provider 归属标识，用于查询接入配置（base_url / api_key）。
         model_name: 模型名（注册表/能力清单中的纯净模型名，不含厂商前缀）。
         model_settings: Agent 级模型覆盖配置（采样参数 / 流式 / 推理强度）。
 
@@ -130,7 +111,7 @@ def build_chat_model(
         ``api_key`` 以 ``SecretStr`` 封装传入（None 时透传 None，由端点决定鉴权）。
     """
 
-    provider = get_provider_service().get_provider(product_id)
+    provider = get_provider_service().get_provider(provider_id)
     provider_capability:ProviderCapability = ProviderCapability.get_capability(provider.name)
 
     if model_name not in provider_capability.models:
@@ -144,15 +125,10 @@ def build_chat_model(
     chat_api_key: SecretStr | None = SecretStr(api_key) if api_key else None
     base_url = provider.base_url or provider_capability.default_base_url
 
-    # 推理强度与 temperature 互斥：命中推理能力时强制不传 temperature。
-    requested_effort = model_settings.reasoning_effort
-    effort_cap = model_capability.reasoning_effort
-    use_reasoning_effort = requested_effort is not None and effort_cap.supported
-    # use_reasoning_effort 为 True 已蕴含 requested_effort 非 None，断言供 mypy 收窄类型。
-    resolved_effort = None
-    if use_reasoning_effort:
-        assert requested_effort is not None
-        resolved_effort = _resolve_effort(model_name, requested_effort, effort_cap)
+    resolved_effort = CapabilityService.resolve_reasoning_effort(
+        model_name, model_settings.reasoning_effort,
+    )
+
 
     # 生成长度上限：max_tokens（顶层字段）与 max_completion_tokens（经 model_kwargs）同时设置，
     # 由厂商 disabled_params 屏蔽其一决定生效项（如 {"max_tokens": None} 仅用新名）。
@@ -160,9 +136,6 @@ def build_chat_model(
     if model_settings.max_tokens is not None:
         # 两者均设置，具体生效项由 provider_capability.disabled_params 决定
         model_kwargs["max_completion_tokens"] = model_settings.max_tokens
-
-
-    http_client = _build_proxy_client()
 
     log.info(
         "llm_model_selected",
@@ -185,7 +158,7 @@ def build_chat_model(
         api_key=chat_api_key,
         base_url=base_url,
         streaming=bool(model_settings.stream),
-        http_client=http_client,
+        # http_client=http_proxy_client,
         stream_usage=True,
         max_retries=Settings.LLM_MAX_RETRIES,
         timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS,
@@ -208,18 +181,18 @@ def resolve_chat_model(
 ) -> BaseChatModel:
     """解析任务/轮次/智能体配置，返回 ``ChatOpenAI`` 实例。
 
-    以 ``agent_profile`` 的 ``model_name`` / ``product_id`` / ``model_settings`` 为默认；
-    当 ``turn`` 提供 ``model_name`` / ``product_id`` / ``reasoning_effort`` 时，运行时覆盖
+    以 ``agent_profile`` 的 ``model_name`` / ``provider_id`` / ``model_settings`` 为默认；
+    当 ``turn`` 提供 ``model_name`` / ``provider_id`` / ``reasoning_effort`` 时，运行时覆盖
     默认值（其余采样参数仍取 agent_profile）。最终委托 ``build_chat_model`` 构建。
     """
     model_settings: ModelSettings = agent_profile.model_settings
     model_name = agent_profile.model_name
-    product_id = agent_profile.product_id
+    provider_id = agent_profile.provider_id
     if turn.model_name is not None:
         model_name = turn.model_name
-    if turn.product_id is not None:
-        product_id = turn.product_id
+    if turn.provider_id is not None:
+        provider_id = turn.provider_id
     if turn.reasoning_effort is not None:
         model_settings.reasoning_effort = turn.reasoning_effort
 
-    return build_chat_model(product_id, model_name, model_settings=model_settings)
+    return build_chat_model(provider_id, model_name, model_settings=model_settings)

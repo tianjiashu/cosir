@@ -10,9 +10,11 @@
 所有模型能力必须且只能来自 ``model_capabilities.json``；JSON 中不存在的模型名经
 ``get_capability`` 返回保守默认副本（不抛错，由调用方决定如何提示用户补全 JSON）。
 
-与 ``model_catalog.ModelCatalog`` 的关系：本包是模型「静态能力」的唯一事实源；
-``ModelCatalog`` 负责「上下文窗口查表 + litellm 目录懒查回填」这一独立链路，二者
-互补，本包不侵入其窗口解析职责。
+与 ``model_catalog.ModelCatalog`` 的关系：本包是模型「静态能力」（含上下文窗口）
+的**唯一事实源**；``ModelCatalog`` 是窗口的**解析策略**，其首选一步即经本包的
+``ModelCapability.context_window`` 读 JSON，未收录时才退到 litellm 目录与兜底值。
+即二者是「事实」与「策略」的上下游关系，不是两条独立链路——ModelCatalog 不再自带
+任何模型名 → 窗口的硬编码字典。
 
 不负责：全局软上限（归 Settings）、实际窗口的 min 计算（归 context_window_resolver）、
 模型配置的加载（归 ModelSettings）。
@@ -75,6 +77,42 @@ class ReasoningEffortCapability:
 
 
 @dataclass(frozen=True, slots=True)
+class ImageLimitCapability:
+    """模型图像输入限制（不可变值对象，JSON ``image_limit`` 的运行时表示）。
+
+    承载厂商文档公布的真实上限，作为产品侧安全余量（如 ``vision_content_blocks``
+    内部的 20MiB / 48MiB 硬限）之外的权威事实源；二者职责分离：本对象只描述
+    “模型能接受什么”，不描述“我们主动收紧到什么”。
+
+    字段:
+        supported_formats: 厂商接受的图像扩展名（小写，不含点），未知时为空列表。
+        external_url_max_chars: 外部图片 URL 最大字符数。
+        request_body_max_bytes: 单请求体最大字节数。
+        single_image_inline_max_bytes: 单图以 base64 / URL 内联时最大字节数。
+        single_image_file_id_max_bytes: 单图以 Files API file_id 引用时最大字节数。
+        max_images_per_request: 单请求最大图片数。
+        request_total_max_bytes_inline_only: 仅内联图片时单请求图片总字节上限。
+        request_total_max_bytes_with_file_id: 含 file_id 引用时单请求图片总字节上限。
+        max_image_side_px: 单图单边最大像素；含 many_image_threshold 张以上时改用
+            ``max_image_side_px_when_many``。
+        max_image_side_px_when_many: 图片数达到阈值时的单边更保守像素上限。
+        many_image_threshold: 触发更保守单边上限的图片数阈值。
+    """
+
+    supported_formats: list[str] = field(default_factory=list)
+    external_url_max_chars: int = 0
+    request_body_max_bytes: int = 0
+    single_image_inline_max_bytes: int = 0
+    single_image_file_id_max_bytes: int = 0
+    max_images_per_request: int = 0
+    request_total_max_bytes_inline_only: int = 0
+    request_total_max_bytes_with_file_id: int = 0
+    max_image_side_px: int = 0
+    max_image_side_px_when_many: int = 0
+    many_image_threshold: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class ModelCapability:
     """单个模型的静态能力元数据（不可变值对象，JSON 唯一真相源的运行时表示）。
 
@@ -91,6 +129,7 @@ class ModelCapability:
         supports_video: 是否支持视频输入。
         need_reasoning_content: 是否需要在请求中透传 reasoning_content。
         reasoning_effort: 推理强度能力（见 ``ReasoningEffortCapability``）。
+        image_limit: 图像输入限制（见 ``ImageLimitCapability``）；未声明时返回空保守默认。
         is_custom: 是否为用户自建 custom 模型（此类模型本包不收录，走保守默认）。
     """
 
@@ -103,6 +142,9 @@ class ModelCapability:
     need_reasoning_content: bool = False
     reasoning_effort: ReasoningEffortCapability = field(
         default_factory=ReasoningEffortCapability
+    )
+    image_limit: ImageLimitCapability = field(
+        default_factory=ImageLimitCapability
     )
 
     @staticmethod
@@ -140,6 +182,33 @@ class ModelCapability:
             supported=bool(effort_raw.get("supported", False)),
             effort_map=dict(effort_map_raw),
         )
+        limit_raw = raw.get("image_limit", {})
+        if not isinstance(limit_raw, dict):
+            limit_raw = {}
+        formats_raw = limit_raw.get("supported_formats", [])
+        image_limit = ImageLimitCapability(
+            supported_formats=list(formats_raw) if isinstance(formats_raw, list) else [],
+            external_url_max_chars=int(limit_raw.get("external_url_max_chars", 0)),
+            request_body_max_bytes=int(limit_raw.get("request_body_max_bytes", 0)),
+            single_image_inline_max_bytes=int(
+                limit_raw.get("single_image_inline_max_bytes", 0)
+            ),
+            single_image_file_id_max_bytes=int(
+                limit_raw.get("single_image_file_id_max_bytes", 0)
+            ),
+            max_images_per_request=int(limit_raw.get("max_images_per_request", 0)),
+            request_total_max_bytes_inline_only=int(
+                limit_raw.get("request_total_max_bytes_inline_only", 0)
+            ),
+            request_total_max_bytes_with_file_id=int(
+                limit_raw.get("request_total_max_bytes_with_file_id", 0)
+            ),
+            max_image_side_px=int(limit_raw.get("max_image_side_px", 0)),
+            max_image_side_px_when_many=int(
+                limit_raw.get("max_image_side_px_when_many", 0)
+            ),
+            many_image_threshold=int(limit_raw.get("many_image_threshold", 0)),
+        )
         return ModelCapability(
             model_name=model_name,
             context_window=int(raw.get("context_window", 0)),
@@ -149,4 +218,5 @@ class ModelCapability:
             supports_video=bool(raw.get("supports_video", False)),
             need_reasoning_content=bool(raw.get("need_reasoning_content", False)),
             reasoning_effort=effort,
+            image_limit=image_limit,
         )
