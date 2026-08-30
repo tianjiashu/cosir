@@ -1,61 +1,95 @@
-"""模型条目（Model Entry）域 HTTP 端点。
+"""模型目录 HTTP 端点。
+
+模型目录不读取 ``models`` 表。Provider 配置决定哪些厂商参与目录，
+``ProviderCapability`` 决定厂商支持的模型集合，``ModelCapability`` 决定模型能力。
 """
-import dataclasses
 
 from fastapi import Depends
 
-from app.api.dependencies import (
-    get_model_entry_service,
-    get_provider_service,
+from app.api.dependencies import get_provider_service
+from app.api.schemas.response.ModelListItemResponse import ModelListItemResponse
+from app.api.schemas.response.ProviderModelGroupResponse import (
+    ProviderModelGroupResponse,
 )
-from app.api.schemas.response.ModelEntryResponse import ModelEntryResponse
 from app.app import app
+from app.config.logging.logger import log
 from app.llm_provider.capability.model_capability import ModelCapability
 from app.llm_provider.capability.provider_capability import ProviderCapability
-from app.llm_provider.provider import ModelEntryService, ProviderService
+from app.llm_provider.provider import ProviderService
 
 
 @app.get("/models")
 async def list_models(
-        model_entry_service: ModelEntryService = Depends(get_model_entry_service),
         provider_service: ProviderService = Depends(get_provider_service),
-) -> list[ModelEntryResponse]:
-    """返回启用模型扁平列表（模型选择下拉数据源）。
+) -> list[ProviderModelGroupResponse]:
+    """返回按启用模型厂商聚合的模型目录。
 
     参数:
-        model_entry_service: 通过依赖注入的模型条目 service。
-        provider_service: 通过依赖注入的厂商 service（厂商过滤与 Key 状态）。
+        provider_service: 通过依赖注入的厂商 service。
 
     返回:
-        ``ModelEntryResponse`` 列表
+        Provider 分组列表。每个模型只返回模型名和前端选择所需的静态能力标记。
 
     异常:
-        无。
+        无。未注册 Provider 能力的 Provider 不贡献模型分组，并记录可排查日志。
 
     副作用:
-        无。
+        只读 Provider 配置和进程内能力注册表。
     """
 
     providers = provider_service.list_providers(enabled=True)
-
-    responses = []
+    responses: list[ProviderModelGroupResponse] = []
 
     for provider in providers:
-        provider_capability = ProviderCapability.get_capability(provider.name)
-        model_names = provider_capability.models
-        for model_name in model_names:
+        if provider.id is None:
+            log.warning(
+                "models_provider_id_missing",
+                extra={
+                    "msg": "模型目录跳过缺少 id 的 Provider",
+                    "data": {"provider_name": provider.name},
+                },
+            )
+            continue
+        try:
+            provider_capability = ProviderCapability.get_capability(provider.name)
+        except ValueError:
+            log.warning(
+                "models_provider_capability_missing",
+                extra={
+                    "msg": "模型目录跳过未注册能力的 Provider",
+                    "data": {
+                        "provider_id": provider.id,
+                        "provider_name": provider.name,
+                    },
+                },
+            )
+            continue
+
+        models: list[ModelListItemResponse] = []
+        for model_name in provider_capability.models:
             model_capability = ModelCapability.get_capability(model_name)
-            responses.append(ModelEntryResponse(
-                provider_id=provider.id,
-                provider_name=provider.name,
-                model_name=model_name,
-                supports_thinking=model_capability.supports_thinking,
-                supports_image=model_capability.supports_image,
-                supports_video=model_capability.supports_video,
-                enabled=True,
-                api_key_configured=provider_service.api_key_configured(provider),
-                reasoning_effort=dataclasses.asdict(model_capability.reasoning_effort),
-                sort_order=0,
-            ))
+            supports_reasoning_effort = (
+                model_capability.reasoning_effort.supported
+                and {"low", "high", "max"}.issubset(
+                    model_capability.reasoning_effort.effort_map
+                )
+            )
+            models.append(
+                ModelListItemResponse(
+                    model_name=model_name,
+                    supports_thinking=model_capability.supports_thinking,
+                    supports_image=model_capability.supports_image,
+                    supports_video=model_capability.supports_video,
+                    supports_reasoning_effort=supports_reasoning_effort,
+                )
+            )
+        if models:
+            responses.append(
+                ProviderModelGroupResponse(
+                    provider_id=provider.id,
+                    provider_name=provider.name,
+                    models=models,
+                )
+            )
 
     return responses
