@@ -144,8 +144,10 @@ class ProviderService:
             向 ``providers`` 表插入一行；写 info 日志 ``provider_created``。
         """
 
+        capability = ProviderCapability.get_capability(name)
         record = self._provider_crud.create(
             name=name,
+            provider_type=capability.provider_type,
             base_url=base_url,
             api_key=api_key,
             sort_order=sort_order,
@@ -292,7 +294,7 @@ class ProviderService:
                 api_base=provider.base_url,
                 api_key=provider.api_key,
             )
-        except Exception as exc:  # 连通性测试需捕获一切外部异常以归一为结果值对象
+        except Exception:  # 连通性测试需捕获一切外部异常以归一为结果值对象
             elapsed_ms = int((perf_counter() - start) * 1000)
 
             log.exception(
@@ -310,7 +312,9 @@ class ProviderService:
             return ConnectionTestResult(
                 provider_id=provider.id,
                 success=False,
-                elapsed_ms=elapsed_ms
+                elapsed_ms=elapsed_ms,
+                error_code="connection_failed",
+                error_message="连接失败，请检查 Base URL、API Key 和模型配置",
             )
 
         elapsed_ms = int((perf_counter() - start) * 1000)

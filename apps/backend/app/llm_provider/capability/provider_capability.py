@@ -43,7 +43,7 @@ def load_provider_json() -> dict[str, dict[str, Any]]:
 #: JSON 数据源解析结果（模块级单次加载，避免每次查询重复读盘）。
 _PROVIDER_JSON_DATA: dict[str, dict[str, Any]] = load_provider_json()
 
-_SUPPORT_PROVIDERS: set[str] = set(_PROVIDER_JSON_DATA.keys()).union({"custom", "ollma"})
+_SUPPORT_PROVIDERS: set[str] = set(_PROVIDER_JSON_DATA.keys())
 
 
 @dataclass(frozen=True, slots=True)
