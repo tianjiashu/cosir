@@ -1,0 +1,19 @@
+import { apiRequest } from "@/lib/api/client";
+
+export type ModelListItem = {
+  model_name: string;
+  supports_thinking: boolean;
+  supports_image: boolean;
+  supports_video: boolean;
+  supports_reasoning_effort: boolean;
+};
+
+export type ProviderModelGroup = {
+  provider_id: number;
+  provider_name: string;
+  models: ModelListItem[];
+};
+
+export function getModelGroups(): Promise<ProviderModelGroup[]> {
+  return apiRequest<ProviderModelGroup[]>("/models");
+}

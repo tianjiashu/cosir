@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Cosir",
+  "version": "0.1.0",
+  "identifier": "com.cosir.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --hostname 127.0.0.1 --port 3000",
+    "devUrl": "http://127.0.0.1:3000",
+    "frontendDist": "../.next"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Cosir",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}
