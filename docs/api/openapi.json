@@ -16,7 +16,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Task Id"
             }
           }
@@ -54,7 +54,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Task Id"
             }
           }
@@ -83,142 +83,6 @@
         }
       }
     },
-    "/tasks/{task_id}/turns": {
-      "get": {
-        "summary": "List Turns",
-        "description": "列出某任务下的全部 turn（支撑多轮历史展示）。\n\n参数:\n    task_id: 来自路由的任务标识。\n    turn_service: 通过依赖注入的轮次 service。\n\n返回:\n    该任务下按创建时间升序的 ``TurnResponse`` 列表。\n\n异常:\n    HTTPException: 当任务不存在（级联 KeyError）时抛出。\n\n副作用:\n    无。",
-        "operationId": "list_turns_tasks__task_id__turns_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TurnResponse"
-                  },
-                  "title": "Response List Turns Tasks  Task Id  Turns Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Create Turn",
-        "description": "为已有任务追加一个 pending 轮次。\n\n该端点只负责把用户本轮输入持久化为一个新的、处于 ``pending`` 状态的\n``Turn`` 记录，并立即返回其 ``turn_id``；**不会**触发 Agent 运行。\n真正的执行由客户端随后对 ``GET /turns/{turn_id}/stream`` 的订阅触发，\n这样客户端可以先拿到 ``turn_id`` 再建立 SSE 连接，避免竞态。\n\n参数:\n    task_id: 来自路由的任务标识。\n    payload: 包含本轮用户输入文本的请求体（``input_text``）。\n    turn_service: 通过依赖注入的轮次 service。\n\n返回:\n    创建后的 ``TurnResponse``，包含 ``turn_id``、所属 ``task_id``、状态与\n    创建时间等字段，供客户端建立后续 SSE 流使用。\n\n异常:\n    HTTPException: 当任务不存在（404）或输入为空/非法（400）时抛出。\n\n副作用:\n    在存储中创建 turn 记录，但不启动运行、不产生运行时事件。",
-        "operationId": "create_turn_tasks__task_id__turns_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateTurnRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TurnResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/{task_id}/events": {
-      "get": {
-        "summary": "Replay Task Events",
-        "description": "回放某任务下的完整运行时事件流（按 turn + sequence 升序）。\n\n用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史\n回看与刷新后重连重渲染；只读查询，不重新执行 Agent。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。\n    event_service: 通过依赖注入的运行时事件 service。\n\n返回:\n    按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。\n\n异常:\n    HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。\n\n副作用:\n    无（只读查询）。",
-        "operationId": "replay_task_events_tasks__task_id__events_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RuntimeEventResponse"
-                  },
-                  "title": "Response Replay Task Events Tasks  Task Id  Events Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/tasks/{task_id}/children": {
       "get": {
         "summary": "List Child Tasks",
@@ -230,7 +94,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Task Id"
             }
           }
@@ -263,63 +127,10 @@
         }
       }
     },
-    "/tasks/{task_id}/turns/{turn_id}/events": {
-      "get": {
-        "summary": "Replay Turn Events",
-        "description": "回放某轮次下的运行时事件流（按 sequence 升序）。\n\n用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需\n隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。\n\n参数:\n    task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。\n    turn_id: 来自路由的轮次标识。\n    event_service: 通过依赖注入的运行时事件 service。\n\n返回:\n    按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。\n\n异常:\n    无。\n\n副作用:\n    无（只读查询）。",
-        "operationId": "replay_turn_events_tasks__task_id__turns__turn_id__events_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Task Id"
-            }
-          },
-          {
-            "name": "turn_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Turn Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RuntimeEventResponse"
-                  },
-                  "title": "Response Replay Turn Events Tasks  Task Id  Turns  Turn Id  Events Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/health": {
       "get": {
         "summary": "Get Health",
-        "description": "返回后端健康状态与当前模型配置摘要。\n\n参数:\n    runtime: 通过依赖注入的运行时单例。\n\n返回:\n    不含 secret 原文的 ``HealthResponse``。\n\n异常:\n    无。\n\n副作用:\n    无。",
+        "description": "后端存活探针（liveness check）。\n\n当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。\n``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。\n\n真实探针（TODO，尚未实现）：聚合 storage 连通性、模型配置中心\n（默认 Agent 的默认模型是否可解析 + Key 是否就位）、可选 CodeGraph\nkernel 可达性，产出不含 secret 明文的健康摘要。届时将改为注入\n``HealthProbeService`` 并移除无用的 ``runtime`` 参数。\n\n参数:\n    runtime: 通过依赖注入的运行时单例；当前占位实现未使用。\n\n返回:\n    表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。\n\n异常:\n    无。\n\n副作用:\n    无。",
         "operationId": "get_health_health_get",
         "responses": {
           "200": {
@@ -406,7 +217,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Workspace Id"
             }
           }
@@ -446,7 +257,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Workspace Id"
             }
           }
@@ -480,8 +291,19 @@
       },
       "post": {
         "summary": "Create Workspace Task",
-        "description": "在工作区下创建任务并同时创建其首个 pending 轮次。\n\n编排逻辑收口在 ``TaskService.create_task_with_initial_turn``（业务层），本端点\n只做参数透传、异常映射与响应格式化，不持有任何创建 / 运行编排。首轮次以\n``pending`` 状态创建，运行由前端经 ``POST /turns/{turn_id}/stream`` 触发。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    payload: 包含首条用户输入的请求体。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    创建后的 ``TaskResponse``（含任务元数据；首轮次标识由前端经\n    ``GET /tasks/{task_id}/turns`` 取得后驱动运行）。\n\n异常:\n    HTTPException: 当工作区不存在、agent 未注册或输入非法时抛出。\n\n副作用:\n    经业务层在存储中创建 task 与首个 pending turn。",
+        "description": "在工作区下创建任务容器（不含首轮次）。\n\n任务创建与首轮次创建已解耦：本端点只创建 task 容器，首轮次由调用方（前端）显式\n调 Assistant Transport 端点提交首条消息。这样 task 维度不再耦合 agent / 模型 /\n附件等运行期字段。\n\n参数:\n    workspace_id: 来自路由的工作区标识，作为任务归属的唯一权威值。\n    payload: 创建任务请求体，含任务文本与 workspace_id 字段。\n    task_service: 任务 service，用于创建任务容器。\n\n返回:\n    新建任务记录（含 ``task_id``）。调用方随后创建首 turn 并连接\n    ``/assistant`` 驱动执行，任务标识通过请求体的 ``taskId`` 传递。\n\n异常:\n    HTTPException: workspace 不存在时为 404；输入非法时为 400。\n\n副作用:\n    向 ``tasks`` 插入一行任务容器；不创建轮次。",
         "operationId": "create_workspace_task_workspaces__workspace_id__tasks_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -527,7 +349,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Workspace Id"
             }
           }
@@ -565,7 +387,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Workspace Id"
             }
           }
@@ -594,95 +416,19 @@
         }
       }
     },
-    "/turns/{turn_id}/stream": {
+    "/workspaces/{workspace_id}/readiness": {
       "get": {
-        "summary": "Stream Turn",
-        "description": "通过 SSE 流式返回轮次的运行时事件。\n\n仅对 ``pending`` 状态的轮次启动 Agent 运行并实时推送事件。非 pending\n轮次由调用方 409 守卫拒绝，历史回看请走 ``GET /tasks/{task_id}/turns``。\n本端点只负责「执行」，不承担回放或断线重连（断开即本轮结束，由运行时\n``run_turn`` 的断开兜底标 failed）。本次运行使用的 agent 在轮次创建时即已绑定\n（``turn.agent_id``），\n运行时按「turn 绑定 > task 默认」解析，无需本端点再传参。\n\n事件以标准 SSE 帧推送，每帧格式为::\n\n    event: <event_type>\n    data: <json 序列化后的 RuntimeEvent>\n\n其中 ``event_type`` 对应 ``RuntimeEvent`` 的种类（如 ``token``、\n``tool_call``、``step``、``status`` 等），``data`` 为该事件的 JSON 负载。\n相邻事件以空行 ``\\n\\n`` 分隔。\n\n参数:\n    turn_id: 来自路由的轮次标识。\n    runtime: 通过依赖注入的运行时（仅用于执行 pending 轮次）。\n    turn_service: 通过依赖注入的轮次 service（用于取轮次记录与状态守卫）。\n    stream_service: 通过依赖注入的轮次事件流编排 service（订阅/认领/驱动/发布/兜底）。\n\n返回:\n    发送 ``text/event-stream`` 的 StreamingResponse，连接保持打开直到\n    轮次运行结束或客户端断开（断开即本轮结束，由运行时 ``run_turn`` 的断开兜底标 failed）。\n\n异常:\n    HTTPException: 当轮次不存在（404）或轮次非 pending（409，历史请走\n        ``GET /tasks/{task_id}/turns``）时抛出。\n\n副作用:\n    仅对 pending turn 调用 ``runtime.run_turn`` 启动运行；事件产出由\n    ``_sse_frames`` 转换为 SSE 帧。不回放历史事件。",
-        "operationId": "stream_turn_turns__turn_id__stream_get",
+        "summary": "Get Workspace Readiness",
+        "description": "读取工作区准备状态快照。\n\nSSE 只负责唤醒客户端；刷新、断线或队列溢出后必须通过本端点从数据库重新水合。",
+        "operationId": "get_workspace_readiness_workspaces__workspace_id__readiness_get",
         "parameters": [
           {
-            "name": "turn_id",
+            "name": "workspace_id",
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "title": "Turn Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/turns/{turn_id}/events/stream": {
-      "get": {
-        "summary": "Subscribe Turn Events",
-        "description": "订阅已运行委派子轮次的实时事件。\n\n参数:\n    turn_id: 来自路由的子轮次标识。\n    turn_service: 用于读取轮次并校验其执行状态的领域 service。\n    stream_service: 通过依赖注入的轮次事件流编排 service（纯订阅转发）。\n\n返回:\n    ``text/event-stream`` 响应，仅转发此后实时发布到该 turn 的事件。\n\n异常:\n    HTTPException: turn 不存在时为 404；turn 已终态时为 409。\n\n副作用:\n    请求消费期间注册事件订阅；不认领 producer、不调用运行时，也不在断开时更新 turn 状态。",
-        "operationId": "subscribe_turn_events_turns__turn_id__events_stream_get",
-        "parameters": [
-          {
-            "name": "turn_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Turn Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/turns/{turn_id}/cancel": {
-      "post": {
-        "summary": "Cancel Turn",
-        "description": "取消指定轮次并中止其运行。\n\n置 turn 为 ``cancelled``，模型节点在下一轮循环检查到取消状态后停止派发工具，从而中止运行。\n\n参数:\n    turn_id: 来自路由的轮次标识。\n    runtime: 通过依赖注入的运行时（负责取消与状态推进）。\n    turn_service: 通过依赖注入的轮次 service（用于校验 turn 存在）。\n\n返回:\n    取消后的 ``TurnResponse``。\n\n异常:\n    HTTPException: 当轮次不存在（404）时抛出。\n\n副作用:\n    置 turn 为 cancelled 并 emit 取消事件。",
-        "operationId": "cancel_turn_turns__turn_id__cancel_post",
-        "parameters": [
-          {
-            "name": "turn_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Turn Id"
+              "type": "integer",
+              "title": "Workspace Id"
             }
           }
         ],
@@ -692,7 +438,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TurnResponse"
+                  "$ref": "#/components/schemas/WorkspaceReadinessResponse"
                 }
               }
             }
@@ -721,7 +467,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Task Id"
             }
           },
@@ -787,7 +533,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Task Id"
             }
           }
@@ -837,7 +583,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
+              "type": "integer",
               "title": "Task Id"
             }
           }
@@ -1073,18 +819,412 @@
         }
       }
     },
-    "/agents": {
+    "/providers/catalog": {
       "get": {
-        "summary": "List Agents",
-        "description": "返回当前所有已注册 agent 的元信息，供前端构建 agent 选择器。\n\n参数:\n    registry: 通过依赖注入的进程级 agent registry 单例。\n\n返回:\n    ``ListAgentsResponse``：含 ``agents``（agent 元信息列表）与\n    ``default_agent_id``（默认选中项）。\n\n异常:\n    RuntimeError: 当 registry 单例未初始化时由依赖注入抛出。\n\n副作用:\n    无。",
-        "operationId": "list_agents_agents_get",
+        "summary": "List Provider Catalog",
+        "description": "返回由 ``llm_provider.json`` 注册的可配置 Provider 目录。",
+        "operationId": "list_provider_catalog_providers_catalog_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ListAgentsResponse"
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderCapabilityResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Provider Catalog Providers Catalog Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers": {
+      "get": {
+        "summary": "List Providers",
+        "description": "返回 Provider 配置列表（模型中心管理面板的数据源）。\n\n参数:\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    Provider 配置列表。响应只包含 API Key 是否已配置，不返回 Key 明文。\n\n异常:\n    无。\n\n副作用:\n    只读 Provider 配置。",
+        "operationId": "list_providers_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Providers Providers Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Provider",
+        "description": "新建模型厂商。\n\n参数:\n    payload: 包含 name / base_url / api_key 的请求体。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    创建后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 输入非法（400）或厂商重名（409）时抛出。\n\n副作用:\n    在存储中创建厂商（service 层写 ``provider_created`` 审计日志）。",
+        "operationId": "create_provider_providers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers/{provider_id}": {
+      "put": {
+        "summary": "Update Provider",
+        "description": "更新厂商字段（仅覆盖显式传入字段；启停即时生效）。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    payload: 待更新字段的请求体（None = 不更新，``\"\"`` = 清除）。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    更新后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 厂商不存在（404）、输入非法（400）或重名冲突（409）时抛出。\n\n副作用:\n    更新 ``providers`` 表对应行（service 层写 ``provider_updated`` 审计日志）。",
+        "operationId": "update_provider_providers__provider_id__put",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Provider",
+        "description": "删除厂商（其下模型条目由 FK CASCADE 级联删除）。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    ``{\"provider_id\": ..., \"deleted\": true}``（幂等：厂商不存在也返回成功）。\n\n异常:\n    无。\n\n副作用:\n    级联删除厂商与其下模型条目（service 层写 ``provider_deleted`` 审计日志）。",
+        "operationId": "delete_provider_providers__provider_id__delete",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Delete Provider Providers  Provider Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers/{provider_id}/test": {
+      "post": {
+        "summary": "Test Provider Connection",
+        "description": "对厂商发起一次最小 chat 请求验证凭据 / 端点可用性（设计文档 §三 用户视角三件套）。\n\n用已配置参数（``base_url`` / ``api_key``）发起一次\n``max_tokens=1`` 的 ping 请求，返回 ``success`` ``elapsed_ms``。**失败是正常结果之一**（区别于\ndiscover 的 502：测试本身就是「试错」语义），故失败也返回 200 携带\n``success=False``，由前端据 ``error_code`` 给出修复引导。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    provider_service: 通过依赖注入的厂商 service（存在性守卫）。\n    connection_test_service: 通过依赖注入的连通性测试 service。\n\n返回:\n    ``ConnectionTestResult`` 字段平铺的字典（``provider_id`` / ``success`` /\n    ``elapsed_ms`` / ``error_code`` / ``error_message``）。骨架阶段恒抛\n    ``NotImplementedError`` 由 FastAPI 转 501（阶段 2 实施后改为正常返回）。\n\n异常:\n    HTTPException: 厂商不存在（404）或骨架阶段未实现（501）时抛出。\n\n副作用:\n    发起一次到厂商端点的网络请求（阶段 2 实施后）；写 info 级\n    ``provider_connection_test_*`` 日志（由 service 层记录）。",
+        "operationId": "test_provider_connection_providers__provider_id__test_post",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Test Provider Connection Providers  Provider Id  Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "List Models",
+        "description": "返回按启用模型厂商聚合的模型目录。\n\n参数:\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    Provider 分组列表。每个模型只返回模型名和前端选择所需的静态能力标记。\n\n异常:\n    无。未注册 Provider 能力的 Provider 不贡献模型分组，并记录可排查日志。\n\n副作用:\n    只读 Provider 配置和进程内能力注册表。",
+        "operationId": "list_models_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderModelGroupResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Models Models Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assistant": {
+      "post": {
+        "summary": "Assistant Transport",
+        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI transport 请求，当前业务命令为文本 ``add-message``。\n    runtime: 通过依赖注入取得的 AgentRuntime。\n    conversation_state_service: 把任务轮次事实投影为本轮运行基线 state 的 service。\n    command_service: 负责计算命令载荷指纹并同步运行命令终态的 service。\n    run_service: 在一个事务中占用 command 并创建、绑定 Turn 的 service。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending turn，并异步驱动一次 AgentRuntime 执行；运行期间更新数据库和\n    canonical conversation facts。",
+        "operationId": "assistant_transport_assistant_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantTransportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/assistant/state": {
+      "get": {
+        "summary": "Assistant Transport State",
+        "description": "返回某任务的首屏历史 state（服务端权威对话视图）。\n\n参数:\n    task_id: URL 中的任务标识。\n    task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。\n    conversation_state_service: 把任务轮次事实投影为中性对话视图的 service。\n\n返回:\n    与 POST 端点形状一致的中性 wire state 字典（含 ``messages`` / ``run`` /\n    ``revision``）；任务无轮次时 ``messages`` 为空数组。\n\n异常:\n    HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的\n    ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。\n\n副作用:\n    以只读方式经 service 层读取任务存在性与轮次/消息事实，不写入任何数据。",
+        "operationId": "assistant_transport_state_tasks__task_id__assistant_state_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Assistant Transport State Tasks  Task Id  Assistant State Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/runs/{run_id}/assistant/stream": {
+      "get": {
+        "summary": "Assistant Transport Resume",
+        "description": "按 task/run 身份从指定 revision 订阅 canonical state。",
+        "operationId": "assistant_transport_resume_tasks__task_id__runs__run_id__assistant_stream_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "after_revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": -1,
+              "default": -1,
+              "title": "After Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{run_id}/cancel": {
+      "post": {
+        "summary": "Cancel Run",
+        "description": "显式取消一个 Conversation Run。\n\n``run_id`` 当前与持久化 ``Turn.id`` 一一对应，但该映射只在 API 适配层使用；\n持久化条件状态转移先落定取消事实，再向进程内执行器发出协作取消信号。HTTP\n断连不会调用本端点，重复取消不会覆盖已落定的终态。\n\n参数:\n    run_id: Conversation Run 标识；当前实现对应 Turn 标识。\n    mutation_writer: 提供事务性 active → cancelled 状态转移的服务。\n    run_executor: 向当前进程中的执行者发出取消信号的服务。\n\n返回:\n    包含 ``run_id`` 与 ``status`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409。\n\n副作用:\n    先写入持久化取消状态，再尽力中断当前进程中的执行任务。",
+        "operationId": "cancel_run_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Cancel Run Runs  Run Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1095,69 +1235,205 @@
   },
   "components": {
     "schemas": {
-      "AgentProfileResponse": {
+      "AddMessageCommand": {
         "properties": {
-          "agent_id": {
+          "type": {
             "type": "string",
-            "title": "Agent Id"
+            "const": "add-message",
+            "title": "Type"
           },
-          "role": {
+          "commandId": {
             "type": "string",
-            "title": "Role"
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commandid"
           },
-          "description": {
-            "type": "string",
-            "title": "Description"
+          "message": {
+            "$ref": "#/components/schemas/AssistantUserMessage"
           },
-          "allowed_tools": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Allowed Tools"
-          },
-          "workflow": {
-            "type": "string",
-            "title": "Workflow"
-          },
-          "model_name": {
-            "type": "string",
-            "title": "Model Name"
-          },
-          "max_steps": {
-            "type": "integer",
-            "title": "Max Steps"
-          },
-          "prompt_ref": {
+          "parentId": {
             "anyOf": [
               {
-                "type": "object"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Prompt Ref"
+            "title": "Parentid"
+          },
+          "sourceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceid"
           }
         },
         "type": "object",
         "required": [
-          "agent_id",
-          "role",
-          "description",
-          "allowed_tools",
-          "workflow",
-          "model_name",
-          "max_steps",
-          "prompt_ref"
+          "type",
+          "commandId",
+          "message"
         ],
-        "title": "AgentProfileResponse",
-        "description": "校验并序列化单个已注册 agent 的元信息。\n\n字段集与 ``AgentProfile.to_dict()`` 完全一致，供前端渲染 agent 选择器与说明；\n二者任一改动都必须同步（见分层约束）。``goal`` 字段已由 ``description`` 取代，\nAgent 的职责、能力、适用场景与约束统一收敛到 ``description`` 文本。\n\n参数:\n    agent_id: 稳定的 Agent 标识。\n    role: 人类可读的 Agent 角色。\n    description: 注入到模型上下文中的运行目标与职责描述（含能力/场景/约束，替代旧 ``goal``）。\n    allowed_tools: 该 Agent 允许使用的工具名或权限名。\n    workflow: 该 Agent 使用的执行策略标识。\n    model_name: 该 Agent 使用的模型名称。\n    max_steps: 单轮最大执行步数。\n    prompt_ref: 关联的 prompt 引用字典（第二部分接缝，可为 None）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "title": "AddMessageCommand",
+        "description": "校验首版支持的 ``add-message`` 命令。"
+      },
+      "AssistantTextPart": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "text",
+            "title": "Type"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "AssistantTextPart",
+        "description": "校验 Assistant UI 用户消息中的文本 part。"
+      },
+      "AssistantTransportRequest": {
+        "properties": {
+          "commands": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AddMessageCommand"
+                },
+                {
+                  "$ref": "#/components/schemas/CustomCommand"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "add-message": "#/components/schemas/AddMessageCommand",
+                  "custom": "#/components/schemas/CustomCommand"
+                }
+              }
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Commands"
+          },
+          "threadId": {
+            "type": "string",
+            "pattern": "^task-[1-9][0-9]*$",
+            "title": "Threadid"
+          },
+          "taskId": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Taskid"
+          },
+          "stateRevision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Staterevision"
+          },
+          "providerId": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Providerid"
+          },
+          "modelName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelname"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoningeffort"
+          }
+        },
+        "type": "object",
+        "required": [
+          "commands",
+          "threadId",
+          "taskId"
+        ],
+        "title": "AssistantTransportRequest",
+        "description": "校验 Assistant Transport 请求。\n\n命令数组由服务端按顺序幂等处理；对话历史由 canonical facts 重建。"
+      },
+      "AssistantUserMessage": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "role": {
+            "type": "string",
+            "const": "user",
+            "title": "Role"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantTextPart"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Parts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "parts"
+        ],
+        "title": "AssistantUserMessage",
+        "description": "校验 Assistant UI 的用户消息。"
       },
       "ChangeCheckpointResponse": {
         "properties": {
           "turn_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Turn Id"
           },
           "turn_seq": {
@@ -1197,7 +1473,7 @@
             "title": "Last Tool Call Id"
           },
           "last_turn_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Last Turn Id"
           },
           "additions": {
@@ -1243,7 +1519,7 @@
       "ChangeSetResponse": {
         "properties": {
           "task_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Task Id"
           },
           "checkpoints": {
@@ -1275,49 +1551,14 @@
           "text": {
             "type": "string",
             "title": "Text"
-          },
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "workspace_id": {
-            "type": "string",
-            "title": "Workspace Id"
           }
         },
         "type": "object",
         "required": [
-          "text",
-          "agent_id",
-          "workspace_id"
+          "text"
         ],
         "title": "CreateTaskRequest",
-        "description": "校验任务创建请求体。\n\n参数:\n    text: 非空的纯文本任务输入。\n    workspace_id: 工作区标识。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``text`` 为空白时抛出。\n\n副作用:\n    无。"
-      },
-      "CreateTurnRequest": {
-        "properties": {
-          "input_text": {
-            "type": "string",
-            "title": "Input Text"
-          },
-          "agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "input_text"
-        ],
-        "title": "CreateTurnRequest",
-        "description": "校验轮次创建请求体。\n\n参数:\n    input_text: 非空的本轮用户输入。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当输入为空白时抛出。\n\n副作用:\n    无。"
+        "description": "校验任务创建请求体（仅建 task 容器，不含首轮次）。\n\n任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段\n（``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等\n属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。\n\n参数:\n    text: 非空的纯文本任务输入。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``text`` 为空白时抛出。\n\n副作用:\n    无。"
       },
       "CreateWorkspaceRequest": {
         "properties": {
@@ -1338,10 +1579,49 @@
         "title": "CreateWorkspaceRequest",
         "description": "校验工作区创建请求体。\n\n参数:\n    name: 非空的工作区名称。\n    root_path: 非空的工作区本地路径。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当名称或路径为空白时抛出。\n\n副作用:\n    无。"
       },
+      "CustomCommand": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "custom",
+            "title": "Type"
+          },
+          "commandId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commandid"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "payload": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "commandId",
+          "name"
+        ],
+        "title": "CustomCommand",
+        "description": "保留 Assistant Transport 扩展命令的显式、可审计边界。"
+      },
       "DeleteTaskResponse": {
         "properties": {
           "task_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Task Id"
           },
           "deleted": {
@@ -1360,7 +1640,7 @@
       "DeleteWorkspaceResponse": {
         "properties": {
           "workspace_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Workspace Id"
           },
           "deleted": {
@@ -1394,61 +1674,14 @@
           "status": {
             "type": "string",
             "title": "Status"
-          },
-          "model_provider": {
-            "type": "string",
-            "title": "Model Provider"
-          },
-          "model_name": {
-            "type": "string",
-            "title": "Model Name"
-          },
-          "model_thinking_mode": {
-            "type": "string",
-            "title": "Model Thinking Mode"
-          },
-          "model_api_key_env": {
-            "type": "string",
-            "title": "Model Api Key Env"
-          },
-          "has_model_api_key": {
-            "type": "boolean",
-            "title": "Has Model Api Key"
           }
         },
         "type": "object",
         "required": [
-          "status",
-          "model_provider",
-          "model_name",
-          "model_thinking_mode",
-          "model_api_key_env",
-          "has_model_api_key"
+          "status"
         ],
         "title": "HealthResponse",
-        "description": "校验并序列化后端健康状态响应（与 ``AgentRuntime.backend_health()`` 对齐）。\n\n参数:\n    status: 健康状态标识。\n    model_provider: 模型提供方。\n    model_name: 模型名称。\n    model_thinking_mode: 模型思考模式。\n    model_api_key_env: API Key 所在环境变量名。\n    has_model_api_key: 环境变量是否已配置。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
-      },
-      "ListAgentsResponse": {
-        "properties": {
-          "agents": {
-            "items": {
-              "$ref": "#/components/schemas/AgentProfileResponse"
-            },
-            "type": "array",
-            "title": "Agents"
-          },
-          "default_agent_id": {
-            "type": "string",
-            "title": "Default Agent Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agents",
-          "default_agent_id"
-        ],
-        "title": "ListAgentsResponse",
-        "description": "校验并序列化 agent 目录列表响应。\n\n参数:\n    agents: 当前所有已注册 agent 的元信息列表。\n    default_agent_id: 前端未显式选择时回落到的默认 agent 标识。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心 / 可选 CodeGraph）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "LogEntryResponse": {
         "properties": {
@@ -1555,85 +1788,276 @@
         "title": "LogQueryResponse",
         "description": "校验并序列化日志查询结果响应（与 ``LogQueryResult.to_dict()`` 对齐）。\n\n参数:\n    entries: 结构化日志记录列表。\n    text: 可直接展示的纯文本日志。\n    total: 满足过滤条件的总记录数（不受 limit/offset 影响）。\n    has_more: 当前页之后是否还有更多记录。\n    level_counts: 各级别日志计数（忽略 level 过滤、含其余过滤条件），供前端展示级别分布。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
-      "RuntimeEventResponse": {
+      "ModelListItemResponse": {
         "properties": {
-          "event_id": {
+          "model_name": {
             "type": "string",
-            "title": "Event Id"
+            "title": "Model Name"
           },
-          "event_type": {
+          "supports_thinking": {
+            "type": "boolean",
+            "title": "Supports Thinking"
+          },
+          "supports_image": {
+            "type": "boolean",
+            "title": "Supports Image"
+          },
+          "supports_video": {
+            "type": "boolean",
+            "title": "Supports Video"
+          },
+          "supports_reasoning_effort": {
+            "type": "boolean",
+            "title": "Supports Reasoning Effort"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_name",
+          "supports_thinking",
+          "supports_image",
+          "supports_video",
+          "supports_reasoning_effort"
+        ],
+        "title": "ModelListItemResponse",
+        "description": "描述一个可展示的模型及其静态能力。"
+      },
+      "ProviderCapabilityResponse": {
+        "properties": {
+          "name": {
             "type": "string",
-            "title": "Event Type"
+            "title": "Name"
           },
-          "task_id": {
+          "provider_type": {
             "type": "string",
-            "title": "Task Id"
+            "title": "Provider Type"
           },
-          "turn_id": {
+          "default_base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Base Url"
+          },
+          "requires_api_key": {
+            "type": "boolean",
+            "title": "Requires Api Key",
+            "default": true
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "provider_type",
+          "models"
+        ],
+        "title": "ProviderCapabilityResponse",
+        "description": "描述能力注册表中一个可配置的 Provider。"
+      },
+      "ProviderCreateRequest": {
+        "properties": {
+          "name": {
             "type": "string",
-            "title": "Turn Id"
+            "title": "Name"
           },
-          "sequence": {
+          "model_name": {
+            "type": "string",
+            "title": "Model Name",
+            "default": ""
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "sort_order": {
             "type": "integer",
-            "title": "Sequence"
+            "title": "Sort Order",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ProviderCreateRequest",
+        "description": "校验厂商创建请求体。\n\n参数:\n    name: 厂商显示名（全局唯一，deepseek、openai、ollama等）。\n    model_name: 模型名称,仅当name 为 custome 或 ollama 时有效。\n    base_url: 接入地址。\n    api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；\n        ``ollama`` 等不需 Key 的厂商可不填。\n    enabled: 启用开关，默认 True。\n    sort_order: 排序权重，默认 0。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``name`` / ``type`` 为空白或 ``type`` 不在允许枚举时抛出。\n\n副作用:\n    无。"
+      },
+      "ProviderModelGroupResponse": {
+        "properties": {
+          "provider_id": {
+            "type": "integer",
+            "title": "Provider Id"
           },
-          "payload": {
-            "type": "object",
-            "title": "Payload"
+          "provider_name": {
+            "type": "string",
+            "title": "Provider Name"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelListItemResponse"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider_id",
+          "provider_name",
+          "models"
+        ],
+        "title": "ProviderModelGroupResponse",
+        "description": "描述一个厂商及其模型目录。"
+      },
+      "ProviderResponse": {
+        "properties": {
+          "provider_id": {
+            "type": "integer",
+            "title": "Provider Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "api_key_configured": {
+            "type": "boolean",
+            "title": "Api Key Configured",
+            "default": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "model_count": {
+            "type": "integer",
+            "title": "Model Count",
+            "default": 0
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order",
+            "default": 0
           },
           "created_at": {
             "type": "string",
             "title": "Created At"
           },
-          "message_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Message Id"
-          },
-          "tool_call_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tool Call Id"
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
           }
         },
         "type": "object",
         "required": [
-          "event_id",
-          "event_type",
-          "task_id",
-          "turn_id",
-          "sequence",
-          "payload",
-          "created_at"
+          "provider_id",
+          "name",
+          "created_at",
+          "updated_at"
         ],
-        "title": "RuntimeEventResponse",
-        "description": "回放用运行时事件响应模型（与持久化事件字典对齐）。\n\n字段对齐 ``RuntimeEventCrud.list_by_task`` / ``list_by_turn`` 返回的事件字典，\n即可直接序列化回前端 ``RuntimeEvent``（思考 / 工具调用 / 状态变更）的回放帧。\n\n参数:\n    event_id: 唯一事件标识。\n    event_type: 稳定的机器可读事件类型字符串。\n    task_id: 关联任务标识。\n    turn_id: 关联轮次标识。\n    sequence: 事件在单次运行流内的排序号。\n    payload: 与 ``event_type`` 匹配的事件负载字典。\n    created_at: 事件创建时间的 UTC 文本。\n    message_id: 可选用户可读消息标识。\n    tool_call_id: 可选工具调用标识。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "title": "ProviderResponse",
+        "description": "序列化厂商配置响应（含聚合状态，设计文档 §8.1）。\n\n参数:\n    provider_id: 厂商标识。\n    name: 厂商名称。\n    base_url: 自定义接入地址（可空，空时 litellm 内置解析）。\n    api_key_configured: Key 配置状态（不依赖 Key 的厂商类型恒 True，§8.4；\n        其余以 ``providers.api_key`` 非空为准）。响应永不回传 Key 明文。\n    enabled: 启用开关。\n    model_count: 该厂商下模型条目数（含禁用条目）。\n    sort_order: 排序权重。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "ProviderUpdateRequest": {
+        "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          }
+        },
+        "type": "object",
+        "title": "ProviderUpdateRequest",
+        "description": "校验厂商更新请求体（仅覆盖显式传入的字段）。\n\n参数:\n    name: 可选，新显示名。\n    type: 可选，新厂商类型（枚举校验）。\n    base_url: 可选，新接入地址；``\"\"`` 表示清除。\n    api_key: 可选，新 API Key 明文；``None`` 不更新，``\"\"`` 清除。\n    enabled: 可选，新启用状态（启停即时生效）。\n    sort_order: 可选，新排序权重。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``type`` 非空且不在允许枚举时抛出（由 pydantic 校验触发）。\n\n副作用:\n    无。"
       },
       "TaskResponse": {
         "properties": {
           "task_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Task Id"
           },
           "workspace_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Workspace Id"
-          },
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
           },
           "title": {
             "type": "string",
@@ -1662,7 +2086,7 @@
           "parent_task_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
@@ -1673,7 +2097,7 @@
           "parent_turn_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
@@ -1684,7 +2108,7 @@
           "delegation_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
@@ -1727,86 +2151,13 @@
         "required": [
           "task_id",
           "workspace_id",
-          "agent_id",
           "title",
           "status",
           "created_at",
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    agent_id: 驱动该任务的 agent 标识。\n    title: 任务标题。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_turn_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
-      },
-      "TurnResponse": {
-        "properties": {
-          "turn_id": {
-            "type": "string",
-            "title": "Turn Id"
-          },
-          "task_id": {
-            "type": "string",
-            "title": "Task Id"
-          },
-          "input_text": {
-            "type": "string",
-            "title": "Input Text"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "end_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "End Reason"
-          },
-          "response_text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Response Text"
-          },
-          "agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Id"
-          },
-          "created_at": {
-            "type": "string",
-            "title": "Created At"
-          },
-          "updated_at": {
-            "type": "string",
-            "title": "Updated At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "turn_id",
-          "task_id",
-          "input_text",
-          "status",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "TurnResponse",
-        "description": "校验并序列化轮次状态响应（与 ``TurnRecord`` 字段对齐）。\n\n参数:\n    turn_id: 轮次标识。\n    task_id: 所属任务标识。\n    input_text: 本轮用户输入。\n    status: 轮次状态。\n    end_reason: 终态原因，可能为 None。\n    response_text: Agent 回复文本，可能为 None。\n    agent_id: 驱动该轮次的 agent 标识，可能为 None。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_turn_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ValidationError": {
         "properties": {
@@ -1844,7 +2195,7 @@
       "WorkspacePrepareResponse": {
         "properties": {
           "workspace_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Workspace Id"
           },
           "ready": {
@@ -1891,10 +2242,72 @@
         "title": "WorkspacePrepareResponse",
         "description": "POST /workspaces/{workspace_id}/events/prepare 的响应。\n\n触发一次 workspace 准备（当前为 CodeGraph 索引就绪）并立即返回；\n准备进度经 ``GET /workspaces/{workspace_id}/events/stream`` SSE 推送。\n\n属性:\n    workspace_id: 触发准备的 workspace 标识。\n    ready: 即时快照中 Kernel 是否已就绪（True / False）。\n    state: 即时状态快照，取值 ``ready`` / ``failed`` / ``unavailable`` /\n        ``unreachable`` / ``timeout``；任何非 ``ready`` 值均表示未就绪，前端应\n        降级到文件搜索但任务可继续。同步阻塞路径下通常为 ``accepted`` 初值，\n        终态以 SSE 事件为准。\n    action_taken: 采取的动作（``init`` / ``sync`` / ``none``）。\n    files_changed: 索引变更文件数（ready 时有效）。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（非 ready 时有效；脱敏，不记录 secret）。"
       },
+      "WorkspaceReadinessResponse": {
+        "properties": {
+          "workspace_id": {
+            "type": "integer",
+            "title": "Workspace Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "action_taken": {
+            "type": "string",
+            "title": "Action Taken"
+          },
+          "files_changed": {
+            "type": "integer",
+            "title": "Files Changed"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "status",
+          "action_taken",
+          "files_changed",
+          "duration_ms",
+          "revision"
+        ],
+        "title": "WorkspaceReadinessResponse",
+        "description": "工作区准备状态的持久化快照。"
+      },
       "WorkspaceResponse": {
         "properties": {
           "workspace_id": {
-            "type": "string",
+            "type": "integer",
             "title": "Workspace Id"
           },
           "name": {

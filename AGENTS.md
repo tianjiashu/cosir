@@ -22,10 +22,21 @@
 - 对话主链路直接重构，不保留外部适配层、双协议端点、feature flag 灰度或旧链路回退。新链路验收后，旧 SSE、`eventStore`、`useSSE`、timeline projector 与 `TurnTimeline` 整体退场。
 - `Task` 是 workspace、ChangeSet、context usage 和 delegation 的唯一业务归属边界，并承担 Conversation Thread 职责；现有 `Turn` 重构为 `ConversationRun`。
 - `ConversationMessage`、`MessagePart`、`TurnAttachment`、`HumanApprovalRequest` 是持久化的对话事实。不得从 `input_text`、运行时日志或前端投影反推这些事实。
-- 模型节点、工具执行、delegation 与审批只能经 `ConversationMutationWriter` 写入 canonical conversation state。`RuntimeEvent` 仅保留为审计、诊断和可观测性旁路，不再作为 Chat UI 的事实源。
-- 后端以 Assistant Transport state 协议传输 canonical state；桌面端以 `@assistant-ui/react` 的 `useAssistantTransportRuntime` 渲染。Assistant UI 的类型和实现不得进入 `core`、`tools`、`models` 或 `storage`。
+- 模型节点、工具执行、delegation 与审批只能经 `ConversationMutationWriter` 写入 canonical conversation state。Runtime 执行过程不再使用通用 `RuntimeEvent` 作为领域事件、UI 投影或事实源；审计、诊断和可观测性统一使用结构化日志、trace，以及必要时独立的 `AuditRecord`。
+- 后端通过 Assistant Transport 传输由 canonical conversation state 派生的状态更新；桌面端以 `@assistant-ui/react` 的 `useAssistantTransportRuntime` 渲染。Assistant UI 的类型和实现不得进入 `core`、`tools`、`models` 或 `storage`。
 - 工具权限/隔离/资源锁、LangGraph checkpoint、ChangeSet、delegation 的父子边界和审批决策仍属服务端领域能力。前端不得启用客户端工具执行。
 - `apps/desktop` 与 `apps/shared` 已按本次重构决议移除，避免旧界面与旧共享协议误导后续开发。仅当新的对话契约和桌面端边界明确后，才能按新设计重建它们；不得恢复旧结构作为过渡方案。
+
+### 前端职责决议
+
+- 前端以 UI 渲染、用户交互和 Assistant Transport 连接为主要职责，不承载 Agent、Context、Tool、审批、checkpoint 或对话事实的业务编排。
+- `@assistant-ui/react` 的 `useAssistantTransportRuntime` 是前端与后端之间的运行时适配边界；它负责把 Composer/Thread 的用户命令发送到后端，并把后端 state stream 转换为 UI 状态。前端不能绕过 runtime 直接调用模型或执行客户端工具。
+- 前端 converter 只负责后端 canonical state 与 Assistant UI 消息模型之间的协议映射；不得在 converter 中推导或替代后端领域状态机。
+- 后端是 Conversation、Task、Workspace、Provider、Model、Tool、Approval、Checkpoint 和运行状态的唯一 canonical state 来源。前端的 React state 和 `localStorage` 只允许保存临时 UI 状态与用户偏好，不能作为对话事实来源。
+- 前端可以在 `useAssistantTransportRuntime` 内持有不可持久化的 `TransportState` 渲染副本，但不得把它作为业务事实、持久化数据或下一次请求的权威输入。后端领域层、Agent Runtime 和 storage 必须对 `TransportState` 保持透明；Assistant Transport 只允许存在于 API/传输适配边界。
+- 后端 API 适配层可以在一次 stream 生命周期内维护临时 Transport 基线，用于生成 `set` / `append-text` 等协议操作，但不得将该 UI 投影反向写入领域模型或数据库作为第二事实源。
+- Workspace/Task/Provider 等页面级 CRUD 仅由前端发起 API 请求并呈现结果；权限、校验、级联、持久化和生命周期规则必须由后端负责。
+- 新增前端对话能力时，优先复用 Assistant UI primitives/runtime 与 Assistant Transport 协议；不得重新引入旧 SSE、客户端 event store 或前端 Tool 执行链路。
 
 ## 4. 后端架构边界
 
@@ -42,7 +53,8 @@ models → utils
 utils → 无 app.* 依赖
 ```
 
-- `api` 是 HTTP/SSE/Transport 接入层，不直接访问 `storage` 或工具 handler。
+- `api` 是 HTTP/SSE/Transport 接入层，不直接访问 `storage` 或工具 handler。Assistant Transport 的 state 组装、协议编码和 stream 生命周期管理必须限制在该适配边界；`core`、`service` 和 `storage` 只处理领域事实与运行状态。
+- API 层请求校验与错误响应约定：纯 wire 契约约束（字段取值、commandId 唯一性、thread/task 一致性、未支持命令类型等，不依赖 DB 的领域状态）由请求 Pydantic 模型用 `@model_validator(mode="after")` 在解析阶段自动校验，不依赖端点显式调用；校验失败抛结构化异常（`TransportRequestError` 携带 `status_code`/`code`/`message`/`retryable`），**不得退化成 Pydantic 默认 422**，以保持前端 `TransportError` 错误体 `{error:{code,message,retryable}}` 契约零改动。全局异常处理器统一放在 `app/api/middleware/`，采用 `install_*` 函数式注册器（参照 `api_logging.py`），由 `app/app.py` 在 `app = FastAPI(...)` 之后、域路由 `import_module` 之前调用；依赖 task/turn/command 持久化状态的领域校验仍留端点，不进 schema。
 - `core` 负责 LangGraph Runtime、工作流、上下文、delegation 和可观测性编排；`service` 负责领域服务编排；`storage` 只负责 SQLite 持久化；`tools` 是独立的工具执行体系。
 - `utils` 必须是叶子层。`config/logging` 是允许依赖 `storage` 的聚合例外。
 - 跨层协作优先通过位于低耦合边界的 Protocol/端口完成，例如工具追踪与 delegation 执行；不得以反向 import 偷渡依赖。
