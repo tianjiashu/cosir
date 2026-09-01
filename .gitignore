@@ -36,6 +36,7 @@ apps/backend/.workspace_payload-node/
 
 # Tauri 生成产物
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
 
 # 临时调试脚本（环境可能重建为空文件，避免误提交）
 apps/backend/tests/_tmp_*.py
@@ -91,6 +92,7 @@ apps/desktop/src-tauri/verify_stem.pdb
 
 # 桌面端临时调试产物（vitest/tsc 输出、覆盖率缓存、日志转储）
 apps/desktop/coverage-tmp/
+apps/desktop/*.log
 apps/desktop/rp*.txt
 apps/desktop/tsc_err.txt
 apps/desktop/tsc_out.txt

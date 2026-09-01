@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "description": "本地桌面 coding-agent 仓库根脚本集合",
   "scripts": {
-    "dev:all": "bash scripts/dev.sh",
-    "dev:client": "bash scripts/dev-client.sh"
+    "dev:all": "npm run dev:desktop",
+    "dev:client": "npm --prefix apps/desktop run dev",
+    "dev:desktop": "npm --prefix apps/desktop run tauri:dev"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.3.3"
   }
 }
