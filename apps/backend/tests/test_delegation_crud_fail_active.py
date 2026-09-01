@@ -15,7 +15,6 @@ RETURNING id`` 原子置 failed。
 from unittest.mock import MagicMock
 
 from app.storage.crud.delegation_crud import (
-    ACTIVE_DELEGATION_STATUSES,
     DelegationCrud,
 )
 

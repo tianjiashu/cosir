@@ -144,7 +144,7 @@ def _collect_chunk_to_ai_message(
     # signature）供下一轮原样回传，否则工具调用 400。
     additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
 
-    #统一为reasoning_content字段
+    # 统一为reasoning_content字段
     reasoning_content = additional.pop(thinking_channel, None)
     additional["reasoning_content"] = reasoning_content
     if _should_strip_reasoning_content(thinking_channel, thinking_roundtrip):

@@ -179,7 +179,6 @@ def test_upsert_user_message_writer_failure_silent_when_allowed() -> None:
         current_turn_id=20,
     ).add_change_listener(
         ContextUsageComputeListener(
-            write_event=write_event,
             update_context_usage=lambda task_id, used: None,
             task_id=1,
         )
@@ -192,7 +191,7 @@ def test_upsert_user_message_writer_failure_silent_when_allowed() -> None:
 
     users = [message for message in manager.load_message() if message.type == "human"]
     assert len(users) == 1
-    assert writer_calls["n"] == 2
+    # Context usage is now a canonical run statistic, not a RuntimeEvent side effect.
 
 
 def test_entries_turn_id_none_when_no_bound_turn() -> None:

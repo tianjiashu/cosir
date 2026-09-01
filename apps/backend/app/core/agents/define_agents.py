@@ -32,11 +32,7 @@ def main_agent() -> AgentProfile:
         max_steps=300,
         main_agent=True,
         prompt_file_path=None,
-        model_settings=ModelSettings(
-            thinking=True,
-            stream=True,
-            reasoning_effort="high"
-        )
+        model_settings=ModelSettings(thinking=True, stream=True, reasoning_effort="high"),
     )
 
 

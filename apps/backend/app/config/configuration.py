@@ -22,7 +22,6 @@
   service / core 装配。
 """
 
-
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
@@ -31,6 +30,7 @@ from app.tools.tool_system import ToolSystem
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _TOOL_SYSTEM: ToolSystem | None = None
+
 
 def set_agent_registry(registry: AgentProfileRegistry) -> None:
     """设置进程级 agent profile 目录单例。
@@ -135,6 +135,7 @@ def set_tool_system(tool_system: ToolSystem) -> None:
     global _TOOL_SYSTEM
     _TOOL_SYSTEM = tool_system
 
+
 def get_tool_registry() -> ToolRegistry:
     """返回进程级工具注册表。
 
@@ -154,8 +155,6 @@ def get_tool_registry() -> ToolRegistry:
     if _TOOL_SYSTEM is None:
         raise RuntimeError("tool system has not been initialized")
     return _TOOL_SYSTEM.registry
-
-
 
 
 def get_tool_system() -> ToolSystem:

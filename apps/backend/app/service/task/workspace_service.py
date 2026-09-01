@@ -1,7 +1,7 @@
 """Workspace orchestration service.
 
 单一职责：编排工作区的创建、列表查询与原子级联删除——删除工作区时在单个写锁事务内
-清理其下所有任务树及全部子产物（轮次、消息轨迹、运行时事件、文件快照、委派记录）。
+清理其下所有任务树及全部子产物（轮次、消息轨迹、文件快照、委派记录）。
 
 职责边界：
 - 负责：工作区创建、列表查询、原子级联删除（委托给 ``CascadeDeleter``）。
@@ -131,8 +131,7 @@ class WorkspaceService:
         删除前先校验工作区存在（不存在则抛 ``KeyError``），再通过
         ``CascadeDeleter.delete_workspace`` 在单个 ``BEGIN IMMEDIATE`` 写锁事务内
         收集该工作区全部任务（含递归委派子任务），按
-        ``turn_messages -> file_snapshots -> turns -> runtime_events -> delegations ->
-        tasks -> workspace``
+        ``turn_messages -> file_snapshots -> turns -> delegations -> tasks -> workspace``
         顺序清理，保证原子性（全删或全不删）与并发安全（删除期间无并发写插入孤儿数据）。
         删除是高风险操作，保留 start / complete 审计日志。
 
@@ -147,9 +146,9 @@ class WorkspaceService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
 
         副作用:
-            从 ``turn_messages`` / ``runtime_events`` / ``file_snapshots`` /
-            ``turns`` / ``delegations`` / ``tasks`` / ``workspaces`` 表删除该工作区
-            相关数据。
+            从 ``turn_messages`` / ``file_snapshots`` / ``turns`` / ``delegations``
+            / ``tasks`` / ``workspaces`` 表删除该工作区相关数据（旧 Runtime 事件体系
+            已删除，不再参与级联删除）。
         """
 
         self._workspace.get(workspace_id)  # 存在性守卫，不存在抛 KeyError

@@ -1,15 +1,15 @@
 """默认 ReAct-like 工作流编排，由 LangGraph StateGraph 驱动。
 
 本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` 节点 +
-条件边）、以 ``astream(stream_mode=["custom"])`` 单循环驱动，把节点经 ``get_stream_writer()``
-写入的 ``custom`` 业务事件（含模型回复/思考增量）统一透传为 ``RuntimeEvent`` 流式 ``yield``；
+条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
+``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状态持久化、断点续跑与
 审批中断。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from time import perf_counter
 from typing import Any, Literal, cast
 
@@ -26,26 +26,22 @@ from app.core.workflows.nodes.helper.vision_content_blocks import (
 from app.llm_provider.model_factory import resolve_chat_model
 from app.llm_provider.provider.capability_service import CapabilityService
 from app.models import RuntimeMessage
-from app.models.enums.event_type import EventType
 from app.models.errors.llm_provider_exceptions import (
     VisionFormatNotSupportedError,
     VisionImageError,
     VisionNotSupportedError,
 )
-from app.models.event.runtime_event import RuntimeEvent
-from app.models.payload.runtime_event_payload import RuntimeEventPayload
 from app.models.turn_usage_stats import TurnUsageStats
-from app.service.depends import get_task_service
 from app.tools.schemas import ToolCall
 from app.utils.image_utils import is_image_path
 
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
 from ..nodes.helper.approval import APPROVAL_INTERRUPT_KEY
-from ..nodes.helper.common import write_event
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
+
 
 class ReactLikeWorkflow(AgentWorkflow):
     """基于“模型推理 -> 工具调用 -> 继续推理/最终回答”的默认工作流，由 LangGraph 编排。
@@ -58,8 +54,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     workflow_id = "react_like_v1"
 
     def __init__(
-            self,
-            approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
+        self,
+        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
     ) -> None:
         """初始化工作流。
 
@@ -106,17 +102,17 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     async def run(
-            self,
-            operations: RuntimeOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
-            execution_mode: Literal["fresh", "resume"] = "fresh",
-    ) -> AsyncIterator[RuntimeEvent]:
+        self,
+        operations: RuntimeOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
+        execution_mode: Literal["fresh", "resume"] = "fresh",
+    ) -> None:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
-        以 ``astream(stream_mode=["custom"])`` 单循环驱动已编译 graph，把节点经
-        ``get_stream_writer()`` 写入的 ``custom`` 业务事件（含模型回复/思考增量）统一透传为
-        ``RuntimeEvent`` 流式 ``yield``。模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
+        以 LangGraph 状态流驱动已编译 graph。工作流不再生产或透传 RuntimeEvent；模型、
+        工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state。
+        模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
         存在 ``approval_resolver`` 时 ``tools`` 节点触发 ``interrupt()`` 暂停，用审批解析器解析出
         批准的工具调用并经 ``Command(resume=)`` 恢复；为 ``None`` 时不暂停、自动放行。循环恢复
         graph 直到无待处理任务或工作流结束。
@@ -131,10 +127,13 @@ class ReactLikeWorkflow(AgentWorkflow):
                 ``resume`` 从当前 turn 已持久化轨迹恢复。
 
         生成:
-            RuntimeEvent: 任务执行过程中产生的运行时事件，供 API 层转换为 SSE 或其他客户端事件。
+            无。该异步迭代器只保留工作流协议的可消费形状，不产生运行时事件。
         """
 
         turn = operations.get_current_turn()
+        # 一个 Conversation Run 对应一个 LangGraph checkpoint thread；当前物理
+        # 迁移阶段 run 仍由 turns.id 承载，因此这里使用 run/turn 的稳定主键，
+        # 而不是 task_id（同一 task 可以拥有多个 run）。
         thread_id = turn.id
         turn_id = turn.id
         current_task = operations.get_current_task()
@@ -202,7 +201,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 读写唯一入口，并挂载上下文占用订阅者。
         runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
             agent_profile=agent_profile,
-            write_event=write_event,
             current_workspace=current_workspace,
             current_task=current_task,
             store=operations.message_store,
@@ -281,40 +279,19 @@ class ReactLikeWorkflow(AgentWorkflow):
             if execution_mode == "resume":
                 checkpoint_state = await graph.aget_state(config)
                 input_state = (
-                    None
-                    if checkpoint_state.values or checkpoint_state.next
-                    else initial_state
+                    None if checkpoint_state.values or checkpoint_state.next else initial_state
                 )
 
-            sequence = 0
             while True:
                 try:
-                    async for mode, data in graph.astream(
-                            input_state,
-                            config,
-                            stream_mode=["custom"],
+                    async for _ in graph.astream(
+                        input_state,
+                        config,
+                        stream_mode=["values"],
                     ):
-                        if mode != "custom":
-                            continue  # 仅消费 custom 事件流（回复/思考增量均来自节点内）
-                        raw = data
-                        event_type = EventType(raw["event_type"])
-                        payload = raw["payload"]
-                        if not isinstance(payload, RuntimeEventPayload):
-                            raise TypeError("custom runtime event payload must be a payload entity")
-                        event = RuntimeEvent(
-                            event_type=event_type,
-                            task_id=current_task.id,
-                            turn_id=turn_id,
-                            sequence=sequence,
-                            payload=payload,
-                            is_main_agent=agent_profile.main_agent,
-                        )
-                        log.info(
-                            "workflow_graph_event",
-                            extra={"msg": "workflow graph event", "data": event.to_dict()},
-                        )
-                        yield event
-                        sequence += 1
+                        # 消费状态流仅用于推进图；canonical conversation state 的变更
+                        # 已由节点通过 RuntimeOperations 提交，不能从 graph stream 反推事实。
+                        continue
                 except Exception:
                     log.exception(
                         "workflow_graph_failed",

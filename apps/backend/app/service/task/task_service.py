@@ -331,8 +331,9 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
 
         副作用:
-            从 ``runtime_events`` / ``turn_messages`` / ``file_snapshots`` /
-            ``turns`` / ``delegations`` / ``tasks`` 表删除该任务树相关数据。
+            从 ``turn_messages`` / ``file_snapshots`` / ``turns`` / ``delegations``
+            / ``tasks`` 表删除该任务树相关数据（旧 Runtime 事件体系已随对话事实重构
+            一并删除，不再参与级联删除）。
         """
 
         self._task.get(task_id)  # 存在性守卫，不存在抛 KeyError

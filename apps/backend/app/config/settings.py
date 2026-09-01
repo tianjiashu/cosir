@@ -59,9 +59,6 @@ class Settings:
     # 取 min 后作为实际上限（分母）。0 表示不设软上限，只用模型自身最大窗口。可由
     # CODING_AGENT_CONTEXT_WINDOW_TOKENS 经环境变量覆盖（如 32000 以省成本/控延迟）。
     CONTEXT_WINDOW_TOKENS: ClassVar[int] = 200000
-    # 上下文占用重算的最小间隔（秒）：ContextUsageMeter 防抖，避免高频 add_message 触发全量
-    # 估算；该间隔内重复 read 命中缓存，超过则按脏标记重算。
-    CONTEXT_USAGE_MIN_INTERVAL_S: ClassVar[float] = 1.0
     WEB_SEARCH_BACKEND: ClassVar[str] = ""
     WEB_EXTRACT_BACKEND: ClassVar[str] = ""
     WEB_BACKEND: ClassVar[str] = ""
@@ -70,14 +67,7 @@ class Settings:
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
 
-    # http_proxy 配置（设计文档阶段 2 用户视角三件套之一，可选）：为 litellm
-    # 访问外网厂商（OpenAI / Anthropic 等）提供代理通道，国内网络必需。
-    # 全可选：任一为 None / 空串时不注入代理，保持既有无代理请求不受影响。
-    # 对应环境变量 ``CODING_AGENT_WEB_PROXY_URL`` / ``CODING_AGENT_WEB_PROXY_API_KEY``。
-    WEB_PROXY_URL: ClassVar[str | None] = None
-    WEB_PROXY_API_KEY: ClassVar[str | None] = None
-
-    # 模型流式 chunk 调试落盘开关：默认关闭。开启后 ``model_node`` 会逐 chunk / 合并后
+    # 模型流式 chunk 调试落盘开关：默认关闭。开启后 ``debug_dump`` 会逐 chunk / 合并后
     # 把完整消息 JSON 追加到 ``logs/debug_*_chunks.jsonl``，用于本地排查 chunk 结构。
     # 该通道绕过常规日志预算截断，且每 turn 写盘量较大，常驻生产会损害稳定迭代，故默认关闭，
     # 仅在需要排查流式 chunk 结构时经环境变量 ``CODING_AGENT_DEBUG_DUMP_CHUNKS=true`` 显式开启。
@@ -316,9 +306,7 @@ class Settings:
         cls.LLM_REQUEST_TIMEOUT_SECONDS = float(
             os.environ.get("CODING_AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "120")
         )
-        cls.LLM_MAX_RETRIES = int(
-            os.environ.get("CODING_AGENT_LLM_MAX_RETRIES", "2")
-        )
+        cls.LLM_MAX_RETRIES = int(os.environ.get("CODING_AGENT_LLM_MAX_RETRIES", "2"))
         _raw_seed = os.environ.get("CODING_AGENT_LLM_SEED", "")
         cls.LLM_SEED = int(_raw_seed) if _raw_seed else None
         cls.TOOL_OBSERVATION_CONTEXT_LIMIT = int(
@@ -328,9 +316,7 @@ class Settings:
         cls.MAX_TOOL_OUTPUT_CHARS = int(
             os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")
         )
-        cls.DEFAULT_LANGUAGE = (
-            os.environ.get("CODING_AGENT_DEFAULT_LANGUAGE", "zh").strip().lower()
-        )
+        cls.DEFAULT_LANGUAGE = os.environ.get("CODING_AGENT_DEFAULT_LANGUAGE", "zh").strip().lower()
         cls.CONTEXT_WINDOW_TOKENS = int(
             os.environ.get("CODING_AGENT_CONTEXT_WINDOW_TOKENS", "200000")
         )
@@ -351,8 +337,6 @@ class Settings:
         cls.WEB_EXTRACT_CHAR_LIMIT = int(
             os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
         )
-        cls.WEB_PROXY_URL = os.environ.get("CODING_AGENT_WEB_PROXY_URL")
-        cls.WEB_PROXY_API_KEY = os.environ.get("CODING_AGENT_WEB_PROXY_API_KEY")
         cls.DEBUG_DUMP_CHUNKS = cls._env_bool("CODING_AGENT_DEBUG_DUMP_CHUNKS", False)
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。

@@ -9,10 +9,12 @@
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
+
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import asc, delete, exists, select, update
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Session, aliased
 
 from app.models import TurnRecord
 from app.storage.model.turn_model import TurnModel
@@ -55,6 +57,7 @@ class TurnCrud:
         image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         extra: dict[str, Any] | None = None,
+        session: Session | None = None,
     ) -> TurnRecord:
         """新建一条 turn 记录并落库。
 
@@ -88,22 +91,26 @@ class TurnCrud:
 
         if not input_text.strip():
             raise ValueError("input_text must be a non-empty string")
-        with self._session_factory.begin() as session:
-            model = TurnModel(
-                task_id=task_id,
-                input_text=input_text,
-                status=status,
-                end_reason=None,
-                response_text=None,
-                agent_id=agent_id,
-                provider_id=provider_id,
-                model_name=model_name,
-                image_paths=image_paths,
-                reasoning_effort=reasoning_effort,
-                extra=extra,
-            )
+        model = TurnModel(
+            task_id=task_id,
+            input_text=input_text,
+            status=status,
+            end_reason=None,
+            response_text=None,
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model_name=model_name,
+            image_paths=image_paths,
+            reasoning_effort=reasoning_effort,
+            extra=extra,
+        )
+        if session is not None:
             session.add(model)
             session.flush()
+            return TurnRecord.from_model(model)
+        with self._session_factory.begin() as managed_session:
+            managed_session.add(model)
+            managed_session.flush()
             return TurnRecord.from_model(model)
 
     def get(self, turn_id: int) -> TurnRecord:
@@ -157,13 +164,26 @@ class TurnCrud:
             )
         return [TurnRecord.from_model(row) for row in rows]
 
+    def list_recoverable(self) -> list[TurnRecord]:
+        """返回进程重启后仍需恢复的 pending/running 运行。"""
+        with self._session_factory() as session:
+            rows = (
+                session.execute(
+                    select(TurnModel)
+                    .where(TurnModel.status.in_(("pending", "running")))
+                    .order_by(asc(TurnModel.created_at), asc(TurnModel.id))
+                )
+                .scalars()
+                .all()
+            )
+        return [TurnRecord.from_model(row) for row in rows]
+
     def update_status_if_in(
         self,
         turn_id: int,
         target_status: str,
         allowed_statuses: tuple[str, ...],
         end_reason: str | None = None,
-        response_text: str | None = None,
     ) -> TurnRecord | None:
         """以乐观锁方式把 turn 更新为目标状态，仅当其当前状态在允许集合内。
 
@@ -179,7 +199,6 @@ class TurnCrud:
             allowed_statuses: 允许执行更新的前置状态白名单；turn 当前状态不在此集合时
                 不做任何修改并返回 None。
             end_reason: 可选，更新时一并写入的终态原因；为 None 时不修改该列。
-            response_text: 可选，更新时一并写入的回复文本；为 None 时不修改该列。
 
         返回:
             更新成功时返回更新后的 TurnRecord；turn 不存在或当前状态不在允许集合内时
@@ -191,7 +210,7 @@ class TurnCrud:
 
         副作用:
             条件满足时更新 ``turns`` 表对应行的 ``status``、``updated_at``，以及调用方
-            传入的 ``end_reason`` / ``response_text`` 列（为 None 的列保持原值）。
+            传入的 ``end_reason`` 列（为 None 时保持原值）。回复正文不在 turns 表写入。
         """
 
         self.get(turn_id)
@@ -201,8 +220,6 @@ class TurnCrud:
         }
         if end_reason is not None:
             values["end_reason"] = end_reason
-        if response_text is not None:
-            values["response_text"] = response_text
         with self._session_factory.begin() as session:
             result = session.execute(
                 update(TurnModel)
@@ -235,6 +252,70 @@ class TurnCrud:
         if not result.rowcount:
             return None
         return self.get(turn_id)
+
+    def claim_executor_lease(
+        self, turn_id: int, owner: str, lease_seconds: int
+    ) -> TurnRecord | None:
+        """以条件更新认领 pending 或已过期 running turn，并递增 fencing version。"""
+        self.get(turn_id)
+        now_text = to_text(utc_now())
+        expires = utc_now() + timedelta(seconds=lease_seconds)
+        expires_text = to_text(expires)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(
+                    TurnModel.id == turn_id,
+                    (TurnModel.status == "pending")
+                    | (
+                        (TurnModel.status == "running")
+                        & (
+                            TurnModel.executor_lease_expires_at.is_(None)
+                            | (TurnModel.executor_lease_expires_at < now_text)
+                        )
+                    ),
+                )
+                .values(
+                    status="running",
+                    executor_lease_owner=owner,
+                    executor_lease_expires_at=expires_text,
+                    fencing_version=TurnModel.fencing_version + 1,
+                    updated_at=to_text(utc_now()),
+                )
+            )
+        return self.get(turn_id) if result.rowcount else None
+
+    def renew_executor_lease(
+        self, turn_id: int, owner: str, fencing_version: int, lease_seconds: int = 60
+    ) -> TurnRecord | None:
+        """仅为当前 owner 与 fencing version 续租运行执行权。"""
+        expires_text = to_text(utc_now() + timedelta(seconds=lease_seconds))
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(
+                    TurnModel.id == turn_id,
+                    TurnModel.status == "running",
+                    TurnModel.executor_lease_owner == owner,
+                    TurnModel.fencing_version == fencing_version,
+                )
+                .values(executor_lease_expires_at=expires_text, updated_at=to_text(utc_now()))
+            )
+        return self.get(turn_id) if result.rowcount else None
+
+    def release_executor_lease(self, turn_id: int, owner: str, fencing_version: int) -> bool:
+        """条件释放当前执行者的租约，不改变运行终态。"""
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TurnModel)
+                .where(
+                    TurnModel.id == turn_id,
+                    TurnModel.executor_lease_owner == owner,
+                    TurnModel.fencing_version == fencing_version,
+                )
+                .values(executor_lease_owner=None, executor_lease_expires_at=None)
+            )
+        return bool(result.rowcount)
 
     def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:
         """返回一批任务下全部 turn 的标识列表。

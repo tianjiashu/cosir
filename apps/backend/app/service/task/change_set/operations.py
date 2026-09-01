@@ -16,12 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.models.enums.event_type import EventType
-from app.models.event.runtime_event import RuntimeEvent
-from app.models.file_snapshot_record import FileSnapshotRecord
-from app.models.payload.file_change_updated_payload import FileChangeUpdatedPayload
 from app.models.result.change_set import ChangeFileEntry
-from app.service.depends import get_runtime_event_bus, get_task_service, get_workspace_service
+from app.service.depends import get_task_service, get_workspace_service
 from app.service.task.change_set.conflict import _is_already_reverted, _is_at_after_state
 from app.service.task.change_set.errors import ChangeSetConflictError
 from app.service.task.change_set.query import _require_latest_any
@@ -151,9 +147,7 @@ async def revert_file(
                     },
                 },
             )
-            raise ChangeSetConflictError(
-                f"change status already mutated, revert rejected: {path}"
-            )
+            raise ChangeSetConflictError(f"change status already mutated, revert rejected: {path}")
         resolver = PathResolver(workspace_root)
         for operation in snapshots_to_operations([snapshot]):
             if _is_already_reverted(operation, resolver):
@@ -203,7 +197,6 @@ async def revert_file(
             reverted_at=datetime.now(UTC).isoformat(),
             expected_statuses=("pending", "reverted"),
         )
-        _publish_revert_updated(task_id, snapshot)
     log.info(
         "change_set_file_reverted",
         extra={
@@ -264,51 +257,6 @@ def _cas_update_status(
             },
         )
         raise ChangeSetConflictError(f"change status already mutated, operation rejected: {path}")
-
-
-def _publish_revert_updated(task_id: int, snapshot: FileSnapshotRecord) -> None:
-    """撤销成功后广播 ``FILE_CHANGE_UPDATED``，驱动前端实时把该条目从列表中移除。
-
-    参数:
-        task_id: 任务标识。
-        snapshot: 刚被撤销的快照记录（提供 turn_id/path/action）。
-
-    返回:
-        无。
-
-    异常:
-        无（总线异常被吞，避免阻断主流程；见下方说明）。
-
-    副作用:
-        经 ``get_runtime_event_bus()`` 单例发布一条不持久化的实时事件。
-    """
-    try:
-        get_runtime_event_bus().publish(
-            RuntimeEvent(
-                event_type=EventType.FILE_CHANGE_UPDATED,
-                task_id=task_id,
-                turn_id=snapshot.turn_id,
-                payload=FileChangeUpdatedPayload(
-                    task_id=task_id,
-                    turn_id=snapshot.turn_id,
-                    path=snapshot.path,
-                    action=snapshot.action,
-                ),
-            )
-        )
-    except Exception:
-        # 总线为运行时增强能力，广播失败不得影响撤销主流程；记完整堆栈备查。
-        log.exception(
-            "change_set_revert_publish_failed",
-            extra={
-                "msg": "变更集：撤销后实时广播失败（不影响磁盘与状态）",
-                "data": {
-                    "task_id": task_id,
-                    "path": snapshot.path,
-                    "turn_id": snapshot.turn_id,
-                },
-            },
-        )
 
 
 def _resolve_workspace_root(task_id: int) -> Path:

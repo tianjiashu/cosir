@@ -61,9 +61,7 @@ def fake_provider_service(monkeypatch: pytest.MonkeyPatch) -> None:
 
     fake = MagicMock()
     fake.get_provider.return_value = _FakeProvider()
-    monkeypatch.setattr(
-        "app.llm_provider.model_factory.get_provider_service", lambda: fake
-    )
+    monkeypatch.setattr("app.llm_provider.model_factory.get_provider_service", lambda: fake)
     monkeypatch.setattr(
         "app.llm_provider.model_factory.ProviderCapability",
         _FakeProviderCapability,

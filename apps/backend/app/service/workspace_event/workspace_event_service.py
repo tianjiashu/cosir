@@ -13,11 +13,12 @@
 """
 
 from app.config.logging.logger import log
-from app.models.enums.event_type import EventType
+from app.models.enums.workspace_event_type import WorkspaceEventType
 from app.models.event.workspace_event import WorkspaceEvent
 from app.models.workspace_readiness import WorkspaceReadiness
 from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
+from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
 
 #: 进入 ensure_ready 前的健康快检超时：Kernel 进程不在/卡死时，不进入最长 600s 的
 #: index_init 阻塞，而是立即判定 degraded 并发终态事件，避免前端永久「索引中」。
@@ -31,12 +32,15 @@ class WorkspaceEventService:
         self,
         lifecycle: CodeGraphLifecycleService,
         bus: WorkspaceEventBus,
+        readiness_crud: WorkspaceReadinessCrud | None = None,
     ) -> None:
         """构造 workspace 事件 service。
 
         参数:
             lifecycle: CodeGraph 索引生命周期编排服务（同步 ensure_ready）。
             bus: workspace 级状态事件总线。
+            readiness_crud: workspace readiness snapshot CRUD；生产装配必须注入，省略时
+                仅用于不涉及存储的单元测试。
 
         返回:
             无。
@@ -50,6 +54,13 @@ class WorkspaceEventService:
 
         self._lifecycle = lifecycle
         self._bus = bus
+        self._readiness_crud = readiness_crud
+
+    def get_readiness(self, workspace_id: int) -> WorkspaceReadiness:
+        """读取 workspace readiness 快照，缺失时返回 pending 初始值。"""
+        if self._readiness_crud is None:
+            return WorkspaceReadiness.initial(workspace_id)
+        return self._readiness_crud.get(workspace_id) or WorkspaceReadiness.initial(workspace_id)
 
     def prepare(self, workspace_id: int, root_path: str) -> WorkspaceReadiness:
         """发布 preparing → 健康快检 → ensure_ready → 发布 ready/degraded → close。
@@ -75,13 +86,25 @@ class WorkspaceEventService:
             绝不进入长阻塞路径。
         """
 
+        self._persist(workspace_id, WorkspaceReadiness.initial(workspace_id))
         self._emit(
-            EventType.WORKSPACE_PREPARING,
+            WorkspaceEventType.PREPARING,
             workspace_id,
             root_path,
             {"workspace_path": root_path},
         )
         if not self._kernel_reachable(workspace_id, root_path):
+            readiness = self._persist(
+                workspace_id,
+                WorkspaceReadiness(
+                    ready=False,
+                    state="unreachable",
+                    action_taken="none",
+                    files_changed=0,
+                    duration_ms=0,
+                    degraded_reason="codegraph kernel unreachable before prepare",
+                ),
+            )
             self._emit_degraded(
                 workspace_id,
                 root_path,
@@ -89,14 +112,7 @@ class WorkspaceEventService:
                 reason="codegraph kernel unreachable before prepare",
             )
             self._bus.close(workspace_id)
-            return WorkspaceReadiness(
-                ready=False,
-                state="unreachable",
-                action_taken="none",
-                files_changed=0,
-                duration_ms=0,
-                degraded_reason="codegraph kernel unreachable before prepare",
-            )
+            return readiness
 
         try:
             readiness = self._lifecycle.ensure_ready(root_path)
@@ -109,9 +125,10 @@ class WorkspaceEventService:
         # 哨兵（对齐 RuntimeEventBus.close_turn 语义，不再写永久关闭标记）。若先
         # close 再 emit ready/degraded，订阅桶已空、终态事件无人接收，SSE 流只收到
         # preparing 就终止（独立审查暴露的致命时序 bug）。
+        readiness = self._persist(workspace_id, readiness)
         if readiness.ready:
             self._emit(
-                EventType.WORKSPACE_READY,
+                WorkspaceEventType.READY,
                 workspace_id,
                 root_path,
                 {
@@ -130,6 +147,13 @@ class WorkspaceEventService:
             )
         self._bus.close(workspace_id)
         return readiness
+
+    def _persist(self, workspace_id: int, readiness: WorkspaceReadiness) -> WorkspaceReadiness:
+        """提交 readiness snapshot；提交成功后由调用方发送 SSE 通知。"""
+
+        if self._readiness_crud is None:
+            return readiness
+        return self._readiness_crud.upsert(workspace_id, readiness)
 
     def _kernel_reachable(self, workspace_id: int, root_path: str) -> bool:
         """在 prepare 前快速探测 Kernel 是否可达，避免进入长阻塞 index_init。
@@ -194,7 +218,7 @@ class WorkspaceEventService:
         """
 
         self._emit(
-            EventType.WORKSPACE_DEGRADED,
+            WorkspaceEventType.DEGRADED,
             workspace_id,
             workspace_path,
             {
@@ -206,7 +230,7 @@ class WorkspaceEventService:
 
     def _emit(
         self,
-        event_type: EventType,
+        event_type: WorkspaceEventType,
         workspace_id: int,
         workspace_path: str,
         payload: dict[str, object],

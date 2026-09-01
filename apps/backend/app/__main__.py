@@ -8,6 +8,7 @@
 - ``CODING_AGENT_HOST``：监听地址，默认 ``127.0.0.1``。
 - ``CODING_AGENT_PORT``：监听端口，默认 ``8000``。
 - ``CODING_AGENT_RELOAD``：是否开启热重载，默认 ``true``。
+- ``CODING_AGENT_LOG_LEVEL``：uvicorn 日志级别，默认 ``info``。
 """
 
 import os
@@ -71,12 +72,14 @@ def main() -> None:
         host = os.environ.get("CODING_AGENT_HOST", "127.0.0.1")
         port = int(os.environ.get("CODING_AGENT_PORT", "8000"))
         reload_enabled = os.environ.get("CODING_AGENT_RELOAD", "true").lower() == "true"
+        log_level = os.environ.get("CODING_AGENT_LOG_LEVEL", "info").lower()
 
         uvicorn.run(
             "app.app:app",
             host=host,
             port=port,
             reload=reload_enabled,
+            log_level=log_level,
         )
     except Exception as exc:
         if boot_state_file is not None:

@@ -2,7 +2,8 @@
 
 本模块承载「步数耗尽统一落定失败」的逻辑，不是 LangGraph graph 节点：它由 ``model_node``
 作为普通 async 函数直接调用（不再经条件边路由），输出终态 state patch。保持独立文件
-（而非并入 model_node）是因为该逻辑横跨事件写入 / turn 标记 / 终态 patch 构造，职责清晰。
+（而非并入 model_node）是因为该逻辑横跨 canonical writer / turn 标记 / 终态 patch 构造，
+职责清晰。
 """
 
 from typing import Any
@@ -10,11 +11,8 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
-    build_run_failed_payload,
     terminal_state,
-    write_event,
 )
-from app.models.enums.event_type import EventType
 
 from ..react.state import ReactGraphState
 
@@ -38,10 +36,8 @@ async def _finalize_max_steps(
     ``state.step_count``（主要供测试直接调用；生产路径 ``model_node`` 恒显式传入）。
 
     终态 patch 会把 ``_MAX_STEPS_FINAL_TEXT`` 写入 ``final_text``（供 checkpoint 留存），
-    且 ``RUN_FAILED`` 事件经 ``end_reason="max_steps_reached"`` 透传语义化枚举码，使前端
-    （``StatusBadge``）与父 Agent（``ChildAgentRunner``）能按枚举分类渲染「因步数耗尽而
-    停止」的可读说明；否则用户 / 父 Agent 只能看到 ``error="max_steps_reached"`` 枚举码，
-    无法感知子/主 Agent 因步数耗尽而停止。
+    且 canonical run 终态经 ``end_reason="max_steps_reached"`` 保存，使前端与父 Agent
+    能按稳定原因分类渲染「因步数耗尽而停止」的可读说明。
 
     参数:
         state: 当前 graph state。
@@ -52,22 +48,25 @@ async def _finalize_max_steps(
     异常:
         无。
     副作用:
-        可能把当前 turn 标记为 failed，并写出 ``RUN_FAILED`` runtime event。
+        可能把当前 turn 标记为 failed，并写入 canonical conversation state。
     """
 
     rc = _runtime_config()
     effective_step_count = state.step_count if step_count is None else step_count
     step_id = f"step-{effective_step_count}"
+    turn_id = getattr(rc.turn, "id", None) or getattr(rc.turn, "turn_id", None)
+    if turn_id is None:
+        raise RuntimeError("runtime config does not contain a run id")
     failed_turn = rc.operations.fail_turn_if_running(
-        rc.turn.turn_id,
+        turn_id,
         end_reason="max_steps_reached",
     )
     if failed_turn is None:
         log.info(
             "max_steps_node_terminal_race_lost",
             extra={
-                "msg": f"最大步数失败落定时 turn 已非 running，跳过失败事件，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": rc.turn.turn_id},
+                "msg": f"最大步数失败落定时 turn 已非 running，跳过终态写入，step_id={step_id}",
+                "data": {"step_id": step_id, "turn_id": turn_id},
             },
         )
         return _terminal_state(effective_step_count)
@@ -86,19 +85,8 @@ async def _finalize_max_steps(
             },
         },
     )
-    write_event(
-        EventType.RUN_FAILED,
-        build_run_failed_payload(
-            step_id,
-            "max_steps_reached",
-            usage=rc.usage_stats,
-            langfuse_trace_id=rc.langfuse_trace_id,
-            data=event_data or None,
-            # 语义化枚举码透传给前端 / 父 Agent，使其能按枚举分类渲染「因步数耗尽而停止」
-            # 的可读文案（对齐 client_disconnected 的差异化文案模式）。
-            end_reason="max_steps_reached",
-        ),
-    )
+    # 失败原因与终态由 RuntimeOperations 的 canonical writer 原子落定；附加诊断
+    # 数据只进入结构化日志，不重新引入通用 runtime event payload。
     return _terminal_state(effective_step_count)
 
 

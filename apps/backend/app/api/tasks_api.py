@@ -11,21 +11,14 @@ import asyncio
 
 from fastapi import Depends, HTTPException
 
-from app.api.dependencies import (
-    get_runtime_event_service,
-    get_task_service,
-    get_turn_service,
-)
+from app.api.dependencies import get_task_service, get_turn_service
 from app.api.schemas import (
     DeleteTaskResponse,
-    RuntimeEventResponse,
     TaskResponse,
-    TurnResponse,
 )
 from app.app import app
 from app.config.logging.logger import log
 from app.llm_provider.provider.capability_service import CapabilityService
-from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
 
@@ -77,68 +70,6 @@ async def get_task(
         context_window_total = None
 
     return TaskResponse.from_record(record, context_window_total=context_window_total)
-
-
-@app.get("/tasks/{task_id}/turns")
-async def list_turns(
-    task_id: int,
-    turn_service: TurnService = Depends(get_turn_service),
-) -> list[TurnResponse]:
-    """列出某任务下的全部 turn（支撑多轮历史展示）。
-
-    参数:
-        task_id: 来自路由的任务标识。
-        turn_service: 通过依赖注入的轮次 service。
-
-    返回:
-        该任务下按创建时间升序的 ``TurnResponse`` 列表。
-
-    异常:
-        HTTPException: 当任务不存在（级联 KeyError）时抛出。
-
-    副作用:
-        无。
-    """
-
-    try:
-        turns = turn_service.list_turns_for_task(task_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
-    return [TurnResponse.from_record(turn) for turn in turns]
-
-
-@app.get("/tasks/{task_id}/events")
-async def replay_task_events(
-    task_id: int,
-    task_service: TaskService = Depends(get_task_service),
-    event_service: RuntimeEventService = Depends(get_runtime_event_service),
-) -> list[RuntimeEventResponse]:
-    """回放某任务下的完整运行时事件流（按 turn + sequence 升序）。
-
-    用于打开任务时一次性重建含思考 / 工具调用 / 状态变更的 timeline，支撑历史
-    回看与刷新后重连重渲染；只读查询，不重新执行 Agent。
-
-    参数:
-        task_id: 来自路由的任务标识。
-        task_service: 通过依赖注入的任务 service（用于任务存在性守卫）。
-        event_service: 通过依赖注入的运行时事件 service。
-
-    返回:
-        按 ``(turn_id, sequence)`` 升序排列的事件回放列表，无记录时返回空列表。
-
-    异常:
-        HTTPException: 当任务不存在时抛出（沿用任务级 404 守卫）。
-
-    副作用:
-        无（只读查询）。
-    """
-
-    try:
-        task_service.get_task(task_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
-    events = event_service.list_by_task(task_id)
-    return [RuntimeEventResponse.from_event_dict(e) for e in events]
 
 
 @app.delete("/tasks/{task_id}")
@@ -199,36 +130,6 @@ async def list_child_tasks(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     return [TaskResponse.from_record(child) for child in children]
-
-
-@app.get("/tasks/{task_id}/turns/{turn_id}/events")
-async def replay_turn_events(
-    task_id: str,
-    turn_id: int,
-    event_service: RuntimeEventService = Depends(get_runtime_event_service),
-) -> list[RuntimeEventResponse]:
-    """回放某轮次下的运行时事件流（按 sequence 升序）。
-
-    用于单轮详情页 / 单轮重连重渲染；只读查询，不重新执行 Agent。该轮次需
-    隶属于路由中的 ``task_id``（交由调用方保证一致性，本端点不重复校验归属）。
-
-    参数:
-        task_id: 来自路由的任务标识（仅作为 URL 层级语义锚点）。
-        turn_id: 来自路由的轮次标识。
-        event_service: 通过依赖注入的运行时事件 service。
-
-    返回:
-        按 ``sequence`` 升序排列的该轮次事件回放列表，无记录时返回空列表。
-
-    异常:
-        无。
-
-    副作用:
-        无（只读查询）。
-    """
-
-    events = event_service.list_by_turn(turn_id)
-    return [RuntimeEventResponse.from_event_dict(e) for e in events]
 
 
 def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> str | None:

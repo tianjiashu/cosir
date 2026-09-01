@@ -42,12 +42,12 @@ def test_path_is_entry_real_absolute_path(populated: Path, context) -> None:
         assert p.is_absolute(), f"path should be resolved absolute, got {entry['path']}"
         # 真实修复点：path 必须以 resolved 根为前缀，且包含条目自身文件名，
         # 而非退化为「目录路径」导致前端拼接时仍需自行加 name。
-        assert entry["path"].startswith(resolved_root), (
-            f"path should live under workspace root, got {entry['path']}"
-        )
-        assert entry["path"].endswith(entry["name"]), (
-            f"path should include entry name, got {entry['path']} vs {entry['name']}"
-        )
+        assert entry["path"].startswith(
+            resolved_root
+        ), f"path should live under workspace root, got {entry['path']}"
+        assert entry["path"].endswith(
+            entry["name"]
+        ), f"path should include entry name, got {entry['path']} vs {entry['name']}"
 
 
 def test_include_globs_matches_name_only(populated: Path, context) -> None:
@@ -57,21 +57,17 @@ def test_include_globs_matches_name_only(populated: Path, context) -> None:
     )
     assert result.status == "success"
     names = {e["name"] for e in (result.data or {}).get("entries", [])}
-    assert names == {"top.py"}, (
-        f"only *.py should be shown by include_globs, got {names}"
-    )
+    assert names == {"top.py"}, f"only *.py should be shown by include_globs, got {names}"
 
 
 def test_include_globs_empty_means_no_filter(populated: Path, context) -> None:
     """include_globs 为空时不做名字过滤，展示全部（仍受 include_hidden 控制）。"""
-    result = ListDirectoryTool().execute(
-        path=".", execution_context=context, include_globs=[]
-    )
+    result = ListDirectoryTool().execute(path=".", execution_context=context, include_globs=[])
     assert result.status == "success"
     names = {e["name"] for e in (result.data or {}).get("entries", [])}
-    assert {"src", "top.py"}.issubset(names), (
-        f"empty include_globs should show all entries, got {names}"
-    )
+    assert {"src", "top.py"}.issubset(
+        names
+    ), f"empty include_globs should show all entries, got {names}"
 
 
 def test_symlink_to_dir_classified_as_link(populated: Path, context) -> None:
@@ -81,16 +77,14 @@ def test_symlink_to_dir_classified_as_link(populated: Path, context) -> None:
         os.symlink(populated / "src", link, target_is_directory=True)
     except (OSError, NotImplementedError, AttributeError):
         pytest.skip("symlink not supported on this platform")
-    result = ListDirectoryTool().execute(
-        path=".", execution_context=context, include_hidden=True
-    )
+    result = ListDirectoryTool().execute(path=".", execution_context=context, include_hidden=True)
     assert result.status == "success"
     entries = (result.data or {}).get("entries", [])
     link_entry = next((e for e in entries if e["name"] == "src_link"), None)
     assert link_entry is not None, "symlink entry should be listed"
-    assert link_entry["type"] == "link", (
-        f"symlink to dir should be 'link', got {link_entry['type']}"
-    )
+    assert (
+        link_entry["type"] == "link"
+    ), f"symlink to dir should be 'link', got {link_entry['type']}"
 
 
 def test_broken_symlink_does_not_crash(populated: Path, context) -> None:
@@ -100,12 +94,10 @@ def test_broken_symlink_does_not_crash(populated: Path, context) -> None:
         os.symlink(populated / "does_not_exist_xyz", broken)
     except (OSError, NotImplementedError, AttributeError):
         pytest.skip("symlink not supported on this platform")
-    result = ListDirectoryTool().execute(
-        path=".", execution_context=context, include_hidden=True
-    )
-    assert result.status == "success", (
-        f"listing should not crash on broken symlink: {result.error!r}"
-    )
+    result = ListDirectoryTool().execute(path=".", execution_context=context, include_hidden=True)
+    assert (
+        result.status == "success"
+    ), f"listing should not crash on broken symlink: {result.error!r}"
     entries = (result.data or {}).get("entries", [])
     broken_entry = next((e for e in entries if e["name"] == "broken_link"), None)
     assert broken_entry is not None, "broken symlink should still be listed"
@@ -120,9 +112,9 @@ def test_offset_out_of_range_is_explicit(populated: Path, context) -> None:
         path=".", execution_context=context, offset=10_000, limit=50
     )
     assert result.status == "success"
-    assert "no entries at offset=" in result.content, (
-        f"expected explicit out-of-range hint, got: {result.content!r}"
-    )
+    assert (
+        "no entries at offset=" in result.content
+    ), f"expected explicit out-of-range hint, got: {result.content!r}"
     assert "offset=10000" in result.content
 
 
@@ -162,10 +154,10 @@ def test_scandir_oserror_returns_structured_error(
         result = ListDirectoryTool().execute(path=".", execution_context=context)
     finally:
         monkeypatch.setattr(os, "scandir", original_scandir)
-    assert result.status == "error", (
-        f"scandir OSError should be normalized to tool_error, got {result.status!r}"
-    )
-    assert result.error and "vanished" in result.error, (
-        f"error should carry the underlying cause, got {result.error!r}"
-    )
+    assert (
+        result.status == "error"
+    ), f"scandir OSError should be normalized to tool_error, got {result.status!r}"
+    assert (
+        result.error and "vanished" in result.error
+    ), f"error should carry the underlying cause, got {result.error!r}"
     assert result.reason, "structured reason must guide the model how to recover"

@@ -64,11 +64,11 @@ class DelegateTaskTool(HandlerBase):
         self.description = description if description is not None else _DEFAULT_DESCRIPTION
 
     def execute(
-            self,
-            child_agent_id: str,
-            title: str,
-            prompt: str,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        child_agent_id: str,
+        title: str,
+        prompt: str,
+        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """通过执行上下文中的运行时执行器委派自由文本任务。
 
@@ -107,11 +107,14 @@ class DelegateTaskTool(HandlerBase):
                 reason="Configure a delegate_task runtime executor before delegating work.",
                 permission=self.permission,
             )
-        return executor.execute(DelegateTaskArgs(
-            child_agent_id=child_agent_id,
-            title=title,
-            prompt=prompt,
-        ), execution_context)
+        return executor.execute(
+            DelegateTaskArgs(
+                child_agent_id=child_agent_id,
+                title=title,
+                prompt=prompt,
+            ),
+            execution_context,
+        )
 
     def to_definition(self) -> ToolDefinition:
         """构建 delegate_task 工具的注册定义。

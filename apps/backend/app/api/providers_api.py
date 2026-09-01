@@ -11,16 +11,67 @@ from sqlalchemy.exc import IntegrityError
 from app.api.dependencies import get_provider_service
 from app.api.schemas.request.ProviderCreateRequest import ProviderCreateRequest
 from app.api.schemas.request.ProviderUpdateRequest import ProviderUpdateRequest
+from app.api.schemas.response.ProviderCapabilityResponse import ProviderCapabilityResponse
 from app.api.schemas.response.ProviderResponse import ProviderResponse
 from app.app import app
-from app.llm_provider.provider import ProviderService, ModelEntryService
+from app.llm_provider.capability.provider_capability import (
+    _SUPPORT_PROVIDERS,
+    ProviderCapability,
+)
+from app.llm_provider.provider import ProviderService
 from app.llm_provider.provider.connection_test_result import ConnectionTestResult
+
+
+@app.get("/providers/catalog", response_model=list[ProviderCapabilityResponse])
+async def list_provider_catalog() -> list[ProviderCapabilityResponse]:
+    """返回由 ``llm_provider.json`` 注册的可配置 Provider 目录。"""
+
+    return [
+        ProviderCapabilityResponse(
+            name=name,
+            provider_type=capability.provider_type,
+            default_base_url=capability.default_base_url,
+            requires_api_key=capability.requires_api_key,
+            models=list(capability.models),
+        )
+        for name in sorted(_SUPPORT_PROVIDERS)
+        for capability in [ProviderCapability.get_capability(name)]
+    ]
+
+
+@app.get("/providers", response_model=list[ProviderResponse])
+async def list_providers(
+    provider_service: ProviderService = Depends(get_provider_service),
+) -> list[ProviderResponse]:
+    """返回 Provider 配置列表（模型中心管理面板的数据源）。
+
+    参数:
+        provider_service: 通过依赖注入的厂商 service。
+
+    返回:
+        Provider 配置列表。响应只包含 API Key 是否已配置，不返回 Key 明文。
+
+    异常:
+        无。
+
+    副作用:
+        只读 Provider 配置。
+    """
+
+    providers = provider_service.list_providers()
+    return [
+        ProviderResponse.from_record(
+            provider,
+            api_key_configured=provider_service.api_key_configured(provider),
+        )
+        for provider in providers
+    ]
 
 
 @app.post("/providers")
 async def create_provider(
-        payload: ProviderCreateRequest,
-        provider_service: ProviderService = Depends(get_provider_service),
+    payload: ProviderCreateRequest,
+    provider_service: ProviderService = Depends(get_provider_service),
 ) -> ProviderResponse:
     """新建模型厂商。
 
@@ -48,6 +99,8 @@ async def create_provider(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except IntegrityError as exc:
+        if "providers.name" not in str(exc.orig):
+            raise HTTPException(status_code=500, detail="provider persistence failed") from exc
         raise HTTPException(
             status_code=409,
             detail=f"provider name conflict: {payload.name}",
@@ -60,9 +113,9 @@ async def create_provider(
 
 @app.put("/providers/{provider_id}")
 async def update_provider(
-        provider_id: int,
-        payload: ProviderUpdateRequest,
-        provider_service: ProviderService = Depends(get_provider_service),
+    provider_id: int,
+    payload: ProviderUpdateRequest,
+    provider_service: ProviderService = Depends(get_provider_service),
 ) -> ProviderResponse:
     """更新厂商字段（仅覆盖显式传入字段；启停即时生效）。
 
@@ -103,8 +156,8 @@ async def update_provider(
 
 @app.delete("/providers/{provider_id}")
 async def delete_provider(
-        provider_id: int,
-        provider_service: ProviderService = Depends(get_provider_service),
+    provider_id: int,
+    provider_service: ProviderService = Depends(get_provider_service),
 ) -> dict[str, object]:
     """删除厂商（其下模型条目由 FK CASCADE 级联删除）。
 
@@ -128,8 +181,7 @@ async def delete_provider(
 
 @app.post("/providers/{provider_id}/test")
 async def test_provider_connection(
-        provider_id: int,
-        provider_service: ProviderService = Depends(get_provider_service)
+    provider_id: int, provider_service: ProviderService = Depends(get_provider_service)
 ) -> dict[str, object]:
     """对厂商发起一次最小 chat 请求验证凭据 / 端点可用性（设计文档 §三 用户视角三件套）。
 
@@ -164,5 +216,7 @@ async def test_provider_connection(
     return {
         "provider_id": result.provider_id,
         "success": result.success,
-        "elapsed_ms": result.elapsed_ms
+        "elapsed_ms": result.elapsed_ms,
+        "error_code": result.error_code,
+        "error_message": result.error_message,
     }

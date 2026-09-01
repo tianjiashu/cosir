@@ -9,8 +9,7 @@ class ProviderResponse(BaseModel):
 
     参数:
         provider_id: 厂商标识。
-        name: 厂商显示名。
-        type: 厂商类型。
+        name: 厂商名称。
         base_url: 自定义接入地址（可空，空时 litellm 内置解析）。
         api_key_configured: Key 配置状态（不依赖 Key 的厂商类型恒 True，§8.4；
             其余以 ``providers.api_key`` 非空为准）。响应永不回传 Key 明文。
@@ -32,7 +31,6 @@ class ProviderResponse(BaseModel):
 
     provider_id: int
     name: str
-    type: str
     base_url: str | None = None
     api_key_configured: bool = True
     enabled: bool = True
@@ -66,10 +64,12 @@ class ProviderResponse(BaseModel):
             无。
         """
 
+        if record.id is None:
+            raise ValueError("ProviderRecord.id 不能为空")
+
         return cls(
-            provider_id=record.provider_id,
+            provider_id=record.id,
             name=record.name,
-            type=record.provider_type,
             base_url=record.base_url,
             api_key_configured=api_key_configured,
             enabled=record.enabled,

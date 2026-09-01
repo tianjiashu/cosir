@@ -10,8 +10,8 @@ from app.config.logging.logger import log
 class TurnCancellationRegistry:
     """Track cancellation requests for turns running in the current process.
 
-    本类只表达运行时控制信号，不是持久化事实来源。持久事实仍由 ``turns.status`` 和
-    ``runtime_events`` 表表达。
+    本类只表达运行时控制信号，不是持久化事实来源。持久事实由 ``turns.status`` 与
+    ``conversation_heads`` / ``conversation_changes`` 承载。
     """
 
     def __init__(self) -> None:

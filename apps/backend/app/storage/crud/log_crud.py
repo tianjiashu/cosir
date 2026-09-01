@@ -133,15 +133,14 @@ class LogCrud:
             start_time=query.start_time,
             end_time=query.end_time,
         )
-        statement = (
-            _apply_filters(
-                select(LogEntryModel.level, func.count()).select_from(LogEntryModel),
-                level_ignored,
-            ).group_by(LogEntryModel.level)
-        )
+        statement = _apply_filters(
+            select(LogEntryModel.level, func.count()).select_from(LogEntryModel),
+            level_ignored,
+        ).group_by(LogEntryModel.level)
         with self._session_factory() as session:
             rows = session.execute(statement).all()
         return {str(level): int(count) for level, count in rows}
+
 
 def _entry_values(entry: LogEntryRecord) -> dict[str, Any]:
     """把日志记录转换为与 ``log_entries`` 列名匹配的 INSERT 参数字典。
@@ -286,11 +285,7 @@ def _build_select(query: LogQuery) -> Select[tuple[LogEntryModel]]:
     statement = _apply_filters(select(LogEntryModel), query)
     order_column = asc(LogEntryModel.ts) if query.order == "asc" else desc(LogEntryModel.ts)
     id_order = asc(LogEntryModel.id) if query.order == "asc" else desc(LogEntryModel.id)
-    return (
-        statement.order_by(order_column, id_order)
-        .offset(query.offset)
-        .limit(query.limit)
-    )
+    return statement.order_by(order_column, id_order).offset(query.offset).limit(query.limit)
 
 
 def _build_count(query: LogQuery) -> Select[tuple[int]]:

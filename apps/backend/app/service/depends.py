@@ -14,26 +14,27 @@ from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 
 if TYPE_CHECKING:
     from app.llm_provider.provider import ModelEntryService, ProviderService
-    from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
-    from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
     from app.service.delegation.delegation_service import DelegationService
     from app.service.log_query_service import LogQueryService
+    from app.service.task.conversation_command_service import ConversationCommandService
+    from app.service.task.conversation_mutation_writer import ConversationMutationWriter
+    from app.service.task.conversation_run_service import ConversationRunService
+    from app.service.task.conversation_state_service import ConversationStateService
     from app.service.task.task_service import TaskService
     from app.service.task.turn_service import TurnService
-    from app.service.task.turn_stream_service import TurnStreamService
     from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
     from app.service.task.workspace_service import WorkspaceService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
     from app.storage.cascade_deletion import CascadeDeleter
+    from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.delegation_crud import DelegationCrud
     from app.storage.crud.log_crud import LogCrud
     from app.storage.crud.model_entry_crud import ModelEntryCrud
     from app.storage.crud.provider_crud import ProviderCrud
-    from app.storage.crud.runtime_event_crud import RuntimeEventCrud
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.turn_crud import TurnCrud
-    from app.storage.crud.turn_message_crud import TurnMessageCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
+    from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
 
 
 def initialize_service_dependencies() -> None:
@@ -146,47 +147,12 @@ def get_workspace_crud() -> WorkspaceCrud:
 
 
 @lru_cache(maxsize=1)
-def get_runtime_event_crud() -> RuntimeEventCrud:
-    """Return the process-local RuntimeEventCrud singleton.
+def get_workspace_readiness_crud() -> WorkspaceReadinessCrud:
+    """Return the process-local workspace readiness snapshot CRUD singleton."""
 
-    参数:
-        无。
+    from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
 
-    返回:
-        RuntimeEventCrud 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 RuntimeEventCrud。
-    """
-
-    from app.storage.crud.runtime_event_crud import RuntimeEventCrud
-
-    return RuntimeEventCrud()
-
-
-@lru_cache(maxsize=1)
-def get_turn_message_crud() -> TurnMessageCrud:
-    """Return the process-local TurnMessageCrud singleton.
-
-    参数:
-        无。
-
-    返回:
-        TurnMessageCrud 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 TurnMessageCrud。
-    """
-
-    from app.storage.crud.turn_message_crud import TurnMessageCrud
-
-    return TurnMessageCrud()
+    return WorkspaceReadinessCrud()
 
 
 @lru_cache(maxsize=1)
@@ -247,14 +213,13 @@ def get_delegation_service() -> DelegationService:
         RuntimeError: 如果 storage 尚未初始化。
 
     副作用:
-        首次调用时创建 DelegationService，并复用 delegation CRUD 与 runtime event service。
+        首次调用时创建 DelegationService，并复用 delegation CRUD。
     """
 
     from app.service.delegation.delegation_service import DelegationService
 
     return DelegationService(
         delegation_crud=get_delegation_crud(),
-        runtime_event_service=get_runtime_event_service(),
     )
 
 
@@ -278,50 +243,6 @@ def get_log_crud() -> LogCrud:
     from app.storage.crud.log_crud import LogCrud
 
     return LogCrud()
-
-
-@lru_cache(maxsize=1)
-def get_runtime_event_bus() -> RuntimeEventBus:
-    """Return the process-local runtime event bus singleton.
-
-    参数:
-        无。
-
-    返回:
-        RuntimeEventBus 单例。
-
-    异常:
-        无。
-
-    副作用:
-        首次调用时创建 RuntimeEventBus。
-    """
-
-    from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
-
-    return RuntimeEventBus()
-
-
-@lru_cache(maxsize=1)
-def get_runtime_event_service() -> RuntimeEventService:
-    """Return the process-local RuntimeEventService singleton.
-
-    参数:
-        无。
-
-    返回:
-        RuntimeEventService 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 RuntimeEventService。
-    """
-
-    from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
-
-    return RuntimeEventService()
 
 
 @lru_cache(maxsize=1)
@@ -369,30 +290,25 @@ def get_turn_service() -> TurnService:
 
 
 @lru_cache(maxsize=1)
-def get_turn_stream_service() -> TurnStreamService:
-    """Return the process-local TurnStreamService singleton.
+def get_conversation_state_service() -> ConversationStateService:
+    """Return the process-local ConversationStateService singleton.
 
     参数:
         无。
 
     返回:
-        TurnStreamService 单例（无状态编排器，事件总线 / 轮次 service /
-        运行时事件 service 三个稳定单例在构造时注入）。
+        ConversationStateService 单例（投影 turns / turn_messages 为中性对话视图）。
 
     异常:
-        RuntimeError: 如果 storage 尚未初始化（经由 turn service / runtime event service）。
+        RuntimeError: 如果 storage 尚未初始化。
 
     副作用:
-        首次调用时创建 TurnStreamService。
+        首次调用时创建 ConversationStateService（注入 turn service 与 turn message CRUD 单例）。
     """
 
-    from app.service.task.turn_stream_service import TurnStreamService
+    from app.service.task.conversation_state_service import ConversationStateService
 
-    return TurnStreamService(
-        event_bus=get_runtime_event_bus(),
-        turn_service=get_turn_service(),
-        runtime_event_service=get_runtime_event_service(),
-    )
+    return ConversationStateService()
 
 
 @lru_cache(maxsize=1)
@@ -481,6 +397,7 @@ def get_workspace_event_service() -> WorkspaceEventService | None:
     from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
     from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
+    from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
 
     try:
         client = get_kernel_supervisor().get_client()
@@ -490,6 +407,7 @@ def get_workspace_event_service() -> WorkspaceEventService | None:
     return WorkspaceEventService(
         lifecycle=CodeGraphLifecycleService(client),
         bus=get_workspace_event_bus(),
+        readiness_crud=WorkspaceReadinessCrud(),
     )
 
 
@@ -538,6 +456,64 @@ def get_provider_crud() -> ProviderCrud:
 
 
 @lru_cache(maxsize=1)
+def get_conversation_command_crud() -> ConversationCommandCrud:
+    """返回进程级 ConversationCommandCrud 单例。"""
+    from app.storage.crud.conversation_command_crud import ConversationCommandCrud
+
+    return ConversationCommandCrud()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_command_service() -> ConversationCommandService:
+    """返回进程级 ConversationCommandService 单例。"""
+    from app.service.task.conversation_command_service import ConversationCommandService
+
+    return ConversationCommandService()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_run_service() -> ConversationRunService:
+    """返回进程级 ConversationRunService 单例。"""
+    from app.service.task.conversation_run_service import ConversationRunService
+
+    return ConversationRunService()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_mutation_writer() -> ConversationMutationWriter:
+    """返回进程级 Conversation Facts 写入器单例。
+
+    参数:
+        无。
+
+    返回:
+        使用主库共享引擎的 ``ConversationMutationWriter``。
+
+    异常:
+        RuntimeError: 如果主库存储尚未初始化。
+
+    副作用:
+        首次调用时创建 Writer。
+    """
+
+    from app.service.task.conversation_mutation_writer import ConversationMutationWriter
+
+    return ConversationMutationWriter()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_run_executor():
+    """返回进程级后台运行执行器。"""
+    from app.service.task.conversation_run_executor import ConversationRunExecutor
+
+    return ConversationRunExecutor(
+        get_turn_service(),
+        get_conversation_mutation_writer(),
+        get_conversation_command_service(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_model_entry_crud() -> ModelEntryCrud:
     """返回进程级 ModelEntryCrud 单例。
 
@@ -576,7 +552,7 @@ def get_provider_service() -> ProviderService:
         首次调用时创建 ProviderService（注入 ProviderCrud 单例）。
     """
 
-
+    from app.llm_provider.provider import ProviderService
 
     return ProviderService()
 
@@ -598,10 +574,9 @@ def get_model_entry_service() -> ModelEntryService:
         首次调用时创建 ModelEntryService（注入 ModelEntryCrud 单例）。
     """
 
-
+    from app.llm_provider.provider import ModelEntryService
 
     return ModelEntryService()
-
 
 
 def reset_service_dependencies() -> None:
@@ -625,20 +600,20 @@ def reset_service_dependencies() -> None:
     get_workspace_service.cache_clear()
     get_turn_workspace_resolver.cache_clear()
     get_turn_service.cache_clear()
-    get_turn_stream_service.cache_clear()
     get_task_service.cache_clear()
-    get_runtime_event_service.cache_clear()
-    get_runtime_event_bus.cache_clear()
     get_log_crud.cache_clear()
     get_delegation_service.cache_clear()
-    get_turn_message_crud.cache_clear()
     get_delegation_crud.cache_clear()
     get_cascade_deleter.cache_clear()
-    get_runtime_event_crud.cache_clear()
     get_workspace_crud.cache_clear()
+    get_workspace_readiness_crud.cache_clear()
     get_turn_crud.cache_clear()
     get_task_crud.cache_clear()
     get_provider_crud.cache_clear()
     get_model_entry_crud.cache_clear()
+    get_conversation_command_crud.cache_clear()
+    get_conversation_command_service.cache_clear()
+    get_conversation_run_service.cache_clear()
+    get_conversation_mutation_writer.cache_clear()
     get_provider_service.cache_clear()
     get_model_entry_service.cache_clear()

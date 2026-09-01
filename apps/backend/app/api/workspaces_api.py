@@ -10,7 +10,7 @@
 workspace 状态事件端点的设计约束（见 design §4.5）：
 - 客户端必须先连 SSE 再触发 prepare，确保订阅先就绪、事件全部可达（bus 无缓冲/重放）。
 - ``_stream_workspace_events`` 独立成模块级函数，保证帧格式/终态 break/
-  finally 退订可被单元测试稳定驱动（对齐 ``turns_api._sse_frames`` 的「service 产出
+  finally 退订可被单元测试稳定驱动（采用「service 产出
   裸事件、api 层格式化帧」范式）。
 """
 
@@ -27,6 +27,7 @@ from app.api.dependencies import (
     get_task_service,
     get_workspace_event_bus,
     get_workspace_event_service,
+    get_workspace_readiness_crud,
     get_workspace_service,
 )
 from app.api.schemas import (
@@ -36,17 +37,20 @@ from app.api.schemas import (
     HealthResponse,
     TaskResponse,
     WorkspacePrepareResponse,
+    WorkspaceReadinessResponse,
     WorkspaceResponse,
 )
 from app.app import app
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
-from app.models.enums.event_type import EventType
+from app.models.enums.workspace_event_type import WorkspaceEventType
 from app.models.event.workspace_event import WorkspaceEvent
+from app.models.workspace_readiness import WorkspaceReadiness
 from app.service.task.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 from app.service.workspace_event.workspace_event_service import WorkspaceEventService
+from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
 
 
 @app.get("/health")
@@ -192,22 +196,24 @@ async def list_workspace_tasks(
 
 @app.post("/workspaces/{workspace_id}/tasks")
 async def create_workspace_task(
+    workspace_id: int,
     payload: CreateTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """在工作区下创建任务容器（不含首轮次）。
 
     任务创建与首轮次创建已解耦：本端点只创建 task 容器，首轮次由调用方（前端）显式
-    调 ``POST /tasks/{task_id}/turns`` 创建。这样 task 维度不再耦合 agent / 模型 /
-    附件等仅属于 turn 的字段，agent 由 turn 维度承载。
+    调 Assistant Transport 端点提交首条消息。这样 task 维度不再耦合 agent / 模型 /
+    附件等运行期字段。
 
     参数:
-        payload: 创建任务请求体，含任务文本与 workspace。
+        workspace_id: 来自路由的工作区标识，作为任务归属的唯一权威值。
+        payload: 创建任务请求体，含任务文本与 workspace_id 字段。
         task_service: 任务 service，用于创建任务容器。
 
     返回:
         新建任务记录（含 ``task_id``）。调用方随后创建首 turn 并连接
-        ``/turns/{turn_id}/stream`` 驱动执行。
+        ``/assistant`` 驱动执行，任务标识通过请求体的 ``taskId`` 传递。
 
     异常:
         HTTPException: workspace 不存在时为 404；输入非法时为 400。
@@ -219,19 +225,19 @@ async def create_workspace_task(
     try:
         task = task_service.create_task(
             input_text=payload.text,
-            workspace_id=payload.workspace_id,
+            workspace_id=workspace_id,
             status="pending",
         )
     except IntegrityError as exc:
         log.error(
             "create_workspace_task failed: workspace %s not found (foreign key violation)",
-            payload.workspace_id,
+            workspace_id,
         )
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     except ValueError as exc:
         log.warning(
             "create_workspace_task rejected: workspace=%s reason=%s",
-            payload.workspace_id,
+            workspace_id,
             exc,
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -318,7 +324,7 @@ async def prepare_workspace(
         # Kernel 不可用（设计明确要降级的正常场景）：主动发降级终态事件 + 返回 unavailable。
         event_bus.publish(
             WorkspaceEvent(
-                event_type=EventType.WORKSPACE_DEGRADED,
+                event_type=WorkspaceEventType.DEGRADED,
                 workspace_id=workspace_id,
                 workspace_path=ws.root_path,
                 payload={
@@ -357,7 +363,7 @@ async def prepare_workspace(
         )
         event_bus.publish(
             WorkspaceEvent(
-                event_type=EventType.WORKSPACE_DEGRADED,
+                event_type=WorkspaceEventType.DEGRADED,
                 workspace_id=workspace_id,
                 workspace_path=ws.root_path,
                 payload={
@@ -384,6 +390,33 @@ async def prepare_workspace(
         files_changed=readiness.files_changed,
         duration_ms=readiness.duration_ms,
         degraded_reason=readiness.degraded_reason,
+    )
+
+
+@app.get("/workspaces/{workspace_id}/readiness")
+async def get_workspace_readiness(
+    workspace_id: int,
+    workspace_service: WorkspaceService = Depends(get_workspace_service),
+    readiness_crud: WorkspaceReadinessCrud = Depends(get_workspace_readiness_crud),
+) -> WorkspaceReadinessResponse:
+    """读取工作区准备状态快照。
+
+    SSE 只负责唤醒客户端；刷新、断线或队列溢出后必须通过本端点从数据库重新水合。
+    """
+    try:
+        workspace_service.get_workspace(workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
+    readiness = readiness_crud.get(workspace_id) or WorkspaceReadiness.initial(workspace_id)
+    return WorkspaceReadinessResponse(
+        workspace_id=workspace_id,
+        status=readiness.status,
+        reason=readiness.reason,
+        action_taken=readiness.action_taken,
+        files_changed=readiness.files_changed,
+        duration_ms=readiness.duration_ms,
+        revision=readiness.revision,
+        updated_at=readiness.updated_at,
     )
 
 
@@ -415,7 +448,7 @@ async def _stream_workspace_events(
                 extra={"msg": "received workspace event", "data": event.to_dict()},
             )
             yield f"event: {event.event_type.value}\ndata: {json.dumps(event.to_dict())}\n\n"
-            if event.event_type in {EventType.WORKSPACE_READY, EventType.WORKSPACE_DEGRADED}:
+            if event.event_type in {WorkspaceEventType.READY, WorkspaceEventType.DEGRADED}:
                 break
     finally:
         event_bus.unsubscribe(subscription)

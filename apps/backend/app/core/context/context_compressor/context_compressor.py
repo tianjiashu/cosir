@@ -1,7 +1,4 @@
 from typing import Protocol
-from langchain_core.messages import (
-    BaseMessage,
-)
 
 from app.models import RuntimeMessage
 

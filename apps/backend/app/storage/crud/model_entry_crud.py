@@ -346,9 +346,7 @@ class ModelEntryCrud:
             values["sort_order"] = sort_order
         with self._session_factory.begin() as session:
             result = session.execute(
-                update(ModelEntryModel)
-                .where(ModelEntryModel.id == model_id)
-                .values(**values)
+                update(ModelEntryModel).where(ModelEntryModel.id == model_id).values(**values)
             )
         # 以 UPDATE 影响行数判定存在性，替代前置独立 session 的 self.get()，消除
         # 「校验存在」与「更新」分离导致的 TOCTOU 窗口；rowcount=0 即该行不存在。
@@ -374,6 +372,3 @@ class ModelEntryCrud:
 
         with self._session_factory.begin() as session:
             session.execute(delete(ModelEntryModel).where(ModelEntryModel.id == model_id))
-
-
-

@@ -19,6 +19,7 @@
 改由 ``ProviderCapability.requires_api_key`` 决定（注册表 §三 单一事实源）。
 新增厂商无需改本文件——只改注册表一行即可。
 """
+
 from time import perf_counter
 
 from app.config.logging.logger import log
@@ -114,11 +115,11 @@ class ProviderService:
         return bool(provider.api_key)
 
     def create_provider(
-            self,
-            name: str,
-            base_url: str | None = None,
-            api_key: str | None = None,
-            sort_order: int = 0,
+        self,
+        name: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        sort_order: int = 0,
     ) -> ProviderRecord:
         """新建模型厂商并写 ``provider_created`` 审计日志。
 
@@ -166,13 +167,13 @@ class ProviderService:
         return record
 
     def update_provider(
-            self,
-            provider_id: int,
-            *,
-            base_url: str | None = None,
-            api_key: str | None = None,
-            enabled: bool | None = None,
-            sort_order: int | None = None,
+        self,
+        provider_id: int,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        enabled: bool | None = None,
+        sort_order: int | None = None,
     ) -> ProviderRecord:
         """更新厂商字段并写 ``provider_updated`` 审计日志。
 
@@ -262,7 +263,6 @@ class ProviderService:
             },
         )
 
-
     async def test_connection(self, provider: ProviderRecord) -> ConnectionTestResult:
         """对厂商发起一次最小 chat 请求以验证凭据与端点可用性。
 
@@ -300,9 +300,7 @@ class ProviderService:
             log.exception(
                 "provider_connection_test_failed",
                 extra={
-                    "msg": (
-                        f"厂商连通性测试失败：provider={provider.name}"
-                    ),
+                    "msg": (f"厂商连通性测试失败：provider={provider.name}"),
                     "data": {
                         "provider_id": provider.id,
                         "elapsed_ms": elapsed_ms,
@@ -321,9 +319,7 @@ class ProviderService:
         log.info(
             "provider_connection_test_succeeded",
             extra={
-                "msg": (
-                    f"厂商连通性测试成功：provider={provider.name}"
-                ),
+                "msg": (f"厂商连通性测试成功：provider={provider.name}"),
                 "data": {
                     "provider_id": provider.id,
                     "elapsed_ms": elapsed_ms,
@@ -337,10 +333,10 @@ class ProviderService:
         )
 
     async def _acompletion_ping(
-            *,
-            model: str,
-            api_base: str | None,
-            api_key: str | None,
+        *,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
     ) -> None:
         """经 litellm 发起一次最小 chat 请求（连通性测试的内部封装）。
 

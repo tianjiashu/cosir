@@ -1,5 +1,4 @@
-"""所有 Hook 拦截的统一收口（``HookInterceptor`` 静态方法）。
-"""
+"""所有 Hook 拦截的统一收口（``HookInterceptor`` 静态方法）。"""
 
 from __future__ import annotations
 
@@ -8,7 +7,7 @@ import json
 
 from app.config.logging.logger import log
 from app.hook.hook_context import HookContext
-from app.hook.hook_event import HookDecision, HookEvent
+from app.hook.hook_event import HookDecision
 from app.hook.hook_registry import HookRegistry, get_hook_registry
 from app.hook.hook_result import HookResult
 
@@ -152,17 +151,25 @@ class HookInterceptor:
         try:
             return HookInterceptor._fire(context)
         except Exception:
-            log.exception(context.event.value, extra={"msg": "safe_fire_触发失败", "data": {"event": json.dumps(context, default=str,ensure_ascii=False)}})
+            log.exception(
+                context.event.value,
+                extra={
+                    "msg": "safe_fire_触发失败",
+                    "data": {"event": json.dumps(context, default=str, ensure_ascii=False)},
+                },
+            )
             return None
 
     @staticmethod
     async def async_safe_fire(context: HookContext) -> HookResult | None:
-
         try:
-            return await asyncio.to_thread(
-                HookInterceptor.safe_fire,
-                context
-            )
+            return await asyncio.to_thread(HookInterceptor.safe_fire, context)
         except Exception:
-            log.exception(context.event.value, extra={"msg": "async_safe_fire_触发失败", "data": {"event": json.dumps(context, default=str,ensure_ascii=False)}})
+            log.exception(
+                context.event.value,
+                extra={
+                    "msg": "async_safe_fire_触发失败",
+                    "data": {"event": json.dumps(context, default=str, ensure_ascii=False)},
+                },
+            )
             return None

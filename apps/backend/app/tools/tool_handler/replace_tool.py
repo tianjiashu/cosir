@@ -93,12 +93,12 @@ class ReplaceTool(HandlerBase):
         """
 
     def execute(
-            self,
-            execution_context: ToolExecutionContext,
-            path: str,
-            old_string: str,
-            new_string: str,
-            replace_all: bool = False,
+        self,
+        execution_context: ToolExecutionContext,
+        path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
     ) -> ToolObservation:
         """在单文件内做模糊查找替换，并统一收口成功/失败观察。
 

@@ -99,8 +99,6 @@ def _normalize_cosir_root(workspace_root: str | None) -> str | None:
     if not workspace_root:
         return None
     try:
-        return os.path.normcase(
-            os.path.realpath(os.path.join(workspace_root, _COSIR_DIR_NAME))
-        )
+        return os.path.normcase(os.path.realpath(os.path.join(workspace_root, _COSIR_DIR_NAME)))
     except OSError:
         return None

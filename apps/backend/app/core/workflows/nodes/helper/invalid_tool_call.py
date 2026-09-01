@@ -142,18 +142,13 @@ def build_invalid_tool_call_repair_message(
         raw_args = str(invalid_tc.get("args", ""))
         redacted_args = redact_terminal_output(raw_args)
         if len(redacted_args) > INVALID_TOOL_ARGS_PREVIEW_CHARS:
-            redacted_args = (
-                redacted_args[:INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
-            )
+            redacted_args = redacted_args[:INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
 
         error = invalid_tc.get("error")
         error_line = f"error: {error}\n" if error else ""
 
         section = (
-            f"## {tool_name}\n"
-            f"name: {tool_name}\n"
-            f"args: {redacted_args}\n"
-            f"{error_line}"
+            f"## {tool_name}\n" f"name: {tool_name}\n" f"args: {redacted_args}\n" f"{error_line}"
         )
 
         # 整体预算约束：加上本段与段间换行后若超预算则停止并加末尾说明。
@@ -232,10 +227,12 @@ def decide_invalid_tool_handling(
             available_tool_names,
         )
         if mentions_tool:
-            result[InvalidToolOutcome.REPAIR].append({
-                "tool_name": mentions_tool,
-                "invalid_tool_call": invalid_tool_call,
-            })
+            result[InvalidToolOutcome.REPAIR].append(
+                {
+                    "tool_name": mentions_tool,
+                    "invalid_tool_call": invalid_tool_call,
+                }
+            )
         else:
             result[InvalidToolOutcome.IGNORE].append(invalid_tool_call)
     return result

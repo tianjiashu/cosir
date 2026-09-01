@@ -15,6 +15,8 @@
 
 import asyncio
 import importlib
+import json
+import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,12 +24,16 @@ from fastapi import FastAPI
 
 from app.api.dependencies import (
     build_agent_registry,
+    get_conversation_run_executor,
+    get_runtime,
     set_agent_registry,
     set_runtime,
     set_tool_system,
 )
 from app.api.middleware.api_logging import install_http_exception_logging, install_request_logging
+from app.api.middleware.transport_error import install_transport_request_error_handler
 from app.bootstate import (
+    BOOT_PHASE_FAILED,
     BOOT_PHASE_READY,
     BOOT_PHASE_STOPPED,
     boot_state_file_from_env,
@@ -51,6 +57,17 @@ from app.tools.tool_system import ToolSystem
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """包装生命周期，使 yield 前的启动异常也能写入 bootstate。"""
+    try:
+        async with _lifespan_impl(_app):
+            yield
+    except Exception as exc:
+        _mark_boot_failed(exc)
+        raise
+
+
+@asynccontextmanager
+async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     """管理 FastAPI 应用生命周期并在关闭时释放运行时资源。
 
     参数:
@@ -100,6 +117,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     set_tool_system(tool_system)
     set_agent_registry(build_agent_registry())
     set_runtime(AgentRuntime())
+    # 进程重启后由持久化 run/lease 状态恢复未终结的执行；HTTP 订阅不拥有运行生命周期。
+    await get_conversation_run_executor().recover(lambda turn: get_runtime().run_turn(turn))
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
@@ -112,6 +131,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
         if _kernel_supervisor is not None:
             _kernel_supervisor.shutdown()
+        await get_conversation_run_executor().close()
         flush_langfuse()
         close_service_dependencies()
         # 模型 HTTP 连接由 litellm 内部管理，无需进程级显式释放。
@@ -122,6 +142,7 @@ app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
 install_request_logging(app, log)
 install_http_exception_logging(app, log)
+install_transport_request_error_handler(app)
 
 # 触发各域路由的模块级装饰器注册到真实 app 上。
 # 这些模块通过 ``from app.api.app import app`` 复用同一单例，因此必须在本模块
@@ -131,11 +152,11 @@ install_http_exception_logging(app, log)
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
-importlib.import_module("app.api.turns_api")
 importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")
+importlib.import_module("app.api.assistant_api")
 
 
 async def _start_codegraph_kernel() -> CodeGraphKernelSupervisor | None:
@@ -229,6 +250,27 @@ def _mark_boot_ready() -> None:
     boot_state_file = boot_state_file_from_env()
     if boot_state_file is not None:
         write_bootstate(boot_state_file, BOOT_PHASE_READY, step="app_ready")
+
+
+def _mark_boot_failed(exc: Exception) -> None:
+    """在应用生命周期进入 yield 前失败时写入结构化启动错误。"""
+    boot_state_file = boot_state_file_from_env()
+    if boot_state_file is None:
+        return
+    try:
+        current = json.loads(boot_state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        current = {}
+    if current.get("phase") != "booting":
+        return
+    write_bootstate(
+        boot_state_file,
+        BOOT_PHASE_FAILED,
+        step="lifespan",
+        error_type=type(exc).__name__,
+        error_message=str(exc),
+        traceback_text=traceback.format_exc(),
+    )
 
 
 def _mark_boot_stopped() -> None:

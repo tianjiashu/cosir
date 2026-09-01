@@ -6,7 +6,7 @@
 
 职责边界：
 - 负责：任务创建与生命周期管理（``TaskService``）、工作区编排（``WorkspaceService``）、
-  轮次流式执行编排（``TurnStreamService`` / ``TurnService``）、turn→workspace 路径解析
+  轮次状态与执行编排（``ConversationRunExecutor`` / ``TurnService``）、turn→workspace 路径解析
   （``TurnWorkspaceResolver``）、任务级变更集查询与保留/撤销（``change_set`` 子包）。
 - 不负责：直接数据库读写（委托给 ``app.storage.crud`` 与 ``app.storage.cascade_deletion``）；
   原子级联删除（归 ``CascadeDeleter``）。

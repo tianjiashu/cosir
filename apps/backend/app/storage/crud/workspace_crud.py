@@ -151,8 +151,4 @@ class WorkspaceCrud:
         """
 
         with self._session_factory.begin() as session:
-            session.execute(
-                delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id)
-            )
-
-
+            session.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))

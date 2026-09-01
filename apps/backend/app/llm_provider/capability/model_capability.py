@@ -140,12 +140,8 @@ class ModelCapability:
     supports_image: bool = False
     supports_video: bool = False
     need_reasoning_content: bool = False
-    reasoning_effort: ReasoningEffortCapability = field(
-        default_factory=ReasoningEffortCapability
-    )
-    image_limit: ImageLimitCapability = field(
-        default_factory=ImageLimitCapability
-    )
+    reasoning_effort: ReasoningEffortCapability = field(default_factory=ReasoningEffortCapability)
+    image_limit: ImageLimitCapability = field(default_factory=ImageLimitCapability)
 
     @staticmethod
     def get_capability(model_name: str) -> ModelCapability:
@@ -190,12 +186,8 @@ class ModelCapability:
             supported_formats=list(formats_raw) if isinstance(formats_raw, list) else [],
             external_url_max_chars=int(limit_raw.get("external_url_max_chars", 0)),
             request_body_max_bytes=int(limit_raw.get("request_body_max_bytes", 0)),
-            single_image_inline_max_bytes=int(
-                limit_raw.get("single_image_inline_max_bytes", 0)
-            ),
-            single_image_file_id_max_bytes=int(
-                limit_raw.get("single_image_file_id_max_bytes", 0)
-            ),
+            single_image_inline_max_bytes=int(limit_raw.get("single_image_inline_max_bytes", 0)),
+            single_image_file_id_max_bytes=int(limit_raw.get("single_image_file_id_max_bytes", 0)),
             max_images_per_request=int(limit_raw.get("max_images_per_request", 0)),
             request_total_max_bytes_inline_only=int(
                 limit_raw.get("request_total_max_bytes_inline_only", 0)
@@ -204,9 +196,7 @@ class ModelCapability:
                 limit_raw.get("request_total_max_bytes_with_file_id", 0)
             ),
             max_image_side_px=int(limit_raw.get("max_image_side_px", 0)),
-            max_image_side_px_when_many=int(
-                limit_raw.get("max_image_side_px_when_many", 0)
-            ),
+            max_image_side_px_when_many=int(limit_raw.get("max_image_side_px_when_many", 0)),
             many_image_threshold=int(limit_raw.get("many_image_threshold", 0)),
         )
         return ModelCapability(

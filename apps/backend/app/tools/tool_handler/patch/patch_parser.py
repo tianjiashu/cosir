@@ -71,9 +71,7 @@ def hunk_content(hunks: list[Hunk], prefix: str) -> str:
     副作用:
         无。
     """
-    return "\n".join(
-        line.content for hunk in hunks for line in hunk.lines if line.prefix == prefix
-    )
+    return "\n".join(line.content for hunk in hunks for line in hunk.lines if line.prefix == prefix)
 
 
 def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | None]:

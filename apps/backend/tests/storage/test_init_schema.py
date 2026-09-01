@@ -32,6 +32,7 @@ def test_initialize_app_schema_creates_provider_and_model_tables(
 
     assert "providers" in table_names
     assert "models" in table_names
+    assert "conversation_commands" in table_names
 
 
 def test_initialize_app_schema_is_idempotent(app_engine: Engine) -> None:
@@ -45,3 +46,19 @@ def test_initialize_app_schema_is_idempotent(app_engine: Engine) -> None:
 
     assert "providers" in table_names
     assert "models" in table_names
+    assert "conversation_commands" in table_names
+
+
+def test_initialize_app_schema_creates_command_idempotency_index(app_engine: Engine) -> None:
+    """命令表必须按 task_id + command_id 建立唯一幂等边界。"""
+
+    initialize_app_schema(app_engine)
+
+    with app_engine.connect() as connection:
+        indexes = inspect(connection).get_indexes("conversation_commands")
+
+    index = next(
+        item for item in indexes if item["name"] == "uq_conversation_commands_task_command"
+    )
+    assert index["unique"] == 1
+    assert index["column_names"] == ["task_id", "command_id"]

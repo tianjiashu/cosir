@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-from collections.abc import AsyncGenerator
 from typing import Literal
 
 from app.config.configuration import get_agent_registry, get_tool_system
@@ -22,21 +21,13 @@ from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import TaskRecord, TurnRecord, WorkspaceRecord
 from app.models.delegation_record import DelegationRecord
-from app.models.enums.event_type import EventType
-from app.models.event.runtime_event import RuntimeEvent
-from app.models.payload import (
-    FileChangeStablePayload,
-    RunCancelledPayload,
-    RunFailedPayload,
-    RunStartedPayload,
-)
 from app.service.depends import (
     get_delegation_service,
-    get_runtime_event_service,
     get_task_service,
     get_turn_service,
     get_workspace_service,
 )
+from app.service.task.conversation_mutation_writer import ConversationMutationWriter
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 from app.tools.schemas import ToolExecutionContext
@@ -53,9 +44,9 @@ class AgentRuntime:
     取消作用于 turn 并中止该 turn 的运行循环（模型节点检查 turn 取消状态后停止派发工具）。
 
     职责边界：
-    - 负责：任务执行编排、运行时事件（含持久化到 ``runtime_events`` 表以供回放）、取消。
-    - 不负责：checkpoint 回放与历史事件回看（历史对话由 ``GET /tasks/{task_id}/turns``
-      提供，细粒度事件 timeline 由 ``runtime_events`` 表 + 回放端点提供）、工作区 / 任务 /
+    - 负责：任务执行编排、取消，以及把执行异常交给 ConversationRunExecutor 收束。
+    - 不负责：checkpoint 回放与历史事件回看（由 Conversation service 提供，细粒度事件仅作
+      审计）、工作区 / 任务 /
       轮次的 CRUD 与查询（委托给对应 service 层）；不对外暴露 service 访问器，
       service 仅作为本引擎的私有协作者。
     """
@@ -91,7 +82,7 @@ class AgentRuntime:
         self._tool_scheduler = get_tool_system().scheduler
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
-        self._runtime_event_service = get_runtime_event_service()
+        self._conversation_writer = ConversationMutationWriter()
         self._task_execution_locks: dict[int, asyncio.Lock] = {}
         self._task_execution_locks_guard = threading.Lock()
 
@@ -132,7 +123,8 @@ class AgentRuntime:
             raise ValueError(f"cannot cancel turn in status {before_cancel.status}")
 
         cancellation_registry.mark_cancelled(turn_id)
-        turn = self._turn_service.cancel_turn_if_active(turn_id, "user_cancelled")
+        cancellation = self._conversation_writer.cancel_run(turn_id, "user_cancelled")
+        turn = self._turn_service.get_turn(turn_id) if cancellation is not None else None
         if turn is None:
             after_race = self._turn_service.get_turn(turn_id)
             if after_race.status == "cancelled":
@@ -177,9 +169,7 @@ class AgentRuntime:
         """
 
         try:
-            active_delegations = get_delegation_service().list_active_by_parent_turn(
-                parent_turn.id
-            )
+            active_delegations = get_delegation_service().list_active_by_parent_turn(parent_turn.id)
         except Exception:
             log.exception(
                 "delegation_child_cancel_scan_failed",
@@ -213,26 +203,17 @@ class AgentRuntime:
             无；单个 child 取消失败会记录日志并继续处理其他 child。
 
         副作用:
-            可能更新 child turn 状态、写入 child RUN_CANCELLED 事件、更新 delegation 状态。
+            可能更新 child turn 状态、更新 delegation 状态并记录取消事实。
         """
 
         reason = "parent_turn_cancelled"
         try:
             if delegation.child_turn_id:
                 cancellation_registry.mark_cancelled(delegation.child_turn_id)
-                child_turn = self._turn_service.cancel_turn_if_active(
+                ConversationMutationWriter().cancel_run(
                     delegation.child_turn_id,
-                    reason,
+                    end_reason=reason,
                 )
-                if child_turn is not None:
-                    self._save_and_publish_runtime_event(
-                        RuntimeEvent(
-                            event_type=EventType.RUN_CANCELLED,
-                            task_id=child_turn.task_id,
-                            payload=RunCancelledPayload(status="cancelled"),
-                            turn_id=child_turn.id,
-                        )
-                    )
             get_delegation_service().mark_cancelled(delegation.id, reason)
         except Exception:
             log.exception(
@@ -250,13 +231,11 @@ class AgentRuntime:
     async def run_turn(
         self,
         turn: TurnRecord | None = None,
-    ) -> AsyncGenerator[RuntimeEvent] | None:
-        """执行单个 pending 轮次并实时流式产出运行时事件。
+    ) -> None:
+        """执行单个 pending 轮次并提交 canonical conversation facts。
 
-        只负责「pending → 认领 → 执行 → 流式事件」。逐条事件在 ``yield`` 前经 ``emit``
-        持久化到 ``runtime_events`` 表（带本轮自增 sequence），供刷新 / 重连后通过回放端点
-        重建细粒度 timeline；历史对话列表由 ``GET /tasks/{task_id}/turns`` 提供。SSE 通过
-        断开兜底（finally 标记 failed）判定本轮是否中断。非 pending 轮次不应进入本方法，
+        只负责「pending → 认领 → 执行 → 事实收口」。Assistant Transport 通过
+        canonical conversation state 订阅执行进度。非 pending 轮次不应进入本方法，
         调用方（API 层）应先做 409 守卫；此处仅做防御性早退。
 
         参数:
@@ -298,7 +277,7 @@ class AgentRuntime:
                 lock_owned = False
                 return None
             execution_mode = "resume" if current_turn.status == "running" else "fresh"
-            return await self._claim_and_build_turn_generator(
+            await self._claim_and_run_turn(
                 current_turn,
                 task_lock,
                 execution_mode,
@@ -308,13 +287,13 @@ class AgentRuntime:
                 task_lock.release()
             raise
 
-    async def _claim_and_build_turn_generator(
+    async def _claim_and_run_turn(
         self,
         turn: TurnRecord,
         task_lock: asyncio.Lock,
         execution_mode: Literal["fresh", "resume"],
-    ) -> AsyncGenerator[RuntimeEvent] | None:
-        """在 task 锁内认领 turn，并返回负责释放锁的运行生成器。"""
+    ) -> None:
+        """在 task 锁内认领 turn，执行 Agent 并释放 task 锁。"""
         turn_id = turn.id
 
         # 解析本次执行的 agent profile：使用轮次创建时绑定的 agent_id
@@ -337,7 +316,7 @@ class AgentRuntime:
                 },
             )
             task_lock.release()
-            return None
+            return
 
         # 派生 per-run 副本承载本轮 turn：共享注册表单例不被原地写，并发 turn 互不串扰。
         try:
@@ -347,34 +326,24 @@ class AgentRuntime:
                 "turn_agent_profile_derivation_failed",
                 extra={"msg": "派生 turn agent profile 失败", "data": {"turn_id": turn_id}},
             )
-            self._turn_service.fail_turn_if_running(turn_id, end_reason=None)
+            self._conversation_writer.settle_run(turn_id, "failed", end_reason="runtime_failed")
             raise
-        run_generator = self.run_agent(agent_profile, execution_mode=execution_mode)
-
-        async def _run_with_task_lock() -> AsyncGenerator[RuntimeEvent, None]:
-            """执行 turn，并在生成器关闭或结束时释放 task 锁。"""
-            try:
-                async for event in run_generator:
-                    yield event
-            except Exception:
-                self._turn_service.fail_turn_if_running(turn_id, end_reason=None)
-                raise
-            finally:
-                try:
-                    await run_generator.aclose()
-                finally:
-                    if task_lock.locked():
-                        task_lock.release()
-
-        return _run_with_task_lock()
+        try:
+            await self.run_agent(agent_profile, execution_mode=execution_mode)
+        except Exception:
+            self._conversation_writer.settle_run(turn_id, "failed", end_reason="runtime_failed")
+            raise
+        finally:
+            if task_lock.locked():
+                task_lock.release()
 
     async def run_agent(
         self,
         agent: AgentProfile,
         *,
         execution_mode: Literal["fresh", "resume"] = "fresh",
-    ) -> AsyncGenerator[RuntimeEvent, None]:
-        """驱动一次 agent turn 执行并逐条透传运行时事件。
+    ) -> None:
+        """驱动一次 agent turn 执行并提交 canonical conversation facts。
 
         参数:
             agent: 当前 turn 的 Agent profile。**必须是 per-run 派生副本**（经
@@ -382,14 +351,11 @@ class AgentRuntime:
                 turn 执行期间可安全写入副本上的运行时字段（如 ``main_agent``），
                 不污染共享实例。
 
-        返回:
-            逐条产生的 ``RuntimeEvent`` 异步生成器。
-
         异常:
             RuntimeError: 当 ``agent.turn`` 为 None 时抛出。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT/STOP hook、落库并广播运行时事件、快照收口、
+            触发 USER_PROMPT_SUBMIT/STOP hook、落库并收口对话事实、快照收口、
             断连兜底终态；执行异常仅当 turn 仍处于 running 时条件落定 failed
             （``fail_turn_if_running``），不覆写已取消/已完成的既有终态；终态已落定
             时异常以降级 warning 留痕（含堆栈），不改变既有终态。
@@ -416,17 +382,6 @@ class AgentRuntime:
         # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
         # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorError），终态都只由本连接决定。
         try:
-            yield await self._emit(
-                RuntimeEvent(
-                    event_type=EventType.RUN_STARTED,
-                    task_id=task_id,
-                    payload=RunStartedPayload(status="running", agent_id=agent.agent_id),
-                    turn_id=turn_id,
-                    is_main_agent=agent.main_agent,
-                ),
-                agent,
-            )
-
             metadata = TraceMetadata(
                 task_id=task_id,
                 turn_id=turn_id,
@@ -440,13 +395,12 @@ class AgentRuntime:
             # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
 
             with turn_trace(metadata) as trace_result:
-                async for event in agent.workflow.run(
+                await agent.workflow.run(
                     operations,
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
                     execution_mode=execution_mode,
-                ):
-                    yield await self._emit(event, agent)
+                )
             try:
                 recorder.flush()
             except Exception:
@@ -457,7 +411,7 @@ class AgentRuntime:
                         "data": {"task_id": task_id, "turn_id": turn_id},
                     },
                 )
-            await self._publish_stable_file_changes(task_id, turn_id, agent.main_agent)
+            await self._publish_stable_file_changes(turn_id)
             # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
             # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
             await HookInterceptor.async_safe_fire(
@@ -465,165 +419,17 @@ class AgentRuntime:
             )
             return
         except Exception as exc:
-            # 真执行异常：仅当本轮仍处于 running 时才条件落定 failed（fail_turn_if_running），
-            # 避免用户取消（cancelled）等已落终态被异常冒泡覆写；end_reason 保持 None
-            # （语义化枚举码，不把自由文本异常塞进枚举字段）。客户端断开由 finally 的
-            # _mark_turn_disconnected_if_running 单独落 end_reason="client_disconnected"
-            # （turn 表），与本 payload 不冲突。
-            failed_turn = self._turn_service.fail_turn_if_running(turn_id, end_reason=None)
-            if failed_turn is None:
-                # 终态已被取消/完成等先行落定：不覆写历史终态，也跳过 RUN_FAILED 投影，
-                # 避免与已有终态事件（如 RUN_CANCELLED）重复矛盾；真实异常仍须留痕
-                # （warning 级，终态非 failed，不打 task_failed 语义）。
-                log.warning(
-                    "task_failed_after_terminal",
-                    extra={
-                        "msg": "turn terminal already settled; exception not overriding",
-                        "data": {
-                            "task_id": task_id,
-                            "turn_id": turn_id,
-                            "exception": str(exc),
-                        },
-                    },
-                    exc_info=True,
-                )
-                return
-            # 失败即终态：把本 turn 运行中（stable=0）的快照收口为稳定，
-            # 使运行后变更能展示与撤销。同步调用（此处非 await 上下文）。
-            self._mark_stable_file_changes(turn_id)
-
             log.exception(
                 "task_failed",
                 extra={
-                    "msg": "task execution failed",
-                    "data": {
-                        "task_id": task_id,
-                    },
+                    "msg": "task execution failed; executor owns terminal settlement",
+                    "data": {"task_id": task_id, "turn_id": turn_id, "error": str(exc)},
                 },
             )
-            yield await self._emit(
-                RuntimeEvent(
-                    event_type=EventType.RUN_FAILED,
-                    task_id=task_id,
-                    turn_id=turn_id,
-                    payload=RunFailedPayload(
-                        status="failed",
-                        error=str(exc),
-                        end_reason=None,
-                    ),
-                    is_main_agent=agent.main_agent,
-                ),
-                agent,
-            )
+            raise
         finally:
-            # 本连接持有的清理收口：仅当本轮仍卡在 running（客户端断开导致运行被中止、
-            # 或落终态前异常逃逸）时置 failed；正常完成 / 已失败 / 已取消均为幂等空操作。
-            self._mark_turn_disconnected_if_running(turn_id)
-
-    def _mark_turn_disconnected_if_running(self, turn_id: int) -> None:
-        """本连接持有的轮次若仍处于 ``running``，则落定为断开失败。
-
-        仅在本引擎成功认领（claim）本轮后进入的清理路径（``run_turn`` 的 finally）中调用：
-        正常完成 / 失败 / 取消时 turn 已落终态（非 ``running``），此处为幂等空操作；仅当
-        客户端断开导致运行被中止、或落终态前异常逃逸使 turn 卡在 ``running`` 时，才置为
-        ``failed``（``end_reason="client_disconnected"``），避免孤儿 ``running``。由于只有
-        持有认领的连接才会走到这里，不会误标他连接正在驱动的 ``running`` turn。
-
-        参数:
-            turn_id: 待检查并可能落终态的轮次标识。
-
-        返回:
-            无。
-
-        异常:
-            不向上抛出：轮次可能已被清理，内部窄异常保护，避免 teardown 抛异常掩盖主流程结果。
-
-        副作用:
-            可能把 turn 状态由 ``running`` 置为 ``failed`` 并写日志。
-        """
-
-        try:
-            failed_turn = self._turn_service.fail_turn_if_running(
-                turn_id, end_reason="client_disconnected"
-            )
-            if failed_turn is None:
-                return
-            log.info(
-                "turn_marked_disconnected",
-                extra={
-                    "msg": f"客户端断开，轮次已标记为 failed，turn_id={turn_id}",
-                    "data": {"turn_id": turn_id, "end_reason": "client_disconnected"},
-                },
-            )
-            # 客户端断开致 failed，同样收口快照为稳定，保证变更可见与可撤销。
-            self._mark_stable_file_changes(turn_id)
-        except Exception:
-            log.exception(
-                "turn_disconnect_mark_failed",
-                extra={
-                    "msg": f"客户端断开后标记轮次 failed 失败，turn_id={turn_id}",
-                    "data": {"turn_id": turn_id},
-                },
-            )
-
-    def _publish_runtime_event(
-        self,
-        event: RuntimeEvent,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
-    ) -> None:
-        """Publish a runtime event through the configured event service.
-
-        参数:
-            event: 待发布的运行时事件。
-            runtime_event_loop: 可选的所属事件循环。为 None 时在当前线程直接广播；
-                非 None 时经 ``call_soon_threadsafe`` 调度到该 loop 线程广播（用于
-                非 loop 线程落库后的跨线程发布）。缺省为 None。
-
-        返回:
-            无。
-
-        异常:
-            RuntimeError: 当 ``runtime_event_loop`` 已关闭时，``call_soon_threadsafe``
-                会抛出；发布失败由调用方决定是否兜底。
-
-        副作用:
-            向 RuntimeEventBus 订阅队列发布事件。
-        """
-
-        if runtime_event_loop is None:
-            self._runtime_event_service.publish_event(event)
-            return
-        runtime_event_loop.call_soon_threadsafe(
-            self._runtime_event_service.publish_event,
-            event,
-        )
-
-    def _save_and_publish_runtime_event(
-        self,
-        event: RuntimeEvent,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
-    ) -> RuntimeEvent:
-        """Persist and publish a runtime event.
-
-        参数:
-            event: 待保存并发布的运行时事件。
-            runtime_event_loop: 可选的所属事件循环，透传给 ``_publish_runtime_event``
-                决定广播方式（None 直发 / 非 None 跨线程调度）。缺省为 None。
-
-        返回:
-            已赋真实 sequence 的 RuntimeEvent。
-
-        异常:
-            RuntimeError: 当 runtime event 持久化失败，或广播阶段 ``runtime_event_loop``
-                已关闭时抛出。
-
-        副作用:
-            向 runtime_events 表写入事件，并广播给当前订阅者。
-        """
-
-        stamped = self._runtime_event_service.save_event(event)
-        self._publish_runtime_event(stamped, runtime_event_loop)
-        return stamped
+            # 终态由 ConversationRunExecutor 条件收口；此处只做资源清理。
+            pass
 
     def _mark_stable_file_changes(self, turn_id: int) -> None:
         """把某 turn 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。
@@ -655,58 +461,16 @@ class AgentRuntime:
                 },
             )
 
-    async def _publish_stable_file_changes(
-        self, task_id: int, turn_id: int, is_main_agent: bool
-    ) -> None:
-        """把本 turn 的文件快照标记为已稳定，并逐条广播 file_change_stable 事件。
-
-        turn 结束意味着其内所有工具调用已定稿，此时变更才对用户可见、可撤销。
-        事件仅广播（不持久化到 ``runtime_events`` 表）：它只是展示侧增量通知，
-        数据源在 ``file_snapshots`` 表，前端可靠 ``GET /tasks/{id}/changes`` 全量校准。
-
-        参数:
-            task_id: 所属任务标识。
-            turn_id: 刚结束的轮次标识。
-            is_main_agent: 是否主 Agent 轮次，透传到每条 file_change_stable 事件供
-                前端区分主/子 Agent 变更。
-
-        返回:
-            无。
-
-        异常:
-            无。变更集广播属展示侧增强，任何失败都不应让已成功的 turn 被判为失败，
-            故整体捕获并记 warning；前端仍可靠全量查询校准。
-
-        副作用:
-            把该 turn 的 file_snapshots 行置 stable=1；向事件总线广播若干事件。
-        """
+    async def _publish_stable_file_changes(self, turn_id: int) -> None:
+        """把本 turn 的文件快照收口为稳定事实。"""
         try:
             self._mark_stable_file_changes(turn_id)
-            crud = FileSnapshotCrud()
-            snapshots = crud.list_stable_by_task(task_id, [turn_id])
-            if not snapshots:
-                return
-            for snapshot in snapshots:
-                self._publish_runtime_event(
-                    RuntimeEvent(
-                        event_type=EventType.FILE_CHANGE_STABLE,
-                        task_id=task_id,
-                        payload=FileChangeStablePayload(
-                            task_id=task_id,
-                            turn_id=turn_id,
-                            path=snapshot.path,
-                            action=snapshot.action,
-                        ),
-                        is_main_agent=is_main_agent,
-                        turn_id=turn_id,
-                    )
-                )
         except Exception:
             log.warning(
-                "file_change_stable_publish_failed",
+                "file_change_stable_mark_failed",
                 extra={
-                    "msg": "变更集稳定标记或事件广播失败，不影响 turn 结果",
-                    "data": {"task_id": task_id, "turn_id": turn_id},
+                    "msg": "变更集稳定标记失败，不影响 turn 结果",
+                    "data": {"turn_id": turn_id},
                 },
             )
 
@@ -745,51 +509,6 @@ class AgentRuntime:
             )
             return None
         return ToolExecutionContext.from_workspace(task.id, workspace, turn_id=turn_id)
-
-    async def _emit(
-        self,
-        event: RuntimeEvent,
-        agent_profile: AgentProfile,
-    ) -> RuntimeEvent:
-        """落库并透传一条运行时事件（赋唯一递增 sequence）。
-
-        在 ``yield`` 前调用：经 ``RuntimeEventService`` 以独立线程写入 ``runtime_events`` 表
-        （避免阻塞 SSE 事件循环），并使用存储层分配的真实 turn-local sequence。
-        落库抛 ``RuntimeError`` 时由本方法记 error 日志并降级透传原事件，不中断流式运行。
-
-        参数:
-            event: 待落库并透传的运行时事件。
-            agent_profile: 当前 agent profile，其 ``runtime_event_loop`` 非空时经
-                ``call_soon_threadsafe`` 跨线程广播。
-
-        返回:
-            已赋序号、可直接 ``yield`` 的事件；落库失败时为原事件。
-
-        异常:
-            落库抛 ``RuntimeError`` 被本方法吞掉（记日志降级透传）；落库抛其他异常或
-            广播阶段 ``runtime_event_loop`` 已关闭时，异常向上冒泡。
-
-        副作用:
-            向 ``runtime_events`` 表插入一行（失败仅记日志）；向事件总线广播。
-        """
-
-        try:
-            stamped = await asyncio.to_thread(self._runtime_event_service.save_event, event)
-        except RuntimeError:
-            log.exception(
-                "runtime_event_emit_persist_failed",
-                extra={
-                    "msg": "运行时事件持久化失败，继续透传实时事件",
-                    "data": {
-                        "event_id": event.event_id,
-                        "event_type": event.event_type.value,
-                        "turn_id": event.turn_id,
-                    },
-                },
-            )
-            stamped = event
-        self._publish_runtime_event(stamped, agent_profile.runtime_event_loop)
-        return stamped
 
     def _build_operations(
         self,

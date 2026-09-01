@@ -3,7 +3,7 @@
 本模块承载「观察节点」的单一职责，作为「工具结果观察处理」的单一收口：在工具执行后，
 依次执行「执行后取消判断」「延后 REPAIR 修复提示（``deferred_repair_message``）注入」，
 再从 ``state.last_tool_results`` 重算连续工具失败计数，并根据 ``Settings.TOOL_ERROR_LIMIT``
-判断是否达到错误上限。达到上限时标记终态并发 ``RUN_FAILED`` 事件；否则把更新后的计数
+判断是否达到错误上限。达到上限时经 ``RuntimeOperations`` 标记终态；否则把更新后的计数
 写回 state，让 graph 回到 ``model`` 节点继续推理。
 
 设计动机（与阶段二演进对齐）：
@@ -24,10 +24,7 @@ from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     _runtime_context,
     emit_run_cancelled,
-    write_event,
 )
-from app.models.enums.event_type import EventType
-from app.models.payload import RunFailedPayload
 
 from ..react.state import ReactGraphState
 
@@ -37,7 +34,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     本节点是「工具结果观察处理」的单一收口，按固定时序处理：
 
-    1. **执行后取消判断**：工具批次执行后若 turn 已取消，发 ``RUN_CANCELLED`` 并置终态
+    1. **执行后取消判断**：工具批次执行后若 turn 已取消，落定 cancelled 并置终态
        （``terminal=True``），不进错误计数——工具已执行、结果已写回上下文，取消时不再
        多做一次推理；
     2. **延后 REPAIR 修复提示注入**：读取 ``state.deferred_repair_message``（``model`` 节点
@@ -47,7 +44,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
        摘要）重算 ``tool_error_count``：任意一次 ``status == "success"`` 即清零（连续失败才
        累计）；仅 ``status == "error"`` 累加计数。``status == "cancelled"`` 属主动中断
        （非工具失败，语义区别于 ``error``），不计入连续失败计数。达到 ``Settings.TOOL_ERROR_LIMIT``
-       时标记终态并发 ``RUN_FAILED``；否则把更新后的计数写回 state，让 graph 经条件边回到
+        时经 canonical writer 标记失败终态；否则把更新后的计数写回 state，让 graph 经条件边回到
        ``model`` 节点。
 
     参数:
@@ -64,19 +61,19 @@ async def _observe_node(state: ReactGraphState) -> dict:
         供 ``_after_observe`` 路由回 ``model``。
 
     副作用:
-        - 执行后取消分支经 ``write_event`` 发 ``RUN_CANCELLED``；
+        - 执行后取消分支经 ``RuntimeOperations`` 落定取消终态；
         - deferred 非空时经 ``_runtime_context().add_message(SystemMessage(...))``
           注入模型上下文（落库并进入内存，补全审计轨迹）；
-        - 错误上限分支经 ``write_event`` 发 ``RUN_FAILED``，并经 ``operations.fail_turn_if_running``
-          标记 turn 失败终态（``get_current_turn`` 仅在该分支内调用，避免无谓的 DB 读）；
-        - 阶段二将在此接入 LLM 观察推理并产 ``OBSERVATION_ADDED`` 类事件，不在此写消息通道。
+        - 错误上限分支经 ``operations.fail_turn_if_running`` 标记 turn 失败终态
+          （``get_current_turn`` 仅在该分支内调用，避免无谓的 DB 读）；
+        - 阶段二将在此接入 LLM 观察推理并写入明确的观察事实，不在此写消息通道。
     """
     rc = _runtime_config()  # 取运行时配置（含 operations / langfuse_trace_id）
     operations = rc.operations  # 领域操作
     results = state.last_tool_results  # tools 节点产出的结果摘要
 
     # 1. 执行后取消判断：工具已执行完毕（结果已写回上下文闭合配对），若 turn 取消则不再
-    # 多做一次推理，发 RUN_CANCELLED 并置终态，不进错误计数。此判断优先于空结果/错误计数，
+    # 多做一次推理并置取消终态，不进错误计数。此判断优先于空结果/错误计数，
     # 保证取消场景无论结果有无都走统一终态。
     if operations.is_current_turn_cancelled():
         log.info(
@@ -89,8 +86,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": f"step-{state.step_count}"},
             },
         )
-        # 取消终态：经文统一 emit_run_cancelled 构造（携带 langfuse_trace_id，
-        # 与 model/tools 一致），清空 deferred 避免残留，直接终态结束（不回 model）。
+        # 取消终态经 RuntimeOperations 条件落定，清空 deferred 避免残留，直接结束。
         emit_run_cancelled(rc, f"step-{state.step_count}")
         return {"terminal": True, "deferred_repair_message": ""}
 
@@ -100,16 +96,11 @@ async def _observe_node(state: ReactGraphState) -> dict:
     # 分支也需先清空）。
     deferred_repair_message = state.deferred_repair_message
     if deferred_repair_message:
-        _runtime_context().add_message(
-            SystemMessage(content=deferred_repair_message)
-        )
+        _runtime_context().add_message(SystemMessage(content=deferred_repair_message))
         log.warning(
             "observe_node_deferred_repair_message_appended",
             extra={
-                "msg": (
-                    "工具结果观察时已追加延迟修复提示，"
-                    f"step_id=step-{state.step_count}"
-                ),
+                "msg": ("工具结果观察时已追加延迟修复提示，" f"step_id=step-{state.step_count}"),
                 "data": {
                     "step_id": f"step-{state.step_count}",
                     "message_length": len(deferred_repair_message),
@@ -191,22 +182,10 @@ async def _observe_node(state: ReactGraphState) -> dict:
                     "tool_error_count": tool_error_count,
                     "limit": Settings.TOOL_ERROR_LIMIT,
                     "instructions": [
-                        r.get("instruction", "")
-                        for r in results
-                        if r.get("instruction")
+                        r.get("instruction", "") for r in results if r.get("instruction")
                     ],
                 },
             },
-        )
-        write_event(
-            EventType.RUN_FAILED,
-            RunFailedPayload(
-                step_id=f"step-{state.step_count}",
-                status="failed",
-                error="tool_error_limit_reached",
-                tool_name=results[0].get("tool_name", ""),
-                langfuse_trace_id=rc.langfuse_trace_id,
-            ),
         )
         # 失败终态：错误上限时已在上方注入并置空 deferred（若非空），这里也清空避免残留。
         return {

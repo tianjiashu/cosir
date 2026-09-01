@@ -16,6 +16,4 @@ from __future__ import annotations
 # 注意：DeepSeek 官方视觉文档不支持 bmp，但此处保留 .bmp 是为了把该类文件**路由到**
 # 运行期视觉通道（build_user_content_blocks 会做格式/体积校验并拒绝），而非静默当成
 # 普通文件拼进文本——属于"早fail"而非"错误归类"。
-IMAGE_EXTENSIONS: frozenset[str] = frozenset(
-    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
-)
+IMAGE_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})

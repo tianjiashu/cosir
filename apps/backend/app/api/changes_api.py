@@ -75,9 +75,7 @@ async def keep_changes(task_id: int, request: ChangeSetActionRequest) -> ChangeS
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ChangeSetResponse.from_change_set(
-        query_change_set(task_id, include_running=True)
-    )
+    return ChangeSetResponse.from_change_set(query_change_set(task_id, include_running=True))
 
 
 @app.post("/tasks/{task_id}/changes/revert", response_model=ChangeSetResponse)
@@ -109,6 +107,4 @@ async def revert_changes(task_id: int, request: ChangeSetActionRequest) -> Chang
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PatchApplyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ChangeSetResponse.from_change_set(
-        query_change_set(task_id, include_running=True)
-    )
+    return ChangeSetResponse.from_change_set(query_change_set(task_id, include_running=True))

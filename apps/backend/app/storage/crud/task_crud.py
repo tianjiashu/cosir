@@ -43,14 +43,14 @@ class TaskCrud:
         self._session_factory = main_session_factory()
 
     def create(
-            self,
-            workspace_id: int,
-            title: str,
-            status: str | None = None,
-            task_type: str = "user",
-            parent_task_id: int | None = None,
-            parent_turn_id: int | None = None,
-            delegation_id: int | None = None,
+        self,
+        workspace_id: int,
+        title: str,
+        status: str | None = None,
+        task_type: str = "user",
+        parent_task_id: int | None = None,
+        parent_turn_id: int | None = None,
+        delegation_id: int | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 

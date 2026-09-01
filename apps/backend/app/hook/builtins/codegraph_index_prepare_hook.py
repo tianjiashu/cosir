@@ -31,9 +31,9 @@ class CodeGraphIndexPrepareHook(HookBase):
     """
 
     def __init__(
-            self,
-            lifecycle_service: CodeGraphLifecycleService,
-            workspace_service: WorkspaceService,
+        self,
+        lifecycle_service: CodeGraphLifecycleService,
+        workspace_service: WorkspaceService,
     ) -> None:
         """构造索引保活 Hook。
 

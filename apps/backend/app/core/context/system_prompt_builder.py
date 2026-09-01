@@ -41,9 +41,7 @@ class SystemPromptBuilder:
         coding_rule_dir = _default_coding_rule_dir()
 
         sections = [
-            SystemPromptBuilder._agent_identity(
-                agent_profile, workspace_root, language
-            ),
+            SystemPromptBuilder._agent_identity(agent_profile, workspace_root, language),
             SystemPromptBuilder._engineering_principles(coding_rule_dir),
             SystemPromptBuilder._workflow_contract(),
             SystemPromptBuilder._tool_use_policy(agent_profile),
@@ -52,9 +50,9 @@ class SystemPromptBuilder:
 
     @staticmethod
     def _agent_identity(
-            agent_profile: AgentProfile,
-            workspace_root: str,
-            language: str,
+        agent_profile: AgentProfile,
+        workspace_root: str,
+        language: str,
     ) -> str:
         """构建 Agent 身份 section。
 

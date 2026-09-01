@@ -46,6 +46,7 @@ class ProviderCrud:
     def create(
         self,
         name: str,
+        provider_type: str = "api",
         base_url: str | None = None,
         api_key: str | None = None,
         sort_order: int = 0,
@@ -58,6 +59,7 @@ class ProviderCrud:
         参数:
             name: 厂商显示名（如 "DeepSeek "）；不能为空白，对应 ``providers.name``
                 唯一约束。
+            provider_type: Provider 能力注册表中的接入类型。
             base_url: 可选自定义接入地址；为空时交 litellm 按前缀内置解析，落库到
                 ``providers.base_url``。
             api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储）；
@@ -79,6 +81,7 @@ class ProviderCrud:
         """
         record = ProviderRecord(
             name=name,
+            provider_type=provider_type,
             base_url=self._normalize_optional(base_url),
             api_key=self._normalize_optional(api_key),
             sort_order=sort_order,
@@ -187,9 +190,7 @@ class ProviderCrud:
             values["sort_order"] = sort_order
         with self._session_factory.begin() as session:
             result = session.execute(
-                update(ProviderModel)
-                .where(ProviderModel.id == provider_id)
-                .values(**values)
+                update(ProviderModel).where(ProviderModel.id == provider_id).values(**values)
             )
         # 「校验存在」与「更新」分离导致的 TOCTOU 窗口；rowcount=0 即该行不存在。
         if not result.rowcount:
@@ -237,5 +238,3 @@ class ProviderCrud:
             return None
         normalized = value.strip()
         return normalized or None
-
-

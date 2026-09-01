@@ -150,7 +150,6 @@ class ToolRegistry:
         with self._lock:
             return sorted(self._tool_definitions.keys())
 
-
     def get_all_definitions(self) -> list[ToolDefinition]:
         """返回全部已注册工具定义。
 

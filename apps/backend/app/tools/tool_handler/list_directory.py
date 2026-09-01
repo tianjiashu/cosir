@@ -171,9 +171,7 @@ class ListDirectoryTool(HandlerBase):
         try:
             with os.scandir(resolved) as scan:
                 raw_entries = [
-                    entry
-                    for entry in scan
-                    if include_hidden or not entry.name.startswith(".")
+                    entry for entry in scan if include_hidden or not entry.name.startswith(".")
                 ]
                 if include_globs:
                     # os.scandir 只列直接子项，条目相对列举根的 rel 恒等于 entry.name，
@@ -184,12 +182,10 @@ class ListDirectoryTool(HandlerBase):
                         for entry in raw_entries
                         if any(fnmatch.fnmatch(entry.name, g) for g in include_globs)
                     ]
-                children = sorted(
-                    raw_entries, key=lambda e: (not e.is_dir(), e.name.lower())
-                )
+                children = sorted(raw_entries, key=lambda e: (not e.is_dir(), e.name.lower()))
         except OSError as exc:
             # exists()/is_dir() 检查与 scandir 之间存在 TOCTOU 窗口：目录可能在检查后被
-            #并发删除、移动或撤销权限，导致 scandir 抛 OSError/FileNotFoundError。
+            # 并发删除、移动或撤销权限，导致 scandir 抛 OSError/FileNotFoundError。
             # 必须归一化为结构化错误而非让异常逃逸到工具调度层，否则模型会收到未处理的
             # raw 异常且可能中断 turn 流式。
             return tool_error(
@@ -208,14 +204,8 @@ class ListDirectoryTool(HandlerBase):
         for entry in page:
             # 符号链接优先判为 "link"，否则指向目录的链接会被 is_dir() 误判为 file，
             # 误导模型对链接目录的理解。
-            entry_type = (
-                "link"
-                if entry.is_symlink()
-                else "dir" if entry.is_dir() else "file"
-            )
-            entry_path = self._normalize_posix_path(
-                (resolved / entry.name).as_posix()
-            )
+            entry_type = "link" if entry.is_symlink() else "dir" if entry.is_dir() else "file"
+            entry_path = self._normalize_posix_path((resolved / entry.name).as_posix())
             entries.append(f"{entry_type:4s}  {entry.name}  ({entry_path})")
             entry_dicts.append(
                 {

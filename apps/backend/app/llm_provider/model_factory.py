@@ -9,10 +9,9 @@ qwen / kimi 等国内厂商的 OpenAI 兼容端点契合度优于 litellm 多厂
 
 from typing import Any
 
-from pydantic import SecretStr
-import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -36,9 +35,9 @@ __all__ = [
 
 
 def _resolve_effort(
-        model_name: str,
-        requested_effort: str,
-        effort_cap: ReasoningEffortCapability,
+    model_name: str,
+    requested_effort: str,
+    effort_cap: ReasoningEffortCapability,
 ) -> str | None:
     """把内部推理强度档位翻译成厂商原始档位。
 
@@ -70,9 +69,9 @@ def _resolve_effort(
 
 
 def build_chat_model(
-        provider_id: int,
-        model_name: str,
-        model_settings: ModelSettings,
+    provider_id: int,
+    model_name: str,
+    model_settings: ModelSettings,
 ) -> BaseChatModel:
     """按模型名构建 ``ChatOpenAI`` 实例（OpenAI-compatible 单一收口）。
 
@@ -112,12 +111,10 @@ def build_chat_model(
     """
 
     provider = get_provider_service().get_provider(provider_id)
-    provider_capability:ProviderCapability = ProviderCapability.get_capability(provider.name)
+    provider_capability: ProviderCapability = ProviderCapability.get_capability(provider.name)
 
     if model_name not in provider_capability.models:
-        raise ValueError(
-            f"model_name: {model_name} not in provider_capability.models"
-        )
+        raise ValueError(f"model_name: {model_name} not in provider_capability.models")
     model_capability = ModelCapability.get_capability(model_name)
 
     api_key = provider.api_key
@@ -126,9 +123,9 @@ def build_chat_model(
     base_url = provider.base_url or provider_capability.default_base_url
 
     resolved_effort = CapabilityService.resolve_reasoning_effort(
-        model_name, model_settings.reasoning_effort,
+        model_name,
+        model_settings.reasoning_effort,
     )
-
 
     # 生成长度上限：max_tokens（顶层字段）与 max_completion_tokens（经 model_kwargs）同时设置，
     # 由厂商 disabled_params 屏蔽其一决定生效项（如 {"max_tokens": None} 仅用新名）。
@@ -145,11 +142,10 @@ def build_chat_model(
                 "model": model_name,
                 "base_url": base_url,
                 "api_key_provided": api_key is not None,
-                "provider_type": provider.name
+                "provider_type": provider.name,
             },
         },
     )
-
 
     return ChatOpenAI(
         model=model_name,
@@ -174,10 +170,10 @@ def build_chat_model(
 
 
 def resolve_chat_model(
-        *,
-        task: TaskRecord | None = None,
-        turn: TurnRecord | None = None,
-        agent_profile: AgentProfile | None = None,
+    *,
+    task: TaskRecord | None = None,
+    turn: TurnRecord | None = None,
+    agent_profile: AgentProfile | None = None,
 ) -> BaseChatModel:
     """解析任务/轮次/智能体配置，返回 ``ChatOpenAI`` 实例。
 

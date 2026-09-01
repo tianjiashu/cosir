@@ -26,26 +26,36 @@ from sqlalchemy import Connection, Engine, Table, inspect, text
 from sqlalchemy.sql.schema import DefaultClause
 
 from app.config.logging.logger import log
+from app.storage.model.conversation_change_model import ConversationChangeModel
+from app.storage.model.conversation_command_model import ConversationCommandModel
+from app.storage.model.conversation_head_model import ConversationHeadModel
+from app.storage.model.conversation_message_model import ConversationMessageModel
+from app.storage.model.conversation_message_part_model import ConversationMessagePartModel
+from app.storage.model.conversation_tool_call_model import ConversationToolCallModel
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.log_model import LogEntryModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
-from app.storage.model.runtime_event_model import RuntimeEventModel
 from app.storage.model.task_model import TaskModel
-from app.storage.model.turn_message_model import TurnMessageModel
 from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
+from app.storage.model.workspace_readiness_model import WorkspaceReadinessModel
 
 APP_MODELS = (
     # providers / models 是模型配置的事实来源，先于业务表创建；models 表外键依赖 providers。
     ProviderModel,
     ModelEntryModel,
     WorkspaceModel,
+    WorkspaceReadinessModel,
     TaskModel,
     TurnModel,
-    TurnMessageModel,
-    RuntimeEventModel,
+    ConversationCommandModel,
+    ConversationHeadModel,
+    ConversationChangeModel,
+    ConversationMessageModel,
+    ConversationMessagePartModel,
+    ConversationToolCallModel,
     FileSnapshotModel,
     DelegationModel,
 )
@@ -173,16 +183,11 @@ def _ensure_drop_legacy_columns(connection: Connection) -> None:
         for column_name in columns:
             if column_name not in existing:
                 continue
-            connection.execute(
-                text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
-            )
+            connection.execute(text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}"))
             log.info("dropped legacy column %s.%s", table_name, column_name)
 
 
-
-def _ensure_model_columns(
-    connection: Connection, engine: Engine, models=None
-) -> None:
+def _ensure_model_columns(connection: Connection, engine: Engine, models=None) -> None:
     """补齐已存在主库表中模型新增但库内尚缺的列。
 
     逐个遍历 ``models``（缺省 ``APP_MODELS``）：表不存在则跳过；存在则比对实际列与模型列，
@@ -267,9 +272,7 @@ def _ensure_model_indexes(connection) -> None:
         table = cast(Table, model.__table__)
         if not inspector.has_table(table.name):
             continue
-        existing_indexes = {
-            idx["name"] for idx in inspector.get_indexes(table.name)
-        }
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes(table.name)}
         for index in table.indexes:
             if index.name in existing_indexes:
                 continue

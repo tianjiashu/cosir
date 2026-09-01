@@ -130,9 +130,7 @@ def reverse_v4a_operation(forward: PatchOperation) -> PatchOperation:
         # 优先用 forward.content（build_forward_operations 已带入完整 before）；Hunk 仅作为
         # 兼容/回显冗余。content 缺失时回退到从 hunks 拼接（不保留尾换行，仅防御）。
         content = (
-            forward.content
-            if forward.content is not None
-            else hunk_content(forward.hunks, "+")
+            forward.content if forward.content is not None else hunk_content(forward.hunks, "+")
         )
         return PatchOperation(
             operation=OperationType.ADD,

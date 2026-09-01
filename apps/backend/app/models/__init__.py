@@ -4,6 +4,12 @@
 model，文件名与 model 相关。不承载服务、适配或 helper 逻辑。
 """
 
+from app.models.conversation_change_record import ConversationChangeRecord
+from app.models.conversation_command_record import ConversationCommandRecord
+from app.models.conversation_head_record import ConversationHeadRecord
+from app.models.conversation_message_part_record import ConversationMessagePartRecord
+from app.models.conversation_message_record import ConversationMessageRecord
+from app.models.conversation_tool_call_record import ConversationToolCallRecord
 from app.models.enums.turn_status import TurnStatus
 from app.models.log_entry_record import LogEntryRecord
 from app.models.log_query import LogQuery, LogSortOrder
@@ -17,6 +23,12 @@ from app.models.turn_record import TurnRecord
 from app.models.workspace_record import WorkspaceRecord
 
 __all__ = [
+    "ConversationChangeRecord",
+    "ConversationCommandRecord",
+    "ConversationHeadRecord",
+    "ConversationMessagePartRecord",
+    "ConversationMessageRecord",
+    "ConversationToolCallRecord",
     "LogEntryRecord",
     "LogQuery",
     "LogQueryResult",

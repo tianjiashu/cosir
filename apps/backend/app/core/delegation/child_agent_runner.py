@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import Awaitable, Callable
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
-from app.models.enums.event_type import EventType
-from app.models.event.runtime_event import RuntimeEvent
 from app.models.result.delegation_result import DelegationResult
+from app.service.depends import get_turn_service
+from app.service.task.conversation_state_service import ConversationStateService
 
 
 class ChildAgentRunner:
@@ -17,7 +17,7 @@ class ChildAgentRunner:
 
     def __init__(
         self,
-        run_agent: Callable[[AgentProfile], AsyncGenerator[RuntimeEvent, None]],
+        run_agent: Callable[[AgentProfile], Awaitable[None]],
         should_cancel: Callable[[str], bool] | None = None,
     ) -> None:
         """初始化 child agent 运行桥接器。
@@ -82,7 +82,7 @@ class ChildAgentRunner:
                 child_turn_id=turn_id,
                 error="delegation_runner_event_loop_thread",
             )
-        return asyncio.run(self._consume_child_events(child_profile, delegation_id))
+        return asyncio.run(self._run_child(child_profile, delegation_id))
 
     @staticmethod
     def _is_running_event_loop_thread() -> bool:
@@ -116,30 +116,28 @@ class ChildAgentRunner:
             return False
         return True
 
-    async def _consume_child_events(
+    async def _run_child(
         self,
         child_profile: AgentProfile,
         delegation_id: str = "",
     ) -> DelegationResult:
-        """消费 child runtime event 流并压缩为委派结果。
+        """运行 child Agent 并从持久化 turn 事实压缩为委派结果。
 
         参数:
             child_profile: 已绑定 child turn 且已收窄工具权限的 AgentProfile。
             delegation_id: 本次委派标识，透传给异常日志以提升并发重入排查能力。
 
         返回:
-            从 child RUN_* 终态事件压缩出的 DelegationResult。
+            从 child turn 终态事实压缩出的 DelegationResult。
 
         异常:
             无。run_agent 或事件消费异常会被转换为 failed DelegationResult。
 
         副作用:
-            迭代执行现有 AgentRuntime.run_agent 异步生成器。
+            执行 AgentRuntime.run_agent；不消费运行时事件。
         """
 
         turn_id = child_profile.turn.turn_id if child_profile.turn is not None else ""
-        latest_final_text = ""
-        terminal_result: DelegationResult | None = None
         try:
             if self._should_cancel(turn_id):
                 return DelegationResult(
@@ -147,53 +145,7 @@ class ChildAgentRunner:
                     child_turn_id=turn_id,
                     error="child turn cancelled",
                 )
-            async for event in self._run_agent(child_profile):
-                if self._should_cancel(turn_id):
-                    return DelegationResult(
-                        status="cancelled",
-                        child_turn_id=turn_id,
-                        error="child turn cancelled",
-                    )
-                if event.event_type == EventType.FINAL_RESPONSE:
-                    latest_final_text = str(getattr(event.payload, "text", "") or "")
-                    continue
-                if event.event_type == EventType.RUN_FINISHED:
-                    terminal_result = DelegationResult(
-                        status="completed",
-                        child_turn_id=turn_id,
-                        summary=latest_final_text or "child turn completed",
-                    )
-                    continue
-                if event.event_type == EventType.RUN_FAILED:
-                    # end_reason 为语义化枚举码时（如 max_steps_reached），把它转成父
-                    # Agent 可读的中文说明，避免父 Agent 只拿到 "max_steps_reached" 枚举码
-                    # 而无法感知 child 因步数耗尽而停止（对齐 StatusBadge 的前端文案）。
-                    end_reason = str(getattr(event.payload, "end_reason", None) or "")
-                    if end_reason == "max_steps_reached":
-                        error = (
-                            "子 Agent 已达到最大步骤数，未产出最终回答，"
-                            "请精简任务范围或拆分重试。"
-                        )
-                    else:
-                        error = str(
-                            getattr(event.payload, "error", None)
-                            or getattr(event.payload, "message", None)
-                            or "child turn failed"
-                        )
-                    terminal_result = DelegationResult(
-                        status="failed",
-                        child_turn_id=turn_id,
-                        error=error,
-                    )
-                    continue
-                if event.event_type == EventType.RUN_CANCELLED:
-                    error = str(getattr(event.payload, "error", None) or "child turn cancelled")
-                    terminal_result = DelegationResult(
-                        status="cancelled",
-                        child_turn_id=turn_id,
-                        error=error,
-                    )
-                    continue
+            await self._run_agent(child_profile)
         except Exception as exc:
             log.exception(
                 "delegation_child_run_failed",
@@ -217,10 +169,31 @@ class ChildAgentRunner:
                 child_turn_id=turn_id,
                 error="child turn cancelled",
             )
-        if terminal_result is not None:
-            return terminal_result
+        child_turn = get_turn_service().get_turn(int(turn_id))
+        if child_turn.status == "completed":
+            state = ConversationStateService().build_run_state(child_turn.task_id, child_turn.id)
+            summary = "child turn completed"
+            for message in state["messages"]:
+                if message["role"] == "assistant":
+                    summary = (
+                        "".join(
+                            str(part.get("text", ""))
+                            for part in message["parts"]
+                            if part.get("type") == "text"
+                        )
+                        or summary
+                    )
+            return DelegationResult(
+                status="completed",
+                child_turn_id=turn_id,
+                summary=summary,
+            )
+        if child_turn.status == "cancelled":
+            return DelegationResult(
+                status="cancelled", child_turn_id=turn_id, error="child turn cancelled"
+            )
         return DelegationResult(
             status="failed",
             child_turn_id=turn_id,
-            error="child turn ended without terminal event",
+            error=child_turn.end_reason or "child turn failed",
         )

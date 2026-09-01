@@ -1,19 +1,19 @@
 """Workspace 状态事件值对象（workspace 级，不带 task/turn 信封）。
 
 单一职责：承载 workspace 级状态事件（如创建时的准备进度 preparing/ready/degraded，
-后续可扩展其他 workspace 状态事件）。与 ``RuntimeEvent`` 不同，本事件**无 task_id /
-turn_id**（创建 workspace 时既无 task 也无 turn），自带 ``workspace_id`` 与
+后续可扩展其他 workspace 状态事件）。本事件**无 task_id / turn_id**
+（创建 workspace 时既无 task 也无 turn），自带 ``workspace_id`` 与
 ``workspace_path``，经独立的 ``WorkspaceEventBus`` 分发，供 workspace 级 SSE 端点
 推送给前端状态展示。
 
-属 ``models`` 层 leaf：仅依赖 ``EventType`` 枚举与标准库，零 ``app.*`` 编排依赖。
+属 ``models`` 层 leaf：仅依赖 ``WorkspaceEventType`` 枚举与标准库，零编排依赖。
 """
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.models.enums.event_type import EventType
+from app.models.enums.workspace_event_type import WorkspaceEventType
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class WorkspaceEvent:
         无。
     """
 
-    event_type: EventType
+    event_type: WorkspaceEventType
     workspace_id: int
     workspace_path: str
     payload: dict[str, object]
@@ -63,9 +63,9 @@ class WorkspaceEvent:
         """
 
         allowed = {
-            EventType.WORKSPACE_PREPARING,
-            EventType.WORKSPACE_READY,
-            EventType.WORKSPACE_DEGRADED,
+            WorkspaceEventType.PREPARING,
+            WorkspaceEventType.READY,
+            WorkspaceEventType.DEGRADED,
         }
         if self.event_type not in allowed:
             raise ValueError(f"event_type must be a workspace event type: {self.event_type}")

@@ -1,10 +1,8 @@
 """运行时与工作流策略共享的工作流协议。"""
 
-from collections.abc import AsyncIterator
 from typing import ClassVar, Literal, Protocol
 
 from app.core.runtime.runtime_operations import RuntimeOperations
-from app.models.event.runtime_event import RuntimeEvent
 
 
 class AgentWorkflow(Protocol):
@@ -21,7 +19,7 @@ class AgentWorkflow(Protocol):
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
         execution_mode: Literal["fresh", "resume"] = "fresh",
-    ) -> AsyncIterator[RuntimeEvent]:
+    ) -> None:
         """通过一个工作流策略运行一个任务。
 
         参数:
@@ -34,13 +32,14 @@ class AgentWorkflow(Protocol):
                 恢复使用 ``resume``。
 
         生成:
-            工作流运行期间产生的运行时事件。
+            无。工作流只驱动领域事实写入；Transport 通过 canonical conversation state
+            订阅事实变更。
 
         异常:
             Exception: 工作流失败可能传播到运行时包装器。
 
         副作用:
-            使用 ``operations`` 更新状态、调用模型、执行工具，并记录运行时事件。
+            使用 ``operations`` 更新状态、调用模型、执行工具，并记录对话事实。
         """
 
         ...

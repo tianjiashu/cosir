@@ -3,7 +3,7 @@
 本模块只定义 ``turns`` 单表的列结构与 StorageBase 继承关系，不含查询逻辑。
 """
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.enums.turn_status import TurnStatus
@@ -30,6 +30,12 @@ class TurnModel(StorageBase):
     - ``image_paths``：本轮涉及的图片路径集合（仅图片，供多模态通道使用），
         文件/目录/链接已固化进 ``input_text``，可选。
     - ``reasoning_effort``：推理强度（``low`` / ``high`` / ``max``），可选。
+    - ``fencing_version``：执行租约的 fencing 版本，每次成功认领 lease 时递增；
+      过期 executor 携带旧版本写入事实时会被 ``ConversationMutationWriter`` 拒绝。
+    - ``executor_lease_owner`` / ``executor_lease_expires_at``：当前有效执行者的租约
+      持有者与过期时间；为空表示无人持有租约。
+    - ``workflow_version``：本次运行所绑定工作流图的版本标识，用于判定暂停 checkpoint
+      能否被当前图安全恢复。
     """
 
     __tablename__ = "turns"
@@ -61,9 +67,17 @@ class TurnModel(StorageBase):
     provider_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("providers.id"), nullable=True
     )
-    model_name: Mapped[str | None] = mapped_column(
-        String, nullable=True
-    )
+    model_name: Mapped[str | None] = mapped_column(String, nullable=True)
     image_paths: Mapped[list[str] | None] = mapped_column(Text)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)  # low/high/max
-    extra: Mapped[str | None] = mapped_column(JSON, nullable=False,doc="额外信息存储")
+    extra: Mapped[str | None] = mapped_column(JSON, nullable=False, doc="额外信息存储")
+    # ConversationMutationWriter 的过渡运行身份校验。未来迁移为 ConversationRun 后，
+    # 该字段应随运行 lease/fencing 事实迁移。
+    fencing_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    executor_lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    executor_lease_expires_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workflow_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="react_like_v1", server_default=text("'react_like_v1'")
+    )

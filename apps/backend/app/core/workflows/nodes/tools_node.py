@@ -4,7 +4,8 @@
 审批编排（按 ``RuntimeConfig.approval_resolver`` 决定是否 ``interrupt()`` 暂停等待人工
 审批）已抽离到独立模块 ``approval``（``resolve_approved_calls``），本节点负责审批恢复后
 的取消检查、工具执行与占位闭合配对。工具执行通过 ``RuntimeOperations`` 完成，工具生命
-周期事件经 ``write_event`` 回调写入自定义事件流；观察消息由 bridge 转为 ``BaseMessage``
+周期事实经明确的开始/完成回调写入 canonical conversation state；观察消息由 bridge 转为
+``BaseMessage``
 经 ``_persist_tool_observations`` 写回 ``RuntimeContextManager``（**不进 graph state**，
 模型上下文由 RuntimeContextManager 独占）。状态写入 **turn**。
 
@@ -27,7 +28,6 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.workflows.nodes.helper.approval import resolve_approved_calls
 from app.core.workflows.nodes.helper.common import (
-    _make_write_event,
     _runtime_config,
     _runtime_context,
     emit_run_cancelled,
@@ -41,7 +41,7 @@ from ..react.state import ReactGraphState
 
 
 def _persist_tool_observations(
-        obs_messages: list[RuntimeMessage],
+    obs_messages: list[RuntimeMessage],
 ) -> None:
     """将一批工具观察消息经 ``RuntimeContextManager`` 落库并同步写回运行时上下文。
 
@@ -101,8 +101,8 @@ def _persist_tool_observations(
 
 
 def _build_tool_result_summaries(
-        observations: list[ToolObservation],
-        instructions: dict[str, str] | None = None,
+    observations: list[ToolObservation],
+    instructions: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """把一批工具观察结果压缩为可序列化摘要，供 ``observe`` 节点判定与后续 LLM 观察使用。
 
@@ -145,6 +145,95 @@ def _build_tool_result_summaries(
     return summaries
 
 
+def _make_tool_lifecycle_callbacks(
+    operations: Any,
+    task_id: int,
+    turn: Any,
+) -> dict[str, Any]:
+    """构造工具生命周期事实回调，不建立通用运行时事件适配层。
+
+    参数:
+        operations: 当前运行时操作门面。
+        task_id: 当前任务标识。
+        turn: 当前运行轮次，提供 turn id 与 fencing version。
+
+    返回:
+        包含 ``on_tool_call_started`` 与 ``on_tool_call_finished`` 的回调容器。
+
+    异常:
+        RuntimeError: RuntimeOperations 与当前 canonical writer 都没有提供工具事实写入
+            能力时抛出。
+        Exception: canonical writer 的持久化异常原样向上传播。
+
+    副作用:
+        回调执行时创建或完成一条 canonical 工具调用事实。
+    """
+    started = getattr(operations, "on_tool_call_started", None)
+    finished = getattr(operations, "on_tool_call_finished", None)
+    if callable(started) and callable(finished):
+        return {
+            "on_tool_call_started": started,
+            "on_tool_call_finished": finished,
+        }
+
+    # 当前 RuntimeOperations 尚未公开两个生命周期方法；在其完成迁移前，直接使用
+    # 它持有的 ConversationMutationWriter。这里不捕获 writer 异常，保证写入失败
+    # 终止工具批次，而不是产生没有 canonical 事实的成功执行。
+    writer = getattr(operations, "conversation_writer", None) or getattr(
+        operations, "_conversation_writer", None
+    )
+    if writer is None:
+        raise RuntimeError(
+            "RuntimeOperations must expose tool lifecycle callbacks or a canonical writer"
+        )
+
+    turn_id = turn.id
+    fencing_version = getattr(turn, "fencing_version", None)
+
+    def _on_started(step_id: str, call: ToolCall) -> None:
+        """持久化工具调用开始事实。"""
+        del step_id
+        call_id = call.call_id or call.tool_name
+        writer.create_tool_call(
+            task_id,
+            call_id,
+            call.tool_name,
+            call.arguments,
+            turn_id=turn_id,
+            fencing_version=fencing_version,
+        )
+        writer.transition_tool_call(
+            task_id,
+            call_id,
+            "running",
+            turn_id=turn_id,
+            fencing_version=fencing_version,
+        )
+
+    def _on_finished(step_id: str, observation: ToolObservation) -> None:
+        """持久化工具调用完成事实。"""
+        del step_id
+        status = (
+            "completed"
+            if observation.status == "success"
+            else ("cancelled" if observation.status == "cancelled" else "failed")
+        )
+        writer.complete_tool_call_by_external_id(
+            task_id,
+            observation.tool_call_id,
+            observation.data or {},
+            status=status,
+            error_text=observation.error or observation.reason or None,
+            turn_id=turn_id,
+            fencing_version=fencing_version,
+        )
+
+    return {
+        "on_tool_call_started": _on_started,
+        "on_tool_call_finished": _on_finished,
+    }
+
+
 async def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：审批 + 执行 + 配对闭合，产出工具结果摘要供 observe 观察。
 
@@ -158,18 +247,16 @@ async def _tools_node(state: ReactGraphState) -> dict:
       这样 graph 不会暂停，编排层循环可正常走到终态，避免「无审批器时反复
       interrupt→resume 同一工具调用」的死循环。
 
-    工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事件经 ``write_event`` 回调写入
-    自定义事件流；观察消息由 bridge 转为 ``BaseMessage`` 经 ``_persist_tool_observations``
+    工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事实经明确的开始/完成回调写入
+    canonical state；观察消息由 bridge 转为 ``BaseMessage`` 经 ``_persist_tool_observations``
     写回 ``RuntimeContextManager``（**不进 graph state**，模型上下文由
     RuntimeContextManager 独占）。
     状态写入 **turn**。
 
     本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
     ``execute_terminal`` 会同步阻塞至命令结束（最长 ``max_command_timeout``），
-    若在事件循环线程内直跑，会连带卡死 SSE 推送与全部并发请求，运行期增量
-    也就无从实时到达客户端。工作线程内的事件写入使用**闭包捕获的 writer**
-    （见 ``_make_write_event``），因为 ``get_stream_writer()`` 依赖 LangGraph 的
-    运行上下文，需在协程内先取出再带入线程。
+    若在事件循环线程内直跑，会连带卡死 SSE 推送与全部并发请求。生命周期回调在协程内
+    构造后闭包捕获，并随工具执行传入工作线程，不依赖 LangGraph stream writer。
 
     参数:
         state: 当前 graph state，含待执行工具调用。
@@ -191,7 +278,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
           ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面为上一轮
           ``tool_calls`` 补同构占位并写回（占位字段与序列化逻辑 100% 同源 service，
           不平行复制），消除 core 对 service 受保护成员的越界访问；
-        - 工具生命周期事件经 ``write_event`` 透传；状态写入 **turn**。
+        - 工具生命周期事实经明确回调写入 canonical state；状态写入 **turn**。
     """
 
     rc = _runtime_config()  # 取运行时配置
@@ -202,15 +289,25 @@ async def _tools_node(state: ReactGraphState) -> dict:
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
-    # 在 LangGraph 运行上下文内取出 writer 并闭包捕获：取消分支与工作线程均复用，
-    # 避免取消分支晚于 writer 定义而取不到运行上下文。
-    node_write_event = _make_write_event()
+    calls_for_fact = [ToolCall.from_dict(call) for call in tool_calls]
+    operations.ensure_tool_calls_pending(calls_for_fact)
+    if getattr(rc, "approval_resolver", None) is not None:
+        operations.request_tool_approval(calls_for_fact, step_id)
+        operations.mark_tool_calls_requires_action(calls_for_fact)
 
     # 审批编排（独立模块）：无审批器自动放行，有审批器 interrupt 暂停 + resume。
     # 注：interrupt 是「挂起续跑」而非「失败重放」——resume 后从此调用点原地继续，
     # 本函数体不会从头重跑，故下方 run_tool_calls / _persist_tool_observations 仅执行一次，
     # 不会因 checkpoint 重放而重复落库（model_node 也无 interrupt，不会被 resume 触发重跑）。
     approved_dicts = resolve_approved_calls(rc, tool_calls, step_id, interrupt)
+    approved_ids = {
+        str(item.get("call_id")) for item in approved_dicts if item.get("call_id")
+    }
+    denied_calls = [
+        call for call in calls_for_fact if (call.call_id or call.tool_name) not in approved_ids
+    ]
+    if denied_calls:
+        operations.cancel_tool_calls(denied_calls)
 
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
@@ -221,7 +318,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # 触发 OpenAI 协议校验失败。为保持与 service 内部协议字段完全同构、避免平行复制语义漂移，
     # 经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面复用 service 的取消占位
     # 实现（而非自拼 JSON、不手调 ``tool_cancelled`` 工厂），仅作「配对闭合」这一件职责，
-    # 执行/事件/广播仍由 service 承担。
+    # 工具执行与生命周期事实写入仍由 service 承担。
     if operations.is_current_turn_cancelled():
         log.info(
             "tools_node_cancelled",
@@ -239,6 +336,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             for call in state.pending_tool_calls
             # 不过滤call_id未定义的情况，统一补占位，避免不配对
         ]
+        operations.cancel_tool_calls(cancel_calls)
         cancel_placeholders = operations.build_cancel_placeholder_messages(cancel_calls)
         _persist_tool_observations(cancel_placeholders)
         # 收口取消终态事件：本分支是实际检测到 turn 取消的执行点，须发出
@@ -259,10 +357,10 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # 与取消分支同源，避免字段增减时两处分支漂移）。
     approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
 
-    # 真正执行工具（内部会发工具生命周期事件，write_event 作为回调注入）。
+    # 真正执行工具（内部通过明确的生命周期回调写入 canonical 工具事实）。
     # 若模型本轮调工具前附带说明文本（instruction），一并带出供排查时看到模型意图。
     # 经 redact_terminal_output 脱敏，避免说明文本意外含凭据等敏感信息落日志。
-    raw_instruction = (approved_dicts[0].get("instruction", "") if approved_dicts else "")
+    raw_instruction = approved_dicts[0].get("instruction", "") if approved_dicts else ""
     instruction = redact_terminal_output(raw_instruction)
     log.info(
         "tools_node_resumed",
@@ -275,15 +373,11 @@ async def _tools_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    # node_write_event 已在函数顶部（LangGraph 运行上下文内）取出并闭包捕获：
-    # 工具批次在工作线程执行，线程内无法再依赖 get_stream_writer() 的运行上下文。
-    # 事件循环也需在此取出并传入，供命令运行期输出增量从工作线程调度回环广播。
     tool_run: ToolRunResult = await asyncio.to_thread(
         operations.run_tool_calls,
         task.id,
         approved_calls,
         step_id,
-        write_event=node_write_event,
         running_loop=asyncio.get_running_loop(),
     )
     log.info(

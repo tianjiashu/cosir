@@ -103,9 +103,7 @@ class ToolSystem:
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
-        registry.register(
-            build_delegate_task_definition(agent_summary=_delegate_summary)
-        )
+        registry.register(build_delegate_task_definition(agent_summary=_delegate_summary))
         # CodeGraph 查询工具（client 可为 None，execute 降级）。
         registry.register(build_codegraph_explore_definition(client))
         registry.register(build_codegraph_search_definition(client))

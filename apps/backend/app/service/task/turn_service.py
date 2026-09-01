@@ -1,21 +1,25 @@
 """Turn orchestration service.
 
-单一职责：编排轮次的创建与管理——创建轮次时同步更新所属任务的
-最新轮次 ID 和消息预览；并透传每轮消息轨迹的读写（跨轮记忆）。
+单一职责：编排轮次的创建与管理——创建轮次时同步更新所属任务的最新轮次 ID 和消息预览，
+并透传执行租约的认领、续租与释放。
 
 职责边界：
-- 负责：轮次创建（含任务最新轮次更新）、轮次查询与状态更新、消息轨迹读写透传。
-- 不负责：直接 SQL 操作（委托给 ``TurnCrud``/``TaskCrud``/``TurnMessageCrud``）。
+- 负责：轮次创建（含任务最新轮次更新）、轮次查询与状态更新、执行租约透传。
+- 不负责：直接 SQL 操作（委托给 ``TurnCrud``/``TaskCrud``）；不负责对话消息事实读写
+  （由 ``ConversationMutationWriter`` 与 ``TurnRuntimeMessageStore`` 负责）。
 """
+
+from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.llm_provider.capability.model_capability import ModelCapability
 from app.llm_provider.capability.provider_capability import ProviderCapability
-from app.models import RuntimeMessage, TurnRecord
+from app.models import TurnRecord
 from app.models.attachment_ref import AttachmentRef
 from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
+from app.service.task.conversation_mutation_writer import ConversationMutationWriter
 from app.utils.file_utils import render_attachment_refs_to_text
 
 # 图片后缀事实源统一收口于 app.utils.constants.IMAGE_EXTENSIONS；本服务不再直接引用，
@@ -24,7 +28,7 @@ from app.utils.file_utils import render_attachment_refs_to_text
 
 
 class TurnService:
-    """Orchestrate turn creation, queries, status management, and message store."""
+    """Orchestrate turn creation, queries, status management, and executor lease."""
 
     def __init__(self) -> None:
         """初始化轮次 service。
@@ -44,18 +48,19 @@ class TurnService:
 
         self._task = service_depends.get_task_crud()
         self._turn = service_depends.get_turn_crud()
-        self._message = service_depends.get_turn_message_crud()
+        self._conversation_writer = ConversationMutationWriter()
 
     def create_turn(
-            self,
-            task_id: int,
-            input_text: str,
-            agent_id: str | None = None,
-            status: str = "pending",
-            provider_id: int | None = None,
-            model_name: str | None = None,
-            reasoning_effort: str | None = None,
-            attachments: list[AttachmentRef] | None = None,
+        self,
+        task_id: int,
+        input_text: str,
+        agent_id: str | None = None,
+        status: str = "pending",
+        provider_id: int | None = None,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+        attachments: list[AttachmentRef] | None = None,
+        session: Session | None = None,
     ) -> TurnRecord:
         """Create a turn and update the parent task's latest turn info.
 
@@ -70,7 +75,7 @@ class TurnService:
             input_text: 本轮用户输入文本。
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"main_agent"``
-                （与接入层 ``turns_api.create_turn`` 的硬编码值一致，非 ``"developer"``）。
+                （与 Assistant Transport 主入口的默认值一致，非 ``"developer"``）。
             provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）；None 表示未指定。
                 与 ``model_name`` 配对出现：两者皆非 None 时按厂商能力校验模型；
                 仅 ``model_name`` 非 None 而 ``provider_id`` 为 None 视为契约不完整，
@@ -79,6 +84,8 @@ class TurnService:
                 未选择模型（前端优先校验、后端兜底报错）。
             reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
             attachments: 可选，本轮携带的结构化附件列表；None 表示无附件。
+            session: 可选，由上层跨表事务传入的数据库会话。传入时本方法不提交事务，
+                由调用方统一提交；未传入时保持独立创建事务的行为。
 
         返回:
             新创建的 ``TurnRecord``（``input_text`` 已含附件文本前缀，``image_paths``
@@ -128,9 +135,7 @@ class TurnService:
                         "reason": "model_not_support_image",
                     },
                 )
-                raise VisionNotSupportedError(
-                    f"model {model_name} does not support image input"
-                )
+                raise VisionNotSupportedError(f"model {model_name} does not support image input")
 
         # 非图片附件渲染为文本前缀并拼进 input_text；空渲染结果不拼接。
         attachment_text = render_attachment_refs_to_text(
@@ -159,6 +164,7 @@ class TurnService:
             model_name=model_name,
             reasoning_effort=reasoning_effort,
             image_paths=image_paths,
+            session=session,
         )
         return turn
 
@@ -167,6 +173,10 @@ class TurnService:
 
     def list_turns_for_task(self, task_id: int) -> list[TurnRecord]:
         return self._turn.list_by_task(task_id)
+
+    def list_recoverable(self) -> list[TurnRecord]:
+        """返回应用启动时可恢复的 pending/running 运行。"""
+        return self._turn.list_recoverable()
 
     def cancel_turn_if_active(self, turn_id: int, end_reason: str) -> TurnRecord | None:
         """Cancel a pending/running turn atomically.
@@ -189,12 +199,8 @@ class TurnService:
             条件满足时更新 turn 状态为 cancelled 并写入 end_reason。
         """
 
-        return self._turn.update_status_if_in(
-            turn_id,
-            target_status="cancelled",
-            allowed_statuses=("pending", "running"),
-            end_reason=end_reason,
-        )
+        mutation = self._conversation_writer.cancel_run(turn_id, end_reason)
+        return None if mutation is None else self._turn.get(turn_id)
 
     def complete_turn_if_running(self, turn_id: int, response_text: str) -> TurnRecord | None:
         """Complete a running turn and persist its response atomically.
@@ -204,7 +210,7 @@ class TurnService:
 
         参数:
             turn_id: 待完成的 turn 标识。
-            response_text: Agent 最终回复文本。
+            response_text: 兼容旧调用方的参数；正文由 canonical conversation writer 写入。
 
         返回:
             成功完成时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
@@ -214,18 +220,14 @@ class TurnService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 turn 状态为 completed 并写入 response_text。
+            条件满足时更新 turn 状态为 completed；不会把回复正文写入 turns。
         """
 
-        return self._turn.update_status_if_in(
-            turn_id,
-            target_status="completed",
-            allowed_statuses=("running",),
-            response_text=response_text,
-        )
+        mutation = self._conversation_writer.settle_run(turn_id, "completed")
+        return None if mutation is None else self._turn.get(turn_id)
 
     def fail_turn_if_running(
-            self, turn_id: int, end_reason: str | None = None
+        self, turn_id: int, end_reason: str | None = None
     ) -> TurnRecord | None:
         """Fail a running turn atomically.
 
@@ -247,23 +249,15 @@ class TurnService:
             条件满足时更新 turn 状态为 failed（并可选写入 end_reason）。
         """
 
-        return self._turn.update_status_if_in(
-            turn_id,
-            target_status="failed",
-            allowed_statuses=("running",),
-            end_reason=end_reason,
-        )
+        mutation = self._conversation_writer.settle_run(turn_id, "failed", end_reason=end_reason)
+        return None if mutation is None else self._turn.get(turn_id)
 
     def fail_turn_if_pending_or_running(
         self, turn_id: int, end_reason: str | None = None
     ) -> TurnRecord | None:
         """将尚未启动或正在执行的 turn 原子落定为 failed。"""
-        return self._turn.update_status_if_in(
-            turn_id,
-            target_status="failed",
-            allowed_statuses=("pending", "running"),
-            end_reason=end_reason,
-        )
+        mutation = self._conversation_writer.settle_run(turn_id, "failed", end_reason=end_reason)
+        return None if mutation is None else self._turn.get(turn_id)
 
     def has_turn_status(self, turn_id: int | None, status: str) -> bool:
         """Return whether the turn currently has the requested status.
@@ -320,59 +314,18 @@ class TurnService:
 
         return self._turn.claim_pending_serialized(turn_id) is not None
 
-    def load_turn_messages(self, turn_id: int) -> list[RuntimeMessage]:
-        """Load a turn's ordered message trajectory; empty list if none stored."""
+    def claim_executor_lease(
+        self, turn_id: int, owner: str, lease_seconds: int = 60
+    ) -> TurnRecord | None:
+        """为后台执行器原子认领 pending turn 并返回 fencing 快照。"""
+        return self._turn.claim_executor_lease(turn_id, owner, lease_seconds)
 
-        return self._message.load_messages(turn_id)
+    def renew_executor_lease(
+        self, turn_id: int, owner: str, fencing_version: int, lease_seconds: int = 60
+    ) -> TurnRecord | None:
+        """为仍持有 fencing version 的后台执行器续租。"""
+        return self._turn.renew_executor_lease(turn_id, owner, fencing_version, lease_seconds)
 
-    def append_turn_message(
-            self,
-            turn_id: int,
-            message: RuntimeMessage,
-            sequence: int,
-            in_context: bool = True,
-    ) -> None:
-        """Incremental single-row append of one runtime message (cross-turn memory).
-
-        参数:
-            turn_id: 目标轮次标识。
-            message: 单条模型无关的运行时消息（用户提问 / 模型回复 / 工具观察）。
-            sequence: 轮内自增序号，由编排层 ``RuntimeOperations`` 维护。
-            in_context: 是纳入模型在上下文内。（默认 True）。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 写入失败（透传给调用方）。
-
-        副作用:
-            在 ``turn_messages`` 表追加一行，不影响同 turn 已有行（与 ``clear_turn_messages``
-            的整轮清空语义互补，组合实现 turn 重跑幂等）。
-        """
-
-        self._message.append_message(
-            turn_id, message, sequence, in_context=in_context
-        )
-
-    def clear_turn_messages(self, turn_id: int) -> None:
-        """Delete all stored messages for a turn (used before re-running a turn).
-
-        参数:
-            turn_id: 目标轮次标识。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 删除失败（透传底层 CRUD 异常）。
-
-        副作用:
-            删除 ``turn_messages`` 表中该 turn 的全部行；仅清本 turn，不影响其它 turn。
-        """
-
-        self._message.clear_turn_messages(turn_id)
-
-    def next_turn_message_sequence(self, turn_id: int) -> int:
-        """返回指定 turn 下一条消息可用的 sequence。"""
-        return self._message.next_sequence(turn_id)
+    def release_executor_lease(self, turn_id: int, owner: str, fencing_version: int) -> bool:
+        """条件释放后台执行器租约。"""
+        return self._turn.release_executor_lease(turn_id, owner, fencing_version)

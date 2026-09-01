@@ -1,16 +1,15 @@
 """ReAct-like 工作流的模型节点（``_model_node``）。
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
-取出 ``operations`` / ``turn`` / ``model``，经 ``get_stream_writer()`` 把业务
-生命周期事件与流式 token 增量写入自定义事件流；用 ``model.astream()`` 累积 ``AIMessage``，
-回复 token 与思考 token 在节点内就地翻译为 ``MODEL_OUTPUT_DELTA`` / ``MODEL_THINKING_DELTA``
-事件。根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
+取出 ``operations`` / ``turn`` / ``model``，将模型文本与 reasoning 增量直接交给
+``RuntimeOperations`` 的 canonical writer；用 ``model.astream()`` 累积 ``AIMessage``，
+根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
 状态写入 **turn**。
 
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_files`` 调用）。此时文本**不计入最终
-回复**（最终回复只来自纯文本分支的 ``FINAL_RESPONSE``），但模型这段说明并非丢弃——
-它会经 ``MODEL_OUTPUT_DELTA`` 流式推给前端、经 ``RuntimeContextManager.add_message``
+回复**（最终回复只来自纯文本分支），但模型这段说明并非丢弃——
+它会经 canonical conversation facts 写入、经 ``RuntimeContextManager.add_message``
 落库进历史上下文，并在进入工具分支时作为 ``instruction`` 键随 ``pending_tool_calls``
 下传给 ``tools`` / ``observe`` 节点，使下游执行与错误排查能看到模型当时的意图。
 
@@ -19,7 +18,6 @@
 节点共享运行时原语见 ``common``。
 """
 
-from time import perf_counter
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk, SystemMessage
@@ -33,10 +31,8 @@ from app.core.workflows.nodes.helper.chunk_assembler import (
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     _runtime_context,
-    build_run_failed_payload,
     emit_run_cancelled,
     terminal_state,
-    write_event,
 )
 from app.core.workflows.nodes.helper.debug_dump import (
     _dump_merged_chunk_debug,  # noqa: F401  # 测试经 model_node._dump_merged_chunk_debug 访问
@@ -51,29 +47,18 @@ from app.core.workflows.nodes.helper.thinking_extractor import (
     _extract_reasoning_content,
     _should_strip_reasoning_content,  # noqa: F401  # 测试经 model_node._should_strip_reasoning_content 访问
 )
-from app.models.enums.event_type import EventType
-from app.models.payload import (
-    FinalResponsePayload,
-    ModelOutputDeltaPayload,
-    ModelRequestedPayload,
-    ModelThinkingDeltaPayload,
-    RunFinishedPayload,
-    StepStartedPayload,
-)
 from app.tools.schemas import ToolCall
 from app.utils.message_content import content_to_text
 
 from ..react.state import ReactGraphState
 
 
-
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
-    节点从运行上下文取出 ``operations`` / ``turn`` / ``model``，通过 ``get_stream_writer()``
-    把业务生命周期事件与流式 token 增量写入自定义事件流；用 ``model.astream()`` 累积
-    ``AIMessage``，回复 token 与思考 token 在节点内就地翻译为 ``MODEL_OUTPUT_DELTA`` /
-    ``MODEL_THINKING_DELTA`` 事件，由编排层统一透传。根据模型最终输出决定进入工具分支、
+    节点从运行上下文取出 ``operations`` / ``turn`` / ``model``，将模型文本与 reasoning 增量
+    直接写入 canonical conversation facts；用 ``model.astream()`` 累积
+    ``AIMessage``。根据模型最终输出决定进入工具分支、
     最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **turn**。
 
     参数:
@@ -86,12 +71,12 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     副作用:
         - 发起推理前若本次已超配额，直接调用 ``_finalize_max_steps`` 收口终态（发
-          ``RUN_FAILED``、把 turn 标 failed），不再触发推理；
+          把 turn 标记为 failed），不再触发推理；
         - 经 ``_runtime_context().add_message`` 把本轮 ``AIMessage`` 落库并写回内存
           （``RuntimeContextManager`` 唯一写入入口），使下一模型步能累积看到本轮输出；
-        - 流式 token / 事件经 ``get_stream_writer`` 透传；状态写入 ``turn``；
-        - 非法输出终态发 ``RUN_FAILED``（携带 usage 摘要）；请求前/流式中取消均发
-          ``RUN_CANCELLED``（携带 usage）；
+        - 模型文本与 reasoning 增量经 ``RuntimeOperations`` 写入 canonical facts；状态写入
+          ``turn``；
+        - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
         - ``invalid_tool_calls`` 按双轨消费：未命中工具名的 ``IGNORE`` 仅记 warning；
           命中工具名的 ``REPAIR`` 在 ``requested_tool`` 为真（情形 a）时把修复提示作为独立
           state 字段 ``deferred_repair_message`` 回传（不 return，由 observe 节点延后注入），
@@ -124,8 +109,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.id},
             },
         )
-        # 请求前取消同样走统一终态并发 RUN_CANCELLED，与流式中取消/工具取消保持事件一致，
-        # 否则前端 StatusBadge 无法感知取消。请求前未调用模型，usage 为零值。
+        # 请求前取消同样走统一 canonical 终态，与流式中取消/工具取消保持语义一致。
         emit_run_cancelled(rc, step_id)
         return terminal_state(step_count)
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
@@ -141,10 +125,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    write_event(
-        EventType.STEP_STARTED,
-        StepStartedPayload(step_id=step_id, kind="model", index=step_count),
-    )
     if operations.is_current_turn_cancelled():
         log.info(
             "model_node_cancelled_before_model_requested",
@@ -153,21 +133,12 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "turn_id": turn.id},
             },
         )
-        # 同上一检查点：请求事件前取消走统一终态并发 RUN_CANCELLED。
+        # 同上一检查点：请求前取消走统一 canonical 终态。
         emit_run_cancelled(rc, step_id)
         return terminal_state(step_count)
-    write_event(
-        EventType.MODEL_REQUESTED,
-        ModelRequestedPayload(step_id=step_id, message_count=len(messages)),
-    )
-
-    # 流式阶段每 chunk 就地翻译为 MODEL_OUTPUT_DELTA 事件（text 取自该 chunk 的
-    # content 增量）；chunks 攒结构化分块合并成 AIMessage 供解析 tool_calls 与
-    # 提取最终正文（output_text 从合并后的 content 统一取，见下）。
+    # chunks 攒结构化分块合并成 AIMessage 供解析 tool_calls 与提取最终正文。
     chunks: list[AIMessageChunk] = []
     chunk_index = 0
-    
-    
 
     log.info(
         "model_node_model_requested",
@@ -183,7 +154,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         chunk_index += 1
 
         if operations.is_current_turn_cancelled():
-            # 取消发 RUN_CANCELLED（携带 usage）而非 RUN_FAILED，避免与取消流其它信号重复。
+            # 取消直接落定 cancelled 终态，而不是把协作取消误记为失败。
             usage_summary = rc.usage_stats.to_dict()
             log.warning(
                 "model_node_cancelled_usage_summary",
@@ -219,16 +190,9 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         if text:
-            write_event(
-                # 就地翻译为增量事件，避免经 messages 流导致完整回复被重复推送。
-                EventType.MODEL_OUTPUT_DELTA,
-                ModelOutputDeltaPayload(step_id=step_id, text=text),
-            )
+            operations.append_assistant_text(text)
         if reasoning and reasoning.strip():
-            write_event(
-                EventType.MODEL_THINKING_DELTA,
-                ModelThinkingDeltaPayload(step_id=step_id, text=reasoning),
-            )
+            operations.append_assistant_reasoning(reasoning)
 
     ai_message = _collect_chunk_to_ai_message(
         chunks,
@@ -241,13 +205,15 @@ async def _model_node(state: ReactGraphState) -> dict:
     # REPAIR 回流的多次模型调用会依次累加，各步末态快照互不覆盖。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
 
-    tool_calls: list[ToolCall] = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
+    tool_calls: list[ToolCall] = [
+        ToolCall.from_from_langchain(call) for call in ai_message.tool_calls
+    ]
     # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
     # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
     requested_tool = bool(tool_calls)
     # 模型已产出的正文统一取合并后 content（与 _has_content 落库判定同源），避免与
-    # 流式阶段就地推送的 MODEL_OUTPUT_DELTA 事件出现两套正文口径。对文本块，逐 chunk
+    # 流式阶段写入的文本与合并后正文需要保持同一口径。对文本块，逐 chunk
     # 提取拼接与合并后整体提取等价；末 chunk 一次性给 content 也能被捕获，不会因 delta
     # 通道未逐 chunk 下传而误判无正文。供修复提示/最终回答/instruction 共用。
     output_text = content_to_text(ai_message.content).strip()
@@ -256,7 +222,6 @@ async def _model_node(state: ReactGraphState) -> dict:
     repair_data: list[dict[str, Any]] = []
 
     if invalid_tool_calls:
-
         available_tool_names = {tool.name for tool in operations.model_tools}
         result = decide_invalid_tool_handling(
             invalid_tool_calls=invalid_tool_calls, available_tool_names=available_tool_names
@@ -361,10 +326,12 @@ async def _model_node(state: ReactGraphState) -> dict:
             {
                 "tool_name": call.tool_name,
                 "arguments": call.arguments,
-                "call_id": call.call_id,
+                # Some providers omit an id. Generate a stable per-run/per-step id so
+                # parallel calls of the same tool cannot collapse into one fact.
+                "call_id": call.call_id or f"{turn.id}:{step_id}:{index}",
                 "instruction": instruction,
             }
-            for call in tool_calls
+            for index, call in enumerate(tool_calls)
         ]
         return {
             "step_count": step_count,
@@ -406,28 +373,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "output_text_length": len(output_text)},
             },
         )
-        write_event(
-            EventType.FINAL_RESPONSE,
-            FinalResponsePayload(text=output_text, step_id=step_id, status="completed"),
-        )
-        # 整个 run 结束：计算耗时、汇总 token 并估算成本。
-        duration_ms = int((perf_counter() - rc.start_time) * 1000)
-        usage = rc.usage_stats.to_dict()
-        write_event(
-            EventType.RUN_FINISHED,
-            RunFinishedPayload(
-                status="completed",
-                step_id=step_id,
-                duration_ms=duration_ms,
-                input_tokens=usage["input_tokens"],
-                output_tokens=usage["output_tokens"],
-                total_tokens=usage["total_tokens"],
-                cache_hit_tokens=usage["cache_hit_tokens"],
-                cache_miss_tokens=usage["cache_miss_tokens"],
-                reasoning_tokens=usage["reasoning_tokens"],
-                langfuse_trace_id=rc.langfuse_trace_id,
-            ),
-        )
         return {
             **terminal_state(step_count, final_response=True),
             "final_text": output_text,
@@ -450,13 +395,4 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         return terminal_state(step_count)
-    write_event(  # 既没工具调用也没文本 → 模型输出非法
-        EventType.RUN_FAILED,
-        build_run_failed_payload(
-            step_id,
-            "invalid_model_output",
-            usage=rc.usage_stats,
-            langfuse_trace_id=rc.langfuse_trace_id,
-        ),
-    )
     return terminal_state(step_count)

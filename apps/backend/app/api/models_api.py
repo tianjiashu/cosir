@@ -20,7 +20,7 @@ from app.llm_provider.provider import ProviderService
 
 @app.get("/models")
 async def list_models(
-        provider_service: ProviderService = Depends(get_provider_service),
+    provider_service: ProviderService = Depends(get_provider_service),
 ) -> list[ProviderModelGroupResponse]:
     """返回按启用模型厂商聚合的模型目录。
 
@@ -68,12 +68,11 @@ async def list_models(
         models: list[ModelListItemResponse] = []
         for model_name in provider_capability.models:
             model_capability = ModelCapability.get_capability(model_name)
-            supports_reasoning_effort = (
-                model_capability.reasoning_effort.supported
-                and {"low", "high", "max"}.issubset(
-                    model_capability.reasoning_effort.effort_map
-                )
-            )
+            supports_reasoning_effort = model_capability.reasoning_effort.supported and {
+                "low",
+                "high",
+                "max",
+            }.issubset(model_capability.reasoning_effort.effort_map)
             models.append(
                 ModelListItemResponse(
                     model_name=model_name,

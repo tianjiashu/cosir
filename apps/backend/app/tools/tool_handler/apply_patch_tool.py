@@ -92,9 +92,9 @@ class ApplyPatchTool(HandlerBase):
         """
 
     def execute(
-            self,
-            execution_context: ToolExecutionContext,
-            patch: str,
+        self,
+        execution_context: ToolExecutionContext,
+        patch: str,
     ) -> ToolObservation:
         """解析并应用 V4A 补丁，统一收口成功/失败观察。
 
@@ -184,15 +184,15 @@ class ApplyPatchTool(HandlerBase):
                 self.name,
                 f"patch apply failed: {exc}",
                 reason=(
-                        "the patch could not be fully applied"
-                        + (
-                            " (some operations were already applied before the failure)"
-                            if exc.partial_applied
-                            else ""
-                        )
-                        + ". This is usually a transient write/lock issue or a conflicting "
-                          "concurrent edit. Resolve the conflict or free the file, then retry "
-                          "the same patch."
+                    "the patch could not be fully applied"
+                    + (
+                        " (some operations were already applied before the failure)"
+                        if exc.partial_applied
+                        else ""
+                    )
+                    + ". This is usually a transient write/lock issue or a conflicting "
+                    "concurrent edit. Resolve the conflict or free the file, then retry "
+                    "the same patch."
                 ),
                 retryable=True,
                 permission=self.permission,
@@ -260,12 +260,12 @@ class ApplyPatchTool(HandlerBase):
             for d in diagnostics
         ]
         return (
-                "the patched file(s) have syntax errors ("
-                + "; ".join(parts)
-                + "); the files have been written but are not valid. "
-                "Fix each with a follow-up edit "
-                "(write_file or patch or apply_patch) that corrects the "
-                "syntax at the reported location."
+            "the patched file(s) have syntax errors ("
+            + "; ".join(parts)
+            + "); the files have been written but are not valid. "
+            "Fix each with a follow-up edit "
+            "(write_file or patch or apply_patch) that corrects the "
+            "syntax at the reported location."
         )
 
     def to_definition(self) -> ToolDefinition:

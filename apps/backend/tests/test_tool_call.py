@@ -20,9 +20,7 @@ def test_from_dict_missing_arguments_defaults_to_empty_dict():
 
 def test_from_dict_none_arguments_defaults_to_empty_dict():
     """arguments 为 None 时兜底为空 dict（与工具执行路径一致）。"""
-    call = ToolCall.from_dict(
-        {"tool_name": "read_file", "arguments": None, "call_id": "c1"}
-    )
+    call = ToolCall.from_dict({"tool_name": "read_file", "arguments": None, "call_id": "c1"})
     assert call.arguments == {}
 
 

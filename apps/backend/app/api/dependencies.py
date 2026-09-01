@@ -15,19 +15,21 @@ from app.config.configuration import (
     set_tool_system,
 )
 from app.core.runtime.runner import AgentRuntime
+from app.llm_provider.provider import ModelEntryService, ProviderService
 from app.service import depends as service_depends
-from app.service.agent_runtime_event.runtime_event_bus import RuntimeEventBus
-from app.service.agent_runtime_event.runtime_event_service import RuntimeEventService
-from app.llm_provider.provider import ModelEntryService
-from app.llm_provider.provider import ProviderService
 from app.service.log_query_service import LogQueryService
+from app.service.task.conversation_command_service import ConversationCommandService
+from app.service.task.conversation_mutation_writer import ConversationMutationWriter
+from app.service.task.conversation_run_executor import ConversationRunExecutor
+from app.service.task.conversation_run_service import ConversationRunService
+from app.service.task.conversation_state_service import ConversationStateService
 from app.service.task.task_service import TaskService
 from app.service.task.turn_service import TurnService
-from app.service.task.turn_stream_service import TurnStreamService
 from app.service.task.turn_workspace_resolver import TurnWorkspaceResolver
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 from app.service.workspace_event.workspace_event_service import WorkspaceEventService
+from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
 
 # 已迁移到 ``app.config.configuration`` 的进程级单例访问器，在此 re-export 以保持
 # ``Depends(get_agent_registry)`` / ``app.py`` 等既有调用点零改动。
@@ -51,8 +53,7 @@ def _build_services() -> dict:
         无。后端运行配置由 ``Settings`` 类级静态属性提供，不以对象传入。
 
     返回:
-        含 ``runtime_event_bus`` / ``runtime_event_service`` / ``task_service`` /
-        ``turn_service`` / ``turn_stream_service`` / ``workspace_service`` /
+        含 ``task_service`` / ``turn_service`` / ``workspace_service`` /
         ``log_query_service`` 的字典。
 
     异常:
@@ -63,11 +64,8 @@ def _build_services() -> dict:
     """
 
     return {
-        "runtime_event_bus": service_depends.get_runtime_event_bus(),
-        "runtime_event_service": service_depends.get_runtime_event_service(),
         "task_service": service_depends.get_task_service(),
         "turn_service": service_depends.get_turn_service(),
-        "turn_stream_service": service_depends.get_turn_stream_service(),
         "workspace_service": service_depends.get_workspace_service(),
         "log_query_service": service_depends.get_log_query_service(),
     }
@@ -130,14 +128,14 @@ def get_turn_service() -> TurnService:
     return _build_services()["turn_service"]
 
 
-def get_turn_stream_service() -> TurnStreamService:
-    """返回进程级轮次事件流编排 service 单例。
+def get_conversation_state_service() -> ConversationStateService:
+    """返回进程级会话状态投影 service 单例。
 
     参数:
         无。
 
     返回:
-        TurnStreamService。
+        ConversationStateService（把 turns / turn_messages 投影为中性对话视图）。
 
     异常:
         RuntimeError: 若存储初始化失败。
@@ -146,7 +144,29 @@ def get_turn_stream_service() -> TurnStreamService:
         首次调用时构建并缓存 service。
     """
 
-    return _build_services()["turn_stream_service"]
+    return service_depends.get_conversation_state_service()
+
+
+def get_conversation_command_service() -> ConversationCommandService:
+    """返回 Assistant Transport 命令幂等服务。"""
+    return service_depends.get_conversation_command_service()
+
+
+def get_conversation_run_service() -> ConversationRunService:
+    """返回 Assistant Transport 命令与轮次原子编排 service。"""
+    return service_depends.get_conversation_run_service()
+
+
+def get_conversation_mutation_writer() -> ConversationMutationWriter:
+    """返回 canonical conversation fact 写入器。"""
+
+    return service_depends.get_conversation_mutation_writer()
+
+
+def get_conversation_run_executor() -> ConversationRunExecutor:
+    """返回后台 Conversation Run 执行器。"""
+
+    return service_depends.get_conversation_run_executor()
 
 
 def get_turn_workspace_resolver() -> TurnWorkspaceResolver:
@@ -206,6 +226,12 @@ def get_workspace_event_service() -> WorkspaceEventService | None:
     return service_depends.get_workspace_event_service()
 
 
+def get_workspace_readiness_crud() -> WorkspaceReadinessCrud:
+    """返回 workspace readiness snapshot 的存储访问器。"""
+
+    return service_depends.get_workspace_readiness_crud()
+
+
 def get_log_query_service() -> LogQueryService:
     """返回进程级日志查询 service 单例。
 
@@ -225,44 +251,6 @@ def get_log_query_service() -> LogQueryService:
     return _build_services()["log_query_service"]
 
 
-def get_runtime_event_bus() -> RuntimeEventBus:
-    """返回进程级 runtime event 广播总线。
-
-    参数:
-        无。
-
-    返回:
-        RuntimeEventBus。
-
-    异常:
-        RuntimeError: 若存储初始化失败。
-
-    副作用:
-        首次调用时构建并缓存 service。
-    """
-
-    return _build_services()["runtime_event_bus"]
-
-
-def get_runtime_event_service() -> RuntimeEventService:
-    """返回进程级 runtime event 持久化与广播 service。
-
-    参数:
-        无。
-
-    返回:
-        RuntimeEventService。
-
-    异常:
-        RuntimeError: 若存储初始化失败。
-
-    副作用:
-        首次调用时构建并缓存 service。
-    """
-
-    return _build_services()["runtime_event_service"]
-
-
 def get_provider_service() -> ProviderService:
     """返回进程级厂商 service 单例（薄壳转发到 ``app.service.depends``）。
 
@@ -280,7 +268,6 @@ def get_provider_service() -> ProviderService:
     """
 
     return service_depends.get_provider_service()
-
 
 
 def get_model_entry_service() -> ModelEntryService:

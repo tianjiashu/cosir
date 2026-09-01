@@ -127,9 +127,7 @@ class DelegationCrud:
                 )
                 conn.rollback()
                 return None
-            result = conn.execute(
-                insert(DelegationModel).values(**record.to_model_dict())
-            )
+            result = conn.execute(insert(DelegationModel).values(**record.to_model_dict()))
             created_id: int | None = result.lastrowid
             conn.commit()
         return created_id
@@ -176,9 +174,7 @@ class DelegationCrud:
             values["error"] = error
         with self._session_factory.begin() as session:
             session.execute(
-                update(DelegationModel)
-                .where(DelegationModel.id == id)
-                .values(**values)
+                update(DelegationModel).where(DelegationModel.id == id).values(**values)
             )
         return self.get(id)
 
@@ -248,7 +244,7 @@ class DelegationCrud:
         """
 
         with self._session_factory() as session:
-            row:DelegationModel | None = session.get(DelegationModel, id)
+            row: DelegationModel | None = session.get(DelegationModel, id)
         if row is None:
             raise KeyError(id)
         return DelegationRecord.from_model(row)

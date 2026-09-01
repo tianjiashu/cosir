@@ -1,4 +1,4 @@
-"""上下文占用订阅者：``RuntimeContextManager`` 条目变更后发出 ``CONTEXT_USAGE`` 事件并回写 task。
+"""上下文占用订阅者：计算上下文占用并回写 task 事实。
 
 实现 :class:`~app.core.context.context_listener.context_listener.ContextListener` 协议，
 供 ``RuntimeContextManager`` 在有效上下文条目变更时通知。仅在 ``add_message`` /
@@ -12,14 +12,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
 from app.models import RuntimeMessage
-from app.models.enums.event_type import EventType
-from app.models.payload import ContextUsagePayload, RuntimeEventPayload
 
 
 class ContextUsageComputeListener(ContextListener):
@@ -28,14 +25,13 @@ class ContextUsageComputeListener(ContextListener):
 
     def __init__(
         self,
-        write_event: Callable[[EventType, RuntimeEventPayload], None],
         update_context_usage: Callable[[int, int], None],
         task_id: int,
+        write_event: Callable[..., object] | None = None,
     ) -> None:
         """构造订阅者，注入事件写入与占用回写回调及 task 标识。
 
         参数:
-            write_event: 发出 ``CONTEXT_USAGE`` 事件的回调。
             update_context_usage: 回写 task 上下文占用的回调，签名 ``(task_id, used_tokens)``。
             task_id: 所属 task，用于回写 context usage。
 
@@ -48,12 +44,12 @@ class ContextUsageComputeListener(ContextListener):
         副作用:
             保存事件写入回调、task 占用回写回调与 task 标识。
         """
-        self.write_event = write_event
+        del write_event
         self._update_context_usage = update_context_usage
         self.task_id = task_id
 
     def listen(self, event: ListenerEvent, result: ListenerResult) -> None:
-        """条目变更后计算上下文占用并写回 ``result``、发出 ``CONTEXT_USAGE`` 事件。
+        """条目变更后计算上下文占用并写回 ``result`` 与 task 事实。
 
         仅处理 ``add_message`` / ``load_history`` / ``context_compressed`` 三类事件；
         所有相关事件均基于有效模型上下文完整快照重算，避免重复累加和排除非上下文轨迹。
@@ -84,25 +80,9 @@ class ContextUsageComputeListener(ContextListener):
             return
         # ``event.entries`` 是变化后的有效模型上下文快照，统一重算避免重复累加。
         result.usage = self._compute(event.entries)
-        write_error: RuntimeError | None = None
-        try:
-            self.write_event(
-                EventType.CONTEXT_USAGE,
-                ContextUsagePayload(used_tokens=result.usage, total_tokens=event.total_tokens),
-            )
-        except RuntimeError as exc:
-            if not event.allow_write_event_failure:
-                write_error = exc
-            else:
-                log.debug(
-                    "context_usage_event_writer_unavailable",
-                    extra={"task_id": self.task_id, "context_event_type": event.type.value},
-                )
         # 原样传播调用方回调的失败：容错策略由注入方决定（生产默认实现
         # ``_update_task_context_usage`` 自行降级，显式注入的回调按契约传播）。
         self._update_context_usage(self.task_id, result.usage)
-        if write_error is not None:
-            raise write_error
 
     def _compute(self, entries: list[ContextEntry]) -> int:
         """对上下文条目逐条估算并求和 token 占用。

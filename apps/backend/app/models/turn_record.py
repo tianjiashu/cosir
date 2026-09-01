@@ -30,6 +30,10 @@ class TurnRecord:
     image_paths: list[str] | None = None
     reasoning_effort: str | None = None
     extra: dict[str, Any] | None = None
+    fencing_version: int = 0
+    executor_lease_owner: str | None = None
+    executor_lease_expires_at: datetime | None = None
+    workflow_version: str = "react_like_v1"
 
     def to_dict(self) -> dict[str, str | None]:
         """将轮次状态转换为可序列化为 JSON 的字典。
@@ -60,6 +64,14 @@ class TurnRecord:
             "provider_id": self.provider_id,
             "model_name": self.model_name,
             "extra": self.extra,
+            "fencing_version": self.fencing_version,
+            "executor_lease_owner": self.executor_lease_owner,
+            "executor_lease_expires_at": (
+                to_text(self.executor_lease_expires_at)
+                if self.executor_lease_expires_at is not None
+                else None
+            ),
+            "workflow_version": self.workflow_version,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -95,4 +107,12 @@ class TurnRecord:
             model_name=row.model_name,
             provider_id=row.provider_id,
             extra=row.extra,
+            fencing_version=row.fencing_version,
+            executor_lease_owner=row.executor_lease_owner,
+            executor_lease_expires_at=(
+                from_text(row.executor_lease_expires_at)
+                if row.executor_lease_expires_at is not None
+                else None
+            ),
+            workflow_version=row.workflow_version,
         )

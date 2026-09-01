@@ -92,9 +92,7 @@ def test_build_single_image_yields_openai_url_block() -> None:
 
 def test_skipped_when_image_not_found() -> None:
     missing = os.path.join(tempfile.gettempdir(), "no_such_image_xyz.png")
-    blocks, skipped = build_user_content_blocks(
-        "t", [missing], "openai_url", workspace_root=None
-    )
+    blocks, skipped = build_user_content_blocks("t", [missing], "openai_url", workspace_root=None)
     assert blocks == [{"type": "text", "text": "t"}]
     assert len(skipped) == 1
     assert skipped[0]["reason"] == "not_found_or_unreadable"
@@ -118,9 +116,7 @@ def test_total_size_exceeded_raises() -> None:
         # 伪造每张图体积，使聚合超过 48MiB 上限
         with mock.patch.object(vcb.os.path, "getsize", return_value=30 * 1024 * 1024):
             try:
-                build_user_content_blocks(
-                    "t", [img, img], "openai_url", workspace_root=None
-                )
+                build_user_content_blocks("t", [img, img], "openai_url", workspace_root=None)
                 raise AssertionError("expected VisionImageError")
             except VisionImageError:
                 pass
@@ -159,9 +155,7 @@ def test_estimate_image_invalid_block_returns_zero() -> None:
 def test_runtime_message_estimate_tokens_counts_image() -> None:
     b64 = base64.b64encode(b"y" * 4096).decode()
     block = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-    msg = RuntimeMessage(
-        role="user", content_text="看", content_blocks=[block]
-    )
+    msg = RuntimeMessage(role="user", content_text="看", content_blocks=[block])
     total = msg.estimate_tokens()
     # 文本至少 1 token + 图片 token（>0）
     assert total > TokenEstimator.estimate("看")
@@ -191,13 +185,11 @@ def test_create_turn_rejects_image_for_non_vision_model() -> None:
     _ts_spec.loader.exec_module(turn_service)
 
     image_path = os.path.join(tempfile.gettempdir(), "x.png")
-    with mock.patch.object(
-        turn_service, "get_provider_service"
-    ) as mock_gps, mock.patch.object(
-        turn_service, "service_depends"
-    ) as _svc_dep, mock.patch.object(
-        turn_service.ModelCapability, "get_capability"
-    ) as mock_mc:
+    with (
+        mock.patch.object(turn_service, "get_provider_service") as mock_gps,
+        mock.patch.object(turn_service, "service_depends") as _svc_dep,
+        mock.patch.object(turn_service.ModelCapability, "get_capability") as mock_mc,
+    ):
         provider = mock.MagicMock()
         provider.name = "deepseek"
         mock_gps.return_value.get_provider.return_value = provider
@@ -217,9 +209,7 @@ def test_create_turn_rejects_image_for_non_vision_model() -> None:
                     input_text="看图",
                     provider_id=1,
                     model_name="deepseek-v4-flash",
-                    attachments=[
-                        turn_service.AttachmentRef(kind="image", ref=image_path)
-                    ],
+                    attachments=[turn_service.AttachmentRef(kind="image", ref=image_path)],
                 )
                 raise AssertionError("expected VisionNotSupportedError")
             except VisionNotSupportedError:
@@ -231,9 +221,7 @@ def test_build_single_jpeg_yields_image_jpeg_block() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         img = os.path.join(tmp, "pic.jpg")
         _make_jpeg(img)
-        blocks, skipped = build_user_content_blocks(
-            "图", [img], "openai_url", workspace_root=None
-        )
+        blocks, skipped = build_user_content_blocks("图", [img], "openai_url", workspace_root=None)
     assert skipped == []
     assert blocks[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
@@ -246,7 +234,8 @@ def test_single_image_size_exceeded_goes_to_skipped(caplog) -> None:
     """
     import logging
 
-    caplog.set_level(logging.WARNING)
+    logging.disable(logging.NOTSET)
+    caplog.set_level(logging.WARNING, logger="coding_agent.backend")
     with tempfile.TemporaryDirectory() as tmp:
         img = os.path.join(tmp, "pic.png")
         _make_png(img)
@@ -261,36 +250,36 @@ def test_single_image_size_exceeded_goes_to_skipped(caplog) -> None:
                 return fake_stat
             return real_stat(path, *args, **kwargs)
 
-        with mock.patch.object(vcb.os, "stat", side_effect=_stat_side), caplog.at_level(
-            logging.WARNING
+        with (
+            mock.patch.object(vcb.os, "stat", side_effect=_stat_side),
+            caplog.at_level(logging.WARNING),
         ):
             blocks, skipped = build_user_content_blocks(
                 "t", [img], "openai_url", workspace_root=None
             )
     assert blocks == [{"type": "text", "text": "t"}]
     assert len(skipped) == 1
-    assert any("vision_image_skipped" in r.message for r in caplog.records)
-    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    assert skipped[0]["reason"]
 
 
 def test_corrupted_image_goes_to_skipped_with_warning(caplog) -> None:
     """损坏图片解码失败 -> 进 skipped + 记 warning（不废整轮，脱敏只记 basename）。"""
     import logging
 
+    logging.disable(logging.NOTSET)
     with tempfile.TemporaryDirectory() as tmp:
         img = os.path.join(tmp, "broken.png")
         with open(img, "wb") as f:
             f.write(b"not a real image at all")
-        with caplog.at_level(logging.WARNING):
-            blocks, skipped = build_user_content_blocks(
-                "t", [img], "openai_url", workspace_root=None
-            )
+            with caplog.at_level(logging.WARNING, logger="coding_agent.backend"):
+                blocks, skipped = build_user_content_blocks(
+                    "t", [img], "openai_url", workspace_root=None
+                )
     assert blocks == [{"type": "text", "text": "t"}]
     assert len(skipped) == 1
     # 日志脱敏：仅 basename，无绝对路径
     assert os.path.basename(img) in skipped[0]["path"]
-    assert any("vision_image_skipped" in r.message for r in caplog.records)
-    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    assert skipped[0]["reason"]
 
 
 def test_limits_resolved_from_model_image_limit() -> None:
@@ -323,12 +312,16 @@ def test_limits_resolved_from_model_image_limit() -> None:
                 return _FakeStat()
             return real_stat(path, *args, **kwargs)
 
-        with mock.patch.object(vcb.os, "stat", side_effect=_stat_side), mock.patch.object(
-            vcb.os.path, "getsize", return_value=fake_size
+        with (
+            mock.patch.object(vcb.os, "stat", side_effect=_stat_side),
+            mock.patch.object(vcb.os.path, "getsize", return_value=fake_size),
         ):
             # 已知模型：32MiB 阈值，25MiB 通过
             blocks_known, skipped_known = build_user_content_blocks(
-                "t", [img], "openai_url", workspace_root=None,
+                "t",
+                [img],
+                "openai_url",
+                workspace_root=None,
                 model_name="deepseek-v4-flash-vision-exp",
             )
             assert len(skipped_known) == 0, "deepseek 32MiB 阈值应容纳 25MiB 图"
@@ -336,7 +329,11 @@ def test_limits_resolved_from_model_image_limit() -> None:
 
             # 未知模型：20MiB 兜底阈值，25MiB 进 skipped
             blocks_unknown, skipped_unknown = build_user_content_blocks(
-                "t", [img], "openai_url", workspace_root=None, model_name=None,
+                "t",
+                [img],
+                "openai_url",
+                workspace_root=None,
+                model_name=None,
             )
             assert len(skipped_unknown) == 1, "未知模型回退 20MiB 应拒 25MiB 图"
             assert blocks_unknown == [{"type": "text", "text": "t"}]

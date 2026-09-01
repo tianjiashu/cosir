@@ -149,7 +149,7 @@ class PathResolver:
         if input_error:
             return None, input_error
         try:
-            #把 workspace 根目录解析成一个「真实、规范化、绝对」的 Path 对象，作为后续边界比较的基准
+            # 把 workspace 根目录解析成一个「真实、规范化、绝对」的 Path 对象，作为后续边界比较的基准
             # 转成绝对路径：如果原本是相对路径（比如"myproject"），就以当前工作
             # 目录为基准补成绝对路径。
             # 规范化：展开所有的..（上级目录）和.（当前目录），消除多余分隔符。
@@ -264,8 +264,8 @@ class PathResolver:
 
         # 第 2 层：检查「符号链接解析后的真实目标」
         if resolved is not None and (
-                self._is_blocked_posix_path(resolved.as_posix())
-                or self._windows_device_name(str(resolved))
+            self._is_blocked_posix_path(resolved.as_posix())
+            or self._windows_device_name(str(resolved))
         ):
             return (
                 f"blocked device path: '{path}' resolves to an OS device or sensitive "
@@ -274,9 +274,9 @@ class PathResolver:
         return ""
 
     def blocked_recursive_search_reason(
-            self,
-            path: str,
-            resolved: Path | None = None,
+        self,
+        path: str,
+        resolved: Path | None = None,
     ) -> str:
         """判断递归搜索根是否位于设备或敏感伪文件树。
 
@@ -304,8 +304,8 @@ class PathResolver:
         for candidate in candidates:
             normalized = candidate.replace("\\", "/").lower().rstrip("/")
             if any(
-                    normalized == root or normalized.startswith(f"{root}/")
-                    for root in self.posix_blocked_recursive_roots
+                normalized == root or normalized.startswith(f"{root}/")
+                for root in self.posix_blocked_recursive_roots
             ):
                 return f"blocked recursive search path: {path}"
         return ""

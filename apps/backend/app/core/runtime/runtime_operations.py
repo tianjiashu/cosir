@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
 from app.core.runtime.turn_cancellation_registry import cancellation_registry
 from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
-from app.models.enums.event_type import EventType
-from app.models.payload.runtime_event_payload import RuntimeEventPayload
-from app.service.depends import get_runtime_event_bus, get_turn_service
-from app.service.turn_runtime_message_store import TurnRuntimeMessageStore
+from app.service.depends import get_turn_service
+from app.service.task.conversation_mutation_writer import ConversationMutationWriter
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
+from app.service.turn_runtime_message_store import TurnRuntimeMessageStore
 from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
@@ -82,6 +80,7 @@ class RuntimeOperations:
         # 注入，使 manager 成为消息读写的唯一事实源。原 append_runtime_message /
         # reset_message_sequence 逐条落库逻辑退役，改由 manager 经本端口落库。
         self._message_store = TurnRuntimeMessageStore(self._turn_service)
+        self._conversation_writer = ConversationMutationWriter()
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
@@ -99,7 +98,6 @@ class RuntimeOperations:
             tool_definitions=self.model_tools,
             trace_recorder=tool_trace_recorder,
             should_cancel=self.is_current_turn_cancelled,
-            event_bus=get_runtime_event_bus(),
         )
 
         log.info(
@@ -147,6 +145,55 @@ class RuntimeOperations:
             ``TurnRuntimeMessageStore`` 适配实例，承载 ``turn_messages`` 读写的依赖倒置端口。
         """
         return self._message_store
+
+    def append_assistant_text(self, text: str) -> None:
+        """将模型文本增量直接追加到当前运行的 canonical assistant part。
+
+        参数:
+            text: 非空模型文本增量。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: ``text`` 为空。
+            KeyError: 当前运行没有 canonical assistant message。
+            PermissionError: 当前 executor fencing 已失效。
+
+        副作用:
+            经 ``ConversationMutationWriter`` 原子追加文本并分配 conversation revision。
+        """
+        self._conversation_writer.append_assistant_text_for_turn(
+            self._current_task.id,
+            self._current_turn.id,
+            text,
+            self._current_turn.fencing_version,
+        )
+
+    def append_assistant_reasoning(self, text: str) -> None:
+        """将模型 reasoning 增量直接追加到当前运行的 canonical reasoning part。
+
+        参数:
+            text: 非空 reasoning 文本增量。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: ``text`` 为空。
+            KeyError: 当前运行没有 canonical assistant message。
+            PermissionError: 当前 executor fencing 已失效。
+
+        副作用:
+            经 ``ConversationMutationWriter`` 原子追加 reasoning part 并分配 revision。
+        """
+        self._conversation_writer.append_assistant_part_for_turn(
+            self._current_task.id,
+            self._current_turn.id,
+            "reasoning",
+            text,
+            self._current_turn.fencing_version,
+        )
 
     def has_turn_status(self, turn_id: int, status: str) -> bool:
         """Return whether a turn currently has the requested status."""
@@ -202,7 +249,22 @@ class RuntimeOperations:
                 "data": {"turn_id": turn_id, "response_length": response_len},
             },
         )
-        return self._turn_service.complete_turn_if_running(turn_id, response_text)
+        # 最终文本先写入 canonical assistant part；response_text 不是事实来源。
+        if response_text:
+            self._conversation_writer.append_assistant_text_for_turn(
+                self._current_task.id,
+                turn_id,
+                response_text,
+                self._current_turn.fencing_version,
+            )
+        mutation = self._conversation_writer.settle_run(
+            turn_id,
+            "completed",
+            fencing_version=self._current_turn.fencing_version,
+        )
+        if mutation is None:
+            return None
+        return self._turn_service.get_turn(turn_id)
 
     def fail_turn_if_running(
         self, turn_id: int, end_reason: str | None = None
@@ -231,38 +293,82 @@ class RuntimeOperations:
                 "data": {"turn_id": turn_id, "end_reason": end_reason},
             },
         )
-        return self._turn_service.fail_turn_if_running(turn_id, end_reason)
+        mutation = self._conversation_writer.settle_run(
+            turn_id,
+            "failed",
+            end_reason=end_reason,
+            fencing_version=self._current_turn.fencing_version,
+        )
+        if mutation is None:
+            return None
+        return self._turn_service.get_turn(turn_id)
+
+    def cancel_turn_if_running(
+        self, turn_id: int, end_reason: str = "runtime_cancelled"
+    ) -> TurnRecord | None:
+        """Cancel the turn through the canonical writer if it is still active.
+
+        参数:
+            turn_id: 待取消的 turn 标识。
+            end_reason: 稳定的取消原因。
+
+        返回:
+            成功取消时返回更新后的 TurnRecord；终态已由其它路径落定时返回 None。
+
+        异常:
+            KeyError: 如果指定 turn 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled。
+        """
+        mutation = self._conversation_writer.settle_run(
+            turn_id,
+            "cancelled",
+            end_reason=end_reason,
+            fencing_version=self._current_turn.fencing_version,
+        )
+        if mutation is None:
+            return None
+        return self._turn_service.get_turn(turn_id)
 
     def run_tool_calls(
         self,
         task_id: str,
         calls: list[ToolCall],
         step_id: str | None = None,
-        write_event: Callable[[EventType, RuntimeEventPayload], None] | None = None,
         running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 
-        工具生命周期事件通过 ``write_event`` 回调写入 LangGraph 自定义事件流；
-        若未提供回调，则静默跳过事件（仅执行工具）。门面持有的 ``execution_context``
-        在内部透传给执行链，最终在执行期注入各 handler（便于后续扩展执行参数）。
+        工具生命周期通过明确的 callback 写入 canonical conversation facts。门面持有的
+        ``execution_context`` 在内部透传给执行链，最终在执行期注入各 handler。
 
         参数:
             task_id: 当前任务标识符。
             calls: 模型请求的工具调用列表。
             step_id: 请求这些工具调用的步骤标识符。
-            write_event: 可选的运行时事件写入回调。
-            running_loop: 承载本轮运行的事件循环；本方法常被异步节点经
-                ``asyncio.to_thread`` 调度到工作线程执行，故由调用方传入，
-                用于把命令运行期输出增量广播调度回循环线程。缺省时禁用该实时通道。
-
+            running_loop: 异步工具节点提供的事件循环，用于工具执行期输出桥接。
         返回:
             工具观察结果与供下一步模型使用的消息。
         """
 
+        effective_step_id = step_id or "step"
+        calls = [
+            replace(
+                call,
+                call_id=call.call_id or f"{self._current_turn.id}:{effective_step_id}:{index}",
+            )
+            for index, call in enumerate(calls)
+        ]
         self._pre_process_turn(task_id=task_id, calls=calls, step_id=step_id)
 
         execution_context = self._execution_context
+        if running_loop is None:
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
         if execution_context is not None and running_loop is not None:
             runtime_dependencies = replace(
                 execution_context.runtime_dependencies,
@@ -273,17 +379,115 @@ class RuntimeOperations:
                 runtime_dependencies=runtime_dependencies,
             )
 
-        result: ToolRunResult = self._tool_service.run_calls_with_events(
-            step_id=step_id or "",
+        result: ToolRunResult = self._tool_service.run_calls(
+            step_id=effective_step_id,
             calls=calls,
             execution_context=execution_context,
-            write_event=write_event,
+            on_tool_call_started=self._record_tool_call_started,
+            on_tool_call_finished=self._record_tool_call_finished,
             running_loop=running_loop,
         )
 
         self._post_process_turn(task_id=task_id, step_id=step_id, result=result)
 
         return result
+
+    def _record_tool_call_started(self, _step_id: str, call: ToolCall) -> None:
+        """将工具开始事实写入 canonical conversation。"""
+        call_id = call.call_id or call.tool_name
+        self._conversation_writer.create_tool_call(
+            self._current_task.id,
+            call_id,
+            call.tool_name,
+            call.arguments,
+            turn_id=self._current_turn.id,
+            fencing_version=self._current_turn.fencing_version,
+        )
+        self._conversation_writer.transition_tool_call(
+            self._current_task.id,
+            call_id,
+            "running",
+            turn_id=self._current_turn.id,
+            fencing_version=self._current_turn.fencing_version,
+        )
+
+    def ensure_tool_calls_pending(self, calls: list[ToolCall]) -> None:
+        """Persist all model-selected calls before approval or handler execution."""
+
+        for call in calls:
+            self._conversation_writer.create_tool_call(
+                self._current_task.id,
+                call.call_id or call.tool_name,
+                call.tool_name,
+                call.arguments,
+                turn_id=self._current_turn.id,
+                fencing_version=self._current_turn.fencing_version,
+            )
+
+    def mark_tool_calls_requires_action(self, calls: list[ToolCall]) -> None:
+        """Mark calls as waiting for the server-side approval decision."""
+
+        for call in calls:
+            self._conversation_writer.transition_tool_call(
+                self._current_task.id,
+                call.call_id or call.tool_name,
+                "requires-action",
+                turn_id=self._current_turn.id,
+                fencing_version=self._current_turn.fencing_version,
+            )
+
+    def request_tool_approval(self, calls: list[ToolCall], step_id: str) -> str:
+        """Persist the approval request associated with a tool batch."""
+
+        request_id = f"approval-{self._current_turn.id}-{step_id}"
+        self._conversation_writer.record_approval_request(
+            self._current_task.id,
+            request_id,
+            {
+                "stepId": step_id,
+                "toolCalls": [
+                    {
+                        "toolCallId": call.call_id or call.tool_name,
+                        "toolName": call.tool_name,
+                        "args": call.arguments,
+                    }
+                    for call in calls
+                ],
+            },
+            turn_id=self._current_turn.id,
+        )
+        return request_id
+    def _record_tool_call_finished(self, _step_id: str, observation: object) -> None:
+        """将工具完成事实写入 canonical conversation。"""
+        call_id = getattr(observation, "tool_call_id", None)
+        if not isinstance(call_id, str) or not call_id:
+            return
+        status = getattr(observation, "status", "error")
+        self._conversation_writer.complete_tool_call_by_external_id(
+            self._current_task.id,
+            call_id,
+            getattr(observation, "data", None),
+            status=(
+                "completed"
+                if status == "success"
+                else ("cancelled" if status == "cancelled" else "failed")
+            ),
+            error_text=getattr(observation, "error", None) or getattr(observation, "reason", None),
+            turn_id=self._current_turn.id,
+            fencing_version=self._current_turn.fencing_version,
+        )
+
+    def cancel_tool_calls(self, calls: list[ToolCall]) -> None:
+        """Mark calls skipped before execution as cancelled in canonical facts."""
+
+        for call in calls:
+            self._conversation_writer.transition_tool_call(
+                self._current_task.id,
+                call.call_id or call.tool_name,
+                "cancelled",
+                turn_id=self._current_turn.id,
+                fencing_version=self._current_turn.fencing_version,
+            )
 
     def build_cancel_placeholder_messages(
         self,

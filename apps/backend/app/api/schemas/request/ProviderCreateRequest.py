@@ -1,5 +1,9 @@
-from pydantic import BaseModel, field_validator
-from app.llm_provider.capability.provider_capability import _SUPPORT_PROVIDERS, ProviderCapability
+from pydantic import BaseModel, model_validator
+
+from app.llm_provider.capability.provider_capability import (
+    _SUPPORT_PROVIDERS,
+    ProviderCapability,
+)
 
 
 class ProviderCreateRequest(BaseModel):
@@ -25,23 +29,25 @@ class ProviderCreateRequest(BaseModel):
     """
 
     name: str
-    model_name: str
+    model_name: str = ""
     base_url: str | None = None
     api_key: str | None = None
     sort_order: int = 0
 
-    def __post_init__(self):
+    @model_validator(mode="after")
+    def validate_provider(self) -> "ProviderCreateRequest":
+        """归一化并校验 Provider 配置。"""
+
         self.name = self.name.strip().lower()
         if self.name not in _SUPPORT_PROVIDERS:
-            raise ValueError(f"Provider {self.name} is not supported.")
+            raise ValueError(f"Provider {self.name} is not supported")
 
-        if self.name != "ollama" and not self.api_key:
+        capability = ProviderCapability.get_capability(self.name)
+        if capability.requires_api_key and not self.api_key:
             raise ValueError(f"Provider {self.name} requires API Key.")
         if not self.base_url:
-            capability: ProviderCapability = ProviderCapability.get_capability(self.name)
-            if capability is None:
+            if capability.default_base_url is None:
                 raise ValueError(f"Provider {self.name} requires Base URL.")
             self.base_url = capability.default_base_url
 
-        if self.name in ["custome", "ollama"] and not self.model_name:
-            raise ValueError(f"Provider {self.name} requires Model Name.")
+        return self

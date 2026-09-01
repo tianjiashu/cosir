@@ -15,7 +15,7 @@
 ```
 api/          FastAPI 接入层（路由、SSE、依赖装配）
 core/         Agent 运行底座（全基于 LangGraph：runtime / workflows / llm / context / agents / observability）
-service/      领域服务编排层（task / turn / workspace / tool_execution / runtime_event / log_query）
+service/      领域服务编排层（task / turn / workspace / tool_execution / workspace_event / log_query）
 storage/      SQLite 数据层（引擎缓存、schema、CRUD）
 tools/        自定义工具系统（schemas / tool_execute / tool_handler / tool_models / validation / guard）
 models/       业务值对象地基（dataclass / 枚举 / payload）
@@ -62,16 +62,14 @@ uv run python -m app
 - `logs/app.log`：应用结构化日志（`configure_logging` 落盘）
 - `logs/backend.log`：uvicorn 进程输出（启动横幅、访问日志、异常栈），由 `scripts/dev.sh` 重定向
 
-### 前后端并行启动
+### 桌面开发模式启动
 
-仓库根提供一键脚本，并行拉起后端 uvicorn 与前端 tauri dev，日志统一到 `logs/`：
+Tauri 开发壳负责启动前端 Next 与后端 `uv run` 进程，后端仅监听本机 `127.0.0.1:8000`：
 
 ```bash
-# 方式一：直接运行脚本
-bash scripts/dev.sh
-
-# 方式二：通过 npm（仓库根 package.json 提供）
+npm run dev:desktop
+# 或使用等价别名
 npm run dev:all
 ```
 
-按 `Ctrl+C` 会同时终止前后端及其子进程（cargo / vite）。
+桌面窗口关闭或按 `Ctrl+C` 会终止后端及其子进程。开发期后端 stdout/stderr 会写入桌面运行目录的 `backend.log`。

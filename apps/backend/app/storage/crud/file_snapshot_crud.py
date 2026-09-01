@@ -101,9 +101,7 @@ class FileSnapshotCrud:
                     base + offset,
                 )
             with self._session_factory.begin() as session:
-                session.add_all(
-                    FileSnapshotModel(**record.to_row_dict()) for record in records
-                )
+                session.add_all(FileSnapshotModel(**record.to_row_dict()) for record in records)
         return records
 
     def _next_seq_for_task(self, task_id: int) -> int:
@@ -126,9 +124,7 @@ class FileSnapshotCrud:
         """
         with self._session_factory() as session:
             max_seq = session.execute(
-                select(func.max(FileSnapshotModel.seq)).where(
-                    FileSnapshotModel.task_id == task_id
-                )
+                select(func.max(FileSnapshotModel.seq)).where(FileSnapshotModel.task_id == task_id)
             ).scalar()
         return 0 if max_seq is None else int(max_seq) + 1
 
@@ -255,9 +251,11 @@ class FileSnapshotCrud:
             )
             if turn_ids is not None:
                 stmt = stmt.where(FileSnapshotModel.turn_id.in_(turn_ids))
-            row = session.execute(
-                stmt.order_by(FileSnapshotModel.seq.desc()).limit(1)
-            ).scalars().first()
+            row = (
+                session.execute(stmt.order_by(FileSnapshotModel.seq.desc()).limit(1))
+                .scalars()
+                .first()
+            )
         return None if row is None else FileSnapshotRecord.from_model(row)
 
     def latest_any_by_path(
@@ -292,9 +290,11 @@ class FileSnapshotCrud:
             )
             if turn_ids is not None:
                 stmt = stmt.where(FileSnapshotModel.turn_id.in_(turn_ids))
-            row = session.execute(
-                stmt.order_by(FileSnapshotModel.seq.desc()).limit(1)
-            ).scalars().first()
+            row = (
+                session.execute(stmt.order_by(FileSnapshotModel.seq.desc()).limit(1))
+                .scalars()
+                .first()
+            )
         return None if row is None else FileSnapshotRecord.from_model(row)
 
     def mark_stable_by_turn(self, turn_id: int) -> int:

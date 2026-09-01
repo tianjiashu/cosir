@@ -203,7 +203,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,
                     provider_id=child_agent_profile.provider_id,
-                    model_name=child_agent_profile.model_name
+                    model_name=child_agent_profile.model_name,
                 )
             except Exception as exc:
                 log.exception(

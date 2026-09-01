@@ -96,11 +96,7 @@ class CreateTurnRequest(BaseModel):
             if not att.ref or not att.ref.strip():
                 raise ValueError("attachment ref must not be blank")
             if len(att.ref) > cls.MAX_REF_LEN:
-                raise ValueError(
-                    "attachment ref must be less than 4096 characters"
-                )
-            if att.kind == "url" and not att.ref.lower().startswith(
-                ("http://", "https://")
-            ):
+                raise ValueError("attachment ref must be less than 4096 characters")
+            if att.kind == "url" and not att.ref.lower().startswith(("http://", "https://")):
                 raise ValueError("url attachment must start with http(s)://")
         return attachments

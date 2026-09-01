@@ -207,9 +207,7 @@ def _encode_image_to_block(
         raise VisionImageError(f"cannot stat image: {exc}") from exc
 
     if st.st_size > max_single_bytes:
-        raise VisionImageError(
-            f"image too large: {st.st_size} bytes exceeds {max_single_bytes}"
-        )
+        raise VisionImageError(f"image too large: {st.st_size} bytes exceeds {max_single_bytes}")
 
     # 尺寸 + 真实格式 + 解码炸弹防护在 _cached_encode 内的 Image.open 阶段生效
     # （Image.MAX_IMAGE_PIXELS 超限会抛 DecompressionBombError）。
@@ -224,9 +222,7 @@ def _encode_image_to_block(
     with Image.open(image_path) as probe:
         width, height = probe.size
     if width > max_side or height > max_side:
-        raise VisionImageError(
-            f"image dimensions {width}x{height} exceed limit {max_side}px"
-        )
+        raise VisionImageError(f"image dimensions {width}x{height} exceed limit {max_side}px")
 
     return {
         "type": "image_url",
@@ -314,7 +310,6 @@ def build_user_content_blocks(
             log.warning(
                 "vision_image_skipped",
                 extra={
-                    "msg": "image validation/decoding failed, skipped",
                     "data": {
                         "path": os.path.basename(image_path),
                         "trusted_cosir": is_trusted,

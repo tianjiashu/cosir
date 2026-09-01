@@ -20,6 +20,7 @@ class ProviderRecord:
     """表示一个模型厂商配置行。"""
 
     name: str
+    provider_type: str = "api"
     id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -51,6 +52,7 @@ class ProviderRecord:
         return {
             "id": self.id,
             "name": self.name,
+            "provider_type": self.provider_type,
             "base_url": self.base_url,
             "enabled": self.enabled,
             "sort_order": self.sort_order,
@@ -77,6 +79,7 @@ class ProviderRecord:
         return cls(
             id=row.id,
             name=row.name,
+            provider_type=row.provider_type,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             base_url=row.base_url,
@@ -90,6 +93,7 @@ class ProviderRecord:
         return ProviderModel(
             id=self.id,
             name=self.name,
+            provider_type=self.provider_type,
             created_at=self.created_at,
             updated_at=self.updated_at,
             base_url=self.base_url,

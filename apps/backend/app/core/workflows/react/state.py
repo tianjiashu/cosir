@@ -44,6 +44,7 @@ class ReactGraphState(BaseModel):
         deferred_repair_message: 模型级「本轮一次的延后 REPAIR 修复提示」。model 节点在
             REPAIR 情形写入；observe 节点工具结果处理后注入模型并清空，避免与单条工具强绑定。
     """
+
     repair_requested: bool
     step_count: int
     tool_error_count: int

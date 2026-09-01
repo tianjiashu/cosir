@@ -56,8 +56,8 @@ class CapabilityService:
 
     @staticmethod
     def resolve_reasoning_effort(
-            model_name: str,
-            requested_effort: str | None,
+        model_name: str,
+        requested_effort: str | None,
     ) -> str | None:
         """把内部推理强度档位翻译成厂商原始档位。
 

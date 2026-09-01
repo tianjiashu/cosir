@@ -145,8 +145,8 @@ def _extract_reasoning_field(additional) -> str:
 
 
 def _should_strip_reasoning_content(
-        channel: str,
-        thinking_roundtrip: bool,
+    channel: str,
+    thinking_roundtrip: bool,
 ) -> bool:
     """判断是否剥离 assistant 消息中的 ``reasoning_content``（回传策略）。
 
