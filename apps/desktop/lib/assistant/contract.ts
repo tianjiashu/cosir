@@ -114,11 +114,6 @@ export type TransportState = {
   messages: TransportMessage[];
   /** 运行时元信息；首屏历史场景下 runId 为 null、status 为 idle。 */
   run: TransportRun;
-  /**
-   * 状态快照版本号，由后端 `ConversationHead.revision` 单调递增；
-   * 前端用于检测 state 是否已基于最新事实投影，避免陈旧历史覆盖实时流。
-   */
-  revision: number;
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;
 };

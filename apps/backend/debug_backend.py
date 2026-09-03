@@ -30,7 +30,6 @@ def run_debug_server() -> None:
         main function.
     """
 
-    os.environ.setdefault("CODING_AGENT_HOST", "127.0.0.1")
     os.environ.setdefault("CODING_AGENT_PORT", "8000")
     os.environ.setdefault("CODING_AGENT_RELOAD", "true")
     os.environ.setdefault("CODING_AGENT_LOG_LEVEL", "debug")

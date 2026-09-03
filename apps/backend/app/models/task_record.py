@@ -21,15 +21,15 @@ class TaskRecord:
     id: int
     workspace_id: int
     title: str
-    status: str
     created_at: datetime
     updated_at: datetime
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
-    parent_turn_id: int | None = None
+    parent_run_id: int | None = None
     delegation_id: int | None = None
     context_usage_used: int | None = None
+    message_sequence: int = 0
 
     @property
     def is_child(self) -> bool:
@@ -57,8 +57,8 @@ class TaskRecord:
             无。
 
         返回:
-            包含任务字段的字典，``latest_turn_id`` / ``execution_status`` /
-            ``parent_task_id`` / ``parent_turn_id`` / ``delegation_id`` /
+            包含任务字段的字典，``latest_run_id`` / ``execution_status`` /
+            ``parent_task_id`` / ``parent_run_id`` / ``delegation_id`` /
             ``context_usage_used`` 可能为 None。
 
         异常:
@@ -72,13 +72,13 @@ class TaskRecord:
             "id": self.id,
             "workspace_id": self.workspace_id,
             "title": self.title,
-            "status": self.status,
             "execution_status": self.execution_status,
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
-            "parent_turn_id": self.parent_turn_id,
+            "parent_run_id": self.parent_run_id,
             "delegation_id": self.delegation_id,
             "context_usage_used": self.context_usage_used,
+            "message_sequence": self.message_sequence,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -103,12 +103,12 @@ class TaskRecord:
             id=row.id,
             workspace_id=row.workspace_id,
             title=row.title,
-            status=row.status,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             task_type=row.task_type,
             parent_task_id=row.parent_task_id,
-            parent_turn_id=row.parent_turn_id,
+            parent_run_id=row.parent_run_id,
             delegation_id=row.delegation_id,
             context_usage_used=row.context_usage_used,
+            message_sequence=row.message_sequence,
         )

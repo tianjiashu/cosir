@@ -1,10 +1,10 @@
 """ReAct-like 工作流的模型节点（``_model_node``）。
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
-取出 ``operations`` / ``turn`` / ``model``，将模型文本与 reasoning 增量直接交给
+取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量直接交给
 ``RuntimeOperations`` 的 canonical writer；用 ``model.astream()`` 累积 ``AIMessage``，
 根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
-状态写入 **turn**。
+状态写入 **run**。
 
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_files`` 调用）。此时文本**不计入最终
@@ -56,10 +56,10 @@ from ..react.state import ReactGraphState
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
-    节点从运行上下文取出 ``operations`` / ``turn`` / ``model``，将模型文本与 reasoning 增量
+    节点从运行上下文取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量
     直接写入 canonical conversation facts；用 ``model.astream()`` 累积
     ``AIMessage``。根据模型最终输出决定进入工具分支、
-    最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **turn**。
+    最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **run**。
 
     参数:
         state: 当前 graph state。
@@ -71,11 +71,11 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     副作用:
         - 发起推理前若本次已超配额，直接调用 ``_finalize_max_steps`` 收口终态（发
-          把 turn 标记为 failed），不再触发推理；
+          把 run 标记为 failed），不再触发推理；
         - 经 ``_runtime_context().add_message`` 把本轮 ``AIMessage`` 落库并写回内存
           （``RuntimeContextManager`` 唯一写入入口），使下一模型步能累积看到本轮输出；
         - 模型文本与 reasoning 增量经 ``RuntimeOperations`` 写入 canonical facts；状态写入
-          ``turn``；
+          ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
         - ``invalid_tool_calls`` 按双轨消费：未命中工具名的 ``IGNORE`` 仅记 warning；
           命中工具名的 ``REPAIR`` 在 ``requested_tool`` 为真（情形 a）时把修复提示作为独立
@@ -87,7 +87,6 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     rc = _runtime_config()
     operations = rc.operations
-    turn = rc.turn
     model = rc.model
     thinking_channel = rc.thinking_channel
     thinking_roundtrip = rc.thinking_roundtrip
@@ -101,12 +100,12 @@ async def _model_node(state: ReactGraphState) -> dict:
     if step_count > state.max_steps:
         return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
-    if operations.is_current_turn_cancelled():
+    if operations.is_current_run_cancelled():
         log.info(
             "model_node_cancelled_before_request",
             extra={
-                "msg": f"模型请求前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.id},
+                "msg": f"模型请求前检测到 run 已取消，跳过模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
         # 请求前取消同样走统一 canonical 终态，与流式中取消/工具取消保持语义一致。
@@ -125,12 +124,12 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    if operations.is_current_turn_cancelled():
+    if operations.is_current_run_cancelled():
         log.info(
             "model_node_cancelled_before_model_requested",
             extra={
-                "msg": f"模型请求事件前检测到 turn 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.id},
+                "msg": f"模型请求事件前检测到 run 已取消，跳过模型调用，step_id={step_id}",
+                "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
         # 同上一检查点：请求前取消走统一 canonical 终态。
@@ -153,7 +152,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         _dump_raw_chunk_debug(chunk, chunk_index)
         chunk_index += 1
 
-        if operations.is_current_turn_cancelled():
+        if operations.is_current_run_cancelled():
             # 取消直接落定 cancelled 终态，而不是把协作取消误记为失败。
             usage_summary = rc.usage_stats.to_dict()
             log.warning(
@@ -201,7 +200,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
     # 单一来源：usage 只在模型调用产出 ai_message 后从其 usage_metadata 累加一次。
     # ai_message.usage_metadata 是 LangChain 对各流式 chunk 求和无重复后的完整快照，
-    # 不再逐 chunk 解析（消除双重口径与键名偏差）。本对象为 turn 级共享累加器，
+    # 不再逐 chunk 解析（消除双重口径与键名偏差）。本对象为 run 级共享累加器，
     # REPAIR 回流的多次模型调用会依次累加，各步末态快照互不覆盖。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
 
@@ -328,7 +327,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "arguments": call.arguments,
                 # Some providers omit an id. Generate a stable per-run/per-step id so
                 # parallel calls of the same tool cannot collapse into one fact.
-                "call_id": call.call_id or f"{turn.id}:{step_id}:{index}",
+                "call_id": call.call_id or f"{rc.run.id}:{step_id}:{index}",
                 "instruction": instruction,
             }
             for index, call in enumerate(tool_calls)
@@ -356,13 +355,13 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if output_text:  # 没有工具调用但有文本 → 最终回答
-        completed_turn = operations.complete_turn_if_running(turn.id, output_text)
-        if completed_turn is None:
+        completed_run = operations.complete_run_if_running(rc.run.id, output_text)
+        if completed_run is None:
             log.info(
                 "model_node_final_response_terminal_race_lost",
                 extra={
-                    "msg": f"最终回复落定时 turn 已非 running，跳过完成事件，step_id={step_id}",
-                    "data": {"step_id": step_id, "turn_id": turn.id},
+                    "msg": f"最终回复落定时 run 已非 running，跳过完成事件，step_id={step_id}",
+                    "data": {"step_id": step_id, "run_id": rc.run.id},
                 },
             )
             return terminal_state(step_count)
@@ -385,13 +384,13 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "output_text_length": len(output_text)},
         },
     )
-    failed_turn = operations.fail_turn_if_running(turn.id, end_reason="invalid_model_output")
-    if failed_turn is None:
+    failed_run = operations.fail_run_if_running(rc.run.id, end_reason="invalid_model_output")
+    if failed_run is None:
         log.info(
             "model_node_invalid_output_terminal_race_lost",
             extra={
-                "msg": f"非法模型输出失败落定时 turn 已非 running，跳过失败事件，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.id},
+                "msg": f"非法模型输出失败落定时 run 已非 running，跳过失败事件，step_id={step_id}",
+                "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
         return terminal_state(step_count)

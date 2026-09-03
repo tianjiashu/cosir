@@ -1,6 +1,7 @@
 """配置后端文件日志。"""
 
 import logging
+from logging.handlers import RotatingFileHandler
 from multiprocessing.queues import Queue
 from pathlib import Path
 
@@ -24,6 +25,8 @@ def configure_logging(
     queue_size: int = 1000,
     batch_size: int = 50,
     flush_interval_ms: int = 1000,
+    max_bytes: int = 10 * 1024 * 1024,
+    backup_count: int = 7,
 ) -> logging.Logger:
     """配置并返回后端应用日志器。
 
@@ -70,7 +73,12 @@ def configure_logging(
 
     context_filter = LogContextFilter()
     caller_filter = CallerFilter()
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8",
+    )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(JsonlFormatter())
     file_handler.addFilter(context_filter)
@@ -101,6 +109,8 @@ def install_logging_for_current_process(
     queue_size: int = 1000,
     batch_size: int = 50,
     flush_interval_ms: int = 1000,
+    max_bytes: int = 10 * 1024 * 1024,
+    backup_count: int = 7,
     log_queue: "Queue | None" = None,
 ) -> logging.Logger:
     """按当前进程角色统一安装日志管线，调用方无需感知父子进程差异。
@@ -138,6 +148,8 @@ def install_logging_for_current_process(
         queue_size=queue_size,
         batch_size=batch_size,
         flush_interval_ms=flush_interval_ms,
+        max_bytes=max_bytes,
+        backup_count=backup_count,
     )
 
 

@@ -14,12 +14,12 @@ from app.api.schemas.request.ProviderUpdateRequest import ProviderUpdateRequest
 from app.api.schemas.response.ProviderCapabilityResponse import ProviderCapabilityResponse
 from app.api.schemas.response.ProviderResponse import ProviderResponse
 from app.app import app
-from app.llm_provider.capability.provider_capability import (
+from app.core.llm_provider.capability.provider_capability import (
     _SUPPORT_PROVIDERS,
     ProviderCapability,
 )
-from app.llm_provider.provider import ProviderService
-from app.llm_provider.provider.connection_test_result import ConnectionTestResult
+from app.service.provider import ProviderService
+from app.service.provider import ConnectionTestResult
 
 
 @app.get("/providers/catalog", response_model=list[ProviderCapabilityResponse])

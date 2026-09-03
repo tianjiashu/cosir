@@ -4,10 +4,10 @@ import tempfile
 from pathlib import Path
 
 from app.config.settings import Settings
-from app.service.task.conversation_mutation_writer import ConversationMutationWriter
+from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
 from app.service.task.conversation_state_service import ConversationStateService
+from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.turn_crud import TurnCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.store_engines import close_storage, init_storage
 
@@ -37,8 +37,8 @@ def _task_id() -> int:
     return TaskCrud().create(workspace.id, "canonical").id
 
 
-def test_projection_reads_canonical_messages_and_revision() -> None:
-    """State is reconstructed from persisted messages and the committed revision."""
+def test_projection_reads_canonical_messages_without_transport_revision() -> None:
+    """State is reconstructed from persisted messages without exposing a transport revision."""
     task_id = _task_id()
     writer = ConversationMutationWriter()
     user, _ = writer.create_message(task_id, "user", text="hello")
@@ -51,60 +51,60 @@ def test_projection_reads_canonical_messages_and_revision() -> None:
     assert [message["role"] for message in state["messages"]] == ["user", "assistant"]
     assert state["messages"][0]["parts"][0]["text"] == "hello"
     assert state["messages"][1]["parts"][0]["text"] == "world"
-    assert state["revision"] == 4
+    assert "revision" not in state
     assert user.id > 0
 
 
 def test_run_snapshot_requires_canonical_run_messages() -> None:
     """A run snapshot cannot be fabricated from the legacy turns table."""
     task_id = _task_id()
-    turn_id = TurnCrud().create(task_id, "hello").id
+    run_id = ConversationRunCrud().create(task_id, "hello").id
     writer = ConversationMutationWriter()
     assistant, _ = writer.create_message(
-        task_id, "assistant", turn_id=turn_id, status="running", text=""
+        task_id, "assistant", run_id=run_id, status="running", text=""
     )
-    state = ConversationStateService().build_initial_state(task_id, turn_id, "ignored")
+    state = ConversationStateService().build_initial_state(task_id, run_id, "ignored")
 
     assert assistant.id > 0
-    assert state["run"] == {"runId": turn_id, "status": "pending"}
+    assert state["run"] == {"runId": run_id, "status": "pending"}
     assert state["messages"][0]["role"] == "assistant"
 
 
 def test_cancel_run_commits_turn_and_assistant_fact_together() -> None:
     """取消必须同时落定运行与助手消息，并推进同一个 revision。"""
     task_id = _task_id()
-    turn_id = TurnCrud().create(task_id, "hello").id
+    run_id = ConversationRunCrud().create(task_id, "hello").id
     writer = ConversationMutationWriter()
     assistant, _ = writer.create_message(
-        task_id, "assistant", turn_id=turn_id, status="running", text=""
+        task_id, "assistant", run_id=run_id, status="running", text=""
     )
 
-    result = writer.cancel_run(turn_id)
+    result = writer.cancel_run(run_id)
     assert result is not None
     state = ConversationStateService().build_initial_history_state(task_id)
     assert state["messages"][0]["status"] == "cancelled"
     assert state["messages"][0]["endReason"] == "user_cancelled"
-    assert result.revision == state["revision"]
+    assert result is not None
     assert assistant.id > 0
 
 
 def test_tool_call_is_projected_at_part_sequence_and_keeps_structured_result() -> None:
     """Tool UI state is attached to a stable assistant part, not appended by projection order."""
     task_id = _task_id()
-    turn_id = TurnCrud().create(task_id, "inspect").id
+    run_id = ConversationRunCrud().create(task_id, "inspect").id
     writer = ConversationMutationWriter()
     assistant, _ = writer.create_message(
-        task_id, "assistant", turn_id=turn_id, status="running", text="thinking"
+        task_id, "assistant", run_id=run_id, status="running", text="thinking"
     )
     call, _ = writer.create_tool_call(
-        task_id, "call-1", "read_file", {"path": "README.md"}, turn_id=turn_id
+        task_id, "call-1", "read_file", {"path": "README.md"}, run_id=run_id
     )
-    writer.transition_tool_call(task_id, "call-1", "running", turn_id=turn_id)
+    writer.transition_tool_call(task_id, "call-1", "running", run_id=run_id)
     writer.complete_tool_call_by_external_id(
         task_id,
         "call-1",
         {"content": "ok", "output_truncated": False},
-        turn_id=turn_id,
+        run_id=run_id,
     )
 
     state = ConversationStateService().build_initial_history_state(task_id)
@@ -120,16 +120,16 @@ def test_tool_call_is_projected_at_part_sequence_and_keeps_structured_result() -
 def test_terminal_tool_call_cannot_be_overwritten_by_late_completion() -> None:
     """A late executor callback must not turn a cancelled call into success."""
     task_id = _task_id()
-    turn_id = TurnCrud().create(task_id, "cancel").id
+    run_id = ConversationRunCrud().create(task_id, "cancel").id
     writer = ConversationMutationWriter()
-    writer.create_message(task_id, "assistant", turn_id=turn_id, status="running", text="")
-    writer.create_tool_call(task_id, "call-2", "execute_terminal", {}, turn_id=turn_id)
-    writer.transition_tool_call(task_id, "call-2", "running", turn_id=turn_id)
+    writer.create_message(task_id, "assistant", run_id=run_id, status="running", text="")
+    writer.create_tool_call(task_id, "call-2", "execute_terminal", {}, run_id=run_id)
+    writer.transition_tool_call(task_id, "call-2", "running", run_id=run_id)
     writer.complete_tool_call_by_external_id(
-        task_id, "call-2", None, status="cancelled", turn_id=turn_id
+        task_id, "call-2", None, status="cancelled", run_id=run_id
     )
     writer.complete_tool_call_by_external_id(
-        task_id, "call-2", {"exit_code": 0}, status="completed", turn_id=turn_id
+        task_id, "call-2", {"exit_code": 0}, status="completed", run_id=run_id
     )
 
     call = next(

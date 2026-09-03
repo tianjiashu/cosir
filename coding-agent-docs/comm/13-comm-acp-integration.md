@@ -752,19 +752,19 @@ def acp_mcp_servers_to_mcp_config(mcp_servers: list[MCPServer]) -> MCPConfig:
         match server:
             case acp.schema.HttpMcpServer():
                 config["mcpServers"][server.name] = {
-                    "transport": "http",
+                    "request": "http",
                     "url": server.url,
                     "headers": {h.name: h.value for h in server.headers},
                 }
             case acp.schema.SseMcpServer():
                 config["mcpServers"][server.name] = {
-                    "transport": "sse",
+                    "request": "sse",
                     "url": server.url,
                     "headers": {h.name: h.value for h in server.headers},
                 }
             case acp.schema.McpServerStdio():
                 config["mcpServers"][server.name] = {
-                    "transport": "stdio",
+                    "request": "stdio",
                     "command": server.command,
                     "args": list(server.args),
                     "env": {e.name: e.value for e in server.env},

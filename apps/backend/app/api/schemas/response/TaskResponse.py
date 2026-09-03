@@ -13,11 +13,10 @@ class TaskResponse(BaseModel):
         task_id: 任务标识。
         workspace_id: 所属工作区标识。
         title: 任务标题。
-        status: 任务生命周期状态。
         execution_status: 派生执行状态，可能为 None。
         task_type: 任务类型，``"user"`` 为用户创建，``"delegation"`` 为委派子任务。
         parent_task_id: 父任务标识，仅委派子任务有值。
-        parent_turn_id: 父轮次标识，仅委派子任务有值。
+        parent_run_id: 父轮次标识，仅委派子任务有值。
         delegation_id: 所属委派标识，仅委派子任务有值。
         context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。
         context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window
@@ -38,11 +37,10 @@ class TaskResponse(BaseModel):
     task_id: int
     workspace_id: int
     title: str
-    status: str
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
-    parent_turn_id: int | None = None
+    parent_run_id: int | None = None
     delegation_id: int | None = None
     context_usage_used: int | None = None
     context_window_total: int | None = None
@@ -81,11 +79,10 @@ class TaskResponse(BaseModel):
             task_id=record.id,
             workspace_id=record.workspace_id,
             title=record.title,
-            status=record.status,
             execution_status=record.execution_status,
             task_type=record.task_type,
             parent_task_id=record.parent_task_id,
-            parent_turn_id=record.parent_turn_id,
+            parent_run_id=record.parent_run_id,
             delegation_id=record.delegation_id,
             context_usage_used=record.context_usage_used,
             context_window_total=context_window_total,

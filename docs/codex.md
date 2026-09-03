@@ -1,3 +1,5 @@
+> 历史架构文档：本文保留对话重构背景，不作为当前桌面技术栈或启动链路的事实来源。当前桌面端为 Tauri + React/Vite 静态前端，后端为 Tauri 管理的本机 FastAPI。
+
 按第零铁律，应该把“发送链路”重新收敛成稳定的本地对话运行架构，而不是继续给 `onError`、重试按钮等局部打补丁。
 
 核心方案是：
@@ -8,7 +10,7 @@
 
 运行位置：
 
-- React/Next：UI 进程，只负责 Composer、消息展示、错误展示、重试操作。
+- React/Vite：Tauri WebView 内的静态 UI，只负责 Composer、消息展示、错误展示、重试操作。
 - FastAPI：Agent 主进程，负责 Conversation、Run、模型调用、工具、审批、checkpoint 和状态恢复。
 - SQLite：唯一事实源，保存用户消息、assistant 消息、运行状态、命令幂等记录和 revision。
 - 工具子进程：只承载需要 OS 故障隔离的工具。

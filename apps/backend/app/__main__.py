@@ -5,7 +5,6 @@
 
 可通过环境变量覆盖运行参数：
 
-- ``CODING_AGENT_HOST``：监听地址，默认 ``127.0.0.1``。
 - ``CODING_AGENT_PORT``：监听端口，默认 ``8000``。
 - ``CODING_AGENT_RELOAD``：是否开启热重载，默认 ``true``。
 - ``CODING_AGENT_LOG_LEVEL``：uvicorn 日志级别，默认 ``info``。
@@ -67,16 +66,17 @@ def main() -> None:
             queue_size=Settings.LOG_QUEUE_SIZE,
             batch_size=Settings.LOG_BATCH_SIZE,
             flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
+            max_bytes=Settings.LOG_MAX_BYTES,
+            backup_count=Settings.LOG_BACKUP_COUNT,
         )
 
-        host = os.environ.get("CODING_AGENT_HOST", "127.0.0.1")
         port = int(os.environ.get("CODING_AGENT_PORT", "8000"))
         reload_enabled = os.environ.get("CODING_AGENT_RELOAD", "true").lower() == "true"
         log_level = os.environ.get("CODING_AGENT_LOG_LEVEL", "info").lower()
 
         uvicorn.run(
             "app.app:app",
-            host=host,
+            host="127.0.0.1",
             port=port,
             reload=reload_enabled,
             log_level=log_level,

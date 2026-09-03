@@ -10,6 +10,7 @@ pub fn wait_for_backend(
     port: u16,
     timeout: Duration,
     bootstate_file: &Path,
+    process_alive: impl Fn() -> bool,
 ) -> Result<(), String> {
     let address = (host, port)
         .to_socket_addrs()
@@ -18,6 +19,9 @@ pub fn wait_for_backend(
         .ok_or_else(|| "后端地址没有可用解析结果".to_string())?;
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
+        if !process_alive() {
+            return Err("本地 Agent 后端进程在健康检查前退出".to_string());
+        }
         if let Some(error) = read_bootstate_failure(bootstate_file) {
             return Err(error);
         }

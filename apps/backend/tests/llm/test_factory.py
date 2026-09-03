@@ -15,7 +15,7 @@ import pytest
 from langchain_openai import ChatOpenAI
 
 from app.core.agents.model_settings import ModelSettings
-from app.llm_provider.model_factory import build_chat_model
+from app.core.llm_provider.model_factory import build_chat_model
 
 
 class _FakeProvider:
@@ -61,9 +61,9 @@ def fake_provider_service(monkeypatch: pytest.MonkeyPatch) -> None:
 
     fake = MagicMock()
     fake.get_provider.return_value = _FakeProvider()
-    monkeypatch.setattr("app.llm_provider.model_factory.get_provider_service", lambda: fake)
+    monkeypatch.setattr("app.core.llm_provider.model_factory.get_provider_service", lambda: fake)
     monkeypatch.setattr(
-        "app.llm_provider.model_factory.ProviderCapability",
+        "app.core.llm_provider.model_factory.ProviderCapability",
         _FakeProviderCapability,
     )
 

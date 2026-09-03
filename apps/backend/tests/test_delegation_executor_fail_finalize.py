@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 from app.core.agents.agent_profile import AgentProfile
 from app.core.delegation.delegation_executor import DelegationExecutor
-from app.models import TaskRecord, TurnRecord
+from app.models import ConversationRunRecord, TaskRecord
 
 
 def _make_executor() -> DelegationExecutor:
@@ -21,9 +21,9 @@ def _make_executor() -> DelegationExecutor:
         依赖全部以占位对象填充的执行器实例；``child_runner`` 等协作者不参与本测试。
     """
 
-    parent_turn = TurnRecord(
+    parent_turn = ConversationRunRecord(
         id=1,
-        task_id="task-1",
+        task_id=1,
         input_text="parent",
         status="running",
         created_at=datetime.now(),
@@ -33,7 +33,7 @@ def _make_executor() -> DelegationExecutor:
         id=1,
         workspace_id="ws-1",
         title="parent task",
-        status="running",
+        execution_status="running",
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -46,7 +46,7 @@ def _make_executor() -> DelegationExecutor:
     return DelegationExecutor(
         child_runner=MagicMock(),
         parent_profile=parent_profile,
-        parent_turn=parent_turn,
+        parent_run=parent_turn,
         parent_task=parent_task,
     )
 

@@ -7,14 +7,14 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
-from app.core.runtime.turn_cancellation_registry import cancellation_registry
-from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
-from app.service.depends import get_turn_service
-from app.service.task.conversation_mutation_writer import ConversationMutationWriter
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.models import ConversationRunRecord, RuntimeMessage, TaskRecord, WorkspaceRecord
+from app.service.conversation_run_message_store import ConversationRunMessageStore
+from app.service.depends import get_conversation_run_service
+from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
 from app.service.tool_execution.run_result import ToolRunResult
 from app.service.tool_execution.tool_execution_service import ToolExecutionService
 from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
-from app.service.turn_runtime_message_store import TurnRuntimeMessageStore
 from app.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.tools.tool_execute.tool_scheduler import ToolScheduler
@@ -27,15 +27,15 @@ if TYPE_CHECKING:
 class RuntimeOperations:
     """Expose runtime-owned side effects through a narrow workflow boundary.
 
-    状态单一事实来源是 ``Turn``：本门面暴露的 ``has_turn_status`` / ``update_turn_status``
-    / ``get_current_turn`` 全部作用于 turn，不再写 task 执行态（task 执行态由最新 turn 派生）。
+    状态单一事实来源是 ``ConversationRun``：本门面暴露的状态和当前 run 方法都作用于
+    run，不再写 task 执行态（task 执行态由最新 run 派生）。
     """
 
     def __init__(
         self,
         tool_scheduler: ToolScheduler,
         agent_profile: AgentProfile,
-        current_turn: TurnRecord,
+        current_run: ConversationRunRecord,
         current_task: TaskRecord,
         current_workspace: WorkspaceRecord,
         model_tools: list[ToolDefinition] | None = None,
@@ -46,22 +46,22 @@ class RuntimeOperations:
         """初始化运行时操作门面及其私有协作者。
 
         参数:
-            turn_store: 轮次存储（私有协作者，不对外暴露）；逐条落库经其
-                ``append_turn_message`` / ``clear_turn_messages`` 门面，避免 core 直连
+            run_store: 运行存储（私有协作者，不对外暴露）；逐条落库经其
+                消息写入/清理门面，避免 core 直连
                 storage 层（分层约束：core → service，service → storage）。
             tool_scheduler: 工具调度器（已按 workspace 边界解析或进程级兜底）。
-            agent_profile: 驱动本轮执行的 agent profile。
-            current_turn: 当前绑定的轮次记录（门面状态单一事实来源）。
+            agent_profile: 驱动本次 run 的 agent profile。
+            current_run: 当前绑定的 Conversation Run 记录（门面状态单一事实来源）。
             current_task: 当前执行的任务记录。
             current_workspace: 当前工作区记录。
             model_tools: 暴露给模型的工具定义列表。
             execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
                 日志不注入 ``workspace_id``。
-            runtime_dependencies: 可选的本 turn 工具运行期依赖；存在 execution_context 时
+            runtime_dependencies: 可选的本 run 工具运行期依赖；存在 execution_context 时
                 会合并进 ``ToolExecutionContext.runtime_dependencies`` 透传给 handler。
             tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
                 工具执行不产生 trace，行为与集成前一致。
-            should_cancel: 当前 turn 的取消检查回调；为 None 时退化为状态查询。
+            should_cancel: 当前 run 的取消检查回调；为 None 时退化为状态查询。
 
         返回:
             无。
@@ -71,20 +71,20 @@ class RuntimeOperations:
 
         副作用:
             构造 ``ToolExecutionService``、存储执行上下文、构造消息持久化端口
-            （``TurnRuntimeMessageStore``，经 ``message_store`` 属性暴露给 workflow）、
+            （``ConversationRunMessageStore``，经 ``message_store`` 属性暴露给 workflow）、
             记初始化日志。
         """
 
-        self._turn_service = get_turn_service()
+        self._conversation_run_state_service = get_conversation_run_service()
         # 消息持久化端口（service 层适配实现）：暴露给 workflow 供 RuntimeContextManager
         # 注入，使 manager 成为消息读写的唯一事实源。原 append_runtime_message /
         # reset_message_sequence 逐条落库逻辑退役，改由 manager 经本端口落库。
-        self._message_store = TurnRuntimeMessageStore(self._turn_service)
+        self._message_store = ConversationRunMessageStore(self._conversation_run_state_service)
         self._conversation_writer = ConversationMutationWriter()
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
-        self._current_turn = current_turn
+        self._current_run = current_run
         self._current_task = current_task
         self._execution_context = (
             replace(execution_context, runtime_dependencies=runtime_dependencies)
@@ -97,7 +97,7 @@ class RuntimeOperations:
             allowed_tool_names=(tool.name for tool in self.model_tools),
             tool_definitions=self.model_tools,
             trace_recorder=tool_trace_recorder,
-            should_cancel=self.is_current_turn_cancelled,
+            should_cancel=self.is_current_run_cancelled,
         )
 
         log.info(
@@ -107,19 +107,19 @@ class RuntimeOperations:
                 "data": {
                     "agent_id": agent_profile.agent_id,
                     "model_tools_count": len(self.model_tools),
-                    "current_turn_id": current_turn.id if current_turn else None,
-                    "current_turn_bound": bool(current_turn),
+                    "current_run_id": current_run.id if current_run else None,
+                    "current_run_bound": bool(current_run),
                 },
             },
         )
 
-    def get_current_turn(self) -> TurnRecord:
-        """Return the turn identified by ``current_turn_id``.
+    def get_current_run(self) -> ConversationRunRecord:
+        """Return the Conversation Run identified by ``current_run_id``.
 
-        用于工作流取「当前要跑的轮」.
+        用于工作流取「当前要跑的 run」。
         """
 
-        return self._current_turn
+        return self._current_run
 
     def get_current_task(self) -> TaskRecord:
         """Return the task identified by ``current_task_id``.
@@ -139,10 +139,10 @@ class RuntimeOperations:
 
     @property
     def message_store(self) -> RuntimeMessageStore:
-        """返回本 turn 的消息持久化端口（供 workflow 注入 ``RuntimeContextManager``）。
+        """返回本 run 的消息持久化端口（供 workflow 注入 ``RuntimeContextManager``）。
 
         返回:
-            ``TurnRuntimeMessageStore`` 适配实例，承载 ``turn_messages`` 读写的依赖倒置端口。
+            ``ConversationRunMessageStore`` 适配实例，承载 ``turn_messages`` 读写的依赖倒置端口。
         """
         return self._message_store
 
@@ -158,16 +158,15 @@ class RuntimeOperations:
         异常:
             ValueError: ``text`` 为空。
             KeyError: 当前运行没有 canonical assistant message。
-            PermissionError: 当前 executor fencing 已失效。
+            PermissionError: 当前运行已不再 active。
 
         副作用:
-            经 ``ConversationMutationWriter`` 原子追加文本并分配 conversation revision。
+            经 ``ConversationMutationWriter`` 原子追加文本并提交 canonical fact。
         """
-        self._conversation_writer.append_assistant_text_for_turn(
+        self._conversation_writer.append_assistant_text_for_run(
             self._current_task.id,
-            self._current_turn.id,
+            self._current_run.id,
             text,
-            self._current_turn.fencing_version,
         )
 
     def append_assistant_reasoning(self, text: str) -> None:
@@ -182,59 +181,60 @@ class RuntimeOperations:
         异常:
             ValueError: ``text`` 为空。
             KeyError: 当前运行没有 canonical assistant message。
-            PermissionError: 当前 executor fencing 已失效。
+            PermissionError: 当前运行已不再 active。
 
         副作用:
-            经 ``ConversationMutationWriter`` 原子追加 reasoning part 并分配 revision。
+            经 ``ConversationMutationWriter`` 原子追加 reasoning part 并提交 canonical fact。
         """
-        self._conversation_writer.append_assistant_part_for_turn(
+        self._conversation_writer.append_assistant_part_for_run(
             self._current_task.id,
-            self._current_turn.id,
+            self._current_run.id,
             "reasoning",
             text,
-            self._current_turn.fencing_version,
         )
 
-    def has_turn_status(self, turn_id: int, status: str) -> bool:
-        """Return whether a turn currently has the requested status."""
+    def has_conversation_run_status(self, run_id: int, status: str) -> bool:
+        """Return whether a Conversation Run currently has the requested status."""
 
-        has = self._turn_service.has_turn_status(turn_id, status)
+        has = self._conversation_run_state_service.has_conversation_run_status(run_id, status)
         return has
 
-    def is_current_turn_cancelled(self) -> bool:
-        """Return whether the currently bound turn should stop.
+    def is_current_run_cancelled(self) -> bool:
+        """Return whether the currently bound run should stop.
 
         参数:
             无。
 
         返回:
-            当前 turn 已被取消时返回 True，否则返回 False。
+            当前 run 已被取消时返回 True，否则返回 False。
 
         异常:
             无。
 
         副作用:
-            可能调用注入的取消检查回调；无回调时读取 turn 状态。
+            可能调用注入的取消检查回调；无回调时读取 run 状态。
         """
-        current_turn_id = self._current_turn.id
-        if cancellation_registry.is_cancelled(current_turn_id):
+        current_run_id = self._current_run.id
+        if cancellation_registry.is_cancelled(current_run_id):
             return True
-        if not self._current_turn:
+        if not self._current_run:
             return False
-        return self.has_turn_status(current_turn_id, "cancelled")
+        return self.has_conversation_run_status(current_run_id, "cancelled")
 
-    def complete_turn_if_running(self, turn_id: int, response_text: str) -> TurnRecord | None:
-        """Complete the turn only if it is still running.
+    def complete_run_if_running(
+        self, run_id: int, response_text: str
+    ) -> ConversationRunRecord | None:
+        """Complete the Conversation Run only if it is still running.
 
         参数:
-            turn_id: 待完成的 turn 标识。
+            run_id: 待完成的 Conversation Run 标识。
             response_text: Agent 最终回复文本。
 
         返回:
-            成功完成时返回更新后的 TurnRecord；turn 已被取消/失败/完成时返回 None。
+            成功完成时返回更新后的 ConversationRunRecord；run 已被取消/失败/完成时返回 None。
 
         异常:
-            KeyError: 如果指定 turn 不存在。
+            KeyError: 如果指定 run 不存在。
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
@@ -243,43 +243,41 @@ class RuntimeOperations:
 
         response_len = len(response_text)
         log.info(
-            "turn_completion_attempted",
+            "run_completion_attempted",
             extra={
-                "msg": f"尝试完成 running turn，turn_id={turn_id}",
-                "data": {"turn_id": turn_id, "response_length": response_len},
+                "msg": f"尝试完成 running run，run_id={run_id}",
+                "data": {"run_id": run_id, "response_length": response_len},
             },
         )
         # 最终文本先写入 canonical assistant part；response_text 不是事实来源。
         if response_text:
-            self._conversation_writer.append_assistant_text_for_turn(
+            self._conversation_writer.append_assistant_text_for_run(
                 self._current_task.id,
-                turn_id,
+                run_id,
                 response_text,
-                self._current_turn.fencing_version,
             )
         mutation = self._conversation_writer.settle_run(
-            turn_id,
+            run_id,
             "completed",
-            fencing_version=self._current_turn.fencing_version,
         )
         if mutation is None:
             return None
-        return self._turn_service.get_turn(turn_id)
+        return self._conversation_run_state_service.get_run(run_id)
 
-    def fail_turn_if_running(
-        self, turn_id: int, end_reason: str | None = None
-    ) -> TurnRecord | None:
-        """Fail the turn only if it is still running.
+    def fail_run_if_running(
+        self, run_id: int, end_reason: str | None = None
+    ) -> ConversationRunRecord | None:
+        """Fail the Conversation Run only if it is still running.
 
         参数:
-            turn_id: 待失败落定的 turn 标识。
+            run_id: 待失败落定的 Conversation Run 标识。
             end_reason: 可选失败原因。
 
         返回:
-            成功失败落定时返回更新后的 TurnRecord；turn 已不是 running 时返回 None。
+            成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
 
         异常:
-            KeyError: 如果指定 turn 不存在。
+            KeyError: 如果指定 run 不存在。
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
@@ -287,50 +285,48 @@ class RuntimeOperations:
         """
 
         log.info(
-            "turn_failure_attempted",
+            "run_failure_attempted",
             extra={
-                "msg": f"尝试将 running turn 标记为 failed，turn_id={turn_id}",
-                "data": {"turn_id": turn_id, "end_reason": end_reason},
+                "msg": f"尝试将 running run 标记为 failed，run_id={run_id}",
+                "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
         mutation = self._conversation_writer.settle_run(
-            turn_id,
+            run_id,
             "failed",
             end_reason=end_reason,
-            fencing_version=self._current_turn.fencing_version,
         )
         if mutation is None:
             return None
-        return self._turn_service.get_turn(turn_id)
+        return self._conversation_run_state_service.get_run(run_id)
 
-    def cancel_turn_if_running(
-        self, turn_id: int, end_reason: str = "runtime_cancelled"
-    ) -> TurnRecord | None:
-        """Cancel the turn through the canonical writer if it is still active.
+    def cancel_run_if_running(
+        self, run_id: int, end_reason: str = "runtime_cancelled"
+    ) -> ConversationRunRecord | None:
+        """Cancel the Conversation Run through the canonical writer if it is still active.
 
         参数:
-            turn_id: 待取消的 turn 标识。
+            run_id: 待取消的 Conversation Run 标识。
             end_reason: 稳定的取消原因。
 
         返回:
-            成功取消时返回更新后的 TurnRecord；终态已由其它路径落定时返回 None。
+            成功取消时返回更新后的 ConversationRunRecord；终态已由其它路径落定时返回 None。
 
         异常:
-            KeyError: 如果指定 turn 不存在。
+            KeyError: 如果指定 run 不存在。
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
             通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled。
         """
         mutation = self._conversation_writer.settle_run(
-            turn_id,
+            run_id,
             "cancelled",
             end_reason=end_reason,
-            fencing_version=self._current_turn.fencing_version,
         )
         if mutation is None:
             return None
-        return self._turn_service.get_turn(turn_id)
+        return self._conversation_run_state_service.get_run(run_id)
 
     def run_tool_calls(
         self,
@@ -357,11 +353,11 @@ class RuntimeOperations:
         calls = [
             replace(
                 call,
-                call_id=call.call_id or f"{self._current_turn.id}:{effective_step_id}:{index}",
+                call_id=call.call_id or f"{self._current_run.id}:{effective_step_id}:{index}",
             )
             for index, call in enumerate(calls)
         ]
-        self._pre_process_turn(task_id=task_id, calls=calls, step_id=step_id)
+        self._pre_process_run(task_id=task_id, calls=calls, step_id=step_id)
 
         execution_context = self._execution_context
         if running_loop is None:
@@ -388,7 +384,7 @@ class RuntimeOperations:
             running_loop=running_loop,
         )
 
-        self._post_process_turn(task_id=task_id, step_id=step_id, result=result)
+        self._post_process_run(task_id=task_id, step_id=step_id, result=result)
 
         return result
 
@@ -400,15 +396,13 @@ class RuntimeOperations:
             call_id,
             call.tool_name,
             call.arguments,
-            turn_id=self._current_turn.id,
-            fencing_version=self._current_turn.fencing_version,
+            run_id=self._current_run.id,
         )
         self._conversation_writer.transition_tool_call(
             self._current_task.id,
             call_id,
             "running",
-            turn_id=self._current_turn.id,
-            fencing_version=self._current_turn.fencing_version,
+            run_id=self._current_run.id,
         )
 
     def ensure_tool_calls_pending(self, calls: list[ToolCall]) -> None:
@@ -420,8 +414,7 @@ class RuntimeOperations:
                 call.call_id or call.tool_name,
                 call.tool_name,
                 call.arguments,
-                turn_id=self._current_turn.id,
-                fencing_version=self._current_turn.fencing_version,
+                run_id=self._current_run.id,
             )
 
     def mark_tool_calls_requires_action(self, calls: list[ToolCall]) -> None:
@@ -432,14 +425,13 @@ class RuntimeOperations:
                 self._current_task.id,
                 call.call_id or call.tool_name,
                 "requires-action",
-                turn_id=self._current_turn.id,
-                fencing_version=self._current_turn.fencing_version,
+                run_id=self._current_run.id,
             )
 
     def request_tool_approval(self, calls: list[ToolCall], step_id: str) -> str:
         """Persist the approval request associated with a tool batch."""
 
-        request_id = f"approval-{self._current_turn.id}-{step_id}"
+        request_id = f"approval-{self._current_run.id}-{step_id}"
         self._conversation_writer.record_approval_request(
             self._current_task.id,
             request_id,
@@ -454,7 +446,7 @@ class RuntimeOperations:
                     for call in calls
                 ],
             },
-            turn_id=self._current_turn.id,
+            run_id=self._current_run.id,
         )
         return request_id
     def _record_tool_call_finished(self, _step_id: str, observation: object) -> None:
@@ -473,8 +465,7 @@ class RuntimeOperations:
                 else ("cancelled" if status == "cancelled" else "failed")
             ),
             error_text=getattr(observation, "error", None) or getattr(observation, "reason", None),
-            turn_id=self._current_turn.id,
-            fencing_version=self._current_turn.fencing_version,
+            run_id=self._current_run.id,
         )
 
     def cancel_tool_calls(self, calls: list[ToolCall]) -> None:
@@ -485,8 +476,7 @@ class RuntimeOperations:
                 self._current_task.id,
                 call.call_id or call.tool_name,
                 "cancelled",
-                turn_id=self._current_turn.id,
-                fencing_version=self._current_turn.fencing_version,
+                run_id=self._current_run.id,
             )
 
     def build_cancel_placeholder_messages(
@@ -513,7 +503,7 @@ class RuntimeOperations:
         """
         return self._tool_service.build_cancel_placeholder_messages(calls)
 
-    def _pre_process_turn(
+    def _pre_process_run(
         self,
         task_id: str,
         calls: list[ToolCall],
@@ -552,7 +542,7 @@ class RuntimeOperations:
             },
         )
 
-    def _post_process_turn(
+    def _post_process_run(
         self,
         task_id: str,
         result: ToolRunResult,

@@ -4,18 +4,20 @@
   "version": "0.1.0",
   "identifier": "com.cosir.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev -- --hostname 127.0.0.1 --port 3000",
+    "beforeDevCommand": "npm run dev -- --host 127.0.0.1 --port 3000",
     "devUrl": "http://127.0.0.1:3000",
-    "frontendDist": "../.next"
+    "frontendDist": "../dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Cosir",
         "width": 1440,
         "height": 900,
         "minWidth": 960,
-        "minHeight": 640
+        "minHeight": 640,
+        "visible": true
       }
     ],
     "security": {

@@ -13,7 +13,7 @@ class ConversationToolCallRecord:
 
     id: int
     task_id: int
-    turn_id: int | None
+    run_id: int | None
     message_id: int | None
     part_id: int | None
     tool_call_id: str
@@ -45,7 +45,7 @@ class ConversationToolCallRecord:
         return cls(
             id=row.id,
             task_id=row.task_id,
-            turn_id=row.turn_id,
+            run_id=row.run_id,
             message_id=row.message_id,
             part_id=row.part_id,
             tool_call_id=row.tool_call_id,

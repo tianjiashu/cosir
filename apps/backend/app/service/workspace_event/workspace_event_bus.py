@@ -5,7 +5,7 @@
 级 SSE 端点推送。
 
 与 turn 级 ``RuntimeEventBus`` 的差异（见 design §2.1）：
-- 按 ``workspace_id`` 路由（而非 turn_id）；创建 workspace 时无 task/turn。
+- 按 ``workspace_id`` 路由（而非 run_id）；创建 workspace 时无 task/turn。
 - 只承载 ``WorkspaceEvent``（不带 task/turn 信封），不落 turn 级事件表。
 - ``publish`` 只向已注册订阅分发、无缓冲重放；``close`` 幂等且只关闭当前订阅桶，
   不写入永久关闭标记——关闭后重新 ``subscribe`` 可再次接收事件（对齐
@@ -22,7 +22,7 @@
   当前线程归属后选择直发或跨线程投递，互不影响。
 
 注：订阅者队列管理（``RLock`` + set 订阅表 + ``QueueFull`` 丢弃最旧 + 关闭哨兵）
-与 ``RuntimeEventBus`` 同构。因路由键（workspace_id vs turn_id）与事件类型不同、
+与 ``RuntimeEventBus`` 同构。因路由键（workspace_id vs run_id）与事件类型不同、
 且 ``RuntimeEventBus`` 属已验收核心（改动有回归风险），本实现独立承载而暂不提取
 公共订阅者注册表（改动最小化）；后续若出现第三个同类总线，应按 Rule of Three
 提取公共基类。

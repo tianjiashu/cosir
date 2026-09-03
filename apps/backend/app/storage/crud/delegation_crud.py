@@ -102,7 +102,7 @@ class DelegationCrud:
             边界排队；同一事务内先统计该 parent turn 下 active 记录数，额度已满则 ``rollback``
             返回 ``None``，未满则 ``insert`` 后 ``commit``。本方法是并发安全 acquire 的
             唯一事务路径；``list_active_by_parent_turn()`` 仅可用于查询展示，不能
-            作为并发安全依据。额度已满被拒时写一条 ``info`` 级日志（含 ``parent_turn_id``、
+            作为并发安全依据。额度已满被拒时写一条 ``info`` 级日志（含 ``parent_run_id``、
             ``active_count``、``max_concurrency``）以便观测并发拒绝频次，不视为错误路径。
         """
 
@@ -111,7 +111,7 @@ class DelegationCrud:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             active_count = conn.scalar(
                 select(func.count(DelegationModel.id)).where(
-                    DelegationModel.parent_turn_id == record.parent_turn_id,
+                    DelegationModel.parent_run_id == record.parent_run_id,
                     DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES),
                 )
             )
@@ -119,9 +119,9 @@ class DelegationCrud:
                 from app.config.logging.logger import log
 
                 log.info(
-                    "delegation slot unavailable: parent_turn_id=%s active_count=%s "
+                    "delegation slot unavailable: parent_run_id=%s active_count=%s "
                     "max_concurrency=%s, acquire rejected",
-                    record.parent_turn_id,
+                    record.parent_run_id,
                     active_count or 0,
                     max_concurrency,
                 )
@@ -136,7 +136,7 @@ class DelegationCrud:
         self,
         id: int,
         status: str,
-        child_turn_id: int | None = None,
+        child_run_id: int | None = None,
         child_task_id: int | None = None,
         summary: str | None = None,
         error: str | None = None,
@@ -146,7 +146,7 @@ class DelegationCrud:
         参数:
             id: 待更新 delegation 的标识。
             status: 新的 delegation 状态。
-            child_turn_id: 可选的 child turn 标识；传入时覆盖原值。
+            child_run_id: 可选的 child turn 标识；传入时覆盖原值。
             child_task_id: 可选的 child task 标识；传入时覆盖原值。
             summary: 可选的 child 执行摘要；传入时覆盖原值。
             error: 可选的失败信息；传入时覆盖原值。
@@ -164,8 +164,8 @@ class DelegationCrud:
 
         self.get(id)
         values: dict[str, str | int] = {"status": status, "updated_at": to_text(utc_now())}
-        if child_turn_id is not None:
-            values["child_turn_id"] = child_turn_id
+        if child_run_id is not None:
+            values["child_run_id"] = child_run_id
         if child_task_id is not None:
             values["child_task_id"] = child_task_id
         if summary is not None:
@@ -181,7 +181,7 @@ class DelegationCrud:
     def fail_active_delegations(
         self,
         error: str,
-        parent_turn_id: int | None = None,
+        parent_run_id: int | None = None,
     ) -> list[int]:
         """原子地把活跃 delegation 直接置为 failed 并返回受影响 id。
 
@@ -190,14 +190,14 @@ class DelegationCrud:
         ``succeeded`` 的记录不会被误覆盖），以及中途崩溃导致残留活跃记录永久占用并发额度、
         使新委派被永久拒绝。
 
-        ``UPDATE ... WHERE status IN (active) [AND parent_turn_id=?] RETURNING id`` 在单条
+        ``UPDATE ... WHERE status IN (active) [AND parent_run_id=?] RETURNING id`` 在单条
         语句内完成条件判定与状态跃迁：已非活跃的记录不会进入更新集；语句要么全成功要么
-        回滚，不存在部分残留。``parent_turn_id`` 为 ``None`` 时跨全部 parent turn 恢复
+        回滚，不存在部分残留。``parent_run_id`` 为 ``None`` 时跨全部 parent turn 恢复
         （进程级重启场景），传入时仅恢复单个 parent turn 的残留。
 
         参数:
             error: 写入这些委派的统一失败原因（通常为恢复场景说明）。
-            parent_turn_id: 可选的 parent turn 标识；传入时仅恢复该 turn 下残留活跃委派，
+            parent_run_id: 可选的 parent turn 标识；传入时仅恢复该 turn 下残留活跃委派，
                 为 ``None``（默认）时恢复全部 parent turn 的残留活跃委派。
 
         返回:
@@ -215,8 +215,8 @@ class DelegationCrud:
         conditions: list[ColumnElement[bool]] = [
             DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES)
         ]
-        if parent_turn_id is not None:
-            conditions.append(DelegationModel.parent_turn_id == parent_turn_id)
+        if parent_run_id is not None:
+            conditions.append(DelegationModel.parent_run_id == parent_run_id)
         with self._session_factory.begin() as session:
             rows = session.execute(
                 update(DelegationModel)
@@ -249,11 +249,11 @@ class DelegationCrud:
             raise KeyError(id)
         return DelegationRecord.from_model(row)
 
-    def list_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
+    def list_by_parent_turn(self, parent_run_id: int) -> list[DelegationRecord]:
         """列出某 parent turn 下的 delegation，按创建时间升序。
 
         参数:
-            parent_turn_id: parent turn 标识。
+            parent_run_id: parent turn 标识。
 
         返回:
             按创建时间和 delegation 标识升序排列的 delegation 记录。
@@ -269,7 +269,7 @@ class DelegationCrud:
             rows = (
                 session.execute(
                     select(DelegationModel)
-                    .where(DelegationModel.parent_turn_id == parent_turn_id)
+                    .where(DelegationModel.parent_run_id == parent_run_id)
                     .order_by(asc(DelegationModel.created_at), asc(DelegationModel.id))
                 )
                 .scalars()

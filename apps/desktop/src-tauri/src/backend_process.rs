@@ -1,5 +1,9 @@
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::thread;
+
+use crate::desktop_log::append_console_line;
 
 pub struct BackendProcess {
     pub child: Child,
@@ -30,6 +34,7 @@ pub fn spawn_backend(
     bootstate_file: &Path,
     use_uv: bool,
     log_file: &Path,
+    structured_log_dir: &Path,
 ) -> Result<BackendProcess, String> {
     let mut command = Command::new(launcher);
     command.current_dir(backend_dir);
@@ -40,24 +45,26 @@ pub fn spawn_backend(
     } else {
         command.args(["-m", "app"]);
     }
-    let stdout = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file)
-        .map_err(|error| format!("无法打开后端日志文件：{error}"))?;
-    let stderr = stdout
-        .try_clone()
-        .map_err(|error| format!("无法复制后端日志句柄：{error}"))?;
     let mut child = command
-        .env("CODING_AGENT_HOST", "127.0.0.1")
         .env("CODING_AGENT_PORT", port.to_string())
         .env("CODING_AGENT_RELOAD", "false")
         .env("CODING_AGENT_BOOT_STATE_FILE", bootstate_file)
+        .env("CODING_AGENT_LOG_DIR", structured_log_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("无法启动本地 Agent 后端：{error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法接管后端 stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法接管后端 stderr".to_string())?;
+    spawn_output_forwarder(stdout, log_file, "stdout");
+    spawn_output_forwarder(stderr, log_file, "stderr");
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
@@ -107,6 +114,18 @@ pub fn spawn_backend(
     }
     #[cfg(not(windows))]
     Ok(BackendProcess { child })
+}
+
+fn spawn_output_forwarder<R>(reader: R, log_file: &Path, stream: &'static str)
+where
+    R: std::io::Read + Send + 'static,
+{
+    let path = log_file.to_path_buf();
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            let _ = append_console_line(&path, stream, &line);
+        }
+    });
 }
 
 pub fn terminate_process_tree(process: &mut BackendProcess) {

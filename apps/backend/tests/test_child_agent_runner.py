@@ -6,8 +6,8 @@ import app.core.delegation.child_agent_runner as child_runner_module
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 
 
-def _make_profile(turn_id: int):
-    return SimpleNamespace(turn=SimpleNamespace(turn_id=turn_id))
+def _make_profile(run_id: int):
+    return SimpleNamespace(run=SimpleNamespace(id=run_id))
 
 
 def test_run_child_reads_completed_turn(monkeypatch) -> None:
@@ -16,9 +16,9 @@ def test_run_child_reads_completed_turn(monkeypatch) -> None:
 
     monkeypatch.setattr(
         child_runner_module,
-        "get_turn_service",
+        "get_conversation_run_service",
         lambda: SimpleNamespace(
-            get_turn=lambda _id: SimpleNamespace(
+            get_run=lambda _id: SimpleNamespace(
                 id=3, task_id=1, status="completed", end_reason=None
             )
         ),
@@ -48,9 +48,9 @@ def test_run_child_reads_failed_turn(monkeypatch) -> None:
 
     monkeypatch.setattr(
         child_runner_module,
-        "get_turn_service",
+        "get_conversation_run_service",
         lambda: SimpleNamespace(
-            get_turn=lambda _id: SimpleNamespace(
+            get_run=lambda _id: SimpleNamespace(
                 status="failed", response_text=None, end_reason="max_steps_reached"
             )
         ),

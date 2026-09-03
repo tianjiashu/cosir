@@ -29,7 +29,7 @@ class DelegationService:
         self,
         *,
         task_id: int,
-        parent_turn_id: int,
+        parent_run_id: int,
         parent_agent_id: str,
         child_agent_id: str,
         prompt: str,
@@ -42,8 +42,8 @@ class DelegationService:
         record = DelegationRecord(
             id=None,
             task_id=task_id,
-            parent_turn_id=parent_turn_id,
-            child_turn_id=None,
+            parent_run_id=parent_run_id,
+            child_run_id=None,
             child_task_id=None,
             parent_agent_id=parent_agent_id,
             child_agent_id=child_agent_id,
@@ -65,7 +65,7 @@ class DelegationService:
     def mark_child_started(
         self,
         delegation_id: int,
-        child_turn_id: int,
+        child_run_id: int,
         child_task_id: int | None = None,
         **_unused_options: object,
     ) -> None:
@@ -74,7 +74,7 @@ class DelegationService:
         self._delegation_crud.update_status(
             delegation_id,
             "running",
-            child_turn_id=child_turn_id,
+            child_run_id=child_run_id,
             child_task_id=child_task_id,
         )
 
@@ -137,16 +137,16 @@ class DelegationService:
         )
         return len(failed_ids)
 
-    def list_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
+    def list_by_parent_turn(self, parent_run_id: int) -> list[DelegationRecord]:
         """列出某个 parent turn 下的全部 delegation 记录。"""
 
-        return self._delegation_crud.list_by_parent_turn(parent_turn_id)
+        return self._delegation_crud.list_by_parent_turn(parent_run_id)
 
-    def list_active_by_parent_turn(self, parent_turn_id: int) -> list[DelegationRecord]:
+    def list_active_by_parent_turn(self, parent_run_id: int) -> list[DelegationRecord]:
         """列出某个 parent turn 下仍处于活动状态的 delegation。"""
 
         return [
             record
-            for record in self._delegation_crud.list_by_parent_turn(parent_turn_id)
+            for record in self._delegation_crud.list_by_parent_turn(parent_run_id)
             if record.status in ACTIVE_DELEGATION_STATUSES
         ]

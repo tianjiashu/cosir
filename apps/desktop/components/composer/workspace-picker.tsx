@@ -1,10 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { CheckIcon, ChevronDownIcon, FolderIcon, FolderPlusIcon, Loader2Icon } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
+import { writeLastWorkspaceId } from "@/lib/workspace-preferences";
 
 type WorkspacePickerProps = {
   workspaces: Workspace[];
@@ -14,31 +16,29 @@ type WorkspacePickerProps = {
   showCreateLabel?: boolean;
 };
 
-export function WorkspacePicker({
-  workspaces,
-  selectedWorkspaceId,
-  onWorkspaceChange,
-  onWorkspaceCreated,
-  showCreateLabel = false,
-}: WorkspacePickerProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [name, setName] = useState("");
-  const [rootPath, setRootPath] = useState("");
+export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated, showCreateLabel = false }: WorkspacePickerProps) {
+  const [openMenu, setOpenMenu] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const handleCreate = async () => {
-    const trimmedName = name.trim();
-    const trimmedPath = rootPath.trim();
-    if (!trimmedName || !trimmedPath || creating) return;
+  const selected = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
+
+  const chooseWorkspace = (workspaceId: number) => {
+    writeLastWorkspaceId(workspaceId);
+    onWorkspaceChange(workspaceId);
+    setOpenMenu(false);
+  };
+
+  const createFromFolder = async () => {
+    if (creating) return;
     setCreating(true);
     setError(null);
     try {
-      const workspace = await createWorkspace({ name: trimmedName, root_path: trimmedPath });
+      const picked = await open({ directory: true, multiple: false, title: "选择工作区文件夹" });
+      if (typeof picked !== "string") return;
+      const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
+      const workspace = await createWorkspace({ name, root_path: picked });
       await onWorkspaceCreated(workspace);
-      onWorkspaceChange(workspace.workspace_id);
-      setName("");
-      setRootPath("");
-      dialogRef.current?.close();
+      chooseWorkspace(workspace.workspace_id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "创建工作区失败，请重试");
     } finally {
@@ -47,76 +47,23 @@ export function WorkspacePicker({
   };
 
   return (
-    <>
-      <div className="border-border/60 bg-background/80 text-foreground flex h-8 min-w-0 items-center gap-1.5 rounded-lg border px-2 shadow-xs">
-        <FolderIcon className="text-muted-foreground size-3.5 shrink-0" />
-        {workspaces.length > 0 ? (
-          <span className="flex min-w-0 items-center">
-            <select
-              aria-label="选择工作区"
-              value={selectedWorkspaceId ?? ""}
-              onChange={(event) => onWorkspaceChange(Number(event.target.value))}
-              className="max-w-48 cursor-pointer appearance-none bg-transparent py-1.5 pr-1 text-xs font-medium outline-none"
-            >
-              {!selectedWorkspaceId && <option value="">选择工作区</option>}
-              {workspaces.map((workspace) => (
-                <option key={workspace.workspace_id} value={workspace.workspace_id}>
-                  {workspace.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDownIcon className="text-muted-foreground pointer-events-none -ml-1 size-3" />
-          </span>
-        ) : (
-          <span className="text-muted-foreground py-1.5 text-xs">选择工作区</span>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size={showCreateLabel ? "sm" : "icon-xs"}
-          className="text-muted-foreground hover:text-foreground"
-          onClick={() => { setError(null); dialogRef.current?.showModal(); }}
-          aria-label="创建工作区"
-          title="创建工作区"
-        >
-          <FolderPlusIcon />
-          {showCreateLabel && "创建工作区"}
-        </Button>
-      </div>
-      <dialog
-        ref={dialogRef}
-        aria-labelledby="create-workspace-title"
-        className="bg-popover text-popover-foreground backdrop:bg-black/20 m-auto w-[min(28rem,calc(100%-2rem))] rounded-xl border p-0 shadow-xl"
-        onCancel={(event) => { if (creating) event.preventDefault(); }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
-            event.preventDefault();
-            void handleCreate();
-          }
-        }}
-      >
-        <div className="space-y-4 p-5">
-          <div>
-            <h2 id="create-workspace-title" className="font-medium">创建工作区</h2>
-            <p className="text-muted-foreground mt-1 text-sm">新任务和后续修改都会归属于这个目录。</p>
-          </div>
-          <label className="block space-y-1.5 text-sm">
-            <span>名称</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：我的项目" autoFocus className="border-input bg-background w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring/20" />
-          </label>
-          <label className="block space-y-1.5 text-sm">
-            <span>本地目录</span>
-            <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="例如：H:\\coding-agent" className="border-input bg-background w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-ring/20" />
-          </label>
-          {error && <p className="text-destructive text-sm">{error}</p>}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => { if (!creating) dialogRef.current?.close(); }}>取消</Button>
-            <Button type="button" onClick={() => void handleCreate()} disabled={!name.trim() || !rootPath.trim() || creating}>
-              {creating ? <Loader2Icon className="animate-spin" /> : <CheckIcon />}创建工作区
-            </Button>
-          </div>
+    <Popover open={openMenu} onOpenChange={setOpenMenu}>
+      <PopoverTrigger type="button" className={`border-border bg-background hover:bg-muted inline-flex min-w-0 max-w-64 items-center justify-start gap-1.5 rounded-lg border font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${showCreateLabel ? "h-7 px-2.5 text-xs" : "h-8 px-2.5 text-sm"}`}>
+          <FolderIcon className="size-4 shrink-0" />
+          <span className="truncate">{selected?.name ?? "选择工作区"}</span>
+          <ChevronDownIcon className="text-muted-foreground ml-auto size-3.5 shrink-0" />
+      </PopoverTrigger>
+      <PopoverContent align="start" side="top" className="w-80 p-2">
+        <div className="mb-1 px-2 py-1"><p className="text-sm font-medium">选择工作区</p><p className="text-muted-foreground text-xs">对话和文件修改都会归属于所选目录</p></div>
+        <div role="listbox" aria-label="工作区列表" className="max-h-64 overflow-y-auto">
+          {workspaces.map((workspace) => {
+            const active = workspace.workspace_id === selectedWorkspaceId;
+            return <button key={workspace.workspace_id} type="button" role="option" aria-selected={active} onClick={() => chooseWorkspace(workspace.workspace_id)} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="min-w-0 flex-1"><span className="block truncate text-sm">{workspace.name}</span><span className="text-muted-foreground block truncate text-[11px]">{workspace.root_path}</span></span>{active && <CheckIcon className="text-primary size-4 shrink-0" />}</button>;
+          })}
         </div>
-      </dialog>
-    </>
+        <div className="border-border/60 mt-1 border-t pt-1"><button type="button" onClick={() => void createFromFolder()} disabled={creating} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50">{creating ? <Loader2Icon className="size-4 animate-spin" /> : <FolderPlusIcon className="size-4" />}新建工作区</button></div>
+        {error && <p className="text-destructive px-2 pt-2 text-xs">{error}</p>}
+      </PopoverContent>
+    </Popover>
   );
 }

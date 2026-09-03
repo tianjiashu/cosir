@@ -43,6 +43,8 @@ class Settings:
     LOG_BATCH_SIZE: ClassVar[int] = 50
     LOG_FLUSH_INTERVAL_MS: ClassVar[int] = 1000
     LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
+    LOG_MAX_BYTES: ClassVar[int] = 10 * 1024 * 1024
+    LOG_BACKUP_COUNT: ClassVar[int] = 7
     TOOL_ERROR_LIMIT: ClassVar[int] = 3
     MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
@@ -238,6 +240,10 @@ class Settings:
             raise ValueError("LOG_FLUSH_INTERVAL_MS must be greater than zero")
         if cls.LOG_QUERY_LIMIT_MAX < 1:
             raise ValueError("LOG_QUERY_LIMIT_MAX must be greater than zero")
+        if cls.LOG_MAX_BYTES < 1:
+            raise ValueError("LOG_MAX_BYTES must be greater than zero")
+        if cls.LOG_BACKUP_COUNT < 1:
+            raise ValueError("LOG_BACKUP_COUNT must be greater than zero")
         if cls.WEB_REQUEST_TIMEOUT_SECONDS <= 0:
             raise ValueError("WEB_REQUEST_TIMEOUT_SECONDS must be greater than zero")
         if cls.WEB_SEARCH_LIMIT_MAX < 1:
@@ -272,7 +278,7 @@ class Settings:
         root = repository_root or cls.repository_root()
         cls._load_local_env(root)
 
-        cls.LOG_DIR = root / "logs"
+        cls.LOG_DIR = Path(os.environ.get("CODING_AGENT_LOG_DIR", str(root / "logs")))
         cls.DATABASE_FILE = root / "storage" / "app.sqlite3"
         cls.LOG_DATABASE_FILE = Path(
             os.environ.get(
@@ -293,6 +299,8 @@ class Settings:
             os.environ.get("CODING_AGENT_LOG_FLUSH_INTERVAL_MS", "1000")
         )
         cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
+        cls.LOG_MAX_BYTES = int(os.environ.get("CODING_AGENT_LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+        cls.LOG_BACKUP_COUNT = int(os.environ.get("CODING_AGENT_LOG_BACKUP_COUNT", "7"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
         cls.MAX_PARALLEL_TOOL_CALLS = int(
             os.environ.get("CODING_AGENT_MAX_PARALLEL_TOOL_CALLS", "8")
@@ -405,8 +413,8 @@ class Settings:
         参数:
             无。
 
-        返回:
-            根据 ``Settings.LOG_DIR`` 和当前日期派生出的 ``logs-YYYY-MM-DD.log`` 路径。
+            返回:
+                ``Settings.LOG_DIR / backend.log``；轮转文件使用 ``backend.log.1`` 等后缀。
 
         异常:
             无。

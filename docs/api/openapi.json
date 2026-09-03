@@ -1058,7 +1058,7 @@
     "/assistant": {
       "post": {
         "summary": "Assistant Transport",
-        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI transport 请求，当前业务命令为文本 ``add-message``。\n    runtime: 通过依赖注入取得的 AgentRuntime。\n    conversation_state_service: 把任务轮次事实投影为本轮运行基线 state 的 service。\n    command_service: 负责计算命令载荷指纹并同步运行命令终态的 service。\n    run_service: 在一个事务中占用 command 并创建、绑定 Turn 的 service。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending turn，并异步驱动一次 AgentRuntime 执行；运行期间更新数据库和\n    canonical conversation facts。",
+        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI transport 请求，当前业务命令为文本 ``add-message``。\n    runtime: 通过依赖注入取得的 AgentRuntime。\n    conversation_state_service: 把任务轮次事实投影为本轮运行基线 state 的 service。\n    run_service: 在一个事务中占用 command 并创建、绑定 Turn 的 service。\n    run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending turn，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
         "operationId": "assistant_transport_assistant_post",
         "requestBody": {
           "content": {
@@ -1117,64 +1117,6 @@
                   "type": "object",
                   "title": "Response Assistant Transport State Tasks  Task Id  Assistant State Get"
                 }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/{task_id}/runs/{run_id}/assistant/stream": {
-      "get": {
-        "summary": "Assistant Transport Resume",
-        "description": "按 task/run 身份从指定 revision 订阅 canonical state。",
-        "operationId": "assistant_transport_resume_tasks__task_id__runs__run_id__assistant_stream_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Run Id"
-            }
-          },
-          {
-            "name": "after_revision",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": -1,
-              "default": -1,
-              "title": "After Revision"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           },
@@ -1329,14 +1271,40 @@
             "title": "Commands"
           },
           "threadId": {
-            "type": "string",
-            "pattern": "^task-[1-9][0-9]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^task-[1-9][0-9]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Threadid"
           },
           "taskId": {
-            "type": "integer",
-            "minimum": 1.0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Taskid"
+          },
+          "workspaceId": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspaceid"
           },
           "stateRevision": {
             "anyOf": [
@@ -1387,9 +1355,7 @@
         },
         "type": "object",
         "required": [
-          "commands",
-          "threadId",
-          "taskId"
+          "commands"
         ],
         "title": "AssistantTransportRequest",
         "description": "校验 Assistant Transport 请求。\n\n命令数组由服务端按顺序幂等处理；对话历史由 canonical facts 重建。"

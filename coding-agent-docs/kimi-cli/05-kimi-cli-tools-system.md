@@ -364,11 +364,11 @@ def acp_mcp_servers_to_mcp_config(mcp_servers: list[MCPServer]) -> MCPConfig:
 ```python
 match server:
     case acp.schema.HttpMcpServer():
-        return {"url": server.url, "transport": "http", ...}
+        return {"url": server.url, "request": "http", ...}
     case acp.schema.SseMcpServer():
-        return {"url": server.url, "transport": "sse", ...}
+        return {"url": server.url, "request": "sse", ...}
     case acp.schema.McpServerStdio():
-        return {"command": server.command, "transport": "stdio", ...}
+        return {"command": server.command, "request": "stdio", ...}
 ```
 
 ### 3.4 组件间协作时序

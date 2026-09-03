@@ -1,7 +1,7 @@
 """视觉输入链路单元测试（仅后端，不触前端）。
 
 覆盖：vision_content_blocks 的编码/校验/逐图隔离、token 估算、RuntimeMessage 多模态
-估算、.cosir 受信归属归一化、create_turn 构建期视觉能力拦截。
+估算、.cosir 受信归属归一化、create_run 构建期视觉能力拦截。
 
 不依赖前端、不依赖真实模型调用；图片用 Pillow 在临时目录构造。
 """
@@ -161,34 +161,34 @@ def test_runtime_message_estimate_tokens_counts_image() -> None:
     assert total > TokenEstimator.estimate("看")
 
 
-def test_create_turn_rejects_image_for_non_vision_model() -> None:
+def test_create_run_rejects_image_for_non_vision_model() -> None:
     """构建期拦截：模型不支持视觉输入 + 携带图片路径 -> VisionNotSupportedError。
 
-    turn_service 与 dependencies / turn_runtime_message_store 存在顶层互相 import（循环），
-    直接 import 会触发循环。这里用 importlib 直接从文件加载 turn_service 模块，并向 sys.modules
-    注入循环方的 mock（dependencies、turn_runtime_message_store），打断循环链使模块可完整加载，
+    conversation_run_service 与 dependencies / conversation_run_message_store 存在顶层互相 import（循环），
+    直接 import 会触发循环。这里用 importlib 直接从文件加载 conversation_run_service 模块，并向 sys.modules
+    注入循环方的 mock（dependencies、conversation_run_message_store），打断循环链使模块可完整加载，
     不改动既有模块结构。
     """
     import sys
 
     sys.modules.setdefault("app.api.dependencies", mock.MagicMock())
-    sys.modules.setdefault("app.service.turn_runtime_message_store", mock.MagicMock())
+    sys.modules.setdefault("app.service.conversation_run_message_store", mock.MagicMock())
 
     _ts_path = os.path.join(
-        os.path.dirname(__file__), "..", "app", "service", "task", "turn_service.py"
+        os.path.dirname(__file__), "..", "app", "service", "task", "conversation_run_service.py"
     )
     _ts_spec = importlib.util.spec_from_file_location(
-        "app.service.task.turn_service_test", os.path.abspath(_ts_path)
+        "app.service.task.conversation_run_service_test", os.path.abspath(_ts_path)
     )
-    turn_service = importlib.util.module_from_spec(_ts_spec)
-    sys.modules["app.service.task.turn_service_test"] = turn_service
-    _ts_spec.loader.exec_module(turn_service)
+    conversation_run_service = importlib.util.module_from_spec(_ts_spec)
+    sys.modules["app.service.task.conversation_run_service_test"] = conversation_run_service
+    _ts_spec.loader.exec_module(conversation_run_service)
 
     image_path = os.path.join(tempfile.gettempdir(), "x.png")
     with (
-        mock.patch.object(turn_service, "get_provider_service") as mock_gps,
-        mock.patch.object(turn_service, "service_depends") as _svc_dep,
-        mock.patch.object(turn_service.ModelCapability, "get_capability") as mock_mc,
+        mock.patch.object(conversation_run_service, "get_provider_service") as mock_gps,
+        mock.patch.object(conversation_run_service, "service_depends") as _svc_dep,
+        mock.patch.object(conversation_run_service.ModelCapability, "get_capability") as mock_mc,
     ):
         provider = mock.MagicMock()
         provider.name = "deepseek"
@@ -197,19 +197,19 @@ def test_create_turn_rejects_image_for_non_vision_model() -> None:
         provider_cap = mock.MagicMock()
         provider_cap.models = ("deepseek-v4-flash",)
         with mock.patch.object(
-            turn_service.ProviderCapability, "get_capability", return_value=provider_cap
+            conversation_run_service.ProviderCapability, "get_capability", return_value=provider_cap
         ):
             model_cap = mock.MagicMock()
             model_cap.supports_image = False
             mock_mc.return_value = model_cap
-            svc = turn_service.TurnService()
+            svc = conversation_run_service.ConversationRunService()
             try:
-                svc.create_turn(
+                svc.create_run(
                     task_id=1,
                     input_text="看图",
                     provider_id=1,
                     model_name="deepseek-v4-flash",
-                    attachments=[turn_service.AttachmentRef(kind="image", ref=image_path)],
+                    attachments=[conversation_run_service.AttachmentRef(kind="image", ref=image_path)],
                 )
                 raise AssertionError("expected VisionNotSupportedError")
             except VisionNotSupportedError:

@@ -8,16 +8,16 @@ from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_
 from app.core.observability.langfuse_tool_trace_recorder import build_tool_trace_recorder
 from app.core.observability.langfuse_tracing import (
     TraceMetadata,
-    TurnTraceResult,
+    ConversationRunTraceResult,
     flush_langfuse,
-    turn_trace,
+    conversation_run_trace,
 )
 
 __all__ = [
     "TraceMetadata",
-    "TurnTraceResult",
+    "ConversationRunTraceResult",
     "build_tool_trace_recorder",
     "flush_langfuse",
     "sanitize_langfuse_payload",
-    "turn_trace",
+    "conversation_run_trace",
 ]

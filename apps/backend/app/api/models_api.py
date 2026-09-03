@@ -13,9 +13,9 @@ from app.api.schemas.response.ProviderModelGroupResponse import (
 )
 from app.app import app
 from app.config.logging.logger import log
-from app.llm_provider.capability.model_capability import ModelCapability
-from app.llm_provider.capability.provider_capability import ProviderCapability
-from app.llm_provider.provider import ProviderService
+from app.core.llm_provider.capability.model_capability import ModelCapability
+from app.core.llm_provider.capability.provider_capability import ProviderCapability
+from app.service.provider import ProviderService
 
 
 @app.get("/models")

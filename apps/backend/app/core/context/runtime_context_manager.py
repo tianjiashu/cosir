@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from platform import system
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -33,9 +33,9 @@ from app.core.context.context_listener.context_usage_compute_listener import (
 )
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
-from app.llm_provider.provider.capability_service import CapabilityService
-from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
+from app.models import ConversationRunRecord, RuntimeMessage, TaskRecord, WorkspaceRecord
 from app.service.depends import get_task_service
+from app.service.provider.capability_service import CapabilityService
 from app.utils.message_content import content_to_text
 
 if TYPE_CHECKING:
@@ -85,7 +85,7 @@ def _update_task_context_usage(task_id: int, used: int) -> None:
     这是 ``ensure_get_runtime_context_manager`` 挂载的**默认**回写实现。上下文占用
     是旁路统计（仅供前端占用圆环展示），其失败不应阻断上下文主流程——否则 task
     表不可用（如 storage 未初始化、DB 瞬时故障）时连 ``RuntimeContextManager``
-    都无法创建，整个 turn 会直接失败。
+    都无法创建，整个 run 会直接失败。
 
     容错放在本默认实现而非 listener 内部：listener 是通用机制，不应替调用方决定
     容错策略；显式注入 ``update_context_usage`` 的调用方（含单测）仍按自身契约
@@ -143,7 +143,7 @@ class RuntimeContextManager:
       API，联合类型收口 ``BaseMessage`` / ``RuntimeMessage``，经
       ``include_in_context`` 控制是否进入模型上下文；canonical store 负责消息事实落库。
     - **变化通知**：条目变更经 :meth:`mark_context_changed` 通知已订阅 listener，
-      事件载体是 :class:`ContextEntry`（含 turn 归属），而非裸消息列表。
+      事件载体是 :class:`ContextEntry`（含 run 归属），而非裸消息列表。
     - **压缩预留**：经可选 ``compressor`` 引用 ``ContextCompressor`` 协议与
       :meth:`maybe_compact` 暴露扩展点，暂不实现具体压缩算法。
 
@@ -170,10 +170,10 @@ class RuntimeContextManager:
     # 消息持久化端口（依赖倒置）：由 service 层实现并注入，使 manager 成为读写唯一入口。
     # 为 None 时表示纯内存上下文（无落库能力），落库请求退化为仅写内存。
     store: RuntimeMessageStore | None = None
-    # 当前绑定的 turn 标识：落库（add_message 固有契约）需要它定位目标 turn；
-    # 为 None 时表示尚未进入某 turn，落库请求退化为仅写内存。
-    current_turn_id: int | None = None
-    # task 级 system prompt、历史 turn 和当前 turn 增量分别维护，避免通过一份列表推断归属。
+    # 当前绑定的 run 标识：落库（add_message 固有契约）需要它定位目标 run；
+    # 为 None 时表示尚未进入某 run，落库请求退化为仅写内存。
+    current_run_id: int | None = None
+    # task 级 system prompt、历史 run 和当前 run 增量分别维护，避免通过一份列表推断归属。
     _system_entry: ContextEntry | None = field(default=None, init=False)
     _history_entries: list[ContextEntry] = field(default_factory=list, init=False)
     _active_entries: list[ContextEntry] = field(default_factory=list, init=False)
@@ -192,14 +192,14 @@ class RuntimeContextManager:
         current_workspace: WorkspaceRecord,
         current_task: TaskRecord,
         store: RuntimeMessageStore,
-        turn: TurnRecord,
+        run: ConversationRunRecord,
     ) -> RuntimeContextManager:
         """获取或创建指定 task_id 的运行时上下文管理器。
 
         仅负责「获取或创建」task 级配置（agent_profile / listeners / 已加载的
-            task 历史 / workspace_root），不绑定 turn 执行态。turn 级执行态
-            （current_turn_id / total_tokens）由调用方在拿到实例后
-        显式调用 ``bind_turn`` 绑定，时序清晰、职责单一。
+            task 历史 / workspace_root），不绑定 run 执行态。run 级执行态
+            （current_run_id / total_tokens）由调用方在拿到实例后
+        显式调用 ``bind_run`` 绑定，时序清晰、职责单一。
         """
         task_id = current_task.id
         if task_id in _runtime_context_managers:
@@ -215,8 +215,8 @@ class RuntimeContextManager:
                     workspace_root=current_workspace.root_path,
                     task_id=task_id,
                     store=store,
-                    current_turn_id=turn.id,
-                    total_tokens=CapabilityService.get_model_context_window(turn.model_name),
+                    current_run_id=run.id,
+                    total_tokens=CapabilityService.get_model_context_window(run.model_name),
                 )
                 .add_change_listener(
                     ContextUsageComputeListener(
@@ -228,84 +228,70 @@ class RuntimeContextManager:
             )
 
             # 加载 task 历史消息
-            runtime_context_manager.load_history(excluded_turn_ids={turn.id})
+            runtime_context_manager.load_history(excluded_run_ids={run.id})
             _runtime_context_managers[task_id] = runtime_context_manager
             log.info(
                 "runtime_context_manager created",
                 extra={
                     "task_id": task_id,
-                    "turn_id": turn.id,
+                    "run_id": run.id,
                     "registered_managers": len(_runtime_context_managers),
                 },
             )
             return runtime_context_manager
 
-    def begin_turn(
+    def begin_run(
         self,
-        turn: TurnRecord,
-        mode: Literal["fresh", "resume"] = "fresh",
+        run: ConversationRunRecord,
     ) -> None:
-        """绑定一个 turn，并按 fresh/resume 语义初始化当前 turn 增量。
+        """绑定一个 run，并以 fresh 语义初始化当前 run 增量。
 
         参数:
-            turn: 待绑定的 turn 记录。
-            mode: ``fresh`` 表示新执行/重跑并清空该 turn；``resume`` 表示从持久化轨迹恢复。
+            run: 待绑定的 run 记录。
 
         返回:
             无。
 
         异常:
-            ValueError: ``mode`` 不是 ``fresh`` 或 ``resume`` 时抛出。
-            ValueError: turn 不属于当前 task 时抛出。
-            sqlalchemy.exc.SQLAlchemyError: 清理或读取 turn 消息失败时抛出。
+            ValueError: run 不属于当前 task 时抛出。
+            sqlalchemy.exc.SQLAlchemyError: 清理或读取 run 消息失败时抛出。
 
         副作用:
-            更新当前 turn、上下文窗口和 active entries；fresh 模式清理当前 turn 持久化轨迹。
+            更新当前 run、上下文窗口和 active entries，并清理当前 run 持久化轨迹。
         """
-        if mode not in {"fresh", "resume"}:
-            raise ValueError(f"unsupported context execution mode: {mode}")
-        if turn.task_id != self.task_id:
+        if run.task_id != self.task_id:
             raise ValueError(
-                f"turn {turn.id} belongs to task {turn.task_id}, expected {self.task_id}"
+                f"run {run.id} belongs to task {run.task_id}, expected {self.task_id}"
             )
         with self.lock:
-            # 保存当前 turn 的 active entries 到历史记录
-            previous_turn_id = self.current_turn_id
+            # 保存当前 run 的 active entries 到历史记录
+            previous_run_id = self.current_run_id
 
-            # 存在turn重放的情况，如果turn一致，则说明是重放，则不追加到历史记录中
-            if previous_turn_id != turn.id and self._active_entries:
+            # 存在 run 重放的情况，如果 run 一致，则不追加到历史记录中。
+            if previous_run_id != run.id and self._active_entries:
                 self._history_entries.extend(self._active_entries)
             self._history_entries = [
-                entry for entry in self._history_entries if entry.turn_id != turn.id
+                entry for entry in self._history_entries if entry.run_id != run.id
             ]
-            # 更新当前 turn 状态
-            self.current_turn_id = turn.id
+            # 更新当前 run 状态
+            self.current_run_id = run.id
             # 更新上下文窗口
-            self.total_tokens = CapabilityService.get_model_context_window(turn.model_name or "")
-            if mode == "fresh":
-                # 清空当前 turn 的 active entries：重放场景
-                self._active_entries = []
-                self._reset_message_sequence()
-            else:
-                # 从持久化轨迹恢复 active entries：恢复场景
-                restored_entries = (
-                    self.store.build_for_turn(turn.id) if self.store is not None else []
-                )
-                self._active_entries = list(restored_entries)
+            self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
+            # 清空当前 run 的 active entries；每个 ConversationRun 都是 fresh。
+            self._active_entries = []
+            self._reset_message_sequence()
 
-                self._message_sequence = self.store.next_sequence(turn.id)
             self.mark_context_changed(
                 ContextEventType.LOAD_HISTORY,
                 self._effective_entries(),
                 allow_write_event_failure=True,
             )
             log.info(
-                "runtime_context_manager rebound to turn",
+                "runtime_context_manager rebound to run",
                 extra={
                     "task_id": self.task_id,
-                    "previous_turn_id": previous_turn_id,
-                    "turn_id": turn.id,
-                    "mode": mode,
+                    "previous_run_id": previous_run_id,
+                    "run_id": run.id,
                 },
             )
 
@@ -315,15 +301,15 @@ class RuntimeContextManager:
         *,
         allow_write_event_failure: bool = False,
     ) -> None:
-        """写入或刷新当前 turn 的 user 消息，不重复追加持久化轨迹。
+        """写入或刷新当前 run 的 user 消息，不重复追加持久化轨迹。
 
         resume 场景从数据库恢复的 user 消息没有运行期多模态 block；本方法在已有 user
         entry 上只刷新内存表示，缺失时才经 :meth:`add_message` 持久化并追加。
 
         参数:
-            message: 当前 turn 的 user 消息。
+            message: 当前 run 的 user 消息。
             allow_write_event_failure: 事件 writer 尚未建立时是否允许继续；workflow
-                在 graph 启动前写入 turn 基线时应传 True。
+                在 graph 启动前写入 run 基线时应传 True。
 
         返回:
             无。
@@ -332,7 +318,7 @@ class RuntimeContextManager:
             sqlalchemy.exc.SQLAlchemyError: 缺少 user entry 且追加持久化失败时抛出。
 
         副作用:
-            更新当前 turn 的 user entry；必要时追加一条持久化消息并触发 usage 更新。
+            更新当前 run 的 user entry；必要时追加一条持久化消息并触发 usage 更新。
         """
         with self.lock:
             for index, entry in enumerate(self._active_entries):
@@ -340,7 +326,7 @@ class RuntimeContextManager:
                     continue
                 self._active_entries[index] = ContextEntry(
                     message=message,
-                    turn_id=self.current_turn_id,
+                    run_id=self.current_run_id,
                 )
                 self.mark_context_changed(
                     ContextEventType.ADD_MESSAGE,
@@ -386,8 +372,8 @@ class RuntimeContextManager:
     ) -> None:
         """标记上下文变化，按 ``order`` 通知所有订阅者并聚合占用结果。
 
-        入参是**上下文条目**而非裸消息：条目除消息外还携带 ``turn_id`` 归属，压缩等
-        需要按 turn 切分/保留上下文的 listener 才能工作；只需消息的实现自行从
+        入参是**上下文条目**而非裸消息：条目除消息外还携带 ``run_id`` 归属，压缩等
+        需要按 run 切分/保留上下文的 listener 才能工作；只需消息的实现自行从
         ``entry.message`` 派生，事件不再同时维护两份等价快照。
 
         快照隔离由本方法统一收口：``entries`` 经深拷贝后分发，listener 对快照的任何
@@ -401,7 +387,7 @@ class RuntimeContextManager:
         参数:
             event_type: 变化来源（add / load_history / compress）。
             entries: 变更后的有效上下文条目完整快照。全部调用点均传
-                :meth:`_effective_entries`（系统 + 历史 + 当前 turn 全量），不传增量批次。
+        :meth:`_effective_entries`（系统 + 历史 + 当前 run 全量），不传增量批次。
             allow_write_event_failure: 是否允许事件写入器不可用时继续执行。
 
         返回:
@@ -447,20 +433,20 @@ class RuntimeContextManager:
 
     def load_history(
         self,
-        excluded_turn_ids: Collection[int] | None = None,
+        excluded_run_ids: Collection[int] | None = None,
         *,
         replace: bool = True,
     ) -> None:
         """从注入 store 读回历史并替换 task 级 history entries。
 
-        ``excluded_turn_ids`` 用于排除当前正在执行的 turn，使当前 turn 由后续
+        ``excluded_run_ids`` 用于排除当前正在执行的 run，使当前 run 由后续
         ``add_message`` 作为运行期增量写入，避免恢复/重跑时把旧轨迹带入上下文。
         经 ``store.build_for_task`` 读回消息后默认替换历史区，当前 active entries 不变，
         因而重复调用不会累加；``replace=False`` 仅用于明确的追加式调用。随后触发
         一次 ``LOAD_HISTORY`` 通知。无 ``store``（纯内存构造）时为空操作。
 
         参数:
-            excluded_turn_ids: 需要排除的 turn 标识集合，可选。
+            excluded_run_ids: 需要排除的 run 标识集合，可选。
             replace: 是否替换已有历史；默认 True，避免重复加载。
 
         返回:
@@ -475,10 +461,10 @@ class RuntimeContextManager:
         if self.store is None:
             return
         with self.lock:
-            effective_excluded_turn_ids = set(excluded_turn_ids or ())
-            if self.current_turn_id is not None:
-                effective_excluded_turn_ids.add(self.current_turn_id)
-            history = self.store.build_for_task(self.task_id, effective_excluded_turn_ids)
+            effective_excluded_run_ids = set(excluded_run_ids or ())
+            if self.current_run_id is not None:
+                effective_excluded_run_ids.add(self.current_run_id)
+            history = self.store.build_for_task(self.task_id, effective_excluded_run_ids)
             entries = list(history)
             if replace:
                 self._history_entries = entries
@@ -513,7 +499,7 @@ class RuntimeContextManager:
         """返回当前有效上下文的消息投影（从 :meth:`_effective_entries` 派生）。
 
         仅供模型读取出口 :meth:`load_message` 使用；变化通知通道传条目本身
-        （见 :meth:`mark_context_changed`），不走本投影，以免 listener 丢失 turn 归属。
+        （见 :meth:`mark_context_changed`），不走本投影，以免 listener 丢失 run 归属。
 
         并发契约：调用方必须已持有 ``self.lock``（与 :meth:`_effective_entries` 一致）。
 
@@ -583,10 +569,10 @@ class RuntimeContextManager:
         不把运行时 entries 当作第二事实源。
 
         持久化是 :meth:`add_message` 的固有契约：只要注入 ``store`` 且已绑定
-        ``current_turn_id``，每条消息都落库（含 ``include_in_context=False`` 的 deferred
+        ``current_run_id``，每条消息都落库（含 ``include_in_context=False`` 的 deferred
         修复提示），保证审计轨迹完整。落库采用「先落库、成功后写内存」防撕裂：落库失败
         抛 ``SQLAlchemyError`` 且内存不写；落库成功才按 ``include_in_context`` 决定是否写
-        内存并自增序号。未注入 ``store`` / ``current_turn_id``（纯内存构造）时退化为仅写
+        内存并自增序号。未注入 ``store`` / ``current_run_id``（纯内存构造）时退化为仅写
         内存，便于无落库能力的单元测试。
 
         参数:
@@ -599,7 +585,7 @@ class RuntimeContextManager:
             无。
 
         异常:
-            sqlalchemy.exc.SQLAlchemyError: 已注入 store/current_turn_id 时落库失败抛出，
+            sqlalchemy.exc.SQLAlchemyError: 已注入 store/current_run_id 时落库失败抛出，
                 此时内存不写（防撕裂）。
 
         副作用:
@@ -611,9 +597,9 @@ class RuntimeContextManager:
         else:
             runtime_message = self._langraph_message_to_runtime_message(message)
 
-        if self.store is not None and self.current_turn_id is not None:
+        if self.store is not None and self.current_run_id is not None:
             self.store.append(
-                self.current_turn_id,
+                self.current_run_id,
                 runtime_message,
                 self._message_sequence,
                 include_in_context=include_in_context,
@@ -625,7 +611,7 @@ class RuntimeContextManager:
                 self._active_entries.append(
                     ContextEntry(
                         message=runtime_message,
-                        turn_id=self.current_turn_id,
+                        run_id=self.current_run_id,
                     )
                 )
                 self.mark_context_changed(
@@ -635,23 +621,23 @@ class RuntimeContextManager:
                 )
 
     def _reset_message_sequence(self) -> None:
-        """清空当前 turn 的 canonical message 残留并归零序号。
+        """清空当前 run 的 canonical message 残留并归零序号。
 
-        经注入 ``store`` 清空当前 ``turn_id`` 的全部 canonical facts 并复位序号，之后每条消息经
-        :meth:`add_message` 自增落库；历史 turn 因按 ``turn_id`` 隔离不受影响。无
-        ``store`` / 无 ``current_turn_id`` 时仅归零序号（纯内存）。
+        经注入 ``store`` 清空当前 ``run_id`` 的全部 canonical facts 并复位序号，之后每条消息经
+        :meth:`add_message` 自增落库；历史 run 因按 ``run_id`` 隔离不受影响。无
+        ``store`` / 无 ``current_run_id`` 时仅归零序号（纯内存）。
 
-        仅由 :meth:`begin_turn` 在 ``fresh`` 模式清空当前 turn 时调用：保证新 turn 序号从
-        0 计，且同 turn_id resume 重试时清空上一轮中途异常残留，落库幂等。
+        仅由 :meth:`begin_run` 在 ``fresh`` 模式清空当前 run 时调用：保证新 run 序号从
+        0 计，且同 run_id resume 重试时清空上一轮中途异常残留，落库幂等。
 
         异常:
             sqlalchemy.exc.SQLAlchemyError: 清理失败时抛出（由底层 CRUD 透传）。
 
         副作用:
-            清理当前 turn 的 canonical facts；``_message_sequence`` 归零。
+            清理当前 run 的 canonical facts；``_message_sequence`` 归零。
         """
-        if self.store is not None and self.current_turn_id is not None:
-            self.store.clear(self.current_turn_id)
+        if self.store is not None and self.current_run_id is not None:
+            self.store.clear(self.current_run_id)
         self._message_sequence = 0
 
     def _langraph_message_to_runtime_message(self, message: BaseMessage) -> RuntimeMessage:
@@ -734,12 +720,14 @@ class RuntimeContextManager:
                 }
                 for call in tool_calls_meta
             ]
+            additional_kwargs = {}
+            reasoning_content = message.metadata.get("reasoning_content")
+            if reasoning_content:
+                additional_kwargs[self._thinking_channel] = reasoning_content
             return AIMessage(
                 content=content_text,
                 tool_calls=langchain_tool_calls,
-                additional_kwargs={
-                    self._thinking_channel: message.metadata.get("reasoning_content", None)
-                },
+                additional_kwargs=additional_kwargs,
             )
         if message.role == "tool":
             return ToolMessage(
@@ -786,11 +774,15 @@ class RuntimeContextManager:
                 content = " "
 
             # 重建时不传 invalid_tool_calls / response_metadata（当轮解析噪声与本地元数据）。
+            additional_kwargs = dict(message.additional_kwargs)
+            if not additional_kwargs.get(self._thinking_channel):
+                additional_kwargs.pop(self._thinking_channel, None)
             normalized.append(
                 AIMessage(
                     content=content,
                     tool_calls=message.tool_calls,
                     id=message.id,
+                    additional_kwargs=additional_kwargs,
                 )
             )
         return normalized

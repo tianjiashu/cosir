@@ -19,7 +19,11 @@ import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
  * @param taskId - 当前任务 id。
  * @returns 加载中显示骨架屏；出错显示错误提示与「重试」按钮；就绪后挂载对话 runtime。
  */
-export const Assistant = ({ taskId }: { taskId: number }) => {
+export const Assistant = ({
+  taskId,
+}: {
+  taskId: number;
+}) => {
   const { initialState, error, retry } = useAssistantInitialState(taskId);
 
   if (error) {
@@ -49,6 +53,10 @@ export const Assistant = ({ taskId }: { taskId: number }) => {
 
   return (
     // key 保证切换 task 时 runtime 整体重建（任务书 §3.5），避免历史交叉残留。
-    <AssistantRuntime key={taskId} taskId={taskId} initialState={initialState} />
+    <AssistantRuntime
+      key={taskId}
+      taskId={taskId}
+      initialState={initialState}
+    />
   );
 };

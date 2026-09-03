@@ -25,7 +25,7 @@
 - 模型节点、工具执行、delegation 与审批只能经 `ConversationMutationWriter` 写入 canonical conversation state。Runtime 执行过程不再使用通用 `RuntimeEvent` 作为领域事件、UI 投影或事实源；审计、诊断和可观测性统一使用结构化日志、trace，以及必要时独立的 `AuditRecord`。
 - 后端通过 Assistant Transport 传输由 canonical conversation state 派生的状态更新；桌面端以 `@assistant-ui/react` 的 `useAssistantTransportRuntime` 渲染。Assistant UI 的类型和实现不得进入 `core`、`tools`、`models` 或 `storage`。
 - 工具权限/隔离/资源锁、LangGraph checkpoint、ChangeSet、delegation 的父子边界和审批决策仍属服务端领域能力。前端不得启用客户端工具执行。
-- `apps/desktop` 与 `apps/shared` 已按本次重构决议移除，避免旧界面与旧共享协议误导后续开发。仅当新的对话契约和桌面端边界明确后，才能按新设计重建它们；不得恢复旧结构作为过渡方案。
+- `apps/shared` 已移除；`apps/desktop` 按新的对话契约重建为 Tauri 托管的静态 React/Vite 前端。前端不包含服务端代理、不执行客户端工具，直接连接 Tauri supervisor 提供的本机 FastAPI 地址。
 
 ### 前端职责决议
 

@@ -174,9 +174,7 @@ def _should_strip_reasoning_content(
     if not thinking_roundtrip:
         return True
     # 通道为空（未解析到 LLMRuntimeConfig 的兜底）时保持既有剥离行为（安全）。
-    if not channel:
-        return True
-    return False
+    return bool(not channel)
 
 
 __all__ = [

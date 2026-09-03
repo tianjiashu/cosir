@@ -7,7 +7,7 @@ import {
   useAui,
   useAssistantTransportRuntime,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { getApiBaseUrl } from "@/lib/api/client";
 import { readStoredSelection } from "@/lib/model-selection-storage";
@@ -16,8 +16,9 @@ import {
   toTransportThreadView,
 } from "@/lib/assistant/converter";
 import type { TransportState } from "@/lib/assistant/contract";
-import { InitialMessageSender } from "./initial-message-sender";
 import { codingAgentToolkit } from "./toolkit";
+import { newTraceId, setActiveTraceId } from "@/lib/trace";
+import { frontendLog } from "@/lib/logging/frontend-log";
 
 /**
  * 把服务端首屏历史 state 挂载到 assistant-ui runtime 的瘦组件。
@@ -29,7 +30,7 @@ import { codingAgentToolkit } from "./toolkit";
  * @param initialState - 已就绪的服务端首屏历史 state，作为 runtime 初始 state。
  * @returns 挂载 `AssistantRuntimeProvider` 的对话界面（含 Thread 渲染）。
  * @sideEffects 建立与后端 `/assistant` 的 assistant-transport 连接；
- *   首次挂载时若 `initialMessage` 存在会向 composer 发送一条初始消息；
+ *   首次挂载只负责历史 state 与后续 fresh commands；正常新消息不走 resume；
  *   模型选择通过 `prepareSendCommandsRequest` 注入发送请求（剥离回传 state，有值才覆盖）。
  */
 export function AssistantRuntime({
@@ -43,6 +44,12 @@ export function AssistantRuntime({
   // 重试。用命令对象做弱引用键，保证同一 queued command 在重试/重连时复用 ID，
   // 而不同消息仍获得不同 ID。
   const commandIds = useRef(new WeakMap<object, string>());
+  // 一个 runtime 对应一个用户可追踪的 Assistant Transport 操作链路；恢复/重连也复用它。
+  const [traceId] = useState(() => newTraceId());
+  useEffect(() => {
+    setActiveTraceId(traceId);
+    return () => setActiveTraceId(null);
+  }, [traceId]);
   // 发送失败时把 inTransit 消息文本回填到 composer 的桥接函数；由下方
   // ComposerRestoreBridge 在挂载后注册（runtime options 闭包无法使用 hooks）。
   const composerRestoreRef = useRef<((text: string) => void) | null>(null);
@@ -74,7 +81,11 @@ export function AssistantRuntime({
    * @sideEffects 调用 ComposerRestoreBridge 注册的 composer.setText；
    *   触发一次本地 state 重渲染。
    */
-  const handleSendError = useCallback((error: unknown, { commands, updateState }: SendErrorParams) => {
+  const handleSendError = useCallback(async (error: unknown, { commands, updateState }: SendErrorParams) => {
+    await frontendLog("ERROR", "assistant_transport_error", "Assistant Transport 请求失败", {
+      traceId,
+      error,
+    });
     const failedText = [...commands]
       .reverse()
       .map((command) => extractUserAddMessageText(command))
@@ -88,15 +99,16 @@ export function AssistantRuntime({
       ...current,
       error: { code: "SEND_FAILED", message, retryable: true },
     }));
-  }, []);
+  }, [traceId]);
   const runtime = useAssistantTransportRuntime<TransportState>({
     // 只在 runtime 首次创建时捕获一次，故必须在挂载前把服务端历史灌入。
     initialState,
     protocol: "assistant-transport",
     api: `${getApiBaseUrl()}/assistant`,
-    headers: {
+    headers: async () => ({
       "Content-Type": "application/json",
-    },
+      "X-Trace-Id": traceId,
+    }),
     prepareSendCommandsRequest: (body) => {
       const selection = readStoredSelection(taskId);
       // 剥离 assistant-ui runtime 硬编码回传的 state 字段：后端已从服务端 turns 事实重建历史，
@@ -106,25 +118,9 @@ export function AssistantRuntime({
         const key = command as object;
         let commandId = commandIds.current.get(key);
         if (!commandId) {
-          const messageText = extractUserAddMessageText(command);
-          const pendingKey = `cosir:pending-initial-message:${taskId}`;
-          const commandKey = `cosir:initial-command-id:${taskId}`;
-          const pendingMessage =
-            typeof window === "undefined"
-              ? null
-              : window.sessionStorage.getItem(pendingKey);
-          // The initial command can be retried after a lost response. Persist
-          // its id for this task so a retry is idempotent across runtime
-          // remounts; ordinary follow-up messages remain runtime-scoped.
-          if (pendingMessage !== null && pendingMessage === messageText) {
-            commandId =
-              window.sessionStorage.getItem(commandKey) ?? crypto.randomUUID();
-            window.sessionStorage.setItem(commandKey, commandId);
-          } else {
-            commandId = crypto.randomUUID();
-          }
-          commandIds.current.set(key, commandId);
+          commandId = crypto.randomUUID();
         }
+        commandIds.current.set(key, commandId);
         return { ...command, commandId };
       });
       const rest = Object.fromEntries(
@@ -137,6 +133,15 @@ export function AssistantRuntime({
         // Task 是领域唯一身份；Transport threadId 统一采用 task-{taskId}。
         threadId: `task-${taskId}`,
       };
+      void frontendLog("INFO", "assistant_transport_request_prepared", "Assistant Transport 请求已组装", {
+        traceId,
+        data: {
+          taskId,
+          commandCount: commands.length,
+          commandTypes: commands.map((command) => command.type),
+          isResume: commands.length === 0,
+        },
+      });
       if (!selection) return request;
       return {
         ...request,
@@ -144,6 +149,12 @@ export function AssistantRuntime({
         ...(selection.modelName !== undefined && { modelName: selection.modelName }),
         ...(selection.reasoningEffort !== undefined && { reasoningEffort: selection.reasoningEffort }),
       };
+    },
+    onResponse: async (response) => {
+      await frontendLog("INFO", "assistant_transport_response", "Assistant Transport 已收到响应", {
+        traceId,
+        data: { taskId, status: response.status, ok: response.ok },
+      });
     },
     onError: handleSendError,
     // 纯映射函数：仅把后端 state 快照与待发送命令翻译为 assistant-ui 数据格式，
@@ -156,7 +167,6 @@ export function AssistantRuntime({
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={config}>
-      <InitialMessageSender taskId={taskId} />
       <ComposerRestoreBridge register={registerComposerRestore} />
       <div className="h-dvh">
         <Thread taskId={taskId} />

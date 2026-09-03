@@ -300,9 +300,9 @@ Kimi CLI 将 MCP 包装在 ACP（Agent Client Protocol）层之下，对外暴�
 def acp_mcp_servers_to_mcp_config(servers):
     for server in servers:
         match server:
-            case HttpMcpServer():   return {"transport": "http", ...}
-            case SseMcpServer():    return {"transport": "sse",  ...}
-            case McpServerStdio():  return {"transport": "stdio",...}
+            case HttpMcpServer():   return {"request": "http", ...}
+            case SseMcpServer():    return {"request": "sse",  ...}
+            case McpServerStdio():  return {"request": "stdio",...}
 ```
 
 **工程意图：** ACP 是 Kimi CLI 设计的更高层协议（用于 Agent 间通信），MCP 只是 ACP 支持的一种工具来源。这允许 Kimi CLI 在 MCP 之外支持其他工具协议。

@@ -13,7 +13,7 @@ class ConversationMessageRecord:
 
     id: int
     task_id: int
-    turn_id: int | None
+    run_id: int | None
     sequence: int
     role: str
     status: str
@@ -41,7 +41,7 @@ class ConversationMessageRecord:
         return cls(
             id=row.id,
             task_id=row.task_id,
-            turn_id=row.turn_id,
+            run_id=row.run_id,
             sequence=row.sequence,
             role=row.role,
             status=row.status,

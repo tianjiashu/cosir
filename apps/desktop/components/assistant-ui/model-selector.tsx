@@ -42,7 +42,7 @@ function findModel(
     ?.models.find((model) => model.model_name === modelName);
 }
 
-export function ModelSelector({ taskId, className }: { taskId?: number; className?: string }) {
+export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: number; className?: string; onReadyChange?: (ready: boolean) => void }) {
   const [groups, setGroups] = useState<ProviderModelGroup[]>([]);
   const [selection, setSelection] = useState<ModelSelection | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -73,12 +73,9 @@ export function ModelSelector({ taskId, className }: { taskId?: number; classNam
         const nextSelection: ModelSelection = {
           providerId,
           modelName: model.model_name,
-          reasoningEffort:
-            storedModel && storedSelection?.reasoningEffort
+            reasoningEffort: storedModel && storedSelection?.reasoningEffort
               ? storedSelection.reasoningEffort
-              : model.supports_reasoning_effort
-                ? "high"
-                : null,
+              : model.supports_reasoning_effort ? "high" : null,
         };
         setSelection(nextSelection);
         window.localStorage.setItem(selectionStorageKey(taskId), JSON.stringify(nextSelection));
@@ -89,6 +86,10 @@ export function ModelSelector({ taskId, className }: { taskId?: number; classNam
       setStatus("error");
     }
   }, [taskId]);
+
+  useEffect(() => {
+    onReadyChange?.(status === "ready" && Boolean(selection));
+  }, [onReadyChange, selection, status]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadModels(), 0);

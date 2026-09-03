@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.models.result.delegation_result import DelegationResult
-from app.service.depends import get_turn_service
+from app.service.depends import get_conversation_run_service
 from app.service.task.conversation_state_service import ConversationStateService
 
 
@@ -36,7 +36,7 @@ class ChildAgentRunner:
         """
 
         self._run_agent = run_agent
-        self._should_cancel = should_cancel or (lambda _turn_id: False)
+        self._should_cancel = should_cancel or (lambda _run_id: False)
 
     def run_child(
         self,
@@ -46,7 +46,7 @@ class ChildAgentRunner:
         """同步运行 child Agent 并返回委派终态。
 
         参数:
-            child_profile: 已绑定 child turn 且已收窄工具权限的 AgentProfile。
+            child_profile: 已绑定 child run 且已收窄工具权限的 AgentProfile。
             delegation_id: 本次委派在 ``delegations`` 表中的标识，用于异常日志定位
                 并发重入场景；无上下文时为 ``""``。
 
@@ -64,14 +64,14 @@ class ChildAgentRunner:
             写入 error 级日志。
         """
 
-        turn_id = child_profile.turn.turn_id if child_profile.turn is not None else ""
+        run_id = child_profile.run.id if child_profile.run is not None else ""
         if self._is_running_event_loop_thread():
             log.error(
                 "delegation_runner_event_loop_conflict",
                 extra={
                     "msg": "委派 child 运行桥接在事件循环线程内被调用，无法启动新 loop",
                     "data": {
-                        "child_turn_id": turn_id,
+                        "child_run_id": run_id,
                         "delegation_id": delegation_id,
                         "error": "delegation_runner_event_loop_thread",
                     },
@@ -79,7 +79,7 @@ class ChildAgentRunner:
             )
             return DelegationResult(
                 status="failed",
-                child_turn_id=turn_id,
+                child_run_id=run_id,
                 error="delegation_runner_event_loop_thread",
             )
         return asyncio.run(self._run_child(child_profile, delegation_id))
@@ -121,14 +121,14 @@ class ChildAgentRunner:
         child_profile: AgentProfile,
         delegation_id: str = "",
     ) -> DelegationResult:
-        """运行 child Agent 并从持久化 turn 事实压缩为委派结果。
+        """运行 child Agent 并从持久化 Conversation Run 事实压缩为委派结果。
 
         参数:
-            child_profile: 已绑定 child turn 且已收窄工具权限的 AgentProfile。
+            child_profile: 已绑定 child run 且已收窄工具权限的 AgentProfile。
             delegation_id: 本次委派标识，透传给异常日志以提升并发重入排查能力。
 
         返回:
-            从 child turn 终态事实压缩出的 DelegationResult。
+            从 child run 终态事实压缩出的 DelegationResult。
 
         异常:
             无。run_agent 或事件消费异常会被转换为 failed DelegationResult。
@@ -137,13 +137,13 @@ class ChildAgentRunner:
             执行 AgentRuntime.run_agent；不消费运行时事件。
         """
 
-        turn_id = child_profile.turn.turn_id if child_profile.turn is not None else ""
+        run_id = child_profile.run.id if child_profile.run is not None else ""
         try:
-            if self._should_cancel(turn_id):
+            if self._should_cancel(run_id):
                 return DelegationResult(
                     status="cancelled",
-                    child_turn_id=turn_id,
-                    error="child turn cancelled",
+                    child_run_id=run_id,
+                    error="child run cancelled",
                 )
             await self._run_agent(child_profile)
         except Exception as exc:
@@ -152,7 +152,7 @@ class ChildAgentRunner:
                 extra={
                     "msg": "委派 child Agent 运行异常，已转换为委派失败结果",
                     "data": {
-                        "child_turn_id": turn_id,
+                        "child_run_id": run_id,
                         "delegation_id": delegation_id,
                         "error": str(exc),
                     },
@@ -160,19 +160,19 @@ class ChildAgentRunner:
             )
             return DelegationResult(
                 status="failed",
-                child_turn_id=turn_id,
-                error=str(exc) or "child turn failed",
+                child_run_id=run_id,
+                    error=str(exc) or "child run failed",
             )
-        if self._should_cancel(turn_id):
+        if self._should_cancel(run_id):
             return DelegationResult(
                 status="cancelled",
-                child_turn_id=turn_id,
-                error="child turn cancelled",
+                child_run_id=run_id,
+                error="child run cancelled",
             )
-        child_turn = get_turn_service().get_turn(int(turn_id))
-        if child_turn.status == "completed":
-            state = ConversationStateService().build_run_state(child_turn.task_id, child_turn.id)
-            summary = "child turn completed"
+        child_run = get_conversation_run_service().get_run(int(run_id))
+        if child_run.status == "completed":
+            state = ConversationStateService().build_run_state(child_run.task_id, child_run.id)
+            summary = "child run completed"
             for message in state["messages"]:
                 if message["role"] == "assistant":
                     summary = (
@@ -185,15 +185,15 @@ class ChildAgentRunner:
                     )
             return DelegationResult(
                 status="completed",
-                child_turn_id=turn_id,
+                child_run_id=run_id,
                 summary=summary,
             )
-        if child_turn.status == "cancelled":
+        if child_run.status == "cancelled":
             return DelegationResult(
-                status="cancelled", child_turn_id=turn_id, error="child turn cancelled"
+                status="cancelled", child_run_id=run_id, error="child run cancelled"
             )
         return DelegationResult(
             status="failed",
-            child_turn_id=turn_id,
-            error=child_turn.end_reason or "child turn failed",
+            child_run_id=run_id,
+            error=child_run.end_reason or "child run failed",
         )

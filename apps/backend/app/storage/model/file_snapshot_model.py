@@ -30,8 +30,8 @@ class FileSnapshotModel(StorageBase):
 
     __tablename__ = "file_snapshots"
     __table_args__ = (
-        # 单 turn 回放（list_by_turn）：turn_id + seq 升序。
-        Index("idx_file_snapshots_turn_seq", "turn_id", "seq"),
+        # 单 turn 回放（list_by_turn）：run_id + seq 升序。
+        Index("idx_file_snapshots_turn_seq", "run_id", "seq"),
         # task 聚合查询（list_*_by_task）与 latest_by_path：task_id + path + seq。
         Index("idx_file_snapshots_task_path_seq", "task_id", "path", "seq"),
         # 保险丝：task 内 seq 必须唯一（seq 命名空间 = task）。
@@ -43,7 +43,9 @@ class FileSnapshotModel(StorageBase):
     task_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=False, default=0, server_default=text("0")
     )
-    turn_id: Mapped[int] = mapped_column(Integer, ForeignKey("turns.id"), nullable=False)
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("conversation_runs.id"), nullable=False
+    )
     tool_call_id: Mapped[str] = mapped_column(Text, nullable=False)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)

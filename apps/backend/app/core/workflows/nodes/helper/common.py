@@ -88,8 +88,8 @@ def emit_run_cancelled(rc: RuntimeConfig, step_id: str) -> None:
     副作用:
         经 ``RuntimeOperations`` 条件写入 cancelled 运行终态；已落定的终态不会被覆盖。
     """
-    rc.operations.cancel_turn_if_running(
-        rc.turn.id,
+    rc.operations.cancel_run_if_running(
+        rc.run.id,
         end_reason="runtime_cancelled",
     )
 

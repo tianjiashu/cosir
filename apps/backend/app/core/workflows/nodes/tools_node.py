@@ -7,7 +7,7 @@
 周期事实经明确的开始/完成回调写入 canonical conversation state；观察消息由 bridge 转为
 ``BaseMessage``
 经 ``_persist_tool_observations`` 写回 ``RuntimeContextManager``（**不进 graph state**，
-模型上下文由 RuntimeContextManager 独占）。状态写入 **turn**。
+模型上下文由 RuntimeContextManager 独占）。状态写入 **run**。
 
 工具观察的增量落库与写回统一收敛在 ``_persist_tool_observations``：落库一条即写回一条，
 避免「部分落库、零写回」的撕裂状态，闭合上一轮模型节点写入的 ``AIMessage.tool_calls``
@@ -148,14 +148,14 @@ def _build_tool_result_summaries(
 def _make_tool_lifecycle_callbacks(
     operations: Any,
     task_id: int,
-    turn: Any,
+        run: Any,
 ) -> dict[str, Any]:
     """构造工具生命周期事实回调，不建立通用运行时事件适配层。
 
     参数:
         operations: 当前运行时操作门面。
         task_id: 当前任务标识。
-        turn: 当前运行轮次，提供 turn id 与 fencing version。
+        run: 当前 Conversation Run，提供 run id。
 
     返回:
         包含 ``on_tool_call_started`` 与 ``on_tool_call_finished`` 的回调容器。
@@ -187,8 +187,7 @@ def _make_tool_lifecycle_callbacks(
             "RuntimeOperations must expose tool lifecycle callbacks or a canonical writer"
         )
 
-    turn_id = turn.id
-    fencing_version = getattr(turn, "fencing_version", None)
+    run_id = operations.get_current_run().id
 
     def _on_started(step_id: str, call: ToolCall) -> None:
         """持久化工具调用开始事实。"""
@@ -199,15 +198,13 @@ def _make_tool_lifecycle_callbacks(
             call_id,
             call.tool_name,
             call.arguments,
-            turn_id=turn_id,
-            fencing_version=fencing_version,
+            run_id=run_id,
         )
         writer.transition_tool_call(
             task_id,
             call_id,
             "running",
-            turn_id=turn_id,
-            fencing_version=fencing_version,
+            run_id=run_id,
         )
 
     def _on_finished(step_id: str, observation: ToolObservation) -> None:
@@ -224,8 +221,7 @@ def _make_tool_lifecycle_callbacks(
             observation.data or {},
             status=status,
             error_text=observation.error or observation.reason or None,
-            turn_id=turn_id,
-            fencing_version=fencing_version,
+            run_id=run_id,
         )
 
     return {
@@ -251,7 +247,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     canonical state；观察消息由 bridge 转为 ``BaseMessage`` 经 ``_persist_tool_observations``
     写回 ``RuntimeContextManager``（**不进 graph state**，模型上下文由
     RuntimeContextManager 独占）。
-    状态写入 **turn**。
+    状态写入 **run**。
 
     本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
     ``execute_terminal`` 会同步阻塞至命令结束（最长 ``max_command_timeout``），
@@ -278,14 +274,12 @@ async def _tools_node(state: ReactGraphState) -> dict:
           ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面为上一轮
           ``tool_calls`` 补同构占位并写回（占位字段与序列化逻辑 100% 同源 service，
           不平行复制），消除 core 对 service 受保护成员的越界访问；
-        - 工具生命周期事实经明确回调写入 canonical state；状态写入 **turn**。
+        - 工具生命周期事实经明确回调写入 canonical state；状态写入 **run**。
     """
 
     rc = _runtime_config()  # 取运行时配置
     operations = rc.operations  # 领域操作
     task = operations.get_current_task()  # 任务（工具执行需要 task_id）
-    turn = operations.get_current_turn()  # 当前 turn 记录
-
     tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
@@ -309,7 +303,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     if denied_calls:
         operations.cancel_tool_calls(denied_calls)
 
-    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 turn 已被取消则跳过工具执行。
+    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
     # ``ToolExecutionService`` 的取消兜底（``_build_result_with_cancel_placeholders``）在此
     # 不会执行。但上一轮 ``_model_node`` 已把 ``AIMessage.tool_calls``
@@ -319,12 +313,12 @@ async def _tools_node(state: ReactGraphState) -> dict:
     # 经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面复用 service 的取消占位
     # 实现（而非自拼 JSON、不手调 ``tool_cancelled`` 工厂），仅作「配对闭合」这一件职责，
     # 工具执行与生命周期事实写入仍由 service 承担。
-    if operations.is_current_turn_cancelled():
+    if operations.is_current_run_cancelled():
         log.info(
             "tools_node_cancelled",
             extra={
-                "msg": f"工具节点恢复后检测到 turn 已取消，跳过工具执行，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn.id},
+                "msg": f"工具节点恢复后检测到 run 已取消，跳过工具执行，step_id={step_id}",
+                "data": {"step_id": step_id, "run_id": operations.get_current_run().id},
             },
         )
         # 配对闭合：为上一轮已写出的 tool_calls 补 cancelled 占位。执行前分支提前
@@ -339,7 +333,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         operations.cancel_tool_calls(cancel_calls)
         cancel_placeholders = operations.build_cancel_placeholder_messages(cancel_calls)
         _persist_tool_observations(cancel_placeholders)
-        # 收口取消终态事件：本分支是实际检测到 turn 取消的执行点，须发出
+    # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
         # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
         # 经统一 emit_run_cancelled 构造（携带 langfuse_trace_id，与 model/observe 一致）。
         emit_run_cancelled(rc, step_id)
@@ -389,7 +383,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
     # 逐条持久化本轮产生的工具观察消息，并同步写回运行时上下文
-    # （替代 turn 结束后的批落库；写回使下一轮模型节点能看到工具结果）。
+    # （替代 run 结束后的批落库；写回使下一轮模型节点能看到工具结果）。
     # 落库与写回逐条配对：落库一条即写回一条，避免「部分落库、零写回」撕裂。
     _persist_tool_observations(tool_run.messages_for_model)
 

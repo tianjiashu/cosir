@@ -11,23 +11,23 @@ import asyncio
 
 from fastapi import Depends, HTTPException
 
-from app.api.dependencies import get_task_service, get_turn_service
+from app.api.dependencies import get_task_service, get_conversation_run_service
 from app.api.schemas import (
     DeleteTaskResponse,
     TaskResponse,
 )
 from app.app import app
 from app.config.logging.logger import log
-from app.llm_provider.provider.capability_service import CapabilityService
+from app.service.provider.capability_service import CapabilityService
 from app.service.task.task_service import TaskService
-from app.service.task.turn_service import TurnService
+from app.service.task.conversation_run_service import ConversationRunService
 
 
 @app.get("/tasks/{task_id}")
 async def get_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
-    turn_service: TurnService = Depends(get_turn_service),
+    conversation_run_state_service: ConversationRunService = Depends(get_conversation_run_service),
 ) -> TaskResponse:
     """返回任务状态（含生命周期 status、上下文窗口占用与派生 execution_status）。
 
@@ -56,7 +56,7 @@ async def get_task(
     # 该值仅用于前端上下文窗口上限展示，解析失败不阻断任务返回。
     context_window_total = None
     try:
-        target_model = _latest_turn_model_name(task_id, turn_service)
+        target_model = _latest_conversation_run_model_name(task_id, conversation_run_state_service)
         if target_model is not None:
             context_window_total = CapabilityService.get_model_context_window(target_model)
     except Exception as exc:
@@ -132,7 +132,7 @@ async def list_child_tasks(
     return [TaskResponse.from_record(child) for child in children]
 
 
-def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> str | None:
+def _latest_conversation_run_model_name(task_id: int, conversation_run_state_service: ConversationRunService) -> str | None:
     """取得某任务最近一次 turn 的 ``model_name``（设计 §6.4 任务级口径）。
 
     按创建时间升序取该 task 的全部 turn，返回最后一个非空 ``model_name``；无 turn
@@ -141,7 +141,7 @@ def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> str | No
 
     参数:
         task_id: 任务标识。
-        turn_service: 轮次 service（只读查询）。
+        conversation_run_state_service: 轮次 service（只读查询）。
 
     返回:
         最近一次 turn 的 ``model_name``；无可用值时返回 None。
@@ -153,7 +153,7 @@ def _latest_turn_model_name(task_id: int, turn_service: TurnService) -> str | No
         无（只读查询）。
     """
 
-    turns = turn_service.list_turns_for_task(task_id)
+    turns = conversation_run_state_service.list_runs_for_task(task_id)
     for turn in reversed(turns):
         if turn.model_name:
             return turn.model_name

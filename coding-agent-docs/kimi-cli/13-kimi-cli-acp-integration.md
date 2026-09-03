@@ -635,13 +635,13 @@ def _convert_acp_mcp_server(server: MCPServer) -> dict[str, Any]:
         case acp.schema.HttpMcpServer():
             return {
                 "url": server.url,
-                "transport": "http",
+                "request": "http",
                 "headers": {header.name: header.value for header in server.headers},
             }
         case acp.schema.SseMcpServer():
             return {
                 "url": server.url,
-                "transport": "sse",
+                "request": "sse",
                 "headers": {header.name: header.value for header in server.headers},
             }
         case acp.schema.McpServerStdio():
@@ -649,7 +649,7 @@ def _convert_acp_mcp_server(server: MCPServer) -> dict[str, Any]:
                 "command": server.command,
                 "args": server.args,
                 "env": {item.name: item.value for item in server.env},
-                "transport": "stdio",
+                "request": "stdio",
             }
 ```
 

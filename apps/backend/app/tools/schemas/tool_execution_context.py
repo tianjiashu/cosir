@@ -25,14 +25,14 @@ class ToolExecutionContext:
         task_id: 当前工具调用所属任务标识。
         workspace_id: 当前工作区标识。
         workspace_root: 当前工具调用允许访问的工作区根路径。
-        turn_id: 当前工具调用所属 turn 标识；缺省为空字符串。
+        run_id: 当前工具调用所属 turn 标识；缺省为空字符串。
         runtime_dependencies: 同进程工具可用的运行期依赖，跨进程执行时必须清空。
     """
 
     task_id: int
     workspace_id: int
     workspace_root: Path
-    turn_id: int = 0
+    run_id: int = 0
     runtime_dependencies: ToolRuntimeDependencies = field(default_factory=ToolRuntimeDependencies)
 
     def for_process_execution(self) -> "ToolExecutionContext":
@@ -53,19 +53,19 @@ class ToolExecutionContext:
             task_id=self.task_id,
             workspace_id=self.workspace_id,
             workspace_root=self.workspace_root,
-            turn_id=self.turn_id,
+            run_id=self.run_id,
         )
 
     @classmethod
     def from_workspace(
-        cls, task_id: int, workspace: WorkspaceRecord, turn_id: int = 0
+        cls, task_id: int, workspace: WorkspaceRecord, run_id: int = 0
     ) -> "ToolExecutionContext":
         """从工作区记录与任务标识构造执行上下文。
 
         参数:
             task_id: 当前执行所属的任务标识。
             workspace: 解析出的工作区记录，其 ``root_path`` 即工具边界基准根。
-            turn_id: 当前执行所属的轮次标识；缺省为空字符串。
+            run_id: 当前执行所属的轮次标识；缺省为空字符串。
         返回:
             绑定了该任务、工作区边界与轮次标识的 ``ToolExecutionContext``。
         异常:
@@ -78,5 +78,5 @@ class ToolExecutionContext:
             task_id=task_id,
             workspace_id=workspace.id,
             workspace_root=Path(workspace.root_path),
-            turn_id=turn_id,
+            run_id=run_id,
         )

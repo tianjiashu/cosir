@@ -5,7 +5,7 @@
 
 模块级常量（如 ``IMAGE_EXTENSIONS``）属于跨层共享的公共契约事实，放在
 leaf 层可被 ``api`` / ``core`` / ``service`` 任意层无循环依赖地引用，避免
-在 ``turn_service`` 与 ``vision_content_blocks`` 之间重复定义同一份扩展名集合。
+在 ``conversation_run_state_service`` 与 ``vision_content_blocks`` 之间重复定义同一份扩展名集合。
 """
 
 from pathlib import Path

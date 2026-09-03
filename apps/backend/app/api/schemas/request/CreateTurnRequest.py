@@ -15,7 +15,7 @@ class CreateTurnRequest(BaseModel):
         attachments: 可选，本 turn 携带的附件引用列表（结构化，含类型与引用）。
             仅做结构合法性校验；workspace 边界、视觉能力等业务规则在 service 层判定。
         reasoning_effort: 可选，本 turn 思考努力等级；None 表示 max。该值经
-            ``turn_service.create_turn`` 透传落库到 ``turns.reasoning_effort``。
+            ``conversation_run_state_service.create_run`` 透传落库到 ``turns.reasoning_effort``。
 
     返回:
         Pydantic 请求模型。

@@ -1,21 +1,34 @@
 mod backend_process;
 mod backend_readiness;
 mod backend_supervisor;
+mod desktop_log;
 
-use backend_supervisor::{backend_status, restart_backend, BackendSupervisor};
+use backend_supervisor::{
+    backend_runtime_config, backend_status, restart_backend, write_frontend_log, BackendSupervisor,
+};
 use tauri::{Manager, RunEvent};
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            app.state::<BackendSupervisor>()
+                .show_main_window_if_settled(app);
+        }))
         .manage(BackendSupervisor::default())
-        .invoke_handler(tauri::generate_handler![backend_status, restart_backend])
+        .invoke_handler(tauri::generate_handler![
+            backend_status,
+            backend_runtime_config,
+            restart_backend,
+            write_frontend_log,
+        ])
         .setup(|app| {
             let supervisor = app.state::<BackendSupervisor>().inner().clone();
             let handle = app.handle().clone();
             supervisor.prepare_start();
             std::thread::spawn(move || {
                 if let Err(error) = supervisor.start(&handle) {
-                    eprintln!("[cosir] 本地 Agent 后端启动失败：{error}");
+                    let _ = supervisor.fail_for_startup(error);
                 }
             });
             Ok(())

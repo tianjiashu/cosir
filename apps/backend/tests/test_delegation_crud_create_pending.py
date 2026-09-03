@@ -20,8 +20,8 @@ def _make_record() -> DelegationRecord:
     return DelegationRecord(
         id=None,
         task_id=1,
-        parent_turn_id=1,
-        child_turn_id=None,
+        parent_run_id=1,
+        child_run_id=None,
         child_task_id=None,
         parent_agent_id="developer",
         child_agent_id="researcher",

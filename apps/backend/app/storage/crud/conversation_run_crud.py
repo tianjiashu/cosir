@@ -1,0 +1,448 @@
+"""``conversation_runs`` 表的纯 CRUD 数据访问层。
+
+单一职责：只提供 ``conversation_runs`` 单表的增删改查与 model↔record 转换。
+
+职责边界：
+    - 负责：run 状态读写与条件更新、
+  ``ConversationRunModel``↔``ConversationRunRecord`` 转换。
+- 不负责：Transport 命令幂等占用（见 ``ConversationCommandCrud``）、跨表操作与任务
+  编排（由 ``service/task/`` 负责）、业务规则。
+
+依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
+``init_storage()`` 之后实例化；本类不创建、不释放引擎。
+"""
+
+from typing import Any
+
+from sqlalchemy import asc, delete, exists, select, update
+from sqlalchemy.orm import Session, aliased
+
+from app.models import ConversationRunRecord
+from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.store_engines import main_session_factory
+from app.utils.datetime_utils import to_text, utc_now
+
+
+class ConversationRunCrud:
+    """``conversation_runs`` 表的纯 CRUD。
+
+    仅负责单表读写与 model↔record 转换，不承担跨表编排；所有方法通过共享主库
+    session 工厂访问数据库。
+    """
+
+    def __init__(self) -> None:
+        """绑定主库共享 session 工厂。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 如果 ``init_storage`` 尚未调用（主库 session 工厂不可用）。
+
+        副作用:
+            无（仅复用已初始化的主库 session 工厂）。
+        """
+        self._session_factory = main_session_factory()
+
+    def create(
+            self,
+            task_id: int,
+            input_text: str,
+            status: str = ConversationRunStatus.PENDING.value,
+            agent_id: str | None = None,
+            provider_id: int | None = None,
+            model_name: str | None = None,
+            image_paths: list[str] | None = None,
+            reasoning_effort: str | None = None,
+            extra: dict[str, Any] | None = None,
+            session: Session | None = None,
+    ) -> ConversationRunRecord:
+        """新建一条 run 记录并落库。
+
+        主键 ``id`` 由存储引擎自增分配，即本次运行的 run 标识。
+
+        参数:
+            task_id: 所属任务标识（整数 id）。
+            input_text: 本次运行的输入文本；不能为空白。
+            status: 初始状态，默认 ``pending``。
+            agent_id: 可选，本次运行绑定的 agent 标识。
+            provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）；None 表示未指定。
+            model_name: 可选，模型路由名。
+            image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
+            reasoning_effort: 可选，思考努力等级；None 表示未指定。
+            extra: 可选，运行期附加结构化数据。
+            session: 可选，外部事务 session；传入时复用该事务不自行提交，
+                None 时自行开启并提交事务。
+
+        返回:
+            落库成功的 ``ConversationRunRecord``（含自增分配的 id）。
+
+        异常:
+            ValueError: 如果 input_text 去除首尾空白后为空。
+            sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
+
+        副作用:
+            向 ``conversation_runs`` 表插入一行。
+        """
+        if not input_text.strip():
+            raise ValueError("input_text must be a non-empty string")
+
+        if session is not None:
+            return self._insert_and_flush(
+                session,
+                task_id=task_id,
+                input_text=input_text,
+                status=status,
+                agent_id=agent_id,
+                provider_id=provider_id,
+                model_name=model_name,
+                image_paths=image_paths,
+                reasoning_effort=reasoning_effort,
+                extra=extra,
+            )
+        with self._session_factory.begin() as managed_session:
+            return self._insert_and_flush(
+                managed_session,
+                task_id=task_id,
+                input_text=input_text,
+                status=status,
+                agent_id=agent_id,
+                provider_id=provider_id,
+                model_name=model_name,
+                image_paths=image_paths,
+                reasoning_effort=reasoning_effort,
+                extra=extra,
+            )
+
+    @staticmethod
+    def _insert_and_flush(
+            session: Session,
+            *,
+            task_id: int,
+            input_text: str,
+            status: str,
+            agent_id: str | None,
+            provider_id: int | None,
+            model_name: str | None,
+            image_paths: list[str] | None,
+            reasoning_effort: str | None,
+            extra: dict[str, Any] | None,
+    ) -> ConversationRunRecord:
+        """在给定 session 内插入 run 行并 flush 取回自增 id。
+
+        参数:
+            session: 处于事务中的 SQLAlchemy session。
+            task_id: 所属任务标识。
+            input_text: 输入文本（调用方已校验非空）。
+            status: 初始状态字符串。
+            agent_id: agent 标识或 None。
+            provider_id: 厂商标识或 None。
+            model_name: 模型名或 None。
+            image_paths: 图片路径列表或 None。
+            reasoning_effort: 思考努力等级或 None。
+            extra: 附加结构化数据或 None。
+
+        返回:
+            由落库 model 映射得到的 ``ConversationRunRecord``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果 flush 失败（如外键约束不满足）。
+
+        副作用:
+            向 session 追加一行 ``ConversationRunModel`` 并 flush。
+        """
+        model = ConversationRunModel(
+            task_id=task_id,
+            input_text=input_text,
+            status=status or ConversationRunStatus.PENDING.value,
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model_name=model_name,
+            image_paths=image_paths,
+            reasoning_effort=reasoning_effort,
+            extra=extra,
+        )
+        session.add(model)
+        session.flush()
+        return ConversationRunRecord.from_model(model)
+
+    def get(self, run_id: int) -> ConversationRunRecord:
+        """按标识返回单个 run。
+
+        参数:
+            run_id: run 标识（整数 id）。
+
+        返回:
+            匹配的 ``ConversationRunRecord``。
+
+        异常:
+            KeyError: 如果指定 run 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+        with self._session_factory() as session:
+            row: ConversationRunModel | None = session.get(ConversationRunModel, run_id)
+            if row is None:
+                raise KeyError(run_id)
+            return ConversationRunRecord.from_model(row)
+
+
+
+    def find_active_by_task_in_session(
+        self, task_id: int, session: Session
+    ) -> list[ConversationRunRecord]:
+        """在给定事务 session 内查找某任务下仍处于活跃态（pending/running）的 run。
+
+        活跃态由 ``ConversationRunStatus.PENDING`` 与 ``ConversationRunStatus.RUNNING``
+        定义；终态（completed/failed/cancelled）不计入。状态字段仅存在于
+        ``conversation_runs`` 表，故查询目标为 ``ConversationRunModel``。
+
+        参数:
+            task_id: 任务标识（整数 id）。
+            session: 外部事务 session；本方法不提交、不关闭该 session。
+
+        返回:
+            该任务下活跃态 run 的 ``ConversationRunRecord`` 列表；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            无（只读查询，不修改 session 状态）。
+        """
+        active_statuses = [
+            ConversationRunStatus.PENDING.value,
+            ConversationRunStatus.RUNNING.value,
+        ]
+        rows = (
+            session.execute(
+                select(ConversationRunModel)
+                .where(ConversationRunModel.task_id == task_id)
+                .where(ConversationRunModel.status.in_(active_statuses))
+                .order_by(
+                    asc(ConversationRunModel.created_at),
+                    asc(ConversationRunModel.id),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [ConversationRunRecord.from_model(row) for row in rows]
+
+    def list_by_task(self, task_id: int) -> list[ConversationRunRecord]:
+        """列出某任务下的全部 run，按创建时间升序。
+
+        参数:
+            task_id: 任务标识（整数 id）。
+
+        返回:
+            该任务的 run 列表，按 ``created_at`` 再 ``id`` 升序；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+        with self._session_factory() as session:
+            rows = (
+                session.execute(
+                    select(ConversationRunModel)
+                    .where(ConversationRunModel.task_id == task_id)
+                    .order_by(
+                        asc(ConversationRunModel.created_at),
+                        asc(ConversationRunModel.id),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [ConversationRunRecord.from_model(row) for row in rows]
+
+    def list_recoverable(self) -> list[ConversationRunRecord]:
+        """返回进程重启后仍需恢复的 pending/running 运行。
+
+        参数:
+            无。
+
+        返回:
+            状态为 ``pending`` 或 ``running`` 的 run 列表，按 ``created_at`` 再 ``id``
+            升序；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+        with self._session_factory() as session:
+            rows = (
+                session.execute(
+                    select(ConversationRunModel)
+                    .where(
+                        ConversationRunModel.status.in_(
+                            (
+                                ConversationRunStatus.PENDING.value,
+                                ConversationRunStatus.RUNNING.value,
+                            )
+                        )
+                    )
+                    .order_by(
+                        asc(ConversationRunModel.created_at),
+                        asc(ConversationRunModel.id),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [ConversationRunRecord.from_model(row) for row in rows]
+
+    def update_status_if_in(
+            self,
+            run_id: int,
+            target_status: str,
+            allowed_statuses: tuple[str, ...],
+            end_reason: str | None = None,
+    ) -> ConversationRunRecord | None:
+        """以乐观锁方式把 run 更新为目标状态，仅当其当前状态在允许集合内。
+
+        纯数据访问操作：不携带业务语义，只负责 ``WHERE status IN (allowed_statuses)``
+        条件下的原子更新，用于避免并发收尾请求改写历史终态。调用方（service 层）负责
+        决定目标状态、允许的前置状态集合与伴随字段。
+
+        参数:
+            run_id: run 标识（整数 id）。
+            target_status: 期望写入的终态状态字符串。
+            allowed_statuses: 允许执行更新的前置状态白名单；当前状态不在此集合时
+                不做任何修改并返回 None。
+            end_reason: 可选，更新时一并写入的终态原因；为 None 时不修改该列。
+
+        返回:
+            更新成功时返回更新后的 ``ConversationRunRecord``；当前状态不在允许集合内时
+            返回 None。
+
+        异常:
+            KeyError: 如果指定 run 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            条件满足时更新对应行的 ``status``、``updated_at`` 与可选的 ``end_reason``。
+        """
+        self.get(run_id)
+        values: dict[str, object] = {
+            "status": target_status,
+            "updated_at": to_text(utc_now()),
+        }
+        if end_reason is not None:
+            values["end_reason"] = end_reason
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(ConversationRunModel)
+                .where(
+                    ConversationRunModel.id == run_id,
+                    ConversationRunModel.status.in_(allowed_statuses),
+                )
+                .values(**values)
+            )
+        if not result.rowcount:
+            return None
+        return self.get(run_id)
+
+    def claim_pending_serialized(self, run_id: int) -> ConversationRunRecord | None:
+        """仅在同 task 没有其它 running run 时原子启动 pending run。
+
+        参数:
+            run_id: 待认领的 run 标识（整数 id）。
+
+        返回:
+            认领成功时返回状态已转为 ``running`` 的 ``ConversationRunRecord``；
+            当前非 pending 或同 task 已有 running run 时返回 None。
+
+        异常:
+            KeyError: 如果指定 run 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            条件满足时把对应行 ``status`` 改为 ``running``、递增
+            并刷新 ``updated_at``。
+        """
+        self.get(run_id)
+        running_run = aliased(ConversationRunModel)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(ConversationRunModel)
+                .where(
+                    ConversationRunModel.id == run_id,
+                    ConversationRunModel.status == ConversationRunStatus.PENDING.value,
+                    ~exists(
+                        select(1).where(
+                            running_run.task_id == ConversationRunModel.task_id,
+                            running_run.status == ConversationRunStatus.RUNNING.value,
+                        )
+                    ),
+                )
+                .values(
+                    status=ConversationRunStatus.RUNNING.value,
+                    updated_at=to_text(utc_now()),
+                )
+            )
+        if not result.rowcount:
+            return None
+        return self.get(run_id)
+
+    def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:
+        """返回一批任务下全部 run 的标识列表。
+
+        只查 ``id`` 一列，用于跨表级联删除等只需 id 的场景。
+
+        参数:
+            task_ids: 任务标识列表（整数 id）；为空时直接返回空列表。
+
+        返回:
+            匹配的 run id 列表；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            task_ids 非空时打开一次主库只读 session。
+        """
+        if not task_ids:
+            return []
+        with self._session_factory() as session:
+            return [
+                row[0]
+                for row in session.execute(
+                    select(ConversationRunModel.id).where(
+                        ConversationRunModel.task_id.in_(task_ids)
+                    )
+                ).all()
+            ]
+
+    def delete_by_ids(self, run_ids: list[int]) -> None:
+        """按标识批量删除 run。
+
+        参数:
+            run_ids: 待删除的 run 标识列表（整数 id）；为空时不执行任何操作。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            run_ids 为空时直接返回；对应行不存在时静默无操作。
+        """
+        if not run_ids:
+            return
+        with self._session_factory.begin() as session:
+            session.execute(
+                delete(ConversationRunModel).where(ConversationRunModel.id.in_(run_ids))
+            )

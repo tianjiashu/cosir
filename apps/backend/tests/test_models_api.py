@@ -4,11 +4,11 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_provider_service
 from app.app import app
-from app.llm_provider.capability.model_capability import (
+from app.core.llm_provider.capability.model_capability import (
     ModelCapability,
     ReasoningEffortCapability,
 )
-from app.llm_provider.capability.provider_capability import ProviderCapability
+from app.core.llm_provider.capability.provider_capability import ProviderCapability
 
 
 class FakeProviderService:

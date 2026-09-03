@@ -4,7 +4,7 @@
 便于上层按"用户输入/请求参数错误"语义统一捕获并转中文引导，而不与内部系统错误混淆。
 
 异常分工：
-- ``VisionNotSupportedError``：模型/厂商当前不支持视觉输入（构建期 ``create_turn`` 或
+- ``VisionNotSupportedError``：模型/厂商当前不支持视觉输入（构建期 ``create_run`` 或
   运行期 workflow 转抛），由 API 层捕获并转 HTTP 4xx + 中文引导。
 - ``VisionFormatNotSupportedError``：用户所选厂商协议的视觉格式本期未实现（如非
   ``openai_url`` 的 Anthropic / Gemini 形式），由 workflow 捕获后转 ``VisionNotSupportedError``。
@@ -18,7 +18,7 @@ from __future__ import annotations
 class VisionNotSupportedError(ValueError):
     """模型或厂商当前不支持视觉输入。
 
-    触发场景：``create_turn`` 构建期校验到 ``ModelCapability.supports_image`` 为 False；
+    触发场景：``create_run`` 构建期校验到 ``ModelCapability.supports_image`` 为 False；
     或运行期 workflow 转抛的「厂商视觉格式未实现 / 聚合体积超限」等，统一归一到此类型，
     由 API 层捕获为 HTTP 4xx + 中文引导。
     """

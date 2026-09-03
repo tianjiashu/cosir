@@ -401,7 +401,6 @@ const AssistantMessage: FC = () => {
                 return (
                   <div data-slot="aui_assistant-message-image" className="py-1">
                     {/* ImageMessagePartComponent supplies alt text internally. */}
-                    {/* eslint-disable-next-line jsx-a11y/alt-text */}
                     <Image {...part} />
                   </div>
                 );
@@ -472,7 +471,6 @@ const UserFilePart: FileMessagePartComponent = (part) => (
 const UserImagePart: ImageMessagePartComponent = (part) => (
   <div data-slot="aui_user-message-image" className="py-1">
     {/* ImageMessagePartComponent supplies alt text internally. */}
-    {/* eslint-disable-next-line jsx-a11y/alt-text */}
     <Image {...part} />
   </div>
 );

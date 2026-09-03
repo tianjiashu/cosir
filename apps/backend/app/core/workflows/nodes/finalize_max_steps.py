@@ -2,7 +2,7 @@
 
 本模块承载「步数耗尽统一落定失败」的逻辑，不是 LangGraph graph 节点：它由 ``model_node``
 作为普通 async 函数直接调用（不再经条件边路由），输出终态 state patch。保持独立文件
-（而非并入 model_node）是因为该逻辑横跨 canonical writer / turn 标记 / 终态 patch 构造，
+（而非并入 model_node）是因为该逻辑横跨 canonical writer / run 标记 / 终态 patch 构造，
 职责清晰。
 """
 
@@ -48,25 +48,25 @@ async def _finalize_max_steps(
     异常:
         无。
     副作用:
-        可能把当前 turn 标记为 failed，并写入 canonical conversation state。
+        可能把当前 run 标记为 failed，并写入 canonical conversation state。
     """
 
     rc = _runtime_config()
     effective_step_count = state.step_count if step_count is None else step_count
     step_id = f"step-{effective_step_count}"
-    turn_id = getattr(rc.turn, "id", None) or getattr(rc.turn, "turn_id", None)
-    if turn_id is None:
+    run_id = getattr(rc.run, "id", None) or getattr(rc.run, "run_id", None)
+    if run_id is None:
         raise RuntimeError("runtime config does not contain a run id")
-    failed_turn = rc.operations.fail_turn_if_running(
-        turn_id,
+    failed_run = rc.operations.fail_run_if_running(
+        run_id,
         end_reason="max_steps_reached",
     )
-    if failed_turn is None:
+    if failed_run is None:
         log.info(
             "max_steps_node_terminal_race_lost",
             extra={
-                "msg": f"最大步数失败落定时 turn 已非 running，跳过终态写入，step_id={step_id}",
-                "data": {"step_id": step_id, "turn_id": turn_id},
+                "msg": f"最大步数失败落定时 run 已非 running，跳过终态写入，step_id={step_id}",
+                "data": {"step_id": step_id, "run_id": run_id},
             },
         )
         return _terminal_state(effective_step_count)

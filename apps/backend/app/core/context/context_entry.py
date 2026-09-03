@@ -15,7 +15,7 @@ class ContextEntry:
 
     参数:
         message: 模型无关的运行时消息。
-        turn_id: 消息所属 turn；task 级消息使用 ``None``。
+        run_id: 消息所属 turn；task 级消息使用 ``None``。
 
     返回:
         不可变的上下文条目。
@@ -28,4 +28,4 @@ class ContextEntry:
     """
 
     message: RuntimeMessage
-    turn_id: int | None
+    run_id: int | None

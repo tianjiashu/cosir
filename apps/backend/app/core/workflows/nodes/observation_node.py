@@ -34,7 +34,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     本节点是「工具结果观察处理」的单一收口，按固定时序处理：
 
-    1. **执行后取消判断**：工具批次执行后若 turn 已取消，落定 cancelled 并置终态
+    1. **执行后取消判断**：工具批次执行后若 run 已取消，落定 cancelled 并置终态
        （``terminal=True``），不进错误计数——工具已执行、结果已写回上下文，取消时不再
        多做一次推理；
     2. **延后 REPAIR 修复提示注入**：读取 ``state.deferred_repair_message``（``model`` 节点
@@ -64,23 +64,23 @@ async def _observe_node(state: ReactGraphState) -> dict:
         - 执行后取消分支经 ``RuntimeOperations`` 落定取消终态；
         - deferred 非空时经 ``_runtime_context().add_message(SystemMessage(...))``
           注入模型上下文（落库并进入内存，补全审计轨迹）；
-        - 错误上限分支经 ``operations.fail_turn_if_running`` 标记 turn 失败终态
-          （``get_current_turn`` 仅在该分支内调用，避免无谓的 DB 读）；
+        - 错误上限分支经 ``operations.fail_run_if_running`` 标记 run 失败终态
+          （``get_current_run`` 仅在该分支内调用，避免无谓的 DB 读）；
         - 阶段二将在此接入 LLM 观察推理并写入明确的观察事实，不在此写消息通道。
     """
     rc = _runtime_config()  # 取运行时配置（含 operations / langfuse_trace_id）
     operations = rc.operations  # 领域操作
     results = state.last_tool_results  # tools 节点产出的结果摘要
 
-    # 1. 执行后取消判断：工具已执行完毕（结果已写回上下文闭合配对），若 turn 取消则不再
+    # 1. 执行后取消判断：工具已执行完毕（结果已写回上下文闭合配对），若 run 取消则不再
     # 多做一次推理并置取消终态，不进错误计数。此判断优先于空结果/错误计数，
     # 保证取消场景无论结果有无都走统一终态。
-    if operations.is_current_turn_cancelled():
+    if operations.is_current_run_cancelled():
         log.info(
             "observe_node_cancelled_after_execution",
             extra={
                 "msg": (
-                    "工具结果观察时检测到 turn 已取消，停止后续模型调用，"
+                    "工具结果观察时检测到 run 已取消，停止后续模型调用，"
                     f"step_id=step-{state.step_count}"
                 ),
                 "data": {"step_id": f"step-{state.step_count}"},
@@ -153,19 +153,19 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
 
     if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        turn = operations.get_current_turn()  # 当前 turn 记录（仅错误上限分支需要 turn_id）
-        failed_turn = operations.fail_turn_if_running(
-            turn.id, end_reason="tool_error_limit_reached"
+        run = operations.get_current_run()  # 当前 Conversation Run；仅错误上限分支需要
+        failed_run = operations.fail_run_if_running(
+            run.id, end_reason="tool_error_limit_reached"
         )
-        if failed_turn is None:
+        if failed_run is None:
             log.info(
                 "observe_node_error_limit_terminal_race_lost",
                 extra={
                     "msg": (
-                        f"工具错误上限失败落定时 turn 已非 running，"
+                        f"工具错误上限失败落定时 run 已非 running，"
                         f"跳过失败事件，step_id=step-{state.step_count}"
                     ),
-                    "data": {"step_id": f"step-{state.step_count}", "turn_id": turn.id},
+                    "data": {"step_id": f"step-{state.step_count}", "run_id": run.id},
                 },
             )
             return {

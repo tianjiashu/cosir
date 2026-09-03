@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -171,10 +172,8 @@ def write_bootstate(
         finally:
             # ``os.replace`` 成功后临时文件已被移除；异常残留时清理，避免遗留垃圾文件。
             if os.path.exists(tmp_name):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(tmp_name)
-                except OSError:
-                    pass
     except OSError as exc:
         # 启动状态文件写入失败不应阻断主流程，但必须留下可排查的本地记录。
         _record_write_failure(path, exc)

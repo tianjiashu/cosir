@@ -5,7 +5,7 @@
 与既有的审计切面并行触发，互不干扰。
 
 职责边界：
-- 负责：成功判定、turn_id / task_id 判定、changes 提取、正向 V4A 构造、反转为
+- 负责：成功判定、run_id / task_id 判定、changes 提取、正向 V4A 构造、反转为
   反向操作、逐文件落库 file_snapshots、采集异常本地吞 + warning。
 - 不负责：工具执行编排、参数校验、文件状态协调（均归 ToolScheduler / 各 guard）。
 
@@ -37,7 +37,7 @@ class FileSnapshotHook(HookBase):
     """工具成功后采集文件回退快照的内置 Hook。
 
     挂载于 ``HookEvent.POST_TOOL_USE``，对所有工具触发；内部自行判定是否产生
-    可落库快照（仅成功、带 turn_id / task_id、且 observation.data 含 changes 的文件工具）。
+    可落库快照（仅成功、带 run_id / task_id、且 observation.data 含 changes 的文件工具）。
     """
 
     def __init__(self) -> None:
@@ -62,14 +62,14 @@ class FileSnapshotHook(HookBase):
     def execute(self, context: HookContext) -> HookResult:
         """采集文件回退快照。
 
-        流程：非成功观察 → 跳过；无 turn_id 或 task_id → 跳过（task_id 缺失时
+        流程：非成功观察 → 跳过；无 run_id 或 task_id → 跳过（task_id 缺失时
         放弃采集，避免快照落入空串归属的 seq 命名空间）；无 ``observation.data``
         → 跳过；无 ``changes`` → 跳过；构造正向 V4A、反转为反向操作、逐文件落库。
         任何异常 → warning 日志 + ALLOW（不阻断主流程）。
 
         参数:
             context: 运行时注入的 ``HookContext``，含 ``tool_name`` /
-                ``tool_observation`` / ``turn_id`` / ``task_id``。
+                ``tool_observation`` / ``run_id`` / ``task_id``。
 
         返回:
             HookResult.allow()：本 Hook 永不阻断主流程（快照是旁路数据副作用，
@@ -85,7 +85,7 @@ class FileSnapshotHook(HookBase):
         observation = context.tool_observation
         if observation is None or observation.status != "success":
             return HookResult.allow()
-        if not context.turn_id or not context.task_id:
+        if not context.run_id or not context.task_id:
             return HookResult.allow()
         data = observation.data
         if not data:
@@ -96,10 +96,10 @@ class FileSnapshotHook(HookBase):
 
         tool_name = context.tool_name or ""
         try:
-            # HookContext 携带的 task_id/turn_id 为字符串标识，落库快照层要求整数主键。
+            # HookContext 携带的 task_id/run_id 为字符串标识，落库快照层要求整数主键。
             task_id = int(context.task_id)
-            turn_id = int(context.turn_id)
-            self._record(observation, tool_name, task_id, turn_id)
+            run_id = int(context.run_id)
+            self._record(observation, tool_name, task_id, run_id)
         except Exception:
             log.warning(
                 "file_snapshot_record_failed",
@@ -107,7 +107,7 @@ class FileSnapshotHook(HookBase):
                     "msg": "文件快照采集失败，回退时可能丢失该次文件改动还原能力",
                     "data": {
                         "task_id": context.task_id,
-                        "turn_id": context.turn_id,
+                        "run_id": context.run_id,
                         "tool_name": tool_name,
                     },
                 },
@@ -120,7 +120,7 @@ class FileSnapshotHook(HookBase):
         observation: ToolObservation,
         tool_name: str,
         task_id: int,
-        turn_id: int,
+        run_id: int,
     ) -> None:
         """把一次工具观察的 changes 落库为反向操作快照。
 
@@ -128,7 +128,7 @@ class FileSnapshotHook(HookBase):
             observation: 归一化后的工具观察结果（提供 ``tool_call_id`` 与 ``data["changes"]``）。
             tool_name: 被执行工具名（作为快照 ``tool_name``）。
             task_id: 任务标识（快照归属任务，seq 命名空间边界）。
-            turn_id: 轮次标识（快照归属的 turn）。
+            run_id: 轮次标识（快照归属的 turn）。
 
         返回:
             无。
@@ -146,7 +146,7 @@ class FileSnapshotHook(HookBase):
                 "file_snapshot_changes_invalid",
                 extra={
                     "msg": "工具观察 data.changes 非 list，跳过文件快照采集",
-                    "data": {"task_id": task_id, "turn_id": turn_id, "tool_name": tool_name},
+                    "data": {"task_id": task_id, "run_id": run_id, "tool_name": tool_name},
                 },
             )
             return
@@ -161,7 +161,7 @@ class FileSnapshotHook(HookBase):
             [
                 FileSnapshotRecord(
                     task_id=task_id,
-                    turn_id=turn_id,
+                    run_id=run_id,
                     tool_name=tool_name,
                     tool_call_id=observation.tool_call_id,
                     path=forward.file_path,

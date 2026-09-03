@@ -26,7 +26,7 @@ class FileSnapshotRecord:
 
     id: int = field(default=-1)
     task_id: int = 0
-    turn_id: int = 0
+    run_id: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
     path: str = ""
@@ -58,7 +58,7 @@ class FileSnapshotRecord:
         return cls(
             id=row.id,
             task_id=row.task_id,
-            turn_id=row.turn_id,
+            run_id=row.run_id,
             tool_call_id=row.tool_call_id,
             tool_name=row.tool_name,
             path=row.path,
@@ -89,7 +89,7 @@ class FileSnapshotRecord:
         """
         return {
             "task_id": self.task_id,
-            "turn_id": self.turn_id,
+            "run_id": self.run_id,
             "tool_call_id": self.tool_call_id,
             "tool_name": self.tool_name,
             "path": self.path,

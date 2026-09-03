@@ -9,7 +9,7 @@ from app.storage.model.base import StorageBase
 class ConversationMessageModel(StorageBase):
     """``conversation_messages`` 表模型。
 
-    消息是可重建 Chat UI 的 canonical fact。当前 ``turn_id`` 关联既有 turns 表，
+    消息是可重建 Chat UI 的 canonical fact。当前 ``run_id`` 关联既有 turns 表，
     作为 ConversationRun 完成迁移前的运行身份过渡字段。
     """
 
@@ -24,7 +24,9 @@ class ConversationMessageModel(StorageBase):
     )
 
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
-    turn_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("turns.id"), nullable=True)
+    run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("conversation_runs.id"), nullable=True
+    )
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="complete")

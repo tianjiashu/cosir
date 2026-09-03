@@ -67,7 +67,7 @@ function toToolCallPart(
   part: TransportToolCallPart,
 ): ThreadMessage["content"][number] {
   const isCancelled = part.status === "cancelled";
-  const isFailed = part.status === "failed" || part.error !== undefined;
+  const isFailed = part.status === "failed";
   const result = isCancelled
     ? { kind: "tool-cancelled" as const }
     : isFailed
@@ -115,7 +115,10 @@ function toMessageStatus(message: TransportMessage): MessageStatus {
     case "pending":
     case "running":
       return { type: "running" };
+    case "requires-action":
+      return { type: "requires-action", reason: "tool-calls" };
     case "completed":
+    case "complete":
       return { type: "complete", reason: "stop" };
     case "cancelled":
       return { type: "incomplete", reason: "cancelled" };

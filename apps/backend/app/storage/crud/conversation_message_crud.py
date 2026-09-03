@@ -23,7 +23,7 @@ class ConversationMessageCrud:
         task_id: int,
         sequence: int,
         role: str,
-        turn_id: int | None = None,
+        run_id: int | None = None,
         status: str = "complete",
         end_reason: str | None = None,
     ) -> ConversationMessageRecord:
@@ -34,7 +34,7 @@ class ConversationMessageCrud:
             task_id: task 整数标识。
             sequence: task 内稳定显示顺序。
             role: ``system``、``user``、``assistant`` 或 ``tool``。
-            turn_id: 过渡 run/turn 标识，可为空。
+            run_id: 过渡 run/turn 标识，可为空。
             status: 消息状态，默认 ``complete``。
             end_reason: 终止原因，可为空。
 
@@ -47,17 +47,13 @@ class ConversationMessageCrud:
         副作用:
             插入 ``conversation_messages`` 行；事务提交由调用方负责。
         """
-
-        now = to_text(utc_now())
         row = ConversationMessageModel(
             task_id=task_id,
-            turn_id=turn_id,
+            run_id=run_id,
             sequence=sequence,
             role=role,
             status=status,
             end_reason=end_reason,
-            created_at=now,
-            updated_at=now,
         )
         session.add(row)
         session.flush()

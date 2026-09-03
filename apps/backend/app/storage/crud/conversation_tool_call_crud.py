@@ -24,7 +24,7 @@ class ConversationToolCallCrud:
         tool_call_id: str,
         tool_name: str,
         args_json: str,
-        turn_id: int | None = None,
+        run_id: int | None = None,
         message_id: int | None = None,
         part_id: int | None = None,
         status: str = "pending",
@@ -37,7 +37,7 @@ class ConversationToolCallCrud:
             tool_call_id: 工具调用幂等标识，在 task 内唯一。
             tool_name: 工具名称。
             args_json: 已规范化的参数 JSON 文本。
-            turn_id: 过渡 run/turn 标识，可为空。
+            run_id: 过渡 run/turn 标识，可为空。
             message_id: 关联的 assistant 消息，可为空。
             part_id: 关联的 tool-call part，可为空。
             status: 初始状态，默认 ``pending``。
@@ -55,7 +55,7 @@ class ConversationToolCallCrud:
         now = to_text(utc_now())
         row = ConversationToolCallModel(
             task_id=task_id,
-            turn_id=turn_id,
+            run_id=run_id,
             message_id=message_id,
             part_id=part_id,
             tool_call_id=tool_call_id,

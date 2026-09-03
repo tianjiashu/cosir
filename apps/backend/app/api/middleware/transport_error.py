@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from app.api.transport.assistant_transport_request import TransportRequestError
+from app.assistant_transport.request import TransportRequestError
 
 
 def install_transport_request_error_handler(app: FastAPI) -> None:

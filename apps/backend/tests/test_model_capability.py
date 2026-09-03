@@ -9,7 +9,7 @@
 所有用例使用的模型名均来自 ``model_capabilities.json`` 真实键，期望值与 JSON 一致。
 """
 
-from app.llm_provider.capability.model_capability import ModelCapability
+from app.core.llm_provider.capability.model_capability import ModelCapability
 
 
 def test_effort_map_read_from_nested_object() -> None:

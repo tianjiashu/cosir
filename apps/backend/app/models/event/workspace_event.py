@@ -1,7 +1,7 @@
 """Workspace 状态事件值对象（workspace 级，不带 task/turn 信封）。
 
 单一职责：承载 workspace 级状态事件（如创建时的准备进度 preparing/ready/degraded，
-后续可扩展其他 workspace 状态事件）。本事件**无 task_id / turn_id**
+后续可扩展其他 workspace 状态事件）。本事件**无 task_id / run_id**
 （创建 workspace 时既无 task 也无 turn），自带 ``workspace_id`` 与
 ``workspace_path``，经独立的 ``WorkspaceEventBus`` 分发，供 workspace 级 SSE 端点
 推送给前端状态展示。

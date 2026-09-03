@@ -10,50 +10,50 @@
 
 from app.models.file_snapshot_record import FileSnapshotRecord
 from app.models.result.change_set import ChangeCheckpoint, ChangeFileEntry, ChangeSet
+from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
-from app.storage.crud.turn_crud import TurnCrud
 
 
-def _turn_ids_until(
-    task_id: int | str, checkpoint_turn_id: int | None
+def _run_ids_until(
+    task_id: int | str, checkpoint_run_id: int | None
 ) -> tuple[list[int] | None, list[ChangeCheckpoint]]:
     """解析 task 下参与聚合的 turn 过滤集合与检查点列表。
 
     seq 命名空间已按 task 隔离（task 内递增），聚合查询默认按 ``task_id`` 直查即可；
-    仅当指定 ``checkpoint_turn_id``（截断到某 turn 为止）时才需要 turn 过滤集合。
+    仅当指定 ``checkpoint_run_id``（截断到某 turn 为止）时才需要 turn 过滤集合。
 
     参数:
         task_id: 任务标识（整数主键；允许传入字符串以兼容 API 路径参数，内部收敛为 int）。
-        checkpoint_turn_id: 检查点轮次标识；为 None 表示不截断（聚合该 task 全部快照）。
+        checkpoint_run_id: 检查点轮次标识；为 None 表示不截断（聚合该 task 全部快照）。
 
     返回:
-        二元组 ``(turn_ids, checkpoints)``：前者为参与变更聚合的 turn 过滤集合（按时间升序，
+        二元组 ``(run_ids, checkpoints)``：前者为参与变更聚合的 turn 过滤集合（按时间升序，
         指定检查点时截断到该 turn 含，为 None 表示不过滤 turn），后者为该 task 全部检查点
         （不受截断影响，供前端下拉）。
 
     异常:
-        ValueError: 当 ``checkpoint_turn_id`` 不属于该 task 时抛出。
+        ValueError: 当 ``checkpoint_run_id`` 不属于该 task 时抛出。
 
     副作用:
         打开主库只读查询。
     """
     task_id = int(task_id)
-    turns = TurnCrud().list_by_task(task_id)
+    turns = ConversationRunCrud().list_by_task(task_id)
     checkpoints = [
-        ChangeCheckpoint(turn_id=turn.id, turn_seq=index, label=f"检查点 {index}")
+        ChangeCheckpoint(run_id=turn.id, turn_seq=index, label=f"检查点 {index}")
         for index, turn in enumerate(turns, start=1)
     ]
-    if checkpoint_turn_id is None:
+    if checkpoint_run_id is None:
         return None, checkpoints
-    turn_ids = [turn.id for turn in turns]
-    if checkpoint_turn_id not in turn_ids:
-        raise ValueError(f"checkpoint turn not in task: {checkpoint_turn_id}")
-    return turn_ids[: turn_ids.index(checkpoint_turn_id) + 1], checkpoints
+    run_ids = [turn.id for turn in turns]
+    if checkpoint_run_id not in run_ids:
+        raise ValueError(f"checkpoint turn not in task: {checkpoint_run_id}")
+    return run_ids[: run_ids.index(checkpoint_run_id) + 1], checkpoints
 
 
 def query_change_set(
     task_id: int | str,
-    checkpoint_turn_id: str | None = None,
+    checkpoint_run_id: str | None = None,
     include_running: bool = True,
 ) -> ChangeSet:
     """查询某 task 的累积文件变更集。
@@ -62,7 +62,7 @@ def query_change_set(
 
     参数:
         task_id: 任务标识（整数主键；允许传入字符串以兼容 API 路径参数，内部收敛为 int）。
-        checkpoint_turn_id: 只聚合到该 turn（含）为止的变更；为 None 表示全部。
+        checkpoint_run_id: 只聚合到该 turn（含）为止的变更；为 None 表示全部。
         include_running: 默认 True，纳入运行中（``stable=0``）的变更，用于工具
             执行中的实时展示与撤销；置 False 时只返回已稳定（``stable=1``）条目。
 
@@ -70,18 +70,18 @@ def query_change_set(
         ``ChangeSet``：含检查点列表与按路径去重的文件条目（按路径字典序排列）。
 
     异常:
-        ValueError: 当 ``checkpoint_turn_id`` 不属于该 task 时抛出。
+        ValueError: 当 ``checkpoint_run_id`` 不属于该 task 时抛出。
 
     副作用:
         打开主库只读查询。
     """
     task_id = int(task_id)
-    turn_ids, checkpoints = _turn_ids_until(task_id, checkpoint_turn_id)
+    run_ids, checkpoints = _run_ids_until(task_id, checkpoint_run_id)
     crud = FileSnapshotCrud()
     snapshots = (
-        crud.list_any_by_task(task_id, turn_ids)
+        crud.list_any_by_task(task_id, run_ids)
         if include_running
-        else crud.list_stable_by_task(task_id, turn_ids)
+        else crud.list_stable_by_task(task_id, run_ids)
     )
     latest: dict[str, ChangeFileEntry] = {}
     for snap in snapshots:

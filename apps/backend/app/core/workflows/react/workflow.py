@@ -11,7 +11,7 @@ graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状�
 
 from collections.abc import Callable
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
@@ -19,19 +19,19 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
 from app.core.workflows.nodes.helper.vision_content_blocks import (
     build_user_content_blocks,
 )
-from app.llm_provider.model_factory import resolve_chat_model
-from app.llm_provider.provider.capability_service import CapabilityService
 from app.models import RuntimeMessage
+from app.models.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.errors.llm_provider_exceptions import (
     VisionFormatNotSupportedError,
     VisionImageError,
     VisionNotSupportedError,
 )
-from app.models.turn_usage_stats import TurnUsageStats
+from app.service.provider.capability_service import CapabilityService
 from app.tools.schemas import ToolCall
 from app.utils.image_utils import is_image_path
 
@@ -106,7 +106,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         operations: RuntimeOperations,
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
-        execution_mode: Literal["fresh", "resume"] = "fresh",
     ) -> None:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -123,40 +122,37 @@ class ReactLikeWorkflow(AgentWorkflow):
                 ``graph.astream`` 的 ``config["callbacks"]`` 使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
                 终态事件 payload 会携带该字段供前端展示。未启用 Langfuse 时为 None。
-            execution_mode: 当前 turn 的执行模式；``fresh`` 清理当前 turn 后重新执行，
-                ``resume`` 从当前 turn 已持久化轨迹恢复。
 
         生成:
             无。该异步迭代器只保留工作流协议的可消费形状，不产生运行时事件。
         """
 
-        turn = operations.get_current_turn()
+        run = operations.get_current_run()
         # 一个 Conversation Run 对应一个 LangGraph checkpoint thread；当前物理
-        # 迁移阶段 run 仍由 turns.id 承载，因此这里使用 run/turn 的稳定主键，
+        # 迁移阶段 run 仍由 conversation_commands.id 承载，因此这里使用 run 的稳定主键，
         # 而不是 task_id（同一 task 可以拥有多个 run）。
-        thread_id = turn.id
-        turn_id = turn.id
+        run_id = run.id
         current_task = operations.get_current_task()
 
         # Agent 执行主体
         agent_profile = operations.agent_profile
-        # 构建模型：按 turn.model_name 运行期兜底解析（None 时回退 agent_profile.model_name），
+        # 构建模型：按 run.model_name 运行期兜底解析（None 时回退 agent_profile.model_name），
         # 失败记 ``model_resolve_failed`` 后抛出，由外层 graph.astream 异常分支收敛为 RUN_FAILED。
         try:
             base_model = resolve_chat_model(
                 task=current_task,
-                turn=turn,
+                run=run,
                 agent_profile=agent_profile,
             )
         except Exception as exc:
             log.exception(
                 "model_resolve_failed",
                 extra={
-                    "msg": f"运行期模型解析失败，turn 进入 RUN_FAILED：{exc}",
+                    "msg": f"运行期模型解析失败，run 进入 RUN_FAILED：{exc}",
                     "data": {
                         "task_id": current_task.id,
-                        "turn_id": turn.id,
-                        "model": turn.model_name or agent_profile.model_name,
+                        "run_id": run.id,
+                        "model": run.model_name or agent_profile.model_name,
                     },
                 },
             )
@@ -181,16 +177,16 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
-        thinking_channel = CapabilityService.get_thinking_channel(turn.provider_id)
-        vision_input_format = CapabilityService.get_vision_input_format(turn.provider_id)
+        thinking_channel = CapabilityService.get_thinking_channel(run.provider_id)
+        vision_input_format = CapabilityService.get_vision_input_format(run.provider_id)
 
         runtime_config = RuntimeConfig(
             operations=operations,
-            turn=turn,
+            run=run,
             model=cast(BaseChatModel, bound_model),
             approval_resolver=self._approval_resolver,
             start_time=perf_counter(),
-            usage_stats=TurnUsageStats(),
+            usage_stats=ConversationRunUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
             thinking_channel=thinking_channel,
             thinking_roundtrip=True,
@@ -204,25 +200,25 @@ class ReactLikeWorkflow(AgentWorkflow):
             current_workspace=current_workspace,
             current_task=current_task,
             store=operations.message_store,
-            turn=turn,
+            run=run,
         )
-        # 显式初始化 turn 级上下文，避免 fresh 重跑和 checkpoint resume 共享隐式时序。
-        runtime_context_manager.begin_turn(turn, mode=execution_mode)
+        # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
+        runtime_context_manager.begin_run(run)
 
         runtime_context_manager.set_thinking_channel(thinking_channel)
 
-        # turn 启动基线：构造带多模态 block 的 user 消息并同时写入当前运行期内存与轨迹；
-        # load_history 已排除当前 turn，历史轮回放保持纯文本。图片路径来自 turn.image_paths（已在
-        # create_turn 阶段从附件抽离并落库，仅含图片）；文件/目录/链接已固化进
-        # turn.input_text，无需在此拼接。视觉格式未实现/聚合超限统一转 VisionNotSupportedError。
-        image_paths = [p for p in (turn.image_paths or []) if is_image_path(p)]
+        # run 启动基线：构造带多模态 block 的 user 消息并同时写入当前运行期内存与轨迹；
+        # load_history 已排除当前 run，历史回放保持纯文本。图片路径来自 run.image_paths（已在
+        # create_run 阶段从附件抽离并落库，仅含图片）；文件/目录/链接已固化进
+        # run.input_text，无需在此拼接。视觉格式未实现/聚合超限统一转 VisionNotSupportedError。
+        image_paths = [p for p in (run.image_paths or []) if is_image_path(p)]
         try:
             content_blocks, skipped = build_user_content_blocks(
-                turn.input_text,
+                run.input_text,
                 image_paths,
                 vision_input_format,
                 workspace_root=current_workspace.root_path,
-                model_name=turn.model_name,
+                model_name=run.model_name,
             )
         except (VisionFormatNotSupportedError, VisionImageError) as exc:
             raise VisionNotSupportedError(str(exc)) from exc
@@ -231,9 +227,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             log.warning(
                 "vision_images_partially_skipped",
                 extra={
-                    "msg": "some images skipped in this turn",
+                    "msg": "some images skipped in this run",
                     "data": {
-                        "turn_id": turn.id,
+                        "run_id": run.id,
                         "skipped_count": len(skipped),
                         "loaded_count": len(content_blocks) - 1,
                     },
@@ -242,7 +238,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         runtime_context_manager.upsert_current_user_message(
             RuntimeMessage(
                 role="user",
-                content_text=turn.input_text,
+                content_text=run.input_text,
                 content_blocks=content_blocks if len(content_blocks) > 1 else None,
             ),
             allow_write_event_failure=True,
@@ -250,7 +246,7 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         config = {
             "configurable": {
-                "thread_id": thread_id,
+                "run_id": run_id,
                 "runtime_config": runtime_config,
                 # 与 runtime_config 同口径经 config 注入，不进入 graph state
                 # （非 list 对象不兼容 state reducer）。
@@ -276,12 +272,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                 last_tool_results=[],
             )
             input_state: ReactGraphState | Command | None = initial_state
-            if execution_mode == "resume":
-                checkpoint_state = await graph.aget_state(config)
-                input_state = (
-                    None if checkpoint_state.values or checkpoint_state.next else initial_state
-                )
-
             while True:
                 try:
                     async for _ in graph.astream(
@@ -299,7 +289,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                             "msg": "langgraph execution failed during workflow run",
                             "data": {
                                 "task_id": current_task.id,
-                                "turn_id": getattr(operations, "_current_turn_id", None),
+                                "run_id": operations.get_current_run().id,
                             },
                         },
                     )
@@ -313,13 +303,13 @@ class ReactLikeWorkflow(AgentWorkflow):
                 if not interrupts:
                     break
 
-                # ★ 取消检查：graph 暂停在 interrupt()（等待审批），若 turn 已取消则不恢复
-                if operations.is_current_turn_cancelled():
+                # ★ 取消检查：graph 暂停在 interrupt()（等待审批），若 run 已取消则不恢复
+                if operations.is_current_run_cancelled():
                     log.info(
                         "workflow_interrupt_cancelled",
                         extra={
-                            "msg": f"interrupt 暂停时 turn 已取消，不再恢复，turn_id={turn_id}",
-                            "data": {"turn_id": turn_id},
+                            "msg": f"interrupt 暂停时 run 已取消，不再恢复，run_id={run_id}",
+                            "data": {"run_id": run_id},
                         },
                     )
                     break

@@ -3,7 +3,7 @@
 覆盖：
 - ``AttachmentRef.from_ref`` 类型推断（url / image / file / 显式 kind）。
 - ``render_attachment_refs_to_text`` 把文件/目录/链接渲染为模型可读文本前缀。
-- ``TurnService.create_turn``：非图片附件拼进落库 ``input_text``，图片单独落
+- ``ConversationRunService.create_run``：非图片附件拼进落库 ``input_text``，图片单独落
   ``image_paths``；视觉拦截按 kind 判定。
 """
 
@@ -73,25 +73,25 @@ def test_render_empty_returns_blank() -> None:
     assert render_attachment_refs_to_text([]) == ""
 
 
-def _load_turn_service() -> object:
-    """以 importlib 加载 turn_service，注入循环依赖 mock，避免顶层 import 触发循环。"""
+def _load_conversation_run_state_service() -> object:
+    """以 importlib 加载 conversation_run_state_service，注入循环依赖 mock，避免顶层 import 触发循环。"""
     sys.modules.setdefault("app.api.dependencies", mock.MagicMock())
-    sys.modules.setdefault("app.service.turn_runtime_message_store", mock.MagicMock())
+    sys.modules.setdefault("app.service.conversation_run_message_store", mock.MagicMock())
     ts_path = os.path.join(
-        os.path.dirname(__file__), "..", "app", "service", "task", "turn_service.py"
+        os.path.dirname(__file__), "..", "app", "service", "task", "conversation_run_service.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "app.service.task.turn_service_test", os.path.abspath(ts_path)
+        "app.service.task.conversation_run_state_service_test", os.path.abspath(ts_path)
     )
     module = importlib.util.module_from_spec(spec)
-    sys.modules["app.service.task.turn_service_test"] = module
+    sys.modules["app.service.task.conversation_run_state_service_test"] = module
     spec.loader.exec_module(module)
     return module
 
 
-def test_create_turn_renders_non_image_into_input_text_and_stores_image_paths() -> None:
+def test_create_run_renders_non_image_into_input_text_and_stores_image_paths() -> None:
     """非图片附件拼进落库 input_text；图片单独落 image_paths；视觉拦截按 kind。"""
-    ts = _load_turn_service()
+    ts = _load_conversation_run_state_service()
     image_path = os.path.join(tempfile.gettempdir(), "x.png")
 
     provider = mock.MagicMock()
@@ -111,10 +111,10 @@ def test_create_turn_renders_non_image_into_input_text_and_stores_image_paths() 
         created = mock.MagicMock()
         created.input_text = None
         created.image_paths = None
-        _svc_dep.get_turn_crud.return_value.create.return_value = created
+        _svc_dep.get_conversation_run_crud.return_value.create.return_value = created
 
-        svc = ts.TurnService()
-        svc.create_turn(
+        svc = ts.ConversationRunService()
+        svc.create_run(
             task_id=1,
             input_text="请处理",
             provider_id=1,
@@ -126,10 +126,10 @@ def test_create_turn_renders_non_image_into_input_text_and_stores_image_paths() 
                 ts.AttachmentRef(kind="image", ref=image_path),
             ],
         )
-        # 落库 create 收到的参数（turn_crud.create 签名：
+        # 落库 create 收到的参数（conversation_run_crud.create 签名：
         # self, task_id, input_text, status, agent_id=, provider_id=, model_name=,
         # image_paths=, reasoning_effort=；input_text 为位置第 2 个，image_paths 为关键字）
-        call_args = _svc_dep.get_turn_crud.return_value.create.call_args
+        call_args = _svc_dep.get_conversation_run_crud.return_value.create.call_args
         stored_input_text = call_args.args[1]
         stored_image_paths = call_args.kwargs["image_paths"]
         assert stored_image_paths == [image_path]
@@ -139,9 +139,9 @@ def test_create_turn_renders_non_image_into_input_text_and_stores_image_paths() 
         assert "- 链接: https://example.com/doc" in stored_input_text
 
 
-def test_create_turn_no_attachments_keeps_input_text_untouched() -> None:
+def test_create_run_no_attachments_keeps_input_text_untouched() -> None:
     """无附件时 input_text 不被拼接、image_paths 为 None。"""
-    ts = _load_turn_service()
+    ts = _load_conversation_run_state_service()
     provider = mock.MagicMock()
     provider.name = "deepseek"
     provider_cap = mock.MagicMock()
@@ -157,23 +157,23 @@ def test_create_turn_no_attachments_keeps_input_text_untouched() -> None:
     ):
         mock_gps.return_value.get_provider.return_value = provider
         created = mock.MagicMock()
-        _svc_dep.get_turn_crud.return_value.create.return_value = created
+        _svc_dep.get_conversation_run_crud.return_value.create.return_value = created
 
-        svc = ts.TurnService()
-        svc.create_turn(
+        svc = ts.ConversationRunService()
+        svc.create_run(
             task_id=1,
             input_text="纯文本",
             provider_id=1,
             model_name="deepseek-v4-flash-vision-exp",
         )
-        call_args = _svc_dep.get_turn_crud.return_value.create.call_args
+        call_args = _svc_dep.get_conversation_run_crud.return_value.create.call_args
         assert call_args.args[1] == "纯文本"
         assert call_args.kwargs["image_paths"] is None
 
 
-def test_create_turn_image_without_vision_raises() -> None:
+def test_create_run_image_without_vision_raises() -> None:
     """携带图片但模型不支持视觉 -> VisionNotSupportedError（按 kind 判定）。"""
-    ts = _load_turn_service()
+    ts = _load_conversation_run_state_service()
     image_path = os.path.join(tempfile.gettempdir(), "x.png")
     provider = mock.MagicMock()
     provider.name = "deepseek"
@@ -189,9 +189,9 @@ def test_create_turn_image_without_vision_raises() -> None:
         mock.patch.object(ts.ProviderCapability, "get_capability", return_value=provider_cap),
     ):
         mock_gps.return_value.get_provider.return_value = provider
-        svc = ts.TurnService()
+        svc = ts.ConversationRunService()
         try:
-            svc.create_turn(
+            svc.create_run(
                 task_id=1,
                 input_text="看图",
                 provider_id=1,
@@ -203,7 +203,7 @@ def test_create_turn_image_without_vision_raises() -> None:
             pass
 
 
-def test_create_turn_request_rejects_url_without_http_scheme() -> None:
+def test_create_run_request_rejects_url_without_http_scheme() -> None:
     """CreateTurnRequest：url 类型附件缺少 http(s):// 前缀应被结构校验拒绝。"""
     from pydantic import ValidationError
 
@@ -219,7 +219,7 @@ def test_create_turn_request_rejects_url_without_http_scheme() -> None:
         pass
 
 
-def test_create_turn_request_rejects_over_max_attachments() -> None:
+def test_create_run_request_rejects_over_max_attachments() -> None:
     """CreateTurnRequest：附件数超过 20 上限应被结构校验拒绝。"""
     from pydantic import ValidationError
 
@@ -235,7 +235,7 @@ def test_create_turn_request_rejects_over_max_attachments() -> None:
         pass
 
 
-def test_create_turn_request_rejects_blank_ref() -> None:
+def test_create_run_request_rejects_blank_ref() -> None:
     """CreateTurnRequest：附件 ref 为空白应被结构校验拒绝。"""
     from pydantic import ValidationError
 
@@ -251,7 +251,7 @@ def test_create_turn_request_rejects_blank_ref() -> None:
         pass
 
 
-def test_create_turn_request_accepts_valid_mixed_attachments() -> None:
+def test_create_run_request_accepts_valid_mixed_attachments() -> None:
     """CreateTurnRequest：混合合法附件应通过结构校验。"""
     from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 

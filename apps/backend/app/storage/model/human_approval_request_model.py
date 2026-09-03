@@ -12,7 +12,7 @@ class HumanApprovalRequestModel(StorageBase):
     __tablename__ = "human_approval_requests"
 
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
-    turn_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("turns.id"))
+    run_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("conversation_runs.id"))
     request_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")

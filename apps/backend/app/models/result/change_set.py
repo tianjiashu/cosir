@@ -23,7 +23,7 @@ class ChangeFileEntry:
         action: 变更动作，取值 ``created`` / ``modified`` / ``deleted``。
         status: 用户处理态，取值 ``pending`` / ``kept`` / ``reverted``。
         last_tool_call_id: 产生该最新变更的工具调用标识。
-        last_turn_id: 产生该最新变更的轮次标识（int，与 ``FileSnapshotRecord.turn_id`` 同维度）。
+        last_run_id: 产生该最新变更的轮次标识（int，与 ``FileSnapshotRecord.run_id`` 同维度）。
         additions: 该次变更的 diff 新增行数。
         deletions: 该次变更的 diff 删除行数。
     """
@@ -32,7 +32,7 @@ class ChangeFileEntry:
     action: str
     status: str
     last_tool_call_id: str
-    last_turn_id: int
+    last_run_id: int
     additions: int = 0
     deletions: int = 0
 
@@ -45,7 +45,7 @@ class ChangeFileEntry:
         指定（快照自身状态 / ``kept`` / ``reverted``）。
 
         参数:
-            snapshot: 快照记录（提供 path/action/tool_call_id/turn_id/additions/deletions）。
+            snapshot: 快照记录（提供 path/action/tool_call_id/run_id/additions/deletions）。
             status: 目标处理态，取值 ``pending`` / ``kept`` / ``reverted``。
 
         返回:
@@ -62,7 +62,7 @@ class ChangeFileEntry:
             action=snapshot.action,
             status=status,
             last_tool_call_id=snapshot.tool_call_id,
-            last_turn_id=snapshot.turn_id,
+            last_run_id=snapshot.run_id,
             additions=snapshot.additions,
             deletions=snapshot.deletions,
         )
@@ -73,12 +73,12 @@ class ChangeCheckpoint:
     """变更集检查点（一个 turn 对应一个检查点）。
 
     参数:
-        turn_id: 轮次标识。
+        run_id: 轮次标识。
         turn_seq: 该 turn 在 task 内的顺序号，从 1 开始。
         label: 展示用标签，如 ``检查点 1``。
     """
 
-    turn_id: int
+    run_id: int
     turn_seq: int
     label: str
 

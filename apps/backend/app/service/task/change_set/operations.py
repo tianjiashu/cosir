@@ -81,12 +81,12 @@ def keep_file(task_id: int, path: str) -> ChangeFileEntry:
     """
     with _path_lock(task_id, path):
         snapshot = _require_latest_any(task_id, path)
-        _cas_update_status(snapshot.id, "kept", task_id, path, snapshot.turn_id)
+        _cas_update_status(snapshot.id, "kept", task_id, path, snapshot.run_id)
     log.info(
         "change_set_file_kept",
         extra={
             "msg": "变更集：文件变更已标记为保留",
-            "data": {"task_id": task_id, "path": path, "turn_id": snapshot.turn_id},
+            "data": {"task_id": task_id, "path": path, "run_id": snapshot.run_id},
         },
     )
     return ChangeFileEntry.from_snapshot(snapshot, "kept")
@@ -142,7 +142,7 @@ async def revert_file(
                     "data": {
                         "task_id": task_id,
                         "path": path,
-                        "turn_id": snapshot.turn_id,
+                        "run_id": snapshot.run_id,
                         "status": snapshot.status,
                     },
                 },
@@ -161,7 +161,7 @@ async def revert_file(
                         "data": {
                             "task_id": task_id,
                             "path": path,
-                            "turn_id": snapshot.turn_id,
+                            "run_id": snapshot.run_id,
                             "operation": operation.operation.value,
                         },
                     },
@@ -180,7 +180,7 @@ async def revert_file(
                         "data": {
                             "task_id": task_id,
                             "path": path,
-                            "turn_id": snapshot.turn_id,
+                            "run_id": snapshot.run_id,
                             "operation": operation.operation.value,
                         },
                     },
@@ -193,7 +193,7 @@ async def revert_file(
             "reverted",
             task_id,
             path,
-            snapshot.turn_id,
+            snapshot.run_id,
             reverted_at=datetime.now(UTC).isoformat(),
             expected_statuses=("pending", "reverted"),
         )
@@ -201,7 +201,7 @@ async def revert_file(
         "change_set_file_reverted",
         extra={
             "msg": "变更集：文件变更已撤销",
-            "data": {"task_id": task_id, "path": path, "turn_id": snapshot.turn_id},
+            "data": {"task_id": task_id, "path": path, "run_id": snapshot.run_id},
         },
     )
     return ChangeFileEntry.from_snapshot(snapshot, "reverted")
@@ -212,7 +212,7 @@ def _cas_update_status(
     status: str,
     task_id: int,
     path: str,
-    turn_id: int,
+    run_id: int,
     reverted_at: str = "",
     expected_statuses: Sequence[str] = ("pending",),
 ) -> None:
@@ -229,7 +229,7 @@ def _cas_update_status(
         status: 目标状态，取值 ``kept`` / ``reverted``。
         task_id: 所属任务标识（仅用于日志）。
         path: 文件路径（仅用于日志）。
-        turn_id: 所属轮次标识（仅用于日志）。
+        run_id: 所属轮次标识（仅用于日志）。
         reverted_at: 撤销时间字符串；``status == "reverted"`` 时传入，否则空串。
         expected_statuses: 允许的当前状态集合（CAS 条件）。``revert_file`` 允许
             ``("pending", "reverted")`` 以支持幂等重入；``keep_file`` 仅 ``("pending",)``。
@@ -253,7 +253,7 @@ def _cas_update_status(
             "change_set_status_cas_miss",
             extra={
                 "msg": "变更集：快照处理态已被并发改态，操作被拒（lost update 防护）",
-                "data": {"task_id": task_id, "path": path, "turn_id": turn_id, "target": status},
+                "data": {"task_id": task_id, "path": path, "run_id": run_id, "target": status},
             },
         )
         raise ChangeSetConflictError(f"change status already mutated, operation rejected: {path}")
@@ -262,9 +262,9 @@ def _cas_update_status(
 def _resolve_workspace_root(task_id: int) -> Path:
     """解析任务所属 workspace 的根路径（兜底路径）。
 
-    与 ``turn_workspace_resolver`` 同构的「task → workspace → root_path」解析链，但
-    输入是 ``task_id``（而非 ``TurnRecord``）、失败抛 ``KeyError``（而非静默返回 None），
-    故不复用 ``TurnWorkspaceResolver``，只在此统一依赖获取——所有依赖经
+    与 ``conversation_run_workspace_resolver`` 同构的「task → workspace → root_path」解析链，但
+    输入是 ``task_id``（而非 ``ConversationRunRecord``）、失败抛 ``KeyError``（而非静默返回 None），
+    故不复用 ``ConversationRunWorkspaceResolver``，只在此统一依赖获取——所有依赖经
     ``service_depends`` 进程单例取得，不做裸 ``new`` 构造。
 
     参数:

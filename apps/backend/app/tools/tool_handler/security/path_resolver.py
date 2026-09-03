@@ -149,7 +149,8 @@ class PathResolver:
         if input_error:
             return None, input_error
         try:
-            # 把 workspace 根目录解析成一个「真实、规范化、绝对」的 Path 对象，作为后续边界比较的基准
+            # 把 workspace 根目录解析成一个「真实、规范化、绝对」的 Path 对象，
+            # 作为后续边界比较的基准
             # 转成绝对路径：如果原本是相对路径（比如"myproject"），就以当前工作
             # 目录为基准补成绝对路径。
             # 规范化：展开所有的..（上级目录）和.（当前目录），消除多余分隔符。

@@ -44,9 +44,7 @@ type AttachmentPreviewProps = {
 const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
   const [isLoaded, setIsLoaded] = useState(false);
   return (
-    // Local data/blob URLs are generated at runtime and are not compatible
-    // with next/image's static optimization pipeline.
-    // eslint-disable-next-line @next/next/no-img-element
+    // Local data/blob URLs are generated at runtime.
     <img
       src={src}
       alt="Attachment preview"

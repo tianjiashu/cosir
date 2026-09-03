@@ -26,6 +26,7 @@ import {
   type Workspace,
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
+import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/workspace-preferences";
 
 type WorkspaceWithTasks = Workspace & { tasks: WorkspaceTask[] };
 type DeleteTarget =
@@ -67,9 +68,17 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
       if (shouldApplyInitialTask && initialWorkspace) {
         setActiveTaskId(initialTaskId);
         setSelectedWorkspaceId(initialWorkspace.workspace_id);
+        writeLastWorkspaceId(initialWorkspace.workspace_id);
         initialTaskAppliedRef.current = true;
       }
-      setSelectedWorkspaceId((current) => shouldApplyInitialTask && initialWorkspace ? initialWorkspace.workspace_id : (current && withTasks.some((workspace) => workspace.workspace_id === current) ? current : withTasks[0]?.workspace_id ?? null));
+      setSelectedWorkspaceId((current) => {
+        if (shouldApplyInitialTask && initialWorkspace) return initialWorkspace.workspace_id;
+        if (current && withTasks.some((workspace) => workspace.workspace_id === current)) return current;
+        const lastWorkspaceId = readLastWorkspaceId();
+        return lastWorkspaceId && withTasks.some((workspace) => workspace.workspace_id === lastWorkspaceId)
+          ? lastWorkspaceId
+          : null;
+      });
       setExpandedWorkspaceIds((current) => current.length > 0 ? current.filter((id) => withTasks.some((workspace) => workspace.workspace_id === id)) : withTasks.map((workspace) => workspace.workspace_id));
       setStatus("ready");
     } catch (cause) {
@@ -81,7 +90,7 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      // `WorkspaceShell` 可能在任务路由变化时被 Next.js 复用。路由传入的任务
+      // 路由变化时，路由传入的任务
       // 身份优先于旧的本地选择，先切换 activeTaskId，再加载列表补齐工作区信息。
       // 放在异步调度中可避免 effect 主体同步触发级联渲染。
       setActiveTaskId(initialTaskId);
@@ -94,7 +103,7 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
     };
   }, [initialTaskId, load]);
 
-  // `WorkspaceShell` 可能在任务路由变化时被 Next.js 复用。路由传入的任务身份
+  // 路由变化时，路由传入的任务身份
   // 是当前页面的权威来源，必须在下一轮加载开始时同步到 activeTaskId，避免 A → B
   // 时旧对话在工作区列表加载期间继续显示，或因列表请求异常而永久残留。与此同时
   // 重置应用标记，让 load() 完成后补齐 B 所属工作区；同一任务内手动刷新时
@@ -103,13 +112,10 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
     initialTaskAppliedRef.current = false;
   }, [initialTaskId]);
 
-  useEffect(() => {
-    if (activeTaskId) window.history.replaceState({}, "", `/tasks/${activeTaskId}`);
-  }, [activeTaskId]);
-
   const selectedWorkspace = useMemo(() => workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId), [selectedWorkspaceId, workspaces]);
   const toggleWorkspace = (workspaceId: number) => setExpandedWorkspaceIds((current) => current.includes(workspaceId) ? current.filter((id) => id !== workspaceId) : [...current, workspaceId]);
-  const startNewConversation = (workspaceId = selectedWorkspaceId) => { setSelectedWorkspaceId(workspaceId); setActiveTaskId(null); window.history.pushState({}, "", "/"); };
+  const selectWorkspace = (workspaceId: number) => { setSelectedWorkspaceId(workspaceId); writeLastWorkspaceId(workspaceId); };
+  const startNewConversation = (workspaceId = selectedWorkspaceId) => { if (workspaceId) writeLastWorkspaceId(workspaceId); setSelectedWorkspaceId(workspaceId); setActiveTaskId(null); window.history.pushState({}, "", "/"); };
   const requestDelete = (target: NonNullable<DeleteTarget>) => { setDeleteError(null); setDeleteTarget(target); };
 
   const confirmDelete = async () => {
@@ -168,7 +174,7 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
                   return (
                     <section key={workspace.workspace_id}>
                       <div className={`group flex items-center rounded-md ${selectedWorkspaceId === workspace.workspace_id && !activeTaskId ? "bg-muted" : "hover:bg-muted"}`}>
-                        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-sm" onClick={() => toggleWorkspace(workspace.workspace_id)}>
+                          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-sm" onClick={() => { selectWorkspace(workspace.workspace_id); toggleWorkspace(workspace.workspace_id); }}>
                           {expanded ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
                           <FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="truncate">{workspace.name}</span><span className="text-muted-foreground ml-auto text-xs">{workspace.tasks.length}</span>
                         </button>
@@ -176,7 +182,7 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
                       </div>
                       {expanded && <div className="ml-5 space-y-0.5 border-l pl-2">
                         {workspace.tasks.map((task) => <div className="group flex items-center" key={task.task_id}>
-                          <button type="button" className={`hover:bg-muted flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs ${activeTaskId === task.task_id ? "bg-muted font-medium" : ""}`} onClick={() => { setSelectedWorkspaceId(workspace.workspace_id); setActiveTaskId(task.task_id); }}>
+                          <button type="button" className={`hover:bg-muted flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs ${activeTaskId === task.task_id ? "bg-muted font-medium" : ""}`} onClick={() => { writeLastWorkspaceId(workspace.workspace_id); setSelectedWorkspaceId(workspace.workspace_id); setActiveTaskId(task.task_id); }}>
                             <span className="truncate">{task.title}</span><span className="text-muted-foreground shrink-0">{new Date(task.updated_at).toLocaleDateString()}</span>
                           </button>
                           <ResourceActionMenu label={task.title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.title, taskCount: 0 })} />
@@ -192,7 +198,7 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
       </aside>
       <main className="min-w-0 flex-1">
         <div className="flex h-14 items-center justify-between border-b px-5"><div className="min-w-0"><p className="text-sm font-medium">{activeTaskId ? "对话" : "新对话"}</p><p className="text-muted-foreground truncate text-xs">{activeTaskId ? "已存在任务" : "选择工作区后开始创建对话"}</p></div>{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div>
-        {activeTaskId ? <div className="h-[calc(100dvh-3.5rem)]"><Assistant taskId={activeTaskId} /></div> : <div className="h-[calc(100dvh-3.5rem)]"><NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={setSelectedWorkspaceId} onWorkspaceCreated={load} /></div>}
+        {activeTaskId ? <div className="h-[calc(100dvh-3.5rem)]"><Assistant taskId={activeTaskId} /></div> : <div className="h-[calc(100dvh-3.5rem)]"><NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation) => { setActiveTaskId(conversation.task_id); window.history.pushState({}, "", `/tasks/${conversation.task_id}`); void load(); }} /></div>}
       </main>
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
     </div>

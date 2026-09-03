@@ -3,7 +3,7 @@
 本模块是 Langfuse 三方依赖出现的唯一另一处（与 ``langfuse_tracing`` 并列），收口在
 ``core/observability``。职责：把每次工具调用记录为 Langfuse tool observation，含参数、结果、
 状态、耗时（observation 自动计时）；不负责工具执行本身、事件发出或 trace 根上下文（由
-``turn_trace`` 建立）。
+``conversation_run_trace`` 建立）。
 
 分层约束：``core → service`` 方向合法，本模块实现 service 定义的 ``ToolTraceRecorder`` 协议，
 不反向依赖 service 运行时。所有 langfuse import 惰性加载；工具 observation 内部异常降级为
@@ -98,7 +98,7 @@ class LangfuseToolTraceRecorder:
 
     职责边界：
     - 负责：observation 开闭、输入输出映射、错误级别标注、输出脱敏、进程级客户端复用与 flush。
-    - 不负责：工具执行本身、事件发出、trace 根上下文（由 ``turn_trace`` 建立）。
+    - 不负责：工具执行本身、事件发出、trace 根上下文（由 ``conversation_run_trace`` 建立）。
     """
 
     def __init__(self) -> None:

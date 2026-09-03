@@ -9,6 +9,14 @@ from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text, utc_now
 
 
+class CommandDuplicateError(ValueError):
+    """相同 command_id 与相同 payload 已提交，禁止重复创建运行。"""
+
+
+class CommandPayloadConflictError(ValueError):
+    """相同 command_id 但 payload 不同，提交冲突拒绝。"""
+
+
 class ConversationCommandCrud:
     """提供 Transport 命令的持久化和状态更新。"""
 
@@ -27,11 +35,11 @@ class ConversationCommandCrud:
             ).scalar_one_or_none()
         return None if row is None else ConversationCommandRecord.from_model(row)
 
-    def get_by_turn(self, turn_id: int) -> ConversationCommandRecord | None:
+    def get_by_run(self, run_id: int) -> ConversationCommandRecord | None:
         """按运行标识读取绑定命令。"""
         with self._session_factory() as session:
             row = session.execute(
-                select(ConversationCommandModel).where(ConversationCommandModel.turn_id == turn_id)
+                select(ConversationCommandModel).where(ConversationCommandModel.run_id == run_id)
             ).scalar_one_or_none()
         return None if row is None else ConversationCommandRecord.from_model(row)
 
@@ -63,25 +71,34 @@ class ConversationCommandCrud:
         ).scalar_one_or_none()
         return None if row is None else ConversationCommandRecord.from_model(row)
 
-    def reserve(
-        self, task_id: int, command_id: str, command_type: str, payload_hash: str
+    def create(
+        self,
+        task_id: int,
+        command_id: str,
+        command_type: str,
+        payload_hash: str,
+        run_id: int | None = None,
+        session: Session | None = None,
     ) -> ConversationCommandRecord:
-        """原子占用一个命令 ID；重复占用由数据库唯一索引拒绝。"""
-        with self._session_factory.begin() as session:
-            return self.reserve_in_session(session, task_id, command_id, command_type, payload_hash)
+        """原子占用一个命令 ID；重复占用由数据库唯一索引拒绝。
 
-    @staticmethod
-    def reserve_in_session(
-        session: Session, task_id: int, command_id: str, command_type: str, payload_hash: str
-    ) -> ConversationCommandRecord:
-        """在调用方事务中创建命令映射并占用幂等键。
+        主键 ``id`` 由存储引擎自增分配；``created_at`` / ``updated_at`` 由模型默认值统一
+        填充。幂等键（``task_id`` + ``command_id``）的并发抢占由数据库唯一索引拒绝。
+        ``run_id`` 在占用阶段通常尚不存在（运行随后才创建），故允许为空；后续由
+        ``bind_run`` 或原子占用接口回填。
+
+        ``session`` 为 ``None`` 时本方法自开事务并自动提交；传入外部会话时复用调用方事务，
+        由调用方负责提交。这与 ``TaskCrud.create`` 的双形态约定保持一致，便于上层在单事务内
+        编排「占用命令 → 其他写入」等操作。
 
         参数:
-            session: 调用方持有的数据库事务会话。
             task_id: 所属任务标识。
-            command_id: Transport 命令标识。
+            command_id: Transport 命令标识（与 task_id 构成幂等键）。
             command_type: 命令类型。
             payload_hash: 命令业务载荷指纹。
+            run_id: 关联的 Run 标识；占用阶段可为 ``None``，随后回填。
+            session: 可选的外部 SQLAlchemy 会话。传入时复用该事务（调用方负责提交）；
+                为 None 时由本方法自开事务并自动提交。
 
         返回:
             已 flush 且拥有数据库主键的命令记录。
@@ -91,55 +108,61 @@ class ConversationCommandCrud:
             sqlalchemy.exc.SQLAlchemyError: 数据库写入失败。
 
         副作用:
-            在当前事务中插入 ``conversation_commands`` 行；事务提交由调用方决定。
+            向 ``conversation_commands`` 表插入一行；当 ``session`` 为 None 时由本方法提交事务。
         """
-        now = to_text(utc_now())
+        if session is None:
+            with self._session_factory.begin() as session:
+                return self._do_create(
+                    session, task_id, command_id, run_id, command_type, payload_hash
+                )
+        return self._do_create(
+            session, task_id, command_id, run_id, command_type, payload_hash
+        )
+
+    def _do_create(
+        self,
+        session: Session,
+        task_id: int,
+        command_id: str,
+        run_id: int | None,
+        command_type: str,
+        payload_hash: str,
+    ) -> ConversationCommandRecord:
+        """在给定会话中构造并 flush 一条命令记录。
+
+        参数:
+            session: 目标 SQLAlchemy 会话（已开启的事务）。
+            task_id: 所属任务标识。
+            command_id: Transport 命令标识。
+            command_type: 命令类型。
+            payload_hash: 命令业务载荷指纹。
+
+        返回:
+            已 flush 的 ``ConversationCommandRecord``。
+
+        异常:
+            sqlalchemy.exc.IntegrityError: 并发请求抢先占用了相同幂等键。
+            sqlalchemy.exc.SQLAlchemyError: 数据库写入失败。
+
+        副作用:
+            在当前事务中插入一行命令；事务提交由调用方或 ``reserve`` 决定。
+        """
         row = ConversationCommandModel(
             task_id=task_id,
             command_id=command_id,
             command_type=command_type,
             payload_hash=payload_hash,
-            status="processing",
-            created_at=now,
-            updated_at=now,
+            run_id=run_id,
         )
         session.add(row)
         session.flush()
         return ConversationCommandRecord.from_model(row)
 
-    def bind_turn(self, record_id: int, turn_id: int) -> None:
-        """把命令记录绑定到已创建的 turn。"""
-        with self._session_factory.begin() as session:
-            self.bind_turn_in_session(session, record_id, turn_id)
-
-    @staticmethod
-    def bind_turn_in_session(session: Session, record_id: int, turn_id: int) -> None:
-        """在调用方事务中绑定命令与 Turn。
-
-        参数:
-            session: 调用方持有的数据库事务会话。
-            record_id: 命令记录主键。
-            turn_id: 新建 Turn 主键。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 数据库更新失败。
-
-        副作用:
-            在当前事务内写入命令的 ``turn_id`` 和更新时间。
-        """
-        result = session.execute(
-            update(ConversationCommandModel)
-            .where(ConversationCommandModel.id == record_id)
-            .values(turn_id=turn_id, updated_at=to_text(utc_now()))
-        )
-        if result.rowcount != 1:
-            raise KeyError(record_id)
-
     def mark_failed(self, record_id: int, error_code: str) -> None:
         """记录命令处理失败并保留幂等占用。
+
+        ``conversation_commands`` 表只承载幂等占用职责，不持有运行态；故本方法
+        仅持久化稳定的内部 ``error_code`` 供诊断与重试决策，不写入任何运行状态。
 
         参数:
             record_id: ``conversation_commands`` 行标识。
@@ -152,39 +175,13 @@ class ConversationCommandCrud:
             sqlalchemy.exc.SQLAlchemyError: 底层更新失败。
 
         副作用:
-            将命令置为 ``failed``，并刷新更新时间。
+            更新命令的 ``error_code`` 并刷新更新时间；不存在的行不产生写入。
         """
         with self._session_factory.begin() as session:
             session.execute(
                 update(ConversationCommandModel)
                 .where(ConversationCommandModel.id == record_id)
-                .values(status="failed", error_code=error_code, updated_at=to_text(utc_now()))
-            )
-
-    def mark_status(self, record_id: int, status: str) -> None:
-        """以受数据库约束保护的方式更新命令终态。
-
-        参数:
-            record_id: ``conversation_commands`` 行标识。
-            status: ``completed``、``failed`` 或 ``cancelled`` 之一。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: ``status`` 不是允许的命令终态。
-            sqlalchemy.exc.SQLAlchemyError: 底层更新失败。
-
-        副作用:
-            更新命令状态和更新时间；不存在的行不产生写入。
-        """
-        if status not in {"completed", "failed", "cancelled"}:
-            raise ValueError(f"unsupported conversation command status: {status}")
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(ConversationCommandModel)
-                .where(ConversationCommandModel.id == record_id)
-                .values(status=status, updated_at=to_text(utc_now()))
+                .values(error_code=error_code, updated_at=to_text(utc_now()))
             )
 
     def delete_by_task_ids(self, task_ids: set[int]) -> None:

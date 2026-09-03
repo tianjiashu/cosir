@@ -18,7 +18,7 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
-from app.models import RuntimeMessage, TaskRecord, TurnRecord, WorkspaceRecord
+from app.models import RuntimeMessage, TaskRecord, ConversationRunRecord, WorkspaceRecord
 
 
 class MemoryMessageStore:
@@ -45,7 +45,7 @@ class MemoryMessageStore:
 
     def append(
         self,
-        turn_id: int,
+        run_id: int,
         message: RuntimeMessage,
         sequence: int,
         include_in_context: bool = True,
@@ -53,7 +53,7 @@ class MemoryMessageStore:
         """记录追加消息调用。
 
         参数:
-            turn_id: 目标 turn 标识。
+            run_id: 目标 turn 标识。
             message: 被追加的运行时消息。
             sequence: 轮内序号。
             include_in_context: 是否进入模型上下文。
@@ -67,13 +67,13 @@ class MemoryMessageStore:
         副作用:
             写入 ``appended`` 调用记录。
         """
-        self.appended.append((turn_id, message, sequence, include_in_context))
+        self.appended.append((run_id, message, sequence, include_in_context))
 
-    def clear(self, turn_id: int) -> None:
+    def clear(self, run_id: int) -> None:
         """记录清理消息调用。
 
         参数:
-            turn_id: 目标 turn 标识。
+            run_id: 目标 turn 标识。
 
         返回:
             无。
@@ -84,18 +84,18 @@ class MemoryMessageStore:
         副作用:
             写入 ``cleared`` 调用记录。
         """
-        self.cleared.append(turn_id)
+        self.cleared.append(run_id)
 
     def build_for_task(
         self,
         task_id: int,
-        excluded_turn_ids: Collection[int] | None = None,
+        excluded_run_ids: Collection[int] | None = None,
     ) -> list[ContextEntry]:
         """返回预置历史消息（包装为 ContextEntry，模拟真实 store 契约）。
 
         参数:
             task_id: 目标 task 标识。
-            excluded_turn_ids: 需要排除的 turn 标识集合；测试仓库不按 turn 分组时忽略。
+            excluded_run_ids: 需要排除的 turn 标识集合；测试仓库不按 turn 分组时忽略。
 
         返回:
             预置历史消息副本（ContextEntry 列表）。
@@ -106,13 +106,13 @@ class MemoryMessageStore:
         副作用:
             无。
         """
-        return [ContextEntry(message=message, turn_id=None) for message in self.history]
+        return [ContextEntry(message=message, run_id=None) for message in self.history]
 
-    def build_for_turn(self, turn_id: int) -> list[ContextEntry]:
+    def build_for_run(self, run_id: int) -> list[ContextEntry]:
         """返回当前 turn 的预置历史消息（包装为 ContextEntry）。
 
         参数:
-            turn_id: 目标 turn 标识。
+            run_id: 目标 turn 标识。
 
         返回:
             预置历史消息副本（ContextEntry 列表）。
@@ -123,13 +123,13 @@ class MemoryMessageStore:
         副作用:
             无。
         """
-        return [ContextEntry(message=message, turn_id=turn_id) for message in self.history]
+        return [ContextEntry(message=message, run_id=run_id) for message in self.history]
 
-    def next_sequence(self, turn_id: int) -> int:
+    def next_run_sequence(self, run_id: int) -> int:
         """返回测试仓库下一条消息序号。
 
         参数:
-            turn_id: 目标 turn 标识。
+            run_id: 目标 turn 标识。
 
         返回:
             历史消息条数。
@@ -167,13 +167,13 @@ class TurnScopedMemoryMessageStore(MemoryMessageStore):
     def build_for_task(
         self,
         task_id: int,
-        excluded_turn_ids: Collection[int] | None = None,
+        excluded_run_ids: Collection[int] | None = None,
     ) -> list[ContextEntry]:
         """返回排除指定 turn 后的有序历史（包装为 ContextEntry）。
 
         参数:
             task_id: 目标 task 标识。
-            excluded_turn_ids: 需要排除的 turn 标识集合。
+            excluded_run_ids: 需要排除的 turn 标识集合。
 
         返回:
             按 turn 标识顺序拼接的历史消息副本（ContextEntry 列表）。
@@ -184,19 +184,19 @@ class TurnScopedMemoryMessageStore(MemoryMessageStore):
         副作用:
             无。
         """
-        excluded = set(excluded_turn_ids or ())
+        excluded = set(excluded_run_ids or ())
         return [
-            ContextEntry(message=message, turn_id=turn_id)
-            for turn_id, messages in sorted(self.histories.items())
-            if turn_id not in excluded
+            ContextEntry(message=message, run_id=run_id)
+            for run_id, messages in sorted(self.histories.items())
+            if run_id not in excluded
             for message in messages
         ]
 
-    def build_for_turn(self, turn_id: int) -> list[ContextEntry]:
+    def build_for_run(self, run_id: int) -> list[ContextEntry]:
         """返回指定 turn 的有效上下文消息（包装为 ContextEntry）。
 
         参数:
-            turn_id: 目标 turn 标识。
+            run_id: 目标 turn 标识。
 
         返回:
             该 turn 的消息副本（ContextEntry 列表）。
@@ -215,16 +215,16 @@ class TurnScopedMemoryMessageStore(MemoryMessageStore):
                     content_blocks=message.content_blocks,
                     metadata=message.metadata,
                 ),
-                turn_id=turn_id,
+                run_id=run_id,
             )
-            for message in self.histories.get(turn_id, [])
+            for message in self.histories.get(run_id, [])
         ]
 
-    def next_sequence(self, turn_id: int) -> int:
+    def next_run_sequence(self, run_id: int) -> int:
         """返回指定 turn 的下一条消息序号。
 
         参数:
-            turn_id: 目标 turn 标识。
+            run_id: 目标 turn 标识。
 
         返回:
             该 turn 的消息条数；无该 turn 时返回 0。
@@ -235,7 +235,7 @@ class TurnScopedMemoryMessageStore(MemoryMessageStore):
         副作用:
             无。
         """
-        return len(self.histories.get(turn_id, []))
+        return len(self.histories.get(run_id, []))
 
 
 def build_agent_profile(*, main_agent: bool) -> AgentProfile:
@@ -313,15 +313,15 @@ def build_workspace_record() -> WorkspaceRecord:
     )
 
 
-def build_turn_record(turn_id: int = 11, task_id: int = 7) -> TurnRecord:
-    """构造测试用 TurnRecord。
+def build_conversation_run_record(run_id: int = 11, task_id: int = 7) -> ConversationRunRecord:
+    """构造测试用 ConversationRunRecord。
 
     参数:
-        turn_id: turn 标识。
+        run_id: turn 标识。
         task_id: 所属 task 标识。
 
     返回:
-        测试用 TurnRecord。
+        测试用 ConversationRunRecord。
 
     异常:
         无。
@@ -330,8 +330,8 @@ def build_turn_record(turn_id: int = 11, task_id: int = 7) -> TurnRecord:
         无。
     """
     now = datetime.now(UTC)
-    return TurnRecord(
-        id=turn_id,
+    return ConversationRunRecord(
+        id=run_id,
         task_id=task_id,
         input_text="hello",
         status="running",
@@ -341,15 +341,15 @@ def build_turn_record(turn_id: int = 11, task_id: int = 7) -> TurnRecord:
     )
 
 
-def build_turn_record_for_task(task_id: int, turn_id: int) -> TurnRecord:
-    """构造绑定指定 task 的测试用 TurnRecord。
+def build_conversation_run_record_for_task(task_id: int, run_id: int) -> ConversationRunRecord:
+    """构造绑定指定 task 的测试用 ConversationRunRecord。
 
     参数:
         task_id: 所属 task 标识。
-        turn_id: turn 标识。
+        run_id: turn 标识。
 
     返回:
-        测试用 TurnRecord。
+        测试用 ConversationRunRecord。
 
     异常:
         无。
@@ -357,7 +357,7 @@ def build_turn_record_for_task(task_id: int, turn_id: int) -> TurnRecord:
     副作用:
         无。
     """
-    turn = build_turn_record(turn_id=turn_id)
+    turn = build_conversation_run_record(run_id=run_id)
     turn.task_id = task_id
     return turn
 

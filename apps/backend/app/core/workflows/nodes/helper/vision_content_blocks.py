@@ -1,12 +1,12 @@
 """视觉输入 block 构造（多模态用户消息拼装）。
 
-单一职责：把用户通过 ``turn.image_paths`` 传入的本地图片路径，在**运行期**读文件、做安全/格式
+单一职责：把用户通过 ``run.image_paths`` 传入的本地图片路径，在**运行期**读文件、做安全/格式
 校验、编码为 LangChain ``HumanMessage`` 可用的多模态 block（``image_url`` 形式），并与文本
 拼接成完整的内容 block 列表。
 
 设计边界：
 - 本模块**不落库**：图片本体与 base64 编码结果均只存在于运行期内存，DB 仅持久化
-  ``turn.image_paths`` 字符串（由 ``turn_model`` / ``create_turn`` 负责；文件/目录/url
+  ``run.image_paths`` 字符串（由 ``conversation_run_model`` / ``create_run`` 负责；文件/目录/url
    附件已固化进 input_text，不走此通道）。
 - 本模块**不复用写工具的 ``PathResolver``**：视觉路径分两类契约 —— (a) workspace 内受信的
   ``.cosir`` 目录（前端图片落盘处，后端放心读）；(b) 历史外部路径（兼容旧数据）。两类均不做
@@ -22,6 +22,7 @@ LangChain 原生透传）。
 from __future__ import annotations
 
 import base64
+import contextlib
 import functools
 import io
 import os
@@ -29,7 +30,7 @@ import os
 from PIL import Image
 
 from app.config.logging.logger import log
-from app.llm_provider.capability.model_capability import (
+from app.core.llm_provider.capability.model_capability import (
     ImageLimitCapability,
     ModelCapability,
 )
@@ -84,7 +85,7 @@ def _resolve_image_limits(model_name: str | None) -> ImageLimitCapability:
     （仅该图被跳过、整轮继续），因此兜底值偏紧是安全的。
 
     参数:
-        model_name: 当前 turn 使用的模型名；为 ``None`` 或未知模型时回退兜底。
+        model_name: 当前 run 使用的模型名；为 ``None`` 或未知模型时回退兜底。
 
     返回:
         ``ImageLimitCapability`` 实例（来自 ``ModelCapability.image_limit`` 真相源，
@@ -252,9 +253,11 @@ def build_user_content_blocks(
     参数:
         text: 用户文本输入（始终作为首条 text block）。
         image_paths: 经 ``_is_image_ext`` 预筛后的图片路径列表。
-        vision_input_format: 厂商视觉格式（如 ``"openai_url"``），由 workflow 从 runtime_config 传入。
-        workspace_root: workspace 根路径，用于 ``.cosir`` 受信归属判定；``None`` 时全部按外部路径处理。
-        model_name: 当前 turn 使用的模型名，用于动态查询图片限制；``None`` 时回退兜底默认值。
+        vision_input_format: 厂商视觉格式（如 ``"openai_url"``），由 workflow 从
+            runtime_config 传入。
+        workspace_root: workspace 根路径，用于 ``.cosir`` 受信归属判定；``None`` 时
+            全部按外部路径处理。
+        model_name: 当前 run 使用的模型名，用于动态查询图片限制；``None`` 时回退兜底默认值。
 
     返回:
         ``(blocks, skipped)`` 二元组：
@@ -264,7 +267,8 @@ def build_user_content_blocks(
 
     异常:
         VisionFormatNotSupportedError: 厂商格式未实现，由 workflow 转 ``VisionNotSupportedError``。
-        VisionImageError: 聚合体积超过模型限制整轮不可恢复，由 workflow 转 ``VisionNotSupportedError``。
+        VisionImageError: 聚合体积超过模型限制整轮不可恢复，由 workflow 转
+            ``VisionNotSupportedError``。
 
     副作用:
         对失败图片写入分级日志（文件不存在记 info 抑回放噪音；其余记 warning）。
@@ -321,10 +325,8 @@ def build_user_content_blocks(
             continue
 
         blocks.append(block)
-        try:
+        with contextlib.suppress(OSError):
             total_bytes += os.path.getsize(image_path)
-        except OSError:
-            pass
 
     if total_bytes > limit.request_total_max_bytes_inline_only:
         raise VisionImageError(

@@ -29,7 +29,7 @@ utils/        叶子工具函数（leaf）
 ## 关键约定
 
 - **日志**：业务模块统一 `from app.config.logging.logger import log` 单例；落盘为单行 JSON（JSONL，9 字段），`trace_id` 为唯一链路键。详见 `rules/Agent日志开发规范.md`。
-- **启动契约**：`app/bootstate.py` 向 `storage/backend.bootstate.json` 写入 `booting/ready/failed/stopped` 状态，供桌面端 Rust supervisor 轮询（崩溃瞬间也能拿到脱敏后的失败原因）。
+- **启动契约**：`app/bootstate.py` 向运行时 bootstate 文件写入 `booting/ready/failed/stopped` 状态，供桌面端 Rust supervisor 轮询（崩溃瞬间也能拿到脱敏后的失败原因）。
 - **配置**：`app/config/settings.py` 以 `Settings` 类级静态命名空间承载进程级配置，消费点静态读 `Settings.X`，不实例化、不传递 Settings 对象。
 - **Web 工具**：`web_search` / `web_extract` 经 `tools/tool_handler/web/` 子系统，通过 `web_provider_registry` 选择 provider（当前 firecrawl），URL 安全校验拦截带凭据/内网地址。
 - **工具执行分级隔离**：`ToolDefinition.execution_mode` 声明隔离策略，`process` 仅用于 execute_terminal 等需 OS 级隔离的工具。
@@ -53,23 +53,20 @@ uv run python -m app
 
 可用环境变量覆盖运行参数：
 
-- `CODING_AGENT_HOST`（默认 `127.0.0.1`）
 - `CODING_AGENT_PORT`（默认 `8000`）
 - `CODING_AGENT_RELOAD`（默认 `true`，设为 `false` 关闭热重载）
 
 后端日志落盘位置：
 
-- `logs/app.log`：应用结构化日志（`configure_logging` 落盘）
-- `logs/backend.log`：uvicorn 进程输出（启动横幅、访问日志、异常栈），由 `scripts/dev.sh` 重定向
+- 应用结构化日志：由 `Settings.LOG_DIR` 配置并按日期轮转
+- 桌面开发时的 uvicorn stdout/stderr：由 Tauri supervisor 写入应用 runtime 目录
 
 ### 桌面开发模式启动
 
-Tauri 开发壳负责启动前端 Next 与后端 `uv run` 进程，后端仅监听本机 `127.0.0.1:8000`：
+Tauri 开发壳先启动后端 `uv run` 进程并等待 `/health`，再让 Vite 前端进入可交互状态。后端仅监听本机 loopback 地址，端口由 Tauri 动态分配：
 
 ```bash
-npm run dev:desktop
-# 或使用等价别名
-npm run dev:all
+npm run tauri:dev --prefix apps/desktop
 ```
 
-桌面窗口关闭或按 `Ctrl+C` 会终止后端及其子进程。开发期后端 stdout/stderr 会写入桌面运行目录的 `backend.log`。
+桌面窗口关闭或按 `Ctrl+C` 会终止后端及其子进程。开发期后端 stdout/stderr 会写入桌面运行目录的 `backend-console.log`。

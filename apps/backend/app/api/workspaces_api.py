@@ -226,7 +226,6 @@ async def create_workspace_task(
         task = task_service.create_task(
             input_text=payload.text,
             workspace_id=workspace_id,
-            status="pending",
         )
     except IntegrityError as exc:
         log.error(

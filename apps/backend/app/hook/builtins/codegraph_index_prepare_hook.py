@@ -63,7 +63,7 @@ class CodeGraphIndexPrepareHook(HookBase):
         （降级到文件搜索）；ensure_ready 同步保活索引；任何异常 → error 日志 + ALLOW。
 
         参数:
-            context: 运行时注入的 ``HookContext``（含 workspace_id / task_id / turn_id）。
+            context: 运行时注入的 ``HookContext``（含 workspace_id / task_id / run_id）。
 
         返回:
             HookResult.allow()：本 Hook 永不阻断主流程（索引准备是旁路优化，
@@ -76,14 +76,14 @@ class CodeGraphIndexPrepareHook(HookBase):
             可能触发 CodeGraph 索引 init/sync（经 lifecycle）；写 info/debug/error 日志。
         """
         workspace_id = context.workspace_id
-        turn_id = context.turn_id
+        run_id = context.run_id
 
         if not workspace_id:
             log.debug(
                 "codegraph_prepare_skip_no_workspace",
                 extra={
                     "msg": "Hook 上下文无 workspace_id，跳过 CodeGraph 索引保活",
-                    "data": {"turn_id": turn_id},
+                    "data": {"run_id": run_id},
                 },
             )
             return HookResult.allow()
@@ -95,7 +95,7 @@ class CodeGraphIndexPrepareHook(HookBase):
                 "codegraph_prepare_resolve_path_failed",
                 extra={
                     "msg": "解析 workspace 路径失败，跳过 CodeGraph 索引保活",
-                    "data": {"workspace_id": workspace_id, "turn_id": turn_id},
+                    "data": {"workspace_id": workspace_id, "run_id": run_id},
                 },
             )
             return HookResult.allow()
@@ -106,7 +106,7 @@ class CodeGraphIndexPrepareHook(HookBase):
                 "codegraph_prepare_skip_empty_path",
                 extra={
                     "msg": "workspace 路径为空，跳过 CodeGraph 索引保活",
-                    "data": {"workspace_id": workspace_id, "turn_id": turn_id},
+                    "data": {"workspace_id": workspace_id, "run_id": run_id},
                 },
             )
             return HookResult.allow()
@@ -123,7 +123,7 @@ class CodeGraphIndexPrepareHook(HookBase):
                     "data": {
                         "workspace_id": workspace_id,
                         "workspace_path": workspace_path,
-                        "turn_id": turn_id,
+                        "run_id": run_id,
                     },
                 },
             )
@@ -140,7 +140,7 @@ class CodeGraphIndexPrepareHook(HookBase):
                         "action_taken": readiness.action_taken,
                         "files_changed": readiness.files_changed,
                         "duration_ms": readiness.duration_ms,
-                        "turn_id": turn_id,
+                        "run_id": run_id,
                     },
                 },
             )
@@ -154,7 +154,7 @@ class CodeGraphIndexPrepareHook(HookBase):
                         "workspace_path": workspace_path,
                         "state": readiness.state,
                         "degraded_reason": readiness.degraded_reason,
-                        "turn_id": turn_id,
+                        "run_id": run_id,
                     },
                 },
             )

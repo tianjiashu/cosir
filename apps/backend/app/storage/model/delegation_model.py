@@ -14,10 +14,12 @@ class DelegationModel(StorageBase):
     task_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=False, index=True
     )
-    parent_turn_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("turns.id"), nullable=False, index=True
+    parent_run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("conversation_runs.id"), nullable=False, index=True
     )
-    child_turn_id: Mapped[int] = mapped_column(Integer, ForeignKey("turns.id"), nullable=True)
+    child_run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("conversation_runs.id"), nullable=True
+    )
     child_task_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=True
     )

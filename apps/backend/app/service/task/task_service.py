@@ -1,12 +1,11 @@
 """Task orchestration service.
 
-单一职责：编排任务创建（仅建 task 容器，首轮次由调用方显式创建）、生命周期管理
-（open/archived）与执行态派生。
+单一职责：编排任务创建（仅建 task 容器，首轮次由调用方显式创建）与执行态派生。
 
 职责边界：
-- 负责：任务容器创建（不含首轮次）、用户驱动的生命周期状态、从最新 turn 派生
-  执行态、任务树原子级联删除（委托给 ``CascadeDeleter``）。
-- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``TurnCrud``/``WorkspaceCrud``/
+- 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
+  （委托给 ``CascadeDeleter``）。
+- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``ConversationRunCrud``/``WorkspaceCrud``/
   ``CascadeDeleter``）；不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）；
   不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
@@ -14,7 +13,7 @@
 from dataclasses import replace
 
 from app.config.logging.logger import log
-from app.models import TaskRecord, TurnRecord
+from app.models import ConversationRunRecord, TaskRecord
 from app.service import depends as service_depends
 from app.utils.datetime_utils import preview
 
@@ -39,30 +38,27 @@ class TaskService:
         """
 
         self._task = service_depends.get_task_crud()
-        self._turn = service_depends.get_turn_crud()
+        self._turn = service_depends.get_conversation_run_crud()
         self._workspace = service_depends.get_workspace_crud()
         self._cascade_deleter = service_depends.get_cascade_deleter()
 
     def create_task(
         self,
         input_text: str,
-        status: str,
         workspace_id: int | None = None,
     ) -> TaskRecord:
-        """创建任务容器记录（不含首轮次，首轮次由调用方显式调 ``create_turn``）。
+        """创建任务容器记录（不含首轮次，首轮次由调用方显式调 ``create_run``）。
 
-        ``status`` 表示用户驱动的**生命周期**（open/archived），与执行态分离。任务文本
-        ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），任务本身只
-        持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向 ``tasks.id``，
-        必须先有 task 才能创建首 turn；但 task 创建与首 turn 创建已解耦，本方法只建 task
-        容器，首 turn 由调用方（API/前端）随后显式创建。
+        任务文本 ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），
+        任务本身只持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向
+        ``tasks.id``，必须先有 task 才能创建首 turn；但 task 创建与首 turn 创建已解耦，
+        本方法只建 task 容器，首 turn 由调用方（API/前端）随后显式创建。
 
         任务不再绑定 agent：agent 维度由 turn（首 turn 的 ``agent_id``）承载，
         ``create_task`` 不再接收也不校验 agent_id；子任务的 agent 由 delegation 记录承载。
 
         参数:
             input_text: 用户输入文本，用于派生任务标题（仅派生 title，原文不落 tasks 表）。
-            status: 任务初始生命周期状态（``open`` / ``archived``）。
             workspace_id: 所属工作区标识。
 
         返回:
@@ -90,7 +86,6 @@ class TaskService:
         task = self._task.create(
             workspace_id=workspace_id,
             title=title,
-            status=status,
         )
 
         return task
@@ -151,28 +146,6 @@ class TaskService:
 
         return self._task.update_context_usage(task_id, used)
 
-    def set_lifecycle_status(self, task_id: int, status: str) -> TaskRecord:
-        """仅设置用户驱动的生命周期状态（open/archived），不改执行态。
-
-        参数:
-            task_id: 任务标识。
-            status: 目标生命周期状态，取值 ``"open"`` 或 ``"archived"``。
-
-        返回:
-            更新后的任务记录。
-
-        异常:
-            ValueError: 当 ``status`` 不属于 ``open``/``archived`` 时抛出。
-            KeyError: 如果指定任务不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            更新 ``tasks`` 表对应行的生命周期状态。
-        """
-        if status not in ("open", "archived"):
-            raise ValueError("lifecycle status must be 'open' or 'archived'")
-        return self._task.update_status(task_id, status)
-
     def task_display_status(self, task_id: int) -> str:
         """从最新轮次派生任务的执行态。
 
@@ -191,32 +164,13 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        turns: list[TurnRecord] = self._turn.list_by_task(task_id)
+        turns: list[ConversationRunRecord] = self._turn.list_by_task(task_id)
         if not turns:
             return "empty"
         latest = turns[-1]
         if latest.status == "running":
             return "active"
         return latest.status
-
-    def has_status(self, task_id: int, status: str) -> bool:
-        """判断任务是否处于指定生命周期状态。
-
-        参数:
-            task_id: 任务标识。
-            status: 目标生命周期状态（``open`` / ``archived``）。
-
-        返回:
-            该任务当前生命周期状态等于 ``status`` 时为 True，否则 False。
-
-        异常:
-            KeyError: 如果指定任务不存在（底层 ``TaskCrud.get`` 抛出）。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
-
-        副作用:
-            无（仅读取）。
-        """
-        return self._task.has_status(task_id, status)
 
     def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务）。
@@ -261,7 +215,7 @@ class TaskService:
         *,
         title: str,
         parent_task_id: int,
-        parent_turn_id: int,
+        parent_run_id: int,
         delegation_id: int,
         workspace_id: int,
     ) -> TaskRecord:
@@ -269,7 +223,7 @@ class TaskService:
 
         与用户任务不同，委派子任务不进侧边栏、无首 turn（turn 由委派执行器单独创建）、
         不参与 archived 生命周期交互。``task_type`` 固定为 ``"delegation"``，并通过
-        ``parent_task_id`` / ``parent_turn_id`` / ``delegation_id`` 关联父任务与委派记录。
+        ``parent_task_id`` / ``parent_run_id`` / ``delegation_id`` 关联父任务与委派记录。
         ``title`` 使用 ``input_text`` 的预览文本（子任务无侧边栏展示，但保留可读标题便于排查）。
 
         子任务不再绑定 agent：agent 关系由 ``DelegationRecord``（``child_agent_id`` /
@@ -277,13 +231,13 @@ class TaskService:
 
         参数:
             parent_task_id: 父任务标识。
-            parent_turn_id: 触发委派的父 turn 标识。
+            parent_run_id: 触发委派的父 turn 标识。
             delegation_id: 关联的委派记录标识（唯一索引兜底并发重入）。
             workspace_id: 所属工作区标识。
             title: 子任务标题（由委派输入文本预览得到，仅用于排查，不进侧边栏）。
 
         返回:
-            已持久化的子任务 ``TaskRecord``（``task_type='delegation'``，``status='pending'``）。
+            已持久化的子任务 ``TaskRecord``（``task_type='delegation'``）。
 
         异常:
             ValueError: 如果任意必填字段为空或非法。
@@ -295,7 +249,7 @@ class TaskService:
         """
         for field_name, value in (
             ("parent_task_id", parent_task_id),
-            ("parent_turn_id", parent_turn_id),
+            ("parent_run_id", parent_run_id),
             ("workspace_id", workspace_id),
         ):
             if not isinstance(value, int) or value <= 0:
@@ -304,10 +258,9 @@ class TaskService:
         return self._task.create(
             workspace_id=workspace_id,
             title=title,
-            status="pending",
             task_type="delegation",
             parent_task_id=parent_task_id,
-            parent_turn_id=parent_turn_id,
+            parent_run_id=parent_run_id,
             delegation_id=delegation_id,
         )
 
@@ -331,7 +284,7 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
 
         副作用:
-            从 ``turn_messages`` / ``file_snapshots`` / ``turns`` / ``delegations``
+            从 ``turn_messages`` / ``file_snapshots`` / ``conversation_runs`` / ``delegations``
             / ``tasks`` 表删除该任务树相关数据（旧 Runtime 事件体系已随对话事实重构
             一并删除，不再参与级联删除）。
         """

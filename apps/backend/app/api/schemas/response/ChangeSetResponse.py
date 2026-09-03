@@ -8,7 +8,7 @@ from app.models.result.change_set import ChangeSet
 class ChangeCheckpointResponse(BaseModel):
     """检查点响应项。"""
 
-    turn_id: int
+    run_id: int
     turn_seq: int
     label: str
 
@@ -20,7 +20,7 @@ class ChangeFileResponse(BaseModel):
     action: str
     status: str
     last_tool_call_id: str
-    last_turn_id: int
+    last_run_id: int
     additions: int
     deletions: int
 
@@ -51,7 +51,7 @@ class ChangeSetResponse(BaseModel):
         return cls(
             task_id=change_set.task_id,
             checkpoints=[
-                ChangeCheckpointResponse(turn_id=c.turn_id, turn_seq=c.turn_seq, label=c.label)
+                ChangeCheckpointResponse(run_id=c.run_id, turn_seq=c.turn_seq, label=c.label)
                 for c in change_set.checkpoints
             ],
             files=[
@@ -60,7 +60,7 @@ class ChangeSetResponse(BaseModel):
                     action=f.action,
                     status=f.status,
                     last_tool_call_id=f.last_tool_call_id,
-                    last_turn_id=f.last_turn_id,
+                    last_run_id=f.last_run_id,
                     additions=f.additions,
                     deletions=f.deletions,
                 )

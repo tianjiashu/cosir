@@ -1,6 +1,6 @@
 from pydantic import BaseModel, model_validator
 
-from app.llm_provider.capability.provider_capability import (
+from app.core.llm_provider.capability.provider_capability import (
     _SUPPORT_PROVIDERS,
     ProviderCapability,
 )

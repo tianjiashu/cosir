@@ -5,7 +5,7 @@ from app.core.workflows.nodes.finalize_max_steps import (
     _finalize_max_steps,
 )
 from app.core.workflows.react.state import ReactGraphState
-from app.models.turn_usage_stats import TurnUsageStats
+from app.models.conversation_run_usage_stats import ConversationRunUsageStats
 
 
 def _make_state(**overrides) -> ReactGraphState:
@@ -36,10 +36,10 @@ def _make_runtime_config(monkeypatch, *, fail_result) -> dict:
     """Inject a runtime stub whose failure mutation returns ``fail_result``."""
 
     class _Ops:
-        def fail_turn_if_running(self, turn_id: str, end_reason=None):
+        def fail_run_if_running(self, run_id: str, end_reason=None):
             return fail_result
 
-    usage = TurnUsageStats()
+    usage = ConversationRunUsageStats()
     usage.input_tokens = 7
     usage.output_tokens = 9
 
@@ -48,7 +48,7 @@ def _make_runtime_config(monkeypatch, *, fail_result) -> dict:
         (),
         {
             "operations": _Ops(),
-            "turn": type("TurnStub", (), {"turn_id": "turn-fixed"})(),
+            "run": type("RunStub", (), {"run_id": "run-fixed"})(),
             "usage_stats": usage,
             "langfuse_trace_id": "trace-xyz",
         },
@@ -58,7 +58,7 @@ def _make_runtime_config(monkeypatch, *, fail_result) -> dict:
         "app.core.workflows.nodes.finalize_max_steps._runtime_config",
         lambda: rc,
     )
-    return {"turn_id": "turn-fixed"}
+    return {"run_id": "run-fixed"}
 
 
 async def test_finalize_max_steps_sets_end_reason_in_run_failed(monkeypatch) -> None:

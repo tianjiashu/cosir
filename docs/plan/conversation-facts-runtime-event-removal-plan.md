@@ -186,20 +186,15 @@ Transport projector 收到 change 后重新读取 canonical state。只有能证
 断连失败处理”四项职责。删除它之前，必须先实现 `ConversationRunExecutor` 与
 `ConversationRunSubscriptionService`：
 
-- `ConversationRunExecutor` 通过数据库 lease 认领一个 pending/recoverable run，并独立于 HTTP
-  请求在后台驱动 Agent Runtime；一个 run 在任意时刻只允许一个有效 lease。Run 需要持久化
-  `executor_lease_owner`、`executor_lease_expires_at`、递增 `lease_fencing_version`、
-  `workflow_version` 等恢复所需元数据。
-- claim、续租、Writer 变更、终态落定均携带并条件校验 fencing version；lease 过期后重新认领的
-  executor 获得更高版本，旧 executor 即使线程仍在运行也不能再提交任何事实。应用启动 recovery、
-  后台 lease 续租/轮询、优雅关闭释放与进程崩溃后的过期认领均由 Executor 统一负责。
+- `ConversationRunExecutor` 通过本进程的 `ConversationRunService.claim_pending_run()` 原子
+  启动一个 pending run，并独立于 HTTP 请求在后台驱动 Agent Runtime；当前不做 lease 续租、
+  崩溃接管或同一 run 的重新认领。
 - HTTP/Assistant Transport 仅订阅 run 所属 task 的 committed conversation changes，绝不成为
   Agent 的生命周期拥有者。客户端断开时执行继续；只有显式 cancel 才请求停止。
-- 进程启动时 recovery worker 检查过期 lease：已取消的 run 不启动；可恢复的 run 依据 checkpoint
-  重新认领并恢复；不可恢复的 run 以稳定的 `runtime_recovery_failed` 原因落定失败。不得让
-  `pending/running` 永久悬挂。
-- 重复 command、重复订阅或多个窗口只能附着到既有 run，不能再次启动 Agent；claim 的条件更新与
-  lease 所有者是唯一执行权威。
+- 进程启动时将遗留的 `pending/running` run 以稳定的 `backend_restarted` 原因落定失败，
+  不尝试恢复 Agent 执行；不得让 `pending/running` 永久悬挂。
+- 重复 command、重复订阅或多个窗口只能附着到既有 run，不能再次启动 Agent；
+  `claim_pending_run()` 的条件更新是启动执行的数据库权威。
 
 Transport subscription 的可执行算法如下：
 

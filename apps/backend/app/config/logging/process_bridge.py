@@ -8,9 +8,10 @@
 - 子进程日志建议通过 extra 携带 run_id，父进程 LogContextFilter 会据此关联 trace/task。
 
 契约：
-- 子进程侧调用 install_logging_for_current_process(log_queue=queue) 把 coding_agent.backend 日志导向队列；
+- 子进程侧调用 install_logging_for_current_process(log_queue=queue)，把日志导向队列；
 - 子进程日志的 extra 字段必须可 pickle；
-- 父进程侧由 install_logging_for_current_process 统一分发：无队列时走 configure_logging 并调用 install_log_queue_bridge 启动监听器。
+- 父进程侧由 install_logging_for_current_process 统一分发：无队列时走 configure_logging，
+  并调用 install_log_queue_bridge 启动监听器。
 """
 
 import logging

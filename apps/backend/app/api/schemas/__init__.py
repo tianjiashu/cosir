@@ -11,11 +11,9 @@ from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
 from app.api.schemas.request.QueryLogsRequest import QueryLogsRequest
 from app.api.schemas.request.RecentLogsRequest import RecentLogsRequest
-from app.api.schemas.response.AgentProfileResponse import AgentProfileResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
-from app.api.schemas.response.ListAgentsResponse import ListAgentsResponse
 from app.api.schemas.response.LogEntryResponse import LogEntryResponse
 from app.api.schemas.response.LogQueryResponse import LogQueryResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
@@ -24,14 +22,12 @@ from app.api.schemas.response.WorkspaceReadinessResponse import WorkspaceReadine
 from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 
 __all__ = [
-    "AgentProfileResponse",
     "CreateTaskRequest",
     "CreateTurnRequest",
     "CreateWorkspaceRequest",
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
     "HealthResponse",
-    "ListAgentsResponse",
     "LogEntryResponse",
     "LogQueryResponse",
     "QueryLogsRequest",

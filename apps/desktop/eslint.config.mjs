@@ -1,19 +1,24 @@
 import { defineConfig, globalIgnores } from "eslint/config";
-import nextVitals from "eslint-config-next/core-web-vitals";
-import nextTs from "eslint-config-next/typescript";
+import js from "@eslint/js";
+import tseslint from "typescript-eslint";
 
 const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
-  // Override default ignores of eslint-config-next.
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  {
+    files: ["**/*.{ts,tsx}"],
+    rules: {
+      "no-undef": "off",
+    },
+  },
   globalIgnores([
-    // Default ignores of eslint-config-next:
+    // Ignore stale build output from the pre-Vite toolchain.
     ".next/**",
     "**/.next/**",
     "src-tauri/target/**",
     "out/**",
     "build/**",
-    "next-env.d.ts",
+    "dist/**",
   ]),
 ]);
 

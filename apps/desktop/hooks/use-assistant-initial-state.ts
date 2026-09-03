@@ -1,6 +1,7 @@
 import { apiRequest } from "@/lib/api/client";
 import { useEffect, useRef, useState } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
+import { frontendLog } from "@/lib/logging/frontend-log";
 
 /** hook 返回的首屏历史加载结果。 */
 export type AssistantInitialStateResult = {
@@ -58,7 +59,6 @@ export function useAssistantInitialState(
       cancelledRef.current = true;
     };
     // 仅在 taskId 变化时重新拉取；load 以最新 taskId 闭包捕获，见下方定义。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
   /**
@@ -88,14 +88,17 @@ export function useAssistantInitialState(
         });
         setLoadError(null);
       })
-      .catch((cause: unknown) => {
+      .catch(async (cause: unknown) => {
         if (
           cancelledRef.current ||
           requestGeneration !== requestGenerationRef.current
         ) {
           return;
         }
-        console.error("加载对话历史失败", { taskId, cause });
+        await frontendLog("ERROR", "assistant_initial_state_failed", "加载对话历史失败", {
+          data: { taskId },
+          error: cause,
+        });
         setLoadError({
           taskId,
           message:

@@ -1,10 +1,8 @@
 """日期日志文件路径解析。"""
 
-from datetime import date
 from pathlib import Path
 
-LOG_FILE_PREFIX = "logs-"
-LOG_FILE_SUFFIX = ".log"
+LOG_FILE_NAME = "backend.log"
 
 
 def current_log_file(log_dir: Path) -> Path:
@@ -22,4 +20,4 @@ def current_log_file(log_dir: Path) -> Path:
     副作用:
         读取系统本地日期，不创建目录或文件。
     """
-    return log_dir / f"{LOG_FILE_PREFIX}{date.today().isoformat()}{LOG_FILE_SUFFIX}"
+    return log_dir / LOG_FILE_NAME

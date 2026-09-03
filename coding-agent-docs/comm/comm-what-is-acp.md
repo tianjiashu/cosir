@@ -265,18 +265,18 @@ def acp_mcp_servers_to_mcp_config(mcp_servers: list[MCPServer]) -> MCPConfig:
         if isinstance(server, HttpMcpServer):
             config[server.name] = {
                 "url": server.url,
-                "transport": "http"
+                "request": "http"
             }
         elif isinstance(server, SseMcpServer):
             config[server.name] = {
                 "url": server.url,
-                "transport": "sse"
+                "request": "sse"
             }
         elif isinstance(server, McpServerStdio):
             config[server.name] = {
                 "command": server.command,
                 "args": server.args,
-                "transport": "stdio"
+                "request": "stdio"
             }
     return MCPConfig(servers=config)
 ```

@@ -11,12 +11,12 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
-from app.models import TaskRecord, TurnRecord
+from app.models import ConversationRunRecord, TaskRecord
 from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_context import DelegationPolicyContext
 from app.service.delegation.delegation_policy import DelegationPolicy
 from app.service.delegation.delegation_service import DelegationService
-from app.service.depends import get_delegation_service, get_turn_service
+from app.service.depends import get_conversation_run_service, get_delegation_service
 from app.tools.schemas import ToolExecutionContext, ToolObservation
 from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 from app.tools.tool_execute.tool_cancelled import tool_cancelled
@@ -32,7 +32,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         self,
         child_runner: Any,
         parent_profile: AgentProfile,
-        parent_turn: TurnRecord,
+        parent_run: ConversationRunRecord,
         parent_task: TaskRecord,
         policy: DelegationPolicy | None = None,
     ) -> None:
@@ -40,8 +40,8 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         参数:
             child_runner: 运行 child AgentProfile 的协作者，需提供 ``run_child``。
-            parent_profile: 当前父 turn 使用的 AgentProfile。
-            parent_turn: 当前父 turn 记录。
+            parent_profile: 当前父 run 使用的 AgentProfile。
+            parent_run: 当前父 Conversation Run 记录。
             parent_task: 当前父 task 记录。
             policy: 可选委派策略实例；缺省使用 DelegationPolicy。
 
@@ -52,12 +52,12 @@ class DelegationExecutor(DelegateTaskExecutor):
             无。
 
         副作用:
-            保存当前 turn 的执行上下文引用。
+            保存当前 run 的执行上下文引用。
         """
 
         self._child_runner = child_runner
         self._parent_profile = parent_profile
-        self._parent_turn = parent_turn
+        self._parent_run = parent_run
         self._parent_task = parent_task
         self._policy = policy or DelegationPolicy()
 
@@ -70,7 +70,7 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         参数:
             args: 已校验的 delegate_task 工具参数（child_agent_id / title / prompt 自由文本契约）。
-            execution_context: 父工具执行上下文；用于确认 parent turn 边界。
+            execution_context: 父工具执行上下文；用于确认 parent run 边界。
 
         返回:
             child 成功时返回 success observation；child 无法解析、策略拒绝、child 失败、取消
@@ -80,7 +80,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             无。已创建 delegation 后的运行异常会转换为 failed delegation 和工具错误。
 
         副作用:
-            可能创建 delegation 记录、child turn，运行 child Agent，并更新 delegation 终态。
+            可能创建 delegation 记录、child run，运行 child Agent，并更新 delegation 终态。
         """
 
         from app.service.depends import get_task_service
@@ -88,7 +88,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         runtime_event_loop = execution_context.runtime_dependencies.runtime_event_loop
         agent_registry = get_agent_registry()
         delegation_service = get_delegation_service()
-        turn_service = get_turn_service()
+        conversation_run_state_service = get_conversation_run_service()
         task_service = get_task_service()
 
         # 获取child agent profile
@@ -99,7 +99,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 extra={
                     "msg": "委派目标 child Agent 无法解析，返回工具错误",
                     "data": {
-                        "parent_turn_id": self._parent_turn.id,
+                        "parent_run_id": self._parent_run.id,
                         "child_agent_id": args.child_agent_id,
                     },
                 },
@@ -127,7 +127,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 # depth 语义：发起者所在 task 已处的委派层数——主 Agent 顶层 task
                 # 为 0（允许发起第一层委派），委派子 task 为 1（拒绝递归委派）。
                 # 取自 TaskRecord 持久化事实而非 profile 运行时字段，避免共享
-                # profile 实例被并发 turn 改写导致 depth 误判。
+                # profile 实例被并发 run 改写导致 depth 误判。
                 depth=1 if self._parent_task.is_child else 0,
                 known_child_agent_ids=frozenset(agent_registry.child_agent_ids()),
             )
@@ -138,7 +138,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         # 原子 acquire 并发额度：额度满时 storage 层在同一事务内拒绝创建
         acquire = delegation_service.try_create_pending(
             task_id=self._parent_task.id,
-            parent_turn_id=self._parent_turn.id,
+            parent_run_id=self._parent_run.id,
             parent_agent_id=self._parent_profile.agent_id,
             child_agent_id=args.child_agent_id,
             prompt=agent_input_text,
@@ -151,11 +151,11 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         delegation_id = acquire.delegation_id
         try:
-            # 先创建委派子任务（只建 task，不建 turn；并发重入由 delegation_id 唯一索引兜底）。
+                # 先创建委派子任务（只建 task，不建 run；并发重入由 delegation_id 唯一索引兜底）。
             try:
                 child_task = task_service.create_child_task(
                     parent_task_id=self._parent_task.id,
-                    parent_turn_id=self._parent_turn.id,
+                    parent_run_id=self._parent_run.id,
                     delegation_id=delegation_id,
                     workspace_id=self._parent_task.workspace_id,
                     title=args.title,
@@ -163,14 +163,14 @@ class DelegationExecutor(DelegateTaskExecutor):
             except IntegrityError:
                 # delegation_id 唯一索引冲突：同一 delegation 已被并发重入创建过子 task。
                 # acquire 已插入 pending delegation 并占用 1 个并发额度，必须在此显式终态化，
-                # 否则该 pending 记录永久计入 ACTIVE_DELEGATION_STATUSES，导致父 turn 并发额度泄漏。
+                # 否则该 pending 记录永久计入 ACTIVE_DELEGATION_STATUSES，导致父 run 并发额度泄漏。
                 log.error(
                     "delegation_child_task_conflict",
                     extra={
                         "msg": "委派子任务创建冲突（delegation_id 已存在子任务）",
                         "data": {
                             "delegation_id": delegation_id,
-                            "parent_turn_id": self._parent_turn.id,
+                            "parent_run_id": self._parent_run.id,
                         },
                     },
                 )
@@ -193,12 +193,12 @@ class DelegationExecutor(DelegateTaskExecutor):
                     permission="delegate_task",
                 )
 
-            # 在子任务下创建 pending child turn（上下文天然隔离，不依赖排除 hack）。
-            # ① service 期预解析（设计 §6.4）：create_turn 内部会把 child 请求的 /
+            # 在子任务下创建 pending child run（上下文天然隔离，不依赖排除 hack）。
+            # ① service 期预解析（设计 §6.4）：create_run 内部会把 child 请求的 /
             # 此处捕获后把 delegation 置 failed（child 无 HTTP 上下文，无法回 422），
             # 成对记 warn model_resolve_rejected(child=true) + error，父收失败 DelegationResult。
             try:
-                child_turn = turn_service.create_turn(
+                child_run = conversation_run_state_service.create_run(
                     task_id=child_task.id,
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,
@@ -212,7 +212,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                         "msg": f"委派 child 预解析模型失败，delegation 置 failed：{exc}",
                         "data": {
                             "delegation_id": delegation_id,
-                            "parent_turn_id": self._parent_turn.id,
+                            "parent_run_id": self._parent_run.id,
                             "child_agent_id": args.child_agent_id,
                         },
                     },
@@ -229,21 +229,21 @@ class DelegationExecutor(DelegateTaskExecutor):
                     f"child model resolve failed: {exc}",
                 )
 
-            # 确认pending child turn
-            if not turn_service.claim_pending_turn(child_turn.id):
-                raise RuntimeError("child_turn_claim_lost")
+            # 确认 pending child run
+            if not conversation_run_state_service.claim_pending_run(child_run.id):
+                raise RuntimeError("child_run_claim_lost")
 
-            # 标记child turn为已开始
+            # 标记 child run 为已开始
             delegation_service.mark_child_started(
                 delegation_id,
-                child_turn.id,
+                child_run.id,
                 child_task_id=child_task.id,
                 runtime_event_loop=runtime_event_loop,
             )
 
             # 构建child agent profile
-            child_profile = child_agent_profile.derive_for_turn(
-                child_turn,
+            child_profile = child_agent_profile.derive_for_run(
+                child_run,
                 allowed_tools=list(decision.effective_tools),
                 runtime_event_loop=runtime_event_loop,
             )
@@ -258,7 +258,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                     "msg": "委派执行异常，已转换为 delegate_task 工具错误",
                     "data": {
                         "delegation_id": delegation_id,
-                        "parent_turn_id": self._parent_turn.id,
+                            "parent_run_id": self._parent_run.id,
                         "child_agent_id": args.child_agent_id,
                     },
                 },
@@ -284,13 +284,13 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         任务契约结构（Objective / Rules / References / Background / Expected Output）
         已由父 Agent 在 ``prompt`` 内以 markdown section 写好，此处原样透传，仅补上
-        标题作为一级标题，保证 child turn 输入可读且可直接追溯。
+        标题作为一级标题，保证 child run 输入可读且可直接追溯。
 
         参数:
             args: 已校验的 delegate_task 自由文本参数。
 
         返回:
-            可直接作为 child turn input_text 的任务文本。
+            可直接作为 child run input_text 的任务文本。
 
         异常:
             无。
@@ -323,7 +323,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             extra={
                 "msg": "委派请求被策略拒绝",
                 "data": {
-                    "parent_turn_id": self._parent_turn.id,
+                    "parent_run_id": self._parent_run.id,
                     "child_agent_id": child_agent_id,
                     "reason": reason,
                 },
@@ -365,7 +365,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             extra={
                 "msg": "委派被并发额度拒绝",
                 "data": {
-                    "parent_turn_id": self._parent_turn.id,
+                    "parent_run_id": self._parent_run.id,
                     "child_agent_id": child_agent_id,
                     "max_concurrency": Settings.DELEGATION_MAX_CONCURRENCY,
                 },
@@ -388,7 +388,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         """把已 acquire 的 delegation 确定性终态化为 failed，释放并发额度。
 
         并发额度由 storage 层 ``try_create_pending`` 插入的 pending 记录承载：只要该记录
-        仍处于 active（pending/running）状态，就会占用父 turn 的并发槽。因此所有在 acquire
+        仍处于 active（pending/running）状态，就会占用父 run 的并发槽。因此所有在 acquire
         成功后、未能通过 ``_finalize_result`` 正常终态化的提前退出路径（并发重入冲突、
         模型未配置、未预期异常）都必须调用本方法，把 delegation 推进到终态，避免额度泄漏。
 
@@ -457,7 +457,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         """
 
         if result.status == "completed":
-            summary = result.summary or "child turn completed"
+            summary = result.summary or "child run completed"
             delegation_service.mark_completed(
                 delegation_id,
                 summary,
@@ -470,13 +470,13 @@ class DelegationExecutor(DelegateTaskExecutor):
                 summary,
                 data={
                     "delegation_id": delegation_id,
-                    "child_turn_id": result.child_turn_id,
+                    "child_run_id": result.child_run_id,
                     "child_task_id": child_task_id,
                     "status": "completed",
                 },
             )
         if result.status == "cancelled":
-            error = result.error or "child turn cancelled"
+            error = result.error or "child run cancelled"
             delegation_service.mark_cancelled(
                 delegation_id,
                 error,
@@ -487,7 +487,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 "delegate_task",
                 reason=(
                     f"the delegated child agent was cancelled: {error}. this was an active "
-                    f"stop initiated by the user or system (e.g. the parent turn was "
+                    f"stop initiated by the user or system (e.g. the parent run was "
                     f"cancelled), not a tool failure, so whether to retry is decided by the "
                     f"user's next instruction or the surrounding context rather than being "
                     f"assumed non-retryable; adapt your plan based on the cancellation and "
@@ -496,7 +496,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 error=f"delegate_task child cancelled: {error}",
                 permission="delegate_task",
             )
-        error = result.error or "child turn failed"
+        error = result.error or "child run failed"
         delegation_service.mark_failed(
             delegation_id,
             error,

@@ -56,9 +56,18 @@ class WorkspaceService:
             （已存在则幂等跳过）。元数据目录创建失败属于非致命降级：不阻断工作区创建，
             仅记 error 日志，便于事后排查。
         """
-        record = self._workspace.create(name, root_path)
+        normalized_path = self._normalize_root_path(root_path)
+        if any(
+            self._same_path(workspace.root_path, normalized_path)
+            for workspace in self._workspace.list_all()
+        ):
+            raise ValueError("workspace root_path is already registered")
+        record = self._workspace.create(
+            name.strip() or Path(normalized_path).name,
+            normalized_path,
+        )
 
-        cosir_dir = Path(root_path.strip()) / ".cosir"
+        cosir_dir = Path(normalized_path) / ".cosir"
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)
             log.info(
@@ -67,7 +76,7 @@ class WorkspaceService:
                     "msg": "workspace metadata dir initialized",
                     "data": {
                         "workspace_name": name,
-                        "root_path": root_path,
+                        "root_path": normalized_path,
                         "cosir_dir": str(cosir_dir),
                     },
                 },
@@ -80,7 +89,7 @@ class WorkspaceService:
                     "msg": "failed to initialize workspace metadata dir, skipped",
                     "data": {
                         "workspace_name": name,
-                        "root_path": root_path,
+                        "root_path": normalized_path,
                         "cosir_dir": str(cosir_dir),
                         "error": str(exc),
                         "errno": getattr(exc, "errno", None),
@@ -89,6 +98,24 @@ class WorkspaceService:
             )
 
         return record
+
+    @staticmethod
+    def _normalize_root_path(root_path: str) -> str:
+        """校验并规范化工作区根目录。"""
+        candidate = Path(root_path.strip()).expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("workspace root_path must be an absolute path")
+        if not candidate.exists() or not candidate.is_dir():
+            raise ValueError("workspace root_path must be an existing directory")
+        return str(candidate.resolve())
+
+    @staticmethod
+    def _same_path(left: str, right: str) -> bool:
+        """按当前操作系统规则比较两个规范化目录路径。"""
+        return (
+            Path(left).resolve().as_posix().casefold()
+            == Path(right).resolve().as_posix().casefold()
+        )
 
     def list_workspaces(self) -> list[WorkspaceRecord]:
         """列出全部工作区。
@@ -146,7 +173,7 @@ class WorkspaceService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
 
         副作用:
-            从 ``turn_messages`` / ``file_snapshots`` / ``turns`` / ``delegations``
+            从 ``turn_messages`` / ``file_snapshots`` / ``conversation_runs`` / ``delegations``
             / ``tasks`` / ``workspaces`` 表删除该工作区相关数据（旧 Runtime 事件体系
             已删除，不再参与级联删除）。
         """

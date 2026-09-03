@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.agents.model_settings import ModelSettings
-from app.models import TurnRecord
+from app.models import ConversationRunRecord
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
@@ -43,8 +43,9 @@ class AgentProfile:
             默认模型，默认 None；None 表示未配置，由前端优先校验、后端兜底报错。
         model_settings: 模型覆盖配置（``ModelSettings``）。
         hidden: 是否隐藏 profile（内置委派子 Agent 为 True）。
-        max_steps: 单 turn 最大步骤数。
-        turn: 当前所属 turn 记录（经 ``derive_for_turn`` 注入 per-run 副本；单例上不原地写）。
+        max_steps: 单 run 最大步骤数。
+        run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
+            单例上不原地写）。
         main_agent: 是否主 Agent。
         runtime_event_loop: 运行时事件循环（可为 None）。
         prompt_file_path: 关联的 prompt 文件路径（可为 None）。
@@ -60,37 +61,37 @@ class AgentProfile:
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     hidden: bool = False
     max_steps: int = 1000
-    turn: TurnRecord | None = None
+    run: ConversationRunRecord | None = None
     main_agent: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     prompt_file_path: Path | None = None
 
-    def derive_for_turn(
+    def derive_for_run(
         self,
-        turn: TurnRecord,
+        run: ConversationRunRecord,
         *,
         allowed_tools: list[str] | None = None,
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> AgentProfile:
-        """为一次独立的 turn 执行派生 per-run 副本。
+        """为一次独立的 Conversation Run 执行派生 per-run 副本。
 
         并发隔离收口：AgentProfile 是注册表共享单例，禁止调用方对其原地写运行时字段
-        （并发 turn 会互相覆盖）。每次 turn 执行必须先经本方法派生独立副本，副本承载
-        本次执行的 ``turn`` 与可选的 ``runtime_event_loop``（及收窄后的 ``allowed_tools``），
-        不同 turn 的副本互不串扰。
+        （并发 run 会互相覆盖）。每次 run 执行必须先经本方法派生独立副本，副本承载
+        本次执行的 ``run`` 与可选的 ``runtime_event_loop``（及收窄后的 ``allowed_tools``），
+        不同 run 的副本互不串扰。
 
         Args:
-            turn: 本次执行的轮次记录（必填，写入副本的 ``turn`` 字段）。
+            run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）。
             allowed_tools: 覆盖工具白名单；None 表示沿用当前值（委派子 Agent 收窄工具集时传入）。
             runtime_event_loop: 覆盖事件广播 loop；None 表示沿用当前值
                 （主路径缺省 None；委派 child 传入父 loop，child 事件经
                 ``call_soon_threadsafe`` 跨线程投递回父 loop）。
 
         Returns:
-            绑定当前 turn 的独立 ``AgentProfile`` 副本（不修改 ``self`` 原实例）。
+            绑定当前 run 的独立 ``AgentProfile`` 副本（不修改 ``self`` 原实例）。
         """
 
-        changes: dict = {"turn": turn}
+        changes: dict = {"run": run}
         if allowed_tools is not None:
             changes["allowed_tools"] = allowed_tools
         if runtime_event_loop is not None:

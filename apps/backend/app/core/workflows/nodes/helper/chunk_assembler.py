@@ -2,7 +2,7 @@
 
 本模块只承载「chunk → AIMessage + 文本」组装单一职责：把模型流式产出的
 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``，并提供文本抽取、有效性判断、
-非法工具调用收集等配套纯函数。usage 统计不在此处解析（统一由 ``TurnUsageStats``
+非法工具调用收集等配套纯函数。usage 统计不在此处解析（统一由 ``ConversationRunUsageStats``
 从 ``ai_message.usage_metadata`` 单一来源累加）。思考回传策略（剥离/保留
 ``reasoning_content``）来自 ``thinking_extractor``，chunk 结构 debug 落盘来自
 ``debug_dump``，本模块负责把三者编排成最终的 ``AIMessage``。

@@ -2,10 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-
-type BackendStatus =
-  | { state: "starting" | "ready" | "stopped" }
-  | { state: "failed"; message: string };
+import { setBackendBaseUrl, type BackendRuntimeConfig, type BackendStatus } from "@/src/runtime-config";
 
 export function BackendStatusBanner() {
   const [status, setStatus] = useState<BackendStatus | null>(null);
@@ -34,7 +31,12 @@ export function BackendStatusBanner() {
   const retry = async () => {
     setRetrying(true);
     try {
-      setStatus(await invoke<BackendStatus>("restart_backend"));
+      const config = await invoke<BackendRuntimeConfig>("restart_backend");
+      setBackendBaseUrl(config.backendBaseUrl);
+      setStatus(config.status);
+      // Assistant Transport captures its API URL when its runtime is created;
+      // reload the shell so every runtime and API client binds to the new port.
+      window.location.reload();
     } catch {
       await refresh();
     } finally {

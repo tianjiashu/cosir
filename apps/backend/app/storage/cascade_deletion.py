@@ -6,7 +6,7 @@
 
 职责边界：
 - 负责：跨多表（``turn_messages`` / ``file_snapshots`` /
-  ``conversation_commands`` / ``turns`` / ``delegations`` / ``tasks`` /
+  ``conversation_commands`` / ``conversation_runs`` / ``delegations`` / ``tasks`` /
   ``workspaces``）的原子级联删除。
 - 不负责：单表增删改查、业务规则校验、事件广播（由上层 service 编排）。
 
@@ -19,16 +19,15 @@
 
 from sqlalchemy import delete, select, update
 
-from app.storage.model.conversation_change_model import ConversationChangeModel
 from app.storage.model.conversation_command_model import ConversationCommandModel
-from app.storage.model.conversation_head_model import ConversationHeadModel
 from app.storage.model.conversation_message_model import ConversationMessageModel
 from app.storage.model.conversation_message_part_model import ConversationMessagePartModel
+from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.model.conversation_task_snapshot_model import ConversationTaskSnapshotModel
 from app.storage.model.conversation_tool_call_model import ConversationToolCallModel
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.task_model import TaskModel
-from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_session_factory
 
@@ -78,7 +77,7 @@ class CascadeDeleter:
 
         副作用:
             从 ``turn_messages`` / ``file_snapshots`` /
-            ``turns`` / ``delegations`` / ``tasks`` 表删除该任务树相关数据。
+            ``conversation_runs`` / ``delegations`` / ``tasks`` 表删除该任务树相关数据。
         """
         with self._engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
@@ -112,7 +111,7 @@ class CascadeDeleter:
 
         副作用:
             从 ``turn_messages`` / ``file_snapshots`` /
-            ``turns`` / ``delegations`` / ``tasks`` / ``workspaces`` 表删除该工作区
+            ``conversation_runs`` / ``delegations`` / ``tasks`` / ``workspaces`` 表删除该工作区
             相关数据。
         """
         with self._engine.connect() as conn:
@@ -129,11 +128,12 @@ class CascadeDeleter:
     def _delete_all_artifacts(self, conn, task_ids: set[int]) -> None:
         """在给定连接上按外键依赖逆序删除一批 task 的全部子产物与 task 自身。
 
-        ``tasks`` 与 ``turns`` 存在双向外键环（``turns.task_id -> tasks.id`` 与
-        ``tasks.parent_turn_id -> turns.id``），删除顺序必须先解除 ``tasks`` 对
-        ``turns`` 的引用（把本批 ``tasks.parent_turn_id`` 置 NULL），再删 turns；否则
-        SQLite 即时外键检查会在删 turns 时因 ``tasks.parent_turn_id`` 引用而报
-        ``FOREIGN KEY constraint failed``。其余子产物按被引用方向先删。
+        ``tasks`` 与 ``conversation_runs`` 存在双向外键环（``conversation_runs.task_id ->
+        tasks.id`` 与 ``tasks.parent_run_id -> conversation_runs.id``），删除顺序必须先解除
+        ``tasks`` 对 ``conversation_runs`` 的引用（把本批 ``tasks.parent_run_id`` 置 NULL），
+        再删 runs；否则 SQLite 即时外键检查会因 ``tasks.parent_run_id`` 引用而报
+        ``FOREIGN KEY constraint failed``。``conversation_commands.run_id`` 亦指向
+        ``conversation_runs.id``，故 commands 必须早于 runs 删除。其余子产物按被引用方向先删。
 
         参数:
             conn: 当前写锁事务的原生连接。
@@ -146,16 +146,16 @@ class CascadeDeleter:
             sqlalchemy.exc.SQLAlchemyError: 如果任一删除失败。
 
         副作用:
-            删除 ``turn_messages`` / ``file_snapshots`` / ``turns`` / ``delegations`` /
+            删除 ``turn_messages`` / ``file_snapshots`` / ``conversation_runs`` / ``delegations`` /
             ``tasks`` 相关行；``task_ids`` 为空时不操作。
         """
         if not task_ids:
             return
-        # 解除 tasks.parent_turn_id -> turns 的引用（双向外键环，删 turns 前必须置空）。
+        # 解除 tasks.parent_run_id -> turns 的引用（双向外键环，删 turns 前必须置空）。
         conn.execute(
-            update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_turn_id=None)
+            update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
         )
-        turn_ids = self._collect_turn_ids(conn, task_ids)
+        run_ids = self._collect_run_ids(conn, task_ids)
         message_ids = [
             row[0]
             for row in conn.execute(
@@ -182,18 +182,20 @@ class CascadeDeleter:
             delete(ConversationMessageModel).where(ConversationMessageModel.task_id.in_(task_ids))
         )
         conn.execute(
-            delete(ConversationChangeModel).where(ConversationChangeModel.task_id.in_(task_ids))
+            delete(ConversationTaskSnapshotModel).where(
+                ConversationTaskSnapshotModel.task_id.in_(task_ids)
+            )
         )
-        conn.execute(
-            delete(ConversationHeadModel).where(ConversationHeadModel.task_id.in_(task_ids))
-        )
+        if run_ids:
+            conn.execute(delete(FileSnapshotModel).where(FileSnapshotModel.run_id.in_(run_ids)))
+        conn.execute(delete(DelegationModel).where(DelegationModel.task_id.in_(task_ids)))
+        # commands.run_id 外键指向 conversation_runs.id，必须先删 commands 再删 runs。
         conn.execute(
             delete(ConversationCommandModel).where(ConversationCommandModel.task_id.in_(task_ids))
         )
-        if turn_ids:
-            conn.execute(delete(FileSnapshotModel).where(FileSnapshotModel.turn_id.in_(turn_ids)))
-            conn.execute(delete(TurnModel).where(TurnModel.task_id.in_(task_ids)))
-        conn.execute(delete(DelegationModel).where(DelegationModel.task_id.in_(task_ids)))
+        conn.execute(
+            delete(ConversationRunModel).where(ConversationRunModel.task_id.in_(task_ids))
+        )
         self._delete_task_tree_layered(conn, task_ids)
 
     @staticmethod
@@ -228,7 +230,7 @@ class CascadeDeleter:
         return collected
 
     @staticmethod
-    def _collect_turn_ids(conn, task_ids: set[int]) -> list[int]:
+    def _collect_run_ids(conn, task_ids: set[int]) -> list[int]:
         """在给定连接上收集一批 task 下全部 turn 标识。
 
         参数:
@@ -244,7 +246,9 @@ class CascadeDeleter:
         副作用:
             无（仅在该连接的当前事务内执行一次查询）。
         """
-        rows = conn.execute(select(TurnModel.id).where(TurnModel.task_id.in_(task_ids))).all()
+        rows = conn.execute(
+            select(ConversationRunModel.id).where(ConversationRunModel.task_id.in_(task_ids))
+        ).all()
         return [row[0] for row in rows]
 
     @staticmethod

@@ -43,13 +43,13 @@ class TraceMetadata:
     """
 
     task_id: int
-    turn_id: int
+    run_id: int
     agent_id: str
 
 
 @dataclass(frozen=True)
-class TurnTraceResult:
-    """``turn_trace`` 上下文管理器的产出结果。
+class ConversationRunTraceResult:
+    """``conversation_run_trace`` 上下文管理器的产出结果。
 
     同时携带注入 workflow 的 LangChain callbacks 与本 turn 根 observation 的实际 Langfuse trace_id。
     未启用 tracing 时 ``callbacks`` 为空列表、``trace_id`` 为 None。
@@ -137,7 +137,7 @@ def _build_langfuse_client() -> Any:
         已配置好 public/secret/base_url 的 Langfuse 客户端实例。
 
     异常:
-        ImportError / LangfuseError: 由调用方（``turn_trace`` / recorder）捕获并降级。
+        ImportError / LangfuseError: 由调用方（``conversation_run_trace`` / recorder）捕获并降级。
 
     副作用:
         首次调用时在进程内注册该 public_key 对应的全局 client 单例。
@@ -230,23 +230,23 @@ def _mask_langfuse_otel_spans(*, params: Any) -> Any:
 
 
 @contextmanager
-def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
+def conversation_run_trace(metadata: TraceMetadata) -> Iterator[ConversationRunTraceResult]:
     """打开 turn 级根 observation，并产出待注入 workflow 的 LangChain callbacks 列表与 trace_id。
 
-    未启用 → yield ``TurnTraceResult([], None)``，完全空操作（零开销路径）。启用 → 构造 Langfuse
+    未启用 → yield ``ConversationRunTraceResult([], None)``，完全空操作（零开销路径）。启用 → 构造 Langfuse
     客户端，经 ``start_as_current_observation(as_type="span")`` 建立 turn 根 observation（该 span
     由 OTel 自动生成 trace_id 并成为 current context），用 ``propagate_attributes`` 写 trace 级
     属性（session/user/tags/metadata），再在该上下文内构造 ``CallbackHandler``——不传
     ``trace_context``，使 LLM generation observation 经 OTel current context 自然传播自动挂到该
-    根下（同一 trace），随后 yield ``TurnTraceResult([handler], root_span.trace_id)``。任何
-    Langfuse 侧异常 → ``log.exception`` 后降级为 yield ``TurnTraceResult([], None)``，绝不中断
+    根下（同一 trace），随后 yield ``ConversationRunTraceResult([handler], root_span.trace_id)``。任何
+    Langfuse 侧异常 → ``log.exception`` 后降级为 yield ``ConversationRunTraceResult([], None)``，绝不中断
     turn 执行。
 
     参数:
         metadata: 本次 turn 的可观测元数据（task/turn/agent/workspace 标识）。
 
     生成:
-        ``TurnTraceResult``：callbacks 列表与本 turn 根 observation 的实际 Langfuse trace_id
+        ``ConversationRunTraceResult``：callbacks 列表与本 turn 根 observation 的实际 Langfuse trace_id
         （未启用或根 observation 无 trace_id 时为 None；后者同时记 warning 以便排查）。
 
     异常:
@@ -259,7 +259,7 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
     """
 
     if not tracing_enabled():
-        yield TurnTraceResult(callbacks=[], trace_id=None)
+        yield ConversationRunTraceResult(callbacks=[], trace_id=None)
         return
 
     # 仅包裹「客户端构造 + 根 observation 上下文构造」阶段；进入 context 和 handler 构造
@@ -271,10 +271,10 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
         client = _build_langfuse_client()
         trace_metadata: dict[str, str] = {
             "task_id": metadata.task_id,
-            "turn_id": metadata.turn_id,
+            "run_id": metadata.run_id,
         }
         root_span_cm = client.start_as_current_observation(
-            as_type="span", name=f"turn {metadata.turn_id}"
+            as_type="span", name=f"turn {metadata.run_id}"
         )
         attr_cm = propagate_attributes(
             session_id=metadata.task_id,
@@ -284,13 +284,13 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
         )
     except Exception:
         log.exception(
-            "langfuse_turn_trace_failed",
+            "langfuse_conversation_run_trace_failed",
             extra={
                 "msg": "Langfuse turn trace 初始化失败，降级为不追踪",
-                "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+                "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
             },
         )
-        yield TurnTraceResult(callbacks=[], trace_id=None)
+        yield ConversationRunTraceResult(callbacks=[], trace_id=None)
         return
 
     root_entered = False
@@ -305,10 +305,10 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
         )
     except Exception:
         log.exception(
-            "langfuse_turn_trace_failed",
+            "langfuse_conversation_run_trace_failed",
             extra={
                 "msg": "Langfuse 根 observation 或 CallbackHandler 初始化失败，降级为不追踪",
-                "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+                "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
             },
         )
         _safe_exit_langfuse_context(
@@ -321,7 +321,7 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
             "langfuse_root_span_exit_failed",
             metadata,
         )
-        yield TurnTraceResult(callbacks=[], trace_id=None)
+        yield ConversationRunTraceResult(callbacks=[], trace_id=None)
         return
 
     try:
@@ -329,13 +329,13 @@ def turn_trace(metadata: TraceMetadata) -> Iterator[TurnTraceResult]:
             root_trace_id = getattr(root_span, "trace_id", None)
             if root_trace_id is None:
                 log.warning(
-                    "langfuse_turn_trace_missing_root_trace_id",
+                    "langfuse_conversation_run_trace_missing_root_trace_id",
                     extra={
                         "msg": "turn 根 observation 无 trace_id，上层无法关联 trace",
-                        "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+                        "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
                     },
                 )
-            yield TurnTraceResult(
+            yield ConversationRunTraceResult(
                 callbacks=[handler],
                 trace_id=root_trace_id,
             )
@@ -382,7 +382,7 @@ def _safe_flush_langfuse_client(client: Any, metadata: TraceMetadata, event: str
             event,
             extra={
                 "msg": "Langfuse flush 失败，已忽略以避免影响 turn",
-                "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+                "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
             },
         )
 
@@ -420,7 +420,7 @@ def _safe_exit_langfuse_context(
             event,
             extra={
                 "msg": "Langfuse context 退出失败，已忽略以避免影响 turn",
-                "data": {"turn_id": metadata.turn_id, "task_id": metadata.task_id},
+                "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
             },
         )
 

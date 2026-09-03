@@ -10,6 +10,7 @@ import {
   type PropsWithChildren,
 } from "react";
 import { createPortal } from "react-dom";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { cva, type VariantProps } from "class-variance-authority";
 import {
   CopyIcon,
@@ -207,7 +208,6 @@ function ImagePreview({
         </div>
       ) : (
         // The source can be a local data/blob URL or a provider URL.
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           ref={imgRef}
           src={src}
@@ -339,7 +339,6 @@ function ImageZoom({ src, alt = "Image preview", children }: ImageZoomProps) {
             onClick={handleClose}
             aria-label="Zoomed image"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               data-slot="image-zoom-content"
               src={src}
@@ -429,7 +428,8 @@ function RegenerateButton({
         setIsRegenerating(true);
         try {
           await onRegenerate();
-        } catch {
+          } catch (error) {
+            await frontendLog("ERROR", "image_regeneration_failed", "图片重新生成失败", { error });
         } finally {
           setIsRegenerating(false);
         }

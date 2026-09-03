@@ -21,11 +21,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dependencies import (
     build_agent_registry,
     get_conversation_run_executor,
-    get_runtime,
     set_agent_registry,
     set_runtime,
     set_tool_system,
@@ -49,6 +49,8 @@ from app.hook import HookContext, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import (
     close_service_dependencies,
+    get_conversation_run_service,
+    get_conversation_state_service,
     get_delegation_service,
     initialize_service_dependencies,
 )
@@ -98,8 +100,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         queue_size=Settings.LOG_QUEUE_SIZE,
         batch_size=Settings.LOG_BATCH_SIZE,
         flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
+        max_bytes=Settings.LOG_MAX_BYTES,
+        backup_count=Settings.LOG_BACKUP_COUNT,
     )
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
+    _mark_interrupted_conversation_runs_failed()
 
     # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
     # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
@@ -117,8 +122,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     set_tool_system(tool_system)
     set_agent_registry(build_agent_registry())
     set_runtime(AgentRuntime())
-    # 进程重启后由持久化 run/lease 状态恢复未终结的执行；HTTP 订阅不拥有运行生命周期。
-    await get_conversation_run_executor().recover(lambda turn: get_runtime().run_turn(turn))
+    # 当前产品只启动新鲜 ConversationRun；旧 run 不在启动期隐式重放。
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
@@ -138,7 +142,45 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         _mark_boot_stopped()
 
 
+def _mark_interrupted_conversation_runs_failed() -> None:
+    """将上次后端进程遗留的 pending/running run 标记为失败。
+
+    当前阶段不自动恢复 Agent 执行；用户可提交新的 command 创建新的 run，
+    并基于已持久化的消息事实继续对话。
+    """
+    run_service = get_conversation_run_service()
+    state_service = get_conversation_state_service()
+    for run in run_service.list_recoverable():
+        # 兼容进程升级前已经存在、但尚未有 snapshot 行的任务；之后的所有
+        # Transport/runtime 读取都只走 snapshot，不在失败收口时临时拼装 state。
+        state_service.ensure_task_snapshot(run.task_id)
+        run_service.fail_run_if_pending_or_running(
+            run.id,
+            end_reason="backend_restarted",
+        )
+
+
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
+
+# Desktop WebView connects directly to the dynamically allocated loopback port.
+# Keep this limited to local desktop/dev origins; the backend itself remains
+# bound to 127.0.0.1 and is never exposed as a network service.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ],
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Cosir-Task-Id", "X-Cosir-Thread-Id"],
+)
 
 install_request_logging(app, log)
 install_http_exception_logging(app, log)
@@ -156,7 +198,7 @@ importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")
-importlib.import_module("app.api.assistant_api")
+importlib.import_module("app.assistant_transport.assistant_api")
 
 
 async def _start_codegraph_kernel() -> CodeGraphKernelSupervisor | None:

@@ -1,16 +1,16 @@
 """SQLite schema 初始化与轻量迁移。
 
-单一职责：负责“建表”与“把已存在的旧表演进到当前模型定义”，即主库 schema 的创建 + 列级
+单一职责：负责"建表"与"把已存在的旧表演进到当前模型定义"，即主库 schema 的创建 + 列级
 补齐，以及日志库 schema 的创建 + 版本化重建。所有表结构以 ``app.storage.model`` 下的
-SQLAlchemy model 为单一事实来源，本模块只做“让数据库结构追上 model 定义”的动作。
+SQLAlchemy model 为单一事实来源，本模块只做"让数据库结构追上 model 定义"的动作。
 
 为什么主库和日志库迁移策略不同：
-- 主库（业务数据）不能丢数据，因此采用“加列不删列”的保守策略：只对缺失列执行
+- 主库（业务数据）不能丢数据，因此采用"加列不删列"的保守策略：只对缺失列执行
   ``ALTER TABLE ADD COLUMN``，历史数据原样保留。**例外**：``_COLUMN_DROP_MAP``
   登记的列属于本次主动契约删除的已知列，会在列迁移前显式 ``DROP COLUMN``
   （仅删登记项，不做宽泛历史清理）。
 - 日志库是可重建的运行产物，历史日志不具备长期价值，因此采用 ``user_version``
-  版本号驱动的“整表重建”策略：版本落后时直接 drop 后重建，简单且无历史包袱。
+  版本号驱动的"整表重建"策略：版本落后时直接 drop 后重建，简单且无历史包袱。
 
 职责边界：
     - 负责：建表、缺失列补齐、日志库版本重建。
@@ -26,11 +26,11 @@ from sqlalchemy import Connection, Engine, Table, inspect, text
 from sqlalchemy.sql.schema import DefaultClause
 
 from app.config.logging.logger import log
-from app.storage.model.conversation_change_model import ConversationChangeModel
 from app.storage.model.conversation_command_model import ConversationCommandModel
-from app.storage.model.conversation_head_model import ConversationHeadModel
 from app.storage.model.conversation_message_model import ConversationMessageModel
 from app.storage.model.conversation_message_part_model import ConversationMessagePartModel
+from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.model.conversation_task_snapshot_model import ConversationTaskSnapshotModel
 from app.storage.model.conversation_tool_call_model import ConversationToolCallModel
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
@@ -38,7 +38,6 @@ from app.storage.model.log_model import LogEntryModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.task_model import TaskModel
-from app.storage.model.turn_model import TurnModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.model.workspace_readiness_model import WorkspaceReadinessModel
 
@@ -49,10 +48,10 @@ APP_MODELS = (
     WorkspaceModel,
     WorkspaceReadinessModel,
     TaskModel,
-    TurnModel,
+    ConversationTaskSnapshotModel,
+    # runs 先于 commands：commands.run_id 外键指向 conversation_runs.id。
+    ConversationRunModel,
     ConversationCommandModel,
-    ConversationHeadModel,
-    ConversationChangeModel,
     ConversationMessageModel,
     ConversationMessagePartModel,
     ConversationToolCallModel,
@@ -133,23 +132,42 @@ def _default_literal_for_type(column_type) -> str:
 # 无需登记；但旧列被改名（而非新增）的场景无法靠补列覆盖，必须显式 RENAME。
 # 当前登记项：
 # - providers 表的 api_key_env → api_key（2026-08-18 确认的历史漂移）。
-# - turns 表的 paths → image_paths（2026-08-27 附件结构化改造：paths 语义收窄为仅图片，
-#   文件/目录/url 已固化进 input_text，故列改名并保留历史图片路径数据）。
-# - turns 表的 product_id → provider_id（2026-08-28 契约对齐：该列指向 providers.id 外键，
-#   product_id 命名易与「产品」混淆，统一为 provider_id，保留历史厂商归属数据）。
+# 注：原 conversation_commands 的 paths→image_paths、product_id→provider_id 两项已随
+# 2026-09-02 的 run/command 拆表失效——这两列已迁至新建的 conversation_runs 表，
+# 新表首建即为目标列名，无重命名需求。
 _COLUMN_RENAME_MAP: dict[str, dict[str, str]] = {
     "providers": {"api_key_env": "api_key"},
-    "turns": {"paths": "image_paths", "product_id": "provider_id"},
 }
 
 # 本次主动契约删除的已知列（按表名 → [待删除列名]）。
 # 与 _COLUMN_RENAME_MAP 同级、可控、非宽泛清理：仅收录经过确认的「主动删列」迁移，
 # 区别于未确认的历史孤儿列（孤儿列不在此处、也不走自动删除以免误删数据）。
 # 当前登记项：
-# - tasks 表的 agent_id（2026-09-X 任务/轮次解耦：task 不再绑定 agent，
+# - tasks 表的 agent_id（任务/轮次解耦：task 不再绑定 agent，
 #   agent 由 turn 维度承载，故从 tasks 表彻底移除该列）。
+# - tasks 表的 status（2026-09-02 移除任务生命周期状态字段：生命周期概念
+#   open/archived 已不再使用，执行态由最新 turn 派生，故从 tasks 表彻底移除该列）。
+# - conversation_commands 表的 13 个 run 字段（2026-09-02 run/command 拆表：
+#   这些列表达「一次 Agent 运行」，已迁至独立的 conversation_runs 表；
+#   commands 表退回纯幂等占用职责，仅保留 run_id 外键指向 conversation_runs.id）。
 _COLUMN_DROP_MAP: dict[str, list[str]] = {
-    "tasks": ["agent_id"],
+    "conversation_runs": ["fencing_version"],
+    "tasks": ["agent_id", "status", "conversation_revision"],
+    "conversation_commands": [
+        "input_text",
+        "agent_id",
+        "provider_id",
+        "model_name",
+        "image_paths",
+        "reasoning_effort",
+        "end_reason",
+        "response_text",
+        "extra",
+        "fencing_version",
+        "executor_lease_owner",
+        "executor_lease_expires_at",
+        "workflow_version",
+    ],
 }
 
 

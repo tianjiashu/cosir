@@ -21,8 +21,8 @@ class DelegationRecord:
 
     id: int | None
     task_id: int
-    parent_turn_id: int | None
-    child_turn_id: int | None
+    parent_run_id: int | None
+    child_run_id: int | None
     parent_agent_id: str | None
     child_agent_id: str
     status: str
@@ -62,8 +62,8 @@ class DelegationRecord:
         return {
             "id": self.id,
             "task_id": self.task_id,
-            "parent_turn_id": self.parent_turn_id,
-            "child_turn_id": self.child_turn_id,
+            "parent_run_id": self.parent_run_id,
+            "child_run_id": self.child_run_id,
             "child_task_id": self.child_task_id,
             "parent_agent_id": self.parent_agent_id,
             "child_agent_id": self.child_agent_id,
@@ -95,8 +95,8 @@ class DelegationRecord:
         return cls(
             id=row.id,
             task_id=row.task_id,
-            parent_turn_id=row.parent_turn_id,
-            child_turn_id=row.child_turn_id,
+            parent_run_id=row.parent_run_id,
+            child_run_id=row.child_run_id,
             parent_agent_id=row.parent_agent_id,
             child_agent_id=row.child_agent_id,
             status=row.status,

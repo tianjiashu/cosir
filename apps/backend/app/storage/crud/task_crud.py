@@ -12,6 +12,7 @@
 """
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.orm import Session
 
 from app.models import TaskRecord
 from app.storage.model.task_model import TaskModel
@@ -42,22 +43,30 @@ class TaskCrud:
         """
         self._session_factory = main_session_factory()
 
+    def ensure_task(self, session: Session, task_id: int) -> TaskRecord:
+        task: TaskModel | None = session.get(TaskModel, task_id)
+        if task is None:
+            raise KeyError(task_id)
+        return TaskRecord.from_model(task)
+
+
     def create(
-        self,
-        workspace_id: int,
-        title: str,
-        status: str | None = None,
-        task_type: str = "user",
-        parent_task_id: int | None = None,
-        parent_turn_id: int | None = None,
-        delegation_id: int | None = None,
+            self,
+            workspace_id: int,
+            title: str,
+            task_type: str = "user",
+            parent_task_id: int | None = None,
+            parent_run_id: int | None = None,
+            delegation_id: int | None = None,
+            creation_command_id: str | None = None,
+            session: Session | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
         主键 ``id`` 由存储引擎自增分配，调用方不再提供业务标识。``created_at`` /
         ``updated_at`` 由本方法以当前 UTC 时间统一填充。``task_type`` 区分用户创建任务
         （``"user"``）与委派子任务（``"delegation"``）；委派子任务通过 ``parent_task_id`` /
-        ``parent_turn_id`` / ``delegation_id``（均为整数 id）关联父任务与委派记录。
+        ``parent_run_id`` / ``delegation_id``（均为整数 id）关联父任务与委派记录。
 
         任务不再绑定 agent：agent 维度由 turn（用户任务首 turn）与 delegation 记录
         （子任务）承载，本方法只持久化 task 容器自身字段。
@@ -65,11 +74,13 @@ class TaskCrud:
         参数:
             workspace_id: 所属工作区标识（整数 id）。
             title: 任务标题。
-            status: 任务初始状态，允许为 None，缺省时回退为 ``"pending"``。
             task_type: 任务类型，``"user"`` 或 ``"delegation"``，缺省为 ``"user"``。
             parent_task_id: 父任务标识（整数 id），委派子任务必填，用户任务为 None。
-            parent_turn_id: 触发委派的父 turn 标识（整数 id），委派子任务必填，用户任务为 None。
+            parent_run_id: 触发委派的父 turn 标识（整数 id），委派子任务必填，用户任务为 None。
             delegation_id: 关联的委派记录标识（整数 id），委派子任务必填，用户任务为 None。
+            creation_command_id: 触发建任务的命令标识（整数 id），缺省为 None。
+            session: 可选的外部 SQLAlchemy 会话。传入时在本方法内复用该事务（调用方负责提交）；
+                为 None 时由本方法自开事务并自动提交。
 
         返回:
             落库成功的 ``TaskRecord``（含自增分配的 id 与填充的创建 / 更新时间）。
@@ -79,26 +90,64 @@ class TaskCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
-            向 ``tasks`` 表插入一行。
+            向 ``tasks`` 表插入一行；当 ``session`` 为 None 时由本方法提交事务。
         """
-        now = utc_now()
-        effective_status = status or "pending"
-        with self._session_factory.begin() as session:
-            model = TaskModel(
-                workspace_id=workspace_id,
-                title=title,
-                status=effective_status,
-                created_at=to_text(now),
-                updated_at=to_text(now),
-                task_type=task_type,
-                parent_task_id=parent_task_id,
-                parent_turn_id=parent_turn_id,
-                delegation_id=delegation_id,
-                context_usage_used=0,
-            )
-            session.add(model)
-            session.flush()
-            return TaskRecord.from_model(model)
+        if session is None:
+            with self._session_factory.begin() as session:
+                return self._build_and_flush(session, workspace_id, title, task_type,
+                                             parent_task_id, parent_run_id, delegation_id,
+                                             creation_command_id)
+        return self._build_and_flush(session, workspace_id, title, task_type,
+                                     parent_task_id, parent_run_id, delegation_id,
+                                     creation_command_id)
+
+    def _build_and_flush(
+            self,
+            session: Session,
+            workspace_id: int,
+            title: str,
+            task_type: str,
+            parent_task_id: int | None,
+            parent_run_id: int | None,
+            delegation_id: int | None,
+            creation_command_id: str | None,
+    ) -> TaskRecord:
+        """在给定会话中构造并 flush 一条 task 记录。
+
+        参数:
+            session: 目标 SQLAlchemy 会话（已开启的事务）。
+            workspace_id: 所属工作区标识。
+            title: 任务标题。
+            task_type: 任务类型。
+            parent_task_id: 委派父任务标识。
+            parent_run_id: 委派父轮次标识。
+            delegation_id: 委派记录标识。
+            creation_command_id: 触发建任务的命令标识。
+
+        返回:
+            已 flush 的 ``TaskRecord``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 写入失败。
+
+        副作用:
+            在当前事务中插入一行任务；事务提交由调用方或 ``create`` 决定。
+        """
+        model = TaskModel(
+            workspace_id=workspace_id,
+            title=title,
+            created_at=to_text(utc_now()),
+            updated_at=to_text(utc_now()),
+            task_type=task_type,
+            parent_task_id=parent_task_id,
+            parent_run_id=parent_run_id,
+            delegation_id=delegation_id,
+            creation_command_id=creation_command_id,
+            context_usage_used=0,
+        )
+        session.add(model)
+        session.flush()
+        return TaskRecord.from_model(model)
 
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。
@@ -183,34 +232,6 @@ class TaskCrud:
             raise KeyError(task_id)
         return TaskRecord.from_model(row)
 
-    def update_status(self, task_id: int, status: str) -> TaskRecord:
-        """更新 task 状态并刷新更新时间。
-
-        先校验 task 存在（不存在则抛出），再更新状态与 ``updated_at``。
-
-        参数:
-            task_id: 任务标识（整数 id）。
-            status: 新状态值。
-
-        返回:
-            更新后的 ``TaskRecord``。
-
-        异常:
-            KeyError: 如果指定 task 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            更新 ``tasks`` 表中对应行的 status 与 updated_at。
-        """
-        self.get(task_id)
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(TaskModel)
-                .where(TaskModel.id == task_id)
-                .values(status=status, updated_at=to_text(utc_now()))
-            )
-        return self.get(task_id)
-
     def update_context_usage(self, task_id: int, used: int) -> TaskRecord:
         """更新 task 最近一次上下文窗口已用 token 并刷新更新时间。
 
@@ -240,25 +261,6 @@ class TaskCrud:
                 .values(context_usage_used=used, updated_at=to_text(utc_now()))
             )
         return self.get(task_id)
-
-    def has_status(self, task_id: int, status: str) -> bool:
-        """判断 task 当前状态是否等于给定值。
-
-        参数:
-            task_id: 任务标识（整数 id）。
-            status: 待比较的状态值。
-
-        返回:
-            当前状态等于 status 时返回 True，否则 False。
-
-        异常:
-            KeyError: 如果指定 task 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-        return self.get(task_id).status == status
 
     def list_ids_by_workspace(self, workspace_id: int) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。

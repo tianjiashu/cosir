@@ -15,7 +15,8 @@ def main_agent() -> AgentProfile:
         无。
 
     返回:
-        用于主 Agent 的 AgentProfile。这是主Agent，其他均是供主Agent使用的子Agent 或者 隐藏在项目内部的Agent，如上下文压缩。
+        用于主 Agent 的 AgentProfile；其他 profile 是供主 Agent 使用的子 Agent，
+        或隐藏在项目内部的 Agent（如上下文压缩）。
 
     异常:
         无。
@@ -139,17 +140,22 @@ def test_agent() -> AgentProfile:
         role="unit-test-engineer",
         description=(
             """
-            Use this agent when you need to write comprehensive unit tests for existing production code. 
+            Use this agent when you need to write comprehensive unit tests for existing
+            production code.
             This agent strictly focuses on testing only and will not modify any production code.
             <example>
-              Context: User has written a TypeScript utility function and needs comprehensive unit tests.
+              Context: User has written a TypeScript utility function and needs comprehensive
+              unit tests.
               user: "Please write unit tests for src/utils/validation.ts"
-              assistant: "I'll use the unit-test-engineer agent to write comprehensive unit tests for this file"
+              assistant: "I'll use the unit-test-engineer agent to write comprehensive unit
+              tests for this file"
             </example>
             <example>
-              Context: Developer wants to check if existing code has sufficient test coverage and potential bugs.
+              Context: Developer wants to check if existing code has sufficient test coverage
+              and potential bugs.
               user: "Test the new authentication module to find any concurrency or boundary issues"
-              assistant: "Launching unit-test-engineer to perform adversarial testing on the authentication module"
+              assistant: "Launching unit-test-engineer to perform adversarial testing on the
+              authentication module"
             </example>
             """
         ),
@@ -179,9 +185,11 @@ def coder_agent() -> AgentProfile:
         agent_id="code-developer",
         role="code-developer",
         description=(
-            "Use this agent when you need to implement new features, refactor existing code, or add functionality to a project."
+            "Use this agent when you need to implement new features, refactor existing code, "
+            "or add functionality to a project."
             "This agent follows strict coding standards focused on long-term maintainability."
-            "This agent prioritizes structural improvements and mature dependency reuse over minimal, "
+            "This agent prioritizes structural improvements and mature dependency reuse over "
+            "minimal, "
             "patch-style changes when they benefit long-term iteration."
         ),
         allowed_tools=[

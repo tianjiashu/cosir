@@ -1,6 +1,6 @@
 """运行时与工作流策略共享的工作流协议。"""
 
-from typing import ClassVar, Literal, Protocol
+from typing import ClassVar, Protocol
 
 from app.core.runtime.runtime_operations import RuntimeOperations
 
@@ -13,12 +13,11 @@ class AgentWorkflow(Protocol):
     # 隐式契约（历史 L6 缺陷：消费方曾用 getattr(self.workflow,"workflow_id","custom")）。
     workflow_id: ClassVar[str]
 
-    def run(
+    async def run(
         self,
         operations: RuntimeOperations,
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
-        execution_mode: Literal["fresh", "resume"] = "fresh",
     ) -> None:
         """通过一个工作流策略运行一个任务。
 
@@ -28,8 +27,6 @@ class AgentWorkflow(Protocol):
                 注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选的 Langfuse trace 标识；工作流可在终态事件 payload
                 中携带，供前端展示与跳转。未启用 Langfuse 时为 None。
-            execution_mode: 当前 turn 的执行模式；新执行/重跑使用 ``fresh``，checkpoint
-                恢复使用 ``resume``。
 
         生成:
             无。工作流只驱动领域事实写入；Transport 通过 canonical conversation state

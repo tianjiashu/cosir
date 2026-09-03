@@ -43,11 +43,9 @@ class SystemPromptContext:
         cls,
         workspace_root: str | None = None,
     ) -> "SystemPromptContext":
-        """从 Agent 档案和当前轮次创建系统提示词上下文。
+        """从当前本地环境创建系统提示词上下文。
 
         参数:
-            agent_profile: 当前执行主体的 Agent 档案。
-            current_turn: 当前运行轮次；为空时使用空标识占位。
             workspace_root: 当前工作区根路径；为空时使用 ``unknown``。
 
         返回:
