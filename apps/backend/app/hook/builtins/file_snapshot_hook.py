@@ -24,10 +24,10 @@ from app.hook.hook_event import HookEvent
 from app.hook.hook_result import HookResult
 from app.models.file_snapshot_record import FileSnapshotRecord
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
-from app.tools.schemas.tool_observation import ToolObservation
-from app.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
-from app.tools.tool_handler.patch.patch_parser import PatchOperation
-from app.tools.tool_handler.patch.v4a_reverse import (
+from app.core.tools.schemas import ToolObservation
+from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
+from app.core.tools.tool_handler.patch.patch_parser import PatchOperation
+from app.core.tools.tool_handler.patch.v4a_reverse import (
     build_forward_operations,
     reverse_v4a_operation,
 )

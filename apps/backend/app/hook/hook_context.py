@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.hook.hook_event import HookEvent
-from app.tools.schemas.tool_observation import ToolObservation
+from app.core.tools.schemas import ToolObservation
 
 
 @dataclass(frozen=True)

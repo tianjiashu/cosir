@@ -54,7 +54,7 @@ from app.service.depends import (
     get_delegation_service,
     initialize_service_dependencies,
 )
-from app.tools.tool_system import ToolSystem
+from app.core.tools import ToolSystem
 
 
 @asynccontextmanager

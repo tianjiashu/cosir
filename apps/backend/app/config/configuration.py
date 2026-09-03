@@ -25,8 +25,8 @@
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
-from app.tools.tool_registry import ToolRegistry
-from app.tools.tool_system import ToolSystem
+from app.core.tools.tool_registry import ToolRegistry
+from app.core.tools import ToolSystem
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _TOOL_SYSTEM: ToolSystem | None = None

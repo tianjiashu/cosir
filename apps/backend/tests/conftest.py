@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas import ToolExecutionContext
 
 
 @pytest.fixture

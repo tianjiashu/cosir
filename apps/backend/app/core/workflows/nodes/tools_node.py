@@ -33,8 +33,8 @@ from app.core.workflows.nodes.helper.common import (
     emit_run_cancelled,
 )
 from app.models import RuntimeMessage
-from app.service.tool_execution.run_result import ToolRunResult
-from app.tools.schemas import ToolCall, ToolObservation
+from app.core.runtime.tool_execution.run_result import ToolRunResult
+from app.core.tools.schemas import ToolCall, ToolObservation
 from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState

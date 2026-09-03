@@ -32,7 +32,7 @@ from app.models.errors.llm_provider_exceptions import (
     VisionNotSupportedError,
 )
 from app.service.provider.capability_service import CapabilityService
-from app.tools.schemas import ToolCall
+from app.core.tools.schemas import ToolCall
 from app.utils.image_utils import is_image_path
 
 from ...runtime.runtime_operations import RuntimeOperations

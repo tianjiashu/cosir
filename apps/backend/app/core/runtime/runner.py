@@ -24,10 +24,10 @@ from app.service.depends import (
     get_workspace_service,
 )
 from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
-from app.service.tool_execution.tool_trace_recorder import ToolTraceRecorder
+from app.core.runtime.tool_execution import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
-from app.tools.schemas import ToolExecutionContext
-from app.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 
 
 class AgentRuntime:

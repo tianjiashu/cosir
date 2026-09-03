@@ -23,8 +23,8 @@ from app.service.task.change_set.errors import ChangeSetConflictError
 from app.service.task.change_set.query import _require_latest_any
 from app.service.task.change_set.snapshot_patch import snapshots_to_operations
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
-from app.tools.tool_handler.patch.patch_apply import PatchApplyError, apply_all_with_diff
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.core.tools.tool_handler.patch.patch_apply import PatchApplyError, apply_all_with_diff
+from app.core.tools.tool_handler.security.path_resolver import PathResolver
 
 # 进程内 (task_id, path) 互斥锁表：串行化同 path 的 keep/revert，消除「revert 先 apply
 # 磁盘、后 CAS 状态」窗口被并发 keep 插入导致「磁盘已还原而 DB 标 kept」的语义破坏。

@@ -14,7 +14,7 @@ from langchain_core.language_models import BaseChatModel
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import ConversationRunRecord
 from app.models.conversation_run_usage_stats import ConversationRunUsageStats
-from app.tools.schemas import ToolCall
+from app.core.tools.schemas import ToolCall
 
 
 @dataclass

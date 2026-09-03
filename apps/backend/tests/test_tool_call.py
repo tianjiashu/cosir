@@ -1,6 +1,6 @@
 """ToolCall 值对象单元测试，锁定 from_dict 字段兜底口径。"""
 
-from app.tools.schemas import ToolCall
+from app.core.tools.schemas import ToolCall
 
 
 def test_from_dict_full_fields():

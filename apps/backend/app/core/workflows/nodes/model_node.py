@@ -35,7 +35,7 @@ from app.core.workflows.nodes.helper.common import (
     terminal_state,
 )
 from app.core.workflows.nodes.helper.debug_dump import (
-    _dump_merged_chunk_debug,  # noqa: F401  # 测试经 model_node._dump_merged_chunk_debug 访问
+    # noqa: F401  # 测试经 model_node._dump_merged_chunk_debug 访问
     _dump_raw_chunk_debug,
 )
 from app.core.workflows.nodes.helper.invalid_tool_call import (
@@ -45,9 +45,9 @@ from app.core.workflows.nodes.helper.invalid_tool_call import (
 )
 from app.core.workflows.nodes.helper.thinking_extractor import (
     _extract_reasoning_content,
-    _should_strip_reasoning_content,  # noqa: F401  # 测试经 model_node._should_strip_reasoning_content 访问
+    # noqa: F401  # 测试经 model_node._should_strip_reasoning_content 访问
 )
-from app.tools.schemas import ToolCall
+from app.core.tools.schemas import ToolCall
 from app.utils.message_content import content_to_text
 
 from ..react.state import ReactGraphState

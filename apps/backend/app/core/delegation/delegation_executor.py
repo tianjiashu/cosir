@@ -17,12 +17,12 @@ from app.service.delegation.delegation_context import DelegationPolicyContext
 from app.service.delegation.delegation_policy import DelegationPolicy
 from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_conversation_run_service, get_delegation_service
-from app.tools.schemas import ToolExecutionContext, ToolObservation
-from app.tools.schemas.delegate_task_executor import DelegateTaskExecutor
-from app.tools.tool_execute.tool_cancelled import tool_cancelled
-from app.tools.tool_execute.tool_error import tool_error
-from app.tools.tool_execute.tool_success import tool_success
-from app.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.schemas import ToolExecutionContext, ToolObservation
+from app.core.tools.schemas.delegate_task_executor import DelegateTaskExecutor
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
+from app.core.tools.tool_execute.tool_error import tool_error
+from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_models import DelegateTaskArgs
 
 
 class DelegationExecutor(DelegateTaskExecutor):

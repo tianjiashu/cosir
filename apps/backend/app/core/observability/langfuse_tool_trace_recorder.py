@@ -22,12 +22,12 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_payload
 from app.core.observability.langfuse_tracing import _build_langfuse_client, tracing_enabled
-from app.service.tool_execution.tool_trace_recorder import (
-    ToolTraceRecorder,
+from app.core.runtime.tool_execution import ToolTraceRecorder
+from app.core.runtime.tool_execution.tool_trace_recorder import (
     _NullToolSpan,
     _NullToolTraceRecorder,
 )
-from app.tools.schemas import ToolCall, ToolObservation
+from app.core.tools.schemas import ToolCall, ToolObservation
 
 
 class _LangfuseToolSpan:

@@ -16,7 +16,7 @@ from app.service.task.change_set import (
     query_change_set,
     revert_file,
 )
-from app.tools.tool_handler.patch.patch_apply import PatchApplyError
+from app.core.tools.tool_handler.patch.patch_apply import PatchApplyError
 
 
 @app.get("/tasks/{task_id}/changes", response_model=ChangeSetResponse)

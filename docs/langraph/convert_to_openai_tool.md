@@ -226,7 +226,7 @@ result = convert_to_openai_tool(ListDirectoryArgs, strict=True)
 ```python
 import json
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from app.tools.tool_models.list_directory_args import ListDirectoryArgs
+from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
 
 plain = ListDirectoryArgs.model_json_schema()
 func = convert_to_openai_tool(ListDirectoryArgs, strict=True)

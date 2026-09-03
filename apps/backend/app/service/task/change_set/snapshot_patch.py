@@ -8,7 +8,7 @@
 import json
 
 from app.models.file_snapshot_record import FileSnapshotRecord
-from app.tools.tool_handler.patch.patch_parser import (
+from app.core.tools.tool_handler.patch.patch_parser import (
     Hunk,
     HunkLine,
     OperationType,

@@ -13,7 +13,7 @@ from app.models import ConversationRunRecord
 
 if TYPE_CHECKING:
     from app.core.workflows.agent_workflow import AgentWorkflow
-    from app.tools.schemas.tool_definition import ToolDefinition
+    from app.core.tools.schemas.tool_definition import ToolDefinition
 
 
 def _default_workflow() -> AgentWorkflow:
