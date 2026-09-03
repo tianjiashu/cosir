@@ -7,8 +7,10 @@ qwen / kimi 等国内厂商的 OpenAI 兼容端点契合度优于 litellm 多厂
 缺 Key 拦截在构建期之前的解析链完成，构建期不读环境变量、不抛缺 Key 错误。
 """
 
+from dataclasses import replace
 from typing import Any
 
+import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -23,9 +25,9 @@ from app.core.llm_provider.capability.model_capability import (
 from app.core.llm_provider.capability.provider_capability import (
     ProviderCapability,
 )
-from app.service.provider.capability_service import CapabilityService
-from app.models import TaskRecord, ConversationRunRecord
+from app.models import ConversationRunRecord
 from app.service.depends import get_provider_service
+from app.service.provider.capability_service import CapabilityService
 
 __all__ = [
     "build_chat_model",
@@ -104,8 +106,8 @@ def build_chat_model(
         ValueError: ``model_name`` 不在该 provider 能力清单内，或 ``provider.name`` 未注册。
 
     副作用:
-        可能创建可复用的 ``httpx.AsyncClient`` 代理（仅当 ``WEB_PROXY_URL`` 配置）；
-        写入一次 ``llm_model_selected`` info 日志（不输出 api_key 明文）；
+        创建供 OpenAI-compatible SDK 使用的 HTTP 客户端；写入一次 ``llm_model_selected``
+        info 日志（不输出 api_key 明文）；
         ``api_key`` 以 ``SecretStr`` 封装传入（None 时透传 None，由端点决定鉴权）。
     """
 
@@ -145,6 +147,16 @@ def build_chat_model(
         },
     )
 
+    # 显式提供客户端，绕过 langchain-openai 在 Windows 上按 socket options 构造
+    # ``request=`` transport 的兼容性问题（httpx 0.28 已移除该 Client 参数）。
+    resolved_base_url = base_url or ""
+    http_client = httpx.Client(
+        base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
+    )
+    http_async_client = httpx.AsyncClient(
+        base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
+    )
+
     return ChatOpenAI(
         model=model_name,
         # api_key 以 SecretStr 封装传入（langchain 推荐做法，防止明文在 repr/日志泄露）；
@@ -152,7 +164,8 @@ def build_chat_model(
         api_key=chat_api_key,
         base_url=base_url,
         streaming=bool(model_settings.stream),
-        # http_client=http_proxy_client,
+        http_client=http_client,
+        http_async_client=http_async_client,
         stream_usage=True,
         max_retries=Settings.LLM_MAX_RETRIES,
         timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS,
@@ -169,24 +182,42 @@ def build_chat_model(
 
 def resolve_chat_model(
     *,
-    task: TaskRecord | None = None,
-    turn: ConversationRunRecord | None = None,
+    run: ConversationRunRecord | None = None,
     agent_profile: AgentProfile | None = None,
 ) -> BaseChatModel:
     """解析任务/轮次/智能体配置，返回 ``ChatOpenAI`` 实例。
 
+    参数:
+        run: 本次执行的 Conversation Run，提供模型、provider 和推理强度覆盖值。
+        agent_profile: 本次执行的 Agent profile，提供未被 Run 覆盖的模型配置。
+
+    返回:
+        已绑定 provider/model 配置的 ``BaseChatModel``。
+
+    异常:
+        ValueError: profile、Run 或最终 provider/model 配置缺失，或模型不在 provider 能力清单。
+
+    副作用:
+        查询 provider 能力并创建一个供本次 Run 使用的 HTTP client；不修改共享 profile。
+
     以 ``agent_profile`` 的 ``model_name`` / ``provider_id`` / ``model_settings`` 为默认；
-    当 ``turn`` 提供 ``model_name`` / ``provider_id`` / ``reasoning_effort`` 时，运行时覆盖
+    当 ``run`` 提供 ``model_name`` / ``provider_id`` / ``reasoning_effort`` 时，运行时覆盖
     默认值（其余采样参数仍取 agent_profile）。最终委托 ``build_chat_model`` 构建。
     """
-    model_settings: ModelSettings = agent_profile.model_settings
+    if agent_profile is None:
+        raise ValueError("agent_profile is required")
+    if run is None:
+        raise ValueError("run is required")
+    model_settings: ModelSettings = replace(agent_profile.model_settings)
     model_name = agent_profile.model_name
     provider_id = agent_profile.provider_id
-    if turn.model_name is not None:
-        model_name = turn.model_name
-    if turn.provider_id is not None:
-        provider_id = turn.provider_id
-    if turn.reasoning_effort is not None:
-        model_settings.reasoning_effort = turn.reasoning_effort
+    if run.model_name is not None:
+        model_name = run.model_name
+    if run.provider_id is not None:
+        provider_id = run.provider_id
+    if run.reasoning_effort is not None:
+        model_settings.reasoning_effort = run.reasoning_effort
 
+    if provider_id is None or model_name is None:
+        raise ValueError("provider_id and model_name must be configured")
     return build_chat_model(provider_id, model_name, model_settings=model_settings)
