@@ -1,83 +1,18 @@
 """Assistant Transport wire schema。
 
-本模块只描述桌面端与后端之间的 Assistant UI transport 请求结构，不依赖领域模型、
+本模块只描述桌面端与后端之间的 Assistant UI request 请求结构，不依赖领域模型、
 LangGraph 或 storage。wire 字段遵循 assistant-ui 的 camelCase 约定；进入 service 层
 后由 API 边界映射为后端 snake_case 领域参数。
 """
 
 import json
 from hashlib import sha256
-from typing import Annotated, Literal
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
-# text part：用户输入的文本内容块；
-# file part：附件内容块；
-# image part：图片内容块。
-class AssistantTextPart(BaseModel):
-    """校验 Assistant UI 用户消息中的文本 part。"""
-
-    model_config = ConfigDict(extra="ignore")
-
-    type: Literal["text"]
-    text: str
-
-    @field_validator("text")
-    @classmethod
-    def text_must_not_be_blank(cls, value: str) -> str:
-        """拒绝空白文本。
-
-        参数:
-            value: 用户消息中的文本。
-
-        返回:
-            去除首尾空白后的文本。
-
-        异常:
-            ValueError: 当文本为空白时抛出。
-
-        副作用:
-            无。
-        """
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("message text must not be blank")
-        return normalized
-
-
-class AssistantUserMessage(BaseModel):
-    """校验 Assistant UI 的用户消息。"""
-
-    model_config = ConfigDict(extra="ignore")
-
-    id: str | None = None
-    role: Literal["user"]
-    parts: list[AssistantTextPart] = Field(min_length=1, max_length=32)
-
-
-class AddMessageCommand(BaseModel):
-    """校验首版支持的 ``add-message`` 命令。"""
-
-    model_config = ConfigDict(extra="ignore")
-
-    type: Literal["add-message"]
-    commandId: str = Field(min_length=1, max_length=128)
-    message: AssistantUserMessage
-    parentId: str | None = None
-    sourceId: str | None = None
-
-
-class CustomCommand(BaseModel):
-    """保留 Assistant Transport 扩展命令的显式、可审计边界。"""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: Literal["custom"]
-    commandId: str = Field(min_length=1, max_length=128)
-    name: str = Field(min_length=1, max_length=128)
-    payload: object | None = None
-
+from app.assistant_transport.request.command.add_message_command import AddMessageCommand
+from app.assistant_transport.request.command.custom_command import CustomCommand
 
 AssistantCommand = Annotated[
     AddMessageCommand | CustomCommand,
@@ -91,13 +26,15 @@ class AssistantTransportRequest(BaseModel):
     命令数组由服务端按顺序幂等处理；对话历史由 canonical facts 重建。
     """
 
-    model_config = ConfigDict(extra="ignore")
+    # Transport 请求只接受当前契约字段；旧的状态游标不得再被静默吞掉。
+    model_config = ConfigDict(extra="forbid")
 
     commands: list[AssistantCommand] = Field(min_length=1, max_length=32)
-    # Transport 线程身份与领域 Task 一一对应，统一使用 ``task-{taskId}``。
-    threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
-    taskId: int = Field(ge=1)
-    stateRevision: int | None = Field(default=None, ge=0)
+    # 已有 task 使用 ``task-{taskId}``；新对话尚无 task/thread 身份，使用
+    # workspaceId 作为创建目标，响应头返回新 task id 后再进入同一 runtime。
+    threadId: str | None = Field(default=None, pattern=r"^task-[1-9][0-9]*$")
+    taskId: int | None = Field(default=None, ge=1)
+    workspaceId: int | None = Field(default=None, ge=1)
     providerId: int | None = Field(default=None, ge=1)
     modelName: str | None = None
     reasoningEffort: str | None = Field(default=None)
@@ -114,7 +51,10 @@ class AssistantTransportRequest(BaseModel):
         - ``commands`` 内 ``commandId`` 必须唯一；
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
-        - ``custom`` 命令尚未绑定领域处理器，直接拒绝。
+        - ``custom`` 命令尚未绑定领域处理器，直接拒绝；
+        - 含 ``add-message`` 时 ``providerId`` 与 ``modelName`` 必填且 ``modelName``
+          非空（启动对话必须确定执行上下文，原 service 内的同等校验已前移至此）；
+        - 新建对话（``taskId is None``）必须提供 ``workspaceId`` 作为创建目标。
 
         参数:
             无；约束字段直接取自当前请求模型。
@@ -146,7 +86,14 @@ class AssistantTransportRequest(BaseModel):
                 message="commands 内 commandId 必须唯一",
                 retryable=False,
             )
-        if self.threadId != f"task-{self.taskId}":
+        if self.taskId is None and self.threadId is not None:
+            raise TransportRequestError(
+                status_code=400,
+                code="THREAD_WITHOUT_TASK",
+                message="没有 taskId 时不能提供 threadId",
+                retryable=False,
+            )
+        if self.taskId is not None and self.threadId != f"task-{self.taskId}":
             raise TransportRequestError(
                 status_code=409,
                 code="THREAD_TASK_MISMATCH",
@@ -170,6 +117,28 @@ class AssistantTransportRequest(BaseModel):
                 message="custom 命令尚未绑定领域处理器",
                 retryable=False,
             )
+        # 首版运行模型在启动对话时必须同时确定厂商与模型，二者构成执行上下文；
+        # 缺失其一会让 Turn 无法绑定执行器，属纯 wire 契约约束，前移至此。
+        has_message = any(
+            isinstance(command, AddMessageCommand) for command in self.commands
+        )
+        if has_message and (
+            self.providerId is None or self.modelName is None or not self.modelName.strip()
+        ):
+            raise TransportRequestError(
+                status_code=400,
+                code="MODEL_SELECTION_REQUIRED",
+                message="启动对话必须同时提供 providerId 与 modelName",
+                retryable=False,
+            )
+        # 没有 taskId 即新建对话，必须以 workspaceId 作为创建目标。
+        if self.taskId is None and self.workspaceId is None:
+            raise TransportRequestError(
+                status_code=400,
+                code="CONVERSATION_TARGET_REQUIRED",
+                message="新对话必须提供 workspaceId",
+                retryable=False,
+            )
         return self
 
     def payload_hash(self) -> str:
@@ -188,8 +157,8 @@ class AssistantTransportRequest(BaseModel):
             无。
 
         说明:
-            ``commandId`` 是幂等身份，``taskId`` 是命令作用域，``threadId`` 与
-            ``stateRevision`` 是 Transport 元数据，均不参与载荷 hash。消息、父命令
+            ``commandId`` 是幂等身份，``taskId`` / ``workspaceId`` 是路由身份，``threadId`` 是
+            Transport 元数据，不参与载荷 hash。消息、父命令
             关系、来源和模型选择会改变实际执行语义，必须参与 hash。
         """
         payload = {
