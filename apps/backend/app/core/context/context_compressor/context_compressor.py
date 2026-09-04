@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from app.models import RuntimeMessage
+from langchain_core.messages import BaseMessage
 
 
 class ContextCompressor(Protocol):
@@ -14,7 +14,7 @@ class ContextCompressor(Protocol):
         compact: 将输入消息列表压缩为等价但更短的列表。
     """
 
-    def compact(self, messages: list[RuntimeMessage]) -> list[RuntimeMessage]:
+    def compact(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         """将消息列表压缩为更短的等价列表。
 
         参数:

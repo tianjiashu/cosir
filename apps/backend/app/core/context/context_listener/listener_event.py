@@ -16,8 +16,8 @@ class ContextEventType(str, Enum):
 class ListenerEvent:
     """运行时上下文变化事件。
 
-    以**上下文条目**而非裸消息作为变更载体：``ContextEntry`` 除 ``RuntimeMessage``
-    外还携带 ``run_id`` 归属，压缩等需要按 turn 切分/保留上下文的 listener 才能工作。
+    以**上下文条目**而非裸消息作为变更载体：``ContextEntry`` 除 LangChain 消息
+    外还携带 ``run_id`` 归属，压缩等需要按 run 切分/保留上下文的 listener 才能工作。
     只需消息的 listener 自行从条目派生消息，事件不维护两份等价快照（避免二者不同步）。
 
     职责边界：只承载「发生了什么变化」的只读快照；不负责变更的落库，也不接受
@@ -44,4 +44,3 @@ class ListenerEvent:
     entries: list[ContextEntry]
     usage: int
     total_tokens: int
-    allow_write_event_failure: bool = False

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.core.context.context_entry import ContextEntry
+from langchain_core.messages import BaseMessage
+
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
-from app.models import RuntimeMessage
+from app.core.context.context_entry import ContextEntry
+from app.utils.message_content import content_to_text
 
 
 class ContextUsageComputeListener(ContextListener):
@@ -27,7 +29,6 @@ class ContextUsageComputeListener(ContextListener):
         self,
         update_context_usage: Callable[[int, int], None],
         task_id: int,
-        write_event: Callable[..., object] | None = None,
     ) -> None:
         """构造订阅者，注入事件写入与占用回写回调及 task 标识。
 
@@ -44,7 +45,6 @@ class ContextUsageComputeListener(ContextListener):
         副作用:
             保存事件写入回调、task 占用回写回调与 task 标识。
         """
-        del write_event
         self._update_context_usage = update_context_usage
         self.task_id = task_id
 
@@ -102,17 +102,16 @@ class ContextUsageComputeListener(ContextListener):
         return sum(self._message_tokens(entry.message) for entry in entries)
 
     @staticmethod
-    def _message_tokens(message: RuntimeMessage) -> int:
+    def _message_tokens(message: BaseMessage) -> int:
         """估算单条消息的 token 占用。
 
-        委托 :meth:`RuntimeMessage.estimate_tokens` 统计（含 assistant 消息的
-        ``tool_calls`` 序列化部分）；非 ``RuntimeMessage`` 元素返回 0，不抛。
+        基于消息正文和 assistant 的 ``tool_calls`` 序列化内容估算。
 
         参数:
             message: 待估算的运行时消息。
 
         返回:
-            单条消息的 token 占用；非 ``RuntimeMessage`` 返回 0。
+            单条消息的 token 占用。
 
         异常:
             无。
@@ -120,6 +119,8 @@ class ContextUsageComputeListener(ContextListener):
         副作用:
             无。
         """
-        if not isinstance(message, RuntimeMessage):
-            return 0
-        return message.estimate_tokens()
+        tool_calls = getattr(message, "tool_calls", None)
+        text = content_to_text(message.content)
+        if tool_calls:
+            text += str(tool_calls)
+        return max(1, len(text) // 4) if text else 0
