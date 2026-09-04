@@ -516,11 +516,12 @@ def _setup_attempt(self) -> None:
         output_dir=self._output_dir / f"attempt_{self._i_attempt}",
     )
 
+
 # sweagent/agent/agents.py:321-327
 def _next_attempt(self) -> None:
     """Switch to the next attempt."""
     self._i_attempt += 1
-    self._attempt_data.append(self._agent.get_trajectory_data())
+    self._attempt_data.create(self._agent.get_trajectory_data())
 ```
 
 </details>

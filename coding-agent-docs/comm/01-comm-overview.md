@@ -490,14 +490,14 @@ flowchart TD
 ```python
 # 伪代码：所有 Code Agent 的本质结构
 class AgentLoop:
-    context: List[Message]      # 历史消息
-    tools: List[Tool]           # 可用工具列表
-    llm: LLMClient              # LLM 客户端
-    max_steps: int              # 最大步数限制
+    context: List[Message]  # 历史消息
+    tools: List[Tool]  # 可用工具列表
+    llm: LLMClient  # LLM 客户端
+    max_steps: int  # 最大步数限制
 
     async def run(self, user_input: str) -> str:
         """主循环入口"""
-        self.context.append(UserMessage(user_input))
+        self.context.create(UserMessage(user_input))
         step_count = 0
 
         while step_count < self.max_steps:
@@ -508,7 +508,7 @@ class AgentLoop:
                 # 执行工具
                 for call in response.tool_calls:
                     result = await self.tools.execute(call)
-                    self.context.append(ToolResult(result))
+                    self.context.create(ToolResult(result))
                 step_count += 1
             else:
                 # 无工具调用 = 任务完成

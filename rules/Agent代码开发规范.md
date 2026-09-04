@@ -92,6 +92,13 @@
 
 - 上调下，下不调上，禁止跳层。Controller 不写业务逻辑，Service 不写 SQL。
 
+### coding-agent Assistant Transport 目录约定
+
+- `apps/backend/app/assistant_transport/` 是 Assistant Transport 协议相关实现的固定归属目录。
+- Assistant Transport 的请求/响应模型、`set` / `append-text` 等协议操作、状态流组装、传输订阅，以及为保证传输状态发布语义所需的事务协调代码，统一放在 `apps/backend/app/assistant_transport/` 下按职责拆分。
+- `core`、普通领域 `service`、`models` 和 `storage` 不得依赖 Assistant UI 类型或协议细节；它们只处理领域事实、运行状态和持久化。
+- Assistant Transport 可以调用领域服务和存储端口，但不得把 Transport 状态副本反向写成第二事实源，也不得在传输层之外复制协议投影逻辑。
+
 ## 六、可排查日志
 
 **没有日志文件，就没有可维护系统。** 任何可运行系统都必须能在出问题后通过日志定位：发生了什么、发生在哪、影响了谁、下一步该查什么。

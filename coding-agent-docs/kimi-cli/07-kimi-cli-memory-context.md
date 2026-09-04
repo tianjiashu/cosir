@@ -410,13 +410,13 @@ def prepare(self, messages: Sequence[Message]) -> PrepareResult:
     # 构建压缩输入消息
     compact_message = Message(role="user", content=[])
     for i, msg in enumerate(to_compact):
-        compact_message.content.append(
+        compact_message.content.create(
             TextPart(text=f"## Message {i + 1}\nRole: {msg.role}\nContent:\n")
         )
         compact_message.content.extend(
             part for part in msg.content if not isinstance(part, ThinkPart)
         )
-    compact_message.content.append(TextPart(text="\n" + prompts.COMPACT))
+    compact_message.content.create(TextPart(text="\n" + prompts.COMPACT))
 ```
 
 ---
@@ -733,7 +733,7 @@ async def restore(self) -> bool:
                 self._next_checkpoint_id = line_json["id"] + 1
             else:
                 message = Message.model_validate(line_json)
-                self._history.append(message)
+                self._history.create(message)
     return True
 ```
 

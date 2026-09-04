@@ -2,9 +2,9 @@
  * 后端 Assistant Transport 协议约定的 state 结构（传输契约类型）。
  *
  * 后端以「增量构建（标准流式）」方式同步此 state：
- * 1. 先通过 `update-state` 一次性设置完整的 `messages` 数组（含历史 + 本轮
+ * 1. 先通过 `set` 一次性设置完整的 `messages` 数组（含历史 + 本轮
  *    用户消息 + 空的 assistant 占位消息）；
- * 2. 随后用 `append-text` / `part-start` 增量填充 assistant 消息的内容。
+ * 2. 随后用 `append-text` 增量填充 assistant 消息的内容。
  *
  * `content` 是消息的 part 数组，支持文本与工具调用两种 part。该类型必须与
  * 后端协议层（apps/backend）产出的 wire 帧严格对齐，改动需前后端同步。
@@ -18,7 +18,7 @@ import type { MessageStatus } from "@assistant-ui/core";
 /**
  * 文本 part：Transport 协议中的纯文本片段。
  *
- * 字段必须与后端 `ConversationStateService.build_messages` 投影出的 text part
+ * 字段必须与后端 snapshot 投影出的 text part
  * 严格对齐：`text` 为正文，`status` 为 part 级运行态（`running` / `complete`）。
  */
 export type TransportTextPart = {
@@ -32,8 +32,7 @@ export type TransportTextPart = {
  * 推理 part：Transport 协议中的模型思考过程片段。
  *
  * 后端经 `ConversationMutationWriter.append_assistant_reasoning` 把推理文本写入
- * `ConversationMessagePartModel(part_type="reasoning", text=...)`，再由
- * `ConversationStateService` 投影为 `{ type: "reasoning", status, text }`，与
+ * snapshot，再由 snapshot 投影为 `{ type: "reasoning", status, text }`，与
  * assistant-ui 的 `ReasoningMessagePart` 字段同构（`unstable_summary` 可选，后端
  * 当前不产，故前端契约亦标可选）。
  */
@@ -50,7 +49,7 @@ export type TransportReasoningPart = {
 /**
  * 工具调用 part：Transport 协议中的工具调用片段。
  *
- * 字段对齐后端 `ConversationToolCallModel` 投影：`toolCallId` / `toolName` /
+ * 字段对齐后端 snapshot tool-call part：`toolCallId` / `toolName` /
  * `status` / `args`（解析后的参数对象）/ `result`（执行结果）/ `error`（失败时的
  * 错误文本，成功或未完成时为 undefined）。后端不产 `argsText` 原始 JSON 流，故本
  * 契约以 `args` 为权威参数通道；converter 在需要时从 `args` 派生 `argsText` 以贴合
@@ -70,11 +69,10 @@ export type TransportToolCallPart = {
   status?:
     | "pending"
     | "running"
-    | "requires-action"
     | "completed"
     | "failed"
     | "cancelled"
-    | "complete";
+    ;
   /** 后端在失败时提供的稳定错误标识（可选）。 */
   errorCode?: string;
 };
@@ -114,6 +112,8 @@ export type TransportState = {
   messages: TransportMessage[];
   /** 运行时元信息；首屏历史场景下 runId 为 null、status 为 idle。 */
   run: TransportRun;
+  /** 审批预留；当前固定为空对象。 */
+  approvals: Record<string, never>;
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;
 };

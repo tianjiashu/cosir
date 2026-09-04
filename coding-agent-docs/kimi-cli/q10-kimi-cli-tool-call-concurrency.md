@@ -601,7 +601,7 @@ async def handle(self, tool_call: ToolCall) -> HandleResult:
 ```python
 # kimi-cli/packages/kosong/src/kosong/__init__.py:144-155
 async def on_tool_call(tool_call: ToolCall):
-    tool_calls.append(tool_call)
+    tool_calls.create(tool_call)
     result = toolset.handle(tool_call)
 
     if isinstance(result, ToolResult):

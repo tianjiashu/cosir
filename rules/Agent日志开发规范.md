@@ -156,6 +156,7 @@ except Exception as exc:
 ```
 
 ### 禁止
+
 ```python
 # ❌ f-string 拼 event：不可聚合、破坏检索
 log.error(f"写任务 {task_id} 失败: {exc}")
@@ -163,9 +164,9 @@ log.error(f"写任务 {task_id} 失败: {exc}")
 print("something failed")
 # ❌ 空 catch
 except Exception:
-    pass
+pass
 # ❌ 在 extra 里塞 task_id / run_id 等独立关联键（应只留 trace_id，实体 ID 值放 data/msg）
-log.info("task_created", extra={"task_id": task.task_id, ...})
+log.info("task_created", extra={"task_id": task.current_task_id, ...})
 # ❌ 把可读描述塞进 event（event 必须稳定英文，描述走 msg）
 log.info("新任务已创建", extra={...})
 ```

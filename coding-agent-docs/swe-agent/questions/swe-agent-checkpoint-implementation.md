@@ -333,7 +333,7 @@ def add_step_to_trajectory(self, step: StepOutput) -> None:
 
     每步执行后自动调用，记录完整的执行上下文
     """
-    self.trajectory.append({
+    self.trajectory.create({
         "action": step.action,
         "observation": step.observation,
         "response": step.response,

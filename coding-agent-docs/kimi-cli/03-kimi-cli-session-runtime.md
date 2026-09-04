@@ -703,7 +703,7 @@ async def restore(self) -> bool:
                 self._next_checkpoint_id = line_json["id"] + 1
                 continue
             message = Message.model_validate(line_json)
-            self._history.append(message)
+            self._history.create(message)
 
     return True
 ```

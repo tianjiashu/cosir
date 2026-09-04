@@ -761,7 +761,7 @@ class MCPServerInfo:
 ```python
 # src/kimi_cli/soul/toolset.py:203-325
 async def load_mcp_tools(
-    self, mcp_configs: list[MCPConfig], runtime: Runtime, in_background: bool = True
+        self, mcp_configs: list[MCPConfig], runtime: Runtime, in_background: bool = True
 ) -> None:
     """Load MCP tools from specified MCP configs."""
     import fastmcp
@@ -778,7 +778,7 @@ async def load_mcp_tools(
             return False
 
     async def _connect_server(
-        server_name: str, server_info: MCPServerInfo
+            server_name: str, server_info: MCPServerInfo
     ) -> tuple[str, Exception | None]:
         if server_info.status != "pending":
             return server_name, None
@@ -787,7 +787,7 @@ async def load_mcp_tools(
         try:
             async with server_info.client as client:
                 for tool in await client.list_tools():
-                    server_info.tools.append(
+                    server_info.tools.create(
                         MCPTool(server_name, tool, client, runtime=runtime)
                     )
 
