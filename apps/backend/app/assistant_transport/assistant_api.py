@@ -10,8 +10,6 @@ from typing import Any, NoReturn, cast
 from assistant_stream import create_run
 from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import Depends, HTTPException
-
-from app.api.dependencies import get_runtime
 from app.app import app
 from app.assistant_transport.request import (
     AddMessageCommand,
@@ -232,10 +230,6 @@ async def assistant_transport_state(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     state = snapshot_service.ensure_state_snapshot(task_id)
-    runs = run_service.list_runs_for_task(task_id)
-    if runs:
-        latest = runs[-1]
-        state = snapshot_service.reconcile_run(task_id, latest.id, latest.status) or state
     return cast(dict[str, object], state)
 
 

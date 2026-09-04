@@ -11,14 +11,12 @@ from typing import Literal, cast
 from langchain_core.messages import AIMessage
 
 from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationStateMutation,
     ConversationTaskSnapshotService,
-    find_assistant_message_index,
 )
+from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateMessage,
     ConversationStateSnapshot,
-    empty_snapshot,
 )
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -66,29 +64,26 @@ class ConversationMutationWriter:
 
         if not text:
             raise ValueError("text must not be empty")
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        index, part_index = _find_message_part(state, message_id, "text")
-        self._snapshots.mutate(
-            task_id,
-            [
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            index, part_index = _find_message_part(state, message_id, "text")
+            return [
                 ConversationStateMutation(
                     "append-text", ("messages", index, "parts", part_index, "text"), text
                 )
-            ],
-        )
+            ]
+
+        self._snapshots.apply_planned(task_id, plan)
         return SimpleNamespace(id=message_id)
 
     def create_run_baseline(self, task_id: int, run_id: int, input_text: str) -> None:
         """为 Run 创建 snapshot user/assistant 消息基线。"""
 
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        if any(message.get("runId") == run_id for message in state["messages"]):
-            return
         created_at = datetime.now(UTC).isoformat()
-        offset = len(state["messages"])
-        self._snapshots.mutate(
-            task_id,
-            [
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            if any(message.get("runId") == run_id for message in state["messages"]):
+                return []
+            offset = len(state["messages"])
+            return [
                 ConversationStateMutation(
                     "set", ("messages", offset), _message(
                         f"user-{run_id}", run_id, "user", "completed", created_at, input_text, "completed"
@@ -101,8 +96,9 @@ class ConversationMutationWriter:
                 ),
                 ConversationStateMutation("set", ("run", "runId"), run_id),
                 ConversationStateMutation("set", ("run", "status"), "pending"),
-            ],
-        )
+            ]
+
+        self._snapshots.apply_planned(task_id, plan)
 
     def append_assistant_text_for_run(self, task_id: int, run_id: int, text: str) -> object:
         """向当前 Run 的 assistant text part 追加 chunk。"""
@@ -119,15 +115,18 @@ class ConversationMutationWriter:
             raise ValueError("unsupported assistant part")
         if not text:
             raise ValueError("text must not be empty")
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        index, part_index = _find_message_part(
-            state, self._message_id_for_state(state, run_id), part_type
-        )
         kind: Literal["append-text"] = "append-text"
-        self._snapshots.mutate(
-            task_id,
-            [ConversationStateMutation(kind, ("messages", index, "parts", part_index, "text"), text)],
-        )
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            index, part_index = _find_message_part(
+                state, self._message_id_for_state(state, run_id), part_type
+            )
+            return [
+                ConversationStateMutation(
+                    kind, ("messages", index, "parts", part_index, "text"), text
+                )
+            ]
+
+        self._snapshots.apply_planned(task_id, plan)
         return SimpleNamespace(id=part_index)
 
     def create_ai_message_with_tool_calls(
@@ -158,44 +157,34 @@ class ConversationMutationWriter:
             负责。
         """
 
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        assistant_id = self._message_id_for_state(state, run_id)
-        message_index, assistant = _find_message(state, assistant_id)
-        existing_call_ids = {
-            str(part.get("toolCallId"))
-            for part in assistant["parts"]
-            if isinstance(part, dict) and part.get("type") == "tool-call"
-        }
-        mutations: list[ConversationStateMutation] = []
-        next_part_index = len(assistant["parts"])
-        for call_id, tool_name, arguments in tool_calls:
-            if not call_id:
-                raise ValueError("tool_call_id must not be empty")
-            if call_id in existing_call_ids:
-                continue
-            if not isinstance(arguments, dict):
-                raise ValueError("tool arguments must be an object")
-            mutations.append(
-                ConversationStateMutation(
-                    "set",
-                    ("messages", message_index, "parts", next_part_index),
-                    {
-                        "type": "tool-call",
-                        "toolCallId": call_id,
-                        "toolName": tool_name,
-                        "status": "pending",
-                        "args": arguments,
-                        "result": None,
-                        "error": None,
-                        "isError": False,
-                        "approvalRequestId": None,
-                    },
-                )
-            )
-            existing_call_ids.add(call_id)
-            next_part_index += 1
-        if mutations:
-            self._snapshots.mutate(task_id, mutations)
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            assistant_id = self._message_id_for_state(state, run_id)
+            message_index, assistant = _find_message(state, assistant_id)
+            existing_call_ids = {
+                str(part.get("toolCallId"))
+                for part in assistant["parts"]
+                if isinstance(part, dict) and part.get("type") == "tool-call"
+            }
+            mutations: list[ConversationStateMutation] = []
+            next_part_index = len(assistant["parts"])
+            for call_id, tool_name, arguments in tool_calls:
+                if not call_id:
+                    raise ValueError("tool_call_id must not be empty")
+                if call_id in existing_call_ids:
+                    continue
+                if not isinstance(arguments, dict):
+                    raise ValueError("tool arguments must be an object")
+                mutations.append(ConversationStateMutation(
+                    "set", ("messages", message_index, "parts", next_part_index),
+                    {"type": "tool-call", "toolCallId": call_id, "toolName": tool_name,
+                     "status": "pending", "args": arguments, "result": None,
+                     "error": None, "isError": False, "approvalRequestId": None},
+                ))
+                existing_call_ids.add(call_id)
+                next_part_index += 1
+            return mutations
+
+        self._snapshots.apply_planned(task_id, plan)
 
     def create_tool_call(
         self,
@@ -211,32 +200,26 @@ class ConversationMutationWriter:
 
         if not tool_call_id:
             raise ValueError("tool_call_id must not be empty")
-        state = self._snapshots.load(task_id) or empty_snapshot()
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            assistant_id = message_id or self._message_id_for_state(state, run_id)
+            index, _ = _find_message(state, assistant_id)
+            if any(isinstance(part, dict) and part.get("type") == "tool-call"
+                   and part.get("toolCallId") == tool_call_id
+                   for part in state["messages"][index]["parts"]):
+                return []
+            part_index = len(state["messages"][index]["parts"])
+            part = {"type": "tool-call", "toolCallId": tool_call_id, "toolName": tool_name,
+                    "status": "pending", "args": arguments if isinstance(arguments, dict) else {},
+                    "result": None, "error": None, "isError": False, "approvalRequestId": None}
+            return [ConversationStateMutation("set", ("messages", index, "parts", part_index), part)]
+
+        change = self._snapshots.apply_planned(task_id, plan)
+        state = change.state
         assistant_id = message_id or self._message_id_for_state(state, run_id)
         index, _ = _find_message(state, assistant_id)
-        if any(
-            isinstance(part, dict)
-            and part.get("type") == "tool-call"
-            and part.get("toolCallId") == tool_call_id
-            for part in state["messages"][index]["parts"]
-        ):
+        if not change.mutations:
             return SimpleNamespace(tool_call_id=tool_call_id), SimpleNamespace(id=part_id)
-        part_index = len(state["messages"][index]["parts"])
-        part = {
-            "type": "tool-call",
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
-            "status": "pending",
-            "args": arguments if isinstance(arguments, dict) else {},
-            "result": None,
-            "error": None,
-            "isError": False,
-            "approvalRequestId": None,
-        }
-        self._snapshots.mutate(
-            task_id,
-            [ConversationStateMutation("set", ("messages", index, "parts", part_index), part)],
-        )
+        part_index = len(state["messages"][index]["parts"]) - 1
         return SimpleNamespace(
             tool_call_id=tool_call_id, part_id=f"{assistant_id}-part-{part_index}"
         ), SimpleNamespace(id=f"{assistant_id}-part-{part_index}")
@@ -248,9 +231,6 @@ class ConversationMutationWriter:
 
         if status not in {"pending", "running", "completed", "failed", "cancelled"}:
             raise ValueError("unsupported tool status")
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        index, part_index = _find_tool(state, tool_call_id)
-        current = state["messages"][index]["parts"][part_index]["status"]
         allowed = {
             "pending": {"pending", "running", "failed", "cancelled"},
             "running": {"running", "completed", "failed", "cancelled"},
@@ -258,12 +238,16 @@ class ConversationMutationWriter:
             "failed": {"failed"},
             "cancelled": {"cancelled"},
         }
-        if status not in allowed[current]:
-            raise ValueError(f"invalid tool transition {current} -> {status}")
-        self._snapshots.mutate(
-            task_id,
-            [ConversationStateMutation("set", ("messages", index, "parts", part_index, "status"), status)],
-        )
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            index, part_index = _find_tool(state, tool_call_id)
+            current = state["messages"][index]["parts"][part_index]["status"]
+            if status not in allowed[current]:
+                raise ValueError(f"invalid tool transition {current} -> {status}")
+            return [ConversationStateMutation(
+                "set", ("messages", index, "parts", part_index, "status"), status
+            )]
+
+        self._snapshots.apply_planned(task_id, plan)
         return SimpleNamespace(tool_call_id=tool_call_id, status=status)
 
     def complete_tool_call_by_external_id(
@@ -280,16 +264,14 @@ class ConversationMutationWriter:
 
         if status not in {"completed", "failed", "cancelled"}:
             raise ValueError("tool completion requires a terminal status")
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        index, part_index = _find_tool(state, tool_call_id)
-        current = state["messages"][index]["parts"][part_index]["status"]
-        if current in {"completed", "failed", "cancelled"}:
-            if current != status:
-                raise ValueError(f"terminal tool status conflict: {current} vs {status}")
-            return SimpleNamespace(tool_call_id=tool_call_id, status=current)
-        self._snapshots.mutate(
-            task_id,
-            [
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            index, part_index = _find_tool(state, tool_call_id)
+            current = state["messages"][index]["parts"][part_index]["status"]
+            if current in {"completed", "failed", "cancelled"}:
+                if current != status:
+                    raise ValueError(f"terminal tool status conflict: {current} vs {status}")
+                return []
+            return [
                 ConversationStateMutation(
                     "set", ("messages", index, "parts", part_index, "status"), status
                 ),
@@ -305,31 +287,81 @@ class ConversationMutationWriter:
                     "set", ("messages", index, "parts", part_index, "isError"),
                     status == "failed",
                 ),
-            ],
-        )
+            ]
+        change = self._snapshots.apply_planned(task_id, plan)
+        if not change.mutations:
+            return SimpleNamespace(tool_call_id=tool_call_id, status=status)
         return SimpleNamespace(tool_call_id=tool_call_id, status=status)
 
     def settle_open_tool_calls(self, run_id: int, status: str, reason: str) -> None:
         """将指定 Run 遗留的 pending/running tools 收束为 failed/cancelled。"""
 
         task_id = self._task_id_for_run(run_id)
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        ids = [
-            str(cast(dict[str, object], part)["toolCallId"])
-            for message in state["messages"]
-            if message.get("runId") == run_id
-            for part in message["parts"]
-            if isinstance(part, dict)
-            and part.get("type") == "tool-call"
-            and part.get("status") in {"pending", "running"}
-        ]
         target = "cancelled" if status == "cancelled" else "failed"
-        for tool_call_id in ids:
-            self.complete_tool_call_by_external_id(
-                task_id, tool_call_id, None, status=target, error_text=reason, run_id=run_id
-            )
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            mutations: list[ConversationStateMutation] = []
+            for index, message in enumerate(state["messages"]):
+                if message.get("runId") != run_id:
+                    continue
+                for part_index, part in enumerate(message["parts"]):
+                    if not (isinstance(part, dict) and part.get("type") == "tool-call"):
+                        continue
+                    if part.get("status") not in {"pending", "running"}:
+                        continue
+                    base = ("messages", index, "parts", part_index)
+                    mutations.extend([
+                        ConversationStateMutation("set", base + ("status",), target),
+                        ConversationStateMutation("set", base + ("result",), None),
+                        ConversationStateMutation("set", base + ("error",), reason),
+                        ConversationStateMutation("set", base + ("isError",), target == "failed"),
+                    ])
+            return mutations
 
-    def recover_interrupted_run(self, run_id: int) -> object | None:
+        self._snapshots.apply_planned(task_id, plan)
+
+    def set_run_snapshot(
+        self, task_id: int, run_id: int, status: str, end_reason: str | None = None
+    ) -> None:
+        """只更新指定 Run 在 Transport snapshot 中的展示状态。"""
+
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            mutations = [ConversationStateMutation("set", ("run", "status"), status)]
+            index = find_assistant_message_index(state, run_id)
+            if index is not None:
+                mutations.extend([
+                    ConversationStateMutation("set", ("messages", index, "status"), status),
+                    ConversationStateMutation("set", ("messages", index, "endReason"), end_reason),
+                ])
+            return mutations
+
+        self._snapshots.apply_planned(task_id, plan)
+
+    def recover_run_snapshot(self, task_id: int, run_id: int) -> None:
+        """只收束 backend 重启后 snapshot 中遗留的运行展示状态。"""
+
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            mutations: list[ConversationStateMutation] = []
+            index = find_assistant_message_index(state, run_id)
+            if index is not None:
+                for part_index, part in enumerate(state["messages"][index]["parts"]):
+                    if isinstance(part, dict) and part.get("type") == "tool-call" \
+                            and part.get("status") in {"pending", "running"}:
+                        base = ("messages", index, "parts", part_index)
+                        mutations.extend([
+                            ConversationStateMutation("set", base + ("status",), "failed"),
+                            ConversationStateMutation("set", base + ("error",), "execution_interrupted"),
+                            ConversationStateMutation("set", base + ("isError",), True),
+                        ])
+                mutations.extend([
+                    ConversationStateMutation("set", ("messages", index, "status"), "failed"),
+                    ConversationStateMutation("set", ("messages", index, "endReason"), "backend_restarted"),
+                ])
+            mutations.append(ConversationStateMutation("set", ("run", "status"), "failed"))
+            return mutations
+
+        self._snapshots.apply_planned(task_id, plan)
+
+    def recover_interrupted_run_legacy_removed(self, run_id: int) -> object | None:
         """收束崩溃遗留 Run、snapshot tools 与 context tool messages。
 
         Run 终态经 run CRUD 独立事务原子更新，snapshot 收敛经 snapshot owner 单独提交。
@@ -360,47 +392,27 @@ class ConversationMutationWriter:
         if record is None:
             return None
 
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        mutations: list[ConversationStateMutation] = []
-        assistant_index = find_assistant_message_index(state, run_id)
-        if assistant_index is not None:
-            for part_index, part in enumerate(state["messages"][assistant_index]["parts"]):
-                if (
-                    isinstance(part, dict)
-                    and part.get("type") == "tool-call"
-                    and part.get("status") in {"pending", "running"}
-                ):
-                    mutations.extend(
-                        [
-                            ConversationStateMutation(
-                                "set",
-                                ("messages", assistant_index, "parts", part_index, "status"),
-                                "failed",
-                            ),
-                            ConversationStateMutation(
-                                "set",
-                                ("messages", assistant_index, "parts", part_index, "error"),
-                                "execution_interrupted",
-                            ),
-                            ConversationStateMutation(
-                                "set",
-                                ("messages", assistant_index, "parts", part_index, "isError"),
-                                True,
-                            ),
-                        ]
-                    )
-            mutations.extend(
-                [
-                    ConversationStateMutation(
-                        "set", ("messages", assistant_index, "status"), "failed"
-                    ),
-                    ConversationStateMutation(
-                        "set", ("messages", assistant_index, "endReason"), "backend_restarted"
-                    ),
-                ]
-            )
-        mutations.append(ConversationStateMutation("set", ("run", "status"), "failed"))
-        self._snapshots.mutate(task_id, mutations)
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            mutations: list[ConversationStateMutation] = []
+            assistant_index = find_assistant_message_index(state, run_id)
+            if assistant_index is not None:
+                for part_index, part in enumerate(state["messages"][assistant_index]["parts"]):
+                    if isinstance(part, dict) and part.get("type") == "tool-call" \
+                            and part.get("status") in {"pending", "running"}:
+                        base = ("messages", assistant_index, "parts", part_index)
+                        mutations.extend([
+                            ConversationStateMutation("set", base + ("status",), "failed"),
+                            ConversationStateMutation("set", base + ("error",), "execution_interrupted"),
+                            ConversationStateMutation("set", base + ("isError",), True),
+                        ])
+                mutations.extend([
+                    ConversationStateMutation("set", ("messages", assistant_index, "status"), "failed"),
+                    ConversationStateMutation("set", ("messages", assistant_index, "endReason"), "backend_restarted"),
+                ])
+            mutations.append(ConversationStateMutation("set", ("run", "status"), "failed"))
+            return mutations
+
+        self._snapshots.apply_planned(task_id, plan)
 
         return SimpleNamespace(id=run_id, status=ConversationRunStatus.FAILED.value)
 
@@ -418,17 +430,17 @@ class ConversationMutationWriter:
         )
         if record is None:
             return None
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        index = find_assistant_message_index(state, run_id)
-        mutations = [ConversationStateMutation("set", ("run", "status"), status)]
-        if index is not None:
-            mutations.extend(
-                [
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            mutations = [ConversationStateMutation("set", ("run", "status"), status)]
+            index = find_assistant_message_index(state, run_id)
+            if index is not None:
+                mutations.extend([
                     ConversationStateMutation("set", ("messages", index, "status"), status),
                     ConversationStateMutation("set", ("messages", index, "endReason"), end_reason),
-                ]
-            )
-        self._snapshots.mutate(task_id, mutations)
+                ])
+            return mutations
+
+        self._snapshots.apply_planned(task_id, plan)
         return SimpleNamespace(id=run_id, status=status)
 
     def complete_run_with_message(
@@ -463,18 +475,17 @@ class ConversationMutationWriter:
         )
         if record is None:
             return None
-        state = self._snapshots.load(task_id) or empty_snapshot()
-        index = find_assistant_message_index(state, run_id)
-        if index is None:
-            raise KeyError(f"assistant message for run {run_id} not found")
-        self._snapshots.mutate(
-            task_id,
-            [
+        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
+            index = find_assistant_message_index(state, run_id)
+            if index is None:
+                raise KeyError(f"assistant message for run {run_id} not found")
+            return [
                 ConversationStateMutation("set", ("messages", index, "status"), "completed"),
                 ConversationStateMutation("set", ("messages", index, "endReason"), end_reason),
                 ConversationStateMutation("set", ("run", "status"), "completed"),
-            ],
-        )
+            ]
+
+        self._snapshots.apply_planned(task_id, plan)
         return SimpleNamespace(id=run_id, status=ConversationRunStatus.COMPLETED.value)
 
     def cancel_run(self, run_id: int, end_reason: str = "user_cancelled") -> object | None:
@@ -503,7 +514,7 @@ class ConversationMutationWriter:
     def _message_id_for_run(self, task_id: int, run_id: int) -> str:
         """返回 Run assistant snapshot 消息 id。"""
 
-        state = self._snapshots.load(task_id) or empty_snapshot()
+        state = self._snapshots.ensure_state_snapshot(task_id)
         return self._message_id_for_state(state, run_id)
 
     @staticmethod
@@ -514,6 +525,17 @@ class ConversationMutationWriter:
             if message.get("runId") == run_id and message.get("role") == "assistant":
                 return str(message["id"])
         raise KeyError(f"assistant message for run {run_id} not found")
+
+
+def find_assistant_message_index(
+    state: ConversationStateSnapshot, run_id: int
+) -> int | None:
+    """在 snapshot 中定位指定 Run 的 assistant 消息。"""
+
+    for index, message in enumerate(state["messages"]):
+        if message.get("runId") == run_id and message.get("role") == "assistant":
+            return index
+    return None
 
 
 def _message(

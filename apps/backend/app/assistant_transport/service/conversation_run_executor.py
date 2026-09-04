@@ -28,7 +28,7 @@ class _Execution:
     """执行器内部维护的运行条目。"""
 
     state: ConversationRunState
-    task: asyncio.Task[None]
+    thread_task: asyncio.Task[None]
 
 
 class ConversationRunExecutor:
@@ -71,25 +71,25 @@ class ConversationRunExecutor:
 
         #检查是否有未结束的后台执行
         existing = self._executions.get(run_id)
-        if existing is not None and not existing.task.done():
+        if existing is not None and not existing.thread_task.done():
             raise ValueError(f"run {run_id} is already executing")
 
         run = self._run_service.get_run(run_id)
         state = ConversationRunState(run_id, ConversationRunStatus.PENDING)
-        task = asyncio.create_task(self._execute(run_id, run, runner))
-        self._executions[run_id] = _Execution(state, task)
-        return task
+        thread_task = asyncio.create_task(self._execute(run_id, run, runner))
+        self._executions[run_id] = _Execution(state, thread_task)
+        return thread_task
 
     async def close(self) -> None:
         """优雅关闭执行器并取消活动执行。"""
 
         executions = list(self._executions.values())
         for execution in executions:
-            if not execution.task.done():
-                execution.task.cancel()
+            if not execution.thread_task.done():
+                execution.thread_task.cancel()
         if executions:
             await asyncio.gather(
-                *(execution.task for execution in executions), return_exceptions=True
+                *(execution.thread_task for execution in executions), return_exceptions=True
             )
         task_runtime_spaces.close()
 
@@ -137,7 +137,7 @@ class ConversationRunExecutor:
                 )
                 settled = True
             else:
-                settled = self._mutation_writer.cancel_run(run_id, end_reason)
+                settled = self._run_service.cancel_run_if_running(run_id, end_reason)
         except KeyError:
             self._signal.clear(run_id)
             raise
@@ -145,11 +145,11 @@ class ConversationRunExecutor:
             self._signal.clear(run_id)
             return False
         execution = self._executions.get(run_id)
-        if execution is None or execution.task.done():
+        if execution is None or execution.thread_task.done():
             self._signal.clear(run_id)
             return False
         execution.state = ConversationRunState(run_id, ConversationRunStatus.CANCELLED)
-        execution.task.cancel()
+        execution.thread_task.cancel()
         return True
 
     async def get_status(self, run_id: int) -> ConversationRunState | None:
@@ -232,7 +232,7 @@ class ConversationRunExecutor:
                 current_task = asyncio.current_task()
             except RuntimeError:
                 current_task = None
-            if current is not None and current.task is current_task:
+            if current is not None and current.thread_task is current_task:
                 self._executions.pop(run_id, None)
             self._signal.clear(run_id)
 
@@ -263,22 +263,20 @@ class ConversationRunExecutor:
         try:
             await runner(run)
             if self._mutation_writer is not None:
-                self._mutation_writer.settle_run(run_id, "completed")
+                self._run_service.complete_run_if_running(run_id)
             await self._set_status(run_id, ConversationRunStatus.COMPLETED)
         except asyncio.CancelledError:
             if self._mutation_writer is not None:
                 self._mutation_writer.settle_open_tool_calls(
                     run_id, "cancelled", "executor_cancelled"
                 )
-                self._mutation_writer.settle_run(
-                    run_id, "cancelled", end_reason="executor_cancelled"
-                )
+                self._run_service.cancel_run_if_running(run_id, end_reason="executor_cancelled")
             await self._set_status(run_id, ConversationRunStatus.CANCELLED)
             raise
         except Exception:
             if self._mutation_writer is not None:
                 self._mutation_writer.settle_open_tool_calls(run_id, "failed", "runtime_failed")
-                self._mutation_writer.settle_run(run_id, "failed", end_reason="runtime_failed")
+                self._run_service.fail_run_if_running(run_id, end_reason="runtime_failed")
             await self._set_status(run_id, ConversationRunStatus.FAILED)
             log.exception(
                 "conversation_run_failed",

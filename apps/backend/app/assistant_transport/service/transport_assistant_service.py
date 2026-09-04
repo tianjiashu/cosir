@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_runtime
-from app.assistant_transport.assistant_api import _raise_transport_error
 from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
-from app.assistant_transport.service.conversation_run_subscription_service import ConversationRunSubscriptionService
 from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService, ConversationStateMutation,
+    ConversationTaskSnapshotService,
+    SnapshotChange,
 )
-from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot, ConversationStateSnapshot
+from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_snapshot import (
+    ConversationStateSnapshot,
+    empty_snapshot,
+)
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.conversation_command_record import ConversationCommandRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
-from app.service.depends import get_conversation_run_executor
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import preview
@@ -50,6 +53,9 @@ class TransportAssistantService:
         self._mutation_writer = ConversationMutationWriter()
         self._snapshots = ConversationTaskSnapshotService()
         self._task = service_depends.get_task_service()
+        from app.api.dependencies import get_runtime
+        from app.service.depends import get_conversation_run_executor
+
         self.run_executor = get_conversation_run_executor()
         self.runtime = get_runtime()
 
@@ -177,6 +183,8 @@ class TransportAssistantService:
                 },
             )
         except Exception:
+            from app.assistant_transport.assistant_api import _raise_transport_error
+
             log.exception(
                 "assistant_transport_executor_start_failed",
                 extra={
@@ -191,6 +199,67 @@ class TransportAssistantService:
                 retryable=True,
             )
 
+    async def stream(
+            self,
+            task_id: int,
+            run_id: int,
+            is_cancelled: Callable[[], bool],
+            is_terminal: Callable[[], Awaitable[bool]] | None = None,
+            poll_interval: float = 0.05,
+            idle_timeout: float = 5.0,
+    ) -> AsyncIterator[SnapshotChange]:
+        """订阅已提交的局部 mutation，直到 run 进入终态、客户端取消或空闲超时。
+
+        采用 push 模型：经 ``ConversationTaskSnapshotService.subscribe`` 注册进程内队列，
+        ``mutate`` 提交后通过 ``call_soon_threadsafe`` 推送 ``SnapshotChange``，无需 revision
+        增量比对。订阅前已提交的状态（含 run baseline）经一次 root ``set`` 变更回填，避免
+        漏推；订阅与回填读取之间无 ``await`` 切换，故不会与后续队列变更重复应用。外部调用方
+        负责把每个 ``SnapshotChange.mutations`` 应用到自己的状态投影（如 Assistant UI thread）。
+
+        Args:
+            task_id: 订阅所属的任务 ID。
+            run_id: 订阅的 run ID。
+            is_cancelled: 客户端取消判定，返回 True 时立即停止迭代。
+            is_terminal: 可选；返回 True 时结束迭代。省略时退化为永不主动结束，
+                仅靠取消、runId 不匹配或空闲超时终止。
+            poll_interval: 单次队列等待超时，兼作取消/终态判定轮询粒度，单位秒。
+            idle_timeout: 连续无变更的最长等待，超时后结束迭代。
+
+        Yields:
+            SnapshotChange: 订阅前基线的一次性回填 + 订阅后逐个推送的已提交变更。
+        """
+
+        queue, unsubscribe = self._snapshots.subscribe(task_id)
+        try:
+            initial = self._snapshots.ensure_state_snapshot(task_id)
+            yield SnapshotChange(
+                task_id,
+                initial,
+                (ConversationStateMutation("set", (), initial),),
+            )
+
+            idle_elapsed = 0.0
+            while True:
+                if is_cancelled():
+                    return
+                if is_terminal is not None and await is_terminal():
+                    return
+
+                try:
+                    change = await asyncio.wait_for(queue.get(), poll_interval)
+                except TimeoutError:
+                    idle_elapsed += poll_interval
+                    if idle_elapsed >= idle_timeout:
+                        return
+                    continue
+
+                if change.state["run"]["runId"] != run_id:
+                    return
+                yield change
+                idle_elapsed = 0.0
+        finally:
+            unsubscribe()
+
     async def subscribe_run_state(
             self,
             controller: Any,
@@ -202,21 +271,19 @@ class TransportAssistantService:
         供新命令主路径与 duplicate 幂等重试路径复用。仅把已提交事实的状态增量推回
         前端，不调用 run_executor.start。
         """
-        subscription = ConversationRunSubscriptionService(self._snapshots)
-
         async def is_terminal() -> bool:
             """返回既有 run 是否已进入终态。"""
             status = await self.run_executor.status(run_id)
             if status is None:
-                snapshot = self._snapshots.load(task_id)
-                return snapshot is None or snapshot["run"]["status"] in {
+                snapshot = self._snapshots.ensure_state_snapshot(task_id)
+                return snapshot["run"]["status"] in {
                     "completed",
                     "failed",
                     "cancelled",
                 }
             return status.status in {"completed", "failed", "cancelled"}
 
-        async for snapshot in subscription.stream(
+        async for snapshot in self.stream(
                 task_id,
                 run_id,
                 lambda: controller.is_cancelled,
