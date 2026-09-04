@@ -11,23 +11,21 @@ from app.core.observability import (
     conversation_run_trace,
 )
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.runtime.runtime_operations import RuntimeOperations
+from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.runtime.tool_execution import ToolTraceRecorder
+from app.core.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
-from app.models.delegation_record import DelegationRecord
 from app.service.depends import (
+    get_conversation_run_executor,
     get_conversation_run_service,
-    get_delegation_service,
     get_task_service,
     get_workspace_service,
 )
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
-from app.core.runtime.tool_execution import ToolTraceRecorder
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 
 
 class AgentRuntime:
@@ -50,27 +48,20 @@ class AgentRuntime:
     def __init__(self) -> None:
         """Initialize the execution engine with its private collaborators.
 
+        私有协作者（任务编排、轮次编排、工具调度、agent 目录、工作区解析）全部经
+        进程级依赖入口解析，构造时不再逐个传参。
+
         参数:
-            task_service: 任务编排服务（私有协作者，不对外暴露）。
-            conversation_run_state_service: 轮次编排服务（私有协作者，不对外暴露）。
-            context_builder: 文本上下文构建器。
-            tool_scheduler: 进程级兜底工具调度器（workspace 缺失时沿用）。
-            agent_registry: 进程级 agent profile 目录；引擎按 ``agent_id`` 从中解析
-                本次执行由哪个 profile 驱动，自身不再绑定单一 agent。
-            workspace_service: 工作区编排服务；提供 ``task → workspace → root_path``
-                解析，使破坏性工具以 workspace 根为路径边界。缺省 None 时只暴露
-                不要求 workspace context 的只读工具。
-            cancellation_registry: 进程内 run 取消信号注册表；缺省时创建独立实例。
-            runtime_event_service: 运行时事件持久化与广播 service。
+            无。
 
         返回:
             无。
 
         异常:
-            无。
+            RuntimeError: 依赖入口要求的存储或配置尚未初始化时抛出。
 
         副作用:
-            持有传入协作者引用；缺省时创建一个进程内取消注册表。
+            解析并持有进程级 service 单例引用。
         """
 
         self._task_service = get_task_service()
@@ -78,83 +69,6 @@ class AgentRuntime:
         self._tool_scheduler = get_tool_system().scheduler
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
-        self._conversation_writer = ConversationMutationWriter()
-
-    def _cancel_active_child_runs(self, parent_run: ConversationRunRecord) -> None:
-        """取消 parent run 下仍处于活动状态的 child delegation。
-
-        参数:
-            parent_run: 已被取消的 parent run 记录。
-
-        返回:
-            无。
-
-        异常:
-            无；级联取消失败会记录日志并继续父 run 取消流程。
-
-        副作用:
-            读取 delegation 记录，标记 child run 取消信号，尽力更新 child run 与 delegation 终态。
-        """
-
-        try:
-            active_delegations = get_delegation_service().list_active_by_parent_turn(parent_run.id)
-        except Exception:
-            log.exception(
-                "delegation_child_cancel_scan_failed",
-                extra={
-                    "msg": "父 run 已取消，但扫描活动 child delegation 失败",
-                    "data": {
-                        "parent_run_id": parent_run.id,
-                        "task_id": parent_run.task_id,
-                    },
-                },
-            )
-            return
-        for delegation in active_delegations:
-            self._cancel_child_delegation(parent_run, delegation)
-
-    def _cancel_child_delegation(
-        self,
-        parent_run: ConversationRunRecord,
-        delegation: DelegationRecord,
-    ) -> None:
-        """取消单个 child delegation 及其 child run。
-
-        参数:
-            parent_run: 已被取消的 parent run 记录。
-            delegation: 需要级联取消的 delegation 记录。
-
-        返回:
-            无。
-
-        异常:
-            无；单个 child 取消失败会记录日志并继续处理其他 child。
-
-        副作用:
-            可能更新 child run 状态、更新 delegation 状态并记录取消事实。
-        """
-
-        reason = "parent_run_cancelled"
-        try:
-            if delegation.child_run_id:
-                cancellation_registry.mark_cancelled(delegation.child_run_id)
-                ConversationMutationWriter().cancel_run(
-                    delegation.child_run_id,
-                    end_reason=reason,
-                )
-            get_delegation_service().mark_cancelled(delegation.id, reason)
-        except Exception:
-            log.exception(
-                "delegation_child_cancel_failed",
-                extra={
-                    "msg": "父 run 已取消，但级联取消 child delegation 失败",
-                    "data": {
-                        "parent_run_id": parent_run.id,
-                        "delegation_id": delegation.id,
-                        "child_run_id": delegation.child_run_id,
-                    },
-                },
-            )
 
     async def execute_run(
         self,
@@ -222,9 +136,7 @@ class AgentRuntime:
         # 无内置实现，空订阅下 fire 零开销放行。统一经 HookInterceptor 收口。
 
         await HookInterceptor.async_safe_fire(
-            HookContext.from_locatable(
-                event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None
-            )
+            HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None)
         )
 
         # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
@@ -364,7 +276,7 @@ class AgentRuntime:
         run: ConversationRunRecord,
         agent_profile: AgentProfile,
         tool_trace_recorder: ToolTraceRecorder | None = None,
-    ) -> RuntimeOperations:
+    ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
         workspace 可见性（写、改、删是否开放）由 ``execution_context`` 决定；
@@ -391,6 +303,7 @@ class AgentRuntime:
                 child_runner=ChildAgentRunner(
                     self.run_agent,
                     should_cancel=cancellation_registry.is_cancelled,
+                    run_executor=get_conversation_run_executor(),
                 ),
                 parent_profile=agent_profile,
                 parent_run=run,
@@ -399,7 +312,7 @@ class AgentRuntime:
             runtime_dependencies = ToolRuntimeDependencies(
                 delegate_task_executor=delegate_task_executor
             )
-        return RuntimeOperations(
+        return WorkflowOperations(
             tool_scheduler=self._tool_scheduler,
             agent_profile=agent_profile,
             current_run=run,

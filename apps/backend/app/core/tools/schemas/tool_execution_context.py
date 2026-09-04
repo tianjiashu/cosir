@@ -3,8 +3,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.models.workspace_record import WorkspaceRecord
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.models.workspace_record import WorkspaceRecord
 
 
 @dataclass(frozen=True)

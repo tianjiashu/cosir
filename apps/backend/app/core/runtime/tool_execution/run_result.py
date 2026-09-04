@@ -6,7 +6,8 @@
 
 from dataclasses import dataclass
 
-from app.models import RuntimeMessage
+from langchain_core.messages import BaseMessage
+
 from app.core.tools.schemas import ToolObservation
 
 
@@ -15,4 +16,3 @@ class ToolRunResult:
     """一次工具调用批次的执行结果。"""
 
     observations: list[ToolObservation]
-    messages_for_model: list[RuntimeMessage]

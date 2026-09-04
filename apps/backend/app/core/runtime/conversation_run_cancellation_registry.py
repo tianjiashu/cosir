@@ -31,9 +31,9 @@ class ConversationRunCancellationRegistry:
         """
 
         self._lock = threading.Lock()
-        self._cancelled_run_ids: set[str] = set()
+        self._cancelled_run_ids: set[int] = set()
 
-    def mark_cancelled(self, run_id: str) -> None:
+    def mark_cancelled(self, run_id: int) -> None:
         """Mark a Conversation Run as cancelled in the current process.
 
         参数:
@@ -78,7 +78,7 @@ class ConversationRunCancellationRegistry:
         with self._lock:
             return run_id in self._cancelled_run_ids
 
-    def clear(self, run_id: str) -> None:
+    def clear(self, run_id: int) -> None:
         """Remove a Conversation Run cancellation signal.
 
         参数:

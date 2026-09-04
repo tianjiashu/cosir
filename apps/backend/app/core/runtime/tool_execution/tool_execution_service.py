@@ -12,14 +12,11 @@
 
 import asyncio
 import contextvars
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from typing import cast
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.models import RuntimeMessage
-from app.models.enums.error_kind import ErrorKind
 from app.core.runtime.tool_execution.run_result import ToolRunResult
 from app.core.runtime.tool_execution.tool_trace_recorder import (
     ToolTraceRecorder,
@@ -31,15 +28,12 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.tool_execute.tool_cancelled import (
-    CANCEL_NOT_EXECUTED_REASON,
-    tool_cancelled,
-)
 from app.core.tools.tool_execute.tool_error import (
     internal_execution_error_reason,
     tool_error,
 )
 from app.core.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.models.enums.error_kind import ErrorKind
 
 ToolCallStartedCallback = Callable[[str, ToolCall], None]
 ToolCallFinishedCallback = Callable[[str, ToolObservation], None]
@@ -95,28 +89,25 @@ class ToolExecutionService:
         step_id: str,
         calls: list[ToolCall],
         execution_context: ToolExecutionContext | None = None,
-        on_tool_call_started: ToolCallStartedCallback | None = None,
-        on_tool_call_finished: ToolCallFinishedCallback | None = None,
         running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """执行一批工具调用并通知明确的工具生命周期回调。
 
         每个调用经 ``ToolScheduler.execute`` 执行（其内部完成权限与参数校验），观察结果
-        转为 ``role="tool"`` 的 ``RuntimeMessage`` 供下一步模型消费。开始与完成回调只
+        转为 ``ToolMessage`` 供下一步模型消费。开始与完成回调只
         传递工具执行事实，不依赖通用运行时事件信封。
 
         入口按工具声明的调度模式（``ToolDefinition.parallel_mode``）分流：串行调用留在
         本方法的串行路径逐个执行；声明为 ``parallel`` 的调用统一交给
         ``_run_calls_with_parallel_modes`` 并发执行（该方法只处理并行组，不再混入串行
-        分支）。两条路径都保留原始 index，最终由 ``_build_result_with_cancel_placeholders``
-        按原始顺序合并、补占位并统一序列化为模型消息。
+        分支）。两条路径都保留原始 index；已执行观察由本方法统一合并、序列化为模型消息，
+        未执行的 call 不产消息，其协议配对闭合由 ``RuntimeContextManager.load_message`` 统一收口。
 
-        配对闭合不变量（本方法收口）：``AIMessage.tool_calls`` 的每个 call 必须在返回的
-        模型消息中配对一条 ``role="tool"`` 消息，否则下一轮对话会因协议不匹配崩溃。为此，
-        两类失败来源都会被收口为 ``status="error"`` 的占位观察并序列化进模型消息：
-        （1）协作式取消——在 call 边界检测到取消信号后未执行的 call；
-        （2）执行链内部 bug——``ToolScheduler.execute`` / trace span / 回调前的序列化
-        抛出的非工具语义异常（此时工具本体未运行）。
+        配对闭合不变量：模型协议层面 ``AIMessage.tool_calls`` 的每个 call 必须最终配对一条
+        ``role="tool"`` 消息，否则下一轮对话会因协议不匹配崩溃。该不变量已下沉到
+        ``RuntimeContextManager.load_message`` 统一收口（崩溃/取消遗留的悬空调用在下次取数时
+        自动补 ``ToolMessage`` 占位）。本方法只负责已执行观察的合并与序列化，并为取消跳过的
+        call 补 canonical 审计终态（``status="cancelled"``），不在此处产模型消息。
 
         参数:
             step_id: 请求这些工具调用的步骤标识。
@@ -128,9 +119,9 @@ class ToolExecutionService:
             running_loop: 保留的运行时参数；工具执行不通过事件循环广播运行期输出。
 
         返回:
-            含观察列表与模型消息的 ``ToolRunResult``。观察与消息数量恒等于 ``calls``
-            数量，且按入参原始顺序返回——未执行的 call（取消跳过）在其原始 index
-            位置以取消占位补齐，保证每个 call_id 的 ``tool_calls`` 协议配对闭合。
+            含已执行观察列表与其模型消息的 ``ToolRunResult``。未执行的 call（取消跳过）
+            不进入返回，其协议配对闭合由 ``RuntimeContextManager.load_message`` 在下次
+            模型取数时统一补充 ``ToolMessage`` 占位；canonical 审计终态由本方法同步写入。
 
         异常:
             生命周期回调抛出的异常会原样向上传播，确保 canonical 写入失败不会被静默
@@ -142,16 +133,11 @@ class ToolExecutionService:
             本批因取消跳过调用时写 warning 日志。
         """
 
-        if calls and (not callable(on_tool_call_started) or not callable(on_tool_call_finished)):
-            raise RuntimeError(
-                "tool lifecycle callbacks are required for a non-empty tool call batch"
-            )
-
         # 入口分流：按工具声明的调度模式，把本批调用拆成「串行组」与「并行组」。
         # 串行组保留原始相对顺序逐个执行；并行组统一交给 _run_calls_with_parallel_modes
         # 并发执行（该方法只处理并行调用，不再混入串行分支）。两组都保留原始 index，
-        # 最终由 _build_result_with_cancel_placeholders 按原始顺序合并、补占位并统一
-        # 序列化为模型消息（配对闭合单一收口）。
+        # 已执行观察由本方法统一合并、序列化为模型消息（协议配对闭合由
+        # RuntimeContextManager.load_message 在下次取数时统一收口）。
         serial_calls: list[tuple[int, ToolCall]] = []
         parallel_calls: list[tuple[int, ToolCall]] = []
         for index, call in enumerate(calls):
@@ -168,96 +154,35 @@ class ToolExecutionService:
         for index, call in serial_calls:
             if self._should_cancel():
                 break
-            self._notify_tool_call_started(step_id, call, on_tool_call_started)
             observation = self._execute_tool_call(step_id, call, execution_context)
             indexed_observations.append((index, observation))
-            self._notify_tool_call_finished(step_id, observation, on_tool_call_finished)
+
 
         # 并行组：统一交给并行执行器（该方法只处理并行调用）。取消已生效时并行组
-        # 整体跳过，未执行的 call 由 _build_result_with_cancel_placeholders 补占位。
+        # 整体跳过，未执行的 call 仅补 canonical 审计终态（协议配对闭合由
+        # RuntimeContextManager.load_message 在下次取数时统一收口）。
         if parallel_calls and not self._should_cancel():
             indexed_observations.extend(
                 self._run_calls_with_parallel_modes(
                     step_id=step_id,
                     calls=parallel_calls,
                     execution_context=execution_context,
-                    on_tool_call_started=on_tool_call_started,
-                    on_tool_call_finished=on_tool_call_finished,
                 )
             )
 
-        # 配对闭合不变量收口：按原始 index 合并排序、为未执行的 call 补取消占位，
-        # 并统一序列化为 role="tool" 模型消息（单一收口，避免平行复制语义漂移）。
-        notified_ids = {observation.tool_call_id for _, observation in indexed_observations}
-        result = self._build_result_with_cancel_placeholders(step_id, calls, indexed_observations)
-        # 未执行的取消占位是在统一收口时创建的，此前没有机会触发生命周期回调；
-        # 补发 finished，保证 canonical tool call 与模型上下文同样闭合。
-        for observation in result.observations:
-            if observation.tool_call_id not in notified_ids:
-                self._notify_tool_call_finished(step_id, observation, on_tool_call_finished)
-        return result
+        executed_observations = [observation for _, observation in indexed_observations]
 
-    def run_calls_with_events(
-        self,
-        step_id: str,
-        calls: list[ToolCall],
-        execution_context: ToolExecutionContext | None = None,
-        running_loop: asyncio.AbstractEventLoop | None = None,
-        **runtime_bridge: object,
-    ) -> ToolRunResult:
-        """兼容旧 RuntimeOperations 转发形态，但只接受新的生命周期回调容器。
 
-        ``RuntimeOperations`` 当前仍以关键字把第四个位置的依赖转发到这里；该
-        兼容入口不解析事件类型或载荷，只提取节点提供的
-        ``on_tool_call_started`` / ``on_tool_call_finished`` 两个回调，然后委托给
-        ``run_calls``。待 RuntimeOperations 完成同一迁移后可删除本入口。
-
-        参数:
-            step_id: 请求这些工具调用的步骤标识。
-            calls: 模型请求的工具调用列表。
-            execution_context: 本次执行的运行时边界。
-            running_loop: 保留的运行时参数。
-            runtime_bridge: RuntimeOperations 转发的生命周期回调容器。
-
-        返回:
-            ``run_calls`` 的工具执行结果。
-
-        异常:
-            生命周期回调缺失或回调写入失败时向上传播。
-
-        副作用:
-            委托 ``run_calls`` 执行工具并写入 canonical 工具事实。
-        """
-        if len(runtime_bridge) != 1:
-            raise TypeError("exactly one tool lifecycle callback container is required")
-        callback_container = next(iter(runtime_bridge.values()))
-        if isinstance(callback_container, Mapping):
-            started = callback_container.get("on_tool_call_started")
-            finished = callback_container.get("on_tool_call_finished")
-        else:
-            started = getattr(callback_container, "on_tool_call_started", None)
-            finished = getattr(callback_container, "on_tool_call_finished", None)
-        if not callable(started) or not callable(finished):
-            raise TypeError(
-                "tool lifecycle callback container must provide callable started and finished "
-                "callbacks"
-            )
-        return self.run_calls(
-            step_id=step_id,
-            calls=calls,
-            execution_context=execution_context,
-            on_tool_call_started=cast(ToolCallStartedCallback, started),
-            on_tool_call_finished=cast(ToolCallFinishedCallback, finished),
-            running_loop=running_loop,
+        return ToolRunResult(
+            observations=executed_observations
         )
+
 
     def _run_calls_with_parallel_modes(
         self,
         step_id: str,
         calls: list[tuple[int, ToolCall]],
         execution_context: ToolExecutionContext | None,
-        on_tool_call_started: ToolCallStartedCallback | None,
-        on_tool_call_finished: ToolCallFinishedCallback | None,
     ) -> list[tuple[int, ToolObservation]]:
         """并发执行一批已声明为可并行调度的工具调用。
 
@@ -278,8 +203,8 @@ class ToolExecutionService:
 
         返回:
             带原始位置的已执行观察列表（按实际完成顺序）。批次中途取消时可能少于
-            传入数量；未执行部分由调用方经 ``_build_result_with_cancel_placeholders``
-            在原始 index 位置补取消占位。
+            传入数量；未执行部分由调用方补 canonical 审计终态，其协议配对闭合由
+            ``RuntimeContextManager.load_message`` 在下次取数时统一收口。
 
         异常:
             无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。
@@ -321,14 +246,19 @@ class ToolExecutionService:
                     and not self._should_cancel()
                 ):
                     batch_index, batch_call = pending_calls.pop()
-                    self._notify_tool_call_started(step_id, batch_call, on_tool_call_started)
                     # 每次提交前复制当前线程 contextvars（含父 turn 根 observation 的
                     # OTel current context）。ThreadPoolExecutor worker 默认在全新 context
                     # 运行，不复制会丢失 current span，导致 delegate 工具 span / 子 turn
                     # 脱离父 trace；且同一 Context 对象不能并发进入，必须逐任务独立副本。
+                    # 复制上下文并按任务独立绑定，使并行 worker 在父 turn 的 contextvars
+                    # （含 OTel current span）下执行，避免 delegate 工具 span / 子 turn 脱离父 trace。
+                    # 注意：下面 pool.submit 的实参搭配会触发 Pyright 对 Context.run 的
+                    # ParamSpec 与 ThreadPoolExecutor.submit 泛型匹配误报（运行期语义正确），
+                    # 用 pyright 抑制注释明确标注，不改动真实逻辑。
+                    run_ctx = contextvars.copy_context()
                     future_by_call[
-                        pool.submit(
-                            contextvars.copy_context().run,
+                        pool.submit(  # pyright: ignore
+                            run_ctx.run,
                             self._execute_tool_call,
                             step_id,
                             batch_call,
@@ -345,7 +275,6 @@ class ToolExecutionService:
                         observation = future.result()
                     except Exception as exc:
                         observation = self._internal_error_observation(step_id, call, exc)
-                    self._notify_tool_call_finished(step_id, observation, on_tool_call_finished)
                     completed.append((index, observation))
                 _submit_until_full()
         return completed
@@ -430,148 +359,6 @@ class ToolExecutionService:
             tool_call_id=call.call_id,
         )
 
-    def _notify_tool_call_started(
-        self,
-        step_id: str,
-        call: ToolCall,
-        callback: ToolCallStartedCallback | None,
-    ) -> None:
-        """通知工具调用开始，canonical 写入失败时直接向上传播。
-
-        参数:
-            step_id: 请求该工具调用的步骤标识。
-            call: 当前工具调用。
-            callback: 工具调用开始生命周期回调。
-
-        返回:
-            无。
-
-        异常:
-            透传 callback 异常，不能把 canonical 写入失败降级为工具执行成功。
-
-        副作用:
-            调用 callback。
-        """
-        if callback is not None:
-            callback(step_id, call)
-
-    def _notify_tool_call_finished(
-        self,
-        step_id: str,
-        observation: ToolObservation,
-        callback: ToolCallFinishedCallback | None,
-    ) -> None:
-        """通知工具调用完成，canonical 写入失败时直接向上传播。
-
-        参数:
-            step_id: 请求该工具调用的步骤标识。
-            observation: 工具执行观察结果。
-            callback: 工具调用完成生命周期回调。
-
-        返回:
-            无。
-
-        异常:
-            透传 callback 异常，不能把 canonical 写入失败降级为工具执行成功。
-
-        副作用:
-            调用 callback。
-        """
-        if callback is not None:
-            callback(step_id, observation)
-
-    def _build_result_with_cancel_placeholders(
-        self,
-        step_id: str,
-        calls: list[ToolCall],
-        indexed_observations: list[tuple[int, ToolObservation]],
-    ) -> ToolRunResult:
-        """补齐取消占位并构建返回给模型的工具结果。
-
-        参数:
-            step_id: 请求这些工具调用的步骤标识。
-            calls: 模型请求的工具调用列表。
-            indexed_observations: 已产生观察的原始位置与观察列表。
-
-        返回:
-            按原始 call 顺序排列且协议闭合的 ``ToolRunResult``。
-
-        异常:
-            无。
-
-        副作用:
-            当存在跳过调用时写 warning 日志；序列化模型消息时会清空 display_data。
-        """
-        executed_indices = {index for index, _ in indexed_observations}
-        skipped_calls = [
-            (index, call) for index, call in enumerate(calls) if index not in executed_indices
-        ]
-        if skipped_calls:
-            log.warning(
-                "tool_calls_cancelled_not_executed",
-                extra={
-                    "msg": "本批工具调用因取消未执行，已补 cancelled 占位闭合协议",
-                    "data": {
-                        "step_id": step_id,
-                        "total": len(calls),
-                        "executed": len(executed_indices),
-                        "skipped_call_ids": [call.call_id for _, call in skipped_calls],
-                    },
-                },
-            )
-            for index, call in skipped_calls:
-                indexed_observations.append(
-                    (
-                        index,
-                        tool_cancelled(
-                            tool_name=call.tool_name,
-                            reason=CANCEL_NOT_EXECUTED_REASON,
-                            error="the tool call was cancelled before execution",
-                            tool_call_id=call.call_id,
-                        ),
-                    )
-                )
-        indexed_observations.sort(key=lambda item: item[0])
-        observations = [observation for _, observation in indexed_observations]
-        messages = [self._to_model_message(observation) for observation in observations]
-        return ToolRunResult(observations=observations, messages_for_model=messages)
-
-    def build_cancel_placeholder_messages(
-        self,
-        calls: list[ToolCall],
-    ) -> list[RuntimeMessage]:
-        """为一批未执行的工具调用构造取消占位消息（供执行前分支复用）。
-
-        把「未执行调用 → cancelled 占位观察 → 序列化模型消息」的配对闭合逻辑
-        收敛到 service 单一实现，避免 ``core`` 编排层钻入受保护成员自拼占位。
-        与 ``_build_result_with_cancel_placeholders`` 内部使用的工厂与序列化完全同源，
-        保证正常路径（执行中取消）与 ``tools_node`` 执行前整批取消两条分支产出的
-        协议字段一致。
-
-        参数:
-            calls: 需要补占位的工具调用列表（已确定不会执行）。
-
-        返回:
-            按入参顺序排列、可直接写回运行时上下文的 ``role="tool"`` 消息列表。
-
-        异常:
-            无。
-
-        副作用:
-            序列化时会就地清空每个占位的 ``display_data``（经 ``_to_model_message``）。
-        """
-        placeholders = [
-            self._to_model_message(
-                tool_cancelled(
-                    tool_name=call.tool_name,
-                    reason=CANCEL_NOT_EXECUTED_REASON,
-                    error="the tool call was cancelled before execution",
-                    tool_call_id=call.call_id,
-                )
-            )
-            for call in calls
-        ]
-        return placeholders
 
     def _is_parallel_call(self, call: ToolCall) -> bool:
         """判断工具调用是否声明为可并行调度。
@@ -589,51 +376,3 @@ class ToolExecutionService:
             无。
         """
         return self._parallel_mode_by_name.get(call.tool_name, "serial") == "parallel"
-
-    def _to_model_message(self, observation: ToolObservation) -> RuntimeMessage:
-        """把工具观察序列化为模型可见的 ``role="tool"`` 消息（markdown 结构）。
-
-        ``content_text`` 以 markdown 区块组织**对模型可见**的字段：``## Tool`` 承载
-        ``tool_name`` / ``status`` / ``retryable``，``## Output`` 承载 ``content``，
-        ``## Error`` 承载 ``error``，``## Reason`` 承载 ``reason``；空值跳过对应区块。
-        ``tool_call_id``（置于 ``metadata``）、``data``、``permission`` 对模型不可见。
-
-        参数:
-            observation: 已产出的工具观察（含正常结果、错误占位、取消占位）。
-
-        返回:
-            可并入模型上下文的 ``RuntimeMessage``，``metadata.tool_call_id`` 用于与
-            ``AIMessage.tool_calls`` 配对闭合。
-
-        异常:
-            无。
-
-        副作用:
-            无（不修改入参观察对象）。
-        """
-        # 仅向模型暴露面向人读的文本通道（content / error / reason）与执行元信息
-        # （tool_name / status / retryable）。tool_call_id / data / permission 对模型不可见
-        # （前者在 metadata、后者转模型前已被 clear_display_data 清空）。None 与空串视为
-        # 无信息，跳过对应区块。其余字段以 markdown 结构组织，使模型能区分「元信息 / 输出 /
-        # 错误 / 修正建议」四个语义维度。
-        sections: list[str] = []
-        meta_lines: list[str] = []
-        if observation.tool_name:
-            meta_lines.append(f"- name: {observation.tool_name}")
-        if observation.status:
-            meta_lines.append(f"- status: {observation.status}")
-        meta_lines.append(f"- retryable: {observation.retryable}")
-        if meta_lines:
-            sections.append("## Tool\n\n" + "\n".join(meta_lines))
-        if observation.content:
-            sections.append(f"## Output\n\n{observation.content}")
-        if observation.error:
-            sections.append(f"## Error\n\n{observation.error}")
-        if observation.reason:
-            sections.append(f"## Reason\n\n{observation.reason}")
-        content_text = "\n\n".join(sections)
-        return RuntimeMessage(
-            role="tool",
-            content_text=content_text,
-            metadata={"tool_call_id": observation.tool_call_id},
-        )

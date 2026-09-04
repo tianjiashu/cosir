@@ -28,7 +28,10 @@ from app.core.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_handler.file_io.atomic_write import atomic_write_text, looks_like_line_numbered
+from app.core.tools.tool_handler.file_io.atomic_write import (
+    atomic_write_text,
+    looks_like_line_numbered,
+)
 from app.core.tools.tool_handler.patch.file_change_display import (
     build_file_change_display_data,
 )

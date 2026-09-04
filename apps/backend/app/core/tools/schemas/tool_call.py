@@ -65,5 +65,5 @@ class ToolCall:
         return cls(
             tool_name=data.get("name", ""),
             arguments=data.get("args", {}) or {},
-            call_id=data.get("id", ""),
+            call_id=str(data.get("id") or ""),
         )

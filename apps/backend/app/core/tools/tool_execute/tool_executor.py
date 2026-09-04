@@ -14,7 +14,6 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
-from app.models.enums.error_kind import ErrorKind
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute.tool_error import handler_exception_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
@@ -22,6 +21,7 @@ from app.core.tools.tool_execute.windows_job_object import (
     assign_current_process_to_kill_on_close_job,
 )
 from app.core.tools.tool_handler.terminal import OutputSink
+from app.models.enums.error_kind import ErrorKind
 
 # 实时输出队列容量上限：满时子进程侧丢弃新片段而非阻塞命令执行。
 _OUTPUT_QUEUE_MAXSIZE = 2000

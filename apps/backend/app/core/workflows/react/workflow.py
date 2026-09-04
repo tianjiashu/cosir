@@ -30,6 +30,7 @@ from app.models.errors.llm_provider_exceptions import (
 from app.service.depends import get_task_service
 from app.service.provider.capability_service import CapabilityService
 from app.utils.image_utils import is_image_path
+from ..event import RunInitializedEvent, UserInputAppendedEvent
 
 from ...context.context_listener.context_compress_listener import ContextCompressListener
 from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
@@ -246,42 +247,13 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
         runtime_context_manager.begin_run(run)
+        initialized_event = RunInitializedEvent(task_id=current_task.id, run_id=run.id)
 
-        # run 启动基线：构造带多模态 block 的 user 消息并同时写入当前运行期内存与轨迹；
-        # context 已包含 command transaction 写入的当前 run 用户消息。图片路径来自
-        # run.image_paths（已在 create_run 阶段从附件抽离并落库，仅含图片）；文件/目录/链接已固化进
-        # run.input_text，无需在此拼接。视觉格式未实现/聚合超限统一转 VisionNotSupportedError。
-        image_paths = [p for p in (run.image_paths or []) if is_image_path(p)]
-        try:
-            content_blocks, skipped = build_user_content_blocks(
-                run.input_text,
-                image_paths,
-                vision_input_format,
-                workspace_root=current_workspace.root_path,
-                model_name=run.model_name,
-            )
-        except (VisionFormatNotSupportedError, VisionImageError) as exc:
-            raise VisionNotSupportedError(str(exc)) from exc
-        if skipped:
-            # 部分图片失效：记 warning 汇总（逐图明细已在 build 内分级记录）
-            log.warning(
-                "vision_images_partially_skipped",
-                extra={
-                    "msg": "some images skipped in this run",
-                    "data": {
-                        "run_id": run.id,
-                        "skipped_count": len(skipped),
-                        "loaded_count": len(content_blocks) - 1,
-                    },
-                },
-            )
-        user_content = cast(
-            str | list[str | dict[str, Any]],
-            content_blocks if len(content_blocks) > 1 else run.input_text,
-        )
+        # 初始化时，将用户输入写入上下文，并发布事件
         runtime_context_manager.add_message(
-            HumanMessage(content=user_content),
+            HumanMessage(content=run.input_text),
         )
+        user_input_appended_event = UserInputAppendedEvent(task_id=current_task.id, run_id=run.id, text=run.input_text)
 
         config = {
             "configurable": {

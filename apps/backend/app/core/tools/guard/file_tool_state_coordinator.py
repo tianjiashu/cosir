@@ -244,7 +244,7 @@ class FileToolStateCoordinator:
             ),
         )
         action = self._repeated_calls.check(
-            execution_context.task_id,
+            str(execution_context.task_id),
             signature,
             observed_snapshot,
             tool_name=tool.name,
@@ -295,7 +295,7 @@ class FileToolStateCoordinator:
         # 把「写路径当前 fingerprint」与 revision registry 里上次观察到的基线比对，
         # 找出被外部改动过的路径（从未记录过的路径不算 stale）。
         stale_paths = self._revisions.stale_paths(
-            execution_context.task_id,
+            str(execution_context.task_id),
             plan.resources.write_paths,
         )
         if not stale_paths:
@@ -341,7 +341,7 @@ class FileToolStateCoordinator:
         # 对本次写路径（含 workspace 祖先链）按稳定顺序获取进程内 RLock，保证同一
         # task 下对相同路径的并发写被串行化；退出 with 块时逆序释放。
         with self._path_locks.acquire(
-            execution_context.task_id,
+            str(execution_context.task_id),
             plan.resources.lock_paths,
         ):
             yield
@@ -377,20 +377,20 @@ class FileToolStateCoordinator:
         # 回写一：把本次观察到的文件快照记入 revision，作为后续 stale 判定的新基线。
         if plan.observed_snapshot:
             self._revisions.record_snapshots(
-                execution_context.task_id,
+                str(execution_context.task_id),
                 plan.observed_snapshot,
             )
         # 回写二：把本次写入的文件路径记入 revision，使「自己刚写的文件」不再被判 stale。
         if plan.resources.write_paths:
             self._revisions.record(
-                execution_context.task_id,
+                str(execution_context.task_id),
                 plan.resources.write_paths,
             )
         # 回写三：把本次成功的重复调用签名登记为可复用基线；下一次相同签名 + 相同
         # 快照的调用会被判为 unchanged/warning/block。
         if plan.repeated_signature:
             self._repeated_calls.record_success(
-                execution_context.task_id,
+                str(execution_context.task_id),
                 plan.repeated_signature,
                 plan.observed_snapshot,
             )

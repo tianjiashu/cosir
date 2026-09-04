@@ -5,7 +5,10 @@
 不关心工具权限与业务语义。
 """
 
-from app.core.tools.tool_handler.patch.fuzzy_match import format_no_match_hint, fuzzy_find_and_replace
+from app.core.tools.tool_handler.patch.fuzzy_match import (
+    format_no_match_hint,
+    fuzzy_find_and_replace,
+)
 from app.core.tools.tool_handler.patch.patch_apply import (
     PatchApplyError,
     apply_all,

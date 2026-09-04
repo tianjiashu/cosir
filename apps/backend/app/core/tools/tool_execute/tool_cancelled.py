@@ -1,7 +1,7 @@
 import dataclasses
 
-from app.models.enums.error_kind import ErrorKind
 from app.core.tools.schemas import ToolObservation
+from app.models.enums.error_kind import ErrorKind
 
 # 执行前被取消（call 边界检测到取消信号、尚未执行）时复用的 reason 模板。
 # 措辞要点：取消是「用户/系统主动中止」，不是「执行故障」，因此**不替用户决定

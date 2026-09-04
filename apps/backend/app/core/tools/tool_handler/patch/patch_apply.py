@@ -15,7 +15,10 @@ import os
 from pathlib import Path
 
 from app.core.tools.tool_handler.file_io.atomic_write import atomic_write_text
-from app.core.tools.tool_handler.patch.fuzzy_match import format_no_match_hint, fuzzy_find_and_replace
+from app.core.tools.tool_handler.patch.fuzzy_match import (
+    format_no_match_hint,
+    fuzzy_find_and_replace,
+)
 from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.patch.patch_parser import (
     Hunk,
