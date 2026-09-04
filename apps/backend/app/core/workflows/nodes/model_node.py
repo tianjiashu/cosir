@@ -1,8 +1,8 @@
 """ReAct-like 工作流的模型节点（``_model_node``）。
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
-取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量直接交给
-``RuntimeOperations`` 的 canonical writer；用 ``model.astream()`` 累积 ``AIMessage``，
+取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
+stream；用 ``model.astream()`` 累积 ``AIMessage``，
 根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
 状态写入 **run**。
 
@@ -21,8 +21,10 @@
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk, SystemMessage
+from langgraph.config import get_stream_writer
 
 from app.config.logging.logger import log
+from app.core.tools.schemas import ToolCall
 from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
@@ -35,7 +37,7 @@ from app.core.workflows.nodes.helper.common import (
     terminal_state,
 )
 from app.core.workflows.nodes.helper.debug_dump import (
-    # noqa: F401  # 测试经 model_node._dump_merged_chunk_debug 访问
+    # 测试经 model_node._dump_merged_chunk_debug 访问
     _dump_raw_chunk_debug,
 )
 from app.core.workflows.nodes.helper.invalid_tool_call import (
@@ -45,19 +47,19 @@ from app.core.workflows.nodes.helper.invalid_tool_call import (
 )
 from app.core.workflows.nodes.helper.thinking_extractor import (
     _extract_reasoning_content,
-    # noqa: F401  # 测试经 model_node._should_strip_reasoning_content 访问
+    # 测试经 model_node._should_strip_reasoning_content 访问
 )
-from app.core.tools.schemas import ToolCall
 from app.utils.message_content import content_to_text
 
 from ..react.state import ReactGraphState
+from ..react.streaming import ModelOutputDelta
 
 
 async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
     节点从运行上下文取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量
-    直接写入 canonical conversation facts；用 ``model.astream()`` 累积
+    写入 workflow stream；用 ``model.astream()`` 累积
     ``AIMessage``。根据模型最终输出决定进入工具分支、
     最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **run**。
 
@@ -74,22 +76,23 @@ async def _model_node(state: ReactGraphState) -> dict:
           把 run 标记为 failed），不再触发推理；
         - 经 ``_runtime_context().add_message`` 把本轮 ``AIMessage`` 落库并写回内存
           （``RuntimeContextManager`` 唯一写入入口），使下一模型步能累积看到本轮输出；
-        - 模型文本与 reasoning 增量经 ``RuntimeOperations`` 写入 canonical facts；状态写入
-          ``run``；
+        - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
+          统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
         - ``invalid_tool_calls`` 按双轨消费：未命中工具名的 ``IGNORE`` 仅记 warning；
-          命中工具名的 ``REPAIR`` 在 ``requested_tool`` 为真（情形 a）时把修复提示作为独立
-          state 字段 ``deferred_repair_message`` 回传（不 return，由 observe 节点延后注入），
-          为假（情形 b）时写 ``SystemMessage`` 并返回非终态 patch 回流 model 重试
-          （靠 ``max_steps`` 兜底）；回流时把模型已产出的非空 ``output_text`` 追加进修复提示，
-          避免其被静默丢弃。
+          命中工具名的 ``REPAIR`` 不论是否同轮有合法 ``tool_call``，都经
+          ``_runtime_context().add_message(SystemMessage(...))`` 直接写入上下文（落库 + 写
+          内存 + 标记 ``have_change``）：同轮无合法工具（情形 b）时返回非终态 patch 回流
+          model 重试（靠 ``max_steps`` 兜底），回流时把模型已产出的非空 ``output_text``
+          追加进修复提示，避免其被静默丢弃；同轮有合法工具（情形 a）时修复提示随工具分支
+          下传、本回合并不回流 model，仅作历史/下轮参考。修复提示不再经 graph state 中转。
     """
 
     rc = _runtime_config()
     operations = rc.operations
     model = rc.model
     thinking_channel = rc.thinking_channel
-    thinking_roundtrip = rc.thinking_roundtrip
+    stream_writer = get_stream_writer()
 
     step_count = state.step_count + 1
     # P1-5 提前拦截：本次推理若已超配额（step_count > max_steps），不发起推理，直接调用
@@ -189,15 +192,20 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         if text:
-            operations.append_assistant_text(text)
+            stream_writer(ModelOutputDelta(type="model_output_delta", part="text", text=text))
         if reasoning and reasoning.strip():
-            operations.append_assistant_reasoning(reasoning)
+            stream_writer(
+                ModelOutputDelta(
+                    type="model_output_delta",
+                    part="reasoning",
+                    text=reasoning,
+                )
+            )
 
     ai_message = _collect_chunk_to_ai_message(
-        chunks,
-        thinking_channel=thinking_channel,
-        thinking_roundtrip=thinking_roundtrip,
+        chunks
     )
+    _runtime_context().add_message(ai_message)
     # 单一来源：usage 只在模型调用产出 ai_message 后从其 usage_metadata 累加一次。
     # ai_message.usage_metadata 是 LangChain 对各流式 chunk 求和无重复后的完整快照，
     # 不再逐 chunk 解析（消除双重口径与键名偏差）。本对象为 run 级共享累加器，
@@ -211,14 +219,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
     # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
     requested_tool = bool(tool_calls)
-    # 模型已产出的正文统一取合并后 content（与 _has_content 落库判定同源），避免与
-    # 流式阶段写入的文本与合并后正文需要保持同一口径。对文本块，逐 chunk
-    # 提取拼接与合并后整体提取等价；末 chunk 一次性给 content 也能被捕获，不会因 delta
-    # 通道未逐 chunk 下传而误判无正文。供修复提示/最终回答/instruction 共用。
-    output_text = content_to_text(ai_message.content).strip()
 
-    repair_message: str | None = None
-    repair_data: list[dict[str, Any]] = []
 
     if invalid_tool_calls:
         available_tool_names = {tool.name for tool in operations.model_tools}
@@ -243,50 +244,18 @@ async def _model_node(state: ReactGraphState) -> dict:
             )
 
         if result[InvalidToolOutcome.REPAIR]:
-            # 命中已注册工具名，视为真实调用意图、仅字段非法：按 requested_tool 二维分流。
-            # 情形 a 有合法工具时延后注入修复提示（不 return）；情形 b 无合法工具时写
-            # SystemMessage 并返回非终态 patch 回流 model 重试（靠 max_steps 兜底）。
             repair_data = result[InvalidToolOutcome.REPAIR]
-
             repair_message = build_invalid_tool_call_repair_message(repair_datas=repair_data)
+            _runtime_context().add_message(SystemMessage(content=repair_message))
 
-            if not requested_tool:
-                # 情形 b 须落库修复提示，保证崩溃恢复后仍可重试。
-                # 模型可能已输出部分正文/意图文本，若直接回流重试会把它静默丢弃；这里把非空
-                # output_text 作为「上一轮的部分输出」追加进修复提示，供模型重试时参考保留。
-                if output_text:
-                    repair_message = (
-                        f"{repair_message}\n\n上一轮模型的部分输出"
-                        f"（请基于此继续完善，勿丢弃）：\n{output_text}"
-                    )
-                log.warning(
-                    "model_node_invalid_tool_calls_no_tool_deferred",
-                    extra={
-                        "msg": (
-                            "非法工具调用命中已注册工具名但本轮无合法工具，"
-                            f"修复提示直接注入并回流 model 重试，step_id={step_id}"
-                        ),
-                        "data": {
-                            "step_id": step_id,
-                            "repair_message_length": len(repair_message or ""),
-                        },
-                    },
-                )
-                _runtime_context().add_message(SystemMessage(content=repair_message))
-                return {
-                    "step_count": step_count,
-                    "repair_requested": True,
-                    "requested_tool": False,
-                    "final_response": False,
-                    "terminal": False,
-                    "pending_tool_calls": [],
-                    "continuation_error_data": None,
-                }
-
-    # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。
-    if _has_content(ai_message):
-        # 落库后写回内存，使下一模型步经 load_message() 能读到本轮输出，避免上下文不增长死循环。
-        _runtime_context().add_message(ai_message)
+    stable_call_ids = [
+        call.call_id or f"{rc.run.id}:{step_id}:{index}" for index, call in enumerate(tool_calls)
+    ]
+    # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。最终文本消息在
+    # complete_run_with_message() 中与 Run 终态同事务写入；工具分支没有 Run 终态，单独写入
+    # context 和 tool-call parts 在一个事务内写入。
+    # if requested_tool and _has_content(ai_message):
+    #     operations.persist_ai_message_with_tool_calls(ai_message, tool_calls, stable_call_ids)
     log.info(
         "model_node_completed",
         extra={
@@ -295,7 +264,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "step_id": step_id,
                 "has_tool_calls": requested_tool,
                 "tool_count": len(tool_calls),
-                "output_text_length": len(output_text),
+                "output_text_length": len(ai_message.content),
             },
         },
     )
@@ -308,54 +277,37 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {
                     "step_id": step_id,
                     "tool_count": len(tool_calls),
-                    "has_instruction": bool(output_text),
-                    "instruction_length": len(output_text),
+                    "has_instruction": bool(ai_message.content),
+                    "instruction_length": len(ai_message.content),
                 },
             },
         )
-        # 文本说明作为 instruction 随工具调用下传，供 tools/observe 节点看到模型意图。
-        instruction = output_text if output_text else ""
-        # repair_message 是 str；repair_data 非空才确有 REPAIR 项需延后注入。
-        deferred_repair_content = str(repair_message) if repair_data else ""
-        # pending_tool_calls 只承载单条工具的 tool_name/arguments/call_id/instruction 四键；
-        # 延后 REPAIR 修复提示不再挂在工具数组上，改为经独立 state 字段
-        # deferred_repair_message 下传，由 observe 节点工具结果处理后统一注入并清空，
-        # 避免与单条工具强绑定。
-        pending_tool_calls = [
-            {
-                "tool_name": call.tool_name,
-                "arguments": call.arguments,
-                # Some providers omit an id. Generate a stable per-run/per-step id so
-                # parallel calls of the same tool cannot collapse into one fact.
-                "call_id": call.call_id or f"{rc.run.id}:{step_id}:{index}",
-                "instruction": instruction,
-            }
-            for index, call in enumerate(tool_calls)
-        ]
+
         return {
             "step_count": step_count,
             "repair_requested": False,
             "requested_tool": True,
-            # 延后 REPAIR 修复提示作为独立 state 字段回传（情形 a 有合法工具时非空）；
-            # observe 节点工具结果处理后注入并清空。
-            "deferred_repair_message": deferred_repair_content,
-            # 仅回传计数而非未脱敏原始 invalid_tool_call，防止原文外泄且避免 _finalize_max_steps
-            # 以 dict() 展开 list 抛 ValueError。
-            "continuation_error_data": (
-                {
-                    "error_kind": "invalid_tool_call_repair",
-                    "invalid_count": len(repair_data),
-                }
-                if repair_data
-                else None
-            ),
             "final_response": False,
             "terminal": False,
-            "pending_tool_calls": pending_tool_calls,
+            "pending_tool_calls": {
+                "tool_calls": tool_calls,
+                "instruction": ai_message.content,#文本说明作为 instruction 随工具调用下传，供 tools/observe 节点看到模型意图
+            }
         }
 
-    if output_text:  # 没有工具调用但有文本 → 最终回答
-        completed_run = operations.complete_run_if_running(rc.run.id, output_text)
+    if _runtime_context().has_change(): #没有工具调用，但上下文有变化 → 继续执行
+        return {
+            "step_count": step_count,
+            "repair_requested": False,
+            "requested_tool": False,
+            "continuation_error_data": None,
+            "final_response": False,
+            "terminal": False,
+            "pending_tool_calls": [],
+        }
+
+    if ai_message.content:  # 没有工具调用，上下文没有变化但有文本 → 最终回答
+        completed_run = operations.complete_run_with_message(rc.run.id, ai_message)
         if completed_run is None:
             log.info(
                 "model_node_final_response_terminal_race_lost",
@@ -369,19 +321,19 @@ async def _model_node(state: ReactGraphState) -> dict:
             "model_node_final_response",
             extra={
                 "msg": f"模型给出最终回复，已落库，step_id={step_id}",
-                "data": {"step_id": step_id, "output_text_length": len(output_text)},
+                "data": {"step_id": step_id, "output_text_length": len(ai_message.content)},
             },
         )
         return {
             **terminal_state(step_count, final_response=True),
-            "final_text": output_text,
+            "final_text": ai_message.content,
         }
 
     log.warning(
         "model_node_invalid_output",
         extra={
             "msg": f"模型既未返回工具调用也无有效文本，判定为非法输出，step_id={step_id}",
-            "data": {"step_id": step_id, "output_text_length": len(output_text)},
+            "data": {"step_id": step_id, "output_text_length": len(ai_message.content)},
         },
     )
     failed_run = operations.fail_run_if_running(rc.run.id, end_reason="invalid_model_output")
@@ -393,5 +345,4 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
-        return terminal_state(step_count)
     return terminal_state(step_count)

@@ -10,7 +10,6 @@
   模块级纯函数）。
 - ``tools_node``：``tools`` 节点（``_tools_node``）及工具观察的增量落库/写回
   （``_persist_tool_observations``）。
-- ``approval``：工具节点审批编排（``resolve_approved_calls``）。
 - ``observation_node``：``observe`` 节点（``_observe_node``），从 ``last_tool_results``
   重算连续失败计数并判定错误上限（阶段二将在此接入 LLM 观察推理）。
 - ``common``：节点共享的运行时原语（事件写入、config/context 取出）。

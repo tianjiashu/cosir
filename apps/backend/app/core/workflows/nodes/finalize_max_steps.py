@@ -93,8 +93,8 @@ async def _finalize_max_steps(
 def _terminal_state(step_count: int) -> dict[str, Any]:
     """构造最大步数收口函数返回的终态 state patch。
 
-    复用 ``common.terminal_state`` 的终态字段（含统一清空 ``deferred_repair_message``，
-    与 observe 节点各分支口径一致），并补回本节点特有的 ``continuation_error_data=None``
+    复用 ``common.terminal_state`` 的终态字段（统一收口终态硬字段，与 observe 节点各分支口径一致），
+    并补回本节点特有的 ``continuation_error_data=None``
     （终态不再有后续 continuation）与默认 ``final_text``（步数耗尽没有最终回答，
     写给父 Agent / 用户的可见失败说明，见 ``_MAX_STEPS_FINAL_TEXT``）。
 

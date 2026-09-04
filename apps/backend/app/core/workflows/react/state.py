@@ -30,7 +30,7 @@ class ReactGraphState(BaseModel):
         terminal: 是否进入完成/失败/取消等终止态。model / tools / observe 节点写；编排层
             结合 ``aget_state().tasks`` 判定结束。
         pending_tool_calls: 待执行的工具调用（可序列化 dict）。model 节点写，tools 节点经
-            ``interrupt()`` 审批后消费。dict 含 ``tool_name`` / ``arguments`` / ``call_id``，
+            工具节点直接消费。dict 含 ``tool_name`` / ``arguments`` / ``call_id``，
             模型同时产出文本与工具调用时另带 ``instruction`` 键。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
             ``step_count > max_steps`` 判定用。
@@ -41,8 +41,6 @@ class ReactGraphState(BaseModel):
         continuation_error_data: 终态排查用错误明细（可序列化 dict，通常含 ``error_kind`` /
             ``invalid_count``）。编排层初始化置 ``None``；model_node 在 REPAIR 工具分支写入
             脱敏计数、REPAIR 回流时置 ``None``；``_finalize_max_steps`` 消费并并入 ``RUN_FAILED``。
-        deferred_repair_message: 模型级「本轮一次的延后 REPAIR 修复提示」。model 节点在
-            REPAIR 情形写入；observe 节点工具结果处理后注入模型并清空，避免与单条工具强绑定。
     """
 
     repair_requested: bool
@@ -51,9 +49,8 @@ class ReactGraphState(BaseModel):
     requested_tool: bool
     final_response: bool
     terminal: bool
-    pending_tool_calls: list[dict[str, Any]]
+    pending_tool_calls: dict[str, Any]
     max_steps: int
     final_text: str
     last_tool_results: list[dict[str, Any]]
     continuation_error_data: Any = None
-    deferred_repair_message: str = ""

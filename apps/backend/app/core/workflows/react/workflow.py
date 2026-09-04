@@ -3,44 +3,60 @@
 本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` 节点 +
 条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
 ``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
-graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph 负责状态持久化、断点续跑与
-审批中断。
+graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
-from collections.abc import Callable
 from time import perf_counter
 from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
 
 from app.config.logging.logger import log
-from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
 from app.core.workflows.nodes.helper.vision_content_blocks import (
     build_user_content_blocks,
 )
-from app.models import RuntimeMessage
 from app.models.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.errors.llm_provider_exceptions import (
     VisionFormatNotSupportedError,
     VisionImageError,
     VisionNotSupportedError,
 )
+from app.service.depends import get_task_service
 from app.service.provider.capability_service import CapabilityService
-from app.core.tools.schemas import ToolCall
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.image_utils import is_image_path
 
+from ...context.context_listener.context_compress_listener import ContextCompressListener
+from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
+from ...context.runtime_context_manager import RuntimeContextManager
 from ...runtime.runtime_operations import RuntimeOperations
 from ..agent_workflow import AgentWorkflow
-from ..nodes.helper.approval import APPROVAL_INTERRUPT_KEY
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
+from .streaming import ModelOutputDelta
+
+
+def _update_task_context_usage(task_id: int, used: int) -> None:
+    """以旁路方式更新 task 上下文占用，失败只记录日志。"""
+
+    try:
+        get_task_service().update_context_usage(task_id, used)
+    except Exception as exc:
+        log.error(
+            "context_usage_task_update_failed",
+            extra={
+                "msg": "context usage write-back failed",
+                "data": {"task_id": task_id, "used": used, "error": str(exc)},
+            },
+            exc_info=True,
+        )
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -48,29 +64,23 @@ class ReactLikeWorkflow(AgentWorkflow):
 
     该类只承担执行策略职责，不直接创建模型、工具或数据库连接，所有外部能力都通过
     ``RuntimeOperations`` 注入。graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph
-    负责状态持久化、断点续跑与 ``interrupt()`` 审批中断。
+    负责控制流状态持久化。
     """
 
     workflow_id = "react_like_v1"
 
-    def __init__(
-        self,
-        approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         """初始化工作流。
 
         参数:
-            approval_resolver: 工具审批解析器；``None`` 表示自动放行全部调用。
-                详见类 ``run`` 方法中 ``interrupt()`` 暂停与 ``Command(resume=)`` 恢复逻辑。
+            无。
         """
-
-        self._approval_resolver = approval_resolver
 
     def _build_graph(self, checkpointer) -> Any:
         """构建并编译 ReAct StateGraph。
 
         ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；graph 编译时挂入
-        ``checkpointer`` 以启用 checkpoint 持久化与 ``interrupt`` 恢复。
+        ``checkpointer`` 以启用 graph 控制流持久化。
 
         参数:
             checkpointer: 已配置好的 LangGraph checkpointer。
@@ -101,20 +111,53 @@ class ReactLikeWorkflow(AgentWorkflow):
         builder.add_conditional_edges("observe", _after_observe, {"model": "model", END: END})
         return builder.compile(checkpointer=checkpointer)
 
+    @staticmethod
+    def _write_stream_item(operations: RuntimeOperations, mode: str, value: object) -> None:
+        """消费 workflow stream 中的模型增量并写入 snapshot。
+
+        参数:
+            operations: 当前 Conversation Run 的运行时操作门面。
+            mode: LangGraph stream 模式；只有 ``custom`` 模式由本方法处理。
+            value: custom stream 产出的中性模型增量。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: custom stream 增量结构非法。
+
+        副作用:
+            将文本或 reasoning 增量交给 ``RuntimeOperations``，由其更新 snapshot 并发布
+            Assistant Transport 增量；不会写入 Agent context。
+        """
+
+        if mode != "custom":
+            return
+        if not isinstance(value, dict) or value.get("type") != "model_output_delta":
+            return
+        part = value.get("part")
+        text = value.get("text")
+        if part not in {"text", "reasoning"} or not isinstance(text, str) or not text:
+            raise ValueError("invalid model output delta")
+        delta = ModelOutputDelta(type="model_output_delta", part=part, text=text)
+        if delta["part"] == "text":
+            operations.append_assistant_text(delta["text"])
+        else:
+            operations.append_assistant_reasoning(delta["text"])
+
     async def run(
-        self,
-        operations: RuntimeOperations,
-        callbacks: list | None = None,
-        langfuse_trace_id: str | None = None,
+            self,
+            operations: RuntimeOperations,
+            callbacks: list | None = None,
+            langfuse_trace_id: str | None = None,
     ) -> None:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
         以 LangGraph 状态流驱动已编译 graph。工作流不再生产或透传 RuntimeEvent；模型、
-        工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state。
+        工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state，
+        模型流式增量由 graph custom stream 统一转发到 snapshot。
         模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
-        存在 ``approval_resolver`` 时 ``tools`` 节点触发 ``interrupt()`` 暂停，用审批解析器解析出
-        批准的工具调用并经 ``Command(resume=)`` 恢复；为 ``None`` 时不暂停、自动放行。循环恢复
-        graph 直到无待处理任务或工作流结束。
+        工具由服务端工具策略直接执行，工作流本身不暂停等待外部决策。
 
         参数:
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
@@ -140,7 +183,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 失败记 ``model_resolve_failed`` 后抛出，由外层 graph.astream 异常分支收敛为 RUN_FAILED。
         try:
             base_model = resolve_chat_model(
-                task=current_task,
                 run=run,
                 agent_profile=agent_profile,
             )
@@ -177,6 +219,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
+        if run.provider_id is None:
+            raise ValueError("Conversation Run provider_id is required")
         thinking_channel = CapabilityService.get_thinking_channel(run.provider_id)
         vision_input_format = CapabilityService.get_vision_input_format(run.provider_id)
 
@@ -184,7 +228,6 @@ class ReactLikeWorkflow(AgentWorkflow):
             operations=operations,
             run=run,
             model=cast(BaseChatModel, bound_model),
-            approval_resolver=self._approval_resolver,
             start_time=perf_counter(),
             usage_stats=ConversationRunUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
@@ -195,21 +238,19 @@ class ReactLikeWorkflow(AgentWorkflow):
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
         # 读写唯一入口，并挂载上下文占用订阅者。
-        runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
-            agent_profile=agent_profile,
-            current_workspace=current_workspace,
-            current_task=current_task,
-            store=operations.message_store,
-            run=run,
-        )
+        runtime_context_manager = (RuntimeContextManager.ensure_get_runtime_context_manager(
+            agent_profile,
+            current_workspace,
+            current_task,
+        ).add_change_listener(ContextUsageComputeListener(_update_task_context_usage, current_task.id))
+                                   .add_change_listener(ContextCompressListener()))
+
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
         runtime_context_manager.begin_run(run)
 
-        runtime_context_manager.set_thinking_channel(thinking_channel)
-
         # run 启动基线：构造带多模态 block 的 user 消息并同时写入当前运行期内存与轨迹；
-        # load_history 已排除当前 run，历史回放保持纯文本。图片路径来自 run.image_paths（已在
-        # create_run 阶段从附件抽离并落库，仅含图片）；文件/目录/链接已固化进
+        # context 已包含 command transaction 写入的当前 run 用户消息。图片路径来自
+        # run.image_paths（已在 create_run 阶段从附件抽离并落库，仅含图片）；文件/目录/链接已固化进
         # run.input_text，无需在此拼接。视觉格式未实现/聚合超限统一转 VisionNotSupportedError。
         image_paths = [p for p in (run.image_paths or []) if is_image_path(p)]
         try:
@@ -235,13 +276,12 @@ class ReactLikeWorkflow(AgentWorkflow):
                     },
                 },
             )
-        runtime_context_manager.upsert_current_user_message(
-            RuntimeMessage(
-                role="user",
-                content_text=run.input_text,
-                content_blocks=content_blocks if len(content_blocks) > 1 else None,
-            ),
-            allow_write_event_failure=True,
+        user_content = cast(
+            str | list[str | dict[str, Any]],
+            content_blocks if len(content_blocks) > 1 else run.input_text,
+        )
+        runtime_context_manager.add_message(
+            HumanMessage(content=user_content),
         )
 
         config = {
@@ -271,17 +311,17 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_text="",
                 last_tool_results=[],
             )
-            input_state: ReactGraphState | Command | None = initial_state
+            input_state: ReactGraphState | None = initial_state
             while True:
                 try:
-                    async for _ in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["values"],
+                    async for mode, value in graph.astream(
+                            input_state,
+                            config,
+                            stream_mode=["values", "custom"],
                     ):
-                        # 消费状态流仅用于推进图；canonical conversation state 的变更
-                        # 已由节点通过 RuntimeOperations 提交，不能从 graph stream 反推事实。
-                        continue
+                        # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
+                        # 统一写入 snapshot。两者都不是 Agent context 的来源。
+                        self._write_stream_item(operations, mode, value)
                 except Exception:
                     log.exception(
                         "workflow_graph_failed",
@@ -299,29 +339,4 @@ class ReactLikeWorkflow(AgentWorkflow):
                 tasks = state_snap.tasks
                 if not tasks:
                     break
-                interrupts = list(tasks[0].interrupts)
-                if not interrupts:
-                    break
-
-                # ★ 取消检查：graph 暂停在 interrupt()（等待审批），若 run 已取消则不恢复
-                if operations.is_current_run_cancelled():
-                    log.info(
-                        "workflow_interrupt_cancelled",
-                        extra={
-                            "msg": f"interrupt 暂停时 run 已取消，不再恢复，run_id={run_id}",
-                            "data": {"run_id": run_id},
-                        },
-                    )
-                    break
-
-                # 此分支仅在「存在 approval_resolver」时进入：无审批器时 tools 节点不会
-                # 调用 interrupt()，graph 不会暂停，外层循环已在上面 `not interrupts` 处退出。
-                interrupt_value = interrupts[0].value
-                pending = (
-                    interrupt_value.get(APPROVAL_INTERRUPT_KEY, [])
-                    if isinstance(interrupt_value, dict)
-                    else []
-                )
-                approval_resolver = runtime_config.approval_resolver
-                approved = approval_resolver(pending) if approval_resolver is not None else pending
-                input_state = Command(resume=approved)
+                break

@@ -1,9 +1,7 @@
 """ReAct-like 工作流的工具节点（``_tools_node``）。
 
-本模块只承载「工具节点」单一职责：在权限审批后执行工具并把观察结果追加回运行时上下文。
-审批编排（按 ``RuntimeConfig.approval_resolver`` 决定是否 ``interrupt()`` 暂停等待人工
-审批）已抽离到独立模块 ``approval``（``resolve_approved_calls``），本节点负责审批恢复后
-的取消检查、工具执行与占位闭合配对。工具执行通过 ``RuntimeOperations`` 完成，工具生命
+本模块只承载「工具节点」单一职责：执行工具并把观察结果追加回运行时上下文。
+工具执行通过 ``RuntimeOperations`` 完成，工具生命
 周期事实经明确的开始/完成回调写入 canonical conversation state；观察消息由 bridge 转为
 ``BaseMessage``
 经 ``_persist_tool_observations`` 写回 ``RuntimeContextManager``（**不进 graph state**，
@@ -11,10 +9,13 @@
 
 工具观察的增量落库与写回统一收敛在 ``_persist_tool_observations``：落库一条即写回一条，
 避免「部分落库、零写回」的撕裂状态，闭合上一轮模型节点写入的 ``AIMessage.tool_calls``
-配对。执行后取消判断与 ``deferred_repair_message`` 注入已下沉到 ``observe`` 节点
-（见 ``observation_node``），本节点只负责「审批 + 执行 + 配对闭合」，正常返回后经条件边
-进 ``observe`` 做「工具结果观察处理」的单一收口。执行前取消分支（工具尚未执行、无结果可
-观察）仍保留在本节点，补占位落库后直接终态。与模型节点共享的运行时原语见 ``common``。
+配对。执行后取消判断已下沉到 ``observe`` 节点
+（见 ``observation_node``），本节点只负责「审批 + 执行 + 配对闭合」，
+    配对闭合仅指已执行工具的正常配对，取消占位见下；正常返回后经条件边
+    进 ``observe`` 做「工具结果观察处理」的单一收口。执行前取消分支（工具尚未执行、无结果可
+观察）仍保留在本节点，仅写 canonical 取消审计终态并收口取消事件；模型协议占位闭合已统一
+    下沉到 ``RuntimeContextManager.load_message`` 在下次取数时自动补 ``ToolMessage`` 占位，
+        本节点不再补/落库占位。与模型节点共享的运行时原语见 ``common``。
 """
 
 import asyncio
@@ -22,26 +23,24 @@ import dataclasses
 from typing import Any
 
 import sqlalchemy
-from langgraph.types import interrupt
+from langchain_core.messages import BaseMessage
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.workflows.nodes.helper.approval import resolve_approved_calls
+from app.core.runtime.tool_execution.run_result import ToolRunResult
+from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     _runtime_context,
     emit_run_cancelled,
 )
-from app.models import RuntimeMessage
-from app.core.runtime.tool_execution.run_result import ToolRunResult
-from app.core.tools.schemas import ToolCall, ToolObservation
 from app.utils.trace_infra.redaction import redact_terminal_output
 
 from ..react.state import ReactGraphState
 
 
 def _persist_tool_observations(
-    obs_messages: list[RuntimeMessage],
+    obs_messages: list[BaseMessage],
 ) -> None:
     """将一批工具观察消息经 ``RuntimeContextManager`` 落库并同步写回运行时上下文。
 
@@ -52,7 +51,7 @@ def _persist_tool_observations(
     模型上下文由 ``RuntimeContextManager`` 独占管理。
 
     参数:
-        obs_messages: 本批次工具观察 ``RuntimeMessage`` 列表（已含 ``tool_call_id`` 元数据）。
+        obs_messages: 本批次工具观察 LangChain ``ToolMessage`` 列表。
 
     返回:
         无。
@@ -81,7 +80,7 @@ def _persist_tool_observations(
             _runtime_context().add_message(obs_message)
         except (sqlalchemy.exc.SQLAlchemyError, IndexError, ValueError, KeyError) as exc:
             # 仅捕获可预期的落库/上下文异常；其他异常（如编程错误）直接抛出不被吞。
-            tool_call_id = (obs_message.metadata or {}).get("tool_call_id", "")
+            tool_call_id = getattr(obs_message, "tool_call_id", "")
             log.exception(
                 "persist_tool_observations_failed",
                 extra={
@@ -148,7 +147,7 @@ def _build_tool_result_summaries(
 def _make_tool_lifecycle_callbacks(
     operations: Any,
     task_id: int,
-        run: Any,
+    run: Any,
 ) -> dict[str, Any]:
     """构造工具生命周期事实回调，不建立通用运行时事件适配层。
 
@@ -231,17 +230,7 @@ def _make_tool_lifecycle_callbacks(
 
 
 async def _tools_node(state: ReactGraphState) -> dict:
-    """ReAct 工具节点：审批 + 执行 + 配对闭合，产出工具结果摘要供 observe 观察。
-
-    节点按 ``RuntimeConfig.approval_resolver`` 决定是否需要审批（审批编排抽离到
-    ``approval.resolve_approved_calls``，行为契约见该模块）：
-
-    - 存在 ``approval_resolver``：用 ``interrupt()`` 暂停 graph 等待审批，审批结果
-      （批准的工具调用列表）通过 ``Command(resume=)`` 恢复；随后执行工具。
-    - 不存在 ``approval_resolver``（``None``）：视为「自动放行全部调用」，
-      **不经过 ``interrupt()``**，直接以 ``state.pending_tool_calls`` 作为已批准列表执行工具。
-      这样 graph 不会暂停，编排层循环可正常走到终态，避免「无审批器时反复
-      interrupt→resume 同一工具调用」的死循环。
+    """ReAct 工具节点：执行工具并产出结果摘要供 observe 观察。
 
     工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事实经明确的开始/完成回调写入
     canonical state；观察消息由 bridge 转为 ``BaseMessage`` 经 ``_persist_tool_observations``
@@ -263,56 +252,36 @@ async def _tools_node(state: ReactGraphState) -> dict:
         ``pending_tool_calls``；执行前取消分支置 ``terminal=True`` 且返回
         ``last_tool_results=[]``——因为 ``_after_tools`` 在 ``terminal`` 时直接 END、不进
         observe，返回摘要既无人消费又会撑大 checkpoint。执行后取消判断、错误计数/上限判定
-        与 ``deferred_repair_message`` 注入均已下沉到 ``observe`` 节点，本节点不再处理。
+        均已下沉到 ``observe`` 节点，本节点不再处理。
 
     副作用:
         - 经 ``_persist_tool_observations`` 把本批次工具观察消息逐条增量落库，并同步
           ``_runtime_context().add_message`` 写回运行时上下文，闭合上一轮 ``_model_node``
           写入的 ``AIMessage.tool_calls`` 配对；
         - 执行前取消分支（工具尚未执行、无结果可观察，不能下沉 observe）置 ``terminal=True``
-          让 graph 走 END；因提前 return 不进入 ``run_tool_calls``，由本节点经
-          ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面为上一轮
-          ``tool_calls`` 补同构占位并写回（占位字段与序列化逻辑 100% 同源 service，
-          不平行复制），消除 core 对 service 受保护成员的越界访问；
+          让 graph 走 END；因提前 return 不进入 ``run_tool_calls``，模型协议层面的配对闭合
+          统一由 ``RuntimeContextManager.load_message`` 在下次取数时自动补
+          ``ToolMessage`` 占位，本节点不再构造/落库占位消息、亦不越界访问 service 受保护成员；
         - 工具生命周期事实经明确回调写入 canonical state；状态写入 **run**。
     """
 
     rc = _runtime_config()  # 取运行时配置
     operations = rc.operations  # 领域操作
     task = operations.get_current_task()  # 任务（工具执行需要 task_id）
-    tool_calls = state.pending_tool_calls  # 来自 model 节点写入的待执行工具调用
+    tool_calls = state.pending_tool_calls["tool_calls"]  # 来自 model 节点写入的待执行工具调用
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
     calls_for_fact = [ToolCall.from_dict(call) for call in tool_calls]
     operations.ensure_tool_calls_pending(calls_for_fact)
-    if getattr(rc, "approval_resolver", None) is not None:
-        operations.request_tool_approval(calls_for_fact, step_id)
-        operations.mark_tool_calls_requires_action(calls_for_fact)
-
-    # 审批编排（独立模块）：无审批器自动放行，有审批器 interrupt 暂停 + resume。
-    # 注：interrupt 是「挂起续跑」而非「失败重放」——resume 后从此调用点原地继续，
-    # 本函数体不会从头重跑，故下方 run_tool_calls / _persist_tool_observations 仅执行一次，
-    # 不会因 checkpoint 重放而重复落库（model_node 也无 interrupt，不会被 resume 触发重跑）。
-    approved_dicts = resolve_approved_calls(rc, tool_calls, step_id, interrupt)
-    approved_ids = {
-        str(item.get("call_id")) for item in approved_dicts if item.get("call_id")
-    }
-    denied_calls = [
-        call for call in calls_for_fact if (call.call_id or call.tool_name) not in approved_ids
-    ]
-    if denied_calls:
-        operations.cancel_tool_calls(denied_calls)
+    approved_dicts = tool_calls
 
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
-    # ``ToolExecutionService`` 的取消兜底（``_build_result_with_cancel_placeholders``）在此
-    # 不会执行。但上一轮 ``_model_node`` 已把 ``AIMessage.tool_calls``
-    # 写入 ``RuntimeContextManager``，必须在本分支内为它们补同构占位 ``ToolMessage``，
-    # 否则下一轮模型请求会因悬空 ``tool_calls``
-    # 触发 OpenAI 协议校验失败。为保持与 service 内部协议字段完全同构、避免平行复制语义漂移，
-    # 经 ``RuntimeOperations.build_cancel_placeholder_messages`` 公开门面复用 service 的取消占位
-    # 实现（而非自拼 JSON、不手调 ``tool_cancelled`` 工厂），仅作「配对闭合」这一件职责，
-    # 工具执行与生命周期事实写入仍由 service 承担。
+    # ``ToolExecutionService`` 的取消兜底（原 ``_build_result_with_cancel_placeholders``）已
+    # 移除，模型协议配对闭合统一由 ``RuntimeContextManager.load_message`` 收口。上一轮
+    # ``_model_node`` 已把 ``AIMessage.tool_calls`` 写入 ``RuntimeContextManager``，会在
+    # 下次模型取数时被自动补 ``ToolMessage`` 占位，不会因悬空 ``tool_calls`` 触发协议校验失败；
+    # 本分支只负责 canonical 审计终态与收口取消事件，工具执行与生命周期事实写入由 service 承担。
     if operations.is_current_run_cancelled():
         log.info(
             "tools_node_cancelled",
@@ -321,30 +290,17 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": operations.get_current_run().id},
             },
         )
-        # 配对闭合：为上一轮已写出的 tool_calls 补 cancelled 占位。执行前分支提前
-        # return 不进 run_tool_calls，service 的兜底（_build_result_with_cancel_placeholders）
-        # 对此路径不生效，故调用 service 公开能力构造同构占位，保证协议字段与正常
-        # 执行路径（含执行中取消）100% 同源，不平行复制序列化逻辑。
-        cancel_calls = [
-            ToolCall.from_dict(call)
-            for call in state.pending_tool_calls
-            # 不过滤call_id未定义的情况，统一补占位，避免不配对
-        ]
-        operations.cancel_tool_calls(cancel_calls)
-        cancel_placeholders = operations.build_cancel_placeholder_messages(cancel_calls)
-        _persist_tool_observations(cancel_placeholders)
-    # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
+
+        operations.cancel_tool_calls(tool_calls)
+        # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
         # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
         # 经统一 emit_run_cancelled 构造（携带 langfuse_trace_id，与 model/observe 一致）。
         emit_run_cancelled(rc, step_id)
         return {
-            "pending_tool_calls": [],
+            "pending_tool_calls": {},
             "tool_error_count": state.tool_error_count,
             "terminal": True,
             "last_tool_results": [],
-            # 清空 deferred 防 checkpoint 残留（与 observe 各路径防残留契约一致）；
-            # terminal=True 直接 END 不消费，但避免下一轮/恢复时读到脏值。
-            "deferred_repair_message": "",
         }
 
     # 把审批结果 dict 重建为内部 ToolCall 值对象（经 ToolCall.from_dict 统一兜底字段，
@@ -359,7 +315,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     log.info(
         "tools_node_resumed",
         extra={
-            "msg": f"审批已恢复，准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
+            "msg": f"准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
             "data": {
                 "step_id": step_id,
                 "approved_count": len(approved_calls),
@@ -369,7 +325,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     )
     tool_run: ToolRunResult = await asyncio.to_thread(
         operations.run_tool_calls,
-        task.id,
+        str(task.id),
         approved_calls,
         step_id,
         running_loop=asyncio.get_running_loop(),
@@ -382,10 +338,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
-    # 逐条持久化本轮产生的工具观察消息，并同步写回运行时上下文
-    # （替代 run 结束后的批落库；写回使下一轮模型节点能看到工具结果）。
-    # 落库与写回逐条配对：落库一条即写回一条，避免「部分落库、零写回」撕裂。
-    _persist_tool_observations(tool_run.messages_for_model)
+    # 工具完成回调已在同一 mutation transaction 写入 snapshot 与完整 ToolMessage context；
+    # 这里仅消费执行结果生成 graph 摘要，避免重复追加同一 ToolMessage。
 
     success_count = sum(1 for o in observations if o.status == "success")
     log.info(

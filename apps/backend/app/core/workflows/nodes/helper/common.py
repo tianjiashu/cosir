@@ -16,33 +16,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from langgraph.config import get_config
 
 if TYPE_CHECKING:
     from app.core.context.runtime_context_manager import RuntimeContextManager
     from app.core.workflows.react.runtime_config import RuntimeConfig
-
-
-def _make_write_event() -> Callable[..., None]:
-    """返回供工具执行服务使用的 canonical tool-fact writer 回调。
-
-    工具执行服务当前仍以两个位置参数描述工具生命周期写入，但这里不再把旧事件
-    类型或 payload 类型带入 workflow 节点层；回调直接落到 ``RuntimeOperations`` 的
-    canonical writer 入口。它只用于 ``tools_node`` 的跨线程工具执行适配，不广播事件。
-
-    返回:
-        可供工具执行服务调用的 writer 回调。
-
-    异常:
-        RuntimeError: 在无 LangGraph 运行上下文处调用时由 ``get_config()`` 抛出。
-
-    副作用:
-        回调被调用时，经 ``RuntimeOperations`` 写入工具调用事实。
-    """
-    return cast(Callable[..., None], _runtime_config().operations.record_runtime_payload)
 
 
 def _runtime_config() -> RuntimeConfig:
@@ -106,8 +86,7 @@ def terminal_state(
     model / max_steps / observe 多个节点都把「终态」写成一组重复的硬字段字典
     （``step_count`` / ``repair_requested`` / ``requested_tool`` / ``final_response`` /
     ``terminal`` / ``pending_tool_calls``），手写易错且各处分歧。本函数收口为单一来源。
-    终态不再有后续模型步，故统一清空 ``deferred_repair_message``，避免残留进 checkpoint
-    与 observe 节点各分支的手动清空口径保持一致（P2-5 一致性收口）。
+    终态不再有后续模型步，统一收口为单一来源，避免各节点手写硬字段字典发散（P2-5 一致性收口）。
 
     参数:
         step_count: 当前步编号，直接落入 patch。
@@ -118,7 +97,7 @@ def terminal_state(
 
     返回:
         可直接 ``return`` 给 LangGraph 合并的 state patch 字典
-        （``pending_tool_calls`` 恒为 ``[]``、``deferred_repair_message`` 恒为 ``""``）。
+        （``pending_tool_calls`` 恒为 ``[]``）。
 
     异常:
         无。
@@ -133,5 +112,4 @@ def terminal_state(
         "final_response": final_response,
         "terminal": True,
         "pending_tool_calls": [],
-        "deferred_repair_message": "",
     }

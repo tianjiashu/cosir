@@ -6,7 +6,6 @@ state 随执行累积并写入 checkpoint；``RuntimeConfig`` 含不可序列化
 **不进入 checkpoint**，由编排层在 ``ReactLikeWorkflow.run()`` 时注入、graph 重放时重新注入。
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from langchain_core.language_models import BaseChatModel
@@ -14,7 +13,6 @@ from langchain_core.language_models import BaseChatModel
 from app.core.runtime.runtime_operations import RuntimeOperations
 from app.models import ConversationRunRecord
 from app.models.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.tools.schemas import ToolCall
 
 
 @dataclass
@@ -30,9 +28,6 @@ class RuntimeConfig:
         operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
         run: 当前执行的 Conversation Run 记录，节点经它写入 run 状态（单一事实来源）。
         model: 已绑定工具的 LangChain chat model 实例，供 model 节点推理。
-        approval_resolver: 可选的工具审批解析器；``tools`` 节点因 ``interrupt()`` 暂停时，
-            用它把待审批的工具调用解析为「批准执行的调用列表」。``None`` 表示自动放行全部调用，
-            且 ``tools`` 节点不调用 ``interrupt()``（不暂停 graph），直接执行工具。
         start_time: graph 开始执行的 ``time.perf_counter()`` 时间戳，用于在 ``run_finished``
             中计算耗时。
         usage_stats: run 级 token 与耗时累加器；model 节点在每次模型调用后把
@@ -51,11 +46,9 @@ class RuntimeConfig:
     operations: RuntimeOperations
     run: ConversationRunRecord
     model: BaseChatModel
-    # None 表示自动放行（tools 节点不调用 interrupt()）。
-    approval_resolver: Callable[[list[ToolCall]], list[ToolCall]] | None = None
     start_time: float = 0.0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
     langfuse_trace_id: str | None = None
-    thinking_channel: str | None = None
-    thinking_roundtrip: bool | None = None
+    thinking_channel: str = ""
+    thinking_roundtrip: bool = True
     vision_input_format: str = ""

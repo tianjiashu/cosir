@@ -26,8 +26,9 @@ import contextlib
 import functools
 import io
 import os
+from typing import Any
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.model_capability import (
@@ -216,7 +217,7 @@ def _encode_image_to_block(
         mime, data = _cached_encode(image_path, st.st_size, st.st_mtime)
     except Image.DecompressionBombError as exc:
         raise VisionImageError(f"image exceeds decompression bomb limit: {exc}") from exc
-    except (OSError, ValueError, Image.UnidentifiedImageError) as exc:
+    except (OSError, ValueError, UnidentifiedImageError) as exc:
         raise VisionImageError(f"failed to decode image: {exc}") from exc
 
     # 尺寸校验（统一 RGB 后取尺寸）
@@ -237,7 +238,7 @@ def build_user_content_blocks(
     vision_input_format: str,
     workspace_root: str | None = None,
     model_name: str | None = None,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """构造用户消息的内容 block 列表（文本 + 多模态图片），逐图失败隔离。
 
     流程（逐图隔离，单图失败不废整轮）：对每个 image_path ->
