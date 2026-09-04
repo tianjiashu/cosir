@@ -1,31 +1,24 @@
-"""运行时上下文条目值对象。"""
+"""运行时上下文条目值对象。
+
+一条 ``ContextEntry`` 承载一条原生 LangChain 消息及其 Run 归属，是 ``core/context``
+层对外表达「上下文变化」的统一载体（监听器、事务、working copy 均消费它）。
+"""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models import RuntimeMessage
+from langchain_core.messages import BaseMessage
 
 
 @dataclass(frozen=True)
 class ContextEntry:
-    """承载消息及其在 task 上下文中的生命周期归属。
-
-    内存中的条目即「进模型的上下文」：只有会进入模型上下文的消息才被持有，
-    是否进模型的标记由持久化层 ``TurnMessageModel.in_context`` 承载，不在此
-    值对象上冗余。
+    """承载一条原生 LangChain 消息及其 Run 归属。
 
     参数:
-        message: 模型无关的运行时消息。
-        run_id: 消息所属 turn；task 级消息使用 ``None``。
-
-    返回:
-        不可变的上下文条目。
-
-    异常:
-        无。
-
-    副作用:
-        无。
+        message: 将直接传给模型的 LangChain 原生消息。
+        run_id: 产生该消息的 ConversationRun id；Task 级 system prompt 为 None。
     """
 
-    message: RuntimeMessage
+    message: BaseMessage
     run_id: int | None
