@@ -5,41 +5,52 @@
 它不把 assistant-ui 类型传入 core、service 或 storage。
 """
 
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 from assistant_stream import create_run
 from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import Depends, HTTPException
 
-from app.api.dependencies import (
-    get_conversation_command_service,
-    get_conversation_mutation_writer,
-    get_conversation_run_executor,
-    get_conversation_state_service,
-    get_runtime,
-    get_task_service,
-)
+from app.api.dependencies import get_runtime
 from app.app import app
 from app.assistant_transport.request import (
     AddMessageCommand,
     AssistantTransportRequest,
 )
-from app.config.logging.logger import log
-from app.core.runtime.runner import AgentRuntime
-from app.assistant_transport.state.conversation_state_snapshot import (
-    ConversationStateSnapshot as AssistantTransportState,
-)
-from app.assistant_transport.service.conversation_command_service import (
-    ConversationCommandService,
-    ConversationRunStartResult,
-)
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_run_subscription_service import (
     ConversationRunSubscriptionService,
 )
-from app.assistant_transport.service.conversation_snapshot_service import ConversationStateMutation
-from app.service.task.conversation_state_service import ConversationStateService
+from app.assistant_transport.service.conversation_task_snapshot_service import (
+    ConversationStateMutation,
+    ConversationTaskSnapshotService,
+)
+from app.assistant_transport.state.conversation_state_snapshot import (
+    ConversationStateSnapshot as AssistantTransportState,
+)
+from app.config.logging.logger import log
+from app.core.runtime.runner import AgentRuntime
+from app.assistant_transport.service.conversation_command_service import (
+    ConversationCommandService,
+    ConversationRunStartResult,
+)
+from app.service.depends import get_conversation_run_executor, get_conversation_task_snapshot_service, get_task_service, \
+    get_conversation_command_service, get_conversation_run_service
+from app.task_runtime.service.task_service import TaskService
+from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.utils.datetime_utils import preview
+
+
+def _empty_snapshot() -> AssistantTransportState:
+    """返回任务首屏使用的固定空 snapshot。"""
+
+    return {
+        "messages": [],
+        "run": {"runId": None, "status": "idle"},
+        "approvals": {},
+        "error": None,
+    }
 
 
 def _raise_transport_error(
@@ -86,17 +97,15 @@ def _raise_transport_error(
 @app.post("/assistant")
 async def assistant_transport(
     request: AssistantTransportRequest,
-    runtime: AgentRuntime = Depends(get_runtime),  # noqa: B008
-    conversation_state_service: ConversationStateService = Depends(get_conversation_state_service),  # noqa: B008
-    run_service: ConversationCommandService = Depends(get_conversation_command_service),  # noqa: B008
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),  # noqa: B008
+    task_service: TaskService = Depends(get_task_service),  
+    run_service: ConversationCommandService = Depends(get_conversation_command_service),
 ) -> AssistantTransportResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
 
     参数:
         request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。
         runtime: 通过依赖注入取得的 AgentRuntime。
-        conversation_state_service: 负责读取任务 ConversationStateSnapshot 的 service。
+        snapshot_service: 负责读取 Task snapshot 的唯一 owner。
         run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。
         run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。
 
@@ -110,17 +119,10 @@ async def assistant_transport(
         创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；
         运行期间更新数据库和 canonical conversation facts。
     """
-    task_id = request.taskId
     command = next(
         command for command in request.commands if isinstance(command, AddMessageCommand)
     )
-    start_result: ConversationRunStartResult | None = None
     input_text = "\n".join(part.text for part in command.message.parts)
-    bootstrap_state = (
-        conversation_state_service.ensure_task_snapshot(task_id)
-        if task_id is not None
-        else {"messages": [], "run": {"runId": None, "status": "idle"}, "error": None}
-    )
     provider_id = request.providerId
     model_name = request.modelName
     if provider_id is None or model_name is None:
@@ -131,8 +133,28 @@ async def assistant_transport(
             retryable=False,
             command_id=command.commandId,
         )
+
+    # 创建或获取任务
+    task = task_service.get_or_create_task(task_id=request.taskId, workspace_id=request.workspaceId, title=preview(input_text),
+                                           creation_command_id=command.commandId, )
+    task_id = task.id
+
+    task_space: TaskRuntimeSpace = task_runtime_spaces.get_or_create(task_id)
+    task_lock = task_space.lock
+
+    acquire = task_lock.acquire(blocking=True, timeout=10.0)
+
+    if not acquire:
+        _raise_transport_error(
+            500,
+            "RUN_START_FAILED",
+            "无法创建对话运行，请稍后重试",
+            retryable=True,
+            command_id=command.commandId,
+        )
+
     try:
-        start_result = run_service.start(
+        start_result: ConversationRunStartResult = run_service.start(
             command_id=command.commandId,
             command_type=command.type,
             payload_hash=request.payload_hash(),
@@ -140,14 +162,25 @@ async def assistant_transport(
             provider_id=provider_id,
             model_name=model_name,
             reasoning_effort=request.reasoningEffort,
-            task_id=request.taskId,
-            workspace_id=request.workspaceId,
-            initial_state=bootstrap_state,
+            task_id=task_id,
         )
-        if task_id is None:
-            if start_result.task is None:
-                raise RuntimeError("new conversation did not return its task")
-            task_id = start_result.task.id
+        run = start_result.run
+        initial_state = start_result.initial_state
+
+        await _start_executor(run.id)
+
+        stream = create_run(
+            lambda controller: _subscribe_run_state(
+                controller,
+                task_id,
+                run.id,
+            ),
+            state=initial_state,
+        )
+        response = AssistantTransportResponse(stream)
+        response.headers["X-Cosir-Task-Id"] = str(task_id)
+        response.headers["X-Cosir-Thread-Id"] = f"task-{task_id}"
+        return response
     except Exception:
         log.exception(
             "assistant_transport_run_start_failed",
@@ -162,40 +195,13 @@ async def assistant_transport(
             "无法创建对话运行，请稍后重试",
             retryable=True,
         )
+    finally:
+        task_lock.release()
 
-    run = start_result.run
-    initial_state: AssistantTransportState = conversation_state_service.build_initial_state(
-        task_id, run.id, input_text
-    )
-    # 立即在端点内启动后台执行，而不是把 Agent 执行绑定在 SSE 回调里：
-    # create_run 的回调只有在客户端真正消费响应流时才会执行；若客户端在流建立前
-    # 断开（刷新/切页/代理中断），回调永不执行，run 将永久滞留在 pending。
-    # 先启动执行器，再用纯订阅回调回流状态，即可让运行生命周期与 HTTP 订阅彻底解耦。
-    await _start_executor(run_executor, runtime, run.id)
-    # 构造 SSE 状态流响应：
-    # - state=initial_state：连接建立后第一帧立即下发首屏快照
-    #   （用户消息 + run=pending），前端不白屏。
-    # - 回调只做 canonical state 订阅推送，不驱动 Agent（已在上面启动）。
-    stream = create_run(
-        lambda controller: _subscribe_run_state(
-            controller,
-            initial_state,
-            task_id,
-            run.id,
-            run_executor,
-            conversation_state_service,
-        ),
-        state=initial_state,
-    )
-    response = AssistantTransportResponse(stream)
-    response.headers["X-Cosir-Task-Id"] = str(task_id)
-    response.headers["X-Cosir-Thread-Id"] = f"task-{task_id}"
-    return response
+
 
 
 async def _start_executor(
-    run_executor: ConversationRunExecutor,
-    runtime: AgentRuntime,
     run_id: int,
 ) -> None:
     """认领并启动指定 run 的后台执行；已被其他执行者持有时静默放行。
@@ -221,7 +227,8 @@ async def _start_executor(
     副作用:
         在当前事件循环注册后台执行 task；HTTP 订阅断开不会取消它。
     """
-
+    run_executor = get_conversation_run_executor()
+    runtime = get_runtime()
     def runner(active_run: Any) -> Any:
         """Adapt the executor runner port to ``AgentRuntime.execute_run``."""
         return runtime.execute_run(active_run)
@@ -255,25 +262,28 @@ async def _start_executor(
 
 async def _subscribe_run_state(
     controller: Any,
-    initial_state: AssistantTransportState,
     task_id: int,
     run_id: int,
-    run_executor: ConversationRunExecutor,
-    conversation_state_service: ConversationStateService,
 ) -> None:
     """按 run 身份订阅任务快照增量并推送给前端，不驱动 Agent。
 
     供新命令主路径与 duplicate 幂等重试路径复用。仅把已提交事实的状态增量推回
     前端，不调用 run_executor.start。
     """
-    subscription = ConversationRunSubscriptionService(conversation_state_service)
+    run_executor = get_conversation_run_executor()
+    snapshot_service = get_conversation_task_snapshot_service()
+    subscription = ConversationRunSubscriptionService(snapshot_service)
 
     async def is_terminal() -> bool:
         """返回既有 run 是否已进入终态。"""
         status = await run_executor.status(run_id)
         if status is None:
-            snapshot = conversation_state_service.build_run_state(task_id, run_id)
-            return snapshot["run"]["status"] in {"completed", "failed", "cancelled"}
+            snapshot = snapshot_service.load(task_id)
+            return snapshot is None or snapshot["run"]["status"] in {
+                "completed",
+                "failed",
+                "cancelled",
+            }
         return status.status in {"completed", "failed", "cancelled"}
 
     async for snapshot in subscription.stream(
@@ -304,15 +314,18 @@ def _apply_state_mutation(controller: Any, mutation: ConversationStateMutation) 
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
     task_id: int,
-    task_service: Any = Depends(get_task_service),  # noqa: B008
-    conversation_state_service: Any = Depends(get_conversation_state_service),  # noqa: B008
-) -> dict:
+    task_service: Any = Depends(get_task_service),  
+    run_service: Any = Depends(get_conversation_run_service),  
+    snapshot_service: ConversationTaskSnapshotService = Depends(  
+        get_conversation_task_snapshot_service
+    ),
+) -> dict[str, object]:
     """返回某任务的首屏历史 state（服务端权威对话视图）。
 
     参数:
         task_id: URL 中的任务标识。
         task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。
-        conversation_state_service: 把任务轮次事实投影为中性对话视图的 service。
+        snapshot_service: Task snapshot 唯一事实源。
 
     返回:
         与 POST 端点形状一致的中性 wire state 字典（含 ``messages`` / ``run``）；
@@ -331,38 +344,42 @@ async def assistant_transport_state(
         task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    conversation_state_service.ensure_task_snapshot(task_id)
-    return conversation_state_service.build_initial_history_state(task_id)
+    state = snapshot_service.ensure_state_snapshot(task_id)
+    runs = run_service.list_runs_for_task(task_id)
+    if runs:
+        latest = runs[-1]
+        state = snapshot_service.reconcile_run(task_id, latest.id, latest.status) or state
+    return cast(dict[str, object], state)
 
 
 @app.post("/runs/{run_id}/cancel")
 async def cancel_run(
     run_id: int,
-    mutation_writer: ConversationMutationWriter = Depends(get_conversation_mutation_writer),  # noqa: B008
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),  # noqa: B008
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),  
 ) -> dict[str, object]:
     """显式取消一个 Conversation Run。
 
-    ``run_id`` 当前与持久化 ``ConversationRun.id`` 一一对应，但该映射只在 API 适配层使用；
-    持久化条件状态转移先落定取消事实，再向进程内执行器发出协作取消信号。HTTP
-    断连不会调用本端点，重复取消不会覆盖已落定的终态。
+    表现层只做输入校验、调用业务层与异常映射，不再编排「先落库再中断」的业务时序——
+    取消编排（进程内取消信号 → 事务性状态转移 → 中断后台 task）已收口到
+    ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会调用本端点，重复取消
+    不会覆盖已落定的终态。
 
     参数:
         run_id: Conversation Run 标识。
-        mutation_writer: 提供事务性 active → cancelled 状态转移的服务。
-        run_executor: 向当前进程中的执行者发出取消信号的服务。
+        run_executor: 取消编排唯一入口（信号标记 + 仲裁落库 + task 中断）。
 
     返回:
         包含 ``run_id`` 与 ``status`` 的 JSON 对象。
 
     异常:
-        HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409。
+        HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409；
+        取消编排内部失败时返回 500。
 
     副作用:
-        先写入持久化取消状态，再尽力中断当前进程中的执行任务。
+        经执行器先标记进程内取消信号，再落库取消终态，再尽力中断当前进程中的执行任务。
     """
     try:
-        cancellation = mutation_writer.cancel_run(run_id, end_reason="user_cancelled")
+        cancelled = await run_executor.cancel(run_id, end_reason="user_cancelled")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
     except Exception as exc:
@@ -371,7 +388,6 @@ async def cancel_run(
             extra={"msg": "取消 Conversation Run 失败", "data": {"run_id": run_id}},
         )
         raise HTTPException(status_code=500, detail="failed to cancel run") from exc
-    if cancellation is None:
+    if not cancelled:
         raise HTTPException(status_code=409, detail="run is not in a cancellable state")
-    await run_executor.cancel(run_id)
     return {"run_id": run_id, "status": "cancelled"}
