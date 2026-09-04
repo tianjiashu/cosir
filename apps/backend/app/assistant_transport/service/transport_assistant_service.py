@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_runtime
+from app.assistant_transport.assistant_api import _raise_transport_error
 from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
+from app.assistant_transport.service.conversation_run_subscription_service import ConversationRunSubscriptionService
 from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
+    ConversationTaskSnapshotService, ConversationStateMutation,
 )
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot, ConversationStateSnapshot
+from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.conversation_command_record import ConversationCommandRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
+from app.service.depends import get_conversation_run_executor
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import preview
@@ -33,8 +39,8 @@ class ConversationRunStartResult:
     initial_state: ConversationStateSnapshot | None = None
 
 
-class ConversationCommandService:
-    """在一个数据库事务中占用 command 并创建、绑定 ConversationRun。"""
+class TransportAssistantService:
+
 
     def __init__(self) -> None:
         """初始化命令与轮次编排依赖。"""
@@ -44,6 +50,9 @@ class ConversationCommandService:
         self._mutation_writer = ConversationMutationWriter()
         self._snapshots = ConversationTaskSnapshotService()
         self._task = service_depends.get_task_service()
+        self.run_executor = get_conversation_run_executor()
+        self.runtime = get_runtime()
+
 
     def start(
             self,
@@ -122,3 +131,110 @@ class ConversationCommandService:
 
         self._mutation_writer.create_run_baseline(task_id, result.run.id, input_text)
         return result
+
+    async def start_executor(
+            self,
+            run_id: int,
+    ) -> None:
+        """认领并启动指定 run 的后台执行；已被其他执行者持有时静默放行。
+
+        参数:
+            run_executor: 进程级后台执行器单例。
+            runtime: AgentRuntime，用于组装与启动恢复一致的 runner（仅调用 execute_run）。
+            run_id: 待执行的 Conversation Run 标识。
+
+        返回:
+            无。
+
+        异常:
+            HTTPException: ``run_executor.start`` 抛出 ``ValueError`` 以外的异常时
+                （如 run 状态认领的持久化失败），先记录含堆栈的错误日志，再抛 500
+                RUN_START_FAILED（retryable），与端点创建路径的错误契约一致。
+                ``ValueError`` 只表示「run 已被其他执行者认领/正在执行」，按并发
+                竞态静默放行，本请求退化为纯订阅；``KeyError``（run 不存在）在两个
+                调用点均不可达——主路径的 run 由 ``run_service.start`` 刚在同一
+                事务中创建，duplicate 路径的 run 经已有命令读取成功，
+                若因并发删除等极端原因出现则归入其他异常统一落日志。
+
+        副作用:
+            在当前事件循环注册后台执行 task；HTTP 订阅断开不会取消它。
+        """
+
+
+        def runner(active_run: Any) -> Any:
+            """Adapt the executor runner port to ``AgentRuntime.execute_run``."""
+            return self.runtime.execute_run(active_run)
+
+        try:
+            await self.run_executor.start(run_id, runner)
+        except ValueError:
+            # 并发窗口内已被其他执行者认领：让既有执行者继续，本请求只订阅。
+            log.info(
+                "assistant_transport_executor_already_claimed",
+                extra={
+                    "msg": "执行器已被其他执行者认领，本请求退化为纯订阅",
+                    "data": {"run_id": run_id},
+                },
+            )
+        except Exception:
+            log.exception(
+                "assistant_transport_executor_start_failed",
+                extra={
+                    "msg": "后台执行器启动失败",
+                    "data": {"run_id": run_id},
+                },
+            )
+            _raise_transport_error(
+                500,
+                "RUN_START_FAILED",
+                "无法启动对话运行，请稍后重试",
+                retryable=True,
+            )
+
+    async def subscribe_run_state(
+            self,
+            controller: Any,
+            task_id: int,
+            run_id: int,
+    ) -> None:
+        """按 run 身份订阅任务快照增量并推送给前端，不驱动 Agent。
+
+        供新命令主路径与 duplicate 幂等重试路径复用。仅把已提交事实的状态增量推回
+        前端，不调用 run_executor.start。
+        """
+        subscription = ConversationRunSubscriptionService(self._snapshots)
+
+        async def is_terminal() -> bool:
+            """返回既有 run 是否已进入终态。"""
+            status = await self.run_executor.status(run_id)
+            if status is None:
+                snapshot = self._snapshots.load(task_id)
+                return snapshot is None or snapshot["run"]["status"] in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }
+            return status.status in {"completed", "failed", "cancelled"}
+
+        async for snapshot in subscription.stream(
+                task_id,
+                run_id,
+                lambda: controller.is_cancelled,
+                is_terminal=is_terminal,
+        ):
+            for mutation in snapshot.mutations:
+                self._apply_state_mutation(controller, mutation)
+
+    def _apply_state_mutation(self, controller: Any, mutation: ConversationStateMutation) -> None:
+        """把中性快照 mutation 适配为 assistant-stream StateProxy 操作。"""
+
+        if not mutation.path:
+            controller.state = mutation.value
+            return
+        if mutation.kind == "append-text":
+            controller.append_state_text(list(mutation.path), str(mutation.value))
+            return
+        target = controller.state
+        for key in mutation.path[:-1]:
+            target = target[key]
+        target[mutation.path[-1]] = mutation.value

@@ -119,9 +119,7 @@ class AssistantTransportRequest(BaseModel):
             )
         # 首版运行模型在启动对话时必须同时确定厂商与模型，二者构成执行上下文；
         # 缺失其一会让 Turn 无法绑定执行器，属纯 wire 契约约束，前移至此。
-        has_message = any(
-            isinstance(command, AddMessageCommand) for command in self.commands
-        )
+        has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
         if has_message and (
             self.providerId is None or self.modelName is None or not self.modelName.strip()
         ):

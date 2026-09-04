@@ -1,27 +1,19 @@
 """进程内 ConversationRun 后台执行器。"""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
 
-from app.config.logging.logger import log
-from app.models import ConversationRunRecord, ConversationRunStatus
-from app.service.depends import get_conversation_run_service
 from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
+from app.config.logging.logger import log
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.models import ConversationRunRecord, ConversationRunStatus
+from app.service.depends import get_conversation_mutation_writer, get_conversation_run_service
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
-
-
-class ConversationRunExecutionPort(Protocol):
-    """执行器所需的 ConversationRun 服务端口。"""
-
-    def get_run(self, run_id: int) -> ConversationRunRecord:
-        """读取运行记录。"""
-
-    def claim_pending_run(self, run_id: int) -> bool:
-        """原子启动 pending run。"""
-
 
 @dataclass(frozen=True)
 class ConversationRunState:
@@ -44,20 +36,23 @@ class ConversationRunExecutor:
 
     def __init__(
         self,
+        run_service: object | None = None,
         mutation_writer: ConversationMutationWriter | None = None,
-        run_service: ConversationRunExecutionPort | None = None,
+        cancellation_signal: object | None = None,
     ) -> None:
         """初始化执行器及其进程内运行注册表。"""
-        self._run_service = (
-            run_service if run_service is not None else get_conversation_run_service()
+
+        self._run_service = run_service or get_conversation_run_service()
+        self._mutation_writer = (
+            mutation_writer
+            if mutation_writer is not None or run_service is not None
+            else get_conversation_mutation_writer()
         )
-        self._mutation_writer = mutation_writer
-        self._lock = asyncio.Lock()
-        self._task_locks: dict[int, asyncio.Lock] = {}
+        self._signal = cancellation_signal or cancellation_registry
         self._executions: dict[int, _Execution] = {}
 
     async def start(self, run_id: int, runner: ConversationRunRunner) -> asyncio.Task[None]:
-        """原子启动 run 并创建独立后台 task。
+        """登记 run 并创建独立后台 task；后台 task 取得 task 锁后才认领 run。
 
         参数:
             run_id: 运行对应的 ``ConversationRunRecord.id``。
@@ -68,29 +63,27 @@ class ConversationRunExecutor:
 
         异常:
             KeyError: ``run_id`` 对应的 run 不存在。
-            ValueError: 该 run 已有未结束的后台执行。
+            ValueError: 该 run 已有未结束的后台执行，或已被其他执行器认领。
 
         副作用:
             在当前事件循环创建后台 task；HTTP 订阅断开不会取消它。
         """
 
+        #检查是否有未结束的后台执行
+        existing = self._executions.get(run_id)
+        if existing is not None and not existing.task.done():
+            raise ValueError(f"run {run_id} is already executing")
+
         run = self._run_service.get_run(run_id)
-        async with self._lock:
-            existing = self._executions.get(run_id)
-            if existing is not None and not existing.task.done():
-                raise ValueError(f"run {run_id} is already executing")
-            if not self._run_service.claim_pending_run(run_id):
-                raise ValueError(f"run {run_id} was claimed by another executor")
-            run = self._run_service.get_run(run_id)
-            state = ConversationRunState(run_id, ConversationRunStatus.PENDING)
-            task = asyncio.create_task(self._execute(run_id, run, runner))
-            self._executions[run_id] = _Execution(state, task)
-            return task
+        state = ConversationRunState(run_id, ConversationRunStatus.PENDING)
+        task = asyncio.create_task(self._execute(run_id, run, runner))
+        self._executions[run_id] = _Execution(state, task)
+        return task
 
     async def close(self) -> None:
         """优雅关闭执行器并取消活动执行。"""
-        async with self._lock:
-            executions = list(self._executions.values())
+
+        executions = list(self._executions.values())
         for execution in executions:
             if not execution.task.done():
                 execution.task.cancel()
@@ -98,30 +91,66 @@ class ConversationRunExecutor:
             await asyncio.gather(
                 *(execution.task for execution in executions), return_exceptions=True
             )
+        task_runtime_spaces.close()
 
-    async def cancel(self, run_id: int) -> bool:
-        """显式取消一个活动 run。
+    async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
+        """显式取消一个 run：标记运行时信号、仲裁落库、中断后台执行。
+
+        取消时序收敛于本方法（全进程唯一取消编排入口）：
+        1. 先在进程内取消信号源标记——工具可能在 ``asyncio.to_thread`` 工作线程
+           任意时刻检查信号，信号先行把协作取消的漏检窗口归零；
+        2. 再经 canonical writer 做事务性 active → cancelled 状态转移，兼作
+           「是否可取消」的仲裁：run 不存在抛 ``KeyError``，已处于终态返回 ``None``；
+        3. 最后中断当前进程中的后台执行 task。
+
+        mark 与落库之间无 ``await``，事件循环不会插入其他协程，因此执行器
+        ``CancelledError`` 分支的 ``executor_cancelled`` 收尾总会被 ``settle_run``
+        的终态守卫吞掉，调用方传入的 ``end_reason``（如 ``user_cancelled``）不会被覆盖。
 
         参数:
             run_id: 待取消的运行标识。
+            end_reason: 写入持久化事实的取消原因，默认 ``user_cancelled``。
 
         返回:
-            成功向活动 task 发出取消请求时为 ``True``；未知或已结束 run 为 ``False``。
+            取消成功（已落库并尽力中断；未装配 writer 时至少中断本地 task）为
+            ``True``；run 已处于不可取消终态为 ``False``。
 
         异常:
-            无。取消请求是幂等的。
+            KeyError: ``run_id`` 对应的 run 不存在——先撤销已标记的信号再向上传播，
+                由 API 层映射为 404。
 
         副作用:
-            向目标 asyncio task 发出取消请求；HTTP 订阅断开不会调用此方法。
+            先写进程内取消信号，再落库取消终态，再向活动 asyncio task 发出取消请求；
+            仲裁失败的路径会撤销信号保持一致性；HTTP 订阅断开不会调用本方法。
         """
 
-        async with self._lock:
-            execution = self._executions.get(run_id)
-            if execution is None or execution.task.done():
-                return False
-            execution.state = ConversationRunState(run_id, ConversationRunStatus.CANCELLED)
-            execution.task.cancel()
-            return True
+        self._signal.mark_cancelled(run_id)
+        settled: object
+        try:
+            if self._mutation_writer is None:
+                log.warning(
+                    "conversation_run_cancel_missing_writer",
+                    extra={
+                        "msg": "执行器未装配 canonical writer，仅中断本地执行，不落库取消终态",
+                        "data": {"run_id": run_id},
+                    },
+                )
+                settled = True
+            else:
+                settled = self._mutation_writer.cancel_run(run_id, end_reason)
+        except KeyError:
+            self._signal.clear(run_id)
+            raise
+        if settled is None:
+            self._signal.clear(run_id)
+            return False
+        execution = self._executions.get(run_id)
+        if execution is None or execution.task.done():
+            self._signal.clear(run_id)
+            return False
+        execution.state = ConversationRunState(run_id, ConversationRunStatus.CANCELLED)
+        execution.task.cancel()
+        return True
 
     async def get_status(self, run_id: int) -> ConversationRunState | None:
         """查询一个 run 的当前进程内状态快照。
@@ -130,7 +159,7 @@ class ConversationRunExecutor:
             run_id: 运行标识。
 
         返回:
-            已知 run 的不可变状态快照；未知 run 返回 ``None``。
+            已知 run 的不可变状态快照；未知 run 返回 None。
 
         异常:
             无。
@@ -139,9 +168,14 @@ class ConversationRunExecutor:
             无。
         """
 
-        async with self._lock:
-            execution = self._executions.get(run_id)
-            return None if execution is None else execution.state
+        execution = self._executions.get(run_id)
+        if execution is not None:
+            return execution.state
+        try:
+            run = self._run_service.get_run(run_id)
+        except KeyError:
+            return None
+        return ConversationRunState(run_id, ConversationRunStatus(run.status))
 
     async def status(self, run_id: int) -> ConversationRunState | None:
         """查询运行状态；这是 ``get_status`` 的简短别名。
@@ -150,7 +184,7 @@ class ConversationRunExecutor:
             run_id: 运行标识。
 
         返回:
-            与 ``get_status`` 相同的状态快照或 ``None``。
+            与 ``get_status`` 相同的状态快照或 None。
 
         异常:
             无。
@@ -167,61 +201,107 @@ class ConversationRunExecutor:
         run: ConversationRunRecord,
         runner: ConversationRunRunner,
     ) -> None:
-        """执行 runner、消费事件生成器并收束状态。
+        """执行 runner 并收束状态：管理执行注册表生命周期。
 
-        同 task 的多次 run 经进程内 per-task 锁串行，确保「同一 task 内一次只有
-        一个 running run」（不同 task 之间仍可并发），与桌面端并发语义一致。锁在
-        后台 task 内持有，端点 ``start`` 立即返回 SSE 首帧，不被阻塞。
+        参数:
+            run_id: 当前运行标识。
+            run: 已认领的运行记录。
+            runner: 实际 Agent runtime 执行函数。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: 该 run 已被其它执行器认领（``claim_pending_run`` 返回 False）。
+            ``_run_and_settle`` 的异常继续向上传播（后台 task 内由 asyncio 捕获）。
+
+        副作用:
+            经 ``claim_pending_run`` 做同一 Task 内 Run 的认领栅栏（DB 级互斥，无进程内锁）；
+            退出时移除执行注册并清理进程内取消信号（清理唯一收口，覆盖取消/失败/完成全部路径）。
         """
 
+        # 同一 Task 的 Run 串行由 DB 级认领保证，进程内不再持锁。
+        if not self._run_service.claim_pending_run(run_id):
+            raise ValueError(f"run {run_id} was claimed by another executor")
         await self._set_status(run_id, ConversationRunStatus.RUNNING)
-        async with self._lock:
-            task_lock = self._task_locks.setdefault(run.task_id, asyncio.Lock())
-        await task_lock.acquire()
         try:
-            try:
-                await runner(run)
-                if self._mutation_writer is not None:
-                    self._mutation_writer.settle_run(
-                        run_id,
-                        "completed",
-                    )
-                await self._set_status(run_id, ConversationRunStatus.COMPLETED)
-            except asyncio.CancelledError:
-                if self._mutation_writer is not None:
-                    self._mutation_writer.settle_open_tool_calls(
-                        run_id, "cancelled", "executor_cancelled"
-                    )
-                    self._mutation_writer.settle_run(
-                        run_id,
-                        "cancelled",
-                        end_reason="executor_cancelled",
-                    )
-                await self._set_status(run_id, ConversationRunStatus.CANCELLED)
-                raise
-            except Exception:
-                if self._mutation_writer is not None:
-                    self._mutation_writer.settle_open_tool_calls(run_id, "failed", "runtime_failed")
-                    self._mutation_writer.settle_run(
-                        run_id,
-                        "failed",
-                        end_reason="runtime_failed",
-                    )
-                await self._set_status(run_id, ConversationRunStatus.FAILED)
-                log.exception(
-                    "conversation_run_failed",
-                    extra={"msg": "后台 ConversationRun 执行失败", "data": {"run_id": run_id}},
-                )
+            await self._run_and_settle(run_id, run, runner)
         finally:
-            task_lock.release()
             current = self._executions.get(run_id)
-            if current is not None and current.task is asyncio.current_task():
+            try:
+                current_task = asyncio.current_task()
+            except RuntimeError:
+                current_task = None
+            if current is not None and current.task is current_task:
                 self._executions.pop(run_id, None)
+            self._signal.clear(run_id)
+
+    async def _run_and_settle(
+        self,
+        run_id: int,
+        run: ConversationRunRecord,
+        runner: ConversationRunRunner,
+    ) -> None:
+        """执行 runner 并按结果收束持久化终态与进程内状态。
+
+        参数:
+            run_id: 当前运行标识。
+            run: 已认领的运行记录。
+            runner: 实际 Agent runtime 执行函数。
+
+        返回:
+            无。
+
+        异常:
+            runner 的异常被记录并转换为 failed；取消异常按 cancelled 收束后继续抛出。
+
+        副作用:
+            经 canonical writer 写入 completed / cancelled / failed 终态与未决工具收口，
+            并更新执行器内该 run 的不可变状态快照。
+        """
+
+        try:
+            await runner(run)
+            if self._mutation_writer is not None:
+                self._mutation_writer.settle_run(run_id, "completed")
+            await self._set_status(run_id, ConversationRunStatus.COMPLETED)
+        except asyncio.CancelledError:
+            if self._mutation_writer is not None:
+                self._mutation_writer.settle_open_tool_calls(
+                    run_id, "cancelled", "executor_cancelled"
+                )
+                self._mutation_writer.settle_run(
+                    run_id, "cancelled", end_reason="executor_cancelled"
+                )
+            await self._set_status(run_id, ConversationRunStatus.CANCELLED)
+            raise
+        except Exception:
+            if self._mutation_writer is not None:
+                self._mutation_writer.settle_open_tool_calls(run_id, "failed", "runtime_failed")
+                self._mutation_writer.settle_run(run_id, "failed", end_reason="runtime_failed")
+            await self._set_status(run_id, ConversationRunStatus.FAILED)
+            log.exception(
+                "conversation_run_failed",
+                extra={"msg": "后台 ConversationRun 执行失败", "data": {"run_id": run_id}},
+            )
 
     async def _set_status(self, run_id: int, status: ConversationRunStatus) -> None:
-        """在锁内更新指定 run 的状态。"""
+        """更新指定 run 的进程内状态快照。
 
-        async with self._lock:
-            execution = self._executions.get(run_id)
-            if execution is not None:
-                execution.state = ConversationRunState(run_id, status)
+        参数:
+            run_id: 运行标识。
+            status: 新的进程内状态。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            更新执行器内对应条目的不可变状态快照。
+        """
+
+        execution = self._executions.get(run_id)
+        if execution is not None:
+            execution.state = ConversationRunState(run_id, status)

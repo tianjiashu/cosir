@@ -1,24 +1,21 @@
-"""中性 ConversationState part 契约。"""
+"""Conversation Transport 的 part（消息片段）契约集合。
 
-from app.assistant_transport.state.conversation_state_part.reasoning_part import ConversationStateReasoningPart
-from app.assistant_transport.state.conversation_state_part.text_part import ConversationStateTextPart
-from app.assistant_transport.state.conversation_state_part.tool_call_part import (
-    ConversationStateToolApproval,
-    ConversationStateToolCallPart,
-    ConversationStateToolError,
-)
+每个 part 类型独立成文件，便于按职责演进与复用。本包统一导出所有 part 类型、
+part 联合类型 ConversationStatePart 以及工具调用状态枚举 ToolCallStatus。
+"""
+
+from .conversation_state_reasoning_part import ConversationStateReasoningPart
+from .conversation_state_text_part import ConversationStateTextPart
+from .conversation_state_tool_call_part import ConversationStateToolCallPart, ToolCallStatus
 
 ConversationStatePart = (
-    ConversationStateTextPart
-    | ConversationStateReasoningPart
-    | ConversationStateToolCallPart
+    ConversationStateTextPart | ConversationStateReasoningPart | ConversationStateToolCallPart
 )
 
 __all__ = [
     "ConversationStatePart",
     "ConversationStateReasoningPart",
     "ConversationStateTextPart",
-    "ConversationStateToolApproval",
     "ConversationStateToolCallPart",
-    "ConversationStateToolError",
+    "ToolCallStatus",
 ]

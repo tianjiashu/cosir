@@ -17,6 +17,10 @@ from app.assistant_transport.request import (
     AddMessageCommand,
     AssistantTransportRequest,
 )
+from app.assistant_transport.service.conversation_command_service import (
+    ConversationCommandService,
+    ConversationRunStartResult,
+)
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_run_subscription_service import (
     ConversationRunSubscriptionService,
@@ -25,19 +29,20 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
     ConversationStateMutation,
     ConversationTaskSnapshotService,
 )
+from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot as AssistantTransportState,
 )
 from app.config.logging.logger import log
-from app.core.runtime.runner import AgentRuntime
-from app.assistant_transport.service.conversation_command_service import (
-    ConversationCommandService,
-    ConversationRunStartResult,
+from app.service.depends import (
+    get_conversation_command_service,
+    get_conversation_run_executor,
+    get_conversation_run_service,
+    get_conversation_task_snapshot_service,
+    get_task_service, get_transport_assistant_service,
 )
-from app.service.depends import get_conversation_run_executor, get_conversation_task_snapshot_service, get_task_service, \
-    get_conversation_command_service, get_conversation_run_service
 from app.task_runtime.service.task_service import TaskService
-from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+from app.task_runtime.task_runtime_lock import TaskRuntimeLockBusy
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.datetime_utils import preview
 
@@ -98,7 +103,7 @@ def _raise_transport_error(
 async def assistant_transport(
     request: AssistantTransportRequest,
     task_service: TaskService = Depends(get_task_service),  
-    run_service: ConversationCommandService = Depends(get_conversation_command_service),
+    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> AssistantTransportResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
 
@@ -139,22 +144,22 @@ async def assistant_transport(
                                            creation_command_id=command.commandId, )
     task_id = task.id
 
-    task_space: TaskRuntimeSpace = task_runtime_spaces.get_or_create(task_id)
-    task_lock = task_space.lock
+    task_space = task_runtime_spaces.get_or_create(task_id)
+    task_space_lock = task_space.lock
 
-    acquire = task_lock.acquire(blocking=True, timeout=10.0)
+    acquire = task_space_lock.acquire(blocking=True, timeout=10)
 
     if not acquire:
         _raise_transport_error(
-            500,
-            "RUN_START_FAILED",
-            "无法创建对话运行，请稍后重试",
-            retryable=True,
+            409,
+            "RUN_ALREADY_STARTED",
+            "该任务正在执行，请等待当前运行结束后再发送",
+            retryable=False,
             command_id=command.commandId,
         )
 
     try:
-        start_result: ConversationRunStartResult = run_service.start(
+        start_result: ConversationRunStartResult = transport_service.start(
             command_id=command.commandId,
             command_type=command.type,
             payload_hash=request.payload_hash(),
@@ -167,10 +172,10 @@ async def assistant_transport(
         run = start_result.run
         initial_state = start_result.initial_state
 
-        await _start_executor(run.id)
+        await transport_service.start_executor(run.id)
 
         stream = create_run(
-            lambda controller: _subscribe_run_state(
+            lambda controller: transport_service.subscribe_run_state(
                 controller,
                 task_id,
                 run.id,
@@ -196,119 +201,8 @@ async def assistant_transport(
             retryable=True,
         )
     finally:
-        task_lock.release()
+        task_space_lock.release()
 
-
-
-
-async def _start_executor(
-    run_id: int,
-) -> None:
-    """认领并启动指定 run 的后台执行；已被其他执行者持有时静默放行。
-
-    参数:
-        run_executor: 进程级后台执行器单例。
-        runtime: AgentRuntime，用于组装与启动恢复一致的 runner（仅调用 execute_run）。
-        run_id: 待执行的 Conversation Run 标识。
-
-    返回:
-        无。
-
-    异常:
-        HTTPException: ``run_executor.start`` 抛出 ``ValueError`` 以外的异常时
-            （如 run 状态认领的持久化失败），先记录含堆栈的错误日志，再抛 500
-            RUN_START_FAILED（retryable），与端点创建路径的错误契约一致。
-            ``ValueError`` 只表示「run 已被其他执行者认领/正在执行」，按并发
-            竞态静默放行，本请求退化为纯订阅；``KeyError``（run 不存在）在两个
-            调用点均不可达——主路径的 run 由 ``run_service.start`` 刚在同一
-            事务中创建，duplicate 路径的 run 经已有命令读取成功，
-            若因并发删除等极端原因出现则归入其他异常统一落日志。
-
-    副作用:
-        在当前事件循环注册后台执行 task；HTTP 订阅断开不会取消它。
-    """
-    run_executor = get_conversation_run_executor()
-    runtime = get_runtime()
-    def runner(active_run: Any) -> Any:
-        """Adapt the executor runner port to ``AgentRuntime.execute_run``."""
-        return runtime.execute_run(active_run)
-
-    try:
-        await run_executor.start(run_id, runner)
-    except ValueError:
-        # 并发窗口内已被其他执行者认领：让既有执行者继续，本请求只订阅。
-        log.info(
-            "assistant_transport_executor_already_claimed",
-            extra={
-                "msg": "执行器已被其他执行者认领，本请求退化为纯订阅",
-                "data": {"run_id": run_id},
-            },
-        )
-    except Exception:
-        log.exception(
-            "assistant_transport_executor_start_failed",
-            extra={
-                "msg": "后台执行器启动失败",
-                "data": {"run_id": run_id},
-            },
-        )
-        _raise_transport_error(
-            500,
-            "RUN_START_FAILED",
-            "无法启动对话运行，请稍后重试",
-            retryable=True,
-        )
-
-
-async def _subscribe_run_state(
-    controller: Any,
-    task_id: int,
-    run_id: int,
-) -> None:
-    """按 run 身份订阅任务快照增量并推送给前端，不驱动 Agent。
-
-    供新命令主路径与 duplicate 幂等重试路径复用。仅把已提交事实的状态增量推回
-    前端，不调用 run_executor.start。
-    """
-    run_executor = get_conversation_run_executor()
-    snapshot_service = get_conversation_task_snapshot_service()
-    subscription = ConversationRunSubscriptionService(snapshot_service)
-
-    async def is_terminal() -> bool:
-        """返回既有 run 是否已进入终态。"""
-        status = await run_executor.status(run_id)
-        if status is None:
-            snapshot = snapshot_service.load(task_id)
-            return snapshot is None or snapshot["run"]["status"] in {
-                "completed",
-                "failed",
-                "cancelled",
-            }
-        return status.status in {"completed", "failed", "cancelled"}
-
-    async for snapshot in subscription.stream(
-        task_id,
-        run_id,
-        lambda: controller.is_cancelled,
-        is_terminal=is_terminal,
-    ):
-        for mutation in snapshot.mutations:
-            _apply_state_mutation(controller, mutation)
-
-
-def _apply_state_mutation(controller: Any, mutation: ConversationStateMutation) -> None:
-    """把中性快照 mutation 适配为 assistant-stream StateProxy 操作。"""
-
-    if not mutation.path:
-        controller.state = mutation.value
-        return
-    if mutation.kind == "append-text":
-        controller.append_state_text(list(mutation.path), str(mutation.value))
-        return
-    target = controller.state
-    for key in mutation.path[:-1]:
-        target = target[key]
-    target[mutation.path[-1]] = mutation.value
 
 
 @app.get("/tasks/{task_id}/assistant/state")
