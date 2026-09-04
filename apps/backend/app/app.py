@@ -45,16 +45,17 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
+from app.core.tools import ToolSystem
 from app.hook import HookContext, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import (
     close_service_dependencies,
+    get_conversation_mutation_writer,
     get_conversation_run_service,
-    get_conversation_state_service,
+    get_conversation_task_context_service,
     get_delegation_service,
     initialize_service_dependencies,
 )
-from app.core.tools import ToolSystem
 
 
 @asynccontextmanager
@@ -149,15 +150,12 @@ def _mark_interrupted_conversation_runs_failed() -> None:
     并基于已持久化的消息事实继续对话。
     """
     run_service = get_conversation_run_service()
-    state_service = get_conversation_state_service()
+    context_service = get_conversation_task_context_service()
+    mutation_writer = get_conversation_mutation_writer()
     for run in run_service.list_recoverable():
-        # 兼容进程升级前已经存在、但尚未有 snapshot 行的任务；之后的所有
-        # Transport/runtime 读取都只走 snapshot，不在失败收口时临时拼装 state。
-        state_service.ensure_task_snapshot(run.task_id)
-        run_service.fail_run_if_pending_or_running(
-            run.id,
-            end_reason="backend_restarted",
-        )
+        run_service.fail_run_if_pending_or_running(run.id, "backend_restarted")
+        mutation_writer.recover_run_snapshot(run.task_id, run.id)
+        context_service.recover_interrupted_run(run.task_id, run.id)
 
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)

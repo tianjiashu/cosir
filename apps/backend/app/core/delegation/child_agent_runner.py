@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
+from app.assistant_transport.service.conversation_task_snapshot_service import (
+    ConversationTaskSnapshotService,
+)
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.models.result.delegation_result import DelegationResult
 from app.service.depends import get_conversation_run_service
-from app.service.task.conversation_state_service import ConversationStateService
 
 
 class ChildAgentRunner:
@@ -19,6 +21,7 @@ class ChildAgentRunner:
         self,
         run_agent: Callable[[AgentProfile], Awaitable[None]],
         should_cancel: Callable[[str], bool] | None = None,
+        run_executor: object | None = None,
     ) -> None:
         """初始化 child agent 运行桥接器。
 
@@ -37,6 +40,7 @@ class ChildAgentRunner:
 
         self._run_agent = run_agent
         self._should_cancel = should_cancel or (lambda _run_id: False)
+        self._run_executor = run_executor
 
     def run_child(
         self,
@@ -64,7 +68,7 @@ class ChildAgentRunner:
             写入 error 级日志。
         """
 
-        run_id = child_profile.run.id if child_profile.run is not None else ""
+        run_id = str(child_profile.run.id) if child_profile.run is not None else ""
         if self._is_running_event_loop_thread():
             log.error(
                 "delegation_runner_event_loop_conflict",
@@ -137,7 +141,7 @@ class ChildAgentRunner:
             执行 AgentRuntime.run_agent；不消费运行时事件。
         """
 
-        run_id = child_profile.run.id if child_profile.run is not None else ""
+        run_id = str(child_profile.run.id) if child_profile.run is not None else ""
         try:
             if self._should_cancel(run_id):
                 return DelegationResult(
@@ -145,7 +149,19 @@ class ChildAgentRunner:
                     child_run_id=run_id,
                     error="child run cancelled",
                 )
-            await self._run_agent(child_profile)
+            executor = self._run_executor
+            if executor is None:
+                from app.service.depends import get_conversation_run_executor
+
+                executor = get_conversation_run_executor()
+            child_run = child_profile.run
+            if child_run is None:
+                raise RuntimeError("child profile has no conversation run")
+            execution = await executor.start(
+                child_run.id,
+                lambda _run: self._run_agent(child_profile),
+            )
+            await execution
         except Exception as exc:
             log.exception(
                 "delegation_child_run_failed",
@@ -161,7 +177,7 @@ class ChildAgentRunner:
             return DelegationResult(
                 status="failed",
                 child_run_id=run_id,
-                    error=str(exc) or "child run failed",
+                error=str(exc) or "child run failed",
             )
         if self._should_cancel(run_id):
             return DelegationResult(
@@ -171,7 +187,7 @@ class ChildAgentRunner:
             )
         child_run = get_conversation_run_service().get_run(int(run_id))
         if child_run.status == "completed":
-            state = ConversationStateService().build_run_state(child_run.task_id, child_run.id)
+            state = ConversationTaskSnapshotService().ensure_state_snapshot(child_run.task_id)
             summary = "child run completed"
             for message in state["messages"]:
                 if message["role"] == "assistant":

@@ -1,0 +1,71 @@
+"""Task 级 LangChain Agent context 值对象。"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+
+from langchain_core.messages import BaseMessage, _message_from_dict, message_to_dict
+
+from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+
+
+@dataclass(frozen=True)
+class ConversationTaskContextRecord:
+
+    task_id: int
+    run_id: int | None
+    message: BaseMessage
+    include_in_context: bool
+    sequence: int
+
+    @classmethod
+    def _from_model(cls, model: ConversationTaskContextModel) -> ConversationTaskContextRecord:
+        """从持久化模型重建一条上下文记录。
+
+        参数:
+            model: ``conversation_task_contexts`` 行实例，列已含单条消息的全部字段。
+
+        返回:
+            含 task_id、run_id、反序列化消息、纳入标记与排序的记录。
+
+        异常:
+            json.JSONDecodeError: ``message_json`` 不是合法 JSON。
+            KeyError: ``message_json`` 反序列化结果不是 ``message_to_dict`` 约定结构。
+
+        副作用:
+            无副作用；纯映射。
+        """
+
+        message_doc = json.loads(model.message_json)
+        return cls(
+            task_id=model.task_id,
+            run_id=model.run_id,
+            message=_message_from_dict(message_doc),
+            include_in_context=model.include_in_context,
+            sequence=model.sequence,
+        )
+
+    def _to_model(self) -> ConversationTaskContextModel:
+        """将记录映射为持久化模型实例。
+
+        本方法只负责字段映射，不生成 ``task_id`` 之外的主键或唯一约束相关派生值；
+        ``sequence`` 由调用方在落盘前按任务维度统一分配以保证唯一性。
+
+        返回:
+            含 task_id、run_id、消息 JSON、纳入标记与排序的模型实例。
+
+        异常:
+            TypeError: ``message`` 无法被 ``message_to_dict`` 序列化。
+
+        副作用:
+            无副作用；纯映射。
+        """
+
+        return ConversationTaskContextModel(
+            task_id=self.task_id,
+            run_id=self.run_id,
+            message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
+            include_in_context=self.include_in_context,
+            sequence=self.sequence,
+        )

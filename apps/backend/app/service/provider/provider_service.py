@@ -24,9 +24,9 @@ from time import perf_counter
 
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
-from app.service.provider.connection_test_result import ConnectionTestResult
 from app.models import ProviderRecord
 from app.service import depends as service_depends
+from app.service.provider.connection_test_result import ConnectionTestResult
 from app.storage.crud.provider_crud import ProviderCrud
 
 
@@ -282,6 +282,8 @@ class ProviderService:
             ``provider_connection_test_succeeded`` 或
             ``provider_connection_test_failed`` 日志。
         """
+        if provider.id is None:
+            raise ValueError("ProviderRecord.id 不能为空")
         capability = ProviderCapability.get_capability(provider.name)
 
         test_model = capability.models[0]
@@ -332,6 +334,7 @@ class ProviderService:
             elapsed_ms=elapsed_ms,
         )
 
+    @staticmethod
     async def _acompletion_ping(
         *,
         model: str,

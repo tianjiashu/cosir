@@ -195,7 +195,6 @@ class LogQueryService:
             level_counts=level_counts,
         )
 
-
     def _normalize_limit(self, limit: int) -> int:
         """校验并归一化 limit。
 

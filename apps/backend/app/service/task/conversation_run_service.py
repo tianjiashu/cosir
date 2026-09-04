@@ -5,21 +5,24 @@
 职责边界：
 - 负责：run 创建（含任务最新 run 更新）、run 查询与状态更新、pending run 的原子启动。
 - 不负责：直接 SQL 操作（委托给 ``ConversationRunCrud``/``TaskCrud``）；不负责对话消息事实读写
-  （由 ``ConversationMutationWriter`` 与 ``ConversationRunMessageStore`` 负责）。
+  （由 ``ConversationMutationWriter`` 与 Task context owner 负责）。
 """
 
 from sqlalchemy.orm import Session
+from langchain_core.messages import AIMessage
 
+from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
+from app.assistant_transport.service.conversation_task_snapshot_service import (
+    ConversationTaskSnapshotService,
+)
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
-from app.models import ConversationRunRecord
+from app.models import ConversationRunRecord, ConversationRunStatus
 from app.models.attachment_ref import AttachmentRef
 from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
-from app.assistant_transport.service.conversation_snapshot_service import ConversationTaskSnapshotService
 from app.storage.store_engines import main_session_factory
 from app.utils.file_utils import render_attachment_refs_to_text
 
@@ -173,10 +176,9 @@ class ConversationRunService:
                 image_paths=image_paths,
                 session=session,
             )
-            self._snapshots.ensure_in_session(
-                session,
+            self._snapshots.ensure_state_snapshot(
                 task_id,
-                {"messages": [], "run": {"runId": run.id, "status": status}, "error": None},
+                session,
             )
             return run
 
@@ -192,12 +194,7 @@ class ConversationRunService:
                 image_paths=image_paths,
                 session=managed_session,
             )
-            state = self._snapshots.ensure_in_session(
-                managed_session,
-                task_id,
-                {"messages": [], "run": {"runId": run.id, "status": status}, "error": None},
-            )
-        self._snapshots.hydrate(task_id, state)
+            state = self._snapshots.ensure_state_snapshot(task_id)
         return run
 
     def get_run(self, run_id: int) -> ConversationRunRecord:
@@ -210,41 +207,14 @@ class ConversationRunService:
         """返回应用启动时可恢复的 pending/running 运行。"""
         return self._run.list_recoverable()
 
-    def cancel_run_if_active(self, run_id: int, end_reason: str) -> ConversationRunRecord | None:
-        """Cancel a pending/running Conversation Run atomically.
-
-        业务语义：仅 ``pending`` / ``running`` 可进入 ``cancelled`` 终态；该约束收敛在
-        本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。
-
-        参数:
-            run_id: 待取消的 Conversation Run 标识。
-            end_reason: 取消原因。
-
-        返回:
-            成功取消时返回更新后的 ConversationRunRecord；run 已处于非 active 状态时返回 None。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            条件满足时更新 run 状态为 cancelled 并写入 end_reason。
-        """
-
-        mutation = self._conversation_writer.cancel_run(run_id, end_reason)
-        return None if mutation is None else self._run.get(run_id)
-
-    def complete_run_if_running(
-        self, run_id: int, response_text: str
-    ) -> ConversationRunRecord | None:
-        """Complete a running Conversation Run and persist its response atomically.
+    def complete_run_if_running(self, run_id: int) -> ConversationRunRecord | None:
+        """Complete a running Conversation Run atomically.
 
         业务语义：仅 ``running`` 可进入 ``completed`` 终态并落库回复文本；约束收敛在
         本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。
 
         参数:
             run_id: 待完成的 Conversation Run 标识。
-            response_text: 兼容旧调用方的参数；正文由 canonical conversation writer 写入。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -254,11 +224,32 @@ class ConversationRunService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 run 状态为 completed；回复正文由 canonical writer 写入快照。
+            条件满足时更新 run 状态为 completed。
         """
 
-        mutation = self._conversation_writer.settle_run(run_id, "completed")
-        return None if mutation is None else self._run.get(run_id)
+        record = self._run.update_status_if_in(
+            run_id, ConversationRunStatus.COMPLETED.value,
+            (ConversationRunStatus.RUNNING.value,), None,
+        )
+        if record is None:
+            return None
+        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "completed")
+        return self._run.get(run_id)
+
+    def complete_run_with_message(
+        self, run_id: int, message: AIMessage, end_reason: str | None = None
+    ) -> ConversationRunRecord | None:
+        """将 Run 标记 completed，并更新其 snapshot 展示状态。"""
+
+        record = self._run.update_status_if_in(
+            run_id, ConversationRunStatus.COMPLETED.value,
+            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
+            end_reason,
+        )
+        if record is None:
+            return None
+        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "completed", end_reason)
+        return self._run.get(run_id)
 
     def fail_run_if_running(
         self, run_id: int, end_reason: str | None = None
@@ -283,47 +274,41 @@ class ConversationRunService:
             条件满足时更新 run 状态为 failed（并可选写入 end_reason）。
         """
 
-        mutation = self._conversation_writer.settle_run(run_id, "failed", end_reason=end_reason)
-        return None if mutation is None else self._run.get(run_id)
+        record = self._run.update_status_if_in(
+            run_id, ConversationRunStatus.FAILED.value,
+            (ConversationRunStatus.RUNNING.value,), end_reason,
+        )
+        if record is None:
+            return None
+        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "failed", end_reason)
+        return self._run.get(run_id)
 
     def fail_run_if_pending_or_running(
         self, run_id: int, end_reason: str | None = None
     ) -> ConversationRunRecord | None:
         """将尚未启动或正在执行的 Conversation Run 原子落定为 failed。"""
-        mutation = self._conversation_writer.settle_run(run_id, "failed", end_reason=end_reason)
-        return None if mutation is None else self._run.get(run_id)
+        record = self._run.update_status_if_in(
+            run_id, ConversationRunStatus.FAILED.value,
+            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value), end_reason,
+        )
+        if record is None:
+            return None
+        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "failed", end_reason)
+        return self._run.get(run_id)
 
-    def has_conversation_run_status(self, run_id: int | None, status: str) -> bool:
-        """Return whether the Conversation Run currently has the requested status.
+    def cancel_run_if_running(
+        self, run_id: int, end_reason: str = "user_cancelled"
+    ) -> ConversationRunRecord | None:
+        """将 active Run 标记 cancelled，并更新 snapshot 展示状态。"""
 
-        参数:
-            run_id: 目标轮次标识，允许为 ``None``（调用方缺陷时按非目标状态处理）。
-            status: 待比对的状态字符串（如 ``cancelled`` / ``running``）。
-
-        返回:
-            run 存在且状态匹配时返回 True；run 不存在或状态不符时返回 False。
-
-        异常:
-            无。``run_id`` 为 ``None`` 属于调用方缺陷，记 warn 后返回 False 而非抛错，
-            避免取消检测在非法输入下静默失效；run 已删除/不存在按「非目标状态」处理
-            （``KeyError`` 转 ``False``），防止取消检测因 ``KeyError`` 被上层吞掉而失效，
-            导致已取消的 run 仍继续进入工具执行。
-        """
-
-        if run_id is None:
-            log.warning(
-                "conversation_run_status_null_id",
-                extra={
-                    "msg": "has_conversation_run_status 收到空 run_id，"
-                    "按非目标状态处理（调用方缺陷）",
-                    "data": {"run_id": None, "status": status},
-                },
-            )
-            return False
-        try:
-            return self._run.get(run_id).status == status
-        except KeyError:
-            return False
+        record = self._run.update_status_if_in(
+            run_id, ConversationRunStatus.CANCELLED.value,
+            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value), end_reason,
+        )
+        if record is None:
+            return None
+        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "cancelled", end_reason)
+        return self._run.get(run_id)
 
     def claim_pending_run(self, run_id: int) -> bool:
         """以条件更新方式将 pending Conversation Run 标记为 running。
@@ -346,5 +331,6 @@ class ConversationRunService:
         副作用:
             条件满足时更新 run 状态为 running。
         """
-
-        return self._conversation_writer.claim_pending_run(run_id)
+        row = self._run.update_status_if_in(run_id=run_id, target_status=ConversationRunStatus.RUNNING.value,
+                                              allowed_statuses=(ConversationRunStatus.PENDING.value,))
+        return row is not None

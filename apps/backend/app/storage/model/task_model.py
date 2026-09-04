@@ -32,9 +32,6 @@ class TaskModel(StorageBase):
         default=0,
         comment="最近一次上下文窗口已用 token（total 由 resolve_context_window 动态计算，不落库）",
     )
-    message_sequence: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
 
     __table_args__ = (
         Index("idx_tasks_parent_task_id", "parent_task_id"),

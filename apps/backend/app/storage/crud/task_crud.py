@@ -49,17 +49,16 @@ class TaskCrud:
             raise KeyError(task_id)
         return TaskRecord.from_model(task)
 
-
     def create(
-            self,
-            workspace_id: int,
-            title: str,
-            task_type: str = "user",
-            parent_task_id: int | None = None,
-            parent_run_id: int | None = None,
-            delegation_id: int | None = None,
-            creation_command_id: str | None = None,
-            session: Session | None = None,
+        self,
+        workspace_id: int,
+        title: str,
+        task_type: str = "user",
+        parent_task_id: int | None = None,
+        parent_run_id: int | None = None,
+        delegation_id: int | None = None,
+        creation_command_id: str | None = None,
+        session: Session | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
@@ -94,23 +93,37 @@ class TaskCrud:
         """
         if session is None:
             with self._session_factory.begin() as session:
-                return self._build_and_flush(session, workspace_id, title, task_type,
-                                             parent_task_id, parent_run_id, delegation_id,
-                                             creation_command_id)
-        return self._build_and_flush(session, workspace_id, title, task_type,
-                                     parent_task_id, parent_run_id, delegation_id,
-                                     creation_command_id)
+                return self._build_and_flush(
+                    session,
+                    workspace_id,
+                    title,
+                    task_type,
+                    parent_task_id,
+                    parent_run_id,
+                    delegation_id,
+                    creation_command_id,
+                )
+        return self._build_and_flush(
+            session,
+            workspace_id,
+            title,
+            task_type,
+            parent_task_id,
+            parent_run_id,
+            delegation_id,
+            creation_command_id,
+        )
 
     def _build_and_flush(
-            self,
-            session: Session,
-            workspace_id: int,
-            title: str,
-            task_type: str,
-            parent_task_id: int | None,
-            parent_run_id: int | None,
-            delegation_id: int | None,
-            creation_command_id: str | None,
+        self,
+        session: Session,
+        workspace_id: int,
+        title: str,
+        task_type: str,
+        parent_task_id: int | None,
+        parent_run_id: int | None,
+        delegation_id: int | None,
+        creation_command_id: str | None,
     ) -> TaskRecord:
         """在给定会话中构造并 flush 一条 task 记录。
 
@@ -136,8 +149,6 @@ class TaskCrud:
         model = TaskModel(
             workspace_id=workspace_id,
             title=title,
-            created_at=to_text(utc_now()),
-            updated_at=to_text(utc_now()),
             task_type=task_type,
             parent_task_id=parent_task_id,
             parent_run_id=parent_run_id,
@@ -145,9 +156,11 @@ class TaskCrud:
             creation_command_id=creation_command_id,
             context_usage_used=0,
         )
-        session.add(model)
+        new_model: TaskModel | None = session.add(model)
+        if new_model is None:
+            raise RuntimeError("Failed to add task model to session")
         session.flush()
-        return TaskRecord.from_model(model)
+        return TaskRecord.from_model(new_model)
 
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。

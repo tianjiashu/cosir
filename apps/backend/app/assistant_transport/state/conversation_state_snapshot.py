@@ -1,44 +1,20 @@
 """Conversation Transport state 的中性 JSON 契约。"""
 
-from typing import Literal, NotRequired, TypedDict
+from typing import TypedDict
 
-from app.assistant_transport.state.conversation_state_part import ConversationStatePart
-
-
-class ConversationStateRun(TypedDict):
-    """当前 Task 的 UI 运行状态。"""
-
-    runId: int | None
-    status: str
-
-
-class ConversationStateError(TypedDict):
-    """面向 UI 的稳定错误结构。"""
-
-    code: str
-    message: str
-    retryable: bool
-
-
-class ConversationStateMessage(TypedDict):
-    """一条面向 Transport 的 user/assistant 消息。"""
-
-    id: str
-    runId: NotRequired[int | None]
-    role: Literal["user", "assistant"]
-    status: str
-    endReason: str | None
-    createdAt: str
-    updatedAt: NotRequired[str]
-    parts: list[ConversationStatePart]
+from app.assistant_transport.state.conversation_state_error import ConversationStateError
+from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
+from app.assistant_transport.state.conversation_state_run import ConversationStateRun
 
 
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。"""
 
-    messages: list[ConversationStateMessage]
+    # 有序消息列表,key为ConversationTaskContextRecord的sequence
+    messages: dict[int, ConversationStateMessage]
     run: ConversationStateRun
     approvals: dict[str, object]
+    context_usage: float
     error: ConversationStateError | None
 
 

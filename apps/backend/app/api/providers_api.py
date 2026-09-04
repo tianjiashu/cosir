@@ -18,8 +18,7 @@ from app.core.llm_provider.capability.provider_capability import (
     _SUPPORT_PROVIDERS,
     ProviderCapability,
 )
-from app.service.provider import ProviderService
-from app.service.provider import ConnectionTestResult
+from app.service.provider import ConnectionTestResult, ProviderService
 
 
 @app.get("/providers/catalog", response_model=list[ProviderCapabilityResponse])

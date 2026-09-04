@@ -18,7 +18,7 @@ from pydantic import field_validator
 from pydantic.dataclasses import dataclass
 
 from app.storage.model.model_entry_model import ModelEntryModel
-from app.utils.datetime_utils import from_text, to_text
+from app.utils.datetime_utils import from_text
 
 
 def _normalize_required_text(value: object) -> str:
@@ -70,6 +70,7 @@ class ModelEntryRecord:
     id: int | None
     provider_id: int
     model_name: str
+    display_name: str
     max_context_window: int
     created_at: datetime | None
     updated_at: datetime | None
@@ -118,8 +119,8 @@ class ModelEntryRecord:
             "supports_video": self.supports_video,
             "enabled": self.enabled,
             "sort_order": self.sort_order,
-            "created_at": to_text(self.created_at),
-            "updated_at": to_text(self.updated_at),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
     @classmethod
@@ -182,8 +183,8 @@ class ModelEntryRecord:
             "sort_order": self.sort_order,
             "supports_image": self.supports_image,
             "supports_video": self.supports_video,
-            "created_at": to_text(self.created_at),
-            "updated_at": to_text(self.updated_at),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
         if self.id:
             model_kwargs["id"] = self.id

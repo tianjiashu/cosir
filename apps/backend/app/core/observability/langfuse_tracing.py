@@ -233,21 +233,21 @@ def _mask_langfuse_otel_spans(*, params: Any) -> Any:
 def conversation_run_trace(metadata: TraceMetadata) -> Iterator[ConversationRunTraceResult]:
     """打开 turn 级根 observation，并产出待注入 workflow 的 LangChain callbacks 列表与 trace_id。
 
-    未启用 → yield ``ConversationRunTraceResult([], None)``，完全空操作（零开销路径）。启用 → 构造 Langfuse
-    客户端，经 ``start_as_current_observation(as_type="span")`` 建立 turn 根 observation（该 span
-    由 OTel 自动生成 trace_id 并成为 current context），用 ``propagate_attributes`` 写 trace 级
-    属性（session/user/tags/metadata），再在该上下文内构造 ``CallbackHandler``——不传
-    ``trace_context``，使 LLM generation observation 经 OTel current context 自然传播自动挂到该
-    根下（同一 trace），随后 yield ``ConversationRunTraceResult([handler], root_span.trace_id)``。任何
-    Langfuse 侧异常 → ``log.exception`` 后降级为 yield ``ConversationRunTraceResult([], None)``，绝不中断
-    turn 执行。
+    未启用 → yield ``ConversationRunTraceResult([], None)``，完全空操作（零开销路径）。
+    启用 → 构造 Langfuse 客户端，经 ``start_as_current_observation(as_type="span")`` 建立
+    turn 根 observation（该 span 由 OTel 自动生成 trace_id 并成为 current context），用
+    ``propagate_attributes`` 写 trace 级属性（session/user/tags/metadata），再在该上下文内
+    构造 ``CallbackHandler``——不传 ``trace_context``，使 LLM generation observation 经 OTel
+    current context 自然传播自动挂到该根下（同一 trace），随后 yield
+    ``ConversationRunTraceResult([handler], root_span.trace_id)``。任何 Langfuse 侧异常 →
+    ``log.exception`` 后降级为 yield ``ConversationRunTraceResult([], None)``，绝不中断 turn 执行。
 
     参数:
         metadata: 本次 turn 的可观测元数据（task/turn/agent/workspace 标识）。
 
     生成:
-        ``ConversationRunTraceResult``：callbacks 列表与本 turn 根 observation 的实际 Langfuse trace_id
-        （未启用或根 observation 无 trace_id 时为 None；后者同时记 warning 以便排查）。
+        ``ConversationRunTraceResult``：callbacks 列表与本 turn 根 observation 的实际 Langfuse
+        trace_id（未启用或根 observation 无 trace_id 时为 None；后者同时记 warning 以便排查）。
 
     异常:
         不向上抛出：Langfuse 客户端/observation 异常被内部捕获并记日志。
@@ -270,14 +270,14 @@ def conversation_run_trace(metadata: TraceMetadata) -> Iterator[ConversationRunT
 
         client = _build_langfuse_client()
         trace_metadata: dict[str, str] = {
-            "task_id": metadata.task_id,
-            "run_id": metadata.run_id,
+            "task_id": str(metadata.task_id),
+            "run_id": str(metadata.run_id),
         }
         root_span_cm = client.start_as_current_observation(
             as_type="span", name=f"turn {metadata.run_id}"
         )
         attr_cm = propagate_attributes(
-            session_id=metadata.task_id,
+            session_id=str(metadata.task_id),
             user_id=metadata.agent_id,
             tags=["coding-agent"],
             metadata=trace_metadata,

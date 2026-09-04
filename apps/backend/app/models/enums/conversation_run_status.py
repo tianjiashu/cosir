@@ -19,6 +19,7 @@ class ConversationRunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
     def __str__(self) -> str:
         """返回状态稳定字符串值。
 

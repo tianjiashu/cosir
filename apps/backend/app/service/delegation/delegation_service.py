@@ -98,7 +98,7 @@ class DelegationService:
         self,
         delegation_id: int,
         error: str,
-        child_task_id: str | None = None,
+        child_task_id: int | None = None,
         **_unused_options: object,
     ) -> None:
         """把 delegation 标记为 failed。"""
@@ -111,7 +111,7 @@ class DelegationService:
         self,
         delegation_id: int,
         error: str,
-        child_task_id: str | None = None,
+        child_task_id: int | None = None,
         **_unused_options: object,
     ) -> None:
         """把 delegation 标记为 cancelled。"""

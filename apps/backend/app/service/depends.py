@@ -10,24 +10,29 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 
 if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_mutation_writer import (
         ConversationMutationWriter,
     )
-    from app.assistant_transport.service.conversation_command_service import (
-        ConversationCommandService,
+    from app.assistant_transport.service.conversation_run_executor import (
+        ConversationRunExecutor,
+    )
+    from app.assistant_transport.service.conversation_task_snapshot_service import (
+        ConversationTaskSnapshotService,
     )
     from app.service.delegation.delegation_service import DelegationService
     from app.service.log_query_service import LogQueryService
     from app.service.provider import ModelEntryService, ProviderService
+    from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_workspace_resolver import (
         ConversationRunWorkspaceResolver,
     )
-    from app.service.task.conversation_state_service import ConversationStateService
-    from app.service.task.task_service import TaskService
+    from app.service.task.conversation_task_context_service import ConversationTaskContextService
+    from app.task_runtime.service.task_service import TaskService
     from app.service.task.workspace_service import WorkspaceService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
     from app.storage.cascade_deletion import CascadeDeleter
@@ -267,31 +272,29 @@ def get_task_service() -> TaskService:
         首次调用时创建 TaskService。
     """
 
-    from app.service.task.task_service import TaskService
+    from app.task_runtime.service.task_service import TaskService
 
     return TaskService()
 
 
 @lru_cache(maxsize=1)
-def get_conversation_state_service() -> ConversationStateService:
-    """Return the process-local ConversationStateService singleton.
+def get_conversation_task_snapshot_service() -> ConversationTaskSnapshotService:
+    """返回进程级 Task snapshot owner。"""
 
-    参数:
-        无。
+    from app.assistant_transport.service.conversation_task_snapshot_service import (
+        ConversationTaskSnapshotService,
+    )
 
-    返回:
-        ConversationStateService 单例（投影 turns / turn_messages 为中性对话视图）。
+    return ConversationTaskSnapshotService()
 
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
 
-    副作用:
-        首次调用时创建 ConversationStateService（注入 turn service 与 turn message CRUD 单例）。
-    """
+@lru_cache(maxsize=1)
+def get_conversation_task_context_service() -> ConversationTaskContextService:
+    """返回进程级 Task Agent context owner。"""
 
-    from app.service.task.conversation_state_service import ConversationStateService
+    from app.service.task.conversation_task_context_service import ConversationTaskContextService
 
-    return ConversationStateService()
+    return ConversationTaskContextService()
 
 
 @lru_cache(maxsize=1)
@@ -449,13 +452,11 @@ def get_conversation_command_crud() -> ConversationCommandCrud:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_command_service() -> ConversationCommandService:
+def get_transport_assistant_service() -> TransportAssistantService:
     """返回进程级 command 编排 service 单例。"""
-    from app.assistant_transport.service.conversation_command_service import (
-        ConversationCommandService,
-    )
+    from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 
-    return ConversationCommandService()
+    return TransportAssistantService()
 
 
 @lru_cache(maxsize=1)
@@ -491,13 +492,24 @@ def get_conversation_mutation_writer() -> ConversationMutationWriter:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_run_executor():
-    """返回进程级后台运行执行器。"""
+def get_conversation_run_executor() -> ConversationRunExecutor:
+    """返回进程级后台运行执行器。
+
+    参数:
+        cancellation_signal: 可选的进程内取消信号端口（``CancellationSignalPort``），
+            由 ``app.api.dependencies`` 注入 core 的取消注册表单例；service 层不直接
+            import core，经协议解耦。None 时执行器退化为空信号实现（仅中断 task，
+            无协作取消信号）。
+
+    返回:
+        已装配 writer 与取消信号源的 ConversationRunExecutor 单例。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+    """
     from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
 
-    return ConversationRunExecutor(
-        get_conversation_mutation_writer(),
-    )
+    return ConversationRunExecutor()
 
 
 @lru_cache(maxsize=1)
@@ -600,8 +612,10 @@ def reset_service_dependencies() -> None:
     get_model_entry_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
     get_conversation_run_service.cache_clear()
-    get_conversation_command_service.cache_clear()
+    get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()
     get_conversation_mutation_writer.cache_clear()
+    get_conversation_task_snapshot_service.cache_clear()
+    get_conversation_task_context_service.cache_clear()
     get_provider_service.cache_clear()
     get_model_entry_service.cache_clear()

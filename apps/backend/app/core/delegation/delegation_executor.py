@@ -11,18 +11,18 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
-from app.models import ConversationRunRecord, TaskRecord
-from app.models.result.delegation_result import DelegationResult
-from app.service.delegation.delegation_context import DelegationPolicyContext
-from app.service.delegation.delegation_policy import DelegationPolicy
-from app.service.delegation.delegation_service import DelegationService
-from app.service.depends import get_conversation_run_service, get_delegation_service
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_models import DelegateTaskArgs
+from app.models import ConversationRunRecord, TaskRecord
+from app.models.result.delegation_result import DelegationResult
+from app.service.delegation.delegation_context import DelegationPolicyContext
+from app.service.delegation.delegation_policy import DelegationPolicy
+from app.service.delegation.delegation_service import DelegationService
+from app.service.depends import get_conversation_run_service, get_delegation_service
 
 
 class DelegationExecutor(DelegateTaskExecutor):
@@ -151,7 +151,7 @@ class DelegationExecutor(DelegateTaskExecutor):
 
         delegation_id = acquire.delegation_id
         try:
-                # 先创建委派子任务（只建 task，不建 run；并发重入由 delegation_id 唯一索引兜底）。
+            # 先创建委派子任务（只建 task，不建 run；并发重入由 delegation_id 唯一索引兜底）。
             try:
                 child_task = task_service.create_child_task(
                     parent_task_id=self._parent_task.id,
@@ -229,11 +229,8 @@ class DelegationExecutor(DelegateTaskExecutor):
                     f"child model resolve failed: {exc}",
                 )
 
-            # 确认 pending child run
-            if not conversation_run_state_service.claim_pending_run(child_run.id):
-                raise RuntimeError("child_run_claim_lost")
-
-            # 标记 child run 为已开始
+            # 标记 child run 已进入执行提交阶段；pending→running 由统一 executor
+            # 在取得 child task runtime space 后完成。
             delegation_service.mark_child_started(
                 delegation_id,
                 child_run.id,
@@ -258,7 +255,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                     "msg": "委派执行异常，已转换为 delegate_task 工具错误",
                     "data": {
                         "delegation_id": delegation_id,
-                            "parent_run_id": self._parent_run.id,
+                        "parent_run_id": self._parent_run.id,
                         "child_agent_id": args.child_agent_id,
                     },
                 },

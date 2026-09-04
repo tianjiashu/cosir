@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import Integer, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -29,7 +31,7 @@ class StorageBase(DeclarativeBase):
     ``int`` 类型，由子类声明 ``ForeignKey`` 指向关联表的 ``id``。
     """
 
-    __table_args__ = ({"sqlite_autoincrement": True},)
+    __table_args__: Any = ({"sqlite_autoincrement": True},)
 
     id: Mapped[int] = mapped_column(
         Integer,

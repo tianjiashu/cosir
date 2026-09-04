@@ -20,11 +20,9 @@
 from sqlalchemy import delete, select, update
 
 from app.storage.model.conversation_command_model import ConversationCommandModel
-from app.storage.model.conversation_message_model import ConversationMessageModel
-from app.storage.model.conversation_message_part_model import ConversationMessagePartModel
 from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.conversation_task_snapshot_model import ConversationTaskSnapshotModel
-from app.storage.model.conversation_tool_call_model import ConversationToolCallModel
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.task_model import TaskModel
@@ -152,34 +150,12 @@ class CascadeDeleter:
         if not task_ids:
             return
         # 解除 tasks.parent_run_id -> turns 的引用（双向外键环，删 turns 前必须置空）。
-        conn.execute(
-            update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
-        )
+        conn.execute(update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None))
         run_ids = self._collect_run_ids(conn, task_ids)
-        message_ids = [
-            row[0]
-            for row in conn.execute(
-                select(ConversationMessageModel.id).where(
-                    ConversationMessageModel.task_id.in_(task_ids)
-                )
-            ).all()
-        ]
-        if message_ids:
-            conn.execute(
-                delete(ConversationToolCallModel).where(
-                    ConversationToolCallModel.message_id.in_(message_ids)
-                )
-            )
-            conn.execute(
-                delete(ConversationMessagePartModel).where(
-                    ConversationMessagePartModel.message_id.in_(message_ids)
-                )
-            )
         conn.execute(
-            delete(ConversationToolCallModel).where(ConversationToolCallModel.task_id.in_(task_ids))
-        )
-        conn.execute(
-            delete(ConversationMessageModel).where(ConversationMessageModel.task_id.in_(task_ids))
+            delete(ConversationTaskContextModel).where(
+                ConversationTaskContextModel.task_id.in_(task_ids)
+            )
         )
         conn.execute(
             delete(ConversationTaskSnapshotModel).where(
@@ -193,9 +169,7 @@ class CascadeDeleter:
         conn.execute(
             delete(ConversationCommandModel).where(ConversationCommandModel.task_id.in_(task_ids))
         )
-        conn.execute(
-            delete(ConversationRunModel).where(ConversationRunModel.task_id.in_(task_ids))
-        )
+        conn.execute(delete(ConversationRunModel).where(ConversationRunModel.task_id.in_(task_ids)))
         self._delete_task_tree_layered(conn, task_ids)
 
     @staticmethod

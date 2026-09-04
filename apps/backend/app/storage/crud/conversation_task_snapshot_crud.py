@@ -20,28 +20,14 @@ class ConversationTaskSnapshotCrud:
 
         self._session_factory = main_session_factory()
 
-    def get(self, task_id: int) -> ConversationStateSnapshot | None:
+    def get(self, task_id: int, session: Session | None = None) -> dict[str, Any] | None:
         """读取 Task 快照；不存在时返回 ``None``。"""
-
+        if session is not None:
+            return self._get_in_session(session, task_id)
         with self._session_factory() as session:
-            return self.get_in_session(session, task_id)
+            return self._get_in_session(session, task_id)
 
-    def get_or_create(
-        self,
-        task_id: int,
-        fallback: ConversationStateSnapshot,
-    ) -> ConversationStateSnapshot:
-        """读取 Task 快照；不存在时在一个事务中创建并返回 fallback。"""
-
-        with self._session_factory.begin() as session:
-            current = self.get_in_session(session, task_id)
-            if current is None:
-                self.upsert_in_session(session, task_id, fallback)
-                return fallback
-            return current
-
-    @staticmethod
-    def get_in_session(session: Session, task_id: int) -> ConversationStateSnapshot | None:
+    def _get_in_session(self, session: Session, task_id: int) -> dict[str, Any] | None:
         """在调用方事务中读取并解析 Task 快照。"""
 
         row = session.execute(
@@ -54,13 +40,25 @@ class ConversationTaskSnapshotCrud:
         value: Any = json.loads(row.state_json)
         if not isinstance(value, dict):
             raise ValueError(f"snapshot for task {task_id} must be a JSON object")
-        return cast(ConversationStateSnapshot, value)
+        return cast(dict[str, Any], value)
 
-    @staticmethod
+    def create(self, task_id: int, state: ConversationStateSnapshot, session: Session | None = None) -> None:
+        """创建 Task 快照。"""
+        if session is not None:
+            self.upsert_in_session(session, task_id, state)
+            return
+        with self._session_factory.begin() as session:
+            return self.upsert_in_session(session, task_id, state)
+
+    def get_in_session(self, session: Session, task_id: int) -> dict[str, Any] | None:
+        """在调用方事务内读取 Task 快照。"""
+        return self._get_in_session(session, task_id)
+
     def upsert_in_session(
-        session: Session,
-        task_id: int,
-        state: ConversationStateSnapshot,
+            self,
+            session: Session,
+            task_id: int,
+            state: ConversationStateSnapshot,
     ) -> None:
         """在调用方事务中插入或更新 Task 快照。"""
 
@@ -75,7 +73,6 @@ class ConversationTaskSnapshotCrud:
                 ConversationTaskSnapshotModel(
                     task_id=task_id,
                     state_json=encoded,
-                    schema_version=1,
                 )
             )
         else:

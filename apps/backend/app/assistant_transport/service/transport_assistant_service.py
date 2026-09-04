@@ -135,7 +135,8 @@ class TransportAssistantService:
             snapshot = self._snapshots.ensure_state_snapshot(task_id, session)
             result = ConversationRunStartResult(command, run, snapshot)
 
-        self._mutation_writer.create_run_baseline(task_id, result.run.id, input_text)
+        self._mutation_writer.create_run(task_id, result.run.id)
+        self._mutation_writer.append_user_input(task_id, result.run.id, input_text)
         return result
 
     async def start_executor(

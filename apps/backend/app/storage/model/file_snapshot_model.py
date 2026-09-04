@@ -43,9 +43,7 @@ class FileSnapshotModel(StorageBase):
     task_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=False, default=0, server_default=text("0")
     )
-    run_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("conversation_runs.id"), nullable=False
-    )
+    run_id: Mapped[int] = mapped_column(Integer, ForeignKey("conversation_runs.id"), nullable=False)
     tool_call_id: Mapped[str] = mapped_column(Text, nullable=False)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)

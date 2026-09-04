@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.storage.model.provider_model import ProviderModel
-from app.utils.datetime_utils import from_text, to_text
+from app.utils.datetime_utils import from_text
 
 
 @dataclass
@@ -56,8 +56,8 @@ class ProviderRecord:
             "base_url": self.base_url,
             "enabled": self.enabled,
             "sort_order": self.sort_order,
-            "created_at": to_text(self.created_at),
-            "updated_at": to_text(self.updated_at),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
     @classmethod

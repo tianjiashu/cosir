@@ -49,17 +49,17 @@ class ConversationRunCrud:
         self._session_factory = main_session_factory()
 
     def create(
-            self,
-            task_id: int,
-            input_text: str,
-            status: str = ConversationRunStatus.PENDING.value,
-            agent_id: str | None = None,
-            provider_id: int | None = None,
-            model_name: str | None = None,
-            image_paths: list[str] | None = None,
-            reasoning_effort: str | None = None,
-            extra: dict[str, Any] | None = None,
-            session: Session | None = None,
+        self,
+        task_id: int,
+        input_text: str,
+        status: str = ConversationRunStatus.PENDING.value,
+        agent_id: str | None = None,
+        provider_id: int | None = None,
+        model_name: str | None = None,
+        image_paths: list[str] | None = None,
+        reasoning_effort: str | None = None,
+        extra: dict[str, Any] | None = None,
+        session: Session | None = None,
     ) -> ConversationRunRecord:
         """新建一条 run 记录并落库。
 
@@ -120,17 +120,17 @@ class ConversationRunCrud:
 
     @staticmethod
     def _insert_and_flush(
-            session: Session,
-            *,
-            task_id: int,
-            input_text: str,
-            status: str,
-            agent_id: str | None,
-            provider_id: int | None,
-            model_name: str | None,
-            image_paths: list[str] | None,
-            reasoning_effort: str | None,
-            extra: dict[str, Any] | None,
+        session: Session,
+        *,
+        task_id: int,
+        input_text: str,
+        status: str,
+        agent_id: str | None,
+        provider_id: int | None,
+        model_name: str | None,
+        image_paths: list[str] | None,
+        reasoning_effort: str | None,
+        extra: dict[str, Any] | None,
     ) -> ConversationRunRecord:
         """在给定 session 内插入 run 行并 flush 取回自增 id。
 
@@ -192,7 +192,14 @@ class ConversationRunCrud:
                 raise KeyError(run_id)
             return ConversationRunRecord.from_model(row)
 
+    @staticmethod
+    def get_in_session(session: Session, run_id: int) -> ConversationRunRecord:
+        """在调用方事务 session 中读取单个 run。"""
 
+        row = session.get(ConversationRunModel, run_id)
+        if row is None:
+            raise KeyError(run_id)
+        return ConversationRunRecord.from_model(row)
 
     def find_active_by_task_in_session(
         self, task_id: int, session: Session
@@ -234,6 +241,40 @@ class ConversationRunCrud:
             .all()
         )
         return [ConversationRunRecord.from_model(row) for row in rows]
+
+    def has_run_in_status(
+        self,
+        task_id: int,
+        statuses: tuple[str, ...],
+        session: Session,
+    ) -> bool:
+        """在给定事务内判断某任务是否存在处于指定状态集合的 run。
+
+        纯存在性检查：仅投影 ``id`` 并 ``LIMIT 1``，不加载完整 run 记录，也不返回
+        匹配行。供 service 层判断任务是否已有处于特定状态（如 pending/running）的 run，
+        避免为"仅判存在"而取出整行。
+
+        参数:
+            task_id: 任务标识（整数 id）。
+            statuses: 待匹配的状态白名单。
+            session: 外部事务 session；本方法不提交、不关闭该 session。
+
+        返回:
+            存在至少一个匹配 run 时返回 ``True``；无匹配时返回 ``False``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            无（只读查询，不修改 session 状态）。
+        """
+        row_id = session.execute(
+            select(ConversationRunModel.id)
+            .where(ConversationRunModel.task_id == task_id)
+            .where(ConversationRunModel.status.in_(statuses))
+            .limit(1)
+        ).scalar_one_or_none()
+        return row_id is not None
 
     def list_by_task(self, task_id: int) -> list[ConversationRunRecord]:
         """列出某任务下的全部 run，按创建时间升序。
@@ -304,11 +345,12 @@ class ConversationRunCrud:
         return [ConversationRunRecord.from_model(row) for row in rows]
 
     def update_status_if_in(
-            self,
-            run_id: int,
-            target_status: str,
-            allowed_statuses: tuple[str, ...],
-            end_reason: str | None = None,
+        self,
+        run_id: int,
+        target_status: str,
+        allowed_statuses: tuple[str, ...],
+        end_reason: str | None = None,
+        session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """以乐观锁方式把 run 更新为目标状态，仅当其当前状态在允许集合内。
 
@@ -328,73 +370,44 @@ class ConversationRunCrud:
             返回 None。
 
         异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。注意：run 不存在时不会抛 KeyError，
+            而是按零行更新静默返回 None（需判存在性时调用方应先 ``get``）。
 
         副作用:
             条件满足时更新对应行的 ``status``、``updated_at`` 与可选的 ``end_reason``。
         """
-        self.get(run_id)
+        if session is not None:
+            return self.update_status_if_in_session(session, run_id, target_status, allowed_statuses, end_reason)
+        with self._session_factory.begin() as session:
+            return self.update_status_if_in_session(session, run_id, target_status, allowed_statuses, end_reason)
+
+    @staticmethod
+    def update_status_if_in_session(
+            session: Session,
+            run_id: int,
+            target_status: str,
+            allowed_statuses: tuple[str, ...],
+            end_reason: str | None = None,
+    ) -> ConversationRunRecord | None:
+        """在给定事务中按状态白名单原子更新 run。"""
+
         values: dict[str, object] = {
-            "status": target_status,
-            "updated_at": to_text(utc_now()),
+            "status": target_status
         }
         if end_reason is not None:
             values["end_reason"] = end_reason
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                update(ConversationRunModel)
-                .where(
-                    ConversationRunModel.id == run_id,
-                    ConversationRunModel.status.in_(allowed_statuses),
-                )
-                .values(**values)
+        result = session.execute(
+            update(ConversationRunModel)
+            .where(
+                ConversationRunModel.id == run_id,
+                ConversationRunModel.status.in_(allowed_statuses),
             )
+            .values(**values)
+        )
         if not result.rowcount:
             return None
-        return self.get(run_id)
-
-    def claim_pending_serialized(self, run_id: int) -> ConversationRunRecord | None:
-        """仅在同 task 没有其它 running run 时原子启动 pending run。
-
-        参数:
-            run_id: 待认领的 run 标识（整数 id）。
-
-        返回:
-            认领成功时返回状态已转为 ``running`` 的 ``ConversationRunRecord``；
-            当前非 pending 或同 task 已有 running run 时返回 None。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            条件满足时把对应行 ``status`` 改为 ``running``、递增
-            并刷新 ``updated_at``。
-        """
-        self.get(run_id)
-        running_run = aliased(ConversationRunModel)
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                update(ConversationRunModel)
-                .where(
-                    ConversationRunModel.id == run_id,
-                    ConversationRunModel.status == ConversationRunStatus.PENDING.value,
-                    ~exists(
-                        select(1).where(
-                            running_run.task_id == ConversationRunModel.task_id,
-                            running_run.status == ConversationRunStatus.RUNNING.value,
-                        )
-                    ),
-                )
-                .values(
-                    status=ConversationRunStatus.RUNNING.value,
-                    updated_at=to_text(utc_now()),
-                )
-            )
-        if not result.rowcount:
-            return None
-        return self.get(run_id)
+        session.flush()
+        return ConversationRunCrud.get_in_session(session, run_id)
 
     def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:
         """返回一批任务下全部 run 的标识列表。

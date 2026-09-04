@@ -7,13 +7,13 @@
 
 import json
 
-from app.models.file_snapshot_record import FileSnapshotRecord
 from app.core.tools.tool_handler.patch.patch_parser import (
     Hunk,
     HunkLine,
     OperationType,
     PatchOperation,
 )
+from app.models.file_snapshot_record import FileSnapshotRecord
 
 
 def snapshots_to_operations(

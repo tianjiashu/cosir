@@ -7,9 +7,13 @@
 单例由 ``app.service.depends`` 统一管理。
 """
 
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
+from __future__ import annotations
+
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
-from app.assistant_transport.service.conversation_command_service import ConversationCommandService
+from app.assistant_transport.service.conversation_task_snapshot_service import (
+    ConversationTaskSnapshotService,
+)
+from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.config.configuration import (
     build_agent_registry,
     get_agent_registry,
@@ -21,10 +25,10 @@ from app.core.runtime.runner import AgentRuntime
 from app.service import depends as service_depends
 from app.service.log_query_service import LogQueryService
 from app.service.provider import ModelEntryService, ProviderService
+from app.assistant_transport.service.conversation_command_service import ConversationCommandService
 from app.service.task.conversation_run_service import ConversationRunService
 from app.service.task.conversation_run_workspace_resolver import ConversationRunWorkspaceResolver
-from app.service.task.conversation_state_service import ConversationStateService
-from app.service.task.task_service import TaskService
+from app.task_runtime.service.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 from app.service.workspace_event.workspace_event_service import WorkspaceEventService
@@ -42,7 +46,7 @@ __all__ = [
     "set_tool_system",
 ]
 
-_RUNTIME: "AgentRuntime | None" = None
+_RUNTIME: AgentRuntime | None = None
 
 
 def _build_services() -> dict:
@@ -127,14 +131,14 @@ def get_conversation_run_service() -> ConversationRunService:
     return _build_services()["conversation_run_service"]
 
 
-def get_conversation_state_service() -> ConversationStateService:
-    """返回进程级会话状态投影 service 单例。
+def get_conversation_task_snapshot_service() -> ConversationTaskSnapshotService:
+    """返回进程级 Task snapshot owner 单例。
 
     参数:
         无。
 
     返回:
-        ConversationStateService（把 turns / turn_messages 投影为中性对话视图）。
+        ConversationTaskSnapshotService，作为 Assistant Transport/UI state 的唯一事实源。
 
     异常:
         RuntimeError: 若存储初始化失败。
@@ -143,22 +147,26 @@ def get_conversation_state_service() -> ConversationStateService:
         首次调用时构建并缓存 service。
     """
 
-    return service_depends.get_conversation_state_service()
+    return service_depends.get_conversation_task_snapshot_service()
 
-
-def get_conversation_command_service() -> ConversationCommandService:
-    """返回 Assistant Transport command 编排 service。"""
-    return service_depends.get_conversation_command_service()
-
-
-def get_conversation_mutation_writer() -> ConversationMutationWriter:
-    """返回 canonical conversation fact 写入器。"""
-
-    return service_depends.get_conversation_mutation_writer()
 
 
 def get_conversation_run_executor() -> ConversationRunExecutor:
-    """返回后台 Conversation Run 执行器。"""
+    """返回后台 Conversation Run 执行器（注入进程内取消注册表）。
+
+    参数:
+        无。
+
+    返回:
+        已装配 canonical writer 与取消信号源的 ConversationRunExecutor。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+
+    副作用:
+        首次调用时经 ``app.service.depends`` 构建并缓存单例；注入 core 的取消注册表
+        单例是全工程唯一注入点，保证执行器取消编排的信号可见性。
+    """
 
     return service_depends.get_conversation_run_executor()
 
@@ -283,7 +291,7 @@ def get_model_entry_service() -> ModelEntryService:
     return service_depends.get_model_entry_service()
 
 
-def set_runtime(runtime: "AgentRuntime") -> None:
+def set_runtime(runtime: AgentRuntime) -> None:
     """设置进程级运行时单例。
 
     参数:
@@ -303,7 +311,7 @@ def set_runtime(runtime: "AgentRuntime") -> None:
     _RUNTIME = runtime
 
 
-def get_runtime() -> "AgentRuntime":
+def get_runtime() -> AgentRuntime:
     """返回进程级运行时单例。
 
     参数:

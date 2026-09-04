@@ -16,7 +16,7 @@ from app.utils.datetime_utils import from_text, to_text
 
 @dataclass
 class TaskRecord:
-    """表示一个任务的持久化状态（不含 agent 维度）。"""
+    """表示一个任务的持久化状态。"""
 
     id: int
     workspace_id: int
@@ -29,7 +29,6 @@ class TaskRecord:
     parent_run_id: int | None = None
     delegation_id: int | None = None
     context_usage_used: int | None = None
-    message_sequence: int = 0
 
     @property
     def is_child(self) -> bool:
@@ -72,13 +71,11 @@ class TaskRecord:
             "id": self.id,
             "workspace_id": self.workspace_id,
             "title": self.title,
-            "execution_status": self.execution_status,
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
             "parent_run_id": self.parent_run_id,
             "delegation_id": self.delegation_id,
             "context_usage_used": self.context_usage_used,
-            "message_sequence": self.message_sequence,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -110,5 +107,4 @@ class TaskRecord:
             parent_run_id=row.parent_run_id,
             delegation_id=row.delegation_id,
             context_usage_used=row.context_usage_used,
-            message_sequence=row.message_sequence,
         )

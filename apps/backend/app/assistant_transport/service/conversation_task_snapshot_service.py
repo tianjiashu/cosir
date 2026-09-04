@@ -52,13 +52,6 @@ class ConversationTaskSnapshotService:
         """绑定 snapshot CRUD。"""
         self._crud = ConversationTaskSnapshotCrud()
 
-    def hydrate(self, task_id: int, state: ConversationStateSnapshot) -> None:
-        """安装一份已校验的完整 snapshot working copy。"""
-
-        validate_snapshot(state)
-        with self._lock:
-            self._states[task_id] = copy.deepcopy(state)
-
     def read(self, task_id: int) -> ConversationStateSnapshot:
         """从 SQLite 读取并校验最新 snapshot，缺失时创建空 snapshot。"""
 

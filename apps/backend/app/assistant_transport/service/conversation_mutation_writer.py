@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Literal, cast
+from typing import Literal
 
 from langchain_core.messages import AIMessage
 
@@ -14,21 +14,10 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
     ConversationTaskSnapshotService,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
-from app.assistant_transport.state.conversation_state_snapshot import (
-    ConversationStateMessage,
-    ConversationStateSnapshot,
-)
+from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
+from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
-
-
-@dataclass(frozen=True)
-class MessageHandle:
-    """snapshot 中一条消息的稳定句柄。"""
-
-    id: str
-    task_id: int
-    run_id: int | None
 
 
 class ConversationMutationWriter:
@@ -59,75 +48,166 @@ class ConversationMutationWriter:
         self._run_crud = run_crud or ConversationRunCrud()
 
 
-    def append_text(self, task_id: int, message_id: str, text: str) -> object:
-        """向指定 snapshot 消息的 text part 追加文本。"""
+    def _append_part_text(
+        self, task_id: int, message_id: str, part_type: str, text: str
+    ) -> object:
+        """向指定消息的指定类型 part 追加文本，返回该 part 的位置信息。
+
+        统一 ``append_text`` 与 ``append_assistant_part_for_run`` 的公共追加逻辑：读最新提交态、
+        定位目标 part、
+        构造单条 ``append-text`` mutation 并经 ``apply`` 提交。
+
+        参数:
+            task_id: 目标 Task 标识。
+            message_id: 追加目标消息标识。
+            part_type: 目标 part 类型（如 ``"text"`` / ``"reasoning"``）。
+            text: 非空追加文本。
+
+        返回:
+            含 ``id``（消息标识）与 ``part_index``（part 索引）的命名空间。
+
+        异常:
+            ValueError: ``text`` 为空。
+            KeyError: 指定消息或目标 part 不存在。
+
+        副作用:
+            经 snapshot owner 原子追加文本并提交 canonical fact；本方法依赖
+            ``assistant_api`` 的 task 锁消除 task 内并发竞态，故使用 ``apply`` 而非
+            ``apply_planned``；若将来 task 内出现并发写，需改回 ``apply_planned``。
+        """
 
         if not text:
             raise ValueError("text must not be empty")
-        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
-            index, part_index = _find_message_part(state, message_id, "text")
-            return [
-                ConversationStateMutation(
-                    "append-text", ("messages", index, "parts", part_index, "text"), text
+        state = self._snapshots.ensure_state_snapshot(task_id)
+        index, part_index = _find_message_part(state, message_id, part_type)
+        mutation = ConversationStateMutation(
+            "append-text",
+            ("messages", index, "parts", part_index, "text"),
+            text,
+        )
+        self._snapshots.apply(task_id, [mutation])
+        return SimpleNamespace(id=message_id, part_index=part_index)
+
+    def append_text(self, task_id: int, message_id: str, text: str) -> object:
+        """向指定 snapshot 消息的 text part 追加文本。
+
+        参数:
+            task_id: 目标 Task 标识。
+            message_id: 追加目标消息标识。
+            text: 非空追加文本。
+
+        返回:
+            含消息与 part 位置信息的命名空间。
+
+        异常:
+            ValueError: ``text`` 为空。
+
+        副作用:
+            经 snapshot owner 原子追加文本并提交 canonical fact。
+        """
+
+        return self._append_part_text(task_id, message_id, "text", text)
+
+    def create_run(self, task_id: int, run_id: int) -> None:
+        """幂等创建指定 Run 的 message 骨架与 run 元数据。
+
+        仅创建 user/assistant 两条空消息与 run 状态；用户输入文本由 ``append_user_input``
+        独立完成。重复进入（同 runId 的消息已存在）直接返回，保证幂等。
+
+        参数:
+            task_id: 目标 Task 标识。
+            run_id: 待创建消息基线的 Conversation Run 标识。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            经 snapshot owner 原子写入 user/assistant 空消息与 run 状态；本方法依赖
+            ``assistant_api`` 的 task 锁消除 task 内并发竞态，因此使用 ``apply`` 而非
+            ``apply_planned``；若将来 task 内出现并发写，需改回 ``apply_planned``。
+        """
+
+        state = self._snapshots.ensure_state_snapshot(task_id)
+        if any(message.get("runId") == run_id for message in state.get("messages", [])):
+            return
+        offset = len(state["messages"])
+        mutations = [
+            ConversationStateMutation(
+                "set", ("messages", offset), _message(
+                    f"user-{run_id}", run_id, "user", "completed", "", "completed"
                 )
-            ]
+            ),
+            ConversationStateMutation(
+                "set", ("messages", offset + 1), _message(
+                    f"assistant-{run_id}", run_id, "assistant", "running", "", "running"
+                )
+            ),
+            ConversationStateMutation("set", ("run", "runId"), run_id),
+            ConversationStateMutation("set", ("run", "status"), "pending"),
+        ]
+        self._snapshots.apply(task_id, mutations)
 
-        self._snapshots.apply_planned(task_id, plan)
-        return SimpleNamespace(id=message_id)
+    def append_user_input(self, task_id: int, run_id: int, input_text: str) -> object:
+        """向指定 Run 的 user 消息文本 part 追加用户输入。
 
-    def create_run_baseline(self, task_id: int, run_id: int, input_text: str) -> None:
-        """为 Run 创建 snapshot user/assistant 消息基线。"""
+        复用 ``append_text``，因此与流式 assistant 文本走同一套原子追加通道。
 
-        created_at = datetime.now(UTC).isoformat()
-        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
-            if any(message.get("runId") == run_id for message in state["messages"]):
-                return []
-            offset = len(state["messages"])
-            return [
-                ConversationStateMutation(
-                    "set", ("messages", offset), _message(
-                        f"user-{run_id}", run_id, "user", "completed", created_at, input_text, "completed"
-                    )
-                ),
-                ConversationStateMutation(
-                    "set", ("messages", offset + 1), _message(
-                        f"assistant-{run_id}", run_id, "assistant", "running", created_at, "", "running"
-                    )
-                ),
-                ConversationStateMutation("set", ("run", "runId"), run_id),
-                ConversationStateMutation("set", ("run", "status"), "pending"),
-            ]
+        参数:
+            task_id: 目标 Task 标识。
+            run_id: 目标 Conversation Run 标识。
+            input_text: 用户输入文本（非空）。
 
-        self._snapshots.apply_planned(task_id, plan)
+        返回:
+            含消息与 part 位置信息的命名空间。
 
-    def append_assistant_text_for_run(self, task_id: int, run_id: int, text: str) -> object:
-        """向当前 Run 的 assistant text part 追加 chunk。"""
+        异常:
+            ValueError: ``input_text`` 为空。
+            KeyError: 指定 run 的 user 消息不存在。
 
-        message_id = self._message_id_for_run(task_id, run_id)
-        return self.append_text(task_id, message_id, text)
+        副作用:
+            经 snapshot owner 原子追加用户输入文本并提交 canonical fact；与 ``create_run``
+            同受 task 锁保护，不存在重复写入竞态。
+        """
+        message_id = None
+        state = self._snapshots.ensure_state_snapshot(task_id)
+        for message in state.get("messages", []):
+            if message.get("runId") == run_id and message.get("role") == "user":
+                message_id =  str(message["id"])
+                break
+        if message_id is None:
+            raise KeyError(f"user message for run {run_id} not found")
+        return self.append_text(task_id, message_id, input_text)
 
     def append_assistant_part_for_run(
         self, task_id: int, run_id: int, part_type: str, text: str
     ) -> object:
-        """向当前 Run 的 assistant reasoning/text part 追加 chunk。"""
+        """向当前 Run 的 assistant reasoning/text part 追加 chunk。
+
+        参数:
+            task_id: 目标 Task 标识。
+            run_id: 目标 Conversation Run 标识。
+            part_type: 目标 part 类型（仅 ``"text"`` 或 ``"reasoning"``）。
+            text: 非空追加文本。
+
+        返回:
+            含消息与 part 位置信息的命名空间。
+
+        异常:
+            ValueError: ``part_type`` 非法或 ``text`` 为空。
+            KeyError: 指定 run 的 assistant 消息或目标 part 不存在。
+
+        副作用:
+            经 snapshot owner 原子追加文本并提交 canonical fact；复用 ``_append_part_text``
+            与 ``append_text`` 同一通道，依赖 task 锁消除并发竞态。
+        """
 
         if part_type not in {"text", "reasoning"}:
             raise ValueError("unsupported assistant part")
-        if not text:
-            raise ValueError("text must not be empty")
-        kind: Literal["append-text"] = "append-text"
-        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
-            index, part_index = _find_message_part(
-                state, self._message_id_for_state(state, run_id), part_type
-            )
-            return [
-                ConversationStateMutation(
-                    kind, ("messages", index, "parts", part_index, "text"), text
-                )
-            ]
-
-        self._snapshots.apply_planned(task_id, plan)
-        return SimpleNamespace(id=part_index)
+        message_id = self._message_id_for_run(task_id, run_id)
+        return self._append_part_text(task_id, message_id, part_type, text)
 
     def create_ai_message_with_tool_calls(
         self,
@@ -361,138 +441,6 @@ class ConversationMutationWriter:
 
         self._snapshots.apply_planned(task_id, plan)
 
-    def recover_interrupted_run_legacy_removed(self, run_id: int) -> object | None:
-        """收束崩溃遗留 Run、snapshot tools 与 context tool messages。
-
-        Run 终态经 run CRUD 独立事务原子更新，snapshot 收敛经 snapshot owner 单独提交。
-
-        参数:
-            run_id: 后端重启时待恢复的 Conversation Run 标识。
-
-        返回:
-            首次收束时返回包含 ``id`` 与 ``status`` 的轻量记录；Run 已不是 active 时返回
-            ``None``，使恢复过程天然幂等。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果 Run 终态更新或 snapshot 收敛写入失败。
-
-        副作用:
-            将 active Run 经 run CRUD 在独立事务内原子标为 failed；snapshot 中未闭合
-            tool-call 的收敛经 snapshot owner 单独提交；context 的恢复补偿由 context owner 负责。
-        """
-
-        task_id = self._task_id_for_run(run_id)
-        record = self._run_crud.update_status_if_in(
-            run_id,
-            ConversationRunStatus.FAILED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-            "backend_restarted",
-        )
-        if record is None:
-            return None
-
-        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
-            mutations: list[ConversationStateMutation] = []
-            assistant_index = find_assistant_message_index(state, run_id)
-            if assistant_index is not None:
-                for part_index, part in enumerate(state["messages"][assistant_index]["parts"]):
-                    if isinstance(part, dict) and part.get("type") == "tool-call" \
-                            and part.get("status") in {"pending", "running"}:
-                        base = ("messages", assistant_index, "parts", part_index)
-                        mutations.extend([
-                            ConversationStateMutation("set", base + ("status",), "failed"),
-                            ConversationStateMutation("set", base + ("error",), "execution_interrupted"),
-                            ConversationStateMutation("set", base + ("isError",), True),
-                        ])
-                mutations.extend([
-                    ConversationStateMutation("set", ("messages", assistant_index, "status"), "failed"),
-                    ConversationStateMutation("set", ("messages", assistant_index, "endReason"), "backend_restarted"),
-                ])
-            mutations.append(ConversationStateMutation("set", ("run", "status"), "failed"))
-            return mutations
-
-        self._snapshots.apply_planned(task_id, plan)
-
-        return SimpleNamespace(id=run_id, status=ConversationRunStatus.FAILED.value)
-
-    def settle_run(self, run_id: int, status: str, end_reason: str | None = None) -> object | None:
-        """先更新 Run 终态，再尽力收敛 assistant snapshot 展示状态。"""
-
-        if status not in {"completed", "failed", "cancelled"}:
-            raise ValueError("invalid terminal run status")
-        task_id = self._task_id_for_run(run_id)
-        record = self._run_crud.update_status_if_in(
-            run_id,
-            status,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-            end_reason,
-        )
-        if record is None:
-            return None
-        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
-            mutations = [ConversationStateMutation("set", ("run", "status"), status)]
-            index = find_assistant_message_index(state, run_id)
-            if index is not None:
-                mutations.extend([
-                    ConversationStateMutation("set", ("messages", index, "status"), status),
-                    ConversationStateMutation("set", ("messages", index, "endReason"), end_reason),
-                ])
-            return mutations
-
-        self._snapshots.apply_planned(task_id, plan)
-        return SimpleNamespace(id=run_id, status=status)
-
-    def complete_run_with_message(
-        self, run_id: int, message: AIMessage, end_reason: str | None = None
-    ) -> object | None:
-        """完成 Run，并独立收敛其 snapshot 展示状态。
-
-        参数:
-            run_id: 待完成的 Conversation Run 标识。
-            message: 模型本轮生成的完整 ``AIMessage``，不得传入增量 chunk。
-            end_reason: 可选的终态原因。
-
-        返回:
-            成功完成时返回包含 ``id`` 与 ``status`` 的轻量记录；run 已经进入其他终态时返回
-            ``None``。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果 snapshot、context 或 run 写入失败。
-
-        副作用:
-            将 Run 经 run CRUD 在独立事务内原子置为 completed；snapshot 展示状态（含 assistant
-            消息 status/endReason 与 run 状态）经 snapshot owner 单独提交。
-        """
-
-        task_id = self._task_id_for_run(run_id)
-        record = self._run_crud.update_status_if_in(
-            run_id,
-            ConversationRunStatus.COMPLETED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-            end_reason,
-        )
-        if record is None:
-            return None
-        def plan(state: ConversationStateSnapshot) -> list[ConversationStateMutation]:
-            index = find_assistant_message_index(state, run_id)
-            if index is None:
-                raise KeyError(f"assistant message for run {run_id} not found")
-            return [
-                ConversationStateMutation("set", ("messages", index, "status"), "completed"),
-                ConversationStateMutation("set", ("messages", index, "endReason"), end_reason),
-                ConversationStateMutation("set", ("run", "status"), "completed"),
-            ]
-
-        self._snapshots.apply_planned(task_id, plan)
-        return SimpleNamespace(id=run_id, status=ConversationRunStatus.COMPLETED.value)
-
-    def cancel_run(self, run_id: int, end_reason: str = "user_cancelled") -> object | None:
-        """将 active Run 原子收束为 cancelled。"""
-
-        return self.settle_run(run_id, "cancelled", end_reason)
-
     def _task_id_for_run(self, run_id: int) -> int:
         """读取 Run 所属 Task。
 
@@ -543,7 +491,6 @@ def _message(
     run_id: int | None,
     role: Literal["user", "assistant"],
     status: str,
-    created_at: str,
     text: str,
     part_status: Literal["running", "completed"],
 ) -> ConversationStateMessage:
@@ -555,7 +502,6 @@ def _message(
         "role": role,
         "status": status,
         "endReason": None,
-        "createdAt": created_at,
         "parts": [{"type": "text", "text": text, "status": part_status}],
     }
 

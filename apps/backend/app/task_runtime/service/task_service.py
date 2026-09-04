@@ -12,9 +12,13 @@
 
 from dataclasses import replace
 
+from sqlalchemy.orm.session import Session
+
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
 from app.service import depends as service_depends
+from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+from app.task_runtime.task_runtime_space_registry import TaskRuntimeSpaceRegistry, task_runtime_spaces
 from app.utils.datetime_utils import preview
 
 
@@ -37,58 +41,39 @@ class TaskService:
             从 service 依赖入口取得 CRUD 单例并保存引用。
         """
 
+        self._task_register = task_runtime_spaces
         self._task = service_depends.get_task_crud()
         self._turn = service_depends.get_conversation_run_crud()
         self._workspace = service_depends.get_workspace_crud()
         self._cascade_deleter = service_depends.get_cascade_deleter()
 
-    def create_task(
+    def get_or_create_task(
         self,
-        input_text: str,
-        workspace_id: int | None = None,
+        task_id: int,
+        workspace_id: int,
+        title: str,
+        creation_command_id: str | None = None,
+        task_type: str = "user",
+        parent_task_id: int | None = None,
+        parent_run_id: int | None = None,
+        delegation_id: int | None = None,
+        session: Session | None = None,
     ) -> TaskRecord:
-        """创建任务容器记录（不含首轮次，首轮次由调用方显式调 ``create_run``）。
+        if workspace_id is None:
+            raise ValueError("workspace_id is None")
 
-        任务文本 ``input_text`` 归属 turn 维度（首轮次创建时写入 ``turns.input_text``），
-        任务本身只持久化由 ``input_text`` 派生的 ``title``。因 ``turns.task_id`` 外键指向
-        ``tasks.id``，必须先有 task 才能创建首 turn；但 task 创建与首 turn 创建已解耦，
-        本方法只建 task 容器，首 turn 由调用方（API/前端）随后显式创建。
-
-        任务不再绑定 agent：agent 维度由 turn（首 turn 的 ``agent_id``）承载，
-        ``create_task`` 不再接收也不校验 agent_id；子任务的 agent 由 delegation 记录承载。
-
-        参数:
-            input_text: 用户输入文本，用于派生任务标题（仅派生 title，原文不落 tasks 表）。
-            workspace_id: 所属工作区标识。
-
-        返回:
-            已持久化的 ``TaskRecord``。
-
-        异常:
-            ValueError: 当 ``input_text``/``workspace_id`` 为空或全空白时抛出。
-            sqlalchemy.exc.IntegrityError: 当 ``workspace_id`` 指向不存在的工作区
-                （外键约束）时抛出。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
-
-        副作用:
-            向 ``tasks`` 表插入一行任务记录（不创建轮次）。
-        """
-
-        if not isinstance(input_text, str) or not input_text.strip():
-            raise ValueError("input_text must be a non-empty string")
-
-        if not isinstance(workspace_id, int) or workspace_id <= 0:
-            raise ValueError("workspace_id must be a positive integer")
-
-        title = preview(input_text)
-        # 先创建 task（turns.task_id 外键指向 tasks.id，必须先有 task 才能建 turn）。
-        # 首 turn 由调用方随后显式创建，本方法不再耦合首 turn 逻辑。
-        task = self._task.create(
-            workspace_id=workspace_id,
-            title=title,
-        )
-
-        return task
+        if task_id is None:
+            return self._task.create(
+                workspace_id=workspace_id,
+                title=title,
+                task_type=task_type,
+                parent_task_id=parent_task_id,
+                parent_run_id=parent_run_id,
+                delegation_id=delegation_id,
+                creation_command_id=creation_command_id,
+                session=session,
+            )
+        return self._task.get(task_id)
 
     def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
@@ -107,8 +92,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        record = self._task.get(task_id)
-        return replace(record, execution_status=self.task_display_status(task_id))
+        return self._task.get(task_id)
 
     def update_context_usage(self, task_id: int, used: int) -> TaskRecord:
         """持久化任务最近一次上下文窗口已用 token。
@@ -211,13 +195,13 @@ class TaskService:
         return self._task.list_by_parent_task(parent_task_id)
 
     def create_child_task(
-        self,
-        *,
-        title: str,
-        parent_task_id: int,
-        parent_run_id: int,
-        delegation_id: int,
-        workspace_id: int,
+            self,
+            *,
+            title: str,
+            parent_task_id: int,
+            parent_run_id: int,
+            delegation_id: int,
+            workspace_id: int,
     ) -> TaskRecord:
         """创建委派子任务（只建 task，不建 turn）。
 
@@ -248,9 +232,9 @@ class TaskService:
             向 ``tasks`` 表插入一行 delegation 类型的子任务记录（不建 turn）。
         """
         for field_name, value in (
-            ("parent_task_id", parent_task_id),
-            ("parent_run_id", parent_run_id),
-            ("workspace_id", workspace_id),
+                ("parent_task_id", parent_task_id),
+                ("parent_run_id", parent_run_id),
+                ("workspace_id", workspace_id),
         ):
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{field_name} must be a positive integer")

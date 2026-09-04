@@ -11,7 +11,11 @@ Agent 改完态（after）、还是用户手动改过（两者都不是）。只
 
 from pathlib import Path
 
-from app.core.tools.tool_handler.patch.patch_parser import OperationType, PatchOperation, hunk_content
+from app.core.tools.tool_handler.patch.patch_parser import (
+    OperationType,
+    PatchOperation,
+    hunk_content,
+)
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 
 

@@ -76,7 +76,9 @@ def query_change_set(
         打开主库只读查询。
     """
     task_id = int(task_id)
-    run_ids, checkpoints = _run_ids_until(task_id, checkpoint_run_id)
+    run_ids, checkpoints = _run_ids_until(
+        task_id, int(checkpoint_run_id) if checkpoint_run_id is not None else None
+    )
     crud = FileSnapshotCrud()
     snapshots = (
         crud.list_any_by_task(task_id, run_ids)

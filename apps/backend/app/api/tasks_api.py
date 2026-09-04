@@ -11,7 +11,7 @@ import asyncio
 
 from fastapi import Depends, HTTPException
 
-from app.api.dependencies import get_task_service, get_conversation_run_service
+from app.api.dependencies import get_conversation_run_service, get_task_service
 from app.api.schemas import (
     DeleteTaskResponse,
     TaskResponse,
@@ -19,8 +19,8 @@ from app.api.schemas import (
 from app.app import app
 from app.config.logging.logger import log
 from app.service.provider.capability_service import CapabilityService
-from app.service.task.task_service import TaskService
 from app.service.task.conversation_run_service import ConversationRunService
+from app.task_runtime.service.task_service import TaskService
 
 
 @app.get("/tasks/{task_id}")
@@ -132,7 +132,9 @@ async def list_child_tasks(
     return [TaskResponse.from_record(child) for child in children]
 
 
-def _latest_conversation_run_model_name(task_id: int, conversation_run_state_service: ConversationRunService) -> str | None:
+def _latest_conversation_run_model_name(
+    task_id: int, conversation_run_state_service: ConversationRunService
+) -> str | None:
     """取得某任务最近一次 turn 的 ``model_name``（设计 §6.4 任务级口径）。
 
     按创建时间升序取该 task 的全部 turn，返回最后一个非空 ``model_name``；无 turn

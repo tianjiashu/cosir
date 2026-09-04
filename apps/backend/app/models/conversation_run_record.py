@@ -27,7 +27,6 @@ class ConversationRunRecord:
     created_at: datetime
     updated_at: datetime
     end_reason: str | None = None
-    response_text: str | None = None
     agent_id: str | None = None
     provider_id: int | None = None
     model_name: str | None = None
@@ -35,7 +34,7 @@ class ConversationRunRecord:
     reasoning_effort: str | None = None
     extra: dict[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, object]:
         """将轮次状态转换为可序列化为 JSON 的字典。
 
         参数:
@@ -57,7 +56,6 @@ class ConversationRunRecord:
             "input_text": self.input_text,
             "status": self.status,
             "end_reason": self.end_reason,
-            "response_text": self.response_text,
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
@@ -92,7 +90,6 @@ class ConversationRunRecord:
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             end_reason=row.end_reason,
-            response_text=row.response_text,
             agent_id=row.agent_id,
             image_paths=row.image_paths,
             reasoning_effort=row.reasoning_effort,

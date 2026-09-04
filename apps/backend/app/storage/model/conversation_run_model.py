@@ -40,7 +40,6 @@ class ConversationRunModel(StorageBase):
     image_paths: Mapped[list[str] | None] = mapped_column(JSON)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)
     end_reason: Mapped[str | None] = mapped_column(Text)
-    response_text: Mapped[str | None] = mapped_column(Text)
     extra: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=ConversationRunStatus.PENDING.value

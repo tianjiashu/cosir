@@ -115,9 +115,7 @@ class ConversationCommandCrud:
                 return self._do_create(
                     session, task_id, command_id, run_id, command_type, payload_hash
                 )
-        return self._do_create(
-            session, task_id, command_id, run_id, command_type, payload_hash
-        )
+        return self._do_create(session, task_id, command_id, run_id, command_type, payload_hash)
 
     def _do_create(
         self,

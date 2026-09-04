@@ -14,9 +14,7 @@ class ConversationTaskSnapshotModel(StorageBase):
     """
 
     __tablename__ = "conversation_task_snapshots"
-    __table_args__ = (  # type: ignore[assignment]
-        UniqueConstraint("task_id", name="uq_conversation_task_snapshots_task"),
-    )
+    __table_args__ = (UniqueConstraint("task_id", name="uq_conversation_task_snapshots_task"),)
 
     task_id: Mapped[int] = mapped_column(
         Integer,
@@ -24,4 +22,3 @@ class ConversationTaskSnapshotModel(StorageBase):
         nullable=False,
     )
     state_json: Mapped[str] = mapped_column(Text, nullable=False)
-    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

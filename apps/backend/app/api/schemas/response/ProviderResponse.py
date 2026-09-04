@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 
 from app.models.provider_record import ProviderRecord
-from app.utils.datetime_utils import to_text
 
 
 class ProviderResponse(BaseModel):
@@ -75,6 +74,6 @@ class ProviderResponse(BaseModel):
             enabled=record.enabled,
             model_count=model_count,
             sort_order=record.sort_order,
-            created_at=to_text(record.created_at),
-            updated_at=to_text(record.updated_at),
+            created_at=record.created_at.isoformat() if record.created_at else "",
+            updated_at=record.updated_at.isoformat() if record.updated_at else "",
         )

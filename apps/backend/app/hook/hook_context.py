@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.hook.hook_event import HookEvent
 from app.core.tools.schemas import ToolObservation
+from app.hook.hook_event import HookEvent
 
 
 @dataclass(frozen=True)

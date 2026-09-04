@@ -46,7 +46,7 @@ from app.core.runtime.runner import AgentRuntime
 from app.models.enums.workspace_event_type import WorkspaceEventType
 from app.models.event.workspace_event import WorkspaceEvent
 from app.models.workspace_readiness import WorkspaceReadiness
-from app.service.task.task_service import TaskService
+from app.task_runtime.service.task_service import TaskService
 from app.service.task.workspace_service import WorkspaceService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 from app.service.workspace_event.workspace_event_service import WorkspaceEventService
@@ -101,7 +101,13 @@ async def list_workspaces(
     """
 
     return [
-        WorkspaceResponse(**workspace.to_dict())
+        WorkspaceResponse(
+            workspace_id=workspace.id,
+            name=workspace.name,
+            root_path=workspace.root_path,
+            created_at=workspace.created_at.isoformat(),
+            updated_at=workspace.updated_at.isoformat(),
+        )
         for workspace in workspace_service.list_workspaces()
     ]
 
@@ -131,7 +137,13 @@ async def create_workspace(
         workspace = workspace_service.create_workspace(payload.name, payload.root_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return WorkspaceResponse(**workspace.to_dict())
+    return WorkspaceResponse(
+        workspace_id=workspace.id,
+        name=workspace.name,
+        root_path=workspace.root_path,
+        created_at=workspace.created_at.isoformat(),
+        updated_at=workspace.updated_at.isoformat(),
+    )
 
 
 @app.delete("/workspaces/{workspace_id}")
@@ -192,55 +204,6 @@ async def list_workspace_tasks(
         ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
-
-
-@app.post("/workspaces/{workspace_id}/tasks")
-async def create_workspace_task(
-    workspace_id: int,
-    payload: CreateTaskRequest,
-    task_service: TaskService = Depends(get_task_service),
-) -> TaskResponse:
-    """在工作区下创建任务容器（不含首轮次）。
-
-    任务创建与首轮次创建已解耦：本端点只创建 task 容器，首轮次由调用方（前端）显式
-    调 Assistant Transport 端点提交首条消息。这样 task 维度不再耦合 agent / 模型 /
-    附件等运行期字段。
-
-    参数:
-        workspace_id: 来自路由的工作区标识，作为任务归属的唯一权威值。
-        payload: 创建任务请求体，含任务文本与 workspace_id 字段。
-        task_service: 任务 service，用于创建任务容器。
-
-    返回:
-        新建任务记录（含 ``task_id``）。调用方随后创建首 turn 并连接
-        ``/assistant`` 驱动执行，任务标识通过请求体的 ``taskId`` 传递。
-
-    异常:
-        HTTPException: workspace 不存在时为 404；输入非法时为 400。
-
-    副作用:
-        向 ``tasks`` 插入一行任务容器；不创建轮次。
-    """
-
-    try:
-        task = task_service.create_task(
-            input_text=payload.text,
-            workspace_id=workspace_id,
-        )
-    except IntegrityError as exc:
-        log.error(
-            "create_workspace_task failed: workspace %s not found (foreign key violation)",
-            workspace_id,
-        )
-        raise HTTPException(status_code=404, detail="workspace not found") from exc
-    except ValueError as exc:
-        log.warning(
-            "create_workspace_task rejected: workspace=%s reason=%s",
-            workspace_id,
-            exc,
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return TaskResponse.from_record(task)
 
 
 @app.get("/workspaces/{workspace_id}/events/stream")

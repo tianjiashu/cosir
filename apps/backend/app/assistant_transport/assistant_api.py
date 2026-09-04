@@ -23,13 +23,9 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
 )
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService, \
     ConversationRunStartResult
-from app.assistant_transport.state.conversation_state_snapshot import (
-    ConversationStateSnapshot as AssistantTransportState,
-)
 from app.config.logging.logger import log
 from app.service.depends import (
     get_conversation_run_executor,
-    get_conversation_run_service,
     get_conversation_task_snapshot_service,
     get_task_service, get_transport_assistant_service,
 )
@@ -37,16 +33,6 @@ from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.datetime_utils import preview
 
-
-def _empty_snapshot() -> AssistantTransportState:
-    """返回任务首屏使用的固定空 snapshot。"""
-
-    return {
-        "messages": [],
-        "run": {"runId": None, "status": "idle"},
-        "approvals": {},
-        "error": None,
-    }
 
 
 def _raise_transport_error(
@@ -199,8 +185,7 @@ async def assistant_transport(
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
     task_id: int,
-    task_service: Any = Depends(get_task_service),  
-    run_service: Any = Depends(get_conversation_run_service),  
+    task_service: Any = Depends(get_task_service),
     snapshot_service: ConversationTaskSnapshotService = Depends(  
         get_conversation_task_snapshot_service
     ),
