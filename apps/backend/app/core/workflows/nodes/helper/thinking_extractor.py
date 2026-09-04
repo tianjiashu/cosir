@@ -11,7 +11,7 @@
 """
 
 
-def _extract_reasoning_content(chunk, channel: str) -> str:
+def extract_reasoning_content(chunk, channel: str) -> str:
     """从 LangChain 消息 chunk 按厂商 thinking 通道提取思考过程分片。
 
     按 ``LLMRuntimeConfig.thinking_channels`` 顺序尝试各通道（设计文档阶段
@@ -178,7 +178,7 @@ def _should_strip_reasoning_content(
 
 
 __all__ = [
-    "_extract_reasoning_content",
+    "extract_reasoning_content",
     "_extract_reasoning_field",
     "_extract_thinking_blocks",
     "_extract_thought_blocks",

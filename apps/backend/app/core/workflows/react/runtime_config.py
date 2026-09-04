@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 
 from langchain_core.language_models import BaseChatModel
 
-from app.core.runtime.runtime_operations import RuntimeOperations
+from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord
-from app.models.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 
 
 @dataclass
@@ -43,7 +43,7 @@ class RuntimeConfig:
             转 ``VisionNotSupportedError``。
     """
 
-    operations: RuntimeOperations
+    operations: WorkflowOperations
     run: ConversationRunRecord
     model: BaseChatModel
     start_time: float = 0.0

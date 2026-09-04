@@ -6,25 +6,31 @@ import asyncio
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from langgraph.config import get_stream_writer
+
+from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
 from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.models import ConversationRunRecord, RuntimeMessage, TaskRecord, WorkspaceRecord
-from app.service.conversation_run_message_store import ConversationRunMessageStore
-from app.service.depends import get_conversation_run_service
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
+from app.core.runtime.tool_execution import ToolTraceRecorder
 from app.core.runtime.tool_execution.run_result import ToolRunResult
 from app.core.runtime.tool_execution.tool_execution_service import ToolExecutionService
-from app.core.runtime.tool_execution import ToolTraceRecorder
-from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
+from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.event import RunStatusChangedEvent
+from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord, ConversationRunStatus
+from app.service.depends import (
+    get_conversation_run_service,
+    get_conversation_task_context_service,
+)
+from langchain_core.messages import ToolMessage
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
-    from app.core.context.runtime_message_store import RuntimeMessageStore
 
 
-class RuntimeOperations:
+class WorkflowOperations:
     """Expose runtime-owned side effects through a narrow workflow boundary.
 
     状态单一事实来源是 ``ConversationRun``：本门面暴露的状态和当前 run 方法都作用于
@@ -32,23 +38,20 @@ class RuntimeOperations:
     """
 
     def __init__(
-        self,
-        tool_scheduler: ToolScheduler,
-        agent_profile: AgentProfile,
-        current_run: ConversationRunRecord,
-        current_task: TaskRecord,
-        current_workspace: WorkspaceRecord,
-        model_tools: list[ToolDefinition] | None = None,
-        execution_context: ToolExecutionContext | None = None,
-        runtime_dependencies: ToolRuntimeDependencies | None = None,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            self,
+            tool_scheduler: ToolScheduler,
+            agent_profile: AgentProfile,
+            current_run: ConversationRunRecord,
+            current_task: TaskRecord,
+            current_workspace: WorkspaceRecord,
+            model_tools: list[ToolDefinition] | None = None,
+            execution_context: ToolExecutionContext | None = None,
+            runtime_dependencies: ToolRuntimeDependencies | None = None,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
         参数:
-            run_store: 运行存储（私有协作者，不对外暴露）；逐条落库经其
-                消息写入/清理门面，避免 core 直连
-                storage 层（分层约束：core → service，service → storage）。
             tool_scheduler: 工具调度器（已按 workspace 边界解析或进程级兜底）。
             agent_profile: 驱动本次 run 的 agent profile。
             current_run: 当前绑定的 Conversation Run 记录（门面状态单一事实来源）。
@@ -61,7 +64,6 @@ class RuntimeOperations:
                 会合并进 ``ToolExecutionContext.runtime_dependencies`` 透传给 handler。
             tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
                 工具执行不产生 trace，行为与集成前一致。
-            should_cancel: 当前 run 的取消检查回调；为 None 时退化为状态查询。
 
         返回:
             无。
@@ -70,16 +72,11 @@ class RuntimeOperations:
             无。
 
         副作用:
-            构造 ``ToolExecutionService``、存储执行上下文、构造消息持久化端口
-            （``ConversationRunMessageStore``，经 ``message_store`` 属性暴露给 workflow）、
-            记初始化日志。
+            构造 ``ToolExecutionService``、存储执行上下文和 canonical writer，记初始化日志。
         """
 
         self._conversation_run_state_service = get_conversation_run_service()
-        # 消息持久化端口（service 层适配实现）：暴露给 workflow 供 RuntimeContextManager
-        # 注入，使 manager 成为消息读写的唯一事实源。原 append_runtime_message /
-        # reset_message_sequence 逐条落库逻辑退役，改由 manager 经本端口落库。
-        self._message_store = ConversationRunMessageStore(self._conversation_run_state_service)
+        self._context_service = get_conversation_task_context_service()
         self._conversation_writer = ConversationMutationWriter()
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
@@ -137,15 +134,6 @@ class RuntimeOperations:
 
         return self._current_workspace
 
-    @property
-    def message_store(self) -> RuntimeMessageStore:
-        """返回本 run 的消息持久化端口（供 workflow 注入 ``RuntimeContextManager``）。
-
-        返回:
-            ``ConversationRunMessageStore`` 适配实例，承载 ``turn_messages`` 读写的依赖倒置端口。
-        """
-        return self._message_store
-
     def append_assistant_text(self, text: str) -> None:
         """将模型文本增量直接追加到当前运行的 canonical assistant part。
 
@@ -163,9 +151,10 @@ class RuntimeOperations:
         副作用:
             经 ``ConversationMutationWriter`` 原子追加文本并提交 canonical fact。
         """
-        self._conversation_writer.append_assistant_text_for_run(
+        self._conversation_writer.append_assistant_part_for_run(
             self._current_task.id,
             self._current_run.id,
+            "text",
             text,
         )
 
@@ -193,42 +182,36 @@ class RuntimeOperations:
             text,
         )
 
-    def has_conversation_run_status(self, run_id: int, status: str) -> bool:
-        """Return whether a Conversation Run currently has the requested status."""
-
-        has = self._conversation_run_state_service.has_conversation_run_status(run_id, status)
-        return has
-
     def is_current_run_cancelled(self) -> bool:
         """Return whether the currently bound run should stop.
+
+        取消检测只读进程内取消注册表（运行时信号源）：取消入口由
+        ``ConversationRunExecutor.cancel`` 统一标记信号并落库，本方法不做 DB 兜底查询，
+        避免协作取消检查在 process 模式工具的 50ms 轮询中产生高频数据库读。
 
         参数:
             无。
 
         返回:
-            当前 run 已被取消时返回 True，否则返回 False。
+            当前 run 已被取消时返回 True；未绑定 run 或无取消信号时返回 False。
 
         异常:
             无。
 
         副作用:
-            可能调用注入的取消检查回调；无回调时读取 run 状态。
+            无。
         """
-        current_run_id = self._current_run.id
-        if cancellation_registry.is_cancelled(current_run_id):
-            return True
-        if not self._current_run:
+        current_run = self._current_run
+        if current_run is None:
             return False
-        return self.has_conversation_run_status(current_run_id, "cancelled")
+        return cancellation_registry.is_cancelled(str(current_run.id))
 
-    def complete_run_if_running(
-        self, run_id: int, response_text: str
-    ) -> ConversationRunRecord | None:
+    def complete_run_if_running(self,
+                                usage_stats: ConversationRunUsageStats | None = None) -> ConversationRunRecord | None:
         """Complete the Conversation Run only if it is still running.
 
         参数:
             run_id: 待完成的 Conversation Run 标识。
-            response_text: Agent 最终回复文本。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已被取消/失败/完成时返回 None。
@@ -240,32 +223,22 @@ class RuntimeOperations:
         副作用:
             条件满足时同事务写入 completed 状态和回复文本。
         """
-
-        response_len = len(response_text)
+        run_id = self._current_run.id
+        stream_writer = get_stream_writer()
+        stream_writer(
+            RunStatusChangedEvent(task_id=self._current_task.id, run_id=run_id, status=ConversationRunStatus.COMPLETED,
+                                  usage_stats=usage_stats))
         log.info(
             "run_completion_attempted",
             extra={
                 "msg": f"尝试完成 running run，run_id={run_id}",
-                "data": {"run_id": run_id, "response_length": response_len},
+                "data": {"run_id": run_id},
             },
         )
-        # 最终文本先写入 canonical assistant part；response_text 不是事实来源。
-        if response_text:
-            self._conversation_writer.append_assistant_text_for_run(
-                self._current_task.id,
-                run_id,
-                response_text,
-            )
-        mutation = self._conversation_writer.settle_run(
-            run_id,
-            "completed",
-        )
-        if mutation is None:
-            return None
-        return self._conversation_run_state_service.get_run(run_id)
+        return self._conversation_run_state_service.complete_run_if_running(run_id)
 
     def fail_run_if_running(
-        self, run_id: int, end_reason: str | None = None
+            self, end_reason: str | None = None, usage_stats: ConversationRunUsageStats | None = None
     ) -> ConversationRunRecord | None:
         """Fail the Conversation Run only if it is still running.
 
@@ -283,6 +256,11 @@ class RuntimeOperations:
         副作用:
             条件满足时写入 failed 状态。
         """
+        run_id = self._current_run.id
+        stream_writer = get_stream_writer()
+        stream_writer(
+            RunStatusChangedEvent(task_id=self._current_task.id, run_id=run_id, status=ConversationRunStatus.FAILED,
+                                  end_reason=end_reason, usage_stats=usage_stats))
 
         log.info(
             "run_failure_attempted",
@@ -291,17 +269,10 @@ class RuntimeOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        mutation = self._conversation_writer.settle_run(
-            run_id,
-            "failed",
-            end_reason=end_reason,
-        )
-        if mutation is None:
-            return None
-        return self._conversation_run_state_service.get_run(run_id)
+        return self._conversation_run_state_service.fail_run_if_running(run_id, end_reason)
 
     def cancel_run_if_running(
-        self, run_id: int, end_reason: str = "runtime_cancelled"
+            self, end_reason: str = "runtime_cancelled", usage_stats: ConversationRunUsageStats | None = None
     ) -> ConversationRunRecord | None:
         """Cancel the Conversation Run through the canonical writer if it is still active.
 
@@ -319,21 +290,27 @@ class RuntimeOperations:
         副作用:
             通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled。
         """
-        mutation = self._conversation_writer.settle_run(
-            run_id,
-            "cancelled",
-            end_reason=end_reason,
+        run_id = self._current_run.id
+        stream_writer = get_stream_writer()
+        stream_writer(
+            RunStatusChangedEvent(task_id=self._current_task.id, run_id=run_id, status=ConversationRunStatus.CANCELLED,
+                                  end_reason=end_reason, usage_stats=usage_stats))
+
+        log.info(
+            "run_cancel_attempted",
+            extra={
+                "msg": f"尝试将 running run 标记为 cancelled，run_id={run_id}",
+                "data": {"run_id": run_id, "end_reason": end_reason},
+            },
         )
-        if mutation is None:
-            return None
-        return self._conversation_run_state_service.get_run(run_id)
+        return self._conversation_run_state_service.cancel_run_if_running(run_id, end_reason)
 
     def run_tool_calls(
-        self,
-        task_id: str,
-        calls: list[ToolCall],
-        step_id: str | None = None,
-        running_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            task_id: str,
+            calls: list[ToolCall],
+            step_id: str | None = None,
+            running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 
@@ -379,8 +356,6 @@ class RuntimeOperations:
             step_id=effective_step_id,
             calls=calls,
             execution_context=execution_context,
-            on_tool_call_started=self._record_tool_call_started,
-            on_tool_call_finished=self._record_tool_call_finished,
             running_loop=running_loop,
         )
 
@@ -388,126 +363,11 @@ class RuntimeOperations:
 
         return result
 
-    def _record_tool_call_started(self, _step_id: str, call: ToolCall) -> None:
-        """将工具开始事实写入 canonical conversation。"""
-        call_id = call.call_id or call.tool_name
-        self._conversation_writer.create_tool_call(
-            self._current_task.id,
-            call_id,
-            call.tool_name,
-            call.arguments,
-            run_id=self._current_run.id,
-        )
-        self._conversation_writer.transition_tool_call(
-            self._current_task.id,
-            call_id,
-            "running",
-            run_id=self._current_run.id,
-        )
-
-    def ensure_tool_calls_pending(self, calls: list[ToolCall]) -> None:
-        """Persist all model-selected calls before approval or handler execution."""
-
-        for call in calls:
-            self._conversation_writer.create_tool_call(
-                self._current_task.id,
-                call.call_id or call.tool_name,
-                call.tool_name,
-                call.arguments,
-                run_id=self._current_run.id,
-            )
-
-    def mark_tool_calls_requires_action(self, calls: list[ToolCall]) -> None:
-        """Mark calls as waiting for the server-side approval decision."""
-
-        for call in calls:
-            self._conversation_writer.transition_tool_call(
-                self._current_task.id,
-                call.call_id or call.tool_name,
-                "requires-action",
-                run_id=self._current_run.id,
-            )
-
-    def request_tool_approval(self, calls: list[ToolCall], step_id: str) -> str:
-        """Persist the approval request associated with a tool batch."""
-
-        request_id = f"approval-{self._current_run.id}-{step_id}"
-        self._conversation_writer.record_approval_request(
-            self._current_task.id,
-            request_id,
-            {
-                "stepId": step_id,
-                "toolCalls": [
-                    {
-                        "toolCallId": call.call_id or call.tool_name,
-                        "toolName": call.tool_name,
-                        "args": call.arguments,
-                    }
-                    for call in calls
-                ],
-            },
-            run_id=self._current_run.id,
-        )
-        return request_id
-    def _record_tool_call_finished(self, _step_id: str, observation: object) -> None:
-        """将工具完成事实写入 canonical conversation。"""
-        call_id = getattr(observation, "tool_call_id", None)
-        if not isinstance(call_id, str) or not call_id:
-            return
-        status = getattr(observation, "status", "error")
-        self._conversation_writer.complete_tool_call_by_external_id(
-            self._current_task.id,
-            call_id,
-            getattr(observation, "data", None),
-            status=(
-                "completed"
-                if status == "success"
-                else ("cancelled" if status == "cancelled" else "failed")
-            ),
-            error_text=getattr(observation, "error", None) or getattr(observation, "reason", None),
-            run_id=self._current_run.id,
-        )
-
-    def cancel_tool_calls(self, calls: list[ToolCall]) -> None:
-        """Mark calls skipped before execution as cancelled in canonical facts."""
-
-        for call in calls:
-            self._conversation_writer.transition_tool_call(
-                self._current_task.id,
-                call.call_id or call.tool_name,
-                "cancelled",
-                run_id=self._current_run.id,
-            )
-
-    def build_cancel_placeholder_messages(
-        self,
-        calls: list[ToolCall],
-    ) -> list[RuntimeMessage]:
-        """为执行前已确定取消的工具调用构造配对闭合占位消息。
-
-        转发到 ``ToolExecutionService.build_cancel_placeholder_messages``，使 ``core``
-        编排层无需钻入 ``_tool_service`` 受保护成员即可复用 service 的取消占位实现，
-        保证执行前整批取消分支与正常执行路径（含执行中取消）产出的协议字段完全一致。
-
-        参数:
-            calls: 已确定不会执行的工具调用列表。
-
-        返回:
-            按入参顺序排列、可直接写回运行时上下文的 ``role="tool"`` 消息列表。
-
-        异常:
-            无。
-
-        副作用:
-            无（仅委托 service 构造消息）。
-        """
-        return self._tool_service.build_cancel_placeholder_messages(calls)
-
     def _pre_process_run(
-        self,
-        task_id: str,
-        calls: list[ToolCall],
-        step_id: str | None = None,
+            self,
+            task_id: str,
+            calls: list[ToolCall],
+            step_id: str | None = None,
     ) -> None:
         """Log metadata before dispatching a tool-call batch.
 
@@ -543,10 +403,10 @@ class RuntimeOperations:
         )
 
     def _post_process_run(
-        self,
-        task_id: str,
-        result: ToolRunResult,
-        step_id: str | None = None,
+            self,
+            task_id: str,
+            result: ToolRunResult,
+            step_id: str | None = None,
     ) -> None:
         """Log metadata after a tool-call batch completes.
 
@@ -584,10 +444,53 @@ class RuntimeOperations:
                     "task_id": task_id,
                     "step_id": step_id,
                     "observation_count": len(result.observations),
-                    "messages_for_model_count": len(result.messages_for_model),
                     "status_counts": status_counts,
                     "error_count": error_count,
                     "workspace_id": workspace_id,
                 },
             },
         )
+
+    def _to_model_message(self, observation: ToolObservation) -> ToolMessage:
+        """把工具观察序列化为模型可见的 ``role="tool"`` 消息（markdown 结构）。
+
+        ``content_text`` 以 markdown 区块组织**对模型可见**的字段：``## Tool`` 承载
+        ``tool_name`` / ``status`` / ``retryable``，``## Output`` 承载 ``content``，
+        ``## Error`` 承载 ``error``，``## Reason`` 承载 ``reason``；空值跳过对应区块。
+        ``tool_call_id``（置于 ``metadata``）、``data``、``permission`` 对模型不可见。
+
+        参数:
+            observation: 已产出的工具观察（含正常结果、错误占位、取消占位）。
+
+        返回:
+            可并入模型上下文的 ``ToolMessage``，其 ``tool_call_id`` 用于与
+            ``AIMessage.tool_calls`` 配对闭合。
+
+        异常:
+            无。
+
+        副作用:
+            无（不修改入参观察对象）。
+        """
+        # 仅向模型暴露面向人读的文本通道（content / error / reason）与执行元信息
+        # （tool_name / status / retryable）。tool_call_id / data / permission 对模型不可见
+        # （前者在 metadata、后者转模型前已被 clear_display_data 清空）。None 与空串视为
+        # 无信息，跳过对应区块。其余字段以 markdown 结构组织，使模型能区分「元信息 / 输出 /
+        # 错误 / 修正建议」四个语义维度。
+        sections: list[str] = []
+        meta_lines: list[str] = []
+        if observation.tool_name:
+            meta_lines.append(f"- name: {observation.tool_name}")
+        if observation.status:
+            meta_lines.append(f"- status: {observation.status}")
+        meta_lines.append(f"- retryable: {observation.retryable}")
+        if meta_lines:
+            sections.append("## Tool\n\n" + "\n".join(meta_lines))
+        if observation.content:
+            sections.append(f"## Output\n\n{observation.content}")
+        if observation.error:
+            sections.append(f"## Error\n\n{observation.error}")
+        if observation.reason:
+            sections.append(f"## Reason\n\n{observation.reason}")
+        content_text = "\n\n".join(sections)
+        return ToolMessage(content=content_text, tool_call_id=observation.tool_call_id, status=observation.status)

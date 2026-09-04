@@ -1,0 +1,65 @@
+"""消息 part 的文本内容与阶段事件。
+
+本模块只承载「一条消息内 text / reasoning part 的内容追加与阶段收口」这一单一职责，
+覆盖 user 与 assistant 两侧：三者在投影上完全同构（都是「往某个 part 追加一段文本」
+或「把某个 part 标记为完成」），因此放在同一模块，而不是按角色拆成两个模块。
+
+不负责：消息骨架的建立（见 ``run_event.RunInitializedEvent``）、工具调用 part
+（见 ``tool_call_event``）、消息终态（见 ``run_event.RunStatusChangedEvent``）。
+"""
+
+from typing import Literal
+
+from pydantic import Field
+
+from app.core.workflows.event.conversation_event_envelope import ConversationEventEnvelope
+
+AssistantTextPartKind = Literal["text", "reasoning"]
+
+
+class AssistantTextDeltaEvent(ConversationEventEnvelope):
+    """模型输出的一段增量文本已经产生。
+
+    事实语义：模型流式产出了一个 chunk 中的文本或 reasoning 内容，Transport 侧应把它
+    增量追加到该 run 的 assistant 消息对应 part。本事件取代原
+    ``react.streaming.ModelOutputDelta``：text 与 reasoning 形状完全相同，合并为一个
+    类型由 ``part`` 区分，避免为两种通道各维护一套事件与投影分支。
+
+    Attributes:
+        part: 目标 part 类型，``"text"`` 为正文、``"reasoning"`` 为思考内容。
+        delta: 非空增量文本。空增量不构成事实，不得发出。
+
+    异常:
+        pydantic.ValidationError: ``part`` 取值非法、``delta`` 为空串，或出现未声明字段时抛出。
+
+    副作用:
+        无；本事件只描述已发生的事实，不执行任何写入。
+    """
+
+    type: Literal["assistant_text_delta"] = "assistant_text_delta"
+    part: AssistantTextPartKind
+    delta: str = Field(min_length=1)
+
+
+class AssistantPartClosedEvent(ConversationEventEnvelope):
+    """一个 assistant text / reasoning part 已停止追加。
+
+    事实语义：该 part 的内容已完整（流末、或 run 进入终态被收口），Transport 侧应把它
+    从 ``running`` 标记为 ``completed``。前端据此关闭流式光标与「正在输入」态。
+
+    单独成事件而不是由 applier 隐式推断：只有生产者知道一段内容何时算写完
+    （模型可能在同一 part 内多次停顿，也可能被取消打断），推断会产生「永远不 completed」
+    的悬挂 part。
+
+    Attributes:
+        part: 要收口的 part 类型，取值同 ``AssistantTextDeltaEvent.part``。
+
+    异常:
+        pydantic.ValidationError: ``part`` 取值非法，或出现未声明字段时抛出。
+
+    副作用:
+        无；本事件只描述已发生的事实，不执行任何写入。
+    """
+
+    type: Literal["assistant_part_closed"] = "assistant_part_closed"
+    part: AssistantTextPartKind

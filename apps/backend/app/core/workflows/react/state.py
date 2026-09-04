@@ -52,5 +52,5 @@ class ReactGraphState(BaseModel):
     pending_tool_calls: dict[str, Any]
     max_steps: int
     final_text: str
-    last_tool_results: list[dict[str, Any]]
+    last_tool_results: dict[str, Any]
     continuation_error_data: Any = None

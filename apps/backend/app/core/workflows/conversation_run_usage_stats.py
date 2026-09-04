@@ -17,7 +17,7 @@ _OUTPUT_REASONING_KEY = "reasoning"
 
 @dataclass
 class ConversationRunUsageStats:
-    """turn 级 token 与耗时累加器。
+    """run 级 token 与耗时累加器。
 
     字段语义与 LangChain ``UsageMetadata`` 对齐（见 langchain_core.messages.ai）：
     - ``input_tokens``：输入 token 数（含历史、工具结果等）。
@@ -88,22 +88,6 @@ class ConversationRunUsageStats:
         output_details = usage_metadata.get("output_token_details") or {}
         if isinstance(output_details, dict):
             self.reasoning_tokens += self._safe_int(output_details.get(_OUTPUT_REASONING_KEY))
-
-    def add_message_usage(self, usage_metadata: dict[str, Any] | None) -> None:
-        """兼容别名：委托 ``add_usage_metadata``，统一单一累加入口。
-
-        保留以平滑迁移历史调用点；新代码应直接调用 ``add_usage_metadata``。
-
-        参数:
-            usage_metadata: 同 ``add_usage_metadata``。
-
-        返回:
-            无。
-
-        副作用:
-            同 ``add_usage_metadata``（就地累加）。
-        """
-        self.add_usage_metadata(usage_metadata)
 
     def to_dict(self) -> dict[str, int]:
         """把统计转成可序列化字典。

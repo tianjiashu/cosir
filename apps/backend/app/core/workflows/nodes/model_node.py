@@ -28,12 +28,10 @@ from app.core.tools.schemas import ToolCall
 from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
-    _has_content,
 )
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
     _runtime_context,
-    emit_run_cancelled,
     terminal_state,
 )
 from app.core.workflows.nodes.helper.debug_dump import (
@@ -46,13 +44,14 @@ from app.core.workflows.nodes.helper.invalid_tool_call import (
     decide_invalid_tool_handling,
 )
 from app.core.workflows.nodes.helper.thinking_extractor import (
-    _extract_reasoning_content,
+    extract_reasoning_content,
     # 测试经 model_node._should_strip_reasoning_content 访问
 )
 from app.utils.message_content import content_to_text
+from .helper.tool_name_extractor import extract_tool_calls
+from ..event import AssistantTextDeltaEvent, ToolCallCreatedEvent, AssistantPartClosedEvent, ToolCallStatusChangedEvent
 
 from ..react.state import ReactGraphState
-from ..react.streaming import ModelOutputDelta
 
 
 async def _model_node(state: ReactGraphState) -> dict:
@@ -94,12 +93,11 @@ async def _model_node(state: ReactGraphState) -> dict:
     thinking_channel = rc.thinking_channel
     stream_writer = get_stream_writer()
 
+    task_id = operations.get_current_run().task_id
+    run_id = operations.get_current_run().id
+
     step_count = state.step_count + 1
-    # P1-5 提前拦截：本次推理若已超配额（step_count > max_steps），不发起推理，直接调用
-    # _finalize_max_steps 统一收口终态。这样「超配额」不再触发推理、也不会因该次推理产出
-    # 非法输出而滑落 invalid_model_output / completed 终态——终态分类恒为
-    # max_steps_reached。覆盖所有进入本节点的路径（START / observe 回流 / REPAIR 自回流），
-    # 是唯一拦截点。
+    # 提前拦截：本次推理若已超配额（step_count > max_steps）
     if step_count > state.max_steps:
         return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
@@ -112,7 +110,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         # 请求前取消同样走统一 canonical 终态，与流式中取消/工具取消保持语义一致。
-        emit_run_cancelled(rc, step_id)
+        operations.cancel_run_if_running(end_reason="runtime_cancelled", usage_stats=rc.usage_stats)
         return terminal_state(step_count)
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages = _runtime_context().load_message()
@@ -127,17 +125,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    if operations.is_current_run_cancelled():
-        log.info(
-            "model_node_cancelled_before_model_requested",
-            extra={
-                "msg": f"模型请求事件前检测到 run 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "run_id": rc.run.id},
-            },
-        )
-        # 同上一检查点：请求前取消走统一 canonical 终态。
-        emit_run_cancelled(rc, step_id)
-        return terminal_state(step_count)
     # chunks 攒结构化分块合并成 AIMessage 供解析 tool_calls 与提取最终正文。
     chunks: list[AIMessageChunk] = []
     chunk_index = 0
@@ -149,6 +136,8 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"messages": [m.model_dump() for m in messages]},
         },
     )
+
+    type = None
 
     async for chunk in model.astream(messages):
         # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
@@ -165,51 +154,37 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": usage_summary},
                 },
             )
-            emit_run_cancelled(rc, step_id)
+            operations.cancel_run_if_running(end_reason="runtime_cancelled", usage_stats=rc.usage_stats)
             return terminal_state(step_count)
 
         chunks.append(chunk)
+        # 提取文本与 reasoning 内容。
         text = content_to_text(chunk.content)
-        reasoning = _extract_reasoning_content(chunk, thinking_channel)
-        # 诊断日志：每个流式 chunk 的增量体量。若多数 chunk 的 content_len=0 仅在末 chunk
-        # 出现整段文本，说明模型/provider 未做逐 token 流式，前端表现为「整块出现、无流式感」。
-        log.info(
-            "model_node_stream_chunk",
-            extra={
-                "msg": (
-                    f"流式 chunk 已处理，chunk_index={chunk_index}，"
-                    f"content_len={len(text)}，reasoning_len={len(reasoning or '')}，"
-                    f"step_id={step_id}"
-                ),
-                "data": {
-                    "step_id": step_id,
-                    "chunk_index": chunk_index,
-                    "content_len": len(text),
-                    "reasoning_len": len(reasoning or ""),
-                    "emitted_output_delta": bool(text),
-                    "emitted_thinking_delta": bool(reasoning and reasoning.strip()),
-                },
-            },
-        )
-        if text:
-            stream_writer(ModelOutputDelta(type="model_output_delta", part="text", text=text))
-        if reasoning and reasoning.strip():
-            stream_writer(
-                ModelOutputDelta(
-                    type="model_output_delta",
-                    part="reasoning",
-                    text=reasoning,
-                )
-            )
+        # 提取 reasoning 内容。
+        reasoning = extract_reasoning_content(chunk, thinking_channel)
+        # 提取工具调用。
+        tool_calls: list[dict[str, Any]] = extract_tool_calls(chunk)
 
+        if text and text.strip():
+            type = "text"
+            stream_writer(AssistantTextDeltaEvent(task_id=task_id, run_id=run_id, step_id=step_id, part="text", delta=text))
+        if reasoning and reasoning.strip():
+            type = "reasoning"
+            stream_writer(AssistantTextDeltaEvent(task_id=task_id, run_id=run_id, step_id=step_id, part="reasoning", delta=reasoning))
+        if tool_calls:
+            for tool_call in tool_calls:
+                stream_writer(ToolCallCreatedEvent(task_id=task_id, run_id=run_id, step_id=step_id, tool_call_id=tool_call["id"], tool_name=tool_call["name"], args=tool_call["args"]))
+
+    # 合并 chunk 到 AIMessage。
     ai_message = _collect_chunk_to_ai_message(
         chunks
     )
+
+    stream_writer(AssistantPartClosedEvent(task_id=task_id, run_id=run_id, step_id=step_id, part=type))
+
     _runtime_context().add_message(ai_message)
-    # 单一来源：usage 只在模型调用产出 ai_message 后从其 usage_metadata 累加一次。
-    # ai_message.usage_metadata 是 LangChain 对各流式 chunk 求和无重复后的完整快照，
-    # 不再逐 chunk 解析（消除双重口径与键名偏差）。本对象为 run 级共享累加器，
-    # REPAIR 回流的多次模型调用会依次累加，各步末态快照互不覆盖。
+
+    # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
 
     tool_calls: list[ToolCall] = [
@@ -248,9 +223,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             repair_message = build_invalid_tool_call_repair_message(repair_datas=repair_data)
             _runtime_context().add_message(SystemMessage(content=repair_message))
 
-    stable_call_ids = [
-        call.call_id or f"{rc.run.id}:{step_id}:{index}" for index, call in enumerate(tool_calls)
-    ]
     # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。最终文本消息在
     # complete_run_with_message() 中与 Run 终态同事务写入；工具分支没有 Run 终态，单独写入
     # context 和 tool-call parts 在一个事务内写入。
@@ -282,6 +254,8 @@ async def _model_node(state: ReactGraphState) -> dict:
                 },
             },
         )
+        for tool_call in tool_calls:
+            stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id, tool_call_id=tool_call.call_id, status="pending"))
 
         return {
             "step_count": step_count,
@@ -307,7 +281,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if ai_message.content:  # 没有工具调用，上下文没有变化但有文本 → 最终回答
-        completed_run = operations.complete_run_with_message(rc.run.id, ai_message)
+        completed_run = operations.complete_run_if_running(rc.usage_stats)
         if completed_run is None:
             log.info(
                 "model_node_final_response_terminal_race_lost",
@@ -336,7 +310,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "output_text_length": len(ai_message.content)},
         },
     )
-    failed_run = operations.fail_run_if_running(rc.run.id, end_reason="invalid_model_output")
+    failed_run = operations.fail_run_if_running(end_reason="invalid_model_output", usage_stats=rc.usage_stats)
     if failed_run is None:
         log.info(
             "model_node_invalid_output_terminal_race_lost",

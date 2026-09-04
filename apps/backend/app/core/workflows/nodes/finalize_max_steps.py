@@ -58,8 +58,7 @@ async def _finalize_max_steps(
     if run_id is None:
         raise RuntimeError("runtime config does not contain a run id")
     failed_run = rc.operations.fail_run_if_running(
-        run_id,
-        end_reason="max_steps_reached",
+        end_reason="max_steps_reached", usage_stats=rc.usage_stats,
     )
     if failed_run is None:
         log.info(

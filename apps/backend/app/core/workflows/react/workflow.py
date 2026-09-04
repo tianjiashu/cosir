@@ -21,7 +21,7 @@ from app.core.runtime.checkpointer import build_checkpointer
 from app.core.workflows.nodes.helper.vision_content_blocks import (
     build_user_content_blocks,
 )
-from app.models.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.errors.llm_provider_exceptions import (
     VisionFormatNotSupportedError,
     VisionImageError,
@@ -29,13 +29,12 @@ from app.models.errors.llm_provider_exceptions import (
 )
 from app.service.depends import get_task_service
 from app.service.provider.capability_service import CapabilityService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.image_utils import is_image_path
 
 from ...context.context_listener.context_compress_listener import ContextCompressListener
 from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
 from ...context.runtime_context_manager import RuntimeContextManager
-from ...runtime.runtime_operations import RuntimeOperations
+from app.core.workflows.workflow_operations import WorkflowOperations
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
@@ -112,7 +111,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     @staticmethod
-    def _write_stream_item(operations: RuntimeOperations, mode: str, value: object) -> None:
+    def _write_stream_item(operations: WorkflowOperations, mode: str, value: object) -> None:
         """消费 workflow stream 中的模型增量并写入 snapshot。
 
         参数:
@@ -147,7 +146,7 @@ class ReactLikeWorkflow(AgentWorkflow):
 
     async def run(
             self,
-            operations: RuntimeOperations,
+            operations: WorkflowOperations,
             callbacks: list | None = None,
             langfuse_trace_id: str | None = None,
     ) -> None:

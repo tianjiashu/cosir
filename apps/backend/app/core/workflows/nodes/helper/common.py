@@ -52,34 +52,14 @@ def _runtime_context() -> RuntimeContextManager:
     return get_config()["configurable"]["runtime_context"]
 
 
-def emit_run_cancelled(rc: RuntimeConfig, step_id: str) -> None:
-    """经 ``RuntimeOperations`` 条件落定取消终态。
-
-    参数:
-        rc: 当前 ``RuntimeConfig``。
-        step_id: 触发取消的步唯一标识，仅用于结构化日志关联。
-
-    返回:
-        无。
-
-    异常:
-        透传 canonical writer 的持久化异常。
-
-    副作用:
-        经 ``RuntimeOperations`` 条件写入 cancelled 运行终态；已落定的终态不会被覆盖。
-    """
-    rc.operations.cancel_run_if_running(
-        rc.run.id,
-        end_reason="runtime_cancelled",
-    )
 
 
 def terminal_state(
-    step_count: int,
-    *,
-    repair_requested: bool = False,
-    requested_tool: bool = False,
-    final_response: bool = False,
+        step_count: int,
+        *,
+        repair_requested: bool = False,
+        requested_tool: bool = False,
+        final_response: bool = False,
 ) -> dict[str, Any]:
     """构造统一的终态 state patch（graph 走到 END 用）。
 

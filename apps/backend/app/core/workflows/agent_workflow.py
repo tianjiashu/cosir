@@ -2,7 +2,7 @@
 
 from typing import ClassVar, Protocol
 
-from app.core.runtime.runtime_operations import RuntimeOperations
+from app.core.workflows.workflow_operations import WorkflowOperations
 
 
 class AgentWorkflow(Protocol):
@@ -15,7 +15,7 @@ class AgentWorkflow(Protocol):
 
     async def run(
         self,
-        operations: RuntimeOperations,
+        operations: WorkflowOperations,
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
     ) -> None:

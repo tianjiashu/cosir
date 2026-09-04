@@ -19,11 +19,11 @@
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.workflows.nodes.helper.common import (
-    _runtime_config,
-    emit_run_cancelled,
+    _runtime_config, _runtime_context,
 )
 
 from ..react.state import ReactGraphState
+from ...tools.schemas import ToolObservation
 
 
 async def _observe_node(state: ReactGraphState) -> dict:
@@ -59,8 +59,9 @@ async def _observe_node(state: ReactGraphState) -> dict:
     """
     rc = _runtime_config()  # 取运行时配置（含 operations / langfuse_trace_id）
     operations = rc.operations  # 领域操作
-    results = state.last_tool_results  # tools 节点产出的结果摘要
-
+    observations: list[ToolObservation] = state.last_tool_results["observations"]  # tools 节点产出的结果摘要
+    instruction = state.last_tool_results["instruction"]
+    run_id = operations.get_current_run().id
     # 1. 执行后取消判断：工具已执行完毕（结果已写回上下文闭合配对），若 run 取消则不再
     # 多做一次推理并置取消终态，不进错误计数。此判断优先于空结果/错误计数，
     # 保证取消场景无论结果有无都走统一终态。
@@ -76,10 +77,10 @@ async def _observe_node(state: ReactGraphState) -> dict:
             },
         )
         # 取消终态经 RuntimeOperations 条件落定，直接结束。
-        emit_run_cancelled(rc, f"step-{state.step_count}")
+        operations.cancel_run_if_running(end_reason="run_cancelled_after_execution", usage_stats=rc.usage_stats)
         return {"terminal": True}
 
-    if not results:
+    if not observations:
         # 无本批工具结果：不计数也不判定，避免对无新结果时误发 RUN_FAILED。
         # 「连续失败计数滞留」是有意为之——本批没有任何 success/error 信号，既无法证明
         # 连续失败在延续，也无法证明已中断；无信息即不改写，把继承的 tool_error_count
@@ -99,15 +100,19 @@ async def _observe_node(state: ReactGraphState) -> dict:
         )
         return {}
 
+
     tool_error_count = state.tool_error_count  # 从 state 继承连续失败计数
     error_count = 0  # 本批错误数（与连续失败数在同一循环累加，避免二次遍历）
-    for result in results:
-        if result.get("status") == "success":
+    for observation in observations:
+        if observation.status == "success":
             tool_error_count = 0  # 成功则清零（连续失败才累计）
-        elif result.get("status") == "error":
+        elif observation.status == "error":
             tool_error_count += 1  # 工具失败 +1
             error_count += 1
         # "cancelled"（主动中断）不计入连续失败计数：非工具失败，语义区别于 error。
+        model_message = operations._to_model_message(observation)
+        _runtime_context().add_message(model_message)
+
 
     log.info(
         "observe_node_completed",
@@ -115,7 +120,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
             "msg": f"工具结果观察完成，step_id=step-{state.step_count}",
             "data": {
                 "step_id": f"step-{state.step_count}",
-                "result_count": len(results),
+                "result_count": len(observations),
                 "error_count": error_count,
                 "tool_error_count": tool_error_count,
             },
@@ -123,8 +128,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
 
     if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        run = operations.get_current_run()  # 当前 Conversation Run；仅错误上限分支需要
-        failed_run = operations.fail_run_if_running(run.id, end_reason="tool_error_limit_reached")
+        failed_run = operations.fail_run_if_running(end_reason="tool_error_limit_reached", usage_stats=rc.usage_stats)
         if failed_run is None:
             log.info(
                 "observe_node_error_limit_terminal_race_lost",
@@ -133,7 +137,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                         f"工具错误上限失败落定时 run 已非 running，"
                         f"跳过失败事件，step_id=step-{state.step_count}"
                     ),
-                    "data": {"step_id": f"step-{state.step_count}", "run_id": run.id},
+                    "data": {"step_id": f"step-{state.step_count}", "run_id": run_id},
                 },
             )
             return {
@@ -148,9 +152,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                     "step_id": f"step-{state.step_count}",
                     "tool_error_count": tool_error_count,
                     "limit": Settings.TOOL_ERROR_LIMIT,
-                    "instructions": [
-                        r.get("instruction", "") for r in results if r.get("instruction")
-                    ],
+                    "instruction": instruction,
                 },
             },
         )
