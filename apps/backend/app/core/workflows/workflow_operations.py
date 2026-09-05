@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -10,16 +12,24 @@ from langchain_core.messages import ToolMessage
 from langgraph.config import get_stream_writer
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
+from app.core.observability.tool_trace_recorder import (
+    ToolTraceRecorder,
+    _NullToolTraceRecorder,
+)
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.runtime.tool_execution import ToolTraceRecorder
 from app.core.runtime.tool_execution.run_result import ToolRunResult
-from app.core.runtime.tool_execution.tool_execution_service import ToolExecutionService
 from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.tools.tool_execute.tool_error import (
+    internal_execution_error_reason,
+    tool_error,
+)
 from app.core.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.event import RunStatusChangedEvent
 from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord, WorkspaceRecord
+from app.models.enums.error_kind import ErrorKind
 from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_run_service,
@@ -71,11 +81,13 @@ class WorkflowOperations:
             无。
 
         副作用:
-            构造 ``ToolExecutionService``、存储执行上下文和 canonical writer，记初始化日志。
+            构造工具执行所需的私有协作者（调度器、可见工具集、并行模式、trace 记录器、
+            取消回调），存储执行上下文与 canonical writer，记初始化日志。
         """
 
         self._conversation_run_state_service = get_conversation_run_service()
         self._event_projector = get_conversation_event_projector()
+        self._scheduler = tool_scheduler
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
@@ -86,14 +98,12 @@ class WorkflowOperations:
             if execution_context is not None and runtime_dependencies is not None
             else execution_context
         )
-        self._tool_service = ToolExecutionService(
-            scheduler=tool_scheduler,
-            agent_id=agent_profile.agent_id,
-            allowed_tool_names=(tool.name for tool in self.model_tools),
-            tool_definitions=self.model_tools,
-            trace_recorder=tool_trace_recorder,
-            should_cancel=self.is_current_run_cancelled,
-        )
+        self._allowed_tool_names = frozenset(tool.name for tool in self.model_tools)
+        self._parallel_mode_by_name = {
+            definition.name: definition.parallel_mode for definition in self.model_tools
+        }
+        self._trace_recorder = tool_trace_recorder or _NullToolTraceRecorder()
+        self._should_cancel = self.is_current_run_cancelled
 
         log.info(
             "runtime_ops_initialized",
@@ -302,130 +312,201 @@ class WorkflowOperations:
             工具观察结果与供下一步模型使用的消息。
         """
 
-        effective_step_id = step_id or "step"
-        calls = [
-            replace(
-                call,
-                call_id=call.call_id or f"{self._current_run.id}:{effective_step_id}:{index}",
-            )
-            for index, call in enumerate(calls)
-        ]
-        self._pre_process_run(task_id=task_id, calls=calls, step_id=step_id)
 
-        execution_context = self._execution_context
-        if running_loop is None:
-            try:
-                running_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                running_loop = None
-        if execution_context is not None and running_loop is not None:
-            runtime_dependencies = replace(
-                execution_context.runtime_dependencies,
-                runtime_event_loop=running_loop,
-            )
-            execution_context = replace(
-                execution_context,
-                runtime_dependencies=runtime_dependencies,
+        serial_calls: list[tuple[int, ToolCall]] = []
+        parallel_calls: list[tuple[int, ToolCall]] = []
+        for index, call in enumerate(calls):
+            if self._is_parallel_call(call):
+                parallel_calls.append((index, call))
+            else:
+                serial_calls.append((index, call))
+
+        indexed_observations: list[tuple[int, ToolObservation]] = []
+        for index, call in serial_calls:
+            if self._should_cancel():
+                break
+            observation = self._execute_tool_call(task_id, call, step_id)
+            indexed_observations.append((index, observation))
+
+        if parallel_calls and not self._should_cancel():
+            indexed_observations.extend(
+                self._run_calls_with_parallel_modes(task_id, parallel_calls, step_id)
             )
 
-        result: ToolRunResult = self._tool_service.run_calls(
-            step_id=effective_step_id,
-            calls=calls,
-            execution_context=execution_context,
-            running_loop=running_loop,
-        )
+        executed_observations = [observation for _, observation in indexed_observations]
+        return ToolRunResult(observations=executed_observations)
 
-        self._post_process_run(task_id=task_id, step_id=step_id, result=result)
-
-        return result
-
-    def _pre_process_run(
+    def _run_calls_with_parallel_modes(
         self,
         task_id: str,
-        calls: list[ToolCall],
-        step_id: str | None = None,
-    ) -> None:
-        """Log metadata before dispatching a tool-call batch.
+        calls: list[tuple[int, ToolCall]],
+        step_id: str | None,
+    ) -> list[tuple[int, ToolObservation]]:
+        """并发执行一批已声明为可并行调度的工具调用。
+
+        只处理并行组：``run_tool_calls`` 入口已按工具声明的调度模式完成分流，本方法不再
+        包含串行分支。每次线程池提交前用 ``contextvars.copy_context()`` 复制当前线程
+        context（含父 turn 根 observation 的 OTel current span），并经 ``ctx.run`` 包装提交，
+        使 worker 线程在捕获的 context 里执行工具——并行工具（尤其 ``delegate_task``）的
+        tool observation 与子 turn 由此正确嵌套在父 turn trace 下。
 
         参数:
-            task_id: 当前任务标识。
-            calls: 待派发的工具调用列表。
-            step_id: 可选步骤标识。
+            task_id: 当前任务标识符，仅用于日志与追踪。
+            calls: 带原始位置的并行工具调用列表（元组 ``(index, call)``）。
+            step_id: 请求这些工具调用的步骤标识符。
 
         返回:
-            无。
+            带原始位置的已执行观察列表（按实际完成顺序）。批次中途取消时可能少于传入数量。
+
+        异常:
+            无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。
+
+        副作用:
+            启动临时线程池执行工具；每任务复制一份 contextvars 快照，不引入跨线程可变状态。
+        """
+        if not calls or self._should_cancel():
+            return []
+
+        completed: list[tuple[int, ToolObservation]] = []
+        max_workers = min(len(calls), Settings.MAX_PARALLEL_TOOL_CALLS)
+        with ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="tool-parallel",
+        ) as pool:
+            pending_calls = list(calls)
+            future_by_call: dict[Future[ToolObservation], tuple[int, ToolCall]] = {}
+
+            def _submit_until_full() -> None:
+                """提交待执行调用，直到达到 worker 上限或检测到取消。"""
+                while (
+                    pending_calls
+                    and len(future_by_call) < max_workers
+                    and not self._should_cancel()
+                ):
+                    batch_index, batch_call = pending_calls.pop()
+                    run_ctx = contextvars.copy_context()
+                    future_by_call[
+                        pool.submit(  # pyright: ignore
+                            run_ctx.run,
+                            self._execute_tool_call,
+                            task_id,
+                            batch_call,
+                            step_id,
+                        )
+                    ] = (batch_index, batch_call)
+
+            _submit_until_full()
+            while future_by_call:
+                done_futures, _ = wait(future_by_call, return_when=FIRST_COMPLETED)
+                for future in done_futures:
+                    index, call = future_by_call.pop(future)
+                    try:
+                        observation = future.result()
+                    except Exception as exc:  # pragma: no cover - 防御性收口
+                        observation = self._internal_error_observation(task_id, call, exc, step_id)
+                    completed.append((index, observation))
+                _submit_until_full()
+        return completed
+
+    def _execute_tool_call(
+        self,
+        task_id: str,
+        call: ToolCall,
+        step_id: str | None,
+    ) -> ToolObservation:
+        """执行单个工具调用，并把执行链路异常收口为工具观察。
+
+        参数:
+            task_id: 当前任务标识符，仅用于日志与追踪。
+            call: 当前工具调用。
+            step_id: 请求该工具调用的步骤标识符。
+
+        返回:
+            调度器返回的观察，或内部异常对应的 error 观察。
+
+        异常:
+            无。内部异常在本方法内转为 ``ToolObservation``。
+
+        副作用:
+            调用底层 ``ToolScheduler``，并记录可选 trace span。
+        """
+        try:
+            with self._trace_recorder.span(call, step_id or "") as tool_span:
+                observation = self._scheduler.execute(
+                    call,
+                    execution_context=self._execution_context,
+                    allowed_tool_names=self._allowed_tool_names,
+                    should_cancel=self._should_cancel,
+                )
+                tool_span.record(observation)
+                return observation
+        except Exception as exc:
+            return self._internal_error_observation(task_id, call, exc, step_id)
+
+    def _internal_error_observation(
+        self,
+        task_id: str,
+        call: ToolCall,
+        exc: Exception,
+        step_id: str | None = None,
+    ) -> ToolObservation:
+        """把工具执行链路内部异常转换为稳定的 error 观察。
+
+        参数:
+            task_id: 当前任务标识符，仅用于日志与追踪。
+            call: 当前工具调用。
+            exc: 被捕获的执行链路异常。
+            step_id: 请求该工具调用的步骤标识符。
+
+        返回:
+            面向模型的内部错误观察。
 
         异常:
             无。
 
         副作用:
-            写入工具批次派发日志。
+            写入带堆栈的 error 日志。
         """
-
-        workspace_id = self._current_workspace.id if self._current_workspace else None
-
-        log.info(
-            "tool_calls_dispatched",
+        log.error(
+            "tool_call_internal_error",
             extra={
-                "msg": f"派发 {len(calls)} 个工具调用，step_id={step_id}",
+                "msg": "工具调用执行链内部异常，已收口为 error 观察",
                 "data": {
+                    "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                    "tool_name": call.tool_name,
+                    "tool_call_id": call.call_id,
                     "task_id": task_id,
                     "step_id": step_id,
-                    "call_count": len(calls),
-                    "tool_names": [call.tool_name for call in calls],
-                    "workspace_id": workspace_id,
+                    "error": str(exc),
                 },
             },
+            exc_info=True,
+        )
+        header = f"internal execution error before the tool ran: {type(exc).__name__}"
+        return tool_error(
+            tool_name=call.tool_name,
+            error=header,
+            reason=internal_execution_error_reason(header),
+            retryable=False,
+            tool_call_id=call.call_id,
         )
 
-    def _post_process_run(
-        self,
-        task_id: str,
-        result: ToolRunResult,
-        step_id: str | None = None,
-    ) -> None:
-        """Log metadata after a tool-call batch completes.
+    def _is_parallel_call(self, call: ToolCall) -> bool:
+        """判断工具调用是否声明为可并行调度。
 
         参数:
-            task_id: 当前任务标识。
-            result: 工具批次执行结果。
-            step_id: 可选步骤标识。
+            call: 当前工具调用。
 
         返回:
-            无。
+            工具定义存在且 ``parallel_mode`` 为 ``"parallel"`` 时返回 ``True``。
 
         异常:
             无。
 
         副作用:
-            写入工具批次完成日志。
+            无。
         """
-
-        workspace_id = self._current_workspace.id if self._current_workspace else None
-        status_counts: dict[str, int] = {}
-        error_count = 0
-        for obs in result.observations:
-            status_counts[obs.status] = status_counts.get(obs.status, 0) + 1
-            if obs.status == "error":
-                error_count += 1
-
-        log.info(
-            "tool_calls_completed",
-            extra={
-                "msg": (
-                    f"工具批次执行完成：{len(result.observations)} 个观察，"
-                    f"其中 {error_count} 个失败"
-                ),
-                "data": {
-                    "task_id": task_id,
-                    "step_id": step_id,
-                    "observation_count": len(result.observations),
-                    "status_counts": status_counts,
-                    "error_count": error_count,
-                    "workspace_id": workspace_id,
-                },
-            },
-        )
+        return self._parallel_mode_by_name.get(call.tool_name, "serial") == "parallel"
 
     def _to_model_message(self, observation: ToolObservation) -> ToolMessage:
         """把工具观察序列化为模型可见的 ``role="tool"`` 消息（markdown 结构）。
