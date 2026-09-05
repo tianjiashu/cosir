@@ -3,7 +3,7 @@
 本模块承载失败观察的**唯一收口** :func:`tool_error`，以及工具层复用的若干
 共享文本助手（:func:`os_error_message`、:func:`blocked_device_reason`、
 :func:`handler_exception_reason`）。
-``ToolScheduler``（未知工具/权限拒绝/参数非法）、``ToolExecutor``（启动失败/超时/
+``ToolAccessGate``（未知工具/权限拒绝/参数非法）、``ToolHandlerRunner``（启动失败/超时/
 handler 异常）以及各 handler（路径越界/无匹配等）的失败分支全部经此构造，确保失败
 诊断字段（``error``/``reason``/``retryable``/``permission``）在整个代码库的填充方式
 保持一致。
@@ -83,8 +83,8 @@ def blocked_device_reason(action: str) -> str:
 def internal_execution_error_reason(header: str) -> str:
     """构造「执行链内部错误（非工具语义失败）」的富文本 ``reason`` 共享尾部。
 
-    该助手是执行器在调用 ``ToolScheduler.execute`` 时捕获到**非工具语义异常**（即
-    执行链自身 bug：调度器内部、事件构造、trace span、序列化等抛出的意外异常，而非
+    该助手是执行器在调用 ``ToolExecutor.execute`` 时捕获到**非工具语义异常**（即
+    执行链自身 bug：执行管线内部、事件构造、trace span、序列化等抛出的意外异常，而非
     工具 handler 主动返回的业务失败）的唯一收口：区分于工具语义失败，明确告诉模型
     「工具本体没跑起来，是 runtime 出了内部错误」，并给出确定性失败的重试提示。
 
@@ -112,7 +112,7 @@ def internal_execution_error_reason(header: str) -> str:
 def handler_exception_reason(header: str) -> str:
     """构造「handler 抛异常 / 进程崩溃」类失败富文本 ``reason`` 的共享尾部。
 
-    该助手是 :class:`ToolExecutor` 各 ``handler_exception`` 失败分支（进程通信
+    该助手是 :class:`ToolHandlerRunner` 各 ``handler_exception`` 失败分支（进程通信
     断裂、子进程 handler 抛异常、线程内 handler 抛异常）复用的唯一收口：统一追加
     「确定性失败 + 原样重试无效 + 先读 message 修正根因」的提示，确保三处语义一致，
     且与 ``retryable=False`` 的重试信号保持一致。

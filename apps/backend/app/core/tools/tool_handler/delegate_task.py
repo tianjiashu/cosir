@@ -82,9 +82,9 @@ class DelegateTaskTool(HandlerBase):
             注入执行器的归一化结果；当执行上下文或执行器缺失时，返回错误观察结果。
 
         异常:
-            无。参数校验由 ``ToolScheduler.validate_tool_arguments`` 在调度层统一
+            无。参数校验由 ``ToolAccessGate`` 在准入门禁层统一
             完成（单一收口），本方法信任已校验入参，不再二次校验；若上游契约被破坏，
-            ``DelegateTaskArgs`` 构造会抛出 ``ValidationError`` 由 ``ToolExecutor``
+            ``DelegateTaskArgs`` 构造会抛出 ``ValidationError`` 由 ``ToolHandlerRunner``
             归一化为错误观察。执行器异常由执行器自身负责处理。
 
         副作用:
@@ -123,7 +123,7 @@ class DelegateTaskTool(HandlerBase):
         ``delegate_task`` 时，它们进入独立的 ``delegate_task_group`` 并行组并发执行，
         使多个子 Agent 真正并行。child 并发的最终裁决权仍在 delegation 业务层的
         并发额度（``DELEGATION_MAX_CONCURRENCY``）——超额的委派会在业务层被拒并回退为
-        错误观察，调度器层并行不绕过该约束。``parallel_group`` 固定为
+        错误观察，执行层并行不绕过该约束。``parallel_group`` 固定为
         ``"delegate_task_group"``，不与外部工具共享分组，避免 delegate_task 与文件类
         工具被错误地并发调度。
 

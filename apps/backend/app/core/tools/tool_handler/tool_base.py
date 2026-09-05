@@ -36,7 +36,7 @@ class HandlerBase(ABC):
     ``execute`` / ``to_definition`` 两个实例方法。
 
     **调用约定**：
-    ``ToolExecutor`` 通过 ``handler(**arguments, execution_context=ec)`` 调用 execute，
+    ``ToolHandlerRunner`` 通过 ``handler(**arguments, execution_context=ec)`` 调用 execute，
     其中 ``arguments`` 是已通过 pydantic 校验的参数字典。子类的 execute 签名可以
     按工具需要声明具体参数，但最终的一个关键字参数必须是
     ``execution_context: ToolExecutionContext | None = None``。
@@ -73,10 +73,10 @@ class HandlerBase(ABC):
 
         子类必须实现此方法。具体参数签名按工具需要声明，但必须接受
         ``execution_context`` 关键字参数（``ToolExecutionContext | None``），
-        由 :class:`ToolExecutor` 在调用时强制注入。
+        由 :class:`ToolHandlerRunner` 在调用时强制注入。
 
         参数:
-            args / kwargs: 由 :class:`ToolExecutor` 按工具的参数模型
+            args / kwargs: 由 :class:`ToolHandlerRunner` 按工具的参数模型
                 解包后传入的关键字参数。
 
         返回:

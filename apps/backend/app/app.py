@@ -114,7 +114,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # 否则 supervisor 未初始化，_codegraph_client() 恒返回 None，工具恒降级（审查暴露）。
     _kernel_supervisor = await _start_codegraph_kernel()
 
-    # Hook 注册表初始化（启动期单线程播种，必须在 ToolScheduler 首次触发拦截前完成，
+    # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
     # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
     from app.hook.hook_registry import initialize_hook_registry
 

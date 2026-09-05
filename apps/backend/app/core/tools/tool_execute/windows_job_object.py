@@ -1,7 +1,7 @@
 """Windows Job Object ctypes 封装，用于子进程退出时强杀整个进程树。
 
 本模块只封装 Win32 Job Object 系统调用，不感知任何工具语义；仅被
-``app.tools.tool_execute.tool_executor`` 的子进程入口调用。非 Windows 平台
+``app.core.tools.tool_execute.tool_handler_runner`` 的子进程入口调用。非 Windows 平台
 直接返回 ``False``（无操作）。
 """
 

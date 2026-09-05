@@ -2,7 +2,7 @@
 
 本模块只承载一个纯函数：:func:`tool_success`。它是工具系统构造成功观察的
 **唯一收口**，带 ``data`` 参数以承载结构化成功载荷，与 :func:`tool_error`
-对称：``ToolExecutor._normalize_result`` 的兜底路径与各 handler 的成功分支
+对称：``ToolHandlerRunner._normalize_result`` 的兜底路径与各 handler 的成功分支
 都应经此构造，确保成功观察的字段（``content``/``data``/``permission`` 等）
 填充方式在整个代码库一致。
 """

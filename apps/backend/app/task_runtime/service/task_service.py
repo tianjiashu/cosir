@@ -49,7 +49,7 @@ class TaskService:
 
     def get_or_create_task(
         self,
-        task_id: int,
+        task_id: int | None,
         workspace_id: int,
         title: str,
         creation_command_id: str | None = None,
@@ -73,6 +73,7 @@ class TaskService:
                 creation_command_id=creation_command_id,
                 session=session,
             )
+        task_runtime_spaces.get_or_create(task_id)
         return self._task.get(task_id)
 
     def get_task(self, task_id: int) -> TaskRecord:
@@ -193,60 +194,6 @@ class TaskService:
         """
 
         return self._task.list_by_parent_task(parent_task_id)
-
-    def create_child_task(
-            self,
-            *,
-            title: str,
-            parent_task_id: int,
-            parent_run_id: int,
-            delegation_id: int,
-            workspace_id: int,
-    ) -> TaskRecord:
-        """创建委派子任务（只建 task，不建 turn）。
-
-        与用户任务不同，委派子任务不进侧边栏、无首 turn（turn 由委派执行器单独创建）、
-        不参与 archived 生命周期交互。``task_type`` 固定为 ``"delegation"``，并通过
-        ``parent_task_id`` / ``parent_run_id`` / ``delegation_id`` 关联父任务与委派记录。
-        ``title`` 使用 ``input_text`` 的预览文本（子任务无侧边栏展示，但保留可读标题便于排查）。
-
-        子任务不再绑定 agent：agent 关系由 ``DelegationRecord``（``child_agent_id`` /
-        ``parent_agent_id``）承载，本方法不接收也不校验 agent_id，仅建 task 容器。
-
-        参数:
-            parent_task_id: 父任务标识。
-            parent_run_id: 触发委派的父 turn 标识。
-            delegation_id: 关联的委派记录标识（唯一索引兜底并发重入）。
-            workspace_id: 所属工作区标识。
-            title: 子任务标题（由委派输入文本预览得到，仅用于排查，不进侧边栏）。
-
-        返回:
-            已持久化的子任务 ``TaskRecord``（``task_type='delegation'``）。
-
-        异常:
-            ValueError: 如果任意必填字段为空或非法。
-            sqlalchemy.exc.IntegrityError: 如果 ``delegation_id`` 重复（并发重入）或外键冲突。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
-
-        副作用:
-            向 ``tasks`` 表插入一行 delegation 类型的子任务记录（不建 turn）。
-        """
-        for field_name, value in (
-                ("parent_task_id", parent_task_id),
-                ("parent_run_id", parent_run_id),
-                ("workspace_id", workspace_id),
-        ):
-            if not isinstance(value, int) or value <= 0:
-                raise ValueError(f"{field_name} must be a positive integer")
-
-        return self._task.create(
-            workspace_id=workspace_id,
-            title=title,
-            task_type="delegation",
-            parent_task_id=parent_task_id,
-            parent_run_id=parent_run_id,
-            delegation_id=delegation_id,
-        )
 
     def delete_task(self, task_id: int) -> None:
         """原子删除任务树并级联清理其下全部子产物。

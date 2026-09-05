@@ -1,28 +1,21 @@
-"""Delegation policy input and decision value objects."""
+"""Delegation policy decision value object."""
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class DelegationPolicyContext:
-    """Carry the primitive values required to evaluate a delegation request.
+class DelegationPolicyDecision:
+    """描述一次委派请求是否被允许以及最终生效的 child 工具集合。
 
     参数:
-        parent_agent_id: 发起委派的父 Agent 标识。
-        child_agent_id: 目标 child Agent 标识。
-        child_allowed_tools: child Agent profile 声明的可用工具集合。
-            ``delegate_task`` 的剔除由 ``DelegationPolicy.resolve`` 在处理过程中完成，
-            调用方无需预先过滤，从而避免 child 获得委派能力而产生递归委派。
-        depth: 发起者所在 task 已处的委派层数——主 Agent 顶层 task 为 0
-            （允许发起第一层委派），委派子 task 为 1（拒绝递归委派）。
-        known_child_agent_ids: 注册表中已知 child Agent 标识集合。
-        max_depth: 委派链最大允许深度，默认 1。并发额度（``max_concurrency``）
-            的实际裁决已下沉到 storage 层的原子 acquire（``try_create_pending``），
-            由 executor 从 ``Settings.DELEGATION_MAX_CONCURRENCY`` 读取后传入，
-            策略层只负责深度、已知 Agent 与工具收敛，不再做并发计数校验。
+        allowed: 策略是否放行本次委派。
+        reason: 拒绝原因短码（如 ``unknown_child_agent`` / ``delegation_depth_exceeded`` /
+            ``no_effective_tools``）；放行时为空字符串。
+        effective_tools: 生效的 child 工具集合（已剔除 ``delegate_task`` 并字典序排序），
+            tuple 化保证跨运行确定性；拒绝时为空 tuple。
 
     返回:
-        不可变的委派策略上下文值对象。
+        不可变的委派策略决策值对象。
 
     异常:
         无。
@@ -30,18 +23,6 @@ class DelegationPolicyContext:
     副作用:
         无。
     """
-
-    parent_agent_id: str
-    child_agent_id: str
-    child_allowed_tools: frozenset[str]
-    depth: int
-    known_child_agent_ids: frozenset[str]
-    max_depth: int = 1
-
-
-@dataclass(frozen=True)
-class DelegationPolicyDecision:
-    """Describe whether delegation is allowed and the resulting child tool set."""
 
     allowed: bool
     reason: str

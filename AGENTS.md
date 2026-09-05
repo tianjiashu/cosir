@@ -99,6 +99,9 @@ utils → 无 app.* 依赖
 - 需 OS 级故障隔离的工具使用 `process` 执行模式（子进程、硬超时和树杀）；其他工具默认 `thread`。工具前后必须经过 Hook 拦截，`DENY` 是硬拒绝，Hook 自身失败不阻断主流程。
 - 文件工具必须经过路径边界、revision/stale、重复调用和写路径锁检查；写前生成反向快照，ChangeSet 按 task 聚合并支持单文件撤销/保留；写入前执行已支持语言的语法检查。
 - 工具输出与展示数据受预算约束。Web 工具必须经 URL 安全校验；CodeGraph 不可用时返回可诊断的降级结果，不得导致 Runtime 崩溃。
+- 工具执行链只有一个入口 `ToolExecutor.execute`（`app/core/tools/tool_execute/tool_executor.py`）：「权限门禁 + 参数校验 + PreToolUse Hook → 文件状态协调 → 隔离执行 → PostToolUse Hook → 输出预算」全链路在此编排。门禁收口在 `tool_access_gate.py`，进程/线程隔离与硬超时强杀收口在 `tool_handler_runner.py`，双通道预算收口在 `tool_observation_budget.py`；不再存在 `ToolScheduler` 中间层。
+- 工具结果处理收敛在 `observe` 节点：工具观察的终态事件（`ToolCallStatusChangedEvent`）、模型上下文写回、连续失败计数与错误上限判定只在 `observe` 节点发生。`tools` 节点只负责「执行前取消 + running 事件 + 执行 + 产出可落 checkpoint 的摘要」。
+- 三处预算必须分清：`MAX_TOOL_OUTPUT_CHARS` 是单条观察模型通道的硬闸门（执行层，含脱敏与 artifact spill）、`DisplayDataBudget` 管展示通道（执行层）、`TOOL_OBSERVATION_CONTEXT_LIMIT` 管进 checkpoint 的摘要（observe 节点）。脱敏与截断一律在**执行层**完成，未治理的原始观察禁止进入 graph state / checkpoint。
 
 ### 测试、契约与临时文件
 

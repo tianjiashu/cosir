@@ -19,8 +19,7 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_models import DelegateTaskArgs
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.result.delegation_result import DelegationResult
-from app.service.delegation.delegation_context import DelegationPolicyContext
-from app.service.delegation.delegation_policy import DelegationPolicy
+from app.service.delegation.delegation_context import DelegationPolicyDecision
 from app.service.delegation.delegation_service import DelegationService
 from app.service.depends import get_conversation_run_service, get_delegation_service
 
@@ -34,7 +33,6 @@ class DelegationExecutor(DelegateTaskExecutor):
         parent_profile: AgentProfile,
         parent_run: ConversationRunRecord,
         parent_task: TaskRecord,
-        policy: DelegationPolicy | None = None,
     ) -> None:
         """初始化委派执行器。
 
@@ -43,7 +41,6 @@ class DelegationExecutor(DelegateTaskExecutor):
             parent_profile: 当前父 run 使用的 AgentProfile。
             parent_run: 当前父 Conversation Run 记录。
             parent_task: 当前父 task 记录。
-            policy: 可选委派策略实例；缺省使用 DelegationPolicy。
 
         返回:
             无。
@@ -59,7 +56,6 @@ class DelegationExecutor(DelegateTaskExecutor):
         self._parent_profile = parent_profile
         self._parent_run = parent_run
         self._parent_task = parent_task
-        self._policy = policy or DelegationPolicy()
 
     def execute(
         self,
@@ -116,21 +112,18 @@ class DelegationExecutor(DelegateTaskExecutor):
             )
 
         # 构建agent输入文本
-        agent_input_text = self._build_agent_input_text(args)
+        agent_input_text = args.prompt
 
         # 校验执行策略（深度、已知 child Agent、工具收敛三类）
-        decision = self._policy.resolve(
-            DelegationPolicyContext(
-                parent_agent_id=self._parent_profile.agent_id,
-                child_agent_id=args.child_agent_id,
-                child_allowed_tools=frozenset(child_agent_profile.allowed_tools),
-                # depth 语义：发起者所在 task 已处的委派层数——主 Agent 顶层 task
-                # 为 0（允许发起第一层委派），委派子 task 为 1（拒绝递归委派）。
-                # 取自 TaskRecord 持久化事实而非 profile 运行时字段，避免共享
-                # profile 实例被并发 run 改写导致 depth 误判。
-                depth=1 if self._parent_task.is_child else 0,
-                known_child_agent_ids=frozenset(agent_registry.child_agent_ids()),
-            )
+        decision = self._resolve_delegation(
+            child_agent_id=args.child_agent_id,
+            child_allowed_tools=frozenset(child_agent_profile.allowed_tools),
+            # depth 语义：发起者所在 task 已处的委派层数——主 Agent 顶层 task
+            # 为 0（允许发起第一层委派），委派子 task 为 1（拒绝递归委派）。
+            # 取自 TaskRecord 持久化事实而非 profile 运行时字段，避免共享
+            # profile 实例被并发 run 改写导致 depth 误判。
+            depth=1 if self._parent_task.is_child else 0,
+            known_child_agent_ids=frozenset(agent_registry.child_agent_ids()),
         )
         if not decision.allowed:
             return self._policy_error(args.child_agent_id, decision.reason)
@@ -153,12 +146,14 @@ class DelegationExecutor(DelegateTaskExecutor):
         try:
             # 先创建委派子任务（只建 task，不建 run；并发重入由 delegation_id 唯一索引兜底）。
             try:
-                child_task = task_service.create_child_task(
+                child_task = task_service.get_or_create_task(
+                    task_id=None,
+                    workspace_id=self._parent_task.workspace_id,
+                    title=args.title,
+                    task_type="delegation",
                     parent_task_id=self._parent_task.id,
                     parent_run_id=self._parent_run.id,
                     delegation_id=delegation_id,
-                    workspace_id=self._parent_task.workspace_id,
-                    title=args.title,
                 )
             except IntegrityError:
                 # delegation_id 唯一索引冲突：同一 delegation 已被并发重入创建过子 task。
@@ -276,18 +271,39 @@ class DelegationExecutor(DelegateTaskExecutor):
             child_task_id=child_task.id,
         )
 
-    def _build_agent_input_text(self, args: DelegateTaskArgs) -> str:
-        """把自由文本 prompt 组装为面向 child 的英文任务文本。
+    @staticmethod
+    def _resolve_delegation(
+        child_agent_id: str,
+        child_allowed_tools: frozenset[str],
+        depth: int,
+        known_child_agent_ids: frozenset[str],
+        max_depth: int = 1,
+    ) -> DelegationPolicyDecision:
+        """依据深度、已知 Agent 与工具收敛三类规则裁决单次委派请求。
 
-        任务契约结构（Objective / Rules / References / Background / Expected Output）
-        已由父 Agent 在 ``prompt`` 内以 markdown section 写好，此处原样透传，仅补上
-        标题作为一级标题，保证 child run 输入可读且可直接追溯。
+        本方法承接原 ``DelegationPolicy.resolve`` 的职责，作为 ``DelegationExecutor``
+        的纯函数式策略裁决，不持有任何实例状态。有效工具完全由 child 工具权限收敛决定，
+        父 Agent 与系统级工具集合不参与计算；并发额度（``max_concurrency``）的裁决已
+        下沉到 storage 层原子 acquire，本方法只负责以下三类校验：
+
+        * 已知性：``child_agent_id`` 必须存在于 ``known_child_agent_ids``，否则拒绝
+          （``unknown_child_agent``）。
+        * 深度：``depth >= max_depth`` 时拒绝（``delegation_depth_exceeded``），默认
+          最大深度为 1，即仅允许主 Agent 发起一层委派，禁止递归委派。
+        * 工具收敛：``child_allowed_tools`` 剔除 ``delegate_task``（避免 child 递归委派）
+          后若为空则拒绝（``no_effective_tools``）。
 
         参数:
-            args: 已校验的 delegate_task 自由文本参数。
+            child_agent_id: 目标 child Agent 标识。
+            child_allowed_tools: child Agent profile 声明的可用工具集合。
+            depth: 发起者所在 task 已处的委派层数（主 Agent 顶层为 0，委派子 task 为 1）。
+            known_child_agent_ids: 注册表中已知 child Agent 标识集合。
+            max_depth: 委派链最大允许深度，默认 1。
 
         返回:
-            可直接作为 child run input_text 的任务文本。
+            包含是否允许、拒绝原因和生效工具列表的策略决策。生效工具为
+            ``child_allowed_tools`` 剔除 ``delegate_task`` 后的集合，按字典序排序后转
+            tuple，保证跨运行确定性。
 
         异常:
             无。
@@ -296,7 +312,14 @@ class DelegationExecutor(DelegateTaskExecutor):
             无。
         """
 
-        return f"# {args.title}\n\n{args.prompt}"
+        if child_agent_id not in known_child_agent_ids:
+            return DelegationPolicyDecision(False, "unknown_child_agent", ())
+        if depth >= max_depth:
+            return DelegationPolicyDecision(False, "delegation_depth_exceeded", ())
+        effective_tools = child_allowed_tools - frozenset({"delegate_task"})
+        if not effective_tools:
+            return DelegationPolicyDecision(False, "no_effective_tools", ())
+        return DelegationPolicyDecision(True, "", tuple(sorted(effective_tools)))
 
     def _policy_error(self, child_agent_id: str, reason: str) -> ToolObservation:
         """构造策略拒绝的工具错误 observation。

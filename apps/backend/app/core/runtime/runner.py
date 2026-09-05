@@ -66,7 +66,7 @@ class AgentRuntime:
 
         self._task_service = get_task_service()
         self._conversation_run_state_service = get_conversation_run_service()
-        self._tool_scheduler = get_tool_system().scheduler
+        self._tool_executor = get_tool_system().executor
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
 
@@ -292,10 +292,10 @@ class AgentRuntime:
                 工具执行不产生 trace，行为与集成前一致。
 
         返回:
-            已注入正确 tool_scheduler / model_tools / execution_context / trace_recorder 的
+            已注入正确 tool_executor / model_tools / execution_context / trace_recorder 的
             RuntimeOperations 实例。
         """
-        model_tools = agent_profile.select_tools(self._tool_scheduler.list_tools())
+        model_tools = agent_profile.select_tools(self._tool_executor.list_tools())
         execution_context = self._resolve_execution_context(task, run_id=run.id)
         runtime_dependencies = None
         if execution_context is not None:
@@ -313,7 +313,7 @@ class AgentRuntime:
                 delegate_task_executor=delegate_task_executor
             )
         return WorkflowOperations(
-            tool_scheduler=self._tool_scheduler,
+            tool_executor=self._tool_executor,
             agent_profile=agent_profile,
             current_run=run,
             current_task=task,

@@ -1,6 +1,6 @@
 """协调文件 revision、重复只读调用和写路径锁。
 
-本协调器是 ToolScheduler 的窄协作者，把三套独立的状态机制（revision / 重复只读调用 /
+本协调器是 ToolExecutor 的窄协作者，把三套独立的状态机制（revision / 重复只读调用 /
 写路径锁）统一编排成调度链上的四步时序：
 
     prepare -> lock -> check_stale -> (执行 handler) -> complete
@@ -143,7 +143,7 @@ class FileToolExecutionPlan:
 
 
 class FileToolStateCoordinator:
-    """把文件协作状态机制收口为 ToolScheduler 的窄协作者。
+    """把文件协作状态机制收口为 ToolExecutor 的窄协作者。
 
     对外只暴露调度链需要的 4 个编排方法（``prepare`` / ``lock`` / ``check_stale`` /
     ``complete``），内部状态全部收敛到三个可注入的 registry；协调器自身无状态。
@@ -199,7 +199,7 @@ class FileToolStateCoordinator:
             tool_call_id: 当前模型工具调用 id。
 
         返回:
-            执行计划；``early_observation`` 非空时调度器应直接返回。
+            执行计划；``early_observation`` 非空时执行器应直接返回。
 
         异常:
             FileResourcePathError: 文件路径被安全策略拒绝时抛出。

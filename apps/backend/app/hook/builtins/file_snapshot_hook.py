@@ -7,7 +7,7 @@
 职责边界：
 - 负责：成功判定、run_id / task_id 判定、changes 提取、正向 V4A 构造、反转为
   反向操作、逐文件落库 file_snapshots、采集异常本地吞 + warning。
-- 不负责：工具执行编排、参数校验、文件状态协调（均归 ToolScheduler / 各 guard）。
+- 不负责：工具执行编排、参数校验、文件状态协调（均归 ToolExecutor / 各 guard）。
 
 失败安全语义：采集失败只记 warning 日志，不阻断工具主流程（方案 §六 可重入要求）；
 Hook 异常或被 HookInterceptor.safe_fire 兜底为 ALLOW 均不阻断主流程。

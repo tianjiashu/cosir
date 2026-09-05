@@ -25,7 +25,7 @@ from app.core.tools.tool_execute.tool_error import (
     internal_execution_error_reason,
     tool_error,
 )
-from app.core.tools.tool_execute.tool_scheduler import ToolScheduler
+from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.event import RunStatusChangedEvent
 from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord, WorkspaceRecord
@@ -48,7 +48,7 @@ class WorkflowOperations:
 
     def __init__(
         self,
-        tool_scheduler: ToolScheduler,
+        tool_executor: ToolExecutor,
         agent_profile: AgentProfile,
         current_run: ConversationRunRecord,
         current_task: TaskRecord,
@@ -61,7 +61,7 @@ class WorkflowOperations:
         """初始化运行时操作门面及其私有协作者。
 
         参数:
-            tool_scheduler: 工具调度器（已按 workspace 边界解析或进程级兜底）。
+            tool_executor: 工具执行管线（已按 workspace 边界解析或进程级兜底）。
             agent_profile: 驱动本次 run 的 agent profile。
             current_run: 当前绑定的 Conversation Run 记录（门面状态单一事实来源）。
             current_task: 当前执行的任务记录。
@@ -81,13 +81,13 @@ class WorkflowOperations:
             无。
 
         副作用:
-            构造工具执行所需的私有协作者（调度器、可见工具集、并行模式、trace 记录器、
+            构造工具执行所需的私有协作者（执行器、可见工具集、并行模式、trace 记录器、
             取消回调），存储执行上下文与 canonical writer，记初始化日志。
         """
 
         self._conversation_run_state_service = get_conversation_run_service()
         self._event_projector = get_conversation_event_projector()
-        self._scheduler = tool_scheduler
+        self._executor = tool_executor
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
@@ -422,17 +422,17 @@ class WorkflowOperations:
             step_id: 请求该工具调用的步骤标识符。
 
         返回:
-            调度器返回的观察，或内部异常对应的 error 观察。
+            执行器返回的观察，或内部异常对应的 error 观察。
 
         异常:
             无。内部异常在本方法内转为 ``ToolObservation``。
 
         副作用:
-            调用底层 ``ToolScheduler``，并记录可选 trace span。
+            调用底层 ``ToolExecutor``，并记录可选 trace span。
         """
         try:
             with self._trace_recorder.span(call, step_id or "") as tool_span:
-                observation = self._scheduler.execute(
+                observation = self._executor.execute(
                     call,
                     execution_context=self._execution_context,
                     allowed_tool_names=self._allowed_tool_names,
@@ -507,6 +507,28 @@ class WorkflowOperations:
             无。
         """
         return self._parallel_mode_by_name.get(call.tool_name, "serial") == "parallel"
+
+    def to_tool_model_message(self, observation: ToolObservation) -> ToolMessage:
+        """把已治理的工具观察转为模型上下文消息（``observe`` 节点的共享契约）。
+
+        面向 workflow 节点的公开端口：``tool_observation_dispatcher`` 在观察分发阶段
+        调用本方法把观察写回 ``RuntimeContextManager``，闭合 ``AIMessage.tool_calls``
+        配对。内部委托 :meth:`_to_model_message`，序列化规则以其为准。
+
+        参数:
+            observation: 已治理的工具观察（含正常结果、错误占位、取消占位）。
+
+        返回:
+            可并入模型上下文的 ``ToolMessage``。
+
+        异常:
+            无（纯序列化）。
+
+        副作用:
+            无（不修改入参观察对象，不写上下文——写回由调用方执行）。
+        """
+
+        return self._to_model_message(observation)
 
     def _to_model_message(self, observation: ToolObservation) -> ToolMessage:
         """把工具观察序列化为模型可见的 ``role="tool"`` 消息（markdown 结构）。

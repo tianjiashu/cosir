@@ -1,7 +1,7 @@
 """Hook 执行结果值对象。
 
 单一职责：承载「一次 Hook 执行后返回给触发方的决策」这一载体。触发方
-（``ToolScheduler`` 经由 ``app.hook.hook_interceptor.HookInterceptor``）按
+（``ToolAccessGate`` / ``ToolExecutor`` 经由 ``app.hook.hook_interceptor.HookInterceptor``）按
 ``decision`` 决定放行 / 拒绝 / 改写参数。``additional_context`` 首版无消费方，
 仅作未来通道占位（``Hook机制技术方案.md`` §6.3，D7）。
 """

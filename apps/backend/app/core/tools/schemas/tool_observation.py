@@ -18,7 +18,7 @@ class ToolObservation:
     - 负责：作为工具系统对外（workflow / runtime / 落库）唯一的执行结果载体，
       统一承载「成功内容」与「失败诊断」两类信息。
     - 不负责：不执行任何工具逻辑、不做权限/参数校验、不负责子进程管理与
-      强杀；这些都是 :class:`ToolScheduler` / :class:`ToolExecutor` /
+      强杀；这些都是 :class:`ToolExecutor` / :class:`ToolHandlerRunner` /
       各 handler 的职责，本类只是它们产出的纯数据快照。
 
     设计要点：

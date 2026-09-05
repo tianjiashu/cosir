@@ -55,6 +55,28 @@ class ConversationRunService:
         self._run = service_depends.get_conversation_run_crud()
         self._session_factory = main_session_factory()
 
+    def have_run_in_runing(self,task_id: int,session: Session | None = None):
+        """检查任务是否正在运行中。
+
+        参数:
+            task_id: 任务标识。
+            session: 可选，数据库会话；为 None 时从依赖获取。
+
+        返回:
+            如果任务正在运行中，返回 True；否则返回 False。
+
+        异常:
+            None。
+
+        副作用:
+            None。
+        """
+        return self._run.has_run_in_status(
+                task_id,
+                (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
+                session,
+            )
+
     def create_run(
         self,
         task_id: int,
@@ -64,7 +86,6 @@ class ConversationRunService:
         provider_id: int | None = None,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
-        attachments: list[AttachmentRef] | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord:
         """Create a Conversation Run and initialize its parent task snapshot.
@@ -88,7 +109,6 @@ class ConversationRunService:
             model_name: 可选，本次请求的模型名（litellm 路由名）；None 表示用户
                 未选择模型（前端优先校验、后端兜底报错）。
             reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
-            attachments: 可选，本轮携带的结构化附件列表；None 表示无附件。
             session: 可选，由上层跨表事务传入的数据库会话。传入时本方法不提交事务，
                 由调用方统一提交；未传入时保持独立创建事务的行为。
 
@@ -122,73 +142,16 @@ class ConversationRunService:
                     f"model_name {model_name} not in provider capability "
                     f"{provider_capability.models}"
                 )
-
-        attachments = attachments or []
-        image_paths = [att.ref for att in attachments if att.kind == "image"] or None
-
-        # 视觉能力拦截（构建期业务规则）：若本轮携带图片且模型不支持视觉输入，
-        # 提前报错（422 语义，由 API 层映射为 HTTP 422 + 中文引导），避免运行期才失败。
-        if image_paths:
-            if model_name is None:
-                raise ValueError("model_name is required when image attachments are present")
-            model_capability = ModelCapability.get_capability(model_name)
-            if not model_capability.supports_image:
-                log.warning(
-                    "create_run vision rejected",
-                    extra={
-                        "task_id": task_id,
-                        "provider_id": provider_id,
-                        "model_name": model_name,
-                        "image_count": len(image_paths),
-                        "reason": "model_not_support_image",
-                    },
-                )
-                raise VisionNotSupportedError(f"model {model_name} does not support image input")
-
-        # 非图片附件渲染为文本前缀并拼进 input_text；空渲染结果不拼接。
-        attachment_text = render_attachment_refs_to_text(
-            [att for att in attachments if att.kind != "image"]
+        run = self._run.create(
+            task_id,
+            input_text,
+            status,
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model_name=model_name,
+            reasoning_effort=reasoning_effort,
+            session=session,
         )
-        if attachment_text:
-            input_text = f"{attachment_text}\n\n{input_text}"
-
-        log.info(
-            "create_run attachments",
-            extra={
-                "task_id": task_id,
-                "provider_id": provider_id,
-                "model_name": model_name,
-                "image_count": len(image_paths or []),
-                "non_image_count": len(attachments) - len(image_paths or []),
-            },
-        )
-
-        if session is not None:
-            run = self._run.create(
-                task_id,
-                input_text,
-                status,
-                agent_id=agent_id,
-                provider_id=provider_id,
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
-                image_paths=image_paths,
-                session=session,
-            )
-            return run
-
-        with self._session_factory.begin() as managed_session:
-            run = self._run.create(
-                task_id,
-                input_text,
-                status,
-                agent_id=agent_id,
-                provider_id=provider_id,
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
-                image_paths=image_paths,
-                session=managed_session,
-            )
         projector = service_depends.get_conversation_event_projector()
         projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
         projector.process(UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text))

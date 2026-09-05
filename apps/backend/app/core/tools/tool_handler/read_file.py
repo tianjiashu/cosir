@@ -141,7 +141,7 @@ class ReadFileTool(HandlerBase):
             limit: 最多返回多少行。参数模型会限制最大值，内部也会再次归一化。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
                 在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
-                ``ToolExecutor._execute_handler`` 调用约定；本工具只读且不受 workspace
+                ``ToolHandlerRunner._execute_handler`` 调用约定；本工具只读且不受 workspace
                 边界限制，故不消费该值。
 
         返回:

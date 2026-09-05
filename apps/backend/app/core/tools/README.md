@@ -1,6 +1,6 @@
 # tools/ 目录开发约定
 
-本文件是 `app/tools/` 包下的**开发约定**，描述目录职责、新增工具的步骤、工具类与
+本文件是 `app/core/tools/` 包下的**开发约定**，描述目录职责、新增工具的步骤、工具类与
 观察构造的强制约定，以及 `guard/` 守卫层（设计中）的使用约定。新代码必须遵守本
 约定；存量代码与本约定冲突时，以「真实代码为准、冲突处修订本文件」为基线。
 
@@ -17,7 +17,7 @@
 | 子包 | 职责 | 不负责 |
 |------|------|--------|
 | `schemas/` | 共享值对象（`ToolObservation` / `ToolDefinition` / `ToolCall` / `ToolExecutionContext` / `ToolDisplayHints`），纯数据零依赖 | 不承载服务、适配、执行逻辑 |
-| `tool_execute/` | 工具执行与调度（`ToolScheduler` / `ToolExecutor` / 子进程隔离 / 输出预算 / `tool_success` / `tool_error` 工厂） | 不实现具体工具业务 |
+| `tool_execute/` | 工具执行管线（`ToolExecutor` 门面 / `ToolAccessGate` 准入门禁 / `ToolHandlerRunner` 进程线程隔离与硬超时强杀 / `ToolObservationBudget` 双通道输出预算 / `tool_success` / `tool_error` / `tool_cancelled` 工厂） | 不实现具体工具业务 |
 | `tool_handler/` | 工具实现（一文件一工具），含 `file_io` / `patch` / `search` / `security` / `terminal` 子包 | 不承载校验之外的调度 |
 | `tool_models/` | 各工具 Pydantic 参数模型（一文件一模型） | 不含执行逻辑 |
 | `validation/` | 参数校验唯一收口（`arguments.py`） | 不校验路径边界（归 `security`） |

@@ -201,47 +201,6 @@ class ConversationRunCrud:
             raise KeyError(run_id)
         return ConversationRunRecord.from_model(row)
 
-    def find_active_by_task_in_session(
-        self, task_id: int, session: Session
-    ) -> list[ConversationRunRecord]:
-        """在给定事务 session 内查找某任务下仍处于活跃态（pending/running）的 run。
-
-        活跃态由 ``ConversationRunStatus.PENDING`` 与 ``ConversationRunStatus.RUNNING``
-        定义；终态（completed/failed/cancelled）不计入。状态字段仅存在于
-        ``conversation_runs`` 表，故查询目标为 ``ConversationRunModel``。
-
-        参数:
-            task_id: 任务标识（整数 id）。
-            session: 外部事务 session；本方法不提交、不关闭该 session。
-
-        返回:
-            该任务下活跃态 run 的 ``ConversationRunRecord`` 列表；无匹配时为空列表。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            无（只读查询，不修改 session 状态）。
-        """
-        active_statuses = [
-            ConversationRunStatus.PENDING.value,
-            ConversationRunStatus.RUNNING.value,
-        ]
-        rows = (
-            session.execute(
-                select(ConversationRunModel)
-                .where(ConversationRunModel.task_id == task_id)
-                .where(ConversationRunModel.status.in_(active_statuses))
-                .order_by(
-                    asc(ConversationRunModel.created_at),
-                    asc(ConversationRunModel.id),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [ConversationRunRecord.from_model(row) for row in rows]
-
     def has_run_in_status(
         self,
         task_id: int,

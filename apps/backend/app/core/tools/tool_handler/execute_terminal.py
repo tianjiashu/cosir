@@ -63,7 +63,7 @@ class ExecuteTerminalTool(HandlerBase):
     description = _EXECUTE_TERMINAL_DESCRIPTION
     permission = "execute_terminal"
     args_model = ExecuteTerminalArgs
-    timeout_seconds = 120.0  # 外层 ToolExecutor 硬保险
+    timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险
     risk_level = "high"
     default_command_timeout = 60.0  # 内层命令级缺省
     max_command_timeout = 110.0  # 内层钳制上限（< 外层 120 留 10s 收尾）
@@ -102,11 +102,11 @@ class ExecuteTerminalTool(HandlerBase):
                 该根解析；绝对路径直接使用。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
                 在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
-                ``ToolExecutor._execute_handler`` 调用约定；本工具为命令执行入口且用户已
+                ``ToolHandlerRunner._execute_handler`` 调用约定；本工具为命令执行入口且用户已
                 注入时作为 workdir 的解析边界。本工具对模型可见（已在 agent profile
                 工具集中登记），命令的全部文件系统副作用由 workdir 边界与 deny-list
                 共同约束，而非仅靠 cwd 宣称。
-            output_sink: 可选实时输出回调；由 ``ToolExecutor`` 在子进程内注入，
+            output_sink: 可选实时输出回调；由 ``ToolHandlerRunner`` 在子进程内注入，
                 透传给执行后端，使命令输出可在运行期回传父进程做实时展示。
                 为 None 时行为与流式接入前完全一致。
 

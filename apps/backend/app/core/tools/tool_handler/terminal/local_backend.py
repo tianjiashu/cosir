@@ -3,7 +3,7 @@
 本模块只负责在宿主机跑一条命令并回收有界输出，不做危险命令判定、不做权限
 校验、不组装 ``ToolObservation``（这些由 ``ExecuteTerminalTool`` 负责）。
 shell 用系统默认（``shell=True`` 复用 Windows ``cmd.exe`` / POSIX ``/bin/sh``），
-Windows 树杀用系统自带 ``taskkill /F /T``，Job Object 由 ``tool_executor`` 子进程
+Windows 树杀用系统自带 ``taskkill /F /T``，Job Object 由 ``tool_handler_runner`` 子进程
 入口负责，均不引第三方依赖（不重复造轮子）。
 """
 

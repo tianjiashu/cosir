@@ -181,7 +181,7 @@ class CodegraphQueryTool(HandlerBase):
         → 解析为展示用结构化数据。
 
         参数:
-            args / kwargs: 由 ToolExecutor 按 args_model 解包后的参数（snake_case）
+            args / kwargs: 由 ToolHandlerRunner 按 args_model 解包后的参数（snake_case）
                 与 execution_context（最后注入）。
 
         返回:

@@ -13,7 +13,7 @@ class ToolRegistry:
 
     职责边界：只负责工具定义的注册（register/deregister）、查询
     （get_* 系列）与导出（schema/权限投影），即充当运行期的"工具
-    定义目录"。所有工具的实际执行统一由 ``ToolScheduler.execute``
+    定义目录"。所有工具的实际执行统一由 ``ToolExecutor.execute``
     编排，本类不调用、也不持有任何执行逻辑——职责严格止于"定义"。
 
     线程安全：注册表的读写均经 ``RLock`` 保护，可在多 worker 场景下

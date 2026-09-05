@@ -20,7 +20,7 @@ class ToolDefinition:
     关键字段：
     - ``args_model``：参数校验契约（pydantic 模型），强制必填，是工具入参唯一校验
       入口；``to_model_tool_definition`` 与 ``normalized`` 据此投影模型可见 schema。
-    - ``execution_mode``：隔离执行模式，仅 ``ToolExecutor`` 读取。``"process"`` 走
+    - ``execution_mode``：隔离执行模式，仅 ``ToolHandlerRunner`` 读取。``"process"`` 走
       子进程隔离 + 硬超时强杀 + 树杀，``"thread"``（默认）线程直跑、无子进程开销但
       无硬超时强杀；按「是否需要 OS 级故障隔离」逐工具声明，不按「是否文件工具」归类。
     - ``resource_keys``：本工具触碰的资源（如 ``("filesystem",)`` / ``("shell",)``），
