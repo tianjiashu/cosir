@@ -25,7 +25,7 @@ from typing import Any
 from langgraph.config import get_stream_writer
 
 from app.config.logging.logger import log
-from app.core.runtime.tool_execution.run_result import ToolRunResult
+from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,

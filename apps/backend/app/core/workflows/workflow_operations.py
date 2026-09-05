@@ -18,7 +18,7 @@ from app.core.observability.tool_trace_recorder import (
     _NullToolTraceRecorder,
 )
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.runtime.tool_execution.run_result import ToolRunResult
+from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_error import (
