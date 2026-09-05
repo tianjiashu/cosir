@@ -18,9 +18,9 @@ stream；用 ``model.astream()`` 累积 ``AIMessage``，
 节点共享运行时原语见 ``common``。
 """
 
-from typing import Any
+from typing import Literal
 
-from langchain_core.messages import AIMessageChunk, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.config import get_stream_writer
 
 from app.config.logging.logger import log
@@ -48,9 +48,14 @@ from app.core.workflows.nodes.helper.thinking_extractor import (
     # 测试经 model_node._should_strip_reasoning_content 访问
 )
 from app.utils.message_content import content_to_text
-from .helper.tool_name_extractor import extract_tool_calls
-from ..event import AssistantTextDeltaEvent, ToolCallCreatedEvent, AssistantPartClosedEvent, ToolCallStatusChangedEvent
 
+from ..event import (
+    AssistantPartClosedEvent,
+    AssistantTextDeltaEvent,
+    ToolCallCreatedEvent,
+    ToolCallStatusChangedEvent,
+    UsageUpdatedEvent,
+)
 from ..react.state import ReactGraphState
 
 
@@ -137,7 +142,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         },
     )
 
-    type = None
+    emitted_parts: list[Literal["text", "reasoning"]] = []
 
     async for chunk in model.astream(messages):
         # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
@@ -154,7 +159,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": usage_summary},
                 },
             )
-            operations.cancel_run_if_running(end_reason="runtime_cancelled", usage_stats=rc.usage_stats)
+            operations.cancel_run_if_running(
+                end_reason="runtime_cancelled", usage_stats=rc.usage_stats
+            )
             return terminal_state(step_count)
 
         chunks.append(chunk)
@@ -162,39 +169,91 @@ async def _model_node(state: ReactGraphState) -> dict:
         text = content_to_text(chunk.content)
         # 提取 reasoning 内容。
         reasoning = extract_reasoning_content(chunk, thinking_channel)
-        # 提取工具调用。
-        tool_calls: list[dict[str, Any]] = extract_tool_calls(chunk)
-
         if text and text.strip():
-            type = "text"
-            stream_writer(AssistantTextDeltaEvent(task_id=task_id, run_id=run_id, step_id=step_id, part="text", delta=text))
+            if "text" not in emitted_parts:
+                emitted_parts.append("text")
+            stream_writer(
+                AssistantTextDeltaEvent(
+                    task_id=task_id, run_id=run_id, step_id=step_id, part="text", delta=text
+                )
+            )
         if reasoning and reasoning.strip():
-            type = "reasoning"
-            stream_writer(AssistantTextDeltaEvent(task_id=task_id, run_id=run_id, step_id=step_id, part="reasoning", delta=reasoning))
-        if tool_calls:
-            for tool_call in tool_calls:
-                stream_writer(ToolCallCreatedEvent(task_id=task_id, run_id=run_id, step_id=step_id, tool_call_id=tool_call["id"], tool_name=tool_call["name"], args=tool_call["args"]))
-
+            if "reasoning" not in emitted_parts:
+                emitted_parts.append("reasoning")
+            stream_writer(
+                AssistantTextDeltaEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    part="reasoning",
+                    delta=reasoning,
+                )
+            )
     # 合并 chunk 到 AIMessage。
-    ai_message = _collect_chunk_to_ai_message(
-        chunks
-    )
+    ai_message = _collect_chunk_to_ai_message(chunks)
 
-    stream_writer(AssistantPartClosedEvent(task_id=task_id, run_id=run_id, step_id=step_id, part=type))
+    for part in emitted_parts:
+        stream_writer(
+            AssistantPartClosedEvent(task_id=task_id, run_id=run_id, step_id=step_id, part=part)
+        )
 
-    _runtime_context().add_message(ai_message)
+    # 以聚合后的 AIMessage 为工具事实唯一来源。流式 tool_call_chunks 的 args 通常是
+    # 未闭合 JSON 字符串，不能直接投影；聚合后统一补齐稳定 ID、归一化 args，再按
+    # created → pending 顺序发事件，保证 projector 永远先看到 tool-call part。
+    tool_calls: list[ToolCall] = []
+    for raw_call in ai_message.tool_calls:
+        parsed_call = ToolCall.from_from_langchain(raw_call)
+        if not parsed_call.tool_name:
+            continue
+        arguments = parsed_call.arguments if isinstance(parsed_call.arguments, dict) else {}
+        tool_calls.append(
+            ToolCall(
+                tool_name=parsed_call.tool_name,
+                arguments=arguments,
+                call_id=parsed_call.call_id or f"{run_id}:{step_id}:{len(tool_calls)}",
+            )
+        )
+
+    context_ai_message = ai_message
+    if tool_calls:
+        # RuntimeContext 中保存的 AIMessage 必须使用与 event/tool executor 相同的 ID；
+        # 否则 RuntimeContextManager 的 ToolMessage 配对与 canonical tool-call part 会
+        # 指向两个不同的调用。保留原 ai_message 供 usage/invalid_tool_calls 读取。
+        context_ai_message = AIMessage(
+            content=ai_message.content,
+            additional_kwargs=ai_message.additional_kwargs,
+            tool_calls=[
+                {
+                    "name": tool_call.tool_name,
+                    "args": tool_call.arguments,
+                    "id": tool_call.call_id,
+                    "type": "tool_call",
+                }
+                for tool_call in tool_calls
+            ],
+        )
+    _runtime_context().add_message(context_ai_message)
 
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
+    usage = rc.usage_stats.to_dict()
+    stream_writer(UsageUpdatedEvent(task_id=task_id, run_id=run_id, step_id=step_id, **usage))
 
-    tool_calls: list[ToolCall] = [
-        ToolCall.from_from_langchain(call) for call in ai_message.tool_calls
-    ]
+    for tool_call in tool_calls:
+        stream_writer(
+            ToolCallCreatedEvent(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                tool_call_id=tool_call.call_id,
+                tool_name=tool_call.tool_name,
+                args=tool_call.arguments,
+            )
+        )
     # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
     # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
     requested_tool = bool(tool_calls)
-
 
     if invalid_tool_calls:
         available_tool_names = {tool.name for tool in operations.model_tools}
@@ -255,7 +314,15 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         for tool_call in tool_calls:
-            stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id, tool_call_id=tool_call.call_id, status="pending"))
+            stream_writer(
+                ToolCallStatusChangedEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    tool_call_id=tool_call.call_id,
+                    status="pending",
+                )
+            )
 
         return {
             "step_count": step_count,
@@ -264,12 +331,20 @@ async def _model_node(state: ReactGraphState) -> dict:
             "final_response": False,
             "terminal": False,
             "pending_tool_calls": {
-                "tool_calls": tool_calls,
-                "instruction": ai_message.content,#文本说明作为 instruction 随工具调用下传，供 tools/observe 节点看到模型意图
-            }
+                "tool_calls": [
+                    {
+                        "tool_name": tool_call.tool_name,
+                        "arguments": tool_call.arguments,
+                        "call_id": tool_call.call_id,
+                    }
+                    for tool_call in tool_calls
+                ],
+                # 文本说明作为 instruction 随工具调用下传，供 tools/observe 节点看到模型意图。
+                "instruction": ai_message.content,
+            },
         }
 
-    if _runtime_context().has_change(): #没有工具调用，但上下文有变化 → 继续执行
+    if _runtime_context().has_change():  # 没有工具调用，但上下文有变化 → 继续执行
         return {
             "step_count": step_count,
             "repair_requested": False,
@@ -277,7 +352,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "continuation_error_data": None,
             "final_response": False,
             "terminal": False,
-            "pending_tool_calls": [],
+            "pending_tool_calls": {},
         }
 
     if ai_message.content:  # 没有工具调用，上下文没有变化但有文本 → 最终回答
@@ -310,7 +385,9 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"step_id": step_id, "output_text_length": len(ai_message.content)},
         },
     )
-    failed_run = operations.fail_run_if_running(end_reason="invalid_model_output", usage_stats=rc.usage_stats)
+    failed_run = operations.fail_run_if_running(
+        end_reason="invalid_model_output", usage_stats=rc.usage_stats
+    )
     if failed_run is None:
         log.info(
             "model_node_invalid_output_terminal_race_lost",

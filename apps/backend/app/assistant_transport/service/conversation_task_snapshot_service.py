@@ -11,17 +11,18 @@ from typing import Any, ClassVar, cast
 
 from sqlalchemy.orm import Session
 
+from app.assistant_transport.state.conversation_state_mutation import (
+    ConversationStateMutation,
+)
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
     validate_snapshot,
 )
-from app.assistant_transport.state.conversation_state_mutation import (
-    ConversationStateMutation,
-)
 from app.config.logging.logger import log
 from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud
 from app.storage.store_engines import main_session_factory
+
 
 @dataclass(frozen=True)
 class SnapshotChange:
@@ -56,13 +57,15 @@ class ConversationTaskSnapshotService:
         """从 SQLite 读取并校验最新 snapshot，缺失时创建空 snapshot。"""
 
         with self._lock:
-            state = self._crud.get(task_id)
-            if state is None:
+            stored = self._crud.get(task_id)
+            if stored is None:
                 state = copy.deepcopy(empty_snapshot())
                 self._crud.create(task_id, state)
-            validate_snapshot(cast(ConversationStateSnapshot, state))
-            self._states[task_id] = copy.deepcopy(cast(ConversationStateSnapshot, state))
-            return copy.deepcopy(cast(ConversationStateSnapshot, state))
+            else:
+                state = cast(ConversationStateSnapshot, stored)
+            validate_snapshot(state)
+            self._states[task_id] = copy.deepcopy(state)
+            return copy.deepcopy(state)
 
     def apply(
         self,
@@ -75,8 +78,9 @@ class ConversationTaskSnapshotService:
             with main_session_factory().begin() as session:
                 current = self._crud.get_in_session(session, task_id)
                 if current is None:
-                    current = copy.deepcopy(empty_snapshot())
-                state = cast(ConversationStateSnapshot, current)
+                    state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
+                else:
+                    state = cast(ConversationStateSnapshot, current)
                 for mutation in mutations:
                     _apply_mutation(state, mutation)
                 validate_snapshot(state)
@@ -85,8 +89,8 @@ class ConversationTaskSnapshotService:
             self._states[task_id] = copy.deepcopy(state)
             if not mutations:
                 return change
-        self._publish(change)
-        return change
+            self._publish(change)
+            return change
 
     def apply_planned(
         self,
@@ -99,8 +103,9 @@ class ConversationTaskSnapshotService:
             with main_session_factory().begin() as session:
                 current = self._crud.get_in_session(session, task_id)
                 if current is None:
-                    current = copy.deepcopy(empty_snapshot())
-                state = cast(ConversationStateSnapshot, current)
+                    state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
+                else:
+                    state = cast(ConversationStateSnapshot, current)
                 mutations = tuple(planner(copy.deepcopy(state)))
                 for mutation in mutations:
                     _apply_mutation(state, mutation)
@@ -110,8 +115,8 @@ class ConversationTaskSnapshotService:
             self._states[task_id] = copy.deepcopy(state)
             if not mutations:
                 return change
-        self._publish(change)
-        return change
+            self._publish(change)
+            return change
 
     def ensure_state_snapshot(
         self, task_id: int, session: Session | None = None
@@ -120,9 +125,10 @@ class ConversationTaskSnapshotService:
 
         current = self._crud.get(task_id, session)
         if current is None:
-            current = copy.deepcopy(empty_snapshot())
-            self._crud.create(task_id, current, session)
-        state = cast(ConversationStateSnapshot, current)
+            state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
+            self._crud.create(task_id, state, session)
+        else:
+            state = cast(ConversationStateSnapshot, current)
         validate_snapshot(state)
         return copy.deepcopy(state)
 

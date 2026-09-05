@@ -4,8 +4,22 @@
 
 
 # 架构决策
-
-
+Agent Runtime
+    ├── RuntimeContextManager
+    │       └── ConversationTaskContextService
+    │
+    └── ConversationEventProjector
+            └── ConversationTaskSnapshotService
+                    ├── Snapshot schema validation
+                    ├── set / append-text
+                    ├── SQLite persistence
+                    ├── in-process working copy
+                    └── Transport notification
+不需要事务保持强一致性，只需要在读取的时候，保持最终一致性即可。context和snapshot允许不一致。比如，AI说：好，我来看看... 。还没完整message，这个时候无需保持一致，允许context有一定滞后。
+ConversationEventProjector 和 ConversationTaskSnapshotService不要参与context修改。context是由app/core/context/runtime_context_manager.py维护，ConversationEventProjector
+和ConversationTaskSnapshotService仅维护快照
+ConversationStateSnapshot是负责和前端交互的快照
+workflow 内统一使用event吐出，然后在workflow统一处理event、
 ## 1. 项目愿景
 
 `cosir` 是面向个人开发者的本地桌面 AI 编程助手底座。它借鉴成熟 coding-agent 的工程机制，但不绑定单一 Agent 范式；用户应能持续定制 Workflow、Context、Tool 和开发规则，使它成为长期协作的工程伙伴。
@@ -26,7 +40,7 @@
 - 对话主链路直接重构，不保留外部适配层、双协议端点、feature flag 灰度或旧链路回退。新链路验收后，旧 SSE、`eventStore`、`useSSE`、timeline projector 与 `TurnTimeline` 整体退场。
 - `Task` 是 workspace、ChangeSet、context usage 和 delegation 的唯一业务归属边界，并承担 Conversation Thread 职责；现有 `Turn` 重构为 `ConversationRun`。
 - `ConversationMessage`、`MessagePart`、`TurnAttachment`、`HumanApprovalRequest` 是持久化的对话事实。不得从 `input_text`、运行时日志或前端投影反推这些事实。
-- 模型节点、工具执行、delegation 与审批只能经 `ConversationMutationWriter` 写入 canonical conversation state。Runtime 执行过程不再使用通用 `RuntimeEvent` 作为领域事件、UI 投影或事实源；审计、诊断和可观测性统一使用结构化日志、trace，以及必要时独立的 `AuditRecord`。
+- 模型节点、工具执行、delegation 与审批只能经 conversation event 由 `ConversationEventProjector` 投影到 `ConversationTaskSnapshotService`（Transport snapshot 的唯一 owner）。Runtime 执行过程不再使用通用 `RuntimeEvent` 作为领域事件、UI 投影或事实源；审计、诊断和可观测性统一使用结构化日志、trace，以及必要时独立的 `AuditRecord`。
 - 后端通过 Assistant Transport 传输由 canonical conversation state 派生的状态更新；桌面端以 `@assistant-ui/react` 的 `useAssistantTransportRuntime` 渲染。Assistant UI 的类型和实现不得进入 `core`、`tools`、`models` 或 `storage`。
 - 工具权限/隔离/资源锁、LangGraph checkpoint、ChangeSet、delegation 的父子边界和审批决策仍属服务端领域能力。前端不得启用客户端工具执行。
 - `apps/shared` 已移除；`apps/desktop` 按新的对话契约重建为 Tauri 托管的静态 React/Vite 前端。前端不包含服务端代理、不执行客户端工具，直接连接 Tauri supervisor 提供的本机 FastAPI 地址。

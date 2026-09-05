@@ -11,6 +11,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.config.logging.logger import log
+from app.core.context.context_listener.context_compress_listener import ContextCompressListener
+from app.core.context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
+from app.service.depends import get_task_service
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
@@ -34,11 +38,11 @@ class TaskRuntimeSpace:
         self._context_guard = threading.Lock()
 
     def get_context_manager(
-        self,
-        *,
-        agent_profile: AgentProfile,
-        current_workspace: WorkspaceRecord,
-        current_task: TaskRecord,
+            self,
+            *,
+            agent_profile: AgentProfile,
+            current_workspace: WorkspaceRecord,
+            current_task: TaskRecord,
     ) -> RuntimeContextManager:
         """返回 task context manager；首次执行时才创建并加载它。
 
@@ -72,6 +76,23 @@ class TaskRuntimeSpace:
                     agent_profile=agent_profile,
                     workspace_root=current_workspace.root_path,
                     context_service=get_conversation_task_context_service(),
-                )
+                ).add_change_listener(ContextUsageComputeListener(
+                    current_task.id,
+                )).add_change_listener(ContextCompressListener())
                 self._context_manager = manager
             return manager
+
+    def _update_task_context_usage(self, task_id: int, used: int) -> None:
+        """以旁路方式更新 task 上下文占用，失败只记录日志。"""
+
+        try:
+            get_task_service().update_context_usage(task_id, used)
+        except Exception as exc:
+            log.error(
+                "context_usage_task_update_failed",
+                extra={
+                    "msg": "context usage write-back failed",
+                    "data": {"task_id": task_id, "used": used, "error": str(exc)},
+                },
+                exc_info=True,
+            )

@@ -36,3 +36,15 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
     type: Literal["context_usage_updated"] = "context_usage_updated"
     ratio: float = Field(ge=0.0)
     used_tokens: int | None = Field(default=None, ge=0)
+
+
+class UsageUpdatedEvent(ConversationEventEnvelope):
+    """一次模型调用后的累计 token 用量已经更新。"""
+
+    type: Literal["usage_updated"] = "usage_updated"
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cache_hit_tokens: int = Field(default=0, ge=0)
+    cache_miss_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)

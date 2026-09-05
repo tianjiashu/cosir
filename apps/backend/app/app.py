@@ -46,11 +46,12 @@ from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
+from app.core.workflows.event import ToolCallsSettledEvent
 from app.hook import HookContext, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import (
     close_service_dependencies,
-    get_conversation_mutation_writer,
+    get_conversation_event_projector,
     get_conversation_run_service,
     get_conversation_task_context_service,
     get_delegation_service,
@@ -151,10 +152,17 @@ def _mark_interrupted_conversation_runs_failed() -> None:
     """
     run_service = get_conversation_run_service()
     context_service = get_conversation_task_context_service()
-    mutation_writer = get_conversation_mutation_writer()
+    event_projector = get_conversation_event_projector()
     for run in run_service.list_recoverable():
         run_service.fail_run_if_pending_or_running(run.id, "backend_restarted")
-        mutation_writer.recover_run_snapshot(run.task_id, run.id)
+        event_projector.process(
+            ToolCallsSettledEvent(
+                task_id=run.task_id,
+                run_id=run.id,
+                status="failed",
+                reason="backend_restarted",
+            )
+        )
         context_service.recover_interrupted_run(run.task_id, run.id)
 
 

@@ -19,20 +19,20 @@ import type { MessageStatus } from "@assistant-ui/core";
  * 文本 part：Transport 协议中的纯文本片段。
  *
  * 字段必须与后端 snapshot 投影出的 text part
- * 严格对齐：`text` 为正文，`status` 为 part 级运行态（`running` / `complete`）。
+ * 严格对齐：`text` 为正文，`status` 为 part 级运行态（`running` / `completed`）。
  */
 export type TransportTextPart = {
   type: "text";
   text: string;
-  /** 运行中为 "running"，结束为 "complete"。 */
-  status?: "running" | "complete";
+  /** 运行中为 "running"，结束为 "completed"。 */
+  status?: "running" | "completed";
 };
 
 /**
  * 推理 part：Transport 协议中的模型思考过程片段。
  *
- * 后端经 `ConversationMutationWriter.append_assistant_reasoning` 把推理文本写入
- * snapshot，再由 snapshot 投影为 `{ type: "reasoning", status, text }`，与
+ * 后端经 conversation event projector 把推理文本写入 snapshot，再由 snapshot
+ * 投影为 `{ type: "reasoning", status, text }`，与
  * assistant-ui 的 `ReasoningMessagePart` 字段同构（`unstable_summary` 可选，后端
  * 当前不产，故前端契约亦标可选）。
  */
@@ -40,8 +40,8 @@ export type TransportReasoningPart = {
   type: "reasoning";
   /** 模型推理文本。 */
   text: string;
-  /** 推理通道运行中为 "running"，结束为 "complete"。 */
-  status?: "running" | "complete";
+  /** 推理通道运行中为 "running"，结束为 "completed"。 */
+  status?: "running" | "completed";
   /** 推理摘要（后端当前不产，保留以对齐 assistant-ui 契约）。 */
   unstable_summary?: string;
 };
@@ -114,6 +114,17 @@ export type TransportState = {
   run: TransportRun;
   /** 审批预留；当前固定为空对象。 */
   approvals: Record<string, never>;
+  /** 当前 Task 的累计模型 token 用量。 */
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    cache_hit_tokens: number;
+    cache_miss_tokens: number;
+    reasoning_tokens: number;
+  };
+  /** 当前上下文窗口占用比例；允许大于 1 表示超额。 */
+  context_usage: number;
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;
 };

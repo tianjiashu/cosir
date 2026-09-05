@@ -9,15 +9,13 @@ turn 归属，也不负责消息读写与持久化实现。
 """
 
 from __future__ import annotations
-
-from collections.abc import Callable
-
 from langchain_core.messages import BaseMessage
-
+from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
-from app.core.context.context_entry import ContextEntry
+from app.core.workflows.event import ContextUsageUpdatedEvent
+from app.service.depends import get_task_service
 from app.utils.message_content import content_to_text
 
 
@@ -27,7 +25,6 @@ class ContextUsageComputeListener(ContextListener):
 
     def __init__(
         self,
-        update_context_usage: Callable[[int, int], None],
         task_id: int,
     ) -> None:
         """构造订阅者，注入事件写入与占用回写回调及 task 标识。
@@ -35,6 +32,8 @@ class ContextUsageComputeListener(ContextListener):
         参数:
             update_context_usage: 回写 task 上下文占用的回调，签名 ``(task_id, used_tokens)``。
             task_id: 所属 task，用于回写 context usage。
+            emit_context_usage: 可选的中性事件回调，签名 ``(task_id, used_tokens,
+                total_tokens)``；由 workflow 适配为 ``ContextUsageUpdatedEvent``。
 
         返回:
             无。
@@ -45,8 +44,21 @@ class ContextUsageComputeListener(ContextListener):
         副作用:
             保存事件写入回调、task 占用回写回调与 task 标识。
         """
-        self._update_context_usage = update_context_usage
         self.task_id = task_id
+
+    def _emit_context_usage(self,task_id: int, used: int, total: int) -> None:
+        """把 context listener 的统计结果转成 workflow event。"""
+
+        ratio = used / total if total > 0 else 0.0
+        from langgraph.config import get_stream_writer
+
+        get_stream_writer()(
+            ContextUsageUpdatedEvent(
+                task_id=task_id,
+                ratio=ratio,
+                used_tokens=used,
+            )
+        )
 
     def listen(self, event: ListenerEvent, result: ListenerResult) -> None:
         """条目变更后计算上下文占用并写回 ``result`` 与 task 事实。
@@ -80,9 +92,8 @@ class ContextUsageComputeListener(ContextListener):
             return
         # ``event.entries`` 是变化后的有效模型上下文快照，统一重算避免重复累加。
         result.usage = self._compute(event.entries)
-        # 原样传播调用方回调的失败：容错策略由注入方决定（生产默认实现
-        # ``_update_task_context_usage`` 自行降级，显式注入的回调按契约传播）。
-        self._update_context_usage(self.task_id, result.usage)
+        self._emit_context_usage(self.task_id, result.usage, event.total_tokens)
+        get_task_service().update_context_usage(self.task_id, result.usage)
 
     def _compute(self, entries: list[ContextEntry]) -> int:
         """对上下文条目逐条估算并求和 token 占用。

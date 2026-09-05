@@ -6,14 +6,16 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
+from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector
 from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflows.event import RunStatusChangedEvent, ToolCallsSettledEvent
 from app.models import ConversationRunRecord, ConversationRunStatus
-from app.service.depends import get_conversation_mutation_writer, get_conversation_run_service
+from app.service.depends import get_conversation_run_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
+
 
 @dataclass(frozen=True)
 class ConversationRunState:
@@ -37,17 +39,31 @@ class ConversationRunExecutor:
     def __init__(
         self,
         run_service: object | None = None,
-        mutation_writer: ConversationMutationWriter | None = None,
         cancellation_signal: object | None = None,
+        *,
+        persist_status: bool = True,
     ) -> None:
-        """初始化执行器及其进程内运行注册表。"""
+        """初始化执行器及其进程内运行注册表。
+
+        参数:
+            run_service: 可选 run 状态与查询 service；None 时使用进程级默认实例。
+            cancellation_signal: 可选取消信号源；None 时使用进程级取消注册表。
+            persist_status: 是否把 run 终态落库并投影到 Transport snapshot；False 时
+                执行器只维护进程内状态（供注入了替代 run_service 的场景使用）。
+
+        返回:
+            无。
+
+        异常:
+            RuntimeError: 若 ``run_service`` 省略且存储尚未初始化。
+
+        副作用:
+            无；进程内运行注册表初始为空。
+        """
 
         self._run_service = run_service or get_conversation_run_service()
-        self._mutation_writer = (
-            mutation_writer
-            if mutation_writer is not None or run_service is not None
-            else get_conversation_mutation_writer()
-        )
+        self._persist_status = persist_status
+        self._event_projector = ConversationEventProjector() if persist_status else None
         self._signal = cancellation_signal or cancellation_registry
         self._executions: dict[int, _Execution] = {}
 
@@ -69,7 +85,7 @@ class ConversationRunExecutor:
             在当前事件循环创建后台 task；HTTP 订阅断开不会取消它。
         """
 
-        #检查是否有未结束的后台执行
+        # 检查是否有未结束的后台执行
         existing = self._executions.get(run_id)
         if existing is not None and not existing.thread_task.done():
             raise ValueError(f"run {run_id} is already executing")
@@ -99,7 +115,7 @@ class ConversationRunExecutor:
         取消时序收敛于本方法（全进程唯一取消编排入口）：
         1. 先在进程内取消信号源标记——工具可能在 ``asyncio.to_thread`` 工作线程
            任意时刻检查信号，信号先行把协作取消的漏检窗口归零；
-        2. 再经 canonical writer 做事务性 active → cancelled 状态转移，兼作
+        2. 再经 run service 做事务性 active → cancelled 状态转移，兼作
            「是否可取消」的仲裁：run 不存在抛 ``KeyError``，已处于终态返回 ``None``；
         3. 最后中断当前进程中的后台执行 task。
 
@@ -112,7 +128,7 @@ class ConversationRunExecutor:
             end_reason: 写入持久化事实的取消原因，默认 ``user_cancelled``。
 
         返回:
-            取消成功（已落库并尽力中断；未装配 writer 时至少中断本地 task）为
+            取消成功（已落库并尽力中断；未开启状态落库时至少中断本地 task）为
             ``True``；run 已处于不可取消终态为 ``False``。
 
         异常:
@@ -127,11 +143,11 @@ class ConversationRunExecutor:
         self._signal.mark_cancelled(run_id)
         settled: object
         try:
-            if self._mutation_writer is None:
+            if not self._persist_status:
                 log.warning(
-                    "conversation_run_cancel_missing_writer",
+                    "conversation_run_cancel_persistence_disabled",
                     extra={
-                        "msg": "执行器未装配 canonical writer，仅中断本地执行，不落库取消终态",
+                        "msg": "执行器未开启状态落库，仅中断本地执行，不落库取消终态",
                         "data": {"run_id": run_id},
                     },
                 )
@@ -223,6 +239,14 @@ class ConversationRunExecutor:
         # 同一 Task 的 Run 串行由 DB 级认领保证，进程内不再持锁。
         if not self._run_service.claim_pending_run(run_id):
             raise ValueError(f"run {run_id} was claimed by another executor")
+        if self._event_projector is not None:
+            self._event_projector.process(
+                RunStatusChangedEvent(
+                    task_id=run.task_id,
+                    run_id=run_id,
+                    status=ConversationRunStatus.RUNNING,
+                )
+            )
         await self._set_status(run_id, ConversationRunStatus.RUNNING)
         try:
             await self._run_and_settle(run_id, run, runner)
@@ -256,32 +280,45 @@ class ConversationRunExecutor:
             runner 的异常被记录并转换为 failed；取消异常按 cancelled 收束后继续抛出。
 
         副作用:
-            经 canonical writer 写入 completed / cancelled / failed 终态与未决工具收口，
+            经 run service 写入 completed / cancelled / failed 终态与未决工具收口，
             并更新执行器内该 run 的不可变状态快照。
         """
 
         try:
             await runner(run)
-            if self._mutation_writer is not None:
+            if self._persist_status:
                 self._run_service.complete_run_if_running(run_id)
             await self._set_status(run_id, ConversationRunStatus.COMPLETED)
         except asyncio.CancelledError:
-            if self._mutation_writer is not None:
-                self._mutation_writer.settle_open_tool_calls(
-                    run_id, "cancelled", "executor_cancelled"
-                )
+            if self._persist_status:
+                self._project_tools_settled(run_id, "cancelled", "executor_cancelled")
                 self._run_service.cancel_run_if_running(run_id, end_reason="executor_cancelled")
             await self._set_status(run_id, ConversationRunStatus.CANCELLED)
             raise
         except Exception:
-            if self._mutation_writer is not None:
-                self._mutation_writer.settle_open_tool_calls(run_id, "failed", "runtime_failed")
+            if self._persist_status:
+                self._project_tools_settled(run_id, "failed", "runtime_failed")
                 self._run_service.fail_run_if_running(run_id, end_reason="runtime_failed")
             await self._set_status(run_id, ConversationRunStatus.FAILED)
             log.exception(
                 "conversation_run_failed",
                 extra={"msg": "后台 ConversationRun 执行失败", "data": {"run_id": run_id}},
             )
+
+    def _project_tools_settled(self, run_id: int, status: str, reason: str) -> None:
+        """通过统一 event projector 收束执行器遗留的工具调用。"""
+
+        if self._event_projector is None:
+            return
+        run = self._run_service.get_run(run_id)
+        self._event_projector.process(
+            ToolCallsSettledEvent(
+                task_id=run.task_id,
+                run_id=run_id,
+                status="cancelled" if status == "cancelled" else "failed",
+                reason=reason,
+            )
+        )
 
     async def _set_status(self, run_id: int, status: ConversationRunStatus) -> None:
         """更新指定 run 的进程内状态快照。

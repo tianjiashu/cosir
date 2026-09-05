@@ -120,12 +120,21 @@ class RuntimeContextManager:
         self.current_run_id = run.id
         self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
 
-
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
-        """注册一个按 order 执行的 context listener。"""
+        """注册一个按 order 执行的 context listener。
+
+        同一个 manager 会跨 Conversation Run 复用，因此同一 listener 类型的后续注册
+        会替换旧实例，避免 context 变更被重复处理，也避免旧 run 的 event emitter
+        在新 run 的 graph stream 外继续收到回调。
+        """
 
         if listener.main_agent_only and not self.agent_profile.main_agent:
             return self
+        for index, current in enumerate(self._listeners):
+            if type(current) is type(listener):
+                self._listeners[index] = listener
+                self._listeners.sort(key=lambda item: item.order)
+                return self
         self._listeners.append(listener)
         self._listeners.sort(key=lambda item: item.order)
         return self
@@ -155,19 +164,25 @@ class RuntimeContextManager:
 
         if isinstance(message, AIMessage):
             # 仅保留 AIMessage 中的 content、 additional_kwargs、 tool_calls
-            message = AIMessage(content=message.content, additional_kwargs=message.additional_kwargs,tool_calls=message.tool_calls)
+            message = AIMessage(
+                content=message.content,
+                additional_kwargs=message.additional_kwargs,
+                tool_calls=message.tool_calls,
+            )
 
-        self.context_service.append(self.current_task_id, self.current_run_id, message, self._message_sequence,
-                                    include_in_context)
+        self.context_service.append(
+            self.current_task_id,
+            self.current_run_id,
+            message,
+            self._message_sequence,
+            include_in_context,
+        )
         self._message_sequence += 1
         if not include_in_context:
             return
         self._entries.append(ContextEntry(message, self.current_run_id))
         self.have_change = True
-        self.mark_context_changed(
-            ContextEventType.ADD_MESSAGE,
-            self._effective_entries()
-        )
+        self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
 
     def _close_unclosed_tool_calls(self) -> None:
         """检测并闭合上下文中未配对闭合的工具调用占位。
@@ -238,7 +253,6 @@ class RuntimeContextManager:
         """是否有上下文变化。"""
 
         return self.have_change
-
 
     def mark_context_changed(
         self,

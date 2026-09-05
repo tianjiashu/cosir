@@ -6,9 +6,9 @@ import asyncio
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from langchain_core.messages import ToolMessage
 from langgraph.config import get_stream_writer
 
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
 from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.tool_execution import ToolTraceRecorder
@@ -19,12 +19,11 @@ from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependen
 from app.core.tools.tool_execute.tool_scheduler import ToolScheduler
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.event import RunStatusChangedEvent
-from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord, ConversationRunStatus
+from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord, WorkspaceRecord
 from app.service.depends import (
+    get_conversation_event_projector,
     get_conversation_run_service,
-    get_conversation_task_context_service,
 )
-from langchain_core.messages import ToolMessage
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
@@ -38,16 +37,16 @@ class WorkflowOperations:
     """
 
     def __init__(
-            self,
-            tool_scheduler: ToolScheduler,
-            agent_profile: AgentProfile,
-            current_run: ConversationRunRecord,
-            current_task: TaskRecord,
-            current_workspace: WorkspaceRecord,
-            model_tools: list[ToolDefinition] | None = None,
-            execution_context: ToolExecutionContext | None = None,
-            runtime_dependencies: ToolRuntimeDependencies | None = None,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
+        self,
+        tool_scheduler: ToolScheduler,
+        agent_profile: AgentProfile,
+        current_run: ConversationRunRecord,
+        current_task: TaskRecord,
+        current_workspace: WorkspaceRecord,
+        model_tools: list[ToolDefinition] | None = None,
+        execution_context: ToolExecutionContext | None = None,
+        runtime_dependencies: ToolRuntimeDependencies | None = None,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -76,8 +75,7 @@ class WorkflowOperations:
         """
 
         self._conversation_run_state_service = get_conversation_run_service()
-        self._context_service = get_conversation_task_context_service()
-        self._conversation_writer = ConversationMutationWriter()
+        self._event_projector = get_conversation_event_projector()
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
@@ -134,53 +132,10 @@ class WorkflowOperations:
 
         return self._current_workspace
 
-    def append_assistant_text(self, text: str) -> None:
-        """将模型文本增量直接追加到当前运行的 canonical assistant part。
+    def process_event(self, event: object) -> object | None:
+        """把 workflow event 交给唯一的 snapshot projector。"""
 
-        参数:
-            text: 非空模型文本增量。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: ``text`` 为空。
-            KeyError: 当前运行没有 canonical assistant message。
-            PermissionError: 当前运行已不再 active。
-
-        副作用:
-            经 ``ConversationMutationWriter`` 原子追加文本并提交 canonical fact。
-        """
-        self._conversation_writer.append_assistant_part_for_run(
-            self._current_task.id,
-            self._current_run.id,
-            "text",
-            text,
-        )
-
-    def append_assistant_reasoning(self, text: str) -> None:
-        """将模型 reasoning 增量直接追加到当前运行的 canonical reasoning part。
-
-        参数:
-            text: 非空 reasoning 文本增量。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: ``text`` 为空。
-            KeyError: 当前运行没有 canonical assistant message。
-            PermissionError: 当前运行已不再 active。
-
-        副作用:
-            经 ``ConversationMutationWriter`` 原子追加 reasoning part 并提交 canonical fact。
-        """
-        self._conversation_writer.append_assistant_part_for_run(
-            self._current_task.id,
-            self._current_run.id,
-            "reasoning",
-            text,
-        )
+        return self._event_projector.process(event)
 
     def is_current_run_cancelled(self) -> bool:
         """Return whether the currently bound run should stop.
@@ -206,8 +161,9 @@ class WorkflowOperations:
             return False
         return cancellation_registry.is_cancelled(str(current_run.id))
 
-    def complete_run_if_running(self,
-                                usage_stats: ConversationRunUsageStats | None = None) -> ConversationRunRecord | None:
+    def complete_run_if_running(
+        self, usage_stats: ConversationRunUsageStats | None = None
+    ) -> ConversationRunRecord | None:
         """Complete the Conversation Run only if it is still running.
 
         参数:
@@ -224,10 +180,6 @@ class WorkflowOperations:
             条件满足时同事务写入 completed 状态和回复文本。
         """
         run_id = self._current_run.id
-        stream_writer = get_stream_writer()
-        stream_writer(
-            RunStatusChangedEvent(task_id=self._current_task.id, run_id=run_id, status=ConversationRunStatus.COMPLETED,
-                                  usage_stats=usage_stats))
         log.info(
             "run_completion_attempted",
             extra={
@@ -235,10 +187,20 @@ class WorkflowOperations:
                 "data": {"run_id": run_id},
             },
         )
-        return self._conversation_run_state_service.complete_run_if_running(run_id)
+        record = self._conversation_run_state_service.complete_run_if_running(run_id)
+        if record is not None:
+            get_stream_writer()(
+                RunStatusChangedEvent(
+                    task_id=self._current_task.id,
+                    run_id=run_id,
+                    status=ConversationRunStatus.COMPLETED,
+                    usage_stats=usage_stats,
+                )
+            )
+        return record
 
     def fail_run_if_running(
-            self, end_reason: str | None = None, usage_stats: ConversationRunUsageStats | None = None
+        self, end_reason: str | None = None, usage_stats: ConversationRunUsageStats | None = None
     ) -> ConversationRunRecord | None:
         """Fail the Conversation Run only if it is still running.
 
@@ -257,11 +219,6 @@ class WorkflowOperations:
             条件满足时写入 failed 状态。
         """
         run_id = self._current_run.id
-        stream_writer = get_stream_writer()
-        stream_writer(
-            RunStatusChangedEvent(task_id=self._current_task.id, run_id=run_id, status=ConversationRunStatus.FAILED,
-                                  end_reason=end_reason, usage_stats=usage_stats))
-
         log.info(
             "run_failure_attempted",
             extra={
@@ -269,10 +226,23 @@ class WorkflowOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        return self._conversation_run_state_service.fail_run_if_running(run_id, end_reason)
+        record = self._conversation_run_state_service.fail_run_if_running(run_id, end_reason)
+        if record is not None:
+            get_stream_writer()(
+                RunStatusChangedEvent(
+                    task_id=self._current_task.id,
+                    run_id=run_id,
+                    status=ConversationRunStatus.FAILED,
+                    end_reason=end_reason,
+                    usage_stats=usage_stats,
+                )
+            )
+        return record
 
     def cancel_run_if_running(
-            self, end_reason: str = "runtime_cancelled", usage_stats: ConversationRunUsageStats | None = None
+        self,
+        end_reason: str = "runtime_cancelled",
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """Cancel the Conversation Run through the canonical writer if it is still active.
 
@@ -291,11 +261,6 @@ class WorkflowOperations:
             通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled。
         """
         run_id = self._current_run.id
-        stream_writer = get_stream_writer()
-        stream_writer(
-            RunStatusChangedEvent(task_id=self._current_task.id, run_id=run_id, status=ConversationRunStatus.CANCELLED,
-                                  end_reason=end_reason, usage_stats=usage_stats))
-
         log.info(
             "run_cancel_attempted",
             extra={
@@ -303,14 +268,25 @@ class WorkflowOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        return self._conversation_run_state_service.cancel_run_if_running(run_id, end_reason)
+        record = self._conversation_run_state_service.cancel_run_if_running(run_id, end_reason)
+        if record is not None:
+            get_stream_writer()(
+                RunStatusChangedEvent(
+                    task_id=self._current_task.id,
+                    run_id=run_id,
+                    status=ConversationRunStatus.CANCELLED,
+                    end_reason=end_reason,
+                    usage_stats=usage_stats,
+                )
+            )
+        return record
 
     def run_tool_calls(
-            self,
-            task_id: str,
-            calls: list[ToolCall],
-            step_id: str | None = None,
-            running_loop: asyncio.AbstractEventLoop | None = None,
+        self,
+        task_id: str,
+        calls: list[ToolCall],
+        step_id: str | None = None,
+        running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """Execute model-requested tool calls through the tool system.
 
@@ -364,10 +340,10 @@ class WorkflowOperations:
         return result
 
     def _pre_process_run(
-            self,
-            task_id: str,
-            calls: list[ToolCall],
-            step_id: str | None = None,
+        self,
+        task_id: str,
+        calls: list[ToolCall],
+        step_id: str | None = None,
     ) -> None:
         """Log metadata before dispatching a tool-call batch.
 
@@ -403,10 +379,10 @@ class WorkflowOperations:
         )
 
     def _post_process_run(
-            self,
-            task_id: str,
-            result: ToolRunResult,
-            step_id: str | None = None,
+        self,
+        task_id: str,
+        result: ToolRunResult,
+        step_id: str | None = None,
     ) -> None:
         """Log metadata after a tool-call batch completes.
 
@@ -493,4 +469,6 @@ class WorkflowOperations:
         if observation.reason:
             sections.append(f"## Reason\n\n{observation.reason}")
         content_text = "\n\n".join(sections)
-        return ToolMessage(content=content_text, tool_call_id=observation.tool_call_id, status=observation.status)
+        return ToolMessage(
+            content=content_text, tool_call_id=observation.tool_call_id, status=observation.status
+        )

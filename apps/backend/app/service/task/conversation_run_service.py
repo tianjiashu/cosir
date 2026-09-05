@@ -5,19 +5,20 @@
 职责边界：
 - 负责：run 创建（含任务最新 run 更新）、run 查询与状态更新、pending run 的原子启动。
 - 不负责：直接 SQL 操作（委托给 ``ConversationRunCrud``/``TaskCrud``）；不负责对话消息事实读写
-  （由 ``ConversationMutationWriter`` 与 Task context owner 负责）。
+  （由 Transport snapshot owner 与 Task context owner 负责）。
 """
 
-from sqlalchemy.orm import Session
 from langchain_core.messages import AIMessage
+from sqlalchemy.orm import Session
 
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
-)
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
+from app.core.workflows.event import (
+    RunInitializedEvent,
+    RunStatusChangedEvent,
+    UserInputAppendedEvent,
+)
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.models.attachment_ref import AttachmentRef
 from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
@@ -52,9 +53,7 @@ class ConversationRunService:
 
         self._task = service_depends.get_task_crud()
         self._run = service_depends.get_conversation_run_crud()
-        self._conversation_writer = ConversationMutationWriter()
         self._session_factory = main_session_factory()
-        self._snapshots = ConversationTaskSnapshotService()
 
     def create_run(
         self,
@@ -176,10 +175,6 @@ class ConversationRunService:
                 image_paths=image_paths,
                 session=session,
             )
-            self._snapshots.ensure_state_snapshot(
-                task_id,
-                session,
-            )
             return run
 
         with self._session_factory.begin() as managed_session:
@@ -194,7 +189,9 @@ class ConversationRunService:
                 image_paths=image_paths,
                 session=managed_session,
             )
-            state = self._snapshots.ensure_state_snapshot(task_id)
+        projector = service_depends.get_conversation_event_projector()
+        projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
+        projector.process(UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text))
         return run
 
     def get_run(self, run_id: int) -> ConversationRunRecord:
@@ -228,12 +225,20 @@ class ConversationRunService:
         """
 
         record = self._run.update_status_if_in(
-            run_id, ConversationRunStatus.COMPLETED.value,
-            (ConversationRunStatus.RUNNING.value,), None,
+            run_id,
+            ConversationRunStatus.COMPLETED.value,
+            (ConversationRunStatus.RUNNING.value,),
+            None,
         )
         if record is None:
             return None
-        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "completed")
+        service_depends.get_conversation_event_projector().process(
+            RunStatusChangedEvent(
+                task_id=record.task_id,
+                run_id=run_id,
+                status=ConversationRunStatus.COMPLETED,
+            )
+        )
         return self._run.get(run_id)
 
     def complete_run_with_message(
@@ -242,13 +247,21 @@ class ConversationRunService:
         """将 Run 标记 completed，并更新其 snapshot 展示状态。"""
 
         record = self._run.update_status_if_in(
-            run_id, ConversationRunStatus.COMPLETED.value,
+            run_id,
+            ConversationRunStatus.COMPLETED.value,
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
         )
         if record is None:
             return None
-        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "completed", end_reason)
+        service_depends.get_conversation_event_projector().process(
+            RunStatusChangedEvent(
+                task_id=record.task_id,
+                run_id=run_id,
+                status=ConversationRunStatus.COMPLETED,
+                end_reason=end_reason,
+            )
+        )
         return self._run.get(run_id)
 
     def fail_run_if_running(
@@ -275,12 +288,21 @@ class ConversationRunService:
         """
 
         record = self._run.update_status_if_in(
-            run_id, ConversationRunStatus.FAILED.value,
-            (ConversationRunStatus.RUNNING.value,), end_reason,
+            run_id,
+            ConversationRunStatus.FAILED.value,
+            (ConversationRunStatus.RUNNING.value,),
+            end_reason,
         )
         if record is None:
             return None
-        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "failed", end_reason)
+        service_depends.get_conversation_event_projector().process(
+            RunStatusChangedEvent(
+                task_id=record.task_id,
+                run_id=run_id,
+                status=ConversationRunStatus.FAILED,
+                end_reason=end_reason,
+            )
+        )
         return self._run.get(run_id)
 
     def fail_run_if_pending_or_running(
@@ -288,12 +310,21 @@ class ConversationRunService:
     ) -> ConversationRunRecord | None:
         """将尚未启动或正在执行的 Conversation Run 原子落定为 failed。"""
         record = self._run.update_status_if_in(
-            run_id, ConversationRunStatus.FAILED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value), end_reason,
+            run_id,
+            ConversationRunStatus.FAILED.value,
+            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
+            end_reason,
         )
         if record is None:
             return None
-        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "failed", end_reason)
+        service_depends.get_conversation_event_projector().process(
+            RunStatusChangedEvent(
+                task_id=record.task_id,
+                run_id=run_id,
+                status=ConversationRunStatus.FAILED,
+                end_reason=end_reason,
+            )
+        )
         return self._run.get(run_id)
 
     def cancel_run_if_running(
@@ -302,12 +333,21 @@ class ConversationRunService:
         """将 active Run 标记 cancelled，并更新 snapshot 展示状态。"""
 
         record = self._run.update_status_if_in(
-            run_id, ConversationRunStatus.CANCELLED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value), end_reason,
+            run_id,
+            ConversationRunStatus.CANCELLED.value,
+            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
+            end_reason,
         )
         if record is None:
             return None
-        self._conversation_writer.set_run_snapshot(record.task_id, run_id, "cancelled", end_reason)
+        service_depends.get_conversation_event_projector().process(
+            RunStatusChangedEvent(
+                task_id=record.task_id,
+                run_id=run_id,
+                status=ConversationRunStatus.CANCELLED,
+                end_reason=end_reason,
+            )
+        )
         return self._run.get(run_id)
 
     def claim_pending_run(self, run_id: int) -> bool:
@@ -331,6 +371,9 @@ class ConversationRunService:
         副作用:
             条件满足时更新 run 状态为 running。
         """
-        row = self._run.update_status_if_in(run_id=run_id, target_status=ConversationRunStatus.RUNNING.value,
-                                              allowed_statuses=(ConversationRunStatus.PENDING.value,))
+        row = self._run.update_status_if_in(
+            run_id=run_id,
+            target_status=ConversationRunStatus.RUNNING.value,
+            allowed_statuses=(ConversationRunStatus.PENDING.value,),
+        )
         return row is not None

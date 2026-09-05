@@ -21,20 +21,19 @@
 import asyncio
 import dataclasses
 from typing import Any
+
 from langgraph.config import get_stream_writer
-import sqlalchemy
-from langchain_core.messages import BaseMessage
 
 from app.config.logging.logger import log
 from app.core.runtime.tool_execution.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
-    _runtime_context,
 )
-from ..event import ToolCallStatusChangedEvent
 
+from ..event import ToolCallStatusChangedEvent
 from ..react.state import ReactGraphState
+
 
 def _build_tool_result_summaries(
     observations: list[ToolObservation],
@@ -112,6 +111,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     stream_writer = get_stream_writer()
 
     approved_dicts = tool_calls
+    approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
 
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
@@ -128,9 +128,16 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": operations.get_current_run().id},
             },
         )
-        for tool_call in approved_dicts:
-            stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id,
-                                                     tool_call_id=tool_call.call_id, status="cancelled"))
+        for tool_call in approved_calls:
+            stream_writer(
+                ToolCallStatusChangedEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    tool_call_id=tool_call.call_id,
+                    status="cancelled",
+                )
+            )
 
         # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
         # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
@@ -140,12 +147,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "pending_tool_calls": {},
             "tool_error_count": state.tool_error_count,
             "terminal": True,
-            "last_tool_results": [],
+            "last_tool_results": {},
         }
-
-    # 把审批结果 dict 重建为内部 ToolCall 值对象（经 ToolCall.from_dict 统一兜底字段，
-    # 与取消分支同源，避免字段增减时两处分支漂移）。
-    approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
 
     log.info(
         "tools_node_resumed",
@@ -158,9 +161,16 @@ async def _tools_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    for tool_call in approved_dicts:
-        stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id,
-                                                 tool_call_id=tool_call.call_id, status="running"))
+    for tool_call in approved_calls:
+        stream_writer(
+            ToolCallStatusChangedEvent(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                tool_call_id=tool_call.call_id,
+                status="running",
+            )
+        )
     tool_run: ToolRunResult = await asyncio.to_thread(
         operations.run_tool_calls,
         str(task.id),
@@ -180,14 +190,37 @@ async def _tools_node(state: ReactGraphState) -> dict:
     for observation in observations:
         status = observation.status
         if status == "success":
-            stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id,
-                                                tool_call_id=observation.tool_call_id, status="completed",result=observation.content))
+            stream_writer(
+                ToolCallStatusChangedEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    tool_call_id=observation.tool_call_id,
+                    status="completed",
+                    result=observation.content,
+                )
+            )
         elif status == "cancelled":
-            stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id,
-                                                    tool_call_id=observation.tool_call_id, status="cancelled"))
+            stream_writer(
+                ToolCallStatusChangedEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    tool_call_id=observation.tool_call_id,
+                    status="cancelled",
+                )
+            )
         else:
-            stream_writer(ToolCallStatusChangedEvent(task_id=task_id, run_id=run_id, step_id=step_id,
-                                                    tool_call_id=observation.tool_call_id, status="failed",error=observation.error))
+            stream_writer(
+                ToolCallStatusChangedEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    tool_call_id=observation.tool_call_id,
+                    status="failed",
+                    error=observation.error,
+                )
+            )
 
     success_count = sum(1 for o in observations if o.status == "success")
     log.info(
@@ -204,6 +237,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
     )
 
     return {
-        "pending_tool_calls": [],  # 清空待执行工具调用
+        "pending_tool_calls": {},  # 清空待执行工具调用
         "last_tool_results": _build_tool_result_summaries(observations, instruction),
     }

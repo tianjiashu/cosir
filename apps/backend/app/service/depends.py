@@ -10,12 +10,11 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
 
 if TYPE_CHECKING:
-    from app.assistant_transport.service.conversation_mutation_writer import (
-        ConversationMutationWriter,
+    from app.assistant_transport.service.conversation_event_projector import (
+        ConversationEventProjector,
     )
     from app.assistant_transport.service.conversation_run_executor import (
         ConversationRunExecutor,
@@ -23,16 +22,17 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_task_snapshot_service import (
         ConversationTaskSnapshotService,
     )
+    from app.assistant_transport.service.transport_assistant_service import (
+        TransportAssistantService,
+    )
     from app.service.delegation.delegation_service import DelegationService
     from app.service.log_query_service import LogQueryService
     from app.service.provider import ModelEntryService, ProviderService
-    from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_workspace_resolver import (
         ConversationRunWorkspaceResolver,
     )
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
-    from app.task_runtime.service.task_service import TaskService
     from app.service.task.workspace_service import WorkspaceService
     from app.service.workspace_event.workspace_event_service import WorkspaceEventService
     from app.storage.cascade_deletion import CascadeDeleter
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
+    from app.task_runtime.service.task_service import TaskService
 
 
 def initialize_service_dependencies() -> None:
@@ -454,7 +455,9 @@ def get_conversation_command_crud() -> ConversationCommandCrud:
 @lru_cache(maxsize=1)
 def get_transport_assistant_service() -> TransportAssistantService:
     """返回进程级 command 编排 service 单例。"""
-    from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+    from app.assistant_transport.service.transport_assistant_service import (
+        TransportAssistantService,
+    )
 
     return TransportAssistantService()
 
@@ -468,27 +471,13 @@ def get_conversation_run_service() -> ConversationRunService:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_mutation_writer() -> ConversationMutationWriter:
-    """返回进程级 Conversation Facts 写入器单例。
-
-    参数:
-        无。
-
-    返回:
-        使用主库共享引擎的 ``ConversationMutationWriter``。
-
-    异常:
-        RuntimeError: 如果主库存储尚未初始化。
-
-    副作用:
-        首次调用时创建 Writer。
-    """
-
-    from app.assistant_transport.service.conversation_mutation_writer import (
-        ConversationMutationWriter,
+def get_conversation_event_projector() -> ConversationEventProjector:
+    """返回进程级 conversation event → snapshot projector。"""
+    from app.assistant_transport.service.conversation_event_projector import (
+        ConversationEventProjector,
     )
 
-    return ConversationMutationWriter()
+    return ConversationEventProjector()
 
 
 @lru_cache(maxsize=1)
@@ -502,7 +491,7 @@ def get_conversation_run_executor() -> ConversationRunExecutor:
             无协作取消信号）。
 
     返回:
-        已装配 writer 与取消信号源的 ConversationRunExecutor 单例。
+        已装配 run service 与取消信号源的 ConversationRunExecutor 单例。
 
     异常:
         RuntimeError: 若存储初始化失败。
@@ -614,7 +603,7 @@ def reset_service_dependencies() -> None:
     get_conversation_run_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()
-    get_conversation_mutation_writer.cache_clear()
+    get_conversation_event_projector.cache_clear()
     get_conversation_task_snapshot_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
     get_provider_service.cache_clear()

@@ -18,29 +18,16 @@ from langgraph.graph import END, START, StateGraph
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
-from app.core.workflows.nodes.helper.vision_content_blocks import (
-    build_user_content_blocks,
-)
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models.errors.llm_provider_exceptions import (
-    VisionFormatNotSupportedError,
-    VisionImageError,
-    VisionNotSupportedError,
-)
+from app.core.workflows.event import ContextUsageUpdatedEvent
+from app.core.workflows.workflow_operations import WorkflowOperations
 from app.service.depends import get_task_service
 from app.service.provider.capability_service import CapabilityService
-from app.utils.image_utils import is_image_path
-from ..event import RunInitializedEvent, UserInputAppendedEvent
-
-from ...context.context_listener.context_compress_listener import ContextCompressListener
-from ...context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
 from ...context.runtime_context_manager import RuntimeContextManager
-from app.core.workflows.workflow_operations import WorkflowOperations
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
-from .streaming import ModelOutputDelta
 
 
 def _update_task_context_usage(task_id: int, used: int) -> None:
@@ -57,6 +44,22 @@ def _update_task_context_usage(task_id: int, used: int) -> None:
             },
             exc_info=True,
         )
+
+
+def _emit_context_usage_event(task_id: int, run_id: int, used: int, total: int) -> None:
+    """把 context listener 的统计结果转成 workflow event。"""
+
+    ratio = used / total if total > 0 else 0.0
+    from langgraph.config import get_stream_writer
+
+    get_stream_writer()(
+        ContextUsageUpdatedEvent(
+            task_id=task_id,
+            run_id=run_id,
+            ratio=ratio,
+            used_tokens=used,
+        )
+    )
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -133,23 +136,13 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         if mode != "custom":
             return
-        if not isinstance(value, dict) or value.get("type") != "model_output_delta":
-            return
-        part = value.get("part")
-        text = value.get("text")
-        if part not in {"text", "reasoning"} or not isinstance(text, str) or not text:
-            raise ValueError("invalid model output delta")
-        delta = ModelOutputDelta(type="model_output_delta", part=part, text=text)
-        if delta["part"] == "text":
-            operations.append_assistant_text(delta["text"])
-        else:
-            operations.append_assistant_reasoning(delta["text"])
+        operations.process_event(value)
 
     async def run(
-            self,
-            operations: WorkflowOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
+        self,
+        operations: WorkflowOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
     ) -> None:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -238,23 +231,18 @@ class ReactLikeWorkflow(AgentWorkflow):
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
         # 读写唯一入口，并挂载上下文占用订阅者。
-        runtime_context_manager = (RuntimeContextManager.ensure_get_runtime_context_manager(
+        runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
             agent_profile,
             current_workspace,
             current_task,
-        ).add_change_listener(ContextUsageComputeListener(_update_task_context_usage, current_task.id))
-                                   .add_change_listener(ContextCompressListener()))
+        )
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
         runtime_context_manager.begin_run(run)
-        initialized_event = RunInitializedEvent(task_id=current_task.id, run_id=run.id)
-
         # 初始化时，将用户输入写入上下文，并发布事件
         runtime_context_manager.add_message(
             HumanMessage(content=run.input_text),
         )
-        user_input_appended_event = UserInputAppendedEvent(task_id=current_task.id, run_id=run.id, text=run.input_text)
-
         config = {
             "configurable": {
                 "run_id": run_id,
@@ -269,6 +257,8 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
+            # get_stream_writer() 只在 graph 执行上下文内有效；首条 user message 在
+            # graph 建立前写入 context，因此 emitter 必须延迟到此处绑定。
             initial_state = ReactGraphState(
                 step_count=0,
                 tool_error_count=0,
@@ -277,18 +267,18 @@ class ReactLikeWorkflow(AgentWorkflow):
                 continuation_error_data=None,
                 final_response=False,
                 terminal=False,
-                pending_tool_calls=[],
+                pending_tool_calls={},
                 max_steps=agent_profile.max_steps,
                 final_text="",
-                last_tool_results=[],
+                last_tool_results={},
             )
             input_state: ReactGraphState | None = initial_state
             while True:
                 try:
                     async for mode, value in graph.astream(
-                            input_state,
-                            config,
-                            stream_mode=["values", "custom"],
+                        input_state,
+                        config,
+                        stream_mode=["values", "custom"],
                     ):
                         # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                         # 统一写入 snapshot。两者都不是 Agent context 的来源。

@@ -5,16 +5,18 @@ from typing import TypedDict
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_run import ConversationStateRun
+from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 
 
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。"""
 
-    # 有序消息列表,key为ConversationTaskContextRecord的sequence
-    messages: dict[int, ConversationStateMessage]
+    # 有序消息列表
+    messages: list[ConversationStateMessage]
     run: ConversationStateRun
     approvals: dict[str, object]
     context_usage: float
+    usage: ConversationStateUsage
     error: ConversationStateError | None
 
 
@@ -39,10 +41,37 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
         无（纯只读断言，不修改 ``state``）。
     """
 
-    if not isinstance(state, dict) or set(state) != {"messages", "run", "approvals", "error"}:
-        raise ValueError("snapshot must contain messages, run, approvals and error")
+    expected_keys = {"messages", "run", "approvals", "context_usage", "usage", "error"}
+    if not isinstance(state, dict) or set(state) != expected_keys:
+        raise ValueError(
+            "snapshot must contain messages, run, approvals, context_usage, usage and error"
+        )
     if not isinstance(state["messages"], list) or not isinstance(state["approvals"], dict):
         raise ValueError("snapshot messages and approvals must be arrays/object")
+    if (
+        not isinstance(state["context_usage"], int | float)
+        or isinstance(state["context_usage"], bool)
+        or state["context_usage"] < 0
+    ):
+        raise ValueError("snapshot context_usage must be a non-negative number")
+    usage = state["usage"]
+    expected_usage_keys = {
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_hit_tokens",
+        "cache_miss_tokens",
+        "reasoning_tokens",
+    }
+    if (
+        not isinstance(usage, dict)
+        or set(usage) != expected_usage_keys
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in usage.values()
+        )
+    ):
+        raise ValueError("snapshot usage is malformed")
     if state["approvals"]:
         raise ValueError("approval state is reserved and must remain empty")
     if not isinstance(state["run"], dict) or not isinstance(state["run"].get("status"), str):
@@ -90,5 +119,14 @@ def empty_snapshot() -> ConversationStateSnapshot:
         "messages": [],
         "run": {"runId": None, "status": "idle"},
         "approvals": {},
+        "context_usage": 0.0,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "reasoning_tokens": 0,
+        },
         "error": None,
     }

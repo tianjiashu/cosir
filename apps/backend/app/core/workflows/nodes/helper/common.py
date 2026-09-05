@@ -52,14 +52,12 @@ def _runtime_context() -> RuntimeContextManager:
     return get_config()["configurable"]["runtime_context"]
 
 
-
-
 def terminal_state(
-        step_count: int,
-        *,
-        repair_requested: bool = False,
-        requested_tool: bool = False,
-        final_response: bool = False,
+    step_count: int,
+    *,
+    repair_requested: bool = False,
+    requested_tool: bool = False,
+    final_response: bool = False,
 ) -> dict[str, Any]:
     """构造统一的终态 state patch（graph 走到 END 用）。
 
@@ -77,7 +75,7 @@ def terminal_state(
 
     返回:
         可直接 ``return`` 给 LangGraph 合并的 state patch 字典
-        （``pending_tool_calls`` 恒为 ``[]``）。
+        （``pending_tool_calls`` 恒为 ``{}``）。
 
     异常:
         无。
@@ -91,5 +89,5 @@ def terminal_state(
         "requested_tool": requested_tool,
         "final_response": final_response,
         "terminal": True,
-        "pending_tool_calls": [],
+        "pending_tool_calls": {},
     }

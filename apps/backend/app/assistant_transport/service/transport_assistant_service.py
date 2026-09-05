@@ -7,9 +7,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy.orm import Session
-
-from app.assistant_transport.service.conversation_mutation_writer import ConversationMutationWriter
 from app.assistant_transport.service.conversation_task_snapshot_service import (
     ConversationTaskSnapshotService,
     SnapshotChange,
@@ -17,16 +14,14 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
-    empty_snapshot,
 )
 from app.config.logging.logger import log
-from app.models import ConversationRunRecord, TaskRecord
+from app.core.workflows.event import RunInitializedEvent, UserInputAppendedEvent
+from app.models import ConversationRunRecord
 from app.models.conversation_command_record import ConversationCommandRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
-from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_session_factory
-from app.utils.datetime_utils import preview
 
 
 @dataclass(frozen=True)
@@ -43,14 +38,12 @@ class ConversationRunStartResult:
 
 
 class TransportAssistantService:
-
-
     def __init__(self) -> None:
         """初始化命令与轮次编排依赖。"""
 
         self._command = service_depends.get_conversation_command_crud()
         self._run = service_depends.get_conversation_run_crud()
-        self._mutation_writer = ConversationMutationWriter()
+        self._event_projector = service_depends.get_conversation_event_projector()
         self._snapshots = ConversationTaskSnapshotService()
         self._task = service_depends.get_task_service()
         from app.api.dependencies import get_runtime
@@ -59,17 +52,16 @@ class TransportAssistantService:
         self.run_executor = get_conversation_run_executor()
         self.runtime = get_runtime()
 
-
     def start(
-            self,
-            command_id: str,
-            command_type: str,
-            payload_hash: str,
-            input_text: str,
-            provider_id: int,
-            model_name: str,
-            reasoning_effort: str | None = None,
-            task_id: int | None = None,
+        self,
+        command_id: str,
+        command_type: str,
+        payload_hash: str,
+        input_text: str,
+        provider_id: int,
+        model_name: str,
+        reasoning_effort: str | None = None,
+        task_id: int | None = None,
     ) -> ConversationRunStartResult:
         """占用命令并创建、绑定 Conversation Run。
 
@@ -111,8 +103,11 @@ class TransportAssistantService:
         # 已有 Task 使用其进程内锁；新 Task 尚不存在可锁定的 Task id，依靠
         # BEGIN IMMEDIATE 与数据库唯一约束保护创建事务。
         with main_session_factory().begin() as session:
-            has_active_run = self._run.has_run_in_status(task_id, (ConversationRunStatus.PENDING.value,
-                                                                   ConversationRunStatus.RUNNING.value), session, )
+            has_active_run = self._run.has_run_in_status(
+                task_id,
+                (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
+                session,
+            )
             if has_active_run:
                 raise ValueError(f"task {task_id} already has an active run")
 
@@ -135,13 +130,15 @@ class TransportAssistantService:
             snapshot = self._snapshots.ensure_state_snapshot(task_id, session)
             result = ConversationRunStartResult(command, run, snapshot)
 
-        self._mutation_writer.create_run(task_id, result.run.id)
-        self._mutation_writer.append_user_input(task_id, result.run.id, input_text)
+        self._event_projector.process(RunInitializedEvent(task_id=task_id, run_id=result.run.id))
+        self._event_projector.process(
+            UserInputAppendedEvent(task_id=task_id, run_id=result.run.id, text=input_text)
+        )
         return result
 
     async def start_executor(
-            self,
-            run_id: int,
+        self,
+        run_id: int,
     ) -> None:
         """认领并启动指定 run 的后台执行；已被其他执行者持有时静默放行。
 
@@ -166,7 +163,6 @@ class TransportAssistantService:
         副作用:
             在当前事件循环注册后台执行 task；HTTP 订阅断开不会取消它。
         """
-
 
         def runner(active_run: Any) -> Any:
             """Adapt the executor runner port to ``AgentRuntime.execute_run``."""
@@ -201,13 +197,13 @@ class TransportAssistantService:
             )
 
     async def stream(
-            self,
-            task_id: int,
-            run_id: int,
-            is_cancelled: Callable[[], bool],
-            is_terminal: Callable[[], Awaitable[bool]] | None = None,
-            poll_interval: float = 0.05,
-            idle_timeout: float = 5.0,
+        self,
+        task_id: int,
+        run_id: int,
+        is_cancelled: Callable[[], bool],
+        is_terminal: Callable[[], Awaitable[bool]] | None = None,
+        poll_interval: float = 0.05,
+        idle_timeout: float = 5.0,
     ) -> AsyncIterator[SnapshotChange]:
         """订阅已提交的局部 mutation，直到 run 进入终态、客户端取消或空闲超时。
 
@@ -262,16 +258,17 @@ class TransportAssistantService:
             unsubscribe()
 
     async def subscribe_run_state(
-            self,
-            controller: Any,
-            task_id: int,
-            run_id: int,
+        self,
+        controller: Any,
+        task_id: int,
+        run_id: int,
     ) -> None:
         """按 run 身份订阅任务快照增量并推送给前端，不驱动 Agent。
 
         供新命令主路径与 duplicate 幂等重试路径复用。仅把已提交事实的状态增量推回
         前端，不调用 run_executor.start。
         """
+
         async def is_terminal() -> bool:
             """返回既有 run 是否已进入终态。"""
             status = await self.run_executor.status(run_id)
@@ -285,10 +282,10 @@ class TransportAssistantService:
             return status.status in {"completed", "failed", "cancelled"}
 
         async for snapshot in self.stream(
-                task_id,
-                run_id,
-                lambda: controller.is_cancelled,
-                is_terminal=is_terminal,
+            task_id,
+            run_id,
+            lambda: controller.is_cancelled,
+            is_terminal=is_terminal,
         ):
             for mutation in snapshot.mutations:
                 self._apply_state_mutation(controller, mutation)

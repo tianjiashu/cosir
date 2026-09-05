@@ -12,6 +12,7 @@
 """
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,6 +49,8 @@ class ConversationEventEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_id: int = Field(ge=1)
-    run_id: int = Field(ge=1)
+    #ContextUsageUpdatedEvent 无 run_id
+    run_id: int | None = None
+    event_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
     step_id: str | None = None
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
