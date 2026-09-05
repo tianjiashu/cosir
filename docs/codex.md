@@ -1,713 +1,467 @@
-结论：前端不应该为每个工具完全手写一套独立组件，而应该按照“工具结果形态”建立少量通用 UI，再由工具声明选择布局。
+建议第一版采用“对话主线 + 工具活动卡片 + 文件变更卡片”的交互模式。用户看到的是 Agent 正在做什么、改了什么以及验证结果，而不是一串原始工具日志。
 
-当前代码已经暴露了这套方向：
+工具执行仍由本地后端负责，桌面端只负责通过 Transport 渲染状态；第一版不增加附件、允许修改、撤销等交互。
 
-- [ToolDisplayHints](H:/coding-agent/apps/backend/app/core/tools/schemas/tool_display.py:16) 已有 `expandable`、`expand_layout`。
-- 各工具已经产生不同的结构化数据：`entries`、`items`、`web`、`changes`、`codegraph`。
-- 但当前 [toolkit.tsx](H:/coding-agent/apps/desktop/components/assistant/toolkit.tsx:12) 所有工具都使用 `ToolFallback`，所以目前前端还无法体现工具之间的差异。
-- [tools_node.py](H:/coding-agent/apps/backend/app/core/workflows/nodes/tools_node.py:190) 当前主要传递 `observation.content`，应改为同时传递结构化 `observation.data`，否则 diff、网页、CodeGraph 等富 UI 无法正确渲染。
+## 一、整体交互
 
-assistant-ui 官方也建议：普通工具调用折叠进 trace，需要用户关注的结果使用 standalone Tool UI；工具 UI 只负责展示，工具执行仍在后端完成。[Tool UI](https://www.assistant-ui.com/docs/tools/tool-ui)、[Message Part Grouping](https://www.assistant-ui.com/docs/guides/part-grouping)。
+### 1. 输入区
 
-## 建议的通用 UI 类型
+第一版只提供：
 
 ```text
-CompactToolRow       一行状态，不展开
-CollapsibleToolCard  标题 + 摘要，详情折叠
-ListResultCard       列表结果
-DiffResultCard       文件变更 / diff
-TerminalResultCard   命令、退出码、终端输出
-WebResultCard        网页标题、链接、摘要
-DelegationCard       子 Agent 状态和结果
+┌──────────────────────────────────────┐
+│ 输入任务，例如：帮我查找登录相关代码... │
+│                                      │
+│                         [发送]        │
+└──────────────────────────────────────┘
 ```
 
-所有组件都必须处理：
+建议：
+
+- 支持多行文字输入。
+- `Enter` 发送，`Shift + Enter` 换行。
+- Agent 执行期间，发送按钮变成“停止”。
+- 第一版不显示附件按钮，但输入区布局预留附件扩展位置。
+- 用户消息立即显示，随后出现 Agent 的流式回复。
+- 工具调用插入在 Agent 回复过程中，而不是单独进入日志页面。
+
+### 2. Agent 执行状态
+
+统一显示四种状态：
 
 ```text
-pending → running → completed
-                    ↘ failed / cancelled
+正在思考...
+正在读取 src/auth/login.ts
+正在搜索 login 相关代码
+已完成
 ```
 
-失败和取消状态不应被默认折叠隐藏。
+工具卡片状态：
 
-## 各工具建议样式
+- 等待执行：灰色，显示“准备执行”
+- 执行中：显示加载动画，可看到正在处理的对象
+- 成功：绿色或中性色，显示简短结果
+- 失败：红色，显示失败原因；只有后端标记为可重试时才显示“重试”
+- 用户取消：显示“已取消”
 
-### 1. `read_file`
+不要把完整 JSON 参数作为主要界面。JSON、原始参数和原始输出放在“查看详情”里。
 
-当前工具返回带行号的文本，且 `ToolDisplayHints` 已明确：
+---
 
-```python
-expandable=False
-expand_layout="none"
+## 二、工具展示原则
+
+工具分成三类：
+
+| 类型 | 工具 | 默认展示 |
+|---|---|---|
+| 只读检查 | ReadFile、ListDirectory、SearchFiles | 轻量活动行；有结构化结果的工具可默认折叠展开 |
+| 文件变更 | ApplyPatch、Replace、WriteFile | 独立 Diff 卡片；显示事实摘要和 Diff，不提供操作按钮 |
+| 删除 | Delete | 独立的删除结果行；不展开、不提供撤销 |
+| 命令执行 | ExecuteTerminal | 独立终端卡片；命令可见，输出折叠 |
+
+只读工具主要用于回答“Agent 正在看什么”；变更工具用于回答“Agent 改了什么”；删除工具用于明确表达破坏性结果；终端工具用于回答“Agent 执行了什么以及结果如何”。
+
+文件变更工具第一版直接执行，因此不显示“允许修改”“确认修改”“撤销”等按钮，也不虚构“待确认”状态。Delete 同样不显示确认或撤销按钮；它的风险和执行结果通过卡片明确表达。
+
+---
+
+## 三、各工具具体交互方案
+
+### 1. ReadFileTool（不支持展开查看读取内容）
+
+ReadFileTool 不支持展开查看读取内容。它只作为 Agent 工作过程中的轻量活动行，不在对话中展示文件正文。
+
+无论是执行中还是成功，都只显示文件路径和请求的读取范围；如果结果中有元信息，也可显示总行数、文件大小和是否还有下一页。
+```text
+▸ 读取  src/auth/login.ts
+   第 1–500 行 · 已完成
 ```
 
-建议：只显示紧凑状态行，不在工具区域直接铺满文件内容。
+读取失败时显示后端错误摘要，例如文件不存在、目标是目录、二进制文件或不是有效 UTF-8。不要显示文件正文，也不要提供“查看内容”“打开内容”等展开按钮；ReadFileTool 当前返回的内容是供模型消费的带行号 JSON 结果，不能直接作为用户可读文本渲染。
+
+
+---
+
+### 2. ListDirectoryTool
+
+ListDirectoryTool 只列出目标目录的直接子项，不递归展示整个目录树。后端返回的结构化条目包含 `name`、`type`、`path`，其中 `type` 为 `file`、`dir` 或 `link`。
+
+默认状态：
 
 ```text
-✓ 读取文件
-  apps/backend/app/core/runtime.py · 第 1–120 行 · 8.4 KB
-```
-
-如果读取被截断：
-
-```text
-✓ 读取文件
-  runtime.py · 第 1–120 行
-  结果已截断 · 可继续读取 offset=121
-```
-
-完整正文仍作为模型上下文使用；用户真正需要查看代码时，可通过最终回答中的代码引用或专门的文件查看能力查看。
-
-需要补充的结构化结果：
-
-```json
-{
-  "type": "text_read",
-  "path": "runtime.py",
-  "offset": 1,
-  "limit": 120,
-  "total_lines": 480,
-  "file_size": 8420,
-  "next_offset": 121
-}
-```
-
-### 2. `list_directory`
-
-当前已有 `data["entries"]`，并声明为 `list` 布局。
-
-建议：普通 trace 中显示为可折叠目录列表。
-
-```text
-▸ 读取目录 · apps/backend
-  42 个条目
-
-  📁 app
-  📁 tests
-  📄 pyproject.toml
-  🔗 current → ...
-```
-
-默认折叠，展开后显示：
-
-- 名称
-- 类型：file / dir / link
-- 路径
-- 分页提示
-
-不建议把整个目录树直接展开，否则连续调用时会严重占据对话空间。
-
-### 3. `search_files`
-
-当前支持三种模式：
-
-- `target="content"`：显示命中行
-- `target="files"`：显示文件路径
-- `output_mode="count"`：显示命中数量
-
-建议：折叠的搜索结果卡片，默认只显示数量，不展示命中的文件内容。
-
-```text
-▸ 搜索文件 · “ToolDefinition”
-  18 个命中 · 7 个文件
+▸ 查看目录  apps/backend/app/core
+   当前页 18 项 · 已完成
 ```
 
 展开后：
 
 ```text
-apps/backend/app/core/tools/schemas/tool_definition.py:12
-> class ToolDefinition:
+查看目录 · apps/backend/app/core
 
-apps/backend/app/core/tools/tool_registry.py:8
-> from ... import ToolDefinition
+📁 context/       dir
+📁 tools/         dir
+📁 workflows/     dir
+📄 runtime.py     file
+🔗 shared         link
 ```
 
-`files_only` 模式：
+交互建议：
+
+- 默认折叠。
+- 文件夹和文件使用不同图标。
+- 默认显示当前页条目；后端支持 `offset`/`limit` 分页，有下一页时显示“还有更多条目”，不要假设当前页就是完整目录。
+- 默认隐藏以 `.` 开头的条目；`include_hidden=true` 时，在卡片中显示“包含隐藏项”。
+- `include_globs` 是按条目名称过滤，不要在 UI 中误导为递归路径过滤。
+- 空目录显示“目录为空”；分页 offset 越界显示“当前页没有条目”，不要和空目录混淆。
+- 不要显示完整绝对路径作为主标题，主标题显示相对 workspace 路径。
+
+---
+
+### 3. SearchFilesTool
+
+SearchFilesTool 实际包含两种能力，UI 必须根据参数 `target` 区分：`target="content"` 是文件内容正则搜索，`target="files"` 是文件名 glob 搜索，且文件名搜索结果按修改时间倒序。
+
+默认状态：
 
 ```text
-▸ 查找文件 · *.py
-  24 个文件
-
-  apps/backend/app/core/runtime.py
-  apps/backend/app/core/tools/tool_registry.py
-  apps/backend/tests/test_runtime.py
+▸ 搜索内容  login
+   当前显示 3 个文件 · 已完成
 ```
 
-`count` 模式：
+展开后：
 
 ```text
-▸ 统计匹配 · “TODO”
-  6 个文件 · 31 次命中
+搜索内容 · login
 
-  runtime.py       12
-  tool_registry.py  8
-  workflow.py       5
+src/auth/login.ts
+src/api/auth.ts
+apps/desktop/auth/session.ts
 ```
 
-### 4. `write_file`
+内容搜索的结构化条目包含 `file_path`、`line_number`、`content`。第一版 UI 只消费 `file_path`，忽略 `line_number`、`content` 和 `context`，因此搜索结果只显示文件，不显示命中行、上下文或代码片段。相同文件的多个命中在 UI 中合并为一个文件。
 
-当前已经产生文件变更结构：
+`output_mode` 的展示方式：
 
 ```text
-data["changes"]
-data["diff_stats"]
+content     文件路径列表
+files_only  文件路径列表
+count       文件路径列表
 ```
 
-建议：作为 standalone 的变更卡片，不放进普通工具 trace。
+文件名搜索：
 
 ```text
-▸ 修改文件 · 1 个文件 · +18 -4
-  apps/backend/app/core/runtime.py
-  已完成
+▸ 查找文件  *.test.ts
+   当前显示 8 个文件 · 已完成
 ```
 
-展开后显示标准 diff：
+展开后只显示文件路径列表：
+
+```text
+查找文件 · *.test.ts
+
+apps/backend/tests/auth.test.ts
+apps/backend/tests/runtime.test.ts
+apps/desktop/tests/thread.test.ts
+```
+
+交互建议：
+
+- 默认折叠。
+- 默认折叠；摘要显示搜索类型、模式、搜索路径和当前页文件数。
+- 第一版不要承诺精确总命中数：结构化展示数据只有当前页 `items`、`pattern`、`target`、`path`，分页总数只可能出现在文本提示中。
+- 无论 `target` 或 `output_mode` 如何取值，结果区域统一只显示文件路径；不要渲染行号、命中内容或上下文。
+- `content` 模式的多个命中可能对应同一个文件，展示时按文件路径去重。
+- 结果分页或字符预算截断时，显示“结果已截断/可继续查看”，不要把截断当成完整结果。
+- 没有匹配时显示“未找到匹配”；搜索路径不存在、正则非法等错误显示为失败状态。
+
+---
+
+### 4. ApplyPatchTool
+
+ApplyPatchTool 是多文件 V4A Patch 工具，可以修改、添加或删除多个文件。成功结果包含每个文件的 `path`、`new_path`、`status`、`before`、`after`、`insertions`、`deletions`，以及整体 `diff_stats`。它直接执行，不显示“待确认”状态。
+
+执行中：
+
+```text
+正在应用补丁
+   处理多文件变更...
+```
+
+执行后：
+
+```text
+✓ 修改文件 · 已完成
+
+2 个文件发生变化
++18 −6
+
+▾ src/auth/login.ts       +12 −4
+▾ src/auth/session.ts      +6 −2
+
+[查看 Diff]
+```
+
+展开后：
 
 ```diff
-apps/backend/app/core/runtime.py
+src/auth/login.ts
 
-- old line
-+ new line
-+ added line
+- const token = getToken()
++ const token = await getToken()
+
++ if (!token) {
++   throw new AuthError("Missing token")
++ }
 ```
 
-文件状态应使用颜色区分：
+交互建议：
+
+- 默认展示变更摘要。
+- 第一次出现时可以自动展开首个文件的 Diff。
+- 多文件按文件分组。
+- 使用标准 Diff 颜色和 `+ / −` 标识，不只依赖颜色。
+- 展示修改前后行数、文件数量和新增/删除行数。
+- 第一版只读展示，不提供允许修改、取消修改、重新应用或撤销。
+- 失败时优先显示后端错误摘要；如果错误数据带有 `syntax_errors`，按文件和行列位置展示语法错误。
+- “部分操作已经应用”的失败不应显示成“未修改”。
+
+---
+
+### 5. ReplaceTool
+
+ReplaceTool 实际是单文件精确文本替换，后端注册名称为 `patch`，参数包含 `path`、`old_string`、`new_string`、`replace_all`。成功结果与文件变更工具一样返回单文件 Diff 数据。
+
+执行中：
 
 ```text
-added    绿色
-modified 黄色/蓝色
-deleted  红色
-moved    紫色
+正在替换 · src/config.ts
+匹配目标：旧配置读取方式
 ```
 
-`write_file` 不应直接展示整个新文件，而应展示 diff。
-
-### 5. `patch`
-
-`patch` 本质上是单文件 fuzzy find-and-replace，已有 diff 结构。
-
-建议与 `write_file` 使用同一个 `DiffResultCard`：
+执行后：
 
 ```text
-▸ 应用修改 · runtime.py · +6 -2
-  fuzzy match: success
+✓ 替换文本 · src/config.ts
+
+单文件已修改
+replace_all: false
++9 −9
+
+[查看变更]
 ```
 
-展开后显示：
+展开后仍然使用 Diff：
 
 ```diff
-@@ runtime.py:120 @@
-
-- previous implementation
-+ replaced implementation
+- const config = process.env.CONFIG
++ const config = loadConfig()
 ```
 
-如果匹配失败，不显示空 diff，而是显示明确错误：
+交互建议：
+
+- 与 ApplyPatch 使用同一套变更卡片。
+- 标题显示“替换文本”，而不是机器工具名 ReplaceTool。
+- `replace_all=true` 时显示“替换全部匹配”；否则显示“要求唯一匹配”。
+- 不显示“替换 3 处”这类推断数量，当前结构化结果没有替换次数字段。
+- 如果匹配不到，使用明确提示：
 
 ```text
-✗ 修改失败 · runtime.py
-  未找到匹配文本
-  展开查看修复建议
+未找到可替换内容
+文件未修改
 ```
 
-### 6. `apply_patch`
+- 未找到匹配、匹配不唯一、写入失败时显示失败卡片，并保留后端错误信息。
+- 第一版不提供允许、取消或撤销按钮。
 
-`apply_patch` 支持多文件修改，因此适合更明显的 standalone 变更卡片。
+---
+
+### 6. WriteFileTool
+
+WriteFileTool 成功后返回单文件变更数据，`status` 为 `added` 或 `modified`，同时提供 `before`、`after` 和增删行统计。UI 不应直接把返回的完整 `content` 当成普通聊天文本渲染。
+
+创建文件：
 
 ```text
-▸ 应用补丁 · 4 个文件 · +42 -17
-  ✓ runtime.py       +12 -4
-  ✓ tool_registry.py +18 -8
-  ✓ workflow.py      +9 -3
-  ✓ tests/test_x.py  +3 -2
+✓ 创建文件 · src/auth/types.ts
+
+新增 1 个文件
++32 行
+
+▸ 查看 Diff
+```
+
+覆盖文件：
+
+```text
+修改文件 · src/config.ts
+
+文件将被重写
++14 −8
+
+▸ 查看 Diff
+```
+
+交互建议：
+
+- 新文件显示“创建文件”。
+- 已存在文件显示“修改文件”。
+- 覆盖已有内容时必须显示 Diff，不要只显示“写入成功”。
+- 结果卡片默认展示摘要，Diff 作为展开内容。
+- 第一版不显示允许写入、取消写入、撤销、保留等按钮。
+- 写入后语法检查失败时，卡片状态显示失败，但要明确提示“文件已经写入，随后检查发现语法错误”，不能误导为完全没有写入。
+- 写入失败时显示失败原因，并保留“重试”。
+
+---
+
+### 7. DeleteTool
+
+DeleteTool 可以删除文件、目录或链接。目录默认只删除空目录，只有 `recursive=true` 才删除非空目录树；项目根目录会被拒绝。它直接执行，不显示“待确认”状态。
+
+执行后：
+
+```text
+✓ 删除文件 · src/legacy/auth.ts
+```
+
+交互建议：
+
+- 永远独立展示，并始终显示删除目标路径。
+- 当 `recursive=true` 时明确显示“递归删除目录”，但不显示未经后端返回的影响数量：
+
+```text
+即将删除目录 src/legacy
+recursive: true
+```
+
+- 文件成功结果有删除前快照，可以显示“文件已删除”；目录和链接成功结果没有同样的结构化 Diff，不要伪造删除内容或文件数量。
+- 第一版不提供确认删除、撤销删除或恢复按钮。
+- 删除失败时显示“目标不存在”“权限不足”等具体原因。
+- 不默认展示被删除文件的完整内容。
+
+---
+
+### 8. ExecuteTerminalTool
+
+ExecuteTerminalTool 在本机 workspace 范围内执行 shell 命令，合并 stdout 和 stderr，并返回退出码。输出会脱敏并受预算限制；超时会被强杀并作为可重试错误返回。终端命令直接执行，不显示前端确认按钮。
+
+默认状态：
+
+```text
+▸ 执行命令  npm test
+   已完成 · exit code 0 · 12.4s
+```
+
+执行中：
+
+```text
+▾ 执行命令  npm test
+   正在运行 · 8.2s
+
+   Running 24 tests...
 ```
 
 展开后：
 
 ```text
-[ runtime.py ]       ▾
-[ tool_registry.py ] ▸
-[ workflow.py ]      ▸
-[ tests/test_x.py ]  ▸
-```
+终端输出
 
-不要一次展开所有文件 diff，默认只展开第一个文件或全部折叠。
-
-### 7. `delete`
-
-当前已经设置：
-
-```python
-expandable=False
-```
-
-而且删除目录、链接时不一定有结构化 `changes`。
-
-建议：始终显示为 standalone 的危险操作状态行，但不默认展示删除前全文。
-
-```text
-✓ 删除文件
-  apps/backend/temp/example.py
-```
-
-目录：
-
-```text
-✓ 删除目录
-  apps/backend/temp · recursive
-```
-
-失败时突出显示：
-
-```text
-✗ 删除失败
-  目录非空，需要 recursive=true
-```
-
-如果是文件删除且存在 `changes`，可以提供可选的删除 diff：
-
-```text
-▸ 删除文件 · example.py
-  - 旧文件内容
-```
-
-但不建议把删除前全文作为默认内容展示。
-
-### 8. `execute_terminal`
-
-当前工具具有：
-
-- 高风险等级
-- 命令级 timeout
-- exit code
-- timed out
-- output truncated
-- ANSI 清理和输出脱敏
-
-建议使用 `TerminalResultCard`，命令始终可见，输出默认折叠。
-
-```text
-▸ 执行命令 · npm test
-  exit code 0 · 12.4s
-```
-
-展开后：
-
-```text
 $ npm test
 
-✓ 128 passed
-✓ 4 files passed
+✓ auth.test.ts
+✓ session.test.ts
+✓ config.test.ts
+
+24 passed
+exit code: 0
 ```
 
-失败：
+失败状态：
 
 ```text
-✗ 执行命令 · pytest
-  exit code 1 · 8.2s
+⚠ 执行命令  npm test
+   失败 · exit code 1 · 4.8s
+
+   2 tests failed
+
+[查看输出]  [重试]
 ```
 
-展开：
+交互建议：
+
+- 命令本身永远可见。
+- 输出默认折叠，执行中可以自动展开实时尾部。
+- 显示退出码、超时和输出截断状态；耗时如果由前端运行时可得再显示，不要当成后端工具结果。
+- 长输出只显示后端返回的有界内容，并标记“输出已截断”，不要显示成完整日志。
+- 危险命令由后端 deny-list 直接拒绝，前端不提供“强制执行”按钮。
+- 用户点击停止后显示“正在停止”，不要立即伪装成成功。
+- 命令中的敏感信息需要脱敏。
+
+---
+
+## 四、工具在对话中的组合方式
+
+推荐这样组织：
 
 ```text
-$ pytest
+用户：帮我修复登录失败问题
 
-FAILED tests/test_runtime.py::test_cancel
-...
+助手：我先检查登录相关代码。
+
+▸ 搜索内容 login
+▸ 读取文件 src/auth/login.ts
+▸ 读取文件 src/auth/session.ts
+
+助手：问题出在 token 获取没有等待异步结果，我准备修改它。
+
+✓ 应用补丁 · 已完成
+  1 个文件发生变化  +8 −3
+  ▸ 查看 Diff
+
+助手：修改完成，我运行测试验证。
+
+▸ 执行命令 npm test
+   ✓ 24 passed
+
+助手：登录流程已修复，测试全部通过。
 ```
 
-超时：
+推荐分组：
+
+- ReadFile、ListDirectory、SearchFiles：可以放进“正在检查代码”的折叠区域。
+- ApplyPatch、Replace、WriteFile：始终作为独立 Diff 卡片。
+- Delete：始终作为独立删除结果行，不折叠。
+- ExecuteTerminal：始终作为独立终端卡片，连续验证命令可以在视觉上连续排列。
+
+不要让最终文字重复完整工具输出。工具卡片负责事实和细节，最终回答负责结论、变更摘要和后续建议。
+
+## 五、第一版建议的最小交互闭环
+
+第一版只需要保证这条流程完整：
 
 ```text
-✗ 命令超时 · 60s
-  输出为部分结果，建议增加 timeout 或拆分命令
+文字输入
+  ↓
+Agent 流式回复
+  ↓
+只读工具轻量展示
+  ↓
+文件工具直接执行并展示 Diff
+  ↓
+Diff 展示
+  ↓
+终端验证
+  ↓
+成功 / 失败 / 取消结果
 ```
 
-建议后端额外提供：
-
-```json
-{
-  "type": "terminal",
-  "command": "npm test",
-  "workdir": ".",
-  "output": "...",
-  "exit_code": 0,
-  "timed_out": false,
-  "truncated": false
-}
-```
-
-当前 terminal 只有文本 `content`，不利于前端可靠展示退出码和超时状态。
-
-### 9. `web_search`
-
-当前已有：
-
-```json
-data["web"]
-```
-
-其中包含标题、URL、描述和位置。
-
-建议：使用 standalone 的网页结果卡片。搜索结果是用户可感知的信息，不应完全埋在工具 trace 中。
-
-```text
-▾ 网页搜索 · “assistant-ui custom transport”
-  找到 5 个结果
-
-  Assistant Transport
-  assistant-ui.com
-  Stream agent state to the frontend...
-
-  Custom Runtime
-  assistant-ui.com
-  Build a React chat UI for any AI backend...
-```
-
-每个结果可以：
-
-- 显示标题
-- 显示域名
-- 显示摘要
-- 点击后在浏览器打开
-- 显示搜索序号
-
-不要直接把搜索结果转成 Markdown 正文，否则会破坏工具结果和 assistant 正文的边界。
-
-### 10. `web_extract`
-
-当前返回网页正文、标题、metadata 和 provider 信息，且超长正文可能落盘。
-
-建议：使用“网页文档卡片”，默认只显示页面摘要，正文折叠。
-
-```text
-▾ 提取网页正文 · 2 个页面
-  Markdown · Firecrawl
-
-  Assistant Transport
-  assistant-ui.com
-  12,430 字符 · 已提取
-```
-
-展开：
-
-```text
-Assistant Transport
-
-# Assistant Transport
-
-...
-```
-
-多个 URL 时按页面分别折叠：
-
-```text
-▸ assistant-ui.com/docs/transport
-▸ example.com/design
-```
-
-如果正文被截断：
-
-```text
-⚠ 正文过长，当前显示截断内容
-  完整结果已保存到本地文件
-```
-
-不建议在前端自动加载本地完整文件；应由用户或 Agent 后续调用 `read_file`。
-
-### 11. `codegraph_explore`
-
-这是当前 CodeGraph 的主入口，返回相关源码和调用路径，但代码中明确说明本期不做结构化解析，会回退到 `raw`。
-
-建议：使用 standalone 的“代码探索”卡片，默认折叠源码。
-
-```text
-▾ 代码语义查询
-  发现 6 个相关文件 · 包含调用路径
-```
-
-展开后：
-
-```text
-相关文件：
-
-apps/backend/app/core/runtime.py
-apps/backend/app/core/context/runtime_context_manager.py
-apps/backend/app/core/workflows/workflow_operations.py
-
-调用路径：
-
-runtime → workflow → tool scheduler
-```
-
-当前如果只有：
-
-```json
-{
-  "codegraph": {
-    "tool": "codegraph_explore",
-    "raw": "..."
-  }
-}
-```
-
-则前端使用全文代码块 fallback，不强行解析。
-
-### 12. `codegraph_search`
-
-当前返回符号位置、类型和签名，适合列表展示。
-
-```text
-▸ 搜索代码符号 · “ConversationEventProjector”
-  找到 3 个定义
-
-  ConversationEventProjector  class
-  apps/backend/app/assistant_transport/service/conversation_event_projector.py:71
-
-  ConversationEventProjector  import
-  apps/backend/app/assistant_transport/service/__init__.py:4
-```
-
-展开条目后显示签名：
-
-```text
-class ConversationEventProjector:
-```
-
-这是典型的 `ListResultCard`，建议放入普通工具 trace 中。
-
-### 13. `codegraph_node`
-
-当前结果包含：
-
-- 当前符号自身
-- `Calls`
-- `Called by`
-- 签名和源码位置
-
-建议使用“符号详情卡片”。
-
-```text
-▾ 查看符号 · ConversationEventProjector
-  class
-  apps/backend/app/assistant_transport/service/conversation_event_projector.py:71
-
-  Calls: 3
-  Called by: 5
-```
-
-展开后分成三个区块：
-
-```text
-符号信息
-  class ConversationEventProjector
-
-调用方
-  WorkflowOperations
-  TransportAssistantService
-
-被调用
-  _plan_tool_created
-  _plan_tool_status
-```
-
-可以支持点击路径或符号，但不要让前端直接执行工具；点击动作只应触发后端已有命令。
-
-### 14. `codegraph_callers`
-
-当前返回调用目标列表，包含：
-
-- name
-- kind
-- filePath
-- lineNumber
-- edge
-
-建议使用简单的 callers 列表：
-
-```text
-▸ 查看调用方 · _plan_tool_created
-  4 个调用方
-
-  WorkflowOperations.run
-  apps/backend/app/core/workflows/workflow_operations.py:328
-
-  ConversationEventProjector.process
-  apps/backend/app/assistant_transport/service/conversation_event_projector.py:126
-```
-
-默认折叠，展开显示完整列表。
-
-### 15. `codegraph_callees`
-
-与 callers 相反，建议使用相同组件，但标题和方向不同：
-
-```text
-▸ 查看依赖调用 · _execute_tool_call
-  6 个被调用符号
-
-  ToolExecutor.execute
-  ToolTraceRecorder.span
-  ToolObservation
-```
-
-可以在每项旁边显示调用边：
-
-```text
-ToolExecutor.execute    · direct_call
-ToolTraceRecorder.span  · instrumentation
-```
-
-### 16. `codegraph_impact`
-
-当前返回受影响符号列表，解析器目前是扁平结构，但原始结果按文件分组。
-
-建议：使用 standalone 的“影响范围”卡片，并在前端按文件重新分组。
-
-```text
-▾ 分析变更影响 · ConversationStateSnapshot
-  3 个文件 · 9 个受影响符号
-
-  apps/backend/app/assistant_transport/
-    conversation_event_projector.py
-      _plan_tool_created
-      _plan_tool_status
-
-    conversation_task_snapshot_service.py
-      apply_planned
-      ensure_state_snapshot
-```
-
-这是比普通列表更重要的结果，适合独立展示。
-
-### 17. `delegate_task`
-
-当前 `delegate_task` 没有 `ToolDisplayHints`，但它与普通工具不同：
-
-- 执行时间最长
-- 可能并行执行
-- 实际上代表一个子 Agent
-- assistant-ui 支持在 Tool UI 中渲染嵌套 `messages`
-
-建议使用 standalone 的 `DelegationCard`：
-
-```text
-▾ 委派子任务 · Code Review
-  child agent: reviewer
-  正在执行 · 24s
-```
-
-完成后：
-
-```text
-✓ 委派完成 · Code Review
-  reviewer · 1 个建议 · 32s
-```
-
-展开后显示子 Agent 对话：
-
-```text
-子 Agent：reviewer
-
-用户目标：
-检查 conversation event projector 的幂等性
-
-子 Agent 结果：
-发现 2 个潜在问题...
-```
-
-assistant-ui 对这种场景推荐在工具 part 中提供 `messages`，再通过 `MessagePartPrimitive.Messages` 渲染嵌套只读对话。[Multi-Agent Chat UI](https://www.assistant-ui.com/docs/tools/multi-agent)。
-
-当前如果后端还没有把子 Agent 消息投影到 tool-call part，则先显示：
-
-```text
-title
-child_agent_id
-status
-result summary
-```
-
-后续再增加嵌套消息。
-
-## 最终分组建议
-
-```text
-普通 trace 折叠组：
-  read_file
-  list_directory
-  search_files
-  codegraph_search
-  codegraph_callers
-  codegraph_callees
-  execute_terminal
-
-独立结果卡片：
-  write_file
-  patch
-  apply_patch
-  delete
-  web_search
-  web_extract
-  codegraph_explore
-  codegraph_node
-  codegraph_impact
-  delegate_task
-```
-
-## Transport 层建议
-
-`ConversationStateToolCallPart` 建议最终包含：
-
-```json
-{
-  "type": "tool-call",
-  "toolCallId": "call-1",
-  "toolName": "search_files",
-  "status": "completed",
-  "presentation": {
-    "surface": "trace",
-    "expandable": true,
-    "layout": "list",
-    "defaultOpen": false
-  },
-  "args": {},
-  "result": {
-    "items": []
-  }
-}
-```
-
-事件处理保持：
-
-```text
-ToolCallCreatedEvent
-  → 创建 tool-call part
-  → 写入 presentation
-
-ToolCallStatusChangedEvent
-  → 更新 status
-  → 写入结构化 result / error
-
-RunStatusChangedEvent
-  → 收口未完成工具
-```
-
-Transport 仍只使用 `set` 和 `append-text`，不需要新增协议操作。前端的 converter 只做字段映射，具体 React 组件由 `ToolCallRenderer` 选择。
-
-最重要的一点是：
-
-```text
-ToolDefinition.display
-    决定展示语义
-
-ToolObservation.data
-    提供展示数据
-
-ToolCallMessagePart.result
-    承载前端可消费的结构化结果
-
-Tool UI renderer
-    决定具体 React 样式
-```
-
-这样既能支持每个工具不同的展示样式，又不会把 React 组件或 assistant-ui 类型泄漏到后端。
+核心取舍是：
+
+- ReadFile 只显示读取动作和元信息，不展示正文。
+- SearchFiles 必须区分内容搜索、文件名搜索和三种输出模式。
+- ListDirectory 只展示直接子项，不假设递归结果或总数量。
+- 文件修改工具重点展示 Diff，但不加入允许修改和撤销。
+- Delete 只展示删除对象和后端返回的结果，不伪造恢复能力或影响数量。
+- ExecuteTerminal 展示命令、退出码、超时和截断状态；危险命令由后端拒绝。
+- 前端只负责展示和停止交互，工具执行及文件变更仍由本地后端负责。
+- 后续附件、图片、拖拽文件可以沿用同一个输入框扩展，不需要改变对话主结构。

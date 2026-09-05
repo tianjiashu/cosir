@@ -27,6 +27,7 @@ class ConversationRunRecord:
     created_at: datetime
     updated_at: datetime
     end_reason: str | None = None
+    final_output: str | None = None
     agent_id: str | None = None
     provider_id: int | None = None
     model_name: str | None = None
@@ -56,6 +57,7 @@ class ConversationRunRecord:
             "input_text": self.input_text,
             "status": self.status,
             "end_reason": self.end_reason,
+            "final_output": self.final_output,
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
@@ -90,6 +92,7 @@ class ConversationRunRecord:
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             end_reason=row.end_reason,
+            final_output=row.final_output,
             agent_id=row.agent_id,
             image_paths=row.image_paths,
             reasoning_effort=row.reasoning_effort,

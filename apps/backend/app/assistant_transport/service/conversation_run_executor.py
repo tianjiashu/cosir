@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector
 from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflows.event import RunStatusChangedEvent, ToolCallsSettledEvent
+from app.core.workflows.event import ToolCallsSettledEvent
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service.depends import get_conversation_run_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -239,14 +239,6 @@ class ConversationRunExecutor:
         # 同一 Task 的 Run 串行由 DB 级认领保证，进程内不再持锁。
         if not self._run_service.claim_pending_run(run_id):
             raise ValueError(f"run {run_id} was claimed by another executor")
-        if self._event_projector is not None:
-            self._event_projector.process(
-                RunStatusChangedEvent(
-                    task_id=run.task_id,
-                    run_id=run_id,
-                    status=ConversationRunStatus.RUNNING,
-                )
-            )
         await self._set_status(run_id, ConversationRunStatus.RUNNING)
         try:
             await self._run_and_settle(run_id, run, runner)

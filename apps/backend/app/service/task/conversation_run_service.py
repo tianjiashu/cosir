@@ -19,7 +19,7 @@ from app.core.workflows.event import (
     RunStatusChangedEvent,
     UserInputAppendedEvent,
 )
-from app.models import ConversationRunRecord, ConversationRunStatus
+from app.models import ConversationRunRecord, ConversationRunStatus, ConversationRunUsageStats
 from app.models.attachment_ref import AttachmentRef
 from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
 from app.service import depends as service_depends
@@ -167,14 +167,22 @@ class ConversationRunService:
         """返回应用启动时可恢复的 pending/running 运行。"""
         return self._run.list_recoverable()
 
-    def complete_run_if_running(self, run_id: int) -> ConversationRunRecord | None:
+    def complete_run_if_running(
+        self,
+        run_id: int,
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
+    ) -> ConversationRunRecord | None:
         """Complete a running Conversation Run atomically.
 
         业务语义：仅 ``running`` 可进入 ``completed`` 终态并落库回复文本；约束收敛在
-        本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。
+        本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。Agent 对该
+        轮次的最终回答文本通过 ``final_output`` 一并写入，供快速检索与审计。
 
         参数:
             run_id: 待完成的 Conversation Run 标识。
+            final_output: 可选，Agent 对该轮次的最终回答文本；为 None 时不修改该列。
+            usage_stats: 可选，运行用量统计，随状态变更事件一并发布（用于快照展示，不落库）。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -184,7 +192,7 @@ class ConversationRunService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 run 状态为 completed。
+            条件满足时更新 run 状态为 completed，可选的 final_output 列。
         """
 
         record = self._run.update_status_if_in(
@@ -192,6 +200,7 @@ class ConversationRunService:
             ConversationRunStatus.COMPLETED.value,
             (ConversationRunStatus.RUNNING.value,),
             None,
+            final_output=final_output,
         )
         if record is None:
             return None
@@ -200,6 +209,7 @@ class ConversationRunService:
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.COMPLETED,
+                usage_stats=usage_stats,
             )
         )
         return self._run.get(run_id)
@@ -228,16 +238,23 @@ class ConversationRunService:
         return self._run.get(run_id)
 
     def fail_run_if_running(
-        self, run_id: int, end_reason: str | None = None
+        self,
+        run_id: int,
+        end_reason: str | None = None,
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """Fail a running Conversation Run atomically.
 
         业务语义：仅 ``running`` 可进入 ``failed`` 终态；约束收敛在本方法（service 层），
-        CRUD 层只做通用的「状态白名单 + 原子更新」。
+        CRUD 层只做通用的「状态白名单 + 原子更新」。终态同时写入 ``final_output``，使复用
+        同一工作流的子 Agent 即便失败，主 Agent 也能从委派结果中感知其终态输出。
 
         参数:
             run_id: 待失败落定的 Conversation Run 标识。
             end_reason: 可选失败原因。
+            final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
+            usage_stats: 可选，运行用量统计，随状态变更事件一并发布（用于快照展示，不落库）。
 
         返回:
             成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -247,7 +264,8 @@ class ConversationRunService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 run 状态为 failed（并可选写入 end_reason）。
+            条件满足时更新 run 状态为 failed（并可选写入 end_reason 与 final_output），并发布
+            状态变更事件。
         """
 
         record = self._run.update_status_if_in(
@@ -255,6 +273,7 @@ class ConversationRunService:
             ConversationRunStatus.FAILED.value,
             (ConversationRunStatus.RUNNING.value,),
             end_reason,
+            final_output=final_output,
         )
         if record is None:
             return None
@@ -264,19 +283,30 @@ class ConversationRunService:
                 run_id=run_id,
                 status=ConversationRunStatus.FAILED,
                 end_reason=end_reason,
+                usage_stats=usage_stats,
             )
         )
         return self._run.get(run_id)
 
     def fail_run_if_pending_or_running(
-        self, run_id: int, end_reason: str | None = None
+        self,
+        run_id: int,
+        end_reason: str | None = None,
+        final_output: str | None = None,
     ) -> ConversationRunRecord | None:
-        """将尚未启动或正在执行的 Conversation Run 原子落定为 failed。"""
+        """将尚未启动或正在执行的 Conversation Run 原子落定为 failed。
+
+        参数:
+            run_id: 待失败落定的 Conversation Run 标识。
+            end_reason: 可选失败原因。
+            final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
+        """
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.FAILED.value,
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
+            final_output=final_output,
         )
         if record is None:
             return None
@@ -291,15 +321,30 @@ class ConversationRunService:
         return self._run.get(run_id)
 
     def cancel_run_if_running(
-        self, run_id: int, end_reason: str = "user_cancelled"
+        self,
+        run_id: int,
+        end_reason: str = "user_cancelled",
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
-        """将 active Run 标记 cancelled，并更新 snapshot 展示状态。"""
+        """将 active Run 标记 cancelled，并更新 snapshot 展示状态。
+
+        终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便被取消，主 Agent
+        也能从委派结果中感知其已产出（或被中断）的内容，而非仅看到一个空终态。
+
+        参数:
+            run_id: 待取消的 Conversation Run 标识。
+            end_reason: 稳定的取消原因。
+            final_output: 可选，随终态一并写入的取消说明/部分输出文本，供委派场景主 Agent 感知。
+            usage_stats: 可选，运行用量统计，随状态变更事件一并发布（用于快照展示，不落库）。
+        """
 
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.CANCELLED.value,
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
+            final_output=final_output,
         )
         if record is None:
             return None
@@ -309,6 +354,7 @@ class ConversationRunService:
                 run_id=run_id,
                 status=ConversationRunStatus.CANCELLED,
                 end_reason=end_reason,
+                usage_stats=usage_stats,
             )
         )
         return self._run.get(run_id)
@@ -332,11 +378,20 @@ class ConversationRunService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 run 状态为 running。
+            条件满足时更新 run 状态为 running，并发布 running 状态变更事件（以数据库更新成功为
+            幂等闸门，重复认领不会重复发布）。
         """
         row = self._run.update_status_if_in(
             run_id=run_id,
             target_status=ConversationRunStatus.RUNNING.value,
             allowed_statuses=(ConversationRunStatus.PENDING.value,),
         )
+        if row is not None:
+            service_depends.get_conversation_event_projector().process(
+                RunStatusChangedEvent(
+                    task_id=row.task_id,
+                    run_id=run_id,
+                    status=ConversationRunStatus.RUNNING,
+                )
+            )
         return row is not None

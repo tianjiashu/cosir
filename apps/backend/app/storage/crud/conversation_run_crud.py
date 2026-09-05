@@ -309,6 +309,7 @@ class ConversationRunCrud:
         target_status: str,
         allowed_statuses: tuple[str, ...],
         end_reason: str | None = None,
+        final_output: str | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """以乐观锁方式把 run 更新为目标状态，仅当其当前状态在允许集合内。
@@ -323,6 +324,7 @@ class ConversationRunCrud:
             allowed_statuses: 允许执行更新的前置状态白名单；当前状态不在此集合时
                 不做任何修改并返回 None。
             end_reason: 可选，更新时一并写入的终态原因；为 None 时不修改该列。
+            final_output: 可选，更新时一并写入的最终回答文本；为 None 时不修改该列。
 
         返回:
             更新成功时返回更新后的 ``ConversationRunRecord``；当前状态不在允许集合内时
@@ -333,12 +335,17 @@ class ConversationRunCrud:
             而是按零行更新静默返回 None（需判存在性时调用方应先 ``get``）。
 
         副作用:
-            条件满足时更新对应行的 ``status``、``updated_at`` 与可选的 ``end_reason``。
+            条件满足时更新对应行的 ``status``、``updated_at`` 与可选的 ``end_reason``、
+            ``final_output``。
         """
         if session is not None:
-            return self.update_status_if_in_session(session, run_id, target_status, allowed_statuses, end_reason)
+            return self.update_status_if_in_session(
+                session, run_id, target_status, allowed_statuses, end_reason, final_output
+            )
         with self._session_factory.begin() as session:
-            return self.update_status_if_in_session(session, run_id, target_status, allowed_statuses, end_reason)
+            return self.update_status_if_in_session(
+                session, run_id, target_status, allowed_statuses, end_reason, final_output
+            )
 
     @staticmethod
     def update_status_if_in_session(
@@ -347,6 +354,7 @@ class ConversationRunCrud:
             target_status: str,
             allowed_statuses: tuple[str, ...],
             end_reason: str | None = None,
+            final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """在给定事务中按状态白名单原子更新 run。"""
 
@@ -355,6 +363,8 @@ class ConversationRunCrud:
         }
         if end_reason is not None:
             values["end_reason"] = end_reason
+        if final_output is not None:
+            values["final_output"] = final_output
         result = session.execute(
             update(ConversationRunModel)
             .where(

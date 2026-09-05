@@ -159,8 +159,15 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": usage_summary},
                 },
             )
+            # 取消时把已流式产出但尚未落定终态的部分文本一并写入 final_output，
+            # 使复用同一工作流的子 Agent 即便被取消，主 Agent 也能感知其已产出的内容。
+            partial_output = (
+                content_to_text(_collect_chunk_to_ai_message(chunks).content) if chunks else ""
+            )
             operations.cancel_run_if_running(
-                end_reason="runtime_cancelled", usage_stats=rc.usage_stats
+                end_reason="runtime_cancelled",
+                usage_stats=rc.usage_stats,
+                final_output=partial_output or None,
             )
             return terminal_state(step_count)
 
@@ -356,7 +363,10 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if ai_message.content:  # 没有工具调用，上下文没有变化但有文本 → 最终回答
-        completed_run = operations.complete_run_if_running(rc.usage_stats)
+        final_answer = ai_message.content if isinstance(ai_message.content, str) else None
+        completed_run = operations.complete_run_if_running(
+            rc.usage_stats, final_output=final_answer
+        )
         if completed_run is None:
             log.info(
                 "model_node_final_response_terminal_race_lost",
@@ -386,7 +396,9 @@ async def _model_node(state: ReactGraphState) -> dict:
         },
     )
     failed_run = operations.fail_run_if_running(
-        end_reason="invalid_model_output", usage_stats=rc.usage_stats
+        end_reason="invalid_model_output",
+        usage_stats=rc.usage_stats,
+        final_output="模型既未返回工具调用也无有效文本，判定为非法输出",
     )
     if failed_run is None:
         log.info(

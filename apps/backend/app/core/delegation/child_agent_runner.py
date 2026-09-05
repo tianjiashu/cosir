@@ -11,7 +11,7 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.models.result.delegation_result import DelegationResult
-from app.service.depends import get_conversation_run_service
+from app.service.depends import get_conversation_run_service, get_conversation_run_executor
 
 
 class ChildAgentRunner:
@@ -21,7 +21,6 @@ class ChildAgentRunner:
         self,
         run_agent: Callable[[AgentProfile], Awaitable[None]],
         should_cancel: Callable[[str], bool] | None = None,
-        run_executor: object | None = None,
     ) -> None:
         """初始化 child agent 运行桥接器。
 
@@ -40,7 +39,7 @@ class ChildAgentRunner:
 
         self._run_agent = run_agent
         self._should_cancel = should_cancel or (lambda _run_id: False)
-        self._run_executor = run_executor
+        self._run_executor = get_conversation_run_executor()
 
     def run_child(
         self,
@@ -68,7 +67,7 @@ class ChildAgentRunner:
             写入 error 级日志。
         """
 
-        run_id = str(child_profile.run.id) if child_profile.run is not None else ""
+        run_id = child_profile.run.id
         if self._is_running_event_loop_thread():
             log.error(
                 "delegation_runner_event_loop_conflict",
@@ -132,32 +131,26 @@ class ChildAgentRunner:
             delegation_id: 本次委派标识，透传给异常日志以提升并发重入排查能力。
 
         返回:
-            从 child run 终态事实压缩出的 DelegationResult。
+            从 child run 终态事实压缩出的 DelegationResult；completed/cancelled/failed 三类
+            终态均会携带 run 的 final_output 作为 summary，供主 Agent 感知子 Agent 的产出或
+            终态原因（委派场景中子 Agent 复用同一工作流，缺少 final_output 主 Agent 无法判断结果）。
 
         异常:
             无。run_agent 或事件消费异常会被转换为 failed DelegationResult。
 
         副作用:
-            执行 AgentRuntime.run_agent；不消费运行时事件。
+            执行 AgentRuntime.run_agent；不消费运行时事件；必要时经 _build_cancelled_result /
+            _build_failed_result 原子收口未终态化的 run 并写入 final_output。
         """
 
-        run_id = str(child_profile.run.id) if child_profile.run is not None else ""
+        run_id = child_profile.run.id
         try:
             if self._should_cancel(run_id):
-                return DelegationResult(
-                    status="cancelled",
-                    child_run_id=run_id,
-                    error="child run cancelled",
-                )
-            executor = self._run_executor
-            if executor is None:
-                from app.service.depends import get_conversation_run_executor
-
-                executor = get_conversation_run_executor()
+                return self._build_cancelled_result(run_id)
             child_run = child_profile.run
             if child_run is None:
                 raise RuntimeError("child profile has no conversation run")
-            execution = await executor.start(
+            execution = await self._run_executor.start(
                 child_run.id,
                 lambda _run: self._run_agent(child_profile),
             )
@@ -174,42 +167,83 @@ class ChildAgentRunner:
                     },
                 },
             )
-            return DelegationResult(
-                status="failed",
-                child_run_id=run_id,
-                error=str(exc) or "child run failed",
-            )
+            return self._build_failed_result(run_id, str(exc) or "child run failed")
         if self._should_cancel(run_id):
             return DelegationResult(
                 status="cancelled",
                 child_run_id=run_id,
                 error="child run cancelled",
             )
-        child_run = get_conversation_run_service().get_run(int(run_id))
+        child_run = get_conversation_run_service().get_run(run_id)
         if child_run.status == "completed":
-            state = ConversationTaskSnapshotService().ensure_state_snapshot(child_run.task_id)
-            summary = "child run completed"
-            for message in state["messages"]:
-                if message["role"] == "assistant":
-                    summary = (
-                        "".join(
-                            str(part.get("text", ""))
-                            for part in message["parts"]
-                            if part.get("type") == "text"
-                        )
-                        or summary
-                    )
             return DelegationResult(
                 status="completed",
                 child_run_id=run_id,
-                summary=summary,
+                summary=child_run.final_output,
             )
         if child_run.status == "cancelled":
             return DelegationResult(
-                status="cancelled", child_run_id=run_id, error="child run cancelled"
+                status="cancelled",
+                child_run_id=run_id,
+                error="child run cancelled",
+                summary=child_run.final_output,
             )
         return DelegationResult(
             status="failed",
             child_run_id=run_id,
             error=child_run.end_reason or "child run failed",
+            summary=child_run.final_output,
+        )
+
+    def _build_cancelled_result(self, run_id: int) -> DelegationResult:
+        """构造 cancelled 终态的委派结果，并确保 child run 已落定终态且携带 final_output。
+
+        当 child 工作流尚未启动即被取消、或主 Agent 在流式中途取消时，run 可能停留在
+        running/pending 未被收口，本方法负责原子收口为 cancelled 并写入可让主 Agent 感知的
+        final_output；若工作流已先落定终态（携带部分输出），则保留既有 final_output 不再覆盖。
+
+        参数:
+            run_id: child run 标识。
+
+        返回:
+            status="cancelled" 的 DelegationResult，其 summary 携带 run 的 final_output。
+        """
+        service = get_conversation_run_service()
+        run = service.cancel_run_if_running(
+            run_id,
+            end_reason="runtime_cancelled",
+            final_output="child run cancelled before execution",
+        )
+        if run is None:
+            run = service.get_run(run_id)
+        return DelegationResult(
+            status="cancelled",
+            child_run_id=run_id,
+            error="child run cancelled",
+            summary=run.final_output,
+        )
+
+    def _build_failed_result(self, run_id: int, error: str) -> DelegationResult:
+        """构造 failed 终态的委派结果，并确保 child run 已落定终态且携带 final_output。
+
+        异常路径下 run 可能停留在 running/pending 未被收口，本方法负责原子收口为 failed 并写入
+        可让主 Agent 感知的 final_output（异常原因）；若工作流已先落定终态，则保留既有
+        final_output 不再覆盖。
+
+        参数:
+            run_id: child run 标识。
+            error: 失败原因文本。
+
+        返回:
+            status="failed" 的 DelegationResult，其 summary 携带 run 的 final_output。
+        """
+        service = get_conversation_run_service()
+        run = service.fail_run_if_running(run_id, end_reason=error, final_output=error)
+        if run is None:
+            run = service.get_run(run_id)
+        return DelegationResult(
+            status="failed",
+            child_run_id=run_id,
+            error=error,
+            summary=run.final_output,
         )

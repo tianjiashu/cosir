@@ -9,7 +9,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import ToolMessage
-from langgraph.config import get_stream_writer
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -27,8 +26,7 @@ from app.core.tools.tool_execute.tool_error import (
 )
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.event import RunStatusChangedEvent
-from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord, WorkspaceRecord
+from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.models.enums.error_kind import ErrorKind
 from app.service.depends import (
     get_conversation_event_projector,
@@ -85,7 +83,7 @@ class WorkflowOperations:
             取消回调），存储执行上下文与 canonical writer，记初始化日志。
         """
 
-        self._conversation_run_state_service = get_conversation_run_service()
+        self._conversation_run_service = get_conversation_run_service()
         self._event_projector = get_conversation_event_projector()
         self._executor = tool_executor
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
@@ -172,12 +170,15 @@ class WorkflowOperations:
         return cancellation_registry.is_cancelled(str(current_run.id))
 
     def complete_run_if_running(
-        self, usage_stats: ConversationRunUsageStats | None = None
+        self,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """Complete the Conversation Run only if it is still running.
 
         参数:
-            run_id: 待完成的 Conversation Run 标识。
+            usage_stats: 可选的运行用量统计，透传给 ConversationRunService 以发布带用量的状态事件。
+            final_output: 可选，Agent 对该轮次的最终回答文本，随终态一并写入 run 行。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已被取消/失败/完成时返回 None。
@@ -187,7 +188,8 @@ class WorkflowOperations:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时同事务写入 completed 状态和回复文本。
+            条件满足时同事务写入 completed 状态、回复文本与可选的最终回答；状态变更事件已由
+            ConversationRunService 在数据库更新成功后统一发布，本方法不再直接处理事件。
         """
         run_id = self._current_run.id
         log.info(
@@ -197,26 +199,26 @@ class WorkflowOperations:
                 "data": {"run_id": run_id},
             },
         )
-        record = self._conversation_run_state_service.complete_run_if_running(run_id)
-        if record is not None:
-            get_stream_writer()(
-                RunStatusChangedEvent(
-                    task_id=self._current_task.id,
-                    run_id=run_id,
-                    status=ConversationRunStatus.COMPLETED,
-                    usage_stats=usage_stats,
-                )
-            )
+        record = self._conversation_run_service.complete_run_if_running(
+            run_id, final_output=final_output, usage_stats=usage_stats
+        )
         return record
 
     def fail_run_if_running(
-        self, end_reason: str | None = None, usage_stats: ConversationRunUsageStats | None = None
+        self,
+        end_reason: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """Fail the Conversation Run only if it is still running.
 
+        终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便失败，主 Agent 也能从
+        委派结果中感知其终态输出，而非仅看到一个空终态。
+
         参数:
-            run_id: 待失败落定的 Conversation Run 标识。
             end_reason: 可选失败原因。
+            usage_stats: 可选 token 使用统计，随状态事件透出。
+            final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
 
         返回:
             成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -226,7 +228,8 @@ class WorkflowOperations:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时写入 failed 状态。
+            条件满足时写入 failed 状态与 final_output；状态变更事件已由 ConversationRunService
+            在数据库更新成功后统一发布，本方法不再直接处理事件。
         """
         run_id = self._current_run.id
         log.info(
@@ -236,29 +239,26 @@ class WorkflowOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        record = self._conversation_run_state_service.fail_run_if_running(run_id, end_reason)
-        if record is not None:
-            get_stream_writer()(
-                RunStatusChangedEvent(
-                    task_id=self._current_task.id,
-                    run_id=run_id,
-                    status=ConversationRunStatus.FAILED,
-                    end_reason=end_reason,
-                    usage_stats=usage_stats,
-                )
-            )
+        record = self._conversation_run_service.fail_run_if_running(
+            run_id, end_reason, final_output=final_output, usage_stats=usage_stats
+        )
         return record
 
     def cancel_run_if_running(
         self,
         end_reason: str = "runtime_cancelled",
         usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """Cancel the Conversation Run through the canonical writer if it is still active.
 
+        终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便被取消，主 Agent 也能从
+        委派结果中感知其已产出（或被中断）的内容，而非仅看到一个空终态。
+
         参数:
-            run_id: 待取消的 Conversation Run 标识。
             end_reason: 稳定的取消原因。
+            usage_stats: 可选 token 使用统计，随状态事件透出。
+            final_output: 可选，随终态一并写入的取消说明/部分输出文本，供委派场景主 Agent 感知。
 
         返回:
             成功取消时返回更新后的 ConversationRunRecord；终态已由其它路径落定时返回 None。
@@ -268,7 +268,8 @@ class WorkflowOperations:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled。
+            通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled 与 final_output；
+            状态变更事件由 ConversationRunService 在数据库更新成功后发布；本方法不再直接处理事件。
         """
         run_id = self._current_run.id
         log.info(
@@ -278,17 +279,9 @@ class WorkflowOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        record = self._conversation_run_state_service.cancel_run_if_running(run_id, end_reason)
-        if record is not None:
-            get_stream_writer()(
-                RunStatusChangedEvent(
-                    task_id=self._current_task.id,
-                    run_id=run_id,
-                    status=ConversationRunStatus.CANCELLED,
-                    end_reason=end_reason,
-                    usage_stats=usage_stats,
-                )
-            )
+        record = self._conversation_run_service.cancel_run_if_running(
+            run_id, end_reason, final_output=final_output, usage_stats=usage_stats
+        )
         return record
 
     def run_tool_calls(

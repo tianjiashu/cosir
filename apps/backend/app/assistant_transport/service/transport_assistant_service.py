@@ -161,13 +161,8 @@ class TransportAssistantService:
         副作用:
             在当前事件循环注册后台执行 task；HTTP 订阅断开不会取消它。
         """
-
-        def runner(active_run: Any) -> Any:
-            """Adapt the executor runner port to ``AgentRuntime.execute_run``."""
-            return self.runtime.execute_run(active_run)
-
         try:
-            await self.run_executor.start(run_id, runner)
+            await self.run_executor.start(run_id, self.runtime.execute_run)
         except ValueError:
             # 并发窗口内已被其他执行者认领：让既有执行者继续，本请求只订阅。
             log.info(

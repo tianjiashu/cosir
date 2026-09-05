@@ -303,7 +303,6 @@ class AgentRuntime:
                 child_runner=ChildAgentRunner(
                     self.run_agent,
                     should_cancel=cancellation_registry.is_cancelled,
-                    run_executor=get_conversation_run_executor(),
                 ),
                 parent_profile=agent_profile,
                 parent_run=run,
