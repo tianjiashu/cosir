@@ -10,11 +10,11 @@ from app.core.observability import (
     build_tool_trace_recorder,
     conversation_run_trace,
 )
+from app.core.observability.tool_trace_recorder import ToolTraceRecorder
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflows.workflow_operations import WorkflowOperations
-from app.core.runtime.tool_execution import ToolTraceRecorder
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.workflows.workflow_operations import WorkflowOperations
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
