@@ -115,7 +115,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
     # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
-    # ``ToolExecutionService`` 的取消兜底（原 ``_build_result_with_cancel_placeholders``）已
+    # ``WorkflowOperations.run_tool_calls`` 的取消兜底（原
+    # ``_build_result_with_cancel_placeholders``）已
     # 移除，模型协议配对闭合统一由 ``RuntimeContextManager.load_message`` 收口。上一轮
     # ``_model_node`` 已把 ``AIMessage.tool_calls`` 写入 ``RuntimeContextManager``，会在
     # 下次模型取数时被自动补 ``ToolMessage`` 占位，不会因悬空 ``tool_calls`` 触发协议校验失败；

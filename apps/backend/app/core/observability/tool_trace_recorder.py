@@ -5,7 +5,7 @@ import Langfuse。``core/observability.LangfuseToolTraceRecorder`` 按结构化�
 （``core → service`` 为允许方向），无任何反向依赖。
 
 空实现（``_NullToolSpan`` / ``_NullToolTraceRecorder``）与协议同文件定义、由 service 自消费，
-``ToolExecutionService`` 与 ``LangfuseToolTraceRecorder`` 的降级分支共用同一份，避免空壳类在
+``WorkflowOperations`` 与 ``LangfuseToolTraceRecorder`` 的降级分支共用同一份，避免空壳类在
 多个包重复漂移（不重复造轮子）。
 """
 
@@ -81,7 +81,7 @@ class ToolTraceRecorder(Protocol):
 class _NullToolSpan(ToolCallSpan):
     """空工具 span（降级路径），``record`` 为 no-op。
 
-    与协议同文件定义、由 service 自消费：未注入真实 recorder 时，``ToolExecutionService``
+    与协议同文件定义、由 service 自消费：未注入真实 recorder 时，``WorkflowOperations``
     与 ``LangfuseToolTraceRecorder`` 的降级分支共用同一份空实现，避免空壳类在多个包重复漂移。
     """
 
@@ -106,7 +106,7 @@ class _NullToolSpan(ToolCallSpan):
 class _NullToolTraceRecorder:
     """空实现 ``ToolTraceRecorder`` 协议：``span`` 退化为 no-op 上下文。
 
-    当未注入真实 recorder 时由 ``ToolExecutionService`` 默认使用，确保循环体只有 ``with``
+    当未注入真实 recorder 时由 ``WorkflowOperations`` 默认使用，确保循环体只有 ``with``
     一条路径、零 trace 开销，且行为与集成前完全一致。
     """
 

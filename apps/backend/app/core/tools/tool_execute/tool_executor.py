@@ -45,7 +45,7 @@ class ToolExecutor:
     - 负责：按 ``execution_mode`` 分流（thread / process）、子进程隔离执行、
       超时强杀（仅 process 路径：terminate / kill 兜底）、进程组清理、结果归一化。
     - 不负责：权限校验（``ToolScheduler``）、参数校验（``validation``）、
-      模型可见性策略（``ToolExecutionService``）；thread 路径不提供超时强杀。
+      模型可见性策略（``WorkflowOperations``）；thread 路径不提供超时强杀。
     """
 
     # ------------------------------------------------------------------

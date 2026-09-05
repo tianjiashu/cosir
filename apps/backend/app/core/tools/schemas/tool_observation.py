@@ -37,8 +37,8 @@ class ToolObservation:
           诊断。它是**模型唯一直接消费的文本通道**。
         - ``data`` 是「面向客户端的结构化机读字典」：给前端渲染消费的计算数据与治理
           标记（如 ``items`` / ``web`` / ``diff`` / ``syntax_errors`` / ``output_truncated`` /
-          ``artifact_path``），类型恒为 ``dict``。它**不到模型**——``ToolExecutionService``
-          在把观察转模型消息前会 ``clear_display_data()`` 清空，模型只看到
+          ``artifact_path``），类型恒为 ``dict``。它**不到模型**——``WorkflowOperations``
+          （``_to_model_message``）在把观察转模型消息前会 ``clear_display_data()`` 清空，模型只看到
           ``content`` / ``error`` / ``reason``。
         - 两者互不替代、可同时填充：例如删除文件时 ``content`` 写「已删除文件 xxx」，
           ``data`` 写 ``{"type": "file", "path": "..."}``，前端既能展示文本，也能不解析
