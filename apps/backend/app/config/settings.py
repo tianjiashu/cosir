@@ -84,6 +84,12 @@ class Settings:
     CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS: ClassVar[float] = 600.0
     CODEGRAPH_INDEX_SYNC_TIMEOUT_SECONDS: ClassVar[float] = 120.0
 
+    # CodeGraph 总开关：True 启用（启动 Kernel 常驻 + 注册 6 个查询工具 + 注册索引保活
+    # Hook + agent 白名单含 codegraph + 系统提示词含 codegraph 指引）；False 关闭（完全不
+    # 挂载 Kernel、不注册工具/Hook，模型侧无任何 codegraph 入口）。默认关闭（False），
+    # 经 CODING_AGENT_CODEGRAPH_ENABLED 环境变量覆盖（true/false）。
+    CODEGRAPH_ENABLED: ClassVar[bool] = False
+
     # --- 委派子Agent并发执行（见 docs/委派子Agent并发执行技术方案.md §6.1） ---
     # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
     # child 委派单次执行的生效超时（async 路径），不等同于线程硬杀，与工具定义
@@ -346,6 +352,9 @@ class Settings:
             os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
         )
         cls.DEBUG_DUMP_CHUNKS = cls._env_bool("CODING_AGENT_DEBUG_DUMP_CHUNKS", False)
+
+        # CodeGraph 总开关（默认关闭；显式开启才挂载 Kernel 与注册 codegraph 工具）。
+        cls.CODEGRAPH_ENABLED = cls._env_bool("CODING_AGENT_CODEGRAPH_ENABLED", False)
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
         cls.LANGFUSE_ENABLED = cls._env_bool("CODING_AGENT_LANGFUSE_ENABLED", False)
