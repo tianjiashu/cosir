@@ -10,7 +10,7 @@ from enum import Enum
 class ConversationRunStatus(str, Enum):
     """轮次执行状态。
 
-    状态机：``pending -> running -> completed|failed|cancelled``，终态不可再迁移。
+    状态机：``pending -> running -> completed|failed|cancelled|interrupted``，终态不可再迁移。
     ``waiting_for_approval`` 本轮不纳入（审批异步持久化暂缓，YAGNI）。
     """
 
@@ -19,6 +19,7 @@ class ConversationRunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
     def __str__(self) -> str:
         """返回状态稳定字符串值。

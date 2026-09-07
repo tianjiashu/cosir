@@ -26,6 +26,8 @@ class ConversationRunRecord:
     status: str
     created_at: datetime
     updated_at: datetime
+    # 与数据库 run 主键分离的 LangGraph thread 身份；checkpoint 生命周期可能长于主库自增 ID。
+    checkpoint_thread_id: str
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
@@ -66,6 +68,7 @@ class ConversationRunRecord:
             "extra": self.extra,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
+            "checkpoint_thread_id": self.checkpoint_thread_id,
         }
 
     @classmethod
@@ -91,6 +94,7 @@ class ConversationRunRecord:
             status=row.status,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
+            checkpoint_thread_id=row.checkpoint_thread_id,
             end_reason=row.end_reason,
             final_output=row.final_output,
             agent_id=row.agent_id,

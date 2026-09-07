@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.config.logging.filter.caller_filter import compute_caller
-from app.utils.trace_infra.redaction import redact_value
+from app.utils.trace_infra.redaction import redact_terminal_output, redact_value
 
 MAX_LOG_TEXT_LENGTH = 2000
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -256,19 +256,35 @@ class MappedLogRecord:
             stack = "".join(traceback.format_exception(*record.exc_info))
             return LogError(
                 type=type(exc).__name__,
-                message=MappedLogRecord._truncate_text(str(exc)),
-                stack=MappedLogRecord._truncate_text(stack),
+                message=MappedLogRecord._sanitize_error_text(str(exc)),
+                stack=MappedLogRecord._sanitize_error_text(stack),
             )
         error_type = str(getattr(record, "error_type", "") or "")
         if error_type:
             return LogError(
                 type=error_type,
-                message=MappedLogRecord._truncate_text(
+                message=MappedLogRecord._sanitize_error_text(
                     str(getattr(record, "error_message", "") or "")
                 ),
-                stack=MappedLogRecord._truncate_text(str(getattr(record, "stack", "") or "")),
+                stack=MappedLogRecord._sanitize_error_text(str(getattr(record, "stack", "") or "")),
             )
         return None
+
+    @staticmethod
+    def _sanitize_error_text(value: str) -> str:
+        """把异常详情收敛为安全占位，避免响应正文进入持久化日志。
+
+        异常类型、event、trace_id 和 caller 已经足够把失败链路定位到具体阶段；
+        原始异常 message/stack 可能携带 provider 响应、用户输入或密钥，不能作为
+        通用结构化日志字段落盘。
+        """
+
+        if not value:
+            return ""
+        # 仍先执行统一脱敏，保持该函数与自由文本日志的安全策略一致；结果只用于
+        # 判断是否存在详情，不把任何原文或截断片段写入持久化日志。
+        sanitized = redact_terminal_output(value)
+        return "异常详情已省略" if sanitized else ""
 
     @staticmethod
     def _truncate_text(value: str) -> str:
