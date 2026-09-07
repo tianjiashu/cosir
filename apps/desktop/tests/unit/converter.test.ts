@@ -104,4 +104,20 @@ describe("assistant transport converter", () => {
     expect(result.messages[0]).toMatchObject({ role: "assistant", status: { type: "incomplete", reason: "error" } });
     expect(result.messages[1]).toMatchObject({ id: "pending-0", role: "user" });
   });
+
+  it("marks only the last assistant message in each run for task fork actions", () => {
+    const state = emptyState();
+    state.messages = [
+      { id: "u1", role: "user", runId: 1, status: "completed", endReason: null, parts: [] },
+      { id: "a1", role: "assistant", runId: 1, status: "completed", endReason: null, parts: [] },
+      { id: "a1-tool-followup", role: "assistant", runId: 1, status: "completed", endReason: null, parts: [] },
+      { id: "u2", role: "user", runId: 2, status: "completed", endReason: null, parts: [] },
+      { id: "a2", role: "assistant", runId: 2, status: "completed", endReason: null, parts: [] },
+    ];
+
+    const messages = toTransportThreadView(state, { pendingCommands: [], isSending: false }).messages;
+    expect(messages[1].metadata?.custom).toMatchObject({ runId: 1, isLastRunMessage: false });
+    expect(messages[2].metadata?.custom).toMatchObject({ runId: 1, isLastRunMessage: true });
+    expect(messages[4].metadata?.custom).toMatchObject({ runId: 2, isLastRunMessage: true });
+  });
 });

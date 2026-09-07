@@ -18,6 +18,7 @@ import type {
 
 type UserAddMessageCommand = {
   type: "add-message";
+  sourceId?: string | null;
   message: {
     role: "user";
     parts: ReadonlyArray<{ type: string; text?: string }>;
@@ -163,7 +164,10 @@ export function toMessageStatus(message: TransportMessage): MessageStatus {
   }
 }
 
-export function toThreadMessage(message: TransportMessage): ThreadMessage {
+export function toThreadMessage(
+  message: TransportMessage,
+  options: { isLastRunMessage?: boolean } = {},
+): ThreadMessage {
   const content = message.parts
     .map((part) => {
       switch (part.type) {
@@ -193,7 +197,10 @@ export function toThreadMessage(message: TransportMessage): ThreadMessage {
         steps: undefined,
         submittedFeedback: undefined,
         timing: undefined,
-        custom: {},
+        custom: {
+          runId: message.runId ?? null,
+          isLastRunMessage: options.isLastRunMessage ?? false,
+        },
       },
     };
     return userMessage;
@@ -210,7 +217,10 @@ export function toThreadMessage(message: TransportMessage): ThreadMessage {
       unstable_annotations: [],
       unstable_data: [],
       steps: [],
-      custom: {},
+      custom: {
+        runId: message.runId ?? null,
+        isLastRunMessage: options.isLastRunMessage ?? false,
+      },
     },
   };
   return assistantMessage;
@@ -222,6 +232,13 @@ export function extractUserAddMessageText(command: unknown): string {
     .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
     .join("\n");
+}
+
+export function getUserAddMessageSourceId(command: unknown): string | null {
+  if (!isUserAddMessageCommand(command)) return null;
+  return typeof command.sourceId === "string" && command.sourceId.length > 0
+    ? command.sourceId
+    : null;
 }
 
 function toPendingUserMessage(command: UserAddMessageCommand, index: number): ThreadMessage | null {
@@ -263,7 +280,16 @@ export function toTransportThreadView(
   const pendingMessages = connectionMetadata.pendingCommands
     .map((command, index) => isUserAddMessageCommand(command) ? toPendingUserMessage(command, index) : null)
     .filter((message): message is ThreadMessage => message !== null);
-  const messages = state.messages.map(toThreadMessage);
+  const lastAssistantMessageIds = new Set<string>();
+  const seenRunIds = new Set<number>();
+  for (const message of [...state.messages].reverse()) {
+    if (message.role !== "assistant" || message.runId == null || seenRunIds.has(message.runId)) continue;
+    seenRunIds.add(message.runId);
+    lastAssistantMessageIds.add(message.id);
+  }
+  const messages = state.messages.map((message) =>
+    toThreadMessage(message, { isLastRunMessage: lastAssistantMessageIds.has(message.id) }),
+  );
   if (state.error) messages.push(toSnapshotErrorMessage(state.error));
   return {
     messages: [...messages, ...pendingMessages],

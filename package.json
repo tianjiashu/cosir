@@ -6,7 +6,8 @@
   "scripts": {
     "dev:all": "npm run dev:desktop",
     "dev:client": "npm --prefix apps/desktop run dev",
-    "dev:desktop": "npm --prefix apps/desktop run tauri:dev"
+    "dev:desktop": "npm --prefix apps/desktop run tauri:dev",
+    "start:desktop": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/start-desktop.ps1"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.3"

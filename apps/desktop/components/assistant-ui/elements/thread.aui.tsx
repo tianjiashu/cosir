@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowDownIcon, ArrowUpIcon, CopyIcon, CheckIcon } from "lucide-react";
-import { useContext, createContext, type FC, type ComponentType } from "react";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
+import { useContext, createContext, useEffect, useState, type FC, type ComponentType } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -10,6 +10,7 @@ import {
   groupPartByType,
   MessagePrimitive,
   ThreadPrimitive,
+  useAui,
   useAuiState,
   type AssistantState,
 } from "@assistant-ui/react";
@@ -27,6 +28,12 @@ import {
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import {
+  deriveComposerAction,
+  isEditableLatestRunUserMessage,
+  isResumableUserCancelledRun,
+} from "@/lib/assistant/conversation-actions";
+import type { TransportState } from "@/lib/assistant/contract";
 import { cn } from "@/lib/utils";
 
 export type ThreadComponents = {
@@ -38,16 +45,22 @@ export type ThreadProps = {
   components?: ThreadComponents;
   autoFocus?: boolean;
   taskId?: number;
+  forkAvailable?: boolean;
+  forkingRunId?: number | null;
+  onForkRun?: (runId: number) => void;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun"> & { taskId?: number };
+const ThreadContext = createContext<ThreadContextValue>({});
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, forkAvailable = false, forkingRunId = null, onForkRun }) => {
   const isEmpty = useAuiState(isNewChatView);
   return (
+    <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun }}>
     <ThreadComponentsContext.Provider value={components}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 flex-col">
         <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
@@ -67,6 +80,7 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
     </ThreadComponentsContext.Provider>
+    </ThreadContext.Provider>
   );
 };
 
@@ -82,19 +96,65 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, task
     />
     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
       <ComposerControls taskId={taskId} />
-      <div className="flex items-center gap-1.5">
-        <AuiIf condition={(state) => !state.thread.isRunning}>
-          <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="发送" />}>
-            <ArrowUpIcon className="size-4" />
-          </ComposerPrimitive.Send>
-        </AuiIf>
-        <AuiIf condition={(state) => state.thread.isRunning}>
-          <ComposerPrimitive.Cancel render={<StopButton taskId={taskId ?? null} />} />
-        </AuiIf>
-      </div>
+      <ComposerAction taskId={taskId ?? null} />
     </div>
   </ComposerPrimitive.Root>
 );
+
+const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
+  const aui = useAui();
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const isDraftEmpty = useAuiState((state) => state.composer.text.trim().length === 0);
+  const canResume = useAuiState((state) => isResumableUserCancelledRun(state.thread.state as unknown as TransportState));
+  const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume });
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isRunning || !canResume) {
+      setResuming(false);
+      setResumeError(null);
+    }
+  }, [canResume, isRunning]);
+
+  if (action === "stop") {
+    return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} />} />;
+  }
+
+  if (action === "resume") {
+    const resume = async () => {
+      if (resuming) return;
+      setResuming(true);
+      setResumeError(null);
+      try {
+        await Promise.resolve(aui.thread.resumeRun({ parentId: null }));
+      } catch (error) {
+        setResuming(false);
+        setResumeError(error instanceof Error ? error.message : "继续运行失败");
+      }
+    };
+
+    return (
+      <Button
+        type="button"
+        size="icon"
+        className="size-8 rounded-full"
+        aria-label={resuming ? "正在继续运行" : "继续运行"}
+        title={resumeError ?? "继续运行"}
+        disabled={resuming}
+        onClick={() => void resume()}
+      >
+        {resuming ? <Loader2Icon className="size-4 animate-spin" /> : <PlayIcon className="size-4 fill-current" />}
+      </Button>
+    );
+  }
+
+  return (
+    <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="发送" />}>
+      <ArrowUpIcon className="size-4" />
+    </ComposerPrimitive.Send>
+  );
+};
 
 const ThreadMessage: FC = () => {
   const role = useAuiState((state) => state.message.role);
@@ -102,13 +162,67 @@ const ThreadMessage: FC = () => {
   return role === "user" ? <UserMessage /> : <AssistantMessage />;
 };
 
-const UserMessage: FC = () => (
-  <MessagePrimitive.Root data-role="user" className="flex justify-end px-2">
-    <div className="bg-muted text-foreground max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
-      <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <MarkdownText status={part.status} /> : null}</MessagePrimitive.Parts>
-    </div>
-  </MessagePrimitive.Root>
-);
+const UserMessage: FC = () => {
+  const isEditing = useAuiState((state) => state.composer.isEditing);
+  if (isEditing) return <UserEditMessage />;
+  return <UserMessageView />;
+};
+
+const UserMessageView: FC = () => {
+  const messageId = useAuiState((state) => state.message.id);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const canEdit = useAuiState((state) => !isRunning && isEditableLatestRunUserMessage(
+    state.thread.state as unknown as TransportState,
+    messageId,
+  ));
+
+  return (
+    <MessagePrimitive.Root data-role="user" className="flex flex-col items-end px-2">
+      <div className="bg-muted text-foreground max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
+        <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <MarkdownText status={part.status} /> : null}</MessagePrimitive.Parts>
+      </div>
+      {canEdit && (
+        <ActionBarPrimitive.Root hideWhenRunning autohide="always" className="mt-1 flex gap-1">
+          <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
+            <PencilIcon />
+          </ActionBarPrimitive.Edit>
+          <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
+            <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
+            <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
+          </ActionBarPrimitive.Copy>
+        </ActionBarPrimitive.Root>
+      )}
+    </MessagePrimitive.Root>
+  );
+};
+
+const UserEditMessage: FC = () => {
+  const { taskId } = useContext(ThreadContext);
+  return (
+    <MessagePrimitive.Root data-role="user" className="px-2">
+      <ComposerPrimitive.Root className="border-border/60 bg-card flex w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+        <ComposerPrimitive.Input
+          className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+          rows={2}
+          autoFocus
+          enterKeyHint="send"
+          aria-label="编辑消息"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <ComposerControls taskId={taskId} />
+          <div className="flex items-center gap-1.5">
+            <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
+              <XIcon />
+            </ComposerPrimitive.Cancel>
+            <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="重跑" />}>
+              <ArrowUpIcon className="size-4" />
+            </ComposerPrimitive.Send>
+          </div>
+        </div>
+      </ComposerPrimitive.Root>
+    </MessagePrimitive.Root>
+  );
+};
 
 const MessageError: FC = () => (
   <MessagePrimitive.Error>
@@ -118,48 +232,69 @@ const MessageError: FC = () => (
   </MessagePrimitive.Error>
 );
 
-const AssistantMessageDefault: FC = () => (
-  <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 pb-6 px-2">
-    <div className="text-foreground leading-relaxed wrap-break-word">
-      <MessagePrimitive.GroupedParts
-        groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}
-      >
-        {({ part, children }) => {
-          switch (part.type) {
-            case "group-reasoning": {
-              const isReasoningStreaming = part.status.type === "running";
-              return (
-                <ReasoningRoot variant="ghost" streaming={isReasoningStreaming}>
-                  <ReasoningTrigger active={isReasoningStreaming} />
-                  <ReasoningContent aria-busy={isReasoningStreaming}>
-                    <ReasoningText>{children}</ReasoningText>
-                  </ReasoningContent>
-                </ReasoningRoot>
-              );
+const AssistantMessageDefault: FC = () => {
+  const custom = useAuiState((state) => state.message.metadata.custom);
+  const isLastRunMessage = custom?.isLastRunMessage === true;
+  const runId = typeof custom?.runId === "number" ? custom.runId : null;
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const { forkAvailable = false, forkingRunId = null, onForkRun } = useContext(ThreadContext);
+  const canFork = isLastRunMessage && runId !== null && forkAvailable && !isRunning;
+  const isForking = runId !== null && forkingRunId === runId;
+
+  return (
+    <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 pb-6 px-2">
+      <div className="text-foreground leading-relaxed wrap-break-word">
+        <MessagePrimitive.GroupedParts
+          groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}
+        >
+          {({ part, children }) => {
+            switch (part.type) {
+              case "group-reasoning": {
+                const isReasoningStreaming = part.status.type === "running";
+                return (
+                  <ReasoningRoot variant="ghost" streaming={isReasoningStreaming}>
+                    <ReasoningTrigger active={isReasoningStreaming} />
+                    <ReasoningContent aria-busy={isReasoningStreaming}>
+                      <ReasoningText>{children}</ReasoningText>
+                    </ReasoningContent>
+                  </ReasoningRoot>
+                );
+              }
+              case "text":
+                return <MarkdownText status={part.status} />;
+              case "reasoning":
+                return <Reasoning {...part} />;
+              case "tool-call":
+                return <ToolPart {...part} />;
+              case "file":
+              case "image":
+              case "data":
+              case "source":
+                return null;
+              default:
+                return null;
             }
-            case "text":
-              return <MarkdownText status={part.status} />;
-            case "reasoning":
-              return <Reasoning {...part} />;
-            case "tool-call":
-              return <ToolPart {...part} />;
-            case "file":
-            case "image":
-            case "data":
-            case "source":
-              return null;
-            default:
-              return null;
-          }
-        }}
-      </MessagePrimitive.GroupedParts>
-      <MessageError />
-    </div>
-    <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="mt-1 flex gap-1">
-      <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
-        <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
-        <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
-      </ActionBarPrimitive.Copy>
-    </ActionBarPrimitive.Root>
-  </MessagePrimitive.Root>
-);
+          }}
+        </MessagePrimitive.GroupedParts>
+        <MessageError />
+      </div>
+      <ActionBarPrimitive.Root hideWhenRunning className="mt-1 flex gap-1">
+        <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
+          <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
+          <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
+        </ActionBarPrimitive.Copy>
+        {isLastRunMessage && runId !== null && (
+          <TooltipIconButton
+            tooltip={forkAvailable ? "从此处 Fork 新任务" : "所有 Run 完成后才能 Fork"}
+            size="sm"
+            aria-label="从此处 Fork 新任务"
+            disabled={!canFork || isForking}
+            onClick={() => onForkRun?.(runId)}
+          >
+            {isForking ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}
+          </TooltipIconButton>
+        )}
+      </ActionBarPrimitive.Root>
+    </MessagePrimitive.Root>
+  );
+};

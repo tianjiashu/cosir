@@ -24,10 +24,20 @@ export const Assistant = ({
   taskId,
   workspaceId,
   initialMessage,
+  forkAvailable,
+  forkingRunId,
+  onForkRun,
+  onTaskStateChanged,
+  onRunStateChange,
 }: {
   taskId: number;
   workspaceId?: number | null;
   initialMessage?: string;
+  forkAvailable?: boolean;
+  forkingRunId?: number | null;
+  onForkRun?: (runId: number) => void;
+  onTaskStateChanged?: () => void;
+  onRunStateChange?: (isRunning: boolean) => void;
 }) => {
   // WorkspaceShell may finish its task-list refresh after the snapshot request.
   // Freeze the workspace identity for this task session so that a late parent
@@ -66,6 +76,11 @@ export const Assistant = ({
       workspaceId={sessionWorkspaceId}
       initialState={initialState}
       initialMessage={initialMessage}
+      forkAvailable={forkAvailable}
+      forkingRunId={forkingRunId}
+      onForkRun={onForkRun}
+      onTaskStateChanged={onTaskStateChanged}
+      onRunStateChange={onRunStateChange}
     />
   );
 };

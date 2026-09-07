@@ -1,19 +1,19 @@
 /** 向后端提交 Conversation Run 的显式取消命令。 */
 
-import { getApiBaseUrl } from "@/lib/api/client";
+import { requestRaw } from "@/lib/http/client";
 import { getActiveTraceId, newTraceId } from "@/lib/trace";
 
 export type CancelRunResult =
   | { accepted: true }
   | { accepted: false; reason: "invalid_run_id" | "not_cancellable" | "rejected" | "network"; message: string };
 
-export async function cancelRun(taskId: number | null, runId: number): Promise<CancelRunResult> {
+export async function cancelRun(_taskId: number | null, runId: number): Promise<CancelRunResult> {
   if (!Number.isInteger(runId)) {
     return { accepted: false, reason: "invalid_run_id", message: "当前运行标识无效，无法取消。" };
   }
   const traceId = getActiveTraceId() ?? newTraceId();
   try {
-    const response = await fetch(`${getApiBaseUrl()}/runs/${runId}/cancel`, {
+    const response = await requestRaw(`/runs/${runId}/cancel`, {
       method: "POST",
       headers: { Accept: "application/json", "X-Trace-Id": traceId },
     });

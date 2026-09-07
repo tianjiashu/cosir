@@ -22,13 +22,26 @@ const states = new Map();
 let lastStreamBody = "";
 let nextRunId = 1;
 let nextResumeRunId = 900;
+let testGeneration = 0;
 const cancelledRuns = new Set();
 const telemetry = {
   clientCancelCount: 0,
   completedStreamCount: 0,
   requestBodies: [],
-  resumeStateThreadIds: [],
 };
+
+function resetTestState() {
+  testGeneration += 1;
+  tasks.clear();
+  states.clear();
+  cancelledRuns.clear();
+  lastStreamBody = "";
+  nextRunId = 1;
+  nextResumeRunId = 900;
+  telemetry.clientCancelCount = 0;
+  telemetry.completedStreamCount = 0;
+  telemetry.requestBodies = [];
+}
 
 const emptyUsage = () => ({
   input_tokens: 0,
@@ -97,7 +110,11 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function streamState(res, initialState, finalState, assistantIndex, chunks, runId) {
+async function streamState(res, initialState, finalState, assistantIndex, chunks, runId, generation) {
+  if (generation !== testGeneration) {
+    res.end();
+    return;
+  }
   lastStreamBody = "";
   res.writeHead(200, {
     "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
@@ -112,15 +129,19 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
   let closed = false;
   res.on("close", () => {
     closed = true;
-    if (!res.writableEnded) telemetry.clientCancelCount += 1;
+    if (generation === testGeneration && !res.writableEnded) telemetry.clientCancelCount += 1;
   });
 
   writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }]));
   await wait(120);
+  if (generation !== testGeneration) {
+    res.end();
+    return;
+  }
   if (cancelledRuns.has(runId)) {
     const cancelledState = structuredClone(initialState);
     cancelledState.messages[assistantIndex].status = "cancelled";
-    cancelledState.messages[assistantIndex].endReason = "cancelled";
+    cancelledState.messages[assistantIndex].endReason = "user_cancelled";
     cancelledState.run = { runId, status: "cancelled" };
     writeSse(res, assistantFrame([
       { type: "set", path: ["messages", assistantIndex], value: cancelledState.messages[assistantIndex] },
@@ -134,11 +155,14 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     return;
   }
   for (const chunk of chunks) {
-    if (closed) return;
+    if (closed || generation !== testGeneration) {
+      res.end();
+      return;
+    }
     if (cancelledRuns.has(runId)) {
       const cancelledState = structuredClone(initialState);
       cancelledState.messages[assistantIndex].status = "cancelled";
-      cancelledState.messages[assistantIndex].endReason = "cancelled";
+      cancelledState.messages[assistantIndex].endReason = "user_cancelled";
       cancelledState.run = { runId, status: "cancelled" };
       writeSse(res, assistantFrame([
         { type: "set", path: ["messages", assistantIndex], value: cancelledState.messages[assistantIndex] },
@@ -169,7 +193,10 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     await wait(420);
   }
 
-  if (closed) return;
+  if (closed || generation !== testGeneration) {
+    res.end();
+    return;
+  }
   writeSse(
     res,
     assistantFrame([
@@ -220,7 +247,22 @@ async function handleAssistant(req, res, body) {
   const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
   const runId = nextRunId++;
   const previous = states.get(taskId) ?? emptyState();
-  const initialState = stateWithExchange(previous, text, runId, "", "running");
+  const sourceId = body?.commands?.find((command) => command?.type === "add-message")?.sourceId;
+  if (typeof sourceId === "string" && text === "edit-failure") {
+    jsonResponse(res, 409, {
+      error: { code: "EDIT_REJECTED", message: "编辑重跑被测试后端拒绝", retryable: true },
+    });
+    return;
+  }
+  let branchBase = previous;
+  if (typeof sourceId === "string") {
+    const sourceIndex = previous.messages.findIndex((message) => message.id === sourceId);
+    if (sourceIndex >= 0) {
+      branchBase = structuredClone(previous);
+      branchBase.messages = branchBase.messages.slice(0, sourceIndex);
+    }
+  }
+  const initialState = stateWithExchange(branchBase, text, runId, "", "running");
   const assistantIndex = initialState.messages.length - 1;
   let finalText;
   let chunks;
@@ -241,24 +283,30 @@ async function handleAssistant(req, res, body) {
     chunks = ["stream", "ing response"];
   }
 
-  const finalState = stateWithExchange(previous, text, runId, finalText, "completed");
+  const finalState = stateWithExchange(branchBase, text, runId, finalText, "completed");
   states.set(taskId, finalState);
 
   res.setHeader("X-Cosir-Task-Id", String(taskId));
   res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-  await streamState(res, initialState, finalState, assistantIndex, chunks, runId);
+  await streamState(res, initialState, finalState, assistantIndex, chunks, runId, testGeneration);
 }
 
 async function handleResume(req, res, body) {
   const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
   const previous = states.get(taskId);
-  if (!previous || (previous.run.status !== "pending" && previous.run.status !== "running")) {
+  const lastMessage = previous?.messages.at(-1);
+  const resumableCancelled = previous?.run.status === "cancelled"
+    && lastMessage?.role === "assistant"
+    && lastMessage.runId === previous.run.runId
+    && lastMessage.endReason === "user_cancelled";
+  if (!previous || (!resumableCancelled && previous.run.status !== "pending" && previous.run.status !== "running")) {
     res.writeHead(204);
     res.end();
     return;
   }
 
   const runId = previous.run.runId ?? nextResumeRunId++;
+  cancelledRuns.delete(runId);
   const initialState = structuredClone(previous);
   const assistantIndex = initialState.messages.length - 1;
   const finalState = structuredClone(previous);
@@ -273,7 +321,7 @@ async function handleResume(req, res, body) {
   states.set(taskId, finalState);
   res.setHeader("X-Cosir-Task-Id", String(taskId));
   res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-  await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId);
+  await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration);
 }
 
 const server = createServer(async (req, res) => {
@@ -292,6 +340,11 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/health") {
     jsonResponse(res, 200, { status: "ok" });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/reset") {
+    resetTestState();
+    jsonResponse(res, 200, { ok: true });
     return;
   }
   if (req.method === "GET" && url.pathname === "/workspaces") {
@@ -374,15 +427,6 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
-  if (req.method === "POST" && url.pathname === "/assistant/resume") {
-    try {
-      await handleResume(req, res, await readJson(req));
-    } catch {
-      if (!res.headersSent) jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
-      else res.destroy();
-    }
-    return;
-  }
   if (req.method === "POST" && url.pathname.startsWith("/runs/") && url.pathname.endsWith("/cancel")) {
     const runId = Number(url.pathname.split("/")[2]);
     cancelledRuns.add(runId);
@@ -393,32 +437,21 @@ const server = createServer(async (req, res) => {
       const assistantMessage = cancelledState.messages.at(-1);
       if (assistantMessage?.role === "assistant") {
         assistantMessage.status = "cancelled";
-        assistantMessage.endReason = "cancelled";
+        assistantMessage.endReason = "user_cancelled";
       }
       states.set(taskId, cancelledState);
     }
     jsonResponse(res, 200, { accepted: true });
     return;
   }
-  if (req.method === "POST" && url.pathname.startsWith("/tasks/") && url.pathname.endsWith("/assistant/resume-state")) {
+  if (req.method === "GET" && /^\/tasks\/\d+$/.test(url.pathname)) {
     const taskId = Number(url.pathname.split("/")[2]);
-    const body = await readJson(req);
-    telemetry.resumeStateThreadIds.push(body.threadId ?? null);
-    if (body.threadId !== `task-${taskId}`) {
-      jsonResponse(res, 409, { error: { code: "THREAD_TASK_MISMATCH", message: "thread/task mismatch", retryable: false } });
-      return;
-    }
-    const state = states.get(taskId);
-    if (!state) {
+    const task = tasks.get(taskId);
+    if (!task) {
       jsonResponse(res, 404, { detail: "task not found" });
       return;
     }
-    if (state.run.status !== "pending" && state.run.status !== "running") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-    jsonResponse(res, 200, { runId: String(state.run.runId), state });
+    jsonResponse(res, 200, { ...task, task_type: task.task_type ?? "user", fork_available: task.fork_available ?? true });
     return;
   }
   if (req.method === "GET" && url.pathname.startsWith("/tasks/") && url.pathname.endsWith("/assistant/state")) {
@@ -432,7 +465,12 @@ const server = createServer(async (req, res) => {
   }
   if (req.method === "POST" && url.pathname === "/assistant") {
     try {
-      await handleAssistant(req, res, await readJson(req));
+      const body = await readJson(req);
+      if (Array.isArray(body.commands) && body.commands.length === 0) {
+        await handleResume(req, res, body);
+      } else {
+        await handleAssistant(req, res, body);
+      }
     } catch {
       if (!res.headersSent) jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
       else res.destroy();

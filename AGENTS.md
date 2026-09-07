@@ -24,6 +24,9 @@ RunStatusChangedEvent 的所有发布点收拢在 ``ConversationRunService``：�
 （``update_status_if_in`` 返回记录）作为幂等闸门，更新未生效则不发布，重复调用不会重复发布。
 工作流编排层（如 ``WorkflowOperations``）不再经 ``get_stream_writer`` 直接发布 run-status 事件，
 仅把 ``usage_stats`` 透传给 ``ConversationRunService`` 用于拼装带用量的状态事件。
+
+RuntimeContextManager 是agent上下文唯一管理事实源，负责系统提示词构建、上下文修复加载、run续跑/恢复的上下文管理、上下文压缩（未实现）、上下文token计算、上下文序列管理、模型消息存储和持久化。
+ContextEntry 作为上下文消息单位，记录消息的run_id、message、sequence。
 ## 1. 项目愿景
 
 `cosir` 是面向个人开发者的本地桌面 AI 编程助手底座。它借鉴成熟 coding-agent 的工程机制，但不绑定单一 Agent 范式；用户应能持续定制 Workflow、Context、Tool 和开发规则，使它成为长期协作的工程伙伴。

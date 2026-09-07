@@ -83,6 +83,56 @@
         }
       }
     },
+    "/tasks/{task_id}/fork": {
+      "post": {
+        "summary": "Fork Task",
+        "description": "从源 Task 指定历史 Run 创建一个新的 fork Task。",
+        "operationId": "fork_task_tasks__task_id__fork_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{task_id}/children": {
       "get": {
         "summary": "List Child Tasks",
@@ -291,7 +341,7 @@
       },
       "post": {
         "summary": "Create Workspace Task",
-        "description": "在工作区下创建任务容器（不含首轮次）。\n\n任务创建与首轮次创建已解耦：本端点只创建 task 容器，首轮次由调用方（前端）显式\n调 Assistant Transport 端点提交首条消息。这样 task 维度不再耦合 agent / 模型 /\n附件等运行期字段。\n\n参数:\n    workspace_id: 来自路由的工作区标识，作为任务归属的唯一权威值。\n    payload: 创建任务请求体，含任务文本与 workspace_id 字段。\n    task_service: 任务 service，用于创建任务容器。\n\n返回:\n    新建任务记录（含 ``task_id``）。调用方随后创建首 turn 并连接\n    ``/assistant`` 驱动执行，任务标识通过请求体的 ``taskId`` 传递。\n\n异常:\n    HTTPException: workspace 不存在时为 404；输入非法时为 400。\n\n副作用:\n    向 ``tasks`` 插入一行任务容器；不创建轮次。",
+        "description": "创建工作区下的任务容器，不启动 ConversationRun。",
         "operationId": "create_workspace_task_workspaces__workspace_id__tasks_post",
         "parameters": [
           {
@@ -1058,7 +1108,7 @@
     "/assistant": {
       "post": {
         "summary": "Assistant Transport",
-        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI transport 请求，当前业务命令为文本 ``add-message``。\n    runtime: 通过依赖注入取得的 AgentRuntime。\n    conversation_state_service: 把任务轮次事实投影为本轮运行基线 state 的 service。\n    run_service: 在一个事务中占用 command 并创建、绑定 Turn 的 service。\n    run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending turn，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
+        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    snapshot_service: 负责读取 Task snapshot 的唯一 owner。\n    run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。\n    run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
         "operationId": "assistant_transport_assistant_post",
         "requestBody": {
           "content": {
@@ -1095,7 +1145,7 @@
     "/tasks/{task_id}/assistant/state": {
       "get": {
         "summary": "Assistant Transport State",
-        "description": "返回某任务的首屏历史 state（服务端权威对话视图）。\n\n参数:\n    task_id: URL 中的任务标识。\n    task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。\n    conversation_state_service: 把任务轮次事实投影为中性对话视图的 service。\n\n返回:\n    与 POST 端点形状一致的中性 wire state 字典（含 ``messages`` / ``run`` /\n    ``revision``）；任务无轮次时 ``messages`` 为空数组。\n\n异常:\n    HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的\n    ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。\n\n副作用:\n    以只读方式经 service 层读取任务存在性与轮次/消息事实，不写入任何数据。",
+        "description": "返回某任务的首屏历史 state（服务端权威对话视图）。\n\n参数:\n    task_id: URL 中的任务标识。\n    task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。\n    snapshot_service: Task snapshot 唯一事实源。\n\n返回:\n    与 Assistant Transport state 形状一致的中性 wire state 字典（含 ``messages`` / ``run``）；\n    任务无轮次时 ``messages`` 为空数组。\n\n异常:\n    HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的\n    ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。\n\n副作用:\n    以只读方式经 service 层读取任务存在性与轮次/消息事实，不写入任何数据。",
         "operationId": "assistant_transport_state_tasks__task_id__assistant_state_get",
         "parameters": [
           {
@@ -1114,8 +1164,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "title": "Response Assistant Transport State Tasks  Task Id  Assistant State Get"
+                  "$ref": "#/components/schemas/ConversationStateSnapshot"
                 }
               }
             }
@@ -1136,7 +1185,7 @@
     "/runs/{run_id}/cancel": {
       "post": {
         "summary": "Cancel Run",
-        "description": "显式取消一个 Conversation Run。\n\n``run_id`` 当前与持久化 ``Turn.id`` 一一对应，但该映射只在 API 适配层使用；\n持久化条件状态转移先落定取消事实，再向进程内执行器发出协作取消信号。HTTP\n断连不会调用本端点，重复取消不会覆盖已落定的终态。\n\n参数:\n    run_id: Conversation Run 标识；当前实现对应 Turn 标识。\n    mutation_writer: 提供事务性 active → cancelled 状态转移的服务。\n    run_executor: 向当前进程中的执行者发出取消信号的服务。\n\n返回:\n    包含 ``run_id`` 与 ``status`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409。\n\n副作用:\n    先写入持久化取消状态，再尽力中断当前进程中的执行任务。",
+        "description": "显式取消一个 Conversation Run。\n\n表现层只做输入校验、调用业务层与异常映射，不再编排「先落库再中断」的业务时序——\n取消编排（进程内取消信号 → 事务性状态转移 → 中断后台 task）已收口到\n``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会调用本端点，重复取消\n不会覆盖已落定的终态。\n\n参数:\n    run_id: Conversation Run 标识。\n    run_executor: 取消编排唯一入口（信号标记 + 仲裁落库 + task 中断）。\n\n返回:\n    包含 ``run_id`` 与 ``status`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409；\n    取消编排内部失败时返回 500。\n\n副作用:\n    经执行器先标记进程内取消信号，再落库取消终态，再尽力中断当前进程中的执行任务。",
         "operationId": "cancel_run_runs__run_id__cancel_post",
         "parameters": [
           {
@@ -1154,10 +1203,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "title": "Response Cancel Run Runs  Run Id  Cancel Post"
-                }
+                "schema": {}
               }
             }
           },
@@ -1267,31 +1313,17 @@
             },
             "type": "array",
             "maxItems": 32,
-            "minItems": 1,
+            "minItems": 0,
             "title": "Commands"
           },
           "threadId": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^task-[1-9][0-9]*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "pattern": "^task-[1-9][0-9]*$",
             "title": "Threadid"
           },
           "taskId": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Taskid"
           },
           "workspaceId": {
@@ -1305,18 +1337,6 @@
               }
             ],
             "title": "Workspaceid"
-          },
-          "stateRevision": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Staterevision"
           },
           "providerId": {
             "anyOf": [
@@ -1351,11 +1371,89 @@
               }
             ],
             "title": "Reasoningeffort"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runid"
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parentid"
+          },
+          "state": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System"
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools"
+          },
+          "callSettings": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callsettings"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "commands"
+          "commands",
+          "threadId",
+          "taskId"
         ],
         "title": "AssistantTransportRequest",
         "description": "校验 Assistant Transport 请求。\n\n命令数组由服务端按顺序幂等处理；对话历史由 canonical facts 重建。"
@@ -1398,9 +1496,9 @@
       },
       "ChangeCheckpointResponse": {
         "properties": {
-          "turn_id": {
+          "run_id": {
             "type": "integer",
-            "title": "Turn Id"
+            "title": "Run Id"
           },
           "turn_seq": {
             "type": "integer",
@@ -1413,7 +1511,7 @@
         },
         "type": "object",
         "required": [
-          "turn_id",
+          "run_id",
           "turn_seq",
           "label"
         ],
@@ -1438,9 +1536,9 @@
             "type": "string",
             "title": "Last Tool Call Id"
           },
-          "last_turn_id": {
+          "last_run_id": {
             "type": "integer",
-            "title": "Last Turn Id"
+            "title": "Last Run Id"
           },
           "additions": {
             "type": "integer",
@@ -1457,7 +1555,7 @@
           "action",
           "status",
           "last_tool_call_id",
-          "last_turn_id",
+          "last_run_id",
           "additions",
           "deletions"
         ],
@@ -1511,6 +1609,308 @@
         ],
         "title": "ChangeSetResponse",
         "description": "某 task 的累积变更集响应。"
+      },
+      "ConversationStateError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "title": "ConversationStateError",
+        "description": "面向 UI 的稳定错误结构。"
+      },
+      "ConversationStateMessage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runid"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "endReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endreason"
+          },
+          "parts": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ConversationStateTextPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationStateToolCallPart"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Parts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "status",
+          "endReason",
+          "parts"
+        ],
+        "title": "ConversationStateMessage",
+        "description": "一条面向 Transport 的 user/assistant 消息。"
+      },
+      "ConversationStateRun": {
+        "properties": {
+          "runId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runid"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runId",
+          "status"
+        ],
+        "title": "ConversationStateRun",
+        "description": "当前 Task 的 UI 运行状态。"
+      },
+      "ConversationStateSnapshot": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationStateMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "run": {
+            "$ref": "#/components/schemas/ConversationStateRun"
+          },
+          "approvals": {
+            "type": "object",
+            "title": "Approvals"
+          },
+          "context_usage": {
+            "type": "number",
+            "title": "Context Usage"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ConversationStateUsage"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "messages",
+          "run",
+          "approvals",
+          "context_usage",
+          "usage",
+          "error"
+        ],
+        "title": "ConversationStateSnapshot",
+        "description": "一个 Task 的完整 Transport state。"
+      },
+      "ConversationStateTextPart": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "reasoning"
+            ],
+            "title": "Type"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "ConversationStateTextPart",
+        "description": "可增量追加的文本 part。\n\n表达一条消息中可流式追加的纯文本片段，status 标记当前增量阶段。"
+      },
+      "ConversationStateToolCallPart": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "tool-call",
+            "title": "Type"
+          },
+          "toolCallId": {
+            "type": "string",
+            "title": "Toolcallid"
+          },
+          "toolName": {
+            "type": "string",
+            "title": "Toolname"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "args": {
+            "type": "object",
+            "title": "Args"
+          },
+          "result": {
+            "title": "Result"
+          },
+          "error": {
+            "title": "Error"
+          },
+          "presentation": {
+            "type": "object",
+            "title": "Presentation"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "isError": {
+            "type": "boolean",
+            "title": "Iserror"
+          },
+          "approvalRequestId": {
+            "type": "null",
+            "title": "Approvalrequestid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "status"
+        ],
+        "title": "ConversationStateToolCallPart",
+        "description": "工具调用及其生命周期的 UI part。\n\n描述一次工具调用从待执行到完成/失败/取消的完整生命周期，并携带参数、结果\n与可能的错误信息。status 取值受限为 ToolCallStatus 的五个枚举。"
+      },
+      "ConversationStateUsage": {
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          },
+          "cache_hit_tokens": {
+            "type": "integer",
+            "title": "Cache Hit Tokens"
+          },
+          "cache_miss_tokens": {
+            "type": "integer",
+            "title": "Cache Miss Tokens"
+          },
+          "reasoning_tokens": {
+            "type": "integer",
+            "title": "Reasoning Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "cache_hit_tokens",
+          "cache_miss_tokens",
+          "reasoning_tokens"
+        ],
+        "title": "ConversationStateUsage",
+        "description": "一次 Task 当前累计的模型 token 用量。"
       },
       "CreateTaskRequest": {
         "properties": {
@@ -1621,6 +2021,20 @@
         ],
         "title": "DeleteWorkspaceResponse",
         "description": "校验并序列化工作区删除结果响应。\n\n参数:\n    workspace_id: 被删除的工作区标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "ForkTaskRequest": {
+        "properties": {
+          "runId": {
+            "type": "integer",
+            "title": "Runid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runId"
+        ],
+        "title": "ForkTaskRequest",
+        "description": "校验历史 Run fork 请求。"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2029,9 +2443,16 @@
             "type": "string",
             "title": "Title"
           },
-          "status": {
-            "type": "string",
-            "title": "Status"
+          "extra": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra"
           },
           "execution_status": {
             "anyOf": [
@@ -2049,6 +2470,11 @@
             "title": "Task Type",
             "default": "user"
           },
+          "fork_available": {
+            "type": "boolean",
+            "title": "Fork Available",
+            "default": true
+          },
           "parent_task_id": {
             "anyOf": [
               {
@@ -2060,7 +2486,7 @@
             ],
             "title": "Parent Task Id"
           },
-          "parent_turn_id": {
+          "parent_run_id": {
             "anyOf": [
               {
                 "type": "integer"
@@ -2069,7 +2495,7 @@
                 "type": "null"
               }
             ],
-            "title": "Parent Turn Id"
+            "title": "Parent Run Id"
           },
           "delegation_id": {
             "anyOf": [
@@ -2118,12 +2544,11 @@
           "task_id",
           "workspace_id",
           "title",
-          "status",
           "created_at",
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    status: 任务生命周期状态。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_turn_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ValidationError": {
         "properties": {

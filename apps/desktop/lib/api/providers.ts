@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api/client";
+import { requestJson } from "@/lib/http/client";
 
 export type Provider = {
   provider_id: number;
@@ -43,32 +43,32 @@ export type ProviderTestResult = {
   error_message?: string;
 };
 
-export const getProviders = () => apiRequest<Provider[]>("/providers");
+export const getProviders = () => requestJson<Provider[]>("/providers");
 
 export const getProviderCatalog = () =>
-  apiRequest<ProviderCatalogItem[]>("/providers/catalog");
+  requestJson<ProviderCatalogItem[]>("/providers/catalog");
 
 export const createProvider = (input: ProviderCreateInput) =>
-  apiRequest<Provider>("/providers", {
+  requestJson<Provider>("/providers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 
 export const updateProvider = (providerId: number, input: ProviderUpdateInput) =>
-  apiRequest<Provider>(`/providers/${providerId}`, {
+  requestJson<Provider>(`/providers/${providerId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 
 export const deleteProvider = (providerId: number) =>
-  apiRequest<{ provider_id: number; deleted: boolean }>(
+  requestJson<{ provider_id: number; deleted: boolean }>(
     `/providers/${providerId}`,
     { method: "DELETE" },
   );
 
 export const testProvider = (providerId: number) =>
-  apiRequest<ProviderTestResult>(`/providers/${providerId}/test`, {
+  requestJson<ProviderTestResult>(`/providers/${providerId}/test`, {
     method: "POST",
   });

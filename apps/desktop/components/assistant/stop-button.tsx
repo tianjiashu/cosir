@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, type FC } from "react";
-import { useAssistantTransportState } from "@assistant-ui/react";
 import { LoaderCircleIcon, SquareIcon } from "lucide-react";
+import { useAuiState } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import { cancelRun } from "@/lib/assistant/cancel-run";
+import { getTransportRunId } from "@/lib/assistant/conversation-actions";
 
 export const StopButton: FC<{ taskId: number | null }> = ({ taskId }) => {
-  const runId = useAssistantTransportState((state) => state.run?.runId ?? null);
+  const runId = useAuiState((state) => getTransportRunId(state.thread.state));
   const [requesting, setRequesting] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
 

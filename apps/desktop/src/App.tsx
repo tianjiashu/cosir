@@ -1,13 +1,26 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Route, Routes, useParams } from "react-router-dom";
+import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
+import { TaskPage } from "@/components/task-page";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import { initializeBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
 
+type TaskRouteState = {
+  initialMessage?: string;
+};
+
 function TaskRoute() {
-  const { taskId } = useParams();
-  const parsedTaskId = Number(taskId);
+  const { pathname, state } = useLocation();
+  const taskPath = pathname.match(/^\/tasks\/([^/]+)$/);
+  if (!taskPath) {
+    return pathname === "/"
+      ? <WorkspaceShell />
+      : <div className="flex h-dvh items-center justify-center p-6 text-sm">页面不存在。</div>;
+  }
+
+  const parsedTaskId = Number(taskPath[1]);
+  const routeState = state as TaskRouteState | null;
   return Number.isInteger(parsedTaskId) && parsedTaskId > 0
-    ? <WorkspaceShell initialTaskId={parsedTaskId} />
+    ? <TaskPage taskId={parsedTaskId} initialMessage={routeState?.initialMessage} />
     : <div className="p-6 text-sm">任务标识无效。</div>;
 }
 
@@ -42,7 +55,7 @@ function DesktopApp() {
 
   if (boot === "failed") return <BootFailure key={retryToken} error={error ?? "启动失败"} onRetry={() => { setBoot("starting"); setError(null); setRetryToken((value) => value + 1); }} />;
   if (boot !== "ready") return <main className="flex min-h-dvh items-center justify-center text-sm">本地 Agent 正在启动…</main>;
-  return <BrowserRouter><Routes><Route path="/tasks/:taskId" element={<TaskRoute />} /><Route path="*" element={<WorkspaceShell />} /></Routes></BrowserRouter>;
+  return <BrowserRouter><Routes><Route path="*" element={<TaskRoute />} /></Routes></BrowserRouter>;
 }
 
 export function App() {

@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api/client";
+import { requestJson } from "@/lib/http/client";
 import { useEffect, useRef, useState } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
@@ -71,7 +71,7 @@ export function useAssistantInitialState(
    */
   function load() {
     const requestGeneration = ++requestGenerationRef.current;
-    void apiRequest<unknown>(`/tasks/${taskId}/assistant/state`)
+    void requestJson<unknown>(`/tasks/${taskId}/assistant/state`)
       .then((data) => {
         if (
           cancelledRef.current ||

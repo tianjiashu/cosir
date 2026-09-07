@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api/client";
+import { requestJson } from "@/lib/http/client";
 
 export type ModelListItem = {
   model_name: string;
@@ -15,5 +15,5 @@ export type ProviderModelGroup = {
 };
 
 export function getModelGroups(): Promise<ProviderModelGroup[]> {
-  return apiRequest<ProviderModelGroup[]>("/models");
+  return requestJson<ProviderModelGroup[]>("/models");
 }
