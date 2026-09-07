@@ -2,7 +2,7 @@
 
 覆盖 ``tool_observation_summary`` 的核心契约：
 - 摘要字段齐全且为纯原生类型（可落 checkpoint）
-- 刻意不承载 ``data``（展示通道数据不进 checkpoint）
+- 携带受执行层预算约束的 UI 展示数据，供 observe 节点转发
 - ``content`` / ``error`` / ``reason`` 截断到 ``Settings.TOOL_OBSERVATION_CONTEXT_LIMIT``
 - ``instruction`` 缺省归一为空串
 """
@@ -46,8 +46,8 @@ def _observation(**overrides: object) -> ToolObservation:
     return ToolObservation(**base)  # type: ignore[arg-type]
 
 
-def test_summary_fields_and_no_data() -> None:
-    """摘要应包含固定字段集合，且完全不携带 ``data``。"""
+def test_summary_fields_and_data() -> None:
+    """摘要应包含固定字段集合，并携带 UI 展示数据。"""
 
     result = build_tool_result_summaries([_observation()], instruction="read it")
 
@@ -61,7 +61,9 @@ def test_summary_fields_and_no_data() -> None:
         "reason",
         "content",
         "retryable",
+        "data",
     }
+    assert item["data"] == {"items": ["x" * 5000], "diff": {"a": 1}}
     assert item["call_id"] == "call-1"
     assert item["tool_name"] == "read_file"
     assert item["status"] == "success"

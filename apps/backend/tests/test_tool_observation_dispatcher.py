@@ -37,6 +37,7 @@ def _summary(**overrides: object) -> dict[str, Any]:
         "reason": "",
         "content": "file body",
         "retryable": False,
+        "data": {},
     }
     base.update(overrides)
     return base
@@ -137,10 +138,31 @@ def test_status_mapping_success_error_cancelled() -> None:
             ("c", "cancelled"),
         ]
         assert harness.events[0].result == "ok"
+        assert harness.events[0].data == {}
         assert harness.events[0].error is None
         assert harness.events[1].error == "boom"
         assert harness.events[1].result is None
         assert result == {"tool_error_count": 1, "error_count": 1}
+    finally:
+        harness.teardown()
+
+
+def test_data_is_forwarded_to_event_only() -> None:
+    """摘要中的 UI data 应进入终态事件，但不进入模型观察消息。"""
+
+    harness = _DispatcherHarness()
+    try:
+        data = {"kind": "file-list", "files": [{"path": "a.py"}]}
+        dispatcher.dispatch_tool_observations(
+            [_summary(data=data)],
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            inherited_error_count=0,
+        )
+
+        assert harness.events[0].data == data
+        assert harness.messages == [("tool-message", "call-1")]
     finally:
         harness.teardown()
 
@@ -217,7 +239,7 @@ def test_unknown_status_falls_back_to_failed() -> None:
 
 
 def test_summary_roundtrip_to_observation() -> None:
-    """摘要转回观察对象后应保留全部语义字段且 ``data`` 为 None。"""
+    """摘要转回模型观察对象时应丢弃 UI data。"""
 
     original = _summary()
     observation = dispatcher._summary_to_observation(original)
