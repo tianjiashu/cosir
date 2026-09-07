@@ -9,13 +9,17 @@ turn 归属，也不负责消息读写与持久化实现。
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+
 from langchain_core.messages import BaseMessage
+
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
-from app.core.workflows.event import ContextUsageUpdatedEvent
-from app.service.depends import get_task_service
+from app.core.workflows.event import ContextUsageUpdatedEvent, ConversationEvent
+from app.service.depends import get_task_service, get_conversation_event_projector
 from app.utils.message_content import content_to_text
 
 
@@ -26,14 +30,15 @@ class ContextUsageComputeListener(ContextListener):
     def __init__(
         self,
         task_id: int,
+        run_id: int | None = None,
     ) -> None:
-        """构造订阅者，注入事件写入与占用回写回调及 task 标识。
+        """构造订阅者，注入事件发布器及 task/run 标识。
 
         参数:
-            update_context_usage: 回写 task 上下文占用的回调，签名 ``(task_id, used_tokens)``。
             task_id: 所属 task，用于回写 context usage。
-            emit_context_usage: 可选的中性事件回调，签名 ``(task_id, used_tokens,
-                total_tokens)``；由 workflow 适配为 ``ContextUsageUpdatedEvent``。
+            run_id: 当前 Conversation Run 标识；初始化历史阶段可为空。
+            publish_event: 可选的中性事件发布器，由 workflow 注入，不能依赖 LangGraph
+                隐式 runnable context。
 
         返回:
             无。
@@ -45,16 +50,18 @@ class ContextUsageComputeListener(ContextListener):
             保存事件写入回调、task 占用回写回调与 task 标识。
         """
         self.task_id = task_id
+        self.run_id = run_id
+        self.event_projector = get_conversation_event_projector()
 
-    def _emit_context_usage(self,task_id: int, used: int, total: int) -> None:
-        """把 context listener 的统计结果转成 workflow event。"""
+    def _emit_context_usage(self, task_id: int, used: int, total: int) -> None:
+        """通过显式事件发布器发布上下文占用事件。"""
+
 
         ratio = used / total if total > 0 else 0.0
-        from langgraph.config import get_stream_writer
-
-        get_stream_writer()(
+        self.event_projector.process(
             ContextUsageUpdatedEvent(
                 task_id=task_id,
+                run_id=self.run_id,
                 ratio=ratio,
                 used_tokens=used,
             )
@@ -81,8 +88,7 @@ class ContextUsageComputeListener(ContextListener):
                 在回写 task 之后原样抛出，保证失败不被静默吞掉。
 
         副作用:
-            经 ``write_event`` 发出 ``CONTEXT_USAGE`` 事件，并经 ``update_context_usage``
-            回写 task 上下文占用。
+            经显式事件发布器发出 ``CONTEXT_USAGE`` 事件，并回写 task 上下文占用。
         """
         if event.type not in [
             ContextEventType.ADD_MESSAGE,

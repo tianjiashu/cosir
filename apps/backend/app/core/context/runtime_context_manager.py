@@ -39,7 +39,8 @@ class RuntimeContextManager:
     # task 级 system prompt 条目，不参与压缩。
     _system_entry: ContextEntry | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
-    # reset_message_sequence 归零、add_message 落库时自增。
+    # begin_run 从持久化 context 恢复下一个可用序号，add_message 落库后自增。
+    # 序号游标由 RuntimeContextManager 独自管理；context service 只负责持久化。
     _message_sequence: int = field(default=0, init=False)
     # 上下文变化订阅者列表：按 order 排序，按需插入。
     _listeners: list[ContextListener] = field(default_factory=list, init=False)
@@ -112,11 +113,17 @@ class RuntimeContextManager:
         if run.task_id != self.current_task_id:
             raise ValueError(f"run {run.id} belongs to task {run.task_id}")
 
-        # 如果当前 run 与上一次 run 相同，则删除上一次 run 的 context 条目
-        if self.current_run_id is not None and self.current_run_id == run.id:
-            self.context_service.delete_by_run_id(self.current_task_id, run.id)
-            self._entries = [entry for entry in self._entries if entry.run_id != run.id]
-        self._message_sequence = self.context_service.max_sequence(self.current_task_id)
+        # ``begin_run`` 也是后端重启恢复的入口：新的 RuntimeContextManager 可能没有
+        # current_run_id 内存标记，但数据库中仍可能存在该 run 上一次执行留下的部分
+        # context。按持久化 run 身份清理，而不是依赖进程内指针，避免恢复时重复追加
+        # user message / tool message。正常首次执行没有同 run 条目，因此仍是幂等空操作。
+        self.context_service.delete_by_run_id(self.current_task_id, run.id)
+        self._entries = [entry for entry in self._entries if entry.run_id != run.id]
+        # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
+        # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
+        # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
+        # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
+        self._message_sequence = self.context_service.max_sequence(self.current_task_id) + 1
         self.current_run_id = run.id
         self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
 

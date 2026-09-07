@@ -171,15 +171,20 @@ class SystemPromptBuilder:
         """
 
         allowed_tools = ", ".join(agent_profile.allowed_tools) or "none"
-        return "\n".join(
+        lines = [
+            "<tool_use_policy>",
+            f"Allowed tools: {allowed_tools}",
+            "- 工具 schema 是参数结构的唯一事实来源；调用工具时必须遵守 schema。",
+            "- 文件读写、搜索、补丁和终端执行应服务于当前任务目标，不做无关探索。",
+        ]
+        # CodeGraph 总开关关闭时不向模型暴露 codegraph 优先级指引（默认关闭）。
+        if Settings.CODEGRAPH_ENABLED:
+            lines.append("- 代码探索、搜索代码，codegraph工具优先级高于搜索工具")
+        lines.extend(
             [
-                "<tool_use_policy>",
-                f"Allowed tools: {allowed_tools}",
-                "- 工具 schema 是参数结构的唯一事实来源；调用工具时必须遵守 schema。",
-                "- 文件读写、搜索、补丁和终端执行应服务于当前任务目标，不做无关探索。",
-                "- 代码探索、搜索代码，codegraph工具优先级高于搜索工具",
                 "- 写入、删除、补丁和命令执行属于高影响操作，必须基于已确认路径和明确目的。",
                 "- 工具失败时先诊断原因并调整路线，不要重复提交同一类无效调用。",
                 "</tool_use_policy>",
             ]
         )
+        return "\n".join(lines)
