@@ -36,8 +36,9 @@ class ReactGraphState(BaseModel):
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
             写默认失败说明。
-        last_tool_results: 本批工具结果摘要（可序列化 dict，content 已截断）。tools 节点写；
-            observe 节点做错误计数与错误上限判定，不承载大体积 ``data``。
+        last_tool_results: 本批工具结果摘要（可序列化 dict，content 与 UI data 均已由执行层
+            预算治理）。tools 节点写；observe 节点做事件分发、错误计数与错误上限判定，
+            其中 UI data 不会进入模型消息。
         continuation_error_data: 终态排查用错误明细（可序列化 dict，通常含 ``error_kind`` /
             ``invalid_count``）。编排层初始化置 ``None``；model_node 在 REPAIR 工具分支写入
             脱敏计数、REPAIR 回流时置 ``None``；``_finalize_max_steps`` 消费并并入 ``RUN_FAILED``。

@@ -33,6 +33,7 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
         tool_call_id: 工具调用在 Task 内唯一的稳定标识（模型提供或由执行链生成）。
         tool_name: 被调用工具名。
         args: 工具入参；非对象形态的入参在投影时归一为空对象。
+        presentation: ``ToolDisplayHints`` 序列化后的静态展示声明；不进入模型上下文。
 
     异常:
         pydantic.ValidationError: 标识或工具名为空、``args`` 非对象，或出现未声明字段时抛出。
@@ -45,6 +46,7 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     args: dict[str, object] = Field(default_factory=dict)
+    presentation: dict[str, object] = Field(default_factory=dict)
 
 
 class ToolCallStatusChangedEvent(ConversationEventEnvelope):
@@ -59,6 +61,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
         status: 迁移后的状态。
         result: 工具输出的结构化结果；失败与取消时为 ``None``。
         error: 面向展示的错误摘要；仅失败时非空。
+        data: 面向 UI 的结构化展示结果；不进入模型上下文。
 
     异常:
         pydantic.ValidationError: 标识为空、``status`` 取值非法，或出现未声明字段时抛出。
@@ -72,6 +75,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     status: ToolCallEventStatus
     result: object | None = None
     error: str | None = None
+    data: dict[str, object] | None = None
 
 
 class ToolCallsSettledEvent(ConversationEventEnvelope):

@@ -19,47 +19,13 @@ from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.event import ContextUsageUpdatedEvent
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.service.depends import get_task_service
 from app.service.provider.capability_service import CapabilityService
 from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from .state import ReactGraphState
-
-
-def _update_task_context_usage(task_id: int, used: int) -> None:
-    """以旁路方式更新 task 上下文占用，失败只记录日志。"""
-
-    try:
-        get_task_service().update_context_usage(task_id, used)
-    except Exception as exc:
-        log.error(
-            "context_usage_task_update_failed",
-            extra={
-                "msg": "context usage write-back failed",
-                "data": {"task_id": task_id, "used": used, "error": str(exc)},
-            },
-            exc_info=True,
-        )
-
-
-def _emit_context_usage_event(task_id: int, run_id: int, used: int, total: int) -> None:
-    """把 context listener 的统计结果转成 workflow event。"""
-
-    ratio = used / total if total > 0 else 0.0
-    from langgraph.config import get_stream_writer
-
-    get_stream_writer()(
-        ContextUsageUpdatedEvent(
-            task_id=task_id,
-            run_id=run_id,
-            ratio=ratio,
-            used_tokens=used,
-        )
-    )
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -164,9 +130,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         """
 
         run = operations.get_current_run()
-        # 一个 Conversation Run 对应一个 LangGraph checkpoint thread；当前物理
-        # 迁移阶段 run 仍由 conversation_commands.id 承载，因此这里使用 run 的稳定主键，
-        # 而不是 task_id（同一 task 可以拥有多个 run）。
+        # 一个 Conversation Run 对应一个 LangGraph checkpoint thread。这里必须使用
+        # run 创建时持久化的 UUID，而不是自增 run.id：主库可被清空/重建并重新分配同一个
+        # 整数 ID，而 checkpoint 库可能仍保留旧状态；UUID 才能保证两套生命周期真正隔离。
         run_id = run.id
         current_task = operations.get_current_task()
 
@@ -245,6 +211,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
         config = {
             "configurable": {
+                "thread_id": run.checkpoint_thread_id,
                 "run_id": run_id,
                 "runtime_config": runtime_config,
                 # 与 runtime_config 同口径经 config 注入，不进入 graph state

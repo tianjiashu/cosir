@@ -546,7 +546,7 @@ class WorkflowOperations:
         """
         # 仅向模型暴露面向人读的文本通道（content / error / reason）与执行元信息
         # （tool_name / status / retryable）。tool_call_id / data / permission 对模型不可见
-        # （前者在 metadata、后者转模型前已被 clear_display_data 清空）。None 与空串视为
+        # （前者在 metadata、后者由模型消息构造逻辑显式忽略）。None 与空串视为
         # 无信息，跳过对应区块。其余字段以 markdown 结构组织，使模型能区分「元信息 / 输出 /
         # 错误 / 修正建议」四个语义维度。
         sections: list[str] = []

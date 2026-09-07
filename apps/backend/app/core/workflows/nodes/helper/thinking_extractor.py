@@ -178,9 +178,9 @@ def _should_strip_reasoning_content(
 
 
 __all__ = [
-    "extract_reasoning_content",
     "_extract_reasoning_field",
     "_extract_thinking_blocks",
     "_extract_thought_blocks",
     "_should_strip_reasoning_content",
+    "extract_reasoning_content",
 ]

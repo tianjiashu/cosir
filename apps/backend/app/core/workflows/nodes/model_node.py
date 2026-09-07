@@ -176,7 +176,8 @@ async def _model_node(state: ReactGraphState) -> dict:
         text = content_to_text(chunk.content)
         # 提取 reasoning 内容。
         reasoning = extract_reasoning_content(chunk, thinking_channel)
-        if text and text.strip():
+        #模型把 "\n"、" \n" 单独作为 chunk 时，也要保留
+        if text:
             if "text" not in emitted_parts:
                 emitted_parts.append("text")
             stream_writer(
@@ -247,6 +248,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     stream_writer(UsageUpdatedEvent(task_id=task_id, run_id=run_id, step_id=step_id, **usage))
 
     for tool_call in tool_calls:
+        tool_definition = next(
+            (
+                definition
+                for definition in operations.model_tools
+                if definition.name == tool_call.tool_name
+            ),
+            None,
+        )
         stream_writer(
             ToolCallCreatedEvent(
                 task_id=task_id,
@@ -255,6 +264,11 @@ async def _model_node(state: ReactGraphState) -> dict:
                 tool_call_id=tool_call.call_id,
                 tool_name=tool_call.tool_name,
                 args=tool_call.arguments,
+                presentation=(
+                    tool_definition.display.to_dict()
+                    if tool_definition is not None and tool_definition.display is not None
+                    else {}
+                ),
             )
         )
     # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。

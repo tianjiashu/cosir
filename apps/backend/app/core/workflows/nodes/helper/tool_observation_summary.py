@@ -4,16 +4,18 @@
 供 ``observe`` 节点判定消费。graph state 全部字段经 checkpointer 持久化，因此摘要必须：
 
 - 只含原生类型（dict / str / bool / int），可直接序列化；
-- **不承载** ``data`` 等大体积结构化展示字段（前端展示数据经事件流传递，不进 checkpoint）；
+- **携带** 经过执行层预算控制的 ``data``，供 observe 节点转发到事件流；
+  它不会进入模型 observation；
 - ``content`` / ``error`` / ``reason`` 经终端输出脱敏后截断到
   ``Settings.TOOL_OBSERVATION_CONTEXT_LIMIT``，避免明文凭据落盘、避免撑爆 checkpoint。
 
 职责边界：
-- 负责：观察 → 可序列化摘要的纯转换（脱敏 + 截断 + 丢 ``data``）。
+- 负责：观察 → 可序列化摘要的纯转换（脱敏 + 截断 + 携带受预算约束的 ``data``）。
 - 不负责：事件分发、模型上下文写回（``tool_observation_dispatcher``）、执行层双通道
   输出预算（``ToolObservationBudget``）。
 """
 
+import copy
 from typing import Any
 
 from app.config.settings import Settings
@@ -64,9 +66,9 @@ def build_tool_result_summaries(
     """把一批工具观察压缩为可序列化摘要，供 ``observe`` 节点判定与后续 LLM 观察使用。
 
     每条摘要固定携带 ``call_id`` / ``tool_name`` / ``status`` / ``error`` / ``reason``
-    / ``content``（脱敏后截断）/ ``retryable`` / ``instruction``（模型意图，无则空串）；
-    顺序与 ``observations`` 一致。刻意**不承载** ``data``：展示通道数据由事件流传递，
-    落 checkpoint 只保留 observe 判定所需的最小事实。
+    / ``content``（脱敏后截断）/ ``retryable`` / ``data`` / ``instruction``；
+    顺序与 ``observations`` 一致。``data`` 只供 observe 节点继续转发到事件流，
+    转模型消息时明确丢弃，不进入 Agent 上下文。
 
     参数:
         observations: 本批次工具观察列表（成功/失败/取消均含）。
@@ -96,6 +98,7 @@ def build_tool_result_summaries(
                 "reason": _clamp_text(observation.reason),
                 "content": _clamp_text(observation.content),
                 "retryable": observation.retryable,
+                "data": copy.deepcopy(observation.data or {}),
             }
         )
     return {"instruction": instruction or "", "observations": summaries}

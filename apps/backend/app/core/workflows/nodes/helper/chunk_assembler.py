@@ -13,7 +13,6 @@
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from app.core.workflows.nodes.helper.thinking_extractor import _should_strip_reasoning_content
 from app.utils.message_content import content_to_text
 
 from .debug_dump import _dump_merged_chunk_debug

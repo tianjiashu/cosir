@@ -1,7 +1,7 @@
 """工具观察分发器：把一批观察摘要分发到「前端事件流 + 模型上下文」。
 
 ``observe`` 节点消费 ``tools`` 节点产出的本批观察摘要（见
-``tool_observation_summary``，已丢 ``data``、已脱敏截断，是唯一允许进入 graph
+``tool_observation_summary``，已脱敏截断并携带预算后的 ``data``，是唯一允许进入 graph
 state / checkpoint 的形状）后，由本模块做统一分发：
 
 1. **事件流**：逐条发 :class:`ToolCallStatusChangedEvent` 终态事件
@@ -22,6 +22,7 @@ state / checkpoint 的形状）后，由本模块做统一分发：
   判定（observation_node 编排）、事件投影到 snapshot（ConversationEventProjector）。
 """
 
+import copy
 from typing import Any, Literal
 
 from langgraph.config import get_stream_writer
@@ -141,6 +142,7 @@ def dispatch_tool_observations(
                 status=event_status,
                 result=summary["content"] if event_status == "completed" else None,
                 error=summary["error"] if event_status in {"failed", "cancelled"} else None,
+                data=copy.deepcopy(summary.get("data") or {}),
             )
         )
         # 2. 模型上下文：转 ToolMessage 写回 RuntimeContextManager，闭合

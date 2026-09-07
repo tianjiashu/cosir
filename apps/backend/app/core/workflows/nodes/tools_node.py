@@ -51,8 +51,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     返回:
         需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具结果
-        治理摘要（经 ``build_tool_result_summaries`` 脱敏截断、不承载 ``data``，可落
-        checkpoint，供 ``observe`` 节点分发与判定），并清空 ``pending_tool_calls``；
+        治理摘要（经 ``build_tool_result_summaries`` 脱敏、截断并携带预算后的 UI data，
+        可落 checkpoint，供 ``observe`` 节点分发与判定），并清空 ``pending_tool_calls``；
         执行前取消分支置 ``terminal=True`` 且返回空摘要——因为 ``_after_tools`` 在
         ``terminal`` 时直接 END、不进 observe，返回摘要既无人消费又会撑大 checkpoint。
 
