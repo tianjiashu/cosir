@@ -53,6 +53,8 @@ def create_sqlite_engine(database_path: Path) -> Engine:
         pool_size=5,
         max_overflow=10,
         pool_pre_ping=True,
+        # 连接归还连接池时无条件回滚，避免异常路径把未结束事务和写锁带回池中。
+        pool_reset_on_return="rollback",
         connect_args={"timeout": 3, "check_same_thread": False},
     )
 
@@ -101,7 +103,12 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
         无。
     """
 
-    return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    return sessionmaker(
+        bind=engine,
+        autoflush=False,
+        expire_on_commit=False,
+        future=True,
+    )
 
 
 class EngineCache:

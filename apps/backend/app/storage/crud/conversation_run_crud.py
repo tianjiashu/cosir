@@ -14,14 +14,13 @@
 
 from typing import Any
 
-from sqlalchemy import asc, delete, exists, select, update
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy import asc, delete, select, update
+from sqlalchemy.orm import Session
 
 from app.models import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
-from app.utils.datetime_utils import to_text, utc_now
 
 
 class ConversationRunCrud:
@@ -196,7 +195,7 @@ class ConversationRunCrud:
     def get_in_session(session: Session, run_id: int) -> ConversationRunRecord:
         """在调用方事务 session 中读取单个 run。"""
 
-        row = session.get(ConversationRunModel, run_id)
+        row: ConversationRunModel | None = session.get(ConversationRunModel, run_id)
         if row is None:
             raise KeyError(run_id)
         return ConversationRunRecord.from_model(row)

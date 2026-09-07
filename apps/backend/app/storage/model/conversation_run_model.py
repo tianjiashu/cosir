@@ -1,5 +1,7 @@
 """Conversation Run 持久化模型。"""
 
+from uuid import uuid4
+
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +35,10 @@ class ConversationRunModel(StorageBase):
     )
 
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
+    # LangGraph checkpoint 的身份不能依赖可复用的自增 run.id；它必须在 run 创建时固定。
+    checkpoint_thread_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, unique=True, default=lambda: str(uuid4())
+    )
     input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_id: Mapped[str | None] = mapped_column(Text)
     provider_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("providers.id"))

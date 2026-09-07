@@ -156,11 +156,9 @@ class TaskCrud:
             creation_command_id=creation_command_id,
             context_usage_used=0,
         )
-        new_model: TaskModel | None = session.add(model)
-        if new_model is None:
-            raise RuntimeError("Failed to add task model to session")
+        session.add(model)
         session.flush()
-        return TaskRecord.from_model(new_model)
+        return TaskRecord.from_model(model)
 
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。

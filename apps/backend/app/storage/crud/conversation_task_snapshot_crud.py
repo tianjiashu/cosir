@@ -42,7 +42,12 @@ class ConversationTaskSnapshotCrud:
             raise ValueError(f"snapshot for task {task_id} must be a JSON object")
         return cast(dict[str, Any], value)
 
-    def create(self, task_id: int, state: ConversationStateSnapshot, session: Session | None = None) -> None:
+    def create(
+        self,
+        task_id: int,
+        state: ConversationStateSnapshot,
+        session: Session | None = None,
+    ) -> None:
         """创建 Task 快照。"""
         if session is not None:
             self.upsert_in_session(session, task_id, state)
