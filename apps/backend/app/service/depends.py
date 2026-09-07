@@ -16,6 +16,9 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_event_projector import (
         ConversationEventProjector,
     )
+    from app.assistant_transport.service.conversation_run_command_service import (
+        ConversationRunCommandService,
+    )
     from app.assistant_transport.service.conversation_run_executor import (
         ConversationRunExecutor,
     )
@@ -25,6 +28,7 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
+    from app.core.runtime.runner import AgentRuntime
     from app.service.delegation.delegation_service import DelegationService
     from app.service.log_query_service import LogQueryService
     from app.service.provider import ModelEntryService, ProviderService
@@ -46,6 +50,50 @@ if TYPE_CHECKING:
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
     from app.task_runtime.service.task_service import TaskService
+
+
+_RUNTIME: AgentRuntime | None = None
+
+
+def set_runtime(runtime: AgentRuntime) -> None:
+    """设置进程级运行时单例。
+
+    参数:
+        runtime: 已构建的运行时实例，由应用启动时构建并注入。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        替换模块级运行时单例。
+    """
+
+    global _RUNTIME
+    _RUNTIME = runtime
+
+
+def get_runtime() -> AgentRuntime:
+    """返回进程级运行时单例。
+
+    参数:
+        无。
+
+    返回:
+        已配置的 ``AgentRuntime`` 实例。
+
+    异常:
+        RuntimeError: 如果运行时尚未初始化（未调用 ``set_runtime``）。
+
+    副作用:
+        无。
+    """
+
+    if _RUNTIME is None:
+        raise RuntimeError("runtime has not been initialized")
+    return _RUNTIME
 
 
 def initialize_service_dependencies() -> None:
@@ -454,12 +502,23 @@ def get_conversation_command_crud() -> ConversationCommandCrud:
 
 @lru_cache(maxsize=1)
 def get_transport_assistant_service() -> TransportAssistantService:
-    """返回进程级 command 编排 service 单例。"""
+    """返回进程级 Assistant Transport snapshot 订阅 service 单例。"""
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
 
     return TransportAssistantService()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_run_command_service() -> ConversationRunCommandService:
+    """返回进程级 command 幂等与 Conversation Run 创建 service 单例。"""
+
+    from app.assistant_transport.service.conversation_run_command_service import (
+        ConversationRunCommandService,
+    )
+
+    return ConversationRunCommandService()
 
 
 @lru_cache(maxsize=1)
@@ -486,7 +545,7 @@ def get_conversation_run_executor() -> ConversationRunExecutor:
 
     参数:
         cancellation_signal: 可选的进程内取消信号端口（``CancellationSignalPort``），
-            由 ``app.api.dependencies`` 注入 core 的取消注册表单例；service 层不直接
+            由 ``app.service.depends`` 注入 core 的取消注册表单例；service 层不直接
             import core，经协议解耦。None 时执行器退化为空信号实现（仅中断 task，
             无协作取消信号）。
 
@@ -600,6 +659,7 @@ def reset_service_dependencies() -> None:
     get_provider_crud.cache_clear()
     get_model_entry_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
+    get_conversation_run_command_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()

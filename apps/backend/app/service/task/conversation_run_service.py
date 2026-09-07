@@ -11,25 +11,17 @@
 from langchain_core.messages import AIMessage
 from sqlalchemy.orm import Session
 
-from app.config.logging.logger import log
-from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
+from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
     UserInputAppendedEvent,
 )
-from app.models import ConversationRunRecord, ConversationRunStatus, ConversationRunUsageStats
-from app.models.attachment_ref import AttachmentRef
-from app.models.errors.llm_provider_exceptions import VisionNotSupportedError
+from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
 from app.storage.store_engines import main_session_factory
-from app.utils.file_utils import render_attachment_refs_to_text
-
-# 图片后缀事实源统一收口于 app.utils.constants.IMAGE_EXTENSIONS；本服务不再直接引用，
-# 视觉粗判改由 attachments 的 kind 字段判定。真实格式/体积校验在运行期
-# build_user_content_blocks 完成。
 
 
 class ConversationRunService:
@@ -55,7 +47,7 @@ class ConversationRunService:
         self._run = service_depends.get_conversation_run_crud()
         self._session_factory = main_session_factory()
 
-    def have_run_in_runing(self,task_id: int,session: Session | None = None):
+    def have_run_in_runing(self, task_id: int, session: Session | None = None) -> bool:
         """检查任务是否正在运行中。
 
         参数:
@@ -71,11 +63,11 @@ class ConversationRunService:
         副作用:
             None。
         """
-        return self._run.has_run_in_status(
-                task_id,
-                (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-                session,
-            )
+        statuses = (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value)
+        if session is not None:
+            return self._run.has_run_in_status(task_id, statuses, session)
+        with self._session_factory() as owned_session:
+            return self._run.has_run_in_status(task_id, statuses, owned_session)
 
     def create_run(
         self,
@@ -153,8 +145,14 @@ class ConversationRunService:
             session=session,
         )
         projector = service_depends.get_conversation_event_projector()
-        projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
-        projector.process(UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text))
+        projector.process(
+            RunInitializedEvent(task_id=task_id, run_id=run.id),
+            session=session,
+        )
+        projector.process(
+            UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text),
+            session=session,
+        )
         return run
 
     def get_run(self, run_id: int) -> ConversationRunRecord:
@@ -395,3 +393,42 @@ class ConversationRunService:
                 )
             )
         return row is not None
+
+    def claim_or_resume_run(self, run_id: int) -> bool:
+        """认领一个待执行或后端重启后遗留的 Conversation Run。
+
+        ``pending`` 通过原子状态迁移进入 ``running``；``running`` 表示旧进程在
+        持久化层已经认领过，但进程内执行器已丢失，恢复入口可以继续驱动同一个 run。
+        调用方必须先持有 task 级运行锁，避免同一进程重复启动恢复执行。
+
+        参数:
+            run_id: 待认领的运行标识。
+
+        返回:
+            当前调用方可以继续执行返回 True；run 已进入终态或已被当前进程之外的执行
+            占用返回 False。
+
+        异常:
+            KeyError: run 不存在。
+
+        副作用:
+            pending run 成功迁移时发布一次 running 状态事件；running run 不重复发布。
+        """
+
+        row = self._run.update_status_if_in(
+            run_id=run_id,
+            target_status=ConversationRunStatus.RUNNING.value,
+            allowed_statuses=(ConversationRunStatus.PENDING.value,),
+        )
+        if row is not None:
+            service_depends.get_conversation_event_projector().process(
+                RunStatusChangedEvent(
+                    task_id=row.task_id,
+                    run_id=run_id,
+                    status=ConversationRunStatus.RUNNING,
+                )
+            )
+            return True
+
+        current = self._run.get(run_id)
+        return current.status == ConversationRunStatus.RUNNING.value
