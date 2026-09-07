@@ -14,6 +14,7 @@ CodeGraph 不可用时（Kernel 未就绪 / client 未注入），``CodeGraphInd
 from __future__ import annotations
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.hook.builtins.codegraph_index_prepare_hook import (
     CodeGraphIndexPrepareHook,
 )
@@ -70,6 +71,9 @@ def _register_file_snapshot_hook(registry: HookRegistry) -> None:
 def _register_codegraph_prepare_hook(registry: HookRegistry) -> None:
     """构造并注册 CodeGraph 索引保活 Hook；CodeGraph 不可用时静默跳过。
 
+    CodeGraph 总开关（``Settings.CODEGRAPH_ENABLED``）关闭时直接跳过注册，
+    不构造 lifecycle、不触碰 Kernel supervisor，避免无效注册与降级日志噪声。
+
     Kernel 未就绪（supervisor 未初始化 / client 未注入）时不可构造
     ``CodeGraphLifecycleService``，此时直接跳过注册，不影响主流程与 ToolAuditHook。
 
@@ -83,8 +87,11 @@ def _register_codegraph_prepare_hook(registry: HookRegistry) -> None:
         不向外抛出：构造/注册异常一律记 error 日志后吞掉。
 
     副作用:
-        CodeGraph 可用时向 ``registry`` 写入一条 USER_PROMPT_SUBMIT 订阅。
+    CodeGraph 可用时向 ``registry`` 写入一条 USER_PROMPT_SUBMIT 订阅。
     """
+    if not Settings.CODEGRAPH_ENABLED:
+        # 总开关关闭：不挂载 CodeGraph 索引保活 Hook（默认关闭）。
+        return
     try:
         from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
         from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService

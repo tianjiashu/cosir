@@ -1,6 +1,6 @@
 """工具执行成功后采集文件回退快照的 Hook（POST_TOOL_USE）。
 
-单一职责：在文件类工具成功执行后，从工具观察的 ``data["changes"]`` 采集反向
+单一职责：在文件类工具成功执行后，从工具观察的 ``internal_data["changes"]`` 采集反向
 操作快照，供 Turn 回退按 turn 精准还原。它是 ``POST_TOOL_USE`` 的一个内置订阅，
 与既有的审计切面并行触发，互不干扰。
 
@@ -37,7 +37,7 @@ class FileSnapshotHook(HookBase):
     """工具成功后采集文件回退快照的内置 Hook。
 
     挂载于 ``HookEvent.POST_TOOL_USE``，对所有工具触发；内部自行判定是否产生
-    可落库快照（仅成功、带 run_id / task_id、且 observation.data 含 changes 的文件工具）。
+    可落库快照（仅成功、带 run_id / task_id、且 observation.internal_data 含 changes 的文件工具）。
     """
 
     def __init__(self) -> None:
@@ -63,7 +63,7 @@ class FileSnapshotHook(HookBase):
         """采集文件回退快照。
 
         流程：非成功观察 → 跳过；无 run_id 或 task_id → 跳过（task_id 缺失时
-        放弃采集，避免快照落入空串归属的 seq 命名空间）；无 ``observation.data``
+        放弃采集，避免快照落入空串归属的 seq 命名空间）；无 ``observation.internal_data``
         → 跳过；无 ``changes`` → 跳过；构造正向 V4A、反转为反向操作、逐文件落库。
         任何异常 → warning 日志 + ALLOW（不阻断主流程）。
 
@@ -87,7 +87,7 @@ class FileSnapshotHook(HookBase):
             return HookResult.allow()
         if not context.run_id or not context.task_id:
             return HookResult.allow()
-        data = observation.data
+        data = observation.internal_data
         if not data:
             return HookResult.allow()
         changes = data.get("changes")
@@ -125,7 +125,8 @@ class FileSnapshotHook(HookBase):
         """把一次工具观察的 changes 落库为反向操作快照。
 
         参数:
-            observation: 归一化后的工具观察结果（提供 ``tool_call_id`` 与 ``data["changes"]``）。
+            observation: 归一化后的工具观察结果（提供 ``tool_call_id`` 与
+                ``internal_data["changes"]``）。
             tool_name: 被执行工具名（作为快照 ``tool_name``）。
             task_id: 任务标识（快照归属任务，seq 命名空间边界）。
             run_id: 轮次标识（快照归属的 turn）。
@@ -139,13 +140,13 @@ class FileSnapshotHook(HookBase):
         副作用:
             向 ``file_snapshots`` 表写入 0~N 条反向操作记录。
         """
-        data = observation.data or {}
+        data = observation.internal_data or {}
         changes = data.get("changes")
         if not isinstance(changes, list):
             log.warning(
                 "file_snapshot_changes_invalid",
                 extra={
-                    "msg": "工具观察 data.changes 非 list，跳过文件快照采集",
+                    "msg": "工具观察 internal_data.changes 非 list，跳过文件快照采集",
                     "data": {"task_id": task_id, "run_id": run_id, "tool_name": tool_name},
                 },
             )
@@ -185,7 +186,7 @@ def _change_diff_stats(changes: list[dict]) -> list[tuple[int, int]]:
     - ``moved``：计 0/0。
 
     参数:
-        changes: ``data["changes"]`` 中的单文件变更字典列表，每个含
+        changes: ``internal_data["changes"]`` 中的单文件变更字典列表，每个含
             ``path`` / ``new_path`` / ``status`` / ``before`` / ``after``。
 
     返回:
