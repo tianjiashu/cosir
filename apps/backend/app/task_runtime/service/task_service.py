@@ -10,16 +10,12 @@
   不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
 
-from dataclasses import replace
-
 from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
 from app.service import depends as service_depends
-from app.task_runtime.task_runtime_space import TaskRuntimeSpace
-from app.task_runtime.task_runtime_space_registry import TaskRuntimeSpaceRegistry, task_runtime_spaces
-from app.utils.datetime_utils import preview
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class TaskService:
@@ -131,31 +127,7 @@ class TaskService:
 
         return self._task.update_context_usage(task_id, used)
 
-    def task_display_status(self, task_id: int) -> str:
-        """从最新轮次派生任务的执行态。
 
-        映射规则：最新轮次为 ``running`` → ``"active"``；为
-        ``completed``/``failed``/``cancelled`` 等终态 → 对应状态值；无任何轮次 → ``"empty"``。
-
-        参数:
-            task_id: 任务标识。
-
-        返回:
-            派生的执行态字符串。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
-
-        副作用:
-            无（仅读取）。
-        """
-        turns: list[ConversationRunRecord] = self._turn.list_by_task(task_id)
-        if not turns:
-            return "empty"
-        latest = turns[-1]
-        if latest.status == "running":
-            return "active"
-        return latest.status
 
     def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务）。

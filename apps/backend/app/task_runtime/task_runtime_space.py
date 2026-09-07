@@ -7,13 +7,16 @@ task / run / context 记录仍由 SQLite 负责。锁原语见 ``app.task_runtim
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
-from app.core.context.context_listener.context_usage_compute_listener import ContextUsageComputeListener
+from app.core.context.context_listener.context_usage_compute_listener import (
+    ContextUsageComputeListener,
+)
 from app.service.depends import get_task_service
 
 if TYPE_CHECKING:
@@ -28,6 +31,7 @@ class TaskRuntimeSpace:
 
     task_id: int
     lock: threading.Lock = field(init=False)
+    run_lock: asyncio.Lock = field(init=False)
     _context_manager: RuntimeContextManager | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
 
@@ -35,14 +39,15 @@ class TaskRuntimeSpace:
         """初始化执行闸门和延迟创建的 context 槽位。"""
 
         self.lock = threading.Lock()
+        self.run_lock = asyncio.Lock()
         self._context_guard = threading.Lock()
 
     def get_context_manager(
-            self,
-            *,
-            agent_profile: AgentProfile,
-            current_workspace: WorkspaceRecord,
-            current_task: TaskRecord,
+        self,
+        *,
+        agent_profile: AgentProfile,
+        current_workspace: WorkspaceRecord,
+        current_task: TaskRecord,
     ) -> RuntimeContextManager:
         """返回 task context manager；首次执行时才创建并加载它。
 
@@ -71,14 +76,16 @@ class TaskRuntimeSpace:
                 from app.core.context.runtime_context_manager import RuntimeContextManager
                 from app.service.depends import get_conversation_task_context_service
 
-                manager = RuntimeContextManager(
-                    current_task_id=current_task.id,
-                    agent_profile=agent_profile,
-                    workspace_root=current_workspace.root_path,
-                    context_service=get_conversation_task_context_service(),
-                ).add_change_listener(ContextUsageComputeListener(
-                    current_task.id,
-                )).add_change_listener(ContextCompressListener())
+                manager = (
+                    RuntimeContextManager(
+                        current_task_id=current_task.id,
+                        agent_profile=agent_profile,
+                        workspace_root=current_workspace.root_path,
+                        context_service=get_conversation_task_context_service(),
+                    )
+                    .add_change_listener(ContextUsageComputeListener(current_task.id))
+                    .add_change_listener(ContextCompressListener())
+                )
                 self._context_manager = manager
             return manager
 
