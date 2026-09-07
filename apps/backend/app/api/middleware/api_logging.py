@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -177,10 +178,49 @@ async def _request_log_extra(request) -> dict:
     if request.method != "GET":
         body_value = await _request_body_value(request)
         if body_value is not None:
-            # 解析为 dict 后写入 data.body，使脱敏能按 key 名递归遮蔽
-            # api_key/token/secret 等敏感字段（redact_value 对字符串只截断不扫描）。
-            data["body"] = body_value
+            # 只记录结构摘要，不记录请求正文。Assistant Transport 的 commands
+            # 包含用户消息，不能依赖通用字段名脱敏后再落盘。
+            data["body_summary"] = _request_body_summary(body_value)
     return extra
+
+
+def _request_body_summary(value: object) -> dict[str, Any]:
+    """生成不含正文的 JSON 请求摘要。
+
+    参数:
+        value: 已解析的 JSON 请求体。
+
+    返回:
+        仅包含字段名、稳定标识、命令数量/类型等诊断元数据的摘要。
+
+    异常:
+        无。
+
+    副作用:
+        无；不会保留用户消息、工具参数或模型响应内容。
+    """
+
+    if not isinstance(value, dict):
+        return {"json_type": type(value).__name__}
+
+    summary: dict[str, Any] = {
+        "keys": sorted(str(key) for key in value),
+        "json_type": "object",
+    }
+    for key in ("taskId", "workspaceId", "threadId", "providerId", "modelName", "reasoningEffort"):
+        if key in value and isinstance(value[key], str | int | float | bool):
+            summary[key] = value[key]
+
+    commands = value.get("commands")
+    if isinstance(commands, list):
+        summary["command_count"] = len(commands)
+        summary["command_types"] = [
+            command.get("type")
+            for command in commands
+            if isinstance(command, dict) and isinstance(command.get("type"), str)
+        ]
+    summary["has_state"] = "state" in value
+    return summary
 
 
 async def _request_body_value(request) -> object | None:
