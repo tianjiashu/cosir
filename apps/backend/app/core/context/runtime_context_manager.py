@@ -19,6 +19,7 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
+from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -90,15 +91,27 @@ class RuntimeContextManager:
                 content=SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
             ),
             None,
+            -1,
         )
-        self._entries = self.context_service.entries_in_context(self.current_task_id)
+        self._entries = self._require_context_service().entries_in_context(self.current_task_id)
         self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
 
-    def begin_run(self, run: ConversationRunRecord) -> None:
+    def _require_context_service(self) -> ConversationTaskContextService:
+        """返回已装配的 context service；未装配时立即失败。"""
+
+        if self.context_service is None:
+            raise RuntimeError("context_service is required for persisted context operations")
+        return self.context_service
+
+    def begin_run(
+        self, run: ConversationRunRecord, execution_mode: ExecutionMode = "fresh"
+    ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
         参数:
             run: 待执行的 Conversation Run。
+            execution_mode: ``fresh`` 清理该 run 的旧消息；``resume`` 保留并重新加载
+                该 run 已持久化的消息。
 
         返回:
             无。
@@ -113,17 +126,24 @@ class RuntimeContextManager:
         if run.task_id != self.current_task_id:
             raise ValueError(f"run {run.id} belongs to task {run.task_id}")
 
-        # ``begin_run`` 也是后端重启恢复的入口：新的 RuntimeContextManager 可能没有
-        # current_run_id 内存标记，但数据库中仍可能存在该 run 上一次执行留下的部分
-        # context。按持久化 run 身份清理，而不是依赖进程内指针，避免恢复时重复追加
-        # user message / tool message。正常首次执行没有同 run 条目，因此仍是幂等空操作。
-        self.context_service.delete_by_run_id(self.current_task_id, run.id)
-        self._entries = [entry for entry in self._entries if entry.run_id != run.id]
+        if execution_mode == "fresh":
+            # fresh 仍按持久化 run 身份清理，而不是依赖进程内指针，避免重跑时重复
+            # 追加 user/tool message。正常首次执行没有同 run 条目，因此是幂等空操作。
+            self._require_context_service().delete_by_run_id(self.current_task_id, run.id)
+            self._entries = [entry for entry in self._entries if entry.run_id != run.id]
+        else:
+            # resume 可能发生在后端重启后，必须从 SQLite 重新装载 working copy；同进程
+            # 恢复也通过同一条路径，确保 ContextEntry.run_id/sequence 与持久化一致。
+            self._entries = self._require_context_service().entries_in_context(
+                self.current_task_id
+            )
         # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
         # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
-        self._message_sequence = self.context_service.max_sequence(self.current_task_id) + 1
+        self._message_sequence = self._require_context_service().max_sequence(
+            self.current_task_id
+        ) + 1
         self.current_run_id = run.id
         self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
 
@@ -177,17 +197,18 @@ class RuntimeContextManager:
                 tool_calls=message.tool_calls,
             )
 
-        self.context_service.append(
+        sequence = self._message_sequence
+        self._require_context_service().append(
             self.current_task_id,
             self.current_run_id,
             message,
-            self._message_sequence,
+            sequence,
             include_in_context,
         )
         self._message_sequence += 1
         if not include_in_context:
             return
-        self._entries.append(ContextEntry(message, self.current_run_id))
+        self._entries.append(ContextEntry(message, self.current_run_id, sequence))
         self.have_change = True
         self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
 
@@ -254,6 +275,8 @@ class RuntimeContextManager:
     def _effective_entries(self) -> list[ContextEntry]:
         """返回 system、历史和当前 run 条目的有序列表。"""
 
+        if self._system_entry is None:
+            raise RuntimeError("system entry is not initialized")
         return [self._system_entry, *self._entries]
 
     def has_change(self) -> bool:
