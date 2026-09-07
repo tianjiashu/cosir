@@ -1,5 +1,6 @@
 mod backend_process;
 mod backend_readiness;
+mod backend_runtime;
 mod backend_supervisor;
 mod desktop_log;
 
@@ -12,8 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            app.state::<BackendSupervisor>()
-                .show_main_window_if_settled(app);
+            app.state::<BackendSupervisor>().show_main_window(app);
         }))
         .manage(BackendSupervisor::default())
         .invoke_handler(tauri::generate_handler![
@@ -26,6 +26,8 @@ pub fn run() {
             let supervisor = app.state::<BackendSupervisor>().inner().clone();
             let handle = app.handle().clone();
             supervisor.prepare_start();
+            // 窗口生命周期不依赖后端健康检查；前端负责展示 starting/failed/ready 状态。
+            supervisor.show_main_window(app.handle());
             std::thread::spawn(move || {
                 if let Err(error) = supervisor.start(&handle) {
                     let _ = supervisor.fail_for_startup(error);

@@ -2,12 +2,14 @@
 
 import { getApiBaseUrl } from "@/lib/api/client";
 import { getActiveTraceId, newTraceId } from "@/lib/trace";
-import { frontendLog } from "@/lib/logging/frontend-log";
 
-export async function cancelRun(taskId: number | null, runId: number): Promise<boolean> {
+export type CancelRunResult =
+  | { accepted: true }
+  | { accepted: false; reason: "invalid_run_id" | "not_cancellable" | "rejected" | "network"; message: string };
+
+export async function cancelRun(taskId: number | null, runId: number): Promise<CancelRunResult> {
   if (!Number.isInteger(runId)) {
-    await frontendLog("WARNING", "cancel_run_invalid_id", "取消请求跳过：runId 非法", { data: { taskId, runId } });
-    return false;
+    return { accepted: false, reason: "invalid_run_id", message: "当前运行标识无效，无法取消。" };
   }
   const traceId = getActiveTraceId() ?? newTraceId();
   try {
@@ -15,18 +17,13 @@ export async function cancelRun(taskId: number | null, runId: number): Promise<b
       method: "POST",
       headers: { Accept: "application/json", "X-Trace-Id": traceId },
     });
-    if (response.ok || response.status === 409) return true;
-    await frontendLog("ERROR", "cancel_run_rejected", "取消请求被服务端拒绝", {
-      traceId,
-      data: { taskId, runId, status: response.status },
-    });
-    return false;
-  } catch (error) {
-    await frontendLog("ERROR", "cancel_run_failed", "取消请求失败", {
-      traceId,
-      data: { taskId, runId },
-      error,
-    });
-    return false;
+    if (response.ok) return { accepted: true };
+    if (response.status === 409) {
+      const message = "后端当前不允许取消此运行，可能已经结束；请刷新对话状态后重试。";
+      return { accepted: false, reason: "not_cancellable", message };
+    }
+    return { accepted: false, reason: "rejected", message: `取消请求被服务端拒绝（HTTP ${response.status}）。` };
+  } catch {
+    return { accepted: false, reason: "network", message: "取消请求失败，请检查本机后端连接。" };
   }
 }

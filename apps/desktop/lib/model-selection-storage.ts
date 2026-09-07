@@ -93,3 +93,19 @@ export function readStoredSelection(
     window.localStorage.getItem(selectionStorageKey()),
   );
 }
+
+/**
+ * 写入指定任务或工作区的模型选择结果。
+ *
+ * @param taskId - 当前选择所属的任务或工作区标识。
+ * @param selection - 要持久化的完整模型选择。
+ * @returns 无。
+ * @sideEffects 在浏览器 localStorage 中写入模型选择；浏览器不可用时静默跳过。
+ */
+export function writeStoredSelection(
+  taskId: number,
+  selection: ModelSelection,
+): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(selectionStorageKey(taskId), JSON.stringify(selection));
+}

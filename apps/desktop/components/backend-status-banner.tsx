@@ -1,16 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { setBackendBaseUrl, type BackendRuntimeConfig, type BackendStatus } from "@/src/runtime-config";
+import {
+  setBackendBaseUrl,
+  type BackendRuntimeConfig,
+  type BackendStatus,
+} from "@/src/runtime-config";
 
 export function BackendStatusBanner() {
   const [status, setStatus] = useState<BackendStatus | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const previousStatusRef = useRef<BackendStatus["state"] | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await invoke<BackendStatus>("backend_status"));
+      const nextStatus = await invoke<BackendStatus>("backend_status");
+      setStatus(nextStatus);
+      if (nextStatus.state === "ready" && previousStatusRef.current !== "ready") {
+        const config = await invoke<BackendRuntimeConfig>("backend_runtime_config");
+        // Always notify: a restarted process may reuse the same port, but its
+        // in-flight Assistant runtime still needs one new resume opportunity.
+        setBackendBaseUrl(config.backendBaseUrl);
+      }
+      previousStatusRef.current = nextStatus.state;
     } catch {
       // Normal browser development does not expose Tauri commands.
       setStatus(null);
@@ -34,9 +47,6 @@ export function BackendStatusBanner() {
       const config = await invoke<BackendRuntimeConfig>("restart_backend");
       setBackendBaseUrl(config.backendBaseUrl);
       setStatus(config.status);
-      // Assistant Transport captures its API URL when its runtime is created;
-      // reload the shell so every runtime and API client binds to the new port.
-      window.location.reload();
     } catch {
       await refresh();
     } finally {

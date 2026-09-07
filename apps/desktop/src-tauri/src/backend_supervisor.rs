@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,10 +8,20 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::backend_process::{spawn_backend, terminate_process_tree, BackendProcess};
 use crate::backend_readiness::wait_for_backend;
+use crate::backend_runtime::resolve_backend_runtime;
 use crate::desktop_log::append_json_line;
 
 const HOST: &str = "127.0.0.1";
 const READY_TIMEOUT: Duration = Duration::from_secs(90);
+const MAX_CRASH_RECOVERY_ATTEMPTS: usize = 1;
+
+fn should_attempt_crash_recovery(attempt: usize) -> bool {
+    attempt < MAX_CRASH_RECOVERY_ATTEMPTS
+}
+
+fn is_current_generation(current: usize, expected: usize) -> bool {
+    current == expected
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
@@ -45,11 +55,15 @@ pub struct FrontendLogEntry {
 }
 
 struct BackendInner {
-    child: Mutex<Option<BackendProcess>>,
+    child: Mutex<Option<ManagedBackendProcess>>,
+    lifecycle_gate: Mutex<()>,
     shutting_down: AtomicBool,
+    crash_recovery_attempts: AtomicUsize,
     status: Mutex<BackendStatus>,
     log_file: Mutex<Option<PathBuf>>,
     backend_base_url: Mutex<Option<String>>,
+    start_in_progress: AtomicBool,
+    lifecycle_generation: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -62,10 +76,14 @@ impl Default for BackendSupervisor {
         Self {
             inner: Arc::new(BackendInner {
                 child: Mutex::new(None),
+                lifecycle_gate: Mutex::new(()),
                 shutting_down: AtomicBool::new(false),
+                crash_recovery_attempts: AtomicUsize::new(0),
                 status: Mutex::new(BackendStatus::Stopped),
                 log_file: Mutex::new(None),
                 backend_base_url: Mutex::new(None),
+                start_in_progress: AtomicBool::new(false),
+                lifecycle_generation: AtomicUsize::new(0),
             }),
         }
     }
@@ -74,19 +92,34 @@ impl Default for BackendSupervisor {
 impl BackendSupervisor {
     pub fn start(&self, app: &AppHandle) -> Result<(), String> {
         match self.start_inner(app) {
-            Ok(()) => {
-                self.show_main_window_if_settled(app);
-                Ok(())
+            Ok(()) => Ok(()),
+            Err(error)
+                if error == "本地 Agent 后端正在启动"
+                    || error == "后端启动已被新的生命周期操作取消" =>
+            {
+                Err(error)
             }
-            Err(error) => {
-                let result = self.fail(error);
-                self.show_main_window_if_settled(app);
-                result
-            }
+            Err(error) => self.fail(error),
         }
     }
 
     fn start_inner(&self, app: &AppHandle) -> Result<(), String> {
+        let lifecycle_guard = self
+            .inner
+            .lifecycle_gate
+            .lock()
+            .map_err(|_| "后端生命周期锁已损坏".to_string())?;
+        let start_reserved = self
+            .inner
+            .start_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        drop(lifecycle_guard);
+        if !start_reserved {
+            return Err("本地 Agent 后端正在启动".to_string());
+        }
+        let _start_guard = StartGuard(&self.inner.start_in_progress);
+        let mut generation = self.inner.lifecycle_generation.load(Ordering::Acquire);
         if self
             .inner
             .child
@@ -110,24 +143,15 @@ impl BackendSupervisor {
             .lock()
             .map_err(|_| "日志锁已损坏".to_string())? = Some(runtime_dir.join("desktop.log"));
         self.set_status(BackendStatus::Starting);
-        let backend_dir = std::env::var_os("COSIR_BACKEND_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join("..")
-                    .join("backend")
-            });
-        let launcher = std::env::var_os("COSIR_BACKEND_PYTHON")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(if cfg!(debug_assertions) {
-                    "uv"
-                } else {
-                    "python"
-                })
-            });
-        let use_uv = std::env::var_os("COSIR_BACKEND_PYTHON").is_none() && cfg!(debug_assertions);
+        let backend_runtime = match resolve_backend_runtime(app, &runtime_dir) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                if self.inner.lifecycle_generation.load(Ordering::Acquire) != generation {
+                    return Err("后端启动已被新的生命周期操作取消".to_string());
+                }
+                return Err(error);
+            }
+        };
         let log_file = runtime_dir.join("backend-console.log");
         let mut last_error = "本地 Agent 后端启动失败".to_string();
         for attempt in 0..3 {
@@ -138,13 +162,16 @@ impl BackendSupervisor {
             if self.inner.shutting_down.load(Ordering::Acquire) {
                 return Ok(());
             }
+            if self.inner.lifecycle_generation.load(Ordering::Acquire) != generation {
+                return Err("后端启动已被新的生命周期操作取消".to_string());
+            }
             let port = find_available_port()?;
             let child = match spawn_backend(
-                &launcher,
-                &backend_dir,
+                backend_runtime.launcher(),
+                backend_runtime.backend_dir(),
                 port,
                 &bootstate,
-                use_uv,
+                backend_runtime.uv_cache_dir(),
                 &log_file,
                 &runtime_dir,
             ) {
@@ -159,10 +186,22 @@ impl BackendSupervisor {
                 .child
                 .lock()
                 .map_err(|_| "后端进程锁已损坏".to_string())?;
-            if child_slot.is_some() {
-                return Ok(());
+            if child_slot.is_some()
+                || self.inner.shutting_down.load(Ordering::Acquire)
+                || self.inner.lifecycle_generation.load(Ordering::Acquire) != generation
+            {
+                drop(child_slot);
+                let mut child = child;
+                terminate_process_tree(&mut child);
+                if self.inner.shutting_down.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                return Err("后端启动已被新的生命周期操作取消".to_string());
             }
-            *child_slot = Some(child);
+            *child_slot = Some(ManagedBackendProcess {
+                generation,
+                process: child,
+            });
             drop(child_slot);
             match wait_for_backend(HOST, port, READY_TIMEOUT, &bootstate, || {
                 self.inner
@@ -172,11 +211,21 @@ impl BackendSupervisor {
                     .and_then(|mut child| {
                         child
                             .as_mut()
-                            .map(|value| value.child.try_wait().ok().flatten().is_none())
+                            .map(|value| value.process.child.try_wait().ok().flatten().is_none())
                     })
                     .unwrap_or(false)
             }) {
                 Ok(()) => {
+                    let _lifecycle_guard = self
+                        .inner
+                        .lifecycle_gate
+                        .lock()
+                        .map_err(|_| "后端生命周期锁已损坏".to_string())?;
+                    if self.inner.shutting_down.load(Ordering::Acquire)
+                        || self.inner.lifecycle_generation.load(Ordering::Acquire) != generation
+                    {
+                        return Ok(());
+                    }
                     *self
                         .inner
                         .backend_base_url
@@ -184,13 +233,16 @@ impl BackendSupervisor {
                         .map_err(|_| "后端地址锁已损坏".to_string())? =
                         Some(format!("http://{HOST}:{port}"));
                     self.set_status(BackendStatus::Ready);
-                    self.spawn_monitor();
+                    self.spawn_monitor(app.clone(), generation);
                     self.log("backend_ready");
                     return Ok(());
                 }
                 Err(error) => {
                     last_error = error;
-                    self.stop();
+                    let Some(next_generation) = self.retry_after_health_failure(generation) else {
+                        return Ok(());
+                    };
+                    generation = next_generation;
                 }
             }
         }
@@ -198,6 +250,13 @@ impl BackendSupervisor {
     }
 
     pub fn stop(&self) {
+        let Ok(_lifecycle_guard) = self.inner.lifecycle_gate.lock() else {
+            return;
+        };
+        self.stop_locked();
+    }
+
+    fn stop_locked(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
         let child = self
             .inner
@@ -205,9 +264,12 @@ impl BackendSupervisor {
             .lock()
             .ok()
             .and_then(|mut value| value.take());
+        self.inner
+            .lifecycle_generation
+            .fetch_add(1, Ordering::AcqRel);
         if let Some(mut child) = child {
             self.set_status(BackendStatus::Starting);
-            terminate_process_tree(&mut child);
+            terminate_process_tree(&mut child.process);
         }
         if let Ok(mut base_url) = self.inner.backend_base_url.lock() {
             *base_url = None;
@@ -218,7 +280,16 @@ impl BackendSupervisor {
 
     pub fn prepare_start(&self) {
         self.inner.shutting_down.store(false, Ordering::Release);
+        self.inner
+            .lifecycle_generation
+            .fetch_add(1, Ordering::AcqRel);
         self.set_status(BackendStatus::Starting);
+    }
+
+    pub fn reset_crash_recovery_budget(&self) {
+        self.inner
+            .crash_recovery_attempts
+            .store(0, Ordering::Release);
     }
 
     pub fn status(&self) -> BackendStatus {
@@ -246,6 +317,39 @@ impl BackendSupervisor {
         Err(message)
     }
 
+    fn retry_after_health_failure(&self, generation: usize) -> Option<usize> {
+        let Ok(_lifecycle_guard) = self.inner.lifecycle_gate.lock() else {
+            return None;
+        };
+        if self.inner.shutting_down.load(Ordering::Acquire)
+            || !is_current_generation(
+                self.inner.lifecycle_generation.load(Ordering::Acquire),
+                generation,
+            )
+        {
+            return None;
+        }
+        let child = self
+            .inner
+            .child
+            .lock()
+            .ok()
+            .and_then(|mut value| value.take());
+        if let Some(mut child) = child {
+            terminate_process_tree(&mut child.process);
+        }
+        if let Ok(mut base_url) = self.inner.backend_base_url.lock() {
+            *base_url = None;
+        }
+        let next_generation = self
+            .inner
+            .lifecycle_generation
+            .fetch_add(1, Ordering::AcqRel)
+            + 1;
+        self.set_status(BackendStatus::Starting);
+        Some(next_generation)
+    }
+
     pub fn fail_for_startup(&self, message: String) -> Result<(), String> {
         self.fail(message)
     }
@@ -254,30 +358,106 @@ impl BackendSupervisor {
             *current = status;
         }
     }
-    fn spawn_monitor(&self) {
+
+    fn set_status_if_generation(&self, generation: usize, status: BackendStatus) {
+        let Ok(_lifecycle_guard) = self.inner.lifecycle_gate.lock() else {
+            return;
+        };
+        if is_current_generation(
+            self.inner.lifecycle_generation.load(Ordering::Acquire),
+            generation,
+        ) && !self.inner.shutting_down.load(Ordering::Acquire)
+        {
+            self.set_status(status);
+        }
+    }
+    fn spawn_monitor(&self, app: AppHandle, generation: usize) {
         let supervisor = self.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(500));
+            if !is_current_generation(
+                supervisor
+                    .inner
+                    .lifecycle_generation
+                    .load(Ordering::Acquire),
+                generation,
+            ) {
+                break;
+            }
             let exited = supervisor
                 .inner
                 .child
                 .lock()
                 .ok()
-                .and_then(|mut child| child.as_mut().and_then(|value| value.child.try_wait().ok()))
+                .and_then(|mut child| {
+                    child.as_mut().and_then(|value| {
+                        if value.generation != generation {
+                            None
+                        } else {
+                            value.process.child.try_wait().ok()
+                        }
+                    })
+                })
                 .flatten();
             if exited.is_some() {
-                if let Ok(mut child) = supervisor.inner.child.lock() {
-                    if let Some(mut child) = child.take() {
-                        terminate_process_tree(&mut child);
+                let removed = supervisor.inner.child.lock().ok().and_then(|mut child| {
+                    if child
+                        .as_ref()
+                        .is_some_and(|value| value.generation == generation)
+                    {
+                        child.take()
+                    } else {
+                        None
                     }
-                }
-                supervisor.set_status(BackendStatus::Failed {
-                    message: "本地 Agent 后端已退出，请点击重试".to_string(),
                 });
+                if let Some(mut child) = removed {
+                    terminate_process_tree(&mut child.process);
+                } else {
+                    break;
+                }
+                let Ok(_lifecycle_guard) = supervisor.inner.lifecycle_gate.lock() else {
+                    break;
+                };
+                if !is_current_generation(
+                    supervisor
+                        .inner
+                        .lifecycle_generation
+                        .load(Ordering::Acquire),
+                    generation,
+                ) {
+                    break;
+                }
                 if let Ok(mut base_url) = supervisor.inner.backend_base_url.lock() {
                     *base_url = None;
                 }
                 supervisor.log("backend_exited");
+
+                if supervisor.inner.shutting_down.load(Ordering::Acquire) {
+                    supervisor.set_status(BackendStatus::Stopped);
+                    break;
+                }
+
+                // 只允许一次进程生命周期内的自动恢复；成功恢复后不重置预算，
+                // 后续再次崩溃进入人工重试，避免把无限重启伪装成可靠性机制。
+                let attempt = supervisor
+                    .inner
+                    .crash_recovery_attempts
+                    .fetch_add(1, Ordering::AcqRel);
+                if should_attempt_crash_recovery(attempt) {
+                    drop(_lifecycle_guard);
+                    let next_generation = supervisor.begin_recovery(generation);
+                    if next_generation.is_some() && supervisor.start(&app).is_ok() {
+                        break;
+                    }
+                } else {
+                    drop(_lifecycle_guard);
+                }
+                supervisor.set_status_if_generation(
+                    generation,
+                    BackendStatus::Failed {
+                        message: "本地 Agent 后端已退出，请点击重试".to_string(),
+                    },
+                );
                 break;
             }
             if supervisor
@@ -290,6 +470,25 @@ impl BackendSupervisor {
                 break;
             }
         });
+    }
+
+    fn begin_recovery(&self, generation: usize) -> Option<usize> {
+        let Ok(_lifecycle_guard) = self.inner.lifecycle_gate.lock() else {
+            return None;
+        };
+        if self.inner.shutting_down.load(Ordering::Acquire)
+            || !is_current_generation(
+                self.inner.lifecycle_generation.load(Ordering::Acquire),
+                generation,
+            )
+        {
+            return None;
+        }
+        self.inner
+            .lifecycle_generation
+            .fetch_add(1, Ordering::AcqRel);
+        self.set_status(BackendStatus::Starting);
+        Some(generation + 1)
     }
     fn log(&self, message: &str) {
         let Ok(path) = self.inner.log_file.lock() else {
@@ -312,13 +511,24 @@ impl BackendSupervisor {
         );
     }
 
-    pub fn show_main_window_if_settled(&self, app: &AppHandle) {
-        if matches!(self.status(), BackendStatus::Starting) {
-            return;
-        }
+    pub fn show_main_window(&self, app: &AppHandle) {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
+            let _ = window.set_focus();
         }
+    }
+}
+
+struct ManagedBackendProcess {
+    generation: usize,
+    process: BackendProcess,
+}
+
+struct StartGuard<'a>(&'a AtomicBool);
+
+impl Drop for StartGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -345,8 +555,18 @@ pub fn restart_backend(
     app: AppHandle,
     supervisor: State<'_, BackendSupervisor>,
 ) -> Result<BackendRuntimeConfig, String> {
-    supervisor.stop();
+    let lifecycle_guard = supervisor
+        .inner
+        .lifecycle_gate
+        .lock()
+        .map_err(|_| "后端生命周期锁已损坏".to_string())?;
+    if supervisor.inner.start_in_progress.load(Ordering::Acquire) {
+        return Err("本地 Agent 后端正在启动，请等待启动完成".to_string());
+    }
+    supervisor.stop_locked();
+    supervisor.reset_crash_recovery_budget();
     supervisor.prepare_start();
+    drop(lifecycle_guard);
     supervisor.start(&app)?;
     let backend_base_url = supervisor
         .backend_base_url()
@@ -416,4 +636,22 @@ fn find_available_port() -> Result<u16, String> {
         .and_then(|listener| listener.local_addr())
         .map(|address| address.port())
         .map_err(|error| format!("无法分配本地后端端口：{error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_attempt_crash_recovery, MAX_CRASH_RECOVERY_ATTEMPTS};
+
+    #[test]
+    fn crash_recovery_is_finite_and_does_not_loop_after_budget() {
+        assert!(should_attempt_crash_recovery(0));
+        assert!(!should_attempt_crash_recovery(MAX_CRASH_RECOVERY_ATTEMPTS));
+        assert!(!should_attempt_crash_recovery(usize::MAX));
+    }
+
+    #[test]
+    fn monitor_generation_comparison_rejects_stale_generation() {
+        assert!(super::is_current_generation(7, 7));
+        assert!(!super::is_current_generation(8, 7));
+    }
 }

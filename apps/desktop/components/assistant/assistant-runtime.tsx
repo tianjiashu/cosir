@@ -2,202 +2,491 @@
 
 import {
   AssistantRuntimeProvider,
-  AuiConfig,
-  Tools,
   useAui,
-  useAssistantTransportRuntime,
+  useAuiState,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Thread } from "@/components/assistant-ui/elements/thread.aui";
-import { getApiBaseUrl } from "@/lib/api/client";
-import { readStoredSelection } from "@/lib/model-selection-storage";
 import {
-  extractUserAddMessageText,
-  toTransportThreadView,
-} from "@/lib/assistant/converter";
+  useCallback,
+  useEffect,
+  memo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MutableRefObject,
+} from "react";
+
+import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
+import { apiRequest } from "@/lib/api/client";
+import { cancelRun, type CancelRunResult } from "@/lib/assistant/cancel-run";
+import { extractUserAddMessageText, toTransportThreadView } from "@/lib/assistant/converter";
 import type { TransportState } from "@/lib/assistant/contract";
-import { codingAgentToolkit } from "./toolkit";
+import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { readStoredSelection } from "@/lib/model-selection-storage";
 import { newTraceId, setActiveTraceId } from "@/lib/trace";
-import { frontendLog } from "@/lib/logging/frontend-log";
+import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import {
+  getBackendBaseUrlSnapshot,
+  subscribeBackendRuntime,
+} from "@/src/runtime-config";
+
+type AssistantRuntimeProps = {
+  taskId: number;
+  workspaceId?: number | null;
+  initialState: TransportState;
+  initialMessage?: string;
+};
+
+export function AssistantRuntime({ taskId, workspaceId, initialState, initialMessage }: AssistantRuntimeProps) {
+  const [issue, setIssue] = useState<TransportIssue | null>(null);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <TransportStatus issue={issue} />
+      <div className="min-h-0 flex-1">
+        <RuntimeSession
+          taskId={taskId}
+          workspaceId={workspaceId}
+          initialState={initialState}
+          initialMessage={initialMessage}
+          setIssue={setIssue}
+        />
+      </div>
+    </div>
+  );
+}
+
+type RuntimeSessionProps = AssistantRuntimeProps & {
+  setIssue: (issue: TransportIssue | null) => void;
+};
 
 /**
- * 把服务端首屏历史 state 挂载到 assistant-ui runtime 的瘦组件。
+ * Assistant UI runtime 的进程内会话边界。
  *
- * 该组件在 `initialState` 已就绪后才被外层渲染，且外层用 `key={taskId}` 保证
- * 切换 task 时 runtime 整体重建，避免上一个 task 的历史残留。
- *
- * @param taskId - 当前任务 id，用于拼接后端 assistant 端点路径与模型选择读取。
- * @param initialState - 已就绪的服务端首屏历史 state，作为 runtime 初始 state。
- * @returns 挂载 `AssistantRuntimeProvider` 的对话界面（含 Thread 渲染）。
- * @sideEffects 建立与后端 `/assistant` 的 assistant-transport 连接；
- *   首次挂载只负责历史 state 与后续 fresh commands；正常新消息不走 resume；
- *   模型选择通过 `prepareSendCommandsRequest` 注入发送请求（剥离回传 state，有值才覆盖）。
+ * `useAssistantTransportRuntime` 内部持有 command queue、run manager 和流请求的
+ * AbortController。外层工作区刷新、错误提示更新或任务列表刷新不应让这个组件
+ * 重新执行 hook；否则 Assistant UI 会把 runtime 资源视为被替换，并主动取消正在
+ * 读取的响应体。task 切换由 `Assistant` 的首屏快照生命周期控制，活动请求不会
+ * 依赖父组件 key 或普通状态刷新来维持。
  */
-export function AssistantRuntime({
-  taskId,
-  initialState,
-}: {
-  taskId: number;
-  initialState: TransportState;
-}) {
-  // assistant-ui 的 AddMessageCommand 没有幂等 ID；后端需要 commandId 才能安全
-  // 重试。用命令对象做弱引用键，保证同一 queued command 在重试/重连时复用 ID，
-  // 而不同消息仍获得不同 ID。
-  const commandIds = useRef(new WeakMap<object, string>());
-  // 一个 runtime 对应一个用户可追踪的 Assistant Transport 操作链路；恢复/重连也复用它。
-  const [traceId] = useState(() => newTraceId());
-  useEffect(() => {
-    setActiveTraceId(traceId);
-    return () => setActiveTraceId(null);
-  }, [traceId]);
-  // 发送失败时把 inTransit 消息文本回填到 composer 的桥接函数；由下方
-  // ComposerRestoreBridge 在挂载后注册（runtime options 闭包无法使用 hooks）。
-  const composerRestoreRef = useRef<((text: string) => void) | null>(null);
-  const registerComposerRestore = useCallback(
-    (restore: (text: string) => void) => {
-      composerRestoreRef.current = restore;
-    },
-    [],
+const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initialState, setIssue, initialMessage }: RuntimeSessionProps) {
+  const backendBaseUrl = useSyncExternalStore(
+    subscribeBackendRuntime,
+    getBackendBaseUrlSnapshot,
+    getBackendBaseUrlSnapshot,
   );
-  // 发送失败处理所需的 runtime 回调参数形状（刻意取最小字段子集，理由同
-  // toTransportThreadView 的第二参数设计）。
-  type SendErrorParams = {
-    commands: readonly unknown[];
-    updateState: (updater: (state: TransportState) => TransportState) => void;
-  };
-  /**
-   * 发送失败处理：把用户文本回填 composer，并把错误写入本地 state 使其可见。
-   *
-   * assistant-ui 在 HTTP 错误/流错误时会静默重置命令队列，若不接管，用户消息
-   * 直接消失且无任何提示。本处理取 inTransit 队列中最后一条非空用户消息文本
-   * 回填 composer（消息不丢，用户可直接重发），再经 updateState 把稳定错误
-   * 写入本地 `TransportState.error` —— converter（`toTransportThreadView`）
-   * 会把它渲染为消息流末尾的错误条；下一次服务端 state 帧到达时自动覆盖消失。
-   *
-   * @param error - transport 抛出的原始错误（网络异常、HTTP 状态错误等）。
-   * @param commands - 失败时仍在传输中的命令队列（inTransit）。
-   * @param updateState - runtime 提供的本地 state 更新入口。
-   * @returns 无。
-   * @sideEffects 调用 ComposerRestoreBridge 注册的 composer.setText；
-   *   触发一次本地 state 重渲染。
-   */
-  const handleSendError = useCallback(async (error: unknown, { commands, updateState }: SendErrorParams) => {
-    await frontendLog("ERROR", "assistant_transport_error", "Assistant Transport 请求失败", {
+  const commandIds = useRef(new WeakMap<object, string>());
+  const latestStateRef = useRef(initialState);
+  const previousBackendBaseUrlRef = useRef(backendBaseUrl);
+  const runtimeControlsRef = useRef<RuntimeControls | null>(null);
+  const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {
+    runtimeControlsRef.current = controls;
+  }, []);
+  const [traceId] = useState(() => newTraceId());
+  const composerRestoreRef = useRef<((text: string) => void) | null>(null);
+  const initialMessageSentRef = useRef(false);
+  const initialStateRef = useRef(initialState);
+  const transportUpdateCountRef = useRef(0);
+  const finishCountRef = useRef(0);
+  const mountedRef = useRef(false);
+  const unmountLogTimerRef = useRef<number | null>(null);
+  const latestConnectionMetadataRef = useRef<{
+    pendingCommandCount: number;
+    isSending: boolean;
+    commandTypes: string[];
+  }>({ pendingCommandCount: 0, isSending: false, commandTypes: [] });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    if (unmountLogTimerRef.current !== null) {
+      window.clearTimeout(unmountLogTimerRef.current);
+      unmountLogTimerRef.current = null;
+    }
+    setActiveTraceId(traceId);
+    void frontendLog("INFO", "assistant_runtime_mounted", "Assistant runtime 已挂载", {
       traceId,
+      data: {
+        taskId,
+        workspaceId: workspaceId ?? null,
+        initialMessageCount: initialStateRef.current.messages.length,
+        initialRunId: initialStateRef.current.run.runId,
+        initialRunStatus: initialStateRef.current.run.status,
+      },
+    });
+    return () => {
+      mountedRef.current = false;
+      // React StrictMode deliberately performs an effect cleanup/setup pair in
+      // development. Delay the diagnostic one macrotask so that pair is not
+      // mistaken for a real runtime teardown (which would abort SSE).
+      unmountLogTimerRef.current = window.setTimeout(() => {
+        unmountLogTimerRef.current = null;
+        if (mountedRef.current) return;
+        void frontendLog("WARNING", "assistant_runtime_unmounted", "Assistant runtime 生命周期已清理", {
+          traceId,
+          data: {
+            taskId,
+            workspaceId: workspaceId ?? null,
+            lastRunId: latestStateRef.current.run.runId,
+            lastRunStatus: latestStateRef.current.run.status,
+          },
+        });
+      }, 0);
+      setActiveTraceId(null);
+    };
+  }, [taskId, traceId, workspaceId]);
+
+  useEffect(() => {
+    const previousBaseUrl = previousBackendBaseUrlRef.current;
+    previousBackendBaseUrlRef.current = backendBaseUrl;
+    if (previousBaseUrl === backendBaseUrl) return;
+
+    void frontendLog("INFO", "assistant_backend_runtime_url_changed", "Assistant 后端地址已变化", {
+      traceId,
+      data: { taskId, previousBaseUrl, backendBaseUrl },
+    });
+
+    const status = latestStateRef.current.run.status;
+    if (status === "pending" || status === "running") {
+      setIssue({ message: "本机后端已重启，正在恢复当前对话…", retryable: true });
+      // The supervisor may replace the backend process and port. Keep this
+      // runtime instance alive and let Assistant UI resume the same run with
+      // the newly published transport URL.
+      runtimeControlsRef.current?.resume();
+    }
+  }, [backendBaseUrl, setIssue]);
+
+  const registerComposerRestore = useCallback((restore: (text: string) => void) => {
+    composerRestoreRef.current = restore;
+  }, []);
+
+  const handleSendError = useCallback(async (error: Error, params: { commands: readonly unknown[]; updateState: (updater: (state: TransportState) => TransportState) => void }) => {
+    void frontendLog("ERROR", "assistant_transport_stream_error", "Assistant Transport 流发生错误", {
+      traceId,
+      data: {
+        taskId,
+        commandCount: params.commands.length,
+        lastRunId: latestStateRef.current.run.runId,
+        lastRunStatus: latestStateRef.current.run.status,
+      },
       error,
     });
-    const failedText = [...commands]
-      .reverse()
-      .map((command) => extractUserAddMessageText(command))
-      .find((text) => text.trim().length > 0);
+    const failedText = [...params.commands].reverse().map(extractUserAddMessageText).find((text) => text.trim().length > 0);
     if (failedText) composerRestoreRef.current?.(failedText);
-    const message =
-      error instanceof Error && error.message
-        ? error.message
-        : "网络异常，请检查后端服务是否在运行";
-    updateState((current) => ({
-      ...current,
-      error: { code: "SEND_FAILED", message, retryable: true },
-    }));
-  }, [traceId]);
-  const runtime = useAssistantTransportRuntime<TransportState>({
-    // 只在 runtime 首次创建时捕获一次，故必须在挂载前把服务端历史灌入。
+    setIssue({
+      message: safeFrontendErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
+      retryable: true,
+    });
+
+    // 重新读取服务端 snapshot 仅用于恢复 runtime 的本地渲染基线，不把任何 UI
+    // state 写回后端，也不把本地错误伪装成 canonical message。
+    try {
+      const snapshot = parseTransportState(await apiRequest<unknown>(`/tasks/${taskId}/assistant/state`));
+      params.updateState(() => snapshot);
+    } catch {
+      // 原始传输错误已经可见，恢复失败不覆盖它。
+    }
+  }, [taskId, setIssue, traceId]);
+
+  const reconcileAfterTransportFinish = useCallback(async () => {
+    try {
+      void frontendLog("INFO", "assistant_transport_reconcile_started", "Assistant Transport 流结束后读取最新快照", {
+        traceId,
+        data: { taskId, lastRunId: latestStateRef.current.run.runId, lastRunStatus: latestStateRef.current.run.status },
+      });
+      const snapshot = parseTransportState(await apiRequest<unknown>(`/tasks/${taskId}/assistant/state`));
+      latestStateRef.current = snapshot;
+      void frontendLog("INFO", "assistant_transport_reconcile_completed", "Assistant Transport 最新快照已读取", {
+        traceId,
+        data: {
+          taskId,
+          runId: snapshot.run.runId,
+          runStatus: snapshot.run.status,
+          messageCount: snapshot.messages.length,
+        },
+      });
+      if (snapshot.run.status === "pending" || snapshot.run.status === "running") {
+        runtimeControlsRef.current?.resume();
+        return;
+      }
+
+      // A resume-state 204 means Assistant UI did not import a new state. Push
+      // the terminal canonical snapshot into the same runtime so it cannot
+      // repeatedly interpret its stale local pending/running state as active.
+      runtimeControlsRef.current?.importState(snapshot);
+      setIssue(null);
+    } catch (error) {
+      setIssue({
+        message: safeFrontendErrorMessage(error, "无法读取本机后端的最新对话状态"),
+        retryable: true,
+      });
+    }
+  }, [taskId, setIssue, traceId]);
+
+  const runtime = useTaskAssistantTransportRuntime(taskId, {
     initialState,
     protocol: "assistant-transport",
-    api: `${getApiBaseUrl()}/assistant`,
+    capabilities: { edit: false },
+    api: `${backendBaseUrl}/assistant`,
+    resumeApi: `${backendBaseUrl}/assistant/resume`,
+    resumeStateApi: `${backendBaseUrl}/tasks/${taskId}/assistant/resume-state`,
     headers: async () => ({
+      Accept: "text/event-stream",
       "Content-Type": "application/json",
       "X-Trace-Id": traceId,
     }),
-    prepareSendCommandsRequest: (body) => {
+    body: async () => {
       const selection = readStoredSelection(taskId);
-      // 剥离 assistant-ui runtime 硬编码回传的 state 字段：后端已从服务端 turns 事实重建历史，
-      // 客户端不持有、不伪造、不回传 state；只保留模型选择注入（T1：有值才覆盖）。
+      return {
+        taskId,
+        threadId: `task-${taskId}`,
+        ...(workspaceId != null ? { workspaceId } : {}),
+        ...(selection?.providerId !== undefined ? { providerId: selection.providerId } : {}),
+        ...(selection?.modelName !== undefined ? { modelName: selection.modelName } : {}),
+        ...(selection?.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+      };
+    },
+    prepareSendCommandsRequest: (body) => {
+      // assistant-ui 的 request body 会带上本地 state。后端契约 extra=forbid，
+      // 所以只能在这个唯一发送边界剥离它；前端不会把 snapshot 当成事实回传。
+      const backendRequest = Object.fromEntries(
+        Object.entries(body).filter(([key]) => key !== "state"),
+      );
       const commands = body.commands.map((command) => {
-        if (command.type !== "add-message") return command;
         const key = command as object;
         let commandId = commandIds.current.get(key);
         if (!commandId) {
           commandId = crypto.randomUUID();
+          commandIds.current.set(key, commandId);
         }
-        commandIds.current.set(key, commandId);
-        return { ...command, commandId };
+        return command.type === "add-message" ? { ...command, commandId } : command;
       });
-      const rest = Object.fromEntries(
-        Object.entries(body).filter(([key]) => key !== "state"),
-      );
-      rest.commands = commands;
-      const request = {
-        ...rest,
-        taskId,
-        // Task 是领域唯一身份；Transport threadId 统一采用 task-{taskId}。
-        threadId: `task-${taskId}`,
-      };
-      void frontendLog("INFO", "assistant_transport_request_prepared", "Assistant Transport 请求已组装", {
+      void frontendLog("INFO", "assistant_transport_request_prepared", "Assistant Transport 请求已准备发送", {
         traceId,
         data: {
           taskId,
+          threadId: `task-${taskId}`,
           commandCount: commands.length,
           commandTypes: commands.map((command) => command.type),
-          isResume: commands.length === 0,
+          stateStripped: Object.prototype.hasOwnProperty.call(body, "state"),
+          parentIdPresent: Object.prototype.hasOwnProperty.call(body, "parentId"),
         },
       });
-      if (!selection) return request;
       return {
-        ...request,
-        ...(selection.providerId !== undefined && { providerId: selection.providerId }),
-        ...(selection.modelName !== undefined && { modelName: selection.modelName }),
-        ...(selection.reasoningEffort !== undefined && { reasoningEffort: selection.reasoningEffort }),
+        ...backendRequest,
+        commands,
+        taskId,
+        threadId: `task-${taskId}`,
+        ...(workspaceId != null ? { workspaceId } : {}),
       };
     },
-    onResponse: async (response) => {
-      await frontendLog("INFO", "assistant_transport_response", "Assistant Transport 已收到响应", {
+    onResponse: (response) => {
+      void frontendLog("INFO", "assistant_transport_response_received", "Assistant Transport 已收到响应头", {
         traceId,
-        data: { taskId, status: response.status, ok: response.ok },
+        data: {
+          taskId,
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+          taskHeader: response.headers.get("x-cosir-task-id"),
+          threadHeader: response.headers.get("x-cosir-thread-id"),
+          traceHeader: response.headers.get("x-trace-id"),
+        },
       });
+      setIssue(null);
+    },
+    onFinish: () => {
+      finishCountRef.current += 1;
+      const status = latestStateRef.current.run.status;
+      const connectionMetadata = latestConnectionMetadataRef.current;
+      void frontendLog("INFO", "assistant_transport_stream_finished", "Assistant Transport 流生命周期结束", {
+        traceId,
+        data: {
+          taskId,
+          finishCount: finishCountRef.current,
+          runId: latestStateRef.current.run.runId,
+          runStatus: status,
+          messageCount: latestStateRef.current.messages.length,
+          pendingCommandCount: connectionMetadata.pendingCommandCount,
+          isSending: connectionMetadata.isSending,
+          pendingCommandTypes: connectionMetadata.commandTypes,
+        },
+      });
+      const terminal = status === "completed"
+        || status === "failed"
+        || status === "cancelled"
+        || status === "interrupted";
+      if (!terminal) {
+        setIssue({ message: "连接暂时中断，正在从本机后端恢复最新状态…", retryable: true });
+        // EOF 不是完成信号：保留同一个 runtime，并让 Assistant UI 使用
+        // resumeApi/resumeStateApi 重新订阅原 run。不能通过 key 重建 runtime，
+        // 否则旧 runtime 的 AbortController 会主动取消当前请求生命周期。
+        void reconcileAfterTransportFinish();
+      } else {
+        setIssue(null);
+      }
     },
     onError: handleSendError,
-    // 纯映射函数：仅把后端 state 快照与待发送命令翻译为 assistant-ui 数据格式，
-    // 不写 React state、不产生副作用（停止按钮所需的 runId 由它自己通过
-    // 官方 useAssistantTransportState 读取，不在此处暴露）。
-    converter: (state, connectionMetadata) =>
-      toTransportThreadView(state, connectionMetadata),
+    onCancel: ({ error, commands }) => {
+      void frontendLog("WARNING", "assistant_transport_stream_cancelled", "Assistant Transport 请求被取消", {
+        traceId,
+        data: {
+          taskId,
+          commandCount: commands?.length ?? 0,
+          runId: latestStateRef.current.run.runId,
+          runStatus: latestStateRef.current.run.status,
+        },
+        error,
+      });
+      if (error) {
+        setIssue({
+          message: safeFrontendErrorMessage(error, "发送已取消，后端仍在确认运行状态"),
+          retryable: true,
+        });
+      }
+    },
+    converter: (state, connectionMetadata) => {
+      latestStateRef.current = state;
+      latestConnectionMetadataRef.current = {
+        pendingCommandCount: connectionMetadata.pendingCommands.length,
+        isSending: connectionMetadata.isSending,
+        commandTypes: connectionMetadata.pendingCommands.map((command) => command.type),
+      };
+      transportUpdateCountRef.current += 1;
+      if (
+        transportUpdateCountRef.current <= 3
+        || transportUpdateCountRef.current % 20 === 0
+        || state.run.status === "completed"
+        || state.run.status === "failed"
+        || state.run.status === "cancelled"
+        || state.run.status === "interrupted"
+      ) {
+        void frontendLog("DEBUG", "assistant_transport_state_update", "Assistant Transport 状态更新采样记录", {
+          traceId,
+          data: {
+            taskId,
+            updateCount: transportUpdateCountRef.current,
+            runId: state.run.runId,
+            runStatus: state.run.status,
+            messageCount: state.messages.length,
+            connectionMetadataPresent: connectionMetadata != null,
+            pendingCommandCount: connectionMetadata.pendingCommands.length,
+            isSending: connectionMetadata.isSending,
+            pendingCommandTypes: connectionMetadata.pendingCommands.map((command) => command.type),
+          },
+        });
+      }
+      return toTransportThreadView(state, connectionMetadata);
+    },
   });
-  const config = AuiConfig({ tools: Tools({ toolkit: codingAgentToolkit }) });
 
   return (
-    <AssistantRuntimeProvider runtime={runtime} config={config}>
+    <AssistantRuntimeProvider runtime={runtime}>
+      <RuntimeControlBridge
+        register={registerRuntimeControls}
+        resumeOnMount={initialState.run.status === "pending" || initialState.run.status === "running"}
+        taskId={taskId}
+      />
       <ComposerRestoreBridge register={registerComposerRestore} />
-      <div className="h-dvh">
+      <div className="flex h-full min-h-0 flex-col">
         <Thread taskId={taskId} />
       </div>
+      <InitialMessageBridge
+        text={initialMessage}
+        sentRef={initialMessageSentRef}
+        initialState={initialState}
+        taskId={taskId}
+      />
     </AssistantRuntimeProvider>
   );
-}
+});
 
-/**
- * 把 composer 回填函数注册给 runtime options 闭包的副作用组件。
- *
- * `useAssistantTransportRuntime` 的 onError 闭包创建于组件渲染期，无法在其中
- * 使用 hooks 获取 composer；本组件在 Provider 内部挂载后，用 `useAui` 组装
- * `composer.setText` 回填函数并注册到调用方 ref，供发送失败时恢复用户输入。
- * 组件不渲染任何可见 UI。
- *
- * @param register - 回填函数注册器（稳定引用，写入调用方持有的 ref）。
- * @returns 恒为 null（纯副作用组件）。
- * @sideEffects 挂载后（及 aui 实例变化时）重新注册回填函数；组件卸载不注销
- *   （ref 由调用方生命周期管理，随 AssistantRuntime 一起销毁）。
- */
-function ComposerRestoreBridge({
+type RuntimeControls = {
+  resume: () => void;
+  importState: (state: TransportState) => void;
+};
+
+function RuntimeControlBridge({
   register,
+  resumeOnMount,
+  taskId,
 }: {
-  register: (restore: (text: string) => void) => void;
+  register: (controls: RuntimeControls | null) => void;
+  resumeOnMount: boolean;
+  taskId: number;
 }) {
   const aui = useAui();
+  const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
+  const initialResumeIssuedRef = useRef(false);
+
   useEffect(() => {
-    register((text) => {
-      aui.composer.setText(text);
+    register({
+      resume: () => aui.thread.resumeRun({ parentId: null }),
+      importState: (state) => aui.thread.importExternalState(state),
     });
+    return () => register(null);
+  }, [aui, register]);
+
+  useEffect(() => {
+    if (!resumeOnMount || initialResumeIssuedRef.current || remoteThreadId !== `task-${taskId}`) return;
+    // RemoteThreadListRuntime finishes binding the concrete thread runtime in
+    // the same commit. Defer the resume to the next macrotask so we never
+    // issue it against the transient inert binding returned during mount.
+    const timer = window.setTimeout(() => {
+      if (initialResumeIssuedRef.current) return;
+      initialResumeIssuedRef.current = true;
+      void aui.thread.resumeRun({ parentId: null });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [aui, remoteThreadId, resumeOnMount, taskId]);
+
+  return null;
+}
+
+function InitialMessageBridge({
+  text,
+  sentRef,
+  initialState,
+  taskId,
+}: {
+  text?: string;
+  sentRef: MutableRefObject<boolean>;
+  initialState: TransportState;
+  taskId: number;
+}) {
+  const aui = useAui();
+  const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
+
+  useEffect(() => {
+    // The pending text is retained by the task session rather than consumed by
+    // WorkspaceShell. If the session is revisited after the task already has a
+    // persisted message, the canonical snapshot is the idempotency guard.
+    if (
+      !text?.trim()
+      || sentRef.current
+      || remoteThreadId !== `task-${taskId}`
+      || initialState.messages.length > 0
+      || initialState.run.status !== "idle"
+    ) return;
+    aui.thread.composer().setText(text);
+    const timer = window.setTimeout(() => {
+      if (sentRef.current) return;
+      sentRef.current = true;
+      aui.thread.composer().send();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [aui, initialState.messages.length, initialState.run.status, remoteThreadId, sentRef, taskId, text]);
+
+  return null;
+}
+
+function ComposerRestoreBridge({ register }: { register: (restore: (text: string) => void) => void }) {
+  const aui = useAui();
+  useEffect(() => {
+    register((text) => aui.thread.composer().setText(text));
   }, [aui, register]);
   return null;
+}
+
+export async function cancelAssistantRun(taskId: number, runId: number): Promise<CancelRunResult> {
+  return cancelRun(taskId, runId);
 }

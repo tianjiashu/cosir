@@ -15,6 +15,28 @@
 
 import type { MessageStatus } from "@assistant-ui/core";
 
+export type KnownTransportToolStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+/** 后端五态之外的值只用于安全显示，不得被解释为 pending 或 completed。 */
+export type TransportToolStatus = KnownTransportToolStatus | "unknown";
+
+export type TransportToolPresentation = {
+  verb?: string;
+  icon?: string;
+  surface?: "trace" | "standalone";
+  expandable?: boolean;
+  expand_layout?: "none" | "details" | "list" | "diff" | "write" | "terminal";
+  default_open?: boolean;
+  [key: string]: unknown;
+};
+
+export type TransportToolData = Record<string, unknown>;
+
 /**
  * 文本 part：Transport 协议中的纯文本片段。
  *
@@ -24,8 +46,8 @@ import type { MessageStatus } from "@assistant-ui/core";
 export type TransportTextPart = {
   type: "text";
   text: string;
-  /** 运行中为 "running"，结束为 "completed"。 */
-  status?: "running" | "completed";
+  /** 运行中为 "running"，结束为 "completed"。未知值保留给 converter 处理。 */
+  status?: string;
 };
 
 /**
@@ -40,8 +62,8 @@ export type TransportReasoningPart = {
   type: "reasoning";
   /** 模型推理文本。 */
   text: string;
-  /** 推理通道运行中为 "running"，结束为 "completed"。 */
-  status?: "running" | "completed";
+  /** 推理通道运行中为 "running"，结束为 "completed"。未知值保留给 converter 处理。 */
+  status?: string;
   /** 推理摘要（后端当前不产，保留以对齐 assistant-ui 契约）。 */
   unstable_summary?: string;
 };
@@ -65,25 +87,26 @@ export type TransportToolCallPart = {
   result?: unknown;
   /** 工具执行错误文本；成功时为空。 */
   error?: string;
-  /** 后端工具调用生命周期状态。 */
-  status?:
-    | "pending"
-    | "running"
-    | "completed"
-    | "failed"
-    | "cancelled"
-    ;
+  /** 后端工具调用生命周期状态；未知 wire 值由 converter 显式标为 unknown。 */
+  status?: string;
   /** 后端在失败时提供的稳定错误标识（可选）。 */
   errorCode?: string;
+  /** 后端声明的工具展示布局；它只影响 renderer，不改变工具生命周期。 */
+  presentation?: TransportToolPresentation;
+  /** 后端治理后的 UI 展示数据，前端不得从 result 或 args 推导替代。 */
+  data?: TransportToolData | null;
+  /** 后端显式标记的错误结果。 */
+  isError?: boolean;
 };
 
 /** 单条 Transport 消息：对应后端 canonical conversation 投影出的一条 UI 消息。 */
 export type TransportMessage = {
   id: string;
+  runId?: number | null;
   role: "user" | "assistant";
   parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart>;
   /** 后端领域状态，由前端 converter 翻译为 assistant-ui 的 MessageStatus。 */
-  status?: string;
+  status: string;
   /**
    * 中性领域终态原因，取自后端 turns.end_reason（可能为 null）。
    * 仅作事实透传，不含 assistant-ui 语义；converter 据此区分 failed 的不同终止原因。

@@ -1,7 +1,8 @@
 import { apiRequest } from "@/lib/api/client";
 import { useEffect, useRef, useState } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
-import { frontendLog } from "@/lib/logging/frontend-log";
+import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 
 /** hook 返回的首屏历史加载结果。 */
 export type AssistantInitialStateResult = {
@@ -26,7 +27,7 @@ export type AssistantInitialStateResult = {
  *
  * 行为说明：
  * - 挂载及 `taskId` 变化时立即拉取；同时重置上一次的错误与历史，避免旧 task 残留。
- * - 拉取成功：写入 `initialState`（messages 缺失时回落空数组）。
+ * - 拉取成功：严格校验并写入服务端返回的完整 `initialState`，不补造字段。
  * - 拉取失败：写 `error`（优先取 Error.message，否则固定文案），并保留错误态供「重试」。
  * - 卸载或 `taskId` 变化导致的新一轮拉取发起后，旧请求的结果不再写入（cancelledRef 守卫）。
  * - 初次加载与 `retry` 共用同一个 `load()`，请求逻辑与错误文案只写一处，消除重复。
@@ -70,7 +71,7 @@ export function useAssistantInitialState(
    */
   function load() {
     const requestGeneration = ++requestGenerationRef.current;
-    void apiRequest<TransportState>(`/tasks/${taskId}/assistant/state`)
+    void apiRequest<unknown>(`/tasks/${taskId}/assistant/state`)
       .then((data) => {
         if (
           cancelledRef.current ||
@@ -78,13 +79,18 @@ export function useAssistantInitialState(
         ) {
           return;
         }
-        // 后端首屏端点返回完整 TransportState（含 run）；整包写入，不手工裁剪字段，
-        // 避免与契约类型（TransportState.run 必填）失配，也保留 run.runId 供停止按钮使用。
-        // 仅对 messages 做防御性兜底：若后端返回结构异常（缺 messages 字段），
-        // 回落空数组，避免把非法对象整体写进 state；不影响 run 必填语义。
+        const state = parseTransportState(data);
+        void frontendLog("INFO", "assistant_initial_state_loaded", "加载对话历史成功", {
+          data: {
+            taskId,
+            messageCount: state.messages.length,
+            runId: state.run.runId,
+            runStatus: state.run.status,
+          },
+        });
         setLoadedState({
           taskId,
-          state: { ...data, messages: data?.messages ?? [] },
+          state,
         });
         setLoadError(null);
       })
@@ -101,8 +107,7 @@ export function useAssistantInitialState(
         });
         setLoadError({
           taskId,
-          message:
-            cause instanceof Error ? cause.message : "对话历史加载失败，请重试",
+          message: safeFrontendErrorMessage(cause, "对话历史加载失败，请重试"),
         });
       });
   }

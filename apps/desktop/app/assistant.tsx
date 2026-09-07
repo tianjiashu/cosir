@@ -3,6 +3,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAssistantInitialState } from "@/hooks/use-assistant-initial-state";
 import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
+import { useState } from "react";
 
 /**
  * 桌面端主入口：先拉取服务端首屏历史，state 就绪后再挂载 runtime。
@@ -10,8 +11,8 @@ import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
  * 关键约束（任务书 §3.5）：`useAssistantTransportRuntime` 只在 runtime 首次创建时
  * 捕获一次 `initialState`，之后无论如何变化都不再生效。因此本组件在挂载后立即
  * 经 `useAssistantInitialState` 拉取服务端 state，待数据就绪才渲染内层
- * `AssistantRuntime`；并用 `key={taskId}` 保证切换 task 时内层组件连同 runtime
- * 一并重建，避免历史残留。
+ * `AssistantRuntime`。taskId 变化时 hook 先返回 null，旧 runtime 在新快照就绪前
+ * 被卸载；这使 task 切换成为明确的页面生命周期，而不是依赖 key 重置活动请求。
  *
  * 本文件为瘦入口：只负责「拉取状态 → 三分支渲染（加载/错误/就绪）」，不再承载
  * 消息投递、runtime 装配等子职责（已拆至 components/assistant/ 下）。
@@ -21,14 +22,22 @@ import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
  */
 export const Assistant = ({
   taskId,
+  workspaceId,
+  initialMessage,
 }: {
   taskId: number;
+  workspaceId?: number | null;
+  initialMessage?: string;
 }) => {
+  // WorkspaceShell may finish its task-list refresh after the snapshot request.
+  // Freeze the workspace identity for this task session so that a late parent
+  // refresh cannot replace the Assistant UI transport while a run is active.
+  const [sessionWorkspaceId] = useState(workspaceId);
   const { initialState, error, retry } = useAssistantInitialState(taskId);
 
   if (error) {
     return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-3 text-sm">
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 text-sm">
         <p className="text-destructive">{error}</p>
         <button
           type="button"
@@ -43,7 +52,7 @@ export const Assistant = ({
 
   if (!initialState) {
     return (
-      <div className="flex h-dvh flex-col gap-3 p-5">
+      <div className="flex h-full min-h-0 flex-col gap-3 p-5">
         <Skeleton className="h-16 w-2/3" />
         <Skeleton className="h-16 w-3/4" />
         <Skeleton className="h-16 w-1/2" />
@@ -52,11 +61,11 @@ export const Assistant = ({
   }
 
   return (
-    // key 保证切换 task 时 runtime 整体重建（任务书 §3.5），避免历史交叉残留。
     <AssistantRuntime
-      key={taskId}
       taskId={taskId}
+      workspaceId={sessionWorkspaceId}
       initialState={initialState}
+      initialMessage={initialMessage}
     />
   );
 };

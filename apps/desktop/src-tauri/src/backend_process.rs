@@ -32,18 +32,21 @@ pub fn spawn_backend(
     backend_dir: &Path,
     port: u16,
     bootstate_file: &Path,
-    use_uv: bool,
+    uv_cache_dir: Option<&Path>,
     log_file: &Path,
     structured_log_dir: &Path,
 ) -> Result<BackendProcess, String> {
     let mut command = Command::new(launcher);
     command.current_dir(backend_dir);
-    if use_uv {
+    if uv_cache_dir.is_some() {
         command.args(["run", "--directory"]);
         command.arg(backend_dir);
         command.args(["python", "-m", "app"]);
     } else {
         command.args(["-m", "app"]);
+    }
+    if let Some(cache_dir) = uv_cache_dir {
+        command.env("UV_CACHE_DIR", cache_dir);
     }
     let mut child = command
         .env("CODING_AGENT_PORT", port.to_string())
@@ -107,10 +110,10 @@ pub fn spawn_backend(
             terminate_child_tree(&mut child);
             return Err("无法将后端进程加入作业对象".to_string());
         }
-        return Ok(BackendProcess {
+        Ok(BackendProcess {
             child,
             _job: WindowsJob(job),
-        });
+        })
     }
     #[cfg(not(windows))]
     Ok(BackendProcess { child })

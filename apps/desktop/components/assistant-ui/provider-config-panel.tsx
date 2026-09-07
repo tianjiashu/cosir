@@ -1,14 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2Icon, Loader2Icon, PlusIcon, Settings2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
+import { CheckCircle2Icon, Loader2Icon, Settings2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -206,10 +205,6 @@ export function ProviderConfigPanel({
           </div>
 
           {message && <p className={message.ok ? "text-emerald-600 text-sm" : "text-destructive text-sm"}>{message.text}</p>}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>关闭</Button>
-            <Button variant="ghost" onClick={() => { resetForm(); setMessage(null); }}> <PlusIcon /> 新增 Provider</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

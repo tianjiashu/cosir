@@ -27,6 +27,7 @@ import {
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
 import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/workspace-preferences";
+import { initialMessageForTask, type PendingInitialMessage } from "@/lib/assistant/initial-message";
 
 type WorkspaceWithTasks = Workspace & { tasks: WorkspaceTask[] };
 type DeleteTarget =
@@ -103,6 +104,14 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
     };
   }, [initialTaskId, load]);
 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 1024px)");
+    const syncCollapsedState = () => setCollapsed(mediaQuery.matches);
+    syncCollapsedState();
+    mediaQuery.addEventListener("change", syncCollapsedState);
+    return () => mediaQuery.removeEventListener("change", syncCollapsedState);
+  }, []);
+
   // 路由变化时，路由传入的任务身份
   // 是当前页面的权威来源，必须在下一轮加载开始时同步到 activeTaskId，避免 A → B
   // 时旧对话在工作区列表加载期间继续显示，或因列表请求异常而永久残留。与此同时
@@ -113,9 +122,15 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
   }, [initialTaskId]);
 
   const selectedWorkspace = useMemo(() => workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId), [selectedWorkspaceId, workspaces]);
+  const activeTaskWorkspaceId = useMemo(() => {
+    if (activeTaskId === null) return selectedWorkspaceId;
+    return workspaces.find((workspace) => workspace.tasks.some((task) => task.task_id === activeTaskId))?.workspace_id
+      ?? selectedWorkspaceId;
+  }, [activeTaskId, selectedWorkspaceId, workspaces]);
   const toggleWorkspace = (workspaceId: number) => setExpandedWorkspaceIds((current) => current.includes(workspaceId) ? current.filter((id) => id !== workspaceId) : [...current, workspaceId]);
   const selectWorkspace = (workspaceId: number) => { setSelectedWorkspaceId(workspaceId); writeLastWorkspaceId(workspaceId); };
-  const startNewConversation = (workspaceId = selectedWorkspaceId) => { if (workspaceId) writeLastWorkspaceId(workspaceId); setSelectedWorkspaceId(workspaceId); setActiveTaskId(null); window.history.pushState({}, "", "/"); };
+  const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingInitialMessage | null>(null);
+  const startNewConversation = (workspaceId = selectedWorkspaceId) => { if (workspaceId) writeLastWorkspaceId(workspaceId); setSelectedWorkspaceId(workspaceId); setPendingInitialMessage(null); setActiveTaskId(null); window.history.pushState({}, "", "/"); };
   const requestDelete = (target: NonNullable<DeleteTarget>) => { setDeleteError(null); setDeleteTarget(target); };
 
   const confirmDelete = async () => {
@@ -148,9 +163,9 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
   };
 
   return (
-    <div className="bg-background flex h-dvh min-h-0">
+    <div className="bg-background flex h-dvh min-h-0 overflow-hidden">
       <BackendStatusBanner />
-      <aside className={`bg-muted/20 flex shrink-0 flex-col border-r transition-[width] duration-200 ${collapsed ? "w-14" : "w-72"}`}>
+      <aside className={`bg-muted/20 flex min-h-0 shrink-0 flex-col border-r transition-[width] duration-200 ${collapsed ? "w-14" : "w-72"}`}>
         <div className="flex h-14 items-center justify-between border-b px-3">
           {!collapsed && <span className="text-sm font-semibold">工作区</span>}
           <Button variant="ghost" size="icon-sm" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "展开侧栏" : "收起侧栏"}>
@@ -196,9 +211,15 @@ export function WorkspaceShell({ initialTaskId = null }: { initialTaskId?: numbe
           </>
         )}
       </aside>
-      <main className="min-w-0 flex-1">
-        <div className="flex h-14 items-center justify-between border-b px-5"><div className="min-w-0"><p className="text-sm font-medium">{activeTaskId ? "对话" : "新对话"}</p><p className="text-muted-foreground truncate text-xs">{activeTaskId ? "已存在任务" : "选择工作区后开始创建对话"}</p></div>{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div>
-        {activeTaskId ? <div className="h-[calc(100dvh-3.5rem)]"><Assistant taskId={activeTaskId} /></div> : <div className="h-[calc(100dvh-3.5rem)]"><NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation) => { setActiveTaskId(conversation.task_id); window.history.pushState({}, "", `/tasks/${conversation.task_id}`); void load(); }} /></div>}
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="text-sm font-medium">{activeTaskId ? "对话" : "新对话"}</p><p className="text-muted-foreground truncate text-xs">{activeTaskId ? "已存在任务" : "选择工作区后开始创建对话"}</p></div>{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {activeTaskId ? <Assistant
+            taskId={activeTaskId}
+            workspaceId={activeTaskWorkspaceId}
+            initialMessage={initialMessageForTask(pendingInitialMessage, activeTaskId)}
+          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText) => { setPendingInitialMessage({ taskId: conversation.task_id, text: initialText }); setActiveTaskId(conversation.task_id); window.history.pushState({}, "", `/tasks/${conversation.task_id}`); void load(); }} />}
+        </div>
       </main>
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
     </div>

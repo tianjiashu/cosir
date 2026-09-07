@@ -14,6 +14,7 @@ import {
   type ModelListItem,
   type ProviderModelGroup,
 } from "@/lib/api/models";
+import { ReasoningEffortSelect } from "@/components/assistant-ui/reasoning-effort-select";
 import { ProviderConfigPanel } from "@/components/assistant-ui/provider-config-panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -21,16 +22,8 @@ import {
   parseStoredSelection,
   readStoredSelection,
   selectionStorageKey,
+  writeStoredSelection,
 } from "@/lib/model-selection-storage";
-
-const EFFORT_OPTIONS: Array<{
-  value: NonNullable<ModelSelection["reasoningEffort"]>;
-  label: string;
-}> = [
-  { value: "low", label: "快速" },
-  { value: "high", label: "标准" },
-  { value: "max", label: "深度" },
-];
 
 function findModel(
   groups: ProviderModelGroup[],
@@ -57,10 +50,10 @@ export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: n
       setGroups(nextGroups);
       setStatus("ready");
 
-      const storageKey = selectionStorageKey(taskId);
-      const stored = window.localStorage.getItem(storageKey);
-      const storedSelection = readStoredSelection(taskId);
-      if (stored && !parseStoredSelection(stored)) window.localStorage.removeItem(storageKey);
+      const storageKey = taskId === undefined ? null : selectionStorageKey(taskId);
+      const stored = storageKey ? window.localStorage.getItem(storageKey) : null;
+      const storedSelection = taskId === undefined ? null : readStoredSelection(taskId);
+      if (storageKey && stored && !parseStoredSelection(stored)) window.localStorage.removeItem(storageKey);
       const storedModel = storedSelection
         ? findModel(nextGroups, Number(storedSelection.providerId), String(storedSelection.modelName))
         : undefined;
@@ -78,7 +71,7 @@ export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: n
               : model.supports_reasoning_effort ? "high" : null,
         };
         setSelection(nextSelection);
-        window.localStorage.setItem(selectionStorageKey(taskId), JSON.stringify(nextSelection));
+        if (storageKey) writeStoredSelection(taskId!, nextSelection);
       } else {
         setSelection(null);
       }
@@ -121,7 +114,9 @@ export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: n
 
   const updateSelection = (next: ModelSelection) => {
     setSelection(next);
-    window.localStorage.setItem(selectionStorageKey(taskId), JSON.stringify(next));
+    if (taskId !== undefined) {
+      writeStoredSelection(taskId, next);
+    }
     setOpen(false);
   };
 
@@ -171,7 +166,7 @@ export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: n
               openModelMenu();
             }
           }}
-          className="border-border/60 bg-background/80 text-foreground inline-flex h-8 max-w-60 items-center gap-1.5 rounded-lg border px-2 text-xs shadow-xs outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="bg-transparent text-foreground inline-flex h-8 max-w-60 items-center gap-1.5 rounded-md px-2 text-xs outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <SparklesIcon className="text-muted-foreground size-3.5 shrink-0" />
           <span className="truncate font-medium">{selection.modelName}</span>
@@ -229,18 +224,10 @@ export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: n
       </Popover>
 
       {selectedModel.supports_reasoning_effort && (
-        <label className="border-border/60 bg-background/80 text-muted-foreground inline-flex h-8 items-center gap-1.5 rounded-lg border px-2 text-xs shadow-xs">
-          <span className="sr-only">推理深度</span>
-          <select
-            aria-label="推理深度"
-            value={selection.reasoningEffort ?? "high"}
-            onChange={(event) => updateSelection({ ...selection, reasoningEffort: event.target.value as ModelSelection["reasoningEffort"] })}
-            className="cursor-pointer appearance-none bg-transparent pr-3 outline-none"
-          >
-            {EFFORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>推理：{option.label}</option>)}
-          </select>
-          <ChevronDownIcon className="pointer-events-none -ml-3 size-3" />
-        </label>
+        <ReasoningEffortSelect
+          value={selection.reasoningEffort ?? "high"}
+          onValueChange={(reasoningEffort) => updateSelection({ ...selection, reasoningEffort })}
+        />
       )}
     </div>
   );
