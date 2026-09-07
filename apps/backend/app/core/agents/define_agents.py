@@ -1,11 +1,31 @@
 from app.config.configuration import get_tool_registry
+from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
+
 
 # 内置默认工具名回退集合：当工具系统单例尚未初始化（如测试导入期）时，
 # 保证 developer 系父 profile 仍具备完整工具可见性，避免模块导入期触碰
 # 未初始化的全局单例而崩溃。生产启动时工具系统已注入，优先以注册表为准。
-_ALL_TOOLS = get_tool_registry().get_all_tool_names()
+# 改为调用期读取实时注册表，使 ``Settings.CODEGRAPH_ENABLED`` 关闭时 main/test
+# agent 的工具白名单同步不含 codegraph（规避导入期快照的时序脆弱点）。
+def _all_tool_names() -> list[str]:
+    """调用期读取实时工具注册表全量工具名。"""
+    return list(get_tool_registry().get_all_tool_names())
+
+
+def _codegraph_tool_names() -> list[str]:
+    """CodeGraph 启用时返回 6 个查询工具名，关闭时返回空（供 agent 白名单条件裁剪）。"""
+    if not Settings.CODEGRAPH_ENABLED:
+        return []
+    return [
+        "codegraph_explore",
+        "codegraph_search",
+        "codegraph_node",
+        "codegraph_callers",
+        "codegraph_callees",
+        "codegraph_impact",
+    ]
 
 
 def main_agent() -> AgentProfile:
@@ -29,7 +49,7 @@ def main_agent() -> AgentProfile:
         agent_id="main_agent",
         role="main_agent",
         description="协助用户完成软件工程项目开发任务",
-        allowed_tools=_ALL_TOOLS,
+        allowed_tools=_all_tool_names(),
         max_steps=300,
         main_agent=True,
         prompt_file_path=None,
@@ -67,12 +87,7 @@ def reviewer_agent() -> AgentProfile:
             "read_file",
             "list_directory",
             "search_files",
-            "codegraph_explore",
-            "codegraph_search",
-            "codegraph_node",
-            "codegraph_callers",
-            "codegraph_callees",
-            "codegraph_impact",
+            *_codegraph_tool_names(),
         ],
         # 子Agent需要指定模型，否则会报错，提示未配置模型
         model_name="deepseek/deepseek-v4-flash",
@@ -107,12 +122,7 @@ def analyst_agent() -> AgentProfile:
             "search_files",
             "web_search",
             "web_extract",
-            "codegraph_explore",
-            "codegraph_search",
-            "codegraph_node",
-            "codegraph_callers",
-            "codegraph_callees",
-            "codegraph_impact",
+            *_codegraph_tool_names(),
         ],
         model_name="deepseek/deepseek-v4-flash",
         max_steps=80,
@@ -159,7 +169,7 @@ def test_agent() -> AgentProfile:
             </example>
             """
         ),
-        allowed_tools=_ALL_TOOLS,
+        allowed_tools=_all_tool_names(),
         model_name="deepseek/deepseek-v4-flash",
         max_steps=80,
         prompt_file_path=None,
@@ -201,12 +211,7 @@ def coder_agent() -> AgentProfile:
             "apply_patch",
             "delete",
             "execute_terminal",
-            "codegraph_explore",
-            "codegraph_search",
-            "codegraph_node",
-            "codegraph_callers",
-            "codegraph_callees",
-            "codegraph_impact",
+            *_codegraph_tool_names(),
         ],
         model_name="deepseek/deepseek-v4-flash",
         max_steps=120,
