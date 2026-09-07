@@ -23,13 +23,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.dependencies import (
-    build_agent_registry,
-    get_conversation_run_executor,
-    set_agent_registry,
-    set_runtime,
-    set_tool_system,
-)
 from app.api.middleware.api_logging import install_http_exception_logging, install_request_logging
 from app.api.middleware.transport_error import install_transport_request_error_handler
 from app.bootstate import (
@@ -40,22 +33,25 @@ from app.bootstate import (
     write_bootstate,
 )
 from app.codegraph import CodeGraphKernelClient, CodeGraphKernelSupervisor
+from app.config.configuration import (
+    build_agent_registry,
+    set_agent_registry,
+    set_tool_system,
+)
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
-from app.core.workflows.event import ToolCallsSettledEvent
 from app.hook import HookContext, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import (
     close_service_dependencies,
-    get_conversation_event_projector,
-    get_conversation_run_service,
-    get_conversation_task_context_service,
+    get_conversation_run_executor,
     get_delegation_service,
     initialize_service_dependencies,
+    set_runtime,
 )
 
 
@@ -106,13 +102,16 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         backup_count=Settings.LOG_BACKUP_COUNT,
     )
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
-    _mark_interrupted_conversation_runs_failed()
 
     # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
     # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
     # 必须先于 build_tool_system：workspace_payload 工具装配需要注入已就绪的 Kernel client，
     # 否则 supervisor 未初始化，_codegraph_client() 恒返回 None，工具恒降级（审查暴露）。
-    _kernel_supervisor = await _start_codegraph_kernel()
+    # CodeGraph 总开关关闭时不挂载 Kernel（默认关闭）：不拉起 Kernel 子进程、不设 supervisor
+    # 单例，后续注册表/白名单/提示词同步不含 codegraph 入口。
+    _kernel_supervisor = (
+        await _start_codegraph_kernel() if Settings.CODEGRAPH_ENABLED else None
+    )
 
     # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
     # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
@@ -142,28 +141,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         close_service_dependencies()
         # 模型 HTTP 连接由 litellm 内部管理，无需进程级显式释放。
         _mark_boot_stopped()
-
-
-def _mark_interrupted_conversation_runs_failed() -> None:
-    """将上次后端进程遗留的 pending/running run 标记为失败。
-
-    当前阶段不自动恢复 Agent 执行；用户可提交新的 command 创建新的 run，
-    并基于已持久化的消息事实继续对话。
-    """
-    run_service = get_conversation_run_service()
-    context_service = get_conversation_task_context_service()
-    event_projector = get_conversation_event_projector()
-    for run in run_service.list_recoverable():
-        run_service.fail_run_if_pending_or_running(run.id, "backend_restarted")
-        event_projector.process(
-            ToolCallsSettledEvent(
-                task_id=run.task_id,
-                run_id=run.id,
-                status="failed",
-                reason="backend_restarted",
-            )
-        )
-        context_service.recover_interrupted_run(run.task_id, run.id)
 
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
