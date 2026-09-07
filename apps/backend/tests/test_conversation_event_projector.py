@@ -8,11 +8,13 @@ from typing import Any
 
 import pytest
 
-
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
-from app.assistant_transport.service.conversation_task_snapshot_service import SnapshotChange
+from app.assistant_transport.service.conversation_task_snapshot_service import (
+    ConversationTaskSnapshotService,
+    SnapshotChange,
+)
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
@@ -237,8 +239,8 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
             self.flush_count += 1
 
     controller = Controller(before)
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._apply_snapshot_change(controller, change)
+    snapshot_service = ConversationTaskSnapshotService.__new__(ConversationTaskSnapshotService)
+    snapshot_service._apply_snapshot_change(controller, change)
     assert controller.appended == []
     assert controller.state["messages"][1]["parts"] == [
         {"type": "text", "text": "你好", "status": "running"}

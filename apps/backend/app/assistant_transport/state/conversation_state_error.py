@@ -1,6 +1,6 @@
 """Conversation Transport 的稳定错误结构契约。"""
 
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 
 class ConversationStateError(TypedDict):

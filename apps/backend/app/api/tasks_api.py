@@ -11,15 +11,14 @@ import asyncio
 
 from fastapi import Depends, HTTPException
 
-from app.api.dependencies import get_conversation_run_service, get_task_service
 from app.api.schemas import (
     DeleteTaskResponse,
+    ForkTaskRequest,
     TaskResponse,
 )
 from app.app import app
-from app.config.logging.logger import log
-from app.service.provider.capability_service import CapabilityService
-from app.service.task.conversation_run_service import ConversationRunService
+from app.models.errors.task_fork_errors import SnapshotNotReadyError, TaskForkConflictError
+from app.service.depends import get_task_service
 from app.task_runtime.service.task_service import TaskService
 
 
@@ -27,49 +26,60 @@ from app.task_runtime.service.task_service import TaskService
 async def get_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
-    conversation_run_state_service: ConversationRunService = Depends(get_conversation_run_service),
 ) -> TaskResponse:
-    """返回任务状态（含生命周期 status、上下文窗口占用与派生 execution_status）。
+    """返回单个任务及其派生状态。
 
     参数:
         task_id: 来自路由的任务标识。
         task_service: 通过依赖注入的任务 service。
 
     返回:
-        ``TaskResponse``：已存储的任务状态（含 ``status``/``execution_status``，
-        以及 ``context_usage_used`` 与动态计算的 ``context_window_total``）。
+        指定任务的 ``TaskResponse``。
 
     异常:
         HTTPException: 当任务不存在时抛出。
 
     副作用:
-        无。
+        无（仅读取）。
     """
 
     try:
-        record = task_service.get_task(task_id)
+        task = task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
+    return TaskResponse.from_record(
+        task,
+        fork_available=task_service.is_fork_available(task_id),
+    )
 
-    # context_window_total 任务级口径（§6.4）：优先按该 task 最近一次 turn 的
-    # model_name 计算；无 turn / 无 model_name 时回退 Agent 默认模型名计算。
-    # 该值仅用于前端上下文窗口上限展示，解析失败不阻断任务返回。
-    context_window_total = None
+
+@app.post("/tasks/{task_id}/fork")
+async def fork_task(
+    task_id: int,
+    payload: ForkTaskRequest,
+    task_service: TaskService = Depends(get_task_service),
+) -> TaskResponse:
+    """从源 Task 指定历史 Run 创建一个新的 fork Task。"""
+
     try:
-        target_model = _latest_conversation_run_model_name(task_id, conversation_run_state_service)
-        if target_model is not None:
-            context_window_total = CapabilityService.get_model_context_window(target_model)
-    except Exception as exc:
-        log.warning(
-            "task_context_window_resolve_failed",
-            extra={
-                "msg": f"按最近 turn model_name 计算 context_window_total 失败，回退 None：{exc}",
-                "data": {"task_id": task_id},
+        target = await task_service.fork_task(task_id, payload.run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task or run not found") from exc
+    except SnapshotNotReadyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SNAPSHOT_NOT_READY",
+                "message": str(exc),
+                "retryable": True,
             },
-        )
-        context_window_total = None
-
-    return TaskResponse.from_record(record, context_window_total=context_window_total)
+        ) from exc
+    except TaskForkConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message, "retryable": True},
+        ) from exc
+    return TaskResponse.from_record(target, fork_available=True)
 
 
 @app.delete("/tasks/{task_id}")
@@ -100,63 +110,3 @@ async def delete_task(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     return DeleteTaskResponse(task_id=task_id, deleted=True)
-
-
-@app.get("/tasks/{task_id}/children")
-async def list_child_tasks(
-    task_id: int,
-    task_service: TaskService = Depends(get_task_service),
-) -> list[TaskResponse]:
-    """列出某任务下的全部子任务（委派子任务）。
-
-    子任务不出现在工作区对话列表，但可通过父任务的该端点下钻查看其轨迹。
-
-    参数:
-        task_id: 来自路由的父任务标识。
-        task_service: 通过依赖注入的任务 service。
-
-    返回:
-        该父任务的直接子任务 ``TaskResponse`` 列表；无子任务时返回空列表。
-
-    异常:
-        HTTPException: 当父任务不存在（级联 KeyError）时抛出。
-
-    副作用:
-        无（只读查询）。
-    """
-
-    try:
-        children = task_service.list_child_tasks(task_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
-    return [TaskResponse.from_record(child) for child in children]
-
-
-def _latest_conversation_run_model_name(
-    task_id: int, conversation_run_state_service: ConversationRunService
-) -> str | None:
-    """取得某任务最近一次 turn 的 ``model_name``（设计 §6.4 任务级口径）。
-
-    按创建时间升序取该 task 的全部 turn，返回最后一个非空 ``model_name``；无 turn
-    或全部 turn 未落库模型名（历史 NULL / Auto 运行期尚未回写）时返回 None，由
-    调用方回退到 Agent 默认模型名。
-
-    参数:
-        task_id: 任务标识。
-        conversation_run_state_service: 轮次 service（只读查询）。
-
-    返回:
-        最近一次 turn 的 ``model_name``；无可用值时返回 None。
-
-    异常:
-        无（查询失败向上抛出，由调用方 try/except 收敛为 total 缺失）。
-
-    副作用:
-        无（只读查询）。
-    """
-
-    turns = conversation_run_state_service.list_runs_for_task(task_id)
-    for turn in reversed(turns):
-        if turn.model_name:
-            return turn.model_name
-    return None

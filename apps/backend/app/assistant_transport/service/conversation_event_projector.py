@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from threading import RLock
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
+from sqlalchemy.orm import Session
 
 from app.assistant_transport.service.conversation_task_snapshot_service import (
     SnapshotChange,
 )
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_part import ConversationStatePart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.core.workflows.event import (
@@ -31,27 +33,6 @@ from app.core.workflows.event import (
     UserInputAppendedEvent,
 )
 from app.service.depends import get_conversation_task_snapshot_service
-
-
-class SnapshotOwnerPort(Protocol):
-    """Projector 所需的 snapshot 读写端口。
-
-    生产 ``ConversationTaskSnapshotService`` 与测试内存实现均按结构满足本端口，
-    projector 因此无需依赖具体 owner，可在无 SQLite 的环境下被驱动。
-    """
-
-    def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
-        """读取（必要时初始化）指定 Task 的 snapshot 副本。"""
-        ...
-
-    def apply_planned(
-        self,
-        task_id: int,
-        planner: Callable[[ConversationStateSnapshot], Sequence[ConversationStateMutation]],
-    ) -> SnapshotChange:
-        """在 owner 锁内规划并提交一次 mutation 批次。"""
-        ...
-
 
 _EVENT_ADAPTER: TypeAdapter[ConversationEvent] = TypeAdapter(ConversationEvent)
 _KNOWN_EVENT_TYPES = {
@@ -76,7 +57,7 @@ class ConversationEventProjector:
     ``event_id`` 用于抵御同一事件的重复投递，尤其是不可重复追加的文本 delta。
     """
 
-    def __init__(self, snapshot_service: SnapshotOwnerPort | None = None) -> None:
+    def __init__(self, snapshot_service: Any | None = None) -> None:
         """初始化 snapshot 投影器。
 
         参数:
@@ -96,11 +77,16 @@ class ConversationEventProjector:
         self._lock = RLock()
         self._seen_event_ids: dict[int, set[str]] = {}
 
-    def process(self, raw_event: object) -> SnapshotChange | None:
+    def process(
+        self,
+        raw_event: object,
+        session: Session | None = None,
+    ) -> SnapshotChange | None:
         """校验并投影一条事件。
 
         参数:
             raw_event: workflow custom stream 产出的 event 对象或其 JSON 字典。
+            session: 可选的外部数据库会话。传入时复用调用方事务，不创建新的写事务。
 
         返回:
             已提交的 ``SnapshotChange``；未知事件返回 ``None``；重复事件返回无 mutation
@@ -123,10 +109,17 @@ class ConversationEventProjector:
                 state = self._snapshot_service.ensure_state_snapshot(event.task_id)
                 return SnapshotChange(event.task_id, state, ())
 
-            change = self._snapshot_service.apply_planned(
-                event.task_id,
-                lambda state: self._plan(state, event),
-            )
+            def planner(state: ConversationStateSnapshot) -> Sequence[ConversationStateMutation]:
+                return self._plan(state, event)
+
+            if session is None:
+                change = self._snapshot_service.apply_planned(event.task_id, planner)
+            else:
+                change = self._snapshot_service.apply_planned(
+                    event.task_id,
+                    planner,
+                    session=session,
+                )
             seen.add(event.event_id)
             return change
 
@@ -202,13 +195,19 @@ class ConversationEventProjector:
             ConversationStateMutation(
                 "set",
                 ("messages", offset),
-                _message(f"user-{event.run_id}", event.run_id, "user", "completed", "completed"),
+                _message(
+                    f"user-{event.run_id}",
+                    event.run_id,
+                    "user",
+                    "completed",
+                    [{"type": "text", "text": "", "status": "completed"}],
+                ),
             ),
             ConversationStateMutation(
                 "set",
                 ("messages", offset + 1),
                 _message(
-                    f"assistant-{event.run_id}", event.run_id, "assistant", "running", "running"
+                    f"assistant-{event.run_id}", event.run_id, "assistant", "running", []
                 ),
             ),
             ConversationStateMutation("set", ("run", "runId"), event.run_id),
@@ -314,6 +313,8 @@ class ConversationEventProjector:
                     "args": copy.deepcopy(event.args),
                     "result": None,
                     "error": None,
+                    "presentation": copy.deepcopy(event.presentation),
+                    "data": None,
                     "isError": False,
                     "approvalRequestId": None,
                 },
@@ -344,6 +345,11 @@ class ConversationEventProjector:
             ConversationStateMutation("set", (*base, "status"), event.status),
             ConversationStateMutation(
                 "set", (*base, "result"), event.result if event.status == "completed" else None
+            ),
+            ConversationStateMutation(
+                "set",
+                (*base, "data"),
+                copy.deepcopy(event.data) if event.data is not None else None,
             ),
             ConversationStateMutation(
                 "set",
@@ -409,7 +415,7 @@ class ConversationEventProjector:
                 ConversationStateMutation("set", (*base, "endReason"), event.end_reason),
             ]
         )
-        if event.status.value in {"completed", "failed", "cancelled"}:
+        if event.status.value in {"completed", "failed", "cancelled", "interrupted"}:
             for part_index, part in enumerate(state["messages"][message_index]["parts"]):
                 if (
                     isinstance(part, dict)
@@ -454,9 +460,13 @@ def _message(
     run_id: int,
     role: Literal["user", "assistant"],
     status: str,
-    part_status: Literal["running", "completed"],
+    parts: list[ConversationStatePart],
 ) -> ConversationStateMessage:
-    """构造 Transport user/assistant 消息骨架。"""
+    """构造 Transport user/assistant 消息骨架。
+
+    assistant 消息不预置空 text part，避免模型先输出 reasoning 时把真实 part 顺序
+    错误地固定为 ``text -> reasoning``。
+    """
 
     return {
         "id": message_id,
@@ -464,7 +474,7 @@ def _message(
         "role": role,
         "status": status,
         "endReason": None,
-        "parts": [{"type": "text", "text": "", "status": part_status}],
+        "parts": parts,
     }
 
 

@@ -223,13 +223,15 @@ class ApplyPatchTool(HandlerBase):
                 error="syntax error detected in patched file(s)",
                 reason=self._format_multi_file_syntax_reason(diagnostics_all),
                 permission=self.permission,
-                display_data={"syntax_errors": syntax_errors},
+                data={"syntax_errors": syntax_errors},
             )
+        display_data = build_file_change_display_data(results)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff(results),
-            data=build_file_change_display_data(results),
+            data={"kind": "file-changes", **display_data},
+            internal_data=display_data,
         )
 
     def _format_multi_file_syntax_reason(self, diagnostics: list[SyntaxDiagnostic]) -> str:
@@ -294,8 +296,9 @@ class ApplyPatchTool(HandlerBase):
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="",
+                verb="应用补丁",
                 icon="git-compare",
+                surface="standalone",
                 expandable=True,
                 expand_layout="diff",
             ),

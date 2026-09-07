@@ -9,7 +9,7 @@ aiosqlite 直连 ``Settings.CHECKPOINT_FILE``，不经过本模块引擎。
 职责边界：
     - 负责：两个 SQLAlchemy 引擎（主库 / 日志库）的按需创建、进程级缓存复用
       （委托 ``engine_cache``）、schema 初始化触发（委托 ``init_schema``）、统一释放。
-    - 不负责：引擎底层 PRAGMA 与连接池细节（见 ``engine_cache``）、建表与迁移 SQL
+    - 不负责：引擎底层 PRAGMA 与连接池细节（见 ``engine_cache``）、建表与 schema 正规化 SQL
       （见 ``init_schema``）、任何业务读写（见 ``crud/``）。
 
 生命周期约定：进程启动时调用一次 ``init_storage()``；各 CRUD 在其 ``__init__``

@@ -12,6 +12,7 @@ from app.core.observability import (
 )
 from app.core.observability.tool_trace_recorder import ToolTraceRecorder
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.runtime.execution_mode import ExecutionMode
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -20,7 +21,6 @@ from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
-    get_conversation_run_executor,
     get_conversation_run_service,
     get_task_service,
     get_workspace_service,
@@ -73,6 +73,8 @@ class AgentRuntime:
     async def execute_run(
         self,
         run: ConversationRunRecord,
+        *,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
@@ -99,11 +101,13 @@ class AgentRuntime:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
         agent_profile = agent_profile.derive_for_run(run)
-        await self.run_agent(agent_profile)
+        await self.run_agent(agent_profile, execution_mode=execution_mode)
 
     async def run_agent(
         self,
         agent: AgentProfile,
+        *,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -152,25 +156,19 @@ class AgentRuntime:
                 workspace, task, run, agent, tool_trace_recorder=recorder
             )
             # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
-            # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
+                # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
 
             with conversation_run_trace(metadata) as trace_result:
                 await agent.workflow.run(
                     operations,
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
+                    execution_mode=execution_mode,
                 )
-            try:
-                recorder.flush()
-            except Exception:
-                log.exception(
-                    "langfuse_recorder_flush_unhandled",
-                    extra={
-                        "msg": "工具 trace recorder flush 未处理异常，已忽略以避免影响 run",
-                        "data": {"task_id": task_id, "run_id": run_id},
-                    },
-                )
-            await self._publish_stable_file_changes(run_id)
+            # Langfuse recorder 使用 SDK 自带的后台批量上报。不能在对话收尾路径
+            # 主动调用同步 flush：网络不可用时 SDK 会等待重试，导致 run 无法及时
+            # 进入 completed/failed 终态，前端会一直显示运行中。
+            # await self._publish_stable_file_changes(run_id)
             # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
             # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
             await HookInterceptor.async_safe_fire(

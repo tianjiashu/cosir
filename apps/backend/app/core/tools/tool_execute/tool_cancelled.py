@@ -1,7 +1,8 @@
-import dataclasses
+import copy
+from collections.abc import Mapping
+from typing import Any
 
 from app.core.tools.schemas import ToolObservation
-from app.models.enums.error_kind import ErrorKind
 
 # 执行前被取消（call 边界检测到取消信号、尚未执行）时复用的 reason 模板。
 # 措辞要点：取消是「用户/系统主动中止」，不是「执行故障」，因此**不替用户决定
@@ -23,6 +24,8 @@ def tool_cancelled(
     error: str = "",
     permission: str = "",
     tool_call_id: str = "",
+    data: Mapping[str, Any] | None = None,
+    internal_data: Mapping[str, Any] | None = None,
 ) -> ToolObservation:
     """构造取消态的工具观察结果（纯工厂函数）。
 
@@ -67,9 +70,6 @@ def tool_cancelled(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    merged = dataclasses.asdict(observation)
-    merged.pop("content", None)
-    merged.pop("display_data", None)
-    merged["error_kind"] = ErrorKind.CANCELLED.value
-    observation.data = merged
+    observation.data = copy.deepcopy(dict(data or {}))
+    observation.internal_data = copy.deepcopy(dict(internal_data or {}))
     return observation

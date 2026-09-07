@@ -10,7 +10,9 @@ from enum import Enum
 class ConversationRunStatus(str, Enum):
     """轮次执行状态。
 
-    状态机：``pending -> running -> completed|failed|cancelled|interrupted``，终态不可再迁移。
+    状态机：``pending -> running -> completed|failed|cancelled|interrupted``。
+    用户主动取消的 ``cancelled`` run（``end_reason=user_cancelled``）允许再次迁移到
+    ``running``；其他取消仍为终态。
     ``waiting_for_approval`` 本轮不纳入（审批异步持久化暂缓，YAGNI）。
     """
 

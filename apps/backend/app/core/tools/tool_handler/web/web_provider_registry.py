@@ -90,7 +90,9 @@ class WebProviderRegistry:
             explicit_backend: 显式指定的 Provider 名称；非空时不进行能力或可用性回退筛选。
 
         返回:
-            显式 Provider、首个可用的搜索 Provider，或没有匹配项时的 ``None``。
+            显式 Provider、首个可用的搜索 Provider；无可用候选时退回首个支持搜索的
+            Provider（用于给出可执行的配置指引），再不济退回首个已注册 Provider（用于
+            给出能力不匹配文案）；注册表为空时返回 ``None``。
 
         异常:
             无。
@@ -108,7 +110,9 @@ class WebProviderRegistry:
             explicit_backend: 显式指定的 Provider 名称；非空时不进行能力或可用性回退筛选。
 
         返回:
-            显式 Provider、首个可用的提取 Provider，或没有匹配项时的 ``None``。
+            显式 Provider、首个可用的提取 Provider；无可用候选时退回首个支持提取的
+            Provider（用于给出可执行的配置指引），再不济退回首个已注册 Provider（用于
+            给出能力不匹配文案）；注册表为空时返回 ``None``。
 
         异常:
             无。
@@ -131,9 +135,17 @@ class WebProviderRegistry:
             capability_name: ``WebProvider`` 上的能力判定方法名。
 
         返回:
-            显式 Provider、按 ``LEGACY_PROVIDER_PRIORITY`` 命中的首个可用且支持目标能力的
-            Provider；若均未命中，则返回注册表中任意首个支持该能力且可用的 Provider
-            （兼容显式注入非默认 Provider 的场景）；都不满足时返回 ``None``。
+            按五级回退选择 Provider，返回值越靠后越「只能用于给出错误文案」：
+
+            1. 显式指定的 Provider（不做能力与可用性过滤，由调用方校验）；
+            2. ``LEGACY_PROVIDER_PRIORITY`` 中可用且支持目标能力的 Provider；
+            3. 注册表中任意可用且支持目标能力的 Provider；
+            4. 任意支持目标能力但不可用的 Provider（使调用方能借
+               ``missing_configuration_message()`` 给出可执行的配置指引）；
+            5. 首个已注册 Provider（使调用方能给出「该 backend 不支持本能力」的精确
+               文案，例如 search-only 后端被用于正文提取）。
+
+            注册表为空时返回 ``None``。
 
         异常:
             无。
@@ -145,19 +157,44 @@ class WebProviderRegistry:
         if explicit_backend:
             return self.get_provider(explicit_backend)
 
+        candidates = list(self._providers.values())
         for provider_name in LEGACY_PROVIDER_PRIORITY:
             provider = self.get_provider(provider_name)
-            if provider is None:
-                continue
-            supports_capability = getattr(provider, capability_name)
-            if supports_capability() and provider.is_available():
+            if (
+                provider is not None
+                and _supports_capability(provider, capability_name)
+                and provider.is_available()
+            ):
                 return provider
 
-        for provider in self._providers.values():
-            supports_capability = getattr(provider, capability_name)
-            if supports_capability() and provider.is_available():
+        for provider in candidates:
+            if _supports_capability(provider, capability_name) and provider.is_available():
                 return provider
-        return None
+        for provider in candidates:
+            if _supports_capability(provider, capability_name):
+                return provider
+        return candidates[0] if candidates else None
+
+
+def _supports_capability(provider: WebProvider, capability_name: str) -> bool:
+    """判断 Provider 是否声明支持指定能力。
+
+    参数:
+        provider: 待判定的 Web Provider。
+        capability_name: ``WebProvider`` 上的能力判定方法名。
+
+    返回:
+        该能力方法返回真值时返回 ``True``，否则返回 ``False``。
+
+    异常:
+        无（能力判定异常由 Provider 自行保证不抛出）。
+
+    副作用:
+        无（只读取 Provider 的静态能力声明）。
+    """
+
+    supports_capability = getattr(provider, capability_name)
+    return bool(supports_capability())
 
 
 def register_default_web_providers(

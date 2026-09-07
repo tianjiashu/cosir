@@ -35,9 +35,10 @@ class ConversationRunModel(StorageBase):
     )
 
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
-    # LangGraph checkpoint 的身份不能依赖可复用的自增 run.id；它必须在 run 创建时固定。
+    # LangGraph checkpoint 身份在新 run 创建时固定；历史 fork 只复制这个引用，
+    # 不复制 checkpoint 内容，也不会恢复 cloned historical run。
     checkpoint_thread_id: Mapped[str] = mapped_column(
-        String(36), nullable=False, unique=True, default=lambda: str(uuid4())
+        String(36), nullable=False, default=lambda: str(uuid4())
     )
     input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_id: Mapped[str | None] = mapped_column(Text)

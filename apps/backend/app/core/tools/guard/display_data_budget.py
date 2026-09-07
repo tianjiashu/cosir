@@ -1,6 +1,6 @@
 """客户端展示数据通道的字符预算守卫。
 
-``ToolObservation.display_data`` 会整体进入事件流与可观测性平台，若 handler 直接
+``ToolObservation.data`` 会整体进入事件流与可观测性平台，若 handler 直接
 放入整页正文（如 web_extract 的网页内容），该通道会绕过面向模型的
 :class:`ToolOutputBudget` 无约束膨胀。本守卫统一对展示数据里的长文本字段做截断，
 并附加原始长度与截断标记，供客户端自行决定如何呈现。
@@ -20,7 +20,7 @@ DEFAULT_DISPLAY_TEXT_MAX_CHARS = 2_000
 
 
 class DisplayDataBudget:
-    """对 ``display_data`` 中的长文本字段应用统一字符预算。"""
+    """对 ``ToolObservation.data`` 中的长文本字段应用统一字符预算。"""
 
     def __init__(self, max_chars: int = DEFAULT_DISPLAY_TEXT_MAX_CHARS) -> None:
         """初始化展示数据预算。

@@ -9,7 +9,7 @@
 - 负责：workspace_id → path 解析、调用 ensure_ready、异常兜底放行、记日志。
 - 不负责：索引算法（上游 CodeGraph）、RPC（Client）、并发去重
   （InflightRegistry，已在 LifecycleService 内）、事件发布（客户端无需感知，
-  显式不发布 workspace 状态事件）、workspace 创建即索引（归 WorkspaceEventService）。
+  显式不发布 workspace 状态事件）、workspace 创建即索引（归 CodeGraphLifecycleService）。
 
 失败安全语义：Hook 本身异常或被 ``HookBase.fire`` 兜底为 ALLOW 均不阻断主流程
 （与既有内置 Hook 一致，符合用户「CodeGraph 一般不会失败，直接挂载」的诉求）。

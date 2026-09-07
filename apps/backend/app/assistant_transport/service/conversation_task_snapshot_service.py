@@ -14,14 +14,19 @@ from sqlalchemy.orm import Session
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
+from app.assistant_transport.state.conversation_state_run import ConversationStateRun
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
     validate_snapshot,
 )
 from app.config.logging.logger import log
+from app.core.workflows.event import RunStatusChangedEvent
+from app.models import ConversationRunStatus
+from app.models.errors.task_fork_errors import SnapshotNotReadyError
 from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud
 from app.storage.store_engines import main_session_factory
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 @dataclass(frozen=True)
@@ -53,70 +58,54 @@ class ConversationTaskSnapshotService:
         """绑定 snapshot CRUD。"""
         self._crud = ConversationTaskSnapshotCrud()
 
-    def read(self, task_id: int) -> ConversationStateSnapshot:
-        """从 SQLite 读取并校验最新 snapshot，缺失时创建空 snapshot。"""
-
-        with self._lock:
-            stored = self._crud.get(task_id)
-            if stored is None:
-                state = copy.deepcopy(empty_snapshot())
-                self._crud.create(task_id, state)
-            else:
-                state = cast(ConversationStateSnapshot, stored)
-            validate_snapshot(state)
-            self._states[task_id] = copy.deepcopy(state)
-            return copy.deepcopy(state)
-
-    def apply(
-        self,
-        task_id: int,
-        mutations: Sequence[ConversationStateMutation],
-    ) -> SnapshotChange:
-        """在最新 snapshot 上应用 mutation，提交成功后更新缓存并发布。"""
-
-        with self._lock:
-            with main_session_factory().begin() as session:
-                current = self._crud.get_in_session(session, task_id)
-                if current is None:
-                    state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
-                else:
-                    state = cast(ConversationStateSnapshot, current)
-                for mutation in mutations:
-                    _apply_mutation(state, mutation)
-                validate_snapshot(state)
-                self._crud.upsert_in_session(session, task_id, state)
-            change = SnapshotChange(task_id, copy.deepcopy(state), tuple(mutations))
-            self._states[task_id] = copy.deepcopy(state)
-            if not mutations:
-                return change
-            self._publish(change)
-            return change
 
     def apply_planned(
         self,
         task_id: int,
         planner: Callable[[ConversationStateSnapshot], Sequence[ConversationStateMutation]],
+        session: Session | None = None,
     ) -> SnapshotChange:
-        """在 service 锁内基于最新 snapshot 规划并提交一次 mutation。"""
+        """在 service 锁内基于最新 snapshot 规划并应用一次 mutation。
+
+        传入 ``session`` 时复用调用方事务；否则创建并提交独立事务。
+        """
 
         with self._lock:
-            with main_session_factory().begin() as session:
-                current = self._crud.get_in_session(session, task_id)
-                if current is None:
-                    state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
-                else:
-                    state = cast(ConversationStateSnapshot, current)
-                mutations = tuple(planner(copy.deepcopy(state)))
-                for mutation in mutations:
-                    _apply_mutation(state, mutation)
-                validate_snapshot(state)
-                self._crud.upsert_in_session(session, task_id, state)
+            if session is None:
+                with main_session_factory().begin() as owned_session:
+                    state, mutations = self._apply_planned_in_session(
+                        owned_session, task_id, planner
+                    )
+                should_publish = True
+            else:
+                state, mutations = self._apply_planned_in_session(session, task_id, planner)
+                should_publish = False
             change = SnapshotChange(task_id, copy.deepcopy(state), mutations)
             self._states[task_id] = copy.deepcopy(state)
-            if not mutations:
+            if not mutations or not should_publish:
                 return change
             self._publish(change)
             return change
+
+    def _apply_planned_in_session(
+        self,
+        session: Session,
+        task_id: int,
+        planner: Callable[[ConversationStateSnapshot], Sequence[ConversationStateMutation]],
+    ) -> tuple[ConversationStateSnapshot, tuple[ConversationStateMutation, ...]]:
+        """在指定 Session 中规划并写入 snapshot，不负责提交或发布通知。"""
+
+        current = self._crud.get_in_session(session, task_id)
+        if current is None:
+            state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
+        else:
+            state = cast(ConversationStateSnapshot, current)
+        mutations = tuple(planner(copy.deepcopy(state)))
+        for mutation in mutations:
+            _apply_mutation(state, mutation)
+        validate_snapshot(state)
+        self._crud.upsert_in_session(session, task_id, state)
+        return state, mutations
 
     def ensure_state_snapshot(
         self, task_id: int, session: Session | None = None
@@ -131,6 +120,107 @@ class ConversationTaskSnapshotService:
             state = cast(ConversationStateSnapshot, current)
         validate_snapshot(state)
         return copy.deepcopy(state)
+
+    def clone_for_fork(
+        self,
+        source_task_id: int,
+        target_task_id: int,
+        run_id_map: dict[int, int],
+        session: Session,
+    ) -> ConversationStateSnapshot:
+        """在外部事务中复制并重置一个 Task 的历史 snapshot。
+
+        该方法只写入调用方事务，不提前更新进程缓存或发布目标 Task 事件；调用方提交
+        成功后再调用 :meth:`cache_committed_snapshot`。
+        """
+
+        with self._lock:
+            source = self._crud.get_in_session(session, source_task_id)
+            if source is None:
+                raise SnapshotNotReadyError(
+                    f"snapshot for task {source_task_id} is not ready"
+                )
+            try:
+                state = cast(ConversationStateSnapshot, copy.deepcopy(source))
+                validate_snapshot(state)
+            except (TypeError, ValueError, KeyError) as exc:
+                raise SnapshotNotReadyError(
+                    f"snapshot for task {source_task_id} is not ready"
+                ) from exc
+
+            messages = []
+            for message in state["messages"]:
+                source_run_id = message.get("runId")
+                if source_run_id not in run_id_map:
+                    continue
+                message["runId"] = run_id_map[source_run_id]
+                messages.append(message)
+            state["messages"] = messages
+            state["run"] = {"runId": None, "status": "idle"}
+            state["error"] = None
+            state["approvals"] = {}
+            state["context_usage"] = 0.0
+            state["usage"] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cache_hit_tokens": 0,
+                "cache_miss_tokens": 0,
+                "reasoning_tokens": 0,
+            }
+            validate_snapshot(state)
+            self._crud.upsert_in_session(session, target_task_id, state)
+            return copy.deepcopy(state)
+
+    def cache_committed_snapshot(
+        self, task_id: int, state: ConversationStateSnapshot
+    ) -> None:
+        """在 fork 事务提交后登记目标 snapshot 的进程缓存。"""
+
+        with self._lock:
+            self._states[task_id] = copy.deepcopy(state)
+
+    def reset_run_for_edit(
+        self, task_id: int, run_id: int, input_text: str
+    ) -> ConversationStateSnapshot:
+        """原地重置当前 run 的 Transport 消息，保留消息身份并替换输入。"""
+
+        with self._lock:
+            with main_session_factory().begin() as session:
+                current = self._crud.get_in_session(session, task_id)
+                if current is None:
+                    raise KeyError(task_id)
+                state = cast(ConversationStateSnapshot, current)
+                next_state: ConversationStateSnapshot = copy.deepcopy(state)
+                found = False
+                for message in next_state["messages"]:
+                    if message.get("runId") != run_id:
+                        continue
+                    found = True
+                    if message.get("role") == "user":
+                        message["status"] = "completed"
+                        message["endReason"] = None
+                        message["parts"] = [
+                            {"type": "text", "text": input_text, "status": "completed"}
+                        ]
+                    else:
+                        message["status"] = "pending"
+                        message["endReason"] = None
+                        message["parts"] = []
+                if not found:
+                    raise KeyError(f"run {run_id} is absent from task snapshot")
+                next_state["run"] = ConversationStateRun(runId=run_id, status="pending")
+                next_state["error"] = None
+                validate_snapshot(next_state)
+                self._crud.upsert_in_session(session, task_id, next_state)
+            change = SnapshotChange(
+                task_id,
+                copy.deepcopy(next_state),
+                (ConversationStateMutation("set", (), next_state),),
+            )
+            self._states[task_id] = copy.deepcopy(next_state)
+            self._publish(change)
+            return copy.deepcopy(next_state)
 
     def _publish(self, change: SnapshotChange) -> None:
         """更新 snapshot working copy 并通知订阅者。"""
@@ -170,6 +260,169 @@ class ConversationTaskSnapshotService:
                         self._subscribers.pop(task_id, None)
 
         return queue, unsubscribe
+
+    async def read(self, task_id: int) -> ConversationStateSnapshot:
+        """读取 canonical snapshot，并保留进程重启后可恢复的 active run。
+
+        ``ConversationRun`` 是持久化执行事实，读取历史 snapshot 不能因为当前进程还没有
+        executor entry 就把它取消。恢复入口会在确认 run 仍为 pending/running 后重新登记
+        executor；因此本方法只负责校正已落库的终态与快照，不负责猜测 active run 已失败。
+        """
+        from app.service.depends import (
+            get_conversation_event_projector,
+            get_conversation_run_executor,
+            get_conversation_run_service,
+        )
+
+        run_executor = get_conversation_run_executor()
+        run_service = get_conversation_run_service()
+        projector = get_conversation_event_projector()
+        task_space = task_runtime_spaces.get_or_create(task_id)
+        if not task_space.lock.acquire(blocking=True, timeout=10):
+            raise TimeoutError(f"task {task_id} recovery lock is busy")
+        try:
+            state: ConversationStateSnapshot = self.ensure_state_snapshot(task_id)
+            for run in run_service.list_runs_for_task(task_id):
+                if (
+                    run.status
+                    in {
+                        ConversationRunStatus.COMPLETED.value,
+                        ConversationRunStatus.FAILED.value,
+                        ConversationRunStatus.CANCELLED.value,
+                        ConversationRunStatus.INTERRUPTED.value,
+                    }
+                    and state["run"]["runId"] == run.id
+                    and state["run"]["status"] != run.status
+                ):
+                    # A process can die after the run row commits but before its final
+                    # projector event. Reconcile the snapshot at the read boundary so
+                    # resume cannot mistake a DB-terminal run for an active stream.
+                    projector.process(
+                        RunStatusChangedEvent(
+                            task_id=task_id,
+                            run_id=run.id,
+                            status=ConversationRunStatus(run.status),
+                            end_reason=run.end_reason,
+                        )
+                    )
+                    state = self.ensure_state_snapshot(task_id)
+                    continue
+                if run.status not in {
+                    ConversationRunStatus.PENDING.value,
+                    ConversationRunStatus.RUNNING.value,
+                }:
+                    continue
+                if not run_executor.is_locally_running(run.id):
+                    log.info(
+                        "conversation_run_recovery_required",
+                        extra={
+                            "msg": "发现当前进程未登记但仍可恢复的 Conversation Run",
+                            "data": {
+                                "task_id": task_id,
+                                "run_id": run.id,
+                                "run_status": run.status,
+                            },
+                        },
+                    )
+            return self.ensure_state_snapshot(task_id)
+        finally:
+            task_space.lock.release()
+
+    def apply(
+        self,
+        controller: Any,
+        mutation: ConversationStateMutation,
+    ) -> None:
+        """将一次 snapshot mutation 应用到 assistant-stream controller。
+
+        参数:
+            controller: assistant-stream 创建的运行控制器。
+            mutation: canonical snapshot 层产生的 mutation。
+
+        异常:
+            TypeError: ``append-text`` 的值不是字符串，或 root mutation 不是 ``set``。
+            KeyError: ``set`` mutation 指向了不存在的路径。
+        """
+        if not mutation.path:
+            if mutation.kind != "set":
+                raise TypeError("root snapshot mutation must use kind='set'")
+            controller.state = mutation.value
+            return
+
+        if mutation.kind == "append-text":
+            if not isinstance(mutation.value, str):
+                raise TypeError(
+                    "append-text snapshot mutation value must be str, "
+                    f"got {type(mutation.value).__name__}"
+                )
+            controller.append_state_text(list(mutation.path), mutation.value)
+            return
+
+        target: Any = controller.state
+        for key in mutation.path[:-1]:
+            target = target[key]
+
+        key = mutation.path[-1]
+        if (
+            isinstance(key, int)
+            and key == len(target)
+            and callable(getattr(target, "append", None))
+        ):
+            target.append(mutation.value)
+            return
+
+        target[key] = mutation.value
+
+    def _apply_snapshot_change(self, controller: Any, change: SnapshotChange) -> None:
+        """应用一批 snapshot mutation，并在批次边界刷新 Assistant Transport。"""
+        try:
+            for mutation in change.mutations:
+                self.apply(controller, mutation)
+            controller.flush()
+        except Exception:
+            log.exception(
+                "assistant_sse_controller_flush_failed",
+                extra={
+                    "msg": "Assistant SSE controller 刷新状态更新失败",
+                    "data": {
+                        "task_id": change.task_id,
+                        "run_id": change.state["run"]["runId"],
+                        "run_status": change.state["run"]["status"],
+                        "mutation_count": len(change.mutations),
+                        "mutation_types": [mutation.kind for mutation in change.mutations],
+                    },
+                },
+            )
+            raise
+
+        flush_count = getattr(self, "_flush_log_count", 0) + 1
+        self._flush_log_count = flush_count
+        if (
+            flush_count <= 3
+            or flush_count % 20 == 0
+            or change.state["run"]["status"]
+            in {
+                ConversationRunStatus.COMPLETED.value,
+                ConversationRunStatus.FAILED.value,
+                ConversationRunStatus.CANCELLED.value,
+                ConversationRunStatus.INTERRUPTED.value,
+            }
+        ):
+            log.debug(
+                "assistant_sse_controller_flushed",
+                extra={
+                    "msg": "Assistant SSE controller 已刷新状态更新（采样）",
+                    "data": {
+                        "task_id": change.task_id,
+                        "run_id": change.state["run"]["runId"],
+                        "run_status": change.state["run"]["status"],
+                        "flush_count": flush_count,
+                        "message_count": len(change.state["messages"]),
+                        "mutation_count": len(change.mutations),
+                        "mutation_types": [mutation.kind for mutation in change.mutations],
+                    },
+                },
+            )
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:

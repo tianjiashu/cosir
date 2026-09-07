@@ -29,15 +29,28 @@ class AssistantTransportRequest(BaseModel):
     # Transport 请求只接受当前契约字段；旧的状态游标不得再被静默吞掉。
     model_config = ConfigDict(extra="forbid")
 
-    commands: list[AssistantCommand] = Field(min_length=1, max_length=32)
+    commands: list[AssistantCommand] = Field(min_length=0, max_length=32)
     # 已有 task 使用 ``task-{taskId}``；新对话尚无 task/thread 身份，使用
     # workspaceId 作为创建目标，响应头返回新 task id 后再进入同一 runtime。
-    threadId: str | None = Field(default=None, pattern=r"^task-[1-9][0-9]*$")
-    taskId: int | None = Field(default=None, ge=1)
+    threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
+    taskId: int = Field(ge=1)
     workspaceId: int | None = Field(default=None, ge=1)
     providerId: int | None = Field(default=None, ge=1)
     modelName: str | None = None
     reasoningEffort: str | None = Field(default=None)
+    # 空 commands 用于恢复指定 run；编辑重跑的 add-message 也必须携带当前 runId。
+    runId: int | None = Field(default=None)
+
+    # Assistant UI 会在请求根部附带这些通用 runtime 字段。它们属于兼容性 envelope：
+    # 当前后端不使用、不持久化，但显式声明后可以安全接收未来版本的客户端请求；
+    # ``extra=forbid`` 仍会拦截真正未知的字段。命令内部的 parentId 则是消息关系，
+    # 由 Assistant UI 命令协议保留，不能与这里的根级 parentId 混淆。
+    parentId: str | None = None
+    state: object | None = None
+    system: str | None = None
+    tools: dict[str, object] | None = None
+    callSettings: dict[str, object] | None = None
+    config: dict[str, object] | None = None
 
     @model_validator(mode="after")
     def validate_transport_constraints(self) -> "AssistantTransportRequest":
@@ -52,6 +65,8 @@ class AssistantTransportRequest(BaseModel):
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
         - ``custom`` 命令尚未绑定领域处理器，直接拒绝；
+        - 空命令必须携带 ``runId`` 用于恢复已有 run；编辑 add-message 必须同时携带
+          ``sourceId`` 与 ``runId``；普通新消息不能携带 ``runId``；
         - 含 ``add-message`` 时 ``providerId`` 与 ``modelName`` 必填且 ``modelName``
           非空（启动对话必须确定执行上下文，原 service 内的同等校验已前移至此）；
         - 新建对话（``taskId is None``）必须提供 ``workspaceId`` 作为创建目标。
@@ -86,14 +101,7 @@ class AssistantTransportRequest(BaseModel):
                 message="commands 内 commandId 必须唯一",
                 retryable=False,
             )
-        if self.taskId is None and self.threadId is not None:
-            raise TransportRequestError(
-                status_code=400,
-                code="THREAD_WITHOUT_TASK",
-                message="没有 taskId 时不能提供 threadId",
-                retryable=False,
-            )
-        if self.taskId is not None and self.threadId != f"task-{self.taskId}":
+        if self.threadId != f"task-{self.taskId}":
             raise TransportRequestError(
                 status_code=409,
                 code="THREAD_TASK_MISMATCH",
@@ -120,6 +128,31 @@ class AssistantTransportRequest(BaseModel):
         # 首版运行模型在启动对话时必须同时确定厂商与模型，二者构成执行上下文；
         # 缺失其一会让 Turn 无法绑定执行器，属纯 wire 契约约束，前移至此。
         has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
+        has_edit_message = any(
+            isinstance(command, AddMessageCommand) and command.sourceId is not None
+            for command in self.commands
+        )
+        if not has_message and self.runId is None:
+            raise TransportRequestError(
+                status_code=400,
+                code="RUN_ID_REQUIRED",
+                message="没有新消息时必须提供 runId 以继续已有运行",
+                retryable=False,
+            )
+        if has_edit_message and self.runId is None:
+            raise TransportRequestError(
+                status_code=400,
+                code="EDIT_RUN_ID_REQUIRED",
+                message="编辑重跑必须提供当前 runId",
+                retryable=False,
+            )
+        if has_message and not has_edit_message and self.runId is not None:
+            raise TransportRequestError(
+                status_code=400,
+                code="RUN_ID_WITH_MESSAGE_UNSUPPORTED",
+                message="发送新消息时不能同时提供 runId",
+                retryable=False,
+            )
         if has_message and (
             self.providerId is None or self.modelName is None or not self.modelName.strip()
         ):
@@ -127,14 +160,6 @@ class AssistantTransportRequest(BaseModel):
                 status_code=400,
                 code="MODEL_SELECTION_REQUIRED",
                 message="启动对话必须同时提供 providerId 与 modelName",
-                retryable=False,
-            )
-        # 没有 taskId 即新建对话，必须以 workspaceId 作为创建目标。
-        if self.taskId is None and self.workspaceId is None:
-            raise TransportRequestError(
-                status_code=400,
-                code="CONVERSATION_TARGET_REQUIRED",
-                message="新对话必须提供 workspaceId",
                 retryable=False,
             )
         return self

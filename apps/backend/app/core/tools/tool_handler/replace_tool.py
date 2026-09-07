@@ -252,14 +252,16 @@ class ReplaceTool(HandlerBase):
                 error="syntax error detected after patch",
                 reason=format_syntax_reason(result),
                 permission=self.permission,
-                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
+                data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
             )
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
+        display_data = build_file_change_display_data([snapshot])
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff([snapshot]),
-            data=build_file_change_display_data([snapshot]),
+            data={"kind": "file-changes", **display_data},
+            internal_data=display_data,
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -288,8 +290,9 @@ class ReplaceTool(HandlerBase):
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="",
+                verb="替换文本",
                 icon="git-compare",
+                surface="standalone",
                 expandable=True,
                 expand_layout="diff",
             ),

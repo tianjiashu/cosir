@@ -1,6 +1,6 @@
 """Conversation Transport 的 run 运行状态契约。"""
 
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 
 class ConversationStateRun(TypedDict):

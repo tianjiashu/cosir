@@ -82,6 +82,7 @@ class TaskRuntimeSpace:
                         agent_profile=agent_profile,
                         workspace_root=current_workspace.root_path,
                         context_service=get_conversation_task_context_service(),
+                        is_fork=current_task.task_type == "fork",
                     )
                     .add_change_listener(ContextUsageComputeListener(current_task.id))
                     .add_change_listener(ContextCompressListener())
@@ -102,4 +103,21 @@ class TaskRuntimeSpace:
                     "data": {"task_id": task_id, "used": used, "error": str(exc)},
                 },
                 exc_info=True,
+            )
+
+    def existing_context_manager(self) -> RuntimeContextManager | None:
+        """返回已物化的 context manager；不因查询而触发懒加载。"""
+
+        with self._context_guard:
+            return self._context_manager
+
+    def install_fork_context_manager(self, manager: RuntimeContextManager) -> None:
+        """安装已由源 manager fork 出来的目标 context manager。"""
+
+        with self._context_guard:
+            if self._context_manager is not None:
+                return
+            self._context_manager = (
+                manager.add_change_listener(ContextUsageComputeListener(self.task_id))
+                .add_change_listener(ContextCompressListener())
             )

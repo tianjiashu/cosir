@@ -5,13 +5,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
-)
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.models.result.delegation_result import DelegationResult
-from app.service.depends import get_conversation_run_service, get_conversation_run_executor
+from app.service.depends import get_conversation_run_executor, get_conversation_run_service
 
 
 class ChildAgentRunner:

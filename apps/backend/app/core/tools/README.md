@@ -100,7 +100,7 @@ def build_read_file_definition() -> ToolDefinition:
 
 `ToolDisplayHints` 是 `ToolDefinition.display` 字段的类型，承载「工具在前端如何展示」的
 **静态声明**。后端**不承载任何渲染逻辑**：折叠态摘要、结果摘要、list/diff 条目等一律由
-客户端共享渲染层（`apps/shared/ts/toolDisplayRules.ts`）按声明与运行时数据生成。
+客户端共享渲染层按声明与运行时数据生成。
 
 ```python
 display=ToolDisplayHints(
@@ -120,8 +120,8 @@ display=ToolDisplayHints(
   都不在后端发生。
 - **布局驱动**：前端仅按 `expand_layout` 字符串分发布局（`list` / `diff` / `write` /
   `terminal` / `details` / `none`），不按工具名写特化分支；渲染差异收敛在客户端共享规则表。
-- **展示数据透传**：工具执行结果的结构化数据放入 `ToolObservation.display_data`，经
-  `tool_call_finished` 事件的 `data` 字段透传给前端；`DisplayDataBudget` 守卫负责该通道的
+- **展示数据透传**：工具执行结果的结构化数据放入 `ToolObservation.data`，经
+  `tool_call_status_changed` 事件的 `data` 字段透传给前端；`DisplayDataBudget` 守卫负责该通道的
   输出治理（截断 + 截断标记），同样不涉及渲染。
 
 ### 3.4 文件与命名

@@ -25,6 +25,7 @@ from app.core.llm_provider.capability.model_capability import (
 from app.core.llm_provider.capability.provider_capability import (
     ProviderCapability,
 )
+from app.core.llm_provider.reasoning_chat_openai import ReasoningChatOpenAI
 from app.models import ConversationRunRecord
 from app.service.depends import get_provider_service
 from app.service.provider.capability_service import CapabilityService
@@ -157,7 +158,13 @@ def build_chat_model(
         base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
     )
 
-    return ChatOpenAI(
+    chat_model_class = (
+        ReasoningChatOpenAI
+        if provider_capability.thinking_channel == "reasoning_content"
+        else ChatOpenAI
+    )
+
+    return chat_model_class(
         model=model_name,
         # api_key 以 SecretStr 封装传入（langchain 推荐做法，防止明文在 repr/日志泄露）；
         # 包装逻辑见上方 ``chat_api_key`` 构造（None 时直接透传 None）。

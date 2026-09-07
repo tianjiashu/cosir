@@ -7,7 +7,9 @@
 填充方式在整个代码库一致。
 """
 
-import dataclasses
+import copy
+from collections.abc import Mapping
+from typing import Any
 
 from app.core.tools.schemas import ToolObservation
 
@@ -17,7 +19,8 @@ def tool_success(
     permission: str,
     content: str,
     tool_call_id: str = "",
-    data: dict[str, object] | None = None,
+    data: Mapping[str, Any] | None = None,
+    internal_data: Mapping[str, Any] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -29,8 +32,7 @@ def tool_success(
             必须**用英文**撰写、对模型友好（简洁、结构化、便于模型直接消费与纠正）；
             开发者向的中文 docstring/注释不在此限。
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
-        display_data: 仅供客户端展示消费的结构化数据；会合并进
-            ``ToolObservation.display_data``，不会回传给模型。
+        data: 仅供客户端展示消费的结构化数据；会写入 ``ToolObservation.data``，不会回传给模型。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="success"``，
@@ -53,11 +55,9 @@ def tool_success(
           文件 xxx」、``data`` 写 ``{"type": "file", "path": "..."}``，上层
           既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
 
-    返回对象的 ``display_data`` 不变量:
-        ``display_data`` 恒**不含** ``content`` 键。``content`` 是面向模型的文本，
-        下游展示应消费 ``display_data`` 的结构化字段而非其副本；剔除副本可避免大体积
-        正文经 ``display_data`` 旁路无约束进入前端事件流与可观测性平台（完整文本只
-        存在于 ``observation.content``，并受全局 ``ToolOutputBudget`` 约束）。
+    返回对象的 ``data`` 不变量:
+        ``data`` 只包含调用方显式提供的 UI 展示数据，不会自动混入观察对象的其它字段；
+        完整正文只进入 ``observation.content``，并受全局 ``ToolOutputBudget`` 约束。
     """
 
     observation = ToolObservation(
@@ -67,12 +67,6 @@ def tool_success(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    merged_display_data = dataclasses.asdict(observation)
-    # 不把完整 content 全文复制进 display_data：content 是面向模型的文本，
-    # 下游展示应消费 display_data 的结构化字段而非其副本；避免大体积正文
-    # 经 display_data 旁路无约束进入前端事件流与可观测性平台。
-    merged_display_data.pop("content", None)
-    if data:
-        merged_display_data.update(data)
-    observation.data = merged_display_data
+    observation.data = copy.deepcopy(dict(data or {}))
+    observation.internal_data = copy.deepcopy(dict(internal_data or {}))
     return observation

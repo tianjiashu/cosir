@@ -17,15 +17,18 @@ class WebSearchItem:
 
 @dataclass(frozen=True, slots=True)
 class WebExtractItem:
-    """Web page content extracted by a provider."""
+    """Web page content extracted by a provider.
+
+    ``content`` 已由 Provider 按调用方下发的 ``char_limit`` 截断，``truncated``
+    标记原文是否被裁剪，使模型能区分「页面就这么短」与「正文被截断」。
+    """
 
     url: str
     title: str
     content: str
-    raw_content: str
     metadata: dict[str, object]
+    truncated: bool = False
     error: str = ""
-
 
 def provider_result_metadata(
     item: dict[str, object],
@@ -55,6 +58,15 @@ def provider_result_metadata(
 
 class WebProviderUnavailableError(RuntimeError):
     """Raised when a selected web provider lacks required configuration."""
+
+    # 语义：本地配置缺失，重试无意义，调用方应返回 retryable=False 的观察。
+
+
+class WebProviderRequestError(RuntimeError):
+    """Raised when a provider is configured but the remote call fails."""
+
+    # 语义：配置正确但远端返回业务失败（HTTP 200 + success:false 等），
+    # 属瞬态故障，调用方应返回 retryable=True 的观察，与配置缺失区分开。
 
 
 def unsupported_extract_format_message(provider_name: str, output_format: str) -> str:
@@ -227,18 +239,20 @@ class WebProvider(Protocol):
     def extract(
         self,
         urls: list[str],
-        output_format: Literal["markdown", "html", "text"],
+        output_format: Literal["markdown", "html"],
         char_limit: int,
     ) -> list[WebExtractItem] | Awaitable[list[WebExtractItem]]:
         """提取网页正文内容。
 
         参数:
             urls: 待提取的网页地址列表。
-            output_format: 调用方请求的网页正文格式。
-            char_limit: 每个网页最多保留的正文字符数。
+            output_format: 调用方请求的网页正文格式（仅 markdown / html）。
+            char_limit: 每个网页最多保留的正文字符数；Provider 必须据此截断
+                ``content`` 并置 ``truncated``。
 
         返回:
-            与成功提取网页对应、尽可能采用请求格式的正文结果。
+            与 ``urls`` 顺序一致的结果列表；单页失败不中断其余页面，该页结果带
+            ``error`` 字段（由上层判定「全部失败 / 部分失败」）。
 
         异常:
             WebProviderUnavailableError: Provider 未配置或不可用时抛出。

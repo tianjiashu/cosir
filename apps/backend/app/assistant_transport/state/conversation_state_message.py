@@ -1,6 +1,8 @@
 """Conversation Transport 的 message 契约。"""
 
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired
+
+from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_part import ConversationStatePart
 

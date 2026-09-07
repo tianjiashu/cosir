@@ -8,7 +8,6 @@
 from fastapi import Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from app.api.dependencies import get_provider_service
 from app.api.schemas.request.ProviderCreateRequest import ProviderCreateRequest
 from app.api.schemas.request.ProviderUpdateRequest import ProviderUpdateRequest
 from app.api.schemas.response.ProviderCapabilityResponse import ProviderCapabilityResponse
@@ -18,6 +17,7 @@ from app.core.llm_provider.capability.provider_capability import (
     _SUPPORT_PROVIDERS,
     ProviderCapability,
 )
+from app.service.depends import get_provider_service
 from app.service.provider import ConnectionTestResult, ProviderService
 
 

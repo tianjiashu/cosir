@@ -90,6 +90,25 @@ class Settings:
     # 经 CODING_AGENT_CODEGRAPH_ENABLED 环境变量覆盖（true/false）。
     CODEGRAPH_ENABLED: ClassVar[bool] = False
 
+    # --- 系统提示词三层构建（动态变量 / Agent 预设 / Workspace 项目指令） ---
+    # Layer 2：Agent 系统预设文件（AgentProfile.prompt_file_path）加载上限，避免超大预设
+    # 撑爆上下文；经 ``CODING_AGENT_AGENT_PERSONA_*`` 覆盖。
+    AGENT_PERSONA_MAX_BYTES: ClassVar[int] = 100_000
+    AGENT_PERSONA_MAX_TOKENS: ClassVar[int] = 2_000
+    # Layer 1：动态变量层字节硬上限（内容小且固定，仅防御性截断）；经
+    # ``CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES`` 覆盖。
+    RUNTIME_CONTEXT_MAX_BYTES: ClassVar[int] = 4_000
+
+    # Layer 3：Workspace 项目指令扫描配置与预算闸门；经 ``CODING_AGENT_WORKSPACE_INSTRUCTION_*``
+    # 覆盖。总量 token 上限另受窗口比例闸门（0 表示仅用固定上限）。
+    WORKSPACE_INSTRUCTION_FILE_NAMES: ClassVar[tuple[str, ...]] = ("AGENTS.md", "CLAUDE.md")
+    WORKSPACE_INSTRUCTION_MAX_DEPTH: ClassVar[int] = 2
+    WORKSPACE_INSTRUCTION_MAX_FILES: ClassVar[int] = 20
+    WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: ClassVar[int] = 200_000
+    WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
+    WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS: ClassVar[int] = 4_000
+    WORKSPACE_INSTRUCTION_WINDOW_RATIO: ClassVar[float] = 0.05
+
     # --- 委派子Agent并发执行（见 docs/委派子Agent并发执行技术方案.md §6.1） ---
     # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
     # child 委派单次执行的生效超时（async 路径），不等同于线程硬杀，与工具定义
@@ -260,6 +279,24 @@ class Settings:
             raise ValueError("WEB_EXTRACT_CHAR_LIMIT must be greater than zero")
         if cls.TOOL_OBSERVATION_CONTEXT_LIMIT < 1:
             raise ValueError("TOOL_OBSERVATION_CONTEXT_LIMIT must be greater than zero")
+        if cls.AGENT_PERSONA_MAX_BYTES < 1:
+            raise ValueError("AGENT_PERSONA_MAX_BYTES must be greater than zero")
+        if cls.AGENT_PERSONA_MAX_TOKENS < 1:
+            raise ValueError("AGENT_PERSONA_MAX_TOKENS must be greater than zero")
+        if cls.RUNTIME_CONTEXT_MAX_BYTES < 1:
+            raise ValueError("RUNTIME_CONTEXT_MAX_BYTES must be greater than zero")
+        if cls.WORKSPACE_INSTRUCTION_MAX_DEPTH < 1:
+            raise ValueError("WORKSPACE_INSTRUCTION_MAX_DEPTH must be greater than zero")
+        if cls.WORKSPACE_INSTRUCTION_MAX_FILES < 1:
+            raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILES must be greater than zero")
+        if cls.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES < 1:
+            raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_BYTES must be greater than zero")
+        if cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS < 1:
+            raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS must be greater than zero")
+        if cls.WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS < 1:
+            raise ValueError("WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS must be greater than zero")
+        if cls.WORKSPACE_INSTRUCTION_WINDOW_RATIO < 0:
+            raise ValueError("WORKSPACE_INSTRUCTION_WINDOW_RATIO must not be negative")
 
     @classmethod
     def load(cls, repository_root: Path | None = None) -> None:
@@ -355,6 +392,42 @@ class Settings:
 
         # CodeGraph 总开关（默认关闭；显式开启才挂载 Kernel 与注册 codegraph 工具）。
         cls.CODEGRAPH_ENABLED = cls._env_bool("CODING_AGENT_CODEGRAPH_ENABLED", False)
+
+        # 系统提示词三层构建配置（动态变量 / Agent 预设 / Workspace 项目指令）。
+        cls.AGENT_PERSONA_MAX_BYTES = int(
+            os.environ.get("CODING_AGENT_AGENT_PERSONA_MAX_BYTES", "100000")
+        )
+        cls.AGENT_PERSONA_MAX_TOKENS = int(
+            os.environ.get("CODING_AGENT_AGENT_PERSONA_MAX_TOKENS", "2000")
+        )
+        cls.RUNTIME_CONTEXT_MAX_BYTES = int(
+            os.environ.get("CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES", "4000")
+        )
+        cls.WORKSPACE_INSTRUCTION_FILE_NAMES = tuple(
+            p.strip()
+            for p in os.environ.get(
+                "CODING_AGENT_WORKSPACE_INSTRUCTION_FILE_NAMES", "AGENTS.md,CLAUDE.md"
+            ).split(",")
+            if p.strip()
+        )
+        cls.WORKSPACE_INSTRUCTION_MAX_DEPTH = int(
+            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_DEPTH", "2")
+        )
+        cls.WORKSPACE_INSTRUCTION_MAX_FILES = int(
+            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILES", "20")
+        )
+        cls.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES = int(
+            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_BYTES", "200000")
+        )
+        cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS = int(
+            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS", "1200")
+        )
+        cls.WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS = int(
+            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS", "4000")
+        )
+        cls.WORKSPACE_INSTRUCTION_WINDOW_RATIO = float(
+            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_WINDOW_RATIO", "0.05")
+        )
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
         cls.LANGFUSE_ENABLED = cls._env_bool("CODING_AGENT_LANGFUSE_ENABLED", False)

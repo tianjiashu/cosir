@@ -11,6 +11,8 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
+from typing import Any
+
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -59,6 +61,7 @@ class TaskCrud:
         delegation_id: int | None = None,
         creation_command_id: str | None = None,
         session: Session | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
@@ -102,6 +105,7 @@ class TaskCrud:
                     parent_run_id,
                     delegation_id,
                     creation_command_id,
+                    extra,
                 )
         return self._build_and_flush(
             session,
@@ -112,6 +116,7 @@ class TaskCrud:
             parent_run_id,
             delegation_id,
             creation_command_id,
+            extra,
         )
 
     def _build_and_flush(
@@ -124,6 +129,7 @@ class TaskCrud:
         parent_run_id: int | None,
         delegation_id: int | None,
         creation_command_id: str | None,
+        extra: dict[str, Any] | None,
     ) -> TaskRecord:
         """在给定会话中构造并 flush 一条 task 记录。
 
@@ -154,6 +160,7 @@ class TaskCrud:
             parent_run_id=parent_run_id,
             delegation_id=delegation_id,
             creation_command_id=creation_command_id,
+            extra=extra,
             context_usage_used=0,
         )
         session.add(model)
@@ -184,7 +191,7 @@ class TaskCrud:
                     select(TaskModel)
                     .where(
                         TaskModel.workspace_id == workspace_id,
-                        TaskModel.task_type == "user",
+                        TaskModel.task_type.in_(("user", "fork")),
                     )
                     .order_by(TaskModel.updated_at.desc(), TaskModel.id.desc())
                 )
@@ -192,6 +199,21 @@ class TaskCrud:
                 .all()
             )
         return [TaskRecord.from_model(row) for row in rows]
+
+    def next_fork_title(self, workspace_id: int, base_title: str, session: Session) -> str:
+        """在外部事务中生成当前工作区内可读的 fork 标题。"""
+
+        titles = set(
+            session.scalars(
+                select(TaskModel.title).where(TaskModel.workspace_id == workspace_id)
+            ).all()
+        )
+        suffix = 1
+        candidate = f"{base_title} {suffix}"
+        while candidate in titles:
+            suffix += 1
+            candidate = f"{base_title} {suffix}"
+        return candidate
 
     def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
         """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。

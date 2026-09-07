@@ -12,15 +12,17 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
+import copy
 from typing import Any
 
-from sqlalchemy import asc, delete, select, update
+from sqlalchemy import asc, delete, desc, select, update
 from sqlalchemy.orm import Session
 
 from app.models import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
+from app.utils.datetime_utils import to_text
 
 
 class ConversationRunCrud:
@@ -200,6 +202,54 @@ class ConversationRunCrud:
             raise KeyError(run_id)
         return ConversationRunRecord.from_model(row)
 
+    @staticmethod
+    def list_by_task_in_session(
+        session: Session, task_id: int
+    ) -> list[ConversationRunRecord]:
+        """在调用方事务中按创建顺序读取任务全部 run。"""
+
+        rows = (
+            session.execute(
+                select(ConversationRunModel)
+                .where(ConversationRunModel.task_id == task_id)
+                .order_by(
+                    asc(ConversationRunModel.created_at),
+                    asc(ConversationRunModel.id),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [ConversationRunRecord.from_model(row) for row in rows]
+
+    @staticmethod
+    def clone_for_task(
+        session: Session,
+        source: ConversationRunRecord,
+        target_task_id: int,
+    ) -> ConversationRunRecord:
+        """在调用方事务中静默复制一条历史 run，并让数据库生成新主键。"""
+
+        model = ConversationRunModel(
+            task_id=target_task_id,
+            checkpoint_thread_id=source.checkpoint_thread_id,
+            input_text=source.input_text,
+            agent_id=source.agent_id,
+            provider_id=source.provider_id,
+            model_name=source.model_name,
+            image_paths=copy.deepcopy(source.image_paths),
+            reasoning_effort=source.reasoning_effort,
+            end_reason=source.end_reason,
+            final_output=source.final_output,
+            extra=copy.deepcopy(source.extra),
+            status=source.status,
+            created_at=to_text(source.created_at),
+            updated_at=to_text(source.updated_at),
+        )
+        session.add(model)
+        session.flush()
+        return ConversationRunRecord.from_model(model)
+
     def has_run_in_status(
         self,
         task_id: int,
@@ -263,6 +313,40 @@ class ConversationRunCrud:
                 .all()
             )
         return [ConversationRunRecord.from_model(row) for row in rows]
+
+    def get_latest_by_task(self, task_id: int) -> ConversationRunRecord | None:
+        """返回某任务下创建时间最新的 run（单条查询）。
+
+        仅投影 ``created_at`` 与 ``id`` 的倒序第一条，避免为取最新 run 而加载全部
+        run 列表。任务无任何 run 时返回 ``None``，不抛异常，由调用方决定后续行为。
+
+        参数:
+            task_id: 任务标识（整数 id）。
+
+        返回:
+            该任务下 ``created_at`` 再 ``id`` 倒序的第一条 ``ConversationRunRecord``；
+            无匹配 run 时返回 ``None``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+
+        with self._session_factory() as session:
+            row: ConversationRunModel | None = session.execute(
+                select(ConversationRunModel)
+                .where(ConversationRunModel.task_id == task_id)
+                .order_by(
+                    desc(ConversationRunModel.created_at),
+                    desc(ConversationRunModel.id),
+                )
+                .limit(1)
+            ).scalars().first()
+        if row is None:
+            return None
+        return ConversationRunRecord.from_model(row)
 
     def list_recoverable(self) -> list[ConversationRunRecord]:
         """返回进程重启后仍需恢复的 pending/running 运行。
@@ -345,6 +429,97 @@ class ConversationRunCrud:
             return self.update_status_if_in_session(
                 session, run_id, target_status, allowed_statuses, end_reason, final_output
             )
+
+    def reset_for_edit(
+        self,
+        run_id: int,
+        input_text: str,
+        checkpoint_thread_id: str,
+        allowed_statuses: tuple[str, ...],
+        session: Session | None = None,
+        provider_id: int | None = None,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> ConversationRunRecord | None:
+        """原子替换一个非活动 run 的输入与执行基线。"""
+
+        if session is not None:
+            return self.reset_for_edit_in_session(
+                session, run_id, input_text, checkpoint_thread_id, allowed_statuses, provider_id, model_name, reasoning_effort
+            )
+        with self._session_factory.begin() as managed_session:
+            return self.reset_for_edit_in_session(
+                managed_session, run_id, input_text, checkpoint_thread_id, allowed_statuses, provider_id, model_name, reasoning_effort
+            )
+
+    def resume_user_cancelled(
+        self, run_id: int, session: Session | None = None
+    ) -> ConversationRunRecord | None:
+        """把用户主动取消的 run 原子恢复为 running，并清空旧终态字段。"""
+
+        if session is not None:
+            return self.resume_user_cancelled_in_session(session, run_id)
+        with self._session_factory.begin() as managed_session:
+            return self.resume_user_cancelled_in_session(managed_session, run_id)
+
+    @staticmethod
+    def resume_user_cancelled_in_session(
+        session: Session, run_id: int
+    ) -> ConversationRunRecord | None:
+        """在外部事务中恢复 user_cancelled run。"""
+
+        result = session.execute(
+            update(ConversationRunModel)
+            .where(
+                ConversationRunModel.id == run_id,
+                ConversationRunModel.status == ConversationRunStatus.CANCELLED.value,
+                ConversationRunModel.end_reason == "user_cancelled",
+            )
+            .values(
+                status=ConversationRunStatus.RUNNING.value,
+                end_reason=None,
+                final_output=None,
+            )
+        )
+        if not result.rowcount:
+            return None
+        session.flush()
+        return ConversationRunCrud.get_in_session(session, run_id)
+
+    @staticmethod
+    def reset_for_edit_in_session(
+        session: Session,
+        run_id: int,
+        input_text: str,
+        checkpoint_thread_id: str,
+        allowed_statuses: tuple[str, ...],
+        provider_id: int | None = None,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> ConversationRunRecord | None:
+        """在外部事务中把 run 重置为待执行，并清空旧输出。"""
+
+        result = session.execute(
+            update(ConversationRunModel)
+            .where(
+                ConversationRunModel.id == run_id,
+                ConversationRunModel.status.in_(allowed_statuses),
+            )
+            .values(
+                input_text=input_text,
+                checkpoint_thread_id=checkpoint_thread_id,
+                status=ConversationRunStatus.PENDING.value,
+                provider_id=provider_id,
+                model_name=model_name,
+                reasoning_effort=reasoning_effort,
+                end_reason=None,
+                final_output=None,
+            )
+        )
+        if not result.rowcount:
+            return None
+        session.flush()
+        return ConversationRunCrud.get_in_session(session, run_id)
 
     @staticmethod
     def update_status_if_in_session(

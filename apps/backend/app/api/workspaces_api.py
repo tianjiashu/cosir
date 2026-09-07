@@ -1,56 +1,31 @@
 """工作区域端点。
 
 本模块承载 workspace 域的全部 HTTP 端点：工作区健康/列表/创建/删除，以及工作区下的
-任务容器管理；并包含 workspace 级状态事件流（两段式第二步）——客户端先建立
-``GET /workspaces/{workspace_id}/events/stream`` 的 SSE 订阅，再触发
-``POST /workspaces/{workspace_id}/events/prepare``，由后端同步执行一次 workspace 准备
-（当前为 CodeGraph 索引就绪）并经 workspace 级状态事件总线把 ``preparing → ready/degraded``
-实时推回。该事件通道是通用的 workspace 状态通道，后续可扩展其他 workspace 状态事件。
-
-workspace 状态事件端点的设计约束（见 design §4.5）：
-- 客户端必须先连 SSE 再触发 prepare，确保订阅先就绪、事件全部可达（bus 无缓冲/重放）。
-- ``_stream_workspace_events`` 独立成模块级函数，保证帧格式/终态 break/
-  finally 退订可被单元测试稳定驱动（采用「service 产出
-  裸事件、api 层格式化帧」范式）。
+任务容器管理。
 """
 
 import asyncio
-import json
-from collections.abc import AsyncIterator
 
 from fastapi import Depends, HTTPException
-from fastapi.responses import StreamingResponse
-from sqlalchemy.exc import IntegrityError
 
-from app.api.dependencies import (
-    get_runtime,
-    get_task_service,
-    get_workspace_event_bus,
-    get_workspace_event_service,
-    get_workspace_readiness_crud,
-    get_workspace_service,
-)
 from app.api.schemas import (
     CreateTaskRequest,
     CreateWorkspaceRequest,
     DeleteWorkspaceResponse,
     HealthResponse,
     TaskResponse,
-    WorkspacePrepareResponse,
-    WorkspaceReadinessResponse,
     WorkspaceResponse,
 )
 from app.app import app
-from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
-from app.models.enums.workspace_event_type import WorkspaceEventType
-from app.models.event.workspace_event import WorkspaceEvent
-from app.models.workspace_readiness import WorkspaceReadiness
-from app.task_runtime.service.task_service import TaskService
+from app.service.depends import (
+    get_runtime,
+    get_task_service,
+    get_workspace_service,
+)
 from app.service.task.workspace_service import WorkspaceService
-from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
-from app.service.workspace_event.workspace_event_service import WorkspaceEventService
-from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
+from app.task_runtime.service.task_service import TaskService
+from app.utils.datetime_utils import preview
 
 
 @app.get("/health")
@@ -199,218 +174,27 @@ async def list_workspace_tasks(
 
     try:
         return [
-            TaskResponse.from_record(task)
+            TaskResponse.from_record(
+                task,
+                fork_available=task_service.is_fork_available(task.id),
+            )
             for task in task_service.list_tasks_for_workspace(workspace_id)
         ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
 
 
-@app.get("/workspaces/{workspace_id}/events/stream")
-async def stream_workspace_events(
+@app.post("/workspaces/{workspace_id}/tasks")
+async def create_workspace_task(
     workspace_id: int,
-    event_bus: WorkspaceEventBus = Depends(get_workspace_event_bus),
-) -> StreamingResponse:
-    """以 SSE 流式返回 workspace 状态事件。
-
-    通用 workspace 状态事件通道：当前承载创建时的准备进度（preparing/ready/degraded），
-    后续可扩展其他 workspace 状态事件。客户端须先调用本端点建立订阅，再触发 prepare，
-    避免错过 preparing 事件。
-
-    参数:
-        workspace_id: 来自路由的 workspace 标识。
-        event_bus: workspace 级状态事件总线。
-
-    返回:
-        text/event-stream 的 StreamingResponse；终态事件（ready/degraded）后结束流。
-
-    异常:
-        无（订阅缺失时流自然结束）。
-
-    副作用:
-        注册并最终移除一条 workspace 状态事件订阅。
-    """
-
-    return StreamingResponse(
-        _stream_workspace_events(event_bus, workspace_id),
-        media_type="text/event-stream; charset=utf-8",
-    )
-
-
-#: prepare 整体超时护栏：即便进入阻塞的 index_init，也在此上限后绝不永久挂起，
-#: 超时即降级返回（对应 Settings.CODEGRAPH_INDEX_INIT_TIMEOUT_SECONDS 之上的再保险）。
-# 超时60秒
-PREPARE_TIMEOUT_SECONDS: float = 60.0
-
-
-@app.post("/workspaces/{workspace_id}/events/prepare")
-async def prepare_workspace(
-    workspace_id: int,
+    payload: CreateTaskRequest,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-    event_service: WorkspaceEventService | None = Depends(get_workspace_event_service),
-    event_bus: WorkspaceEventBus = Depends(get_workspace_event_bus),
-) -> WorkspacePrepareResponse:
-    """同步触发一次 workspace 准备（prepare）。
-
-    当前准备动作是 CodeGraph 索引就绪；该端点走通用 workspace 状态事件通道，后续可扩展
-    其他 workspace 状态事件的准备动作。客户端应先连 ``/events/stream`` 建立订阅再触发本端点。
-
-    参数:
-        workspace_id: 来自路由的 workspace 标识。
-        workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。
-        event_service: workspace 状态事件编排 service；Kernel 不可用时为 None（降级）。
-        event_bus: workspace 级状态事件总线（用于 Kernel 不可用时主动发降级终态）。
-
-    返回:
-        WorkspacePrepareResponse，含就绪状态与动作摘要。
-
-    异常:
-        HTTPException: 当 workspace 不存在（404）时抛出。
-
-    副作用:
-        发布 preparing/ready/degraded 工作状态事件到总线。
-
-    设计要点:
-        Kernel 不可用时 event_service 为 None，属于设计明确的正常降级场景。此时不仅
-        HTTP 返回 unavailable，还**主动 emit 一条 WORKSPACE_DEGRADED 事件**到总线——
-        因为前端先连 SSE 再 POST prepare，若只靠 HTTP 响应而 SSE 订阅者未收到终态事件，
-        前端会永远停在 preparing（独立审查暴露的时序 bug 的另一半）。
-    """
-
-    try:
-        # 获取workspace
-        ws = workspace_service.get_workspace(workspace_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="workspace not found") from exc
-    if event_service is None:
-        # Kernel 不可用（设计明确要降级的正常场景）：主动发降级终态事件 + 返回 unavailable。
-        event_bus.publish(
-            WorkspaceEvent(
-                event_type=WorkspaceEventType.DEGRADED,
-                workspace_id=workspace_id,
-                workspace_path=ws.root_path,
-                payload={
-                    "workspace_path": ws.root_path,
-                    "state": "unavailable",
-                    "degraded_reason": "workspace event kernel unavailable",
-                },
-            )
-        )
-        return WorkspacePrepareResponse(
-            workspace_id=workspace_id,
-            ready=False,
-            state="unavailable",
-            action_taken="none",
-            files_changed=0,
-            duration_ms=0,
-            degraded_reason="workspace event kernel unavailable",
-        )
-    # prepare 同步阻塞（大仓库首次 init 可达数分钟），放进线程池避免卡事件循环；
-    # asyncio.wait_for 作为再保险：超过上限即取消协程并降级返回，绝不永久挂起。
-    try:
-        readiness = await asyncio.wait_for(
-            asyncio.to_thread(event_service.prepare, workspace_id, ws.root_path),
-            timeout=PREPARE_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        log.error(
-            "workspace_event_prepare_timeout",
-            extra={
-                "msg": "prepare 超过总超时上限，降级返回",
-                "data": {
-                    "workspace_id": workspace_id,
-                    "timeout_seconds": PREPARE_TIMEOUT_SECONDS,
-                },
-            },
-        )
-        event_bus.publish(
-            WorkspaceEvent(
-                event_type=WorkspaceEventType.DEGRADED,
-                workspace_id=workspace_id,
-                workspace_path=ws.root_path,
-                payload={
-                    "workspace_path": ws.root_path,
-                    "state": "timeout",
-                    "degraded_reason": "workspace event prepare exceeded timeout",
-                },
-            )
-        )
-        return WorkspacePrepareResponse(
-            workspace_id=workspace_id,
-            ready=False,
-            state="timeout",
-            action_taken="none",
-            files_changed=0,
-            duration_ms=0,
-            degraded_reason="workspace event prepare exceeded timeout",
-        )
-    return WorkspacePrepareResponse(
-        workspace_id=workspace_id,
-        ready=readiness.ready,
-        state=readiness.state,
-        action_taken=readiness.action_taken,
-        files_changed=readiness.files_changed,
-        duration_ms=readiness.duration_ms,
-        degraded_reason=readiness.degraded_reason,
-    )
-
-
-@app.get("/workspaces/{workspace_id}/readiness")
-async def get_workspace_readiness(
-    workspace_id: int,
-    workspace_service: WorkspaceService = Depends(get_workspace_service),
-    readiness_crud: WorkspaceReadinessCrud = Depends(get_workspace_readiness_crud),
-) -> WorkspaceReadinessResponse:
-    """读取工作区准备状态快照。
-
-    SSE 只负责唤醒客户端；刷新、断线或队列溢出后必须通过本端点从数据库重新水合。
-    """
+    task_service: TaskService = Depends(get_task_service),
+) -> TaskResponse:
+    """创建工作区下的任务容器，不启动 ConversationRun。"""
     try:
         workspace_service.get_workspace(workspace_id)
+        task = task_service.get_or_create_task(workspace_id, preview(payload.text))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
-    readiness = readiness_crud.get(workspace_id) or WorkspaceReadiness.initial(workspace_id)
-    return WorkspaceReadinessResponse(
-        workspace_id=workspace_id,
-        status=readiness.status,
-        reason=readiness.reason,
-        action_taken=readiness.action_taken,
-        files_changed=readiness.files_changed,
-        duration_ms=readiness.duration_ms,
-        revision=readiness.revision,
-        updated_at=readiness.updated_at,
-    )
-
-
-async def _stream_workspace_events(
-    event_bus: WorkspaceEventBus,
-    workspace_id: int,
-) -> AsyncIterator[str]:
-    """把 workspace 状态事件转换为 SSE 帧；终态后结束，finally 退订。
-
-    参数:
-        event_bus: workspace 级状态事件总线。
-        workspace_id: 需要订阅事件的 workspace 标识。
-
-    生成:
-        SSE 格式的事件字符串（``event: <type>\\ndata: <json>\\n\\n``）。
-
-    异常:
-        不向上抛出：订阅期间异常记录并终止流（由调用方结束响应）。
-
-    副作用:
-        订阅并在 finally 中退订 workspace 状态事件。
-    """
-
-    subscription = event_bus.subscribe(workspace_id)
-    try:
-        async for event in subscription:
-            log.info(
-                "workspace_event_stream",
-                extra={"msg": "received workspace event", "data": event.to_dict()},
-            )
-            yield f"event: {event.event_type.value}\ndata: {json.dumps(event.to_dict())}\n\n"
-            if event.event_type in {WorkspaceEventType.READY, WorkspaceEventType.DEGRADED}:
-                break
-    finally:
-        event_bus.unsubscribe(subscription)
+    return TaskResponse.from_record(task)

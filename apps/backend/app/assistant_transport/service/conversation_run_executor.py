@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector
 from app.config.logging.logger import log
@@ -15,6 +16,41 @@ from app.service.depends import get_conversation_run_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
+CANCEL_WAIT_TIMEOUT_SECONDS = 5.0
+
+
+class _RunService(Protocol):
+    """Conversation Run service operations required by the executor."""
+
+    def get_run(self, run_id: int) -> ConversationRunRecord: ...
+
+    def claim_pending_run(self, run_id: int) -> bool: ...
+
+    def claim_or_resume_run(self, run_id: int) -> bool: ...
+
+    def complete_run_if_running(self, run_id: int) -> ConversationRunRecord | None: ...
+
+    def cancel_run_if_running(
+        self,
+        run_id: int,
+        end_reason: str = "user_cancelled",
+        final_output: str | None = None,
+    ) -> ConversationRunRecord | None: ...
+
+    def fail_run_if_running(
+        self,
+        run_id: int,
+        end_reason: str | None = None,
+        final_output: str | None = None,
+    ) -> ConversationRunRecord | None: ...
+
+
+class _CancellationSignal(Protocol):
+    """Process-local cancellation signal operations required by the executor."""
+
+    def mark_cancelled(self, run_id: int) -> None: ...
+
+    def clear(self, run_id: int) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -38,8 +74,8 @@ class ConversationRunExecutor:
 
     def __init__(
         self,
-        run_service: object | None = None,
-        cancellation_signal: object | None = None,
+        run_service: _RunService | None = None,
+        cancellation_signal: _CancellationSignal | None = None,
         *,
         persist_status: bool = True,
     ) -> None:
@@ -61,11 +97,13 @@ class ConversationRunExecutor:
             无；进程内运行注册表初始为空。
         """
 
-        self._run_service = run_service or get_conversation_run_service()
+        self._run_service: _RunService = run_service or get_conversation_run_service()
         self._persist_status = persist_status
         self._event_projector = ConversationEventProjector() if persist_status else None
-        self._signal = cancellation_signal or cancellation_registry
+        self._signal: _CancellationSignal = cancellation_signal or cancellation_registry
         self._executions: dict[int, _Execution] = {}
+        self._cancelling_run_ids: set[int] = set()
+        self._cancellation_cleanup_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self, run_id: int, runner: ConversationRunRunner) -> asyncio.Task[None]:
         """登记 run 并创建独立后台 task；后台 task 取得 task 锁后才认领 run。
@@ -86,6 +124,8 @@ class ConversationRunExecutor:
         """
 
         # 检查是否有未结束的后台执行
+        if run_id in self._cancelling_run_ids:
+            raise ValueError(f"run {run_id} cancellation is still in progress")
         existing = self._executions.get(run_id)
         if existing is not None and not existing.thread_task.done():
             raise ValueError(f"run {run_id} is already executing")
@@ -137,12 +177,30 @@ class ConversationRunExecutor:
 
         副作用:
             先写进程内取消信号，再落库取消终态，再向活动 asyncio task 发出取消请求；
+            若线程工具超过取消等待窗口，run 会保持 ``cancelling`` 门闩，直到旧 task
+            真正结束后才允许 resume，避免以“快速返回”为代价造成两个执行器重叠。
             仲裁失败的路径会撤销信号保持一致性；HTTP 订阅断开不会调用本方法。
         """
 
+        # 这是同步集合操作，且在第一个 await 之前完成。恢复入口可以据此把
+        # “取消已开始但数据库尚未切换”的短窗口视为冲突，避免旧 task 与新
+        # resume task 交叉运行同一个 task 的 context / tool / snapshot。
+        if run_id in self._cancelling_run_ids:
+            return False
+        self._cancelling_run_ids.add(run_id)
         self._signal.mark_cancelled(run_id)
-        settled: object
         try:
+            self._run_service.get_run(run_id)
+        except KeyError:
+            self._cancelling_run_ids.discard(run_id)
+            self._signal.clear(run_id)
+            raise
+        execution = self._executions.get(run_id)
+        execution_was_active = execution is not None and not execution.thread_task.done()
+        try:
+            # 先以数据库状态作为取消闸门，再取消 asyncio task。这样 task 的
+            # CancelledError 收口看到的必然是 user_cancelled，不会抢先写成
+            # executor_cancelled；resume 也只能在取消请求完成后重开同一个 run。
             if not self._persist_status:
                 log.warning(
                     "conversation_run_cancel_persistence_disabled",
@@ -151,21 +209,48 @@ class ConversationRunExecutor:
                         "data": {"run_id": run_id},
                     },
                 )
-                settled = True
+                settled: object = True
             else:
                 settled = self._run_service.cancel_run_if_running(run_id, end_reason)
+                if settled is not None and end_reason != "user_cancelled":
+                    self._project_tools_settled(run_id, "cancelled", end_reason)
+
+            if execution_was_active:
+                execution.state = ConversationRunState(run_id, ConversationRunStatus.CANCELLED)
+                execution.thread_task.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(execution.thread_task),
+                        timeout=CANCEL_WAIT_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    log.warning(
+                        "conversation_run_cancel_wait_timeout",
+                        extra={
+                            "msg": "取消等待旧 run 收束超时，暂不允许同 run resume",
+                            "data": {
+                                "run_id": run_id,
+                                "timeout_seconds": CANCEL_WAIT_TIMEOUT_SECONDS,
+                            },
+                        },
+                    )
         except KeyError:
-            self._signal.clear(run_id)
             raise
+        finally:
+            if execution is None or execution.thread_task.done():
+                self._signal.clear(run_id)
+                self._cancelling_run_ids.discard(run_id)
+            else:
+                # 旧 task 仍可能在 worker 线程里检查取消信号；让它保持到
+                # ``_execute`` 的 finally，避免超时返回后过早清除协作取消标记。
+                cleanup_task = asyncio.create_task(
+                    self._release_cancellation_after(run_id, execution.thread_task)
+                )
+                self._cancellation_cleanup_tasks.add(cleanup_task)
+                cleanup_task.add_done_callback(self._cancellation_cleanup_tasks.discard)
         if settled is None:
-            self._signal.clear(run_id)
-            return False
-        execution = self._executions.get(run_id)
-        if execution is None or execution.thread_task.done():
-            self._signal.clear(run_id)
-            return False
-        execution.state = ConversationRunState(run_id, ConversationRunStatus.CANCELLED)
-        execution.thread_task.cancel()
+            return execution_was_active
+        await self._set_status(run_id, ConversationRunStatus.CANCELLED)
         return True
 
     async def get_status(self, run_id: int) -> ConversationRunState | None:
@@ -211,6 +296,37 @@ class ConversationRunExecutor:
 
         return await self.get_status(run_id)
 
+    def is_locally_running(self, run_id: int) -> bool:
+        """返回当前进程是否仍持有指定 run 的后台执行 task。"""
+
+        execution = self._executions.get(run_id)
+        return execution is not None and not execution.thread_task.done()
+
+    def is_cancelling(self, run_id: int) -> bool:
+        """返回指定 run 是否正在执行取消编排。"""
+
+        return run_id in self._cancelling_run_ids
+
+    async def _release_cancellation_after(
+        self, run_id: int, execution_task: asyncio.Task[None]
+    ) -> None:
+        """等待超时的旧执行结束，再释放同 run 的恢复门闩。"""
+
+        try:
+            await execution_task
+        except BaseException as error:
+            # 旧 task 的异常已经由 ``_run_and_settle`` 或 asyncio task 生命周期
+            # 收口；这里仅负责释放并发门闩，不重复记录同一异常。
+            log.debug(
+                "conversation_run_cancel_cleanup_finished_with_error",
+                extra={
+                    "msg": "取消收束监视任务观察到旧执行异常",
+                    "data": {"run_id": run_id, "error_type": type(error).__name__},
+                },
+            )
+        finally:
+            self._cancelling_run_ids.discard(run_id)
+
     async def _execute(
         self,
         run_id: int,
@@ -236,12 +352,15 @@ class ConversationRunExecutor:
             退出时移除执行注册并清理进程内取消信号（清理唯一收口，覆盖取消/失败/完成全部路径）。
         """
 
-        # 同一 Task 的 Run 串行由 DB 级认领保证，进程内不再持锁。
-        if not self._run_service.claim_pending_run(run_id):
-            raise ValueError(f"run {run_id} was claimed by another executor")
-        await self._set_status(run_id, ConversationRunStatus.RUNNING)
+        task_space = task_runtime_spaces.get_or_create(run.task_id)
         try:
-            await self._run_and_settle(run_id, run, runner)
+            # DB claim 只保证状态转移幂等；run_lock 才保证同一 Task 的 context、
+            # sequence、tool 资源和 snapshot 投影在整个执行生命周期内串行。
+            async with task_space.run_lock:
+                if not self._run_service.claim_or_resume_run(run_id):
+                    raise ValueError(f"run {run_id} was claimed by another executor")
+                await self._set_status(run_id, ConversationRunStatus.RUNNING)
+                await self._run_and_settle(run_id, run, runner)
         finally:
             current = self._executions.get(run_id)
             try:
@@ -283,8 +402,18 @@ class ConversationRunExecutor:
             await self._set_status(run_id, ConversationRunStatus.COMPLETED)
         except asyncio.CancelledError:
             if self._persist_status:
-                self._project_tools_settled(run_id, "cancelled", "executor_cancelled")
-                self._run_service.cancel_run_if_running(run_id, end_reason="executor_cancelled")
+                current = self._run_service.get_run(run_id)
+                # 用户取消是可恢复的暂停语义：不要把未完成工具投影为 cancelled，
+                # 否则 resume 时无法从上一个 checkpoint 重新走该步骤。进程级关闭或
+                # 其他取消仍按不可恢复的 executor_cancelled 收口。
+                if not (
+                    current.status == ConversationRunStatus.CANCELLED.value
+                    and current.end_reason == "user_cancelled"
+                ):
+                    self._project_tools_settled(run_id, "cancelled", "executor_cancelled")
+                    self._run_service.cancel_run_if_running(
+                        run_id, end_reason="executor_cancelled"
+                    )
             await self._set_status(run_id, ConversationRunStatus.CANCELLED)
             raise
         except Exception:

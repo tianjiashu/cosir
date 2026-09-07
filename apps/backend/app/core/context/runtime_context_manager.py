@@ -37,6 +37,8 @@ class RuntimeContextManager:
     compressor: ContextCompressor | None = None
     context_service: ConversationTaskContextService | None = None
     current_run_id: int | None = None
+    # fork Task 的运行时标记；它只描述 Task 身份，不改变 context 持久化规则。
+    is_fork: bool = False
     # task 级 system prompt 条目，不参与压缩。
     _system_entry: ContextEntry | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
@@ -45,14 +47,14 @@ class RuntimeContextManager:
     _message_sequence: int = field(default=0, init=False)
     # 上下文变化订阅者列表：按 order 排序，按需插入。
     _listeners: list[ContextListener] = field(default_factory=list, init=False)
-    # 上下文是否有变化
+    # 标记的在workflow期间，上下文是否有变化
     have_change: bool = field(default=False, init=False)
 
     @staticmethod
     def ensure_get_runtime_context_manager(
-        agent_profile: AgentProfile,
-        current_workspace: WorkspaceRecord,
-        current_task: TaskRecord,
+            agent_profile: AgentProfile,
+            current_workspace: WorkspaceRecord,
+            current_task: TaskRecord,
     ) -> RuntimeContextManager:
         """获取或创建 task 级 context 管理器。
 
@@ -83,6 +85,34 @@ class RuntimeContextManager:
             current_task=current_task,
         )
 
+    def fork_context_manager(
+        self, task_id: int
+    ) -> RuntimeContextManager:
+        """为已复制 context 的目标 Task 创建独立的 fork manager。
+
+        参数:
+            task_id: 已完成持久化复制的目标 Task 标识。
+            run_id: 源 Task 的历史边界，仅用于调用语义记录；不绑定目标当前 run。
+
+        返回:
+            绑定目标 Task、初始没有当前 run 且带有 ``is_fork`` 标记的新 manager。
+
+        异常:
+            RuntimeError: context service 未装配。
+
+        副作用:
+            从目标 Task 的持久化 context 加载独立 working copy；不修改源 manager。
+        """
+
+
+        return RuntimeContextManager(
+            current_task_id=task_id,
+            agent_profile=copy.deepcopy(self.agent_profile),
+            workspace_root=self.workspace_root,
+            context_service=self._require_context_service(),
+            is_fork=True,
+        )
+
     def __post_init__(self) -> None:
         """初始化不持久化的 system prompt 条目。"""
 
@@ -104,7 +134,7 @@ class RuntimeContextManager:
         return self.context_service
 
     def begin_run(
-        self, run: ConversationRunRecord, execution_mode: ExecutionMode = "fresh"
+            self, run: ConversationRunRecord, execution_mode: ExecutionMode = "fresh"
     ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
@@ -167,10 +197,10 @@ class RuntimeContextManager:
         return self
 
     def add_message(
-        self,
-        message: BaseMessage,
-        *,
-        include_in_context: bool = True,
+            self,
+            message: BaseMessage,
+            *,
+            include_in_context: bool = True,
     ) -> None:
         """追加一条完整 LangChain 消息到 Task context。
 
@@ -285,9 +315,9 @@ class RuntimeContextManager:
         return self.have_change
 
     def mark_context_changed(
-        self,
-        event_type: ContextEventType,
-        entries: list[ContextEntry],
+            self,
+            event_type: ContextEventType,
+            entries: list[ContextEntry],
     ) -> None:
         """向 listener 发布 context 完整快照。"""
 

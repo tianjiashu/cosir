@@ -14,7 +14,8 @@ class TaskResponse(BaseModel):
         workspace_id: 所属工作区标识。
         title: 任务标题。
         execution_status: 派生执行状态，可能为 None。
-        task_type: 任务类型，``"user"`` 为用户创建，``"delegation"`` 为委派子任务。
+        task_type: 任务类型，``"user"`` 为用户创建，``"fork"`` 为历史分支，
+            ``"delegation"`` 为委派子任务。
         parent_task_id: 父任务标识，仅委派子任务有值。
         parent_run_id: 父轮次标识，仅委派子任务有值。
         delegation_id: 所属委派标识，仅委派子任务有值。
@@ -37,8 +38,10 @@ class TaskResponse(BaseModel):
     task_id: int
     workspace_id: int
     title: str
+    extra: dict[str, object] | None = None
     execution_status: str | None = None
     task_type: str = "user"
+    fork_available: bool = True
     parent_task_id: int | None = None
     parent_run_id: int | None = None
     delegation_id: int | None = None
@@ -53,6 +56,7 @@ class TaskResponse(BaseModel):
         record: TaskRecord,
         *,
         context_window_total: int | None = None,
+        fork_available: bool = True,
     ) -> "TaskResponse":
         """从 ``TaskRecord`` 值对象构造响应模型。
 
@@ -79,8 +83,10 @@ class TaskResponse(BaseModel):
             task_id=record.id,
             workspace_id=record.workspace_id,
             title=record.title,
+            extra=record.extra,
             execution_status=record.execution_status,
             task_type=record.task_type,
+            fork_available=fork_available,
             parent_task_id=record.parent_task_id,
             parent_run_id=record.parent_run_id,
             delegation_id=record.delegation_id,

@@ -3,7 +3,7 @@
 import ipaddress
 import re
 import socket
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 SECRET_VALUE_RE = re.compile(
@@ -29,34 +29,6 @@ SENSITIVE_QUERY_KEYS = {
     "signature",
     "token",
 }
-
-
-def extract_url_from_item(value: object) -> str | None:
-    """从字符串或搜索结果对象中提取非空 URL。
-
-    参数:
-        value: 候选 URL 字符串，或含有 ``url`` 或 ``href`` 字段的映射对象。
-
-    返回:
-        去除首尾空白后的 URL；输入不包含有效字符串 URL 时返回 ``None``。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    if isinstance(value, str):
-        return value.strip() or None
-    if not isinstance(value, Mapping):
-        return None
-
-    for key in ("url", "href"):
-        candidate = value.get(key)
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    return None
 
 
 def normalize_url_for_request(url: str) -> str:

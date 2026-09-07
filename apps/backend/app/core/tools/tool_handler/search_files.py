@@ -203,15 +203,23 @@ class SearchFilesTool(HandlerBase):
             )
         if not result:
             result = empty_message
+        file_paths = _display_file_paths(display_items, target)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=result,
             data={
-                "items": display_items,
+                "kind": "file-list",
+                "files": [{"path": file_path} for file_path in file_paths],
                 "pattern": pattern,
                 "target": target,
                 "path": search_path,
+                "page": {
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": match_count > offset + limit,
+                    "next_offset": offset + limit if match_count > offset + limit else None,
+                },
             },
         )
 
@@ -266,3 +274,22 @@ def build_search_files_definition() -> ToolDefinition:
     """
 
     return SearchFilesTool().to_definition()
+
+
+def _display_file_paths(items: list[Any], target: str) -> list[str]:
+    """把搜索引擎结果归一为 UI 只消费的去重文件路径列表。"""
+
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if target == "files":
+            path = item
+        elif isinstance(item, dict):
+            path = item.get("file_path", "")
+        else:
+            path = ""
+        if not isinstance(path, str) or not path or path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+    return paths

@@ -63,10 +63,17 @@ uv run python -m app
 
 ### 桌面开发模式启动
 
-Tauri 开发壳先启动后端 `uv run` 进程并等待 `/health`，再让 Vite 前端进入可交互状态。后端仅监听本机 loopback 地址，端口由 Tauri 动态分配：
+Tauri 负责托管后端生命周期。窗口立即显示，前端根据 supervisor 状态展示“后端启动中/可用/失败”，后端仅监听本机 loopback 地址，端口由 Tauri 动态分配：
 
 ```bash
 npm run tauri:dev --prefix apps/desktop
 ```
 
-桌面窗口关闭或按 `Ctrl+C` 会终止后端及其子进程。开发期后端 stdout/stderr 会写入桌面运行目录的 `backend-console.log`。
+桌面窗口关闭或按 `Ctrl+C` 会终止后端及其子进程。开发期后端使用应用 runtime 目录下的 `uv-cache`，不依赖用户全局 uv 缓存权限；stdout/stderr 会写入桌面运行目录的 `backend-console.log`。
+
+### 后端运行时契约
+
+- 开发态默认使用 `uv run --directory <backend> python -m app`，缓存固定在应用 runtime 目录的 `uv-cache`。
+- `COSIR_BACKEND_PYTHON` 仅作为明确的本地开发/测试运行时覆盖，不是启动失败后的隐式兜底。
+- 发布态不查找 PATH 中的 `python` 或 `uv`；应用资源目录必须携带 `backend-runtime/python.exe`（Unix 为 `backend-runtime/bin/python`），否则 supervisor 会报告明确的运行时缺失错误。
+- 发布包还必须将后端代码放入应用资源目录的 `backend/`。HTTP 仍只作为桌面端与本机后端之间的进程边界。

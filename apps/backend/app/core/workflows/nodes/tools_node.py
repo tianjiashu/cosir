@@ -139,13 +139,35 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 status="running",
             )
         )
-    tool_run: ToolRunResult = await asyncio.to_thread(
-        operations.run_tool_calls,
-        str(task.id),
-        approved_calls,
-        step_id,
-        running_loop=asyncio.get_running_loop(),
+    tool_task = asyncio.create_task(
+        asyncio.to_thread(
+            operations.run_tool_calls,
+            str(task.id),
+            approved_calls,
+            step_id,
+            running_loop=asyncio.get_running_loop(),
+        )
     )
+    try:
+        tool_run: ToolRunResult = await asyncio.shield(tool_task)
+    except asyncio.CancelledError:
+        # 取消外层 graph task 不会自动停止 to_thread 的 worker。先等待 worker 收束，
+        # 再让 executor 释放 task lock，避免用户立即 resume 时与旧工具写入重叠。
+        try:
+            await tool_task
+        except BaseException as error:
+            log.warning(
+                "tools_node_cancelled_worker_failed",
+                extra={
+                    "msg": "取消时等待工具 worker 收束失败",
+                    "data": {
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "error_type": type(error).__name__,
+                    },
+                },
+            )
+        raise
     log.info(
         "tools_node_tool_run",
         extra={

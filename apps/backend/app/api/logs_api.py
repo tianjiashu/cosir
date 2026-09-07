@@ -7,9 +7,9 @@
 from fastapi import Depends, HTTPException
 from pydantic import ValidationError
 
-from app.api.dependencies import get_log_query_service
 from app.api.schemas import LogQueryResponse, QueryLogsRequest, RecentLogsRequest
 from app.app import app
+from app.service.depends import get_log_query_service
 from app.service.log_query_service import LogQueryService
 
 

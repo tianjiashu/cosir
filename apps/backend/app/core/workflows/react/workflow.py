@@ -18,9 +18,11 @@ from langgraph.graph import END, START, StateGraph
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.runtime.checkpointer import build_checkpointer
+from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.service.provider.capability_service import CapabilityService
+
 from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_observe, _after_tools, _should_continue
@@ -109,6 +111,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         operations: WorkflowOperations,
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """执行一个任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -204,11 +207,10 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
-        runtime_context_manager.begin_run(run)
-        # 初始化时，将用户输入写入上下文，并发布事件
-        runtime_context_manager.add_message(
-            HumanMessage(content=run.input_text),
-        )
+        runtime_context_manager.begin_run(run, execution_mode)
+        if execution_mode == "fresh":
+            # 只有 fresh 才写入新的用户消息；resume 必须保留已有 ContextEntry。
+            runtime_context_manager.add_message(HumanMessage(content=run.input_text))
         config = {
             "configurable": {
                 "thread_id": run.checkpoint_thread_id,
@@ -239,7 +241,11 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_text="",
                 last_tool_results={},
             )
-            input_state: ReactGraphState | None = initial_state
+            # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
+            # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
+            input_state: ReactGraphState | None = (
+                initial_state if execution_mode == "fresh" else None
+            )
             while True:
                 try:
                     async for mode, value in graph.astream(

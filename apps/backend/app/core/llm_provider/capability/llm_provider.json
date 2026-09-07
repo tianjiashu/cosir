@@ -18,7 +18,11 @@
     },
     "thinking_channel": "reasoning_content",
     "vision_input_format": "openai_url",
-    "extra_body": {},
+    "extra_body": {
+      "thinking": {
+        "type": "enabled"
+      }
+    },
     "disabled_params":{}
   }
 }

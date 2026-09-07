@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
+
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from sqlalchemy.orm import Session
 
 from app.core.context.context_entry import ContextEntry
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -71,18 +74,66 @@ class ConversationTaskContextService:
         """返回纳入上下文的 Task context entry 列表（仅取 ``include_in_context`` 为真）。"""
 
         records = self._crud.get(task_id) or []
-        return [ContextEntry(run_id=record.run_id, message=record.message) for record in records]
+        return [
+            ContextEntry(
+                run_id=record.run_id,
+                message=record.message,
+                sequence=record.sequence,
+            )
+            for record in records
+        ]
 
     def entries(self, task_id: int) -> list[ContextEntry]:
         """返回 Task 全部 context entry（不分纳入标记）。"""
 
         records = self._crud.get(task_id, include_in_context=False) or []
-        return [ContextEntry(run_id=record.run_id, message=record.message) for record in records]
+        return [
+            ContextEntry(
+                run_id=record.run_id,
+                message=record.message,
+                sequence=record.sequence,
+            )
+            for record in records
+        ]
 
     def max_sequence(self, task_id: int) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""
 
         return self._crud.max_sequence(task_id)
+
+    def clone_for_fork(
+        self,
+        source_task_id: int,
+        target_task_id: int,
+        run_id_map: dict[int, int],
+        session: Session,
+    ) -> None:
+        """在外部事务中复制指定 Run 前缀的全部 context entries。
+
+        目标序号从 1 重新分配；序号数值不属于业务契约，只保证目标 Task 内严格递增且
+        不重复。系统提示词不落库，因此不会从源 Task 复制。
+        """
+
+        source_entries = self._crud.get(
+            source_task_id,
+            include_in_context=False,
+            session=session,
+        )
+        next_sequence = 1
+        for source_entry in source_entries:
+            if source_entry.run_id not in run_id_map:
+                continue
+            self._crud.create(
+                ConversationTaskContextRecord(
+                    task_id=target_task_id,
+                    run_id=run_id_map[source_entry.run_id],
+                    message=copy.deepcopy(source_entry.message),
+                    include_in_context=source_entry.include_in_context,
+                    sequence=next_sequence,
+                ),
+                session=session,
+            )
+            next_sequence += 1
 
     def delete_by_run_id(self, task_id: int, run_id: int) -> None:
         """删除指定 run 的全部 context entry。

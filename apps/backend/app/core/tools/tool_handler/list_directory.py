@@ -237,7 +237,15 @@ class ListDirectoryTool(HandlerBase):
             content=content,
             permission=self.permission,
             data={
+                "kind": "directory-list",
+                "path": path,
                 "entries": entry_dicts,
+                "page": {
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": next_offset is not None,
+                    "next_offset": next_offset,
+                },
             },
         )
 
@@ -291,7 +299,7 @@ class ListDirectoryTool(HandlerBase):
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="读取",
+                verb="查看目录",
                 icon="eye",
                 expandable=True,
                 expand_layout="list",

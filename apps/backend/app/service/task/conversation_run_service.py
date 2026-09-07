@@ -8,6 +8,8 @@
   （由 Transport snapshot owner 与 Task context owner 负责）。
 """
 
+from uuid import uuid4
+
 from langchain_core.messages import AIMessage
 from sqlalchemy.orm import Session
 
@@ -164,6 +166,52 @@ class ConversationRunService:
     def list_recoverable(self) -> list[ConversationRunRecord]:
         """返回应用启动时可恢复的 pending/running 运行。"""
         return self._run.list_recoverable()
+
+    def reset_run_for_edit(
+        self,
+        run_id: int,
+        input_text: str,
+        provider_id: int | None = None,
+        model_name: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> ConversationRunRecord | None:
+        """原地重置一个已结束 run，替换输入并创建新的 checkpoint 身份。
+
+        仅允许非 active run 编辑；调用方负责在同一 task 锁内清理 context 与 snapshot。
+        """
+
+        if not input_text.strip():
+            raise ValueError("input_text must be a non-empty string")
+        allowed_statuses = (
+            ConversationRunStatus.COMPLETED.value,
+            ConversationRunStatus.FAILED.value,
+            ConversationRunStatus.CANCELLED.value,
+            ConversationRunStatus.INTERRUPTED.value,
+        )
+        return self._run.reset_for_edit(
+            run_id=run_id,
+            input_text=input_text,
+            checkpoint_thread_id=str(uuid4()),
+            allowed_statuses=allowed_statuses,
+            provider_id=provider_id,
+            model_name=model_name,
+            reasoning_effort=reasoning_effort,
+        )
+
+    def resume_user_cancelled_run(self, run_id: int) -> ConversationRunRecord | None:
+        """恢复用户主动取消的 run，并清理上一次执行的终态字段。"""
+
+        record = self._run.resume_user_cancelled(run_id)
+        if record is None:
+            return None
+        service_depends.get_conversation_event_projector().process(
+            RunStatusChangedEvent(
+                task_id=record.task_id,
+                run_id=run_id,
+                status=ConversationRunStatus.RUNNING,
+            )
+        )
+        return record
 
     def complete_run_if_running(
         self,
@@ -399,6 +447,7 @@ class ConversationRunService:
 
         ``pending`` 通过原子状态迁移进入 ``running``；``running`` 表示旧进程在
         持久化层已经认领过，但进程内执行器已丢失，恢复入口可以继续驱动同一个 run。
+        用户主动取消的 run 也允许恢复，但其他 ``cancelled`` run 不允许重开。
         调用方必须先持有 task 级运行锁，避免同一进程重复启动恢复执行。
 
         参数:
@@ -428,6 +477,10 @@ class ConversationRunService:
                     status=ConversationRunStatus.RUNNING,
                 )
             )
+            return True
+
+        resumed = self.resume_user_cancelled_run(run_id)
+        if resumed is not None:
             return True
 
         current = self._run.get(run_id)

@@ -2,14 +2,18 @@
 
 本模块只承载「工具在客户端长什么样」的**静态声明**，是 ``ToolDefinition`` 契约的
 一部分。后端不承载任何渲染逻辑：摘要文本、列表条目、diff 条目等一律由客户端按
-本声明与工具结构化数据渲染（规则在 ``apps/shared/ts/toolDisplayRules.ts``）。
+本声明与 ``ToolObservation.data`` 渲染。
 
 设计边界：
 - 只有字面量字段，不含 ``Callable``、不含摘要文本、不含条目投影。
 - 零依赖（不 import 业务模块），避免循环依赖与包初始化污染。
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Literal
+
+ToolDisplaySurface = Literal["trace", "standalone"]
+ToolDisplayLayout = Literal["none", "details", "list", "diff", "write", "terminal"]
 
 
 @dataclass(frozen=True)
@@ -19,10 +23,11 @@ class ToolDisplayHints:
     参数:
         verb: 动作名，如 “读取”、“搜索”，客户端作为主标题动词。
         icon: lucide 图标名，如 “eye”、“search”，客户端据此渲染图标。
+        surface: 工具位于普通执行轨迹（``trace``）还是独立结果区域
+            （``standalone``）。
         expandable: 是否可展开；默认 ``True``，客户端据此隐藏展开箭头。
-        expand_layout: 展开态布局；默认 ``"details"``。可选 ``none`` / ``details`` /
-            ``list`` / ``diff`` / ``write`` / ``terminal``，客户端仅按该字符串分发
-            布局，不按工具名写特化分支。
+        expand_layout: 展开态布局；客户端仅按该字符串分发布局，不按工具名写特化分支。
+        default_open: 工具完成后是否默认展开；这是静态偏好，不代表执行状态。
 
     返回:
         无。
@@ -36,5 +41,12 @@ class ToolDisplayHints:
 
     verb: str
     icon: str
+    surface: ToolDisplaySurface = "trace"
     expandable: bool = True
-    expand_layout: str = "details"
+    expand_layout: ToolDisplayLayout = "details"
+    default_open: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        """把静态展示声明转换为可跨 Transport 边界传输的普通字典。"""
+
+        return asdict(self)

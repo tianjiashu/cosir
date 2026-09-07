@@ -191,11 +191,23 @@ class ExecuteTerminalTool(HandlerBase):
                 ),
                 retryable=True,
                 permission=self.permission,
+                data=self._display_data(
+                    command=command,
+                    workdir=cwd,
+                    output=redacted_output,
+                    result=result,
+                ),
             )
         return tool_success(
             tool_name=self.name,
             content=content,
             permission=self.permission,
+            data=self._display_data(
+                command=command,
+                workdir=cwd,
+                output=redacted_output,
+                result=result,
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -226,10 +238,27 @@ class ExecuteTerminalTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="执行命令",
                 icon="terminal",
+                surface="standalone",
                 expandable=True,
                 expand_layout="terminal",
             ),
         )
+
+    @staticmethod
+    def _display_data(
+        *, command: str, workdir: Path, output: str, result: ExecutionResult
+    ) -> dict[str, object]:
+        """构造终端专用 UI 数据，不复用模型可见 content。"""
+
+        return {
+            "kind": "terminal-result",
+            "command": command,
+            "workdir": str(workdir),
+            "output": output,
+            "exit_code": result.exit_code,
+            "timed_out": result.timed_out,
+            "truncated": result.truncated,
+        }
 
     def _resolve_workdir(self, workdir: str | None, execution_root: str | Path) -> tuple[Path, str]:
         """解析工作目录并限制在执行根内。

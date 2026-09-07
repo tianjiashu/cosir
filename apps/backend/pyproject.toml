@@ -42,7 +42,7 @@ dependencies = [
     "pillow==11.3.0",
     # 显式声明代码直接 import 的包（app/llm_provider/model_factory.py: from langchain_openai
     # import ChatOpenAI）。此前为 langchain 的传递依赖，现显式化以避免 uv 重解析时丢失。
-    "langchain-openai>=0.3.0",
+    "langchain-openai==1.6.0",
     # T6（F3）：从宽松下界 >=0.0.36 锁定为精确版本 ==0.0.36，
     # 与 Assistant Transport 链路直接相关；版本取当前环境实际安装版本（uv run 核实为 0.0.36）。
     "assistant-stream==0.0.36",
@@ -108,6 +108,8 @@ ignore = [
 "tests/**" = ["S101", "S603", "S607"]
 # FastAPI 路由用 Depends() 作默认参数是惯用法，B008 在此为误报。
 "app/api/**" = ["B008"]
+# Assistant Transport 同样是 FastAPI 路由边界，依赖注入默认参数是框架契约。
+"app/assistant_transport/assistant_api.py" = ["B008"]
 
 [tool.ruff.format]
 quote-style = "double"  # 与现有代码双引号约定一致

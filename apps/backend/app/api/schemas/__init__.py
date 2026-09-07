@@ -9,6 +9,7 @@ FastAPI/Pydantic 把模块当作类型注解从而报错）。
 from app.api.schemas.request.CreateTaskRequest import CreateTaskRequest
 from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
+from app.api.schemas.request.ForkTaskRequest import ForkTaskRequest
 from app.api.schemas.request.QueryLogsRequest import QueryLogsRequest
 from app.api.schemas.request.RecentLogsRequest import RecentLogsRequest
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
@@ -17,8 +18,6 @@ from app.api.schemas.response.HealthResponse import HealthResponse
 from app.api.schemas.response.LogEntryResponse import LogEntryResponse
 from app.api.schemas.response.LogQueryResponse import LogQueryResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
-from app.api.schemas.response.WorkspacePrepareResponse import WorkspacePrepareResponse
-from app.api.schemas.response.WorkspaceReadinessResponse import WorkspaceReadinessResponse
 from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 
 __all__ = [
@@ -27,13 +26,12 @@ __all__ = [
     "CreateWorkspaceRequest",
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
+    "ForkTaskRequest",
     "HealthResponse",
     "LogEntryResponse",
     "LogQueryResponse",
     "QueryLogsRequest",
     "RecentLogsRequest",
     "TaskResponse",
-    "WorkspacePrepareResponse",
-    "WorkspaceReadinessResponse",
     "WorkspaceResponse",
 ]

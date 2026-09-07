@@ -15,6 +15,7 @@ from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_handler.web.providers import default_web_providers
+from app.core.tools.tool_handler.web.web_provider import WebProviderUnavailableError
 from app.core.tools.tool_handler.web.web_provider_registry import (
     WebProviderRegistry,
     register_default_web_providers,
@@ -70,7 +71,9 @@ class WebSearchTool(HandlerBase):
 
         返回:
             搜索成功时返回包含 ``title``、``url``、``description``、``position`` 和
-            ``provider`` 的 JSON 观察结果；无可用 Provider 或调用失败时返回错误观察结果。
+            ``provider`` 的 JSON 观察结果（远端无结果时为合法的空列表）；无可用
+            Provider、Provider 未配置或调用失败时返回错误观察结果，配置类失败标记
+            ``retryable=False``。
 
         异常:
             不向上抛出；Provider 选择、可用性检查或搜索执行异常均归一化为错误观察结果。
@@ -87,6 +90,17 @@ class WebSearchTool(HandlerBase):
         try:
             provider = self._provider_registry.active_search_provider(backend)
             if provider is None:
+                if backend:
+                    return tool_error(
+                        self.name,
+                        f"Web search backend '{backend}' is not registered.",
+                        reason=(
+                            "Fix WEB_SEARCH_BACKEND or WEB_BACKEND to name a registered "
+                            "search-capable provider, then retry. "
+                            "No network request was made."
+                        ),
+                        permission=self.permission,
+                    )
                 return tool_error(
                     self.name,
                     "No web search provider configured.",
@@ -117,6 +131,25 @@ class WebSearchTool(HandlerBase):
                     permission=self.permission,
                 )
             results = provider.search(query, effective_limit)
+        except WebProviderUnavailableError as exc:
+            log.error(
+                "web_search_provider_unavailable",
+                extra={
+                    "msg": "网页搜索 Provider 未配置",
+                    "data": {"provider": provider.name if provider else backend, "error": str(exc)},
+                },
+            )
+            return tool_error(
+                self.name,
+                str(exc),
+                reason=(
+                    "The selected web search provider is not configured on this "
+                    "machine. This is deterministic, so fix the provider configuration "
+                    "and retry; the same call will keep failing until then."
+                ),
+                retryable=False,
+                permission=self.permission,
+            )
         except Exception:
             provider_name = (
                 provider.name if provider is not None else backend or "selected provider"
@@ -152,7 +185,9 @@ class WebSearchTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(
-                {"success": True, "data": {"web": web_results}}, separators=(",", ":")
+                {"success": True, "data": {"web": web_results}},
+                ensure_ascii=False,
+                separators=(",", ":"),
             ),
             data={"web": web_results},
         )

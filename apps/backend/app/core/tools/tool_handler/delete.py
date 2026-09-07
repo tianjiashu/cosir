@@ -188,6 +188,12 @@ class DeleteTool(HandlerBase):
                 tool_name=self.name,
                 content=f"Deleted link entry: {entry}",
                 permission=self.permission,
+                data={
+                    "kind": "delete-result",
+                    "path": path,
+                    "target_type": "link",
+                    "recursive": False,
+                },
             )
         if not entry.exists():
             return tool_error(
@@ -269,6 +275,12 @@ class DeleteTool(HandlerBase):
                 tool_name=self.name,
                 permission=self.permission,
                 content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
+                data={
+                    "kind": "delete-result",
+                    "path": path,
+                    "target_type": "directory",
+                    "recursive": recursive,
+                },
             )
         try:
             current_resolved, current_error = resolver.resolve_within_workspace(path)
@@ -306,24 +318,29 @@ class DeleteTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
+        internal_data = {
+            "changes": [
+                {
+                    "path": path,
+                    "new_path": None,
+                    "status": "deleted",
+                    "before": before_content,
+                    "after": "",
+                }
+            ]
+        }
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=f"Deleted file: {resolved}",
             data={
-                "path": str(resolved),
+                "kind": "delete-result",
+                "path": path,
                 "path_basename": resolved.name,
-                "type": "file",
-                "changes": [
-                    {
-                        "path": path,
-                        "new_path": None,
-                        "status": "deleted",
-                        "before": before_content,
-                        "after": "",
-                    }
-                ],
+                "target_type": "file",
+                "recursive": False,
             },
+            internal_data=internal_data,
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -354,8 +371,9 @@ class DeleteTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="删除",
                 icon="trash-2",
+                surface="standalone",
                 expandable=False,
-                expand_layout="details",
+                expand_layout="none",
             ),
         )
 

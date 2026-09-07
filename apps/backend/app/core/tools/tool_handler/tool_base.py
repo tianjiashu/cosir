@@ -18,7 +18,7 @@
 - ``to_definition() -> ToolDefinition``: 返回可注册到 ``ToolRegistry`` 的工具定义。
 
 后端不承载任何渲染职责：handler 只产出模型可见的 ``content`` 与客户端渲染所需的
-结构化 ``display_data``；摘要文本与展示条目一律由客户端渲染。
+结构化 ``ToolObservation.data``；摘要文本与展示条目一律由客户端渲染。
 """
 
 from abc import ABC, abstractmethod

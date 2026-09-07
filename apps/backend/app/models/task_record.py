@@ -9,6 +9,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from app.storage.model.task_model import TaskModel
 from app.utils.datetime_utils import from_text, to_text
@@ -23,6 +24,7 @@ class TaskRecord:
     title: str
     created_at: datetime
     updated_at: datetime
+    extra: dict[str, Any] | None = None
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
@@ -49,7 +51,7 @@ class TaskRecord:
 
         return self.parent_task_id is not None
 
-    def to_dict(self) -> dict[str, str | int | None]:
+    def to_dict(self) -> dict[str, object]:
         """将任务状态转换为可序列化为 JSON 的字典。
 
         参数:
@@ -71,6 +73,7 @@ class TaskRecord:
             "id": self.id,
             "workspace_id": self.workspace_id,
             "title": self.title,
+            "extra": self.extra,
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
             "parent_run_id": self.parent_run_id,
@@ -100,6 +103,7 @@ class TaskRecord:
             id=row.id,
             workspace_id=row.workspace_id,
             title=row.title,
+            extra=row.extra,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             task_type=row.task_type,

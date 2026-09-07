@@ -60,7 +60,9 @@ class ToolSystem:
     ) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册全部 16 个工具定义（10 个既有 + 6 个 CodeGraph 查询工具）。其中
+        按内置清单注册工具定义：10 个既有工具恒注册；``Settings.CODEGRAPH_ENABLED``
+        为 True 时额外注册 6 个 CodeGraph 查询工具（共 16 个），为 False 时仅注册
+        10 个既有工具（模型侧完全无 codegraph 入口）。其中
         原 patch 工具已拆分为 replace(patch) 与 apply_patch(V4A) 两个独立工具，故既有工具
         由 9 个增至 10 个，总数由 15 个增至 16 个。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
@@ -104,13 +106,15 @@ class ToolSystem:
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
         registry.register(build_delegate_task_definition(agent_summary=_delegate_summary))
-        # CodeGraph 查询工具（client 可为 None，execute 降级）。
-        registry.register(build_codegraph_explore_definition(client))
-        registry.register(build_codegraph_search_definition(client))
-        registry.register(build_codegraph_node_definition(client))
-        registry.register(build_codegraph_callers_definition(client))
-        registry.register(build_codegraph_callees_definition(client))
-        registry.register(build_codegraph_impact_definition(client))
+        # CodeGraph 查询工具（client 可为 None，execute 降级）。总开关关闭时不注册，
+        # 模型侧完全无 codegraph 工具入口；开关开启时注册 6 个只读查询工具。
+        if Settings.CODEGRAPH_ENABLED:
+            registry.register(build_codegraph_explore_definition(client))
+            registry.register(build_codegraph_search_definition(client))
+            registry.register(build_codegraph_node_definition(client))
+            registry.register(build_codegraph_callers_definition(client))
+            registry.register(build_codegraph_callees_definition(client))
+            registry.register(build_codegraph_impact_definition(client))
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),

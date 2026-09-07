@@ -1,6 +1,6 @@
 """Conversation Transport 的模型用量契约。"""
 
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 
 class ConversationStateUsage(TypedDict):

@@ -1,6 +1,6 @@
 """Conversation Transport state 的中性 JSON 契约。"""
 
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
@@ -93,6 +93,10 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
                     raise ValueError("snapshot contains an invalid tool status")
                 if part.get("approvalRequestId") is not None:
                     raise ValueError("approval requests are not implemented")
+                if not isinstance(part.get("presentation", {}), dict):
+                    raise ValueError("snapshot tool presentation must be an object")
+                if part.get("data") is not None and not isinstance(part.get("data"), dict):
+                    raise ValueError("snapshot tool data must be an object or null")
 
 
 def empty_snapshot() -> ConversationStateSnapshot:

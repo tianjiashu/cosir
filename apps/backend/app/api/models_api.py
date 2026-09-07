@@ -6,7 +6,6 @@
 
 from fastapi import Depends
 
-from app.api.dependencies import get_provider_service
 from app.api.schemas.response.ModelListItemResponse import ModelListItemResponse
 from app.api.schemas.response.ProviderModelGroupResponse import (
     ProviderModelGroupResponse,
@@ -15,6 +14,7 @@ from app.app import app
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
+from app.service.depends import get_provider_service
 from app.service.provider import ProviderService
 
 

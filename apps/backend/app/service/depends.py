@@ -10,8 +10,6 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from app.service.workspace_event.workspace_event_bus import WorkspaceEventBus
-
 if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_event_projector import (
         ConversationEventProjector,
@@ -38,7 +36,6 @@ if TYPE_CHECKING:
     )
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
     from app.service.task.workspace_service import WorkspaceService
-    from app.service.workspace_event.workspace_event_service import WorkspaceEventService
     from app.storage.cascade_deletion import CascadeDeleter
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -48,7 +45,6 @@ if TYPE_CHECKING:
     from app.storage.crud.provider_crud import ProviderCrud
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
-    from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
     from app.task_runtime.service.task_service import TaskService
 
 
@@ -203,15 +199,6 @@ def get_workspace_crud() -> WorkspaceCrud:
     from app.storage.crud.workspace_crud import WorkspaceCrud
 
     return WorkspaceCrud()
-
-
-@lru_cache(maxsize=1)
-def get_workspace_readiness_crud() -> WorkspaceReadinessCrud:
-    """Return the process-local workspace readiness snapshot CRUD singleton."""
-
-    from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
-
-    return WorkspaceReadinessCrud()
 
 
 @lru_cache(maxsize=1)
@@ -390,62 +377,6 @@ def get_conversation_run_workspace_resolver() -> ConversationRunWorkspaceResolve
     )
 
     return ConversationRunWorkspaceResolver()
-
-
-@lru_cache(maxsize=1)
-def get_workspace_event_bus() -> WorkspaceEventBus:
-    """返回进程级 workspace 状态事件总线单例。
-
-    参数:
-        无。
-
-    返回:
-        WorkspaceEventBus 单例。
-
-    异常:
-        无。
-
-    副作用:
-        首次调用时创建 WorkspaceEventBus。
-    """
-
-    return WorkspaceEventBus()
-
-
-def get_workspace_event_service() -> WorkspaceEventService | None:
-    """返回 workspace 状态事件 service，CodeGraph 不可用时返回 None。
-
-    因依赖 Kernel 进程状态（可能后启动/重启/不可用），不做缓存；每次构造轻量。
-    CodeGraph 不可用时返回 None，调用方（API 层）据此降级返回 ready=False。
-
-    参数:
-        无。
-
-    返回:
-        WorkspaceEventService 实例；CodeGraph Kernel 不可用时返回 None。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        尝试从 supervisor 取得 Kernel client。
-    """
-
-    from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
-    from app.service.codegraph_lifecycle_service import CodeGraphLifecycleService
-    from app.service.workspace_event.workspace_event_service import WorkspaceEventService
-    from app.storage.crud.workspace_readiness_crud import WorkspaceReadinessCrud
-
-    try:
-        client = get_kernel_supervisor().get_client()
-    except (RuntimeError, CodeGraphKernelUnavailableError):
-        # supervisor 未初始化或 Kernel 未就绪：禁用索引准备，降级到文件搜索。
-        return None
-    return WorkspaceEventService(
-        lifecycle=CodeGraphLifecycleService(client),
-        bus=get_workspace_event_bus(),
-        readiness_crud=WorkspaceReadinessCrud(),
-    )
 
 
 @lru_cache(maxsize=1)
@@ -643,7 +574,6 @@ def reset_service_dependencies() -> None:
     """
 
     get_log_query_service.cache_clear()
-    get_workspace_event_bus.cache_clear()
     get_workspace_service.cache_clear()
     get_conversation_run_workspace_resolver.cache_clear()
     get_conversation_run_service.cache_clear()
@@ -653,7 +583,6 @@ def reset_service_dependencies() -> None:
     get_delegation_crud.cache_clear()
     get_cascade_deleter.cache_clear()
     get_workspace_crud.cache_clear()
-    get_workspace_readiness_crud.cache_clear()
     get_conversation_run_crud.cache_clear()
     get_task_crud.cache_clear()
     get_provider_crud.cache_clear()

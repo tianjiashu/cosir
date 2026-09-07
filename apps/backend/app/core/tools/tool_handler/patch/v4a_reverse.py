@@ -1,7 +1,7 @@
 """V4A 文件变更反向操作构造。
 
 把一次 turn 内文件工具（write_file / patch / delete / move）成功执行产生的
-``display_data["changes"]``（采集层事实快照）转换为「反向 V4A 操作」列表，落库后
+``internal_data["changes"]``（采集层事实快照）转换为「反向 V4A 操作」列表，落库后
 供 task 级变更集（``service.task.change_set``）用 ``apply_all_with_diff`` 逆向应用，
 将文件还原到该变更执行前的状态。
 
@@ -25,7 +25,7 @@ def build_forward_operations(changes: list[dict]) -> list[PatchOperation]:
     """从采集层变更快照构造「正向」V4A 操作列表（Turn 回退文件快照采集主链路入口）。
 
     参数:
-        changes: ``display_data["changes"]`` 中的单文件变更字典列表，每个含
+        changes: ``internal_data["changes"]`` 中的单文件变更字典列表，每个含
             ``path`` / ``new_path`` / ``status`` / ``before`` / ``after``。
 
     返回:

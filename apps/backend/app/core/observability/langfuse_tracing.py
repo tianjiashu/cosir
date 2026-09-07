@@ -254,8 +254,8 @@ def conversation_run_trace(metadata: TraceMetadata) -> Iterator[ConversationRunT
 
     副作用:
         创建 Langfuse 客户端与根 observation、写 trace 属性、构造 CallbackHandler；
-        退出上下文时自动结束根 observation 并 ``flush``；根 observation 无 trace_id
-        时记一条 warning。
+        退出上下文时自动结束根 observation。单次对话不主动 flush，避免观测系统网络
+        重试阻塞对话终态收口。
     """
 
     if not tracing_enabled():
@@ -325,22 +325,13 @@ def conversation_run_trace(metadata: TraceMetadata) -> Iterator[ConversationRunT
         return
 
     try:
-        try:
-            root_trace_id = getattr(root_span, "trace_id", None)
-            if root_trace_id is None:
-                log.warning(
-                    "langfuse_conversation_run_trace_missing_root_trace_id",
-                    extra={
-                        "msg": "turn 根 observation 无 trace_id，上层无法关联 trace",
-                        "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
-                    },
-                )
-            yield ConversationRunTraceResult(
-                callbacks=[handler],
-                trace_id=root_trace_id,
-            )
-        finally:
-            _safe_flush_langfuse_client(client, metadata, "langfuse_turn_flush_failed")
+        root_trace_id = getattr(root_span, "trace_id", None)
+        # Langfuse SDK 会在后台批量上报。这里不能调用同步 client.flush()：
+        # flush 的网络重试属于非关键观测路径，不能阻塞 ConversationRun。
+        yield ConversationRunTraceResult(
+            callbacks=[handler],
+            trace_id=root_trace_id,
+        )
     finally:
         exc_info = sys.exc_info()
         _safe_exit_langfuse_context(
@@ -354,36 +345,6 @@ def conversation_run_trace(metadata: TraceMetadata) -> Iterator[ConversationRunT
             "langfuse_root_span_exit_failed",
             metadata,
             exc_info,
-        )
-
-
-def _safe_flush_langfuse_client(client: Any, metadata: TraceMetadata, event: str) -> None:
-    """Best-effort flush a Langfuse client without affecting turn execution.
-
-    参数:
-        client: Langfuse client 实例。
-        metadata: 当前 turn 的定位元数据。
-        event: flush 失败时使用的稳定日志事件名。
-
-    返回:
-        无。
-
-    异常:
-        无。Langfuse flush 异常被记录后吞掉。
-
-    副作用:
-        触发 Langfuse 后台缓冲 flush；失败时写 error 日志。
-    """
-
-    try:
-        client.flush()
-    except Exception:
-        log.exception(
-            event,
-            extra={
-                "msg": "Langfuse flush 失败，已忽略以避免影响 turn",
-                "data": {"run_id": metadata.run_id, "task_id": metadata.task_id},
-            },
         )
 
 

@@ -202,10 +202,20 @@ class ReadFileTool(HandlerBase):
                 permission=self.permission,
             )
 
+        normalized_offset, normalized_limit = self._normalize_read_pagination(offset, limit)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(dataclasses.asdict(result)),
+            data={
+                "kind": "read-file-meta",
+                "path": path,
+                "offset": normalized_offset,
+                "limit": normalized_limit,
+                "total_lines": result.total_lines,
+                "file_size": result.file_size,
+                "next_offset": result.next_offset,
+            },
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -234,7 +244,7 @@ class ReadFileTool(HandlerBase):
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="读取",
+                verb="读取文件",
                 icon="eye",
                 expandable=False,
                 expand_layout="none",

@@ -13,8 +13,10 @@ handler 异常）以及各 handler（路径越界/无匹配等）的失败分支
 观察不同，单独归口以避免与确定性失败的重试提示混淆。
 """
 
-import dataclasses
+import copy
 import errno
+from collections.abc import Mapping
+from typing import Any
 
 from app.core.tools.schemas import ToolObservation
 from app.models.enums.error_kind import ErrorKind
@@ -146,7 +148,8 @@ def tool_error(
     retryable: bool = False,
     permission: str = "",
     tool_call_id: str = "",
-    display_data: dict[str, object] | None = None,
+    data: Mapping[str, Any] | None = None,
+    internal_data: Mapping[str, Any] | None = None,
     error_kind: ErrorKind = ErrorKind.RUNTIME_FAILED,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
@@ -170,10 +173,9 @@ def tool_error(
         permission: 触发工具所需权限标识（用于审计/展示），默认空字符串；权限被
             拒时由调用方回填被拒的权限值。
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
-        display_data: 仅供客户端展示消费的结构化数据；会 merge 进
-            ``ToolObservation.display_data``（不含 ``content`` 副本），**不会回传给
-            模型**。为 error 观察携带结构化诊断（如语法检查的 ``syntax_errors``）而
-            增补，与 :func:`tool_success` 的 ``display_data`` 语义对称。
+        data: 仅供客户端展示消费的结构化数据；会写入
+            ``ToolObservation.data``，不会回传给模型。为 error 观察携带结构化诊断
+            （如语法检查的 ``syntax_errors``）。
         error_kind: 供日志、运行时事件与回放分析使用的稳定错误分类，例如
             ``parse_invalid``、``unknown_tool``、``schema_invalid``、``runtime_failed``、
             ``permission_denied``。
@@ -198,13 +200,10 @@ def tool_error(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    # 与 tool_success 对称：display_data 不承载 content 副本，避免大体积错误文本
-    # 经 display_data 旁路无约束进入前端事件流与可观测性平台。
-    merged = dataclasses.asdict(observation)
-    merged.pop("content", None)
-    merged.pop("display_data", None)
-    if display_data:
-        merged.update(display_data)
-    merged["error_kind"] = error_kind.value
-    observation.data = merged
+    # 与 tool_success 对称：data 不承载 content 副本，避免大体积错误文本经 UI
+    # 通道进入前端事件流与可观测性平台。
+    observation.data = copy.deepcopy(dict(data or {}))
+    internal = copy.deepcopy(dict(internal_data or {}))
+    internal.setdefault("error_kind", error_kind.value)
+    observation.internal_data = internal
     return observation

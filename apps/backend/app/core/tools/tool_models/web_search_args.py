@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config.settings import Settings
+
 
 class WebSearchArgs(BaseModel):
     """网页搜索工具的模型可见参数。"""
@@ -19,6 +21,9 @@ class WebSearchArgs(BaseModel):
     limit: int = Field(
         default=5,
         ge=1,
-        le=100,
-        description="Maximum number of results to return. Defaults to 5.",
+        le=Settings.WEB_SEARCH_LIMIT_MAX,
+        description=(
+            f"Maximum number of results to return. Defaults to 5, hard-capped by "
+            f"the runtime limit ({Settings.WEB_SEARCH_LIMIT_MAX})."
+        ),
     )

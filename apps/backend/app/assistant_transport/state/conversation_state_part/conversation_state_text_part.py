@@ -1,6 +1,8 @@
 """可增量追加的文本 part 契约。"""
 
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired
+
+from typing_extensions import TypedDict
 
 
 class ConversationStateTextPart(TypedDict):

@@ -196,7 +196,7 @@ class WriteFileTool(HandlerBase):
             )
 
         # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
-        # 经 reason 引导 Agent 二次编辑覆盖自修复；display_data 只给前端展示。
+        # 经 reason 引导 Agent 二次编辑覆盖自修复；data 只给前端展示。
         result = check_source_syntax(str(resolved), content)
         if result.has_error:
             return tool_error(
@@ -204,16 +204,18 @@ class WriteFileTool(HandlerBase):
                 error="syntax error detected after write",
                 reason=format_syntax_reason(result),
                 permission=self.permission,
-                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
+                data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
             )
 
         status = "modified" if existed else "added"
         snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
+        display_data = build_file_change_display_data([snapshot])
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=content,
-            data=build_file_change_display_data([snapshot]),
+            data={"kind": "file-changes", **display_data},
+            internal_data=display_data,
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -242,8 +244,9 @@ class WriteFileTool(HandlerBase):
             risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
-                verb="",
+                verb="写入文件",
                 icon="git-compare",
+                surface="standalone",
                 expandable=True,
                 expand_layout="diff",
             ),

@@ -1,6 +1,8 @@
 """工具调用及其生命周期的 UI part 契约。"""
 
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired
+
+from typing_extensions import TypedDict
 
 ToolCallStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
@@ -19,5 +21,7 @@ class ConversationStateToolCallPart(TypedDict):
     args: NotRequired[dict[str, object]]
     result: NotRequired[object]
     error: NotRequired[object]
+    presentation: NotRequired[dict[str, object]]
+    data: NotRequired[dict[str, object] | None]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]

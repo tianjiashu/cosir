@@ -2,6 +2,7 @@
 
 from typing import ClassVar, Protocol
 
+from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.workflow_operations import WorkflowOperations
 
 
@@ -18,6 +19,7 @@ class AgentWorkflow(Protocol):
         operations: WorkflowOperations,
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """通过一个工作流策略运行一个任务。
 
