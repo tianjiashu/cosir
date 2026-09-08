@@ -445,35 +445,48 @@ class ConversationRunCrud:
 
         if session is not None:
             return self.reset_for_edit_in_session(
-                session, run_id, input_text, checkpoint_thread_id, allowed_statuses, provider_id, model_name, reasoning_effort
+                session,
+                run_id,
+                input_text,
+                checkpoint_thread_id,
+                allowed_statuses,
+                provider_id,
+                model_name,
+                reasoning_effort,
             )
         with self._session_factory.begin() as managed_session:
             return self.reset_for_edit_in_session(
-                managed_session, run_id, input_text, checkpoint_thread_id, allowed_statuses, provider_id, model_name, reasoning_effort
+                managed_session,
+                run_id,
+                input_text,
+                checkpoint_thread_id,
+                allowed_statuses,
+                provider_id,
+                model_name,
+                reasoning_effort,
             )
 
-    def resume_user_cancelled(
+    def resume_cancelled(
         self, run_id: int, session: Session | None = None
     ) -> ConversationRunRecord | None:
-        """把用户主动取消的 run 原子恢复为 running，并清空旧终态字段。"""
+        """把任意 cancelled run 原子恢复为 running，并清空旧终态字段。"""
 
         if session is not None:
-            return self.resume_user_cancelled_in_session(session, run_id)
+            return self.resume_cancelled_in_session(session, run_id)
         with self._session_factory.begin() as managed_session:
-            return self.resume_user_cancelled_in_session(managed_session, run_id)
+            return self.resume_cancelled_in_session(managed_session, run_id)
 
     @staticmethod
-    def resume_user_cancelled_in_session(
+    def resume_cancelled_in_session(
         session: Session, run_id: int
     ) -> ConversationRunRecord | None:
-        """在外部事务中恢复 user_cancelled run。"""
+        """在外部事务中恢复任意 cancelled run。"""
 
         result = session.execute(
             update(ConversationRunModel)
             .where(
                 ConversationRunModel.id == run_id,
                 ConversationRunModel.status == ConversationRunStatus.CANCELLED.value,
-                ConversationRunModel.end_reason == "user_cancelled",
             )
             .values(
                 status=ConversationRunStatus.RUNNING.value,
@@ -485,6 +498,38 @@ class ConversationRunCrud:
             return None
         session.flush()
         return ConversationRunCrud.get_in_session(session, run_id)
+
+    def cancel_recoverable_for_restart(
+        self, run_id: int, end_reason: str = "runtime_restarted"
+    ) -> ConversationRunRecord | None:
+        """把进程重启时遗留的 active run 原子收敛为 cancelled。
+
+        此方法只修改 ConversationRun 持久化事实，不发布 snapshot/projector 事件；
+        snapshot 的最终一致性由 ConversationTaskSnapshotService.read 在读取边界完成。
+        """
+
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(ConversationRunModel)
+                .where(
+                    ConversationRunModel.id == run_id,
+                    ConversationRunModel.status.in_(
+                        (
+                            ConversationRunStatus.PENDING.value,
+                            ConversationRunStatus.RUNNING.value,
+                        )
+                    ),
+                )
+                .values(
+                    status=ConversationRunStatus.CANCELLED.value,
+                    end_reason=end_reason,
+                    final_output=None,
+                )
+            )
+            if not result.rowcount:
+                return None
+            session.flush()
+            return ConversationRunCrud.get_in_session(session, run_id)
 
     @staticmethod
     def reset_for_edit_in_session(

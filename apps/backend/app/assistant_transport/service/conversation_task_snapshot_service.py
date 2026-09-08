@@ -261,12 +261,43 @@ class ConversationTaskSnapshotService:
 
         return queue, unsubscribe
 
-    async def read(self, task_id: int) -> ConversationStateSnapshot:
-        """读取 canonical snapshot，并保留进程重启后可恢复的 active run。
+    def subscribe_with_snapshot(
+        self, task_id: int
+    ) -> tuple[asyncio.Queue[SnapshotChange], Callable[[], None], ConversationStateSnapshot]:
+        """原子注册订阅者并读取首帧 snapshot。
 
-        ``ConversationRun`` 是持久化执行事实，读取历史 snapshot 不能因为当前进程还没有
-        executor entry 就把它取消。恢复入口会在确认 run 仍为 pending/running 后重新登记
-        executor；因此本方法只负责校正已落库的终态与快照，不负责猜测 active run 已失败。
+        注册和首帧读取必须共享 service 锁。否则 mutation 可能在 ``subscribe`` 与
+        ``ensure_state_snapshot`` 之间提交，导致首帧已经包含 mutation 后的完整状态，
+        但队列又留下同一 mutation，Assistant Transport 会把增量重复应用。
+        """
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
+        subscriber = _Subscriber(loop, queue)
+        with self._lock:
+            self._subscribers.setdefault(task_id, set()).add(subscriber)
+            initial = self.ensure_state_snapshot(task_id)
+
+        def unsubscribe() -> None:
+            """注销订阅者，重复调用安全。"""
+
+            with self._lock:
+                subscribers = self._subscribers.get(task_id)
+                if subscribers is not None:
+                    subscribers.discard(subscriber)
+                    if not subscribers:
+                        self._subscribers.pop(task_id, None)
+
+        return queue, unsubscribe, initial
+
+    async def read(self, task_id: int) -> ConversationStateSnapshot:
+        """读取 canonical snapshot，并在读取边界收敛终态一致性。
+
+        后端启动时由 ``ConversationRunService.recover_orphaned_runs`` 将崩溃前遗留的
+        ``pending``/``running`` Run 原子收敛为 ``cancelled``，且不直接修改 snapshot。
+        因此本方法负责读取时发现「Run 已是终态、snapshot 仍是旧状态」的窗口，并经
+        ``ConversationEventProjector`` 补齐 snapshot；不会因为 transport 断开、任务切换或
+        当前进程暂时没有 executor entry 就取消 Run，也不会自动 resume。
         """
         from app.service.depends import (
             get_conversation_event_projector,

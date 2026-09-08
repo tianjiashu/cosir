@@ -49,6 +49,7 @@ from app.hook.hook_interceptor import HookInterceptor
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_executor,
+    get_conversation_run_service,
     get_delegation_service,
     initialize_service_dependencies,
     set_runtime,
@@ -101,6 +102,15 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         max_bytes=Settings.LOG_MAX_BYTES,
         backup_count=Settings.LOG_BACKUP_COUNT,
     )
+    recovered_runs = get_conversation_run_service().recover_orphaned_runs()
+    if recovered_runs:
+        log.info(
+            "conversation_runs_recovered_after_restart",
+            extra={
+                "msg": "后端启动时已将遗留 active run 收敛为 cancelled",
+                "data": {"run_ids": [run.id for run in recovered_runs]},
+            },
+        )
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
 
     # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。

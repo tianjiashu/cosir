@@ -353,6 +353,42 @@ async def test_stream_does_not_close_while_run_is_still_active() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_disconnect_only_unsubscribes_and_does_not_cancel_run() -> None:
+    """Transport 断开只结束 subscriber，不触发 ConversationRun cancel。"""
+
+    initial = empty_snapshot()
+    initial["run"] = {"runId": 1, "status": "running"}
+    queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
+    cancelled = False
+    unsubscribe_count = 0
+
+    def unsubscribe() -> None:
+        nonlocal unsubscribe_count
+        unsubscribe_count += 1
+
+    class Snapshots:
+        def subscribe(self, task_id: int) -> tuple[asyncio.Queue[SnapshotChange], Any]:
+            assert task_id == 1
+            return queue, unsubscribe
+
+        def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+            assert task_id == 1
+            return copy.deepcopy(initial)
+
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._snapshots = Snapshots()
+    stream = service.stream(1, 1, lambda: cancelled, poll_interval=0.01)
+
+    first = await anext(stream)
+    assert first.state["run"]["status"] == "running"
+    cancelled = True
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+
+    assert unsubscribe_count == 1
+
+
+@pytest.mark.asyncio
 async def test_stream_fallback_sends_terminal_snapshot() -> None:
     """队列通知丢失但 snapshot 已终态时，兜底仍发送完整状态。"""
 

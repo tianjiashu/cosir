@@ -92,9 +92,14 @@ class TransportAssistantService:
             },
         )
         try:
-            queue, unsubscribe = self._snapshots.subscribe(task_id)
-            assert queue is not None
-            initial = self._snapshots.ensure_state_snapshot(task_id)
+            subscribe_with_snapshot = getattr(self._snapshots, "subscribe_with_snapshot", None)
+            if callable(subscribe_with_snapshot):
+                queue, unsubscribe, initial = subscribe_with_snapshot(task_id)
+            else:
+                # 保留对轻量测试替身/旧注入实现的兼容；生产 snapshot service 使用
+                # subscribe_with_snapshot 保证首帧与订阅注册的原子顺序。
+                queue, unsubscribe = self._snapshots.subscribe(task_id)
+                initial = self._snapshots.ensure_state_snapshot(task_id)
             log.info(
                 "assistant_sse_initial_snapshot_prepared",
                 extra={
@@ -394,6 +399,88 @@ class TransportAssistantService:
             lambda run: self.runtime.execute_run(run, execution_mode="resume"),
         )
 
+    async def attach_run(
+        self,
+        *,
+        task_id: int,
+        thread_id: str,
+        run_id: int,
+    ) -> AssistantTransportResponse:
+        """只订阅一个已有 run 的 canonical snapshot，不启动或恢复执行。
+
+        参数:
+            task_id: 任务标识。
+            thread_id: Assistant UI thread 标识。
+            run_id: 已存在的 Conversation Run 标识。
+
+        返回:
+            使用 ``assistant-stream`` 编码的 snapshot subscription 响应。
+
+        异常:
+            HTTPException: run 不属于 task、不是当前 latest run、或 snapshot 尚未
+                收敛时抛出结构化 transport 错误。
+
+        副作用:
+            只注册 snapshot subscriber；不会创建 executor、修改 Run status、写入
+            Context 或调用业务 resume。
+        """
+
+        try:
+            run = self._runs.get_run(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        if run.task_id != task_id:
+            _raise_transport_error(
+                409,
+                "RUN_TASK_MISMATCH",
+                "运行不属于当前任务",
+                retryable=False,
+                run_id=run_id,
+            )
+
+        state = await self._snapshots.read(task_id)
+        if state["run"]["runId"] != run_id:
+            _raise_transport_error(
+                409,
+                "RUN_NOT_ATTACHABLE",
+                "当前任务的最新快照已不是该运行",
+                retryable=True,
+                run_id=run_id,
+            )
+        if run.status not in {
+            ConversationRunStatus.PENDING.value,
+            ConversationRunStatus.RUNNING.value,
+        }:
+            _raise_transport_error(
+                409,
+                "RUN_NOT_ATTACHABLE",
+                "只有仍在执行的运行可以建立状态订阅",
+                retryable=False,
+                run_id=run_id,
+            )
+        if run.status in {
+            ConversationRunStatus.PENDING.value,
+            ConversationRunStatus.RUNNING.value,
+        } and not self.run_executor.is_locally_running(run_id):
+            _raise_transport_error(
+                409,
+                "RUN_RECOVERY_REQUIRED",
+                "本机后端尚未恢复该运行，请先读取最新状态",
+                retryable=True,
+                run_id=run_id,
+            )
+
+        stream = create_run(
+            lambda controller: self.subscribe_run_state_with_logging(
+                controller, task_id, run_id
+            ),
+            state=state,
+        )
+        response = AssistantTransportResponse(stream)
+        response.headers["X-Cosir-Task-Id"] = str(task_id)
+        response.headers["X-Cosir-Thread-Id"] = thread_id
+        return response
+
     async def resume_run(
         self,
         *,
@@ -416,7 +503,8 @@ class TransportAssistantService:
             HTTPException: 任务不存在、run 不可恢复、run 正在取消或冲突时抛出。
 
         副作用:
-            如果执行器仍在本进程则只重新订阅其状态流。
+            仅在该 Run 已处于最新 ``CANCELLED`` 且当前进程没有执行器条目时启动
+            resume；已有本地执行器时直接返回冲突，避免把业务 resume 当成 attach。
         """
         try:
             self.task_service.get_task(task_id)

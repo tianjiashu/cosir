@@ -9,6 +9,7 @@ from assistant_stream import create_run
 from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.app import app
 from app.assistant_transport.request import (
@@ -36,6 +37,20 @@ from app.service.depends import (
     get_transport_assistant_service,
 )
 from app.task_runtime.service.task_service import TaskService
+
+
+class AssistantAttachRequest(BaseModel):
+    """只订阅已有 Conversation Run 的 transport 请求。"""
+
+    # assistant-ui resume requests carry the common transport envelope
+    # (commands/state/system/tools/callSettings/config). Attach only consumes
+    # identity fields and intentionally ignores that envelope.
+    model_config = ConfigDict(extra="ignore")
+
+    commands: list[object] = Field(default_factory=list)
+    taskId: int | None = Field(default=None, ge=1)
+    threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
+    runId: int = Field(ge=1)
 
 
 @app.post("/assistant")
@@ -198,6 +213,50 @@ async def assistant_transport(
         )
 
 
+@app.post("/tasks/{task_id}/assistant/attach")
+async def assistant_transport_attach(
+    task_id: int,
+    request: AssistantAttachRequest,
+    task_service: TaskService = Depends(get_task_service),
+    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+) -> AssistantTransportResponse:
+    """重新订阅已有 Run，不触发业务 resume。"""
+
+    try:
+        task_service.get_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    if request.threadId != f"task-{task_id}":
+        _raise_transport_error(
+            409,
+            "THREAD_TASK_MISMATCH",
+            "threadId 与 task_id 不一致",
+            retryable=False,
+            run_id=request.runId,
+        )
+    if request.taskId is not None and request.taskId != task_id:
+        _raise_transport_error(
+            409,
+            "TASK_ID_MISMATCH",
+            "请求 taskId 与路径不一致",
+            retryable=False,
+            run_id=request.runId,
+        )
+    if request.commands:
+        _raise_transport_error(
+            400,
+            "ATTACH_COMMANDS_UNSUPPORTED",
+            "attach 请求不能携带业务命令",
+            retryable=False,
+            run_id=request.runId,
+        )
+    return await transport_service.attach_run(
+        task_id=task_id,
+        thread_id=request.threadId,
+        run_id=request.runId,
+    )
+
+
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
     task_id: int,
@@ -222,7 +281,8 @@ async def assistant_transport_state(
         ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。
 
     副作用:
-        以只读方式经 service 层读取任务存在性与轮次/消息事实，不写入任何数据。
+        不修改 Run、Context 或执行器；snapshot service 可能在发现 Run 已进入终态而
+        snapshot 尚未投影时，执行幂等的 snapshot 对账写入，然后返回最终一致的 state。
     """
     # 先校验任务存在：不存在时 ``get_task`` 抛 KeyError → 映射为 404。
     # 不能在投影阶段再判，因为空 task 与不存在 task 在投影层都表现为空 messages。

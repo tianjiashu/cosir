@@ -11,8 +11,8 @@ class ConversationRunStatus(str, Enum):
     """轮次执行状态。
 
     状态机：``pending -> running -> completed|failed|cancelled|interrupted``。
-    用户主动取消的 ``cancelled`` run（``end_reason=user_cancelled``）允许再次迁移到
-    ``running``；其他取消仍为终态。
+    所有 ``cancelled`` run 都允许在用户明确操作后再次迁移到 ``running``；
+    ``end_reason`` 只用于展示与审计，不参与恢复资格判断。
     ``waiting_for_approval`` 本轮不纳入（审批异步持久化暂缓，YAGNI）。
     """
 

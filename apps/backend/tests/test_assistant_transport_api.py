@@ -8,9 +8,18 @@ from fastapi.routing import APIRoute
 
 from app.api.tasks_api import get_task
 from app.app import app
-from app.assistant_transport.assistant_api import assistant_transport_state
+from app.assistant_transport.assistant_api import (
+    AssistantAttachRequest,
+    assistant_transport_attach,
+    assistant_transport_state,
+)
+from app.assistant_transport.service import conversation_task_snapshot_service as snapshot_module
 from app.assistant_transport.service import transport_assistant_service as transport_module
+from app.assistant_transport.service.conversation_task_snapshot_service import (
+    ConversationTaskSnapshotService,
+)
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.service.task.conversation_run_service import ConversationRunService
 
 
 def test_task_route_has_one_get_method() -> None:
@@ -60,19 +69,13 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status", "end_reason", "expected_mode"),
-    [
-        ("pending", None, "fresh"),
-        ("running", None, "resume"),
-        ("cancelled", "user_cancelled", "resume"),
-    ],
+    "end_reason", [None, "user_cancelled", "runtime_restarted", "executor_cancelled"]
 )
-async def test_resume_task_starts_missing_executor_with_correct_mode(
+async def test_resume_task_accepts_any_cancelled_end_reason(
     monkeypatch: pytest.MonkeyPatch,
-    status: str,
     end_reason: str | None,
-    expected_mode: str,
 ) -> None:
+    status = "cancelled"
     state = {
         "messages": [],
         "run": {"runId": 7, "status": status},
@@ -129,17 +132,17 @@ async def test_resume_task_starts_missing_executor_with_correct_mode(
     result = await service.resume_run(task_id=1, thread_id="task-1", run_id=7)
 
     assert result.value == state
-    assert started_modes == [expected_mode]
+    assert started_modes == ["resume"]
 
 
 @pytest.mark.asyncio
-async def test_resume_task_rejects_non_user_cancelled_run() -> None:
+async def test_resume_task_requires_cancelled_status() -> None:
     class _TaskService:
         def get_task(self, _task_id: int) -> object:
             return object()
 
         def get_latest_run(self, _task_id: int) -> object:
-            return SimpleNamespace(id=7, status="cancelled", end_reason="executor_cancelled")
+            return SimpleNamespace(id=7, status="running", end_reason="executor_cancelled")
 
     class _SnapshotService:
         async def read(self, _task_id: int) -> dict[str, object]:
@@ -148,11 +151,234 @@ async def test_resume_task_rejects_non_user_cancelled_run() -> None:
     service = TransportAssistantService.__new__(TransportAssistantService)
     service.task_service = _TaskService()
     service._snapshots = _SnapshotService()
+    service.run_executor = SimpleNamespace(
+        is_cancelling=lambda _run_id: False,
+        is_locally_running=lambda _run_id: False,
+    )
 
     with pytest.raises(HTTPException) as error:
         await service.resume_run(task_id=1, thread_id="task-1", run_id=7)
 
     assert error.value.status_code == 409
+
+
+def test_attach_route_is_separate_from_business_resume() -> None:
+    routes = [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/tasks/{task_id}/assistant/attach"
+    ]
+
+    assert len(routes) == 1
+    assert routes[0].methods == {"POST"}
+
+
+@pytest.mark.asyncio
+async def test_attach_run_only_subscribes_existing_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {
+        "messages": [],
+        "run": {"runId": 7, "status": "running"},
+        "approvals": {},
+        "context_usage": 0.0,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "reasoning_tokens": 0,
+        },
+        "error": None,
+    }
+
+    class _RunService:
+        def get_run(self, _run_id: int) -> object:
+            return SimpleNamespace(id=7, task_id=1, status="running")
+
+    class _SnapshotService:
+        async def read(self, _task_id: int) -> dict[str, object]:
+            return state
+
+    class _Executor:
+        def is_locally_running(self, _run_id: int) -> bool:
+            return True
+
+    class _Response:
+        def __init__(self, value: object) -> None:
+            self.value = value
+            self.headers: dict[str, str] = {}
+
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._runs = _RunService()
+    service._snapshots = _SnapshotService()
+    service.run_executor = _Executor()
+    service.subscribe_run_state_with_logging = lambda *_args: None  # type: ignore[method-assign]
+    monkeypatch.setattr(transport_module, "create_run", lambda _callback, state: state)
+    monkeypatch.setattr(transport_module, "AssistantTransportResponse", _Response)
+
+    result = await service.attach_run(task_id=1, thread_id="task-1", run_id=7)
+
+    assert result.value == state
+    assert result.headers == {"X-Cosir-Task-Id": "1", "X-Cosir-Thread-Id": "task-1"}
+
+
+@pytest.mark.asyncio
+async def test_attach_run_rejects_terminal_run_even_when_snapshot_matches() -> None:
+    state = {
+        "messages": [],
+        "run": {"runId": 7, "status": "cancelled"},
+        "approvals": {},
+        "context_usage": 0.0,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "reasoning_tokens": 0,
+        },
+        "error": None,
+    }
+
+    class _RunService:
+        def get_run(self, _run_id: int) -> object:
+            return SimpleNamespace(id=7, task_id=1, status="cancelled")
+
+    class _SnapshotService:
+        async def read(self, _task_id: int) -> dict[str, object]:
+            return state
+
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._runs = _RunService()
+    service._snapshots = _SnapshotService()
+    service.run_executor = SimpleNamespace(is_locally_running=lambda _run_id: False)
+
+    with pytest.raises(HTTPException) as error:
+        await service.attach_run(task_id=1, thread_id="task-1", run_id=7)
+
+    assert error.value.status_code == 409
+    assert error.value.detail["error"]["code"] == "RUN_NOT_ATTACHABLE"
+
+
+@pytest.mark.asyncio
+async def test_attach_endpoint_rejects_business_commands() -> None:
+    class _TaskService:
+        def get_task(self, _task_id: int) -> object:
+            return object()
+
+    with pytest.raises(HTTPException) as error:
+        await assistant_transport_attach(
+            1,
+            AssistantAttachRequest(
+                commands=[{"type": "add-message"}],
+                taskId=1,
+                threadId="task-1",
+                runId=7,
+            ),
+            _TaskService(),
+            object(),  # type: ignore[arg-type]
+        )
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_state_read_reconciles_terminal_run_without_starting_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = {
+        "messages": [],
+        "run": {"runId": 7, "status": "running"},
+        "approvals": {},
+        "context_usage": 0.0,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "reasoning_tokens": 0,
+        },
+        "error": None,
+    }
+    terminal = {**active, "run": {"runId": 7, "status": "cancelled"}}
+    state_reads = 0
+    projector_events: list[object] = []
+
+    class _Lock:
+        def acquire(self, *, blocking: bool, timeout: float) -> bool:
+            assert blocking is True
+            assert timeout == 10
+            return True
+
+        def release(self) -> None:
+            return None
+
+    class _TaskSpace:
+        lock = _Lock()
+
+    class _TaskSpaces:
+        def get_or_create(self, _task_id: int) -> _TaskSpace:
+            return _TaskSpace()
+
+    class _RunService:
+        def list_runs_for_task(self, _task_id: int) -> list[object]:
+            return [SimpleNamespace(id=7, status="cancelled", end_reason="runtime_restarted")]
+
+    class _Executor:
+        def is_locally_running(self, _run_id: int) -> bool:
+            return False
+
+    class _Projector:
+        def process(self, event: object) -> None:
+            projector_events.append(event)
+
+    service = ConversationTaskSnapshotService.__new__(ConversationTaskSnapshotService)
+
+    def ensure_state_snapshot(_task_id: int) -> dict[str, object]:
+        nonlocal state_reads
+        state_reads += 1
+        return active if state_reads == 1 else terminal
+
+    service.ensure_state_snapshot = ensure_state_snapshot  # type: ignore[method-assign]
+    monkeypatch.setattr(snapshot_module, "task_runtime_spaces", _TaskSpaces())
+
+    # ``read`` imports dependency getters lazily, so patch the provider module
+    # used by that import rather than pretending recovery is a snapshot write.
+    import app.service.depends as depends
+
+    monkeypatch.setattr(depends, "get_conversation_run_executor", lambda: _Executor())
+    monkeypatch.setattr(depends, "get_conversation_run_service", lambda: _RunService())
+    monkeypatch.setattr(depends, "get_conversation_event_projector", lambda: _Projector())
+
+    result = await service.read(1)
+
+    assert result["run"]["status"] == "cancelled"
+    assert state_reads == 3
+    assert len(projector_events) == 1
+
+
+def test_restart_recovery_only_updates_run_persistence() -> None:
+    calls: list[tuple[int, str]] = []
+
+    class _RunCrud:
+        def list_recoverable(self) -> list[object]:
+            return [SimpleNamespace(id=7), SimpleNamespace(id=8)]
+
+        def cancel_recoverable_for_restart(self, run_id: int, end_reason: str) -> object:
+            calls.append((run_id, end_reason))
+            return SimpleNamespace(id=run_id)
+
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = _RunCrud()
+
+    result = service.recover_orphaned_runs()
+
+    assert [record.id for record in result] == [7, 8]
+    assert calls == [(7, "runtime_restarted"), (8, "runtime_restarted")]
 
 
 def test_state_route_has_one_read_method() -> None:

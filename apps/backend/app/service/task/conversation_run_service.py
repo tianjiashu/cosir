@@ -198,10 +198,10 @@ class ConversationRunService:
             reasoning_effort=reasoning_effort,
         )
 
-    def resume_user_cancelled_run(self, run_id: int) -> ConversationRunRecord | None:
-        """恢复用户主动取消的 run，并清理上一次执行的终态字段。"""
+    def resume_cancelled_run(self, run_id: int) -> ConversationRunRecord | None:
+        """恢复任意 cancelled run，并清理上一次执行的终态字段。"""
 
-        record = self._run.resume_user_cancelled(run_id)
+        record = self._run.resume_cancelled(run_id)
         if record is None:
             return None
         service_depends.get_conversation_event_projector().process(
@@ -212,6 +212,22 @@ class ConversationRunService:
             )
         )
         return record
+
+    def recover_orphaned_runs(
+        self, end_reason: str = "runtime_restarted"
+    ) -> list[ConversationRunRecord]:
+        """把当前进程启动前遗留的 pending/running run 收敛为 cancelled。
+
+        该恢复步骤只更新数据库 Run 状态，不触碰 snapshot 或 projector；读取 snapshot
+        时由 ConversationTaskSnapshotService.read 负责最终一致性校正。
+        """
+
+        recovered: list[ConversationRunRecord] = []
+        for run in self.list_recoverable():
+            record = self._run.cancel_recoverable_for_restart(run.id, end_reason)
+            if record is not None:
+                recovered.append(record)
+        return recovered
 
     def complete_run_if_running(
         self,
@@ -447,7 +463,7 @@ class ConversationRunService:
 
         ``pending`` 通过原子状态迁移进入 ``running``；``running`` 表示旧进程在
         持久化层已经认领过，但进程内执行器已丢失，恢复入口可以继续驱动同一个 run。
-        用户主动取消的 run 也允许恢复，但其他 ``cancelled`` run 不允许重开。
+        任意 ``cancelled`` run 都允许恢复；``end_reason`` 只用于展示与审计，不参与资格判断。
         调用方必须先持有 task 级运行锁，避免同一进程重复启动恢复执行。
 
         参数:
@@ -479,7 +495,7 @@ class ConversationRunService:
             )
             return True
 
-        resumed = self.resume_user_cancelled_run(run_id)
+        resumed = self.resume_cancelled_run(run_id)
         if resumed is not None:
             return True
 
