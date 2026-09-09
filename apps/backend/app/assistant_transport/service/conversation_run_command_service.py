@@ -10,6 +10,7 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
+from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunRecord
 from app.models.conversation_command_record import ConversationCommandRecord
 from app.service import depends as service_depends
@@ -22,10 +23,11 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 class ConversationRunStartResult:
     """表示一次命令创建或幂等重连的结果。"""
 
-    command: ConversationCommandRecord
+    command: ConversationCommandRecord | None
     run: ConversationRunRecord
     initial_state: ConversationStateSnapshot
     created: bool
+    execution_mode: ExecutionMode = "fresh"
 
 
 class ConversationRunCommandService:
@@ -82,6 +84,7 @@ class ConversationRunCommandService:
             run=run,
             initial_state=self._snapshots.ensure_state_snapshot(task_id),
             created=False,
+            execution_mode="fresh",
         )
 
     def start_or_attach(
@@ -90,8 +93,8 @@ class ConversationRunCommandService:
         command_type: str,
         payload_hash: str,
         input_text: str,
-        provider_id: int,
-        model_name: str,
+        provider_id: int | None,
+        model_name: str | None,
         reasoning_effort: str | None = None,
         task_id: int | None = None,
     ) -> ConversationRunStartResult:
@@ -124,9 +127,7 @@ class ConversationRunCommandService:
             raise ValueError("task_id is required for Assistant Transport runs")
 
         task_space = task_runtime_spaces.get_or_create(task_id)
-        if not task_space.lock.acquire(blocking=True, timeout=10):
-            raise TimeoutError(f"task {task_id} command lock is busy")
-        try:
+        with task_space.operation(timeout=10):
             existing_result = self._resolve_existing_command(
                 task_id, command_id, payload_hash
             )
@@ -159,9 +160,8 @@ class ConversationRunCommandService:
                 run=run,
                 initial_state=snapshot,
                 created=True,
+                execution_mode="fresh",
             )
-        finally:
-            task_space.lock.release()
 
     def edit_or_restart(
         self,
@@ -171,20 +171,19 @@ class ConversationRunCommandService:
         input_text: str,
         task_id: int,
         run_id: int,
-        provider_id: int,
-        model_name: str,
+        provider_id: int | None,
+        model_name: str | None,
         reasoning_effort: str | None = None,
     ) -> ConversationRunStartResult:
         """原地编辑当前 run 的最后一条用户消息并重置执行基线。
 
-        ``source_id`` 必须对应 snapshot 中最后一条 user 消息。旧 run 的 context entries
-        按 ``ContextEntry.run_id`` 删除，run 保留原 id，但会换用新的 checkpoint thread。
+        ``run_id`` 必须是 task 最近 run，且 snapshot 中必须存在该 run 的 user 消息。
+        旧 run 的 context entries 按 ``ContextEntry.run_id`` 删除，run 保留原 id，
+        但会换用新的 checkpoint thread；Assistant UI ``sourceId`` 不参与本用例。
         """
 
         task_space = task_runtime_spaces.get_or_create(task_id)
-        if not task_space.lock.acquire(blocking=True, timeout=10):
-            raise TimeoutError(f"task {task_id} edit lock is busy")
-        try:
+        with task_space.operation(timeout=10):
             latest_run = self._task.get_latest_run(task_id)
             if latest_run is None or latest_run.id != run_id:
                 raise ValueError(f"run {run_id} does not belong to task {task_id}")
@@ -196,25 +195,74 @@ class ConversationRunCommandService:
                 return existing_result
 
 
-            if self._conversation_run.have_run_in_runing(task_id):
-                raise ValueError(f"task {task_id} already has an active run")
-            reset = self._conversation_run.reset_run_for_edit(latest_run.id, input_text, provider_id, model_name, reasoning_effort)
-            if reset is None:
-                raise ValueError(f"run {latest_run.id} is not editable in its current state")
-            self._context.delete_by_run_id(task_id, latest_run.id)
-            self._snapshots.reset_run_for_edit(task_id, latest_run.id, input_text)
-            command = self._command.create(
-                task_id=task_id,
-                command_id=command_id,
-                command_type=command_type,
-                payload_hash=payload_hash,
-                run_id=latest_run.id,
-            )
+            with main_session_factory().begin() as session:
+                if self._conversation_run.have_run_in_runing(task_id, session=session):
+                    raise ValueError(f"task {task_id} already has an active run")
+                reset = self._conversation_run.reset_run_for_edit(
+                    latest_run.id,
+                    input_text,
+                    provider_id,
+                    model_name,
+                    reasoning_effort,
+                    session=session,
+                )
+                if reset is None:
+                    raise ValueError(f"run {latest_run.id} is not editable in its current state")
+                self._context.delete_by_run_id(task_id, latest_run.id, session=session)
+                snapshot = self._snapshots.reset_run_for_edit(
+                    task_id, latest_run.id, input_text, session=session
+                )
+                command = self._command.create(
+                    task_id=task_id,
+                    command_id=command_id,
+                    command_type=command_type,
+                    payload_hash=payload_hash,
+                    run_id=latest_run.id,
+                    session=session,
+                )
+            self._snapshots.publish_committed_snapshot(task_id, snapshot)
             return ConversationRunStartResult(
                 command=command,
                 run=reset,
-                initial_state=self._snapshots.ensure_state_snapshot(task_id),
+                initial_state=snapshot,
                 created=True,
+                execution_mode="fresh",
             )
-        finally:
-            task_space.lock.release()
+
+    def resume_latest_run(
+        self, task_id: int, run_id: int
+    ) -> ConversationRunStartResult:
+        """校验 task 最近 run 并返回业务续跑的执行结果。
+
+        该用例只负责领域身份和持久状态资格判断；真正的 executor 启动由 API 编排层
+        完成，Transport 层只负责随后建立 snapshot response。
+        """
+
+        task_space = task_runtime_spaces.get_or_create(task_id)
+        with task_space.operation(timeout=10):
+            latest_run = self._task.get_latest_run(task_id)
+            if (
+                latest_run is None
+                or latest_run.id != run_id
+                or latest_run.status != "cancelled"
+            ):
+                raise ValueError(f"run {run_id} is not resumable")
+            state = self._snapshots.ensure_state_snapshot(task_id)
+            if state["run"]["runId"] != run_id:
+                raise ValueError(f"run {run_id} snapshot is stale")
+            if not any(
+                message.get("runId") == run_id and message.get("role") == "user"
+                for message in state["messages"]
+            ):
+                raise ValueError(f"run {run_id} has no user message")
+            resumed = self._conversation_run.resume_cancelled_run(run_id)
+            if resumed is None:
+                raise ValueError(f"run {run_id} is no longer resumable")
+            state = self._snapshots.ensure_state_snapshot(task_id)
+            return ConversationRunStartResult(
+                command=self._command.get_by_run(run_id),
+                run=resumed,
+                initial_state=state,
+                created=True,
+                execution_mode="resume",
+            )

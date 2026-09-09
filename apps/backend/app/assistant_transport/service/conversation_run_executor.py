@@ -149,6 +149,12 @@ class ConversationRunExecutor:
             )
         task_runtime_spaces.close()
 
+    def mark_task_deleted(self, task_id: int) -> None:
+        """阻止该执行器实例继续投影已删除 Task 的迟到事件。"""
+
+        if self._event_projector is not None:
+            self._event_projector.mark_task_deleted(task_id)
+
     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
         """显式取消一个 run：标记运行时信号、仲裁落库、中断后台执行。
 
@@ -352,11 +358,50 @@ class ConversationRunExecutor:
             退出时移除执行注册并清理进程内取消信号（清理唯一收口，覆盖取消/失败/完成全部路径）。
         """
 
-        task_space = task_runtime_spaces.get_or_create(run.task_id)
         try:
-            # DB claim 只保证状态转移幂等；run_lock 才保证同一 Task 的 context、
+            task_space = task_runtime_spaces.get_or_create(run.task_id)
+        except KeyError:
+            log.info(
+                "conversation_run_skipped_for_deleted_task",
+                extra={
+                    "msg": "runtime space 已卸载，跳过已删除 task 的 Conversation Run",
+                    "data": {"task_id": run.task_id, "run_id": run_id},
+                },
+            )
+            return
+        try:
+            # DB claim 只保证状态转移幂等；Task 操作闸门才保证同一 Task 的 context、
             # sequence、tool 资源和 snapshot 投影在整个执行生命周期内串行。
-            async with task_space.run_lock:
+            async with task_space.async_operation():
+                # start() 与真正调度 _execute 之间存在一次 event-loop 让出窗口；
+                # task 可能已经在该窗口被删除，因此必须在取得 Task 闸门后重新读取
+                # run，不能继续信任调度前传入的对象。
+                try:
+                    current_run = self._run_service.get_run(run_id)
+                except KeyError:
+                    log.info(
+                        "conversation_run_skipped_after_task_delete",
+                        extra={
+                            "msg": "task 删除后跳过已排队的 Conversation Run",
+                            "data": {"task_id": run.task_id, "run_id": run_id},
+                        },
+                    )
+                    task_runtime_spaces.unload(run.task_id, expected_space=task_space)
+                    return
+                if current_run.task_id != run.task_id:
+                    log.warning(
+                        "conversation_run_task_mismatch",
+                        extra={
+                            "msg": "Conversation Run 所属 task 在执行前发生变化，跳过执行",
+                            "data": {
+                                "task_id": run.task_id,
+                                "run_id": run_id,
+                                "actual_task_id": current_run.task_id,
+                            },
+                        },
+                    )
+                    return
+                run = current_run
                 if not self._run_service.claim_or_resume_run(run_id):
                     raise ValueError(f"run {run_id} was claimed by another executor")
                 await self._set_status(run_id, ConversationRunStatus.RUNNING)

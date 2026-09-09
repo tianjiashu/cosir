@@ -65,8 +65,8 @@ class AssistantTransportRequest(BaseModel):
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
         - ``custom`` 命令尚未绑定领域处理器，直接拒绝；
-        - 空命令必须携带 ``runId`` 用于恢复已有 run；编辑 add-message 必须同时携带
-          ``sourceId`` 与 ``runId``；普通新消息不能携带 ``runId``；
+        - 空命令必须携带 ``runId`` 用于恢复已有 run；add-message 是否重放只由
+          ``runId`` 是否存在决定，不能由 ``sourceId`` 推导；
         - 含 ``add-message`` 时 ``providerId`` 与 ``modelName`` 必填且 ``modelName``
           非空（启动对话必须确定执行上下文，原 service 内的同等校验已前移至此）；
         - 新建对话（``taskId is None``）必须提供 ``workspaceId`` 作为创建目标。
@@ -128,29 +128,11 @@ class AssistantTransportRequest(BaseModel):
         # 首版运行模型在启动对话时必须同时确定厂商与模型，二者构成执行上下文；
         # 缺失其一会让 Turn 无法绑定执行器，属纯 wire 契约约束，前移至此。
         has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
-        has_edit_message = any(
-            isinstance(command, AddMessageCommand) and command.sourceId is not None
-            for command in self.commands
-        )
         if not has_message and self.runId is None:
             raise TransportRequestError(
                 status_code=400,
                 code="RUN_ID_REQUIRED",
                 message="没有新消息时必须提供 runId 以继续已有运行",
-                retryable=False,
-            )
-        if has_edit_message and self.runId is None:
-            raise TransportRequestError(
-                status_code=400,
-                code="EDIT_RUN_ID_REQUIRED",
-                message="编辑重跑必须提供当前 runId",
-                retryable=False,
-            )
-        if has_message and not has_edit_message and self.runId is not None:
-            raise TransportRequestError(
-                status_code=400,
-                code="RUN_ID_WITH_MESSAGE_UNSUPPORTED",
-                message="发送新消息时不能同时提供 runId",
                 retryable=False,
             )
         if has_message and (
@@ -181,16 +163,21 @@ class AssistantTransportRequest(BaseModel):
 
         说明:
             ``commandId`` 是幂等身份，``taskId`` / ``workspaceId`` 是路由身份，``threadId`` 是
-            Transport 元数据，不参与载荷 hash。消息、父命令
-            关系、来源和模型选择会改变实际执行语义，必须参与 hash。
+            Transport 元数据，不参与载荷 hash。消息、run 操作身份和模型选择会改变实际
+            执行语义，必须参与 hash；Assistant UI 的 ``parentId``/``sourceId`` 只属于
+            编辑元数据，不参与领域幂等指纹。
         """
         payload = {
             "commands": [
-                command.model_dump(mode="json", exclude={"commandId"}) for command in self.commands
+                command.model_dump(
+                    mode="json", exclude={"commandId", "parentId", "sourceId"}
+                )
+                for command in self.commands
             ],
             "providerId": self.providerId,
             "modelName": self.modelName,
             "reasoningEffort": self.reasoningEffort,
+            "runId": self.runId,
         }
         serialized = json.dumps(
             payload,

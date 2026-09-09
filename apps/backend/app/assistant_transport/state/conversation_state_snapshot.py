@@ -7,6 +7,51 @@ from app.assistant_transport.state.conversation_state_message import Conversatio
 from app.assistant_transport.state.conversation_state_run import ConversationStateRun
 from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 
+_WEB_EXTRACT_DATA_KEYS = {"kind", "provider", "sites"}
+_WEB_EXTRACT_SITE_KEYS = {"site", "url", "status", "error_code", "truncated"}
+_WEB_SEARCH_DATA_KEYS = {"kind", "query", "provider", "results"}
+_WEB_SEARCH_RESULT_KEYS = {"title", "url", "description", "position"}
+
+
+def _validate_web_tool_data(part: dict[str, object]) -> None:
+    """校验 Web 工具 UI data 的字段白名单，并阻断正文进入 snapshot。"""
+
+    tool_name = part.get("toolName")
+    data = part.get("data")
+    if tool_name not in {"web_search", "web_extract"}:
+        return
+    if part.get("result") is not None:
+        raise ValueError("web tool snapshot result must remain empty")
+    if data is None:
+        return
+    if not isinstance(data, dict):
+        raise ValueError("web tool snapshot data must be an object or null")
+    kind = data.get("kind")
+    if tool_name == "web_extract":
+        if kind != "web-extract-status" or set(data) - _WEB_EXTRACT_DATA_KEYS:
+            raise ValueError("web_extract snapshot data contains forbidden fields")
+        sites = data.get("sites")
+        if not isinstance(sites, list):
+            raise ValueError("web_extract snapshot sites must be an array")
+        for site in sites:
+            if not isinstance(site, dict) or set(site) - _WEB_EXTRACT_SITE_KEYS:
+                raise ValueError("web_extract snapshot site contains forbidden fields")
+            if not isinstance(site.get("site"), str) or not isinstance(site.get("url"), str):
+                raise ValueError("web_extract snapshot site identity is malformed")
+            if site.get("status") not in {"pending", "running", "success", "failed", "truncated"}:
+                raise ValueError("web_extract snapshot site status is invalid")
+        return
+    if kind != "web-search-results" or set(data) - _WEB_SEARCH_DATA_KEYS:
+        raise ValueError("web_search snapshot data contains forbidden fields")
+    results = data.get("results")
+    if not isinstance(results, list):
+        raise ValueError("web_search snapshot results must be an array")
+    for result in results:
+        if not isinstance(result, dict) or set(result) - _WEB_SEARCH_RESULT_KEYS:
+            raise ValueError("web_search snapshot result contains forbidden fields")
+        if not isinstance(result.get("url"), str):
+            raise ValueError("web_search snapshot result URL is malformed")
+
 
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。"""
@@ -97,6 +142,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
                     raise ValueError("snapshot tool presentation must be an object")
                 if part.get("data") is not None and not isinstance(part.get("data"), dict):
                     raise ValueError("snapshot tool data must be an object or null")
+                _validate_web_tool_data(part)
 
 
 def empty_snapshot() -> ConversationStateSnapshot:

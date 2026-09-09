@@ -52,6 +52,7 @@ class ConversationTaskSnapshotService:
     _lock: ClassVar[RLock] = RLock()
     _states: ClassVar[dict[int, ConversationStateSnapshot]] = {}
     _subscribers: ClassVar[dict[int, set[_Subscriber]]] = {}
+    _deleted_task_ids: ClassVar[set[int]] = set()
     _cache_scope: ClassVar[str | None] = None
 
     def __init__(self) -> None:
@@ -71,6 +72,8 @@ class ConversationTaskSnapshotService:
         """
 
         with self._lock:
+            if task_id in self._deleted_task_ids:
+                raise KeyError(task_id)
             if session is None:
                 with main_session_factory().begin() as owned_session:
                     state, mutations = self._apply_planned_in_session(
@@ -112,6 +115,9 @@ class ConversationTaskSnapshotService:
     ) -> ConversationStateSnapshot:
         """读取 snapshot；保留 session 参数供尚未迁移的创建流程读取。"""
 
+        with self._lock:
+            if task_id in self._deleted_task_ids:
+                raise KeyError(task_id)
         current = self._crud.get(task_id, session)
         if current is None:
             state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
@@ -178,41 +184,63 @@ class ConversationTaskSnapshotService:
         """在 fork 事务提交后登记目标 snapshot 的进程缓存。"""
 
         with self._lock:
+            if task_id in self._deleted_task_ids:
+                return
             self._states[task_id] = copy.deepcopy(state)
 
-    def reset_run_for_edit(
-        self, task_id: int, run_id: int, input_text: str
-    ) -> ConversationStateSnapshot:
-        """原地重置当前 run 的 Transport 消息，保留消息身份并替换输入。"""
+    def mark_task_deleted(self, task_id: int) -> None:
+        """标记 Task 已删除并清理其 snapshot 缓存与订阅者引用。
+
+        参数:
+            task_id: 已经完成数据库级删除的任务标识。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            清除进程内 snapshot working copy 和订阅关系；后续 snapshot 读取或投影
+            不会为该 task 重新创建 snapshot。
+        """
 
         with self._lock:
-            with main_session_factory().begin() as session:
-                current = self._crud.get_in_session(session, task_id)
-                if current is None:
-                    raise KeyError(task_id)
-                state = cast(ConversationStateSnapshot, current)
-                next_state: ConversationStateSnapshot = copy.deepcopy(state)
-                found = False
-                for message in next_state["messages"]:
-                    if message.get("runId") != run_id:
-                        continue
-                    found = True
-                    if message.get("role") == "user":
-                        message["status"] = "completed"
-                        message["endReason"] = None
-                        message["parts"] = [
-                            {"type": "text", "text": input_text, "status": "completed"}
-                        ]
-                    else:
-                        message["status"] = "pending"
-                        message["endReason"] = None
-                        message["parts"] = []
-                if not found:
-                    raise KeyError(f"run {run_id} is absent from task snapshot")
-                next_state["run"] = ConversationStateRun(runId=run_id, status="pending")
-                next_state["error"] = None
-                validate_snapshot(next_state)
-                self._crud.upsert_in_session(session, task_id, next_state)
+            self._deleted_task_ids.add(task_id)
+            self._states.pop(task_id, None)
+            self._subscribers.pop(task_id, None)
+
+    def is_task_deleted(self, task_id: int) -> bool:
+        """返回 Task 是否已被当前 backend 进程标记为删除。"""
+
+        with self._lock:
+            return task_id in self._deleted_task_ids
+
+    def reset_run_for_edit(
+        self,
+        task_id: int,
+        run_id: int,
+        input_text: str,
+        session: Session | None = None,
+    ) -> ConversationStateSnapshot:
+        """原地重置当前 run 的 Transport 消息，保留消息身份并替换输入。
+
+        传入外部 session 时只写入该事务，不更新进程缓存或发布订阅通知；调用方提交
+        成功后必须调用 ``publish_committed_snapshot``。
+        """
+
+        with self._lock:
+            if session is None:
+                with main_session_factory().begin() as owned_session:
+                    next_state = self._reset_run_for_edit_in_session(
+                        owned_session, task_id, run_id, input_text
+                    )
+            else:
+                next_state = self._reset_run_for_edit_in_session(
+                    session, task_id, run_id, input_text
+                )
+            if session is not None:
+                return copy.deepcopy(next_state)
             change = SnapshotChange(
                 task_id,
                 copy.deepcopy(next_state),
@@ -221,6 +249,64 @@ class ConversationTaskSnapshotService:
             self._states[task_id] = copy.deepcopy(next_state)
             self._publish(change)
             return copy.deepcopy(next_state)
+
+    def _reset_run_for_edit_in_session(
+        self,
+        session: Session,
+        task_id: int,
+        run_id: int,
+        input_text: str,
+    ) -> ConversationStateSnapshot:
+        """在外部事务中重置 run snapshot，不更新缓存或发布通知。"""
+
+        current = self._crud.get_in_session(session, task_id)
+        if current is None:
+            raise KeyError(task_id)
+        state = cast(ConversationStateSnapshot, current)
+        next_state: ConversationStateSnapshot = copy.deepcopy(state)
+        found = False
+        user_found = False
+        for message in next_state["messages"]:
+            if message.get("runId") != run_id:
+                continue
+            found = True
+            if message.get("role") == "user":
+                user_found = True
+                message["status"] = "completed"
+                message["endReason"] = None
+                message["parts"] = [
+                    {"type": "text", "text": input_text, "status": "completed"}
+                ]
+            else:
+                message["status"] = "pending"
+                message["endReason"] = None
+                message["parts"] = []
+        if not found or not user_found:
+            raise KeyError(f"run {run_id} has no user message in task snapshot")
+        next_state["run"] = ConversationStateRun(runId=run_id, status="pending")
+        next_state["error"] = None
+        validate_snapshot(next_state)
+        self._crud.upsert_in_session(session, task_id, next_state)
+        return next_state
+
+    def publish_committed_snapshot(
+        self,
+        task_id: int,
+        state: ConversationStateSnapshot,
+        mutations: tuple[ConversationStateMutation, ...] | None = None,
+    ) -> SnapshotChange:
+        """发布已经由外部事务成功提交的 snapshot。"""
+
+        validate_snapshot(state)
+        change = SnapshotChange(
+            task_id,
+            copy.deepcopy(state),
+            mutations
+            or (ConversationStateMutation("set", (), copy.deepcopy(state)),),
+        )
+        with self._lock:
+            self._publish(change)
+        return change
 
     def _publish(self, change: SnapshotChange) -> None:
         """更新 snapshot working copy 并通知订阅者。"""
@@ -247,6 +333,8 @@ class ConversationTaskSnapshotService:
         queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
         subscriber = _Subscriber(loop, queue)
         with self._lock:
+            if task_id in self._deleted_task_ids:
+                raise KeyError(task_id)
             self._subscribers.setdefault(task_id, set()).add(subscriber)
 
         def unsubscribe() -> None:
@@ -275,6 +363,8 @@ class ConversationTaskSnapshotService:
         queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
         subscriber = _Subscriber(loop, queue)
         with self._lock:
+            if task_id in self._deleted_task_ids:
+                raise KeyError(task_id)
             self._subscribers.setdefault(task_id, set()).add(subscriber)
             initial = self.ensure_state_snapshot(task_id)
 
@@ -309,9 +399,9 @@ class ConversationTaskSnapshotService:
         run_service = get_conversation_run_service()
         projector = get_conversation_event_projector()
         task_space = task_runtime_spaces.get_or_create(task_id)
-        if not task_space.lock.acquire(blocking=True, timeout=10):
-            raise TimeoutError(f"task {task_id} recovery lock is busy")
-        try:
+        async def read_locked() -> ConversationStateSnapshot:
+            """在已取得 Task 闸门后执行 snapshot recovery 读取。"""
+
             state: ConversationStateSnapshot = self.ensure_state_snapshot(task_id)
             for run in run_service.list_runs_for_task(task_id):
                 if (
@@ -356,105 +446,25 @@ class ConversationTaskSnapshotService:
                         },
                     )
             return self.ensure_state_snapshot(task_id)
+
+        async_operation = getattr(task_space, "async_operation", None)
+        if callable(async_operation):
+            async with async_operation(wait_seconds=10):
+                return await read_locked()
+
+        # 轻量测试替身可能只实现旧的同步 lock 接口；生产 TaskRuntimeSpace 始终
+        # 走上面的共享异步适配器。兼容路径也放入线程池，避免阻塞 event loop。
+        acquired = await asyncio.to_thread(
+            task_space.lock.acquire,
+            blocking=True,
+            timeout=10,
+        )
+        if not acquired:
+            raise TimeoutError(f"task {task_id} recovery lock is busy")
+        try:
+            return await read_locked()
         finally:
             task_space.lock.release()
-
-    def apply(
-        self,
-        controller: Any,
-        mutation: ConversationStateMutation,
-    ) -> None:
-        """将一次 snapshot mutation 应用到 assistant-stream controller。
-
-        参数:
-            controller: assistant-stream 创建的运行控制器。
-            mutation: canonical snapshot 层产生的 mutation。
-
-        异常:
-            TypeError: ``append-text`` 的值不是字符串，或 root mutation 不是 ``set``。
-            KeyError: ``set`` mutation 指向了不存在的路径。
-        """
-        if not mutation.path:
-            if mutation.kind != "set":
-                raise TypeError("root snapshot mutation must use kind='set'")
-            controller.state = mutation.value
-            return
-
-        if mutation.kind == "append-text":
-            if not isinstance(mutation.value, str):
-                raise TypeError(
-                    "append-text snapshot mutation value must be str, "
-                    f"got {type(mutation.value).__name__}"
-                )
-            controller.append_state_text(list(mutation.path), mutation.value)
-            return
-
-        target: Any = controller.state
-        for key in mutation.path[:-1]:
-            target = target[key]
-
-        key = mutation.path[-1]
-        if (
-            isinstance(key, int)
-            and key == len(target)
-            and callable(getattr(target, "append", None))
-        ):
-            target.append(mutation.value)
-            return
-
-        target[key] = mutation.value
-
-    def _apply_snapshot_change(self, controller: Any, change: SnapshotChange) -> None:
-        """应用一批 snapshot mutation，并在批次边界刷新 Assistant Transport。"""
-        try:
-            for mutation in change.mutations:
-                self.apply(controller, mutation)
-            controller.flush()
-        except Exception:
-            log.exception(
-                "assistant_sse_controller_flush_failed",
-                extra={
-                    "msg": "Assistant SSE controller 刷新状态更新失败",
-                    "data": {
-                        "task_id": change.task_id,
-                        "run_id": change.state["run"]["runId"],
-                        "run_status": change.state["run"]["status"],
-                        "mutation_count": len(change.mutations),
-                        "mutation_types": [mutation.kind for mutation in change.mutations],
-                    },
-                },
-            )
-            raise
-
-        flush_count = getattr(self, "_flush_log_count", 0) + 1
-        self._flush_log_count = flush_count
-        if (
-            flush_count <= 3
-            or flush_count % 20 == 0
-            or change.state["run"]["status"]
-            in {
-                ConversationRunStatus.COMPLETED.value,
-                ConversationRunStatus.FAILED.value,
-                ConversationRunStatus.CANCELLED.value,
-                ConversationRunStatus.INTERRUPTED.value,
-            }
-        ):
-            log.debug(
-                "assistant_sse_controller_flushed",
-                extra={
-                    "msg": "Assistant SSE controller 已刷新状态更新（采样）",
-                    "data": {
-                        "task_id": change.task_id,
-                        "run_id": change.state["run"]["runId"],
-                        "run_status": change.state["run"]["status"],
-                        "flush_count": flush_count,
-                        "message_count": len(change.state["messages"]),
-                        "mutation_count": len(change.mutations),
-                        "mutation_types": [mutation.kind for mutation in change.mutations],
-                    },
-                },
-            )
-
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
     """在 JSON state 上应用官方 set/append-text 操作。"""

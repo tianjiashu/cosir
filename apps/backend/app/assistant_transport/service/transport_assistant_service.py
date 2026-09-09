@@ -15,8 +15,8 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
     SnapshotChange,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
-from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunStatus
 
 
@@ -33,15 +33,6 @@ class TransportAssistantService:
         from app.service.depends import get_conversation_run_service
 
         self._runs = get_conversation_run_service()
-        from app.service.depends import get_conversation_event_projector
-
-        self._projector = get_conversation_event_projector()
-        from app.service.depends import get_task_service
-
-        self.task_service = get_task_service()
-        from app.service.depends import get_runtime
-
-        self.runtime = get_runtime()
 
     async def stream(
         self,
@@ -115,6 +106,21 @@ class TransportAssistantService:
                     },
                 },
             )
+            if initial["run"]["runId"] != run_id:
+                log.warning(
+                    "assistant_sse_initial_snapshot_run_mismatch",
+                    extra={
+                        "msg": "Assistant SSE 首帧快照不属于请求的 run，拒绝发送",
+                        "data": {
+                            "task_id": task_id,
+                            "expected_run_id": run_id,
+                            "actual_run_id": initial["run"]["runId"],
+                        },
+                    },
+                )
+                raise ValueError(
+                    f"snapshot run {initial['run']['runId']} does not match requested run {run_id}"
+                )
             yield SnapshotChange(
                 task_id,
                 initial,
@@ -149,6 +155,16 @@ class TransportAssistantService:
                 try:
                     change = await asyncio.wait_for(queue.get(), poll_interval)
                 except TimeoutError:
+                    is_task_deleted = getattr(self._snapshots, "is_task_deleted", None)
+                    if callable(is_task_deleted) and is_task_deleted(task_id):
+                        log.info(
+                            "assistant_sse_task_deleted",
+                            extra={
+                                "msg": "Assistant SSE 因 task 删除而结束",
+                                "data": {"task_id": task_id, "run_id": run_id},
+                            },
+                        )
+                        return
                     if is_terminal is not None and await is_terminal():
                         latest = self._snapshots.ensure_state_snapshot(task_id)
                         if (
@@ -317,7 +333,89 @@ class TransportAssistantService:
             lambda: controller.is_cancelled,
             is_terminal=is_terminal,
         ):
-            self._snapshots._apply_snapshot_change(controller, snapshot)
+            self._apply_snapshot_change(controller, snapshot)
+
+    def _apply_snapshot_change(self, controller: Any, change: SnapshotChange) -> None:
+        """把 canonical snapshot mutation 编码到 Assistant Stream controller。"""
+
+        try:
+            for mutation in change.mutations:
+                self._apply_mutation(controller, mutation)
+            controller.flush()
+        except Exception:
+            log.exception(
+                "assistant_sse_controller_flush_failed",
+                extra={
+                    "msg": "Assistant SSE controller 刷新状态更新失败",
+                    "data": {
+                        "task_id": change.task_id,
+                        "run_id": change.state["run"]["runId"],
+                        "run_status": change.state["run"]["status"],
+                        "mutation_count": len(change.mutations),
+                        "mutation_types": [mutation.kind for mutation in change.mutations],
+                    },
+                },
+            )
+            raise
+
+        flush_count = getattr(self, "_flush_log_count", 0) + 1
+        self._flush_log_count = flush_count
+        if (
+            flush_count <= 3
+            or flush_count % 20 == 0
+            or change.state["run"]["status"]
+            in {
+                ConversationRunStatus.COMPLETED.value,
+                ConversationRunStatus.FAILED.value,
+                ConversationRunStatus.CANCELLED.value,
+                ConversationRunStatus.INTERRUPTED.value,
+            }
+        ):
+            log.debug(
+                "assistant_sse_controller_flushed",
+                extra={
+                    "msg": "Assistant SSE controller 已刷新状态更新（采样）",
+                    "data": {
+                        "task_id": change.task_id,
+                        "run_id": change.state["run"]["runId"],
+                        "run_status": change.state["run"]["status"],
+                        "flush_count": flush_count,
+                        "message_count": len(change.state["messages"]),
+                        "mutation_count": len(change.mutations),
+                        "mutation_types": [mutation.kind for mutation in change.mutations],
+                    },
+                },
+            )
+
+    @staticmethod
+    def _apply_mutation(controller: Any, mutation: ConversationStateMutation) -> None:
+        """把单个 snapshot mutation 应用到 Assistant Stream controller。"""
+
+        if not mutation.path:
+            if mutation.kind != "set":
+                raise TypeError("root snapshot mutation must use kind='set'")
+            controller.state = mutation.value
+            return
+        if mutation.kind == "append-text":
+            if not isinstance(mutation.value, str):
+                raise TypeError(
+                    "append-text snapshot mutation value must be str, "
+                    f"got {type(mutation.value).__name__}"
+                )
+            controller.append_state_text(list(mutation.path), mutation.value)
+            return
+        target: Any = controller.state
+        for key in mutation.path[:-1]:
+            target = target[key]
+        key = mutation.path[-1]
+        if (
+            isinstance(key, int)
+            and key == len(target)
+            and callable(getattr(target, "append", None))
+        ):
+            target.append(mutation.value)
+            return
+        target[key] = mutation.value
 
     async def subscribe_run_state_with_logging(
         self, controller: Any, task_id: int, run_id: int
@@ -373,31 +471,32 @@ class TransportAssistantService:
                     "msg": "Assistant SSE 后台订阅 callback 已正常结束",
                     "data": {"task_id": task_id, "run_id": run_id},
                 },
+                )
+
+    def build_response(
+        self,
+        *,
+        task_id: int,
+        thread_id: str,
+        run_id: int,
+        state: ConversationStateSnapshot,
+    ) -> AssistantTransportResponse:
+        """为指定 run 构造统一的 Assistant Transport snapshot response。"""
+
+        if state["run"]["runId"] != run_id:
+            raise ValueError(
+                f"snapshot run {state['run']['runId']} does not match requested run {run_id}"
             )
-
-    async def start_run(self, run_id: int, execution_mode: ExecutionMode) -> None:
-        """按显式执行模式启动后台 run。
-
-        参数:
-            run_id: Conversation Run 标识。
-            execution_mode: ``"fresh"`` 全新执行或 ``"resume"`` 恢复执行。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: 当 run 已被其他进程内请求登记（执行器单点约束）。
-
-        副作用:
-            经 ``run_executor`` 驱动 ``runtime.execute_run`` 后台执行。
-        """
-        if execution_mode == "fresh":
-            await self.run_executor.start(run_id, self.runtime.execute_run)
-            return
-        await self.run_executor.start(
-            run_id,
-            lambda run: self.runtime.execute_run(run, execution_mode="resume"),
+        stream = create_run(
+            lambda controller: self.subscribe_run_state_with_logging(
+                controller, task_id, run_id
+            ),
+            state=state,
         )
+        response = AssistantTransportResponse(stream)
+        response.headers["X-Cosir-Task-Id"] = str(task_id)
+        response.headers["X-Cosir-Thread-Id"] = thread_id
+        return response
 
     async def attach_run(
         self,
@@ -470,104 +569,12 @@ class TransportAssistantService:
                 run_id=run_id,
             )
 
-        stream = create_run(
-            lambda controller: self.subscribe_run_state_with_logging(
-                controller, task_id, run_id
-            ),
+        return self.build_response(
+            task_id=task_id,
+            thread_id=thread_id,
+            run_id=run_id,
             state=state,
         )
-        response = AssistantTransportResponse(stream)
-        response.headers["X-Cosir-Task-Id"] = str(task_id)
-        response.headers["X-Cosir-Thread-Id"] = thread_id
-        return response
-
-    async def resume_run(
-        self,
-        *,
-        task_id: int,
-        thread_id: str,
-        run_id: int,
-    ) -> AssistantTransportResponse:
-        """
-        中断续跑，只能在取消状态才能恢复。
-
-        参数:
-            task_id: 任务标识。
-            thread_id: 线程标识（写入响应头 ``X-Cosir-Thread-Id``）。
-            run_id: 待恢复的 Conversation Run 标识。
-
-        返回:
-            使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。
-
-        异常:
-            HTTPException: 任务不存在、run 不可恢复、run 正在取消或冲突时抛出。
-
-        副作用:
-            仅在该 Run 已处于最新 ``CANCELLED`` 且当前进程没有执行器条目时启动
-            resume；已有本地执行器时直接返回冲突，避免把业务 resume 当成 attach。
-        """
-        try:
-            self.task_service.get_task(task_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="task not found") from exc
-        state = await self._snapshots.read(task_id)
-
-        latest_run = self.task_service.get_latest_run(task_id)
-        if latest_run is None:
-            _raise_transport_error(
-                409,
-                "RUN_NOT_RESUMABLE",
-                "当前任务没有可恢复的运行，请读取最新快照",
-                retryable=False,
-                run_id=run_id,
-            )
-
-        if run_id != latest_run.id or latest_run.status != ConversationRunStatus.CANCELLED.value:
-            _raise_transport_error(
-                409,
-                "RUN_NOT_RESUMABLE",
-                "对话运行当前不可继续，请读取最新快照",
-                retryable=True,
-                run_id=run_id,
-            )
-
-        if self.run_executor.is_cancelling(run_id):
-            _raise_transport_error(
-                409,
-                "RUN_CANCELLING",
-                "运行正在取消，请稍后重新提交恢复请求",
-                retryable=True,
-                run_id=run_id,
-            )
-        if self.run_executor.is_locally_running(run_id):
-            _raise_transport_error(
-                409,
-                "RUN_ALREADY_RUNNING",
-                "对话运行当前正在运行，请稍后重新提交恢复请求",
-                retryable=True,
-                run_id=run_id,
-            )
-        try:
-            await self.start_run(run_id, "resume")
-        except ValueError:
-            log.info(
-                "assistant_transport_resume_executor_already_claimed",
-                extra={
-                    "msg": "恢复执行器已被其他请求登记，当前请求继续订阅",
-                    "data": {"task_id": task_id, "run_id": run_id},
-                },
-            )
-        stream = create_run(
-            lambda controller: self.subscribe_run_state_with_logging(
-                controller, task_id, run_id
-            ),
-            state=state,
-        )
-        response = AssistantTransportResponse(stream)
-        response.headers["X-Cosir-Task-Id"] = str(task_id)
-        response.headers["X-Cosir-Thread-Id"] = thread_id
-        return response
-
 
 def _raise_transport_error(
     status_code: int,

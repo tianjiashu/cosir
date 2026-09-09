@@ -5,7 +5,8 @@
 它不把 assistant-ui 类型传入 core、service 或 storage。
 """
 
-from assistant_stream import create_run
+import asyncio
+
 from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
@@ -29,10 +30,12 @@ from app.assistant_transport.service.transport_assistant_service import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
+from app.core.runtime.runner import AgentRuntime
 from app.service.depends import (
     get_conversation_run_command_service,
     get_conversation_run_executor,
     get_conversation_task_snapshot_service,
+    get_runtime,
     get_task_service,
     get_transport_assistant_service,
 )
@@ -59,6 +62,7 @@ async def assistant_transport(
     task_service: TaskService = Depends(get_task_service),
     command_service: ConversationRunCommandService = Depends(get_conversation_run_command_service),
     run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    runtime: AgentRuntime = Depends(get_runtime),
     transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> AssistantTransportResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
@@ -96,24 +100,33 @@ async def assistant_transport(
             command_id=command.commandId if command is not None else None,
         )
 
+    start_result = None
     if command is None:
-        # 恢复运行
+        # 空 commands 只表示业务续跑；Assistant UI 的 transport attach 走独立
+        # resumeApi，不经过本入口。
         if request.runId is None:
             _raise_transport_error(
                 400,
                 "RUN_ID_REQUIRED",
                 "请先创建运行切片",
                 retryable=False,
-                command_id=command.commandId if command is not None else None,
             )
-        return await transport_service.resume_run(
-            task_id=request.taskId,
-            thread_id=request.threadId,
-            run_id=request.runId,
-        )
-    input_text = "\n".join(part.text for part in command.message.parts)
-    provider_id = request.providerId
-    model_name = request.modelName
+        if run_executor.is_cancelling(request.runId):
+            _raise_transport_error(
+                409,
+                "RUN_CANCELLING",
+                "运行正在取消，请稍后重新提交恢复请求",
+                retryable=True,
+                run_id=request.runId,
+            )
+        if run_executor.is_locally_running(request.runId):
+            _raise_transport_error(
+                409,
+                "RUN_ALREADY_RUNNING",
+                "对话运行当前正在运行，请使用 attach 重新订阅",
+                retryable=True,
+                run_id=request.runId,
+            )
 
     if request.workspaceId is not None and task.workspace_id != request.workspaceId:
         _raise_transport_error(
@@ -121,20 +134,23 @@ async def assistant_transport(
             "TASK_WORKSPACE_MISMATCH",
             "对话任务不属于当前工作区",
             retryable=False,
-            command_id=command.commandId,
+            command_id=command.commandId if command is not None else None,
         )
     task_id = task.id
 
     try:
-        if command.sourceId is not None:
-            if request.runId is None:
-                _raise_transport_error(
-                    400,
-                    "RUN_ID_REQUIRED",
-                    "请先创建运行切片",
-                    retryable=False,
-                    command_id=command.commandId,
-                )
+        if command is None:
+            assert request.runId is not None
+            start_result = await asyncio.to_thread(
+                command_service.resume_latest_run,
+                task_id=task_id,
+                run_id=request.runId,
+            )
+        else:
+            input_text = "\n".join(part.text for part in command.message.parts)
+            provider_id = request.providerId
+            model_name = request.modelName
+        if command is not None and request.runId is not None:
             if run_executor.is_cancelling(request.runId):
                 _raise_transport_error(
                     409,
@@ -143,7 +159,8 @@ async def assistant_transport(
                     retryable=True,
                     run_id=request.runId,
                 )
-            start_result = command_service.edit_or_restart(
+            start_result = await asyncio.to_thread(
+                command_service.edit_or_restart,
                 command_id=command.commandId,
                 command_type=command.type,
                 payload_hash=request.payload_hash(),
@@ -154,8 +171,9 @@ async def assistant_transport(
                 model_name=model_name,
                 reasoning_effort=request.reasoningEffort,
             )
-        else:
-            start_result = command_service.start_or_attach(
+        elif command is not None:
+            start_result = await asyncio.to_thread(
+                command_service.start_or_attach,
                 command_id=command.commandId,
                 command_type=command.type,
                 payload_hash=request.payload_hash(),
@@ -165,13 +183,19 @@ async def assistant_transport(
                 reasoning_effort=request.reasoningEffort,
                 task_id=task_id,
             )
+        assert start_result is not None
         run = start_result.run
         initial_state = start_result.initial_state
 
-
         if start_result.created:
             try:
-                await transport_service.start_run(run.id, "fresh")
+                await run_executor.start(
+                    run.id,
+                    lambda execution_run: runtime.execute_run(
+                        execution_run,
+                        execution_mode=start_result.execution_mode,
+                    ),
+                )
             except ValueError:
                 # 另一个进程内请求已经登记相同 run；本请求只重新订阅。
                 log.info(
@@ -182,27 +206,43 @@ async def assistant_transport(
                     },
                 )
 
-        stream = create_run(
-            lambda controller: transport_service.subscribe_run_state_with_logging(
-                controller, task_id, run.id
-            ),
+        return transport_service.build_response(
+            task_id=task_id,
+            thread_id=f"task-{task_id}",
+            run_id=run.id,
             state=initial_state,
         )
-        response = AssistantTransportResponse(stream)
-        response.headers["X-Cosir-Task-Id"] = str(task_id)
-        response.headers["X-Cosir-Thread-Id"] = f"task-{task_id}"
-        return response
     except HTTPException:
         # Domain conflict responses raised by ``_raise_transport_error`` must
         # reach FastAPI unchanged.  Converting them to RUN_START_FAILED would
         # hide actionable states such as RUN_CANCELLING and RUN_NOT_RESUMABLE.
         raise
+    except ValueError as exc:
+        operation_code = (
+            "RUN_NOT_RESUMABLE"
+            if command is None
+            else "RUN_NOT_REPLAYABLE"
+            if request.runId is not None
+            else "RUN_START_CONFLICT"
+        )
+        _raise_transport_error(
+            409,
+            operation_code,
+            str(exc),
+            retryable=True,
+            command_id=command.commandId if command is not None else None,
+            run_id=request.runId,
+        )
     except Exception:
         log.exception(
             "assistant_transport_run_start_failed",
             extra={
                 "msg": "Assistant Transport 命令与运行切片原子创建失败",
-                "data": {"task_id": task_id, "command_id": command.commandId},
+                "data": {
+                    "task_id": task_id,
+                    "command_id": command.commandId if command is not None else None,
+                    "run_id": request.runId,
+                },
             },
         )
         _raise_transport_error(

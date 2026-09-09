@@ -76,6 +76,14 @@ class ConversationEventProjector:
         self._snapshot_service = snapshot_service or get_conversation_task_snapshot_service()
         self._lock = RLock()
         self._seen_event_ids: dict[int, set[str]] = {}
+        self._deleted_task_ids: set[int] = set()
+
+    def mark_task_deleted(self, task_id: int) -> None:
+        """标记 Task 已删除并丢弃其进程内事件去重状态。"""
+
+        with self._lock:
+            self._deleted_task_ids.add(task_id)
+            self._seen_event_ids.pop(task_id, None)
 
     def process(
         self,
@@ -104,6 +112,15 @@ class ConversationEventProjector:
         if event is None:
             return None
         with (self._lock):
+            if event.task_id in self._deleted_task_ids:
+                log.info(
+                    "conversation_event_ignored_for_deleted_task",
+                    extra={
+                        "msg": "忽略已删除 task 的迟到 conversation event",
+                        "data": {"task_id": event.task_id, "event_id": event.event_id},
+                    },
+                )
+                return None
             seen = self._seen_event_ids.setdefault(event.task_id, set())
             if event.event_id in seen:
                 state = self._snapshot_service.ensure_state_snapshot(event.task_id)
@@ -314,7 +331,7 @@ class ConversationEventProjector:
                     "result": None,
                     "error": None,
                     "presentation": copy.deepcopy(event.presentation),
-                    "data": None,
+                    "data": copy.deepcopy(event.data) if event.data is not None else None,
                     "isError": False,
                     "approvalRequestId": None,
                 },
@@ -341,15 +358,10 @@ class ConversationEventProjector:
         if event.status not in allowed[current]:
             raise ValueError(f"invalid tool transition {current} -> {event.status}")
         base = ("messages", message_index, "parts", part_index)
-        return [
+        mutations = [
             ConversationStateMutation("set", (*base, "status"), event.status),
             ConversationStateMutation(
                 "set", (*base, "result"), event.result if event.status == "completed" else None
-            ),
-            ConversationStateMutation(
-                "set",
-                (*base, "data"),
-                copy.deepcopy(event.data) if event.data is not None else None,
             ),
             ConversationStateMutation(
                 "set",
@@ -358,6 +370,16 @@ class ConversationEventProjector:
             ),
             ConversationStateMutation("set", (*base, "isError"), event.status == "failed"),
         ]
+        if event.data is not None:
+            mutations.insert(
+                2,
+                ConversationStateMutation(
+                    "set",
+                    (*base, "data"),
+                    copy.deepcopy(event.data),
+                ),
+            )
+        return mutations
 
     @staticmethod
     def _plan_tools_settled(
