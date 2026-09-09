@@ -66,9 +66,10 @@ async def assistant_transport(
         (command for command in request.commands if isinstance(command, AddMessageCommand)),
         None,
     )
-
+    # 确定 run 模式：resume / edit / new
     mode = transport_service.classify_run_command(command, request.runId)
 
+    # 确保 run 目标存在
     task_id = transport_service.ensure_run_target(
         request=request,
         command=command,
@@ -76,6 +77,7 @@ async def assistant_transport(
     )
 
     try:
+        # 准备 run 启动结果
         start_result = await transport_service.prepare_run_start(
             task_id=task_id,
             command=command,
@@ -85,24 +87,42 @@ async def assistant_transport(
         run = start_result.run
         initial_state = start_result.initial_state
 
-        if start_result.created:
-            try:
-                await run_executor.start(
-                    run.id,
-                    lambda execution_run: runtime.execute_run(
-                        execution_run,
-                        execution_mode=start_result.execution_mode,
-                    ),
-                )
-            except ValueError:
-                # 另一个进程内请求已经登记相同 run；本请求只重新订阅。
-                log.info(
-                    "assistant_transport_executor_already_claimed",
-                    extra={
-                        "msg": "执行器已被其他请求认领，本请求退化为纯订阅",
-                        "data": {"run_id": run.id, "task_id": task_id},
-                    },
-                )
+        if not start_result.created:
+            _raise_transport_error(
+                409,
+                "RUN_START_CONFLICT",
+                "run already exists",
+                retryable=True,
+                command_id=command.commandId if command is not None else None,
+                run_id=request.runId,
+            )
+
+        try:
+            await run_executor.start(
+                run.id,
+                lambda execution_run: runtime.execute_run(
+                    execution_run,
+                    execution_mode=start_result.execution_mode,
+                ),
+            )
+        except Exception as exc:
+            log.exception(
+                "assistant_transport_executor_already_claimed",
+                extra={
+                    "msg": "执行器已被其他请求认领，本请求退化为纯订阅",
+                    "data": {"run_id": run.id, "task_id": task_id},
+                },
+            )
+            _raise_transport_error(
+                500,
+                "RUN_START_FAILED",
+                str(exc),
+                retryable=False,
+                command_id=command.commandId if command is not None else None,
+                run_id=request.runId,
+            )
+
+
 
         return transport_service.build_response(
             task_id=task_id,
