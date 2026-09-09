@@ -167,6 +167,71 @@ def test_data_is_forwarded_to_event_only() -> None:
         harness.teardown()
 
 
+def test_web_extract_content_never_becomes_event_result() -> None:
+    """Web Extract 正文只写模型上下文，完成事件不得携带 result。"""
+
+    harness = _DispatcherHarness()
+    try:
+        dispatcher.dispatch_tool_observations(
+            [
+                _summary(
+                    tool_name="web_extract",
+                    content="private document body",
+                    data={
+                        "kind": "web-extract-status",
+                        "provider": "fake",
+                        "sites": [
+                            {
+                                "site": "example.com",
+                                "url": "https://example.com",
+                                "status": "success",
+                            }
+                        ],
+                    },
+                )
+            ],
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            inherited_error_count=0,
+        )
+
+        assert harness.events[0].result is None
+        assert harness.events[0].data["kind"] == "web-extract-status"
+    finally:
+        harness.teardown()
+
+
+def test_web_extract_failure_preserves_created_site_projection() -> None:
+    """Web Extract 失败且没有新 data 时不得用空投影覆盖 pending 网站列表。"""
+
+    harness = _DispatcherHarness()
+    try:
+        dispatcher.dispatch_tool_observations(
+            [
+                _summary(
+                    tool_name="web_extract",
+                    status="error",
+                    error="provider unavailable",
+                    data={
+                        "kind": "web-extract-status",
+                        "provider": "",
+                        "sites": [],
+                    },
+                )
+            ],
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            inherited_error_count=0,
+        )
+
+        assert harness.events[0].data is None
+        assert harness.events[0].result is None
+    finally:
+        harness.teardown()
+
+
 def test_error_count_resets_on_success_and_increments_on_error() -> None:
     """success 清零连续失败计数；error 累加；cancelled 不计。"""
 

@@ -87,20 +87,36 @@ def test_accepts_edit_command_with_source_id_and_current_run_id() -> None:
     assert request.commands[0].sourceId == "user-1"
 
 
-def test_rejects_edit_command_without_run_id() -> None:
-    with pytest.raises(TransportRequestError) as error:
-        AssistantTransportRequest(
-            commands=[
-                {
-                    "type": "add-message",
-                    "commandId": "edit-command-1",
-                    "message": {"role": "user", "parts": [{"type": "text", "text": "edited"}]},
-                    "sourceId": "user-1",
-                }
-            ],
-            threadId="task-1",
-            taskId=1,
-            providerId=1,
-            modelName="deepseek-chat",
-        )
-    assert error.value.code == "EDIT_RUN_ID_REQUIRED"
+def test_accepts_add_message_with_run_id_without_source_id() -> None:
+    request = AssistantTransportRequest(
+        commands=[
+            {
+                "type": "add-message",
+                "commandId": "replay-command-1",
+                "message": {"role": "user", "parts": [{"type": "text", "text": "replay"}]},
+                "sourceId": None,
+            }
+        ],
+        threadId="task-1",
+        taskId=1,
+        providerId=1,
+        modelName="deepseek-chat",
+        runId=42,
+    )
+
+    assert request.runId == 42
+
+
+def test_source_id_does_not_change_payload_hash() -> None:
+    first = _request()
+    second = _request()
+    second.commands[0].sourceId = "user-1"
+
+    assert first.payload_hash() == second.payload_hash()
+
+
+def test_run_id_changes_payload_hash() -> None:
+    first = _request()
+    second = _request(runId=42)
+
+    assert first.payload_hash() != second.payload_hash()

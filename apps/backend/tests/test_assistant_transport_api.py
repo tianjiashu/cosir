@@ -9,17 +9,45 @@ from fastapi.routing import APIRoute
 from app.api.tasks_api import get_task
 from app.app import app
 from app.assistant_transport.assistant_api import (
-    AssistantAttachRequest,
     assistant_transport_attach,
     assistant_transport_state,
 )
+from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
+from app.assistant_transport.service import conversation_run_command_service as command_module
 from app.assistant_transport.service import conversation_task_snapshot_service as snapshot_module
 from app.assistant_transport.service import transport_assistant_service as transport_module
+from app.assistant_transport.service.conversation_run_command_service import (
+    ConversationRunCommandService,
+)
 from app.assistant_transport.service.conversation_task_snapshot_service import (
     ConversationTaskSnapshotService,
 )
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.assistant_transport.service.transport_stream_service import (
+    AssistantTransportStreamService,
+)
 from app.service.task.conversation_run_service import ConversationRunService
+
+
+@pytest.mark.parametrize(
+    ("run_id", "expected"),
+    [(None, "new"), (42, "edit")],
+)
+def test_assistant_command_batch_classifies_message_modes(
+    run_id: int | None,
+    expected: str,
+) -> None:
+    command = AddMessageCommand(
+        type="add-message",
+        commandId="command-1",
+        message={"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+    )
+
+    assert TransportAssistantService.classify_run_command(command, run_id) == expected
+
+
+def test_assistant_command_batch_classifies_empty_resume() -> None:
+    assert TransportAssistantService.classify_run_command(None, 42) == "resume"
 
 
 def test_task_route_has_one_get_method() -> None:
@@ -60,6 +88,9 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
         def is_fork_available(self, _task_id: int) -> bool:
             return False
 
+        def get_context_window_total(self, _task_id: int) -> int | None:
+            return None
+
     result = await get_task(7, _TaskService())
 
     assert result.task_id == 7
@@ -77,7 +108,7 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
 ) -> None:
     status = "cancelled"
     state = {
-        "messages": [],
+        "messages": [{"id": "user-7", "runId": 7, "role": "user"}],
         "run": {"runId": 7, "status": status},
         "approvals": {},
         "context_usage": 0.0,
@@ -92,74 +123,81 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
         "error": None,
     }
     latest_run = SimpleNamespace(id=7, status=status, end_reason=end_reason)
-    started_modes: list[str] = []
-
     class _TaskService:
-        def get_task(self, _task_id: int) -> object:
-            return object()
-
         def get_latest_run(self, _task_id: int) -> object:
             return latest_run
 
     class _SnapshotService:
-        async def read(self, _task_id: int) -> dict[str, object]:
+        def ensure_state_snapshot(self, _task_id: int) -> dict[str, object]:
             return state
 
-    class _RunExecutor:
-        def is_cancelling(self, _run_id: int) -> bool:
-            return False
+    class _RunService:
+        def resume_cancelled_run(self, _run_id: int) -> object:
+            return SimpleNamespace(id=7, task_id=1, status="running")
 
-        def is_locally_running(self, _run_id: int) -> bool:
-            return False
+    class _CommandCrud:
+        def get_by_run(self, _run_id: int) -> None:
+            return None
 
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service.task_service = _TaskService()
+    class _Operation:
+        def __enter__(self) -> "_Operation":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class _TaskSpace:
+        def operation(self, *, timeout: float) -> _Operation:
+            assert timeout == 10
+            return _Operation()
+
+    class _TaskSpaces:
+        def get_or_create(self, _task_id: int) -> _TaskSpace:
+            return _TaskSpace()
+
+    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
+    service._task = _TaskService()
     service._snapshots = _SnapshotService()
-    service.run_executor = _RunExecutor()
+    service._conversation_run = _RunService()
+    service._command = _CommandCrud()
+    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
 
-    async def start_run(_run_id: int, mode: str) -> None:
-        started_modes.append(mode)
+    result = service.resume_latest_run(task_id=1, run_id=7)
 
-    class _Response:
-        def __init__(self, value: object) -> None:
-            self.value = value
-            self.headers: dict[str, str] = {}
-
-    service.start_run = start_run  # type: ignore[method-assign]
-    monkeypatch.setattr(transport_module, "create_run", lambda _callback, state: state)
-    monkeypatch.setattr(transport_module, "AssistantTransportResponse", _Response)
-
-    result = await service.resume_run(task_id=1, thread_id="task-1", run_id=7)
-
-    assert result.value == state
-    assert started_modes == ["resume"]
+    assert result.initial_state == state
+    assert result.execution_mode == "resume"
+    assert result.mode == "resume"
 
 
 @pytest.mark.asyncio
-async def test_resume_task_requires_cancelled_status() -> None:
+async def test_resume_task_requires_cancelled_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _TaskService:
-        def get_task(self, _task_id: int) -> object:
-            return object()
-
         def get_latest_run(self, _task_id: int) -> object:
             return SimpleNamespace(id=7, status="running", end_reason="executor_cancelled")
 
-    class _SnapshotService:
-        async def read(self, _task_id: int) -> dict[str, object]:
-            return {"run": {"runId": 7, "status": "cancelled"}}
+    class _TaskSpace:
+        def operation(self, *, timeout: float) -> object:
+            assert timeout == 10
+            class _Operation:
+                def __enter__(self) -> "_Operation":
+                    return self
 
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service.task_service = _TaskService()
-    service._snapshots = _SnapshotService()
-    service.run_executor = SimpleNamespace(
-        is_cancelling=lambda _run_id: False,
-        is_locally_running=lambda _run_id: False,
-    )
+                def __exit__(self, *_args: object) -> None:
+                    return None
 
-    with pytest.raises(HTTPException) as error:
-        await service.resume_run(task_id=1, thread_id="task-1", run_id=7)
+            return _Operation()
 
-    assert error.value.status_code == 409
+    class _TaskSpaces:
+        def get_or_create(self, _task_id: int) -> _TaskSpace:
+            return _TaskSpace()
+
+    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
+    service._task = _TaskService()
+    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
+    with pytest.raises(ValueError, match="not resumable"):
+        service.resume_latest_run(task_id=1, run_id=7)
 
 
 def test_attach_route_is_separate_from_business_resume() -> None:
@@ -215,7 +253,7 @@ async def test_attach_run_only_subscribes_existing_executor(
     service._runs = _RunService()
     service._snapshots = _SnapshotService()
     service.run_executor = _Executor()
-    service.subscribe_run_state_with_logging = lambda *_args: None  # type: ignore[method-assign]
+    service._stream = SimpleNamespace(subscribe_run_state=lambda *_args: None)  # type: ignore[attr-defined]
     monkeypatch.setattr(transport_module, "create_run", lambda _callback, state: state)
     monkeypatch.setattr(transport_module, "AssistantTransportResponse", _Response)
 
@@ -436,16 +474,20 @@ async def test_state_endpoint_returns_snapshot_fields_at_top_level() -> None:
 async def test_sse_callback_logs_and_returns_on_normal_completion(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def subscribe(_controller: object, _task_id: int, _run_id: int) -> None:
-        return None
+    async def _noop_stream(*_args, **_kwargs):
+        return
+        yield  # pragma: no cover
+
+    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
+    service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
+    service._snapshots = SimpleNamespace(
+        ensure_state_snapshot=lambda _t: {"run": {"runId": 7, "status": "completed"}}
+    )
+    service.run_executor = SimpleNamespace(status=lambda *_a: None)
+    service.stream = _noop_stream
 
     with caplog.at_level("INFO"):
-        await TransportAssistantService.subscribe_run_state_with_logging(
-            SimpleNamespace(subscribe_run_state=subscribe),
-            object(),
-            7,
-            11,
-        )
+        await service.subscribe_run_state(object(), 1, 7)
 
     events = {record.message for record in caplog.records}
     assert "assistant_sse_callback_started" in events
@@ -456,31 +498,39 @@ async def test_sse_callback_logs_and_returns_on_normal_completion(
 async def test_sse_callback_logs_and_propagates_cancellation(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def subscribe(_controller: object, _task_id: int, _run_id: int) -> None:
+    async def _cancelling_stream(*_args, **_kwargs):
         raise asyncio.CancelledError()
+        yield  # pragma: no cover
+
+    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
+    service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
+    service._snapshots = SimpleNamespace(
+        ensure_state_snapshot=lambda _t: {"run": {"runId": 7, "status": "completed"}}
+    )
+    service.run_executor = SimpleNamespace(status=lambda *_a: None)
+    service.stream = _cancelling_stream
 
     with caplog.at_level("WARNING"), pytest.raises(asyncio.CancelledError):
-        await TransportAssistantService.subscribe_run_state_with_logging(
-            SimpleNamespace(subscribe_run_state=subscribe),
-            object(),
-            7,
-            12,
-        )
+        await service.subscribe_run_state(object(), 1, 12)
 
     assert "assistant_sse_callback_cancelled" in {record.message for record in caplog.records}
 
 
 @pytest.mark.asyncio
 async def test_sse_callback_logs_and_propagates_failures(caplog: pytest.LogCaptureFixture) -> None:
-    async def subscribe(_controller: object, _task_id: int, _run_id: int) -> None:
+    async def _failing_stream(*_args, **_kwargs):
         raise RuntimeError("stream failed")
+        yield  # pragma: no cover
+
+    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
+    service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
+    service._snapshots = SimpleNamespace(
+        ensure_state_snapshot=lambda _t: {"run": {"runId": 7, "status": "completed"}}
+    )
+    service.run_executor = SimpleNamespace(status=lambda *_a: None)
+    service.stream = _failing_stream
 
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="stream failed"):
-        await TransportAssistantService.subscribe_run_state_with_logging(
-            SimpleNamespace(subscribe_run_state=subscribe),
-            object(),
-            7,
-            13,
-        )
+        await service.subscribe_run_state(object(), 1, 13)
 
     assert "assistant_sse_callback_failed" in {record.message for record in caplog.records}

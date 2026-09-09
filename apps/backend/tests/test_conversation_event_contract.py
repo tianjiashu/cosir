@@ -12,7 +12,7 @@ from typing import Literal, get_args
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from app.core.workflows.event import (
+from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     ContextUsageUpdatedEvent,

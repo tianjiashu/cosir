@@ -210,6 +210,15 @@ def _registry_with(*providers: Any) -> WebProviderRegistry:
     return registry
 
 
+@pytest.fixture(autouse=True)
+def _clear_web_backend_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让 fake provider 测试不受本机环境中的生产 backend 配置影响。"""
+
+    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "")
+    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "")
+    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
+
+
 # ---------------------------------------------------------------------------
 # 1. Firecrawl 搜索响应解析与 limit 钳制
 # ---------------------------------------------------------------------------
@@ -231,6 +240,56 @@ def test_search_result_items_v2_structure(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert [item["url"] for item in items] == ["https://a.com", "https://b.com"]
     assert items[0]["title"] == "A"
+
+
+def test_web_search_ui_data_uses_explicit_renderer_contract() -> None:
+    """搜索 UI data 只提供专用 kind 和安全结果字段。"""
+
+    provider = FakeProvider(
+        name="fake",
+        search_items=[
+            WebSearchItem(title="A", url="https://a.com", description="desc", position=1)
+        ],
+    )
+    observation = WebSearchTool(_registry_with(provider)).execute(query="测试")
+
+    assert observation.data == {
+        "kind": "web-search-results",
+        "query": "测试",
+        "provider": "fake",
+        "results": [
+            {"title": "A", "url": "https://a.com", "description": "desc", "position": 1}
+        ],
+    }
+
+
+def test_web_extract_ui_data_never_contains_document_content() -> None:
+    """正文仍供模型使用，但 UI data 只显示网站身份和状态。"""
+
+    provider = FakeProvider(
+        name="fake",
+        extract_factory=lambda urls, fmt, cl: [
+            WebExtractItem(
+                url=urls[0],
+                title="title",
+                content="private document body",
+                metadata={"source": "private metadata"},
+            )
+        ],
+    )
+    observation = WebExtractTool(_registry_with(provider), resolver=_public_resolver).execute(
+        urls=["https://example.com/docs"]
+    )
+
+    assert observation.data == {
+        "kind": "web-extract-status",
+        "provider": "fake",
+        "sites": [
+            {"site": "example.com", "url": "https://example.com/docs", "status": "success"}
+        ],
+    }
+    assert "private document body" in observation.content
+    assert "private metadata" not in str(observation.data)
 
 
 def test_search_result_items_v1_structure(monkeypatch: pytest.MonkeyPatch) -> None:
