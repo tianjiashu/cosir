@@ -18,6 +18,7 @@ from app.api.schemas import (
 )
 from app.app import app
 from app.core.runtime.runner import AgentRuntime
+from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
     get_runtime,
     get_task_service,
@@ -148,6 +149,11 @@ async def delete_workspace(
         await asyncio.to_thread(workspace_service.delete_workspace, workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
+    except DeletionBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message, "retryable": True},
+        ) from exc
     return DeleteWorkspaceResponse(workspace_id=workspace_id, deleted=True)
 
 
@@ -189,12 +195,17 @@ async def create_workspace_task(
     workspace_id: int,
     payload: CreateTaskRequest,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-    task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """创建工作区下的任务容器，不启动 ConversationRun。"""
     try:
-        workspace_service.get_workspace(workspace_id)
-        task = task_service.get_or_create_task(workspace_id, preview(payload.text))
+        task = await asyncio.to_thread(
+            workspace_service.create_task, workspace_id, preview(payload.text)
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
+    except DeletionBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message, "retryable": True},
+        ) from exc
     return TaskResponse.from_record(task)

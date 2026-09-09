@@ -17,6 +17,7 @@ from app.api.schemas import (
     TaskResponse,
 )
 from app.app import app
+from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.errors.task_fork_errors import SnapshotNotReadyError, TaskForkConflictError
 from app.service.depends import get_task_service
 from app.task_runtime.service.task_service import TaskService
@@ -109,4 +110,9 @@ async def delete_task(
         await asyncio.to_thread(task_service.delete_task, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
+    except DeletionBusyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message, "retryable": True},
+        ) from exc
     return DeleteTaskResponse(task_id=task_id, deleted=True)
