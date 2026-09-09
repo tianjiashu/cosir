@@ -4,22 +4,30 @@
 
 职责边界：
 - 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
-  （委托给 ``CascadeDeleter``）。
-- 不负责：直接 SQL 操作（委托给 ``TaskCrud``/``ConversationRunCrud``/``WorkspaceCrud``/
-  ``CascadeDeleter``）；不写执行态（执行态由 ``Turn`` 持有，本 service 仅派生展示）；
-  不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
+  （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationCommandCrud``/
+  ``ConversationTaskContextCrud``/``ConversationTaskSnapshotCrud``/``FileSnapshotCrud``/
+  ``DelegationCrud`` 在单事务内逐个清理，孤儿 checkpoint 线程交 ``checkpoint_gc`` 回收）。
+- 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
+  service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
 
 import asyncio
+from contextlib import ExitStack
+from dataclasses import dataclass
 
 from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord
+from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
+from app.service.provider.capability_service import CapabilityService
+from app.storage.checkpoint_gc import cleanup_orphan_checkpoint_threads
 from app.storage.store_engines import main_session_factory
+from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.task_runtime.workspace_operation_registry import workspace_operations
 
 _TERMINAL_RUN_STATUSES = frozenset(
     {
@@ -28,6 +36,14 @@ _TERMINAL_RUN_STATUSES = frozenset(
         ConversationRunStatus.CANCELLED.value,
     }
 )
+
+
+@dataclass(frozen=True)
+class TaskDeletionResult:
+    """一次已提交任务级联删除需要执行的进程内清理信息。"""
+
+    task_ids: frozenset[int]
+    orphan_checkpoint_threads: frozenset[str]
 
 
 class TaskService:
@@ -53,9 +69,13 @@ class TaskService:
         self._task = service_depends.get_task_crud()
         self._turn = service_depends.get_conversation_run_crud()
         self._workspace = service_depends.get_workspace_crud()
-        self._cascade_deleter = service_depends.get_cascade_deleter()
         self._context = service_depends.get_conversation_task_context_service()
         self._snapshot = service_depends.get_conversation_task_snapshot_service()
+        self._command = service_depends.get_conversation_command_crud()
+        self._delegation = service_depends.get_delegation_crud()
+        self._file_snapshot = service_depends.get_file_snapshot_crud()
+        self._task_context_crud = service_depends.get_conversation_task_context_crud()
+        self._task_snapshot_crud = service_depends.get_conversation_task_snapshot_crud()
         self._session_factory = main_session_factory()
 
     def get_or_create_task(
@@ -111,6 +131,38 @@ class TaskService:
         """
 
         return self._turn.get_latest_by_task(task_id)
+
+    def get_context_window_total(self, task_id: int) -> int | None:
+        """返回任务最近一次 run 可确定的有效上下文窗口。
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            按最近 run 的模型和当前软上限解析出的窗口；没有 run、模型或能力元数据时为
+            ``None``，不使用固定兜底值。
+
+        异常:
+            底层任务读取异常会原样抛出；未知模型仅记录告警并返回 ``None``。
+
+        副作用:
+            无（仅读取任务和模型能力配置）。
+        """
+
+        run = self.get_latest_run(task_id)
+        if run is None or not run.model_name:
+            return None
+        try:
+            return CapabilityService.get_model_context_window(run.model_name)
+        except (KeyError, TypeError, ValueError):
+            log.warning(
+                "task_context_window_unavailable",
+                extra={
+                    "msg": "无法解析任务最近 run 的上下文窗口",
+                    "data": {"task_id": task_id, "model_name": run.model_name},
+                },
+            )
+            return None
 
     def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
@@ -185,22 +237,16 @@ class TaskService:
             return await asyncio.shield(supervisor)
         except asyncio.CancelledError:
             # 持锁与 SQLite worker 属于 supervisor，而不是 HTTP 请求协程；请求
-            # 被重复取消时仍由 supervisor 完成事务并负责释放 run_lock。
+            # 被重复取消时仍由 supervisor 完成事务并负责释放 Task 操作闸门。
             supervisor.add_done_callback(self._consume_detached_fork_result)
             raise
 
     async def _fork_task_with_lock(
         self, source_task_id: int, source_run_id: int
     ) -> TaskRecord:
-        """在独立 supervisor 中持有源 Task 执行锁并运行同步 Fork 事务。"""
+        """在独立 supervisor 中运行带 workspace/task 锁的同步 Fork 事务。"""
 
-        source_space = task_runtime_spaces.get_or_create(source_task_id)
-        # 与 ConversationRunExecutor 共用 run_lock，等待执行/取消完全收束后再
-        # 把 DB、context 和 snapshot 作为同一个历史边界复制。
-        async with source_space.run_lock:
-            return await asyncio.to_thread(
-                self._fork_task_locked, source_task_id, source_run_id
-            )
+        return await asyncio.to_thread(self._fork_task_locked, source_task_id, source_run_id)
 
     @staticmethod
     def _consume_detached_fork_result(task: asyncio.Task[TaskRecord]) -> None:
@@ -239,119 +285,124 @@ class TaskService:
             新增目标 Task、历史 cloned Runs、context entries 与 idle snapshot；源 Task 不变。
         """
 
-        source_space = task_runtime_spaces.get_or_create(source_task_id)
-        with source_space.lock:
-            cloned_snapshot = None
-            with self._session_factory.begin() as session:
-                source = self._task.ensure_task(session, source_task_id)
-                runs = self._turn.list_by_task_in_session(session, source_task_id)
-                if any(run.status not in _TERMINAL_RUN_STATUSES for run in runs):
-                    raise TaskForkConflictError(
-                        "TASK_NOT_READY",
-                        "all runs must be terminal before forking",
-                    )
+        source = self._task.get(source_task_id)
+        try:
+            with workspace_operations.operation(source.workspace_id, timeout=10):
+                source_space = task_runtime_spaces.get_or_create(source_task_id)
+                with source_space.operation(timeout=10):
+                    return self._fork_task_locked_in_operation(source_task_id, source_run_id)
+        except TimeoutError as exc:
+            raise DeletionBusyError("task", source_task_id) from exc
 
-                boundary_index = next(
-                    (
-                        index
-                        for index, run in enumerate(runs)
-                        if run.id == source_run_id
-                    ),
-                    None,
-                )
-                if boundary_index is None:
-                    raise KeyError(source_run_id)
-                source_prefix = runs[: boundary_index + 1]
-                if any(run.status not in _TERMINAL_RUN_STATUSES for run in source_prefix):
-                    raise TaskForkConflictError(
-                        "RUN_NOT_READY",
-                        "the selected run must be terminal before forking",
-                    )
+    def _fork_task_locked_in_operation(
+        self,
+        source_task_id: int,
+        source_run_id: int,
+    ) -> TaskRecord:
+        """在已持有 workspace/task 闸门时执行 Fork 数据库事务。"""
 
-                target = self._task.create(
-                    workspace_id=source.workspace_id,
-                    title=self._task.next_fork_title(
-                        source.workspace_id, source.title, session
-                    ),
-                    task_type="fork",
-                    extra={
-                        "fork": {
-                            "source_task_id": source_task_id,
-                            "source_run_id": source_run_id,
-                        }
-                    },
-                    session=session,
+        cloned_snapshot = None
+        with begin_immediate(self._session_factory) as session:
+            source = self._task.ensure_task(session, source_task_id)
+            runs = self._turn.list_by_task_in_session(session, source_task_id)
+            if any(run.status not in _TERMINAL_RUN_STATUSES for run in runs):
+                raise TaskForkConflictError(
+                    "TASK_NOT_READY",
+                    "all runs must be terminal before forking",
                 )
 
-                run_id_map: dict[int, int] = {}
-                for source_run in source_prefix:
-                    cloned = self._turn.clone_for_task(
-                        session, source_run, target.id
-                    )
-                    run_id_map[source_run.id] = cloned.id
-
-                self._context.clone_for_fork(
-                    source_task_id,
-                    target.id,
-                    run_id_map,
-                    session,
-                )
-                cloned_snapshot = self._snapshot.clone_for_fork(
-                    source_task_id,
-                    target.id,
-                    run_id_map,
-                    session,
+            boundary_index = next(
+                (index for index, run in enumerate(runs) if run.id == source_run_id),
+                None,
+            )
+            if boundary_index is None:
+                raise KeyError(source_run_id)
+            source_prefix = runs[: boundary_index + 1]
+            if any(run.status not in _TERMINAL_RUN_STATUSES for run in source_prefix):
+                raise TaskForkConflictError(
+                    "RUN_NOT_READY",
+                    "the selected run must be terminal before forking",
                 )
 
-            if cloned_snapshot is None:
-                raise RuntimeError("fork snapshot was not produced")
-            source_manager = source_space.existing_context_manager()
-            if source_manager is not None:
-                try:
-                    task_runtime_spaces.get_or_create(
-                        target.id
-                    ).install_fork_context_manager(
-                        source_manager.fork_context_manager(target.id)
-                    )
-                except Exception:
-                    # DB 已提交后，持久化 context 仍是 canonical source；目标 space
-                    # 下次访问时会按 fork Task 懒加载，不能把可恢复的内存优化失败
-                    # 伪装成整个 fork 失败。
-                    log.exception(
-                        "task_fork_runtime_hydration_failed",
-                        extra={
-                            "msg": "fork 目标运行时 hydrate 失败，将在后续访问时懒加载",
-                            "data": {
-                                "source_task_id": source_task_id,
-                                "source_run_id": source_run_id,
-                                "target_task_id": target.id,
-                            },
-                        },
-                    )
-            try:
-                self._snapshot.cache_committed_snapshot(target.id, cloned_snapshot)
-            except Exception:
-                log.exception(
-                    "task_fork_snapshot_cache_failed",
-                    extra={
-                        "msg": "fork 目标 snapshot 缓存失败，持久化数据仍可重新读取",
-                        "data": {"target_task_id": target.id},
-                    },
-                )
-            log.info(
-                "task_forked",
+            target = self._task.create(
+                workspace_id=source.workspace_id,
+                title=self._task.next_fork_title(source.workspace_id, source.title, session),
+                task_type="fork",
                 extra={
-                    "msg": "task fork committed",
-                    "data": {
+                    "fork": {
                         "source_task_id": source_task_id,
                         "source_run_id": source_run_id,
-                        "target_task_id": target.id,
+                    }
+                },
+                session=session,
+            )
+
+            run_id_map: dict[int, int] = {}
+            for source_run in source_prefix:
+                cloned = self._turn.clone_for_task(session, source_run, target.id)
+                run_id_map[source_run.id] = cloned.id
+
+            self._context.clone_for_fork(
+                source_task_id,
+                target.id,
+                run_id_map,
+                session,
+            )
+            cloned_snapshot = self._snapshot.clone_for_fork(
+                source_task_id,
+                target.id,
+                run_id_map,
+                session,
+            )
+
+        if cloned_snapshot is None:
+            raise RuntimeError("fork snapshot was not produced")
+        source_space = task_runtime_spaces.get_or_create(source_task_id)
+        source_manager = source_space.existing_context_manager()
+        if source_manager is not None:
+            try:
+                task_runtime_spaces.get_or_create(target.id).install_fork_context_manager(
+                    source_manager.fork_context_manager(target.id)
+                )
+            except Exception:
+                # DB 已提交后，持久化 context 仍是 canonical source；目标 space
+                # 下次访问时会按 fork Task 懒加载，不能把可恢复的内存优化失败
+                # 伪装成整个 fork 失败。
+                log.exception(
+                    "task_fork_runtime_hydration_failed",
+                    extra={
+                        "msg": "fork 目标运行时 hydrate 失败，将在后续访问时懒加载",
+                        "data": {
+                            "source_task_id": source_task_id,
+                            "source_run_id": source_run_id,
+                            "target_task_id": target.id,
+                        },
                     },
+                )
+        try:
+            self._snapshot.cache_committed_snapshot(target.id, cloned_snapshot)
+        except Exception:
+            log.exception(
+                "task_fork_snapshot_cache_failed",
+                extra={
+                    "msg": "fork 目标 snapshot 缓存失败，持久化数据仍可重新读取",
+                    "data": {"target_task_id": target.id},
                 },
             )
-            # target 已经在事务内 flush，且提交后的只读查询不是 Fork 成功条件；
-            # 直接返回事务内记录，避免“已提交但最后 get 失败”伪装成 Fork 失败。
-            return target
+        log.info(
+            "task_forked",
+            extra={
+                "msg": "task fork committed",
+                "data": {
+                    "source_task_id": source_task_id,
+                    "source_run_id": source_run_id,
+                    "target_task_id": target.id,
+                },
+            },
+        )
+        # target 已经在事务内 flush，且提交后的只读查询不是 Fork 成功条件；
+        # 直接返回事务内记录，避免“已提交但最后 get 失败”伪装成 Fork 失败。
+        return target
 
 
 
@@ -378,11 +429,11 @@ class TaskService:
     def delete_task(self, task_id: int) -> None:
         """原子删除任务树并级联清理其下全部子产物。
 
-        删除前先校验任务存在（不存在则抛 ``KeyError``），再通过
-        ``CascadeDeleter.delete_task_tree`` 在单个 ``BEGIN IMMEDIATE`` 写锁事务内
-        递归清理其下全部子任务（委派子任务）及各自轮次、消息轨迹、运行时事件、文件
-        快照与委派记录，保证原子性（全删或全不删）与并发安全（删除期间无并发写插入
-        孤儿数据）。删除是高风险操作，保留 start / complete 审计日志。
+        删除前先校验任务存在（不存在则抛 ``KeyError``），再按固定的 workspace → task
+        锁顺序取得结构性写操作闸门。在单个 ``BEGIN IMMEDIATE`` 事务内按「子任务先于父任务」
+        的后序清理每个任务自身及其产物，保证原子性（全删或全不删）。
+        提交后把孤儿 LangGraph checkpoint 线程交 ``checkpoint_gc.cleanup_orphan_checkpoint_threads``
+        回收。删除是高风险操作，保留 start / complete 审计日志。
 
         参数:
             task_id: 待删除的任务标识。
@@ -392,24 +443,330 @@ class TaskService:
 
         异常:
             KeyError: 如果指定任务不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
+            sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            从 ``turn_messages`` / ``file_snapshots`` / ``conversation_runs`` / ``delegations``
-            / ``tasks`` 表删除该任务树相关数据（旧 Runtime 事件体系已随对话事实重构
-            一并删除，不再参与级联删除）。
+            从 ``conversation_task_contexts`` / ``conversation_task_snapshots`` /
+            ``file_snapshots`` / ``conversation_commands`` / ``conversation_runs`` /
+            ``delegations`` / ``tasks`` 表删除该任务树相关数据；并提交后清理已删任务遗留的
+            孤儿 LangGraph checkpoint 线程、卸载进程内 runtime space。
         """
 
-        self._task.get(task_id)  # 存在性守卫，不存在抛 KeyError
-        log.info(
-            "task_delete_start",
-            extra={"msg": "task delete started", "data": {"task_id": task_id}},
-        )
-        deleted_count = self._cascade_deleter.delete_task_tree(task_id)
+        task = self._task.get(task_id)
+        try:
+            with workspace_operations.operation(task.workspace_id, timeout=10):
+                task = self._task.get(task_id)
+                locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
+                with ExitStack() as stack:
+                    for current_id in sorted(locked_ids):
+                        stack.enter_context(
+                            self._task_register.get_or_create(current_id).operation(timeout=10)
+                        )
+                    task_ids = self._collect_task_tree_ids(task_id)
+                    for current_id in sorted(task_ids - locked_ids):
+                        stack.enter_context(
+                            self._task_register.get_or_create(current_id).operation(timeout=10)
+                        )
+                        locked_ids.add(current_id)
+                    log.info(
+                        "task_delete_start",
+                        extra={"msg": "task delete started", "data": {"task_id": task_id}},
+                    )
+                    with begin_immediate(self._session_factory) as session:
+                        result = self.delete_task_tree_in_session(task_id, session)
+                    self.finalize_deleted_task_spaces(result)
+        except TimeoutError as exc:
+            raise DeletionBusyError("task", task_id) from exc
         log.info(
             "task_deleted",
             extra={
                 "msg": "task deleted",
-                "data": {"task_id": task_id, "deleted_tasks": deleted_count},
+                "data": {"task_id": task_id, "deleted_tasks": len(result.task_ids)},
             },
         )
+
+    def _collect_task_ancestor_ids(self, task_id: int) -> set[int]:
+        """收集 task 自身以上的父 task 标识。
+
+        参数:
+            task_id: 起始 task 标识。
+
+        返回:
+            从起始 task 向上的全部父 task 标识，不含起始 task。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果读取父子关系失败。
+
+        副作用:
+            无；仅读取 task 关系。关系异常形成环时停止遍历，避免删除请求死循环。
+        """
+
+        ancestors: set[int] = set()
+        current = self._task.get(task_id)
+        while current.parent_task_id is not None:
+            parent_id = current.parent_task_id
+            if parent_id in ancestors or parent_id == task_id:
+                break
+            ancestors.add(parent_id)
+            current = self._task.get(parent_id)
+        return ancestors
+
+    def _collect_task_tree_ids(
+        self, root_task_id: int, session: Session | None = None
+    ) -> set[int]:
+        """收集待删除任务树的全部 task id。
+
+        参数:
+            root_task_id: 任务树根节点。
+
+        返回:
+            包含根任务和递归委派子任务的 task id 集合。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询任务树失败。
+
+        副作用:
+            无；只读取任务关系。
+        """
+
+        collected: set[int] = set()
+        frontier = [root_task_id]
+        while frontier:
+            current_id = frontier.pop()
+            if current_id in collected:
+                continue
+            collected.add(current_id)
+            frontier.extend(
+                child.id
+                for child in self._task.list_by_parent_task(current_id, session=session)
+            )
+        return collected
+
+    def _collect_task_tree_ids_postorder(
+        self, root_task_id: int, session: Session | None = None
+    ) -> list[int]:
+        """收集任务树全部 id 并按「子任务先于父任务」的后序返回。
+
+        单条 ``DELETE ... WHERE id IN (...)`` 无法保证父行晚于子行，而 ``tasks.parent_task_id``
+        自引用外键要求父任务行在其所有子任务行之后删除，否则 SQLite 即时外键检查会报
+        ``FOREIGN KEY constraint failed``。故先收集整棵任务树，再以「被本批任务引用为父的
+        节点暂留、其余为叶子」的拓扑方式逐层产出后序列表（叶子在前、根在后）。
+
+        参数:
+            root_task_id: 任务树根节点。
+
+        返回:
+            后序排列的 task id 列表（子任务在前、根任务在后）。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询任务关系失败。
+
+        副作用:
+            无；只读取任务关系。
+        """
+
+        all_ids = self._collect_task_tree_ids(root_task_id, session=session)
+        parent_of: dict[int, int] = {}
+        for current_id in all_ids:
+            for child in self._task.list_by_parent_task(current_id, session=session):
+                parent_of[child.id] = current_id
+
+        remaining = set(all_ids)
+        order: list[int] = []
+        while remaining:
+            parents_in_remaining = {
+                parent_of[tid] for tid in remaining if tid in parent_of
+            }
+            leaves = [tid for tid in remaining if tid not in parents_in_remaining]
+            if not leaves:
+                # 防御性兜底：仅当任务关系出现环时触发，直接收尾避免死循环。
+                order.extend(remaining)
+                break
+            order.extend(leaves)
+            remaining -= set(leaves)
+        return order
+
+    def delete_task_tree_in_session(
+        self, root_task_id: int, session: Session
+    ) -> TaskDeletionResult:
+        """在调用方事务内删除一棵 task 树，不提交也不做进程内清理。
+
+        参数:
+            root_task_id: 待删除任务树的根 task 标识。
+            session: 已开启的主库事务 session；调用方必须先取得相关 runtime 闸门。
+
+        返回:
+            包含已删除 task 标识和待提交后回收的 checkpoint thread 标识的结果。
+
+        异常:
+            KeyError: 如果根 task 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
+
+        副作用:
+            在当前事务中删除 task 树及全部子产物；不提交、不卸载 runtime space。
+        """
+
+        task_ids_postorder = self._collect_task_tree_ids_postorder(
+            root_task_id, session=session
+        )
+        orphan_threads: set[str] = set()
+        for current_id in task_ids_postorder:
+            orphan_threads |= self._delete_single_task_in_session(current_id, session)
+        return TaskDeletionResult(
+            task_ids=frozenset(task_ids_postorder),
+            orphan_checkpoint_threads=frozenset(orphan_threads),
+        )
+
+    def finalize_deleted_task_spaces(self, result: TaskDeletionResult) -> None:
+        """执行已提交 task 删除的进程内 runtime 清理和 checkpoint GC。
+
+        参数:
+            result: 已提交的 task 删除结果。
+
+        返回:
+            无。
+
+        异常:
+            无。checkpoint GC 本身失败安全；runtime 清理异常由调用方观察并记录。
+
+        副作用:
+            标记并卸载已删除 task 的 runtime 投影，回收不再被主库引用的 checkpoint。
+        """
+
+        cleanup_orphan_checkpoint_threads(set(result.orphan_checkpoint_threads))
+        self._unload_deleted_task_spaces(set(result.task_ids))
+
+    def _unload_deleted_task_spaces(self, task_ids: set[int]) -> None:
+        """清除已删除任务的进程内 runtime space 与 context 引用。"""
+
+        for current_id in task_ids:
+            try:
+                self._task_register.mark_deleted(current_id)
+                mark_snapshot_deleted = getattr(self._snapshot, "mark_task_deleted", None)
+                if callable(mark_snapshot_deleted):
+                    mark_snapshot_deleted(current_id)
+                projector = service_depends.get_conversation_event_projector()
+                mark_projector_deleted = getattr(projector, "mark_task_deleted", None)
+                if callable(mark_projector_deleted):
+                    mark_projector_deleted(current_id)
+                executor = service_depends.get_conversation_run_executor()
+                mark_executor_deleted = getattr(executor, "mark_task_deleted", None)
+                if callable(mark_executor_deleted):
+                    mark_executor_deleted(current_id)
+                try:
+                    from app.config.configuration import get_tool_system
+
+                    clear_tool_state = getattr(
+                        get_tool_system().executor, "clear_task_state", None
+                    )
+                    if callable(clear_tool_state):
+                        clear_tool_state(current_id)
+                except RuntimeError:
+                    # 删除可以发生在工具系统尚未完成装配的测试/启动边界；此时没有
+                    # 进程内工具状态需要清理，数据库删除仍然是 canonical 结果。
+                    pass
+                space = self._task_register.get(current_id)
+                if space is None:
+                    continue
+                space.unload_context_manager()
+                self._task_register.unload(current_id, expected_space=space)
+            except Exception:
+                log.exception(
+                    "task_runtime_cleanup_failed",
+                    extra={
+                        "msg": "task runtime cleanup failed after committed deletion",
+                        "data": {"task_id": current_id},
+                    },
+                )
+
+    def delete_single_task(
+        self, task_id: int, session: Session | None = None
+    ) -> set[str]:
+        """删除单个任务及其全部产物，不递归删除其子任务。
+
+        给定单个 task_id，在单一事务内清理该任务自身及其全部产物（run / command / context /
+        snapshot / 文件快照 / delegation），但不触碰子任务行。任务树的收集与级联删除由上层
+        编排（见 ``delete_task``）：上层负责以「子任务先于父任务」的后序顺序逐个调用本方法，
+        本方法只负责单任务粒度的删除，并在独立事务（无外部 session 时）提交后清理该任务
+        遗留的孤儿 LangGraph checkpoint 线程。
+
+        外键前置条件（由上层保证）：因 ``tasks`` 与 ``conversation_runs`` 存在双向外键环
+        （``tasks.parent_run_id → runs``、``tasks.delegation_id → delegations``），且
+        ``tasks.parent_task_id`` 自引用指向父任务，本方法在删除 run / delegation / task 行前
+        会先解除本任务行对 run 与 delegation 的引用；而子任务必须在父任务之前删除（后序），
+        以避免自引用外键冲突。
+
+        参数:
+            task_id: 待删除任务的标识（整数 id）。
+            session: 可选外部事务 session。传入时复用该事务（调用方负责提交、子任务后序
+                编排、space 卸载与 checkpoint GC）；为 None 时由本方法自开事务并自动提交，
+                随后清理孤儿 checkpoint 线程。
+
+        返回:
+            本次删除不再被主库剩余 run 引用的 checkpoint thread id 集合；传入外部 session 时
+            同样返回该集合，由调用方在提交后统一做 checkpoint GC。
+
+        异常:
+            KeyError: 如果 task_id 对应的任务不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败（事务回滚）。
+
+        副作用:
+            在事务内删除该任务的产物与任务行；无外部 session 时额外清理孤儿 checkpoint 线程；
+            不触碰子任务、不卸载 runtime space（均由上层负责）。
+        """
+
+        if session is None:
+            with begin_immediate(self._session_factory) as session:
+                orphan_threads = self._delete_single_task_in_session(task_id, session)
+            if orphan_threads:
+                cleanup_orphan_checkpoint_threads(orphan_threads)
+            return orphan_threads
+        return self._delete_single_task_in_session(task_id, session)
+
+    def _delete_single_task_in_session(
+        self, task_id: int, session: Session
+    ) -> set[str]:
+        """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
+
+        顺序：先解除本任务行对 run / delegation 的引用（双向外键环），再按外键依赖逆序
+        删除 context / snapshot / 文件快照 / delegation / command / run，最后删除 task 行。
+        delegation 同时按 ``task_id`` 与 ``child_task_id`` 删除，覆盖本任务发起的委派与
+        创建本任务的委派记录。
+
+        参数:
+            task_id: 待删除任务的标识。
+            session: 处于事务中的 SQLAlchemy session（本方法不提交）。
+
+        返回:
+            已不再被主库剩余 run 引用的 checkpoint thread id 集合。
+
+        异常:
+            KeyError: 如果任务不存在。
+            sqlalchemy.exc.SQLAlchemyError: 如果任一删除失败（由调用方回滚）。
+
+        副作用:
+            在 session 内删除该任务的产物与任务行；不提交、不卸载 space。
+        """
+
+        self._task.ensure_task(session, task_id)  # 存在性守卫
+        # 解除 tasks.parent_run_id / delegation_id 对 run、delegation 的引用（双向外键环）。
+        self._task.clear_parent_run_id([task_id], session)
+        self._task.clear_delegation_id([task_id], session)
+
+        checkpoint_threads = self._turn.collect_checkpoint_threads_by_task_ids(session, [task_id])
+        run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
+
+        self._task_context_crud.delete_by_task_ids([task_id], session)
+        self._task_snapshot_crud.delete_by_task_ids([task_id], session)
+        self._file_snapshot.delete_by_task_ids([task_id], session)
+        # delegation 同时覆盖 task_id / child_task_id 两个外键方向。
+        self._delegation.delete_by_task_ids([task_id], session)
+        # command.run_id 外键指向 run，必须先删 command 再删 run。
+        self._command.delete_by_task_ids([task_id], session)
+        self._turn.delete_by_ids(run_ids, session)
+        self._task.delete_by_ids([task_id], session)
+
+        remaining_threads = self._turn.collect_checkpoint_threads_by_thread_ids(
+            session, checkpoint_threads
+        )
+        return checkpoint_threads - remaining_threads
