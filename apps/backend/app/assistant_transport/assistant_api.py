@@ -5,20 +5,15 @@
 它不把 assistant-ui 类型传入 core、service 或 storage。
 """
 
-import asyncio
-
 from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
 
 from app.app import app
 from app.assistant_transport.request import (
     AddMessageCommand,
+    AssistantAttachRequest,
     AssistantTransportRequest,
-)
-from app.assistant_transport.service.conversation_run_command_service import (
-    ConversationRunCommandService,
 )
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_task_snapshot_service import (
@@ -32,7 +27,6 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.service.depends import (
-    get_conversation_run_command_service,
     get_conversation_run_executor,
     get_conversation_task_snapshot_service,
     get_runtime,
@@ -42,28 +36,12 @@ from app.service.depends import (
 from app.task_runtime.service.task_service import TaskService
 
 
-class AssistantAttachRequest(BaseModel):
-    """只订阅已有 Conversation Run 的 transport 请求。"""
-
-    # assistant-ui resume requests carry the common transport envelope
-    # (commands/state/system/tools/callSettings/config). Attach only consumes
-    # identity fields and intentionally ignores that envelope.
-    model_config = ConfigDict(extra="ignore")
-
-    commands: list[object] = Field(default_factory=list)
-    taskId: int | None = Field(default=None, ge=1)
-    threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
-    runId: int = Field(ge=1)
-
-
 @app.post("/assistant")
 async def assistant_transport(
-    request: AssistantTransportRequest,
-    task_service: TaskService = Depends(get_task_service),
-    command_service: ConversationRunCommandService = Depends(get_conversation_run_command_service),
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
-    runtime: AgentRuntime = Depends(get_runtime),
-    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+        request: AssistantTransportRequest,
+        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+        runtime: AgentRuntime = Depends(get_runtime),
+        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> AssistantTransportResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
 
@@ -89,101 +67,21 @@ async def assistant_transport(
         None,
     )
 
-    try:
-        task = task_service.get_task(request.taskId)
-    except KeyError:
-        _raise_transport_error(
-            404,
-            "TASK_NOT_FOUND",
-            "对话任务不存在，请重新创建对话",
-            retryable=False,
-            command_id=command.commandId if command is not None else None,
-        )
+    mode = transport_service.classify_run_command(command, request.runId)
 
-    start_result = None
-    if command is None:
-        # 空 commands 只表示业务续跑；Assistant UI 的 transport attach 走独立
-        # resumeApi，不经过本入口。
-        if request.runId is None:
-            _raise_transport_error(
-                400,
-                "RUN_ID_REQUIRED",
-                "请先创建运行切片",
-                retryable=False,
-            )
-        if run_executor.is_cancelling(request.runId):
-            _raise_transport_error(
-                409,
-                "RUN_CANCELLING",
-                "运行正在取消，请稍后重新提交恢复请求",
-                retryable=True,
-                run_id=request.runId,
-            )
-        if run_executor.is_locally_running(request.runId):
-            _raise_transport_error(
-                409,
-                "RUN_ALREADY_RUNNING",
-                "对话运行当前正在运行，请使用 attach 重新订阅",
-                retryable=True,
-                run_id=request.runId,
-            )
-
-    if request.workspaceId is not None and task.workspace_id != request.workspaceId:
-        _raise_transport_error(
-            409,
-            "TASK_WORKSPACE_MISMATCH",
-            "对话任务不属于当前工作区",
-            retryable=False,
-            command_id=command.commandId if command is not None else None,
-        )
-    task_id = task.id
+    task_id = transport_service.ensure_run_target(
+        request=request,
+        command=command,
+        mode=mode,
+    )
 
     try:
-        if command is None:
-            assert request.runId is not None
-            start_result = await asyncio.to_thread(
-                command_service.resume_latest_run,
-                task_id=task_id,
-                run_id=request.runId,
-            )
-        else:
-            input_text = "\n".join(part.text for part in command.message.parts)
-            provider_id = request.providerId
-            model_name = request.modelName
-        if command is not None and request.runId is not None:
-            if run_executor.is_cancelling(request.runId):
-                _raise_transport_error(
-                    409,
-                    "RUN_CANCELLING",
-                    "运行正在取消，请稍后再编辑并重跑",
-                    retryable=True,
-                    run_id=request.runId,
-                )
-            start_result = await asyncio.to_thread(
-                command_service.edit_or_restart,
-                command_id=command.commandId,
-                command_type=command.type,
-                payload_hash=request.payload_hash(),
-                input_text=input_text,
-                task_id=task_id,
-                run_id=request.runId,
-                provider_id=provider_id,
-                model_name=model_name,
-                reasoning_effort=request.reasoningEffort,
-            )
-        elif command is not None:
-            start_result = await asyncio.to_thread(
-                command_service.start_or_attach,
-                command_id=command.commandId,
-                command_type=command.type,
-                payload_hash=request.payload_hash(),
-                input_text=input_text,
-                provider_id=provider_id,
-                model_name=model_name,
-                reasoning_effort=request.reasoningEffort,
-                task_id=task_id,
-            )
-        assert start_result is not None
+        start_result = await transport_service.prepare_run_start(
+            task_id=task_id,
+            command=command,
+            mode=mode,
+            request=request,
+        )
         run = start_result.run
         initial_state = start_result.initial_state
 
@@ -220,9 +118,9 @@ async def assistant_transport(
     except ValueError as exc:
         operation_code = (
             "RUN_NOT_RESUMABLE"
-            if command is None
+            if mode == "resume"
             else "RUN_NOT_REPLAYABLE"
-            if request.runId is not None
+            if mode == "edit"
             else "RUN_START_CONFLICT"
         )
         _raise_transport_error(
@@ -255,10 +153,10 @@ async def assistant_transport(
 
 @app.post("/tasks/{task_id}/assistant/attach")
 async def assistant_transport_attach(
-    task_id: int,
-    request: AssistantAttachRequest,
-    task_service: TaskService = Depends(get_task_service),
-    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+        task_id: int,
+        request: AssistantAttachRequest,
+        task_service: TaskService = Depends(get_task_service),
+        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> AssistantTransportResponse:
     """重新订阅已有 Run，不触发业务 resume。"""
 
@@ -299,11 +197,11 @@ async def assistant_transport_attach(
 
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
-    task_id: int,
-    task_service: TaskService = Depends(get_task_service),
-    snapshot_service: ConversationTaskSnapshotService = Depends(
-        get_conversation_task_snapshot_service
-    ),
+        task_id: int,
+        task_service: TaskService = Depends(get_task_service),
+        snapshot_service: ConversationTaskSnapshotService = Depends(
+            get_conversation_task_snapshot_service
+        ),
 ) -> ConversationStateSnapshot:
     """返回某任务的首屏历史 state（服务端权威对话视图）。
 
@@ -348,8 +246,8 @@ async def assistant_transport_state(
 
 @app.post("/runs/{run_id}/cancel")
 async def cancel_run(
-    run_id: int,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+        run_id: int,
+        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> Response:
     """显式取消一个 Conversation Run。
 

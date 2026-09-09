@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Literal
+
+from sqlalchemy.orm import Session
 
 from app.assistant_transport.service.conversation_task_snapshot_service import (
     ConversationTaskSnapshotService,
@@ -18,16 +23,24 @@ from app.service.task.conversation_task_context_service import ConversationTaskC
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
+RunCommandMode = Literal["new", "edit", "resume"]
+
 
 @dataclass(frozen=True)
 class ConversationRunStartResult:
-    """表示一次命令创建或幂等重连的结果。"""
+    """表示一次 Run 命令分类、创建或幂等重连的结果。
+
+    ``mode`` 表示业务语义，``execution_mode`` 表示 AgentRuntime 的执行方式。
+    编辑重跑因此是 ``mode="edit"`` 与 ``execution_mode="fresh"`` 的组合，且保留
+    原 Conversation Run id。
+    """
 
     command: ConversationCommandRecord | None
     run: ConversationRunRecord
     initial_state: ConversationStateSnapshot
     created: bool
     execution_mode: ExecutionMode = "fresh"
+    mode: RunCommandMode = "new"
 
 
 class ConversationRunCommandService:
@@ -43,7 +56,11 @@ class ConversationRunCommandService:
         self._task = service_depends.get_task_service()
 
     def _resolve_existing_command(
-        self, task_id: int, command_id: str, payload_hash: str
+        self,
+        task_id: int,
+        command_id: str,
+        payload_hash: str,
+        mode: RunCommandMode,
     ) -> ConversationRunStartResult | None:
         """查找并校验已存在的同 command_id 命令，命中则返回既有 run 的续订结果。
 
@@ -56,6 +73,7 @@ class ConversationRunCommandService:
             task_id: 任务标识。
             command_id: 幂等命令标识。
             payload_hash: 本次请求的 payload 指纹。
+            mode: 本次请求归一化后的业务模式。
 
         返回:
             命中且校验通过的 ``ConversationRunStartResult``（created=False）；
@@ -85,7 +103,22 @@ class ConversationRunCommandService:
             initial_state=self._snapshots.ensure_state_snapshot(task_id),
             created=False,
             execution_mode="fresh",
+            mode=mode,
         )
+
+    def _assert_no_active_run(self, task_id: int, session: Session | None = None) -> None:
+        """任务已有 active run 时拒绝新的 run 占用请求。"""
+
+        if self._conversation_run.have_run_in_runing(task_id, session=session):
+            raise ValueError(f"task {task_id} already has an active run")
+
+    @contextmanager
+    def _task_run_operation(self, task_id: int) -> Iterator[None]:
+        """在 task 运行时空间内执行一个带超时的独占操作。"""
+
+        task_space = task_runtime_spaces.get_or_create(task_id)
+        with task_space.operation(timeout=10):
+            yield
 
     def start_or_attach(
         self,
@@ -126,17 +159,15 @@ class ConversationRunCommandService:
         if task_id is None:
             raise ValueError("task_id is required for Assistant Transport runs")
 
-        task_space = task_runtime_spaces.get_or_create(task_id)
-        with task_space.operation(timeout=10):
+        with self._task_run_operation(task_id):
             existing_result = self._resolve_existing_command(
-                task_id, command_id, payload_hash
+                task_id, command_id, payload_hash, "new"
             )
             if existing_result is not None:
                 return existing_result
 
             with main_session_factory().begin() as session:
-                if self._conversation_run.have_run_in_runing(task_id, session):
-                    raise ValueError(f"task {task_id} already has an active run")
+                self._assert_no_active_run(task_id, session)
                 run = self._conversation_run.create_run(
                     task_id=task_id,
                     input_text=input_text,
@@ -161,6 +192,7 @@ class ConversationRunCommandService:
                 initial_state=snapshot,
                 created=True,
                 execution_mode="fresh",
+                mode="new",
             )
 
     def edit_or_restart(
@@ -182,22 +214,20 @@ class ConversationRunCommandService:
         但会换用新的 checkpoint thread；Assistant UI ``sourceId`` 不参与本用例。
         """
 
-        task_space = task_runtime_spaces.get_or_create(task_id)
-        with task_space.operation(timeout=10):
+        with self._task_run_operation(task_id):
             latest_run = self._task.get_latest_run(task_id)
             if latest_run is None or latest_run.id != run_id:
                 raise ValueError(f"run {run_id} does not belong to task {task_id}")
 
             existing_result = self._resolve_existing_command(
-                task_id, command_id, payload_hash
+                task_id, command_id, payload_hash, "edit"
             )
             if existing_result is not None:
                 return existing_result
 
 
             with main_session_factory().begin() as session:
-                if self._conversation_run.have_run_in_runing(task_id, session=session):
-                    raise ValueError(f"task {task_id} already has an active run")
+                self._assert_no_active_run(task_id, session)
                 reset = self._conversation_run.reset_run_for_edit(
                     latest_run.id,
                     input_text,
@@ -227,6 +257,7 @@ class ConversationRunCommandService:
                 initial_state=snapshot,
                 created=True,
                 execution_mode="fresh",
+                mode="edit",
             )
 
     def resume_latest_run(
@@ -238,8 +269,7 @@ class ConversationRunCommandService:
         完成，Transport 层只负责随后建立 snapshot response。
         """
 
-        task_space = task_runtime_spaces.get_or_create(task_id)
-        with task_space.operation(timeout=10):
+        with self._task_run_operation(task_id):
             latest_run = self._task.get_latest_run(task_id)
             if (
                 latest_run is None
@@ -265,4 +295,5 @@ class ConversationRunCommandService:
                 initial_state=state,
                 created=True,
                 execution_mode="resume",
+                mode="resume",
             )

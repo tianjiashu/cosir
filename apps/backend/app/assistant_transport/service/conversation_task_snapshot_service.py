@@ -11,6 +11,7 @@ from typing import Any, ClassVar, cast
 
 from sqlalchemy.orm import Session
 
+from app.assistant_transport.event import RunStatusChangedEvent
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
@@ -21,7 +22,6 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.config.logging.logger import log
-from app.core.workflows.event import RunStatusChangedEvent
 from app.models import ConversationRunStatus
 from app.models.errors.task_fork_errors import SnapshotNotReadyError
 from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud

@@ -7,10 +7,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from app.assistant_transport.event import ToolCallsSettledEvent
 from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector
 from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflows.event import ToolCallsSettledEvent
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service.depends import get_conversation_run_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
