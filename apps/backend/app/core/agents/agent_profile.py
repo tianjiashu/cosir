@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,20 @@ from app.models import ConversationRunRecord
 if TYPE_CHECKING:
     from app.core.tools.schemas.tool_definition import ToolDefinition
     from app.core.workflows.agent_workflow import AgentWorkflow
+
+
+class AgentProfileType(str, Enum):
+    """Agent 分类，决定它在运行时如何被暴露与调度。
+
+    取值：
+        MAIN: 主 Agent，全局唯一（系统内置，不对用户开放配置）。
+        CHILD: 供主 Agent 委派的子 Agent（出现在委派摘要、可被 delegation 调用）。
+        HIDDEN: 隐藏在系统内部的 Agent（如上下文压缩），不向委派摘要暴露、不可被委派。
+    """
+
+    MAIN = "main"
+    CHILD = "child"
+    HIDDEN = "hidden"
 
 
 def _default_workflow() -> AgentWorkflow:
@@ -31,38 +46,39 @@ def _default_workflow() -> AgentWorkflow:
 @dataclass
 class AgentProfile:
     """描述某个任务的 Agent 执行主体（能力事实源）。
+    description 应该是"选择指南"，prompt_file_path 应该是"执行协议"，而本次
+    delegate_task.prompt 才是"具体工作单"
 
     字段：
         agent_id: 持久化在任务和事件上的稳定 Agent 标识。
         role: 人类可读的 Agent 角色。
-        description: 职责/能力/适用场景与约束的唯一文本描述（delegate_task 中暴露给父 Agent）。
+        description: 子 Agent 的职责/能力/适用场景与约束描述（delegate_task 中暴露给父 Agent）；
+            主 Agent 不设置此字段。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
         provider_id: 模型厂商 id（None 时由 model_name 推导）。
         model_name: 模型名称（可带 provider 前缀）。2026-08-18 决议：内置 profile 不内置
             默认模型，默认 None；None 表示未配置，由前端优先校验、后端兜底报错。
         model_settings: 模型覆盖配置（``ModelSettings``）。
-        hidden: 是否隐藏 profile（内置委派子 Agent 为 True）。
+        agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
         run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
             单例上不原地写）。
-        main_agent: 是否主 Agent。
         runtime_event_loop: 运行时事件循环（可为 None）。
         prompt_file_path: 关联的 prompt 文件路径（可为 None）。
     """
 
     agent_id: str
     role: str
-    description: str
     allowed_tools: list[str]
+    agent_type: AgentProfileType
+    description: str | None = field(default=None, kw_only=True)
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     provider_id: int | None = None
     model_name: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
-    hidden: bool = False
     max_steps: int = 1000
     run: ConversationRunRecord | None = None
-    main_agent: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     prompt_file_path: Path | None = None
 
@@ -125,6 +141,7 @@ class AgentProfile:
             "role": self.role,
             "description": self.description,
             "allowed_tools": self.allowed_tools,
+            "agent_type": self.agent_type.value,
             "workflow": self.workflow.workflow_id,
             "model_name": self.model_name,
             "max_steps": self.max_steps,

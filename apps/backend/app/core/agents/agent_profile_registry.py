@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 
 
 class AgentProfileRegistry:
@@ -91,8 +91,8 @@ class AgentProfileRegistry:
     def child_agent_summary(self) -> str:
         """把注册表中全部委派子 Agent 投影为面向父 Agent 的能力摘要字符串。
 
-        直接基于 ``AgentProfile`` 的 ``description`` 与 ``allowed_tools`` 渲染可读文本，
-        把各子 Agent 摘要拼装为面向父 Agent 的可用目标清单。
+        直接基于类型为 ``CHILD`` 的 ``AgentProfile`` 的 ``description`` 与 ``allowed_tools``
+        渲染可读文本，把各委派子 Agent 摘要拼装为面向父 Agent 的可用目标清单。
 
         参数:
             无（方法消费实例自身的 ``list`` 接口返回全部已注册 profile）。
@@ -110,12 +110,12 @@ class AgentProfileRegistry:
 
         blocks: list[str] = []
         for profile in self.list():
-            if not profile.main_agent:
+            if profile.agent_type is not AgentProfileType.CHILD:
                 continue
             tool_capability_summary = "tools: " + ", ".join(profile.allowed_tools)
             blocks.append(
                 f"agent_id: {profile.agent_id} ==> role: {profile.role} ==> "
-                f"description: {profile.description} | {tool_capability_summary}"
+                f"description: {profile.description or ''} | {tool_capability_summary}"
             )
 
         if not blocks:
@@ -123,10 +123,22 @@ class AgentProfileRegistry:
         return "Available child agents:\n" + "\n".join(blocks)
 
     def child_agent_ids(self) -> set[str]:
-        """
-        列举当前目录中所有已注册的委派子 Agent 的 agent_id。
+        """列举当前目录中所有可委派子 Agent（``AgentProfileType.CHILD``）的 ID。
 
         参数:
             无。
+
+        返回:
+            已注册且类型为 ``CHILD`` 的 Agent ID 集合（主 Agent 与隐藏 Agent 均被排除）。
+
+        异常:
+            无。
+
+        副作用:
+            无；仅读取内存中的 profile 目录。
         """
-        return {profile.agent_id for profile in self._profiles.values() if profile.main_agent}
+        return {
+            profile.agent_id
+            for profile in self._profiles.values()
+            if profile.agent_type is AgentProfileType.CHILD
+        }
