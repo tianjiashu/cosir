@@ -9,6 +9,6 @@
   Conversation Run 状态与执行编排（``ConversationRunExecutor`` / ``ConversationRunService``）、
   run→workspace 路径解析
   （``ConversationRunWorkspaceResolver``）、任务级变更集查询与保留/撤销（``change_set`` 子包）。
-- 不负责：直接数据库读写（委托给 ``app.storage.crud`` 与 ``app.storage.cascade_deletion``）；
-  原子级联删除（归 ``CascadeDeleter``）。
+- 不负责：直接数据库读写（委托给 ``app.storage.crud``）；单任务 / 工作区级联删除的
+  内部编排细节（归 ``TaskService`` / ``WorkspaceService``）。
 """

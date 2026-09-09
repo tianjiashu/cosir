@@ -135,7 +135,9 @@ class ConversationTaskContextService:
             )
             next_sequence += 1
 
-    def delete_by_run_id(self, task_id: int, run_id: int) -> None:
+    def delete_by_run_id(
+        self, task_id: int, run_id: int, session: Session | None = None
+    ) -> None:
         """删除指定 run 的全部 context entry。
 
         参数:
@@ -145,11 +147,14 @@ class ConversationTaskContextService:
         返回:
             无。
 
+        参数:
+            session: 可选外部事务 Session；传入时复用该事务，不自行提交。
+
         副作用:
-            删除匹配行；由 CRUD 自建事务并提交。
+            删除匹配行；未传入 session 时由 CRUD 自建事务并提交。
         """
 
-        self._crud.delete_by_run_id(task_id, run_id)
+        self._crud.delete_by_run_id(task_id, run_id, session=session)
 
     def recover_interrupted_run(self, task_id: int, run_id: int) -> None:
         """为崩溃遗留的未闭合 tool call 补写 context 终止消息。

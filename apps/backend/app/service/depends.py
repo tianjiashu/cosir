@@ -36,10 +36,12 @@ if TYPE_CHECKING:
     )
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
     from app.service.task.workspace_service import WorkspaceService
-    from app.storage.cascade_deletion import CascadeDeleter
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
+    from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+    from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud
     from app.storage.crud.delegation_crud import DelegationCrud
+    from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
     from app.storage.crud.log_crud import LogCrud
     from app.storage.crud.model_entry_crud import ModelEntryCrud
     from app.storage.crud.provider_crud import ProviderCrud
@@ -130,8 +132,10 @@ def close_service_dependencies() -> None:
     """
 
     from app.storage.store_engines import close_storage
+    from app.task_runtime.workspace_operation_registry import workspace_operations
 
     reset_service_dependencies()
+    workspace_operations.close()
     close_storage()
 
 
@@ -221,28 +225,6 @@ def get_delegation_crud() -> DelegationCrud:
     from app.storage.crud.delegation_crud import DelegationCrud
 
     return DelegationCrud()
-
-
-@lru_cache(maxsize=1)
-def get_cascade_deleter() -> CascadeDeleter:
-    """Return the process-local CascadeDeleter singleton.
-
-    参数:
-        无。
-
-    返回:
-        CascadeDeleter 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 CascadeDeleter。
-    """
-
-    from app.storage.cascade_deletion import CascadeDeleter
-
-    return CascadeDeleter()
 
 
 @lru_cache(maxsize=1)
@@ -432,6 +414,30 @@ def get_conversation_command_crud() -> ConversationCommandCrud:
 
 
 @lru_cache(maxsize=1)
+def get_conversation_task_context_crud() -> ConversationTaskContextCrud:
+    """返回进程级 ConversationTaskContextCrud 单例。"""
+    from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+
+    return ConversationTaskContextCrud()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_task_snapshot_crud() -> ConversationTaskSnapshotCrud:
+    """返回进程级 ConversationTaskSnapshotCrud 单例。"""
+    from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud
+
+    return ConversationTaskSnapshotCrud()
+
+
+@lru_cache(maxsize=1)
+def get_file_snapshot_crud() -> FileSnapshotCrud:
+    """返回进程级 FileSnapshotCrud 单例。"""
+    from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
+
+    return FileSnapshotCrud()
+
+
+@lru_cache(maxsize=1)
 def get_transport_assistant_service() -> TransportAssistantService:
     """返回进程级 Assistant Transport snapshot 订阅 service 单例。"""
     from app.assistant_transport.service.transport_assistant_service import (
@@ -581,13 +587,15 @@ def reset_service_dependencies() -> None:
     get_log_crud.cache_clear()
     get_delegation_service.cache_clear()
     get_delegation_crud.cache_clear()
-    get_cascade_deleter.cache_clear()
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()
     get_task_crud.cache_clear()
     get_provider_crud.cache_clear()
     get_model_entry_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
+    get_conversation_task_context_crud.cache_clear()
+    get_conversation_task_snapshot_crud.cache_clear()
+    get_file_snapshot_crud.cache_clear()
     get_conversation_run_command_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_transport_assistant_service.cache_clear()

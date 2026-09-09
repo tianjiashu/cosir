@@ -174,10 +174,12 @@ class ConversationRunService:
         provider_id: int | None = None,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
+        session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """原地重置一个已结束 run，替换输入并创建新的 checkpoint 身份。
 
-        仅允许非 active run 编辑；调用方负责在同一 task 锁内清理 context 与 snapshot。
+            仅允许非 active run 编辑；调用方负责在同一 task 锁内清理 context 与 snapshot。
+            传入 ``session`` 时复用外部事务且不自行提交。
         """
 
         if not input_text.strip():
@@ -196,6 +198,7 @@ class ConversationRunService:
             provider_id=provider_id,
             model_name=model_name,
             reasoning_effort=reasoning_effort,
+            session=session,
         )
 
     def resume_cancelled_run(self, run_id: int) -> ConversationRunRecord | None:
