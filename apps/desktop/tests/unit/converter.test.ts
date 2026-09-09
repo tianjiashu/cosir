@@ -13,6 +13,10 @@ const emptyState = (): TransportState => ({
   run: { runId: null, status: "idle" },
   approvals: {},
   context_usage: 0,
+  context_revision: null,
+  usage_run_id: null,
+  context_usage_used: null,
+  context_window_total: null,
   usage: {
     input_tokens: 0,
     output_tokens: 0,
@@ -70,8 +74,38 @@ describe("assistant transport converter", () => {
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: { backendStatus: "pending" } });
     expect(running).toMatchObject({ artifact: { backendStatus: "running" } });
     expect(completed).toMatchObject({ result: { exit_code: 0 }, isError: false, artifact: { backendStatus: "completed", data: { kind: "terminal-result" } } });
-    expect(failed).toMatchObject({ isError: true, result: { kind: "tool-error", message: "denied" }, artifact: { backendStatus: "failed", errorCode: "DENIED" } });
-    expect(cancelled).toMatchObject({ isError: false, result: { kind: "tool-cancelled" }, artifact: { backendStatus: "cancelled" } });
+    expect(failed).toMatchObject({ isError: true, artifact: { backendStatus: "failed", errorCode: "DENIED" } });
+    expect(failed).not.toHaveProperty("result");
+    expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled" } });
+    expect(cancelled).not.toHaveProperty("result");
+  });
+
+  it("keeps web extract UI data status-only and drops its document result", () => {
+    const converted = toToolCallPart(tool("completed", {
+      toolName: "web_extract",
+      result: "private document body",
+      data: {
+        kind: "web-extract-status",
+        provider: "fake",
+        sites: [{
+          site: "example.com",
+          url: "https://example.com",
+          status: "success",
+          content: "should never render",
+        }],
+      },
+    }));
+
+    expect(converted).not.toHaveProperty("result");
+    expect(converted).toMatchObject({
+      artifact: {
+        data: {
+          kind: "web-extract-status",
+          sites: [{ site: "example.com", status: "success" }],
+        },
+      },
+    });
+    expect(JSON.stringify(converted)).not.toContain("should never render");
   });
 
   it("does not treat unknown message status as success", () => {
@@ -95,14 +129,20 @@ describe("assistant transport converter", () => {
   it("keeps canonical errors visible and shows pending user commands optimistically", () => {
     const state = emptyState();
     state.error = { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型", retryable: false };
+    const command = { type: "add-message", message: { role: "user", parts: [{ type: "text", text: "你好" }] } };
     const result = toTransportThreadView(state, {
       isSending: true,
-      pendingCommands: [{ type: "add-message", message: { role: "user", parts: [{ type: "text", text: "你好" }] } }],
+      pendingCommands: [command],
+    });
+    const repeated = toTransportThreadView(state, {
+      isSending: true,
+      pendingCommands: [command],
     });
     expect(result.isRunning).toBe(true);
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]).toMatchObject({ role: "assistant", status: { type: "incomplete", reason: "error" } });
-    expect(result.messages[1]).toMatchObject({ id: "pending-0", role: "user" });
+    expect(result.messages[1]).toMatchObject({ id: expect.stringMatching(/^pending-transport-/), role: "user" });
+    expect(repeated.messages[1].id).toBe(result.messages[1].id);
   });
 
   it("marks only the last assistant message in each run for task fork actions", () => {

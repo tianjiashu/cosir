@@ -6,7 +6,7 @@ import {
   getTransportRunId,
   isEditableLatestRunUserMessage,
   isLatestUserMessage,
-  isResumableUserCancelledRun,
+  isResumableCancelledRun,
 } from "@/lib/assistant/conversation-actions";
 import type { TransportState } from "@/lib/assistant/contract";
 
@@ -23,6 +23,10 @@ const state = (overrides: Partial<TransportState> = {}): TransportState => ({
     reasoning_tokens: 0,
   },
   context_usage: 0,
+  context_revision: null,
+  usage_run_id: null,
+  context_usage_used: null,
+  context_window_total: null,
   error: null,
   ...overrides,
 });
@@ -57,17 +61,28 @@ describe("conversation actions", () => {
     expect(isEditableLatestRunUserMessage({ ...snapshot, run: { runId: 3, status: "completed" } }, "u2")).toBe(false);
   });
 
-  it("requires a user-cancelled assistant message before showing resume", () => {
+  it("allows every cancelled run regardless of end reason", () => {
     const resumable = state({
       run: { runId: 7, status: "cancelled" },
-      messages: [{ id: "a7", role: "assistant", runId: 7, status: "cancelled", endReason: "user_cancelled", parts: [] }],
+      messages: [
+        { id: "u7", role: "user", runId: 7, status: "completed", parts: [] },
+        { id: "a7", role: "assistant", runId: 7, status: "cancelled", endReason: "user_cancelled", parts: [] },
+      ],
     });
-    expect(isResumableUserCancelledRun(resumable)).toBe(true);
-    expect(isResumableUserCancelledRun({
+    expect(isResumableCancelledRun(resumable)).toBe(true);
+    expect(isResumableCancelledRun({
       ...resumable,
-      messages: [{ ...resumable.messages[0], endReason: "runtime_cancelled" }],
-    })).toBe(false);
-    expect(isResumableUserCancelledRun({ ...resumable, run: { runId: 7, status: "completed" } })).toBe(false);
+      messages: resumable.messages.map((message) => message.id === "a7"
+        ? { ...message, endReason: "runtime_cancelled" }
+        : message),
+    })).toBe(true);
+    expect(isResumableCancelledRun({
+      ...resumable,
+      messages: resumable.messages.map((message) => message.id === "a7"
+        ? { ...message, endReason: "runtime_restarted" }
+        : message),
+    })).toBe(true);
+    expect(isResumableCancelledRun({ ...resumable, run: { runId: 7, status: "completed" } })).toBe(false);
   });
 
   it("keeps the three composer button states deterministic", () => {

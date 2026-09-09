@@ -25,6 +25,23 @@ type UserAddMessageCommand = {
   };
 };
 
+const optimisticCommandIds = new WeakMap<object, string>();
+
+/**
+ * 为一个 assistant-ui command 提供稳定的幂等标识。
+ *
+ * WeakMap 保证同一个 runtime 内，converter 和 request transformer 对同一
+ * command 使用同一个 ID；UUID 保证 WebView/页面重载后重新创建的模块实例
+ * 不会从相同的递增序列重新开始，避免命令 ID 撞上后端已有记录。
+ */
+export function getOrCreateTransportCommandId(command: object): string {
+  const existing = optimisticCommandIds.get(command);
+  if (existing) return existing;
+  const commandId = `transport-${globalThis.crypto.randomUUID()}`;
+  optimisticCommandIds.set(command, commandId);
+  return commandId;
+}
+
 function isUserAddMessageCommand(command: unknown): command is UserAddMessageCommand {
   if (typeof command !== "object" || command === null) return false;
   const candidate = command as { type?: unknown; message?: unknown };
@@ -61,6 +78,35 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
   return "unknown";
 }
 
+function sanitizeWebToolData(toolName: string, value: TransportToolCallPart["data"]): TransportToolCallPart["data"] {
+  if (toolName === "web_extract" && (!value || value.kind !== "web-extract-status")) {
+    return null;
+  }
+  if (toolName === "web_extract" && value && value.kind === "web-extract-status") {
+    return {
+      kind: "web-extract-status",
+      provider: typeof value.provider === "string" ? value.provider : "",
+      sites: Array.isArray(value.sites)
+        ? value.sites.flatMap((site) => {
+            if (typeof site !== "object" || site === null) return [];
+            const candidate = site as Record<string, unknown>;
+            if (typeof candidate.site !== "string" || typeof candidate.url !== "string") return [];
+            const status = candidate.status;
+            if (status !== "pending" && status !== "running" && status !== "success" && status !== "failed" && status !== "truncated") return [];
+            return [{
+              site: candidate.site,
+              url: candidate.url,
+              status,
+              ...(typeof candidate.error_code === "string" ? { error_code: candidate.error_code } : {}),
+              ...(candidate.truncated === true ? { truncated: true } : {}),
+            }];
+          })
+        : [],
+    };
+  }
+  return value;
+}
+
 /**
  * 把后端 tool-call part 映射为 assistant-ui part。
  *
@@ -73,7 +119,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
   const artifact = {
     backendStatus,
     presentation: part.presentation ?? {},
-    data: part.data ?? null,
+    data: sanitizeWebToolData(part.toolName, part.data ?? null),
     error: part.error ?? null,
     errorCode: part.errorCode ?? null,
   };
@@ -87,11 +133,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       args: args as ReadonlyJSONObject,
       argsText: JSON.stringify(args, null, 2),
       artifact,
-      result: {
-        kind: "tool-error",
-        message: typeof part.error === "string" ? part.error : "工具执行失败",
-        data: part.result ?? null,
-      },
       isError: true,
     };
   }
@@ -104,7 +145,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       args: args as ReadonlyJSONObject,
       argsText: JSON.stringify(args, null, 2),
       artifact,
-      result: { kind: "tool-cancelled" },
       isError: false,
     };
   }
@@ -122,6 +162,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     };
   }
 
+  const safeResult = part.toolName === "web_search" || part.toolName === "web_extract" ? undefined : part.result;
   return {
     type: "tool-call",
     toolCallId: part.toolCallId,
@@ -129,8 +170,8 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     args: args as ReadonlyJSONObject,
     argsText: JSON.stringify(args, null, 2),
     artifact,
-    ...(backendStatus === "completed" && part.result !== undefined
-      ? { result: part.result, isError: part.isError ?? false }
+    ...(backendStatus === "completed" && safeResult !== undefined
+      ? { result: safeResult, isError: part.isError ?? false }
       : {}),
   };
 }
@@ -241,13 +282,13 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
     : null;
 }
 
-function toPendingUserMessage(command: UserAddMessageCommand, index: number): ThreadMessage | null {
+function toPendingUserMessage(command: UserAddMessageCommand): ThreadMessage | null {
   const parts = command.message.parts
     .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string" && part.text.length > 0)
     .map((part) => ({ type: "text" as const, text: part.text }));
   if (parts.length === 0) return null;
   return toThreadMessage({
-    id: `pending-${index}`,
+    id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
     status: "completed",
     endReason: null,
@@ -278,7 +319,7 @@ export function toTransportThreadView(
   connectionMetadata: { pendingCommands: readonly unknown[]; isSending: boolean },
 ): { messages: ThreadMessage[]; isRunning: boolean; state: ReadonlyJSONValue } {
   const pendingMessages = connectionMetadata.pendingCommands
-    .map((command, index) => isUserAddMessageCommand(command) ? toPendingUserMessage(command, index) : null)
+    .map((command) => isUserAddMessageCommand(command) ? toPendingUserMessage(command) : null)
     .filter((message): message is ThreadMessage => message !== null);
   const lastAssistantMessageIds = new Set<string>();
   const seenRunIds = new Set<number>();

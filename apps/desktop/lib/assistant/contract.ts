@@ -35,7 +35,39 @@ export type TransportToolPresentation = {
   [key: string]: unknown;
 };
 
-export type TransportToolData = Record<string, unknown>;
+export type WebSearchResultData = {
+  [key: string]: unknown;
+  kind: "web-search-results";
+  query: string;
+  provider?: string;
+  results: Array<{
+    title: string;
+    url: string;
+    description?: string;
+    position?: number;
+  }>;
+};
+
+export type WebExtractStatusData = {
+  [key: string]: unknown;
+  kind: "web-extract-status";
+  provider?: string;
+  sites: Array<{
+    site: string;
+    url: string;
+    status: "pending" | "running" | "success" | "failed" | "truncated";
+    error_code?: string;
+    truncated?: boolean;
+  }>;
+};
+
+/** 非 Web 工具的兼容展示数据；Web 工具使用上面的判别联合。 */
+export type GenericTransportToolData = {
+  kind?: string;
+  [key: string]: unknown;
+};
+
+export type TransportToolData = GenericTransportToolData;
 
 /**
  * 文本 part：Transport 协议中的纯文本片段。
@@ -143,11 +175,19 @@ export type TransportState = {
     output_tokens: number;
     total_tokens: number;
     cache_hit_tokens: number;
-    cache_miss_tokens: number;
+    cache_miss_tokens: number | null;
     reasoning_tokens: number;
   };
+  /** 顶层 usage 所属的 Conversation Run；null 表示尚未有可关联的 run。 */
+  usage_run_id: number | null;
   /** 当前上下文窗口占用比例；允许大于 1 表示超额。 */
   context_usage: number;
+  /** 上下文测量的单调 revision；null 表示尚未完成测量。 */
+  context_revision: number | null;
+  /** 当前有效上下文已用 token；null 表示尚未完成有效测量。 */
+  context_usage_used: number | null;
+  /** 当前有效上下文窗口上限；null 表示后端暂时无法确定。 */
+  context_window_total: number | null;
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;
 };

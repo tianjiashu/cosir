@@ -47,6 +47,13 @@ export async function requestRaw(
       },
     });
   } catch (error) {
+    // Abort is an expected lifecycle signal for shared catalog reloads and
+    // runtime teardown, not an HTTP failure worth surfacing in diagnostics.
+    const isAbort =
+      typeof DOMException !== "undefined" &&
+      error instanceof DOMException &&
+      error.name === "AbortError";
+    if (isAbort) throw error;
     await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
       traceId,
       data: { path, method: requestInit.method ?? "GET" },

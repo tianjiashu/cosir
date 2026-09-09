@@ -40,21 +40,17 @@ export function isEditableLatestRunUserMessage(
 }
 
 /**
- * 只有用户主动取消的 run 才允许继续运行。
+ * 只要当前 canonical run 是 cancelled 就允许用户继续运行。
  *
- * ``cancelled`` 也可能来自运行时取消、后端收尾或其他不可恢复原因；
- * endReason 是后端保留的事实字段，不能仅凭 status 推断可恢复性。
+ * endReason 是后端保留的展示/审计事实，不参与 resume 资格判断。
  */
-export function isResumableUserCancelledRun(state: TransportState | null | undefined): boolean {
+export function isResumableCancelledRun(state: TransportState | null | undefined): boolean {
   if (!state || typeof state.run !== "object" || state.run === null || !Array.isArray(state.messages)) return false;
   const runId = state.run.runId;
   if (runId == null || state.run.status !== "cancelled") return false;
 
   return state.messages.some(
-    (message) =>
-      message.role === "assistant" &&
-      message.runId === runId &&
-      message.endReason === "user_cancelled",
+    (message) => message.role === "user" && message.runId === runId,
   );
 }
 

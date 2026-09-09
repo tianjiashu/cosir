@@ -8,6 +8,10 @@ const validSnapshot = (): TransportState => ({
   run: { runId: null, status: "idle" },
   approvals: {},
   context_usage: 0,
+  context_revision: null,
+  usage_run_id: null,
+  context_usage_used: null,
+  context_window_total: null,
   usage: {
     input_tokens: 0,
     output_tokens: 0,

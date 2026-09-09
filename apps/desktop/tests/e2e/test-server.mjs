@@ -57,6 +57,10 @@ const emptyState = () => ({
   run: { runId: null, status: "idle" },
   approvals: {},
   context_usage: 0,
+  context_revision: null,
+  usage_run_id: null,
+  context_usage_used: null,
+  context_window_total: null,
   usage: emptyUsage(),
   error: null,
 });
@@ -83,6 +87,85 @@ function stateWithExchange(previous, text, runId, assistantText, status) {
   );
   next.run = { runId, status: status === "completed" ? "completed" : "running" };
   return next;
+}
+
+function applyUsageFixture(state, runId, secondRun) {
+  const input = secondRun ? 2_000 : 1_000;
+  const output = secondRun ? 500 : 500;
+  const total = input + output;
+  const contextUsed = secondRun ? 80_000 : 70_000;
+  state.usage_run_id = runId;
+  state.usage = {
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: total,
+    cache_hit_tokens: secondRun ? 200 : 100,
+    cache_miss_tokens: secondRun ? 50 : null,
+    reasoning_tokens: secondRun ? 40 : 20,
+  };
+  state.context_usage = contextUsed / 100_000;
+  state.context_revision = runId;
+  state.context_usage_used = contextUsed;
+  state.context_window_total = 100_000;
+}
+
+function toolTraceState() {
+  return {
+    messages: [
+      {
+        id: "user-tool-trace",
+        runId: 77,
+        role: "user",
+        status: "completed",
+        endReason: "stop",
+        parts: [{ type: "text", text: "检查项目", status: "completed" }],
+      },
+      {
+        id: "assistant-tool-trace",
+        runId: 77,
+        role: "assistant",
+        status: "completed",
+        endReason: "stop",
+        parts: [
+          { type: "reasoning", text: "先分析项目结构", status: "completed" },
+          {
+            type: "tool-call",
+            toolCallId: "trace-read-file",
+            toolName: "read_file",
+            args: { path: "README.md" },
+            status: "completed",
+            result: null,
+            error: null,
+            presentation: { verb: "读取文件", icon: "eye", expandable: false, expand_layout: "none" },
+            data: null,
+            isError: false,
+          },
+          {
+            type: "tool-call",
+            toolCallId: "trace-search-files",
+            toolName: "search_files",
+            args: { pattern: "assistant-ui" },
+            status: "completed",
+            result: null,
+            error: null,
+            presentation: { verb: "搜索文件", icon: "search", expandable: false, expand_layout: "none" },
+            data: null,
+            isError: false,
+          },
+          { type: "text", text: "检查完成", status: "completed" },
+        ],
+      },
+    ],
+    run: { runId: null, status: "idle" },
+    approvals: {},
+    context_usage: 0,
+    context_revision: null,
+    usage_run_id: null,
+    context_usage_used: null,
+    context_window_total: null,
+    usage: emptyUsage(),
+    error: null,
+  };
 }
 
 function jsonResponse(res, status, value) {
@@ -284,6 +367,10 @@ async function handleAssistant(req, res, body) {
   }
 
   const finalState = stateWithExchange(branchBase, text, runId, finalText, "completed");
+  if (text.startsWith("usage-regression")) {
+    applyUsageFixture(initialState, runId, text.includes("second"));
+    applyUsageFixture(finalState, runId, text.includes("second"));
+  }
   states.set(taskId, finalState);
 
   res.setHeader("X-Cosir-Task-Id", String(taskId));
@@ -322,6 +409,23 @@ async function handleResume(req, res, body) {
   res.setHeader("X-Cosir-Task-Id", String(taskId));
   res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
   await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration);
+}
+
+async function handleAttach(req, res, body) {
+  const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
+  const previous = states.get(taskId);
+  const lastMessage = previous?.messages.at(-1);
+  // A business resume may finish its executor before the UI's attach request
+  // arrives. Replay the terminal canonical snapshot so the UI does not miss
+  // the result merely because the two local HTTP streams are independent.
+  if (previous?.run.status === "completed" && lastMessage?.role === "assistant") {
+    const assistantIndex = previous.messages.length - 1;
+    res.setHeader("X-Cosir-Task-Id", String(taskId));
+    res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
+    await streamState(res, previous, previous, assistantIndex, [], previous.run.runId, testGeneration);
+    return;
+  }
+  await handleResume(req, res, body);
 }
 
 const server = createServer(async (req, res) => {
@@ -427,6 +531,19 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-tool-trace") {
+    tasks.set(TASK_ID, {
+      task_id: TASK_ID,
+      workspace_id: WORKSPACE_ID,
+      title: "工具追踪视觉回归",
+      execution_status: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    states.set(TASK_ID, toolTraceState());
+    jsonResponse(res, 200, { task_id: TASK_ID });
+    return;
+  }
   if (req.method === "POST" && url.pathname.startsWith("/runs/") && url.pathname.endsWith("/cancel")) {
     const runId = Number(url.pathname.split("/")[2]);
     cancelledRuns.add(runId);
@@ -461,6 +578,19 @@ const server = createServer(async (req, res) => {
       return;
     }
     jsonResponse(res, 200, states.get(taskId));
+    return;
+  }
+  if (req.method === "POST" && /^\/tasks\/\d+\/assistant\/attach$/.test(url.pathname)) {
+    try {
+      const body = await readJson(req);
+      // The fixture models an already-running local executor. In production
+      // this endpoint only attaches the UI stream; it must not be confused
+      // with the user-triggered business resume on /assistant.
+      await handleAttach(req, res, body);
+    } catch {
+      if (!res.headersSent) jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
+      else res.destroy();
+    }
     return;
   }
   if (req.method === "POST" && url.pathname === "/assistant") {

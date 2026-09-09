@@ -50,6 +50,7 @@ export function useAssistantInitialState(
   // 避免旧 task 的加载结果污染新 task 的界面。
   const cancelledRef = useRef(false);
   const requestGenerationRef = useRef(0);
+  const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     // 切换 task 时重置状态，并复位守卫，避免旧 task 的历史/错误态残留到新 task。
@@ -58,6 +59,7 @@ export function useAssistantInitialState(
     return () => {
       // 卸载或 task 变化：标记本轮拉取作废，后续回调不再写状态。
       cancelledRef.current = true;
+      controllerRef.current?.abort();
     };
     // 仅在 taskId 变化时重新拉取；load 以最新 taskId 闭包捕获，见下方定义。
   }, [taskId]);
@@ -71,9 +73,13 @@ export function useAssistantInitialState(
    */
   function load() {
     const requestGeneration = ++requestGenerationRef.current;
-    void requestJson<unknown>(`/tasks/${taskId}/assistant/state`)
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    void requestJson<unknown>(`/tasks/${taskId}/assistant/state`, { signal: controller.signal })
       .then((data) => {
         if (
+          controller.signal.aborted ||
           cancelledRef.current ||
           requestGeneration !== requestGenerationRef.current
         ) {
@@ -96,6 +102,7 @@ export function useAssistantInitialState(
       })
       .catch(async (cause: unknown) => {
         if (
+          controller.signal.aborted ||
           cancelledRef.current ||
           requestGeneration !== requestGenerationRef.current
         ) {

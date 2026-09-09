@@ -7,7 +7,6 @@ import {
   ActionBarPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
-  groupPartByType,
   MessagePrimitive,
   ThreadPrimitive,
   useAui,
@@ -16,6 +15,7 @@ import {
 } from "@assistant-ui/react";
 
 import { StopButton } from "@/components/assistant/stop-button";
+import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { MarkdownText } from "@/components/markdown-text";
 import {
@@ -25,15 +25,22 @@ import {
   ReasoningText,
   ReasoningTrigger,
 } from "@/components/assistant-ui/elements/reasoning.aui";
+import {
+  ToolGroupContent,
+  ToolGroupRoot,
+  ToolGroupTrigger,
+} from "@/components/assistant-ui/elements/tool-group.aui";
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
+import { readToolArtifact } from "@/components/assistant-ui/tools/types";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import {
   deriveComposerAction,
   isEditableLatestRunUserMessage,
-  isResumableUserCancelledRun,
+  isResumableCancelledRun,
 } from "@/lib/assistant/conversation-actions";
 import type { TransportState } from "@/lib/assistant/contract";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 
 export type ThreadComponents = {
@@ -48,19 +55,32 @@ export type ThreadProps = {
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
+  onResumeBusiness?: () => Promise<void>;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
+const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
+
+type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
+
+const assistantMessageGroupBy = (
+  part: { type: string; artifact?: unknown },
+): readonly AssistantGroupKey[] => {
+  if (part.type === "reasoning") return ["group-reasoning"];
+  if (part.type !== "tool-call") return [];
+  const surface = readToolArtifact(part.artifact).presentation.surface;
+  return surface === "standalone" ? [] : ["group-tool-trace"];
+};
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, forkAvailable = false, forkingRunId = null, onForkRun }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness }) => {
   const isEmpty = useAuiState(isNewChatView);
   return (
-    <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun }}>
+    <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun, onResumeBusiness }}>
     <ThreadComponentsContext.Provider value={components}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 flex-col">
         <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
@@ -95,7 +115,13 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, task
       aria-label="消息输入"
     />
     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-      <ComposerControls taskId={taskId} />
+      <div className="flex min-w-0 items-center gap-1">
+        <TaskContextUsage />
+        <ComposerControls
+          scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+          runtimeModelContext
+        />
+      </div>
       <ComposerAction taskId={taskId ?? null} />
     </div>
   </ComposerPrimitive.Root>
@@ -104,11 +130,19 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, task
 const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
+  const draftLength = useAuiState((state) => state.composer.text.length);
   const isDraftEmpty = useAuiState((state) => state.composer.text.trim().length === 0);
-  const canResume = useAuiState((state) => isResumableUserCancelledRun(state.thread.state as unknown as TransportState));
+  const canResume = useAuiState((state) => isResumableCancelledRun(state.thread.state as unknown as TransportState));
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const { onResumeBusiness } = useContext(ThreadContext);
+
+  useEffect(() => {
+    void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
+      data: { taskId, action, isRunning, isDraftEmpty, canResume, draftLength },
+    });
+  }, [action, canResume, draftLength, isDraftEmpty, isRunning, taskId]);
 
   useEffect(() => {
     if (isRunning || !canResume) {
@@ -116,6 +150,15 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
       setResumeError(null);
     }
   }, [canResume, isRunning]);
+
+  useEffect(() => {
+    if (!resuming) return;
+    const timeout = window.setTimeout(() => {
+      setResuming(false);
+      setResumeError("继续运行请求未建立连接，请重试");
+    }, RESUME_FEEDBACK_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [resuming]);
 
   if (action === "stop") {
     return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} />} />;
@@ -127,7 +170,11 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
       setResuming(true);
       setResumeError(null);
       try {
-        await Promise.resolve(aui.thread.resumeRun({ parentId: null }));
+        if (onResumeBusiness) {
+          await onResumeBusiness();
+        } else {
+          await Promise.resolve(aui.thread.resumeRun({ parentId: null }));
+        }
       } catch (error) {
         setResuming(false);
         setResumeError(error instanceof Error ? error.message : "继续运行失败");
@@ -177,21 +224,23 @@ const UserMessageView: FC = () => {
   ));
 
   return (
-    <MessagePrimitive.Root data-role="user" className="flex flex-col items-end px-2">
+    <MessagePrimitive.Root data-role="user" className="group flex flex-col items-end px-2">
       <div className="bg-muted text-foreground max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
         <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <MarkdownText status={part.status} /> : null}</MessagePrimitive.Parts>
       </div>
-      {canEdit && (
-        <ActionBarPrimitive.Root hideWhenRunning autohide="always" className="mt-1 flex gap-1">
+      <ActionBarPrimitive.Root
+        className="mt-1 flex gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+      >
+        {canEdit && (
           <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
             <PencilIcon />
           </ActionBarPrimitive.Edit>
-          <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
-            <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
-            <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
-          </ActionBarPrimitive.Copy>
-        </ActionBarPrimitive.Root>
-      )}
+        )}
+        <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" aria-label="复制" size="sm" />}>
+          <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
+          <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
+        </ActionBarPrimitive.Copy>
+      </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );
 };
@@ -209,7 +258,9 @@ const UserEditMessage: FC = () => {
           aria-label="编辑消息"
         />
         <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-          <ComposerControls taskId={taskId} />
+          <ComposerControls
+            scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+          />
           <div className="flex items-center gap-1.5">
             <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
               <XIcon />
@@ -245,10 +296,19 @@ const AssistantMessageDefault: FC = () => {
     <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 pb-6 px-2">
       <div className="text-foreground leading-relaxed wrap-break-word">
         <MessagePrimitive.GroupedParts
-          groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}
+          groupBy={assistantMessageGroupBy}
         >
           {({ part, children }) => {
             switch (part.type) {
+              case "group-tool-trace": {
+                const isToolRunning = part.status.type === "running";
+                return (
+                  <ToolGroupRoot variant="ghost">
+                    <ToolGroupTrigger count={part.indices.length} active={isToolRunning} />
+                    <ToolGroupContent>{children}</ToolGroupContent>
+                  </ToolGroupRoot>
+                );
+              }
               case "group-reasoning": {
                 const isReasoningStreaming = part.status.type === "running";
                 return (
@@ -278,6 +338,7 @@ const AssistantMessageDefault: FC = () => {
         </MessagePrimitive.GroupedParts>
         <MessageError />
       </div>
+      <RunUsageDisplay runId={runId} visible={isLastRunMessage} />
       <ActionBarPrimitive.Root hideWhenRunning className="mt-1 flex gap-1">
         <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
           <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>

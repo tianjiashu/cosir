@@ -20,7 +20,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:7",
+      "cosir:model-selection:workspace:7",
       JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
     );
   });
@@ -51,8 +51,8 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByText("demo").first()).toBeVisible();
   await page.getByRole("button", { name: "选择工作区" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
-  await expect(page.getByRole("button", { name: "demo-model" })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:model-selection:7"))).toBe(
+  await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:model-selection:workspace:7"))).toBe(
     JSON.stringify({ providerId: 1, modelName: "demo-model", reasoningEffort: null }),
   );
   expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-selection:default"))).toBeNull();
@@ -116,7 +116,7 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:7",
+      "cosir:model-selection:task:42",
       JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
     );
   });
@@ -126,7 +126,7 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
   });
 
   const resumeResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/assistant") && response.request().method() === "POST"
+    response.url().endsWith("/tasks/42/assistant/attach") && response.request().method() === "POST"
   ));
   await page.goto("/tasks/42");
   await expect(page.getByRole("main").getByText("恢复测试", { exact: true })).toBeVisible();
@@ -142,7 +142,7 @@ test("不同 task 的 Assistant Transport 会话与消息互相隔离", async ({
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:7",
+      "cosir:model-selection:task:100",
       JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
     );
   });
@@ -173,7 +173,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:7",
+      "cosir:model-selection:task:102",
       JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
     );
   });
@@ -239,7 +239,7 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:7",
+      "cosir:model-selection:task:103",
       JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
     );
   });
@@ -264,11 +264,19 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await expect.poll(() => assistantRequests.length).toBe(2);
 
   const userMessages = page.locator('[data-role="user"]');
+  const followingAssistant = page.locator('[data-role="assistant"]').first();
+  const followingAssistantBeforeHover = await followingAssistant.boundingBox();
   await userMessages.nth(0).hover();
   await expect(userMessages.nth(0).getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+  await expect(userMessages.nth(0).getByRole("button", { name: "复制" })).toBeVisible();
+  const followingAssistantAfterFirstHover = await followingAssistant.boundingBox();
+  expect(followingAssistantBeforeHover).not.toBeNull();
+  expect(followingAssistantAfterFirstHover).not.toBeNull();
+  expect(followingAssistantAfterFirstHover?.y).toBe(followingAssistantBeforeHover?.y);
   await userMessages.last().hover();
   const editButton = userMessages.last().getByRole("button", { name: "编辑并重跑" });
   await expect(editButton).toBeVisible();
+  await expect(userMessages.last().getByRole("button", { name: "复制" })).toBeVisible();
   await editButton.click();
 
   const editInput = page.getByLabel("编辑消息");
@@ -294,7 +302,7 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:7",
+      "cosir:model-selection:task:104",
       JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
     );
   });

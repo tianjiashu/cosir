@@ -12,18 +12,49 @@ export type ModelSelection = {
   reasoningEffort: "low" | "high" | "max" | null;
 };
 
+export type ModelSelectionScope =
+  | { kind: "workspace"; id: number }
+  | { kind: "task"; id: number };
+
 const STORAGE_KEY_PREFIX = "cosir:model-selection:";
 const DEFAULT_TASK_KEY = "default";
+const selectionSnapshotCache = new Map<string, {
+  raw: string | null;
+  value: Partial<ModelSelection> | null;
+}>();
+const selectionSubscribers = new Map<string, Set<() => void>>();
+
+function selectionKey(scope?: ModelSelectionScope): string {
+  return selectionStorageKey(scope);
+}
+
+function getCachedSelection(scope?: ModelSelectionScope): Partial<ModelSelection> | null {
+  if (typeof window === "undefined") return null;
+  const key = selectionKey(scope);
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+  const cached = selectionSnapshotCache.get(key);
+  if (cached?.raw === raw) return cached.value;
+  const value = parseStoredSelection(raw);
+  selectionSnapshotCache.set(key, { raw, value });
+  return value;
+}
+
+function notifySelection(scope?: ModelSelectionScope): void {
+  for (const listener of selectionSubscribers.get(selectionKey(scope)) ?? []) listener();
+}
 
 /**
- * 构造 localStorage 中模型选择项的 key。
- *
- * taskId 缺省（undefined）时统一回落为 "default"，保证写入侧与读取侧
- * 在 taskId 为空时构造出完全相同的 key，避免「写入 ...:default、
- * 读取 ...:undefined」导致永远读不到的缺陷。
+ * 构造 localStorage 中模型选择项的 key。工作区与任务即使使用同一个数字
+ * ID，也必须生成不同的 key，避免页面级选择污染任务级选择。
  */
-export function selectionStorageKey(taskId?: number): string {
-  return `${STORAGE_KEY_PREFIX}${taskId ?? DEFAULT_TASK_KEY}`;
+export function selectionStorageKey(scope?: ModelSelectionScope): string {
+  if (!scope) return `${STORAGE_KEY_PREFIX}${DEFAULT_TASK_KEY}`;
+  return `${STORAGE_KEY_PREFIX}${scope.kind}:${scope.id}`;
 }
 
 /**
@@ -44,8 +75,7 @@ function isReasoningEffort(
 /**
  * 解析 localStorage 中的原始字符串为模型选择对象。
  *
- * 返回 Partial<ModelSelection>：当 taskId 明确但专属 key 缺失、需要回落
- * 到默认 key 时，调用方仍可继续读取默认选择。解析失败（raw 为空、
+ * 返回 Partial<ModelSelection>。解析失败（raw 为空、
  * JSON.parse 异常、字段缺失或类型不符）一律返回 null，不抛异常。
  */
 export function parseStoredSelection(
@@ -74,38 +104,59 @@ export function parseStoredSelection(
 }
 
 /**
- * 读取指定 task 的模型选择结果。
+ * 读取指定作用域的模型选择结果。
  *
- * 优先读取 task 专属 key；若 taskId 明确但专属 key 缺失，则回落读取
- * 默认 key（taskId 缺省时直接读默认 key）。任何失败路径（window 不存在、
- * localStorage 被禁用、JSON.parse 失败、字段缺失或类型不符）均返回 null，
- * 不抛异常。
+ * 不在 workspace 与 task 之间回落。未提供作用域时只读取显式 default key。
+ * 任何失败路径（window 不存在、localStorage 被禁用、JSON.parse 失败、字段
+ * 缺失或类型不符）均返回 null，不抛异常。
  */
 export function readStoredSelection(
-  taskId?: number,
+  scope?: ModelSelectionScope,
 ): Partial<ModelSelection> | null {
-  if (typeof window === "undefined") return null;
-  const taskSelection = parseStoredSelection(
-    window.localStorage.getItem(selectionStorageKey(taskId)),
-  );
-  if (taskSelection || taskId === undefined) return taskSelection;
-  return parseStoredSelection(
-    window.localStorage.getItem(selectionStorageKey()),
-  );
+  return getCachedSelection(scope);
+}
+
+export function getStoredSelectionSnapshot(
+  scope?: ModelSelectionScope,
+): Partial<ModelSelection> | null {
+  return getCachedSelection(scope);
+}
+
+export function subscribeStoredSelection(
+  scope: ModelSelectionScope,
+  listener: () => void,
+): () => void {
+  const key = selectionKey(scope);
+  const listeners = selectionSubscribers.get(key) ?? new Set<() => void>();
+  listeners.add(listener);
+  selectionSubscribers.set(key, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) selectionSubscribers.delete(key);
+  };
 }
 
 /**
  * 写入指定任务或工作区的模型选择结果。
  *
- * @param taskId - 当前选择所属的任务或工作区标识。
+ * @param scope - 当前选择所属的明确作用域。
  * @param selection - 要持久化的完整模型选择。
  * @returns 无。
  * @sideEffects 在浏览器 localStorage 中写入模型选择；浏览器不可用时静默跳过。
  */
 export function writeStoredSelection(
-  taskId: number,
+  scope: ModelSelectionScope,
   selection: ModelSelection,
 ): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(selectionStorageKey(taskId), JSON.stringify(selection));
+  const key = selectionKey(scope);
+  const raw = JSON.stringify(selection);
+  try {
+    if (window.localStorage.getItem(key) === raw) return;
+    window.localStorage.setItem(key, raw);
+  } catch {
+    return;
+  }
+  selectionSnapshotCache.set(key, { raw, value: selection });
+  notifySelection(scope);
 }

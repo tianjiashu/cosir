@@ -6,22 +6,30 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import {
+  Component,
   useCallback,
   useEffect,
   memo,
   useRef,
   useState,
   useSyncExternalStore,
+  type ErrorInfo,
   type MutableRefObject,
+  type ReactNode,
 } from "react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
 import { requestJson } from "@/lib/http/client";
 import { cancelRun, type CancelRunResult } from "@/lib/assistant/cancel-run";
-import { extractUserAddMessageText, getUserAddMessageSourceId, toTransportThreadView } from "@/lib/assistant/converter";
+import { extractUserAddMessageText, getOrCreateTransportCommandId, getUserAddMessageSourceId, toTransportThreadView } from "@/lib/assistant/converter";
 import type { TransportState } from "@/lib/assistant/contract";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import {
+  modelContextToTransportFields,
+  selectionToTransportFields,
+} from "@/lib/assistant/model-request-adapter";
+import { getModelCatalogSnapshot } from "@/lib/model-catalog";
 import { readStoredSelection } from "@/lib/model-selection-storage";
 import { parseTransportError } from "@/lib/assistant/transport-error";
 import { newTraceId, setActiveTraceId } from "@/lib/trace";
@@ -46,23 +54,30 @@ type AssistantRuntimeProps = {
 
 export function AssistantRuntime({ taskId, workspaceId, initialState, initialMessage, forkAvailable, forkingRunId, onForkRun, onTaskStateChanged, onRunStateChange }: AssistantRuntimeProps) {
   const [issue, setIssue] = useState<TransportIssue | null>(null);
+  const [runtimeGeneration, setRuntimeGeneration] = useState(0);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TransportStatus issue={issue} />
       <div className="min-h-0 flex-1">
-        <RuntimeSession
+        <RuntimeErrorBoundary
+          key={runtimeGeneration}
           taskId={taskId}
-          workspaceId={workspaceId}
-          initialState={initialState}
-          initialMessage={initialMessage}
-          forkAvailable={forkAvailable}
-          forkingRunId={forkingRunId}
-          onForkRun={onForkRun}
-          onTaskStateChanged={onTaskStateChanged}
-          onRunStateChange={onRunStateChange}
-          setIssue={setIssue}
-        />
+          onRetry={() => setRuntimeGeneration((generation) => generation + 1)}
+        >
+          <RuntimeSession
+            taskId={taskId}
+            workspaceId={workspaceId}
+            initialState={initialState}
+            initialMessage={initialMessage}
+            forkAvailable={forkAvailable}
+            forkingRunId={forkingRunId}
+            onForkRun={onForkRun}
+            onTaskStateChanged={onTaskStateChanged}
+            onRunStateChange={onRunStateChange}
+            setIssue={setIssue}
+          />
+        </RuntimeErrorBoundary>
       </div>
     </div>
   );
@@ -71,6 +86,59 @@ export function AssistantRuntime({ taskId, workspaceId, initialState, initialMes
 type RuntimeSessionProps = AssistantRuntimeProps & {
   setIssue: (issue: TransportIssue | null) => void;
 };
+
+type RuntimeRunDiagnostic = {
+  runId?: unknown;
+  status?: unknown;
+};
+
+function readRuntimeRun(value: unknown): RuntimeRunDiagnostic | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const run = (value as { run?: unknown }).run;
+  if (typeof run !== "object" || run === null || Array.isArray(run)) return undefined;
+  return run as RuntimeRunDiagnostic;
+}
+
+type RuntimeErrorBoundaryProps = {
+  taskId: number;
+  children: ReactNode;
+  onRetry: () => void;
+};
+
+type RuntimeErrorBoundaryState = {
+  error: Error | null;
+};
+
+class RuntimeErrorBoundary extends Component<RuntimeErrorBoundaryProps, RuntimeErrorBoundaryState> {
+  state: RuntimeErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): RuntimeErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    void frontendLog("ERROR", "assistant_runtime_render_failed", "Assistant 对话界面渲染失败", {
+      data: { taskId: this.props.taskId, componentStack: info.componentStack ?? "" },
+      error,
+    });
+  }
+
+  private handleRetry = (): void => {
+    this.setState({ error: null });
+    this.props.onRetry();
+  };
+
+  render(): ReactNode {
+    if (this.state.error === null) return this.props.children;
+    return (
+      <section className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
+        <h2 className="text-sm font-medium">对话界面渲染失败</h2>
+        <p className="text-muted-foreground max-w-md text-xs">对话数据仍保存在本机，可以重试恢复界面。</p>
+        <button type="button" className="text-sm underline underline-offset-4" onClick={this.handleRetry}>重试</button>
+      </section>
+    );
+  }
+}
 
 /**
  * Assistant UI runtime 的进程内会话边界。
@@ -87,7 +155,6 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
     getBackendBaseUrlSnapshot,
     getBackendBaseUrlSnapshot,
   );
-  const commandIds = useRef(new WeakMap<object, string>());
   const latestStateRef = useRef(initialState);
   const previousBackendBaseUrlRef = useRef(backendBaseUrl);
   const runtimeControlsRef = useRef<RuntimeControls | null>(null);
@@ -229,13 +296,14 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
         },
       });
       if (snapshot.run.status === "pending" || snapshot.run.status === "running") {
+        // resumeApi is the transport-only attach endpoint. It must never be
+        // confused with the user-triggered business resume below.
         runtimeControlsRef.current?.resume();
         return;
       }
 
-      // A resume preflight 204 means Assistant UI did not import a new state. Push
-      // the terminal canonical snapshot into the same runtime so it cannot
-      // repeatedly interpret its stale local pending/running state as active.
+      // Rebase terminal canonical state into the runtime so it cannot repeatedly
+      // interpret stale local pending/running state as active.
       runtimeControlsRef.current?.importState(snapshot);
       setIssue(null);
     } catch (error) {
@@ -246,26 +314,60 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
     }
   }, [taskId, setIssue, traceId]);
 
+  const resumeBusinessRun = useCallback(async () => {
+    const runId = latestStateRef.current.run.runId;
+    if (runId == null) throw new Error("当前没有可恢复的运行");
+    const response = await fetch(`${backendBaseUrl}/assistant`, {
+      method: "POST",
+      headers: {
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+        "X-Trace-Id": traceId,
+      },
+      body: JSON.stringify({
+        commands: [],
+        taskId,
+        threadId: `task-${taskId}`,
+        runId,
+        ...(workspaceId != null ? { workspaceId } : {}),
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`继续运行失败（HTTP ${response.status}）`);
+    }
+    // The business resume request starts the backend executor. Its stream is
+    // deliberately discarded; the Assistant runtime attaches through the
+    // transport-only endpoint below, so business resume and UI subscription
+    // have independent lifecycles.
+    await response.body?.cancel();
+    runtimeControlsRef.current?.resume();
+  }, [backendBaseUrl, taskId, traceId, workspaceId]);
+
   const runtime = useTaskAssistantTransportRuntime(taskId, {
     initialState,
     protocol: "assistant-transport",
     capabilities: { edit: true },
     api: `${backendBaseUrl}/assistant`,
-    resumeApi: `${backendBaseUrl}/assistant`,
+    resumeApi: `${backendBaseUrl}/tasks/${taskId}/assistant/attach`,
     headers: async () => ({
       Accept: "text/event-stream",
       "Content-Type": "application/json",
       "X-Trace-Id": traceId,
     }),
     body: async () => {
-      const selection = readStoredSelection(taskId);
+      const selection = readStoredSelection({ kind: "task", id: taskId });
+      const completeSelection = selection?.providerId !== undefined && selection.modelName !== undefined
+        ? {
+            providerId: selection.providerId,
+            modelName: selection.modelName,
+            reasoningEffort: selection.reasoningEffort ?? null,
+          }
+        : null;
       return {
         taskId,
         threadId: `task-${taskId}`,
         ...(workspaceId != null ? { workspaceId } : {}),
-        ...(selection?.providerId !== undefined ? { providerId: selection.providerId } : {}),
-        ...(selection?.modelName !== undefined ? { modelName: selection.modelName } : {}),
-        ...(selection?.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+        ...selectionToTransportFields(completeSelection),
       };
     },
     prepareSendCommandsRequest: (body) => {
@@ -274,14 +376,29 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       const backendRequest = Object.fromEntries(
         Object.entries(body).filter(([key]) => key !== "state"),
       );
+      const contextModel = modelContextToTransportFields(
+        body.config,
+        getModelCatalogSnapshot().catalog,
+      );
+      if (contextModel) {
+        delete backendRequest.config;
+        delete backendRequest.providerId;
+        delete backendRequest.modelName;
+        delete backendRequest.reasoningEffort;
+        Object.assign(backendRequest, contextModel);
+      }
+      // assistant-ui only adds runId automatically when resumeStateApi is used.
+      // This project keeps the canonical state endpoint separate, so the
+      // transport-only resumeApi must receive the current run identity here.
+      // An empty command batch is reserved for runtime resume; user-triggered
+      // business resume uses the explicit request below instead.
+      if (body.commands.length === 0 && latestStateRef.current.run.runId !== null) {
+        backendRequest.runId = latestStateRef.current.run.runId;
+      }
       lastTransportErrorRef.current = null;
       const commands = body.commands.map((command) => {
         const key = command as object;
-        let commandId = commandIds.current.get(key);
-        if (!commandId) {
-          commandId = crypto.randomUUID();
-          commandIds.current.set(key, commandId);
-        }
+        const commandId = getOrCreateTransportCommandId(key);
         return command.type === "add-message" ? { ...command, commandId } : command;
       });
       const hasEditCommand = commands.some((command) => getUserAddMessageSourceId(command) !== null);
@@ -342,10 +459,15 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       });
       if (lastTransportErrorRef.current) {
         // Assistant UI also invokes onFinish after a failed HTTP response.
-        // Preserve the structured backend error instead of replacing it with
-        // the generic recovery message below.
+        // Preserve the structured backend error, but still re-read and attach
+        // when the backend says the run remains active. Transport failure is
+        // not business cancellation, so this path never calls /assistant's
+        // cancelled-only resume operation.
         setIssue(lastTransportErrorRef.current);
         onTaskStateChanged?.();
+        if (latestStateRef.current.run.status === "pending" || latestStateRef.current.run.status === "running") {
+          void reconcileAfterTransportFinish();
+        }
         return;
       }
       const terminal = status === "completed"
@@ -355,7 +477,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       if (!terminal) {
         setIssue({ message: "连接暂时中断，正在从本机后端恢复最新状态…", retryable: true });
         // EOF 不是完成信号：保留同一个 runtime，并让 Assistant UI 使用
-        // resumeApi 重新订阅原 run。不能通过 key 重建 runtime，
+        // transport-only resumeApi 重新订阅原 run。不能通过 key 重建 runtime，
         // 否则旧 runtime 的 AbortController 会主动取消当前请求生命周期。
         void reconcileAfterTransportFinish();
       } else {
@@ -399,12 +521,14 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       <TaskStateBridge
         onRunStateChange={onRunStateChange}
       />
+      <RuntimeRenderDiagnostics taskId={taskId} />
       <div className="flex h-full min-h-0 flex-col">
         <Thread
           taskId={taskId}
           forkAvailable={forkAvailable}
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
+          onResumeBusiness={resumeBusinessRun}
         />
       </div>
       <InitialMessageBridge
@@ -448,6 +572,28 @@ function TaskStateBridge({
   useEffect(() => {
     onRunStateChange?.(isRunning);
   }, [isRunning, onRunStateChange]);
+
+  return null;
+}
+
+function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
+  const messageCount = useAuiState((state) => state.thread.messages.length);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const draftLength = useAuiState((state) => state.composer.text.length);
+  const runId = useAuiState((state) => {
+    const run = readRuntimeRun(state.thread.state);
+    return typeof run?.runId === "number" ? run.runId : null;
+  });
+  const runStatus = useAuiState((state) => {
+    const run = readRuntimeRun(state.thread.state);
+    return typeof run?.status === "string" ? run.status : "unknown";
+  });
+
+  useEffect(() => {
+    void frontendLog("DEBUG", "assistant_ui_render_state", "Assistant UI 渲染状态发生变化", {
+      data: { taskId, messageCount, runId, runStatus, isRunning, draftLength },
+    });
+  }, [draftLength, isRunning, messageCount, runId, runStatus, taskId]);
 
   return null;
 }

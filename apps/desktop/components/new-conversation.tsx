@@ -40,10 +40,10 @@ export function NewConversation({
     setSubmitting(true);
     setError(null);
     try {
-      const selection = readStoredSelection(selectedWorkspaceId);
+      const selection = readStoredSelection({ kind: "workspace", id: selectedWorkspaceId });
       if (!selection?.providerId || !selection.modelName) throw new Error("请先选择模型");
       const task = await createWorkspaceTask(selectedWorkspaceId, { text: trimmedText });
-      writeStoredSelection(task.task_id, {
+      writeStoredSelection({ kind: "task", id: task.task_id }, {
         providerId: selection.providerId,
         modelName: selection.modelName,
         reasoningEffort: selection.reasoningEffort ?? null,
@@ -93,7 +93,10 @@ export function NewConversation({
           />
           <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <ComposerControls taskId={selectedWorkspaceId ?? undefined} onModelReadyChange={setModelReady} />
+              <ComposerControls
+                scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
+                onModelReadyChange={setModelReady}
+              />
             </div>
             <Button type="submit" className="shrink-0 rounded-full" disabled={!selectedWorkspaceId || !modelReady || !text.trim() || submitting}>
               {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}开始对话

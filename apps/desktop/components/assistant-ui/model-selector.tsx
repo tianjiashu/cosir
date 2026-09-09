@@ -1,234 +1,265 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  RefreshCwIcon,
-  SparklesIcon,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { RefreshCwIcon, SparklesIcon } from "lucide-react";
+import { useAui } from "@assistant-ui/react";
 
-import { cn } from "@/lib/utils";
 import {
-  getModelGroups,
-  type ModelListItem,
-  type ProviderModelGroup,
-} from "@/lib/api/models";
-import { ReasoningEffortSelect } from "@/components/assistant-ui/reasoning-effort-select";
+  ModelSelectorContent as OfficialModelSelectorContent,
+  ModelSelectorEffort as OfficialModelSelectorEffort,
+  ModelSelectorList as OfficialModelSelectorList,
+  ModelSelectorRoot as OfficialModelSelectorRoot,
+  ModelSelectorSearch as OfficialModelSelectorSearch,
+  ModelSelectorTrigger as OfficialModelSelectorTrigger,
+  ModelSelectorValue as OfficialModelSelectorValue,
+  type ModelOption,
+  type ModelSelectorEffortOption,
+} from "@/components/model-selector";
 import { ProviderConfigPanel } from "@/components/assistant-ui/provider-config-panel";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
   type ModelSelection,
-  parseStoredSelection,
-  readStoredSelection,
-  selectionStorageKey,
+  type ModelSelectionScope,
+  getStoredSelectionSnapshot,
+  subscribeStoredSelection,
   writeStoredSelection,
 } from "@/lib/model-selection-storage";
+import { cn } from "@/lib/utils";
 
-function findModel(
-  groups: ProviderModelGroup[],
-  providerId: number,
-  modelName: string,
-): ModelListItem | undefined {
-  return groups
-    .find((group) => group.provider_id === providerId)
-    ?.models.find((model) => model.model_name === modelName);
+const BACKEND_REASONING_EFFORTS: readonly ModelSelectorEffortOption[] = [
+  { id: "low", name: "Low" },
+  { id: "high", name: "High" },
+  { id: "max", name: "Max" },
+];
+
+type ModelSelectorProps = {
+  scope?: ModelSelectionScope;
+  className?: string;
+  onReadyChange?: (ready: boolean) => void;
+  runtimeModelContext?: boolean;
+};
+
+type SelectionState = {
+  scopeKey: string;
+  selection: ModelSelection | null;
+};
+
+function scopeKey(scope?: ModelSelectionScope): string {
+  return scope ? `${scope.kind}:${scope.id}` : "none";
 }
 
-export function ModelSelector({ taskId, className, onReadyChange }: { taskId?: number; className?: string; onReadyChange?: (ready: boolean) => void }) {
-  const [groups, setGroups] = useState<ProviderModelGroup[]>([]);
-  const [selection, setSelection] = useState<ModelSelection | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+function getSelection(
+  models: readonly ModelCatalogModel[],
+  stored: Partial<ModelSelection> | null,
+): ModelSelection | null {
+  const storedModel = stored
+    ? models.find(
+        (model) =>
+          model.providerId === stored.providerId &&
+          model.modelName === stored.modelName,
+      )
+    : undefined;
+  const model = storedModel ?? models[0];
+  if (!model) return null;
 
-  const loadModels = useCallback(async () => {
-    setStatus("loading");
-    try {
-      const nextGroups = await getModelGroups();
-      setGroups(nextGroups);
-      setStatus("ready");
-
-      const storageKey = taskId === undefined ? null : selectionStorageKey(taskId);
-      const stored = storageKey ? window.localStorage.getItem(storageKey) : null;
-      const storedSelection = taskId === undefined ? null : readStoredSelection(taskId);
-      if (storageKey && stored && !parseStoredSelection(stored)) window.localStorage.removeItem(storageKey);
-      const storedModel = storedSelection
-        ? findModel(nextGroups, Number(storedSelection.providerId), String(storedSelection.modelName))
-        : undefined;
-      const firstGroup = nextGroups.find((group) => group.models.length > 0);
-      const firstModel = firstGroup?.models[0];
-      const providerId = storedModel ? Number(storedSelection?.providerId) : firstGroup?.provider_id;
-      const model = storedModel ?? firstModel;
-
-      if (providerId !== undefined && model) {
-        const nextSelection: ModelSelection = {
-          providerId,
-          modelName: model.model_name,
-            reasoningEffort: storedModel && storedSelection?.reasoningEffort
-              ? storedSelection.reasoningEffort
-              : model.supports_reasoning_effort ? "high" : null,
-        };
-        setSelection(nextSelection);
-        if (storageKey) writeStoredSelection(taskId!, nextSelection);
-      } else {
-        setSelection(null);
-      }
-    } catch {
-      setStatus("error");
-    }
-  }, [taskId]);
-
-  useEffect(() => {
-    onReadyChange?.(status === "ready" && Boolean(selection));
-  }, [onReadyChange, selection, status]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void loadModels(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadModels]);
-
-  const selectedModel = useMemo(
-    () => selection ? findModel(groups, selection.providerId, selection.modelName) : undefined,
-    [groups, selection],
-  );
-  const selectedProvider = groups.find((group) => group.provider_id === selection?.providerId);
-  const hasModels = groups.some((group) => group.models.length > 0);
-  const modelOptions = useMemo(
-    () => groups.flatMap((group) => group.models.map((model) => ({ group, model }))),
-    [groups],
-  );
-
-  useEffect(() => {
-    if (open) optionRefs.current[activeIndex]?.focus();
-  }, [activeIndex, open]);
-
-  const openModelMenu = () => {
-    const selectedIndex = modelOptions.findIndex(
-      ({ group, model }) => group.provider_id === selection?.providerId && model.model_name === selection?.modelName,
-    );
-    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
-    setOpen(true);
+  return {
+    providerId: model.providerId,
+    modelName: model.modelName,
+    reasoningEffort: model.supportsReasoningEffort
+      ? stored?.reasoningEffort ?? "high"
+      : null,
   };
+}
 
-  const updateSelection = (next: ModelSelection) => {
-    setSelection(next);
-    if (taskId !== undefined) {
-      writeStoredSelection(taskId, next);
-    }
-    setOpen(false);
+function toOfficialModel(model: ModelCatalogModel): ModelOption {
+  return {
+    id: model.optionId,
+    name: model.modelName,
+    description: model.providerName,
+    keywords: [model.providerName],
+    efforts: model.supportsReasoningEffort
+      ? BACKEND_REASONING_EFFORTS
+      : undefined,
   };
+}
 
-  if (status === "loading") {
-    return (
-      <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs">
-        <SparklesIcon className="size-3.5 animate-pulse" />
-        加载模型…
-      </span>
-    );
-  }
+function SelectorView({
+  catalogModels,
+  selection,
+  className,
+  onSelectionChange,
+  onCatalogChanged,
+}: {
+  catalogModels: readonly ModelCatalogModel[];
+  selection: ModelSelection;
+  className?: string;
+  onSelectionChange: (selection: ModelSelection) => void;
+  onCatalogChanged: () => void;
+}) {
+  const officialModels = useMemo(
+    () => catalogModels.map(toOfficialModel),
+    [catalogModels],
+  );
+  const selectedModel = catalogModels.find(
+    (model) =>
+      model.providerId === selection.providerId &&
+      model.modelName === selection.modelName,
+  );
+  const selectedOptionId = selectedModel?.optionId;
 
-  if (status === "error") {
-    return (
-      <div className="flex items-center gap-1">
-        <button type="button" onClick={() => void loadModels()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs">
-          <RefreshCwIcon className="size-3.5" />
-          模型加载失败，重试
-        </button>
-        <ProviderConfigPanel onChanged={() => void loadModels()} />
-      </div>
-    );
-  }
-
-  if (!hasModels || !selection || !selectedModel || !selectedProvider) {
-    return (
-      <div className="flex items-center gap-1">
-        <span className="text-muted-foreground inline-flex h-8 items-center px-2 text-xs">暂无可用模型</span>
-        <ProviderConfigPanel onChanged={() => void loadModels()} />
-      </div>
-    );
-  }
+  if (!selectedModel || !selectedOptionId) return null;
 
   return (
-    <div className={cn("flex flex-wrap items-center gap-2", className)}>
-      <Popover open={open} onOpenChange={(nextOpen) => {
-        if (nextOpen) openModelMenu();
-        else setOpen(false);
-      }}>
-        <PopoverTrigger
-          type="button"
-          aria-expanded={open}
-          aria-haspopup="menu"
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              openModelMenu();
-            }
-          }}
-          className="bg-transparent text-foreground inline-flex h-8 max-w-60 items-center gap-1.5 rounded-md px-2 text-xs outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50"
+    <div className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}>
+      <OfficialModelSelectorRoot
+        models={officialModels}
+        value={selectedOptionId}
+        effort={selection.reasoningEffort ?? undefined}
+        onValueChange={(optionId) => {
+          const model = catalogModels.find((candidate) => candidate.optionId === optionId);
+          if (!model) return;
+          onSelectionChange({
+            providerId: model.providerId,
+            modelName: model.modelName,
+            reasoningEffort: model.supportsReasoningEffort
+              ? selection.reasoningEffort ?? "high"
+              : null,
+          });
+        }}
+        onEffortChange={(reasoningEffort) => {
+          if (!selectedModel.supportsReasoningEffort) return;
+          onSelectionChange({
+            ...selection,
+            reasoningEffort: reasoningEffort as ModelSelection["reasoningEffort"],
+          });
+        }}
+      >
+        <OfficialModelSelectorTrigger
+          variant="ghost"
+          size="sm"
+          className="max-w-60"
+          aria-label="选择模型"
         >
           <SparklesIcon className="text-muted-foreground size-3.5 shrink-0" />
-          <span className="truncate font-medium">{selection.modelName}</span>
-          <ChevronDownIcon className={cn("text-muted-foreground size-3 shrink-0 transition-transform", open && "rotate-180")} />
-        </PopoverTrigger>
-        <PopoverContent side="top" align="start" keepMounted className="w-72 p-2">
-          <p className="text-muted-foreground px-2 pb-1.5 text-[11px] font-medium uppercase tracking-wide">选择模型</p>
-          <div role="menu" aria-label="模型列表" className="max-h-72 overflow-y-auto">
-            {groups.map((group) => (
-              <div key={group.provider_id} className="pb-1 last:pb-0">
-                <p className="text-muted-foreground px-2 py-1 text-[11px] font-medium">{group.provider_name}</p>
-                {group.models.map((model) => {
-                  const optionIndex = modelOptions.findIndex(
-                    ({ group: optionGroup, model: optionModel }) => optionGroup.provider_id === group.provider_id && optionModel.model_name === model.model_name,
-                  );
-                  const isSelected = selection.providerId === group.provider_id && selection.modelName === model.model_name;
-                  return (
-                    <button
-                      key={`${group.provider_id}:${model.model_name}`}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={isSelected}
-                      tabIndex={activeIndex === optionIndex ? 0 : -1}
-                      ref={(element) => { optionRefs.current[optionIndex] = element; }}
-                      onKeyDown={(event) => {
-                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                          event.preventDefault();
-                          const direction = event.key === "ArrowDown" ? 1 : -1;
-                          setActiveIndex((optionIndex + direction + modelOptions.length) % modelOptions.length);
-                        }
-                        if (event.key === "Home" || event.key === "End") {
-                          event.preventDefault();
-                          setActiveIndex(event.key === "Home" ? 0 : modelOptions.length - 1);
-                        }
-                      }}
-                      onClick={() => updateSelection({
-                        providerId: group.provider_id,
-                        modelName: model.model_name,
-                        reasoningEffort: model.supports_reasoning_effort ? selection.reasoningEffort ?? "high" : null,
-                      })}
-                      className="hover:bg-muted flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:bg-muted"
-                    >
-                      <span className="truncate">{model.model_name}</span>
-                      {isSelected && <CheckIcon className="text-primary size-4 shrink-0" />}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+          <OfficialModelSelectorValue className="min-w-0" />
+        </OfficialModelSelectorTrigger>
+        <OfficialModelSelectorContent
+          side="top"
+          align="start"
+          searchable
+          className="w-72"
+        >
+          <OfficialModelSelectorSearch placeholder="搜索模型…" />
+          <OfficialModelSelectorList />
+          <OfficialModelSelectorEffort label="推理强度" />
           <div className="border-border/60 mt-1 border-t pt-1">
-            <ProviderConfigPanel onBeforeOpen={() => setOpen(false)} onChanged={() => void loadModels()} />
+            <ProviderConfigPanel onChanged={onCatalogChanged} />
           </div>
-        </PopoverContent>
-      </Popover>
-
-      {selectedModel.supports_reasoning_effort && (
-        <ReasoningEffortSelect
-          value={selection.reasoningEffort ?? "high"}
-          onValueChange={(reasoningEffort) => updateSelection({ ...selection, reasoningEffort })}
-        />
-      )}
+        </OfficialModelSelectorContent>
+      </OfficialModelSelectorRoot>
     </div>
   );
+}
+
+function useScopedSelection(scope: ModelSelectionScope | undefined) {
+  const catalogState = useModelCatalog();
+  const key = scopeKey(scope);
+  const [unscopedSelection, setUnscopedSelection] = useState<ModelSelection | null>(null);
+  const subscribe = useCallback(
+    (listener: () => void) => (scope ? subscribeStoredSelection(scope, listener) : () => undefined),
+    [key],
+  );
+  const getSnapshot = useCallback(
+    () => (scope ? getStoredSelectionSnapshot(scope) : null),
+    [key],
+  );
+  const storedSelection = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  const [selectionState, setSelectionState] = useState<SelectionState>({
+    scopeKey: "",
+    selection: null,
+  });
+
+  useEffect(() => {
+    if (catalogState.status !== "ready" || !catalogState.catalog) return;
+    const nextSelection = getSelection(
+      catalogState.catalog.models,
+      scope ? storedSelection : null,
+    );
+    setSelectionState({ scopeKey: key, selection: nextSelection });
+    if (scope && nextSelection) writeStoredSelection(scope, nextSelection);
+    if (!scope) setUnscopedSelection(nextSelection);
+  }, [catalogState.catalog, catalogState.status, key, storedSelection]);
+
+  const selection = scope
+    ? catalogState.status === "ready" && catalogState.catalog
+      ? getSelection(catalogState.catalog.models, storedSelection)
+      : null
+    : selectionState.scopeKey === key
+      ? unscopedSelection ?? selectionState.selection
+      : null;
+  const updateSelection = (nextSelection: ModelSelection) => {
+    setSelectionState({ scopeKey: key, selection: nextSelection });
+    if (!scope) setUnscopedSelection(nextSelection);
+    if (scope) writeStoredSelection(scope, nextSelection);
+  };
+
+  return { ...catalogState, selection, updateSelection };
+}
+
+function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
+  const { catalog, status, retry, selection, updateSelection } = useScopedSelection(props.scope);
+
+  useEffect(() => {
+    props.onReadyChange?.(status === "ready" && selection !== null);
+  }, [props.onReadyChange, selection, status]);
+
+  if (status === "loading" || status === "idle") {
+    return <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs"><SparklesIcon className="size-3.5 animate-pulse" />加载模型…</span>;
+  }
+  if (status === "error") {
+    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ProviderConfigPanel onChanged={() => void retry()} /></div>;
+  }
+  if (!catalog || !selection) {
+    return <div className="flex items-center gap-1"><span className="text-muted-foreground inline-flex h-8 items-center px-2 text-xs">暂无可用模型</span><ProviderConfigPanel onChanged={() => void retry()} /></div>;
+  }
+
+  return <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />;
+}
+
+function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
+  const aui = useAui();
+  const { catalog, status, retry, selection, updateSelection } = useScopedSelection(props.scope);
+  const selectedModel = catalog?.models.find(
+    (model) => model.providerId === selection?.providerId && model.modelName === selection?.modelName,
+  );
+
+  useEffect(() => {
+    if (!selectedModel || !selection) return;
+    return aui.modelContext.register({
+      getModelContext: () => ({
+        config: {
+          modelName: selectedModel.optionId,
+          reasoningEffort: selection.reasoningEffort ?? undefined,
+        },
+      }),
+    });
+  }, [aui, selectedModel, selection]);
+
+  useEffect(() => {
+    props.onReadyChange?.(status === "ready" && selection !== null);
+  }, [props.onReadyChange, selection, status]);
+
+  if (status === "error") {
+    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ProviderConfigPanel onChanged={() => void retry()} /></div>;
+  }
+  if (status !== "ready" || !catalog || !selection) {
+    return <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs"><SparklesIcon className="size-3.5 animate-pulse" />加载模型…</span>;
+  }
+
+  return <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />;
+}
+
+export function ModelSelector(props: ModelSelectorProps) {
+  if (props.runtimeModelContext) return <RuntimeModelSelector {...props} />;
+  return <StandaloneModelSelector {...props} />;
 }

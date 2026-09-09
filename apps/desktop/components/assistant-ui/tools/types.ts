@@ -1,4 +1,10 @@
-import type { TransportToolData, TransportToolPresentation, TransportToolStatus } from "@/lib/assistant/contract";
+import type {
+  TransportToolData,
+  TransportToolPresentation,
+  TransportToolStatus,
+  WebExtractStatusData,
+  WebSearchResultData,
+} from "@/lib/assistant/contract";
 
 export type ToolArtifact = {
   backendStatus: TransportToolStatus;
@@ -28,6 +34,27 @@ export function readToolArtifact(value: unknown): ToolArtifact {
 
 export function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+export function isWebSearchData(value: TransportToolData | null): value is WebSearchResultData {
+  return value?.kind === "web-search-results" && Array.isArray(value.results);
+}
+
+export function isWebExtractStatusData(value: TransportToolData | null): value is WebExtractStatusData {
+  return value?.kind === "web-extract-status" && Array.isArray(value.sites);
+}
+
+export type WebExtractDisplayStatus = WebExtractStatusData["sites"][number]["status"] | "cancelled";
+
+export function resolveWebExtractSiteStatus(
+  siteStatus: WebExtractStatusData["sites"][number]["status"],
+  backendStatus: TransportToolStatus,
+): WebExtractDisplayStatus {
+  if (siteStatus !== "pending" && siteStatus !== "running") return siteStatus;
+  if (backendStatus === "running") return "running";
+  if (backendStatus === "cancelled") return "cancelled";
+  if (backendStatus === "failed") return "failed";
+  return siteStatus;
 }
 
 export function displayValue(value: unknown): string {

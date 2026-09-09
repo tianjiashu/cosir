@@ -1,9 +1,11 @@
-import { ChevronDownIcon, FileIcon, FolderIcon, LinkIcon } from "lucide-react";
+import { FileIcon, FolderIcon, LinkIcon } from "lucide-react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { DisclosureRow, DisclosureRowStatic } from "../elements/disclosure-row.aui";
 import { asRecord, displayValue, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
+import { ToolIcon } from "./tool-icons";
 
 function toolTitle(toolName: string, verb?: string): string {
   return verb ?? toolName;
@@ -16,7 +18,7 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
     return <p className="text-muted-foreground text-xs">未找到匹配</p>;
   }
   return (
-    <ul className="divide-border/60 divide-y rounded-lg border text-xs">
+    <ul className="space-y-0.5 text-xs">
       {entries.map((entry, index) => {
         const item = asRecord(entry);
         const type = item.type;
@@ -61,31 +63,27 @@ export function DetailsTool({ toolName, argsText, result, artifact: rawArtifact 
       ) : (
         <>
           {artifact.error && <p className="text-destructive text-xs">{artifact.error}</p>}
-          {!artifact.error && result !== undefined && <pre className="max-h-64 overflow-auto rounded-lg bg-muted/50 p-2 text-xs">{displayValue(result)}</pre>}
-          {argsText && <pre className="max-h-48 overflow-auto rounded-lg bg-muted/50 p-2 text-xs">{argsText}</pre>}
+          {!artifact.error && result !== undefined && <pre className="max-h-64 overflow-auto bg-muted/30 p-2 text-xs">{displayValue(result)}</pre>}
+          {argsText && <pre className="max-h-48 overflow-auto bg-muted/30 p-2 text-xs">{argsText}</pre>}
         </>
       )}
     </div>
   );
 
-  const trigger = (
-    <div className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left">
-      <span className="truncate text-sm font-medium">{title}</span>
-      {summary && <span className="text-muted-foreground min-w-0 truncate text-xs">{summary}</span>}
-      <span className="ml-auto shrink-0"><ToolStatus status={artifact.backendStatus} /></span>
-    </div>
-  );
+  const rowProps = {
+    leading: <ToolIcon name={presentation.icon} aria-hidden="true" />,
+    label: <span className="text-sm font-medium">{title}</span>,
+    meta: <span className="text-muted-foreground max-w-[45%] truncate">{artifact.error ?? summary}</span>,
+    trailing: <ToolStatus status={artifact.backendStatus} />,
+  };
 
   if (!expandable) {
-    return <div className={cn("flex min-w-0 items-center", artifact.backendStatus === "failed" && "text-destructive")}>{trigger}</div>;
+    return <DisclosureRowStatic {...rowProps} className={cn(artifact.backendStatus === "failed" && "text-destructive")} />;
   }
 
   return (
-    <Collapsible defaultOpen={defaultOpen} className="group/tool-call overflow-hidden">
-      <CollapsibleTrigger className="flex w-full items-center text-left text-muted-foreground transition-colors hover:text-foreground">
-        <ChevronDownIcon className="size-4 shrink-0 transition-transform duration-200 group-data-open/tool-call:rotate-0 group-data-[state=closed]/tool-call:-rotate-90" aria-hidden="true" />
-        {trigger}
-      </CollapsibleTrigger>
+    <Collapsible defaultOpen={defaultOpen} className="group/tool-call">
+      <DisclosureRow {...rowProps} />
       <CollapsibleContent className="ml-6 pl-2">{body}</CollapsibleContent>
     </Collapsible>
   );

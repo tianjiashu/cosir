@@ -8,7 +8,7 @@ import {
   type FC,
   type PropsWithChildren,
 } from "react";
-import { ChevronDownIcon, LoaderIcon } from "lucide-react";
+import { LoaderIcon, WrenchIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
 import {
@@ -17,10 +17,12 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { DisclosureRow } from "./disclosure-row.aui";
+import { DISCLOSURE_CONTENT_CLASS } from "./disclosure-tokens";
 
 const ANIMATION_DURATION = 200;
 
-const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
+const toolGroupVariants = cva("aui-tool-group-root group/tool-group mb-1 w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border py-3",
@@ -28,7 +30,7 @@ const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
       muted: "border-muted-foreground/30 bg-muted/30 rounded-lg border py-3",
     },
   },
-  defaultVariants: { variant: "outline" },
+  defaultVariants: { variant: "ghost" },
 });
 
 export type ToolGroupRootProps = Omit<
@@ -72,7 +74,7 @@ function ToolGroupRoot({
     <Collapsible
       ref={collapsibleRef}
       data-slot="tool-group-root"
-      data-variant={variant ?? "outline"}
+      data-variant={variant ?? "ghost"}
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
@@ -101,49 +103,45 @@ function ToolGroupTrigger({
   count: number;
   active?: boolean;
 }) {
-  const label = `${count} tool ${count === 1 ? "call" : "calls"}`;
+  const label = `${count} 个工具调用`;
 
   return (
-    <CollapsibleTrigger
+    <DisclosureRow
       data-slot="tool-group-trigger"
+      leading={
+        <WrenchIcon
+          data-slot="tool-group-trigger-icon"
+          className="aui-tool-group-trigger-icon size-4 shrink-0"
+        />
+      }
+      label={
+        <span
+          data-slot="tool-group-trigger-label"
+          className={cn(
+            "aui-tool-group-trigger-label-wrapper inline-block text-start text-sm leading-none font-medium",
+            "group-data-[variant=ghost]/tool-group-root:font-normal",
+            active && "shimmer motion-reduce:animate-none",
+          )}
+        >
+          {label}
+        </span>
+      }
+      trailing={active ? (
+        <LoaderIcon
+          data-slot="tool-group-trigger-loader"
+          className="aui-tool-group-trigger-loader size-3.5 animate-spin [animation-duration:0.6s]"
+          aria-label="工具执行中"
+        />
+      ) : undefined}
       className={cn(
-        "aui-tool-group-trigger group/trigger flex origin-left items-center gap-2 text-sm transition-[color,scale] active:scale-[0.98]",
-        "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground group-data-[variant=ghost]/tool-group-root:py-1.5",
+        "aui-tool-group-trigger origin-left",
+        "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground",
         "group-data-[variant=outline]/tool-group-root:w-full group-data-[variant=outline]/tool-group-root:px-4",
         "group-data-[variant=muted]/tool-group-root:w-full group-data-[variant=muted]/tool-group-root:px-4",
         className,
       )}
       {...props}
-    >
-      {active && (
-        <LoaderIcon
-          data-slot="tool-group-trigger-loader"
-          className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin [animation-duration:0.6s]"
-        />
-      )}
-      <span
-        data-slot="tool-group-trigger-label"
-        className={cn(
-          "aui-tool-group-trigger-label-wrapper inline-block text-start text-xs leading-none font-medium",
-          "group-data-[variant=ghost]/tool-group-root:font-normal",
-          "group-data-[variant=outline]/tool-group-root:grow",
-          "group-data-[variant=muted]/tool-group-root:grow",
-          active && "shimmer motion-reduce:animate-none",
-        )}
-      >
-        {label}
-      </span>
-      <ChevronDownIcon
-        data-slot="tool-group-trigger-chevron"
-        className={cn(
-          "aui-tool-group-trigger-chevron size-3 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0",
-        )}
-      />
-    </CollapsibleTrigger>
+    />
   );
 }
 
@@ -169,8 +167,7 @@ function ToolGroupContent({
     >
       <div
         className={cn(
-          "mt-2 flex flex-col gap-2",
-          "group-data-[variant=ghost]/tool-group-root:mt-1 group-data-[variant=ghost]/tool-group-root:gap-1",
+          DISCLOSURE_CONTENT_CLASS,
           "group-data-[variant=outline]/tool-group-root:mt-3 group-data-[variant=outline]/tool-group-root:border-t group-data-[variant=outline]/tool-group-root:px-4 group-data-[variant=outline]/tool-group-root:pt-3",
           "group-data-[variant=muted]/tool-group-root:mt-3 group-data-[variant=muted]/tool-group-root:border-t group-data-[variant=muted]/tool-group-root:px-4 group-data-[variant=muted]/tool-group-root:pt-3",
           "[&>*]:animate-in [&>*]:fade-in-0 [&>*]:blur-in-[2px] [&>*]:slide-in-from-top-1 [&>*]:animation-duration-(--animation-duration) [&>*]:ease-[cubic-bezier(0.32,0.72,0,1)]",

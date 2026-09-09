@@ -119,7 +119,7 @@ impl BackendSupervisor {
             return Err("本地 Agent 后端正在启动".to_string());
         }
         let _start_guard = StartGuard(&self.inner.start_in_progress);
-        let mut generation = self.inner.lifecycle_generation.load(Ordering::Acquire);
+        let generation = self.inner.lifecycle_generation.load(Ordering::Acquire);
         if self
             .inner
             .child
@@ -156,7 +156,9 @@ impl BackendSupervisor {
         let mut last_error = "本地 Agent 后端启动失败".to_string();
         for attempt in 0..3 {
             if attempt > 0 {
-                self.prepare_start();
+                // 重试属于当前生命周期；不要调用 prepare_start，因为它会
+                // 复位 shutting_down，可能把并发 stop 误打开。generation 只
+                // 在真正的 start/restart 操作开始时推进。
                 let _ = std::fs::remove_file(&bootstate);
             }
             if self.inner.shutting_down.load(Ordering::Acquire) {
@@ -178,6 +180,12 @@ impl BackendSupervisor {
                 Ok(child) => child,
                 Err(error) => {
                     last_error = error;
+                    if self.inner.shutting_down.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    if self.inner.lifecycle_generation.load(Ordering::Acquire) != generation {
+                        return Err("后端启动已被新的生命周期操作取消".to_string());
+                    }
                     continue;
                 }
             };
@@ -239,10 +247,9 @@ impl BackendSupervisor {
                 }
                 Err(error) => {
                     last_error = error;
-                    let Some(next_generation) = self.retry_after_health_failure(generation) else {
+                    let Some(()) = self.retry_after_health_failure(generation) else {
                         return Ok(());
                     };
-                    generation = next_generation;
                 }
             }
         }
@@ -278,12 +285,15 @@ impl BackendSupervisor {
         self.log("backend_stopped");
     }
 
-    pub fn prepare_start(&self) {
+    pub fn prepare_start(&self) -> usize {
         self.inner.shutting_down.store(false, Ordering::Release);
-        self.inner
+        let generation = self
+            .inner
             .lifecycle_generation
-            .fetch_add(1, Ordering::AcqRel);
+            .fetch_add(1, Ordering::AcqRel)
+            + 1;
         self.set_status(BackendStatus::Starting);
+        generation
     }
 
     pub fn reset_crash_recovery_budget(&self) {
@@ -317,7 +327,7 @@ impl BackendSupervisor {
         Err(message)
     }
 
-    fn retry_after_health_failure(&self, generation: usize) -> Option<usize> {
+    fn retry_after_health_failure(&self, generation: usize) -> Option<()> {
         let Ok(_lifecycle_guard) = self.inner.lifecycle_gate.lock() else {
             return None;
         };
@@ -341,13 +351,10 @@ impl BackendSupervisor {
         if let Ok(mut base_url) = self.inner.backend_base_url.lock() {
             *base_url = None;
         }
-        let next_generation = self
-            .inner
-            .lifecycle_generation
-            .fetch_add(1, Ordering::AcqRel)
-            + 1;
         self.set_status(BackendStatus::Starting);
-        Some(next_generation)
+        // generation 的推进统一由下一轮 prepare_start 完成，避免一次重试
+        // 同时在这里和循环入口递增两次，导致局部 generation 失配。
+        Some(())
     }
 
     pub fn fail_for_startup(&self, message: String) -> Result<(), String> {
@@ -641,6 +648,7 @@ fn find_available_port() -> Result<u16, String> {
 #[cfg(test)]
 mod tests {
     use super::{should_attempt_crash_recovery, MAX_CRASH_RECOVERY_ATTEMPTS};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn crash_recovery_is_finite_and_does_not_loop_after_budget() {
@@ -653,5 +661,36 @@ mod tests {
     fn monitor_generation_comparison_rejects_stale_generation() {
         assert!(super::is_current_generation(7, 7));
         assert!(!super::is_current_generation(8, 7));
+    }
+
+    #[test]
+    fn health_failure_retry_advances_generation_once_on_next_start() {
+        let supervisor = super::BackendSupervisor::default();
+        assert_eq!(supervisor.prepare_start(), 1);
+        assert!(supervisor.retry_after_health_failure(1).is_some());
+        assert_eq!(
+            supervisor
+                .inner
+                .lifecycle_generation
+                .load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(supervisor.prepare_start(), 2);
+    }
+
+    #[test]
+    fn health_failure_retry_does_not_reopen_shutdown_lifecycle() {
+        let supervisor = super::BackendSupervisor::default();
+        assert_eq!(supervisor.prepare_start(), 1);
+        supervisor.stop();
+        assert!(supervisor.retry_after_health_failure(1).is_none());
+        assert!(supervisor.inner.shutting_down.load(Ordering::Acquire));
+        assert_eq!(
+            supervisor
+                .inner
+                .lifecycle_generation
+                .load(Ordering::Acquire),
+            2
+        );
     }
 }

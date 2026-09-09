@@ -1,11 +1,11 @@
 import { useMemo } from "react";
 import { createTwoFilesPatch } from "diff";
 import { Diff, Hunk, parseDiff } from "react-diff-view";
-import { ChevronDownIcon } from "lucide-react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
+import { DisclosureRow } from "../elements/disclosure-row.aui";
 
 type Change = {
   path: string;
@@ -59,21 +59,24 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
   const defaultOpen = artifact.backendStatus === "running" || artifact.presentation.default_open === true;
 
   return (
-    <Collapsible defaultOpen={defaultOpen} className="group/tool-call overflow-hidden">
-      <CollapsibleTrigger className="flex w-full items-center gap-2 py-1.5 text-left text-muted-foreground transition-colors hover:text-foreground">
-        <ChevronDownIcon className="size-4 shrink-0 transition-transform duration-200 group-data-open/tool-call:rotate-0 group-data-[state=closed]/tool-call:-rotate-90" aria-hidden="true" />
-        <span className="text-foreground truncate text-sm font-medium">{title}</span>
-        <span className="text-muted-foreground text-xs">{totalFiles} 个文件</span>
-        <span className="text-emerald-600 text-xs">+{insertions}</span>
-        <span className="text-destructive text-xs">−{deletions}</span>
-        <span className="ml-auto"><ToolStatus status={artifact.backendStatus} /></span>
-      </CollapsibleTrigger>
+    <Collapsible defaultOpen={defaultOpen} className="group/tool-call">
+      <DisclosureRow
+        label={<span className="text-foreground text-sm font-medium">{title}</span>}
+        meta={
+          <>
+            <span className="text-muted-foreground">{totalFiles} 个文件</span>
+            <span className="ml-2 text-emerald-600">+{insertions}</span>
+            <span className="ml-2 text-destructive">−{deletions}</span>
+          </>
+        }
+        trailing={<ToolStatus status={artifact.backendStatus} />}
+      />
       <CollapsibleContent className="ml-6 space-y-2 pl-2 pt-2">
         {artifact.error && <p className="text-destructive px-2 text-xs">{artifact.error}</p>}
         {changes.length === 0 && !artifact.error && <p className="text-muted-foreground px-2 text-xs">后端没有返回可展示的 Diff。</p>}
         {changes.map((change) => (
-          <section key={`${change.path}:${change.new_path ?? ""}`} className="overflow-hidden rounded-md border">
-            <header className="flex items-center justify-between gap-2 bg-muted/40 px-2.5 py-1.5 text-xs">
+          <section key={`${change.path}:${change.new_path ?? ""}`} className="overflow-hidden">
+            <header className="flex items-center justify-between gap-2 bg-muted/30 px-2.5 py-1.5 text-xs">
               <span className="truncate font-medium">{change.new_path ?? change.path}</span>
               <span className="shrink-0"><span className="text-emerald-600">+{change.insertions ?? 0}</span>{" "}<span className="text-destructive">−{change.deletions ?? 0}</span></span>
             </header>

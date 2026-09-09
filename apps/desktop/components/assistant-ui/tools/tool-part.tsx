@@ -4,10 +4,12 @@ import { DetailsTool } from "./details-tool";
 import { DiffTool } from "./diff-tool";
 import { DeleteTool } from "./delete-tool";
 import { TerminalTool } from "./terminal-tool";
-import { UnknownTool } from "./unknown-tool";
+import { ToolFallback } from "./tool-fallback";
+import { WebExtractStatusTool } from "./web-extract-status-tool";
+import { WebSearchTool } from "./web-search-tool";
 import { readToolArtifact } from "./types";
 
-export type ToolPartRoute = "delete" | "diff" | "terminal" | "details" | "unknown";
+export type ToolPartRoute = "delete" | "diff" | "terminal" | "details" | "web-search" | "web-extract-status" | "fallback";
 
 const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
 
@@ -18,6 +20,8 @@ const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
 export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
   const artifact = readToolArtifact(rawArtifact);
   const kind = typeof artifact.data?.kind === "string" ? artifact.data.kind : undefined;
+  if (kind === "web-search-results") return "web-search";
+  if (kind === "web-extract-status") return "web-extract-status";
   if (DELETE_TOOL_NAMES.has(toolName) || kind === "delete-result") return "delete";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
   if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";
@@ -27,9 +31,12 @@ export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartR
     kind === "file-list" ||
     artifact.presentation.expand_layout === "details" ||
     artifact.presentation.expand_layout === "list" ||
-    artifact.presentation.expand_layout === "write"
+    artifact.presentation.expand_layout === "write" ||
+    artifact.presentation.expand_layout === "none" ||
+    artifact.presentation.verb !== undefined ||
+    artifact.presentation.icon !== undefined
   ) return "details";
-  return "unknown";
+  return "fallback";
 }
 
 const ToolPartImpl: ToolCallMessagePartComponent = (props) => {
@@ -42,8 +49,12 @@ const ToolPartImpl: ToolCallMessagePartComponent = (props) => {
       return <TerminalTool {...props} />;
     case "details":
       return <DetailsTool {...props} />;
-    case "unknown":
-      return <UnknownTool {...props} />;
+    case "web-search":
+      return <WebSearchTool {...props} />;
+    case "web-extract-status":
+      return <WebExtractStatusTool {...props} />;
+    case "fallback":
+      return <ToolFallback {...props} />;
   }
 };
 

@@ -10,19 +10,21 @@ import {
   useState,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { BrainIcon, ChevronDownIcon } from "lucide-react";
+import { BrainIcon } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { DisclosureRow } from "@/components/assistant-ui/elements/disclosure-row.aui";
+import { DISCLOSURE_CONTENT_CLASS } from "@/components/assistant-ui/elements/disclosure-tokens";
 import { cn } from "@/lib/utils";
 
 export const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
 
-const reasoningVariants = cva("aui-reasoning-root mb-4 w-full", {
+const reasoningVariants = cva("aui-reasoning-root mb-1 w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border px-3 py-2",
@@ -69,21 +71,23 @@ function ReasoningRoot({
   ...props
 }: ReasoningRootProps) {
   const [initialOpen] = useState(defaultOpen);
+  const [autoOpen, setAutoOpen] = useState(() => streaming === true || initialOpen);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
 
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled
     ? controlledOpen
-    : (userOpen ?? (streaming || initialOpen));
+    : (userOpen ?? autoOpen);
   const isPreview = streaming === true && isOpen;
 
   const prevStreamingRef = useRef(streaming);
   useLayoutEffect(() => {
     if (prevStreamingRef.current === streaming) return;
     prevStreamingRef.current = streaming;
-    // A streaming transition only animates the panel when the resting state
-    // is collapsed; with `defaultOpen` the disclosure stays open across it.
-    if (!isControlled && userOpen === null && !initialOpen) {
+    if (!isControlled && userOpen === null) {
+      // Streaming always opens the live preview; the matching completion
+      // transition closes it exactly once unless the user took control.
+      setAutoOpen(streaming === true);
       onAnimationStart?.();
     }
   }, [streaming, isControlled, userOpen, initialOpen, onAnimationStart]);
@@ -173,38 +177,31 @@ function ReasoningTrigger({
   const durationText = duration ? ` (${duration}s)` : "";
 
   return (
-    <CollapsibleTrigger
+    <DisclosureRow
       data-slot="reasoning-trigger"
+      leading={
+        <BrainIcon
+          data-slot="reasoning-trigger-icon"
+          className="aui-reasoning-trigger-icon size-4 shrink-0"
+        />
+      }
+      label={
+        <span
+          data-slot="reasoning-trigger-label"
+          className={cn(
+            "aui-reasoning-trigger-label-wrapper inline-block leading-none tabular-nums",
+            active && "shimmer motion-reduce:animate-none",
+          )}
+        >
+          Reasoning{durationText}
+        </span>
+      }
       className={cn(
-        "aui-reasoning-trigger group/trigger text-muted-foreground hover:text-foreground flex max-w-[75%] origin-left items-center gap-2 py-1.5 text-sm transition-[color,scale] active:scale-[0.98]",
+        "aui-reasoning-trigger",
         className,
       )}
       {...props}
-    >
-      <BrainIcon
-        data-slot="reasoning-trigger-icon"
-        className="aui-reasoning-trigger-icon size-4 shrink-0"
-      />
-      <span
-        data-slot="reasoning-trigger-label"
-        className={cn(
-          "aui-reasoning-trigger-label-wrapper inline-block leading-none tabular-nums",
-          active && "shimmer motion-reduce:animate-none",
-        )}
-      >
-        Reasoning{durationText}
-      </span>
-      <ChevronDownIcon
-        data-slot="reasoning-trigger-chevron"
-        className={cn(
-          "aui-reasoning-trigger-chevron mt-0.5 size-4 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0",
-        )}
-      />
-    </CollapsibleTrigger>
+    />
   );
 }
 
@@ -312,7 +309,7 @@ function ReasoningText({
       )}
       {...props}
     >
-      <div ref={contentRef} className="aui-reasoning-text-content space-y-4">
+      <div ref={contentRef} className={cn("aui-reasoning-text-content", DISCLOSURE_CONTENT_CLASS)}>
         {children}
       </div>
     </div>

@@ -1,5 +1,7 @@
 import { requestJson } from "@/lib/http/client";
 
+type ReadRequestOptions = Pick<RequestInit, "signal">;
+
 export type Workspace = {
   workspace_id: number;
   name: string;
@@ -15,6 +17,8 @@ export type WorkspaceTask = {
   task_type: "user" | "fork" | "delegation" | string;
   fork_available: boolean;
   execution_status: string | null;
+  context_usage_used: number | null;
+  context_window_total: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -23,13 +27,13 @@ export type StartedConversation = Pick<WorkspaceTask, "task_id">;
 export type CreateWorkspaceInput = { name: string; root_path: string };
 export type CreateTaskInput = { text: string };
 
-export const getWorkspaces = () => requestJson<Workspace[]>("/workspaces");
+export const getWorkspaces = (options?: ReadRequestOptions) => requestJson<Workspace[]>("/workspaces", options);
 export const createWorkspace = (input: CreateWorkspaceInput) =>
   requestJson<Workspace>("/workspaces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
-export const getWorkspaceTasks = (workspaceId: number) => requestJson<WorkspaceTask[]>(`/workspaces/${workspaceId}/tasks`);
+export const getWorkspaceTasks = (workspaceId: number, options?: ReadRequestOptions) => requestJson<WorkspaceTask[]>(`/workspaces/${workspaceId}/tasks`, options);
 export const createWorkspaceTask = (workspaceId: number, input: CreateTaskInput) =>
   requestJson<WorkspaceTask>(`/workspaces/${workspaceId}/tasks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
-export const getTask = (taskId: number) => requestJson<WorkspaceTask>(`/tasks/${taskId}`);
+export const getTask = (taskId: number, options?: ReadRequestOptions) => requestJson<WorkspaceTask>(`/tasks/${taskId}`, options);
 export const deleteWorkspace = (workspaceId: number) =>
   requestJson<{ workspace_id: number; deleted: boolean }>(`/workspaces/${workspaceId}`, { method: "DELETE" });
 export const deleteTask = (taskId: number) =>

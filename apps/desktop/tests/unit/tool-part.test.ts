@@ -11,8 +11,8 @@ describe("tool renderer routing", () => {
     })).toBe("details");
   });
 
-  it("does not guess a renderer when read_file has no semantic data", () => {
-    expect(routeToolPart("read_file", { presentation: { expand_layout: "none" }, data: null })).toBe("unknown");
+  it("uses the declared presentation when read_file has no semantic data", () => {
+    expect(routeToolPart("read_file", { presentation: { expand_layout: "none" }, data: null })).toBe("details");
   });
 
   it("requires delete semantics for the delete renderer", () => {
@@ -20,6 +20,25 @@ describe("tool renderer routing", () => {
   });
 
   it("uses an explicit safe fallback for unknown tools", () => {
-    expect(routeToolPart("future_tool", { presentation: {}, data: null })).toBe("unknown");
+    expect(routeToolPart("future_tool", { presentation: {}, data: null })).toBe("fallback");
+  });
+
+  it("routes web search to its semantic renderer", () => {
+    expect(routeToolPart("web_search", {
+      backendStatus: "completed",
+      presentation: { expand_layout: "list" },
+      data: { kind: "web-search-results", query: "assistant-ui", results: [] },
+    })).toBe("web-search");
+  });
+
+  it("routes web extract to the status-only renderer", () => {
+    expect(routeToolPart("web_extract", {
+      backendStatus: "completed",
+      presentation: { expand_layout: "none", expandable: false },
+      data: {
+        kind: "web-extract-status",
+        sites: [{ site: "example.com", url: "https://example.com", status: "success" }],
+      },
+    })).toBe("web-extract-status");
   });
 });

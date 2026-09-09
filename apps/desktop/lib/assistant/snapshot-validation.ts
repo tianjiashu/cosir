@@ -32,6 +32,14 @@ function requireFiniteNonNegativeNumber(value: unknown, path: string): number {
   return value;
 }
 
+function requireNullableNonNegativeInteger(value: unknown, path: string): number | null {
+  if (value === null) return null;
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new TransportSnapshotValidationError(path, "非负整数或 null");
+  }
+  return value as number;
+}
+
 const USAGE_KEYS = [
   "input_tokens",
   "output_tokens",
@@ -97,6 +105,9 @@ function validateMessage(value: unknown, index: number): void {
   const path = `messages[${index}]`;
   const message = requireRecord(value, path);
   requireString(message.id, `${path}.id`);
+  if (hasOwn(message, "runId") && message.runId !== null && (!Number.isInteger(message.runId) || (message.runId as number) < 0)) {
+    throw new TransportSnapshotValidationError(`${path}.runId`, "非负整数或 null");
+  }
   if (message.role !== "user" && message.role !== "assistant") {
     throw new TransportSnapshotValidationError(`${path}.role`, "user 或 assistant");
   }
@@ -110,7 +121,10 @@ function validateMessage(value: unknown, index: number): void {
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["messages", "run", "approvals", "context_usage", "usage", "error"], "snapshot");
+  requireExactKeys(state, [
+    "messages", "run", "approvals", "context_usage", "context_revision", "usage_run_id", "usage",
+    "context_usage_used", "context_window_total", "error",
+  ], "snapshot");
 
   if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
   state.messages.forEach(validateMessage);
@@ -139,10 +153,15 @@ export function parseTransportState(value: unknown): TransportState {
   }
 
   requireFiniteNonNegativeNumber(state.context_usage, "context_usage");
+  requireNullableNonNegativeInteger(state.context_revision, "context_revision");
+  requireNullableNonNegativeInteger(state.usage_run_id, "usage_run_id");
+  requireNullableNonNegativeInteger(state.context_usage_used, "context_usage_used");
+  requireNullableNonNegativeInteger(state.context_window_total, "context_window_total");
   const usage = requireRecord(state.usage, "usage");
   requireExactKeys(usage, USAGE_KEYS, "usage");
   USAGE_KEYS.forEach((key) => {
     const count = usage[key];
+    if (key === "cache_miss_tokens" && count === null) return;
     if (!Number.isInteger(count) || (count as number) < 0) {
       throw new TransportSnapshotValidationError(`usage.${key}`, "非负整数");
     }

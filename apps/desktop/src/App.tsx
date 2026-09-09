@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
-import { TaskPage } from "@/components/task-page";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import { initializeBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
 
@@ -13,14 +12,14 @@ function TaskRoute() {
   const taskPath = pathname.match(/^\/tasks\/([^/]+)$/);
   if (!taskPath) {
     return pathname === "/"
-      ? <WorkspaceShell />
+      ? <WorkspaceShell routeTaskId={null} />
       : <div className="flex h-dvh items-center justify-center p-6 text-sm">页面不存在。</div>;
   }
 
   const parsedTaskId = Number(taskPath[1]);
   const routeState = state as TaskRouteState | null;
   return Number.isInteger(parsedTaskId) && parsedTaskId > 0
-    ? <TaskPage taskId={parsedTaskId} initialMessage={routeState?.initialMessage} />
+    ? <WorkspaceShell routeTaskId={parsedTaskId} initialMessage={routeState?.initialMessage} />
     : <div className="p-6 text-sm">任务标识无效。</div>;
 }
 

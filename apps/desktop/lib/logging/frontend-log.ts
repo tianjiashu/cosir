@@ -48,6 +48,16 @@ export async function frontendLog(
     const logs = logWindow.__cosirFrontendLogs ?? (logWindow.__cosirFrontendLogs = []);
     logs.push(entry);
     if (logs.length > 500) logs.splice(0, logs.length - 500);
+
+    // Keep the diagnostic trail visible in the Tauri WebView console while
+    // preserving the bounded in-memory sink used by E2E diagnostics. Payloads
+    // are already limited to lifecycle metadata; message/file contents never
+    // enter this logger.
+    const consoleData = { ...entry.data, ...(entry.error ? { error: entry.error } : {}) };
+    if (level === "ERROR") console.error(`[cosir.frontend] ${event}: ${msg}`, consoleData);
+    else if (level === "WARNING") console.warn(`[cosir.frontend] ${event}: ${msg}`, consoleData);
+    else if (level === "DEBUG") console.debug(`[cosir.frontend] ${event}: ${msg}`, consoleData);
+    else console.info(`[cosir.frontend] ${event}: ${msg}`, consoleData);
   }
   try {
     await invoke("write_frontend_log", { entry });

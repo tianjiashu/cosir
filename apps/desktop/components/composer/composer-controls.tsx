@@ -3,19 +3,21 @@
 import type { ReactNode } from "react";
 
 import { ModelSelector } from "@/components/assistant-ui/model-selector";
+import type { ModelSelectionScope } from "@/lib/model-selection-storage";
 
 type ComposerControlsProps = {
-  taskId?: number;
+  scope?: ModelSelectionScope;
+  runtimeModelContext?: boolean;
   workspacePicker?: ReactNode;
   trailing?: ReactNode;
   onModelReadyChange?: (ready: boolean) => void;
 };
 
-export function ComposerControls({ taskId, workspacePicker, trailing, onModelReadyChange }: ComposerControlsProps) {
+export function ComposerControls({ scope, runtimeModelContext = false, workspacePicker, trailing, onModelReadyChange }: ComposerControlsProps) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       {workspacePicker}
-      <ModelSelector taskId={taskId} onReadyChange={onModelReadyChange} />
+      <ModelSelector scope={scope} runtimeModelContext={runtimeModelContext} onReadyChange={onModelReadyChange} />
       {trailing}
     </div>
   );
