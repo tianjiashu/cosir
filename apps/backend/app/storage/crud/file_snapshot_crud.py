@@ -8,6 +8,7 @@ import threading
 from collections.abc import Sequence
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.orm import Session
 
 from app.models.file_snapshot_record import FileSnapshotRecord
 from app.storage.model.file_snapshot_model import FileSnapshotModel
@@ -380,3 +381,39 @@ class FileSnapshotCrud:
         """
         with self._session_factory.begin() as session:
             session.execute(delete(FileSnapshotModel).where(FileSnapshotModel.run_id == run_id))
+
+    def delete_by_task_ids(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> None:
+        """按一批 task 的标识批量删除其全部文件快照记录。
+
+        与 ``clear_by_turn`` 不同，本方法按 ``task_id`` 整删某任务下的快照（不依赖 run），
+        供任务级联删除在外部事务内复用。
+
+        参数:
+            task_ids: 待清理的 task 整数 id 列表。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            从 ``file_snapshots`` 表删除 ``task_id`` 命中的行；task_ids 为空或对应行
+            不存在时静默无操作。
+        """
+
+        if not task_ids:
+            return
+        if session is not None:
+            session.execute(
+                delete(FileSnapshotModel).where(FileSnapshotModel.task_id.in_(task_ids))
+            )
+            return
+        with self._session_factory.begin() as session:
+            session.execute(
+                delete(FileSnapshotModel).where(FileSnapshotModel.task_id.in_(task_ids))
+            )

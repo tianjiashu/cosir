@@ -626,11 +626,103 @@ class ConversationRunCrud:
                 ).all()
             ]
 
-    def delete_by_ids(self, run_ids: list[int]) -> None:
+    def collect_run_ids_by_task_ids(self, session: Session, task_ids: list[int]) -> list[int]:
+        """在调用方事务内返回一批任务下全部 run 的标识列表。
+
+        与 ``list_ids_by_task_ids`` 语义相同，但复用调用方传入的事务 session，用于
+        级联删除在单个共享事务内先收集 run 标识再删除，保证原子性。
+
+        参数:
+            session: 处于事务中的 SQLAlchemy session（本方法只读、不提交）。
+            task_ids: 任务标识列表（整数 id）；为空时直接返回空列表。
+
+        返回:
+            匹配的 run id 列表；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            无（仅在该事务内执行一次只读查询）。
+        """
+
+        if not task_ids:
+            return []
+        return [
+            row[0]
+            for row in session.execute(
+                select(ConversationRunModel.id).where(ConversationRunModel.task_id.in_(task_ids))
+            ).all()
+        ]
+
+    def collect_checkpoint_threads_by_task_ids(
+        self, session: Session, task_ids: list[int]
+    ) -> set[str]:
+        """在调用方事务内收集一批任务对应的 checkpoint thread id 集合。
+
+        参数:
+            session: 处于事务中的 SQLAlchemy session（本方法只读、不提交）。
+            task_ids: 任务标识列表（整数 id）；为空时直接返回空集合。
+
+        返回:
+            这些任务下 run 的 ``checkpoint_thread_id`` 集合（跳过空值）；无匹配时为空集合。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            无（仅在该事务内执行一次只读查询）。
+        """
+
+        if not task_ids:
+            return set()
+        rows = session.execute(
+            select(ConversationRunModel.checkpoint_thread_id).where(
+                ConversationRunModel.task_id.in_(task_ids)
+            )
+        ).all()
+        return {row[0] for row in rows if row[0]}
+
+    def collect_checkpoint_threads_by_thread_ids(
+        self, session: Session, thread_ids: set[str]
+    ) -> set[str]:
+        """返回主库中仍被任意 run 引用的 checkpoint thread id 集合。
+
+        用于级联删除后判断哪些 thread 已成孤儿：传入删除前收集到的 thread 集合，
+        返回其中仍被主库剩余 run 引用的子集，差集即为可 GC 的孤儿。
+
+        参数:
+            session: 处于事务中的 SQLAlchemy session（本方法只读、不提交）。
+            thread_ids: 待判定的 checkpoint thread id 集合；为空时直接返回空集合。
+
+        返回:
+            仍被主库 run 引用的 thread id 集合；无匹配时为空集合。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            无（仅在该事务内执行一次只读查询）。
+        """
+
+        if not thread_ids:
+            return set()
+        rows = session.execute(
+            select(ConversationRunModel.checkpoint_thread_id).where(
+                ConversationRunModel.checkpoint_thread_id.in_(thread_ids)
+            )
+        ).all()
+        return {row[0] for row in rows if row[0]}
+
+    def delete_by_ids(
+        self, run_ids: list[int], session: Session | None = None
+    ) -> None:
         """按标识批量删除 run。
 
         参数:
             run_ids: 待删除的 run 标识列表（整数 id）；为空时不执行任何操作。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
 
         返回:
             无。
@@ -642,6 +734,11 @@ class ConversationRunCrud:
             run_ids 为空时直接返回；对应行不存在时静默无操作。
         """
         if not run_ids:
+            return
+        if session is not None:
+            session.execute(
+                delete(ConversationRunModel).where(ConversationRunModel.id.in_(run_ids))
+            )
             return
         with self._session_factory.begin() as session:
             session.execute(

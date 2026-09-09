@@ -182,11 +182,15 @@ class ConversationCommandCrud:
                 .values(error_code=error_code, updated_at=to_text(utc_now()))
             )
 
-    def delete_by_task_ids(self, task_ids: set[int]) -> None:
+    def delete_by_task_ids(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> None:
         """删除任务集合对应的命令记录。
 
         参数:
-            task_ids: 要删除的任务标识集合。
+            task_ids: 要删除的任务标识列表。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
 
         返回:
             无。
@@ -198,6 +202,13 @@ class ConversationCommandCrud:
             删除指定任务下的全部命令映射；空集合不执行数据库操作。
         """
         if not task_ids:
+            return
+        if session is not None:
+            session.execute(
+                delete(ConversationCommandModel).where(
+                    ConversationCommandModel.task_id.in_(task_ids)
+                )
+            )
             return
         with self._session_factory.begin() as session:
             session.execute(

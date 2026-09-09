@@ -85,10 +85,35 @@ class ConversationTaskSnapshotCrud:
             row.updated_at = to_text(utc_now())
         session.flush()
 
-    def delete_by_task_ids(self, task_ids: set[int]) -> None:
-        """删除一批 Task 的快照。"""
+    def delete_by_task_ids(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> None:
+        """删除一批 Task 的快照。
+
+        参数:
+            task_ids: 待清理的 task 整数 id 列表。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            从 ``conversation_task_snapshots`` 表删除 ``task_id`` 命中的行；task_ids 为空
+            或对应行不存在时静默无操作。
+        """
 
         if not task_ids:
+            return
+        if session is not None:
+            session.execute(
+                delete(ConversationTaskSnapshotModel).where(
+                    ConversationTaskSnapshotModel.task_id.in_(task_ids)
+                )
+            )
             return
         with self._session_factory.begin() as session:
             session.execute(

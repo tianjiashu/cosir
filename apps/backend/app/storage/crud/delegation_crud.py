@@ -13,7 +13,8 @@
 
 import dataclasses
 
-from sqlalchemy import ColumnElement, asc, delete, func, insert, select, update
+from sqlalchemy import ColumnElement, asc, delete, func, insert, or_, select, update
+from sqlalchemy.orm import Session
 
 from app.models.delegation_record import DelegationRecord
 from app.storage.model.delegation_model import DelegationModel
@@ -277,14 +278,21 @@ class DelegationCrud:
             )
         return [DelegationRecord.from_model(row) for row in rows]
 
-    def delete_by_ids(self, ids: list[int]) -> int:
-        """按 ``task_id`` 批量删除 delegation 记录。
+    def delete_by_task_ids(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> int:
+        """删除与一批任务相关的全部 delegation 记录。
 
-        注意方法名易与「按 delegation 自身 id 删除」混淆：本方法按 ``task_id`` 匹配，
-        传入的是任务 id 列表，会删除这些任务下归属的全部 delegation 行。
+        同时按 ``task_id`` 与 ``child_task_id`` 匹配：``task_id`` 命中本任务发起的委派
+        （指向其子任务），``child_task_id`` 命中创建本任务的委派（本任务作为委派子任务）。
+        单任务删除必须同时清理这两类，否则 ``delegations.child_task_id -> tasks.id`` 与
+        ``tasks.delegation_id -> delegations.id`` 外键会在删除任务行时报
+        ``FOREIGN KEY constraint failed``。
 
         参数:
-            ids: 用于匹配 ``task_id`` 的任务整数 id 列表（非 delegation 自身 id）。
+            task_ids: 待清理的任务整数 id 列表（非 delegation 自身 id）。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
 
         返回:
             被删除的 delegation 行数（便于调用方审计日志）。
@@ -293,17 +301,24 @@ class DelegationCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
 
         副作用:
-            从 ``delegations`` 表删除 ``task_id`` 命中的行；仅删除 delegation 自身，
-            不级联其他表（级联编排由上层 service 负责）。ids 为空或对应行不存在时
-            静默无操作；返回 0。
+            从 ``delegations`` 表删除 ``task_id`` 或 ``child_task_id`` 命中的行；仅删除
+            delegation 自身，不级联其他表（级联编排由上层 service 负责）。task_ids 为空或
+            对应行不存在时静默无操作；返回 0。
         """
 
-        if not ids:
+        if not task_ids:
             return 0
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                delete(DelegationModel).where(DelegationModel.task_id.in_(ids))
+        stmt = delete(DelegationModel).where(
+            or_(
+                DelegationModel.task_id.in_(task_ids),
+                DelegationModel.child_task_id.in_(task_ids),
             )
+        )
+        if session is not None:
+            result = session.execute(stmt)
+            return int(result.rowcount or 0)
+        with self._session_factory.begin() as session:
+            result = session.execute(stmt)
         return int(result.rowcount or 0)
 
     def list_pending_or_running(self) -> list[DelegationRecord]:

@@ -215,11 +215,14 @@ class TaskCrud:
             candidate = f"{base_title} {suffix}"
         return candidate
 
-    def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
+    def list_by_parent_task(
+        self, parent_task_id: int, session: Session | None = None
+    ) -> list[TaskRecord]:
         """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。
 
         参数:
             parent_task_id: 父任务标识（整数 id）。
+            session: 可选的调用方事务 session；传入时复用当前事务，不自行提交。
 
         返回:
             该父任务的直接子任务列表（``task_type='delegation'`` 且 ``parent_task_id`` 匹配）；
@@ -231,16 +234,16 @@ class TaskCrud:
         副作用:
             打开一次主库只读 session。
         """
-        with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(TaskModel)
-                    .where(TaskModel.parent_task_id == parent_task_id)
-                    .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
-                )
-                .scalars()
-                .all()
-            )
+        stmt = (
+            select(TaskModel)
+            .where(TaskModel.parent_task_id == parent_task_id)
+            .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
+        )
+        if session is not None:
+            rows = session.scalars(stmt).all()
+        else:
+            with self._session_factory() as owned_session:
+                rows = owned_session.scalars(stmt).all()
         return [TaskRecord.from_model(row) for row in rows]
 
     def get(self, task_id: int) -> TaskRecord:
@@ -295,7 +298,9 @@ class TaskCrud:
             )
         return self.get(task_id)
 
-    def list_ids_by_workspace(self, workspace_id: int) -> list[int]:
+    def list_ids_by_workspace(
+        self, workspace_id: int, session: Session | None = None
+    ) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。
 
         相比 ``list_by_workspace``，本方法只查 ``id`` 一列，用于跨表级联删除等只需 id
@@ -303,6 +308,7 @@ class TaskCrud:
 
         参数:
             workspace_id: 工作区标识（整数 id）。
+            session: 可选的调用方事务 session；传入时复用当前事务，不自行提交。
 
         返回:
             该工作区的 task id 列表；无匹配时为空列表。
@@ -313,19 +319,53 @@ class TaskCrud:
         副作用:
             打开一次主库只读 session。
         """
-        with self._session_factory() as session:
-            return [
-                row[0]
-                for row in session.execute(
-                    select(TaskModel.id).where(TaskModel.workspace_id == workspace_id)
-                ).all()
-            ]
+        stmt = select(TaskModel.id).where(TaskModel.workspace_id == workspace_id)
+        if session is not None:
+            return list(session.scalars(stmt).all())
+        with self._session_factory() as owned_session:
+            return list(owned_session.scalars(stmt).all())
 
-    def delete_by_ids(self, task_ids: list[int]) -> None:
+    def list_root_ids_by_workspace(
+        self, workspace_id: int, session: Session | None = None
+    ) -> list[int]:
+        """返回某工作区下「主任务」（``parent_task_id`` 为 NULL）的整数 id 列表。
+
+        主任务对应于用户任务 / fork 任务等根节点，其下通过 ``parent_task_id`` 自引用挂接
+        委派子任务。级联删除工作区时只需删除这些根任务，``TaskService.delete_task`` 会沿
+        ``parent_task_id`` 递归清理整棵子树（含委派子任务），从而覆盖工作区内全部 task。
+
+        参数:
+            workspace_id: 工作区标识（整数 id）。
+            session: 可选的调用方事务 session；传入时复用当前事务，不自行提交。
+
+        返回:
+            该工作区下根任务（``parent_task_id IS NULL``）的 id 列表；无匹配时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+
+        stmt = select(TaskModel.id).where(
+            TaskModel.workspace_id == workspace_id,
+            TaskModel.parent_task_id.is_(None),
+        )
+        if session is not None:
+            return list(session.scalars(stmt).all())
+        with self._session_factory() as owned_session:
+            return list(owned_session.scalars(stmt).all())
+
+    def delete_by_ids(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> None:
         """按标识批量删除 task。
 
         参数:
             task_ids: 待删除的 task 整数 id 列表。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
 
         返回:
             无。
@@ -340,5 +380,88 @@ class TaskCrud:
 
         if not task_ids:
             return
+        if session is not None:
+            session.execute(delete(TaskModel).where(TaskModel.id.in_(task_ids)))
+            return
         with self._session_factory.begin() as session:
             session.execute(delete(TaskModel).where(TaskModel.id.in_(task_ids)))
+
+    def clear_parent_run_id(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> None:
+        """把指定 task 的 ``parent_run_id`` 置空，解除与 ``conversation_runs`` 的双向外键环。
+
+        删除单个任务的 run 之前必须先解除该列对 run 的引用，否则 SQLite 即时外键检查会因
+        ``tasks.parent_run_id`` 指向即将被删的 run 而报 ``FOREIGN KEY constraint failed``。
+        本方法只改这一列，不删除行、不触碰其它列。
+
+        参数:
+            task_ids: 待解除 run 引用的 task 整数 id 列表。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            把 ``tasks`` 表中匹配行的 ``parent_run_id`` 置为 NULL；task_ids 为空时静默无操作。
+        """
+
+        if not task_ids:
+            return
+        if session is not None:
+            session.execute(
+                update(TaskModel)
+                .where(TaskModel.id.in_(task_ids))
+                .values(parent_run_id=None)
+            )
+            return
+        with self._session_factory.begin() as session:
+            session.execute(
+                update(TaskModel)
+                .where(TaskModel.id.in_(task_ids))
+                .values(parent_run_id=None)
+            )
+
+    def clear_delegation_id(
+        self, task_ids: list[int], session: Session | None = None
+    ) -> None:
+        """把指定 task 的 ``delegation_id`` 置空，解除与 ``delegations`` 的外键引用。
+
+        删除创建本任务的委派记录（``delegations.child_task_id`` 指向本任务）之前必须先
+        解除本列对该委派记录的引用，否则 SQLite 即时外键检查会因 ``tasks.delegation_id``
+        指向即将被删的委派行而报 ``FOREIGN KEY constraint failed``。本方法只改这一列。
+
+        参数:
+            task_ids: 待解除 delegation 引用的 task 整数 id 列表。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
+                自开事务并自动提交。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            把 ``tasks`` 表中匹配行的 ``delegation_id`` 置为 NULL；task_ids 为空时静默无操作。
+        """
+
+        if not task_ids:
+            return
+        if session is not None:
+            session.execute(
+                update(TaskModel)
+                .where(TaskModel.id.in_(task_ids))
+                .values(delegation_id=None)
+            )
+            return
+        with self._session_factory.begin() as session:
+            session.execute(
+                update(TaskModel)
+                .where(TaskModel.id.in_(task_ids))
+                .values(delegation_id=None)
+            )

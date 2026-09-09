@@ -12,6 +12,7 @@
 """
 
 from sqlalchemy import asc, delete, select
+from sqlalchemy.orm import Session
 
 from app.models import WorkspaceRecord
 from app.storage.model.workspace_model import WorkspaceModel
@@ -131,6 +132,29 @@ class WorkspaceCrud:
             raise KeyError(workspace_id)
         return WorkspaceRecord.from_model(row)
 
+    @staticmethod
+    def get_in_session(session: Session, workspace_id: int) -> WorkspaceRecord:
+        """在调用方事务内读取 workspace，缺失时抛出 ``KeyError``。
+
+        参数:
+            session: 处于事务中的 SQLAlchemy session。
+            workspace_id: workspace 标识。
+
+        返回:
+            对应的 ``WorkspaceRecord``。
+
+        异常:
+            KeyError: 如果 workspace 不存在。
+
+        副作用:
+            无；仅复用调用方事务读取数据库。
+        """
+
+        row: WorkspaceModel | None = session.get(WorkspaceModel, workspace_id)
+        if row is None:
+            raise KeyError(workspace_id)
+        return WorkspaceRecord.from_model(row)
+
     def delete(self, workspace_id: int) -> None:
         """删除单个工作区记录。
 
@@ -152,3 +176,23 @@ class WorkspaceCrud:
 
         with self._session_factory.begin() as session:
             session.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))
+
+    @staticmethod
+    def delete_in_session(session: Session, workspace_id: int) -> None:
+        """在调用方事务内删除 workspace 行。
+
+        参数:
+            session: 处于事务中的 SQLAlchemy session。
+            workspace_id: 待删除的 workspace 标识。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            在当前事务中删除 workspace 行；不提交事务。
+        """
+
+        session.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))
