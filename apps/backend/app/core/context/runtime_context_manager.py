@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 
-from app.core.agents.agent_profile import AgentProfile
+from app.config.logging.logger import log
+from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_compressor.context_compressor import ContextCompressor
 from app.core.context.context_entry import ContextEntry
@@ -185,7 +186,7 @@ class RuntimeContextManager:
         在新 run 的 graph stream 外继续收到回调。
         """
 
-        if listener.main_agent_only and not self.agent_profile.main_agent:
+        if listener.main_agent_only and self.agent_profile.agent_type is not AgentProfileType.MAIN:
             return self
         for index, current in enumerate(self._listeners):
             if type(current) is type(listener):
@@ -226,6 +227,45 @@ class RuntimeContextManager:
                 additional_kwargs=message.additional_kwargs,
                 tool_calls=message.tool_calls,
             )
+
+        if include_in_context and isinstance(message, ToolMessage) and message.tool_call_id and any(
+            entry.run_id == self.current_run_id
+            and isinstance(entry.message, ToolMessage)
+            and entry.message.tool_call_id == message.tool_call_id
+            for entry in self._entries
+        ):
+            log.info(
+                "runtime_context_tool_message_duplicate_ignored",
+                extra={
+                    "msg": "重复恢复的 ToolMessage 已幂等忽略",
+                    "data": {
+                        "task_id": self.current_task_id,
+                        "tool_call_id": message.tool_call_id,
+                    },
+                },
+            )
+            return
+
+        if include_in_context and isinstance(message, SystemMessage):
+            message_kind = message.additional_kwargs.get("cosir_message_kind")
+            if message_kind == "tool_call_repair" and any(
+                entry.run_id == self.current_run_id
+                and isinstance(entry.message, SystemMessage)
+                and entry.message.additional_kwargs.get("cosir_message_kind") == message_kind
+                and entry.message.content == message.content
+                for entry in self._entries
+            ):
+                log.info(
+                    "runtime_context_repair_message_duplicate_ignored",
+                    extra={
+                        "msg": "重复恢复的工具调用修复提示已幂等忽略",
+                        "data": {
+                            "task_id": self.current_task_id,
+                            "run_id": self.current_run_id,
+                        },
+                    },
+                )
+                return
 
         sequence = self._message_sequence
         self._require_context_service().append(
@@ -287,6 +327,69 @@ class RuntimeContextManager:
             )
             self.add_message(placeholder, include_in_context=True)
 
+    def _normalize_tool_call_message_order(self) -> None:
+        """把历史遗留的修复 ``SystemMessage`` 移到关联工具结果之后。
+
+        新代码通过 ``deferred_repair_message`` 保证消息顺序，但旧版本可能已经持久化了
+        ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage``。该顺序会在下一次请求时
+        再次触发 provider 的 400，因此每次加载模型上下文前做一次内存侧兼容修复。这里只
+        调整模型输入副本的顺序，不删除或重写 canonical context 事实；后续追加消息仍使用
+        原有序号，下一次加载会再次得到同样的规范顺序。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。无法识别的消息保持原顺序，不阻断上下文加载。
+
+        副作用:
+            可能调整 ``_entries`` 的内存顺序并写一条结构化诊断日志；不直接写数据库。
+        """
+        normalized: list[ContextEntry] = []
+        deferred_systems: list[ContextEntry] = []
+        pending_call_ids: set[str] = set()
+        moved_count = 0
+
+        for entry in self._entries:
+            message = entry.message
+            if isinstance(message, SystemMessage) and pending_call_ids:
+                deferred_systems.append(entry)
+                moved_count += 1
+                continue
+
+            normalized.append(entry)
+            if isinstance(message, AIMessage):
+                pending_call_ids.update(
+                    str(call.get("id"))
+                    for call in message.tool_calls
+                    if call.get("id")
+                )
+            elif isinstance(message, ToolMessage) and message.tool_call_id:
+                pending_call_ids.discard(message.tool_call_id)
+
+            if not pending_call_ids and deferred_systems:
+                normalized.extend(deferred_systems)
+                deferred_systems = []
+
+        # 悬空调用没有结果时，仍把被延迟的 system 消息放到当前可见历史末尾；调用方已在
+        # 本方法前执行 ``_close_unclosed_tool_calls``，因此此处不会再把占位插到它后面。
+        normalized.extend(deferred_systems)
+        if moved_count:
+            self._entries = normalized
+            log.warning(
+                "runtime_context_tool_message_order_repaired",
+                extra={
+                    "msg": "加载上下文时修复历史 SystemMessage 与 ToolMessage 的顺序",
+                    "data": {
+                        "task_id": self.current_task_id,
+                        "moved_system_message_count": moved_count,
+                    },
+                },
+            )
+
     def load_message(self) -> list[BaseMessage]:
         """返回 system prompt 加 Task context 的模型输入副本。
 
@@ -299,7 +402,11 @@ class RuntimeContextManager:
             保持原 ``have_change=False``。
         """
         self.have_change = False
+        # 先补齐悬空 tool call，再移动修复 SystemMessage；否则历史形如
+        # AI(tool_calls) -> SystemMessage（无 ToolMessage）会在排序后重新被占位插到 System
+        # 后面，仍然触发 provider 400。
         self._close_unclosed_tool_calls()
+        self._normalize_tool_call_message_order()
         return [entry.message for entry in copy.deepcopy(self._effective_entries())]
 
     def _effective_entries(self) -> list[ContextEntry]:

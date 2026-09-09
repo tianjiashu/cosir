@@ -5,8 +5,8 @@
 1. ``<runtime_context>`` 动态变量层：运行期才确定的事实（角色、工作区、日期、工具集合、
    语言、CodeGraph 开关等），直接由 ``AgentProfile`` / ``Settings`` / 系统状态注入，不读取任何文件。
 2. ``<agent_layer>`` Agent 系统预设层：来源唯一为 ``AgentProfile.prompt_file_path`` 指向的
-   md/txt 文件全文（系统预设，与用户无关）；该字段为 ``None`` 时回退内置默认预设（工程原则
-   + 工作流契约 + 工具策略静态原则），加载后不做变量替换。
+   md/txt 文件全文（系统预设，与用户无关）；该字段为 ``None`` 或文件读取失败时使用空的
+   规则层，加载后不做变量替换。
 3. ``<workspace_layer>`` Workspace 项目层：扫描工作区下的项目指令文件（如 ``AGENTS.md`` /
    ``CLAUDE.md``），受预算闸门约束，避免上下文爆炸。
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
 from pathlib import Path
 from platform import system
 
@@ -26,7 +25,6 @@ from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
-
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +51,6 @@ _IGNORED_DIRS: frozenset[str] = frozenset(
 )
 
 
-def _default_coding_rule_dir() -> str:
-    """返回默认编码规则的绝对路径。"""
-    return str(Path(__file__).resolve().parent / "rules" / "default-coding-rules.md")
-
-
 class SystemPromptBuilder:
     """按三层结构构建本地 coding-agent 的系统提示词。
 
@@ -80,7 +73,7 @@ class SystemPromptBuilder:
             无。
 
         副作用:
-            可能读取 ``prompt_file_path`` 与 workspace 指令文件（失败均容错回退）。
+            可能读取 ``prompt_file_path`` 与 workspace 指令文件（失败均容错）。
         """
         layer1 = SystemPromptBuilder._build_runtime_context(agent_profile, workspace_root)
         layer2 = SystemPromptBuilder._build_agent_layer(agent_profile)
@@ -129,7 +122,7 @@ class SystemPromptBuilder:
     # --- Layer 2: Agent 系统预设层（profile.prompt_file_path 或内置默认） ---
     @staticmethod
     def _build_agent_layer(agent_profile: AgentProfile) -> str:
-        """构建 Agent 系统预设层：加载预设文件或对回退默认预设施加预算上限。
+        """构建 Agent 系统预设层：加载预设文件并施加预算上限。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案（取其 ``prompt_file_path``）。
@@ -141,7 +134,7 @@ class SystemPromptBuilder:
             无。
 
         副作用:
-            可能读取 ``prompt_file_path`` 或内置工程原则文件（失败容错回退）。
+            可能读取 ``prompt_file_path``（失败容错为空规则层）。
         """
         raw = SystemPromptBuilder._load_agent_preset(agent_profile)
         if raw is None:
@@ -149,32 +142,32 @@ class SystemPromptBuilder:
         content = SystemPromptBuilder._enforce_budget(
             raw, Settings.AGENT_PERSONA_MAX_BYTES, Settings.AGENT_PERSONA_MAX_TOKENS
         )
-        return "<rule_layer>\n" + content + "\n</rule_layer>"
+        return "<agent_layer>\n" + content + "\n</agent_layer>"
 
     @staticmethod
     def _load_agent_preset(agent_profile: AgentProfile) -> str | None:
         """加载 Agent 系统预设内容。
 
-        ``prompt_file_path`` 非空时读取该文件；读取失败（不存在/无权限/编码错误）时
-        记 warning 并回退内置默认预设，不中断构建。
+        ``prompt_file_path`` 非空时读取该文件；路径为空或读取失败（不存在/无权限/编码错误）
+        时返回 ``None``，读取失败会记录 warning，不中断构建。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
 
         返回:
-            预设文件全文或内置默认预设全文。
+            预设文件全文；没有可用文件时返回 ``None``。
 
         异常:
             无（读取异常均内部兜底）。
 
         副作用:
-            读取 ``prompt_file_path`` 指向的文件或内置工程原则文件。
+            读取 ``prompt_file_path`` 指向的文件。
         """
         path = agent_profile.prompt_file_path
         if path:
             try:
                 return read_text_file(path)
-            except (FileNotFoundError, PermissionError, OSError) as exc:
+            except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
                 logger.warning(f"agent_preset_load_failed path={path} error={exc}")
         return None
 
