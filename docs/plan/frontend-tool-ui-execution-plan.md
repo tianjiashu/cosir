@@ -57,12 +57,12 @@ AssistantRuntimeProvider
 | `write_file` | WriteFileToolUI | 文件摘要 + Code diff |
 | `delete` | DeleteToolUI | 高风险目标清单 + 快照/撤销状态 |
 | `execute_terminal` | TerminalToolUI | Terminal block |
-| `web_search` | WebSearchToolUI | 搜索结果 + Sources |
-| `web_extract` | WebExtractToolUI | URL、标题、正文摘要 |
+| `web_search` | `DetailsTool`（通用 list） | 标题 + URL 链接 |
+| `web_extract` | `DetailsTool`（通用 list） | URL 链接 + 工具整体状态 |
 | `delegate_task` | DelegateTaskToolUI | Subagent list |
 | 未注册工具 | ToolFallback | 参数 + JSON/文本结果 |
 
-优先复用官方元素的实现契约与视觉结构：[Terminal block](https://www.assistant-ui.com/elements/terminal-block)、[Code diff](https://www.assistant-ui.com/elements/code-diff)、[Reviewable diff](https://www.assistant-ui.com/elements/reviewable-diff)、[File tree](https://www.assistant-ui.com/elements/file-tree)。这些页面提供可复制到本地的组件实现，不等于当前已安装的运行时依赖；落地时应维护当前项目的本地组件，或在明确评估后把官方 registry 源码作为项目代码纳入版本控制，不能直接假定存在可 import 的独立包。`WebSearchToolUI`、`DelegateTaskToolUI` 等需先确认后端结果 schema，不能仅凭工具名假定存在。
+优先复用官方元素的实现契约与视觉结构：[Terminal block](https://www.assistant-ui.com/elements/terminal-block)、[Code diff](https://www.assistant-ui.com/elements/code-diff)、[Reviewable diff](https://www.assistant-ui.com/elements/reviewable-diff)、[File tree](https://www.assistant-ui.com/elements/file-tree)。这些页面提供可复制到本地的组件实现，不等于当前已安装的运行时依赖；落地时应维护当前项目的本地组件，或在明确评估后把官方 registry 源码作为项目代码纳入版本控制，不能直接假定存在可 import 的独立包。Web 工具复用通用 `DetailsTool`，不按工具名增加 renderer 分支。
 
 ## 协议前置条件与状态映射
 

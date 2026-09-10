@@ -41,19 +41,19 @@
 | --- | --- | --- |
 | 前端 Task 容器 | `workspace-shell.tsx` 使用 `key={activeTaskId}` 渲染 Assistant | 切换 Task 会卸载旧 runtime，不能再把卸载等同于取消 Run |
 | 前端初始化 | `use-assistant-initial-state.ts` 通过 `GET /tasks/{id}/assistant/state` 加载 snapshot | 可以把 snapshot 作为重新挂载/重新 attach 的基线，但它不是前端事实源 |
-| 前端 runtime | `assistant-runtime.tsx` 当前仍会在 mount、EOF 或非终态 snapshot 时调用 `resumeRun` | 这是本方案需要移除的自动业务恢复行为 |
-| 前端 transport | `useAssistantTransportRuntime` 的 `resumeApi` 当前指向 `/assistant` | 该入口同时承载 command 和业务 resume，语义不清，必须增加独立 attach 入口 |
+| 前端 runtime | `assistant-runtime.tsx` 在 mount、EOF 或非终态 snapshot 时会调用 assistant-ui 的 `resumeRun` | 当前已将这些调用绑定到 transport-only attach；它们不会触发业务 resume |
+| 前端 transport | `useAssistantTransportRuntime` 的 `resumeApi` 当前指向 `/tasks/{task_id}/assistant/attach` | `/assistant` 只保留用户命令和显式业务 resume，attach 与 resume 已分离 |
 | 前端取消 | `stop-button.tsx` 明确调用 `POST /runs/{runId}/cancel` | 取消只能由明确的用户动作触发 |
 | 后端创建 Run | `POST /assistant` 收到 `AddMessageCommand` 后创建 Run、写入基线 snapshot，并调用 `start_run` | 创建执行与 HTTP subscription 已经解耦 |
-| 后端 stream | `TransportAssistantService.stream()` 只订阅 snapshot；无 idle timeout；没有 mutation 时保持连接 | 当前 server stream 断开不会自动取消 Run |
+| 后端 stream | `TransportAssistantService.stream()` 只订阅 snapshot；无 idle timeout；没有 mutation 时保持连接 | HTTP/SSE 断开会清理 transport subscriber，但不会调用 Run executor 的业务 cancel |
 | 后端 executor | `ConversationRunExecutor.start()` 创建独立 asyncio task；HTTP 断开不会调用 `cancel()` | 已具备“传输断开不影响执行”的核心能力 |
 | 后端 cancel | `POST /runs/{runId}/cancel` 是独立显式入口 | 保持不变，不能在 stream cleanup 或 Task 切换中调用 |
 | 后端 resume | `TransportAssistantService.resume_run()` 明确只允许 `CANCELLED` Run | 这是业务契约，不能用来实现 transport reconnect |
 | snapshot subscriber | `ConversationTaskSnapshotService` 支持同一个 Task 的多个 subscriber；stream 再按 `runId` 过滤 | 可以支持多个 Task 同时连接，也可以支持同一 Run 的重新订阅 |
 | 运行边界 | Tauri 前端通过 supervisor 提供的本机 FastAPI 地址通信；Agent executor 属于本机后端进程 | HTTP/SSE 断开与后端进程停止必须分别建模 |
-| 进程关闭 | executor shutdown 会停止本地 asyncio task；启动时当前策略不是自动重放旧 Run | 必须把“HTTP/SSE 断开”和“后端进程崩溃”分开处理 |
+| 进程关闭 | executor shutdown 会停止本地 asyncio task；启动时会把遗留 `pending/running` Run 收敛为 `CANCELLED` | 必须把“HTTP/SSE 断开”和“后端进程崩溃”分开处理 |
 
-当前代码已经具备后端执行与订阅解耦，主要缺口在于：前端把 runtime 卸载、stream EOF 和 snapshot rehydrate 误接到了 `resumeRun`；后端也缺少一个语义明确的“只订阅已有 Run”的 transport attach API。
+当前代码已经具备后端执行与订阅解耦；本次改造补齐了前端 transport attach 与业务 resume 的边界，以及一个语义明确的“只订阅已有 active Run”的 transport attach API。
 
 ### 2.2 Assistant UI 官方模型
 
@@ -68,12 +68,14 @@ AssistantTransport
 
 后端发送 canonical state 的 snapshot/增量；前端把它转换为 Assistant UI 消息模型。UI 是渲染层，不应该成为 Run 或 Context 的事实源。
 
-官方文档还明确区分了两类行为：
+官方文档把 `resumeRun` 定义为 runtime 对一次 Run 的恢复操作，通常通过 `resumeApi` 重新连接或恢复后端 Run；它的具体行为由 transport adapter 和后端契约决定。官方并没有规定 transport reconnect 与 application business resume 必须是两个 API，也不能把 `resumeRun` 的名称直接当作本项目的业务状态机。
 
-- transport reconnect：连接丢失后重新连接仍在服务端运行的任务；
-- application resume：由应用自己的后端契约决定是否允许继续执行。
+本项目额外定义两个后端操作：
 
-因此 assistant-ui 的 `resumeRun` 这个名字不能直接等同于项目的“取消后续跑”。在本项目中，它最多只能映射到一个只读的 transport attach/reconnect 入口；真正的 `CANCELLED -> RUNNING` 业务续跑仍然走独立的后端业务 API。
+- `attach`：只恢复既有 Run 的 snapshot subscription，不创建、不启动、不恢复 Run；
+- `resume`：用户明确点击 Continue 后，将允许恢复的 `CANCELLED` Run 重新启动。
+
+二者的区分是本项目的协议约定，不是 assistant-ui 的内建语义。当前实现把 `resumeApi` 指向 `/tasks/{task_id}/assistant/attach`，并在 Composer 的 Continue 动作中显式调用 `/assistant` 的空 command 分支。这样 assistant-ui 的 transport `resumeRun()` 只代表重新订阅，而本项目的业务 Continue 才代表恢复 `CANCELLED` Run。
 
 官方参考：
 
@@ -118,9 +120,10 @@ AssistantTransport
 
 切回 A
   -> 若 A session 仍连接：直接显示缓存的最新 UI state
-  -> 若 A session 已断开：GET snapshot + POST /assistant/attach
+  -> 若 A session 已断开：GET snapshot + POST /tasks/{task_id}/assistant/attach
   -> 接收当前基线和后续 mutation
   -> 不创建新 Run，不重复发送用户消息，不调用 business resume
+```
 
 如果中间发生的是本机后端进程重启或整个应用崩溃，则流程不同：
 
@@ -132,7 +135,6 @@ AssistantTransport
   -> 用户点击 Continue
   -> POST /assistant(runId=A.run-1)
   -> 新的 transport subscription 展示恢复后的执行
-```
 ```
 
 ### 3.3 Task 切换的推荐策略
@@ -151,23 +153,24 @@ AssistantTransport
 
 ### 4.1 新增只读 transport attach API
 
-建议新增：
+当前已实现：
 
 ```http
-POST /assistant/attach
+POST /tasks/{task_id}/assistant/attach
 ```
 
 请求只描述要订阅的已有 Run，不携带新的 user command：
 
 ```json
 {
-  "taskId": "task-a",
-  "threadId": "task-task-a",
-  "runId": "run-a-1"
+  "taskId": 7,
+  "threadId": "task-7",
+  "runId": 42,
+  "commands": []
 }
 ```
 
-命名可以是 `/assistant/attach` 或 `/assistant/subscribe`，但必须和业务 `resume` 分开。推荐 `/assistant/attach`，因为它表达的是连接到既有服务端执行。
+必须使用明确的 Task 边界路径，例如 `/tasks/{task_id}/assistant/attach`；它必须和业务 `resume` 分开，因为它表达的是连接到既有服务端执行。
 
 attach 服务应执行以下步骤：
 
@@ -213,7 +216,11 @@ CANCELLED
 - 本机 FastAPI 服务恢复或 Tauri 前端重新连接；
 - GET snapshot 发现 `pending/running`。
 
-如果 assistant-ui 的 `resumeApi` 必须配置，则将它指向 `/assistant/attach`，并在代码注释中明确：这是 transport reconnect，不是项目业务 resume。项目自己的“继续执行”按钮仍应调用业务 resume API，完成后再 attach 新的执行流。
+当前实现已将 assistant-ui 的 `resumeApi` 指向 `/tasks/{task_id}/assistant/attach`。该 endpoint 忽略 assistant-ui 的通用 envelope，只接受空 `commands`，并校验 `taskId`、`threadId`、`runId`；项目自己的“继续执行”按钮调用 `/assistant` 的业务 resume，成功后再通过 `resumeApi` attach 新的执行流。
+
+assistant-ui 在未配置 `resumeStateApi` 时不会自动把 `runId` 加入 `resumeApi` 请求。本项目在
+`prepareSendCommandsRequest` 的唯一发送边界，从当前 canonical runtime state 注入 `runId`；
+因此 attach 请求仍能严格绑定当前 Task/Run，而不会把 UI state 作为后端事实回传。
 
 ### 4.3 并行边界
 
@@ -246,19 +253,32 @@ CANCELLED
   -> projector 更新 canonical snapshot
 
 后端硬崩溃后再次启动
-  -> recovery sweep 或首次 state read 发现 DB 中 pending/running
-     但当前进程没有 executor
+  -> 启动 recovery sweep 发现 DB 中 pending/running
+     且本次进程没有对应 executor
   -> 原子地收敛为 CANCELLED(runtime_restarted)
-  -> 投影 RunStatusChangedEvent
-  -> /tasks/{task_id}/assistant/state 返回已收敛 snapshot
+  -> recovery 不直接操作 snapshot/state
+  -> /tasks/{task_id}/assistant/state 进入 ConversationTaskSnapshotService.read
+  -> read 按 DB Run 状态校正并返回最终一致的 snapshot
   -> 用户明确调用 /assistant(resume, runId)
 ```
 
 这里的 `CANCELLED` 是“可由用户恢复”的业务状态，不是前端断线产生的状态。`/assistant` 的无 `AddMessageCommand` 分支继续调用 `resume_run()`，并由后端强制校验：只有最新 Run 且 status 为 `CANCELLED` 才能恢复。任何 state read、attach、stream EOF 或本机服务重新连接都不得触发它。
 
-当前代码中 `ConversationTaskSnapshotService.read()` 在发现“数据库仍为 pending/running、但 executor 不在本进程”时还只是记录 `conversation_run_recovery_required`。要满足本节契约，必须把这条路径改为幂等的状态收敛，并在返回 `/tasks/{task_id}/assistant/state` 前完成 snapshot 投影；不能仅记录日志后把 pending/running 返回给前端。
+当前代码已补齐后端启动 recovery：应用 lifespan 在初始化服务依赖后调用 `ConversationRunService.recover_orphaned_runs()`，将遗留 Run 数据库状态幂等收敛为 `CANCELLED`；该 recovery 不直接写 snapshot/state。`read()` 仍是 snapshot 最终一致性的唯一边界：它读取已收敛的 Run 状态，发现 snapshot 与 Run 不一致时通过既有 projector/reconcile 路径校正 snapshot，并在返回 `/tasks/{task_id}/assistant/state` 前返回一致结果。
 
-状态收敛必须可重复执行：如果进程在 Run 状态提交和 snapshot 投影之间再次崩溃，下一次 recovery 或 state read 仍能根据数据库 Run 状态补齐投影，最终返回一致结果。不要把 attach 误宣传为跨进程 durable execution。
+`read()` 不负责替代启动 recovery，也不应在普通读取中擅自启动 executor 或调用业务 resume。正常启动顺序保证 recovery 先于路由服务可用；若未来引入异步启动，应在 recovery 完成前让 state endpoint 返回可重试的后端未就绪错误，不能把遗留的 pending/running 当作可继续运行的事实返回给前端。
+
+Run 状态 recovery 必须可重复执行：如果进程在 Run 状态提交后再次崩溃，下一次 recovery 只会命中已是 `CANCELLED` 的记录，不重复产生状态转换。snapshot 的补齐由 `ConversationTaskSnapshotService.read()` 在读取边界完成；如果进程在 snapshot 校正期间再次崩溃，下一次 `read()` 继续根据 DB Run 状态重做幂等校正，最终返回一致结果。不要把 attach 误宣传为跨进程 durable execution。
+
+恢复资格矩阵必须固定为：
+
+| Run status | `end_reason` | 用户可否 Continue | 可否 attach | 是否启动 executor |
+| --- | --- | ---: | ---: | ---: |
+| `CANCELLED` | 任意值，包括 `null` | 是 | 否，仅展示历史 | 用户点击后 |
+| `PENDING` / `RUNNING` | 任意值 | 否，先由 recovery 收敛 | 仅在同一后端进程仍有有效 executor 时 | 否 |
+| `COMPLETED` / `FAILED` / `INTERRUPTED` | 任意值 | 否 | 仅展示历史 | 否 |
+
+`end_reason` 只用于展示、日志和审计，绝不能进入 resume 的资格判断。当前 CRUD 的 `resume_cancelled`、Service 的恢复入口以及前端 `isResumableCancelledRun()` 均只检查“最新 Run 且 status 为 `CANCELLED`”。
 
 ### 4.5 UI 缓存与 canonical snapshot 的一致性
 
@@ -346,14 +366,19 @@ WorkspaceShell
 
 第二阶段可以将 transport state 完整迁移到基于 `ExternalStoreRuntime` 的集中 session store，使 runtime 与 UI 更彻底分离。该阶段适合在第一阶段验证协议和性能后进行，不应在没有 attach API 的情况下先做大量 UI 重构。
 
-### 5.3 删除当前自动业务恢复路径
+### 5.3 区分 transport attach 与业务 resume
 
-`assistant-runtime.tsx` 中下列路径应删除或改造成 transport attach：
+当前 `assistant-runtime.tsx` 中这些路径都只调用 transport attach：
 
-- backend URL 改变后发现 pending/running 就调用 `resume()`；
-- `onFinish` 发现 snapshot 非终态就调用 `resume()`；
+- backend URL 改变后发现 pending/running 就调用 assistant-ui runtime 的 `resume()`；
+- `onFinish` 读取 snapshot 发现非终态后调用 `resume()`；
 - mount 时 `resumeOnMount` 自动执行 `resumeRun`；
-- GET snapshot 发现 pending/running 就将它解释为“需要恢复执行”。
+- GET snapshot 发现 pending/running 后重新建立 attach。
+
+这些调用虽然沿用了 assistant-ui 的 `resumeRun()` 名称，但 `resumeApi` 已经指向
+`/tasks/{task_id}/assistant/attach`，不会调用 `/assistant` 的业务 resume。业务 resume
+只在用户点击 Continue 时由 `resumeBusinessRun()` 显式 POST `/assistant`，且后端只接受
+最新 `CANCELLED` Run。
 
 正确处理是：
 
@@ -385,6 +410,18 @@ attach 重试必须带有：
 - 已终态后停止重试；
 - 不重复发送 command；
 - 不因重复 attach 增加 Run 或 Context。
+
+### 5.5 当前前端实现必须补齐的边界
+
+当前 `WorkspaceShell` 的 `key={activeTaskId}` 会卸载 Assistant runtime。它会中止当前前端 fetch/transport subscriber，但不是后端 cancel；因此当前实现保证“Run 继续执行、前端订阅断开”，切回时由 GET snapshot + attach 恢复可见状态，但还没有为每个非当前 Task 保留后台 UI stream。要实现本方案推荐的后台轻量 session，`TaskSessionRegistry` 必须位于 active Thread 视图之上，不能随 `key` 一起销毁；这是后续 Phase 2，不影响本阶段的 Run 独立执行契约。
+
+还必须补齐以下实现约束：
+
+- 当前 `assistant-runtime.tsx` 用 `WeakMap<object, string>` 生成 commandId。它无法跨 runtime remount 复用；commandId 应在 App/Workspace 级 session registry 中生成并保存到 command 被 snapshot 确认或明确失败。
+- 当前 converter 已改为使用稳定的 `pending-${commandId}` optimistic message id，不再依赖 pending command 数组索引。
+- state GET、attach stream、finish/error callback、initial message send 和 optimistic rebase 都必须验证 `(taskId, sessionGeneration, runId)`；请求需要绑定 AbortController，迟到结果不得覆盖新 session。
+- Continue 的 loading 状态不能依赖 `await resumeRun()`，因为 assistant-ui runtime 的 `resumeRun()` 返回值不代表服务端请求完成。当前实现通过 canonical `isRunning`、transport 错误回调和 15 秒 UI 超时清理 `resume_pending`，保证 attach 失败后可重试。
+- `ConnectionState` 至少区分 `connected`、`disconnected`、`attaching`、`resume_required`、`resume_pending`、`terminal` 和 `failed`。`resume_required` 只由 `CANCELLED` snapshot 触发，不能由 pending/running snapshot 自动触发。
 
 如果用户快速 A → B → A，旧 A stream 的事件到达时，必须因 generation 不匹配被丢弃，不能覆盖新的 A session state。
 
@@ -429,21 +466,22 @@ attach 重试必须带有：
 
 ### 7.2 attach 期间发生 mutation
 
-必须保证注册 subscriber 与发送初始 snapshot 的顺序不会丢事件。建议实现：
+必须保证注册 subscriber 与发送初始 snapshot 的顺序不会丢事件或重复应用事件。目标实现必须使用 revision/watermark：
 
 ```text
 ensure snapshot
   -> register subscriber
   -> reread snapshot
+  -> capture rootRevision
   -> send root snapshot
-  -> send register 后的后续 mutation
+  -> 只发送 revision > rootRevision 的后续 mutation
 ```
 
-如果 snapshot service 只提供当前 snapshot 而不提供 mutation sequence，至少要通过版本号或 revision 检测 root 与后续 mutation 的覆盖关系，避免旧数据覆盖新数据。
+当前 `ConversationStateMutation` 没有 revision，且 `stream()` 目前是 `subscribe -> ensure_state_snapshot -> yield root`，所以尚未满足这个条件。必须给每个 Task 的 snapshot 提交分配持久化单调 revision，并让 root snapshot、mutation 和 `/assistant/state` 都携带它；如果无法证明 mutation 连续，则丢弃增量队列，重新读取完整 root snapshot。
 
 ### 7.3 旧 stream 迟到
 
-每个 TaskSession 必须有 `sessionGeneration`。新 attach 或新 active view 建立后，旧 stream 的所有事件都要经过 generation 校验。后端事件也必须带 `taskId/runId`，不能只依赖当前 active Task。
+每个 TaskSession 必须有 `sessionGeneration`。新 attach 或新 active view 建立后，旧 stream 的所有事件都要经过 generation 校验。后端事件也必须带 `taskId/runId/revision`，不能只依赖当前 active Task。
 
 ### 7.4 Run 已经终态
 
@@ -470,6 +508,10 @@ attach 可以发送一次终态 root snapshot 后立即结束；前端进入 `te
 9. subscriber 注册和 root snapshot 读取之间发生 mutation 时，不丢最终状态。
 10. 后端正常关闭和重启后，遗留 pending/running Run 最终收敛为 `CANCELLED`，且 `/tasks/{task_id}/assistant/state` 返回的 snapshot 与 Run 状态一致。
 11. Run 状态提交与 snapshot 投影之间再次崩溃时，下一次 recovery/state read 可以幂等补齐投影。
+12. 任意 `end_reason` 的最新 `CANCELLED` Run 都能通过用户操作进入 resume；`end_reason` 不影响资格。
+13. 两个 Continue 请求并发时只有一个有效状态转换和 executor；attach 与 Continue 并发时 attach 不启动 executor。
+14. hard kill 后 supervisor 只负责拉起本机 FastAPI，后端 recovery 负责状态收敛，Tauri 前端不自动 resume。
+15. recovery 尚未完成时，`/assistant/state` 不返回伪造的 pending/running 可恢复状态。
 
 ### 8.2 前端测试
 
@@ -500,18 +542,19 @@ attach 可以发送一次终态 root snapshot 后立即结束；前端进入 `te
 
 - 固化“stream disconnect 不 cancel”的后端测试。
 - 固化 `CANCELLED` only business resume 测试。
+- 修正现有测试中把 `PENDING/RUNNING` 当作可 resume、或拒绝非 `user_cancelled` 的 `CANCELLED` Run 的过时断言。
 - 为 attach 请求和错误码定义 Pydantic 契约。
 - 清理旧文档中关于“5 秒 idle timeout”和“非终态自动 resume”的过时描述。
 
-### Phase 1：后端 attach
+### Phase 1：后端 attach（本次已完成的主链路）
 
-- 新增 `/assistant/attach`。
-- 抽取新消息 stream 与 attach 共用的订阅逻辑。
-- 实现注册后 reread snapshot 的竞态保护。
+- 新增 `/tasks/{task_id}/assistant/attach`。
+- attach 复用现有 snapshot subscriber，不启动、不恢复、不取消 Run。
 - 增加 task/run 归属校验和结构化错误。
-- 增加后端启动 recovery 与 `/assistant/state` 读边界 recovery：遗留 pending/running Run 收敛为 `CANCELLED`，并在响应前补齐 snapshot 投影。
+- 增加后端启动 recovery：遗留 pending/running Run 收敛为 `CANCELLED`，但 recovery 不直接操作 snapshot/state；由 `ConversationTaskSnapshotService.read()` 在 `/assistant/state` 读边界完成 snapshot 最终一致性校正。
+- 固化任意 `end_reason` 的 `CANCELLED` Run 都可由用户进入业务 resume。
 
-### Phase 2：前端 TaskSessionRegistry
+### Phase 2：前端 TaskSessionRegistry（后续迭代）
 
 - 将 Task session 从 `activeTaskId` 单一 runtime 中提取出来。
 - 移除 mount/EOF/snapshot rehydrate 到 business `resumeRun` 的自动路径。

@@ -5,11 +5,9 @@ import { DiffTool } from "./diff-tool";
 import { DeleteTool } from "./delete-tool";
 import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
-import { WebExtractStatusTool } from "./web-extract-status-tool";
-import { WebSearchTool } from "./web-search-tool";
 import { readToolArtifact } from "./types";
 
-export type ToolPartRoute = "delete" | "diff" | "terminal" | "details" | "web-search" | "web-extract-status" | "fallback";
+export type ToolPartRoute = "delete" | "diff" | "terminal" | "details" | "fallback";
 
 const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
 
@@ -20,8 +18,6 @@ const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
 export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
   const artifact = readToolArtifact(rawArtifact);
   const kind = typeof artifact.data?.kind === "string" ? artifact.data.kind : undefined;
-  if (kind === "web-search-results") return "web-search";
-  if (kind === "web-extract-status") return "web-extract-status";
   if (DELETE_TOOL_NAMES.has(toolName) || kind === "delete-result") return "delete";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
   if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";
@@ -49,10 +45,6 @@ const ToolPartImpl: ToolCallMessagePartComponent = (props) => {
       return <TerminalTool {...props} />;
     case "details":
       return <DetailsTool {...props} />;
-    case "web-search":
-      return <WebSearchTool {...props} />;
-    case "web-extract-status":
-      return <WebExtractStatusTool {...props} />;
     case "fallback":
       return <ToolFallback {...props} />;
   }

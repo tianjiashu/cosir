@@ -1,22 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 const emptyState = () => ({
-  messages: [],
-  run: { runId: null, status: "idle" },
+  runs: [],
+  current_run_id: null,
   approvals: {},
-  context_usage: 0,
-  context_revision: null,
-  usage_run_id: null,
+  context_usage_ratio: null,
   context_usage_used: null,
   context_window_total: null,
-  usage: {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-    cache_hit_tokens: 0,
-    cache_miss_tokens: 0,
-    reasoning_tokens: 0,
-  },
   error: null,
 });
 
@@ -50,6 +40,18 @@ test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后�
   await expect(assistant.getByText(/未知工具/)).toHaveCount(0);
 });
 
+test("网页搜索结果只显示标题并保留标题链接", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-web-search");
+  await page.goto("/tasks/42");
+
+  const assistant = page.locator('[data-role="assistant"]').last();
+  const resultLink = assistant.getByRole("link", { name: "Assistant UI 官方文档" });
+  await expect(resultLink).toBeVisible();
+  await expect(resultLink).toHaveAttribute("href", "https://assistant-ui.com/docs");
+  await expect(assistant.getByText("这段摘要不应出现在搜索结果 UI 中", { exact: true })).toHaveCount(0);
+  await expect(assistant.getByText("https://assistant-ui.com/docs", { exact: true })).toHaveCount(0);
+});
+
 test("Reasoning 在真实流式完成后自动收起且仍可手动展开", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "Reasoning 状态回归" } });
   await page.goto("/tasks/42");
@@ -75,7 +77,21 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
   await expect(assistant.getByText("推理完成", { exact: true })).toBeVisible();
 });
 
-test("连续 Run 的 context meter 和 usage footer 只显示当前 Run", async ({ page, request }) => {
+test("工具详情从 pending 进入 running 时自动展开，并在完成后收起", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "工具生命周期回归" } });
+  await page.goto("/tasks/42");
+  await page.getByLabel("消息输入").fill("tool-lifecycle");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  const assistant = page.locator('[data-role="assistant"]').last();
+  const tool = assistant.getByText("搜索文件", { exact: true });
+  await expect(tool).toBeVisible();
+  const details = assistant.getByText("未找到匹配", { exact: true });
+  await expect(details).toBeVisible({ timeout: 2_000 });
+  await expect(details).toBeHidden({ timeout: 3_000 });
+});
+
+test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage footer", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "用量展示回归" } });
   await page.goto("/tasks/42");
   const input = page.getByLabel("消息输入");
@@ -114,8 +130,13 @@ test("连续 Run 的 context meter 和 usage footer 只显示当前 Run", async 
   await input.fill("usage-regression-second");
   await page.getByRole("button", { name: "发送" }).click();
   await expect(contextMeter).toContainText("上下文 80%");
-  await expect(page.getByTestId("run-usage-display")).toContainText("本次用量 2.5k tokens");
-  await expect(page.getByTestId("run-usage-display")).toHaveCount(1);
+  await expect(page.getByTestId("run-usage-display").last()).toContainText("本次用量 2.5k tokens");
+  await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
+  await expect(page.getByTestId("run-usage-display").first()).toContainText("本次用量 1.5k tokens");
+  await page.reload();
+  await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
+  await expect(page.getByTestId("run-usage-display").first()).toContainText("本次用量 1.5k tokens");
+  await expect(page.getByTestId("run-usage-display").last()).toContainText("本次用量 2.5k tokens");
 });
 
 test("侧栏任务列表失败时不阻塞已确认 Task 的 Assistant", async ({ page, request }) => {

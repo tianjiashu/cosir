@@ -13,15 +13,13 @@ from app.assistant_transport.event import (
     ConversationEvent,
     ConversationEventEnvelope,
 )
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    SnapshotChange,
-)
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
+from app.assistant_transport.stream import SnapshotChange
 from app.config.logging.logger import log
 from app.service.depends import get_conversation_task_snapshot_service
 
@@ -105,7 +103,7 @@ class ConversationEventProjector:
         event = self._parse(raw_event)
         if event is None:
             return None
-        with (self._lock):
+        with self._lock:
             if event.task_id in self._deleted_task_ids:
                 log.info(
                     "conversation_event_ignored_for_deleted_task",
@@ -121,6 +119,23 @@ class ConversationEventProjector:
                 return SnapshotChange(event.task_id, state, ())
 
             def planner(state: ConversationStateSnapshot) -> Sequence[ConversationStateMutation]:
+                if event.type not in {"run_initialized", "context_usage_updated"} and (
+                    event.run_id is None
+                    or not any(run["runId"] == event.run_id for run in state["runs"])
+                ):
+                    log.warning(
+                        "conversation_event_unknown_run",
+                        extra={
+                            "msg": "忽略引用未知 Run 的 conversation event",
+                            "data": {
+                                "task_id": event.task_id,
+                                "run_id": event.run_id,
+                                "event_id": event.event_id,
+                                "event_type": event.type,
+                            },
+                        },
+                    )
+                    return []
                 return event.plan(state)
 
             if session is None:
@@ -131,7 +146,9 @@ class ConversationEventProjector:
                     planner,
                     session=session,
                 )
-            seen.add(event.event_id)
+            # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。
+            if change.mutations:
+                seen.add(event.event_id)
             return change
 
     @staticmethod

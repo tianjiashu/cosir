@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 
@@ -48,8 +50,8 @@ class RuntimeContextManager:
     _message_sequence: int = field(default=0, init=False)
     # 上下文变化订阅者列表：按 order 排序，按需插入。
     _listeners: list[ContextListener] = field(default_factory=list, init=False)
-    # 标记的在workflow期间，上下文是否有变化
-    have_change: bool = field(default=False, init=False)
+    # 当前 Conversation Run 实际暴露给模型的工具 schema；只保存运行时配置，不落库。
+    _tool_schemas: tuple[Mapping[str, Any], ...] = field(default_factory=tuple, init=False)
 
     @staticmethod
     def ensure_get_runtime_context_manager(
@@ -135,7 +137,10 @@ class RuntimeContextManager:
         return self.context_service
 
     def begin_run(
-            self, run: ConversationRunRecord, execution_mode: ExecutionMode = "fresh"
+            self,
+            run: ConversationRunRecord,
+            execution_mode: ExecutionMode = "fresh",
+            tool_schemas: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
@@ -143,6 +148,8 @@ class RuntimeContextManager:
             run: 待执行的 Conversation Run。
             execution_mode: ``fresh`` 清理该 run 的旧消息；``resume`` 保留并重新加载
                 该 run 已持久化的消息。
+            tool_schemas: 当前 Run 实际绑定给模型的模型侧工具 schema；只保存在运行时，
+                不写入 Task context 持久化记录。
 
         返回:
             无。
@@ -156,6 +163,9 @@ class RuntimeContextManager:
 
         if run.task_id != self.current_task_id:
             raise ValueError(f"run {run.id} belongs to task {run.task_id}")
+
+        # manager 跨 Run 复用，必须在绑定新 Run 时替换而不是沿用旧工具集合。
+        self._tool_schemas = tuple(copy.deepcopy(schema) for schema in tool_schemas)
 
         if execution_mode == "fresh":
             # fresh 仍按持久化 run 身份清理，而不是依赖进程内指针，避免重跑时重复
@@ -177,6 +187,24 @@ class RuntimeContextManager:
         ) + 1
         self.current_run_id = run.id
         self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
+        if execution_mode == "resume":
+            # resume 不会走 fresh 的 add_message，但 UI 仍需要立即得到已有
+            # context 的 used/window；重新投影完整 working copy，避免重启后只看到 0/null。
+            self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
+
+    def reproject_context_usage(self, run: ConversationRunRecord) -> None:
+        """按已持久化 context 为 backend 重启后的 snapshot 重新投影占用。"""
+
+        if run.task_id != self.current_task_id:
+            raise ValueError(f"run {run.id} belongs to task {run.task_id}")
+        self._entries = self._require_context_service().entries_in_context(self.current_task_id)
+        self._message_sequence = self._require_context_service().max_sequence(
+            self.current_task_id
+        ) + 1
+        self.current_run_id = run.id
+        self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
+        # LOAD_HISTORY 是完整 canonical context 快照，允许 projector 重置过期 revision。
+        self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
 
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
         """注册一个按 order 执行的 context listener。
@@ -279,7 +307,6 @@ class RuntimeContextManager:
         if not include_in_context:
             return
         self._entries.append(ContextEntry(message, self.current_run_id, sequence))
-        self.have_change = True
         self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
 
     def _close_unclosed_tool_calls(self) -> None:
@@ -398,10 +425,8 @@ class RuntimeContextManager:
 
         副作用:
             若检测到悬空调用，经 ``_close_unclosed_tool_calls`` -> ``add_message`` 补占位会
-            把 ``have_change`` 置为 True，取数即可能触发上下文持久化与变更通知；无悬空时
-            保持原 ``have_change=False``。
+            写回上下文并触发变更通知；无悬空时不修改上下文。
         """
-        self.have_change = False
         # 先补齐悬空 tool call，再移动修复 SystemMessage；否则历史形如
         # AI(tool_calls) -> SystemMessage（无 ToolMessage）会在排序后重新被占位插到 System
         # 后面，仍然触发 provider 400。
@@ -415,11 +440,6 @@ class RuntimeContextManager:
         if self._system_entry is None:
             raise RuntimeError("system entry is not initialized")
         return [self._system_entry, *self._entries]
-
-    def has_change(self) -> bool:
-        """是否有上下文变化。"""
-
-        return self.have_change
 
     def mark_context_changed(
             self,
@@ -437,6 +457,7 @@ class RuntimeContextManager:
                     snapshot,
                     self.used_tokens,
                     self.total_tokens,
+                    self._tool_schemas,
                 ),
                 result,
             )

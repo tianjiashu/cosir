@@ -98,15 +98,15 @@ def build_agent_registry() -> AgentProfileRegistry:
     """
 
     from app.core.agents.define_agents import (
-        analyst_agent,
         coder_agent,
+        explorer_agent,
         main_agent,
         reviewer_agent,
         test_agent,
     )
 
     registry = AgentProfileRegistry()
-    registry.register(analyst_agent())
+    registry.register(explorer_agent())
     registry.register(reviewer_agent())
     registry.register(test_agent())
     registry.register(coder_agent())

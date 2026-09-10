@@ -32,6 +32,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
+from app.core.tools.display.filesystem_display import build_repeated_call_display_data
 from app.core.tools.guard.file_resource_paths import FileResourcePaths, resolve_file_resource_paths
 from app.core.tools.guard.file_state import (
     FileFingerprint,
@@ -553,13 +554,13 @@ class FileToolStateCoordinator:
                 "Repeated search skipped: the search scope is unchanged. "
                 "Use the previous result or refine the query."
             )
-            data = {"repeated": True, "warning": True}
+            data = build_repeated_call_display_data()
         else:
             content = (
                 "Unchanged since the previous read. Use the previous result "
                 "instead of reading the same file again."
             )
-            data = {"unchanged": True}
+            data = build_repeated_call_display_data(unchanged=True)
         return ToolObservation(
             tool_name=tool.name,
             status="success",

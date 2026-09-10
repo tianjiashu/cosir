@@ -48,8 +48,7 @@ def _manager(context_service: _ContextService) -> RuntimeContextManager:
     manager._entries = []
     manager._message_sequence = 0
     manager._listeners = []
-    manager.have_change = False
-    manager._context_revision = 0
+    manager._tool_schemas = ()
     return manager
 
 
@@ -117,12 +116,45 @@ def test_runtime_context_manager_resume_reprojects_context_window(monkeypatch) -
     manager.begin_run(
         SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"),
         execution_mode="resume",
+        tool_schemas=(
+            {
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ),
     )
 
     assert len(listener.events) == 1
     assert listener.events[0].type.value == "load_history"
     assert listener.events[0].total_tokens == 8192
-    assert listener.events[0].context_revision == 1
+    assert listener.events[0].tool_schemas[0]["name"] == "read_file"
+
+
+def test_runtime_context_manager_replaces_tool_schemas_between_runs(monkeypatch) -> None:
+    context_service = _ContextService(max_sequence=0)
+    manager = _manager(context_service)
+    monkeypatch.setattr(
+        "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
+        lambda _model_name: 8192,
+    )
+
+    first_schema = {
+        "name": "read_file",
+        "description": "Read a file.",
+        "parameters": {"type": "object", "properties": {}},
+    }
+    manager.begin_run(
+        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"),
+        tool_schemas=(first_schema,),
+    )
+    assert manager._tool_schemas[0]["name"] == "read_file"
+
+    manager.begin_run(
+        SimpleNamespace(task_id=7, id=3, model_name="deepseek-v4-flash"),
+    )
+
+    assert manager._tool_schemas == ()
 
 
 def test_load_message_repairs_legacy_system_message_between_tool_messages() -> None:
@@ -153,7 +185,6 @@ def test_load_message_repairs_legacy_system_message_between_tool_messages() -> N
         SystemMessage,
     ]
     assert messages[-1].content == "repair"
-    assert not manager.have_change
 
 
 def test_load_message_closes_then_repairs_legacy_missing_tool_result() -> None:

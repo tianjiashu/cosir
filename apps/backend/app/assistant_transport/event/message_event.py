@@ -66,11 +66,15 @@ class AssistantTextDeltaEvent(ConversationEventEnvelope):
             无。
         """
 
-        if state["run"].get("status") in {"completed", "failed", "cancelled"}:
+        run_index = self._find_run(state, self.run_id)
+        if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
             return []
-        message_index = self._find_assistant_message(state, self.run_id)
-        assert message_index is not None
-        parts: list[ConversationStateTextPart] = state["messages"][message_index]["parts"]
+        located = self._find_assistant_message(state, self.run_id)
+        assert located is not None
+        _, message_index = located
+        parts: list[ConversationStateTextPart] = state["runs"][run_index]["messages"][
+            message_index
+        ]["parts"]
         for part_index in range(len(parts) - 1, -1, -1):
             part = parts[part_index]
             if (
@@ -81,14 +85,14 @@ class AssistantTextDeltaEvent(ConversationEventEnvelope):
                 return [
                     ConversationStateMutation(
                         "append-text",
-                        ("messages", message_index, "parts", part_index, "text"),
+                        ("runs", run_index, "messages", message_index, "parts", part_index, "text"),
                         self.delta,
                     )
                 ]
         return [
             ConversationStateMutation(
                 "set",
-                ("messages", message_index, "parts", len(parts)),
+                ("runs", run_index, "messages", message_index, "parts", len(parts)),
                 {"type": self.part, "text": self.delta, "status": "running"},
             )
         ]
@@ -137,11 +141,13 @@ class AssistantPartClosedEvent(ConversationEventEnvelope):
             无。
         """
 
-        if state["run"].get("status") in {"completed", "failed", "cancelled"}:
+        run_index = self._find_run(state, self.run_id)
+        if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
             return []
-        message_index = self._find_assistant_message(state, self.run_id)
-        assert message_index is not None
-        parts = state["messages"][message_index]["parts"]
+        located = self._find_assistant_message(state, self.run_id)
+        assert located is not None
+        _, message_index = located
+        parts = state["runs"][run_index]["messages"][message_index]["parts"]
         for part_index in range(len(parts) - 1, -1, -1):
             part = parts[part_index]
             if (
@@ -152,7 +158,15 @@ class AssistantPartClosedEvent(ConversationEventEnvelope):
                 return [
                     ConversationStateMutation(
                         "set",
-                        ("messages", message_index, "parts", part_index, "status"),
+                        (
+                            "runs",
+                            run_index,
+                            "messages",
+                            message_index,
+                            "parts",
+                            part_index,
+                            "status",
+                        ),
                         "completed",
                     )
                 ]

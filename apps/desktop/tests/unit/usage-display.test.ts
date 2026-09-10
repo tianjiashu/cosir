@@ -10,6 +10,7 @@ describe("usage display", () => {
   it("formats token counts compactly without turning invalid values into numbers", () => {
     expect(formatTokenCount(0)).toBe("0");
     expect(formatTokenCount(12_345)).toBe("12k");
+    expect(formatTokenCount(999_999)).toBe("1M");
     expect(formatTokenCount(1_234_567)).toBe("1.2M");
     expect(formatTokenCount(Number.NaN)).toBe("—");
   });
@@ -40,10 +41,9 @@ describe("usage display", () => {
   });
 
   it("only attaches run usage to the matching latest assistant run", () => {
-    expect(shouldDisplayRunUsage(true, 3, 3, 3)).toBe(true);
-    expect(shouldDisplayRunUsage(true, 2, 3, 3)).toBe(false);
-    expect(shouldDisplayRunUsage(true, 2, 2, 3)).toBe(false);
-    expect(shouldDisplayRunUsage(false, 3, 3, 3)).toBe(false);
-    expect(shouldDisplayRunUsage(true, null, 3, 3)).toBe(false);
+    expect(shouldDisplayRunUsage(true, 3, true)).toBe(true);
+    expect(shouldDisplayRunUsage(true, 3, false)).toBe(false);
+    expect(shouldDisplayRunUsage(false, 3, true)).toBe(false);
+    expect(shouldDisplayRunUsage(true, null, true)).toBe(false);
   });
 });

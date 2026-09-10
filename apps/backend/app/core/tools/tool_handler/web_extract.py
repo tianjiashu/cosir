@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Literal, cast
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.tools.display.web_display import build_web_extract_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -253,17 +254,14 @@ class WebExtractTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            display_data={
-                "entries": [
-                    {
-                        "name": item["url"],
-                        "type": "link",
-                        "path": item["url"],
-                    }
+            display_data=build_web_extract_display_data(
+                urls=[
+                    item["url"]
                     for item in results
                     if isinstance(item.get("url"), str) and item["url"]
-                ]
-            },
+                ],
+                partial=bool(failures),
+            ),
         )
 
     def _resolve_extract_provider(

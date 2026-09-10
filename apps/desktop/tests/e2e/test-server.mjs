@@ -43,34 +43,19 @@ function resetTestState() {
   telemetry.requestBodies = [];
 }
 
-const emptyUsage = () => ({
-  input_tokens: 0,
-  output_tokens: 0,
-  total_tokens: 0,
-  cache_hit_tokens: 0,
-  cache_miss_tokens: 0,
-  reasoning_tokens: 0,
-});
-
 const emptyState = () => ({
-  messages: [],
-  run: { runId: null, status: "idle" },
+  runs: [],
+  current_run_id: null,
   approvals: {},
-  context_usage: 0,
-  context_revision: null,
-  usage_run_id: null,
+  context_usage_ratio: null,
   context_usage_used: null,
   context_window_total: null,
-  usage: emptyUsage(),
   error: null,
 });
 
-const textMessage = (id, runId, role, text, status) => ({
+const textMessage = (id, role, text, status) => ({
   id,
-  runId,
   role,
-  status,
-  endReason: status === "completed" ? "stop" : null,
   parts: role === "assistant"
     ? [
         { type: "reasoning", text: status === "completed" ? "推理完成" : "正在推理", status: status === "completed" ? "completed" : "running" },
@@ -81,11 +66,39 @@ const textMessage = (id, runId, role, text, status) => ({
 
 function stateWithExchange(previous, text, runId, assistantText, status) {
   const next = structuredClone(previous);
-  next.messages.push(
-    textMessage(`user-${runId}`, runId, "user", text, "completed"),
-    textMessage(`assistant-${runId}`, runId, "assistant", assistantText, status),
-  );
-  next.run = { runId, status: status === "completed" ? "completed" : "running" };
+  next.runs.push({
+    runId,
+    status: status === "completed" ? "completed" : "running",
+    endReason: status === "completed" ? "stop" : null,
+    messages: [
+      textMessage(`user-${runId}`, "user", text, "completed"),
+      textMessage(`assistant-${runId}`, "assistant", assistantText, status),
+    ],
+    usage: null,
+  });
+  next.current_run_id = runId;
+  return next;
+}
+
+function toolLifecycleState(previous, text, runId, status, toolStatus) {
+  const next = stateWithExchange(previous, text, runId, "", status);
+  const assistant = next.runs.at(-1).messages.at(-1);
+  assistant.parts = [
+    {
+      type: "tool-call",
+      toolCallId: `tool-lifecycle-${runId}`,
+      toolName: "search_files",
+      args: { pattern: "lifecycle" },
+      status: toolStatus,
+      error: null,
+      presentation: { verb: "搜索文件", icon: "search", surface: "standalone", expandable: true, expand_layout: "list" },
+      data: toolStatus === "completed"
+        ? { kind: "file-list", files: [{ path: "lifecycle.test.ts" }] }
+        : null,
+      isError: false,
+    },
+    { type: "text", text: status === "completed" ? "工具完成" : "", status: status === "completed" ? "completed" : "running" },
+  ];
   return next;
 }
 
@@ -94,8 +107,8 @@ function applyUsageFixture(state, runId, secondRun) {
   const output = secondRun ? 500 : 500;
   const total = input + output;
   const contextUsed = secondRun ? 80_000 : 70_000;
-  state.usage_run_id = runId;
-  state.usage = {
+  const run = state.runs.find((candidate) => candidate.runId === runId);
+  run.usage = {
     input_tokens: input,
     output_tokens: output,
     total_tokens: total,
@@ -103,29 +116,26 @@ function applyUsageFixture(state, runId, secondRun) {
     cache_miss_tokens: secondRun ? 50 : null,
     reasoning_tokens: secondRun ? 40 : 20,
   };
-  state.context_usage = contextUsed / 100_000;
-  state.context_revision = runId;
+  state.context_usage_ratio = contextUsed / 100_000;
   state.context_usage_used = contextUsed;
   state.context_window_total = 100_000;
 }
 
 function toolTraceState() {
   return {
-    messages: [
+    runs: [{
+      runId: 77,
+      status: "completed",
+      endReason: "stop",
+      messages: [
       {
         id: "user-tool-trace",
-        runId: 77,
         role: "user",
-        status: "completed",
-        endReason: "stop",
         parts: [{ type: "text", text: "检查项目", status: "completed" }],
       },
       {
         id: "assistant-tool-trace",
-        runId: 77,
         role: "assistant",
-        status: "completed",
-        endReason: "stop",
         parts: [
           { type: "reasoning", text: "先分析项目结构", status: "completed" },
           {
@@ -134,7 +144,6 @@ function toolTraceState() {
             toolName: "read_file",
             args: { path: "README.md" },
             status: "completed",
-            result: null,
             error: null,
             presentation: { verb: "读取文件", icon: "eye", expandable: false, expand_layout: "none" },
             data: null,
@@ -146,7 +155,6 @@ function toolTraceState() {
             toolName: "search_files",
             args: { pattern: "assistant-ui" },
             status: "completed",
-            result: null,
             error: null,
             presentation: { verb: "搜索文件", icon: "search", expandable: false, expand_layout: "none" },
             data: null,
@@ -155,15 +163,69 @@ function toolTraceState() {
           { type: "text", text: "检查完成", status: "completed" },
         ],
       },
-    ],
-    run: { runId: null, status: "idle" },
+      ],
+      usage: null,
+    }],
+    current_run_id: 77,
     approvals: {},
-    context_usage: 0,
-    context_revision: null,
-    usage_run_id: null,
+    context_usage_ratio: null,
     context_usage_used: null,
     context_window_total: null,
-    usage: emptyUsage(),
+    error: null,
+  };
+}
+
+function webSearchState() {
+  return {
+    runs: [{
+      runId: 78,
+      status: "completed",
+      endReason: "stop",
+      messages: [
+      {
+        id: "user-web-search",
+        role: "user",
+        parts: [{ type: "text", text: "搜索 assistant-ui", status: "completed" }],
+      },
+      {
+        id: "assistant-web-search",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-call",
+            toolCallId: "trace-web-search",
+            toolName: "web_search",
+            args: { query: "assistant-ui" },
+            status: "completed",
+            error: null,
+            presentation: {
+              verb: "网页搜索",
+              icon: "globe",
+              surface: "standalone",
+              expandable: true,
+              expand_layout: "list",
+              default_open: true,
+            },
+            data: {
+              entries: [{
+                name: "Assistant UI 官方文档",
+                type: "link",
+                path: "https://assistant-ui.com/docs",
+              }],
+            },
+            isError: false,
+          },
+          { type: "text", text: "搜索完成", status: "completed" },
+        ],
+      },
+      ],
+      usage: null,
+    }],
+    current_run_id: 78,
+    approvals: {},
+    context_usage_ratio: null,
+    context_usage_used: null,
+    context_window_total: null,
     error: null,
   };
 }
@@ -210,6 +272,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
   });
 
   let closed = false;
+  const runIndex = initialState.runs.findIndex((run) => run.runId === runId);
   res.on("close", () => {
     closed = true;
     if (generation === testGeneration && !res.writableEnded) telemetry.clientCancelCount += 1;
@@ -223,12 +286,10 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
   }
   if (cancelledRuns.has(runId)) {
     const cancelledState = structuredClone(initialState);
-    cancelledState.messages[assistantIndex].status = "cancelled";
-    cancelledState.messages[assistantIndex].endReason = "user_cancelled";
-    cancelledState.run = { runId, status: "cancelled" };
+    cancelledState.runs[runIndex].status = "cancelled";
+    cancelledState.runs[runIndex].endReason = "user_cancelled";
     writeSse(res, assistantFrame([
-      { type: "set", path: ["messages", assistantIndex], value: cancelledState.messages[assistantIndex] },
-      { type: "set", path: ["run"], value: cancelledState.run },
+      { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
     ]));
     writeSse(res, { type: "message-finish", finishReason: "cancelled" });
     lastStreamBody += "data: [DONE]\n\n";
@@ -244,12 +305,10 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     }
     if (cancelledRuns.has(runId)) {
       const cancelledState = structuredClone(initialState);
-      cancelledState.messages[assistantIndex].status = "cancelled";
-      cancelledState.messages[assistantIndex].endReason = "user_cancelled";
-      cancelledState.run = { runId, status: "cancelled" };
+      cancelledState.runs[runIndex].status = "cancelled";
+      cancelledState.runs[runIndex].endReason = "user_cancelled";
       writeSse(res, assistantFrame([
-        { type: "set", path: ["messages", assistantIndex], value: cancelledState.messages[assistantIndex] },
-        { type: "set", path: ["run"], value: cancelledState.run },
+        { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
       ]));
       writeSse(res, { type: "message-finish", finishReason: "cancelled" });
       lastStreamBody += "data: [DONE]\n\n";
@@ -263,12 +322,12 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
       assistantFrame([
         {
           type: "append-text",
-          path: ["messages", assistantIndex, "parts", 0, "text"],
+          path: ["runs", runIndex, "messages", assistantIndex, "parts", 0, "text"],
           value: "先分析一下。",
         },
         {
           type: "append-text",
-          path: ["messages", assistantIndex, "parts", 1, "text"],
+          path: ["runs", runIndex, "messages", assistantIndex, "parts", 1, "text"],
           value: chunk,
         },
       ]),
@@ -283,10 +342,44 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
   writeSse(
     res,
     assistantFrame([
-      { type: "set", path: ["messages", assistantIndex], value: finalState.messages[assistantIndex] },
-      { type: "set", path: ["run"], value: finalState.run },
+      { type: "set", path: ["runs", runIndex], value: finalState.runs[runIndex] },
     ]),
   );
+  writeSse(res, { type: "message-finish", finishReason: "stop" });
+  lastStreamBody += "data: [DONE]\n\n";
+  res.write("data: [DONE]\n\n");
+  res.end();
+  telemetry.completedStreamCount += 1;
+}
+
+async function streamToolLifecycle(res, initialState, finalState, runId, generation) {
+  if (generation !== testGeneration) {
+    res.end();
+    return;
+  }
+  lastStreamBody = "";
+  res.writeHead(200, {
+    "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
+    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Expose-Headers": "X-Cosir-Task-Id, X-Cosir-Thread-Id",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Content-Type": "text/event-stream; charset=utf-8",
+  });
+  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }]));
+  await wait(250);
+  if (generation !== testGeneration) {
+    res.end();
+    return;
+  }
+  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0, "messages", 1, "parts", 0, "status"], value: "running" }]));
+  await wait(250);
+  if (generation !== testGeneration) {
+    res.end();
+    return;
+  }
+  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }]));
   writeSse(res, { type: "message-finish", finishReason: "stop" });
   lastStreamBody += "data: [DONE]\n\n";
   res.write("data: [DONE]\n\n");
@@ -339,16 +432,29 @@ async function handleAssistant(req, res, body) {
   }
   let branchBase = previous;
   if (typeof sourceId === "string") {
-    const sourceIndex = previous.messages.findIndex((message) => message.id === sourceId);
-    if (sourceIndex >= 0) {
+    const sourceRunIndex = previous.runs.findIndex((run) => run.messages.some((message) => message.id === sourceId));
+    const sourceRun = sourceRunIndex < 0 ? null : previous.runs[sourceRunIndex];
+    const sourceIndex = sourceRun?.messages.findIndex((message) => message.id === sourceId) ?? -1;
+    if (sourceRun && sourceIndex >= 0) {
       branchBase = structuredClone(previous);
-      branchBase.messages = branchBase.messages.slice(0, sourceIndex);
+      branchBase.runs = branchBase.runs.slice(0, sourceRunIndex + 1);
+      branchBase.runs[sourceRunIndex].messages = branchBase.runs[sourceRunIndex].messages.slice(0, sourceIndex);
     }
   }
   const initialState = stateWithExchange(branchBase, text, runId, "", "running");
-  const assistantIndex = initialState.messages.length - 1;
+  const assistantIndex = initialState.runs.at(-1).messages.length - 1;
   let finalText;
   let chunks;
+
+  if (text.startsWith("tool-lifecycle")) {
+    const toolInitialState = toolLifecycleState(branchBase, text, runId, "running", "pending");
+    const toolFinalState = toolLifecycleState(branchBase, text, runId, "completed", "completed");
+    states.set(taskId, toolFinalState);
+    res.setHeader("X-Cosir-Task-Id", String(taskId));
+    res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
+    await streamToolLifecycle(res, toolInitialState, toolFinalState, runId, testGeneration);
+    return;
+  }
 
   if (body.taskId === undefined) {
     tasks.set(TASK_ID, {
@@ -381,30 +487,31 @@ async function handleAssistant(req, res, body) {
 async function handleResume(req, res, body) {
   const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
   const previous = states.get(taskId);
-  const lastMessage = previous?.messages.at(-1);
-  const resumableCancelled = previous?.run.status === "cancelled"
+  const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
+  const lastMessage = previousRun?.messages.at(-1);
+  const resumableCancelled = previousRun?.status === "cancelled"
     && lastMessage?.role === "assistant"
-    && lastMessage.runId === previous.run.runId
-    && lastMessage.endReason === "user_cancelled";
-  if (!previous || (!resumableCancelled && previous.run.status !== "pending" && previous.run.status !== "running")) {
+    && previousRun.endReason === "user_cancelled";
+  if (!previous || (!resumableCancelled && previousRun?.status !== "pending" && previousRun?.status !== "running")) {
     res.writeHead(204);
     res.end();
     return;
   }
 
-  const runId = previous.run.runId ?? nextResumeRunId++;
+  const runId = previous.current_run_id ?? nextResumeRunId++;
   cancelledRuns.delete(runId);
   const initialState = structuredClone(previous);
-  const assistantIndex = initialState.messages.length - 1;
+  const runIndex = initialState.runs.findIndex((run) => run.runId === runId);
+  const assistantIndex = initialState.runs[runIndex].messages.length - 1;
   const finalState = structuredClone(previous);
-  finalState.messages[assistantIndex] = textMessage(
-    finalState.messages[assistantIndex].id,
-    runId,
+  finalState.runs[runIndex].messages[assistantIndex] = textMessage(
+    finalState.runs[runIndex].messages[assistantIndex].id,
     "assistant",
     "resumed response",
     "completed",
   );
-  finalState.run = { runId, status: "completed" };
+  finalState.runs[runIndex].status = "completed";
+  finalState.runs[runIndex].endReason = "stop";
   states.set(taskId, finalState);
   res.setHeader("X-Cosir-Task-Id", String(taskId));
   res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
@@ -414,15 +521,16 @@ async function handleResume(req, res, body) {
 async function handleAttach(req, res, body) {
   const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
   const previous = states.get(taskId);
-  const lastMessage = previous?.messages.at(-1);
+  const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
+  const lastMessage = previousRun?.messages.at(-1);
   // A business resume may finish its executor before the UI's attach request
   // arrives. Replay the terminal canonical snapshot so the UI does not miss
   // the result merely because the two local HTTP streams are independent.
-  if (previous?.run.status === "completed" && lastMessage?.role === "assistant") {
-    const assistantIndex = previous.messages.length - 1;
+  if (previousRun?.status === "completed" && lastMessage?.role === "assistant") {
+    const assistantIndex = previousRun.messages.length - 1;
     res.setHeader("X-Cosir-Task-Id", String(taskId));
     res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-    await streamState(res, previous, previous, assistantIndex, [], previous.run.runId, testGeneration);
+    await streamState(res, previous, previous, assistantIndex, [], previousRun.runId, testGeneration);
     return;
   }
   await handleResume(req, res, body);
@@ -544,20 +652,34 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-web-search") {
+    tasks.set(TASK_ID, {
+      task_id: TASK_ID,
+      workspace_id: WORKSPACE_ID,
+      title: "网页搜索标题展示回归",
+      execution_status: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    states.set(TASK_ID, webSearchState());
+    jsonResponse(res, 200, { task_id: TASK_ID });
+    return;
+  }
   if (req.method === "POST" && url.pathname.startsWith("/runs/") && url.pathname.endsWith("/cancel")) {
     const runId = Number(url.pathname.split("/")[2]);
     cancelledRuns.add(runId);
     for (const [taskId, state] of states) {
-      if (state.run.runId !== runId) continue;
+      const runIndex = state.runs.findIndex((run) => run.runId === runId);
+      if (runIndex < 0) continue;
       const cancelledState = structuredClone(state);
-      cancelledState.run = { runId, status: "cancelled" };
-      const assistantMessage = cancelledState.messages.at(-1);
-      if (assistantMessage?.role === "assistant") {
-        assistantMessage.status = "cancelled";
-        assistantMessage.endReason = "user_cancelled";
-      }
+      cancelledState.runs[runIndex].status = "cancelled";
+      cancelledState.runs[runIndex].endReason = "user_cancelled";
       states.set(taskId, cancelledState);
     }
+    // Give an already-connected Assistant Transport stream a turn to publish
+    // the terminal cancelled snapshot before the client receives the ACK and
+    // aborts its local request. This mirrors the production projector push.
+    await wait(160);
     jsonResponse(res, 200, { accepted: true });
     return;
   }

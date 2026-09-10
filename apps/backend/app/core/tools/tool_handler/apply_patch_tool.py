@@ -14,8 +14,9 @@
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
 
-import dataclasses
-
+from app.core.tools.display.file_change_display import (
+    build_file_change_display_data,
+)
 from app.core.tools.guard.syntax_check import (
     SyntaxDiagnostic,
     check_source_syntax,
@@ -35,9 +36,6 @@ from app.core.tools.tool_handler.patch import (
     format_patch_diff,
     parse_v4a_patch,
     validate_all,
-)
-from app.core.tools.display.file_change_display import (
-    build_file_change_display_data,
 )
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
@@ -197,9 +195,8 @@ class ApplyPatchTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
-        # 落盘后逐文件语法检查（error 驱动）：任一文件命中语法错误即返回 error 观察，
-        # 聚合所有错误诊断（带文件维度），经 reason 引导 Agent 逐文件二次编辑覆盖自修复。
-        syntax_errors: list[dict[str, object]] = []
+        # 展示数据先基于文件变更事实构造；语法检查只作为模型侧诊断，不改变 UI 成功状态。
+        display_data = build_file_change_display_data(results)
         diagnostics_all: list[SyntaxDiagnostic] = []
         # 仅对产生新内容的文件（modified/added）做语法检查；deleted/moved 无新内容可查。
         for r in results:
@@ -210,27 +207,24 @@ class ApplyPatchTool(HandlerBase):
                 continue
             check = check_source_syntax(str(resolved_path), r.after)
             if check.has_error:
-                syntax_errors.append(
-                    {
-                        "path": r.path,
-                        "errors": [dataclasses.asdict(d) for d in check.diagnostics],
-                    }
-                )
                 diagnostics_all.extend(check.diagnostics)
-        if syntax_errors:
-            return tool_error(
+        if diagnostics_all:
+            return tool_success(
                 tool_name=self.name,
-                error="syntax error detected in patched file(s)",
-                reason=self._format_multi_file_syntax_reason(diagnostics_all),
                 permission=self.permission,
-                display_data={"syntax_errors": syntax_errors},
+                content=(
+                    format_patch_diff(results)
+                    + "\n\nPost-write syntax check reported issues:\n"
+                    + self._format_multi_file_syntax_reason(diagnostics_all)
+                ),
+                display_data=display_data,
+                artifact_data=display_data,
             )
-        display_data = build_file_change_display_data(results)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff(results),
-            display_data={"kind": "file-changes", **display_data},
+            display_data=display_data,
             artifact_data=display_data,
         )
 
@@ -301,6 +295,7 @@ class ApplyPatchTool(HandlerBase):
                 surface="standalone",
                 expandable=True,
                 expand_layout="diff",
+                show_result=False,
             ),
         )
 

@@ -1,36 +1,19 @@
-import { useEffect, useRef, useState } from "react";
 import { TerminalIcon } from "lucide-react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { DisclosureRow } from "../elements/disclosure-row.aui";
-import { asRecord, displayValue, readToolArtifact } from "./types";
+import { readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
+import { useToolDisclosure } from "./tool-disclosure";
 
-export function TerminalTool({ toolName, args, result, artifact: rawArtifact }: ToolCallMessagePartProps) {
+export function TerminalTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.data ?? {};
-  const command = typeof data.command === "string" ? data.command : typeof asRecord(args).command === "string" ? String(asRecord(args).command) : toolName;
-  const output = typeof data.output === "string"
-    ? data.output
-    : artifact.error || result === undefined
-      ? ""
-      : displayValue(result);
+  const command = typeof data.command === "string" ? data.command : toolName;
+  const output = typeof data.output === "string" ? data.output : "";
   const exitCode = typeof data.exit_code === "number" ? data.exit_code : undefined;
   const status = artifact.backendStatus;
-  const wasRunning = useRef(status === "running");
-  const [open, setOpen] = useState(status === "running");
-
-  useEffect(() => {
-    if (status === "running") {
-      wasRunning.current = true;
-      setOpen(true);
-      return;
-    }
-    if (wasRunning.current) {
-      wasRunning.current = false;
-      setOpen(false);
-    }
-  }, [status]);
+  const [open, setOpen] = useToolDisclosure(status);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="group/tool-call overflow-hidden bg-zinc-950 text-zinc-100">

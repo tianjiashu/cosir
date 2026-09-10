@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import ClassVar
 
+from app.core.tools.display.filesystem_display import build_read_file_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -166,6 +167,7 @@ class ReadFileTool(HandlerBase):
                 device_error,
                 reason=_BLOCKED_DEVICE_REASON,
                 permission=self.permission,
+                status_hint="无法读取",
             )
 
         # 解析路径、相对路径转绝对路径
@@ -181,6 +183,7 @@ class ReadFileTool(HandlerBase):
                     "project root -- and retry; the same invalid value will always fail."
                 ),
                 permission=self.permission,
+                status_hint="路径无效",
             )
 
         device_error = resolver.blocked_device_reason(path, resolved)
@@ -190,6 +193,7 @@ class ReadFileTool(HandlerBase):
                 device_error,
                 reason=_BLOCKED_DEVICE_REASON,
                 permission=self.permission,
+                status_hint="无法读取",
             )
 
         result = self._read_text_page(resolved, offset, limit)
@@ -200,22 +204,24 @@ class ReadFileTool(HandlerBase):
                 reason=result.reason,
                 retryable=result.retryable,
                 permission=self.permission,
+                status_hint="无法读取",
             )
 
         normalized_offset, normalized_limit = self._normalize_read_pagination(offset, limit)
+        end_line: int | str | None = (
+            "END" if result.next_offset is None and result.end_line is not None else result.end_line
+        )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(dataclasses.asdict(result)),
-            display_data={
-                "kind": "read-file-meta",
-                "path": path,
-                "offset": normalized_offset,
-                "limit": normalized_limit,
-                "total_lines": result.total_lines,
-                "file_size": result.file_size,
-                "next_offset": result.next_offset,
-            },
+            display_data=build_read_file_display_data(
+                path,
+                start_line=normalized_offset,
+                end_line=end_line,
+                file_size=result.file_size,
+                truncated=result.truncated,
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -248,6 +254,7 @@ class ReadFileTool(HandlerBase):
                 icon="eye",
                 expandable=False,
                 expand_layout="none",
+                show_result=False,
             ),
         )
 
@@ -326,6 +333,8 @@ class ReadFileTool(HandlerBase):
         offset, limit = self._normalize_read_pagination(offset, limit)
         selected: list[tuple[int, str]] = []
         next_offset = None
+        end_line = None
+        truncated = False
         hint = ""
         total_lines = 0
         current_chars = 0
@@ -348,6 +357,7 @@ class ReadFileTool(HandlerBase):
                     addition = len(rendered) + (1 if selected else 0)
                     if current_chars + addition > self.max_content_chars:
                         next_offset = line_number
+                        truncated = True
                         hint = (
                             "Output was truncated by character budget. "
                             f"Use offset={next_offset} to continue reading."
@@ -355,6 +365,7 @@ class ReadFileTool(HandlerBase):
                         break
 
                     selected.append((line_number, line))
+                    end_line = line_number
                     current_chars += addition
         except UnicodeDecodeError:
             return TextReadResult(
@@ -391,6 +402,8 @@ class ReadFileTool(HandlerBase):
             file_size=self._safe_file_size(path),
             next_offset=next_offset,
             hint=hint,
+            end_line=end_line,
+            truncated=truncated,
         )
 
     def _is_likely_binary(self, path: Path) -> bool:

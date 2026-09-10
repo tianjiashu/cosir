@@ -38,10 +38,10 @@ from app.task_runtime.service.task_service import TaskService
 
 @app.post("/assistant")
 async def assistant_transport(
-        request: AssistantTransportRequest,
-        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
-        runtime: AgentRuntime = Depends(get_runtime),
-        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+    request: AssistantTransportRequest,
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    runtime: AgentRuntime = Depends(get_runtime),
+    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> AssistantTransportResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
 
@@ -122,8 +122,6 @@ async def assistant_transport(
                 run_id=request.runId,
             )
 
-
-
         return transport_service.build_response(
             task_id=task_id,
             thread_id=f"task-{task_id}",
@@ -173,10 +171,10 @@ async def assistant_transport(
 
 @app.post("/tasks/{task_id}/assistant/attach")
 async def assistant_transport_attach(
-        task_id: int,
-        request: AssistantAttachRequest,
-        task_service: TaskService = Depends(get_task_service),
-        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+    task_id: int,
+    request: AssistantAttachRequest,
+    task_service: TaskService = Depends(get_task_service),
+    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> AssistantTransportResponse:
     """重新订阅已有 Run，不触发业务 resume。"""
 
@@ -217,11 +215,11 @@ async def assistant_transport_attach(
 
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
-        task_id: int,
-        task_service: TaskService = Depends(get_task_service),
-        snapshot_service: ConversationTaskSnapshotService = Depends(
-            get_conversation_task_snapshot_service
-        ),
+    task_id: int,
+    task_service: TaskService = Depends(get_task_service),
+    snapshot_service: ConversationTaskSnapshotService = Depends(
+        get_conversation_task_snapshot_service
+    ),
 ) -> ConversationStateSnapshot:
     """返回某任务的首屏历史 state（服务端权威对话视图）。
 
@@ -231,8 +229,8 @@ async def assistant_transport_state(
         snapshot_service: Task snapshot 唯一事实源。
 
     返回:
-        与 Assistant Transport state 形状一致的中性 wire state 字典（含 ``messages`` / ``run``）；
-        任务无轮次时 ``messages`` 为空数组。
+        与 Assistant Transport state 形状一致的中性 wire state 字典；任务无 Run 时
+        ``runs`` 为空数组。
 
     异常:
         HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的
@@ -243,7 +241,7 @@ async def assistant_transport_state(
         snapshot 尚未投影时，执行幂等的 snapshot 对账写入，然后返回最终一致的 state。
     """
     # 先校验任务存在：不存在时 ``get_task`` 抛 KeyError → 映射为 404。
-    # 不能在投影阶段再判，因为空 task 与不存在 task 在投影层都表现为空 messages。
+    # 不能在投影阶段再判，因为空 task 与不存在 task 在投影层都表现为空 runs。
     try:
         task_service.get_task(task_id)
     except KeyError as exc:
@@ -255,9 +253,16 @@ async def assistant_transport_state(
             "msg": "读取 Assistant 历史快照",
             "data": {
                 "task_id": task_id,
-                "run_id": state["run"]["runId"],
-                "run_status": state["run"]["status"],
-                "message_count": len(state["messages"]),
+                "run_id": state["current_run_id"],
+                "run_status": next(
+                    (
+                        run["status"]
+                        for run in state["runs"]
+                        if run["runId"] == state["current_run_id"]
+                    ),
+                    "idle",
+                ),
+                "message_count": sum(len(run["messages"]) for run in state["runs"]),
             },
         },
     )
@@ -266,8 +271,8 @@ async def assistant_transport_state(
 
 @app.post("/runs/{run_id}/cancel")
 async def cancel_run(
-        run_id: int,
-        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    run_id: int,
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> Response:
     """显式取消一个 Conversation Run。
 

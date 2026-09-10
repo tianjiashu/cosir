@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from app.core.context.context_entry import ContextEntry
 
@@ -28,7 +30,8 @@ class ListenerEvent:
         entries: 变化后的有效上下文条目快照（由分发方深拷贝，listener 可安全读取）。
         usage: 分发时记录的上下文已用 token。
         total_tokens: 当前上下文窗口上限。
-        allow_write_event_failure: 是否允许事件写入器不可用时继续执行。
+        tool_schemas: 当前 Run 实际暴露给模型的工具 schema 快照；它属于运行时输入配置，
+            不属于持久化 context entries。
 
     返回:
         不可变的上下文变化事件。
@@ -44,3 +47,4 @@ class ListenerEvent:
     entries: list[ContextEntry]
     usage: int
     total_tokens: int
+    tool_schemas: tuple[Mapping[str, Any], ...] = ()

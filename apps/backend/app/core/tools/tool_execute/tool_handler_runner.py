@@ -14,6 +14,10 @@ from typing import Any
 from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
+from app.core.tools.tool_execute.tool_cancelled import (
+    CANCEL_NOT_EXECUTED_REASON,
+    tool_cancelled,
+)
 from app.core.tools.tool_execute.tool_error import handler_exception_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_execute.windows_job_object import (
@@ -234,17 +238,12 @@ class ToolHandlerRunner:
                     },
                 },
             )
-            return tool_error(
+            return tool_cancelled(
                 tool.name,
-                "tool execution cancelled",
-                reason=(
-                    "the current turn was cancelled while this tool was running; "
-                    "the tool process was terminated and no further action is needed."
-                ),
-                retryable=False,
+                reason=CANCEL_NOT_EXECUTED_REASON,
+                error="the current turn was cancelled while this tool was running",
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
-                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         except TimeoutError:
             log.warning(
@@ -270,7 +269,6 @@ class ToolHandlerRunner:
                 retryable=True,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
-                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         except (OSError, EOFError) as exc:
             # 【Bug 修复】子进程崩溃 / 被外部杀死 / 管道断裂时，父进程 result_queue.get
@@ -299,7 +297,6 @@ class ToolHandlerRunner:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
-                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         finally:
             if process.is_alive():
@@ -328,7 +325,6 @@ class ToolHandlerRunner:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
-                error_kind=ErrorKind.RUNTIME_FAILED,
             )
 
         return self._normalize_result(tool, payload, tool_call_id)
@@ -507,7 +503,6 @@ class ToolHandlerRunner:
                 retryable=False,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
-                error_kind=ErrorKind.RUNTIME_FAILED,
             )
         return self._normalize_result(tool, result, tool_call_id)
 

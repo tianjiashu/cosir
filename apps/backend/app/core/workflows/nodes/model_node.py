@@ -13,21 +13,26 @@ stream；用 ``model.astream()`` 累积 ``AIMessage``，
 落库进历史上下文，并在进入工具分支时作为 ``instruction`` 键随 ``pending_tool_calls``
 下传给 ``tools`` / ``observe`` 节点，使下游执行与错误排查能看到模型当时的意图。
 
-模型侧数据处理辅助（思考通道抽取、chunk 组装、chunk debug 落盘）已拆为独立模块
-（``thinking_extractor`` / ``chunk_assembler`` / ``debug_dump``），本模块仅 import 使用；
-节点共享运行时原语见 ``common``。
+模型侧数据处理辅助（思考通道抽取、chunk 组装、chunk debug 落盘、流式 part 生命周期）已拆为
+独立模块（``thinking_extractor`` / ``chunk_assembler`` / ``debug_dump`` /
+``streaming_part_state_machine``），本模块仅 import 使用；节点共享运行时原语见 ``common``。
 """
 
-from typing import Literal
+from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.config import get_stream_writer
 
+from app.assistant_transport.event import (
+    ToolCallCreatedEvent,
+    ToolCallStatusChangedEvent,
+    UsageUpdatedEvent,
+)
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.nodes.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.chunk_assembler import (
     _collect_chunk_to_ai_message,
+    _has_content,
 )
 from app.core.workflows.nodes.helper.common import (
     _runtime_config,
@@ -38,24 +43,23 @@ from app.core.workflows.nodes.helper.debug_dump import (
     # 测试经 model_node._dump_merged_chunk_debug 访问
     _dump_raw_chunk_debug,
 )
+from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.invalid_tool_call import (
+    TOOL_CALL_REPAIR_MESSAGE_KIND,
     InvalidToolOutcome,
     build_invalid_tool_call_repair_message,
     decide_invalid_tool_handling,
+)
+from app.core.workflows.nodes.helper.streaming_part_state_machine import (
+    StreamingPartStateMachine,
 )
 from app.core.workflows.nodes.helper.thinking_extractor import (
     extract_reasoning_content,
     # 测试经 model_node._should_strip_reasoning_content 访问
 )
+from app.core.workflows.nodes.helper.tool_name_extractor import extract_tool_calls
 from app.utils.message_content import content_to_text
 
-from ..event import (
-    AssistantPartClosedEvent,
-    AssistantTextDeltaEvent,
-    ToolCallCreatedEvent,
-    ToolCallStatusChangedEvent,
-    UsageUpdatedEvent,
-)
 from ..react.state import ReactGraphState
 
 
@@ -84,12 +88,10 @@ async def _model_node(state: ReactGraphState) -> dict:
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
         - ``invalid_tool_calls`` 按双轨消费：未命中工具名的 ``IGNORE`` 仅记 warning；
-          命中工具名的 ``REPAIR`` 不论是否同轮有合法 ``tool_call``，都经
-          ``_runtime_context().add_message(SystemMessage(...))`` 直接写入上下文（落库 + 写
-          内存 + 标记 ``have_change``）：同轮无合法工具（情形 b）时返回非终态 patch 回流
-          model 重试（靠 ``max_steps`` 兜底），回流时把模型已产出的非空 ``output_text``
-          追加进修复提示，避免其被静默丢弃；同轮有合法工具（情形 a）时修复提示随工具分支
-          下传、本回合并不回流 model，仅作历史/下轮参考。修复提示不再经 graph state 中转。
+          命中工具名的 ``REPAIR`` 在无合法调用时于当前 AIMessage 之后立即注入并回流
+          model，在存在合法调用时只写入 ``deferred_repair_message``，由 observe 在全部
+          ToolMessage 之后追加，避免产生 ``AIMessage(tool_calls) -> SystemMessage ->
+          ToolMessage`` 的非法顺序。
     """
 
     rc = _runtime_config()
@@ -141,8 +143,10 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {"messages": [m.model_dump() for m in messages]},
         },
     )
-
-    emitted_parts: list[Literal["text", "reasoning"]] = []
+    # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
+    parts = StreamingPartStateMachine(
+        stream_writer, task_id=task_id, run_id=run_id, step_id=step_id
+    )
 
     async for chunk in model.astream(messages):
         # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
@@ -164,6 +168,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             partial_output = (
                 content_to_text(_collect_chunk_to_ai_message(chunks).content) if chunks else ""
             )
+            parts.finish()
             operations.cancel_run_if_running(
                 end_reason="runtime_cancelled",
                 usage_stats=rc.usage_stats,
@@ -178,32 +183,16 @@ async def _model_node(state: ReactGraphState) -> dict:
         reasoning = extract_reasoning_content(chunk, thinking_channel)
         #模型把 "\n"、" \n" 单独作为 chunk 时，也要保留
         if text:
-            if "text" not in emitted_parts:
-                emitted_parts.append("text")
-            stream_writer(
-                AssistantTextDeltaEvent(
-                    task_id=task_id, run_id=run_id, step_id=step_id, part="text", delta=text
-                )
-            )
+            parts.text(text)
         if reasoning and reasoning.strip():
-            if "reasoning" not in emitted_parts:
-                emitted_parts.append("reasoning")
-            stream_writer(
-                AssistantTextDeltaEvent(
-                    task_id=task_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    part="reasoning",
-                    delta=reasoning,
-                )
-            )
+            parts.reasoning(reasoning)
+        # tool_call_created 只能在聚合消息后发出；先收口当前文本/推理 part，确保
+        # Transport 不会把「reasoning 仍在 running」与后续工具创建绑定在一起。
+        if extract_tool_calls(chunk):
+            parts.tool_call()
     # 合并 chunk 到 AIMessage。
     ai_message = _collect_chunk_to_ai_message(chunks)
-
-    for part in emitted_parts:
-        stream_writer(
-            AssistantPartClosedEvent(task_id=task_id, run_id=run_id, step_id=step_id, part=part)
-        )
+    parts.finish()
 
     # 以聚合后的 AIMessage 为工具事实唯一来源。流式 tool_call_chunks 的 args 通常是
     # 未闭合 JSON 字符串，不能直接投影；聚合后统一补齐稳定 ID、归一化 args，再按
@@ -240,12 +229,21 @@ async def _model_node(state: ReactGraphState) -> dict:
                 for tool_call in tool_calls
             ],
         )
-    _runtime_context().add_message(context_ai_message)
+    # 空壳 AIMessage 不进入上下文；这也避免后续误判为可继续推理。
+    if _has_content(context_ai_message):
+        _runtime_context().add_message(context_ai_message)
 
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
-    usage = rc.usage_stats.to_dict()
-    stream_writer(UsageUpdatedEvent(task_id=task_id, run_id=run_id, step_id=step_id, **usage))
+
+    stream_writer(
+        UsageUpdatedEvent(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            **rc.usage_stats.to_dict(),
+        )
+    )
 
     for tool_call in tool_calls:
         tool_definition = next(
@@ -269,6 +267,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                     if tool_definition is not None and tool_definition.display is not None
                     else {}
                 ),
+                data=None,
             )
         )
     # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。
@@ -276,6 +275,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
     requested_tool = bool(tool_calls)
 
+    repair_data: list[dict[str, Any]] = []
+    repair_message = ""
     if invalid_tool_calls:
         available_tool_names = {tool.name for tool in operations.model_tools}
         result = decide_invalid_tool_handling(
@@ -298,10 +299,53 @@ async def _model_node(state: ReactGraphState) -> dict:
                 },
             )
 
-        if result[InvalidToolOutcome.REPAIR]:
-            repair_data = result[InvalidToolOutcome.REPAIR]
+        repair_data = result[InvalidToolOutcome.REPAIR]
+        if repair_data:
             repair_message = build_invalid_tool_call_repair_message(repair_datas=repair_data)
-            _runtime_context().add_message(SystemMessage(content=repair_message))
+            if not requested_tool:
+                output_text = content_to_text(ai_message.content)
+                if output_text:
+                    repair_message = (
+                        f"{repair_message}\n\n上一轮模型的部分输出"
+                        f"（请基于此继续完善，勿丢弃）：\n{output_text}"
+                    )
+                log.warning(
+                    "model_node_invalid_tool_calls_no_tool_repair",
+                    extra={
+                        "msg": (
+                            "非法工具调用命中已注册工具名但本轮无合法工具，"
+                            f"追加修复提示并回流 model，step_id={step_id}"
+                        ),
+                        "data": {
+                            "step_id": step_id,
+                            "invalid_count": len(repair_data),
+                            "repair_message_length": len(repair_message),
+                        },
+                    },
+                )
+                # 没有合法 tool_calls 时，当前 AIMessage 不携带工具调用，SystemMessage
+                # 可以安全地紧随其后；下一轮由 repair_requested 回流 model。
+                _runtime_context().add_message(
+                    SystemMessage(
+                        content=repair_message,
+                        additional_kwargs={
+                            "cosir_message_kind": TOOL_CALL_REPAIR_MESSAGE_KIND,
+                        },
+                    )
+                )
+                return {
+                    "step_count": step_count,
+                    "repair_requested": True,
+                    "requested_tool": False,
+                    "final_response": False,
+                    "terminal": False,
+                    "pending_tool_calls": {},
+                    "deferred_repair_message": "",
+                    "continuation_error_data": {
+                        "error_kind": "invalid_tool_call_repair",
+                        "invalid_count": len(repair_data),
+                    },
+                }
 
     # 仅当消息有文本或工具调用时才落库，避免空壳消息污染跨轮历史。最终文本消息在
     # complete_run_with_message() 中与 Run 终态同事务写入；工具分支没有 Run 终态，单独写入
@@ -351,6 +395,15 @@ async def _model_node(state: ReactGraphState) -> dict:
             "requested_tool": True,
             "final_response": False,
             "terminal": False,
+            "deferred_repair_message": repair_message,
+            "continuation_error_data": (
+                {
+                    "error_kind": "invalid_tool_call_repair",
+                    "invalid_count": len(repair_data),
+                }
+                if repair_data
+                else None
+            ),
             "pending_tool_calls": {
                 "tool_calls": [
                     {
@@ -363,17 +416,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 # 文本说明作为 instruction 随工具调用下传，供 tools/observe 节点看到模型意图。
                 "instruction": ai_message.content,
             },
-        }
-
-    if _runtime_context().has_change():  # 没有工具调用，但上下文有变化 → 继续执行
-        return {
-            "step_count": step_count,
-            "repair_requested": False,
-            "requested_tool": False,
-            "continuation_error_data": None,
-            "final_response": False,
-            "terminal": False,
-            "pending_tool_calls": {},
         }
 
     if ai_message.content:  # 没有工具调用，上下文没有变化但有文本 → 最终回答
@@ -423,3 +465,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
     return terminal_state(step_count)
+
+
+

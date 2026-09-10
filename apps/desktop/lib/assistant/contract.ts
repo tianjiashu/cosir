@@ -2,9 +2,8 @@
  * 后端 Assistant Transport 协议约定的 state 结构（传输契约类型）。
  *
  * 后端以「增量构建（标准流式）」方式同步此 state：
- * 1. 先通过 `set` 一次性设置完整的 `messages` 数组（含历史 + 本轮
- *    用户消息 + 空的 assistant 占位消息）；
- * 2. 随后用 `append-text` 增量填充 assistant 消息的内容。
+ * 1. 先通过 `set` 一次性设置完整的 `runs` 数组；
+ * 2. 随后在对应 Run 的消息 part 上增量填充内容。
  *
  * `content` 是消息的 part 数组，支持文本与工具调用两种 part。该类型必须与
  * 后端协议层（apps/backend）产出的 wire 帧严格对齐，改动需前后端同步。
@@ -32,36 +31,11 @@ export type TransportToolPresentation = {
   expandable?: boolean;
   expand_layout?: "none" | "details" | "list" | "diff" | "write" | "terminal";
   default_open?: boolean;
+  show_result?: boolean;
   [key: string]: unknown;
 };
 
-export type WebSearchResultData = {
-  [key: string]: unknown;
-  kind: "web-search-results";
-  query: string;
-  provider?: string;
-  results: Array<{
-    title: string;
-    url: string;
-    description?: string;
-    position?: number;
-  }>;
-};
-
-export type WebExtractStatusData = {
-  [key: string]: unknown;
-  kind: "web-extract-status";
-  provider?: string;
-  sites: Array<{
-    site: string;
-    url: string;
-    status: "pending" | "running" | "success" | "failed" | "truncated";
-    error_code?: string;
-    truncated?: boolean;
-  }>;
-};
-
-/** 非 Web 工具的兼容展示数据；Web 工具使用上面的判别联合。 */
+/** 工具的通用展示数据；具体字段由 presentation.expand_layout 解释。 */
 export type GenericTransportToolData = {
   kind?: string;
   [key: string]: unknown;
@@ -104,8 +78,8 @@ export type TransportReasoningPart = {
  * 工具调用 part：Transport 协议中的工具调用片段。
  *
  * 字段对齐后端 snapshot tool-call part：`toolCallId` / `toolName` /
- * `status` / `args`（解析后的参数对象）/ `result`（执行结果）/ `error`（失败时的
- * 错误文本，成功或未完成时为 undefined）。后端不产 `argsText` 原始 JSON 流，故本
+ * `status` / `args`（解析后的参数对象）/ `error`（失败时的错误文本，成功或未完成时为
+ * undefined）/ `data`（展示数据）。后端不产 `argsText` 原始 JSON 流，故本
  * 契约以 `args` 为权威参数通道；converter 在需要时从 `args` 派生 `argsText` 以贴合
  * assistant-ui 的 `ToolCallMessagePart`。
  */
@@ -115,44 +89,43 @@ export type TransportToolCallPart = {
   toolName: string;
   /** 解析后的参数对象（可能因流式未完成而不完整）。 */
   args: Record<string, unknown>;
-  /** 工具执行结果；未完成或失败时为空。 */
-  result?: unknown;
   /** 工具执行错误文本；成功时为空。 */
-  error?: string;
+  error?: string | null;
   /** 后端工具调用生命周期状态；未知 wire 值由 converter 显式标为 unknown。 */
   status?: string;
   /** 后端在失败时提供的稳定错误标识（可选）。 */
   errorCode?: string;
   /** 后端声明的工具展示布局；它只影响 renderer，不改变工具生命周期。 */
   presentation?: TransportToolPresentation;
-  /** 后端治理后的 UI 展示数据，前端不得从 result 或 args 推导替代。 */
+  /** 后端治理后的 UI 展示数据，前端不得从 args 推导展示内容。 */
   data?: TransportToolData | null;
   /** 后端显式标记的错误结果。 */
-  isError?: boolean;
+  isError?: boolean | null;
 };
 
-/** 单条 Transport 消息：对应后端 canonical conversation 投影出的一条 UI 消息。 */
+/** 单条 Transport 消息：Run 内的 canonical conversation 消息。 */
 export type TransportMessage = {
   id: string;
-  runId?: number | null;
   role: "user" | "assistant";
   parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart>;
-  /** 后端领域状态，由前端 converter 翻译为 assistant-ui 的 MessageStatus。 */
-  status: string;
-  /**
-   * 中性领域终态原因，取自后端 turns.end_reason（可能为 null）。
-   * 仅作事实透传，不含 assistant-ui 语义；converter 据此区分 failed 的不同终止原因。
-   */
-  endReason?: string | null;
-  createdAt?: string;
 };
 
-/** 当前运行元信息：供前端在「停止」时取出 turn_id 调用真实取消端点。 */
+export type ConversationStateUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_hit_tokens: number;
+  cache_miss_tokens: number | null;
+  reasoning_tokens: number;
+};
+
+/** 一个 Run 的完整 Transport 事实，包括其消息、生命周期和 token usage。 */
 export type TransportRun = {
-  /** 当前运行切片标识，等价于后端 turns.id；首屏无运行时为 null。 */
-  runId: number | null;
-  /** 运行态领域状态字符串（pending/running/idle 等）。 */
+  runId: number;
   status: string;
+  endReason: string | null;
+  messages: TransportMessage[];
+  usage: ConversationStateUsage | null;
 };
 
 /** 运行错误：与后端 `ConversationStateError` 对齐的稳定结构。 */
@@ -162,28 +135,14 @@ export type TransportError = {
   retryable: boolean;
 };
 
-/** Transport 整体 state：message 数组的容器 + 当前运行元信息。 */
+/** Task 级 Transport state；Run 事实全部按 Run 保存在 `runs` 中。 */
 export type TransportState = {
-  messages: TransportMessage[];
-  /** 运行时元信息；首屏历史场景下 runId 为 null、status 为 idle。 */
-  run: TransportRun;
+  runs: TransportRun[];
+  current_run_id: number | null;
   /** 审批预留；当前固定为空对象。 */
   approvals: Record<string, never>;
-  /** 当前 Task 的累计模型 token 用量。 */
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens: number;
-    cache_hit_tokens: number;
-    cache_miss_tokens: number | null;
-    reasoning_tokens: number;
-  };
-  /** 顶层 usage 所属的 Conversation Run；null 表示尚未有可关联的 run。 */
-  usage_run_id: number | null;
-  /** 当前上下文窗口占用比例；允许大于 1 表示超额。 */
-  context_usage: number;
-  /** 上下文测量的单调 revision；null 表示尚未完成测量。 */
-  context_revision: number | null;
+  /** 当前 Task 上下文窗口占用比例；允许大于 1 表示超额。 */
+  context_usage_ratio: number | null;
   /** 当前有效上下文已用 token；null 表示尚未完成有效测量。 */
   context_usage_used: number | null;
   /** 当前有效上下文窗口上限；null 表示后端暂时无法确定。 */
@@ -195,4 +154,5 @@ export type TransportState = {
 /** 把后端领域 status 翻译为 assistant-ui MessageStatus 的映射函数签名。 */
 export type MessageStatusMapper = (
   message: TransportMessage,
+  run: TransportRun,
 ) => MessageStatus;

@@ -13,6 +13,7 @@ output_mode=files_only / context / 分页续读提示）。
 
 from typing import Any
 
+from app.core.tools.display.filesystem_display import build_file_search_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -208,19 +209,15 @@ class SearchFilesTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=result,
-            display_data={
-                "kind": "file-list",
-                "files": [{"path": file_path} for file_path in file_paths],
-                "pattern": pattern,
-                "target": target,
-                "path": search_path,
-                "page": {
-                    "offset": offset,
-                    "limit": limit,
-                    "has_more": match_count > offset + limit,
-                    "next_offset": offset + limit if match_count > offset + limit else None,
-                },
-            },
+            display_data=build_file_search_display_data(
+                pattern=pattern,
+                target=target,
+                path=search_path,
+                files=file_paths,
+                offset=offset,
+                limit=limit,
+                match_count=match_count,
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -253,6 +250,7 @@ class SearchFilesTool(HandlerBase):
                 icon="search",
                 expandable=True,
                 expand_layout="list",
+                show_result=False,
             ),
         )
 

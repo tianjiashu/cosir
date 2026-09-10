@@ -13,13 +13,13 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage
 from sqlalchemy.orm import Session
 
-from app.core.llm_provider.capability.provider_capability import ProviderCapability
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.event import (
+from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
     UserInputAppendedEvent,
 )
+from app.core.llm_provider.capability.provider_capability import ProviderCapability
+from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
@@ -188,7 +188,6 @@ class ConversationRunService:
             ConversationRunStatus.COMPLETED.value,
             ConversationRunStatus.FAILED.value,
             ConversationRunStatus.CANCELLED.value,
-            ConversationRunStatus.INTERRUPTED.value,
         )
         return self._run.reset_for_edit(
             run_id=run_id,

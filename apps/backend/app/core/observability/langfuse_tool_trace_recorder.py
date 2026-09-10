@@ -79,7 +79,7 @@ class _LangfuseToolSpan:
             return
         output = {
             "content": sanitize_langfuse_payload(observation.content),
-            "data": sanitize_langfuse_payload(observation.data or {}),
+            "data": sanitize_langfuse_payload(observation.display_data or {}),
             "error": sanitize_langfuse_payload(observation.error),
             "reason": observation.reason,
             "retryable": observation.retryable,

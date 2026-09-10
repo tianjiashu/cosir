@@ -5,7 +5,9 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
+import { ToolIcon } from "./tool-icons";
 import { DisclosureRow } from "../elements/disclosure-row.aui";
+import { useToolDisclosure } from "./tool-disclosure";
 
 type Change = {
   path: string;
@@ -57,24 +59,32 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
   const deletions = typeof stats.total_deletions === "number" ? stats.total_deletions : changes.reduce((sum, item) => sum + (item.deletions ?? 0), 0);
   const title = artifact.presentation.verb ?? toolName;
   const defaultOpen = artifact.backendStatus === "running" || artifact.presentation.default_open === true;
+  const isTerminalState = artifact.backendStatus === "failed" || artifact.backendStatus === "cancelled";
+  const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen);
 
   return (
-    <Collapsible defaultOpen={defaultOpen} className="group/tool-call">
+    <Collapsible open={open} onOpenChange={setOpen} className="group/tool-call">
       <DisclosureRow
+        leading={<ToolIcon name={artifact.presentation.icon} aria-hidden="true" />}
         label={<span className="text-foreground text-sm font-medium">{title}</span>}
-        meta={
+        meta={isTerminalState ? (
+          <span className="text-destructive">{artifact.error ?? "执行失败"}</span>
+        ) : (
           <>
             <span className="text-muted-foreground">{totalFiles} 个文件</span>
             <span className="ml-2 text-emerald-600">+{insertions}</span>
             <span className="ml-2 text-destructive">−{deletions}</span>
           </>
-        }
+        )}
         trailing={<ToolStatus status={artifact.backendStatus} />}
       />
       <CollapsibleContent className="ml-6 space-y-2 pl-2 pt-2">
-        {artifact.error && <p className="text-destructive px-2 text-xs">{artifact.error}</p>}
-        {changes.length === 0 && !artifact.error && <p className="text-muted-foreground px-2 text-xs">后端没有返回可展示的 Diff。</p>}
-        {changes.map((change) => (
+        {isTerminalState ? (
+          <p className="text-destructive px-2 text-xs">{artifact.error ?? "执行失败"}</p>
+        ) : (
+          <>
+            {changes.length === 0 && <p className="text-muted-foreground px-2 text-xs">后端没有返回可展示的 Diff。</p>}
+            {changes.map((change) => (
           <section key={`${change.path}:${change.new_path ?? ""}`} className="overflow-hidden">
             <header className="flex items-center justify-between gap-2 bg-muted/30 px-2.5 py-1.5 text-xs">
               <span className="truncate font-medium">{change.new_path ?? change.path}</span>
@@ -82,7 +92,9 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
             </header>
             <FileDiff change={change} />
           </section>
-        ))}
+            ))}
+          </>
+        )}
       </CollapsibleContent>
     </Collapsible>
   );

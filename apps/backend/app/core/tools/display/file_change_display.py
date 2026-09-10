@@ -38,6 +38,7 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
         for result, file_stat in zip(results, file_stats, strict=True)
     ]
     return {
+        "kind": "file-changes",
         "changes": changes,
         "diff_stats": stats,
     }

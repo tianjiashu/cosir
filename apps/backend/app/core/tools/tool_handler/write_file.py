@@ -12,9 +12,11 @@
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
 
-import dataclasses
 from pathlib import Path
 
+from app.core.tools.display.file_change_display import (
+    build_file_change_display_data,
+)
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
     ToolDefinition,
@@ -31,9 +33,6 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.file_io.atomic_write import (
     atomic_write_text,
     looks_like_line_numbered,
-)
-from app.core.tools.display.file_change_display import (
-    build_file_change_display_data,
 )
 from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
@@ -195,26 +194,29 @@ class WriteFileTool(HandlerBase):
                 permission=self.permission,
             )
 
-        # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
-        # 经 reason 引导 Agent 二次编辑覆盖自修复；data 只给前端展示。
-        result = check_source_syntax(str(resolved), content)
-        if result.has_error:
-            return tool_error(
-                tool_name=self.name,
-                error="syntax error detected after write",
-                reason=format_syntax_reason(result),
-                permission=self.permission,
-                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
-            )
-
         status = "modified" if existed else "added"
         snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
         display_data = build_file_change_display_data([snapshot])
+
+        # 语法检查是模型侧诊断，不改变文件写入成功的 UI 状态；前端只看到统一文件 Diff。
+        result = check_source_syntax(str(resolved), content)
+        if result.has_error:
+            return tool_success(
+                tool_name=self.name,
+                permission=self.permission,
+                content=(
+                    "File written successfully. Post-write syntax check reported issues:\n"
+                    + format_syntax_reason(result)
+                ),
+                display_data=display_data,
+                artifact_data=display_data,
+            )
+
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=content,
-            display_data={"kind": "file-changes", **display_data},
+            display_data=display_data,
             artifact_data=display_data,
         )
 
@@ -249,6 +251,7 @@ class WriteFileTool(HandlerBase):
                 surface="standalone",
                 expandable=True,
                 expand_layout="diff",
+                show_result=False,
             ),
         )
 

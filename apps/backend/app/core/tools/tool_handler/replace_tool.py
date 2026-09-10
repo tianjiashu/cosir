@@ -13,9 +13,11 @@ edit_file 逻辑。成功后返回 unified diff 回显（``content``）与结构
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
 
-import dataclasses
 from pathlib import Path
 
+from app.core.tools.display.file_change_display import (
+    build_file_change_display_data,
+)
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
     ToolDefinition,
@@ -37,9 +39,6 @@ from app.core.tools.tool_handler.patch import (
     format_no_match_hint,
     format_patch_diff,
     fuzzy_find_and_replace,
-)
-from app.core.tools.display.file_change_display import (
-    build_file_change_display_data,
 )
 from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
@@ -245,22 +244,25 @@ class ReplaceTool(HandlerBase):
             )
         # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
         # 经 reason 引导 Agent 二次编辑覆盖自修复。
-        result = check_source_syntax(str(resolved), new_content)
-        if result.has_error:
-            return tool_error(
-                tool_name=self.name,
-                error="syntax error detected after patch",
-                reason=format_syntax_reason(result),
-                permission=self.permission,
-                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
-            )
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
         display_data = build_file_change_display_data([snapshot])
+        result = check_source_syntax(str(resolved), new_content)
+        if result.has_error:
+            return tool_success(
+                tool_name=self.name,
+                permission=self.permission,
+                content=(
+                    "File patched successfully. Post-write syntax check reported issues:\n"
+                    + format_syntax_reason(result)
+                ),
+                display_data=display_data,
+                artifact_data=display_data,
+            )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff([snapshot]),
-            display_data={"kind": "file-changes", **display_data},
+            display_data=display_data,
             artifact_data=display_data,
         )
 
@@ -295,6 +297,7 @@ class ReplaceTool(HandlerBase):
                 surface="standalone",
                 expandable=True,
                 expand_layout="diff",
+                show_result=False,
             ),
         )
 

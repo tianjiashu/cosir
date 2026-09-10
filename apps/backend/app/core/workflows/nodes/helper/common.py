@@ -63,7 +63,8 @@ def terminal_state(
 
     model / max_steps / observe 多个节点都把「终态」写成一组重复的硬字段字典
     （``step_count`` / ``repair_requested`` / ``requested_tool`` / ``final_response`` /
-    ``terminal`` / ``pending_tool_calls``），手写易错且各处分歧。本函数收口为单一来源。
+        ``terminal`` / ``pending_tool_calls`` / ``deferred_repair_message``），手写易错且
+        各处分歧。本函数收口为单一来源。
     终态不再有后续模型步，统一收口为单一来源，避免各节点手写硬字段字典发散（P2-5 一致性收口）。
 
     参数:
@@ -90,4 +91,5 @@ def terminal_state(
         "final_response": final_response,
         "terminal": True,
         "pending_tool_calls": {},
+        "deferred_repair_message": "",
     }

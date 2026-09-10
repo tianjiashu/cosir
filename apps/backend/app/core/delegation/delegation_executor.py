@@ -11,6 +11,7 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
+from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
@@ -269,6 +270,8 @@ class DelegationExecutor(DelegateTaskExecutor):
             runtime_event_loop,
             delegation_service,
             child_task_id=child_task.id,
+            title=args.title,
+            child_agent_id=args.child_agent_id,
         )
 
     @staticmethod
@@ -455,6 +458,8 @@ class DelegationExecutor(DelegateTaskExecutor):
         runtime_event_loop: asyncio.AbstractEventLoop | None,
         delegation_service: DelegationService,
         child_task_id: int | None = None,
+        title: str = "",
+        child_agent_id: str = "",
     ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 
@@ -488,12 +493,14 @@ class DelegationExecutor(DelegateTaskExecutor):
                 "delegate_task",
                 "delegate_task",
                 summary,
-                data={
-                    "delegation_id": delegation_id,
-                    "child_run_id": result.child_run_id,
-                    "child_task_id": child_task_id,
-                    "status": "completed",
-                },
+                display_data=build_delegation_display_data(
+                    title=title,
+                    child_agent_id=child_agent_id,
+                    delegation_id=delegation_id,
+                    child_task_id=child_task_id,
+                    child_run_id=result.child_run_id,
+                    status="completed",
+                ),
             )
         if result.status == "cancelled":
             error = result.error or "child run cancelled"

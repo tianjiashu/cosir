@@ -130,6 +130,7 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
   ));
   await page.goto("/tasks/42");
   await expect(page.getByRole("main").getByText("恢复测试", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("run-usage-display")).toHaveText("用量统计中…");
   await resumeResponse;
   await expect(page.getByText("resumed", { exact: true })).toBeVisible();
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
@@ -179,6 +180,10 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   });
 
   const assistantRequests: Array<{ body: Record<string, unknown>; status: number }> = [];
+  const assistantStateRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/assistant/state")) assistantStateRequests.push(request.url());
+  });
   page.on("response", (response) => {
     if (!response.url().endsWith("/assistant")) return;
     assistantRequests.push({
@@ -189,6 +194,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
 
   await page.goto("/tasks/102");
   await expect(page.getByLabel("消息输入")).toBeVisible();
+  const stateReadsBeforeCancel = assistantStateRequests.length;
   await page.getByLabel("消息输入").fill("cancel-me");
   await page.getByRole("button", { name: "发送" }).click();
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
@@ -200,6 +206,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.getByRole("button", { name: "停止" }).click();
   await expect((await cancelResponse).status()).toBe(200);
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
+  expect(assistantStateRequests).toHaveLength(stateReadsBeforeCancel);
   expect(assistantRequests).toHaveLength(1);
 
   const resumeResponse = page.waitForResponse((response) => (

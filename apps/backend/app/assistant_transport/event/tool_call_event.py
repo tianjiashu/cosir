@@ -82,27 +82,27 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
             无。
         """
 
-        if state["run"].get("status") in {"completed", "failed", "cancelled"}:
+        run_index = self._find_run(state, self.run_id)
+        if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
             return []
-        message_index = self._find_assistant_message(state, self.run_id)
-        assert message_index is not None
-        parts = state["messages"][message_index]["parts"]
+        located = self._find_assistant_message(state, self.run_id)
+        assert located is not None
+        _, message_index = located
+        parts = state["runs"][run_index]["messages"][message_index]["parts"]
         if any(
-            isinstance(part, dict) and part.get("toolCallId") == self.tool_call_id
-            for part in parts
+            isinstance(part, dict) and part.get("toolCallId") == self.tool_call_id for part in parts
         ):
             return []
         return [
             ConversationStateMutation(
                 "set",
-                ("messages", message_index, "parts", len(parts)),
+                ("runs", run_index, "messages", message_index, "parts", len(parts)),
                 {
                     "type": "tool-call",
                     "toolCallId": self.tool_call_id,
                     "toolName": self.tool_name,
                     "status": "pending",
                     "args": copy.deepcopy(self.args),
-                    "result": None,
                     "error": None,
                     "presentation": copy.deepcopy(self.presentation),
                     "data": copy.deepcopy(self.data) if self.data is not None else None,
@@ -117,14 +117,13 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     """一次工具调用的状态已经迁移。
 
     事实语义：工具已被开始执行，或已执行结束（成功 / 失败 / 取消），Transport 侧应把
-    对应 tool-call part 迁移到目标状态并写入结果或错误。所有非终态与终态迁移统一由本
-    类型表达，不为每个目标状态单开事件类型。
+    对应 tool-call part 迁移到目标状态，并写入错误与展示数据（均不进入模型上下文）。
+    所有非终态与终态迁移统一由本类型表达，不为每个目标状态单开事件类型。
 
     Attributes:
         tool_call_id: 目标工具调用标识。
         status: 迁移后的状态。
-        result: UI-safe 工具输出；失败与取消时为 ``None``，不得填入模型正文。
-        error: 面向展示的错误摘要；仅失败时非空。
+        error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
         data: 面向 UI 的结构化展示结果；不进入模型上下文。
 
     异常:
@@ -137,7 +136,6 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     type: Literal["tool_call_status_changed"] = "tool_call_status_changed"
     tool_call_id: str = Field(min_length=1)
     status: ToolCallEventStatus
-    result: object | None = None
     error: str | None = None
     data: dict[str, object] | None = None
 
@@ -145,13 +143,13 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
         self,
         state: ConversationStateSnapshot,
     ) -> Sequence[ConversationStateMutation]:
-        """规划工具调用状态及结果的一致迁移。
+        """规划工具调用状态的一致迁移。
 
         参数:
             state: 当前 Task snapshot。
 
         返回:
-            更新 ``status`` / ``result`` / ``error`` / ``isError``（及可选 ``data``）的
+            更新 ``status`` / ``error`` / ``isError``（及可选 ``data``）的
             mutation 列表。
 
         异常:
@@ -162,8 +160,8 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index, part_index = self._find_tool(state, self.tool_call_id)
-        part = state["messages"][message_index]["parts"][part_index]
+        run_index, message_index, part_index = self._find_tool(state, self.tool_call_id)
+        part = state["runs"][run_index]["messages"][message_index]["parts"][part_index]
         current = str(part["status"])
         allowed = {
             "pending": {"pending", "running", "completed", "failed", "cancelled"},
@@ -176,12 +174,9 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             return []
         if self.status not in allowed[current]:
             raise ValueError(f"invalid tool transition {current} -> {self.status}")
-        base = ("messages", message_index, "parts", part_index)
+        base = ("runs", run_index, "messages", message_index, "parts", part_index)
         mutations: list[ConversationStateMutation] = [
             ConversationStateMutation("set", (*base, "status"), self.status),
-            ConversationStateMutation(
-                "set", (*base, "result"), self.result if self.status == "completed" else None
-            ),
             ConversationStateMutation(
                 "set",
                 (*base, "error"),
@@ -192,9 +187,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
         if self.data is not None:
             mutations.insert(
                 2,
-                ConversationStateMutation(
-                    "set", (*base, "data"), copy.deepcopy(self.data)
-                ),
+                ConversationStateMutation("set", (*base, "data"), copy.deepcopy(self.data)),
             )
         return mutations
 
@@ -207,12 +200,12 @@ class ToolCallsSettledEvent(ConversationEventEnvelope):
     本事件是**补偿性事实**，正常路径仍由 ``ToolCallStatusChangedEvent`` 逐条驱动。
 
     之所以需要独立类型：批量收束没有单一的 ``tool_call_id``，且语义是「清扫」而非
-    「某一次调用的迁移」，与单条迁移的投影规则不同（不动 result）。
+    「某一次调用的迁移」，与单条迁移的投影规则不同（只迁移状态、错误与 isError，不写展示数据）。
 
     Attributes:
         status: 收束后的目标状态，仅可为 ``failed`` 或 ``cancelled``。
-        reason: 收束原因（如 ``"runtime_failed"`` / ``"executor_cancelled"`` /
-            ``"backend_restarted"``），写入各 part 的 error 字段供前端展示。
+        reason: 内部收束原因（如 ``"runtime_failed"`` / ``"executor_cancelled"`` /
+            ``"backend_restarted"``），不直接写入前端；投影为固定短提示。
 
     异常:
         pydantic.ValidationError: ``status`` 不是收束终态、``reason`` 为空，或出现未声明
@@ -237,7 +230,7 @@ class ToolCallsSettledEvent(ConversationEventEnvelope):
 
         返回:
             对该 run 下所有仍处于 ``pending`` / ``running`` 的 tool-call part 施加终态迁移
-            的 mutation 列表（不动 ``result``）。
+            的 mutation 列表（只迁移状态与错误）。
 
         异常:
             无。
@@ -247,9 +240,8 @@ class ToolCallsSettledEvent(ConversationEventEnvelope):
         """
 
         mutations: list[ConversationStateMutation] = []
-        for message_index, message in enumerate(state["messages"]):
-            if message.get("runId") != self.run_id:
-                continue
+        run_index = self._find_run(state, self.run_id)
+        for message_index, message in enumerate(state["runs"][run_index]["messages"]):
             for part_index, part in enumerate(message["parts"]):
                 if (
                     not isinstance(part, dict)
@@ -257,12 +249,15 @@ class ToolCallsSettledEvent(ConversationEventEnvelope):
                     or part.get("status") not in {"pending", "running"}
                 ):
                     continue
-                base = ("messages", message_index, "parts", part_index)
+                base = ("runs", run_index, "messages", message_index, "parts", part_index)
                 mutations.extend(
                     [
                         ConversationStateMutation("set", (*base, "status"), self.status),
-                        ConversationStateMutation("set", (*base, "result"), None),
-                        ConversationStateMutation("set", (*base, "error"), self.reason),
+                        ConversationStateMutation(
+                            "set",
+                            (*base, "error"),
+                            "已取消" if self.status == "cancelled" else "执行异常",
+                        ),
                         ConversationStateMutation(
                             "set", (*base, "isError"), self.status == "failed"
                         ),

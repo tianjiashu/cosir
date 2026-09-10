@@ -65,56 +65,42 @@ class RunInitializedEvent(ConversationEventEnvelope):
             无。
         """
 
-        current_run_id = state["run"].get("runId")
+        current_run_id = state["current_run_id"]
         if self.run_id is None:
             return []
-        if (
-            current_run_id is not None
-            and (
-                self.run_id <= current_run_id
-                or state["run"].get("status") not in {"completed", "failed", "cancelled"}
-            )
+        if current_run_id is not None and (
+            self.run_id <= current_run_id
+            or not state["runs"]
+            or state["runs"][-1]["status"] not in {"completed", "failed", "cancelled"}
         ):
             return []
-        if any(message.get("runId") == self.run_id for message in state["messages"]):
+        if any(run["runId"] == self.run_id for run in state["runs"]):
             return []
-        offset = len(state["messages"])
+        offset = len(state["runs"])
         return [
             ConversationStateMutation(
                 "set",
-                ("messages", offset),
-                self._message(
-                    f"user-{self.run_id}",
-                    self.run_id,
-                    "user",
-                    "completed",
-                    [{"type": "text", "text": "", "status": "completed"}],
-                ),
-            ),
-            ConversationStateMutation(
-                "set",
-                ("messages", offset + 1),
-                self._message(f"assistant-{self.run_id}", self.run_id, "assistant", "running", []),
-            ),
-            ConversationStateMutation("set", ("run", "runId"), self.run_id),
-            ConversationStateMutation("set", ("run", "status"), "pending"),
-            ConversationStateMutation("set", ("usage_run_id",), self.run_id),
-            ConversationStateMutation(
-                "set",
-                ("usage",),
+                ("runs", offset),
                 {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens": 0,
-                    "cache_hit_tokens": 0,
-                    "cache_miss_tokens": 0,
-                    "reasoning_tokens": 0,
+                    "runId": self.run_id,
+                    "status": "pending",
+                    "endReason": None,
+                    "messages": [
+                        self._message(
+                            f"user-{self.run_id}",
+                            "user",
+                            [{"type": "text", "text": "", "status": "completed"}],
+                        ),
+                        self._message(f"assistant-{self.run_id}", "assistant", []),
+                    ],
+                    "usage": None,
                 },
             ),
-            ConversationStateMutation("set", ("context_usage",), 0.0),
-            ConversationStateMutation("set", ("context_revision",), None),
+            ConversationStateMutation("set", ("current_run_id",), self.run_id),
+            ConversationStateMutation("set", ("context_usage_ratio",), None),
             ConversationStateMutation("set", ("context_usage_used",), None),
             ConversationStateMutation("set", ("context_window_total",), None),
+            ConversationStateMutation("set", ("error",), None),
         ]
 
 
@@ -167,48 +153,41 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             无。
         """
 
-        if state["run"].get("runId") != self.run_id:
-            return []
-        current_status = state["run"].get("status")
+        run_index = self._find_run(state, self.run_id)
+        current_status = state["runs"][run_index]["status"]
         if (
             current_status in {"completed", "failed", "cancelled"}
             and self.status.value != current_status
         ):
             return []
         mutations: list[ConversationStateMutation] = [
-            ConversationStateMutation("set", ("run", "runId"), self.run_id),
-            ConversationStateMutation("set", ("run", "status"), self.status.value),
+            ConversationStateMutation("set", ("runs", run_index, "status"), self.status.value),
+            ConversationStateMutation("set", ("runs", run_index, "endReason"), self.end_reason),
         ]
         if self.usage_stats is not None:
             incoming_usage = self.usage_stats.to_dict()
-            current_usage = state["usage"]
+            current_usage = state["runs"][run_index]["usage"]
             # 终态事件可能在最后一个 UsageUpdatedEvent 之前或之后到达；它携带的
             # provider usage 仍然必须遵守完整累计值的单调替换语义，不能把较大的
             # 已确认累计值回滚成较小的终态摘要。
-            if all(
-                incoming_usage[key] is None
-                or current_usage[key] is None
+            if current_usage is None or all(
+                current_usage[key] is None
+                or incoming_usage[key] is None
                 or current_usage[key] <= incoming_usage[key]
                 for key in current_usage
             ):
                 mutations.append(
-                    ConversationStateMutation("set", ("usage_run_id",), self.run_id)
-                )
-                mutations.append(
-                    ConversationStateMutation("set", ("usage",), incoming_usage)
+                    ConversationStateMutation("set", ("runs", run_index, "usage"), incoming_usage)
                 )
         message_index = self._find_assistant_message(state, self.run_id, required=False)
         if message_index is None:
             return mutations
-        base = ("messages", message_index)
-        mutations.extend(
-            [
-                ConversationStateMutation("set", (*base, "status"), self.status.value),
-                ConversationStateMutation("set", (*base, "endReason"), self.end_reason),
-            ]
-        )
+        _, assistant_index = message_index
+        base = ("runs", run_index, "messages", assistant_index)
         if self.status.value in {"completed", "failed", "cancelled"}:
-            for part_index, part in enumerate(state["messages"][message_index]["parts"]):
+            for part_index, part in enumerate(
+                state["runs"][run_index]["messages"][assistant_index]["parts"]
+            ):
                 if (
                     isinstance(part, dict)
                     and part.get("type") in {"text", "reasoning"}
@@ -262,11 +241,13 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index, part_index = self._find_message_part(state, self.run_id, "user", "text")
+        run_index, message_index, part_index = self._find_message_part(
+            state, self.run_id, "user", "text"
+        )
         return [
             ConversationStateMutation(
                 "append-text",
-                ("messages", message_index, "parts", part_index, "text"),
+                ("runs", run_index, "messages", message_index, "parts", part_index, "text"),
                 self.text,
             )
         ]

@@ -1,7 +1,7 @@
 """工具观察分发器的单元测试。
 
 覆盖 ``tool_observation_dispatcher`` 的核心契约：
-- 状态映射：success→completed（携 result）、error→failed（携 error）、cancelled→cancelled
+- 状态映射：success→completed、error→failed（携 error）、cancelled→cancelled
 - 计数语义：success 清零、error 累加、cancelled 不计
 - 每条摘要同时写回模型上下文（ToolMessage 配对闭合）
 """
@@ -47,7 +47,7 @@ class _DispatcherHarness:
     """分发器测试桩：收集事件与写回消息，替换 LangGraph 与运行时配置上下文。
 
     参数:
-        无。
+        model_tools: 可选的模型工具定义列表，用于覆盖通用展示声明。
 
     异常:
         无。
@@ -56,11 +56,11 @@ class _DispatcherHarness:
         patch 模块级依赖（get_stream_writer / _runtime_config / _runtime_context）。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model_tools: list[Any] | None = None) -> None:
         """初始化桩并安装 patch。
 
         参数:
-            无。
+            model_tools: 可选的模型工具定义列表。
 
         返回:
             无。
@@ -81,7 +81,8 @@ class _DispatcherHarness:
             self.events.append(event)
 
         operations = SimpleNamespace(
-            to_tool_model_message=lambda summary_obj: ("tool-message", summary_obj.tool_call_id)
+            to_tool_model_message=lambda summary_obj: ("tool-message", summary_obj.tool_call_id),
+            model_tools=model_tools or [],
         )
         runtime_context = SimpleNamespace(add_message=self.messages.append)
         runtime_config = SimpleNamespace(operations=operations)
@@ -123,7 +124,9 @@ def test_status_mapping_success_error_cancelled() -> None:
         result = dispatcher.dispatch_tool_observations(
             [
                 _summary(call_id="a", status="success", content="ok"),
-                _summary(call_id="b", status="error", error="boom"),
+                _summary(
+                    call_id="b", status="error", error="boom", data={"status_hint": "命令失败"}
+                ),
                 _summary(call_id="c", status="cancelled"),
             ],
             task_id=1,
@@ -137,11 +140,10 @@ def test_status_mapping_success_error_cancelled() -> None:
             ("b", "failed"),
             ("c", "cancelled"),
         ]
-        assert harness.events[0].result == "ok"
         assert harness.events[0].data == {}
         assert harness.events[0].error is None
-        assert harness.events[1].error == "boom"
-        assert harness.events[1].result is None
+        assert harness.events[1].error == "命令失败"
+        assert harness.events[2].error == "已取消"
         assert result == {"tool_error_count": 1, "error_count": 1}
     finally:
         harness.teardown()
@@ -167,67 +169,26 @@ def test_data_is_forwarded_to_event_only() -> None:
         harness.teardown()
 
 
-def test_web_extract_content_never_becomes_event_result() -> None:
-    """Web Extract 正文只写模型上下文，完成事件不得携带 result。"""
+def test_dispatcher_is_presentation_agnostic() -> None:
+    """dispatcher 只转发 data 与模型消息，不消费 presentation.show_result。
+
+    ``show_result`` 是前端展示声明（details-tool 据此决定是否显示占位文本），
+    不影响分发层；分发层是否携带展示结果只取决于摘要的 ``data``（display_data）。
+    """
 
     harness = _DispatcherHarness()
     try:
+        data = {"kind": "web-extract-urls", "urls": [{"url": "https://example.com"}]}
         dispatcher.dispatch_tool_observations(
-            [
-                _summary(
-                    tool_name="web_extract",
-                    content="private document body",
-                    data={
-                        "kind": "web-extract-status",
-                        "provider": "fake",
-                        "sites": [
-                            {
-                                "site": "example.com",
-                                "url": "https://example.com",
-                                "status": "success",
-                            }
-                        ],
-                    },
-                )
-            ],
+            [_summary(tool_name="web_extract", content="model body", data=data)],
             task_id=1,
             run_id=2,
-            step_id="step-3",
+            step_id="step-1",
             inherited_error_count=0,
         )
 
-        assert harness.events[0].result is None
-        assert harness.events[0].data["kind"] == "web-extract-status"
-    finally:
-        harness.teardown()
-
-
-def test_web_extract_failure_preserves_created_site_projection() -> None:
-    """Web Extract 失败且没有新 data 时不得用空投影覆盖 pending 网站列表。"""
-
-    harness = _DispatcherHarness()
-    try:
-        dispatcher.dispatch_tool_observations(
-            [
-                _summary(
-                    tool_name="web_extract",
-                    status="error",
-                    error="provider unavailable",
-                    data={
-                        "kind": "web-extract-status",
-                        "provider": "",
-                        "sites": [],
-                    },
-                )
-            ],
-            task_id=1,
-            run_id=2,
-            step_id="step-3",
-            inherited_error_count=0,
-        )
-
-        assert harness.events[0].data is None
-        assert harness.events[0].result is None
+        assert harness.events[0].data == data
+        assert harness.messages == [("tool-message", "call-1")]
     finally:
         harness.teardown()
 
@@ -313,7 +274,7 @@ def test_summary_roundtrip_to_observation() -> None:
     assert observation.tool_name == "read_file"
     assert observation.status == "success"
     assert observation.content == "file body"
-    assert observation.data is None
+    assert observation.display_data is None
     # 摘要与构建函数产出的字段一一对应（圆环完整性）。
     rebuilt = summary_module.build_tool_result_summaries([observation])
     assert rebuilt["observations"][0] == original

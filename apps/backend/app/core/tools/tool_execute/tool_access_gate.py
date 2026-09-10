@@ -33,7 +33,6 @@ from app.hook import HookContext
 from app.hook.hook_event import HookDecision, HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.hook.hook_result import HookResult
-from app.models.enums.error_kind import ErrorKind
 
 
 @dataclass(frozen=True)
@@ -140,7 +139,6 @@ class ToolAccessGate:
                         f"name will always be rejected."
                     ),
                     tool_call_id=call.call_id,
-                    error_kind=ErrorKind.UNKNOWN_TOOL,
                 )
             )
 
@@ -158,7 +156,6 @@ class ToolAccessGate:
                     ),
                     permission=tool.permission,
                     tool_call_id=call.call_id,
-                    error_kind=ErrorKind.PERMISSION_DENIED,
                 )
             )
 
@@ -180,7 +177,6 @@ class ToolAccessGate:
                     ),
                     permission=tool.permission,
                     tool_call_id=call.call_id,
-                    error_kind=ErrorKind.SCHEMA_INVALID,
                 )
             )
 
@@ -240,7 +236,6 @@ class ToolAccessGate:
                 reason=reason,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
-                error_kind=ErrorKind.PERMISSION_DENIED,
             )
         if decision.modified_arguments is not None:
             return decision.modified_arguments

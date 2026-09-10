@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from app.core.tools.display.filesystem_display import build_directory_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -236,17 +237,14 @@ class ListDirectoryTool(HandlerBase):
             tool_name=self.name,
             content=content,
             permission=self.permission,
-            display_data={
-                "kind": "directory-list",
-                "path": path,
-                "entries": entry_dicts,
-                "page": {
-                    "offset": offset,
-                    "limit": limit,
-                    "has_more": next_offset is not None,
-                    "next_offset": next_offset,
-                },
-            },
+            display_data=build_directory_display_data(
+                path=path,
+                entries=entry_dicts,
+                offset=offset,
+                limit=limit,
+                total_entries=len(children),
+                next_offset=next_offset,
+            ),
         )
 
     def _normalize_posix_path(self, path: str) -> str:
@@ -303,6 +301,7 @@ class ListDirectoryTool(HandlerBase):
                 icon="eye",
                 expandable=True,
                 expand_layout="list",
+                show_result=False,
             ),
         )
 

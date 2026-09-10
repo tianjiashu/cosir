@@ -39,9 +39,13 @@ type DeleteTarget =
   | { kind: "task"; id: number; label: string; taskCount: number }
   | null;
 
+const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
+
 export function WorkspaceShell({ routeTaskId, initialMessage }: { routeTaskId: number | null; initialMessage?: string }) {
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => (
+    typeof window !== "undefined" && window.matchMedia(NARROW_VIEWPORT_QUERY).matches
+  ));
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<number[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceWithTasks[]>([]);
@@ -131,7 +135,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage }: { routeTaskId: n
   }, [load]);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 1024px)");
+    const mediaQuery = window.matchMedia(NARROW_VIEWPORT_QUERY);
     const syncCollapsedState = () => setCollapsed(mediaQuery.matches);
     syncCollapsedState();
     mediaQuery.addEventListener("change", syncCollapsedState);
@@ -308,7 +312,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage }: { routeTaskId: n
   return (
     <div className="bg-background flex h-dvh min-h-0 overflow-hidden">
       <BackendStatusBanner />
-      <aside className={`bg-muted/20 flex min-h-0 shrink-0 flex-col border-r transition-[width] duration-200 ${collapsed ? "w-14" : "w-72"}`}>
+      <aside className={`bg-muted/20 flex min-h-0 shrink-0 flex-col border-r transition-[width] duration-200 max-[1024px]:transition-none ${collapsed ? "w-14" : "w-72"}`}>
         <div className="flex h-14 items-center justify-between border-b px-3">
           {!collapsed && <span className="text-sm font-semibold">工作区</span>}
           <Button variant="ghost" size="icon-sm" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "展开侧栏" : "收起侧栏"}>

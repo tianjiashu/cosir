@@ -89,9 +89,10 @@ export function useAssistantInitialState(
         void frontendLog("INFO", "assistant_initial_state_loaded", "加载对话历史成功", {
           data: {
             taskId,
-            messageCount: state.messages.length,
-            runId: state.run.runId,
-            runStatus: state.run.status,
+            runCount: state.runs.length,
+            messageCount: state.runs.reduce((count, run) => count + run.messages.length, 0),
+            runId: state.current_run_id,
+            runStatus: state.current_run_id === null ? null : state.runs.find((run) => run.runId === state.current_run_id)?.status ?? null,
           },
         });
         setLoadedState({

@@ -25,13 +25,13 @@ describe("ToolFallback", () => {
     const html = renderFallback({
       backendStatus: "failed",
       presentation: { verb: "读取文件", icon: "eye", expand_layout: "none" },
-      data: null,
-      error: "路径不在工作区内",
+      data: { status_hint: "路径无效" },
+      error: "full diagnostic",
       errorCode: "path_outside_workspace",
     });
 
     expect(html).toContain("工具执行失败：读取文件");
-    expect(html).toContain("路径不在工作区内");
+    expect(html).toContain("路径无效");
     expect(html).not.toContain("未知工具");
   });
 });

@@ -21,4 +21,24 @@ def test_cache_miss_tokens_are_derived_from_cumulative_input_and_hits() -> None:
 def test_cache_miss_is_hidden_when_provider_does_not_report_cache_details() -> None:
     stats = ConversationRunUsageStats()
     stats.add_usage_metadata({"input_tokens": 100, "output_tokens": 10, "total_tokens": 110})
-    assert stats.to_dict()["cache_miss_tokens"] == 0
+    assert stats.to_dict()["cache_miss_tokens"] is None
+
+
+def test_invalid_provider_token_values_are_ignored_without_interrupting_run() -> None:
+    stats = ConversationRunUsageStats()
+    stats.add_usage_metadata({
+        "input_tokens": -10,
+        "output_tokens": 1.5,
+        "total_tokens": float("inf"),
+        "input_token_details": {"cache_read": -2},
+        "output_token_details": {"reasoning": float("nan")},
+    })
+
+    assert stats.to_dict() == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+        "reasoning_tokens": 0,
+    }

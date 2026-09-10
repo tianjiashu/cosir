@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from app.config.logging.logger import log
+from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -191,22 +192,19 @@ class ExecuteTerminalTool(HandlerBase):
                 ),
                 retryable=True,
                 permission=self.permission,
-                display_data=self._display_data(
-                    command=command,
-                    workdir=cwd,
-                    output=redacted_output,
-                    result=result,
-                ),
+                status_hint="命令超时",
             )
         return tool_success(
             tool_name=self.name,
             content=content,
             permission=self.permission,
-            data=self._display_data(
+            display_data=build_terminal_display_data(
                 command=command,
                 workdir=cwd,
                 output=redacted_output,
-                result=result,
+                exit_code=result.exit_code,
+                timed_out=result.timed_out,
+                truncated=result.truncated,
             ),
         )
 
@@ -241,24 +239,9 @@ class ExecuteTerminalTool(HandlerBase):
                 surface="standalone",
                 expandable=True,
                 expand_layout="terminal",
+                show_result=False,
             ),
         )
-
-    @staticmethod
-    def _display_data(
-        *, command: str, workdir: Path, output: str, result: ExecutionResult
-    ) -> dict[str, object]:
-        """构造终端专用 UI 数据，不复用模型可见 content。"""
-
-        return {
-            "kind": "terminal-result",
-            "command": command,
-            "workdir": str(workdir),
-            "output": output,
-            "exit_code": result.exit_code,
-            "timed_out": result.timed_out,
-            "truncated": result.truncated,
-        }
 
     def _resolve_workdir(self, workdir: str | None, execution_root: str | Path) -> tuple[Path, str]:
         """解析工作目录并限制在执行根内。

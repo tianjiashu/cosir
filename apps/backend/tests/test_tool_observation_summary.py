@@ -40,7 +40,7 @@ def _observation(**overrides: object) -> ToolObservation:
         "reason": "",
         "retryable": False,
         "tool_call_id": "call-1",
-        "data": {"items": ["x" * 5000], "diff": {"a": 1}},
+        "display_data": {"items": ["x" * 5000], "diff": {"a": 1}},
     }
     base.update(overrides)
     return ToolObservation(**base)  # type: ignore[arg-type]

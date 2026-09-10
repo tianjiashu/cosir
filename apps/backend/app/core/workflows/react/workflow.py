@@ -196,6 +196,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             thinking_channel=thinking_channel,
             thinking_roundtrip=True,
             vision_input_format=vision_input_format,
+            execution_mode=execution_mode,
         )
         current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
@@ -207,7 +208,11 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
-        runtime_context_manager.begin_run(run, execution_mode)
+        runtime_context_manager.begin_run(
+            run,
+            execution_mode,
+            tool_schemas=tool_schemas,
+        )
         if execution_mode == "fresh":
             # 只有 fresh 才写入新的用户消息；resume 必须保留已有 ContextEntry。
             runtime_context_manager.add_message(HumanMessage(content=run.input_text))
@@ -237,6 +242,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_response=False,
                 terminal=False,
                 pending_tool_calls={},
+                deferred_repair_message="",
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},

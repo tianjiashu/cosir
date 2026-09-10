@@ -9,9 +9,9 @@ canonical conversation state。本节点**不再**分发终态事件（``complet
 
 本节点产出经 ``tool_observation_summary`` 治理的可序列化摘要（``last_tool_results``）
 供 ``observe`` 消费；执行前取消分支（工具尚未执行、无结果可观察）仍保留在本节点，
-仅收口取消事件并落定取消终态；模型协议占位闭合统一下沉到
-``RuntimeContextManager.load_message`` 在下次取数时自动补 ``ToolMessage`` 占位，
-本节点不再补/落库占位。与模型节点共享的运行时原语见 ``common``。
+仅收口取消事件并落定取消终态；业务恢复 checkpoint 时本节点跳过旧工具批次，随后由
+``model_node.load_message`` 统一闭合未完成调用。与模型节点共享的运行时原语见
+``common``。
 """
 
 import asyncio
@@ -19,17 +19,15 @@ import dataclasses
 
 from langgraph.config import get_stream_writer
 
+from app.assistant_transport.event import ToolCallStatusChangedEvent
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.nodes.helper.common import (
-    _runtime_config,
-)
+from app.core.workflows.nodes.helper.common import _runtime_config
 from app.core.workflows.nodes.helper.tool_observation_summary import (
     build_tool_result_summaries,
 )
 
-from ..event import ToolCallStatusChangedEvent
 from ..react.state import ReactGraphState
 
 
@@ -53,7 +51,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具结果
         治理摘要（经 ``build_tool_result_summaries`` 脱敏、截断并携带预算后的 UI data，
         可落 checkpoint，供 ``observe`` 节点分发与判定），并清空 ``pending_tool_calls``；
-        执行前取消分支置 ``terminal=True`` 且返回空摘要——因为 ``_after_tools`` 在
+        业务恢复时跳过 checkpoint 中的旧工具调用，返回空摘要并置 ``terminal=False``，让
+        ``observe`` 把 Agent 推回下一轮推理；执行前取消分支置 ``terminal=True`` 且返回空摘要——
+        因为 ``_after_tools`` 在
         ``terminal`` 时直接 END、不进 observe，返回摘要既无人消费又会撑大 checkpoint。
 
     副作用:
@@ -80,14 +80,28 @@ async def _tools_node(state: ReactGraphState) -> dict:
     approved_dicts = tool_calls
     approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
 
-    # ★ 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
-    # 第零铁律（正确性优先）：本分支提前 return，不进入下方 ``run_tool_calls`` 路径，故
-    # ``WorkflowOperations.run_tool_calls`` 的取消兜底（原
-    # ``_build_result_with_cancel_placeholders``）已
-    # 移除，模型协议配对闭合统一由 ``RuntimeContextManager.load_message`` 收口。上一轮
-    # ``_model_node`` 已把 ``AIMessage.tool_calls`` 写入 ``RuntimeContextManager``，会在
-    # 下次模型取数时被自动补 ``ToolMessage`` 占位，不会因悬空 ``tool_calls`` 触发协议校验失败；
-    # 本分支只负责 canonical 审计终态与收口取消事件，工具执行与生命周期事实写入由 service 承担。
+    # 业务 resume 可能从取消时保存的 tools checkpoint 重新进入本节点。此处不重放
+    # 旧工具批次，而是先经过 observe 回到 model；model_node 的 load_message() 会统一
+    # 用 _close_unclosed_tool_calls() 闭合上下文协议。
+    if rc.execution_mode == "resume":
+        log.info(
+            "tools_node_skipped_on_resume",
+            extra={
+                "msg": "业务恢复时跳过 checkpoint 中的旧工具批次",
+                "data": {"run_id": run_id, "step_id": step_id},
+            },
+        )
+        return {
+            "pending_tool_calls": {},
+            "tool_error_count": state.tool_error_count,
+            "terminal": False,
+            "last_tool_results": {"observations": [], "instruction": ""},
+            "deferred_repair_message": state.deferred_repair_message,
+        }
+
+    # 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
+    # 未完成调用的上下文闭合由下一次 model_node.load_message() 统一兜底；本分支只负责
+    # 当前 workflow 已经观察到取消的执行前场景。
     if operations.is_current_run_cancelled():
         log.info(
             "tools_node_cancelled",
@@ -116,6 +130,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "tool_error_count": state.tool_error_count,
             "terminal": True,
             "last_tool_results": {},
+            "deferred_repair_message": "",
         }
 
     log.info(
@@ -193,7 +208,11 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
 
+    result_summaries = build_tool_result_summaries(observations, instruction)
+    # 将本批应有的 call id 一并落入摘要，供 observe 检测执行层异常丢结果；正常情况下
+    # observations 与该列表一一对应，异常时由 RuntimeContextManager 补齐协议占位。
+    result_summaries["expected_call_ids"] = [call.call_id for call in approved_calls]
     return {
         "pending_tool_calls": {},  # 清空待执行工具调用
-        "last_tool_results": build_tool_result_summaries(observations, instruction),
+        "last_tool_results": result_summaries,
     }

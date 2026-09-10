@@ -17,6 +17,8 @@ import { cn } from "@/lib/utils";
 type StopButtonProps = Omit<ComponentPropsWithoutRef<typeof Button>, "onClick"> & {
   taskId: number | null;
   onClick?: MouseEventHandler<HTMLButtonElement>;
+  onCancelRequested?: (runId: number) => void;
+  onCancelResult?: (runId: number, accepted: boolean) => void;
 };
 
 export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
@@ -26,6 +28,8 @@ export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
     className,
     disabled,
     "aria-label": ariaLabel,
+    onCancelRequested,
+    onCancelResult,
     ...props
   }, ref) {
     const runId = useAuiState((state) => getTransportRunId(state.thread.state));
@@ -36,10 +40,12 @@ export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
       if (requesting || runId == null) return;
       setRequesting(true);
       setFailureMessage(null);
+      onCancelRequested?.(runId);
       void frontendLog("DEBUG", "assistant_stop_requested", "用户点击停止运行", {
         data: { taskId, runId },
       });
       const result = await cancelRun(taskId, runId);
+      onCancelResult?.(runId, result.accepted);
       void frontendLog(result.accepted ? "DEBUG" : "WARNING", "assistant_stop_result", result.accepted ? "后端已接受停止运行" : "后端拒绝停止运行", {
         data: { taskId, runId, accepted: result.accepted, reason: result.accepted ? null : result.reason },
       });

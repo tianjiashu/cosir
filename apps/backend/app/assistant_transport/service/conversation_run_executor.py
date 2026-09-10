@@ -184,8 +184,8 @@ class ConversationRunExecutor:
         副作用:
             先写进程内取消信号，再落库取消终态，再向活动 asyncio task 发出取消请求；
             若线程工具超过取消等待窗口，run 会保持 ``cancelling`` 门闩，直到旧 task
-            真正结束后才允许 resume，避免以“快速返回”为代价造成两个执行器重叠。
-            仲裁失败的路径会撤销信号保持一致性；HTTP 订阅断开不会调用本方法。
+            真正结束后才允许 resume，避免以“快速返回”为代价造成两个执行器重叠。仲裁
+            失败的路径会撤销信号保持一致性；HTTP 订阅断开不会调用本方法。
         """
 
         # 这是同步集合操作，且在第一个 await 之前完成。恢复入口可以据此把
@@ -218,7 +218,10 @@ class ConversationRunExecutor:
                 settled: object = True
             else:
                 settled = self._run_service.cancel_run_if_running(run_id, end_reason)
-                if settled is not None and end_reason != "user_cancelled":
+                if settled is not None:
+                    # 取消是终止当前工具调用的事实，不再把 user_cancelled 当作“可重放
+                    # 工具”的特殊分支。事件投影先收口 UI；运行上下文在旧 task 收束后
+                    # 补 ToolMessage，供 resume 从当前上下文继续。
                     self._project_tools_settled(run_id, "cancelled", end_reason)
 
             if execution_was_active:
@@ -229,6 +232,13 @@ class ConversationRunExecutor:
                         asyncio.shield(execution.thread_task),
                         timeout=CANCEL_WAIT_TIMEOUT_SECONDS,
                     )
+                except asyncio.CancelledError:
+                    # 旧执行 task 正常响应取消后会以 CancelledError 结束；该异常属于
+                    # 被取消的子 task，不应冒泡成取消 API 自身失败。
+                    if not execution.thread_task.done():
+                        # 如果子 task 还没结束，CancelledError 来自 cancel() 自身，不能
+                        # 把调用方取消误吞掉；后台 task 由 finally 中的 cleanup 继续收束。
+                        raise
                 except TimeoutError:
                     log.warning(
                         "conversation_run_cancel_wait_timeout",
@@ -448,9 +458,6 @@ class ConversationRunExecutor:
         except asyncio.CancelledError:
             if self._persist_status:
                 current = self._run_service.get_run(run_id)
-                # 用户取消是可恢复的暂停语义：不要把未完成工具投影为 cancelled，
-                # 否则 resume 时无法从上一个 checkpoint 重新走该步骤。进程级关闭或
-                # 其他取消仍按不可恢复的 executor_cancelled 收口。
                 if not (
                     current.status == ConversationRunStatus.CANCELLED.value
                     and current.end_reason == "user_cancelled"

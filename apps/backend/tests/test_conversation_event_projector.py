@@ -30,7 +30,6 @@ from app.assistant_transport.state.conversation_state_mutation import Conversati
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
-    migrate_snapshot,
     validate_snapshot,
 )
 from app.assistant_transport.stream import SnapshotChange
@@ -88,6 +87,10 @@ def _start(projector: ConversationEventProjector) -> None:
     projector.process(RunInitializedEvent(task_id=1, run_id=1))
 
 
+def _run(state: ConversationStateSnapshot, run_id: int) -> dict[str, Any]:
+    return next(run for run in state["runs"] if run["runId"] == run_id)
+
+
 def test_run_initialized_and_user_input(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
@@ -95,25 +98,11 @@ def test_run_initialized_and_user_input(
     _start(event_projector)
     event_projector.process(UserInputAppendedEvent(task_id=1, run_id=1, text="你好"))
     state = snapshots.states[1]
-    assert state["run"] == {"runId": 1, "status": "pending"}
-    assert state["messages"][0]["parts"][0]["text"] == "你好"
-    assert state["messages"][1]["parts"] == []
-
-
-def test_legacy_snapshot_is_migrated_without_inventing_absolute_usage() -> None:
-    legacy = empty_snapshot()
-    legacy["run"] = {"runId": 9, "status": "completed"}
-    legacy.pop("usage_run_id")
-    legacy.pop("context_usage_used")
-    legacy.pop("context_window_total")
-
-    upgraded = migrate_snapshot(legacy)
-
-    assert "usage_run_id" not in legacy
-    assert upgraded["usage_run_id"] == 9
-    assert upgraded["context_usage_used"] is None
-    assert upgraded["context_window_total"] is None
-    validate_snapshot(upgraded)
+    current = _run(state, 1)
+    assert state["current_run_id"] == 1
+    assert current["status"] == "pending"
+    assert current["messages"][0]["parts"][0]["text"] == "你好"
+    assert current["messages"][1]["parts"] == []
 
 
 def test_assistant_text_and_reasoning_parts(
@@ -129,7 +118,7 @@ def test_assistant_text_and_reasoning_parts(
     )
     event_projector.process(AssistantPartClosedEvent(task_id=1, run_id=1, part="reasoning"))
     event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="答案"))
-    parts = snapshots.states[1]["messages"][1]["parts"]
+    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
     assert [part["type"] for part in parts] == ["reasoning", "text"]
     assert parts[0]["text"] == "先思考一下"
     assert parts[0]["status"] == "completed"
@@ -146,7 +135,7 @@ def test_duplicate_text_delta_is_not_appended_twice(
     second = event_projector.process(event)
     assert first is not None and first.mutations
     assert second is not None and second.mutations == ()
-    assert snapshots.states[1]["messages"][1]["parts"][0]["text"] == "一次"
+    assert _run(snapshots.states[1], 1)["messages"][1]["parts"][0]["text"] == "一次"
 
 
 def test_tool_lifecycle_and_settlement(
@@ -180,7 +169,6 @@ def test_tool_lifecycle_and_settlement(
             run_id=1,
             tool_call_id="call-1",
             status="completed",
-            result="内容",
             data={"kind": "read-file-meta", "path": "a.py", "total_lines": 10},
         )
     )
@@ -192,142 +180,12 @@ def test_tool_lifecycle_and_settlement(
     event_projector.process(
         ToolCallsSettledEvent(task_id=1, run_id=1, status="failed", reason="runtime_failed")
     )
-    parts = snapshots.states[1]["messages"][1]["parts"]
+    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
     assert parts[0]["status"] == "completed"
     assert parts[0]["presentation"]["expandable"] is False
-    assert parts[0]["result"] == "内容"
     assert parts[0]["data"] == {"kind": "read-file-meta", "path": "a.py", "total_lines": 10}
     assert parts[1]["status"] == "failed"
-    assert parts[1]["error"] == "runtime_failed"
-
-
-def test_web_tool_created_data_survives_status_events_without_data(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    """创建阶段的 Web 站点列表不能被 running 事件的空 data 清除。"""
-
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ToolCallCreatedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="web-call",
-            tool_name="web_extract",
-            args={"urls": ["https://example.com/docs"]},
-            data={
-                "kind": "web-extract-status",
-                "provider": "",
-                "sites": [
-                    {"site": "example.com", "url": "https://example.com/docs", "status": "pending"}
-                ],
-            },
-        )
-    )
-    event_projector.process(
-        ToolCallStatusChangedEvent(task_id=1, run_id=1, tool_call_id="web-call", status="running")
-    )
-    event_projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="web-call",
-            status="completed",
-            data={
-                "kind": "web-extract-status",
-                "provider": "fake",
-                "sites": [
-                    {"site": "example.com", "url": "https://example.com/docs", "status": "success"}
-                ],
-            },
-        )
-    )
-
-    part = snapshots.states[1]["messages"][1]["parts"][0]
-    assert part["data"]["kind"] == "web-extract-status"
-    assert part["data"]["sites"][0]["status"] == "success"
-    assert part["result"] is None
-
-
-def test_web_tool_failed_status_without_data_preserves_created_data(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    """失败事件没有新 data 时仍保留创建阶段的 Web 站点身份。"""
-
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ToolCallCreatedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="web-failed-call",
-            tool_name="web_extract",
-            args={"urls": ["https://example.com/docs"]},
-            data={
-                "kind": "web-extract-status",
-                "provider": "",
-                "sites": [
-                    {"site": "example.com", "url": "https://example.com/docs", "status": "pending"}
-                ],
-            },
-        )
-    )
-    event_projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="web-failed-call",
-            status="failed",
-            error="provider unavailable",
-        )
-    )
-
-    part = snapshots.states[1]["messages"][1]["parts"][0]
-    assert part["status"] == "failed"
-    assert part["data"]["sites"][0]["status"] == "pending"
-
-
-def test_snapshot_rejects_web_extract_document_fields() -> None:
-    """Transport snapshot 不接受 Web Extract 正文或 metadata 字段。"""
-
-    state = empty_snapshot()
-    state["messages"] = [
-        {
-            "id": "assistant-1",
-            "role": "assistant",
-            "parts": [
-                {
-                    "type": "tool-call",
-                    "toolCallId": "web-call",
-                    "toolName": "web_extract",
-                    "status": "completed",
-                    "args": {},
-                    "result": None,
-                    "error": None,
-                    "presentation": {},
-                    "data": {
-                        "kind": "web-extract-status",
-                        "provider": "fake",
-                        "sites": [
-                            {
-                                "site": "example.com",
-                                "url": "https://example.com",
-                                "status": "success",
-                                "content": "must not cross transport",
-                            }
-                        ],
-                    },
-                    "isError": False,
-                    "approvalRequestId": None,
-                }
-                ],
-                "status": "completed",
-                "endReason": None,
-            }
-    ]
-
-    with pytest.raises(ValueError, match="forbidden fields"):
-        validate_snapshot(state)
+    assert parts[1]["error"] == "执行异常"
 
 
 def test_run_status_usage_and_context_usage(
@@ -345,20 +203,18 @@ def test_run_status_usage_and_context_usage(
             ratio=0.42,
             used_tokens=42,
             context_window_tokens=100,
-            context_revision=1,
         )
     )
     event_projector.process(
         RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     state = snapshots.states[1]
-    assert state["usage"]["total_tokens"] == 14
-    assert state["usage_run_id"] == 1
-    assert state["context_usage"] == 0.42
+    assert _run(state, 1)["usage"]["total_tokens"] == 14
+    assert state["current_run_id"] == 1
+    assert state["context_usage_ratio"] == 0.42
     assert state["context_usage_used"] == 42
     assert state["context_window_total"] == 100
-    assert state["run"]["status"] == "completed"
-    assert state["messages"][1]["status"] == "completed"
+    assert _run(state, 1)["status"] == "completed"
 
 
 def test_terminal_usage_cannot_rewind_confirmed_cumulative_usage(
@@ -377,7 +233,7 @@ def test_terminal_usage_cannot_rewind_confirmed_cumulative_usage(
             usage_stats=ConversationRunUsageStats(input_tokens=1, output_tokens=2, total_tokens=3),
         )
     )
-    assert snapshots.states[1]["usage"]["total_tokens"] == 150
+    assert _run(snapshots.states[1], 1)["usage"]["total_tokens"] == 150
 
 
 def test_new_run_clears_previous_run_usage(
@@ -388,13 +244,13 @@ def test_new_run_clears_previous_run_usage(
     event_projector.process(
         UsageUpdatedEvent(task_id=1, run_id=1, input_tokens=10, output_tokens=4, total_tokens=14)
     )
-    event_projector.process(RunStatusChangedEvent(
-        task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED
-    ))
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+    )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
     state = snapshots.states[1]
-    assert state["usage_run_id"] == 2
-    assert state["usage"]["total_tokens"] == 0
+    assert _run(state, 1)["usage"]["total_tokens"] == 14
+    assert _run(state, 2)["usage"] is None
     assert state["context_usage_used"] is None
     assert state["context_window_total"] is None
 
@@ -404,20 +260,63 @@ def test_late_previous_run_events_cannot_overwrite_current_run(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
-    event_projector.process(RunStatusChangedEvent(
-        task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED
-    ))
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+    )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
     event_projector.process(
         UsageUpdatedEvent(task_id=1, run_id=1, input_tokens=99, total_tokens=99)
     )
-    event_projector.process(RunStatusChangedEvent(
-        task_id=1, run_id=1, status=ConversationRunStatus.FAILED
-    ))
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.FAILED)
+    )
     state = snapshots.states[1]
-    assert state["run"] == {"runId": 2, "status": "pending"}
-    assert state["usage_run_id"] == 2
-    assert state["usage"]["total_tokens"] == 0
+    assert _run(state, 2)["status"] == "pending"
+    assert _run(state, 1)["usage"]["total_tokens"] == 99
+
+
+def test_historical_run_status_event_updates_its_own_run(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(RunStatusChangedEvent(
+        task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED,
+    ))
+    event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
+    change = event_projector.process(RunStatusChangedEvent(
+        task_id=1,
+        run_id=1,
+        status=ConversationRunStatus.COMPLETED,
+        end_reason="late_failure",
+        usage_stats=ConversationRunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
+    ))
+    assert change is not None and change.mutations
+    state = snapshots.states[1]
+    assert _run(state, 1)["status"] == "completed"
+    assert _run(state, 1)["endReason"] == "late_failure"
+    assert _run(state, 1)["usage"]["total_tokens"] == 6
+    assert _run(state, 2)["status"] == "pending"
+
+
+def test_unknown_run_event_is_logged_and_not_projected(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    event_projector, snapshots = projector
+    caplog.set_level("WARNING")
+    change = event_projector.process(UsageUpdatedEvent(
+        task_id=1, run_id=404, input_tokens=1, output_tokens=1, total_tokens=2,
+    ))
+    assert change is not None and change.mutations == ()
+    assert snapshots.states[1] == empty_snapshot()
+    record = next(
+        record for record in caplog.records if record.msg == "conversation_event_unknown_run"
+    )
+    assert record.data["task_id"] == 1
+    assert record.data["run_id"] == 404
+    assert record.data["event_type"] == "usage_updated"
+    assert record.data["event_id"]
 
 
 def test_late_run_initialization_cannot_rewind_terminal_newer_run(
@@ -425,15 +324,15 @@ def test_late_run_initialization_cannot_rewind_terminal_newer_run(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
-    event_projector.process(RunStatusChangedEvent(
-        task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED
-    ))
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+    )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
-    event_projector.process(RunStatusChangedEvent(
-        task_id=1, run_id=2, status=ConversationRunStatus.COMPLETED
-    ))
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=2, status=ConversationRunStatus.COMPLETED)
+    )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=1))
-    assert snapshots.states[1]["run"] == {"runId": 2, "status": "completed"}
+    assert _run(snapshots.states[1], 2)["status"] == "completed"
 
 
 def test_unknown_context_measurement_clears_stale_absolute_values(
@@ -443,37 +342,47 @@ def test_unknown_context_measurement_clears_stale_absolute_values(
     _start(event_projector)
     event_projector.process(
         ContextUsageUpdatedEvent(
-            task_id=1, run_id=1, ratio=0.9, used_tokens=90, context_window_tokens=100,
-            context_revision=1,
+            task_id=1,
+            run_id=1,
+            ratio=0.9,
+            used_tokens=90,
+            context_window_tokens=100,
         )
     )
-    event_projector.process(
-        ContextUsageUpdatedEvent(task_id=1, run_id=1, ratio=0.0, context_revision=2)
-    )
+    event_projector.process(ContextUsageUpdatedEvent(task_id=1, run_id=1, ratio=0.0))
     state = snapshots.states[1]
-    assert state["context_usage"] == 0.0
+    assert state["context_usage_ratio"] == 0.0
     assert state["context_usage_used"] is None
     assert state["context_window_total"] is None
 
 
-def test_late_context_revision_cannot_rewind_task_usage(
+def test_context_reprojection_replaces_task_usage(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
         ContextUsageUpdatedEvent(
-            task_id=1, ratio=0.8, used_tokens=80, context_window_tokens=100, context_revision=2
+            task_id=1,
+            run_id=1,
+            ratio=0.9,
+            used_tokens=90,
+            context_window_tokens=100,
         )
     )
     event_projector.process(
         ContextUsageUpdatedEvent(
-            task_id=1, ratio=0.2, used_tokens=20, context_window_tokens=100, context_revision=1
+            task_id=1,
+            run_id=1,
+            ratio=0.4,
+            used_tokens=40,
+            context_window_tokens=100,
+            reproject=True,
         )
     )
     state = snapshots.states[1]
-    assert state["context_revision"] == 2
-    assert state["context_usage_used"] == 80
+    assert state["context_usage_ratio"] == 0.4
+    assert state["context_usage_used"] == 40
 
 
 def test_unknown_event_is_ignored(
@@ -511,7 +420,7 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     transport_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     transport_service._apply_snapshot_change(controller, change)
     assert controller.appended == []
-    assert controller.state["messages"][1]["parts"] == [
+    assert _run(controller.state, 1)["messages"][1]["parts"] == [
         {"type": "text", "text": "你好", "status": "running"}
     ]
     assert controller.flush_count == 1
@@ -522,9 +431,12 @@ async def test_stream_delivers_queued_terminal_change_before_exit() -> None:
     """终态轮询命中时，仍必须先消费已经排队的终态快照。"""
 
     initial = empty_snapshot()
-    initial["run"] = {"runId": 1, "status": "running"}
+    initial["runs"] = [
+        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+    ]
+    initial["current_run_id"] = 1
     terminal = copy.deepcopy(initial)
-    terminal["run"] = {"runId": 1, "status": "completed"}
+    terminal["runs"][0]["status"] = "completed"
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
 
     class Snapshots:
@@ -544,10 +456,10 @@ async def test_stream_delivers_queued_terminal_change_before_exit() -> None:
 
     stream = service.stream(1, 1, lambda: False, is_terminal=lambda: _true())
     first = await anext(stream)
-    assert first.state["run"]["status"] == "running"
+    assert _run(first.state, 1)["status"] == "running"
     await queue.put(SnapshotChange(1, terminal, ()))
     second = await anext(stream)
-    assert second.state["run"]["status"] == "completed"
+    assert _run(second.state, 1)["status"] == "completed"
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
 
@@ -557,9 +469,12 @@ async def test_stream_waits_for_terminal_snapshot_projection() -> None:
     """run 已终态但 snapshot 尚未投影时，订阅继续等待最后一帧。"""
 
     initial = empty_snapshot()
-    initial["run"] = {"runId": 1, "status": "running"}
+    initial["runs"] = [
+        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+    ]
+    initial["current_run_id"] = 1
     terminal = copy.deepcopy(initial)
-    terminal["run"] = {"runId": 1, "status": "completed"}
+    terminal["runs"][0]["status"] = "completed"
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
 
     class Snapshots:
@@ -584,7 +499,7 @@ async def test_stream_waits_for_terminal_snapshot_projection() -> None:
     await anext(stream)
     terminal_task = asyncio.create_task(delayed_terminal_change())
     change = await anext(stream)
-    assert change.state["run"]["status"] == "completed"
+    assert _run(change.state, 1)["status"] == "completed"
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
     await terminal_task
@@ -595,7 +510,10 @@ async def test_stream_does_not_close_while_run_is_still_active() -> None:
     """没有 snapshot 通知时，活跃 run 的 SSE 不能被 idle timeout 提前关闭。"""
 
     initial = empty_snapshot()
-    initial["run"] = {"runId": 1, "status": "running"}
+    initial["runs"] = [
+        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+    ]
+    initial["current_run_id"] = 1
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
 
     class Snapshots:
@@ -616,7 +534,7 @@ async def test_stream_does_not_close_while_run_is_still_active() -> None:
     async def delayed_terminal_change() -> None:
         await asyncio.sleep(0.06)
         terminal = copy.deepcopy(initial)
-        terminal["run"] = {"runId": 1, "status": "completed"}
+        terminal["runs"][0]["status"] = "completed"
         await queue.put(SnapshotChange(1, terminal, ()))
 
     stream = service.stream(
@@ -627,10 +545,10 @@ async def test_stream_does_not_close_while_run_is_still_active() -> None:
         poll_interval=0.01,
     )
     first = await anext(stream)
-    assert first.state["run"]["status"] == "running"
+    assert _run(first.state, 1)["status"] == "running"
     terminal_task = asyncio.create_task(delayed_terminal_change())
     second = await anext(stream)
-    assert second.state["run"]["status"] == "completed"
+    assert _run(second.state, 1)["status"] == "completed"
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
     await terminal_task
@@ -641,7 +559,10 @@ async def test_stream_disconnect_only_unsubscribes_and_does_not_cancel_run() -> 
     """Transport 断开只结束 subscriber，不触发 ConversationRun cancel。"""
 
     initial = empty_snapshot()
-    initial["run"] = {"runId": 1, "status": "running"}
+    initial["runs"] = [
+        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+    ]
+    initial["current_run_id"] = 1
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
     cancelled = False
     unsubscribe_count = 0
@@ -669,7 +590,7 @@ async def test_stream_disconnect_only_unsubscribes_and_does_not_cancel_run() -> 
     stream = service.stream(1, 1, lambda: cancelled, poll_interval=0.01)
 
     first = await anext(stream)
-    assert first.state["run"]["status"] == "running"
+    assert _run(first.state, 1)["status"] == "running"
     cancelled = True
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
@@ -682,9 +603,15 @@ async def test_stream_fallback_sends_terminal_snapshot() -> None:
     """队列通知丢失但 snapshot 已终态时，兜底仍发送完整状态。"""
 
     initial = empty_snapshot()
-    initial["run"] = {"runId": 1, "status": "running"}
+    initial["runs"] = [
+        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+    ]
+    initial["current_run_id"] = 1
     terminal = empty_snapshot()
-    terminal["run"] = {"runId": 1, "status": "completed"}
+    terminal["runs"] = [
+        {"runId": 1, "status": "completed", "endReason": None, "messages": [], "usage": None}
+    ]
+    terminal["current_run_id"] = 1
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
 
     class Snapshots:
@@ -712,9 +639,9 @@ async def test_stream_fallback_sends_terminal_snapshot() -> None:
         poll_interval=0.01,
     )
     first = await anext(stream)
-    assert first.state["run"]["status"] == "running"
+    assert _run(first.state, 1)["status"] == "running"
     change = await anext(stream)
-    assert change.state["run"]["status"] == "completed"
+    assert _run(change.state, 1)["status"] == "completed"
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
 

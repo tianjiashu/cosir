@@ -182,6 +182,7 @@ async def list_workspace_tasks(
         return [
             TaskResponse.from_record(
                 task,
+                context_window_total=task_service.get_context_window_total(task.id),
                 fork_available=task_service.is_fork_available(task.id),
             )
             for task in task_service.list_tasks_for_workspace(workspace_id)

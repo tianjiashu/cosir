@@ -9,23 +9,21 @@ import {
 import type { TransportMessage, TransportState, TransportToolCallPart } from "@/lib/assistant/contract";
 
 const emptyState = (): TransportState => ({
-  messages: [],
-  run: { runId: null, status: "idle" },
+  runs: [],
+  current_run_id: null,
   approvals: {},
-  context_usage: 0,
-  context_revision: null,
-  usage_run_id: null,
+  context_usage_ratio: null,
   context_usage_used: null,
   context_window_total: null,
-  usage: {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-    cache_hit_tokens: 0,
-    cache_miss_tokens: 0,
-    reasoning_tokens: 0,
-  },
   error: null,
+});
+
+const completedRun = (runId: number, messages: TransportMessage[] = []): TransportState["runs"][number] => ({
+  runId,
+  status: "completed",
+  endReason: null,
+  messages,
+  usage: null,
 });
 
 const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportToolCallPart> = {}): TransportToolCallPart => ({
@@ -51,14 +49,12 @@ describe("assistant transport converter", () => {
     const message: TransportMessage = {
       id: "assistant-1",
       role: "assistant",
-      status: "running",
-      endReason: null,
       parts: [
         { type: "text", text: "partial **markdown", status: "running" },
         { type: "reasoning", text: "checking", status: "completed" },
       ],
     };
-    const converted = toThreadMessage(message);
+    const converted = toThreadMessage(message, { ...completedRun(1), status: "running" });
     expect(converted.content[0]).toMatchObject({ type: "text", text: "partial **markdown", status: { type: "running" } });
     expect(converted.content[1]).toMatchObject({ type: "reasoning", text: "checking", status: { type: "complete" } });
     expect(converted.status).toEqual({ type: "running" });
@@ -67,49 +63,38 @@ describe("assistant transport converter", () => {
   it("maps all backend tool lifecycle states and preserves artifact data", () => {
     const pending = toToolCallPart(tool("pending"));
     const running = toToolCallPart(tool("running"));
-    const completed = toToolCallPart(tool("completed", { result: { exit_code: 0 }, data: { kind: "terminal-result" } }));
-    const failed = toToolCallPart(tool("failed", { error: "denied", errorCode: "DENIED" }));
+    const completed = toToolCallPart(tool("completed", { data: { kind: "terminal-result" } }));
+    const failed = toToolCallPart(tool("failed", { error: "full diagnostic", data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
     const cancelled = toToolCallPart(tool("cancelled"));
 
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: { backendStatus: "pending" } });
     expect(running).toMatchObject({ artifact: { backendStatus: "running" } });
-    expect(completed).toMatchObject({ result: { exit_code: 0 }, isError: false, artifact: { backendStatus: "completed", data: { kind: "terminal-result" } } });
+    expect(completed).toMatchObject({ isError: false, artifact: { backendStatus: "completed", data: { kind: "terminal-result" } } });
     expect(failed).toMatchObject({ isError: true, artifact: { backendStatus: "failed", errorCode: "DENIED" } });
+    expect(failed).toMatchObject({ artifact: { error: "权限不足" } });
     expect(failed).not.toHaveProperty("result");
-    expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled" } });
+    expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).not.toHaveProperty("result");
   });
 
-  it("keeps web extract UI data status-only and drops its document result", () => {
+  it("hides a tool result when the generic presentation disables it", () => {
     const converted = toToolCallPart(tool("completed", {
       toolName: "web_extract",
-      result: "private document body",
-      data: {
-        kind: "web-extract-status",
-        provider: "fake",
-        sites: [{
-          site: "example.com",
-          url: "https://example.com",
-          status: "success",
-          content: "should never render",
-        }],
-      },
+      presentation: { expand_layout: "list", show_result: false },
+      data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
     }));
 
     expect(converted).not.toHaveProperty("result");
     expect(converted).toMatchObject({
       artifact: {
-        data: {
-          kind: "web-extract-status",
-          sites: [{ site: "example.com", status: "success" }],
-        },
+        data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
       },
     });
-    expect(JSON.stringify(converted)).not.toContain("should never render");
+    expect(JSON.stringify(converted)).not.toContain("private document body");
   });
 
   it("does not treat unknown message status as success", () => {
-    expect(toMessageStatus({ id: "m", role: "assistant", status: "future-status", endReason: null, parts: [] })).toEqual({ type: "incomplete", reason: "other" });
+    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, { ...completedRun(1), status: "future-status" })).toEqual({ type: "incomplete", reason: "other" });
   });
 
   it("keeps unknown tool and run states explicitly non-success", () => {
@@ -120,7 +105,8 @@ describe("assistant transport converter", () => {
       artifact: { backendStatus: "unknown" },
     });
     const state = emptyState();
-    state.run.status = "future-run-status";
+    state.runs = [{ ...completedRun(1), status: "future-run-status" }];
+    state.current_run_id = 1;
     const result = toTransportThreadView(state, { pendingCommands: [], isSending: false });
     expect(result.isRunning).toBe(true);
     expect(result.state).toBe(state);
@@ -147,12 +133,13 @@ describe("assistant transport converter", () => {
 
   it("marks only the last assistant message in each run for task fork actions", () => {
     const state = emptyState();
-    state.messages = [
-      { id: "u1", role: "user", runId: 1, status: "completed", endReason: null, parts: [] },
-      { id: "a1", role: "assistant", runId: 1, status: "completed", endReason: null, parts: [] },
-      { id: "a1-tool-followup", role: "assistant", runId: 1, status: "completed", endReason: null, parts: [] },
-      { id: "u2", role: "user", runId: 2, status: "completed", endReason: null, parts: [] },
-      { id: "a2", role: "assistant", runId: 2, status: "completed", endReason: null, parts: [] },
+    state.runs = [
+      completedRun(1, [
+        { id: "u1", role: "user", parts: [] },
+        { id: "a1", role: "assistant", parts: [] },
+        { id: "a1-tool-followup", role: "assistant", parts: [] },
+      ]),
+      completedRun(2, [{ id: "u2", role: "user", parts: [] }, { id: "a2", role: "assistant", parts: [] }]),
     ];
 
     const messages = toTransportThreadView(state, { pendingCommands: [], isSending: false }).messages;

@@ -20,7 +20,10 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.assistant_transport.state.conversation_state_snapshot import (
+    ConversationStateSnapshot,
+    find_run,
+)
 from app.config.logging.logger import log
 from app.models import ConversationRunStatus
 
@@ -60,10 +63,12 @@ class TransportAssistantService:
     ) -> AssistantTransportResponse:
         """为指定 run 构造统一的 Assistant Transport snapshot response。"""
 
-        if state["run"]["runId"] != run_id:
+        try:
+            find_run(state, run_id)
+        except KeyError as exc:
             raise ValueError(
-                f"snapshot run {state['run']['runId']} does not match requested run {run_id}"
-            )
+                f"snapshot run {run_id} does not exist"
+            ) from exc
         stream = create_run(
             lambda controller: self._stream.subscribe_run_state(controller, task_id, run_id),
             state=state,
@@ -341,7 +346,7 @@ class TransportAssistantService:
             )
 
         state = await self._snapshots.read(task_id)
-        if state["run"]["runId"] != run_id:
+        if state["current_run_id"] != run_id:
             _raise_transport_error(
                 409,
                 "RUN_NOT_ATTACHABLE",

@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.tools.display.web_display import build_web_search_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -189,17 +190,7 @@ class WebSearchTool(HandlerBase):
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            display_data={
-                "entries": [
-                    {
-                        "name": item["title"] or item["url"],
-                        "type": "link",
-                        "path": item["url"],
-                    }
-                    for item in web_results
-                    if item["url"]
-                ]
-            },
+            display_data=build_web_search_display_data(query=query, results=web_results),
         )
 
     def to_definition(self) -> ToolDefinition:

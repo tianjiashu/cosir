@@ -15,6 +15,7 @@ import errno
 import shutil
 
 from app.config.logging.logger import log
+from app.core.tools.display.filesystem_display import build_delete_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -188,12 +189,9 @@ class DeleteTool(HandlerBase):
                 tool_name=self.name,
                 content=f"Deleted link entry: {entry}",
                 permission=self.permission,
-                display_data={
-                    "kind": "delete-result",
-                    "path": path,
-                    "target_type": "link",
-                    "recursive": False,
-                },
+                display_data=build_delete_display_data(
+                    path=path, target_type="link", recursive=False
+                ),
             )
         if not entry.exists():
             return tool_error(
@@ -275,12 +273,9 @@ class DeleteTool(HandlerBase):
                 tool_name=self.name,
                 permission=self.permission,
                 content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
-                display_data={
-                    "kind": "delete-result",
-                    "path": path,
-                    "target_type": "directory",
-                    "recursive": recursive,
-                },
+                display_data=build_delete_display_data(
+                    path=path, target_type="directory", recursive=recursive
+                ),
             )
         try:
             current_resolved, current_error = resolver.resolve_within_workspace(path)
@@ -333,13 +328,9 @@ class DeleteTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=f"Deleted file: {resolved}",
-            display_data={
-                "kind": "delete-result",
-                "path": path,
-                "path_basename": resolved.name,
-                "target_type": "file",
-                "recursive": False,
-            },
+            display_data=build_delete_display_data(
+                path=path, target_type="file", recursive=False
+            ),
             artifact_data=artifact_data,
         )
 
@@ -374,6 +365,7 @@ class DeleteTool(HandlerBase):
                 surface="standalone",
                 expandable=False,
                 expand_layout="none",
+                show_result=False,
             ),
         )
 

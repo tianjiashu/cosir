@@ -13,13 +13,23 @@ handler 异常）以及各 handler（路径越界/无匹配等）的失败分支
 观察不同，单独归口以避免与确定性失败的重试提示混淆。
 """
 
-import copy
 import errno
-from collections.abc import Mapping
-from typing import Any
 
 from app.core.tools.schemas import ToolObservation
-from app.models.enums.error_kind import ErrorKind
+
+_DEFAULT_STATUS_HINTS = {
+    "read_file": "读取失败",
+    "write_file": "写入失败",
+    "patch": "替换失败",
+    "apply_patch": "补丁失败",
+    "delete": "删除失败",
+    "search_files": "搜索失败",
+    "list_directory": "列举失败",
+    "execute_terminal": "命令失败",
+    "web_search": "搜索失败",
+    "web_extract": "提取失败",
+    "delegate_task": "委派失败",
+}
 
 
 def os_error_message(exc: OSError, action: str) -> str:
@@ -148,9 +158,7 @@ def tool_error(
     retryable: bool = False,
     permission: str = "",
     tool_call_id: str = "",
-    display_data: Mapping[str, Any] | None = None,
-    artifact_data: Mapping[str, Any] | None = None,
-    error_kind: ErrorKind = ErrorKind.RUNTIME_FAILED,
+    status_hint: str | None = None,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
 
@@ -173,12 +181,9 @@ def tool_error(
         permission: 触发工具所需权限标识（用于审计/展示），默认空字符串；权限被
             拒时由调用方回填被拒的权限值。
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
-        display_data: 仅供客户端展示消费的结构化数据；会写入
-            ``ToolObservation.display_data``，不会回传给模型。为 error 观察携带结构化诊断
-            （如语法检查的 ``syntax_errors``）。
-        error_kind: 供日志、运行时事件与回放分析使用的稳定错误分类，例如
-            ``parse_invalid``、``unknown_tool``、``schema_invalid``、``runtime_failed``、
-            ``permission_denied``。
+        status_hint: 可直接传入的客户端短提示，建议约 5 个字，最长 8 个字符；不会
+            回传给模型。省略时按 ``tool_name`` 选择工具默认提示。错误观察的
+            ``display_data`` 固定只包含该提示，不承载目标、结果或完整错误原因。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="error"``，``content`` 与
@@ -200,10 +205,9 @@ def tool_error(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    # 与 tool_success 对称：display_data 不承载 content 副本，避免大体积错误文本经 UI
-    # 通道进入前端事件流与可观测性平台。
-    observation.display_data = copy.deepcopy(dict(display_data or {}))
-    internal = copy.deepcopy(dict(artifact_data or {}))
-    internal.setdefault("error_kind", error_kind.value)
-    observation.artifact_data = internal
+    # 错误 UI 通道只保留后端显式传入的短提示；完整 error/reason/content 仅供模型通道。
+    hint = status_hint.strip() if isinstance(status_hint, str) else ""
+    if not hint or len(hint) > 8:
+        hint = _DEFAULT_STATUS_HINTS.get(tool_name, "执行失败")
+    observation.display_data = {"status_hint": hint}
     return observation

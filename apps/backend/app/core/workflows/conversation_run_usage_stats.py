@@ -4,6 +4,7 @@
 不进入 LangGraph checkpoint，只在单次 graph 执行期间生效。
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,18 +43,30 @@ class ConversationRunUsageStats:
     output_tokens: int = 0
     total_tokens: int = 0
     cache_hit_tokens: int = 0
-    cache_miss_tokens: int = 0
+    cache_miss_tokens: int | None = None
     reasoning_tokens: int = 0
-
     @staticmethod
     def _safe_int(value: Any) -> int:
-        """把字段值安全转为 int；布尔或无法转换时返回 0。"""
+        """把非负有限整数安全转为 int；异常值返回 0。"""
         if isinstance(value, bool) or value is None:
             return 0
-        try:
-            return int(value)
-        except (TypeError, ValueError):
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer() or value < 0
+        ):
             return 0
+        try:
+            converted = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+        return (
+            converted
+            if converted >= 0 and math.isfinite(numeric) and numeric == converted
+            else 0
+        )
 
     def add_usage_metadata(self, usage_metadata: dict[str, Any] | None) -> None:
         """按 LangChain ``UsageMetadata`` 标准契约累加一次模型调用的 token 统计。
@@ -82,14 +95,26 @@ class ConversationRunUsageStats:
         self.output_tokens += self._safe_int(usage_metadata.get("output_tokens"))
         self.total_tokens += self._safe_int(usage_metadata.get("total_tokens"))
 
-        input_details = usage_metadata.get("input_token_details") or {}
-        if isinstance(input_details, dict):
+        cache_details_complete = getattr(self, "_cache_details_complete", True)
+        input_details = usage_metadata.get("input_token_details")
+        if isinstance(input_details, dict) and _INPUT_CACHE_READ_KEY in input_details:
             self.cache_hit_tokens += self._safe_int(input_details.get(_INPUT_CACHE_READ_KEY))
+        else:
+            cache_details_complete = False
         output_details = usage_metadata.get("output_token_details") or {}
         if isinstance(output_details, dict):
             self.reasoning_tokens += self._safe_int(output_details.get(_OUTPUT_REASONING_KEY))
 
-    def to_dict(self) -> dict[str, int]:
+        # cache_read 是 input_tokens 的子集。未命中值不再保持永久 0，按累计输入减
+        # 累计命中推导，并对 provider 异常的 cache_read > input 做下限保护。
+        self.cache_miss_tokens = (
+            max(0, self.input_tokens - self.cache_hit_tokens)
+            if cache_details_complete
+            else None
+        )
+        self._cache_details_complete = cache_details_complete
+
+    def to_dict(self) -> dict[str, int | None]:
         """把统计转成可序列化字典。
 
         参数:

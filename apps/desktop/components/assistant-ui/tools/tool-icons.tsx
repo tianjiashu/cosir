@@ -1,6 +1,7 @@
 import { createElement, type ComponentProps } from "react";
 import {
   EyeIcon,
+  GitCompareIcon,
   GlobeIcon,
   NetworkIcon,
   SearchIcon,
@@ -12,6 +13,7 @@ import { cn } from "@/lib/utils";
 
 const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   eye: EyeIcon,
+  "git-compare": GitCompareIcon,
   globe: GlobeIcon,
   network: NetworkIcon,
   search: SearchIcon,

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from langchain_core.language_models import BaseChatModel
 
+from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord
@@ -41,6 +42,8 @@ class RuntimeConfig:
         vision_input_format: 按厂商分派的视觉输入格式（如 ``"openai_url"``）；供 workflow 在
             构造用户消息时选择图片 block 拼装方式。空串表示本期未支持的厂商格式，由 workflow
             转 ``VisionNotSupportedError``。
+        execution_mode: 当前 graph 是新运行（``fresh``）还是从既有 checkpoint 恢复
+            （``resume``）；工具节点用它避免业务恢复时重放旧工具批次。
     """
 
     operations: WorkflowOperations
@@ -52,3 +55,4 @@ class RuntimeConfig:
     thinking_channel: str = ""
     thinking_roundtrip: bool = True
     vision_input_format: str = ""
+    execution_mode: ExecutionMode = "fresh"

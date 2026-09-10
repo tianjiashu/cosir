@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from threading import RLock
 from typing import Any, ClassVar, cast
 
@@ -15,12 +14,13 @@ from app.assistant_transport.event import RunStatusChangedEvent
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
-from app.assistant_transport.state.conversation_state_run import ConversationStateRun
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
     validate_snapshot,
 )
+from app.assistant_transport.stream import SnapshotChange
+from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
 from app.models import ConversationRunStatus
 from app.models.errors.task_fork_errors import SnapshotNotReadyError
@@ -29,36 +29,18 @@ from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
-@dataclass(frozen=True)
-class SnapshotChange:
-    """一次已提交的 snapshot 变化。"""
-
-    task_id: int
-    state: ConversationStateSnapshot
-    mutations: tuple[ConversationStateMutation, ...]
-
-
-@dataclass(frozen=True)
-class _Subscriber:
-    """绑定事件循环的进程内订阅者。"""
-
-    loop: asyncio.AbstractEventLoop
-    queue: asyncio.Queue[SnapshotChange]
-
-
 class ConversationTaskSnapshotService:
     """维护 Task snapshot 的唯一持久化、校验、缓存和发布边界。"""
 
     _lock: ClassVar[RLock] = RLock()
     _states: ClassVar[dict[int, ConversationStateSnapshot]] = {}
-    _subscribers: ClassVar[dict[int, set[_Subscriber]]] = {}
+    _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
     _cache_scope: ClassVar[str | None] = None
 
     def __init__(self) -> None:
         """绑定 snapshot CRUD。"""
         self._crud = ConversationTaskSnapshotCrud()
-
 
     def apply_planned(
         self,
@@ -102,7 +84,7 @@ class ConversationTaskSnapshotService:
         if current is None:
             state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
         else:
-            state = cast(ConversationStateSnapshot, current)
+            state = copy.deepcopy(current)
         mutations = tuple(planner(copy.deepcopy(state)))
         for mutation in mutations:
             _apply_mutation(state, mutation)
@@ -123,7 +105,7 @@ class ConversationTaskSnapshotService:
             state: ConversationStateSnapshot = copy.deepcopy(empty_snapshot())
             self._crud.create(task_id, state, session)
         else:
-            state = cast(ConversationStateSnapshot, current)
+            state = copy.deepcopy(current)
         validate_snapshot(state)
         return copy.deepcopy(state)
 
@@ -147,33 +129,28 @@ class ConversationTaskSnapshotService:
                     f"snapshot for task {source_task_id} is not ready"
                 )
             try:
-                state = cast(ConversationStateSnapshot, copy.deepcopy(source))
+                state = copy.deepcopy(source)
                 validate_snapshot(state)
             except (TypeError, ValueError, KeyError) as exc:
                 raise SnapshotNotReadyError(
                     f"snapshot for task {source_task_id} is not ready"
                 ) from exc
 
-            messages = []
-            for message in state["messages"]:
-                source_run_id = message.get("runId")
+            runs = []
+            for run in state["runs"]:
+                source_run_id = run["runId"]
                 if source_run_id not in run_id_map:
                     continue
-                message["runId"] = run_id_map[source_run_id]
-                messages.append(message)
-            state["messages"] = messages
-            state["run"] = {"runId": None, "status": "idle"}
+                cloned_run = copy.deepcopy(run)
+                cloned_run["runId"] = run_id_map[source_run_id]
+                runs.append(cloned_run)
+            state["runs"] = runs
+            state["current_run_id"] = None
             state["error"] = None
             state["approvals"] = {}
-            state["context_usage"] = 0.0
-            state["usage"] = {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "cache_hit_tokens": 0,
-                "cache_miss_tokens": 0,
-                "reasoning_tokens": 0,
-            }
+            state["context_usage_ratio"] = None
+            state["context_usage_used"] = None
+            state["context_window_total"] = None
             validate_snapshot(state)
             self._crud.upsert_in_session(session, target_task_id, state)
             return copy.deepcopy(state)
@@ -262,28 +239,32 @@ class ConversationTaskSnapshotService:
         current = self._crud.get_in_session(session, task_id)
         if current is None:
             raise KeyError(task_id)
-        state = cast(ConversationStateSnapshot, current)
+        state = copy.deepcopy(current)
         next_state: ConversationStateSnapshot = copy.deepcopy(state)
-        found = False
+        target_run = next(
+            (run for run in next_state["runs"] if run["runId"] == run_id),
+            None,
+        )
+        if target_run is None:
+            raise KeyError(f"run {run_id} has no user message in task snapshot")
         user_found = False
-        for message in next_state["messages"]:
-            if message.get("runId") != run_id:
-                continue
-            found = True
-            if message.get("role") == "user":
+        for message in target_run["messages"]:
+            if message["role"] == "user":
                 user_found = True
-                message["status"] = "completed"
-                message["endReason"] = None
                 message["parts"] = [
                     {"type": "text", "text": input_text, "status": "completed"}
                 ]
             else:
-                message["status"] = "pending"
-                message["endReason"] = None
                 message["parts"] = []
-        if not found or not user_found:
+        if not user_found:
             raise KeyError(f"run {run_id} has no user message in task snapshot")
-        next_state["run"] = ConversationStateRun(runId=run_id, status="pending")
+        target_run["status"] = "pending"
+        target_run["endReason"] = None
+        target_run["usage"] = None
+        next_state["current_run_id"] = run_id
+        next_state["context_usage_ratio"] = None
+        next_state["context_usage_used"] = None
+        next_state["context_window_total"] = None
         next_state["error"] = None
         validate_snapshot(next_state)
         self._crud.upsert_in_session(session, task_id, next_state)
@@ -326,29 +307,6 @@ class ConversationTaskSnapshotService:
                     },
                 )
 
-    def subscribe(self, task_id: int) -> tuple[asyncio.Queue[SnapshotChange], Callable[[], None]]:
-        """注册 Task 订阅者。"""
-
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-        subscriber = _Subscriber(loop, queue)
-        with self._lock:
-            if task_id in self._deleted_task_ids:
-                raise KeyError(task_id)
-            self._subscribers.setdefault(task_id, set()).add(subscriber)
-
-        def unsubscribe() -> None:
-            """注销订阅者，重复调用安全。"""
-
-            with self._lock:
-                subscribers = self._subscribers.get(task_id)
-                if subscribers is not None:
-                    subscribers.discard(subscriber)
-                    if not subscribers:
-                        self._subscribers.pop(task_id, None)
-
-        return queue, unsubscribe
-
     def subscribe_with_snapshot(
         self, task_id: int
     ) -> tuple[asyncio.Queue[SnapshotChange], Callable[[], None], ConversationStateSnapshot]:
@@ -361,7 +319,7 @@ class ConversationTaskSnapshotService:
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-        subscriber = _Subscriber(loop, queue)
+        subscriber = Subscriber(loop, queue)
         with self._lock:
             if task_id in self._deleted_task_ids:
                 raise KeyError(task_id)
@@ -403,17 +361,45 @@ class ConversationTaskSnapshotService:
             """在已取得 Task 闸门后执行 snapshot recovery 读取。"""
 
             state: ConversationStateSnapshot = self.ensure_state_snapshot(task_id)
-            for run in run_service.list_runs_for_task(task_id):
+            runs = run_service.list_runs_for_task(task_id)
+            existing_context_manager = getattr(task_space, "existing_context_manager", None)
+            ensure_context_projection = getattr(
+                task_space, "ensure_context_usage_projection", None
+            )
+            if (
+                runs
+                and callable(existing_context_manager)
+                and existing_context_manager() is None
+                and callable(ensure_context_projection)
+            ):
+                latest_run = max(runs, key=lambda item: (item.created_at, item.id))
+                try:
+                    ensure_context_projection(latest_run)
+                    state = self.ensure_state_snapshot(task_id)
+                except Exception:
+                    # context reproject 是 snapshot 的恢复旁路；不能让能力目录或 context
+                    # 数据异常阻断用户读取已有对话，下一次真实 run 仍会重算。
+                    log.exception(
+                        "conversation_context_reproject_failed",
+                        extra={
+                            "msg": "backend 重启后的 context snapshot 重投影失败",
+                            "data": {"task_id": task_id, "run_id": latest_run.id},
+                        },
+                    )
+            for run in runs:
+                snapshot_run = next(
+                    (item for item in state["runs"] if item["runId"] == run.id),
+                    None,
+                )
                 if (
                     run.status
                     in {
                         ConversationRunStatus.COMPLETED.value,
                         ConversationRunStatus.FAILED.value,
                         ConversationRunStatus.CANCELLED.value,
-                        ConversationRunStatus.INTERRUPTED.value,
                     }
-                    and state["run"]["runId"] == run.id
-                    and state["run"]["status"] != run.status
+                    and snapshot_run is not None
+                    and snapshot_run["status"] != run.status
                 ):
                     # A process can die after the run row commits but before its final
                     # projector event. Reconcile the snapshot at the read boundary so

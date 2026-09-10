@@ -220,6 +220,10 @@ def test_envelope_defaults_and_optional_fields() -> None:
         {"type": "run_status_changed", "task_id": 1, "run_id": 1, "status": "half_done"},
         {"type": "run_initialized", "task_id": 0, "run_id": 1},
         {"type": "run_initialized", "task_id": 1, "run_id": 1, "typo_field": 1},
+        {"type": "usage_updated", "task_id": 1, "run_id": 1, "input_tokens": True},
+        {"type": "usage_updated", "task_id": 1, "run_id": 1, "input_tokens": 1.0},
+        {"type": "context_usage_updated", "task_id": 1, "run_id": 1, "ratio": True},
+        {"type": "context_usage_updated", "task_id": 1, "run_id": 1, "used_tokens": True},
     ],
     ids=[
         "empty_user_text",
@@ -232,6 +236,10 @@ def test_envelope_defaults_and_optional_fields() -> None:
         "unknown_run_status",
         "non_positive_task_id",
         "unknown_field",
+        "boolean_tokens",
+        "float_tokens",
+        "boolean_ratio",
+        "boolean_context_tokens",
     ],
 )
 def test_constraints_reject_invalid_payloads(payload: dict[str, object]) -> None:

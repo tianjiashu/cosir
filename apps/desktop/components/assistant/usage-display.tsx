@@ -13,6 +13,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import type { TransportState, TransportRun } from "@/lib/assistant/contract";
 
 type UsageTone = "normal" | "warning" | "critical" | "unknown";
 
@@ -30,8 +31,14 @@ export type ContextUsagePresentation = {
 export function formatTokenCount(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "—";
   if (value < 1_000) return Math.round(value).toLocaleString("en-US");
-  if (value < 1_000_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-  return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  if (value < 1_000_000) {
+    const compact = value / 1_000;
+    const rounded = Number(compact.toFixed(compact < 10 ? 1 : 0));
+    return rounded >= 1_000 ? "1M" : `${rounded.toLocaleString("en-US")}k`;
+  }
+  const compact = value / 1_000_000;
+  const rounded = Number(compact.toFixed(compact < 10 ? 1 : 0));
+  return `${rounded.toLocaleString("en-US")}M`;
 }
 
 export function getContextUsagePresentation(
@@ -91,24 +98,17 @@ export function getContextUsagePresentation(
 export function shouldDisplayRunUsage(
   visible: boolean,
   messageRunId: number | null,
-  usageRunId: number | null,
-  currentRunId: number | null,
+  runExists: boolean,
 ): boolean {
   return visible
     && messageRunId !== null
-    && usageRunId === messageRunId
-    && currentRunId === messageRunId;
+    && runExists;
 }
 
 function stateNumber(state: unknown, key: string): number | null {
   if (typeof state !== "object" || state === null) return null;
   const value = (state as Record<string, unknown>)[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function stateValue(state: unknown, key: string): unknown {
-  if (typeof state !== "object" || state === null) return null;
-  return (state as Record<string, unknown>)[key];
 }
 
 function stateNullableNumber(state: unknown, key: string): number | null {
@@ -133,10 +133,10 @@ function statusLabel(status: ContextUsagePresentation["status"]): string {
 }
 
 export function TaskContextUsage(): ReactElement {
-  const ratio = useAuiState((state) => stateNumber(state.thread.state, "context_usage") ?? 0);
+  const ratio = useAuiState((state) => stateNullableNumber(state.thread.state, "context_usage_ratio"));
   const used = useAuiState((state) => stateNullableNumber(state.thread.state, "context_usage_used"));
   const total = useAuiState((state) => stateNullableNumber(state.thread.state, "context_window_total"));
-  const presentation = getContextUsagePresentation(ratio, used, total);
+  const presentation = getContextUsagePresentation(ratio ?? Number.NaN, used, total);
   const percent = presentation.percent === null ? 0 : Math.min(100, Math.max(0, presentation.percent));
 
   return (
@@ -203,22 +203,21 @@ export function TaskContextUsage(): ReactElement {
 }
 
 export function RunUsageDisplay({ runId, visible }: { runId: number | null; visible: boolean }): ReactElement | null {
-  const usageRunId = useAuiState((state) => stateNumber(state.thread.state, "usage_run_id"));
-  const currentRunId = useAuiState((state) =>
-    stateNumber(stateValue(state.thread.state, "run"), "runId")
-  );
-  const isRunning = useAuiState((state) => state.thread.isRunning);
-  const input = useAuiState((state) => stateNullableNumber(stateValue(state.thread.state, "usage"), "input_tokens"));
-  const output = useAuiState((state) => stateNullableNumber(stateValue(state.thread.state, "usage"), "output_tokens"));
-  const total = useAuiState((state) => stateNullableNumber(stateValue(state.thread.state, "usage"), "total_tokens"));
-  const cacheHit = useAuiState((state) => stateNullableNumber(stateValue(state.thread.state, "usage"), "cache_hit_tokens"));
-  const cacheMiss = useAuiState((state) => stateNullableNumber(stateValue(state.thread.state, "usage"), "cache_miss_tokens"));
-  const reasoning = useAuiState((state) => stateNullableNumber(stateValue(state.thread.state, "usage"), "reasoning_tokens"));
+  const run = useAuiState((state): TransportRun | null => {
+    const transportState = state.thread.state as unknown as TransportState;
+    return runId === null ? null : transportState.runs.find((candidate) => candidate.runId === runId) ?? null;
+  });
+  const usage = run?.usage ?? null;
+  const input = usage?.input_tokens ?? null;
+  const output = usage?.output_tokens ?? null;
+  const total = usage?.total_tokens ?? null;
+  const cacheHit = usage?.cache_hit_tokens ?? null;
+  const cacheMiss = usage?.cache_miss_tokens ?? null;
+  const reasoning = usage?.reasoning_tokens ?? null;
 
-  if (!shouldDisplayRunUsage(visible, runId, usageRunId, currentRunId)) return null;
-  const known = [total, input, output, cacheHit, cacheMiss, reasoning].some(
-    (value) => value !== null && value > 0,
-  );
+  if (!shouldDisplayRunUsage(visible, runId, run !== null)) return null;
+  const known = usage !== null;
+  const isRunning = run?.status === "pending" || run?.status === "running";
   const label = known ? `本次用量 ${formatTokenCount(total ?? 0)} tokens` : isRunning ? "用量统计中…" : "本次用量 —";
 
   return (

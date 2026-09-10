@@ -278,11 +278,13 @@ class ConversationRunCommandService:
             ):
                 raise ValueError(f"run {run_id} is not resumable")
             state = self._snapshots.ensure_state_snapshot(task_id)
-            if state["run"]["runId"] != run_id:
+            if state["current_run_id"] != run_id:
                 raise ValueError(f"run {run_id} snapshot is stale")
             if not any(
-                message.get("runId") == run_id and message.get("role") == "user"
-                for message in state["messages"]
+                message["role"] == "user"
+                for run in state["runs"]
+                if run["runId"] == run_id
+                for message in run["messages"]
             ):
                 raise ValueError(f"run {run_id} has no user message")
             resumed = self._conversation_run.resume_cancelled_run(run_id)

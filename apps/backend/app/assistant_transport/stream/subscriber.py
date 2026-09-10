@@ -9,7 +9,7 @@ from app.assistant_transport.stream.snapshot_change import SnapshotChange
 
 
 @dataclass(frozen=True)
-class _Subscriber:
+class Subscriber:
     """绑定事件循环的进程内订阅者。"""
 
     loop: asyncio.AbstractEventLoop

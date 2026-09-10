@@ -6,7 +6,8 @@ state / checkpoint 的形状）后，由本模块做统一分发：
 
 1. **事件流**：逐条发 :class:`ToolCallStatusChangedEvent` 终态事件
    （``success→completed`` / ``error→failed`` / ``cancelled→cancelled``），
-   ``completed`` 携带 ``result=content``、``failed`` 携带 ``error``；
+   ``failed`` 携带短错误提示（``data.status_hint`` 或 ``"执行失败"``）、``cancelled``
+   携带 ``"已取消"``；展示结果统一走 ``data``（display_data），不单独携带 ``result``；
 2. **模型上下文**：逐条经 ``WorkflowOperations._to_model_message`` 转
    ``ToolMessage`` 写回 ``RuntimeContextManager``，闭合上一轮 ``AIMessage.tool_calls``
    配对（模型上下文由 RuntimeContextManager 独占，不进 graph state）；
@@ -23,13 +24,14 @@ state / checkpoint 的形状）后，由本模块做统一分发：
 """
 
 import copy
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from langgraph.config import get_stream_writer
 
+from app.assistant_transport.event import ToolCallStatusChangedEvent
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolObservation
-from app.core.workflows.event import ToolCallStatusChangedEvent
 from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_context
 
 
@@ -57,6 +59,42 @@ def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
     return "failed"
 
 
+def _ui_data(summary: dict[str, Any], event_status: str) -> dict[str, object] | None:
+    """返回终态事件需要更新的 UI data，缺少新数据时保留创建态投影。
+
+    参数:
+        summary: ``tool_observation_summary`` 产出的单条观察摘要。
+        event_status: 已映射的终态状态。
+
+    返回:
+        摘要中的 UI data；没有 data 时返回 ``None``。
+
+    异常:
+        无（摘要中的非映射数据按没有 UI data 处理）。
+
+    副作用:
+        无；返回值为摘要 data 的深拷贝。
+    """
+
+    data = summary.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    return copy.deepcopy(dict(data))
+
+
+def _ui_error(summary: dict[str, Any], event_status: str) -> str | None:
+    """只生成事件层的短错误提示；完整诊断仅保留在模型消息。"""
+
+    if event_status == "cancelled":
+        return "已取消"
+    if event_status != "failed":
+        return None
+    data = summary.get("data")
+    if isinstance(data, Mapping) and isinstance(data.get("status_hint"), str):
+        return data["status_hint"]
+    return "执行失败"
+
+
 def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
     """把一条观察摘要转回 ``ToolObservation`` 供模型消息序列化消费。
 
@@ -68,7 +106,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
         summary: ``tool_observation_summary`` 产出的单条摘要 dict。
 
     返回:
-        等价语义的 :class:`ToolObservation`（``data=None``）。
+        等价语义的 :class:`ToolObservation`（``display_data=None``）。
 
     异常:
         KeyError: 摘要缺失必需字段时抛出（上游契约被破坏，属装配错误，
@@ -86,7 +124,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
         reason=summary["reason"],
         retryable=summary["retryable"],
         tool_call_id=summary["call_id"],
-        data=None,
+        display_data=None,
     )
 
 
@@ -140,9 +178,10 @@ def dispatch_tool_observations(
                 step_id=step_id,
                 tool_call_id=summary["call_id"],
                 status=event_status,
-                result=summary["content"] if event_status == "completed" else None,
-                error=summary["error"] if event_status in {"failed", "cancelled"} else None,
-                data=copy.deepcopy(summary.get("data") or {}),
+                # 终态事件不携带 result：UI 展示结果统一来自 data（display_data），
+                # 模型可读正文经 _summary_to_observation 走模型上下文，二者不混用。
+                error=_ui_error(summary, event_status),
+                data=_ui_data(summary, event_status),
             )
         )
         # 2. 模型上下文：转 ToolMessage 写回 RuntimeContextManager，闭合

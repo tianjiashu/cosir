@@ -110,7 +110,7 @@ function SelectorView({
   if (!selectedModel || !selectedOptionId) return null;
 
   return (
-    <div className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}>
+    <div className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-2", className)}>
       <OfficialModelSelectorRoot
         models={officialModels}
         value={selectedOptionId}
@@ -137,7 +137,7 @@ function SelectorView({
         <OfficialModelSelectorTrigger
           variant="ghost"
           size="sm"
-          className="max-w-60"
+          className="min-w-0 max-w-full sm:max-w-60"
           aria-label="选择模型"
         >
           <SparklesIcon className="text-muted-foreground size-3.5 shrink-0" />

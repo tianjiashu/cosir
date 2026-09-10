@@ -22,7 +22,7 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 class ContextUsageUpdatedEvent(ConversationEventEnvelope):
     """上下文窗口占用比例已经更新。
 
-    事实语义：上下文占用的最新测算结果已产生，Transport 侧应写入快照 ``context_usage``
+    事实语义：上下文占用的最新测算结果已产生，Transport 侧应写入快照 ``context_usage_ratio``
     供前端上下文圆环展示。
 
     Attributes:
@@ -41,7 +41,6 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
     ratio: StrictFloat = Field(ge=0.0)
     used_tokens: StrictInt | None = Field(default=None, ge=0)
     context_window_tokens: StrictInt | None = Field(default=None, ge=0)
-    context_revision: StrictInt | None = Field(default=None, ge=0)
     reproject: bool = False
 
     @field_validator("ratio")
@@ -63,7 +62,7 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
             _state: 未使用；上下文占用与现有 snapshot 内容无关。
 
         返回:
-            ``context_usage``、绝对已用 token 和窗口上限的 ``set`` mutation。
+            ``context_usage_ratio``、绝对已用 token 和窗口上限的 ``set`` mutation。
 
         异常:
             无。
@@ -72,30 +71,8 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
             无。
         """
 
-        if self.run_id is not None and state["run"].get("runId") != self.run_id:
-            return []
-        if (
-            not self.reproject
-            and self.context_revision is not None
-            and state["context_revision"] is not None
-            and self.context_revision <= state["context_revision"]
-        ):
-            return []
-        if (
-            not self.reproject
-            and self.context_revision is None
-            and state["context_revision"] is not None
-        ):
-            # 没有 revision 的旧/迟到事件无法证明顺序，不能覆盖已经确认的测量。
-            return []
-        context_revision = (
-            self.context_revision
-            if self.context_revision is not None
-            else state["context_revision"]
-        )
         return [
-            ConversationStateMutation("set", ("context_usage",), self.ratio),
-            ConversationStateMutation("set", ("context_revision",), context_revision),
+            ConversationStateMutation("set", ("context_usage_ratio",), self.ratio),
             ConversationStateMutation("set", ("context_usage_used",), self.used_tokens),
             ConversationStateMutation(
                 "set", ("context_window_total",), self.context_window_tokens
@@ -133,9 +110,8 @@ class UsageUpdatedEvent(ConversationEventEnvelope):
             无。
         """
 
-        if self.run_id is None or state["run"].get("runId") != self.run_id:
-            return []
-        current_usage = state["usage"]
+        run_index = self._find_run(state, self.run_id)
+        current_usage = state["runs"][run_index]["usage"]
         incoming_usage = {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -144,18 +120,17 @@ class UsageUpdatedEvent(ConversationEventEnvelope):
             "cache_miss_tokens": self.cache_miss_tokens,
             "reasoning_tokens": self.reasoning_tokens,
         }
-        if any(
-            incoming_usage[key] is not None
-            and current_usage[key] is not None
+        if current_usage is not None and any(
+            current_usage[key] is not None
+            and incoming_usage[key] is not None
             and current_usage[key] > incoming_usage[key]
             for key in incoming_usage
         ):
             return []
         return [
-            ConversationStateMutation("set", ("usage_run_id",), self.run_id),
             ConversationStateMutation(
                 "set",
-                ("usage",),
+                ("runs", run_index, "usage"),
                 {
                     "input_tokens": self.input_tokens,
                     "output_tokens": self.output_tokens,

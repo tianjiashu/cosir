@@ -21,7 +21,6 @@ import {
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
 import { requestJson } from "@/lib/http/client";
-import { cancelRun, type CancelRunResult } from "@/lib/assistant/cancel-run";
 import { extractUserAddMessageText, getOrCreateTransportCommandId, getUserAddMessageSourceId, toTransportThreadView } from "@/lib/assistant/converter";
 import type { TransportState } from "@/lib/assistant/contract";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
@@ -94,9 +93,23 @@ type RuntimeRunDiagnostic = {
 
 function readRuntimeRun(value: unknown): RuntimeRunDiagnostic | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const run = (value as { run?: unknown }).run;
-  if (typeof run !== "object" || run === null || Array.isArray(run)) return undefined;
-  return run as RuntimeRunDiagnostic;
+  const state = value as { current_run_id?: unknown; runs?: unknown };
+  if (!Array.isArray(state.runs) || typeof state.current_run_id !== "number") return undefined;
+  const run = state.runs.find((candidate) =>
+    typeof candidate === "object" && candidate !== null
+      && (candidate as { runId?: unknown }).runId === state.current_run_id,
+  );
+  return typeof run === "object" && run !== null ? run as RuntimeRunDiagnostic : undefined;
+}
+
+function currentTransportRun(state: TransportState): TransportState["runs"][number] | undefined {
+  return state.current_run_id === null
+    ? undefined
+    : state.runs.find((run) => run.runId === state.current_run_id);
+}
+
+function transportMessageCount(state: TransportState): number {
+  return state.runs.reduce((count, run) => count + run.messages.length, 0);
 }
 
 type RuntimeErrorBoundaryProps = {
@@ -161,8 +174,18 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
   const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {
     runtimeControlsRef.current = controls;
   }, []);
+  const cancelRequestedRunIdRef = useRef<number | null>(null);
+  const lastTransportErrorRef = useRef<TransportIssue | null>(null);
   const commitTransportState = useCallback((state: TransportState) => {
     latestStateRef.current = state;
+    const run = currentTransportRun(state);
+    if (
+      cancelRequestedRunIdRef.current === (run?.runId ?? null)
+      && run?.status === "cancelled"
+    ) {
+      cancelRequestedRunIdRef.current = null;
+      lastTransportErrorRef.current = null;
+    }
   }, []);
   const [traceId] = useState(() => newTraceId());
   const composerRestoreRef = useRef<ComposerRestore | null>(null);
@@ -170,8 +193,37 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
   const initialStateRef = useRef(initialState);
   const finishCountRef = useRef(0);
   const mountedRef = useRef(false);
-  const lastTransportErrorRef = useRef<TransportIssue | null>(null);
   const unmountLogTimerRef = useRef<number | null>(null);
+
+  const handleCancelRequested = useCallback((runId: number) => {
+    if (latestStateRef.current.current_run_id !== runId) return;
+    cancelRequestedRunIdRef.current = runId;
+    // A user cancellation supersedes a stale transport error from the same
+    // request. The terminal cancelled snapshot will clear the intent below.
+    lastTransportErrorRef.current = null;
+  }, []);
+
+  const handleCancelResult = useCallback((runId: number, accepted: boolean) => {
+    if (accepted) {
+      if (latestStateRef.current.current_run_id !== runId) return;
+      lastTransportErrorRef.current = null;
+      // The backend ACK is authoritative for the run status. Import a small
+      // local terminal projection as a fallback for the race where the client
+      // aborts the stream before it can consume the pushed terminal snapshot.
+      // A later backend snapshot can still replace this projection with the
+      // complete canonical message/tool state.
+      const cancelledState = markTransportStateCancelled(latestStateRef.current, runId);
+      latestStateRef.current = cancelledState;
+      runtimeControlsRef.current?.importState(cancelledState);
+      cancelRequestedRunIdRef.current = null;
+      onTaskStateChanged?.();
+      return;
+    }
+    if (cancelRequestedRunIdRef.current !== runId) return;
+    // A rejected cancellation must not suppress the normal active-run
+    // recovery path if the stream later ends unexpectedly.
+    cancelRequestedRunIdRef.current = null;
+  }, [onTaskStateChanged]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -185,9 +237,9 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       data: {
         taskId,
         workspaceId: workspaceId ?? null,
-        initialMessageCount: initialStateRef.current.messages.length,
-        initialRunId: initialStateRef.current.run.runId,
-        initialRunStatus: initialStateRef.current.run.status,
+        initialMessageCount: transportMessageCount(initialStateRef.current),
+        initialRunId: initialStateRef.current.current_run_id,
+        initialRunStatus: currentTransportRun(initialStateRef.current)?.status ?? null,
       },
     });
     return () => {
@@ -203,8 +255,8 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
           data: {
             taskId,
             workspaceId: workspaceId ?? null,
-            lastRunId: latestStateRef.current.run.runId,
-            lastRunStatus: latestStateRef.current.run.status,
+            lastRunId: latestStateRef.current.current_run_id,
+            lastRunStatus: currentTransportRun(latestStateRef.current)?.status ?? null,
           },
         });
       }, 0);
@@ -222,7 +274,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       data: { taskId, previousBaseUrl, backendBaseUrl },
     });
 
-    const status = latestStateRef.current.run.status;
+    const status = currentTransportRun(latestStateRef.current)?.status;
     if (status === "pending" || status === "running") {
       setIssue({ message: "本机后端已重启，正在恢复当前对话…", retryable: true });
       // The supervisor may replace the backend process and port. Keep this
@@ -237,13 +289,22 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
   }, []);
 
   const handleSendError = useCallback(async (error: Error, params: { commands: readonly unknown[]; updateState: (updater: (state: TransportState) => TransportState) => void }) => {
+    const currentRunId = latestStateRef.current.current_run_id;
+    if (cancelRequestedRunIdRef.current === currentRunId && currentRunId !== null) {
+      // Assistant UI can report the client-side abort as a transport error
+      // after the backend has already accepted the explicit cancellation.
+      // It is an expected lifecycle event, not a recoverable transport fault.
+      lastTransportErrorRef.current = null;
+      setIssue(null);
+      return;
+    }
     void frontendLog("ERROR", "assistant_transport_stream_error", "Assistant Transport 流发生错误", {
       traceId,
       data: {
         taskId,
         commandCount: params.commands.length,
-        lastRunId: latestStateRef.current.run.runId,
-        lastRunStatus: latestStateRef.current.run.status,
+        lastRunId: latestStateRef.current.current_run_id,
+        lastRunStatus: currentTransportRun(latestStateRef.current)?.status ?? null,
       },
       error,
     });
@@ -282,7 +343,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
     try {
       void frontendLog("INFO", "assistant_transport_reconcile_started", "Assistant Transport 流结束后读取最新快照", {
         traceId,
-        data: { taskId, lastRunId: latestStateRef.current.run.runId, lastRunStatus: latestStateRef.current.run.status },
+        data: { taskId, lastRunId: latestStateRef.current.current_run_id, lastRunStatus: currentTransportRun(latestStateRef.current)?.status ?? null },
       });
       const snapshot = parseTransportState(await requestJson<unknown>(`/tasks/${taskId}/assistant/state`));
       latestStateRef.current = snapshot;
@@ -290,12 +351,12 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
         traceId,
         data: {
           taskId,
-          runId: snapshot.run.runId,
-          runStatus: snapshot.run.status,
-          messageCount: snapshot.messages.length,
+          runId: snapshot.current_run_id,
+          runStatus: currentTransportRun(snapshot)?.status ?? null,
+          messageCount: transportMessageCount(snapshot),
         },
       });
-      if (snapshot.run.status === "pending" || snapshot.run.status === "running") {
+      if (currentTransportRun(snapshot)?.status === "pending" || currentTransportRun(snapshot)?.status === "running") {
         // resumeApi is the transport-only attach endpoint. It must never be
         // confused with the user-triggered business resume below.
         runtimeControlsRef.current?.resume();
@@ -315,7 +376,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
   }, [taskId, setIssue, traceId]);
 
   const resumeBusinessRun = useCallback(async () => {
-    const runId = latestStateRef.current.run.runId;
+    const runId = latestStateRef.current.current_run_id;
     if (runId == null) throw new Error("当前没有可恢复的运行");
     const response = await fetch(`${backendBaseUrl}/assistant`, {
       method: "POST",
@@ -392,8 +453,8 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       // transport-only resumeApi must receive the current run identity here.
       // An empty command batch is reserved for runtime resume; user-triggered
       // business resume uses the explicit request below instead.
-      if (body.commands.length === 0 && latestStateRef.current.run.runId !== null) {
-        backendRequest.runId = latestStateRef.current.run.runId;
+      if (body.commands.length === 0 && latestStateRef.current.current_run_id !== null) {
+        backendRequest.runId = latestStateRef.current.current_run_id;
       }
       lastTransportErrorRef.current = null;
       const commands = body.commands.map((command) => {
@@ -403,7 +464,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       });
       const hasEditCommand = commands.some((command) => getUserAddMessageSourceId(command) !== null);
       const requestRunId = commands.length === 0 || hasEditCommand
-        ? latestStateRef.current.run.runId
+        ? latestStateRef.current.current_run_id
         : null;
       void frontendLog("INFO", "assistant_transport_request_prepared", "Assistant Transport 请求已准备发送", {
         traceId,
@@ -443,20 +504,31 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
     },
     onFinish: () => {
       finishCountRef.current += 1;
-      const status = latestStateRef.current.run.status;
+      const runId = latestStateRef.current.current_run_id;
+      const status = currentTransportRun(latestStateRef.current)?.status;
+      const cancellationRequested = runId !== null && cancelRequestedRunIdRef.current === runId;
       void frontendLog("INFO", "assistant_transport_stream_finished", "Assistant Transport 流生命周期结束", {
         traceId,
         data: {
           taskId,
           finishCount: finishCountRef.current,
-          runId: latestStateRef.current.run.runId,
+          runId,
           runStatus: status,
-          messageCount: latestStateRef.current.messages.length,
+          messageCount: transportMessageCount(latestStateRef.current),
           pendingCommandCount: 0,
           isSending: false,
           pendingCommandTypes: [],
         },
       });
+      if (cancellationRequested) {
+        // Explicit cancellation is completed by the backend's pushed terminal
+        // snapshot. Do not treat the client-side stream close as an EOF that
+        // needs a second /assistant/state read.
+        lastTransportErrorRef.current = null;
+        setIssue(null);
+        onTaskStateChanged?.();
+        return;
+      }
       if (lastTransportErrorRef.current) {
         // Assistant UI also invokes onFinish after a failed HTTP response.
         // Preserve the structured backend error, but still re-read and attach
@@ -465,7 +537,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
         // cancelled-only resume operation.
         setIssue(lastTransportErrorRef.current);
         onTaskStateChanged?.();
-        if (latestStateRef.current.run.status === "pending" || latestStateRef.current.run.status === "running") {
+        if (currentTransportRun(latestStateRef.current)?.status === "pending" || currentTransportRun(latestStateRef.current)?.status === "running") {
           void reconcileAfterTransportFinish();
         }
         return;
@@ -492,12 +564,16 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
         data: {
           taskId,
           commandCount: commands?.length ?? 0,
-          runId: latestStateRef.current.run.runId,
-          runStatus: latestStateRef.current.run.status,
+          runId: latestStateRef.current.current_run_id,
+          runStatus: currentTransportRun(latestStateRef.current)?.status ?? null,
         },
         error,
       });
       if (error) {
+        const currentRunId = latestStateRef.current.current_run_id;
+        if (cancelRequestedRunIdRef.current === currentRunId && currentRunId !== null) {
+          return;
+        }
         setIssue({
           message: safeFrontendErrorMessage(error, "发送已取消，后端仍在确认运行状态"),
           retryable: true,
@@ -513,7 +589,7 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
       <AssistantRuntimeProvider runtime={runtime}>
       <RuntimeControlBridge
         register={registerRuntimeControls}
-        resumeOnMount={initialState.run.status === "pending" || initialState.run.status === "running"}
+        resumeOnMount={currentTransportRun(initialState)?.status === "pending" || currentTransportRun(initialState)?.status === "running"}
         taskId={taskId}
       />
       <TransportStateCommitBridge initialState={initialState} onCommit={commitTransportState} />
@@ -529,6 +605,8 @@ const RuntimeSession = memo(function RuntimeSession({ taskId, workspaceId, initi
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
           onResumeBusiness={resumeBusinessRun}
+          onCancelRequested={handleCancelRequested}
+          onCancelResult={handleCancelResult}
         />
       </div>
       <InitialMessageBridge
@@ -558,10 +636,34 @@ function TransportStateCommitBridge({ initialState, onCommit }: { initialState: 
 
 function isTransportState(value: unknown): value is TransportState {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as { messages?: unknown; run?: unknown };
-  return Array.isArray(candidate.messages)
-    && typeof candidate.run === "object"
-    && candidate.run !== null;
+  const candidate = value as { runs?: unknown; current_run_id?: unknown };
+  return Array.isArray(candidate.runs)
+    && (candidate.current_run_id === null || typeof candidate.current_run_id === "number");
+}
+
+function markTransportStateCancelled(state: TransportState, runId: number): TransportState {
+  const runIndex = state.runs.findIndex((run) => run.runId === runId);
+  if (runIndex < 0) return state;
+  const runs = state.runs.map((candidate, index) => index === runIndex
+    ? {
+      ...candidate,
+      status: "cancelled",
+      endReason: "user_cancelled",
+      messages: candidate.messages.map((message) => ({
+        ...message,
+        parts: message.parts.map((part) => (
+          part.type === "tool-call" && (part.status === "pending" || part.status === "running")
+            ? { ...part, status: "cancelled", error: "已取消", isError: false }
+            : part
+        )),
+      })),
+    }
+    : candidate);
+  return {
+    ...state,
+    runs,
+    current_run_id: runId,
+  };
 }
 
 function TaskStateBridge({
@@ -662,8 +764,8 @@ function InitialMessageBridge({
       !text?.trim()
       || sentRef.current
       || remoteThreadId !== `task-${taskId}`
-      || initialState.messages.length > 0
-      || initialState.run.status !== "idle"
+      || transportMessageCount(initialState) > 0
+      || (currentTransportRun(initialState)?.status ?? "idle") !== "idle"
     ) return;
     aui.thread.composer().setText(text);
     const timer = window.setTimeout(() => {
@@ -672,7 +774,7 @@ function InitialMessageBridge({
       aui.thread.composer().send();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [aui, initialState.messages.length, initialState.run.status, remoteThreadId, sentRef, taskId, text]);
+  }, [aui, initialState, remoteThreadId, sentRef, taskId, text]);
 
   return null;
 }
@@ -695,8 +797,4 @@ function ComposerRestoreBridge({ register }: { register: (restore: ComposerResto
     });
   }, [aui, register]);
   return null;
-}
-
-export async function cancelAssistantRun(taskId: number, runId: number): Promise<CancelRunResult> {
-  return cancelRun(taskId, runId);
 }

@@ -56,12 +56,14 @@ export type ThreadProps = {
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
   onResumeBusiness?: () => Promise<void>;
+  onCancelRequested?: (runId: number) => void;
+  onCancelResult?: (runId: number, accepted: boolean) => void;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -77,18 +79,18 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }) => {
   const isEmpty = useAuiState(isNewChatView);
   return (
-    <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun, onResumeBusiness }}>
+    <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }}>
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 flex-col">
-        <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
-          <div className={cn("mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
+      <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
+        <ThreadPrimitive.Viewport className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
+          <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
             <div className="mb-14 flex flex-col gap-y-6 empty:hidden">
               <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
             </div>
-            <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
+            <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
               <ThreadPrimitive.ScrollToBottom
                 render={<TooltipIconButton tooltip="回到底部" variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
               >
@@ -105,7 +107,7 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
 };
 
 const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, taskId }) => (
-  <ComposerPrimitive.Root className="border-border/60 bg-card flex w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+  <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
     <ComposerPrimitive.Input
       placeholder="输入任务，例如：帮我查找登录相关代码…"
       className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
@@ -115,12 +117,14 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, task
       aria-label="消息输入"
     />
     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         <TaskContextUsage />
-        <ComposerControls
-          scope={taskId == null ? undefined : { kind: "task", id: taskId }}
-          runtimeModelContext
-        />
+        <div className="min-w-0 flex-1">
+          <ComposerControls
+            scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+            runtimeModelContext
+          />
+        </div>
       </div>
       <ComposerAction taskId={taskId ?? null} />
     </div>
@@ -136,7 +140,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  const { onResumeBusiness } = useContext(ThreadContext);
+  const { onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
 
   useEffect(() => {
     void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
@@ -161,7 +165,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   }, [resuming]);
 
   if (action === "stop") {
-    return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} />} />;
+    return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />;
   }
 
   if (action === "resume") {
@@ -248,8 +252,8 @@ const UserMessageView: FC = () => {
 const UserEditMessage: FC = () => {
   const { taskId } = useContext(ThreadContext);
   return (
-    <MessagePrimitive.Root data-role="user" className="px-2">
-      <ComposerPrimitive.Root className="border-border/60 bg-card flex w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+      <MessagePrimitive.Root data-role="user" className="min-w-0 px-2">
+      <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
         <ComposerPrimitive.Input
           className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
           rows={2}
@@ -258,10 +262,12 @@ const UserEditMessage: FC = () => {
           aria-label="编辑消息"
         />
         <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-          <ComposerControls
-            scope={taskId == null ? undefined : { kind: "task", id: taskId }}
-          />
-          <div className="flex items-center gap-1.5">
+          <div className="min-w-0 flex-1">
+            <ComposerControls
+              scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
             <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
               <XIcon />
             </ComposerPrimitive.Cancel>

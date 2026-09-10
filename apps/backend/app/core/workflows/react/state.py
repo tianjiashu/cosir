@@ -32,6 +32,10 @@ class ReactGraphState(BaseModel):
         pending_tool_calls: 待执行的工具调用（可序列化 dict）。model 节点写，tools 节点经
             工具节点直接消费。dict 含 ``tool_name`` / ``arguments`` / ``call_id``，
             模型同时产出文本与工具调用时另带 ``instruction`` 键。
+        deferred_repair_message: 本轮同时存在合法与可修复非法工具调用时，待工具结果
+            全部写回上下文后追加的修复提示。model 节点写，observe 节点在
+            ``ToolMessage`` 之后消费并清空，避免形成 ``AIMessage -> SystemMessage ->
+            ToolMessage`` 的非法消息顺序。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
@@ -54,4 +58,5 @@ class ReactGraphState(BaseModel):
     max_steps: int
     final_text: str
     last_tool_results: dict[str, Any]
+    deferred_repair_message: str = ""
     continuation_error_data: Any = None

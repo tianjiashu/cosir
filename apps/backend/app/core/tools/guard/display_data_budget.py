@@ -2,10 +2,11 @@
 
 ``ToolObservation.display_data`` 会整体进入事件流与可观测性平台。UI projection 必须先移除
 不应进入客户端的字段（例如 ``web_extract`` 的网页正文和 metadata），本守卫再对
-剩余展示数据里的长文本字段做截断，并附加原始长度与截断标记，供客户端自行决定如何呈现。
+剩余展示数据里的长文本字段做截断。预算守卫不新增字段，避免改变各工具在
+``app.core.tools.display`` 中定义的展示 schema。
 
 职责边界：
-- 负责：展示数据通道的输出治理（截断 + 截断标记）。
+- 负责：展示数据通道的输出治理（截断，不改变展示 schema）。
 - 不负责：任何渲染（摘要文本、列表条目、diff 条目一律由客户端生成）。
 """
 
@@ -94,14 +95,14 @@ class DisplayDataBudget:
         return value, False
 
     def _trim_mapping(self, mapping: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-        """截断字典节点中的长文本，并为被截断的字段补充可观测标记。
+        """截断字典节点中的长文本，但不改变展示数据 schema。
 
         参数:
             mapping: 展示数据中的字典节点。
 
         返回:
-            ``(处理后的字典, 是否发生截断)``；被截断的字符串字段会额外写入
-            ``{key}_chars``（原始长度）与 ``{key}_truncated=True``。
+            ``(处理后的字典, 是否发生截断)``；被截断的字符串只保留预算内前缀，
+            不额外写入长度或截断标记字段。
 
         异常:
             无。
@@ -118,7 +119,4 @@ class DisplayDataBudget:
             if not item_changed:
                 continue
             changed = True
-            if isinstance(item, str):
-                trimmed[f"{key}_chars"] = len(item)
-                trimmed[f"{key}_truncated"] = True
         return trimmed, changed

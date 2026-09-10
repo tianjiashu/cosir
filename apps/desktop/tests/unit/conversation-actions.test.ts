@@ -8,81 +8,61 @@ import {
   isLatestUserMessage,
   isResumableCancelledRun,
 } from "@/lib/assistant/conversation-actions";
-import type { TransportState } from "@/lib/assistant/contract";
+import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
 
 const state = (overrides: Partial<TransportState> = {}): TransportState => ({
-  messages: [],
-  run: { runId: null, status: "idle" },
+  runs: [],
+  current_run_id: null,
   approvals: {},
-  usage: {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-    cache_hit_tokens: 0,
-    cache_miss_tokens: 0,
-    reasoning_tokens: 0,
-  },
-  context_usage: 0,
-  context_revision: null,
-  usage_run_id: null,
+  context_usage_ratio: null,
   context_usage_used: null,
   context_window_total: null,
   error: null,
   ...overrides,
 });
 
+const run = (runId: number, status: string = "completed", messages: TransportMessage[] = []) => ({
+  runId,
+  status,
+  endReason: null,
+  messages,
+  usage: null,
+});
+
 describe("conversation actions", () => {
   it("only exposes the last canonical user message as editable", () => {
     const snapshot = state({
-      messages: [
-        { id: "u1", role: "user", runId: 1, status: "completed", parts: [] },
-        { id: "a1", role: "assistant", runId: 1, status: "completed", parts: [] },
-        { id: "u2", role: "user", runId: 2, status: "completed", parts: [] },
+      runs: [
+        run(1, "completed", [{ id: "u1", role: "user", parts: [] }, { id: "a1", role: "assistant", parts: [] }]),
+        run(2, "completed", [{ id: "u2", role: "user", parts: [] }]),
       ],
+      current_run_id: 2,
     });
-
     expect(getLatestUserMessageId(snapshot)).toBe("u2");
     expect(isLatestUserMessage(snapshot, "u1")).toBe(false);
     expect(isLatestUserMessage(snapshot, "u2")).toBe(true);
   });
 
-  it("only allows editing the latest user message from the task's latest run", () => {
+  it("only allows editing the latest user message from the current run", () => {
     const snapshot = state({
-      run: { runId: 2, status: "completed" },
-      messages: [
-        { id: "u1", role: "user", runId: 1, status: "completed", parts: [] },
-        { id: "a1", role: "assistant", runId: 1, status: "completed", parts: [] },
-        { id: "u2", role: "user", runId: 2, status: "completed", parts: [] },
+      runs: [
+        run(1, "completed", [{ id: "u1", role: "user", parts: [] }]),
+        run(2, "completed", [{ id: "u2", role: "user", parts: [] }]),
       ],
+      current_run_id: 2,
     });
-
     expect(isEditableLatestRunUserMessage(snapshot, "u1")).toBe(false);
     expect(isEditableLatestRunUserMessage(snapshot, "u2")).toBe(true);
-    expect(isEditableLatestRunUserMessage({ ...snapshot, run: { runId: 3, status: "completed" } }, "u2")).toBe(false);
+    expect(isEditableLatestRunUserMessage({ ...snapshot, current_run_id: 3 }, "u2")).toBe(false);
   });
 
-  it("allows every cancelled run regardless of end reason", () => {
+  it("allows a cancelled current run to resume", () => {
     const resumable = state({
-      run: { runId: 7, status: "cancelled" },
-      messages: [
-        { id: "u7", role: "user", runId: 7, status: "completed", parts: [] },
-        { id: "a7", role: "assistant", runId: 7, status: "cancelled", endReason: "user_cancelled", parts: [] },
-      ],
+      runs: [run(7, "cancelled", [{ id: "u7", role: "user", parts: [] }])],
+      current_run_id: 7,
     });
     expect(isResumableCancelledRun(resumable)).toBe(true);
-    expect(isResumableCancelledRun({
-      ...resumable,
-      messages: resumable.messages.map((message) => message.id === "a7"
-        ? { ...message, endReason: "runtime_cancelled" }
-        : message),
-    })).toBe(true);
-    expect(isResumableCancelledRun({
-      ...resumable,
-      messages: resumable.messages.map((message) => message.id === "a7"
-        ? { ...message, endReason: "runtime_restarted" }
-        : message),
-    })).toBe(true);
-    expect(isResumableCancelledRun({ ...resumable, run: { runId: 7, status: "completed" } })).toBe(false);
+    expect(isResumableCancelledRun({ ...resumable, runs: [run(7, "completed", resumable.runs[0].messages)] })).toBe(false);
   });
 
   it("keeps the three composer button states deterministic", () => {
@@ -92,9 +72,9 @@ describe("conversation actions", () => {
     expect(deriveComposerAction({ isRunning: false, isDraftEmpty: true, canResume: false })).toBe("send");
   });
 
-  it("safely reads a run id from an uninitialized assistant-ui thread state", () => {
+  it("reads only current_run_id from canonical state", () => {
     expect(getTransportRunId(undefined)).toBeNull();
-    expect(getTransportRunId({ run: { runId: 9 } })).toBe(9);
-    expect(getTransportRunId({ run: { runId: "9" } })).toBeNull();
+    expect(getTransportRunId({ current_run_id: 9 })).toBe(9);
+    expect(getTransportRunId({ current_run_id: "9" })).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import type {
   TransportError,
   TransportMessage,
   TransportReasoningPart,
+  TransportRun,
   TransportState,
   TransportTextPart,
   TransportToolCallPart,
@@ -78,49 +79,25 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
   return "unknown";
 }
 
-function sanitizeWebToolData(toolName: string, value: TransportToolCallPart["data"]): TransportToolCallPart["data"] {
-  if (toolName === "web_extract" && (!value || value.kind !== "web-extract-status")) {
-    return null;
-  }
-  if (toolName === "web_extract" && value && value.kind === "web-extract-status") {
-    return {
-      kind: "web-extract-status",
-      provider: typeof value.provider === "string" ? value.provider : "",
-      sites: Array.isArray(value.sites)
-        ? value.sites.flatMap((site) => {
-            if (typeof site !== "object" || site === null) return [];
-            const candidate = site as Record<string, unknown>;
-            if (typeof candidate.site !== "string" || typeof candidate.url !== "string") return [];
-            const status = candidate.status;
-            if (status !== "pending" && status !== "running" && status !== "success" && status !== "failed" && status !== "truncated") return [];
-            return [{
-              site: candidate.site,
-              url: candidate.url,
-              status,
-              ...(typeof candidate.error_code === "string" ? { error_code: candidate.error_code } : {}),
-              ...(candidate.truncated === true ? { truncated: true } : {}),
-            }];
-          })
-        : [],
-    };
-  }
-  return value;
-}
-
 /**
  * 把后端 tool-call part 映射为 assistant-ui part。
  *
  * `artifact` 是 UI-only 适配数据，保留后端五态、presentation、data 和错误；
  * 它不会被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载
- * args/argsText/result/isError，renderer 从 artifact 读取后端展示声明。
+ * args/argsText/isError，renderer 从 artifact 读取后端展示声明。
  */
 export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
   const backendStatus = normalizeToolStatus(part.status);
+  const data = part.data ?? null;
+  const dataRecord = typeof data === "object" && data !== null ? data as Record<string, unknown> : {};
+  const statusHint = typeof dataRecord.status_hint === "string" ? dataRecord.status_hint : "执行失败";
   const artifact = {
     backendStatus,
     presentation: part.presentation ?? {},
-    data: sanitizeWebToolData(part.toolName, part.data ?? null),
-    error: part.error ?? null,
+    data,
+    error: backendStatus === "cancelled"
+      ? "已取消"
+      : backendStatus === "failed" ? statusHint : null,
     errorCode: part.errorCode ?? null,
   };
   const args = part.args ?? {};
@@ -162,7 +139,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     };
   }
 
-  const safeResult = part.toolName === "web_search" || part.toolName === "web_extract" ? undefined : part.result;
   return {
     type: "tool-call",
     toolCallId: part.toolCallId,
@@ -170,14 +146,12 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     args: args as ReadonlyJSONObject,
     argsText: JSON.stringify(args, null, 2),
     artifact,
-    ...(backendStatus === "completed" && safeResult !== undefined
-      ? { result: safeResult, isError: part.isError ?? false }
-      : {}),
+    ...(backendStatus === "completed" ? { isError: part.isError ?? false } : {}),
   };
 }
 
-export function toMessageStatus(message: TransportMessage): MessageStatus {
-  switch (message.status) {
+export function toMessageStatus(message: TransportMessage, run: TransportRun): MessageStatus {
+  switch (run.status) {
     case "pending":
     case "running":
       return { type: "running" };
@@ -192,7 +166,7 @@ export function toMessageStatus(message: TransportMessage): MessageStatus {
         error: "上次对话运行已中断，可以继续发送新消息。",
       };
     case "failed":
-      if (message.endReason === "client_disconnected" || message.endReason === "cancelled") {
+      if (run.endReason === "client_disconnected" || run.endReason === "cancelled") {
         return { type: "incomplete", reason: "cancelled" };
       }
       return {
@@ -207,6 +181,7 @@ export function toMessageStatus(message: TransportMessage): MessageStatus {
 
 export function toThreadMessage(
   message: TransportMessage,
+  run: TransportRun,
   options: { isLastRunMessage?: boolean } = {},
 ): ThreadMessage {
   const content = message.parts
@@ -230,7 +205,7 @@ export function toThreadMessage(
       role: "user",
       content: content as ThreadUserMessage["content"],
       attachments: [],
-      createdAt: message.createdAt ? new Date(message.createdAt) : new Date(),
+      createdAt: new Date(),
       metadata: {
         unstable_state: undefined,
         unstable_annotations: undefined,
@@ -239,7 +214,7 @@ export function toThreadMessage(
         submittedFeedback: undefined,
         timing: undefined,
         custom: {
-          runId: message.runId ?? null,
+          runId: run.runId,
           isLastRunMessage: options.isLastRunMessage ?? false,
         },
       },
@@ -251,15 +226,15 @@ export function toThreadMessage(
     id: message.id,
     role: "assistant",
     content: content as ThreadAssistantMessage["content"],
-    status: toMessageStatus(message),
-    createdAt: message.createdAt ? new Date(message.createdAt) : new Date(),
+    status: toMessageStatus(message, run),
+    createdAt: new Date(),
     metadata: {
       unstable_state: null,
       unstable_annotations: [],
       unstable_data: [],
       steps: [],
       custom: {
-        runId: message.runId ?? null,
+        runId: run.runId,
         isLastRunMessage: options.isLastRunMessage ?? false,
       },
     },
@@ -290,10 +265,13 @@ function toPendingUserMessage(command: UserAddMessageCommand): ThreadMessage | n
   return toThreadMessage({
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
+    parts,
+  }, {
+    runId: -1,
     status: "completed",
     endReason: null,
-    parts,
-    createdAt: new Date().toISOString(),
+    messages: [],
+    usage: null,
   });
 }
 
@@ -321,22 +299,21 @@ export function toTransportThreadView(
   const pendingMessages = connectionMetadata.pendingCommands
     .map((command) => isUserAddMessageCommand(command) ? toPendingUserMessage(command) : null)
     .filter((message): message is ThreadMessage => message !== null);
-  const lastAssistantMessageIds = new Set<string>();
-  const seenRunIds = new Set<number>();
-  for (const message of [...state.messages].reverse()) {
-    if (message.role !== "assistant" || message.runId == null || seenRunIds.has(message.runId)) continue;
-    seenRunIds.add(message.runId);
-    lastAssistantMessageIds.add(message.id);
-  }
-  const messages = state.messages.map((message) =>
-    toThreadMessage(message, { isLastRunMessage: lastAssistantMessageIds.has(message.id) }),
-  );
+  const messages = state.runs.flatMap((run) => {
+    const lastAssistantMessageId = [...run.messages].reverse().find((message) => message.role === "assistant")?.id;
+    return run.messages.map((message) =>
+      toThreadMessage(message, run, { isLastRunMessage: message.id === lastAssistantMessageId }),
+    );
+  });
   if (state.error) messages.push(toSnapshotErrorMessage(state.error));
+  const currentRun = state.current_run_id === null
+    ? null
+    : state.runs.find((run) => run.runId === state.current_run_id) ?? null;
   return {
     messages: [...messages, ...pendingMessages],
     // 未知 run 状态保持非成功的活动态，直到服务端给出明确终态；不能把未知值
     // 当作 idle，也不能在 EOF 后伪造 completed。
-    isRunning: connectionMetadata.isSending || !["idle", "completed", "failed", "cancelled", "interrupted"].includes(state.run.status),
+    isRunning: connectionMetadata.isSending || (currentRun !== null && !["idle", "completed", "failed", "cancelled", "interrupted"].includes(currentRun.status)),
     // initial-state/recovery 入口已通过 parseTransportState 验证；这里仅按官方
     // AssistantTransportState 的 JSON state 字段透传，不构造或回写领域事实。
     state: state as unknown as ReadonlyJSONValue,

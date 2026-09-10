@@ -15,7 +15,6 @@
   输出预算（``ToolObservationBudget``）。
 """
 
-import copy
 from typing import Any
 
 from app.config.settings import Settings
@@ -98,7 +97,7 @@ def build_tool_result_summaries(
                 "reason": _clamp_text(observation.reason),
                 "content": _clamp_text(observation.content),
                 "retryable": observation.retryable,
-                "data": copy.deepcopy(observation.data or {}),
+                "data": dict(observation.display_data or {}),
             }
         )
     return {"instruction": instruction or "", "observations": summaries}

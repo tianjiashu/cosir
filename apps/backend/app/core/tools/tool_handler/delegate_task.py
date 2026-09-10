@@ -2,7 +2,12 @@
 
 from typing import ClassVar
 
-from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
+from app.core.tools.schemas import (
+    ToolDefinition,
+    ToolDisplayHints,
+    ToolExecutionContext,
+    ToolObservation,
+)
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.delegate_task_args import PROMPT_MAX, TITLE_MAX, DelegateTaskArgs
@@ -151,6 +156,13 @@ class DelegateTaskTool(HandlerBase):
             execution_mode="thread",
             parallel_mode="parallel",
             parallel_group="delegate_task_group",
+            display=ToolDisplayHints(
+                verb="委派任务",
+                icon="users",
+                expandable=True,
+                expand_layout="details",
+                show_result=False,
+            ),
         )
 
 

@@ -232,7 +232,9 @@ class AgentRuntime:
             )
 
     def _resolve_execution_context(
-        self, task: TaskRecord, run_id: int = 0
+        self,
+        task: TaskRecord,
+        run_id: int = 0,
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 

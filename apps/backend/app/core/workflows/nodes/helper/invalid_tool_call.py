@@ -25,6 +25,9 @@ INVALID_TOOL_CALL_SUMMARY_LIMIT = 5
 # 修复提示整体字符预算上限（超出整体截断并加末尾说明）
 INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS = 2000
 
+# 写入上下文的稳定标记，用于 observe 在 checkpoint 重放时幂等识别修复提示。
+TOOL_CALL_REPAIR_MESSAGE_KIND = "tool_call_repair"
+
 
 class InvalidToolOutcome(str, Enum):
     """``invalid_tool_calls`` 的处置结论，由决策函数返回，调用方只做薄执行。

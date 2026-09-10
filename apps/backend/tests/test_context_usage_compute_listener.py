@@ -1,4 +1,4 @@
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_usage_compute_listener import (
@@ -47,6 +47,7 @@ def test_context_usage_publishes_event_and_persists_absolute_window(monkeypatch)
         ListenerResult(usage=0),
     )
 
+    assert projector.events[0].reproject is False
     assert len(projector.events) == 1
     assert projector.events[0].type == "context_usage_updated"
     assert projector.events[0].task_id == 7
@@ -84,4 +85,53 @@ def test_context_usage_task_write_is_failure_safe(monkeypatch) -> None:
     )
 
     assert len(projector.events) == 1
+    assert projector.events[0].reproject is True
     assert projector.events[0].run_id is None
+
+
+def test_context_usage_includes_system_prompt_and_tool_schemas(monkeypatch) -> None:
+    task_service = _TaskService()
+    monkeypatch.setattr(
+        "app.core.context.context_listener.context_usage_compute_listener.get_task_service",
+        lambda: task_service,
+    )
+    projector = _Projector()
+    monkeypatch.setattr(
+        "app.core.context.context_listener.context_usage_compute_listener.get_conversation_event_projector",
+        lambda: projector,
+    )
+    listener = ContextUsageComputeListener(task_id=7, run_id=11)
+    tool_schemas = (
+        {
+            "name": "search_files",
+            "description": "Search files in the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query."},
+                },
+                "required": ["query"],
+            },
+        },
+    )
+    entries = [
+        ContextEntry(SystemMessage(content="system prompt"), None, -1),
+        ContextEntry(HumanMessage(content="hello"), 11, 0),
+    ]
+
+    listener.listen(
+        ListenerEvent(
+            type=ContextEventType.ADD_MESSAGE,
+            entries=entries,
+            usage=0,
+            total_tokens=100,
+            tool_schemas=tool_schemas,
+        ),
+        ListenerResult(usage=0),
+    )
+
+    expected_messages = sum(listener._message_tokens(entry.message) for entry in entries)
+    expected_tools = listener._tool_schema_tokens(tool_schemas)
+    assert expected_tools > 0
+    assert projector.events[0].used_tokens == expected_messages + expected_tools
+    assert task_service.updates == [(7, expected_messages + expected_tools)]
