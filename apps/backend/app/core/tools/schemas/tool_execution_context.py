@@ -58,7 +58,10 @@ class ToolExecutionContext:
 
     @classmethod
     def from_workspace(
-        cls, task_id: int, workspace: WorkspaceRecord, run_id: int = 0
+        cls,
+        task_id: int,
+        workspace: WorkspaceRecord,
+        run_id: int = 0,
     ) -> "ToolExecutionContext":
         """从工作区记录与任务标识构造执行上下文。
 

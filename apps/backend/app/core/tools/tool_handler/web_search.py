@@ -189,7 +189,17 @@ class WebSearchTool(HandlerBase):
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            data={"web": web_results},
+            data={
+                "entries": [
+                    {
+                        "name": item["title"] or item["url"],
+                        "type": "link",
+                        "path": item["url"],
+                    }
+                    for item in web_results
+                    if item["url"]
+                ]
+            },
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -221,8 +231,10 @@ class WebSearchTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="网页搜索",
                 icon="globe",
+                surface="standalone",
                 expandable=True,
                 expand_layout="list",
+                show_result=False,
             ),
         )
 

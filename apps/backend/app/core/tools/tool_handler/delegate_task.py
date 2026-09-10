@@ -158,8 +158,8 @@ def build_delegate_task_definition(agent_summary: str = "") -> ToolDefinition:
     """构建 delegate_task 工具定义，可选注入子 Agent 能力摘要。
 
     参数:
-        agent_summary: 可选的可选子 Agent 能力摘要文本。非空时拼入完整描述，
-            为空时降级为通用默认描述（仍经带 description 的构造路径注入）。
+        agent_summary: 可选的子 Agent 能力摘要文本。非空时拼入完整描述，
+            为空时降级为通用默认描述。
 
     返回:
         可直接注册到工具注册表的 delegate_task 工具定义。
@@ -170,7 +170,6 @@ def build_delegate_task_definition(agent_summary: str = "") -> ToolDefinition:
     副作用:
         创建 DelegateTaskTool 实例，但不会启动委派。
     """
-
     description = _DEFAULT_DESCRIPTION
     if agent_summary.strip():
         description = (

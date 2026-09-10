@@ -28,6 +28,8 @@ class ToolDisplayHints:
         expandable: 是否可展开；默认 ``True``，客户端据此隐藏展开箭头。
         expand_layout: 展开态布局；客户端仅按该字符串分发布局，不按工具名写特化分支。
         default_open: 工具完成后是否默认展开；这是静态偏好，不代表执行状态。
+        show_result: 是否把模型可见结果暴露给客户端；关闭时客户端只消费
+            ``data``，模型正文仍只进入 RuntimeContext。
 
     返回:
         无。
@@ -45,6 +47,7 @@ class ToolDisplayHints:
     expandable: bool = True
     expand_layout: ToolDisplayLayout = "details"
     default_open: bool = False
+    show_result: bool = True
 
     def to_dict(self) -> dict[str, object]:
         """把静态展示声明转换为可跨 Transport 边界传输的普通字典。"""

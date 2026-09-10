@@ -60,11 +60,11 @@ class ToolSystem:
     ) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册工具定义：10 个既有工具恒注册；``Settings.CODEGRAPH_ENABLED``
-        为 True 时额外注册 6 个 CodeGraph 查询工具（共 16 个），为 False 时仅注册
-        10 个既有工具（模型侧完全无 codegraph 入口）。其中
-        原 patch 工具已拆分为 replace(patch) 与 apply_patch(V4A) 两个独立工具，故既有工具
-        由 9 个增至 10 个，总数由 15 个增至 16 个。本方法用
+        按内置清单注册工具定义：11 个非 CodeGraph 工具恒注册（包含
+        ``delegate_task``）；``Settings.CODEGRAPH_ENABLED`` 为 True 时额外注册 6 个
+        CodeGraph 查询工具（共 17 个），为 False 时仅注册 11 个工具（模型侧完全无
+        codegraph 入口）。其中原 patch 工具已拆分为 replace(patch) 与 apply_patch(V4A)
+        两个独立工具，故非 CodeGraph 工具由 10 个增至 11 个，总数由 16 个增至 17 个。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
         构造输出预算上限，装配执行管线（``ToolExecutor``）。工具拦截（Pre/PostToolUse）通过
         ``app.hook.hook_interceptor.HookInterceptor`` 静态方法直接收口，
@@ -86,12 +86,15 @@ class ToolSystem:
             向 ``delegate_task`` 工具描述注入已投影的子 Agent 能力摘要（未注入时降级空串）。
         """
 
+        # configuration.py 也持有 ToolSystem；只能在模块已完成导入后读取
+        # registry，不能让 delegate_task handler 在模块级反向导入配置层。
         try:
             from app.config.configuration import get_agent_registry
 
-            _delegate_summary = get_agent_registry().child_agent_summary()
+            delegate_summary = get_agent_registry().child_agent_summary()
         except RuntimeError:
-            _delegate_summary = ""
+            # 应用首次装配时工具系统先于 agent registry 注入；此时使用通用描述。
+            delegate_summary = ""
 
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
@@ -105,7 +108,7 @@ class ToolSystem:
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
-        registry.register(build_delegate_task_definition(agent_summary=_delegate_summary))
+        registry.register(build_delegate_task_definition(agent_summary=delegate_summary))
         # CodeGraph 查询工具（client 可为 None，execute 降级）。总开关关闭时不注册，
         # 模型侧完全无 codegraph 工具入口；开关开启时注册 6 个只读查询工具。
         if Settings.CODEGRAPH_ENABLED:

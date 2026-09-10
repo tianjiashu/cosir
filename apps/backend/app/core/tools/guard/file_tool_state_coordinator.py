@@ -395,6 +395,28 @@ class FileToolStateCoordinator:
                 plan.observed_snapshot,
             )
 
+    def clear_task(self, task_id: int) -> None:
+        """清除一个 Task 的全部进程内文件协作状态。
+
+        参数:
+            task_id: 待清除任务标识。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            清除 revision、路径锁和重复调用 registry 中该 Task 的状态；调用方必须
+            在该 Task 的所有工具执行退出后调用。
+        """
+
+        key = str(task_id)
+        self._revisions.clear_task(key)
+        self._path_locks.clear_task(key)
+        self._repeated_calls.clear_task(key)
+
     @property
     def revisions(self) -> FileRevisionRegistry:
         """返回协调器使用的 revision registry。

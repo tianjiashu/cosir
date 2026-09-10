@@ -8,13 +8,38 @@ description 模板软引导，而非此处强制。预算校验退化为 ``promp
 与实测长度，便于排查父 Agent 调用问题。
 """
 
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field, model_validator
+from pydantic.json_schema import GenerateJsonSchema
 
 from app.config.logging.logger import log
 
 # 预算常量
-PROMPT_MAX = 8000
-TITLE_MAX = 20
+PROMPT_MAX = 3000
+TITLE_MAX = 10
+
+# child_agent_id 运行时描述模板：``{ids}`` 在 schema 生成期由进程级注册表的
+# ``child_agent_ids()`` 注入，模型据此从合法选项中选择且明确必填。
+_CHILD_AGENT_ID_DESCRIPTION_TEMPLATE = (
+    "Target child AgentProfile id. REQUIRED. Must be one of the available child agent ids: "
+    "{ids}. Pick the child agent whose role fits the task。"
+)
+
+
+def _available_child_agent_ids() -> list[str]:
+    """返回进程级注册表中可委派子 Agent 的 ID 列表。
+
+    注册表在应用启动后经 ``set_agent_registry`` 注入；本函数延迟到 schema 生成时调用，
+    此时注册表已就绪。未初始化或取数失败时返回空列表（调用方降级为静态描述）。
+    """
+
+    try:
+        from app.config.configuration import get_agent_registry
+
+        return sorted(get_agent_registry().child_agent_ids())
+    except (RuntimeError, ImportError, AttributeError):
+        return []
 
 
 class DelegateTaskArgs(BaseModel):
@@ -27,26 +52,22 @@ class DelegateTaskArgs(BaseModel):
     """
 
     child_agent_id: str = Field(
-        description=(
-            "Target child AgentProfile id. Use delegate_reviewer for review-only code review, "
-            "delegate_analyst for read-only investigation or document/code analysis, and "
-            "delegate_coder for scoped code changes plus verification."
-        )
+        description=_CHILD_AGENT_ID_DESCRIPTION_TEMPLATE
     )
     title: str = Field(
         description=(
-            "Short title for the delegated task, used for display and traceability. "
-            "It must not duplicate the prompt or carry secrets; it is required and "
-            "must be a non-empty, non-whitespace string."
+            f"Short title for the delegated task, used for display and traceability. "
+            f"It must not duplicate the prompt or carry secrets; it is required and "
+            f"must be a non-empty, non-whitespace string of at most {TITLE_MAX} characters."
         ),
     )
     prompt: str = Field(
         description=(
-            "The full task contract for the child agent as free-form text. Structure it "
-            "with markdown sections: Objective (the single goal), Rules (hard constraints), "
-            "References (relevant paths or documents), and Expected Output (what the child "
-            "returns), plus an optional Background. This text is passed verbatim as the "
-            "child turn's input."
+            f"The full task contract as free-form text (no fixed format required), passed "
+            f"verbatim as the delegated task input. It is required and must be a non-empty "
+            f"string of at most {PROMPT_MAX} characters. You may organize it with optional "
+            f"markdown sections such as Objective / Rules / References / Expected Output to "
+            f"improve clarity, but any clear free-form wording is acceptable."
         )
     )
 
@@ -121,3 +142,31 @@ class DelegateTaskArgs(BaseModel):
             )
 
         return self
+
+    @classmethod
+    def model_json_schema(
+        cls,
+        by_alias: bool = True,
+        ref_template: str = "#/$defs/{model}",
+        schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
+        mode: Literal["validation", "serialization"] = "validation",
+    ) -> dict[str, Any]:
+        """生成模型可见 JSON schema，并把可用 child agent id 列表注入描述。
+
+        注册表在应用启动后注入，模块加载期不可靠；schema 生成发生在工具注册时，
+        此时 ``get_agent_registry().child_agent_ids()`` 可返回真实可用集合，模型据此
+        从合法选项中选择，且描述显式标注必填。取数失败则保留静态描述。
+        """
+
+        schema = super().model_json_schema(
+            by_alias=by_alias,
+            ref_template=ref_template,
+            schema_generator=schema_generator,
+            mode=mode,
+        )
+        ids = _available_child_agent_ids()
+        if ids:
+            schema.setdefault("properties", {}).setdefault("child_agent_id", {})[
+                "description"
+            ] = _CHILD_AGENT_ID_DESCRIPTION_TEMPLATE.format(ids=", ".join(ids))
+        return schema

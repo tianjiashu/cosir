@@ -253,7 +253,17 @@ class WebExtractTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            data={"web": results},
+            data={
+                "entries": [
+                    {
+                        "name": item["url"],
+                        "type": "link",
+                        "path": item["url"],
+                    }
+                    for item in results
+                    if isinstance(item.get("url"), str) and item["url"]
+                ]
+            },
         )
 
     def _resolve_extract_provider(
@@ -504,6 +514,7 @@ class WebExtractTool(HandlerBase):
                 icon="globe",
                 expandable=True,
                 expand_layout="list",
+                show_result=False,
             ),
         )
 
