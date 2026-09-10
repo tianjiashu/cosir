@@ -32,7 +32,7 @@ from app.core.tools.tool_handler.file_io.atomic_write import (
     atomic_write_text,
     looks_like_line_numbered,
 )
-from app.core.tools.tool_handler.patch.file_change_display import (
+from app.core.tools.display.file_change_display import (
     build_file_change_display_data,
 )
 from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
@@ -204,7 +204,7 @@ class WriteFileTool(HandlerBase):
                 error="syntax error detected after write",
                 reason=format_syntax_reason(result),
                 permission=self.permission,
-                data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
+                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
             )
 
         status = "modified" if existed else "added"
@@ -214,8 +214,8 @@ class WriteFileTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=content,
-            data={"kind": "file-changes", **display_data},
-            internal_data=display_data,
+            display_data={"kind": "file-changes", **display_data},
+            artifact_data=display_data,
         )
 
     def to_definition(self) -> ToolDefinition:

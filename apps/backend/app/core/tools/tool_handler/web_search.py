@@ -189,7 +189,7 @@ class WebSearchTool(HandlerBase):
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            data={
+            display_data={
                 "entries": [
                     {
                         "name": item["title"] or item["url"],

@@ -208,7 +208,7 @@ class SearchFilesTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=result,
-            data={
+            display_data={
                 "kind": "file-list",
                 "files": [{"path": file_path} for file_path in file_paths],
                 "pattern": pattern,

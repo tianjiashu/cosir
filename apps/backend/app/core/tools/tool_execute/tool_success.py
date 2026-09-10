@@ -19,8 +19,8 @@ def tool_success(
     permission: str,
     content: str,
     tool_call_id: str = "",
-    data: Mapping[str, Any] | None = None,
-    internal_data: Mapping[str, Any] | None = None,
+    display_data: Mapping[str, Any] | None = None,
+    artifact_data: Mapping[str, Any] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -32,7 +32,8 @@ def tool_success(
             必须**用英文**撰写、对模型友好（简洁、结构化、便于模型直接消费与纠正）；
             开发者向的中文 docstring/注释不在此限。
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
-        data: 仅供客户端展示消费的结构化数据；会写入 ``ToolObservation.data``，不会回传给模型。
+        display_data: 仅供客户端展示消费的结构化数据；会写入
+            ``ToolObservation.display_data``，不会回传给模型。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="success"``，
@@ -45,18 +46,18 @@ def tool_success(
     副作用:
         无（仅构造并返回新对象，不修改入参 ``tool``、不触发任何执行）。
 
-    content 与 data 的区别:
+    content 与 display_data 的区别:
         - ``content`` 是「人读文本」：给模型/用户看的故事（命令回显、文件
           摘要等），类型恒为 ``str``；必须英文、对模型友好（见 :func:`tool_success`
           的 ``content`` 参数约定）；失败时由 :func:`tool_error` 填入与 ``error``
           相同的错误描述（并非置空），保证模型总能从 ``content`` 读到正文。
-        - ``data`` 是「机读字典」：给上层程序逻辑消费的账本（退出码、对象
+        - ``display_data`` 是「机读字典」：给上层程序逻辑消费的账本（退出码、对象
           类型等），类型恒为 ``dict``；例如删除文件时 ``content`` 写「已删除
-          文件 xxx」、``data`` 写 ``{"type": "file", "path": "..."}``，上层
+          文件 xxx」、``display_data`` 写 ``{"type": "file", "path": "..."}``，上层
           既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
 
-    返回对象的 ``data`` 不变量:
-        ``data`` 只包含调用方显式提供的 UI 展示数据，不会自动混入观察对象的其它字段；
+    返回对象的 ``display_data`` 不变量:
+        ``display_data`` 只包含调用方显式提供的 UI 展示数据，不会自动混入观察对象的其它字段；
         完整正文只进入 ``observation.content``，并受全局 ``ToolOutputBudget`` 约束。
     """
 
@@ -67,6 +68,6 @@ def tool_success(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    observation.data = copy.deepcopy(dict(data or {}))
-    observation.internal_data = copy.deepcopy(dict(internal_data or {}))
+    observation.display_data = copy.deepcopy(dict(display_data or {}))
+    observation.artifact_data = copy.deepcopy(dict(artifact_data or {}))
     return observation

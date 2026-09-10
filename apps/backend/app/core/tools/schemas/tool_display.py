@@ -2,7 +2,7 @@
 
 本模块只承载「工具在客户端长什么样」的**静态声明**，是 ``ToolDefinition`` 契约的
 一部分。后端不承载任何渲染逻辑：摘要文本、列表条目、diff 条目等一律由客户端按
-本声明与 ``ToolObservation.data`` 渲染。
+本声明与 ``ToolObservation.display_data`` 渲染。
 
 设计边界：
 - 只有字面量字段，不含 ``Callable``、不含摘要文本、不含条目投影。

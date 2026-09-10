@@ -148,8 +148,8 @@ def tool_error(
     retryable: bool = False,
     permission: str = "",
     tool_call_id: str = "",
-    data: Mapping[str, Any] | None = None,
-    internal_data: Mapping[str, Any] | None = None,
+    display_data: Mapping[str, Any] | None = None,
+    artifact_data: Mapping[str, Any] | None = None,
     error_kind: ErrorKind = ErrorKind.RUNTIME_FAILED,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
@@ -173,8 +173,8 @@ def tool_error(
         permission: 触发工具所需权限标识（用于审计/展示），默认空字符串；权限被
             拒时由调用方回填被拒的权限值。
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
-        data: 仅供客户端展示消费的结构化数据；会写入
-            ``ToolObservation.data``，不会回传给模型。为 error 观察携带结构化诊断
+        display_data: 仅供客户端展示消费的结构化数据；会写入
+            ``ToolObservation.display_data``，不会回传给模型。为 error 观察携带结构化诊断
             （如语法检查的 ``syntax_errors``）。
         error_kind: 供日志、运行时事件与回放分析使用的稳定错误分类，例如
             ``parse_invalid``、``unknown_tool``、``schema_invalid``、``runtime_failed``、
@@ -200,10 +200,10 @@ def tool_error(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    # 与 tool_success 对称：data 不承载 content 副本，避免大体积错误文本经 UI
+    # 与 tool_success 对称：display_data 不承载 content 副本，避免大体积错误文本经 UI
     # 通道进入前端事件流与可观测性平台。
-    observation.data = copy.deepcopy(dict(data or {}))
-    internal = copy.deepcopy(dict(internal_data or {}))
+    observation.display_data = copy.deepcopy(dict(display_data or {}))
+    internal = copy.deepcopy(dict(artifact_data or {}))
     internal.setdefault("error_kind", error_kind.value)
-    observation.internal_data = internal
+    observation.artifact_data = internal
     return observation

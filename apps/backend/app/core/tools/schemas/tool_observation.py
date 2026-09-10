@@ -30,16 +30,18 @@ class ToolObservation:
       由 :func:`tool_cancelled` 工厂构造——它与 ``error`` 同为确定性终态，但根因是
       「主动中断」而非「执行失败」，须与 ``error`` 明确区分，避免误读为真实故障。
 
-    content、data 与 internal_data 的区别（易混，单独说明）:
+    content、display_data 与 artifact_data 的区别（易混，单独说明）:
         - ``content`` 是「面向模型的英文人读文本」：给模型/用户看的故事（命令回显、
           文件摘要、可恢复错误等），类型恒为 ``str``；失败时与 ``error`` 同时携带可读
           诊断。它是**模型唯一直接消费的文本通道**。
-        - ``data`` 是「面向客户端的结构化机读字典」：只给前端渲染消费的结果与展示治理
-          标记，类型恒为 ``dict``。它不进入模型，也不应被后端持久化逻辑当作事实源。
-        - ``internal_data`` 是后端执行链的内部结构化事实，不进入 Transport，也不到模型。
-          例如文件变更的反向快照可以放在这里，避免 UI 展示数据成为 ChangeSet 的隐式接口。
+        - ``display_data`` 是「面向客户端的结构化机读字典」：只给前端渲染消费的结果与
+          展示治理标记，类型恒为 ``dict``。它不进入模型，也不应被后端持久化逻辑当作事实源。
+        - ``artifact_data`` 是工具执行产出的内部结构化事实（产物数据），不进入 Transport，
+          也不到模型。例如文件变更的反向快照作为工具产物放在这里，避免 UI 展示数据成为
+          ChangeSet 的隐式接口。
         - 三者互不替代：Agent 只依赖 ``content`` / ``error`` / ``reason``；UI 只依赖
-          ``ToolDisplayHints`` 与 ``data``；后端恢复/审计逻辑只依赖明确的内部数据。
+          ``ToolDisplayHints`` 与 ``display_data``；后端恢复/审计逻辑只依赖明确的产物数据
+          ``artifact_data``。
 
     字段:
         tool_name: 触发本次观察的工具名称（与 :class:`ToolDefinition.name` 对应）。
@@ -69,10 +71,10 @@ class ToolObservation:
             便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         tool_call_id: 与本次观察对应的模型工具调用 id（透传自 :class:`ToolCall`）；
             用于把观察回绑到具体的模型请求，缺失时为空。
-        data: 面向客户端的结构化机读字典，仅供前端渲染。UI 不应通过本字段之外的
+        display_data: 面向客户端的结构化机读字典，仅供前端渲染。UI 不应通过本字段之外的
             Observation 字段推导展示结果。
-        internal_data: 后端内部结构化事实，不进入事件、快照或模型上下文；用于文件
-            快照、ChangeSet 等后端能力。
+        artifact_data: 工具执行产出的内部结构化事实（产物数据）；不进入事件、快照或
+            模型上下文，仅用于文件快照、ChangeSet 等后端恢复/审计能力。
     """
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。
@@ -96,6 +98,6 @@ class ToolObservation:
     # 对应的模型工具调用 id，透传自 ToolCall，用于observation回绑；缺失为空。
     tool_call_id: str = ""
     # 面向客户端的结构化机读字典，仅前端渲染消费，不到模型。
-    data: dict[str, Any] | None = field(default_factory=dict)
-    # 后端内部结构化事实，不进入 Transport 或模型上下文。
-    internal_data: dict[str, Any] | None = field(default_factory=dict)
+    display_data: dict[str, Any] | None = field(default_factory=dict)
+    # 工具执行产出的内部结构化事实（产物数据）；不进入 Transport 或模型上下文。
+    artifact_data: dict[str, Any] | None = field(default_factory=dict)

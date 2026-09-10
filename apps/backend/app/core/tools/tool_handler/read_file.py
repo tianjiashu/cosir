@@ -207,7 +207,7 @@ class ReadFileTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(dataclasses.asdict(result)),
-            data={
+            display_data={
                 "kind": "read-file-meta",
                 "path": path,
                 "offset": normalized_offset,

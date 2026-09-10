@@ -258,7 +258,7 @@ class CodegraphQueryTool(HandlerBase):
             self.name,
             self.permission,
             content=content,
-            data={"codegraph": parse_tool_result(self.name, content)},
+            display_data={"codegraph": parse_tool_result(self.name, content)},
         )
 
     def to_definition(self) -> ToolDefinition:

@@ -191,7 +191,7 @@ class ExecuteTerminalTool(HandlerBase):
                 ),
                 retryable=True,
                 permission=self.permission,
-                data=self._display_data(
+                display_data=self._display_data(
                     command=command,
                     workdir=cwd,
                     output=redacted_output,

@@ -188,7 +188,7 @@ class DeleteTool(HandlerBase):
                 tool_name=self.name,
                 content=f"Deleted link entry: {entry}",
                 permission=self.permission,
-                data={
+                display_data={
                     "kind": "delete-result",
                     "path": path,
                     "target_type": "link",
@@ -275,7 +275,7 @@ class DeleteTool(HandlerBase):
                 tool_name=self.name,
                 permission=self.permission,
                 content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
-                data={
+                display_data={
                     "kind": "delete-result",
                     "path": path,
                     "target_type": "directory",
@@ -318,7 +318,7 @@ class DeleteTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
-        internal_data = {
+        artifact_data = {
             "changes": [
                 {
                     "path": path,
@@ -333,14 +333,14 @@ class DeleteTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=f"Deleted file: {resolved}",
-            data={
+            display_data={
                 "kind": "delete-result",
                 "path": path,
                 "path_basename": resolved.name,
                 "target_type": "file",
                 "recursive": False,
             },
-            internal_data=internal_data,
+            artifact_data=artifact_data,
         )
 
     def to_definition(self) -> ToolDefinition:

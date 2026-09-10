@@ -38,7 +38,7 @@ from app.core.tools.tool_handler.patch import (
     format_patch_diff,
     fuzzy_find_and_replace,
 )
-from app.core.tools.tool_handler.patch.file_change_display import (
+from app.core.tools.display.file_change_display import (
     build_file_change_display_data,
 )
 from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
@@ -252,7 +252,7 @@ class ReplaceTool(HandlerBase):
                 error="syntax error detected after patch",
                 reason=format_syntax_reason(result),
                 permission=self.permission,
-                data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
+                display_data={"syntax_errors": [dataclasses.asdict(d) for d in result.diagnostics]},
             )
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
         display_data = build_file_change_display_data([snapshot])
@@ -260,8 +260,8 @@ class ReplaceTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff([snapshot]),
-            data={"kind": "file-changes", **display_data},
-            internal_data=display_data,
+            display_data={"kind": "file-changes", **display_data},
+            artifact_data=display_data,
         )
 
     def to_definition(self) -> ToolDefinition:

@@ -253,7 +253,7 @@ class WebExtractTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            data={
+            display_data={
                 "entries": [
                     {
                         "name": item["url"],

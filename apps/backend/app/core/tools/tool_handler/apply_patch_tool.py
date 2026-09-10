@@ -36,7 +36,7 @@ from app.core.tools.tool_handler.patch import (
     parse_v4a_patch,
     validate_all,
 )
-from app.core.tools.tool_handler.patch.file_change_display import (
+from app.core.tools.display.file_change_display import (
     build_file_change_display_data,
 )
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
@@ -223,15 +223,15 @@ class ApplyPatchTool(HandlerBase):
                 error="syntax error detected in patched file(s)",
                 reason=self._format_multi_file_syntax_reason(diagnostics_all),
                 permission=self.permission,
-                data={"syntax_errors": syntax_errors},
+                display_data={"syntax_errors": syntax_errors},
             )
         display_data = build_file_change_display_data(results)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff(results),
-            data={"kind": "file-changes", **display_data},
-            internal_data=display_data,
+            display_data={"kind": "file-changes", **display_data},
+            artifact_data=display_data,
         )
 
     def _format_multi_file_syntax_reason(self, diagnostics: list[SyntaxDiagnostic]) -> str:

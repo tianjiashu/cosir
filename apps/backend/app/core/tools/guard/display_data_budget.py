@@ -1,6 +1,6 @@
 """客户端展示数据通道的字符预算守卫。
 
-``ToolObservation.data`` 会整体进入事件流与可观测性平台。UI projection 必须先移除
+``ToolObservation.display_data`` 会整体进入事件流与可观测性平台。UI projection 必须先移除
 不应进入客户端的字段（例如 ``web_extract`` 的网页正文和 metadata），本守卫再对
 剩余展示数据里的长文本字段做截断，并附加原始长度与截断标记，供客户端自行决定如何呈现。
 
@@ -19,7 +19,7 @@ DEFAULT_DISPLAY_TEXT_MAX_CHARS = 2_000
 
 
 class DisplayDataBudget:
-    """对已经完成字段安全投影的 ``ToolObservation.data`` 应用统一字符预算。"""
+    """对已经完成字段安全投影的 ``ToolObservation.display_data`` 应用统一字符预算。"""
 
     def __init__(self, max_chars: int = DEFAULT_DISPLAY_TEXT_MAX_CHARS) -> None:
         """初始化展示数据预算。
@@ -57,13 +57,13 @@ class DisplayDataBudget:
             无（不修改入参，返回新对象）。
         """
 
-        display_data = observation.data
+        display_data = observation.display_data
         if not display_data:
             return observation
         trimmed, changed = self._trim_value(display_data)
         if not changed:
             return observation
-        return replace(observation, data=trimmed)
+        return replace(observation, display_data=trimmed)
 
     def _trim_value(self, value: Any) -> tuple[Any, bool]:
         """递归截断任意展示数据结构中的长文本。

@@ -24,8 +24,8 @@ def tool_cancelled(
     error: str = "",
     permission: str = "",
     tool_call_id: str = "",
-    data: Mapping[str, Any] | None = None,
-    internal_data: Mapping[str, Any] | None = None,
+    display_data: Mapping[str, Any] | None = None,
+    artifact_data: Mapping[str, Any] | None = None,
 ) -> ToolObservation:
     """构造取消态的工具观察结果（纯工厂函数）。
 
@@ -70,6 +70,6 @@ def tool_cancelled(
         permission=permission,
         tool_call_id=tool_call_id,
     )
-    observation.data = copy.deepcopy(dict(data or {}))
-    observation.internal_data = copy.deepcopy(dict(internal_data or {}))
+    observation.display_data = copy.deepcopy(dict(display_data or {}))
+    observation.artifact_data = copy.deepcopy(dict(artifact_data or {}))
     return observation
