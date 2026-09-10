@@ -123,6 +123,25 @@ class ToolExecutor:
 
         return self._registry.get_tool_definition(tool_name)
 
+    def clear_task_state(self, task_id: int) -> None:
+        """清除指定 Task 的进程内文件工具状态。
+
+        参数:
+            task_id: 待清除任务标识。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            委托文件状态协调器清除 revision、路径锁和重复调用状态；调用方必须
+            确认该 Task 已没有正在执行的工具调用。
+        """
+
+        self._state_coordinator.clear_task(task_id)
+
     def execute(
         self,
         call: ToolCall,
