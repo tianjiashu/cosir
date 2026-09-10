@@ -13,9 +13,11 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.assistant_transport.event.conversation_event_envelope import ConversationEventEnvelope
-from app.assistant_transport.event.snapshot_locators import _find_assistant_message
+from app.assistant_transport.event.conversation_event_envelope import (
+    ConversationEventEnvelope,
+)
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_part import ConversationStateTextPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 
 AssistantTextPartKind = Literal["text", "reasoning"]
@@ -64,9 +66,11 @@ class AssistantTextDeltaEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index = _find_assistant_message(state, self.run_id)
+        if state["run"].get("status") in {"completed", "failed", "cancelled"}:
+            return []
+        message_index = self._find_assistant_message(state, self.run_id)
         assert message_index is not None
-        parts = state["messages"][message_index]["parts"]
+        parts: list[ConversationStateTextPart] = state["messages"][message_index]["parts"]
         for part_index in range(len(parts) - 1, -1, -1):
             part = parts[part_index]
             if (
@@ -133,7 +137,9 @@ class AssistantPartClosedEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index = _find_assistant_message(state, self.run_id)
+        if state["run"].get("status") in {"completed", "failed", "cancelled"}:
+            return []
+        message_index = self._find_assistant_message(state, self.run_id)
         assert message_index is not None
         parts = state["messages"][message_index]["parts"]
         for part_index in range(len(parts) - 1, -1, -1):

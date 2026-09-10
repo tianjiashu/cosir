@@ -8,10 +8,11 @@
 event 携带什么，快照就存什么。
 """
 
+import math
 from collections.abc import Sequence
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, StrictFloat, StrictInt, field_validator
 
 from app.assistant_transport.event.conversation_event_envelope import ConversationEventEnvelope
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
@@ -37,12 +38,24 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
     """
 
     type: Literal["context_usage_updated"] = "context_usage_updated"
-    ratio: float = Field(ge=0.0)
-    used_tokens: int | None = Field(default=None, ge=0)
+    ratio: StrictFloat = Field(ge=0.0)
+    used_tokens: StrictInt | None = Field(default=None, ge=0)
+    context_window_tokens: StrictInt | None = Field(default=None, ge=0)
+    context_revision: StrictInt | None = Field(default=None, ge=0)
+    reproject: bool = False
+
+    @field_validator("ratio")
+    @classmethod
+    def _require_finite_ratio(cls, value: float) -> float:
+        """拒绝 NaN/Infinity，避免不可渲染的比例进入 snapshot。"""
+
+        if not math.isfinite(value):
+            raise ValueError("ratio must be finite")
+        return value
 
     def plan(
         self,
-        _state: ConversationStateSnapshot,
+        state: ConversationStateSnapshot,
     ) -> Sequence[ConversationStateMutation]:
         """规划上下文窗口占用比例的完整替换。
 
@@ -50,7 +63,7 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
             _state: 未使用；上下文占用与现有 snapshot 内容无关。
 
         返回:
-            单条 ``set`` mutation，把 ``context_usage`` 设为本次 ``ratio``。
+            ``context_usage``、绝对已用 token 和窗口上限的 ``set`` mutation。
 
         异常:
             无。
@@ -59,23 +72,51 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
             无。
         """
 
-        return [ConversationStateMutation("set", ("context_usage",), self.ratio)]
+        if self.run_id is not None and state["run"].get("runId") != self.run_id:
+            return []
+        if (
+            not self.reproject
+            and self.context_revision is not None
+            and state["context_revision"] is not None
+            and self.context_revision <= state["context_revision"]
+        ):
+            return []
+        if (
+            not self.reproject
+            and self.context_revision is None
+            and state["context_revision"] is not None
+        ):
+            # 没有 revision 的旧/迟到事件无法证明顺序，不能覆盖已经确认的测量。
+            return []
+        context_revision = (
+            self.context_revision
+            if self.context_revision is not None
+            else state["context_revision"]
+        )
+        return [
+            ConversationStateMutation("set", ("context_usage",), self.ratio),
+            ConversationStateMutation("set", ("context_revision",), context_revision),
+            ConversationStateMutation("set", ("context_usage_used",), self.used_tokens),
+            ConversationStateMutation(
+                "set", ("context_window_total",), self.context_window_tokens
+            ),
+        ]
 
 
 class UsageUpdatedEvent(ConversationEventEnvelope):
     """一次模型调用后的累计 token 用量已经更新。"""
 
     type: Literal["usage_updated"] = "usage_updated"
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    total_tokens: int = Field(default=0, ge=0)
-    cache_hit_tokens: int = Field(default=0, ge=0)
-    cache_miss_tokens: int = Field(default=0, ge=0)
-    reasoning_tokens: int = Field(default=0, ge=0)
+    input_tokens: StrictInt = Field(default=0, ge=0)
+    output_tokens: StrictInt = Field(default=0, ge=0)
+    total_tokens: StrictInt = Field(default=0, ge=0)
+    cache_hit_tokens: StrictInt = Field(default=0, ge=0)
+    cache_miss_tokens: StrictInt | None = Field(default=None, ge=0)
+    reasoning_tokens: StrictInt = Field(default=0, ge=0)
 
     def plan(
         self,
-        _state: ConversationStateSnapshot,
+        state: ConversationStateSnapshot,
     ) -> Sequence[ConversationStateMutation]:
         """规划累计模型用量的完整替换。
 
@@ -92,7 +133,26 @@ class UsageUpdatedEvent(ConversationEventEnvelope):
             无。
         """
 
+        if self.run_id is None or state["run"].get("runId") != self.run_id:
+            return []
+        current_usage = state["usage"]
+        incoming_usage = {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "cache_hit_tokens": self.cache_hit_tokens,
+            "cache_miss_tokens": self.cache_miss_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+        }
+        if any(
+            incoming_usage[key] is not None
+            and current_usage[key] is not None
+            and current_usage[key] > incoming_usage[key]
+            for key in incoming_usage
+        ):
+            return []
         return [
+            ConversationStateMutation("set", ("usage_run_id",), self.run_id),
             ConversationStateMutation(
                 "set",
                 ("usage",),

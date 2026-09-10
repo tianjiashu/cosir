@@ -15,11 +15,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.assistant_transport.event.conversation_event_envelope import ConversationEventEnvelope
-from app.assistant_transport.event.snapshot_locators import (
-    _find_assistant_message,
-    _find_message_part,
-    _message,
+from app.assistant_transport.event.conversation_event_envelope import (
+    ConversationEventEnvelope,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
@@ -68,6 +65,17 @@ class RunInitializedEvent(ConversationEventEnvelope):
             无。
         """
 
+        current_run_id = state["run"].get("runId")
+        if self.run_id is None:
+            return []
+        if (
+            current_run_id is not None
+            and (
+                self.run_id <= current_run_id
+                or state["run"].get("status") not in {"completed", "failed", "cancelled"}
+            )
+        ):
+            return []
         if any(message.get("runId") == self.run_id for message in state["messages"]):
             return []
         offset = len(state["messages"])
@@ -75,7 +83,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
             ConversationStateMutation(
                 "set",
                 ("messages", offset),
-                _message(
+                self._message(
                     f"user-{self.run_id}",
                     self.run_id,
                     "user",
@@ -86,10 +94,27 @@ class RunInitializedEvent(ConversationEventEnvelope):
             ConversationStateMutation(
                 "set",
                 ("messages", offset + 1),
-                _message(f"assistant-{self.run_id}", self.run_id, "assistant", "running", []),
+                self._message(f"assistant-{self.run_id}", self.run_id, "assistant", "running", []),
             ),
             ConversationStateMutation("set", ("run", "runId"), self.run_id),
             ConversationStateMutation("set", ("run", "status"), "pending"),
+            ConversationStateMutation("set", ("usage_run_id",), self.run_id),
+            ConversationStateMutation(
+                "set",
+                ("usage",),
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "cache_hit_tokens": 0,
+                    "cache_miss_tokens": 0,
+                    "reasoning_tokens": 0,
+                },
+            ),
+            ConversationStateMutation("set", ("context_usage",), 0.0),
+            ConversationStateMutation("set", ("context_revision",), None),
+            ConversationStateMutation("set", ("context_usage_used",), None),
+            ConversationStateMutation("set", ("context_window_total",), None),
         ]
 
 
@@ -142,15 +167,37 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             无。
         """
 
+        if state["run"].get("runId") != self.run_id:
+            return []
+        current_status = state["run"].get("status")
+        if (
+            current_status in {"completed", "failed", "cancelled"}
+            and self.status.value != current_status
+        ):
+            return []
         mutations: list[ConversationStateMutation] = [
             ConversationStateMutation("set", ("run", "runId"), self.run_id),
             ConversationStateMutation("set", ("run", "status"), self.status.value),
         ]
         if self.usage_stats is not None:
-            mutations.append(
-                ConversationStateMutation("set", ("usage",), self.usage_stats.to_dict())
-            )
-        message_index = _find_assistant_message(state, self.run_id, required=False)
+            incoming_usage = self.usage_stats.to_dict()
+            current_usage = state["usage"]
+            # 终态事件可能在最后一个 UsageUpdatedEvent 之前或之后到达；它携带的
+            # provider usage 仍然必须遵守完整累计值的单调替换语义，不能把较大的
+            # 已确认累计值回滚成较小的终态摘要。
+            if all(
+                incoming_usage[key] is None
+                or current_usage[key] is None
+                or current_usage[key] <= incoming_usage[key]
+                for key in current_usage
+            ):
+                mutations.append(
+                    ConversationStateMutation("set", ("usage_run_id",), self.run_id)
+                )
+                mutations.append(
+                    ConversationStateMutation("set", ("usage",), incoming_usage)
+                )
+        message_index = self._find_assistant_message(state, self.run_id, required=False)
         if message_index is None:
             return mutations
         base = ("messages", message_index)
@@ -160,7 +207,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
                 ConversationStateMutation("set", (*base, "endReason"), self.end_reason),
             ]
         )
-        if self.status.value in {"completed", "failed", "cancelled", "interrupted"}:
+        if self.status.value in {"completed", "failed", "cancelled"}:
             for part_index, part in enumerate(state["messages"][message_index]["parts"]):
                 if (
                     isinstance(part, dict)
@@ -215,7 +262,7 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index, part_index = _find_message_part(state, self.run_id, "user", "text")
+        message_index, part_index = self._find_message_part(state, self.run_id, "user", "text")
         return [
             ConversationStateMutation(
                 "append-text",

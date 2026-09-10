@@ -3,9 +3,9 @@
 本模块只承载「一次工具调用从被模型请求到执行结束」这一单一职责，以及 run 终态时对未决工具的
 批量收束。每个事件把自身的投影逻辑实现在 ``plan`` 中。
 
-待收口项：``ToolCallEventStatus`` 与 ``ConversationStateToolCallPart.status`` 目前是两处同义
-字面量。event 现位于 ``assistant_transport`` 层，可引用传输契约，但为避免与 snapshot part
-状态词表漂移，此处仍内联声明，后续应把该词表下沉到 ``app.models.enums`` 让两者引用同一事实源。
+工具调用状态词表的「单一事实来源」已下沉至 ``app.models.enums.tool_call_status``
+（``ToolCallEventStatus``）：本模块的 ``ToolCallStatusChangedEvent.status`` 与 Transport
+snapshot 的 ``ConversationStateToolCallPart.status`` 共用同一 Literal，避免两处字面量漂移。
 """
 
 import copy
@@ -14,16 +14,12 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.assistant_transport.event.conversation_event_envelope import ConversationEventEnvelope
-from app.assistant_transport.event.snapshot_locators import (
-    _find_assistant_message,
-    _find_tool,
+from app.assistant_transport.event.conversation_event_envelope import (
+    ConversationEventEnvelope,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
-
-# 工具调用状态词表，与快照 tool-call part 的 status 同义（详见模块 docstring 待收口项）。
-ToolCallEventStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+from app.models.enums.tool_call_status import ToolCallEventStatus
 
 
 class ToolCallCreatedEvent(ConversationEventEnvelope):
@@ -37,8 +33,20 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
         tool_call_id: 工具调用在 Task 内唯一的稳定标识（模型提供或由执行链生成）。
         tool_name: 被调用工具名。
         args: 工具入参；非对象形态的入参在投影时归一为空对象。
-        presentation: ``ToolDisplayHints`` 序列化后的静态展示声明；不进入模型上下文。
-        data: 执行前即可安全展示的结构化 UI 数据；不进入模型上下文。
+        presentation: 「怎么展示」的静态外壳声明，由 ``ToolDefinition.display``
+            （``ToolDisplayHints``）经 ``to_dict()`` 序列化得到，**同一种工具每次调用
+            完全相同**。只含字面量字段（``verb`` 动词、``icon`` 图标、``surface`` 展示面、
+            ``expandable`` 是否可展开、``expand_layout`` 展开布局、``default_open`` 默认展开、
+            ``show_result`` 是否展示模型结果）；
+            不含 Callable、摘要文本或条目内容。前端据此决定外壳布局与图标。
+            **不进入模型上下文**。
+        data: 「展示什么内容」的动态载荷。它是执行后由
+            ``ToolCallStatusChangedEvent.data`` 写入的通用结构化 UI 数据（文件列表、diff、
+            读取元数据等）；执行前通常为 ``None``。**不进入模型上下文**。
+
+        二者对比：``presentation`` 是 UI 外壳与行为配置（同工具恒定），``data`` 是 UI 内容
+            载荷（逐次调用不同、随执行推进刷新）；二者均由 ``plan`` 原样拷入 snapshot 的
+            tool-call part，再经 converter 映射为前端 ``artifact``，均不进入模型上下文。
 
     异常:
         pydantic.ValidationError: 标识或工具名为空、``args`` 非对象，或出现未声明字段时抛出。
@@ -74,7 +82,9 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index = _find_assistant_message(state, self.run_id)
+        if state["run"].get("status") in {"completed", "failed", "cancelled"}:
+            return []
+        message_index = self._find_assistant_message(state, self.run_id)
         assert message_index is not None
         parts = state["messages"][message_index]["parts"]
         if any(
@@ -152,7 +162,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             无。
         """
 
-        message_index, part_index = _find_tool(state, self.tool_call_id)
+        message_index, part_index = self._find_tool(state, self.tool_call_id)
         part = state["messages"][message_index]["parts"][part_index]
         current = str(part["status"])
         allowed = {
@@ -162,6 +172,8 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             "failed": {"failed"},
             "cancelled": {"cancelled"},
         }
+        if current in {"completed", "failed", "cancelled"} and self.status != current:
+            return []
         if self.status not in allowed[current]:
             raise ValueError(f"invalid tool transition {current} -> {self.status}")
         base = ("messages", message_index, "parts", part_index)

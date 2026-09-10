@@ -11,8 +11,9 @@
 
 模块划分（按事实域，非按产生方）：
 
-- ``conversation_event_envelope``：所有事件共有的信封字段与抽象 ``plan`` 契约。
-- ``snapshot_locators``：``plan`` 共用的 snapshot 定位与消息骨架辅助。
+- ``conversation_event_envelope``：所有事件共有的信封字段、抽象 ``plan`` 契约，以及 ``plan``
+  共用的 snapshot 定位与消息骨架静态方法（``_message`` / ``_find_assistant_message`` /
+  ``_find_message_part`` / ``_find_tool``，内部复用 ``_locate_message`` / ``_locate_part``）。
 - ``run_event``：run 骨架建立、执行状态迁移、用户输入文本。
 - ``message_event``：消息内 text / reasoning part 的内容追加与阶段收口。
 - ``tool_call_event``：工具调用生命周期与终态批量收束。
