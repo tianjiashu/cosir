@@ -57,16 +57,16 @@ class ModelSettings:
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
-    thinking: bool = True
+    thinking: bool | None = None
     # 可选厂商类型（注册表键，如 ``deepseek`` / ``azure``）：None 时由
     # ``factory.build_chat_model`` 按 model_name 前缀回退推导。
     provider_type: str | None = None
     # 可选是否丢弃不支持参数覆盖：None 时回退 ``ProviderCapability.default_drop_params``。
     drop_params: bool | None = None
     # 可选流式开关覆盖：None 时不覆盖（沿用运行时默认流式）。
-    stream: bool = True
+    stream: bool | None = None
     # 可选推理强度覆盖（``low`` / ``high`` / ``max``）：None 时不注入。
-    reasoning_effort: str = "max"
+    reasoning_effort: str | None = None
     # 可选响应格式覆盖：None 时不注入。text / json_object
     response_format: str | None = None
 
@@ -87,6 +87,33 @@ class ModelSettings:
         """
 
         return {k: getattr(self, k) for k in _fields() if getattr(self, k) is not None}
+
+    def with_defaults(self, defaults: "ModelSettings") -> "ModelSettings":
+        """用另一份配置补齐当前未显式提供的模型参数。
+
+        参数:
+            defaults: 父 Agent 或运行时提供的默认配置。当前对象中非 ``None`` 的字段
+                始终优先，因而可保留子 Agent Profile 的未来自定义覆盖能力。
+
+        返回:
+            一份新的合并配置；不修改当前对象或 ``defaults``。
+
+        异常:
+            无。
+
+        副作用:
+            无。该方法仅合并值对象。
+        """
+
+        values = {
+            field.name: (
+                getattr(self, field.name)
+                if getattr(self, field.name) is not None
+                else getattr(defaults, field.name)
+            )
+            for field in fields(self)
+        }
+        return type(self)(**values)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModelSettings":

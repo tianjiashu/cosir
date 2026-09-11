@@ -32,6 +32,7 @@ class ExecutionBackend(ABC):
         cwd: str,
         timeout: float,
         output_sink: OutputSink | None = None,
+        shell: str = "auto",
     ) -> ExecutionResult:
         """在宿主机上同步执行一条命令并返回归一化结果。
 
@@ -42,6 +43,8 @@ class ExecutionBackend(ABC):
                 ``timed_out=True``。
             output_sink: 可选实时输出回调；传入时实现应在命令运行期间按行回传
                 已脱敏片段。不支持流式的实现可忽略此参数，不得因此改变返回结果。
+            shell: 解释命令的 shell；``auto`` 保持宿主默认行为，显式 shell 由实现
+                解析并在不可用时返回启动失败结果。
 
         返回:
             ``ExecutionResult``，含合并输出、退出码、截断与超时标记。

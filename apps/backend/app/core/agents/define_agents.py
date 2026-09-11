@@ -108,8 +108,6 @@ def reviewer_agent() -> AgentProfile:
             "search_files",
             *_codegraph_tool_names(),
         ],
-        # 子Agent需要指定模型，否则会报错，提示未配置模型
-        model_name="deepseek/deepseek-v4-flash",
         max_steps=50,
         prompt_file_path=_system_prompt_path("delegate_reviewer.md"),
     )
@@ -151,7 +149,6 @@ def explorer_agent() -> AgentProfile:
             "web_extract",
             *_codegraph_tool_names(),
         ],
-        model_name="deepseek/deepseek-v4-flash",
         max_steps=80,
         prompt_file_path=_system_prompt_path("code_explorer.md"),
     )
@@ -186,7 +183,6 @@ def test_agent() -> AgentProfile:
             "新增测试、执行命令、结果、覆盖盲区和未解决失败。"
         ),
         allowed_tools=_all_tool_names(),
-        model_name="deepseek/deepseek-v4-flash",
         max_steps=80,
         prompt_file_path=_system_prompt_path("unit_test_engineer.md"),
     )
@@ -231,7 +227,6 @@ def coder_agent() -> AgentProfile:
             "execute_terminal",
             *_codegraph_tool_names(),
         ],
-        model_name="deepseek/deepseek-v4-flash",
         max_steps=120,
         prompt_file_path=_system_prompt_path("code_developer.md"),
     )

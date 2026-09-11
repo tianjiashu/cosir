@@ -5,7 +5,12 @@
 （下沉到 ``app.tools.tool_handler.terminal.local_backend``）。
 """
 
+import os
+import platform
 import re
+import shutil
+from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
 from app.config.logging.logger import log
@@ -26,17 +31,14 @@ from app.core.tools.tool_handler.terminal import (
 )
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.tool_base import HandlerBase
-from app.core.tools.tool_models.execute_terminal_args import ExecuteTerminalArgs
+from app.core.tools.tool_models.execute_terminal_args import (
+    ExecuteTerminalArgs,
+    ExecuteTerminalShell,
+)
 from app.utils.trace_infra.redaction import redact_terminal_output
 
 # workdir 字符白名单：挡住命令注入式 workdir（含 ;|&$() 等注入字符直接拒绝）。
 _WORKDIR_SAFE_RE = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
-
-_EXECUTE_TERMINAL_DESCRIPTION = (
-    "Execute a command in the local shell (foreground) and return its merged output "
-    "and exit code. Shell semantics depend on the runtime OS (Windows=cmd.exe, "
-    "POSIX=/bin/sh)."
-)
 
 
 class ExecuteTerminalTool(HandlerBase):
@@ -61,7 +63,7 @@ class ExecuteTerminalTool(HandlerBase):
     """
 
     name = "execute_terminal"
-    description = _EXECUTE_TERMINAL_DESCRIPTION
+    description = "Execute one foreground, non-interactive command locally in the workspace."
     permission = "execute_terminal"
     args_model = ExecuteTerminalArgs
     timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险
@@ -73,7 +75,7 @@ class ExecuteTerminalTool(HandlerBase):
         """初始化 execute_terminal 工具实例。
 
         参数:
-            无。
+            无。平台和可用 shell 均由当前 backend 进程自动检测。
 
         返回:
             无。
@@ -82,12 +84,124 @@ class ExecuteTerminalTool(HandlerBase):
             无。
 
         副作用:
-            仅保存默认工作目录，不执行命令。
+            读取当前平台和可执行文件搜索路径，把可用 shell 与对应模型描述保存到实例；
+            不执行命令或读取 workspace。
         """
+        self._platform_name = (platform.system() or "").strip() or "unknown"
+        self._available_shells = self._detect_available_shells()
+        if "auto" not in self._available_shells:
+            self._available_shells = ("auto", *self._available_shells)
+        self.description = self._build_description()
+
+    @property
+    def available_shells(self) -> tuple[str, ...]:
+        """返回当前实例会暴露给模型且允许执行的 shell 名称。"""
+
+        return self._available_shells
+
+    @staticmethod
+    def _detect_available_shells() -> tuple[str, ...]:
+        """根据平台和 PATH 检测可用 shell；不启动 shell。"""
+
+        platform_name = (platform.system() or "").strip() or "unknown"
+        shells: list[str] = ["auto"]
+        if platform_name == "Windows":
+            if os.environ.get("COMSPEC") or shutil.which("cmd.exe"):
+                shells.append("cmd")
+            if shutil.which("powershell.exe"):
+                shells.append("powershell")
+            if shutil.which("pwsh.exe"):
+                shells.append("pwsh")
+            return tuple(shells)
+
+        if Path("/bin/sh").is_file() and os.access("/bin/sh", os.X_OK):
+            shells.append("sh")
+        for shell in ("bash", "zsh", "fish", "pwsh"):
+            if shutil.which(shell):
+                shells.append(shell)
+        return tuple(shells)
+
+    def _build_description(self) -> str:
+        """生成当前宿主平台的模型可见工具描述。
+
+        参数:
+            无。使用初始化阶段自动检测的平台和可用 shell。
+
+        返回:
+            包含本工具共同执行语义和平台 shell 语法说明的描述文本。
+
+        异常:
+            无。
+
+        副作用:
+            读取当前进程的平台名称；不启动 shell、不访问 workspace，也不修改状态。
+        """
+        current_platform = self._platform_name
+        shells = self._available_shells
+        shell_list = ", ".join(f"'{shell}'" for shell in shells)
+        common = (
+            "Execute one foreground, non-interactive command locally in the current workspace. "
+            "This tool has no interactive stdin, so commands waiting for user input may time out. "
+            "stdout and stderr are merged; the result includes the exit code and bounded output. "
+            "The working directory defaults to the workspace root and must remain inside it. "
+            "Some destructive commands may be blocked by the current command policy. "
+        )
+        if current_platform == "Windows":
+            return common + (
+                "On Windows, the command is interpreted by cmd.exe. Use cmd syntax such as "
+                "dir, type, where, %VAR%, &&, and ||. PowerShell is not the default; to use it, "
+                f"Available shell values are {shell_list}. Use 'powershell' (powershell.exe) "
+                "or 'pwsh' (pwsh.exe) for PowerShell syntax when listed as available. Do not "
+                "mix cmd and PowerShell syntax."
+            )
+        if current_platform == "Darwin":
+            return common + (
+                "On macOS, the command uses /bin/sh semantics rather than an interactive login "
+                f"zsh. Available shell values are {shell_list}. Use 'zsh' (/bin/zsh) when "
+                "zsh-specific behavior is required and listed as available."
+            )
+        if current_platform == "Linux":
+            return common + (
+                f"On Linux, the command uses /bin/sh semantics. Available shell values are "
+                f"{shell_list}. Use 'bash' (/bin/bash) when Bash-specific behavior is required "
+                "and listed as available."
+            )
+        return common + (
+            f"On {current_platform}, the command uses the non-Windows POSIX /bin/sh execution "
+            f"semantics. Available shell values are {shell_list}. Do not assume Windows cmd.exe "
+            "or PowerShell syntax."
+        )
+
+    def _build_parameters_schema(self) -> dict[str, object]:
+        """构造当前平台的模型可见参数 schema。"""
+
+        schema = self.args_model.model_json_schema()
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return schema
+        shell_schema = properties.get("shell")
+        if isinstance(shell_schema, dict):
+            shell_schema["enum"] = list(self._available_shells)
+            shell_schema[
+                "description"
+            ] = self._build_shell_description(self._available_shells)
+        return schema
+
+    @staticmethod
+    def _build_shell_description(available_shells: Iterable[str]) -> str:
+        """生成 shell 参数字段的可用值说明。"""
+
+        values = ", ".join(f"'{shell}'" for shell in available_shells)
+        return (
+            "Shell used to interpret command. Choose one of the shells available on this host: "
+            f"{values}. 'auto' preserves the host default; the command syntax must match the "
+            "selected shell."
+        )
 
     def execute(
         self,
         command: str,
+        shell: ExecuteTerminalShell = "auto",
         timeout: float | None = None,
         workdir: str | None = None,
         execution_context: ToolExecutionContext | None = None,
@@ -96,6 +210,8 @@ class ExecuteTerminalTool(HandlerBase):
         """在本机 shell 同步执行一条命令并返回归一化观测。
 
         参数:
+            shell: shell 选择；``auto`` 保持宿主默认 shell，也可显式选择 cmd、PowerShell
+                或 POSIX shell。该值已由 ``ExecuteTerminalArgs`` 校验。
             command: 待执行命令。
             timeout: 命令级超时秒数；缺省 ``default_command_timeout``，钳制到
                 ``max_command_timeout``。
@@ -146,6 +262,17 @@ class ExecuteTerminalTool(HandlerBase):
                 permission=self.permission,
             )
 
+        if shell not in self._available_shells:
+            return tool_error(
+                self.name,
+                f"could not run the command: shell '{shell}' is not available on this host",
+                reason=(
+                    f"choose one of the available shell values: {', '.join(self._available_shells)}"
+                ),
+                retryable=False,
+                permission=self.permission,
+            )
+
         verdict = detect_dangerous_command(command)
         if verdict.is_dangerous:
             log.warning(
@@ -161,7 +288,7 @@ class ExecuteTerminalTool(HandlerBase):
 
         effective = min(timeout or self.default_command_timeout, self.max_command_timeout)
         result = create_backend("local").execute(
-            command, str(cwd), effective, output_sink=output_sink
+            command, str(cwd), effective, shell=shell, output_sink=output_sink
         )
 
         log.info(
@@ -223,7 +350,7 @@ class ExecuteTerminalTool(HandlerBase):
         副作用:
             无。
         """
-        return ToolDefinition(
+        definition = ToolDefinition(
             name=self.name,
             description=self.description,
             permission=self.permission,
@@ -242,6 +369,7 @@ class ExecuteTerminalTool(HandlerBase):
                 show_result=False,
             ),
         )
+        return replace(definition, parameters_schema=self._build_parameters_schema())
 
     def _resolve_workdir(self, workdir: str | None, execution_root: str | Path) -> tuple[Path, str]:
         """解析工作目录并限制在执行根内。

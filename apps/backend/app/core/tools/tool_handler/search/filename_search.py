@@ -14,7 +14,6 @@ from pathlib import Path
 from app.core.tools.tool_handler.search.error_prefixes import PATH_NOT_FOUND_PREFIX
 from app.core.tools.tool_handler.search.file_walker import iter_files, to_relative
 
-DEFAULT_BUDGET = 20_000
 DEFAULT_LIMIT = 50
 
 
@@ -46,7 +45,6 @@ def search_filenames(
     path: str | None = None,
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
-    budget: int = DEFAULT_BUDGET,
 ) -> tuple[str, int, list[str]]:
     """在项目内按 glob 模式查找文件，按修改时间降序返回分页结果。
 
@@ -58,7 +56,6 @@ def search_filenames(
         path: 可选的基于 root 的子目录（仅在该范围内搜索）。
         limit: 单页最大结果条数（默认 50）。
         offset: 跳过前 N 条结果用于分页（默认 0）。
-        budget: 输出字符预算，超出截断并追加提示。
 
     返回:
         ``(output, total, items)`` 三元组：``output`` 为换行分隔的匹配相对路径字符串
@@ -66,6 +63,12 @@ def search_filenames(
         为 ``Path not found:`` 前缀错误）；``total`` 为分页前的匹配文件总数
         （错误时为 0），供调用方回传结构化命中数；``items`` 为与 ``output`` 同序的
         相对路径列表，供前端 list 布局消费。
+
+    注:
+        本函数只做行级（``offset``/``limit``）分页，不施加字符预算截断——超长
+        ``output`` 的字符预算与超限落盘统一由上层
+        ``app.core.tools.guard.tool_output_budget.ToolOutputBudget`` 在
+        ``ToolExecutor`` 阶段五处理，避免与全局预算重复截断、出现两套不一致的截断标记。
 
     异常:
         不向上抛出遍历异常。
@@ -98,9 +101,8 @@ def search_filenames(
     page = matched[offset : offset + limit]
     items = [to_relative(base, f) for f in page]
 
+    # 仅做行级分页；字符预算截断（含超限落盘 artifact）由上层 ToolOutputBudget 统一负责。
     output = "\n".join(items)
-    if budget and len(output) > budget:
-        output = output[:budget] + "\n... [output truncated by budget]"
     if total > offset + limit:
         output += (
             f"\n\n[Hint: Results truncated ({total} total). "

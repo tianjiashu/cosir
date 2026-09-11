@@ -193,13 +193,17 @@ class DelegationExecutor(DelegateTaskExecutor):
             # ① service 期预解析（设计 §6.4）：create_run 内部会把 child 请求的 /
             # 此处捕获后把 delegation 置 failed（child 无 HTTP 上下文，无法回 422），
             # 成对记 warn model_resolve_rejected(child=true) + error，父收失败 DelegationResult。
+            child_provider_id, child_model_name, child_reasoning_effort = (
+                self._resolve_child_model_config(child_agent_profile)
+            )
             try:
                 child_run = conversation_run_state_service.create_run(
                     task_id=child_task.id,
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,
-                    provider_id=child_agent_profile.provider_id,
-                    model_name=child_agent_profile.model_name,
+                    provider_id=child_provider_id,
+                    model_name=child_model_name,
+                    reasoning_effort=child_reasoning_effort,
                 )
             except Exception as exc:
                 log.exception(
@@ -239,6 +243,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 child_run,
                 allowed_tools=list(decision.effective_tools),
                 runtime_event_loop=runtime_event_loop,
+                model_defaults=self._parent_profile,
             )
             result = self._child_runner.run_child(
                 child_profile,
@@ -272,6 +277,40 @@ class DelegationExecutor(DelegateTaskExecutor):
             child_task_id=child_task.id,
             title=args.title,
             child_agent_id=args.child_agent_id,
+        )
+
+    def _resolve_child_model_config(
+        self,
+        child_profile: AgentProfile,
+    ) -> tuple[int | None, str | None, str | None]:
+        """解析 child Run 的模型路由，默认继承当前父 Run 的有效配置。
+
+        参数:
+            child_profile: 注册表中的 child Agent Profile。其显式 provider/model 配置
+                优先于父 Run，允许未来为特定 child 定制模型；未配置的字段从父 Run 继承。
+
+        返回:
+            ``(provider_id, model_name, reasoning_effort)``，可直接传入 child Run 创建
+            service。provider/model 未显式定制时读取父 Run；reasoning_effort 也遵循同样
+            的覆盖规则，未定制时才继承父 Run 的持久化选择。
+
+        异常:
+            无。
+
+        副作用:
+            无。仅读取 profile 和父 Run，不创建数据库记录。
+        """
+
+        return (
+            child_profile.provider_id
+            if child_profile.provider_id is not None
+            else self._parent_run.provider_id,
+            child_profile.model_name
+            if child_profile.model_name is not None
+            else self._parent_run.model_name,
+            child_profile.model_settings.reasoning_effort
+            if child_profile.model_settings.reasoning_effort is not None
+            else self._parent_run.reasoning_effort,
         )
 
     @staticmethod

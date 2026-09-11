@@ -166,6 +166,13 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `trace`、可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
 
+交互式 terminal handler 当前处于隐藏实现阶段，尚未计入上述 11 个工具，也不会出现在
+Agent tool schema。实现完成后继续复用现有 renderer 路由，静态布局为 `terminal`，动态
+`kind` 为 `terminal-session`，只传 session identity、状态和有限 cursor 元数据；完整 PTY
+输出只走独立的只读 `terminal-preview-v1` WebSocket，不进入 Assistant Transport 的工具
+展示 payload。handler 的 docstring 明确记录“未注册、Agent 不可见”，注册必须在真实
+worker 和跨平台集成验收后作为独立变更完成。
+
 ### 3.1 文件读取
 
 `read_file` 的 UI 只展示读取目标、实际展示的起止行号和文件大小；不展示正文、总行数或下一页 offset。读到文件行尾时，行号范围固定渲染为 `L<start>-END`，例如 `L1-END`；尚未读到行尾时渲染为 `L<start>-L<end>`。只有因文件过大导致输出被字符预算截断时，额外固定展示“文件过大，已截断”。普通分页到达 `limit` 不属于该提示。正文和继续读取所需的 `next_offset` 继续通过 `content` 进入模型通道。

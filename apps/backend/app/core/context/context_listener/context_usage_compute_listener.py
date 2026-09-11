@@ -205,7 +205,9 @@ class ContextUsageComputeListener(ContextListener):
     def _message_tokens(message: BaseMessage) -> int:
         """估算单条消息的 token 占用。
 
-        基于消息正文和 assistant 的 ``tool_calls`` 序列化内容估算。
+        基于消息正文、assistant 的 ``tool_calls`` 以及 tool message 的
+        ``tool_call_id`` 估算。``tool_call_id`` 是模型协议中用于关联工具结果的字段，
+        不能因为 ``ToolMessage.content`` 为空而完全忽略。
 
         参数:
             message: 待估算的运行时消息。
@@ -221,6 +223,7 @@ class ContextUsageComputeListener(ContextListener):
         """
         tool_calls = getattr(message, "tool_calls", None)
         invalid_tool_calls = getattr(message, "invalid_tool_calls", None)
+        tool_call_id = getattr(message, "tool_call_id", None)
         text = content_to_text(message.content)
         if tool_calls:
             text += json.dumps(
@@ -236,4 +239,6 @@ class ContextUsageComputeListener(ContextListener):
                 sort_keys=True,
                 separators=(",", ":"),
             )
+        if tool_call_id:
+            text += str(tool_call_id)
         return TokenEstimator.estimate(text)

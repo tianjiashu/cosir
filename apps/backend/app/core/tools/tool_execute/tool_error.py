@@ -20,6 +20,7 @@ from app.core.tools.schemas import ToolObservation
 _DEFAULT_STATUS_HINTS = {
     "read_file": "读取失败",
     "write_file": "写入失败",
+    "replace": "替换失败",
     "patch": "替换失败",
     "apply_patch": "补丁失败",
     "delete": "删除失败",

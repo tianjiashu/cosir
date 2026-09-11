@@ -192,20 +192,6 @@ class RuntimeContextManager:
             # context 的 used/window；重新投影完整 working copy，避免重启后只看到 0/null。
             self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
 
-    def reproject_context_usage(self, run: ConversationRunRecord) -> None:
-        """按已持久化 context 为 backend 重启后的 snapshot 重新投影占用。"""
-
-        if run.task_id != self.current_task_id:
-            raise ValueError(f"run {run.id} belongs to task {run.task_id}")
-        self._entries = self._require_context_service().entries_in_context(self.current_task_id)
-        self._message_sequence = self._require_context_service().max_sequence(
-            self.current_task_id
-        ) + 1
-        self.current_run_id = run.id
-        self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
-        # LOAD_HISTORY 是完整 canonical context 快照，允许 projector 重置过期 revision。
-        self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
-
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
         """注册一个按 order 执行的 context listener。
 
@@ -310,12 +296,17 @@ class RuntimeContextManager:
         self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
 
     def _close_unclosed_tool_calls(self) -> None:
-        """检测并闭合上下文中未配对闭合的工具调用占位。
+        """闭合并规范化上下文中未配对或错位的工具调用结果。
 
         未闭合指某个 ``AIMessage`` 携带 ``tool_calls``，但后续上下文中不存在
         ``tool_call_id`` 与之匹配的 ``ToolMessage``。通常由 run 崩溃或被取消导致
         （模型已请求工具但结果未落库）。此处作为**唯一收口点**，为每个未闭合调用补
         一条 ``ToolMessage`` 占位，写回内存与数据库，使模型协议始终闭合、可继续。
+
+        历史上下文还可能已经存在匹配的 ``ToolMessage``，但它被追加在后续
+        ``HumanMessage`` / ``SystemMessage`` 之后。仅按 ``tool_call_id`` 判断存在会把这种
+        序列误认为合法；本方法会把匹配结果移动到对应 ``AIMessage`` 后面，并保留其他
+        消息的相对顺序。
 
         不论原因是取消还是崩溃，占位的业务语义统一标记为 ``cancelled``；canonical
         工具执行事实的终态由取消分支经 ``cancel_tool_calls`` 单独写入，本方法只负责
@@ -327,32 +318,82 @@ class RuntimeContextManager:
         副作用:
             为每个未闭合调用调用 ``add_message``：写回 ``_entries``、经
             ``context_service.append`` 落库（``include_in_context=True``）并触发
-            上下文变更监听。占位落库后下次加载即命中配对，天然幂等。
+            上下文变更监听；已有但错位的 ToolMessage 只在当前 working copy 中重排，
+            不改写上下文事实。占位落库后下次加载即命中配对，天然幂等。
         """
-        pending_call_ids: dict[str, str | None] = {}
-        for entry in self._effective_entries():
+        entries = list(self._entries)
+        tool_entries_by_call_id: dict[str, list[tuple[int, ContextEntry]]] = {}
+        for index, entry in enumerate(entries):
             message = entry.message
-            if isinstance(message, AIMessage) and message.tool_calls:
-                for call in message.tool_calls:
-                    call_id = call.get("id")
-                    if not call_id:
-                        continue
-                    name = call.get("name")
-                    pending_call_ids.setdefault(call_id, name)
-            elif isinstance(message, ToolMessage) and message.tool_call_id:
-                pending_call_ids.pop(message.tool_call_id, None)
-        if not pending_call_ids:
+            if isinstance(message, ToolMessage) and message.tool_call_id:
+                tool_entries_by_call_id.setdefault(message.tool_call_id, []).append(
+                    (index, entry)
+                )
+
+        normalized: list[ContextEntry] = []
+        claimed_tool_entry_indices: set[int] = set()
+        created_placeholder_count = 0
+        reordered_tool_count = 0
+
+        for index, entry in enumerate(entries):
+            if index in claimed_tool_entry_indices:
+                continue
+
+            message = entry.message
+            normalized.append(entry)
+            if not isinstance(message, AIMessage) or not message.tool_calls:
+                continue
+
+            # 一个 assistant 消息的多个 tool call 必须按 tool_calls 顺序紧随其后。
+            # 结果即使已经落库，也可能因为取消后追加新用户消息而出现在更后面；只要
+            # 它位于该 assistant 消息之后且尚未被其他调用认领，就把它移动到这里。
+            result_offset = 0
+            for call in message.tool_calls:
+                call_id = call.get("id")
+                if not call_id:
+                    continue
+                candidates = [
+                    (tool_index, tool_entry)
+                    for tool_index, tool_entry in tool_entries_by_call_id.get(call_id, [])
+                    if tool_index > index and tool_index not in claimed_tool_entry_indices
+                ]
+                if candidates:
+                    tool_index, tool_entry = candidates[0]
+                    claimed_tool_entry_indices.add(tool_index)
+                    normalized.append(tool_entry)
+                    if tool_index != index + 1 + result_offset:
+                        reordered_tool_count += 1
+                    result_offset += 1
+                    continue
+
+                placeholder = ToolMessage(
+                    content=(
+                        f"The tool call '{call.get('name') or 'unknown'}' (id={call_id}) "
+                        f"did not produce a result because the run was cancelled or "
+                        f"interrupted; no tool output is available."
+                    ),
+                    tool_call_id=call_id,
+                )
+                previous_length = len(self._entries)
+                self.add_message(placeholder, include_in_context=True)
+                normalized.append(self._entries[previous_length])
+                created_placeholder_count += 1
+
+        if not created_placeholder_count and not reordered_tool_count:
             return
-        for call_id, tool_name in pending_call_ids.items():
-            placeholder = ToolMessage(
-                content=(
-                    f"The tool call '{tool_name or 'unknown'}' (id={call_id}) "
-                    f"did not produce a result because the run was cancelled or "
-                    f"interrupted; no tool output is available."
-                ),
-                tool_call_id=call_id,
-            )
-            self.add_message(placeholder, include_in_context=True)
+
+        self._entries = normalized
+        log.warning(
+            "runtime_context_tool_call_protocol_repaired",
+            extra={
+                "msg": "上下文中的工具调用结果已闭合或恢复到合法消息顺序",
+                "data": {
+                    "task_id": self.current_task_id,
+                    "created_placeholder_count": created_placeholder_count,
+                    "reordered_tool_count": reordered_tool_count,
+                },
+            },
+        )
 
     def _normalize_tool_call_message_order(self) -> None:
         """把历史遗留的修复 ``SystemMessage`` 移到关联工具结果之后。

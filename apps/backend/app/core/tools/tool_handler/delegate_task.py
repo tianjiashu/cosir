@@ -159,8 +159,9 @@ class DelegateTaskTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="委派任务",
                 icon="users",
-                expandable=True,
-                expand_layout="details",
+                surface="standalone",
+                expandable=False,
+                expand_layout="none",
                 show_result=False,
             ),
         )

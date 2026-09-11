@@ -10,7 +10,6 @@ qwen / kimi 等国内厂商的 OpenAI 兼容端点契合度优于 litellm 多厂
 from dataclasses import replace
 from typing import Any
 
-import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
@@ -25,6 +24,7 @@ from app.core.llm_provider.capability.model_capability import (
 from app.core.llm_provider.capability.provider_capability import (
     ProviderCapability,
 )
+from app.utils.http_proxy import build_proxy_async_client, build_proxy_client
 from app.core.llm_provider.reasoning_chat_openai import ReasoningChatOpenAI
 from app.models import ConversationRunRecord
 from app.service.depends import get_provider_service
@@ -150,11 +150,15 @@ def build_chat_model(
 
     # 显式提供客户端，绕过 langchain-openai 在 Windows 上按 socket options 构造
     # ``request=`` transport 的兼容性问题（httpx 0.28 已移除该 Client 参数）。
+    # 通过 ``build_proxy_client`` / ``build_proxy_async_client`` 把系统代理注入客户端：
+    # ``CODING_AGENT_PROXY_AUTO_DETECT`` 关闭或无系统代理时返回 None，等价于不设置代理。
+    # 代理在每次构建 client 时解析一次，因此系统代理开关变化会在下次解析时实时生效；不再于
+    # 进程启动期全局写入环境变量。
     resolved_base_url = base_url or ""
-    http_client = httpx.Client(
+    http_client = build_proxy_client(
         base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
     )
-    http_async_client = httpx.AsyncClient(
+    http_async_client = build_proxy_async_client(
         base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
     )
 
@@ -170,7 +174,8 @@ def build_chat_model(
         # 包装逻辑见上方 ``chat_api_key`` 构造（None 时直接透传 None）。
         api_key=chat_api_key,
         base_url=base_url,
-        streaming=bool(model_settings.stream),
+        # None 表示未覆盖，沿用系统默认的流式行为；False 才是显式关闭。
+        streaming=model_settings.stream if model_settings.stream is not None else True,
         http_client=http_client,
         http_async_client=http_async_client,
         stream_usage=True,

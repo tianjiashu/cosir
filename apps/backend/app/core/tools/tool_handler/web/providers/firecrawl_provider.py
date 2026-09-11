@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.config.logging.logger import log
+from app.utils.http_proxy import ProxyHttpClient
 from app.config.settings import Settings
 from app.core.tools.tool_handler.web.web_provider import (
     WebExtractItem,
@@ -58,6 +59,9 @@ class FirecrawlProvider(WebProvider):
         self._base_url = (
             base_url if base_url is not None else os.environ.get("FIRECRAWL_API_URL", "")
         )
+        # 复用的同步 httpx 客户端：由 ``ProxyHttpClient`` 持有并缓存，代理变化时自动重建，
+        # 从而让系统代理（Clash / V2RayN 等）开关变化在进程不重启的情况下对后续请求实时生效。
+        self._proxy_http_client = ProxyHttpClient()
 
     @property
     def display_name(self) -> str:
@@ -312,6 +316,29 @@ class FirecrawlProvider(WebProvider):
             error=str(data.get("error") or ""),
         )
 
+    def _get_client(self) -> httpx.Client:
+        """返回复用的同步 httpx 客户端（代理变化时自动重建）。
+
+        委托 ``self._proxy_http_client``（``ProxyHttpClient``）持有缓存：每次取 client 都会重新
+        解析一次系统代理，仅当解析到的代理与已缓存 client 所用代理不一致时才关闭旧 client 并重建，
+        从而让系统代理开关变化在**不重启后端进程**的情况下对后续 web 请求实时生效。
+        ``search`` / ``extract`` 共享同一实例。
+
+        参数:
+            无。
+
+        返回:
+            注入了当前系统代理（若启用）的 httpx.Client 实例。
+
+        异常:
+            无（构造失败由调用方 ``_post`` 的 httpx.HTTPError 路径统一处理）。
+
+        副作用:
+            代理变化时由 holder 关闭旧 client 并重建新 client。
+        """
+
+        return self._proxy_http_client.get(timeout=Settings.WEB_REQUEST_TIMEOUT_SECONDS)
+
     def _post(self, endpoint: str, body: dict[str, object]) -> object:
         """向 Firecrawl API 发送 JSON 请求。
 
@@ -338,10 +365,9 @@ class FirecrawlProvider(WebProvider):
         base_url = self._base_url.rstrip("/") or _DEFAULT_BASE_URL
         started = time.monotonic()
         try:
-            with httpx.Client(timeout=Settings.WEB_REQUEST_TIMEOUT_SECONDS) as client:
-                response = client.post(
-                    f"{base_url}/{endpoint}", json=body, headers=request_headers
-                )
+            response = self._get_client().post(
+                f"{base_url}/{endpoint}", json=body, headers=request_headers
+            )
         except httpx.HTTPError as exc:
             # 传输层失败（连接错误 / 超时 / 协议错误）拿不到响应对象，此处单独记录，
             # 否则最常见的网络故障将没有任何带 endpoint 与耗时的定位线索。

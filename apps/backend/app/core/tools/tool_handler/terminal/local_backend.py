@@ -2,15 +2,17 @@
 
 本模块只负责在宿主机跑一条命令并回收有界输出，不做危险命令判定、不做权限
 校验、不组装 ``ToolObservation``（这些由 ``ExecuteTerminalTool`` 负责）。
-shell 用系统默认（``shell=True`` 复用 Windows ``cmd.exe`` / POSIX ``/bin/sh``），
-Windows 树杀用系统自带 ``taskkill /F /T``，Job Object 由 ``tool_handler_runner`` 子进程
-入口负责，均不引第三方依赖（不重复造轮子）。
+``shell="auto"`` 用系统默认（``shell=True`` 复用 Windows ``cmd.exe`` / POSIX
+``/bin/sh``）；显式 shell 使用 argv 直接启动（``shell=False``）。Windows 树杀用系统
+自带 ``taskkill /F /T``，Job Object 由 ``tool_handler_runner`` 子进程入口负责，均不引
+第三方依赖（不重复造轮子）。
 """
 
 import contextlib
 import locale
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -205,6 +207,7 @@ class LocalExecutionBackend(ExecutionBackend):
         cwd: str,
         timeout: float,
         output_sink: OutputSink | None = None,
+        shell: str = "auto",
     ) -> ExecutionResult:
         """在宿主机同步执行一条命令并回收有界输出。
 
@@ -215,6 +218,8 @@ class LocalExecutionBackend(ExecutionBackend):
             output_sink: 可选实时输出回调；传入时读取线程每读到一行即回传已
                 剥离 ANSI 并脱敏的片段，受 ``Settings.MAX_TOOL_OUTPUT_CHARS``
                 预算约束。回调异常不影响命令执行与最终输出。
+            shell: shell 名称；``auto`` 使用现有宿主默认 shell，显式值直接启动对应
+                shell，避免嵌套 shell 的二次解析。
 
         返回:
             ``ExecutionResult``；超时返回 ``timed_out=True``、``exit_code=-1`` 且保留
@@ -228,15 +233,16 @@ class LocalExecutionBackend(ExecutionBackend):
             传入 ``output_sink`` 时在读取线程中回调它。
         """
         try:
-            process = subprocess.Popen(  # noqa: S602
-                command,
-                shell=True,
+            command_argv, use_shell = _resolve_command(command, shell)
+            process = subprocess.Popen(  # noqa: S603 - shell command is policy-checked upstream
+                command_argv,
+                shell=use_shell,
                 cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 start_new_session=(os.name == "posix"),
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return ExecutionResult(
                 output=f"failed to start command: {exc}",
                 exit_code=-1,
@@ -281,7 +287,7 @@ class LocalExecutionBackend(ExecutionBackend):
             无。
 
         异常:
-            不向上抛出。
+            无；清理失败静默处理，调用方仍返回超时结果。
 
         副作用:
             POSIX：``os.killpg(getpgid(pid), SIGKILL)``（shell 在独立新组）；
@@ -302,3 +308,56 @@ class LocalExecutionBackend(ExecutionBackend):
                     stderr=subprocess.DEVNULL,
                     check=False,
                 )
+
+
+def _resolve_command(command: str, shell: str) -> tuple[str | list[str], bool]:
+    """把 shell 选择转换为 Popen 命令和 shell 标志。
+
+    ``auto`` 保留 Python 当前的宿主默认 shell 行为；显式 shell 使用 argv 直接启动，
+    从而避免 PowerShell 命令先经过 cmd.exe 解析。该函数只解析本机可执行文件，不启动
+    进程；未知、平台不支持或未安装的 shell 通过 ``ValueError`` 交给 execute 转为启动
+    失败结果。
+    """
+
+    if shell == "auto":
+        return command, True
+
+    if os.name == "nt":
+        if shell == "cmd":
+            executable = os.environ.get("COMSPEC") or shutil.which("cmd.exe")
+            if not executable:
+                raise ValueError("cmd.exe is not available")
+            return [executable, "/d", "/s", "/c", command], False
+        if shell in {"powershell", "pwsh"}:
+            executable_name = "powershell.exe" if shell == "powershell" else "pwsh.exe"
+            executable = shutil.which(executable_name)
+            if not executable:
+                raise ValueError(f"{executable_name} is not available")
+            return [
+                executable,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ], False
+        raise ValueError(f"shell '{shell}' is not available on Windows")
+
+    if shell in {"sh", "bash", "zsh", "fish"}:
+        executable = "/bin/sh" if shell == "sh" else shutil.which(shell)
+        if not executable:
+            raise ValueError(f"{shell} is not available")
+        return [executable, "-c", command], False
+    if shell in {"powershell", "pwsh"}:
+        executable = shutil.which("pwsh")
+        if not executable:
+            raise ValueError("pwsh is not available")
+        return [
+            executable,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ], False
+    raise ValueError(f"unsupported shell '{shell}'")

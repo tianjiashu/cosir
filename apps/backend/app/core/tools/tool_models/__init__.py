@@ -9,11 +9,21 @@ from app.core.tools.tool_models.codegraph_node_args import CodegraphNodeArgs
 from app.core.tools.tool_models.codegraph_search_args import CodegraphSearchArgs
 from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_models.delete_args import DeleteArgs
-from app.core.tools.tool_models.execute_terminal_args import ExecuteTerminalArgs
+from app.core.tools.tool_models.execute_terminal_args import (
+    ExecuteTerminalArgs,
+    ExecuteTerminalShell,
+)
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
 from app.core.tools.tool_models.read_file_args import ReadFileArgs
 from app.core.tools.tool_models.replace_args import ReplaceArgs
 from app.core.tools.tool_models.search_files_args import SearchFilesArgs
+from app.core.tools.tool_models.terminal_session_args import (
+    TerminalCloseArgs,
+    TerminalReadArgs,
+    TerminalSignalArgs,
+    TerminalStartArgs,
+    TerminalWriteArgs,
+)
 from app.core.tools.tool_models.write_file_args import WriteFileArgs
 
 __all__ = [
@@ -27,9 +37,15 @@ __all__ = [
     "DelegateTaskArgs",
     "DeleteArgs",
     "ExecuteTerminalArgs",
+    "ExecuteTerminalShell",
     "ListDirectoryArgs",
     "ReadFileArgs",
     "ReplaceArgs",
     "SearchFilesArgs",
+    "TerminalCloseArgs",
+    "TerminalReadArgs",
+    "TerminalSignalArgs",
+    "TerminalStartArgs",
+    "TerminalWriteArgs",
     "WriteFileArgs",
 ]

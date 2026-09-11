@@ -59,7 +59,7 @@ class ConversationRunCancellationRegistry:
             },
         )
 
-    def is_cancelled(self, run_id: str) -> bool:
+    def is_cancelled(self, run_id: int | str) -> bool:
         """Return whether the Conversation Run has a process-local cancellation signal.
 
         参数:
@@ -75,8 +75,9 @@ class ConversationRunCancellationRegistry:
             无。
         """
 
+        normalized_id = int(run_id) if isinstance(run_id, str) and run_id.isdigit() else run_id
         with self._lock:
-            return run_id in self._cancelled_run_ids
+            return normalized_id in self._cancelled_run_ids
 
     def clear(self, run_id: int) -> None:
         """Remove a Conversation Run cancellation signal.

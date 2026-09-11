@@ -23,6 +23,7 @@ from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
     get_conversation_run_service,
     get_task_service,
+    get_terminal_session_service,
     get_workspace_service,
 )
 from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
@@ -156,7 +157,7 @@ class AgentRuntime:
                 workspace, task, run, agent, tool_trace_recorder=recorder
             )
             # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
-                # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
+            # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
 
             with conversation_run_trace(metadata) as trace_result:
                 await agent.workflow.run(
@@ -309,7 +310,9 @@ class AgentRuntime:
                 parent_task=task,
             )
             runtime_dependencies = ToolRuntimeDependencies(
-                delegate_task_executor=delegate_task_executor
+                delegate_task_executor=delegate_task_executor,
+                terminal_session_service=get_terminal_session_service(),
+                is_run_cancelled=cancellation_registry.is_cancelled,
             )
         return WorkflowOperations(
             tool_executor=self._tool_executor,

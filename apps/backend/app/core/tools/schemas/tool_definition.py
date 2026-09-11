@@ -79,16 +79,17 @@ class ToolDefinition:
         仅做投影：用本类 ``name`` / ``description`` 覆盖 pydantic 类名（如
         ``SearchFilesArgs``），确保 registry / tools_node / 前端全链路使用注册名
         （如 ``search_files``）这一唯一事实来源，不被 pydantic 类名污染。直接返回
-        ``args_model.model_json_schema()`` 的原始 schema，**不做 strict 化**（交由
-        下游 ``bind_tools(strict=True)`` 统一承担）。
+        ``parameters_schema``（存在时）或 ``args_model.model_json_schema()`` 的 schema，
+        **不做 strict 化**（交由下游 ``bind_tools(strict=True)`` 统一承担）。
 
         返回 ``{"name", "description", "parameters"}``（裸 function 形状，由
         ``bind_tools`` 包裹为 ``{"type": "function", "function": {...}}``）。
         """
         # 名称/描述取本类契约而非 args_model.__name__，避免 LangChain 用 pydantic 类名
         # 覆盖注册名，污染全链路唯一事实来源。
+        parameters = self.parameters_schema or self.args_model.model_json_schema()
         return {
             "name": self.name,
             "description": self.description,
-            "parameters": self.args_model.model_json_schema(),
+            "parameters": parameters,
         }

@@ -88,6 +88,7 @@ class AgentProfile:
         *,
         allowed_tools: list[str] | None = None,
         runtime_event_loop: asyncio.AbstractEventLoop | None = None,
+        model_defaults: AgentProfile | None = None,
     ) -> AgentProfile:
         """为一次独立的 Conversation Run 执行派生 per-run 副本。
 
@@ -102,6 +103,9 @@ class AgentProfile:
             runtime_event_loop: 覆盖事件广播 loop；None 表示沿用当前值
                 （主路径缺省 None；委派 child 传入父 loop，child 事件经
                 ``call_soon_threadsafe`` 跨线程投递回父 loop）。
+            model_defaults: 可选的父 Agent Profile，仅用于补齐当前 profile 未显式设置的
+                provider/model/model_settings。当前 profile 的非空字段优先，供未来自定义
+                child profile 覆盖主 Agent 的默认配置。
 
         Returns:
             绑定当前 run 的独立 ``AgentProfile`` 副本（不修改 ``self`` 原实例）。
@@ -112,6 +116,14 @@ class AgentProfile:
             changes["allowed_tools"] = allowed_tools
         if runtime_event_loop is not None:
             changes["runtime_event_loop"] = runtime_event_loop
+        if model_defaults is not None:
+            if self.provider_id is None:
+                changes["provider_id"] = model_defaults.provider_id
+            if self.model_name is None:
+                changes["model_name"] = model_defaults.model_name
+            changes["model_settings"] = self.model_settings.with_defaults(
+                model_defaults.model_settings
+            )
         return replace(self, **changes)
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
