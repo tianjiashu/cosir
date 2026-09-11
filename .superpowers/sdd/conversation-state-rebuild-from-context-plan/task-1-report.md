@@ -133,3 +133,54 @@ $env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_
 静态检查：指定修改文件的 Ruff 为 `All checks passed!`，`git diff --check` 无输出。按本轮范围执行 mypy 时仍会经过既有 Assistant Transport、snapshot service、terminal/web_extract 及 `init_schema.py` 类型问题；未为此越界修改 Task 4 或 Transport 代码。
 
 本轮未处理 snapshot 删除路径，也未恢复 snapshot 表。
+
+## 第 2 轮复核修复（metadata/error）
+
+### 修改文件
+
+- `apps/backend/app/models/json_helpers.py`
+  - 使 `TransportMetadata` 的 TypedDict 与运行时校验一致：tool-call 的 `status`、`args`、`presentation`、`isError` 为必需非 null 字段；text part 显式 null status 也拒绝。
+  - 新增严格 `TransportToolResult` contract：精确校验 `status`、`display_data`、`status_hint`、`error`；仅 `display_data`、`status_hint`、`error` 按定义允许 null，拒绝未知字段和错误类型。
+  - `ConversationRunError.message` 限制为非空、首尾无空白、可打印且不超过 256 个字符的短文本。
+- `apps/backend/tests/test_conversation_fact_models.py`
+  - 增加 required tool part 字段显式 null、text status 显式 null、tool_result 缺失/未知字段/错误类型和可允许 null 性测试；增加 error message 超长、换行和空白文本拒绝测试。
+
+### 第 2 轮 TDD 证据
+
+第一阶段 RED 命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py -q --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round2-red'
+```
+
+结果：`14 failed, 23 passed in 1.11s`。失败命中 tool-call 的显式 null、任意 tool_result 结构以及 error message 无长度/内容边界。
+
+针对补充 text status / tool_result null 性测试的 RED 命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py -q -k "explicit_null_text_status or allows_null_optional_tool_result_fields" --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round2-red-followup'
+```
+
+结果：`2 failed, 36 deselected in 0.94s`；分别证明显式 null text status 被错误放行，以及目标允许的 tool_result null 性尚未实现。
+
+GREEN 命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py -q --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round2-green-final2'
+```
+
+结果：`38 passed in 0.60s`。
+
+相关回归命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py tests/test_sqlite_schema.py tests/test_context_usage_compute_listener.py tests/test_conversation_run_usage_stats.py -q --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round2-related-final'
+```
+
+结果：`46 passed in 0.78s`；指定文件 Ruff 检查结果为 `All checks passed!`。
+
+本轮仍未修改 Task 4 snapshot cleanup，未恢复 `conversation_task_snapshots` 表。

@@ -24,16 +24,25 @@ class TransportToolCallPart(TypedDict):
     toolCallId: str
     toolName: str
     status: Literal["pending", "running", "completed", "failed", "cancelled"]
-    args: NotRequired[dict[str, JSONValue]]
+    args: dict[str, JSONValue]
     error: NotRequired[str | None]
     errorCode: NotRequired[str | None]
-    presentation: NotRequired[dict[str, JSONValue]]
+    presentation: dict[str, JSONValue]
     display_data: NotRequired[dict[str, JSONValue] | None]
-    isError: NotRequired[bool]
+    isError: bool
     approvalRequestId: NotRequired[None]
 
 
 TransportPart: TypeAlias = TransportTextPart | TransportToolCallPart
+
+
+class TransportToolResult(TypedDict):
+    """Structured tool result stored alongside a context message."""
+
+    status: Literal["success", "error", "cancelled"]
+    display_data: dict[str, JSONValue] | None
+    status_hint: str | None
+    error: str | None
 
 
 class TransportMetadata(TypedDict):
@@ -41,7 +50,7 @@ class TransportMetadata(TypedDict):
 
     schema_version: int
     parts: list[TransportPart]
-    tool_result: dict[str, JSONValue] | None
+    tool_result: TransportToolResult | None
 
 
 class ConversationRunError(TypedDict):
@@ -68,6 +77,18 @@ _TOOL_PART_KEYS = {
     "approvalRequestId",
 }
 _TOOL_STATUSES = {"pending", "running", "completed", "failed", "cancelled"}
+_TOOL_RESULT_KEYS = {"status", "display_data", "status_hint", "error"}
+_TOOL_RESULT_STATUSES = {"success", "error", "cancelled"}
+_REQUIRED_TOOL_PART_KEYS = {
+    "type",
+    "toolCallId",
+    "toolName",
+    "status",
+    "args",
+    "presentation",
+    "isError",
+}
+_MAX_RUN_ERROR_MESSAGE_LENGTH = 256
 
 
 def serialize_json_object(value: dict[str, Any], field_name: str) -> str:
@@ -145,9 +166,7 @@ def _validate_transport_metadata(value: object) -> TransportMetadata:
         _validate_transport_part(part)
     tool_result = value["tool_result"]
     if tool_result is not None:
-        if not isinstance(tool_result, dict):
-            raise ValueError("transport_metadata.tool_result must be an object or null")
-        _validate_json_value(tool_result, "transport_metadata.tool_result")
+        _validate_tool_result(tool_result)
     return cast(TransportMetadata, value)
 
 
@@ -160,31 +179,33 @@ def _validate_transport_part(part: object) -> None:
             raise ValueError("transport_metadata text part contains unknown fields")
         if not isinstance(part.get("text"), str):
             raise ValueError("transport_metadata text part text must be a string")
-        if part.get("status") not in {None, "running", "completed"}:
+        if "status" in part and part["status"] not in {"running", "completed"}:
             raise ValueError("transport_metadata text part status is invalid")
         return
     if part_type == "tool-call":
         if set(part) - _TOOL_PART_KEYS:
             raise ValueError("transport_metadata tool part contains unknown fields")
+        if set(part) < _REQUIRED_TOOL_PART_KEYS:
+            raise ValueError("transport_metadata tool part is missing required fields")
         if not isinstance(part.get("toolCallId"), str) or not isinstance(
             part.get("toolName"), str
         ):
             raise ValueError("transport_metadata tool identity is malformed")
         if part.get("status") not in _TOOL_STATUSES:
             raise ValueError("transport_metadata tool status is invalid")
-        if part.get("args") is not None and not isinstance(part.get("args"), dict):
+        if not isinstance(part["args"], dict):
             raise ValueError("transport_metadata tool args must be an object")
         if part.get("error") is not None and not isinstance(part.get("error"), str):
             raise ValueError("transport_metadata tool error must be a string or null")
         if part.get("errorCode") is not None and not isinstance(part.get("errorCode"), str):
             raise ValueError("transport_metadata tool errorCode must be a string or null")
-        if part.get("presentation") is not None and not isinstance(part.get("presentation"), dict):
+        if not isinstance(part["presentation"], dict):
             raise ValueError("transport_metadata tool presentation must be an object")
         if part.get("display_data") is not None and not isinstance(
             part.get("display_data"), dict
         ):
             raise ValueError("transport_metadata tool display_data must be an object or null")
-        if part.get("isError") is not None and not isinstance(part.get("isError"), bool):
+        if not isinstance(part["isError"], bool):
             raise ValueError("transport_metadata tool isError must be a boolean")
         if part.get("approvalRequestId") is not None:
             raise ValueError("transport_metadata approval requests are not implemented")
@@ -193,16 +214,44 @@ def _validate_transport_part(part: object) -> None:
     raise ValueError("transport_metadata contains an unknown part type")
 
 
+def _validate_tool_result(value: object) -> TransportToolResult:
+    if not isinstance(value, dict) or set(value) != _TOOL_RESULT_KEYS:
+        raise ValueError(
+            "transport_metadata.tool_result must contain exactly status, display_data, "
+            "status_hint, and error"
+        )
+    if value["status"] not in _TOOL_RESULT_STATUSES:
+        raise ValueError("transport_metadata.tool_result status is invalid")
+    if value["display_data"] is not None and not isinstance(value["display_data"], dict):
+        raise ValueError("transport_metadata.tool_result display_data must be an object or null")
+    if value["status_hint"] is not None and not isinstance(value["status_hint"], str):
+        raise ValueError("transport_metadata.tool_result status_hint must be a string or null")
+    if value["error"] is not None and not isinstance(value["error"], str):
+        raise ValueError("transport_metadata.tool_result error must be a string or null")
+    _validate_json_value(value, "transport_metadata.tool_result")
+    return cast(TransportToolResult, value)
+
+
 def _validate_run_error(value: object) -> ConversationRunError:
     if (
         not isinstance(value, dict)
         or set(value) != {"code", "message", "retryable"}
         or not isinstance(value.get("code"), str)
-        or not isinstance(value.get("message"), str)
+        or not _is_short_error_message(value.get("message"))
         or not isinstance(value.get("retryable"), bool)
     ):
         raise ValueError("error must contain only code, message, and retryable")
     return cast(ConversationRunError, value)
+
+
+def _is_short_error_message(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value) <= _MAX_RUN_ERROR_MESSAGE_LENGTH
+        and value == value.strip()
+        and value.isprintable()
+    )
 
 
 def _validate_json_value(value: object, field_name: str) -> None:

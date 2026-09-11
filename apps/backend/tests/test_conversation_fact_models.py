@@ -27,7 +27,12 @@ def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None
     metadata = {
         "schema_version": 1,
         "parts": [{"type": "text", "text": "hello", "status": "completed"}],
-        "tool_result": None,
+        "tool_result": {
+            "status": "success",
+            "display_data": {"kind": "file"},
+            "status_hint": None,
+            "error": None,
+        },
     }
     record = ConversationTaskContextRecord(
         task_id=7,
@@ -103,6 +108,131 @@ def test_context_record_rejects_malformed_metadata_json() -> None:
 
     with pytest.raises((TypeError, ValueError)):
         ConversationTaskContextRecord._from_model(model)
+
+
+@pytest.mark.parametrize("field", ["status", "args", "presentation", "isError"])
+def test_context_metadata_rejects_null_for_required_tool_part_fields(field: str) -> None:
+    part = {
+        "type": "tool-call",
+        "toolCallId": "call-1",
+        "toolName": "read_file",
+        "status": "completed",
+        "args": {},
+        "presentation": {},
+        "isError": False,
+    }
+    part[field] = None
+    record = ConversationTaskContextRecord(
+        task_id=7,
+        run_id=11,
+        message=HumanMessage(content="hello"),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata={
+            "schema_version": 1,
+            "parts": [part],
+            "tool_result": None,
+        },
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record._to_model()
+
+
+def test_context_metadata_rejects_explicit_null_text_status() -> None:
+    record = ConversationTaskContextRecord(
+        task_id=7,
+        run_id=11,
+        message=HumanMessage(content="hello"),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata={
+            "schema_version": 1,
+            "parts": [{"type": "text", "text": "hello", "status": None}],
+            "tool_result": None,
+        },
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record._to_model()
+
+
+def test_context_metadata_allows_null_optional_tool_result_fields() -> None:
+    record = ConversationTaskContextRecord(
+        task_id=7,
+        run_id=11,
+        message=HumanMessage(content="hello"),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata={
+            "schema_version": 1,
+            "parts": [],
+            "tool_result": {
+                "status": "success",
+                "display_data": None,
+                "status_hint": None,
+                "error": None,
+            },
+        },
+    )
+
+    record._to_model()
+
+
+@pytest.mark.parametrize(
+    "tool_result",
+    [
+        {},
+        {"status": "success", "display_data": {}, "status_hint": None},
+        {
+            "status": None,
+            "display_data": {},
+            "status_hint": None,
+            "error": None,
+        },
+        {
+            "status": "unknown",
+            "display_data": {},
+            "status_hint": None,
+            "error": None,
+        },
+        {
+            "status": "success",
+            "display_data": {},
+            "status_hint": 42,
+            "error": None,
+        },
+        {
+            "status": "success",
+            "display_data": {},
+            "status_hint": None,
+            "error": {"provider_response": "raw"},
+        },
+        {
+            "status": "success",
+            "display_data": {},
+            "status_hint": None,
+            "error": None,
+            "unexpected": True,
+        },
+    ],
+)
+def test_context_metadata_rejects_malformed_tool_result(tool_result: dict[str, object]) -> None:
+    record = ConversationTaskContextRecord(
+        task_id=7,
+        run_id=11,
+        message=HumanMessage(content="hello"),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata={
+            "schema_version": 1,
+            "parts": [],
+            "tool_result": tool_result,
+        },
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record._to_model()
 
 
 def test_run_record_round_trips_usage_and_error() -> None:
@@ -247,11 +377,40 @@ def test_run_error_rejects_malformed_json() -> None:
         ConversationRunRecord.from_model(model)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "x" * 257,
+        "provider failed\nTraceback (most recent call last):",
+        "  ",
+    ],
+)
+def test_run_error_rejects_uncontrolled_message_text(message: str) -> None:
+    record = ConversationRunRecord(
+        id=11,
+        task_id=7,
+        input_text="run input",
+        status="failed",
+        created_at=_timestamp(),
+        updated_at=_timestamp(),
+        checkpoint_thread_id="thread-11",
+        error={"code": "provider_error", "message": message, "retryable": True},
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record.to_model()
+
+
 def test_context_clone_copies_transport_fields_to_real_row() -> None:
     metadata = {
         "schema_version": 1,
         "parts": [{"type": "text", "text": "source", "status": "completed"}],
-        "tool_result": None,
+        "tool_result": {
+            "status": "success",
+            "display_data": {"kind": "file"},
+            "status_hint": None,
+            "error": None,
+        },
     }
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
