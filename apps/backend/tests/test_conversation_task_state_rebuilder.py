@@ -177,7 +177,7 @@ def test_rebuild_merges_ai_rows_in_sequence_using_first_row_id_and_keeps_part_or
     ]
 
 
-def test_rebuild_backfills_tool_result_into_ai_tool_call_without_tool_message() -> None:
+def test_rebuild_backfills_success_tool_result_and_deep_copies_display_data() -> None:
     tool_call = {
         "type": "tool-call",
         "toolCallId": "call-1",
@@ -187,41 +187,236 @@ def test_rebuild_backfills_tool_result_into_ai_tool_call_without_tool_message() 
         "presentation": {"surface": "trace"},
         "isError": False,
     }
+    result = {
+        "status": "success",
+        "display_data": {"kind": "file", "nested": {"items": ["a"]}},
+        "status_hint": None,
+        "error": None,
+    }
+    tool_row = _row(
+        203,
+        ToolMessage(content="ignored tool content", tool_call_id="call-1"),
+        sequence=3,
+        metadata=_metadata([], tool_result=result),
+    )
     state = ConversationTaskStateRebuilder.rebuild(
         _task(),
         [_run()],
         [
             _row(201, HumanMessage(content="read a.py"), sequence=1),
             _row(202, AIMessage(content=""), sequence=2, metadata=_metadata([tool_call])),
-            _row(
-                203,
-                ToolMessage(content="ignored tool content", tool_call_id="call-1"),
-                sequence=3,
-                metadata=_metadata(
-                    [],
-                    tool_result={
-                        "status": "error",
-                        "display_data": {"kind": "file-error"},
-                        "status_hint": "读取失败",
-                        "error": "permission denied",
-                        "errorCode": "permission_denied",
-                        "isError": True,
-                    },
-                ),
-            ),
+            tool_row,
         ],
     )
 
     assert state["runs"][0]["messages"][1]["parts"] == [
         {
             **tool_call,
-            "status": "failed",
-            "error": "permission denied",
-            "errorCode": "permission_denied",
-            "isError": True,
-            "display_data": {"kind": "file-error"},
+            "status": "completed",
+            "error": None,
+            "isError": False,
+            "display_data": {"kind": "file", "nested": {"items": ["a"]}},
         }
     ]
+
+    display_data = state["runs"][0]["messages"][1]["parts"][0]["display_data"]
+    assert display_data is not result["display_data"]
+    assert display_data is not None
+    display_data["nested"]["items"].append("snapshot-only")
+    assert result["display_data"] == {"kind": "file", "nested": {"items": ["a"]}}
+
+
+@pytest.mark.parametrize(
+    ("run_status", "expected_status", "expected_error", "expected_is_error"),
+    [
+        ("cancelled", "cancelled", "已取消", False),
+        ("completed", "failed", "执行异常", True),
+        ("failed", "failed", "执行异常", True),
+    ],
+)
+def test_rebuild_settles_unmatched_terminal_tool_calls(
+    run_status: str,
+    expected_status: str,
+    expected_error: str,
+    expected_is_error: bool,
+) -> None:
+    tool_call = {
+        "type": "tool-call",
+        "toolCallId": "call-unmatched",
+        "toolName": "read_file",
+        "status": "running",
+        "args": {},
+        "presentation": {},
+        "isError": False,
+    }
+
+    state = ConversationTaskStateRebuilder.rebuild(
+        _task(),
+        [_run(status=run_status, end_reason="terminal")],
+        [_row(202, AIMessage(content=""), metadata=_metadata([tool_call]))],
+    )
+
+    assert state["runs"][0]["messages"][0]["parts"][0] == {
+        **tool_call,
+        "status": expected_status,
+        "error": expected_error,
+        "isError": expected_is_error,
+    }
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_status", "expected_error", "expected_is_error"),
+    [
+        (
+            {
+                "status": "success",
+                "display_data": {"kind": "file"},
+                "status_hint": None,
+                "error": None,
+            },
+            "completed",
+            None,
+            False,
+        ),
+        (
+            {
+                "status": "error",
+                "display_data": {"kind": "tool-error", "status_hint": "文件不存在"},
+                "status_hint": "文件不存在",
+                "error": "full provider error must stay out of UI",
+                "errorCode": "not_found",
+                "isError": True,
+            },
+            "failed",
+            "文件不存在",
+            True,
+        ),
+        (
+            {
+                "status": "cancelled",
+                "display_data": None,
+                "status_hint": "用户取消",
+                "error": "full cancellation diagnostic",
+            },
+            "cancelled",
+            "已取消",
+            False,
+        ),
+    ],
+)
+def test_rebuild_projects_tool_result_to_controlled_ui_error(
+    result: dict[str, object],
+    expected_status: str,
+    expected_error: str | None,
+    expected_is_error: bool,
+) -> None:
+    tool_call = {
+        "type": "tool-call",
+        "toolCallId": "call-result",
+        "toolName": "read_file",
+        "status": "running",
+        "args": {},
+        "presentation": {},
+        "isError": False,
+    }
+    state = ConversationTaskStateRebuilder.rebuild(
+        _task(),
+        [_run()],
+        [
+            _row(202, AIMessage(content=""), metadata=_metadata([tool_call]), sequence=1),
+            _row(
+                203,
+                ToolMessage(content="ignored", tool_call_id="call-result"),
+                metadata=_metadata([], tool_result=result),
+                sequence=2,
+            ),
+        ],
+    )
+
+    part = state["runs"][0]["messages"][0]["parts"][0]
+    assert part["status"] == expected_status
+    assert part["error"] == expected_error
+    assert part["isError"] is expected_is_error
+    if result.get("errorCode") is not None:
+        assert part["errorCode"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    "message,metadata",
+    [
+        (
+            AIMessage(content=""),
+            _metadata(
+                [],
+                tool_result={
+                    "status": "success",
+                    "display_data": None,
+                    "status_hint": None,
+                    "error": None,
+                },
+            ),
+        ),
+        (
+            ToolMessage(content="tool", tool_call_id="call-1"),
+            _metadata([{"type": "text", "text": "wrong"}]),
+        ),
+        (
+            ToolMessage(content="tool", tool_call_id="call-1"),
+            _metadata([]),
+        ),
+        (
+            HumanMessage(content="human"),
+            _metadata(
+                [
+                    {
+                        "type": "tool-call",
+                        "toolCallId": "call-1",
+                        "toolName": "read_file",
+                        "status": "pending",
+                        "args": {},
+                        "presentation": {},
+                        "isError": False,
+                    }
+                ]
+            ),
+        ),
+        (
+            SystemMessage(content="system"),
+            _metadata(
+                [
+                    {
+                        "type": "tool-call",
+                        "toolCallId": "call-1",
+                        "toolName": "read_file",
+                        "status": "pending",
+                        "args": {},
+                        "presentation": {},
+                        "isError": False,
+                    }
+                ]
+            ),
+        ),
+    ],
+)
+def test_rebuild_rejects_semantically_misplaced_transport_metadata(
+    message: object, metadata: dict[str, object]
+) -> None:
+    with pytest.raises(ConversationStateRebuildError) as exc_info:
+        ConversationTaskStateRebuilder.rebuild(
+            _task(),
+            [_run()],
+            [
+                _row(
+                    204,
+                    message,
+                    run_id=None if isinstance(message, SystemMessage) else 11,
+                    metadata=metadata,
+                )
+            ],
+        )
+
+    assert exc_info.value.code == "misplaced_transport_metadata"
+    assert exc_info.value.context_row_id == 204
 
 
 def test_rebuild_maps_task_usage_current_run_and_stably_sorts_runs() -> None:

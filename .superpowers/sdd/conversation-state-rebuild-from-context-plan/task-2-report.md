@@ -53,3 +53,20 @@
   五个 task/workspace deletion 测试报告 SQLite 中缺少 `conversation_task_snapshots` 表，另一个
   Windows terminal worker 集成测试缺少 `terminal-worker.exe`。相关 Task 2 与 snapshot/context/
   projector 回归均通过，建议后续单独处理这些基线/环境问题。
+
+## Fix round 1（scoped review）
+
+- RED：先更新 `test_conversation_task_state_rebuilder.py`，新增 terminal 未匹配 tool-call
+  收口、success/failure/cancelled 结果映射、短提示、嵌套 `display_data` 隔离和五类错位
+  metadata 测试；运行 `uv run pytest tests/test_conversation_task_state_rebuilder.py -q`，
+  结果为 `11 failed, 14 passed`，失败均对应 review finding。
+- GREEN：实现后同一 focused 命令结果为 `25 passed`；相关回归命令结果为 `99 passed`。
+- 修复内容：终态 Run 的孤儿 tool-call 映射为 cancelled/failed；ToolMessage 结果只把受控
+  `status_hint`（取消固定为“已取消”）写入 UI error，full error 不进入 snapshot，并保持
+  status/isError 一致、保留 errorCode；所有 result display_data 深拷贝；按消息类型拒绝
+  tool_result、非空 ToolMessage parts、缺失 tool_result 和 UI tool part 错位。
+- Fix round 1 修改文件：
+  `apps/backend/app/assistant_transport/service/conversation_task_state_rebuilder.py`、
+  `apps/backend/tests/test_conversation_task_state_rebuilder.py`、本报告。
+- 未扩展到 Task 3：未修改 canonical context/tool/run 写路径、API/SSE、Projector、snapshot
+  removal 或其它持久化集成。

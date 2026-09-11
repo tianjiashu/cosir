@@ -24,6 +24,7 @@ from app.utils.message_content import content_to_text
 
 _SUPPORTED_MESSAGE_SCHEMA_VERSION = 1
 _SUPPORTED_TRANSPORT_SCHEMA_VERSION = 1
+_TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 
 
 class ConversationStateRebuildError(ValueError):
@@ -228,16 +229,22 @@ class ConversationTaskStateRebuilder:
                     context_row_id=row.id,
                 )
             settled_tool_call_ids.add(call_id)
-            part["status"] = {
-                "success": "completed",
-                "error": "failed",
-                "cancelled": "cancelled",
-            }[result["status"]]
-            part["error"] = result["error"]
-            part["display_data"] = result["display_data"]
-            if "errorCode" in result:
-                part["errorCode"] = result["errorCode"]
-            part["isError"] = result.get("isError", result["status"] == "error")
+            ConversationTaskStateRebuilder._apply_tool_result(part, result)
+
+        for call_id, (owner_run_id, part) in tool_parts.items():
+            if call_id in settled_tool_call_ids:
+                continue
+            run_status = run_by_id[owner_run_id].status
+            if run_status not in _TERMINAL_RUN_STATUSES:
+                continue
+            if run_status == "cancelled":
+                part["status"] = "cancelled"
+                part["error"] = "已取消"
+                part["isError"] = False
+            else:
+                part["status"] = "failed"
+                part["error"] = "执行异常"
+                part["isError"] = True
 
         for run in sorted(run_records, key=lambda item: (item.created_at, item.id)):
             snapshot_runs.append(
@@ -344,6 +351,58 @@ class ConversationTaskStateRebuilder:
                 task_id=task_id,
                 context_row_id=row.id,
             )
+        tool_result = metadata["tool_result"]
+        has_tool_part = any(part.get("type") == "tool-call" for part in metadata["parts"])
+        message_name = type(row.message).__name__
+        if isinstance(row.message, AIMessage) and tool_result is not None:
+            raise ConversationStateRebuildError(
+                "misplaced_transport_metadata",
+                f"{message_name} context row cannot carry tool_result metadata",
+                task_id=task_id,
+                run_id=row.run_id,
+                context_row_id=row.id,
+            )
+        if isinstance(row.message, ToolMessage) and (metadata["parts"] or tool_result is None):
+            raise ConversationStateRebuildError(
+                "misplaced_transport_metadata",
+                f"{message_name} context row requires only tool_result metadata",
+                task_id=task_id,
+                run_id=row.run_id,
+                context_row_id=row.id,
+            )
+        if isinstance(row.message, HumanMessage | SystemMessage) and (
+            tool_result is not None or has_tool_part
+        ):
+            raise ConversationStateRebuildError(
+                "misplaced_transport_metadata",
+                f"{message_name} context row cannot carry tool UI metadata",
+                task_id=task_id,
+                run_id=row.run_id,
+                context_row_id=row.id,
+            )
+
+    @staticmethod
+    def _apply_tool_result(part: dict[str, Any], result: dict[str, Any]) -> None:
+        """Project persisted tool result facts into safe Transport tool-call fields."""
+
+        result_status = result["status"]
+        part["status"] = {
+            "success": "completed",
+            "error": "failed",
+            "cancelled": "cancelled",
+        }[result_status]
+        if result_status == "success":
+            part["error"] = None
+            part["isError"] = False
+        elif result_status == "error":
+            part["error"] = result["status_hint"] or "执行失败"
+            part["isError"] = True
+        else:
+            part["error"] = "已取消"
+            part["isError"] = False
+        part["display_data"] = copy.deepcopy(result["display_data"])
+        if "errorCode" in result:
+            part["errorCode"] = result["errorCode"]
 __all__ = [
     "AgentContextLoader",
     "ConversationStateRebuildError",
