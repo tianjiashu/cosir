@@ -9,10 +9,12 @@ pub enum BackendRuntime {
         launcher: PathBuf,
         backend_dir: PathBuf,
         cache_dir: PathBuf,
+        terminal_worker: Option<PathBuf>,
     },
     Interpreter {
         launcher: PathBuf,
         backend_dir: PathBuf,
+        terminal_worker: Option<PathBuf>,
     },
 }
 
@@ -37,6 +39,17 @@ impl BackendRuntime {
             Self::Interpreter { .. } => None,
         }
     }
+
+    pub fn terminal_worker(&self) -> Option<&Path> {
+        match self {
+            Self::UvProject {
+                terminal_worker, ..
+            }
+            | Self::Interpreter {
+                terminal_worker, ..
+            } => terminal_worker.as_deref(),
+        }
+    }
 }
 
 /// 解析本地桌面应用应使用的后端运行时。
@@ -52,6 +65,7 @@ pub fn resolve_backend_runtime(
             return Ok(BackendRuntime::Interpreter {
                 launcher,
                 backend_dir,
+                terminal_worker: development_terminal_worker(),
             });
         }
         if std::process::Command::new("uv")
@@ -77,6 +91,7 @@ pub fn resolve_backend_runtime(
             launcher: PathBuf::from("uv"),
             backend_dir,
             cache_dir,
+            terminal_worker: development_terminal_worker(),
         });
     }
 
@@ -99,9 +114,17 @@ pub fn resolve_backend_runtime(
             launcher.display()
         ));
     }
+    let terminal_worker = packaged_terminal_worker(&resource_dir);
+    if !terminal_worker.is_file() {
+        return Err(format!(
+            "随应用交付的 Terminal Worker 不存在：{}",
+            terminal_worker.display()
+        ));
+    }
     Ok(BackendRuntime::Interpreter {
         launcher,
         backend_dir,
+        terminal_worker: Some(terminal_worker),
     })
 }
 
@@ -127,6 +150,42 @@ fn packaged_python(runtime_root: &Path) -> PathBuf {
     }
 }
 
+fn terminal_worker_filename() -> &'static str {
+    if cfg!(windows) {
+        "terminal-worker.exe"
+    } else {
+        "terminal-worker"
+    }
+}
+
+/// 解析开发模式下可用的 Terminal Worker 可执行文件。
+///
+/// 优先使用 `CODING_AGENT_TERMINAL_WORKER` 环境变量；否则回退到仓库统一的
+/// Cargo 构建目录 `target/debug`（由仓库根 `.cargo/config.toml` 的
+/// `target-dir` 指定），而不是各 crate 目录下的 `apps/terminal-worker/target`。
+///
+/// 候选文件不存在时返回 `None`，由调用方按“无 Terminal Worker”降级处理，
+/// 不会中断后端启动。
+fn development_terminal_worker() -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("CODING_AGENT_TERMINAL_WORKER") {
+        return Some(PathBuf::from(configured));
+    }
+    let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("target")
+        .join("debug")
+        .join(terminal_worker_filename());
+    candidate.is_file().then_some(candidate)
+}
+
+fn packaged_terminal_worker(resource_dir: &Path) -> PathBuf {
+    resource_dir
+        .join("terminal-worker")
+        .join(terminal_worker_filename())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{packaged_python, BackendRuntime};
@@ -138,6 +197,7 @@ mod tests {
             launcher: PathBuf::from("uv"),
             backend_dir: PathBuf::from("backend"),
             cache_dir: PathBuf::from("runtime/uv-cache"),
+            terminal_worker: None,
         };
         assert_eq!(
             runtime.uv_cache_dir(),

@@ -76,7 +76,7 @@ class ConversationStateUsage(TypedDict):
 
 没有可靠 provider usage 时，Run snapshot 的 `usage` 为 `null`，不能用全零对象伪装成真实的零消耗。
 
-`UsageUpdatedEvent` 和 `RunStatusChangedEvent.usage_stats` 都遵守“该 Run 的完整累计值替换”语义，不是 Task 累计值，也不是前端增量。
+`RunStatusChangedEvent.usage_stats` 遵守“该 Run 的完整累计值替换”语义，不是 Task 累计值，也不是前端增量；它只在 Run 终态时发送。
 
 ## 4. 目标 snapshot 结构
 
@@ -207,19 +207,7 @@ backend adapter 与 desktop converter 直接消费 `runs[current_run_id]`；不�
 5. 不修改历史 Run 的 messages、status 或 usage；
 6. Task context 字段进入“等待本次 Run 重新测量”的状态。
 
-### 5.2 UsageUpdatedEvent
-
-事件携带 `run_id` 时：
-
-```text
-找到 runs[run_id]
-校验累计值不能小于当前已确认值
-替换 runs[run_id].usage
-```
-
-如果事件的 `run_id` 不存在，不能静默写入当前 Run；应记录结构化日志并拒绝该 mutation。
-
-### 5.3 RunStatusChangedEvent
+### 5.2 RunStatusChangedEvent
 
 `RunStatusChangedEvent.usage_stats` 的投影顺序：
 
@@ -230,9 +218,9 @@ backend adapter 与 desktop converter 直接消费 `runs[current_run_id]`；不�
 若 usage_stats 不为空，则按累计值规则更新 runs[run_id].usage
 ```
 
-终态事件可能早于或晚于最后一个 `UsageUpdatedEvent` 到达，不能让较小的终态摘要覆盖较大的累计值。
+用量只在终态事件中附带；重复投递或恢复流程中的较小摘要不能覆盖已经确认的累计值。
 
-### 5.4 ContextUsageUpdatedEvent
+### 5.3 ContextUsageUpdatedEvent
 
 只更新 Task 级字段：
 
@@ -317,7 +305,7 @@ const usage = snapshot.runs.find((run) => run.runId === messageRunId)?.usage ?? 
 后端单元测试：
 
 - 两个 Run 的消息分别进入各自 `runs[*].messages`；
-- `UsageUpdatedEvent(run_id=101)` 只更新 Run 101；
+- 终态 `RunStatusChangedEvent(run_id=101, usage_stats=...)` 只更新 Run 101；
 - `RunStatusChangedEvent.usage_stats` 写入对应 Run；
 - 新 Run 初始化不会清空历史 Run usage；
 - 终态 usage 乱序不能回退累计值；

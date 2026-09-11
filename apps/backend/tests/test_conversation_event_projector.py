@@ -192,6 +192,112 @@ def test_tool_lifecycle_and_settlement(
     assert parts[1]["error"] == "执行异常"
 
 
+def test_cancelled_run_resume_status_is_projected(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """续跑恢复（cancelled -> running）必须被投影，否则 snapshot 会永久停在终态。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            status=ConversationRunStatus.CANCELLED,
+            end_reason="user_cancelled",
+        )
+    )
+    assert _run(snapshots.states[1], 1)["status"] == "cancelled"
+
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+    )
+
+    resumed = _run(snapshots.states[1], 1)
+    assert resumed["status"] == "running"
+    assert resumed["endReason"] is None
+
+
+def test_completed_and_failed_runs_reject_reviving_status_event() -> None:
+    """completed / failed 仍不可逆：迟到事件不能把已结束的 Run 拉回 active。"""
+
+    for terminal in (ConversationRunStatus.COMPLETED, ConversationRunStatus.FAILED):
+        snapshots = InMemorySnapshotService()
+        event_projector = ConversationEventProjector(snapshots)
+        _start(event_projector)
+        event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=terminal))
+        event_projector.process(
+            RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        )
+
+        assert _run(snapshots.states[1], 1)["status"] == terminal.value
+
+
+def test_tool_part_is_created_after_run_resume(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """回归：取消后续跑时，新的 tool-call 创建事件必须落成 part 并被状态事件正常迁移。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            status=ConversationRunStatus.CANCELLED,
+            end_reason="user_cancelled",
+        )
+    )
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+    )
+
+    event_projector.process(
+        ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="call-9", tool_name="read_file")
+    )
+    event_projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            tool_call_id="call-9",
+            status="running",
+            args={"path": "a.py"},
+        )
+    )
+
+    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    assert [part["toolCallId"] for part in parts] == ["call-9"]
+    assert parts[0]["status"] == "running"
+    assert parts[0]["args"] == {"path": "a.py"}
+
+
+def test_tool_status_change_without_part_is_skipped(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """part 缺失属于展示事实不完整：跳过投影并记 warning，不得中断整个 Run。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+
+    with caplog.at_level("WARNING"):
+        change = event_projector.process(
+            ToolCallStatusChangedEvent(
+                task_id=1,
+                run_id=1,
+                tool_call_id="missing-call",
+                status="running",
+            )
+        )
+
+    assert change is not None
+    assert change.mutations == ()
+    assert _run(snapshots.states[1], 1)["messages"][1]["parts"] == []
+    assert "tool_call_part_missing_for_status_change" in {
+        record.message for record in caplog.records
+    }
+
+
 def test_run_status_usage_and_context_usage(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:

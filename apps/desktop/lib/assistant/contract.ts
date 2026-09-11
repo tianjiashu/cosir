@@ -41,7 +41,7 @@ export type GenericTransportToolData = {
   [key: string]: unknown;
 };
 
-export type TransportToolData = GenericTransportToolData;
+export type TransportToolDisplayData = GenericTransportToolData;
 
 /**
  * 文本 part：Transport 协议中的纯文本片段。
@@ -79,7 +79,7 @@ export type TransportReasoningPart = {
  *
  * 字段对齐后端 snapshot tool-call part：`toolCallId` / `toolName` /
  * `status` / `args`（解析后的参数对象）/ `error`（失败时的错误文本，成功或未完成时为
- * undefined）/ `data`（展示数据）。后端不产 `argsText` 原始 JSON 流，故本
+ * undefined）/ `display_data`（展示数据）。后端不产 `argsText` 原始 JSON 流，故本
  * 契约以 `args` 为权威参数通道；converter 在需要时从 `args` 派生 `argsText` 以贴合
  * assistant-ui 的 `ToolCallMessagePart`。
  */
@@ -98,7 +98,7 @@ export type TransportToolCallPart = {
   /** 后端声明的工具展示布局；它只影响 renderer，不改变工具生命周期。 */
   presentation?: TransportToolPresentation;
   /** 后端治理后的 UI 展示数据，前端不得从 args 推导展示内容。 */
-  data?: TransportToolData | null;
+  display_data?: TransportToolDisplayData | null;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
 };

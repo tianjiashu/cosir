@@ -27,14 +27,14 @@ test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后�
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("Reasoning", { exact: true })).toBeVisible();
-  await expect(assistant.getByText("2 个工具调用", { exact: true })).toBeVisible();
+  await expect(assistant.getByText("2 个工具调用 · 全部成功", { exact: true })).toBeVisible();
   await expect(assistant.locator('[data-slot="reasoning-trigger-icon"]')).toHaveCount(1);
   await expect(assistant.locator('[data-slot="tool-group-trigger-icon"]')).toHaveCount(1);
   await expect(assistant.getByText("先分析项目结构", { exact: true })).toHaveCount(0);
   await expect(assistant.getByText("读取文件", { exact: true })).toHaveCount(0);
   await expect(assistant).toHaveScreenshot("assistant-tool-trace.png", { animations: "disabled" });
 
-  await assistant.getByRole("button", { name: "2 个工具调用" }).click();
+  await assistant.getByRole("button", { name: /2 个工具调用 · 全部成功/ }).click();
   await expect(assistant.getByText("读取文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText(/未知工具/)).toHaveCount(0);
@@ -89,6 +89,32 @@ test("工具详情从 pending 进入 running 时自动展开，并在完成后�
   const details = assistant.getByText("未找到匹配", { exact: true });
   await expect(details).toBeVisible({ timeout: 2_000 });
   await expect(details).toBeHidden({ timeout: 3_000 });
+});
+
+test("失败的工具在流结束后显示失败而不是执行中", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "失败工具生命周期回归" } });
+  await page.goto("/tasks/42");
+  await page.getByLabel("消息输入").fill("tool-lifecycle-failed");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  const assistant = page.locator('[data-role="assistant"]').last();
+  await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
+  await expect(assistant.getByText("失败", { exact: true })).toBeVisible({ timeout: 3_000 });
+  await expect(assistant.getByText("执行中", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
+});
+
+test("取消的工具在流结束后显示已取消而不是执行中", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "取消工具生命周期回归" } });
+  await page.goto("/tasks/42");
+  await page.getByLabel("消息输入").fill("tool-lifecycle-cancelled");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  const assistant = page.locator('[data-role="assistant"]').last();
+  await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
+  await expect(assistant.getByRole("button", { name: /搜索文件 已取消/ })).toBeVisible({ timeout: 3_000 });
+  await expect(assistant.getByText("执行中", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
 });
 
 test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage footer", async ({ page, request }) => {

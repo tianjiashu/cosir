@@ -11,6 +11,17 @@ pub struct BackendProcess {
     _job: WindowsJob,
 }
 
+pub struct BackendLaunchConfig<'a> {
+    pub launcher: &'a Path,
+    pub backend_dir: &'a Path,
+    pub port: u16,
+    pub bootstate_file: &'a Path,
+    pub uv_cache_dir: Option<&'a Path>,
+    pub terminal_worker: Option<&'a Path>,
+    pub log_file: &'a Path,
+    pub structured_log_dir: &'a Path,
+}
+
 #[cfg(windows)]
 struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
 
@@ -27,32 +38,27 @@ impl Drop for WindowsJob {
     }
 }
 
-pub fn spawn_backend(
-    launcher: &Path,
-    backend_dir: &Path,
-    port: u16,
-    bootstate_file: &Path,
-    uv_cache_dir: Option<&Path>,
-    log_file: &Path,
-    structured_log_dir: &Path,
-) -> Result<BackendProcess, String> {
-    let mut command = Command::new(launcher);
-    command.current_dir(backend_dir);
-    if uv_cache_dir.is_some() {
+pub fn spawn_backend(config: &BackendLaunchConfig<'_>) -> Result<BackendProcess, String> {
+    let mut command = Command::new(config.launcher);
+    command.current_dir(config.backend_dir);
+    if config.uv_cache_dir.is_some() {
         command.args(["run", "--directory"]);
-        command.arg(backend_dir);
+        command.arg(config.backend_dir);
         command.args(["python", "-m", "app"]);
     } else {
         command.args(["-m", "app"]);
     }
-    if let Some(cache_dir) = uv_cache_dir {
+    if let Some(cache_dir) = config.uv_cache_dir {
         command.env("UV_CACHE_DIR", cache_dir);
     }
+    if let Some(worker) = config.terminal_worker {
+        command.env("CODING_AGENT_TERMINAL_WORKER", worker);
+    }
     let mut child = command
-        .env("CODING_AGENT_PORT", port.to_string())
+        .env("CODING_AGENT_PORT", config.port.to_string())
         .env("CODING_AGENT_RELOAD", "false")
-        .env("CODING_AGENT_BOOT_STATE_FILE", bootstate_file)
-        .env("CODING_AGENT_LOG_DIR", structured_log_dir)
+        .env("CODING_AGENT_BOOT_STATE_FILE", config.bootstate_file)
+        .env("CODING_AGENT_LOG_DIR", config.structured_log_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -66,8 +72,8 @@ pub fn spawn_backend(
         .stderr
         .take()
         .ok_or_else(|| "无法接管后端 stderr".to_string())?;
-    spawn_output_forwarder(stdout, log_file, "stdout");
-    spawn_output_forwarder(stderr, log_file, "stderr");
+    spawn_output_forwarder(stdout, config.log_file, "stdout");
+    spawn_output_forwarder(stderr, config.log_file, "stderr");
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;

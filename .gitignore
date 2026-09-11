@@ -113,3 +113,4 @@ temp_gen_out.txt
 .trae/
 /.uv-cache/
 /.tauri-target-terminal/
+/.cargo/

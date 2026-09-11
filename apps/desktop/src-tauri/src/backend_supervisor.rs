@@ -6,7 +6,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::backend_process::{spawn_backend, terminate_process_tree, BackendProcess};
+use crate::backend_process::{
+    spawn_backend, terminate_process_tree, BackendLaunchConfig, BackendProcess,
+};
 use crate::backend_readiness::wait_for_backend;
 use crate::backend_runtime::resolve_backend_runtime;
 use crate::desktop_log::append_json_line;
@@ -168,15 +170,16 @@ impl BackendSupervisor {
                 return Err("后端启动已被新的生命周期操作取消".to_string());
             }
             let port = find_available_port()?;
-            let child = match spawn_backend(
-                backend_runtime.launcher(),
-                backend_runtime.backend_dir(),
+            let child = match spawn_backend(&BackendLaunchConfig {
+                launcher: backend_runtime.launcher(),
+                backend_dir: backend_runtime.backend_dir(),
                 port,
-                &bootstate,
-                backend_runtime.uv_cache_dir(),
-                &log_file,
-                &runtime_dir,
-            ) {
+                bootstate_file: &bootstate,
+                uv_cache_dir: backend_runtime.uv_cache_dir(),
+                terminal_worker: backend_runtime.terminal_worker(),
+                log_file: &log_file,
+                structured_log_dir: &runtime_dir,
+            }) {
                 Ok(child) => child,
                 Err(error) => {
                     last_error = error;

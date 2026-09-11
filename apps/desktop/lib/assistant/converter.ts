@@ -17,13 +17,22 @@ import type {
   TransportToolStatus,
 } from "@/lib/assistant/contract";
 
-type UserAddMessageCommand = {
+export type UserAddMessageCommand = {
   type: "add-message";
   sourceId?: string | null;
+  parentId?: string | null;
   message: {
     role: "user";
     parts: ReadonlyArray<{ type: string; text?: string }>;
   };
+};
+
+/** The render-time Run fields required to project one canonical message. */
+export type TransportMessageRenderContext = {
+  runId: TransportRun["runId"];
+  runStatus: TransportRun["status"];
+  endReason: TransportRun["endReason"];
+  isLastRunMessage: boolean;
 };
 
 const optimisticCommandIds = new WeakMap<object, string>();
@@ -43,7 +52,7 @@ export function getOrCreateTransportCommandId(command: object): string {
   return commandId;
 }
 
-function isUserAddMessageCommand(command: unknown): command is UserAddMessageCommand {
+export function isUserAddMessageCommand(command: unknown): command is UserAddMessageCommand {
   if (typeof command !== "object" || command === null) return false;
   const candidate = command as { type?: unknown; message?: unknown };
   if (candidate.type !== "add-message" || typeof candidate.message !== "object" || candidate.message === null) {
@@ -82,19 +91,19 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
 /**
  * 把后端 tool-call part 映射为 assistant-ui part。
  *
- * `artifact` 是 UI-only 适配数据，保留后端五态、presentation、data 和错误；
+ * `artifact` 是 UI-only 适配数据，保留后端五态、presentation、display_data 和错误；
  * 它不会被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载
  * args/argsText/isError，renderer 从 artifact 读取后端展示声明。
  */
 export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
   const backendStatus = normalizeToolStatus(part.status);
-  const data = part.data ?? null;
-  const dataRecord = typeof data === "object" && data !== null ? data as Record<string, unknown> : {};
-  const statusHint = typeof dataRecord.status_hint === "string" ? dataRecord.status_hint : "执行失败";
+  const displayData = part.display_data ?? null;
+  const displayDataRecord = typeof displayData === "object" && displayData !== null ? displayData as Record<string, unknown> : {};
+  const statusHint = typeof displayDataRecord.status_hint === "string" ? displayDataRecord.status_hint : "执行失败";
   const artifact = {
     backendStatus,
     presentation: part.presentation ?? {},
-    data,
+    display_data: displayData,
     error: backendStatus === "cancelled"
       ? "已取消"
       : backendStatus === "failed" ? statusHint : null,
@@ -110,6 +119,11 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       args: args as ReadonlyJSONObject,
       argsText: JSON.stringify(args, null, 2),
       artifact,
+      // Assistant UI's optional client-side tracker uses result presence to
+      // close a tool-call stream. This is a sanitized UI sentinel only: the
+      // canonical backend status/error stays in artifact and the raw
+      // TransportState is never replaced by this projection.
+      result: { kind: "tool-terminal", status: "failed" },
       isError: true,
     };
   }
@@ -122,6 +136,9 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       args: args as ReadonlyJSONObject,
       argsText: JSON.stringify(args, null, 2),
       artifact,
+      // See the failed branch above. Never place the backend exception or
+      // tool output in this sentinel.
+      result: { kind: "tool-terminal", status: "cancelled" },
       isError: false,
     };
   }
@@ -150,8 +167,8 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
   };
 }
 
-export function toMessageStatus(message: TransportMessage, run: TransportRun): MessageStatus {
-  switch (run.status) {
+function toMessageStatusForRun(status: TransportRun["status"], endReason: TransportRun["endReason"]): MessageStatus {
+  switch (status) {
     case "pending":
     case "running":
       return { type: "running" };
@@ -166,7 +183,7 @@ export function toMessageStatus(message: TransportMessage, run: TransportRun): M
         error: "上次对话运行已中断，可以继续发送新消息。",
       };
     case "failed":
-      if (run.endReason === "client_disconnected" || run.endReason === "cancelled") {
+      if (endReason === "client_disconnected" || endReason === "cancelled") {
         return { type: "incomplete", reason: "cancelled" };
       }
       return {
@@ -179,10 +196,13 @@ export function toMessageStatus(message: TransportMessage, run: TransportRun): M
   }
 }
 
-export function toThreadMessage(
+export function toMessageStatus(message: TransportMessage, run: TransportRun): MessageStatus {
+  return toMessageStatusForRun(run.status, run.endReason);
+}
+
+function toThreadMessageWithContext(
   message: TransportMessage,
-  run: TransportRun,
-  options: { isLastRunMessage?: boolean } = {},
+  context: TransportMessageRenderContext,
 ): ThreadMessage {
   const content = message.parts
     .map((part) => {
@@ -214,8 +234,8 @@ export function toThreadMessage(
         submittedFeedback: undefined,
         timing: undefined,
         custom: {
-          runId: run.runId,
-          isLastRunMessage: options.isLastRunMessage ?? false,
+          runId: context.runId,
+          isLastRunMessage: context.isLastRunMessage,
         },
       },
     };
@@ -226,7 +246,7 @@ export function toThreadMessage(
     id: message.id,
     role: "assistant",
     content: content as ThreadAssistantMessage["content"],
-    status: toMessageStatus(message, run),
+    status: toMessageStatusForRun(context.runStatus, context.endReason),
     createdAt: new Date(),
     metadata: {
       unstable_state: null,
@@ -234,12 +254,33 @@ export function toThreadMessage(
       unstable_data: [],
       steps: [],
       custom: {
-        runId: run.runId,
-        isLastRunMessage: options.isLastRunMessage ?? false,
+        runId: context.runId,
+        isLastRunMessage: context.isLastRunMessage,
       },
     },
   };
   return assistantMessage;
+}
+
+export function toThreadMessage(
+  message: TransportMessage,
+  run: TransportRun,
+  options: { isLastRunMessage?: boolean } = {},
+): ThreadMessage {
+  return toThreadMessageWithContext(message, {
+    runId: run.runId,
+    runStatus: run.status,
+    endReason: run.endReason,
+    isLastRunMessage: options.isLastRunMessage ?? false,
+  });
+}
+
+/** Project one canonical message from only the Run fields needed by the UI. */
+export function toThreadMessageWithRenderContext(
+  message: TransportMessage,
+  context: TransportMessageRenderContext,
+): ThreadMessage {
+  return toThreadMessageWithContext(message, context);
 }
 
 export function extractUserAddMessageText(command: unknown): string {
@@ -257,7 +298,8 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
     : null;
 }
 
-function toPendingUserMessage(command: UserAddMessageCommand): ThreadMessage | null {
+export function toPendingUserMessage(command: unknown): ThreadMessage | null {
+  if (!isUserAddMessageCommand(command)) return null;
   const parts = command.message.parts
     .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string" && part.text.length > 0)
     .map((part) => ({ type: "text" as const, text: part.text }));
@@ -275,7 +317,7 @@ function toPendingUserMessage(command: UserAddMessageCommand): ThreadMessage | n
   });
 }
 
-function toSnapshotErrorMessage(error: TransportError): ThreadAssistantMessage {
+export function toSnapshotErrorMessage(error: TransportError): ThreadAssistantMessage {
   return {
     id: "snapshot-error",
     role: "assistant",
@@ -309,11 +351,17 @@ export function toTransportThreadView(
   const currentRun = state.current_run_id === null
     ? null
     : state.runs.find((run) => run.runId === state.current_run_id) ?? null;
+  const hasPendingCommands = connectionMetadata.pendingCommands.length > 0;
+  const currentRunIsTerminal = currentRun !== null
+    && ["idle", "completed", "failed", "cancelled", "interrupted"].includes(currentRun.status);
   return {
     messages: [...messages, ...pendingMessages],
-    // 未知 run 状态保持非成功的活动态，直到服务端给出明确终态；不能把未知值
-    // 当作 idle，也不能在 EOF 后伪造 completed。
-    isRunning: connectionMetadata.isSending || (currentRun !== null && !["idle", "completed", "failed", "cancelled", "interrupted"].includes(currentRun.status)),
+    // 服务端 Run 终态是唯一事实源，优先级高于 transport 的 sending 标记。
+    // EOF/React 提交存在时序差异：如果 isSending 仍为 true，不能因此把
+    // 已经 failed/cancelled 的 Run 重新投影为运行中。待发送命令仍然保留
+    // sending 语义，以免新消息尚未创建 Run 时输入区提前恢复。
+    isRunning: hasPendingCommands
+      || (currentRun !== null ? !currentRunIsTerminal : connectionMetadata.isSending),
     // initial-state/recovery 入口已通过 parseTransportState 验证；这里仅按官方
     // AssistantTransportState 的 JSON state 字段透传，不构造或回写领域事实。
     state: state as unknown as ReadonlyJSONValue,

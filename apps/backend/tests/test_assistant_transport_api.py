@@ -508,3 +508,152 @@ async def test_sse_callback_logs_and_propagates_failures(caplog: pytest.LogCaptu
         await service.subscribe_run_state(object(), 1, 13)
 
     assert "assistant_sse_callback_failed" in {record.message for record in caplog.records}
+
+
+class _Operation:
+    """task 运行时空间的独占操作桩。"""
+
+    def __enter__(self) -> "_Operation":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class _TaskSpace:
+    """task 运行时空间桩。"""
+
+    def operation(self, *, timeout: float) -> _Operation:
+        assert timeout == 10
+        return _Operation()
+
+
+class _TaskSpaces:
+    """task 运行时空间注册表桩。"""
+
+    def get_or_create(self, _task_id: int) -> _TaskSpace:
+        return _TaskSpace()
+
+
+@pytest.mark.asyncio
+async def test_resume_setup_failure_settles_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """写操作之后再次读取快照失败时，必须补偿收敛 run，不能留下无执行器的 active run。"""
+
+    state = _snapshot(7, "cancelled")
+    snapshot_reads = 0
+    settled: list[tuple[int, str]] = []
+
+    class _TaskService:
+        def get_latest_run(self, _task_id: int) -> object:
+            return SimpleNamespace(id=7, status="cancelled", end_reason="user_cancelled")
+
+    class _SnapshotService:
+        def ensure_state_snapshot(self, _task_id: int) -> dict[str, object]:
+            nonlocal snapshot_reads
+            snapshot_reads += 1
+            if snapshot_reads > 1:
+                raise RuntimeError("snapshot read failed")
+            return state
+
+    class _RunService:
+        def resume_cancelled_run(self, _run_id: int) -> object:
+            return SimpleNamespace(id=7, task_id=1, status="running")
+
+        def cancel_run_if_running(
+            self,
+            run_id: int,
+            end_reason: str = "user_cancelled",
+            final_output: str | None = None,
+            usage_stats: object | None = None,
+        ) -> object:
+            settled.append((run_id, end_reason))
+            return SimpleNamespace(id=run_id, task_id=1, status="cancelled")
+
+    class _CommandCrud:
+        def get_by_run(self, _run_id: int) -> object:
+            return SimpleNamespace(id=6, command_id="transport-second")
+
+    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
+    service._task = _TaskService()
+    service._snapshots = _SnapshotService()
+    service._conversation_run = _RunService()
+    service._command = _CommandCrud()
+    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
+
+    with pytest.raises(RuntimeError, match="snapshot read failed"):
+        service.resume_latest_run(task_id=1, run_id=7)
+
+    assert snapshot_reads == 2
+    assert settled == [(7, "resume_setup_failed")]
+
+
+@pytest.mark.asyncio
+async def test_resume_reads_command_before_restoring_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """驱动命令读取必须在恢复 run 之前完成：读取失败时 run 仍是 cancelled。"""
+
+    state = _snapshot(7, "cancelled")
+    resumed = False
+
+    class _TaskService:
+        def get_latest_run(self, _task_id: int) -> object:
+            return SimpleNamespace(id=7, status="cancelled", end_reason="user_cancelled")
+
+    class _SnapshotService:
+        def ensure_state_snapshot(self, _task_id: int) -> dict[str, object]:
+            return state
+
+    class _RunService:
+        def resume_cancelled_run(self, _run_id: int) -> object:
+            nonlocal resumed
+            resumed = True
+            return SimpleNamespace(id=7, task_id=1, status="running")
+
+        def cancel_run_if_running(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("读取失败时不应触发收敛")
+
+    class _CommandCrud:
+        def get_by_run(self, _run_id: int) -> object:
+            raise RuntimeError("command lookup failed")
+
+    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
+    service._task = _TaskService()
+    service._snapshots = _SnapshotService()
+    service._conversation_run = _RunService()
+    service._command = _CommandCrud()
+    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
+
+    with pytest.raises(RuntimeError, match="command lookup failed"):
+        service.resume_latest_run(task_id=1, run_id=7)
+
+    assert resumed is False
+
+
+def test_settle_run_start_failure_cancels_active_run() -> None:
+    """执行器启动失败后，run 必须被收敛为终态，不能残留 active run。"""
+
+    cancelled: list[tuple[int, str]] = []
+
+    class _RunService:
+        def cancel_run_if_running(self, run_id: int, end_reason: str = "user_cancelled") -> object:
+            cancelled.append((run_id, end_reason))
+            return SimpleNamespace(id=run_id, task_id=1, status="cancelled")
+
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._runs = _RunService()
+
+    service.settle_run_start_failure(7)
+
+    assert cancelled == [(7, "run_start_failed")]
+
+
+def test_settle_run_start_failure_swallows_settle_errors() -> None:
+    """收敛自身失败只记日志，不能覆盖原始启动异常。"""
+
+    class _RunService:
+        def cancel_run_if_running(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("database unavailable")
+
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._runs = _RunService()
+
+    service.settle_run_start_failure(7)

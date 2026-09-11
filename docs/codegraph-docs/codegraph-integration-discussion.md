@@ -25,7 +25,7 @@
 - CodeGraph 的 `status/init/sync` 等生命周期管理不作为 Agent 可见 tool 暴露。
 - 第一版配齐 Agent 可见的 CodeGraph 查询工具。
 - 文件搜索工具当前保留，作为 CodeGraph 不可用、索引未覆盖或需要纯文本匹配时的兜底。
-- CodeGraph vendor 源码已放入 `third_party/codegraph`，并保留 MIT `LICENSE` 与 `UPSTREAM.md` 来源说明。
+- CodeGraph vendor 源码已放入 `apps/codeIndex`，并保留 MIT `LICENSE` 与 `UPSTREAM.md` 来源说明。
 - 长期方向不是依赖用户机器上的全局 `codegraph` CLI。
 - Python 后端不重写 CodeGraph 核心逻辑。
 - 倾向复用 CodeGraph MCP 背后的执行层，而不是把 CodeGraph 当外部 MCP 服务接入。
@@ -57,7 +57,7 @@ coding-agent
     ToolSystem
       - 向 Agent 暴露 CodeGraph 查询工具
 
-  third_party/codegraph/
+  apps/codeIndex/
     src/agent-kernel/
       server.ts
       protocol.ts
@@ -509,7 +509,7 @@ CodeGraph 能力分两类：
 
 - 内置 Node Kernel 仍是独立运行时，不是 Python 进程内库；需要管理生命周期、启动失败、超时和崩溃恢复。
 - 如果直接复用 MCP `ToolHandler` 的文本输出，第一版实现简单，但结构化程度有限。
-- 如果过早裁剪 `third_party/codegraph`，后续 upstream 合并和问题定位会变复杂。
+- 如果过早裁剪 `apps/codeIndex`，后续 upstream 合并和问题定位会变复杂。
 - 默认启用会增加首次 workspace 使用时的索引等待，需要前端把索引行为解释清楚。
 - CodeGraph 写入 `.codegraph/` 会影响用户仓库目录，需要明确权限和忽略策略。
 - 每次新建 task 前检查和阻塞同步索引会增加启动耗时，需要定义快速状态检查和用户可见反馈策略。
@@ -519,7 +519,7 @@ CodeGraph 能力分两类：
 
 ## 开放问题
 
-- `third_party/codegraph` 第一阶段是否保留 site、installer、telemetry-worker 等非运行核心目录。
+- `apps/codeIndex` 第一阶段是否保留 site、installer、telemetry-worker 等非运行核心目录。
 - CodeGraph 查询结果在前端工具调用卡片中如何展示：全文文本、折叠摘要，还是结构化分区。
 - `WorkspaceManager` 如何与现有 `WorkspaceService`、`TaskService`、`AgentRuntime` 分层对齐，避免把服务层和运行时层搅在一起。
 - 内置 Node runtime 的具体资源路径、版本锁定、升级策略和跨平台产物组织方式。

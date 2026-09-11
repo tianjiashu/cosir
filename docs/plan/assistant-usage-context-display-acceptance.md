@@ -27,7 +27,7 @@
 ### B. run usage 更新
 
 - [x] 每个完整模型调用最多按一次 usage metadata 累加；流式 chunk 不重复累加。
-- [x] `UsageUpdatedEvent` 到达后，snapshot usage 是该 run 的完整累计替换值，而不是前端自行累加的增量。
+- [x] Run 终态 `RunStatusChangedEvent.usage_stats` 写入该 run 的完整累计值，而不是前端自行累加的增量。
 - [x] `RunInitializedEvent` 后 usage 已清零且 `usage_run_id` 指向新 run。
 - [x] completed、failed、cancelled、resume 路径均不会把上一 run 的 usage 留在新 run 上；终态小 usage 不能覆盖大累计值。
 - [x] provider 没有 usage 时 UI 显示“统计中/—”，不把 0 文案解释成真实消耗 0 token。
@@ -74,8 +74,9 @@
 
 ```text
 RunInitializedEvent -> usage reset
-UsageUpdatedEvent(step 1) -> cumulative usage
-UsageUpdatedEvent(step 2) -> replacement cumulative usage
+model step 1 -> ConversationRunUsageStats 累加
+model step 2 -> ConversationRunUsageStats 累加
+RunStatusChangedEvent(terminal, usage_stats) -> final usage snapshot
 completed / failed / cancelled -> final known usage
 new run -> old usage isolation
 ContextUsageUpdatedEvent -> ratio + used + window

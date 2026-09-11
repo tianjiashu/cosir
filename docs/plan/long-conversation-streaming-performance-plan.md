@@ -1,622 +1,585 @@
-# 长历史对话与流式渲染性能改造方案
+# 长历史对话与流式渲染性能改造方案（按当前代码重设计）
 
-> 状态：方案阶段，尚未实施。
+> 状态：重新设计，尚未实施。
 >
-> 本方案针对 `coding-agent` 长历史对话下的流式渲染卡顿、滚动追赶和首屏加载成本。
-> 它建立在现有 Assistant Transport 增量快照方案之上，不改变 Conversation snapshot 与
-> Runtime context 的职责边界，也不引入远程服务、队列、Redis 或其他分布式设施。
+> 本文是性能改造方案，不是执行指令集合。它以当前工作树代码为事实基础；工作树中其
+> 他未提交改动不属于本文范围，也不应因实施本文而回退。
+>
+> 明确决策：本轮不做 Transport subscriber-local 合帧。后端继续按已提交的
+> `SnapshotChange` 逐次向订阅者发送；任何合帧、节流或背压改造另立方案。
 
-## 1. 目标与结论
+## 1. 结论与范围
 
-长对话的性能问题不是一个单点问题，而是四个成本叠加：
-
-```text
-模型 chunk
-  -> snapshot mutation / SQLite commit
-  -> Transport 通知与 flush
-  -> frontend state converter
-  -> message identity / GroupedParts
-  -> Markdown、tool UI、DOM、滚动
-```
-
-目标是让一次文本增量只影响：
-
-1. 当前正在生成的 text/reasoning part；
-2. 必要的运行状态和自动滚动；
-3. 视口附近真正需要挂载的消息。
-
-历史消息必须保持稳定引用、稳定 row identity 和可恢复事实，但不应在每个增量上重新
-转换、重新处理或重新绘制。
-
-推荐的实施顺序是：
+长历史对话的第一瓶颈在 WebView 内的“状态更新后如何转换和挂载”，而不是先改变
+Assistant Transport 协议。当前应按以下顺序推进：
 
 ```text
-Phase 0  建立性能基线
-Phase 1  converter 结构共享与消息身份稳定
-Phase 2  （可选）Transport 文本增量合帧
-Phase 3  长线程消息虚拟化与滚动控制
-Phase 4  历史窗口/分页与首屏加载治理
+P0  建立可复现的前后端基线与诊断
+P1  稳定 Assistant Transport converter，并复用 assistant-ui 消息转换缓存
+P2  修正自定义 Thread 的屏幕外 paint 成本与滚动行为
+P3  只有 profile 证明 React mount/update 成为瓶颈时，才引入虚拟列表
+P4  只有完整 state 传输/解析/SQLite 成为瓶颈时，另行设计历史窗口
 ```
 
-Phase 0 和 Phase 1 是默认必须项；Phase 3 在数百条消息或重型 tool UI 的 Task 上按基线
-启用；Phase 2 不进入默认实施路线，只有性能基线证明 Transport 帧频或 backend flush 是
-瓶颈时才考虑；Phase 4 在确实达到数千条消息、单 snapshot 或首屏 JSON 已成为瓶颈时实施。
+本轮包含 P0–P2 的设计，P3 是有门槛的后续阶段，P4 不作为本轮实现前置条件。
+Transport subscriber-local 合帧从默认路线和可选路线中都移除。
 
-## 2. 架构边界
+目标是让一次文本增量主要影响：
 
-### 2.1 进程与事实所有权
+1. 当前发生变化的 assistant message/part；
+2. 必要的运行状态和滚动跟随；
+3. 当前视口真正需要绘制的内容。
 
-本项目仍是单用户本地桌面 Agent：
+不以“把历史从 canonical snapshot 中删除”或“让前端自行维护另一份对话事实”为代价。
+
+## 2. 运行拓扑与不变边界
+
+本项目仍是单用户、本机运行的桌面 Agent：
 
 ```text
-Tauri / React UI 进程
-  -> localhost Assistant Transport
-本机 FastAPI backend 进程
-  -> LangGraph / Runtime / Tool subprocess
-  -> SQLite
+Tauri Rust 主进程
+├─ WebView2 / React
+└─ FastAPI backend 子进程
+   ├─ Agent Runtime / LangGraph workflow
+   ├─ SQLite
+   └─ 按需创建的工具子进程
 ```
 
-- backend 进程拥有 Agent 执行、Conversation snapshot、Run、checkpoint、工具和文件事实。
-- `ConversationTaskSnapshotService` 继续是 Transport/UI snapshot 的唯一 owner。
-- `RuntimeContextManager` 继续是 LLM context 的唯一事实源；UI snapshot 不能反向写入 context。
-- React state、assistant-ui runtime state 和性能缓存都只是不可持久化的渲染副本。
-- Assistant UI 类型和实现只存在于 `apps/desktop`；backend 不依赖 React 或 assistant-ui。
+- Tauri 是 backend 子进程生命周期的唯一所有者，负责启动、readiness、有限恢复和退出清理。
+- React 只通过动态 runtime config 访问 localhost backend；不创建、停止或重启 backend。
+- `ConversationTaskSnapshotService` 是 Transport snapshot 的唯一 owner。
+- `ConversationEventProjector` 只把 conversation event 投影为 snapshot mutation，不维护
+  第二套 Run 状态机，也不触碰 `RuntimeContextManager`。
+- `RuntimeContextManager` 继续负责 LLM context 的 working copy、序列、消息存储和持久化；
+  UI snapshot 不反向写入 context。
+- `ConversationRunModel.status` 是 Run 生命周期唯一事实源；snapshot 读取边界只做现有的
+  终态对账。
+- React state、assistant-ui runtime state 和 converter cache 都是渲染副本，不写入
+  `localStorage`，也不成为业务恢复依据。
 
-本方案会跨越现有的本机 HTTP/Assistant Transport 进程边界，但不会改变边界。后端由现有
-Tauri supervisor 启动、停止和报告 readiness；backend 崩溃后，内存 snapshot/notifier/HTTP
-连接丢失，新的 backend 从 SQLite 恢复，前端重新从 state endpoint 或 attach 流 hydrate。
-可选的性能合帧不能成为恢复事实，未提交的 Transport 更新可以丢失，已提交 snapshot 必须
-可重新读取。
-
-模型供应商请求仍按现有 provider 配置离开本机；本方案不新增任何网络数据流。
-
-### 2.2 不改变的持久化原则
-
-后端持久化与 Transport 推送必须保持：
-
-```text
-领域 mutation
-  -> snapshot/context/Run 按现有 owner 规则提交
-  -> SQLite commit 成功
-  -> 通知 Transport subscriber
-```
-
-如果未来启用合帧，它只允许发生在“已提交 snapshot 到某个 HTTP subscriber 的协议输出”
-之间。默认路线不依赖合帧；无论是否启用，都不能为了获得更平滑的 UI，把 snapshot 延迟
-提交、只写内存，或重新引入 outbox/revision/distributed queue。
-
-这和已有的 [incremental Assistant Transport snapshot plan](./incremental-assistant-transport-snapshot-plan.md)
-一致：`controller.state` 是单个连接的协议副本，不是新的业务事实源。
+backend 崩溃或重启时，进程内 subscriber、controller state 和 converter cache 都会丢失；
+新进程从 SQLite 恢复，遗留 active Run 按现有规则收敛，不隐式重放。前端通过 state 端点和
+attach 重新建立渲染状态。性能优化不得改变这一恢复语义。
 
 ## 3. 当前代码事实
 
-### 3.1 Assistant Transport 是全 state + converter 模型
+### 3.1 当前 Transport 链路
 
-当前桌面端在
-`apps/desktop/components/assistant/assistant-runtime.tsx` 使用
-`useAssistantTransportRuntime`，协议为 `assistant-transport`，并提供：
+当前实际数据流是：
 
-- `initialState`：由 `useAssistantInitialState` 从
-  `/tasks/{taskId}/assistant/state` 首屏加载；
-- `resumeApi`：`/tasks/{taskId}/assistant/attach`；
-- `converter`：`toTransportThreadView`；
-- `body` / `prepareSendCommandsRequest`：发送 Task、workspace、provider、model 和 run 信息。
+```text
+model.astream()
+  → ModelChunkProcessor
+  → LangGraph custom stream
+  → WorkflowOperations.process_event()
+  → ConversationEventProjector
+  → ConversationTaskSnapshotService
+       validate + SQLite commit + _publish
+  → Subscriber.queue（每个 HTTP 连接独立）
+  → AssistantTransportStreamService
+       apply set / append-text + controller.flush()
+  → assistant-stream decoder / accumulator
+  → useAssistantTransportRuntime
+  → converter
+  → ExternalStoreRuntime / assistant-ui Thread
+```
 
-这符合 assistant-ui 官方 Assistant Transport 模型：backend 流式传输 agent state snapshot，
-frontend converter 将 snapshot 转成 UI message。官方文档明确说明 Assistant Transport
-是建立在 `ExternalStoreRuntime` 之上的 state-streaming protocol，而不是直接把后端消息
-组件化渲染。
+相关实现：
 
-参考：[Assistant Transport](https://www.assistant-ui.com/docs/runtimes/custom/assistant-transport)。
+- workflow：`apps/backend/app/core/workflows/react/workflow.py`
+- 运行时门面：`apps/backend/app/core/workflows/workflow_operations.py`
+- 事件投影：`apps/backend/app/assistant_transport/service/conversation_event_projector.py`
+- snapshot owner：`apps/backend/app/assistant_transport/service/conversation_task_snapshot_service.py`
+- SSE 订阅与 mutation 编码：`apps/backend/app/assistant_transport/service/transport_stream_service.py`
+- HTTP 入口：`apps/backend/app/assistant_transport/assistant_api.py`
+- 前端 runtime 装配：`apps/desktop/components/assistant/runtime/use-runtime-transport.ts`
 
-### 3.2 converter 每次更新都会重建完整历史
+`ConversationTaskSnapshotService` 在事务提交后才发布 `SnapshotChange`。首帧是 root `set`，
+后续文本使用 `append-text`，结构、工具状态、错误和终态使用 `set`。本轮不改变这些
+mutation 语义，不把渲染性能策略放进 snapshot owner 或 projector。
 
-`apps/desktop/lib/assistant/converter.ts` 的 `toTransportThreadView` 当前会：
+### 3.2 当前前端 runtime 与关键问题
+
+当前 runtime session 已完成以下职责拆分：
+
+- `AssistantRuntimeSession` 在 `AssistantRuntimeProvider` 下装配 transport、recovery、
+  cancellation、state commit bridge 和 Thread；
+- `RuntimeControlBridge` 区分 attach/resume 控制；
+- `useRuntimeRecovery` 负责业务恢复；
+- `useRuntimeTransport` 负责 API、错误、终态补偿和 Assistant Transport callbacks；
+- `TransportStateCommitBridge` 只把 runtime 当前 state 同步到进程内最新引用，不是新的事实源。
+
+但当前还有两个确定的渲染成本：
+
+1. `useRuntimeTransport` 将
+   `converter: (state, connectionMetadata) => toTransportThreadView(...)` 作为 inline
+   函数传入。该函数身份随 hook render 改变；assistant-ui 的 `useConvertedState` 会把
+   converter 身份作为 memo 依赖，因此即使 state 本身没有实质变化也可能重新转换。
+2. `toTransportThreadView` 每次都会遍历所有 Run 和所有 message，并直接调用
+   `toThreadMessage`。未修改历史 message 虽然通常保持输入对象引用，但当前转换层没有
+   按输入对象复用转换结果的机制。
+
+这比“当前后端没有合帧”更适合作为第一修复目标。后端当前确实在
+`AssistantTransportStreamService._apply_snapshot_change` 中对每个 change 应用 mutation
+后立即 `controller.flush()`，但本轮只测量，不修改它。
+
+### 3.3 assistant-stream 的引用事实
+
+当前桌面安装的 `assistant-stream` accumulator 对嵌套 mutation 使用结构共享：
+
+- `append-text` 会复制从 root 到目标 path 的数组/对象；
+- 未命中的兄弟分支保持原引用；
+- 因而历史 Run、未修改 message 和未修改 part 通常能保持引用稳定；
+- 当前活动 text/reasoning part 变化时，只有其祖先路径及目标对象需要变化。
+
+这使“以稳定输入身份为键的前端转换缓存”可行，但不能直接假设所有对象永远稳定：root
+set、编辑/重排、重连 hydrate、错误投影和不兼容的 future mutation 都必须触发安全失效。
+
+### 3.4 当前 Thread 与 Markdown
+
+`apps/desktop/components/assistant-ui/elements/thread.aui.tsx` 当前使用官方的
+`ThreadPrimitive.Viewport` 和 `ThreadPrimitive.Messages` children render function；没有
+虚拟列表，也没有发现 `content-visibility` 或 `contain-intrinsic-size` 样式。当前 viewport
+还使用 `scroll-smooth`。
+
+assistant-ui 官方文档说明：默认 kit 使用 `content-visibility: auto` 与
+`contain-intrinsic-size` 降低屏幕外消息的 paint 成本；这不等于减少 React mount/update。
+当前自定义 Thread 不自动获得默认 kit 的全部样式，因此要先补齐轻量 containment，再测量
+是否仍需虚拟化。
+
+当前 `apps/desktop/components/markdown-text.tsx` 使用
+`StreamdownTextPrimitive` 的 `mode="streaming"`、`defer`、caret 和链接安全配置。
+`defer` 只能降低 Markdown 解析优先级，不能修复上游重复转换，也不能减少 Transport 更新数。
+
+### 3.5 当前依赖事实
+
+当前锁定/安装的关键版本包括：
+
+- `@assistant-ui/react` `0.15.17`
+- `@assistant-ui/core` `0.3.16`
+- `@assistant-ui/react-streamdown` `0.3.13`
+- desktop `assistant-stream` `0.3.40`（由 npm 依赖树提供）
+- backend `assistant-stream` `0.0.36`（`apps/backend/pyproject.toml`）
+
+JavaScript 与 Python 包版本号不相同本身不代表不兼容；但每次依赖升级必须执行真实的
+`set`、`append-text`、终态、取消和重连互操作测试。不要因为性能方案而盲目升级或锁成相同
+版本号。
+
+## 4. Assistant UI 官方依据与适用结论
+
+本方案以以下官方文档和当前安装包源码为准：
+
+- [Assistant Transport](https://www.assistant-ui.com/docs/runtimes/custom/assistant-transport)：
+  Assistant Transport 是建立在 `ExternalStoreRuntime` 上的 state-streaming protocol；
+  backend 发送 state，frontend converter 映射为 UI messages。
+- [Message conversion API](https://www.assistant-ui.com/docs/api-reference/external-store/message-conversion)：
+  `unstable_createMessageConverter` 可按 external message 输入复用转换结果；该 API 仍为
+  unstable，使用时必须锁定版本并保留回归测试。
+- [Thread](https://www.assistant-ui.com/docs/primitives/thread)：
+  普通线程使用 `ThreadPrimitive.Viewport` 管理 auto-scroll；`Messages` children render
+  function 是当前推荐的消息迭代方式。
+- [Thread Virtualization](https://www.assistant-ui.com/docs/guides/virtualization)：
+  默认不需要虚拟化；只有 React mount/update 本身成为数百到数千条消息或重型内容的瓶颈时
+  才使用。虚拟化时使用 `unstable_useThreadMessageIds` 和
+  `ThreadPrimitive.Unstable_MessageById`，并由自定义 scroll owner 管理滚动。
+- [Message primitives](https://www.assistant-ui.com/docs/primitives/message)：
+  `GroupedParts` 适用于相邻 part 分组，`groupPartByType` 自带稳定 memo fingerprint；
+  非相邻特殊分组才使用 unstable API。
+- [Markdown text](https://www.assistant-ui.com/elements/markdown-text)：
+  MarkdownText 读取当前 message part context；streaming/defer 是渲染策略，不是 state
+  持久化策略。
+
+由此得到三个边界：
+
+1. 不把 assistant-ui 类型下沉到 backend、storage、workflow 或 context。
+2. 不为了缓存把 canonical state 转为前端私有事实；缓存只存渲染对象。
+3. 不在普通列表阶段提前接管 assistant-ui viewport；只有真正虚拟化时才切换到
+   `ViewportProvider` + 自定义 scroll owner。
+
+## 5. P0：基线与诊断
+
+### 5.1 固定测试数据
+
+使用同一套可复现 fixture，至少包含：
+
+1. 20 条普通 user/assistant 消息；
+2. 200 条消息，含多段 Markdown；
+3. 1000 条消息，含 reasoning、tool trace、diff、terminal 和失败工具状态。
+
+每组测试首屏、历史滚动、发送新消息、纯 text streaming、reasoning streaming、tool 生命周期、
+cancel、attach/reconnect、edit 和 fork。模型输出使用固定本地 stub，不用一次人工体感作为
+唯一结论。
+
+### 5.2 前端只记录摘要指标
+
+在开发诊断开关下增加计时或 profiler hook，沿用项目的 `frontendLog`，只记录：
+
+- task/run/trace 标识；
+- message、part、字符总数；
+- Transport state update 次数；
+- converter 调用次数、耗时、缓存命中/失效数量；
+- React commit 次数、最长 commit；
+- Markdown parse 次数/耗时；
+- 已挂载消息数、可见消息数；
+- scroll event、是否处于底部跟随、Task 切换后的缓存条目数。
+
+禁止记录 prompt、token 内容、tool args、文件内容、完整模型响应或凭据。正式日志默认
+采样，性能 fixture 可通过内存计数器和 React Profiler 获取，不把高频计时写成生产噪声。
+
+### 5.3 backend 只观察，不合帧
+
+复用现有结构化日志，补充或核对以下摘要：
+
+- model delta 到 event projector 的耗时；
+- snapshot apply、SQLite commit、commit-to-publish 延迟；
+- subscriber queue 入队/出队数量与深度；
+- `controller.flush()` 次数、每次 mutation 数和消息数量；
+- first snapshot、first text、terminal snapshot 时间。
+
+这些指标用于判断瓶颈是否在 backend durable path。P0 不修改 queue、flush 频率或 mutation
+顺序；尤其不引入 subscriber-local coalescer。
+
+## 6. P1：稳定 converter 与结构共享
+
+### 6.1 先修 converter 身份
+
+将 `useRuntimeTransport` 中的 inline converter 改为模块级稳定引用，或用无动态依赖的
+`useCallback`，首选直接传入稳定的命名函数：
 
 ```ts
-const messages = state.messages.map((message) =>
-  toThreadMessage(message, ...),
-);
+converter: toTransportThreadView
 ```
 
-`toThreadMessage` 会继续创建新的 metadata、parts、tool artifact 和派生字段。即使历史
-消息内容没有变化，新的 `ThreadMessage` 和 `parts` 引用仍然会产生。
+该改动先单独验收，确认未发生 state 更新时不再因 converter 函数身份变化而重复转换。
+它不改变 `TransportState`、request body、resume、cancel 或错误处理。
 
-当前运行时内部会在每个 Assistant Transport state chunk 后重新计算 converted state。对
-`ExternalStoreRuntime` 而言，新的 messages array 和新 message object 会使历史消息也进入
-adapter 更新路径；`MessagePrimitive.GroupedParts` 收到新的 parts array 后也无法复用旧 tree。
+### 6.2 用官方 helper 做 message-level 缓存
 
-因此，当前最先需要治理的是对象身份与结构共享，而不是先增加更多 Markdown 优化。
+在 `apps/desktop/lib/assistant/converter.ts` 内增加 task/runtime 生命周期内的 converter
+实例，优先复用官方 `unstable_createMessageConverter`。实例通过 `useMemo` 在
+`AssistantRuntimeSession` 或 `useTaskAssistantTransportRuntime` 的 task 生命周期内创建，
+不得把带有当前调用上下文的可变闭包做成 module-global singleton。
 
-### 3.3 当前 Thread 会挂载完整消息列表
-
-`apps/desktop/components/assistant-ui/elements/thread.aui.tsx` 当前使用：
-
-```tsx
-<ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
-```
-
-当前代码中没有发现 `unstable_useThreadMessageIds`、
-`ThreadPrimitive.Unstable_MessageById`、`MessageByIndex` 或
-`@tanstack/react-virtual`。因此历史消息全部处在 React tree 中；即使浏览器可以通过
-`content-visibility` 减少部分 paint，React 更新和自定义 tool UI 的成本仍然存在。
-
-当前 viewport 还带有 `scroll-smooth`。在流式内容高度变化时，它可能放大自动跟随底部的
-视觉追赶，但它不是 converter 重建的根因。
-
-### 3.4 backend 当前没有文本增量合帧（可选优化的背景）
-
-`apps/backend/app/core/workflows/nodes/model_node.py` 对 `model.astream(messages)` 的
-每个 chunk 发布 Assistant text/reasoning delta。
-
-`ConversationTaskSnapshotService` 将 mutation 应用到内存快照、校验、写 SQLite，并在
-`_apply_snapshot_change` 的路径上调用 `controller.flush()`。`TransportAssistantService`
-则从 subscriber queue 逐个取 `SnapshotChange`，当前没有按文本窗口合并相邻 change 的
-逻辑。
-
-这会让前端收到不均匀的 state update：模型或 SQLite 形成 burst，React 再对每个 burst 做
-一次完整 converter/render 工作，于是体感上出现“卡一下、跳一段”。但合帧只是在减少
-更新次数，不能解决 converter 对整段历史的重建，因此属于可选的后置优化，不是长历史
-对话的主修复路径。
-
-### 3.5 Markdown 已经启用 defer，但它只能降低优先级
-
-`apps/desktop/components/markdown-text.tsx` 已启用：
-
-```tsx
-mode="streaming"
-defer
-```
-
-官方 Streamdown 文档对 `defer` 的定义是使用 `useDeferredValue` 把 Markdown parsing 放到
-较低优先级，以便保持输入和滚动响应。它不能阻止上游把所有历史 message 重新转换，也
-不能减少 backend state frame 数量。
-
-参考：[Streamdown Markdown Renderer](https://www.assistant-ui.com/docs/guides/streamdown)。
-
-## 4. 目标运行模型
-
-### 4.1 四类更新分开治理
-
-| 更新 | 是否影响 canonical snapshot | 是否需要每次立即显示 | 允许合并方式 |
-| --- | --- | --- | --- |
-| 当前 text/reasoning append | 是 | 需要保持自然流式显示 | 默认逐 mutation；未来可在同一路径短窗口合并 |
-| 新 message / 新 part | 是 | 需要尽快显示 | 默认立即传输；若未来合帧，不得越过结构边界 |
-| tool 状态、approval、error | 是 | 需要立即显示 | 不延迟 terminal/approval/error |
-| run completed/failed/cancelled | 是 | 必须立即收尾 | 强制 flush，确保最终状态先于流结束 |
-
-默认目标是降低每次 UI 更新的计算量，而不是减少 text mutation 数量；首先依靠稳定引用
-和按需挂载。若后续启用合帧，目标才是降低 UI 连接看到的无意义 frame 数量，并保证最后
-一个可见状态和 durable snapshot 一致。
-
-### 4.2 更新后的数据流
-
-```text
-model chunk
-  -> Runtime mutation
-  -> snapshot owner: validate + SQLite commit
-  -> Transport subscriber（默认逐 mutation）
-  -> controller.state apply mutations
-  -> controller.flush()
-  -> stable converter output
-  -> only active message / visible rows update
-```
-
-如果 Phase 2 后置启用，每个 HTTP 连接再拥有独立的 coalescer 和 `controller.state` 副本。
-无论是否启用，一个连接的慢渲染不能阻塞另一个连接，也不能改变 SQLite snapshot。
-
-## 5. Phase 0：性能基线与可观测性
-
-在任何结构性改造前，先记录同一个 Task 的以下指标：
-
-### 5.1 frontend 指标
-
-在开发诊断模式中增加非生产噪声日志或 profiling hook：
-
-- 初始 `messageCount`、`partCount`、总文本字符数；
-- 每秒收到的 Transport state update 数；
-- 每次 converter 执行耗时；
-- 新建的 message/part 数量与可复用数量；
-- React commit 次数、最长 commit 时长；
-- Markdown parse 次数和耗时；
-- viewport scroll event 次数及是否处于底部跟随；
-- 当前可见消息数与已挂载消息数。
-
-禁止在日志中输出 prompt、token、tool 参数或文件内容；只记录 count、size、duration、
-run_id 和 trace_id。
-
-### 5.2 backend 指标
-
-在结构化日志中增加：
-
-- model delta 到达时间；
-- snapshot mutation apply / SQLite commit 耗时；
-- commit 后 publish 时间；
-- subscriber queue 入队、出队和 Transport flush 数量；若启用 Phase 2，再记录合帧数量；
-- 每个 flush 包含的 mutation 数、字符数和时间跨度；
-- stream 的 first snapshot、first text、terminal snapshot 时间。
-
-### 5.3 验收基线
-
-使用三组本地 fixture：
-
-1. 20 条普通消息；
-2. 200 条消息，包含普通 Markdown；
-3. 1000 条消息，包含 reasoning、tool trace、diff 和 terminal 展示。
-
-每组分别测试：首屏加载、历史滚动、发送新消息、纯 text streaming、reasoning streaming、
-tool 生命周期和断线重连。
-
-## 6. Phase 1：converter 结构共享与消息身份稳定
-
-### 6.1 设计
-
-把当前导出的无状态转换函数拆成“每个 runtime/task 一个生命周期 converter”：
+当前 message 没有独立的 `runId` 字段，而 message status 和 fork metadata 依赖父 Run。因此
+不能简单把 raw `TransportMessage` 直接作为唯一 cache key。建议使用 adapter-owned 的
+稳定输入对象：
 
 ```ts
-type TransportViewConverter = (
-  state: TransportState,
-  metadata: ConnectionMetadata,
-) => AssistantTransportState;
-
-function createTransportViewConverter(): TransportViewConverter;
+type TransportMessageInput = {
+  source: TransportMessage;
+  runStatus: string;
+  endReason: string | null;
+  isLastRunMessage: boolean;
+};
 ```
 
-在 `RuntimeSession` 或 `useTaskAssistantTransportRuntime` 内用 `useMemo` 按 `taskId` 创建，
-task 切换时销毁，单个 Task 的一次运行期间保持 converter cache。不得使用 module-global
-cache，避免不同 Task 互相持有消息和 tool artifact。
+规则：
 
-### 6.2 复用规则
+- 同一 `source` 且 `runStatus`、`endReason`、`isLastRunMessage` 未改变时复用 input；
+- `append-text` 使当前 message/source 改变时，只重建该 message 的转换结果；
+- 当前 Run 的文本继续增长时，不能因为父 Run 对象整体被复制而让该 Run 的所有历史
+  message input 都失效；cache signature 只包含真正影响 message 映射的字段；
+- tool part 的 `status`、`args`、`display_data`、presentation 或 error 改变时，由改变后的
+  message/source 触发该 message 失效；
+- Run 状态、终态原因或 fork 标记改变时，只失效受影响的 message；
+- 删除、重排、编辑、root set、重连 hydrate 或结构校验失败时，以 message id/sequence
+  重建 adapter cache，不复用无法证明正确的条目。
 
-缓存必须以 backend message id、part id/稳定位置和影响展示的字段为依据：
+官方 helper 的 `toOriginalMessage` 若返回 adapter-owned input，应在本项目文档中说明其为
+UI 适配对象，不把它当 backend domain message；若当前 UI 需要取原始 Transport message，
+在 adapter 边界显式保留 `source` 映射并写测试。
 
-- 未改变的 message 复用上一次 `ThreadMessage` 对象；
-- 未改变的 parts 复用上一次 parts array 和 part object；
-- 只有当前 append 的 text/reasoning part 创建新 part；
-- tool artifact 只有状态、args、result 或 presentation 变化时才重建；
-- `error`、`isRunning`、latest-run 标识等 message-level 派生值变化时，只重建受影响消息；
-- pending command 消息单独缓存，不要让它导致所有历史消息重建；
-- 删除、重排、run 切换或无法证明结构共享时，按 message 粒度安全失效，不直接假设全局
-  引用有效。
+### 6.3 pending command 与 snapshot error
 
-优先依赖 Assistant Transport accumulator 的 immutable snapshot / path update 语义，使未
-修改数组项保持引用；如果某条后端路径会复制整个 `messages` 数组，则使用稳定 message
-id + 内容 fingerprint 作为兜底。fingerprint 只能用于 UI cache，不能写入 domain state。
+pending user command 不在 canonical snapshot 中，继续使用当前 command object 的稳定幂等
+ID。为 pending message 增加 runtime-local `WeakMap<object, ThreadMessage>`，使 pending
+command 队列变化不导致历史 message 失效。
 
-### 6.3 converter 输出约束
+snapshot error 仍是受控的 assistant-ui error message；按 error object/稳定错误字段缓存，
+不得把原始异常、provider 响应或堆栈写入 UI。error 消失、替换或 root snapshot 重置时清理
+对应条目。
 
-converter 仍然只做中性 snapshot 到 assistant-ui 的适配：
+### 6.4 converter 输出约束
 
-- 不把 Assistant UI 类型带入 backend、storage、core 或 service；
-- 不把 UI cache 当作下一次请求的 authority；
-- 不从 `result`、`args` 或字段存在性猜测 tool 领域状态；
-- 不在 converter 中做 context compaction、历史裁剪或事实修复；
-- `state` 返回值继续指向当前 Transport state，供 runtime 处理，不持久化到 localStorage。
+`toTransportThreadView` 继续只做中性 Transport state 到 assistant-ui state 的适配：
 
-### 6.4 配套渲染调整
+- `state` 原样作为 runtime state 返回，不复制、不写回 backend；
+- `MessageStatus`、tool artifact 和 UI-only sentinel 只在 desktop converter 产生；
+- 不从 `args`、`result` 或字段存在性猜测工具生命周期；
+- 不在 converter 中做历史裁剪、context compaction、数据库读取或事实修复；
+- 未知 Run/tool 状态保持显式非成功，不降级为 completed；
+- `createdAt` 仍不是当前 Transport canonical 字段，本性能改造不擅自引入持久化事实。
 
-- 保持 `assistantMessageGroupBy` 为模块级稳定函数；如果改回按 type 分组，优先采用
-  assistant-ui 的 `groupPartByType`，因为官方文档说明该 helper 提供稳定 memo fingerprint。
-- `MESSAGE_COMPONENTS`、Markdown `security`、`linkSafety` 配置提升为模块级常量，避免
-  每次 render 重建 plugin/config 对象。
-- 检查 `ToolPart`、reasoning、diff、terminal 等组件的 props，确保它们只接收稳定字段，
-  不把每次 converter 创建的新 wrapper object 作为 props。
+### 6.5 part 与 GroupedParts
 
-参考：[Message primitives / GroupedParts](https://www.assistant-ui.com/docs/primitives/message)。
+当前 assistant message 使用 `MessagePrimitive.GroupedParts`，`assistantMessageGroupBy` 是
+模块级稳定函数，并依据 tool artifact 的 `presentation.surface` 把 standalone tool 排除在
+trace group 外。保留这个业务行为；不要为了追求 memo fingerprint 强行改成错误的分组。
 
-### 6.5 Phase 1 验收
+如果以后分组规则可以完全按 part type 表达，再迁移到官方 `groupPartByType`。在此之前，
+只确保 `groupBy`、renderer map、Markdown 配置和工具 renderer 引用稳定；不要在每个 render
+创建新的 components/config 对象。
 
-- 200 条历史消息 streaming 时，历史 message 的转换命中率应接近 100%；
-- 每个 text chunk 只有当前 text part 及其父 message 发生引用变化；
-- 历史 tool、diff、terminal 组件不因当前文本增量重复 mount；
-- converter 的单次耗时不随历史消息数量线性增长，或增长仅来自必要的轻量 id 扫描；
-- 不改变 snapshot wire contract、resume、cancel、tool lifecycle 和现有 unit tests。
+### 6.6 P1 验收
 
-## 7. Phase 2（可选）：Transport subscriber-local 合帧
+- 同一 fixture 下，未改变历史 message 的 converter cache 命中率接近 100%；
+- 单个 text/reasoning append 不重建其他历史 message 的 `ThreadMessage`；
+- Run 终态变化只更新受影响 Run 的 message status/fork metadata；
+- tool lifecycle 更新只更新对应 message/part；
+- pending command、snapshot error、edit、cancel、attach、retry、fork 行为保持正确；
+- converter 不依赖 module-global task 状态，切换 task 后旧条目可回收。
 
-本阶段不属于默认实施路线。由于 text/reasoning 的增量合帧会改变前端看到的更新粒度，默认
-保留当前逐 mutation 的流式显示，以优先保证自然的打字感和最小的协议语义变化。只有
-Phase 0–1、containment 和必要的虚拟化完成后，性能数据仍明确显示“Transport frame 数量
-或 backend flush 调度”是瓶颈，才启动本阶段。
+## 7. P2：普通 Thread 的 paint 与滚动治理
 
-### 7.1 合帧位置
+### 7.1 先补 containment
 
-合帧放在：
+在当前自定义 message root 的样式边界增加经过浏览器验证的：
 
-```text
-ConversationTaskSnapshotService commit/publish
-  -> TransportAssistantService subscriber stream
-  -> assistant-stream controller
+```css
+content-visibility: auto;
+contain-intrinsic-size: auto <fixture-derived-size>;
 ```
 
-不要在 `ConversationTaskSnapshotService` 中为了 UI 而延迟 canonical snapshot commit，也不
-要让 `ConversationEventProjector` 知道 React 帧率。
+具体 selector 和 intrinsic size 以实际消息布局测试确定，不能把固定高度当成消息事实，也
+不能遮挡工具展开内容。该优化只减少屏幕外 paint，不宣称减少 React 更新。
 
-建议新增明确命名的本地组件，例如：
+### 7.2 保留官方 viewport，单独验证 smooth scroll
 
-```text
-apps/backend/app/assistant_transport/service/transport_frame_coalescer.py
-```
+普通列表继续使用 `ThreadPrimitive.Viewport` 和 `ThreadPrimitive.ViewportFooter`，因为当前
+消息列表未虚拟化，官方 viewport 的 auto-scroll 语义适用。对当前 `scroll-smooth` 做 A/B：
 
-它只接收已经提交的 `SnapshotChange`，输出有序的 mutation batch；不保存业务事实，不跨
-Task 共享状态，不写数据库。
+- 用户在底部 streaming 时应自然跟随；
+- 用户向上滚动后不得强行拉回；
+- cancel、terminal、attach 和 Thread 切换不能出现滚动跳跃；
+- 如果 smooth behavior 放大高度变化造成的追赶，移除 class，使用默认 instant/auto 行为；
+- 是否移除以浏览器 trace 和回归用例决定，不凭直觉写入协议或 backend。
 
-### 7.2 合并规则（仅在 profiling 证明必要时使用）
+本阶段不自定义 `scrollTop`，不引入 ResizeObserver scroll owner，也不把 viewport 自动滚动
+改成业务状态机。
 
-如果启用，目标窗口应接近一个渲染帧（约 8–16ms）；约 50ms 只能作为硬上限，不能作为
-默认刷新周期。还需要最大字符数和最大 mutation 数上限，不能让低速模型或无新事件的流
-无限等待。合帧窗口必须通过用户体感和 profiling 校准，不能为了降低 frame 数牺牲流式
-打字效果。
+### 7.3 Markdown 与重型 tool UI
 
-允许：
+继续使用现有 `StreamdownTextPrimitive` 的 streaming/defer；不重复实现 Markdown parser、
+不把 Markdown AST 放入 snapshot。对 diff、terminal、details 等重型 tool UI：
 
-- 同一 text/reasoning path 上相邻的 `append-text` 合并为一个 append；
-- 同一连接窗口内连续、互不冲突的最小 `set` 按原顺序发送；
-- 同一路径的非终态展示字段在不改变语义时保留最后一次值。
+- 流式期间只渲染必要的状态摘要；
+- 需要最终参数/结果才有意义的昂贵 UI，按官方 Tool UI deferred rendering 模式在完成后
+  才挂载；
+- 展开、复制、错误提示和 tool status 继续从 `ToolObservation.display_data` / artifact
+  契约读取，不从结果字符串反推。
 
-禁止：
+### 7.4 P2 验收
 
-- 把 `set` 和 `append-text` 在结构边界两侧错误合并；
-- 丢弃新 message、新 part、tool result、error、approval 或 run terminal 状态；
-- 用完整 root snapshot 代替正常增量路径；
-- 在 subscriber 还没收到 terminal 状态时结束 stream。
+验证 200/1000 条消息时：
 
-遇到结构变化、tool 状态、错误、取消或终态时，先把前面的文本 batch flush，再立即发送
-结构/终态 mutation。终态处理必须最终 flush 一次，确保 controller state 与已提交 snapshot
-一致。
+- converter 成本已由 P1 隔离，屏幕外消息 paint 成本下降；
+- streaming 底部跟随和用户上滑锁定行为稳定；
+- Markdown、reasoning、tool group、diff、terminal 不因 containment 错位或丢失；
+- Task 切换、retry、attach、cancel、edit、fork 无新增滚动回归。
 
-### 7.3 与断线和崩溃的关系
+## 8. P3：按基线决定的虚拟化
 
-- 合帧中的未发送 mutation 不是 durable state；连接关闭时可以丢弃。
-- attach/reconnect 仍从最新 SQLite snapshot hydrate，不依赖旧 subscriber queue。
-- backend 崩溃后 Tauri supervisor 按现有生命周期重启；新连接拿到完整 snapshot，不能从
-  旧进程内存 coalescer 恢复。
-- 取消时先停止后续模型/工具工作，flush 已提交的取消状态，再关闭本地 stream。
+### 8.1 启动条件
 
-### 7.4 Phase 2 验收（启用本阶段时才执行）
+只有满足以下条件才启动 P3：
 
-- 纯 text streaming 的 wire frame 数明显下降，且最终文本完全一致；
-- `append-text` value 仍然只包含新增文本；
-- tool pending/running/completed/failed/cancelled、error 和终态没有被延迟到错误顺序；
-- SQLite snapshot 与重连后 UI 完全一致；
-- 流关闭、客户端取消、backend 重启不产生悬挂 subscriber 或永不结束的请求。
+- P1/P2 完成且测试通过；
+- React mount/update 或已挂载 message 数仍是主要耗时；
+- 典型 Task 达到数百至数千消息，或单条重型 UI 导致 typing latency 明显下降；
+- 通过 profile 能证明虚拟化收益大于滚动、测量、selection 和交互复杂度。
 
-## 8. Phase 3：长线程虚拟化与滚动控制
+不把“消息很多”本身当成阈值；阈值来自固定 fixture 和真实 trace。
 
-### 8.1 assistant-ui 官方建议的适用范围
+### 8.2 官方组合
 
-assistant-ui 官方 Thread Virtualization 文档指出：默认 kit 已使用
-`content-visibility: auto` 和 `contain-intrinsic-size` 降低屏幕外消息的 paint 成本；只有当
-React mount/update 本身成为瓶颈，通常是数百到数千条消息或重型消息内容时，才需要虚拟化。
+虚拟化版本新增 desktop-only 的 message list，使用：
 
-当前自定义 Thread 没有发现这些 CSS，也没有虚拟化实现。因此建议：
+- `unstable_useThreadMessageIds()`：利用 content-only update 时稳定的 id 数组；
+- `ThreadPrimitive.Unstable_MessageById`：以 message id 而不是 index 作为 row identity；
+- `@tanstack/react-virtual`：仅在 P3 决策后加入依赖；
+- 普通文档流 spacer + `paddingTop`/`paddingBottom` + `measureElement`，不使用绝对定位
+  覆盖当前 message CSS；
+- stable `MESSAGE_COMPONENTS`/renderer 引用。
 
-1. 先补齐轻量的屏幕外内容 containment；
-2. 在达到阈值的 Task 上使用虚拟列表；
-3. 不把虚拟化当作 Phase 1 converter 问题的替代品。
+assistant-ui 官方将上述 id API 标为 experimental，必须封装在一个 desktop 组件内，不能把
+experimental 类型扩散到 backend、domain 或 storage。未知/已删除 id 应允许 renderer 返回
+`null`。
 
-参考：[Thread Virtualization](https://www.assistant-ui.com/docs/guides/virtualization)。
+### 8.3 scroll owner 变化
 
-### 8.2 推荐实现形态
+虚拟化不能直接叠加当前 `ThreadPrimitive.Viewport` 的默认 auto-scroll。按官方建议改为
+`ThreadPrimitive.ViewportProvider` 加自有 scroll element，并实现最小的：
 
-新增 desktop UI 内部的 `VirtualizedThreadMessageList`，不把 virtualizer 类型泄漏到
-backend 或 domain。实现遵循官方文档：
+1. sticky-follow：用户在底部时跟随内容高度变化；
+2. disarm：用户上滑后停止追底，返回底部后重新 armed；
+3. measurement guard：virtualizer re-measure 不与追底逻辑争写 scrollTop；
+4. run-start jump：新 Run 开始时避免新消息在首帧落到 fold 外。
 
-- 使用 `unstable_useThreadMessageIds` 获取稳定 message id 数组；
-- 优先使用 `ThreadPrimitive.Unstable_MessageById`，以 message id 作为 row identity；
-- `MESSAGE_COMPONENTS` 保持模块级稳定引用；
-- 使用 `@tanstack/react-virtual` 的正常文档流 spacer + `measureElement`，不使用绝对定位
-  覆盖消息 CSS；
-- 对 user message 加后续 assistant/tool/reasoning response 组成稳定 turn row，避免流式
-  高度变化导致大量 row 重排；
-- active streaming message 保持 mounted，并留出合理 overscan；
-- 删除、重排、分支和新消息插入时以 id 重新计算 row，不复用过期 index。
+这些逻辑只存在于 desktop Thread 组件。先实现单消息 id row；只有 row 数量和高度测量证明
+必要时，再按 user turn 组合 row。若按 turn 组合，必须以稳定的 `{id, role}` 结构建组，
+不能把数组 index 当事实身份。
 
-assistant-ui 文档明确提醒：内置 `ThreadPrimitive.Viewport` 的 auto-scroll 假设所有消息
-都 mounted；虚拟化时应由自定义 scroll owner 管理 auto-follow、测量调整和 run-start jump。
+### 8.4 P3 验收
 
-因此虚拟化版本不应继续简单叠加当前的 `ThreadPrimitive.Viewport` 自动滚动：
+- 1000 条消息时 mounted rows 接近 viewport + overscan，而不是完整历史；
+- 顶部、中部、底部滚动不出现错位、重复或丢失；
+- streaming 时底部跟随、上滑锁定、重新回底均稳定；
+- re-measure 不 rubber-band；
+- tool 展开/折叠、复制、terminal/diff 交互和 action bar 仍可用；
+- attach、cancel、retry、edit、fork 不依赖 index 稳定性。
 
-- 去掉 `scroll-smooth`，先使用确定性的 instant/auto 行为；
-- 仅在用户仍位于底部时跟随流式高度变化；
-- 用户向上滚动后解除 sticky follow；
-- 用户返回底部后重新 armed；
-- virtualizer re-measure 时禁止和 auto-scroll 互相写 scrollTop；
-- run 开始时在 paint 前跳到底部，避免新 assistant message 闪现到 fold 外。
+## 9. P4：未来的历史窗口（本轮不实施）
 
-### 8.3 是否默认启用
+虚拟化只减少 DOM/React mount，不减少完整 Transport state 的传输、解析、converter 的轻量
+扫描或 SQLite JSON 读写。只有 profile 证明这些才是主要瓶颈时，才另立 history-window 方案。
 
-建议不要在运行中随着消息数量跨阈值突然切换两套 DOM 结构。可选策略按优先级为：
-
-1. 首选：统一使用稳定的 message list 抽象，短线程使用普通列表，长线程在首次挂载时按
-   初始消息数选择 virtualized renderer；
-2. 如果后续实测切换会导致滚动/selection 问题，则统一使用虚拟列表，利用较大的 overscan
-   覆盖普通 Task；
-3. 暂不为少量历史消息引入虚拟化，只使用 containment + Phase 1 结构共享。
-
-阈值必须来自 profiling，不写成产品事实；初始实验可以从 200 条消息或 100 个 turn 开始。
-
-### 8.4 Phase 3 验收
-
-- 1000 条消息时，mounted message 数量接近 viewport + overscan，而不是 1000；
-- 用户在历史顶部、中部、底部滚动时不出现 row 错位、重复或丢失；
-- streaming 在底部时跟随正常，用户上滑后不会被强行拉回；
-- re-measure 不产生 rubber-band 或 scrollTop 争抢；
-- tool/diff/terminal 等重型展示的展开、折叠、复制和跳转仍然可用；
-- attach、cancel、retry、edit、branch 行为不依赖 index 稳定性。
-
-## 9. Phase 4：历史窗口、分页与首屏治理
-
-虚拟化只减少 DOM/React mount 成本，不能减少以下成本：
-
-- `/assistant/state` 首屏传输完整历史；
-- Assistant Transport root `set` 携带完整 `messages`；
-- converter 对完整 state 做 id/状态扫描；
-- snapshot 单行 JSON 的读取、解析和深拷贝；
-- context 构建和 compaction 的 token 成本。
-
-因此，当历史达到数千条或单 Task snapshot 达到实际预算时，再设计“canonical full history
-+ bounded UI window”，而不是在前端简单 `slice()` 丢掉旧消息。
-
-### 9.1 目标形态
+未来目标应保持：
 
 ```text
 backend canonical snapshot/context
-  └── 完整、可恢复、按现有 owner 写入
+  └─ 完整、可恢复、按现有 owner 写入
 
-Assistant UI transport projection
-  └── 当前窗口 + has_more + history cursor
+assistant-ui transport projection
+  └─ 明确的当前窗口 + history cursor
 ```
 
-旧消息仍由 backend 事实源保存；UI 只加载当前窗口。向上滚动时通过明确的 history API 或
-custom command 请求更早消息，加载后按 message id 前插，并保持当前 scroll anchor。
+不能在前端直接 `slice()` 后把旧消息当作不存在。单独方案必须决定：
 
-### 9.2 需要单独设计的协议问题
+- history cursor 与 task/run/thread 的绑定、失效和重连；
+- 前插历史使用专用 API、custom command 还是新 state schema；
+- 当前 active Run 是否允许加载历史；
+- 编辑、删除、fork、root set 如何使 cursor 失效；
+- SQLite 是否仍用单 JSON snapshot，还是引入可分页的本地事实表；
+- UI history window 与 `RuntimeContextManager` 的 context/compaction 如何保持边界。
 
-Assistant Transport 当前契约是 full state snapshot + converter，不能把分页字段偷偷塞进
-现有 `messages` 语义。Phase 4 需要单独确定：
+P4 不应由 converter、assistant-ui runtime 或 Transport subscriber 临时决定。
 
-- history cursor 与 Task/run/thread 的绑定和失效规则；
-- 前插历史是否通过 custom command、专用 API，或扩展 state schema；
-- append-text 路径在窗口前插和消息重排后的定位规则；
-- 当前 active run 期间加载历史是否允许；
-- 删除、编辑、分支、重连时 cursor 如何失效；
-- 断线后是从完整 snapshot 还是窗口 snapshot hydrate；
-- SQLite 是否继续使用单 JSON snapshot，还是将归档历史拆为可分页的本地表/文件。
+## 10. 明确非目标：Transport subscriber-local 合帧
 
-这些会影响事实模型、数据库和对外 Transport 契约，不能在本性能方案中擅自决定。
+本轮明确不做以下改动：
 
-### 9.3 与 context compaction 的关系
+- 不新增 `transport_frame_coalescer.py` 或等价 subscriber-local 合帧器；
+- 不在 `ConversationTaskSnapshotService` 延迟 SQLite commit 或 publish；
+- 不合并、丢弃或重排 `append-text`、结构、tool、error、cancel、terminal mutation；
+- 不修改 `Subscriber.queue` 的生命周期和每连接独立性；
+- 不用完整 root snapshot 替代正常增量路径；
+- 不因为 SSE/HTTP 断开而取消或重放业务 Run。
 
-UI history window 不等于 LLM context compaction：
+P0 可以记录 frame/flush 数量和 queue 延迟，但这些指标只用于后续独立决策。若未来证明
+Transport 调度是瓶颈，应另写方案，重新定义终态 flush、断线、slow subscriber、背压和
+assistant-stream 互操作测试，不能把它混入 P1/P2。
 
-- UI 可以显示较小窗口，但 context 仍按 `RuntimeContextManager` 规则构建；
-- context compaction 不能由 converter 或前端触发；
-- system prompt、tool result、checkpoint 和 context sequence 不从 UI window 推导；
-- 两者都需要历史 cursor/boundary 时，应由 backend 明确产生并持久化，而不是让前端猜测。
+## 11. 文件边界与实施顺序
 
-## 10. 文件与模块边界
-
-### 10.1 Phase 0/1 前端
-
-主要涉及：
+### 11.1 本轮预计涉及的前端文件
 
 ```text
 apps/desktop/lib/assistant/converter.ts
-apps/desktop/components/assistant/assistant-runtime.tsx
-apps/desktop/lib/assistant/use-task-assistant-transport-runtime.ts
-apps/desktop/components/markdown-text.tsx
+apps/desktop/components/assistant/runtime/use-runtime-transport.ts
+apps/desktop/components/assistant/runtime/assistant-runtime-session.tsx
 apps/desktop/components/assistant-ui/elements/thread.aui.tsx
-apps/desktop/components/assistant-ui/tools/tool-part.tsx
+apps/desktop/components/markdown-text.tsx       # 仅必要的诊断/样式边界
+apps/desktop/tests/unit/converter.test.ts
 ```
 
-建议新增的 cache/converter 工厂保持在 `lib/assistant/`，不要把 assistant-ui 适配类型放入
-`lib/api` 或 backend 契约以外的共享 domain 层。
+P1 的 cache 只放在 `lib/assistant` 的 assistant-ui 适配边界；不放入 domain、storage 或
+backend。P3 的 virtual list 和 scroll owner 只放在 `components/assistant-ui`。
 
-### 10.2 Phase 2 backend（后置可选）
+### 11.2 本轮 backend 边界
 
-主要涉及：
+P0 只允许增加遵循既有结构化日志规范的摘要指标，主要观察：
 
 ```text
-apps/backend/app/assistant_transport/service/transport_assistant_service.py
+apps/backend/app/assistant_transport/service/transport_stream_service.py
 apps/backend/app/assistant_transport/service/conversation_task_snapshot_service.py
-apps/backend/app/assistant_transport/assistant_api.py
 ```
 
-仅在 Phase 2 被 profiling 选中后，才建议新增 `transport_frame_coalescer.py` 或等价的
-subscriber-local service。它必须不依赖 React，不进入 Runtime context，不拥有 SQLite
-canonical state。
+除非基线发现现有日志缺失，否则不改 projector、snapshot owner、Subscriber 或 workflow。
 
-### 10.3 Phase 3/4
+### 11.3 实施顺序
 
-Phase 3 仅修改 `apps/desktop` Thread composition、样式和依赖；Phase 4 才讨论 backend
-history API、snapshot storage 或 schema。不要为了 Phase 3 提前改变 Conversation facts。
+1. 先实现 P0 fixture 和诊断，保存 20/200/1000 的结果。
+2. 先改 inline converter 为稳定引用，单独运行现有 unit/E2E。
+3. 实现 P1 message-level cache，补充引用稳定性和状态失效测试。
+4. 补 P2 containment，并对 `scroll-smooth` 做 A/B；只保留有证据的选择。
+5. 重新 profile。若 React mount/update 仍为瓶颈，才评审并实现 P3。
+6. 若 state 传输/解析/SQLite 才是瓶颈，停止扩展本方案，另开 P4 设计。
 
-## 11. 测试与验收闭环
+## 12. 测试与验收矩阵
 
-### 11.1 frontend unit
+### 12.1 frontend unit
 
-新增/扩展：
+- stable converter function 不因 runtime render 改变身份；
+- 未改变 message/source 的 `ThreadMessage` 引用保持稳定；
+- text/reasoning append 只使目标 message/part 变化；
+- Run status/endReason/isLast metadata 只使受影响 message 变化；
+- tool pending/running/completed/failed/cancelled 映射和 artifact 不变；
+- pending command、snapshot error 的身份、清理和重连行为正确；
+- root set、编辑、删除、重排、未知状态安全失效；
+- task 切换不共享带上下文的 cache。
 
-- converter structural sharing：未变化 message/parts 引用保持不变；
-- active text append：只有当前 message/part 变化；
-- run status、error、tool lifecycle 导致正确粒度失效；
-- pending command 不使历史消息失效；
-- task 切换销毁 cache，不串 Task；
-- virtual row id 在插入、删除、重排、分支后正确；
-- history anchor 在前插消息后保持可见位置。
+### 12.2 backend integration
 
-### 11.2 backend unit/integration（默认路线）
+- snapshot commit 失败不会 publish 对应 change；
+- Subscriber 和 controller state 按连接隔离；
+- 首帧 root set 与后续 mutation 不重复应用；
+- append-text 的顺序、终态和取消行为保持不变；
+- attach 只订阅，不触发业务 resume；
+- backend 重启后 state read/终态对账符合现有规则；
+- 本轮不新增或修改 subscriber-local 合帧测试，因为本轮不实现该能力。
 
-无论是否启用可选合帧，都必须覆盖：
+### 12.3 浏览器性能验收
 
-- snapshot commit 失败不会发送对应 mutation；
-- 多个 subscriber 互不共享可变 controller state；
-- slow subscriber 不阻塞 snapshot owner 或其他连接。
+用 Playwright、Chrome Performance 和 React Profiler 固定采集：
 
-如果 Phase 2 被 profiling 选中，再额外覆盖：
+- 首屏完成时间和首次可交互时间；
+- 每秒 state update、converter 调用/命中率和总耗时；
+- React commit 次数、最长 commit；
+- Markdown/tool/diff/terminal mount/update 次数；
+- 已挂载/可见消息数；
+- streaming 底部跟随、用户上滑和回到底部的 scrollTop 行为；
+- Task 切换后的内存和 cache 回收迹象。
 
-- 连续 append-text 合帧后文本完全一致；
-- 合帧跨结构边界时不会改变 mutation 顺序；
-- terminal/error/cancel/approval 强制 flush；
-- subscriber 断开会清理 coalescer；
-- reconnect 从 SQLite snapshot 恢复，不依赖内存 queue。
+验收记录必须同时保存 fixture、依赖版本、浏览器版本和测试配置，避免把一次环境差异
+误判为架构收益。
 
-### 11.3 浏览器性能验收
+## 13. 风险与决策门槛
 
-用 Playwright/Chrome Performance 和 React Profiler 验证：
+### 13.1 assistant-ui unstable API
 
-- 20/200/1000 条消息的 first contentful paint、首屏完成时间；
-- streaming 时每秒 React commit 数、最长 commit、converter 总耗时；
-- Markdown/tool/diff/terminal 的 mount/update 次数；
-- scroll event、scrollTop 变化和用户上滑后的 sticky 状态；
-- memory 使用和 Task 切换后的 cache 是否释放。
+`unstable_createMessageConverter`、`unstable_useThreadMessageIds` 和
+`Unstable_MessageById` 都可能随版本变化。P1 首选前者但必须封装和锁版本；P3 默认延后，
+只有 profile 证明收益时才接受额外兼容成本。
 
-性能验收应使用固定 fixture 和固定模型输出，不以一次人工“感觉变顺”作为唯一标准。
+### 13.2 cache 键错误导致旧状态
 
-## 12. 风险与取舍
+只按 message id 缓存会漏掉 Run status、endReason 和 fork metadata 的变化；只按整个父
+Run 对象缓存又会在每个 text append 时失效整个 Run。必须使用 raw source identity 加“真正
+影响 UI 的字段签名”，并用状态迁移测试覆盖。
 
-### 12.1 过早虚拟化
+### 13.3 containment 不是虚拟化
 
-assistant-ui 官方文档将虚拟化 API 标为 experimental，并建议只有 React mount/update 成为
-瓶颈时使用。过早引入会增加 scroll owner、测量、anchor、selection 和 tool UI 交互复杂度。
-因此先做 converter 结构共享和 containment，再按基线决定默认策略。
+`content-visibility` 主要减少 paint；若 profile 显示 React 仍在遍历/更新全部 message，
+继续调 CSS 不会解决问题，应进入 P3 评审。
 
-### 12.2 可选合帧造成延迟
+### 13.4 full state 与历史窗口
 
-合帧不是默认优化。若未来启用，窗口过大时用户会感到首 token 或工具状态延迟；窗口过小
-时，React 仍被高频唤醒。必须使用时间、字符数、mutation 数三重上限，并对结构/终态提供
-立即 flush。若没有明确 profiling 证据，应保持逐 mutation，以保留自然流式显示。
+P1/P2/P3 都不能偷偷改变 full snapshot 的事实和恢复语义。P4 需要新的协议/存储决策，
+不能在性能修复中用前端截断代替。
 
-### 12.3 单 JSON snapshot 写放大
+## 14. 当前可直接执行的决策
 
-即使启用可选 Phase 2，也只减少 Transport 输出帧，不减少现有 durable mutation 次数。若
-profile 证明 SQLite 写放大才是主要瓶颈，应另行设计“事务内批量 mutation”，仍须满足
-commit-before-publish，并由 snapshot owner 统一实现，不能在 Transport 层偷偷绕过持久化。
+本方案不等待额外架构确认即可进入：
 
-### 12.4 full state Transport 与分页冲突
+1. P0 基线与摘要诊断；
+2. 稳定 converter 引用修复；
+3. 基于官方 `unstable_createMessageConverter` 的 P1 适配设计与单测；
+4. 当前 Thread 的 containment 与 `scroll-smooth` A/B。
 
-Phase 4 会影响 state schema、重连和 message path 稳定性，不能把前端截断当成解决方案。
-在 Phase 4 之前，完整历史仍以 backend canonical snapshot 为准，UI 性能由 Phase 1 和
-按需启用的 Phase 3 治理；Phase 2 不是前置条件。
+以下决策必须等待 profile：
 
-## 13. 建议的落地顺序
+1. 是否引入 `@tanstack/react-virtual`；
+2. 是否采用 id-based virtual rows 还是按 turn 分组；
+3. 是否启动历史窗口和本地存储形态调整。
 
-1. 先实施 Phase 0，保存 20/200/1000 条消息的基线。
-2. 实施 Phase 1 converter cache，并先用引用稳定性单测证明收益。
-3. 补齐当前自定义 Thread 的 `content-visibility` containment，移除 `scroll-smooth` 做
-   A/B 验证。
-4. 若 200 条以上仍因 mounted/update 成本明显卡顿，再实施 Phase 3；优先按官方 id-based
-   virtualization 和自定义 scroll owner 组合。
-5. 如果上述改造完成后，profiling 仍显示 Transport frame/flush 调度是瓶颈，才评估是否
-   启用 Phase 2；启用后补充合帧顺序、终态和重连测试。
-6. 只有完整 state 的传输/解析/SQLite 成为实际瓶颈时，才启动 Phase 4，并先单独确认
-   history window 的协议和事实模型决策。
-
-## 14. 当前需要用户确认的架构决策
-
-本方案可以直接进入 Phase 0/1 的实现设计；以下事项不应在未确认前写入长期架构规则：
-
-1. 长线程是否默认启用虚拟化，还是仅对超过 profiling 阈值的 Task 启用；
-2. 在 profiling 证明必要时，是否接受 Phase 2 带来的极短文本更新延迟；
-3. Phase 4 是否需要真正的后端历史分页，以及是否允许为此调整 snapshot storage 形态。
+Transport subscriber-local 合帧在本轮决策中为“不做”，不作为待确认项。

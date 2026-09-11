@@ -66,10 +66,11 @@ const textMessage = (id, role, text, status) => ({
 
 function stateWithExchange(previous, text, runId, assistantText, status) {
   const next = structuredClone(previous);
+  const terminal = status === "completed" || status === "failed" || status === "cancelled";
   next.runs.push({
     runId,
-    status: status === "completed" ? "completed" : "running",
-    endReason: status === "completed" ? "stop" : null,
+    status: terminal ? status : "running",
+    endReason: status === "completed" ? "stop" : status === "failed" ? "tool_error_limit_reached" : status === "cancelled" ? "user_cancelled" : null,
     messages: [
       textMessage(`user-${runId}`, "user", text, "completed"),
       textMessage(`assistant-${runId}`, "assistant", assistantText, status),
@@ -97,7 +98,7 @@ function toolLifecycleState(previous, text, runId, status, toolStatus) {
         : null,
       isError: false,
     },
-    { type: "text", text: status === "completed" ? "工具完成" : "", status: status === "completed" ? "completed" : "running" },
+    { type: "text", text: status === "completed" ? "工具完成" : "", status: status === "running" ? "running" : "completed" },
   ];
   return next;
 }
@@ -380,7 +381,10 @@ async function streamToolLifecycle(res, initialState, finalState, runId, generat
     return;
   }
   writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }]));
-  writeSse(res, { type: "message-finish", finishReason: "stop" });
+  writeSse(res, {
+    type: "message-finish",
+    finishReason: finalState.runs[0].status === "cancelled" ? "cancelled" : finalState.runs[0].status === "failed" ? "error" : "stop",
+  });
   lastStreamBody += "data: [DONE]\n\n";
   res.write("data: [DONE]\n\n");
   res.end();
@@ -448,7 +452,11 @@ async function handleAssistant(req, res, body) {
 
   if (text.startsWith("tool-lifecycle")) {
     const toolInitialState = toolLifecycleState(branchBase, text, runId, "running", "pending");
-    const toolFinalState = toolLifecycleState(branchBase, text, runId, "completed", "completed");
+    const finalStatus = text.startsWith("tool-lifecycle-failed") ? "failed"
+      : text.startsWith("tool-lifecycle-cancelled") ? "cancelled"
+        : "completed";
+    const finalToolStatus = finalStatus === "completed" ? "completed" : finalStatus;
+    const toolFinalState = toolLifecycleState(branchBase, text, runId, finalStatus, finalToolStatus);
     states.set(taskId, toolFinalState);
     res.setHeader("X-Cosir-Task-Id", String(taskId));
     res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);

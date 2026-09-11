@@ -5,6 +5,7 @@
   "identifier": "com.cosir.desktop",
   "build": {
     "beforeDevCommand": "npm run dev -- --host 127.0.0.1 --port 3000",
+    "beforeBuildCommand": "npm run build:bundle",
     "devUrl": "http://127.0.0.1:3000",
     "frontendDist": "../dist"
   },
@@ -25,6 +26,9 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "resources": {
+      "resources/terminal-worker/": "terminal-worker/"
+    }
   }
 }

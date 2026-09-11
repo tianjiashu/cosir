@@ -8,7 +8,7 @@
 
 ### 第一阶段必须交付（MVP）
 
-1. `third_party/codegraph/src/agent-kernel/` 新建常驻适配层，在 `MCPEngine` 之上封装 stdio JSON-line RPC 服务。
+1. `apps/codeIndex/src/agent-kernel/` 新建常驻适配层，在 `MCPEngine` 之上封装 stdio JSON-line RPC 服务。
 2. vendor 侧新增最小 `tsc` 构建配置，产出 `dist/agent-kernel/server.js`（不破坏现有 `dist/` 构建）。
 3. 后端 `CodeGraphKernelSupervisor`：从项目内固定目录解析锁定的 `node` 可执行文件，启动 Kernel 子进程，管理握手、健康检查、重启、关闭、stderr 桥接。
 4. 后端 `CodeGraphKernelClient`：通过子进程 stdin/stdout 发送 JSON-line RPC、管理 `request_id`、超时、取消、协议错误转换。
@@ -28,7 +28,7 @@
 
 **事实依据：**
 
-- `third_party/codegraph/package.json` 已是标准 `tsc` 工程：`"build": "tsc && npm run copy-assets ..."`，`main: dist/index.js`，`bin: dist/bin/codegraph.js`，`engines.node: ">=20.0.0 <25.0.0"`。新增 `dist/agent-kernel/server.js` 只是扩展现有构建，不引入新范式。
+- `apps/codeIndex/package.json` 已是标准 `tsc` 工程：`"build": "tsc && npm run copy-assets ..."`，`main: dist/index.js`，`bin: dist/bin/codegraph.js`，`engines.node: ">=20.0.0 <25.0.0"`。新增 `dist/agent-kernel/server.js` 只是扩展现有构建，不引入新范式。
 - 项目 `AGENTS.md` 的 CodeGraph 使用规则明确：CodeGraph 对 Node 25/26 有已知拦截风险，应锁定 Node 22 LTS。这与 `engines` 约束一致。
 - 后端已有成熟的子进程管理范式：`tool_executor.py`（multiprocessing 子进程 + 超时强杀 + Windows Job Object 树杀）、`terminal/local_backend.py`、`config/logging/process_bridge.py`（跨进程队列桥）。
 - 桌面端 `src-tauri/src/backend/runtime_locator.rs` 已有「从项目内固定目录解析运行时、不读用户 PATH」的成熟范式（`resolve_python_binary` 从 `apps/backend/.venv` 解析）。
@@ -55,7 +55,7 @@
 
 ## 三、agent-kernel 适配层设计（vendor 内新建）
 
-位置：`third_party/codegraph/src/agent-kernel/`，严格作为窄适配层，不修改 `mcp/`、`index.ts` 等上游核心（遵守 `UPSTREAM.md` 约定）。
+位置：`apps/codeIndex/src/agent-kernel/`，严格作为窄适配层，不修改 `mcp/`、`index.ts` 等上游核心（遵守 `UPSTREAM.md` 约定）。
 
 ### 3.1 文件职责
 
@@ -72,7 +72,7 @@
 
 ### 3.3 构建配置
 
-- 已核实：`third_party/codegraph/tsconfig.json` 的 `include` 为 `["src/**/*"]`，`src/agent-kernel/**` **天然被纳入编译，无需修改 tsconfig**。
+- 已核实：`apps/codeIndex/tsconfig.json` 的 `include` 为 `["src/**/*"]`，`src/agent-kernel/**` **天然被纳入编译，无需修改 tsconfig**。
 - 不修改 `package.json` 的 `build` 主体；如需单独构建 agent-kernel，新增 `"build:agent-kernel": "tsc -p tsconfig.agent-kernel.json"` 或在现有 `build` 中自然产出 `dist/agent-kernel/server.js`。
 - 注意 `copy-assets` 已把 `src/db/schema.sql` 与 `src/extraction/wasm/*.wasm` 拷到 `dist/`；agent-kernel 运行时依赖这些资源，必须随 `build` 一起产出。
 - **vendor 侧联网屏蔽（T1 前置，已落地）**：上游 `mcp/` 层在常驻路径上会触发两个对外网络调用——`src/telemetry/index.ts`（`getTelemetry().startInterval()` 周期上报）与 `src/upgrade/update-check.ts`（`getUpdateNotice`/`checkForUpdateInBackground` 后台查 GitHub 版本）。本集成是本地-first 常驻 Kernel，必须零对外联网。已在不改 `mcp/` 调用点的前提下置空：`telemetry/index.ts` 的 `getStatus()` 强制返回 `enabled:false`（所有 record/flush 路径 early-return，不写盘不联网），`upgrade/update-check.ts` 的 `updateCheckDisabled()` 强制返回 `true`（所有检查路径早退返回 null，绝不发请求）。`upgrade/index.ts` 对 `../installer/targets/claude` 的动态 import 已置空为 no-op（installer 目录已删）。**导出签名全部保留**，故 `mcp/` 编译与 `new MCPEngine().getToolHandler()` 调用不受影响。T1 验证须确认编译产物不含真实联网行为。
@@ -144,7 +144,7 @@ codegraph_files(workspace_path, ...)
 
 | 序 | 任务 | 产出 | 依赖 |
 |----|------|------|------|
-| T1 | vendor 构建验证 | 在 `third_party/codegraph` 跑通 `npm run build`，确认产出 `dist/` 且 `dist/agent-kernel` 被纳入（先加空 `server.ts` 验证编译链路）；**前置**：vendor 侧 telemetry/upgrade 联网已屏蔽（见 3.3）；验证点须补强——① `dist/agent-kernel/server.js` 能 `require('../index')` 成功；② 确认 `dist/db/schema.sql` 与 `dist/extraction/wasm/*.wasm` 随 `copy-assets` 产出且路径正确（server 运行时加载 wasm 不报 `ENOENT`）；③ 确认 `getTelemetry().isEnabled()` 为 false、`getUpdateNotice()` 返回 null（零联网） | 无 |
+| T1 | vendor 构建验证 | 在 `apps/codeIndex` 跑通 `npm run build`，确认产出 `dist/` 且 `dist/agent-kernel` 被纳入（先加空 `server.ts` 验证编译链路）；**前置**：vendor 侧 telemetry/upgrade 联网已屏蔽（见 3.3）；验证点须补强——① `dist/agent-kernel/server.js` 能 `require('../index')` 成功；② 确认 `dist/db/schema.sql` 与 `dist/extraction/wasm/*.wasm` 随 `copy-assets` 产出且路径正确（server 运行时加载 wasm 不报 `ENOENT`）；③ 确认 `getTelemetry().isEnabled()` 为 false、`getUpdateNotice()` 返回 null（零联网） | 无 |
 | T2 | `agent-kernel/protocol.ts` | RPC 消息类型 + 错误码 + 握手类型 | T1 |
 | T3 | `agent-kernel/workspace-service.ts` | 持有单个 `MCPEngine`：懒创建 + `ensureInitialized` + `getStatus` + `getToolHandler` + `stop` | T2 |
 | T4 | `agent-kernel/tool-service.ts` | 查询方法映射 `workspace_path → args.projectPath`，分发到 `ToolHandler.execute`，第一版复用文本输出 | T3 |
@@ -163,7 +163,7 @@ codegraph_files(workspace_path, ...)
 
 - 构建形态：编译 `dist` + 锁定 node（判断一）。
 - workspace 关联：按请求带 path + 单 `MCPEngine` + 复用 `ToolHandler.projectCache` 懒加载（判断二，2026-08-04 修订）。
-- 适配层位置：`third_party/codegraph/src/agent-kernel/`，窄适配不污染上游。
+- 适配层位置：`apps/codeIndex/src/agent-kernel/`，窄适配不污染上游。
 - 查询输出：第一版复用 MCP 文本，不重新定义结构化响应。
 
 ### 待第二阶段解决（不在本阶段）

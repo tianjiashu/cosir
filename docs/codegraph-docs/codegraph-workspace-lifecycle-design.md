@@ -37,7 +37,7 @@
 
 以下均从 vendored 源码核实，不是推测。
 
-### 3.1 `CodeGraph` 主类的索引 API（`third_party/codegraph/src/index.ts`）
+### 3.1 `CodeGraph` 主类的索引 API（`apps/codeIndex/src/index.ts`）
 
 | 动作 | 上游 API | 行号 | 说明 |
 |------|---------|------|------|
@@ -54,7 +54,7 @@
 
 #### 3.1.1 `init` 的两个致命细节（必须按此实现）
 
-```249:265:third_party/codegraph/src/index.ts
+```249:265:apps/codeIndex/src/index.ts
     // Check if already initialized
     if (isInitialized(resolvedRoot)) {
       throw new Error(`CodeGraph already initialized in ${resolvedRoot}`);
@@ -116,7 +116,7 @@
 ### 5.1 新增文件与职责
 
 ```text
-third_party/codegraph/src/agent-kernel/
+apps/codeIndex/src/agent-kernel/
   protocol.ts           # [改] 新增 3 个 method + 结果类型 + 2 个错误码
   workspace-service.ts  # [不改] 单 MCPEngine 持有者（只读底座）
   tool-service.ts       # [不改] 只读查询分发

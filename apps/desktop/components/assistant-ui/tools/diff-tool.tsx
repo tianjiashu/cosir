@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { createTwoFilesPatch } from "diff";
 import { Diff, Hunk, parseDiff } from "react-diff-view";
+import type { FileData } from "react-diff-view";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { asRecord, readToolArtifact } from "./types";
@@ -13,11 +13,16 @@ type Change = {
   path: string;
   new_path?: string | null;
   status?: string;
-  before?: string;
-  after?: string;
+  patch?: string | null;
+  truncated?: boolean;
   insertions?: number;
   deletions?: number;
 };
+
+type ParsedFileDiff =
+  | { kind: "ready"; file: FileData }
+  | { kind: "empty" }
+  | { kind: "unavailable"; reason: "truncated" | "invalid" | "missing" };
 
 function readChanges(value: unknown): Change[] {
   if (!Array.isArray(value)) return [];
@@ -25,26 +30,56 @@ function readChanges(value: unknown): Change[] {
     path: String(change.path),
     new_path: typeof change.new_path === "string" ? change.new_path : null,
     status: typeof change.status === "string" ? change.status : undefined,
-    before: typeof change.before === "string" ? change.before : "",
-    after: typeof change.after === "string" ? change.after : "",
+    patch: typeof change.patch === "string" ? change.patch : null,
+    truncated: change.truncated === true,
     insertions: typeof change.insertions === "number" ? change.insertions : 0,
     deletions: typeof change.deletions === "number" ? change.deletions : 0,
   }));
 }
 
-function FileDiff({ change }: { change: Change }) {
-  const file = useMemo(() => {
-    const patch = createTwoFilesPatch(change.path, change.new_path ?? change.path, change.before ?? "", change.after ?? "", "", "", { context: 3 });
-    return parseDiff(patch)[0];
-  }, [change]);
+export function parseFileDiff(change: Change): ParsedFileDiff {
+  if (change.truncated) return { kind: "unavailable", reason: "truncated" };
+  if (!change.patch) return { kind: "unavailable", reason: "missing" };
+  const isRenamePatch = change.patch.includes("\nsimilarity index ")
+    && change.patch.includes("\nrename from ")
+    && change.patch.includes("\nrename to ");
+  if (!change.patch.startsWith("diff --git ")) {
+    return { kind: "unavailable", reason: "invalid" };
+  }
+  if (isRenamePatch) return { kind: "empty" };
+  if (!change.patch.includes("\n--- ") || !change.patch.includes("\n+++ ")) {
+    return { kind: "unavailable", reason: "invalid" };
+  }
 
-  if (!file || file.hunks.length === 0) {
+  try {
+    const file = parseDiff(change.patch)[0];
+    if (!file || file.hunks.length === 0) return { kind: "empty" };
+    return { kind: "ready", file };
+  } catch {
+    return { kind: "unavailable", reason: "invalid" };
+  }
+}
+
+function FileDiff({ change }: { change: Change }) {
+  const parsed = useMemo(() => parseFileDiff(change), [change]);
+
+  if (parsed.kind === "empty") {
     return <p className="text-muted-foreground px-3 py-2 text-xs">没有文本差异</p>;
   }
+  if (parsed.kind === "unavailable") {
+    const message = parsed.reason === "truncated"
+      ? "Diff 内容过大，无法完整展示"
+      : parsed.reason === "missing"
+        ? "Diff 数据不可用"
+        : "Diff 解析失败";
+    return <p className="text-muted-foreground px-3 py-2 text-xs">{message}</p>;
+  }
+
+  const { file } = parsed;
 
   return (
     <Diff viewType="split" diffType={file.type} hunks={file.hunks} className="aui-diff-view overflow-auto text-xs">
-      {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+      {(hunks) => hunks.map((hunk, index) => <Hunk key={`${hunk.oldStart}:${hunk.newStart}:${index}`} hunk={hunk} />)}
     </Diff>
   );
 }

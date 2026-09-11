@@ -17,7 +17,7 @@ def _summary(**overrides: object) -> dict[str, Any]:
     """构造最小观察摘要。"""
 
     base: dict[str, Any] = {
-        "call_id": "call-1",
+        "tool_call_id": "call-1",
         "tool_name": "read_file",
         "status": "success",
         "error": "",
@@ -63,7 +63,7 @@ class _LifecycleHarness:
         """结算摘要并保留返回的生命周期快照。"""
 
         for summary in summaries:
-            call_id = summary["call_id"]
+            call_id = summary["tool_call_id"]
             self.manager.calls.setdefault(
                 call_id,
                 ToolCallLifecycleRecord(
@@ -122,14 +122,14 @@ def test_status_mapping_success_error_cancelled() -> None:
     harness = _LifecycleHarness()
     result = harness.settle_batch(
         [
-            _summary(call_id="a", status="success", content="ok"),
+            _summary(tool_call_id="a", status="success", content="ok"),
             _summary(
-                call_id="b",
-                status="error",
+                    tool_call_id="b",
+                    status="error",
                 error="boom",
                 display_data={"status_hint": "命令失败"},
             ),
-            _summary(call_id="c", status="cancelled"),
+            _summary(tool_call_id="c", status="cancelled"),
         ],
         inherited_error_count=0,
     )
@@ -164,15 +164,15 @@ def test_error_count_resets_on_success_and_increments_on_error() -> None:
     harness = _LifecycleHarness()
     result = harness.settle_batch(
         [
-            _summary(call_id="a", status="error", error="x"),
-            _summary(call_id="b", status="error", error="y"),
-            _summary(call_id="c", status="cancelled"),
+            _summary(tool_call_id="a", status="error", error="x"),
+            _summary(tool_call_id="b", status="error", error="y"),
+            _summary(tool_call_id="c", status="cancelled"),
         ],
         inherited_error_count=1,
     )
     assert result.tool_error_count == 3
     result2 = harness.settle_batch(
-        [_summary(call_id="d", status="success")],
+        [_summary(tool_call_id="d", status="success")],
         inherited_error_count=result.tool_error_count,
     )
     assert result2.tool_error_count == 0
@@ -182,7 +182,9 @@ def test_unknown_status_falls_back_to_failed() -> None:
     """未知状态兜底为 failed 并计入失败次数。"""
 
     harness = _LifecycleHarness()
-    result = harness.settle_batch([_summary(call_id="a", status="weird")], inherited_error_count=0)
+    result = harness.settle_batch(
+        [_summary(tool_call_id="a", status="weird")], inherited_error_count=0
+    )
 
     assert harness.events[0].status == "failed"
     assert result == SettlementResult(tool_error_count=1, error_count=1)

@@ -13,9 +13,9 @@
 ```text
 模型节点
   -> ConversationRunUsageStats 累加
-  -> UsageUpdatedEvent
+  -> RunStatusChangedEvent.usage_stats（run 终态）
   -> ConversationEventProjector
-  -> snapshot.usage
+  -> runs[*].usage
   -> Assistant Transport
 
 RuntimeContextManager
@@ -71,10 +71,10 @@ Tauri / React WebView
 
 已确认的代码事实：
 
-- `apps/backend/app/core/workflows/nodes/model_node.py` 在完整 assistant 消息形成后调用 `rc.usage_stats.add_usage_metadata(...)`，随后发出 `UsageUpdatedEvent`。
+- `apps/backend/app/core/workflows/nodes/model_node.py` 在完整 assistant 消息形成后调用 `rc.usage_stats.add_usage_metadata(...)`；run 终态时由 `RunStatusChangedEvent.usage_stats` 一次性投影。
 - `ConversationRunUsageStats` 会跨同一 run 的多次模型调用累加 input、output、total、cache hit 和 reasoning。
-- `ConversationEventProjector` 将 `usage_updated` 列为已知事件，并调用事件自身的 `plan` 写入 `snapshot["usage"]`。
-- 终态 `RunStatusChangedEvent` 也可以携带 `usage_stats`，因此成功、失败、取消路径在传入累加器时能补写最终值。
+- `ConversationEventProjector` 只通过终态 `RunStatusChangedEvent` 的 `usage_stats` 写入对应 `runs[*].usage`。
+- 成功、失败、取消路径在传入累加器时都能补写最终值；未提供 provider usage 时保持 `null`。
 - `ConversationTaskSnapshotService` 在 mutation 后校验、写 SQLite、通知订阅者；正常情况下前端能收到 usage 更新。
 
 因此，“模型节点是否会发、projector 是否会写、Transport 是否能传”这条主链路是成立的。
@@ -87,7 +87,7 @@ Tauri / React WebView
 
 同时，顶层 `usage` 没有 `usage_run_id`，无法仅凭 snapshot 判断它属于哪个 run。当前实现事实上是“最近一次写入的 run usage”，不是可追溯的“明确属于某个 run 的 usage”。
 
-**修正**：在 `RunInitializedEvent` 中清零并设置 `usage_run_id = run_id`；`UsageUpdatedEvent` 和终态状态事件都带上相同关联。若 provider 没有 usage，UI 显示“暂无用量”；cache miss 明细缺失时使用 `null`，不要解释为模型确实消耗了 0 token。
+**修正**：在 `RunInitializedEvent` 中为新 Run 初始化 `usage = null`；仅由终态状态事件携带该 Run 的累计 usage。若 provider 没有 usage，UI 显示“暂无用量”；cache miss 明细缺失时使用 `null`，不要解释为模型确实消耗了 0 token。
 
 #### P1（已确认边界）：backend 重启后 run usage 无法完整恢复
 
@@ -213,7 +213,7 @@ Assistant UI 官方文档的核心原则适合本项目：Context meter 放在 c
 状态规则：
 
 - run 运行中且还没有 provider usage：`用量统计中…`，不显示 0。
-- 收到 `UsageUpdatedEvent`：实时替换为当前累计值；多个模型 step 显示 run 累计，而不是单 step。
+- 收到终态 `RunStatusChangedEvent.usage_stats`：替换为该 Run 的最终累计值；多个模型 step 已在后端累加，而不是单 step。
 - run 完成/失败/取消：保留最终已知值；若没有有效 provider usage，显示 `本次用量暂无`。
 - 历史消息只显示它自己的 run usage；不能把当前 task 的 context percentage 放在这行。
 
@@ -260,7 +260,7 @@ assistant-ui 官方 runtime usage hook 读取 assistant message 的 `metadata.us
 
 ### 5.2 事件修改
 
-`UsageUpdatedEvent` 保持“完整累计值替换”语义，新增/明确 `run_id` 关联，projector 写入 `usage_run_id` 与 `usage`。
+Run token usage 不再通过独立事件流式更新；模型节点只更新 run 级内存累加器，终态 `RunStatusChangedEvent.usage_stats` 将最终累计值写入对应 Run。
 
 `ContextUsageUpdatedEvent` 增加 `context_window_tokens` 或等价字段，`plan()` 同时写入 `context_usage`、`context_usage_used`、`context_window_total`；现有 `used_tokens` 不能再只是 debug dead field。
 
@@ -271,7 +271,7 @@ assistant-ui 官方 runtime usage hook 读取 assistant message 的 `metadata.us
 1. `app/assistant_transport/state/conversation_state_snapshot.py`：扩展 snapshot TypedDict、empty baseline、严格校验和旧数据兼容策略。
 2. `app/assistant_transport/state/conversation_state_usage.py`：补齐 `usage_run_id` 的邻接类型/文档，明确“run 累计，不是 Task 累计”。
 3. `app/assistant_transport/event/run_event.py`：`RunInitializedEvent` 清零 run usage；`RunStatusChangedEvent` 在带 usage 时同步 run id；恢复终态不制造虚假 usage。
-4. `app/assistant_transport/event/usage_event.py`：补投影 `usage_run_id` 和 context absolute/window 字段，增加有限数校验。
+4. `app/assistant_transport/event/run_event.py`：由终态 `RunStatusChangedEvent.usage_stats` 投影 Run usage；`usage_event.py` 只承载 context absolute/window 字段。
 5. `app/core/workflows/conversation_run_usage_stats.py`：实现 cache miss 口径，补足 provider details 异常值防御和单元测试。
 6. `app/core/context/context_listener/context_usage_compute_listener.py`：传递 absolute/window，保留估算来源；将 Task DB 写回改为失败安全的最终一致性旁路；修复模块 docstring 中已经不存在的 `publish_event` 描述。
 7. `app/core/context/runtime_context_manager.py`：确保 begin_run 后的实际窗口进入 context event；如实施 revision，则在这里递增 context revision。

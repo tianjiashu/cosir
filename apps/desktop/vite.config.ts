@@ -86,26 +86,35 @@ function getVendorChunk(packageName: string): string {
   return "vendor-shared";
 }
 
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: { "@": path.resolve(__dirname, ".") },
-  },
-  server: {
-    host: "127.0.0.1",
-    port: 3000,
-    strictPort: true,
-  },
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          const packageName = getPackageName(id);
-          return packageName ? getVendorChunk(packageName) : undefined;
+export default defineConfig(({ command }) => {
+  // Vite 决定 NODE_ENV 的规则是 `process.env.NODE_ENV || mode`，且仅在未设置时才回退到
+  // 默认值；因此外部环境（IDE/终端）注入的 NODE_ENV=production 会让 dev 被当作生产模式：
+  // 依赖预构建会产出生产版 React（react-jsx-dev-runtime 的 jsxDEV 被置空），页面启动即抛
+  // `_jsxDEV is not a function` 而白屏。这里按命令语义归一 NODE_ENV（serve=development、
+  // build=production），使构建结果不再受外部环境污染。
+  process.env.NODE_ENV = command === "serve" ? "development" : "production";
+
+  return {
+    plugins: [react()],
+    resolve: {
+      alias: { "@": path.resolve(__dirname, ".") },
+    },
+    server: {
+      host: "127.0.0.1",
+      port: 3000,
+      strictPort: true,
+    },
+    build: {
+      outDir: "dist",
+      emptyOutDir: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            const packageName = getPackageName(id);
+            return packageName ? getVendorChunk(packageName) : undefined;
+          },
         },
       },
     },
-  },
+  };
 });

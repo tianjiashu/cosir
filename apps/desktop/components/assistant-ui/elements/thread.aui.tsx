@@ -120,7 +120,20 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
     <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }}>
     <ThreadComponentsContext.Provider value={components}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
-        <ThreadPrimitive.Viewport className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
+        {/*
+          Top anchor pins the turn's user message while the answer grows below
+          it, so streaming no longer re-pins the scroll position on every
+          chunk. autoScroll is stated explicitly because it defaults to false
+          in this mode: following the bottom mid-stream is deliberately traded
+          for a stable viewport. Message roots below additionally skip
+          off-screen layout and paint through content-visibility utilities
+          (intrinsic size is not calibrated yet).
+        */}
+        <ThreadPrimitive.Viewport
+          className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth"
+          turnAnchor="top"
+          autoScroll={false}
+        >
           <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
             <div className="mb-14 flex flex-col gap-y-6 empty:hidden">
               <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
@@ -273,7 +286,10 @@ const UserMessageView: FC = () => {
   });
 
   return (
-    <MessagePrimitive.Root data-role="user" className="group flex flex-col items-end px-2">
+    <MessagePrimitive.Root
+      data-role="user"
+      className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
+    >
       <div className="bg-muted text-foreground max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
         <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <MarkdownText status={part.status} /> : null}</MessagePrimitive.Parts>
       </div>
@@ -346,7 +362,10 @@ const AssistantMessageDefault: FC = () => {
   const isForking = runId !== null && forkingRunId === runId;
 
   return (
-    <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 pb-6 px-2">
+    <MessagePrimitive.Root
+      data-role="assistant"
+      className="relative -mb-6 pb-6 px-2 [content-visibility:auto] [contain-intrinsic-size:auto_24rem]"
+    >
       <div className="text-foreground leading-relaxed wrap-break-word">
         <MessagePrimitive.GroupedParts
           groupBy={assistantMessageGroupBy}

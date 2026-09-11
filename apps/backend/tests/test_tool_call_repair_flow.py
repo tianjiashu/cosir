@@ -256,7 +256,7 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
                     "expected_call_ids": ["valid-1"],
                     "observations": [
                         {
-                            "call_id": "valid-1",
+                            "tool_call_id": "valid-1",
                             "tool_name": "read_file",
                             "status": "success",
                             "error": "",
@@ -266,7 +266,7 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
                             "display_data": {},
                         },
                         {
-                            "call_id": "unexpected-1",
+                            "tool_call_id": "unexpected-1",
                             "tool_name": "read_file",
                             "status": "success",
                             "error": "",
