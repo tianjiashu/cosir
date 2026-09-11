@@ -77,4 +77,5 @@
 
 ### 提交
 
-- 本轮修复提交：`8940855`（`fix: harden task 3 canonical recovery writes`）。
+- 本轮实现提交：`605c1ea`（`fix: harden task 3 canonical recovery writes`）。本报告更新随后
+  作为独立文档提交。
