@@ -18,6 +18,7 @@ from app.assistant_transport.event import (
     RunStatusChangedEvent,
     UserInputAppendedEvent,
 )
+from app.config.logging.logger import log
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunRecord, ConversationRunStatus
@@ -260,20 +261,53 @@ class ConversationRunService:
     ) -> list[ConversationRunRecord]:
         """把当前进程启动前遗留的 pending/running run 收敛为 cancelled。
 
-        该恢复步骤只更新数据库 Run 状态，不触碰 snapshot 或 projector；读取 snapshot
-        时由 ConversationTaskSnapshotService.read 负责最终一致性校正。
+        Run 终态与未闭合工具结果在同一个数据库事务内收敛；事务提交后再投影 Run 状态。
         """
 
         recovered: list[ConversationRunRecord] = []
         for run in self.list_recoverable():
-            record = self._run.cancel_recoverable_for_restart(
-                run.id,
-                end_reason,
-                usage=self._terminal_usage(None),
-                error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
-            )
+            session_factory = getattr(self, "_session_factory", None)
+            context = getattr(self, "_context", None)
+            publish_status = session_factory is not None and context is not None
+            if session_factory is None or context is None:
+                record = self._run.cancel_recoverable_for_restart(
+                    run.id,
+                    end_reason,
+                    usage=self._terminal_usage(None),
+                    error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+                )
+            else:
+                with session_factory.begin() as session:
+                    record = self._run.cancel_recoverable_for_restart(
+                        run.id,
+                        end_reason,
+                        usage=self._terminal_usage(None),
+                        error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+                        session=session,
+                    )
+                    if record is not None:
+                        context.recover_interrupted_run(run.task_id, run.id, session=session)
             if record is not None:
                 recovered.append(record)
+            if record is not None and publish_status:
+                try:
+                    service_depends.get_conversation_event_projector().process(
+                        RunStatusChangedEvent(
+                            task_id=record.task_id,
+                            run_id=record.id,
+                            status=ConversationRunStatus.CANCELLED,
+                            end_reason=end_reason,
+                            usage_stats=ConversationRunUsageStats(),
+                        )
+                    )
+                except Exception:
+                    log.exception(
+                        "orphan_recovery_projector_failed",
+                        extra={
+                            "msg": "孤儿 Run 已提交，状态 projector 失败并被降级",
+                            "data": {"task_id": record.task_id, "run_id": record.id},
+                        },
+                    )
         return recovered
 
     def complete_run_if_running(

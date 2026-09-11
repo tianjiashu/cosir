@@ -2,19 +2,22 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy import create_engine, inspect, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
+from app.assistant_transport.event import RunStatusChangedEvent
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
+from app.service.task.conversation_run_service import ConversationRunService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.init_schema import initialize_app_schema
 from app.storage.model.base import StorageBase
+from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.task_model import TaskModel
 
@@ -517,6 +520,127 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             assert cloned_row.run_id == 22
             assert json.loads(cloned_row.transport_metadata_json) == metadata
             assert cloned_row.message_schema_version == 2
+    finally:
+        engine.dispose()
+
+
+def test_context_storage_has_durable_tool_settle_uniqueness_and_crud_reports_duplicate() -> None:
+    engine = create_engine("sqlite://")
+    StorageBase.metadata.create_all(engine)
+    try:
+        constraints = inspect(engine).get_unique_constraints("conversation_task_contexts")
+        assert any(
+            set(constraint["column_names"]) == {"task_id", "run_id", "tool_call_id"}
+            for constraint in constraints
+        )
+
+        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+        first = ConversationTaskContextRecord(
+            task_id=7,
+            run_id=11,
+            message=ToolMessage(content="done", tool_call_id="call-1", status="success"),
+            include_in_context=True,
+            sequence=1,
+        )
+        duplicate = ConversationTaskContextRecord(
+            task_id=7,
+            run_id=11,
+            message=ToolMessage(content="done again", tool_call_id="call-1", status="success"),
+            include_in_context=True,
+            sequence=2,
+        )
+        with Session(engine) as session:
+            assert crud.create(first, session=session) is True
+            assert crud.create(duplicate, session=session) is False
+            assert len(session.scalars(select(ConversationTaskContextModel)).all()) == 1
+    finally:
+        engine.dispose()
+
+
+def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypatch) -> None:
+    engine = create_engine("sqlite://")
+    StorageBase.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    try:
+        with Session(engine) as session:
+            session.add(
+                TaskModel(id=7, workspace_id=3, title="task", creation_command_id=None)
+            )
+            session.add(
+                ConversationRunModel(
+                    id=11,
+                    task_id=7,
+                    input_text="hello",
+                    status="running",
+                    checkpoint_thread_id="thread-11",
+                )
+            )
+            context = ConversationTaskContextRecord(
+                task_id=7,
+                run_id=11,
+                message=AIMessage(
+                    content="I will inspect it",
+                    tool_calls=[
+                        {"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}
+                    ],
+                ),
+                include_in_context=True,
+                sequence=1,
+            )
+            session.add(context._to_model())
+            session.commit()
+
+        run_crud = ConversationRunCrud.__new__(ConversationRunCrud)
+        run_crud._session_factory = factory
+        context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
+        context_crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+        context_crud._session_factory = factory
+        context_service._crud = context_crud
+        service = ConversationRunService.__new__(ConversationRunService)
+        service._run = run_crud
+        service._context = context_service
+        service._session_factory = factory
+        projected: list[RunStatusChangedEvent] = []
+
+        class _Projector:
+            def process(self, event: RunStatusChangedEvent) -> None:
+                projected.append(event)
+
+        monkeypatch.setattr(
+            "app.service.depends.get_conversation_event_projector", lambda: _Projector()
+        )
+
+        recovered = service.recover_orphaned_runs()
+
+        with Session(engine) as session:
+            run_row = session.get(ConversationRunModel, 11)
+            context_rows = session.scalars(
+                select(ConversationTaskContextModel).where(
+                    ConversationTaskContextModel.task_id == 7,
+                    ConversationTaskContextModel.run_id == 11,
+                )
+            ).all()
+            repaired = [
+                record
+                for record in (
+                    ConversationTaskContextRecord._from_model(row) for row in context_rows
+                )
+                if isinstance(record.message, ToolMessage)
+            ]
+
+        assert len(recovered) == 1
+        assert run_row is not None
+        assert run_row.status == "cancelled"
+        assert run_row.end_reason == "runtime_restarted"
+        assert len(repaired) == 1
+        assert repaired[0].message.tool_call_id == "call-1"
+        assert repaired[0].transport_metadata["tool_result"] == {
+            "status": "error",
+            "display_data": {"status_hint": "执行已中断"},
+            "status_hint": "执行已中断",
+            "error": "execution_interrupted",
+        }
+        assert projected[0].status.value == "cancelled"
     finally:
         engine.dispose()
 

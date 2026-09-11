@@ -176,15 +176,14 @@ class RuntimeContextManager:
         if execution_mode == "fresh":
             # fresh 仍按持久化 run 身份清理，而不是依赖进程内指针，避免重跑时重复
             # 追加 user/tool message。正常首次执行没有同 run 条目，因此是幂等空操作。
-            self._require_context_service().delete_by_run_id(self.current_task_id, run.id)
-            self._entries = [entry for entry in self._entries if entry.run_id != run.id]
-            # The initial user row is a canonical Run fact. Recreate it immediately after
-            # clearing an old attempt so fresh starts remain idempotent without relying on the
-            # workflow to manufacture UI history.
             service = self._require_context_service()
-            append_user = getattr(service, "append_user_message_once", None)
-            if append_user is not None:
-                append_user(self.current_task_id, run.id, run.input_text)
+            reset_fresh = getattr(service, "reset_run_for_fresh", None)
+            if callable(reset_fresh):
+                reset_fresh(self.current_task_id, run.id)
+            else:
+                service.delete_by_run_id(self.current_task_id, run.id)
+            self._entries = [entry for entry in self._entries if entry.run_id != run.id]
+            if callable(reset_fresh):
                 self._entries = service.entries_in_context(self.current_task_id)
         else:
             # resume 可能发生在后端重启后，必须从 SQLite 重新装载 working copy；同进程
@@ -237,7 +236,7 @@ class RuntimeContextManager:
         include_in_context: bool = True,
         transport_parts: Sequence[TransportPart] | None = None,
         tool_result: TransportToolResult | None = None,
-    ) -> None:
+    ) -> bool:
         """追加一条完整 LangChain 消息到 Task context。
 
         参数:
@@ -246,7 +245,7 @@ class RuntimeContextManager:
             allow_write_event_failure: listener 旁路失败时是否继续。
 
         返回:
-            无。
+            ``True`` 表示 canonical context 新增；``False`` 表示同一工具结果已存在。
 
         异常:
             ValueError: 传入 ``AIMessageChunk``。
@@ -276,7 +275,7 @@ class RuntimeContextManager:
                     },
                 },
             )
-            return
+            return False
 
         if include_in_context and isinstance(message, SystemMessage):
             message_kind = message.additional_kwargs.get("cosir_message_kind")
@@ -297,7 +296,7 @@ class RuntimeContextManager:
                         },
                     },
                 )
-                return
+                return False
 
         sequence = self._message_sequence
         append_kwargs: dict[str, object] = {}
@@ -314,12 +313,13 @@ class RuntimeContextManager:
             **append_kwargs,
         )
         if created is False:
-            return
+            return False
         self._message_sequence += 1
         if not include_in_context:
-            return
+            return True
         self._entries.append(ContextEntry(message, self.current_run_id, sequence))
         self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
+        return True
 
     def _close_unclosed_tool_calls(self) -> None:
         """闭合并规范化上下文中未配对或错位的工具调用结果。
@@ -514,14 +514,28 @@ class RuntimeContextManager:
         result = ListenerResult(self.used_tokens)
         snapshot = copy.deepcopy(entries)
         for listener in self._listeners:
-            listener.listen(
-                ListenerEvent(
-                    event_type,
-                    snapshot,
-                    self.used_tokens,
-                    self.total_tokens,
-                    self._tool_schemas,
-                ),
-                result,
-            )
+            try:
+                listener.listen(
+                    ListenerEvent(
+                        event_type,
+                        snapshot,
+                        self.used_tokens,
+                        self.total_tokens,
+                        self._tool_schemas,
+                    ),
+                    result,
+                )
+            except Exception:
+                log.exception(
+                    "context_listener_failed",
+                    extra={
+                        "msg": "context 已落库，旁路 listener 失败并被降级",
+                        "data": {
+                            "task_id": self.current_task_id,
+                            "run_id": self.current_run_id,
+                            "listener": type(listener).__name__,
+                            "event_type": event_type.value,
+                        },
+                    },
+                )
         self.used_tokens = result.usage

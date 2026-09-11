@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from langchain_core.messages import BaseMessage, _message_from_dict, message_to_dict
+from langchain_core.messages import BaseMessage, ToolMessage, _message_from_dict, message_to_dict
 
 from app.models.json_helpers import (
     TransportMetadata,
@@ -81,6 +81,9 @@ class ConversationTaskContextRecord:
             id=self.id,
             task_id=self.task_id,
             run_id=self.run_id,
+            tool_call_id=(
+                self.message.tool_call_id if isinstance(self.message, ToolMessage) else None
+            ),
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
             transport_metadata_json=serialize_transport_metadata(self.transport_metadata),
             message_schema_version=self.message_schema_version,

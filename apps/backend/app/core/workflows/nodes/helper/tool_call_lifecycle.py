@@ -320,21 +320,37 @@ class ToolCallLifecycleManager(BaseModel):
             "status_hint": status_hint,
             "error": observation.error or None,
         }
-        runtime_context.add_message(
+        created = runtime_context.add_message(
             operations.to_tool_model_message(observation),
             tool_result=tool_result,
         )
+        if created is False:
+            return updated, event_status
         # DB-backed context write is deliberately before the event so the projector never
         # publishes a terminal tool state that cannot be rebuilt from context.
-        updated._emit_status(
-            task_id=task_id,
-            run_id=run_id,
-            step_id=step_id,
-            call_id=call_id,
-            to_status=event_status,
-            error=status_hint,
-            display_data=_ui_data(summary),
-        )
+        try:
+            updated._emit_status(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                call_id=call_id,
+                to_status=event_status,
+                error=status_hint,
+                display_data=copy.deepcopy(result_display_data),
+            )
+        except Exception:
+            log.exception(
+                "tool_terminal_event_failed",
+                extra={
+                    "msg": "工具结果已落库，终态 Transport 事件发送失败并被降级",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "tool_call_id": call_id,
+                        "status": event_status,
+                    },
+                },
+            )
         return updated, event_status
 
     def settle_batch(

@@ -105,13 +105,39 @@ cycle and each task must receive an independent review before the next task.
 ## Task 3
 
 - Brief: `.superpowers/sdd/conversation-state-rebuild-from-context-plan/task-3-brief.md`.
-- Implementer: Codex，直接在共享 workspace 执行；无可用子 Agent 工具，因此未创建子 thread。
-- TDD RED：Task 3 canonical write-path focused tests first，首次 `5 failed`，扩展覆盖后
-  `9 failed`，fresh Run 重载用例单独 `1 failed`。
-- TDD GREEN：Task 3 focused `10 passed`；相关 context/tool/usage 回归 `29 passed`，
-  tool repair/observation 回归 `8 passed`。
-- 静态检查：Ruff 与 `compileall` 通过；聚焦 MyPy 触达两个未修改的既有 event TypedDict
-  类型错误。
-- 完整后端回归：`336 passed, 1 skipped, 7 failed`；失败为已知 snapshot cleanup/read
-  边界与缺少 terminal-worker sidecar，详见 `task-3-report.md`。
-- Status: DONE_WITH_CONCERNS；未触碰 Task 4 snapshot removal/read-path switching。
+- Implementer: Locke (`01a0915f-770c-73e2-8dd6-825e61a7e85a`).
+- Implementer commit: `718d4911c3d589d4169a81eaeb573bc52b83f626`.
+- TDD/verification reported by implementer: focused `37 passed`; Ruff, compileall and diff checks
+  passed; full backend `336 passed, 1 skipped, 7 failed` (known snapshot-boundary and
+  terminal-worker environment failures).
+- Task 3 changed canonical context/system/user/AI/tool writes, Run usage/error/final-output writes,
+  and Task usage ordering; it did not switch Task 4 snapshot read/removal paths.
+- Status: implementation complete, independent review pending; Task 4 remains blocked until clean.
+- Task 3 review verdict: Spec compliance FAIL; Task quality FAIL.
+- Independent review findings: model chunk loses interleaved tool-call order and structured/complete
+  AI message semantics; post-commit projector/transport failures can abort Agent execution; Tool
+  settle is only read-before-insert without durable exactly-once or duplicate-event suppression;
+  restart recovery does not repair interrupted tool calls or publish terminal events; fresh Run setup
+  deletes and recreates the already persisted initial HumanMessage; failed tool events can expose
+  unsanitized success-shaped display data.
+- Ruling: keep DB failures fatal but isolate post-commit projector/transport failures; preserve actual
+  stream order and serializer-compatible AI fields; add a durable unique tool-result invariant and
+  return a created/duplicate outcome so only the first result emits; make restart recovery persist
+  interrupted-tool repairs and terminal fields before events; preserve the initial user row across
+  fresh startup; sanitize event payloads identically to persisted failure metadata. Add integration
+  or real-CRUD tests for race/idempotence/recovery where feasible, not only mocks.
+- Task 3 fix round 1/5 dispatched to Locke; independent re-review required.
+
+### Task 3 — fix round 1
+
+- Strict TDD RED: focused Task 3/context tests reported `7 failed, 51 passed`; the additional
+  created-vs-duplicate settle test independently reported `1 failed` before implementation.
+- GREEN: focused Task 3/context tests `60 passed`; related regression `51 passed, 1 known Task 4
+  snapshot assertion failed`; full backend with workspace basetemp `344 passed, 1 skipped, 7 known
+  failures` (snapshot cleanup/read-path boundary plus missing terminal-worker sidecar).
+- Fixes: preserve streamed tool positions and full LangChain AI semantics; make post-commit listener/
+  terminal-event failures non-fatal; enforce durable tool-call uniqueness with created-vs-duplicate
+  outcomes; transactionally recover Run and interrupted ToolMessage facts before projector; preserve
+  fresh-start HumanMessage row identity; share sanitized failed-tool display data between persistence
+  and event.
+- Changed files and final commit are recorded in `task-3-report.md` after commit.

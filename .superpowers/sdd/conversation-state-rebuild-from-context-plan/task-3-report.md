@@ -49,3 +49,32 @@
   `conversation_task_snapshots` 表不存在，另有一个旧 snapshot recovery 断言仍期待已移除的
   task-space projection hook。这些属于 Task 4，不在本次修改。
 - 终端 worker 集成测试需要桌面 sidecar `terminal-worker.exe`，当前环境未提供。
+
+## Fix round 1（independent acceptance findings）
+
+状态：修复完成，等待独立复审；Task 4 snapshot 删除/读路径切换未触碰。
+
+### TDD RED/GREEN
+
+- RED（先测后改）：新增/更新六类行为测试后运行
+  `apps/backend/.venv/Scripts/python.exe -m pytest tests/test_task3_canonical_write_paths.py tests/test_conversation_fact_models.py -q`，结果为 `7 failed, 51 passed`；失败分别暴露 fresh user 身份、完整 AIMessage、流式工具顺序、旁路异常、恢复事务/事件和数据库唯一约束问题。
+- RED（exactly-once 追加覆盖）：补充 canonical append 返回 duplicate 时不发终态事件的测试，单测结果为 `1 failed`。
+- GREEN：同一 focused 命令结果为 `60 passed`。
+- 相关回归：context manager、tool lifecycle、usage listener、repair/observation、Assistant API 结果为 `51 passed, 1 failed`；唯一失败是既有 Task 4 snapshot 读测试仍断言已移除的 task-space projection hook。
+- 全量回归（workspace basetemp）：`pytest -q --basetemp H:\coding-agent\.pytest-task3-fix-round1-20260912` 结果为 `344 passed, 1 skipped, 7 failed`。7 个失败均为已知边界：1 个旧 snapshot recovery 断言、5 个 Task 4 snapshot cleanup 缺表测试、1 个缺少 `terminal-worker.exe` 的 Windows sidecar 集成测试。
+- 静态检查：本轮修改文件 Ruff 通过；`python -m compileall -q app` 通过；`git diff --check` 通过。
+
+### 修复内容与变更文件
+
+- `apps/backend/app/core/workflows/nodes/helper/model_chunk.py`：完整消息使用 LangChain 序列化字段恢复，保留结构化 content/name/id/metadata/tool-call 字段；Transport tool-call part 按 chunk 原始位置冻结并回填完整参数。
+- `apps/backend/app/core/context/runtime_context_manager.py`：canonical append 返回 created/duplicate；DB 成功后 listener 失败结构化记录并降级；fresh reset 保留 canonical HumanMessage 行身份。
+- `apps/backend/app/core/workflows/nodes/helper/tool_call_lifecycle.py`：仅首个持久化 ToolMessage 发终态事件；发送失败非致命；失败事件与持久化使用同一 sanitized display payload。
+- `apps/backend/app/models/conversation_task_context.py`、`apps/backend/app/storage/model/conversation_task_context_model.py`、`apps/backend/app/storage/crud/conversation_task_context_crud.py`：增加 `tool_call_id` 持久化列、`(task_id, run_id, tool_call_id)` 唯一性、savepoint duplicate 返回值和 fresh 生成消息清理。
+- `apps/backend/app/service/task/conversation_task_context_service.py`：接通 duplicate 返回值；恢复在外部事务内修复 interrupted ToolMessage 并写 typed tool_result metadata。
+- `apps/backend/app/storage/init_schema.py`：为已有 SQLite 主库补列、回填 tool_call_id 并建立唯一索引。
+- `apps/backend/app/storage/crud/conversation_run_crud.py`、`apps/backend/app/service/task/conversation_run_service.py`：orphan recovery 在同一事务提交 Run 终态和 ToolMessage 修复，提交后再发状态 projector 事件并降级旁路异常。
+- `apps/backend/tests/test_task3_canonical_write_paths.py`、`apps/backend/tests/test_conversation_fact_models.py`：新增上述 RED/GREEN、真实 SQLite CRUD、真实 orphan recovery 和身份幂等测试。
+
+### 提交
+
+- 本轮修复提交：`8940855`（`fix: harden task 3 canonical recovery writes`）。

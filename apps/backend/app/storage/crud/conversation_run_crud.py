@@ -541,6 +541,7 @@ class ConversationRunCrud:
         end_reason: str = "runtime_restarted",
         usage: ConversationRunUsage | None = None,
         error: ConversationRunError | None = None,
+        session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """把进程重启时遗留的 active run 原子收敛为 cancelled。
 
@@ -548,30 +549,34 @@ class ConversationRunCrud:
         snapshot 的最终一致性由 ConversationTaskSnapshotService.read 在读取边界完成。
         """
 
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                update(ConversationRunModel)
-                .where(
-                    ConversationRunModel.id == run_id,
-                    ConversationRunModel.status.in_(
-                        (
-                            ConversationRunStatus.PENDING.value,
-                            ConversationRunStatus.RUNNING.value,
-                        )
-                    ),
+        if session is None:
+            with self._session_factory.begin() as owned_session:
+                return self.cancel_recoverable_for_restart(
+                    run_id, end_reason, usage=usage, error=error, session=owned_session
                 )
-                .values(
-                    status=ConversationRunStatus.CANCELLED.value,
-                    end_reason=end_reason,
-                    final_output=None,
-                    usage_json=serialize_run_usage(usage),
-                    error_json=serialize_run_error(error) if error is not None else None,
-                )
+        result = session.execute(
+            update(ConversationRunModel)
+            .where(
+                ConversationRunModel.id == run_id,
+                ConversationRunModel.status.in_(
+                    (
+                        ConversationRunStatus.PENDING.value,
+                        ConversationRunStatus.RUNNING.value,
+                    )
+                ),
             )
-            if not result.rowcount:
-                return None
-            session.flush()
-            return ConversationRunCrud.get_in_session(session, run_id)
+            .values(
+                status=ConversationRunStatus.CANCELLED.value,
+                end_reason=end_reason,
+                final_output=None,
+                usage_json=serialize_run_usage(usage),
+                error_json=serialize_run_error(error) if error is not None else None,
+            )
+        )
+        if not result.rowcount:
+            return None
+        session.flush()
+        return ConversationRunCrud.get_in_session(session, run_id)
 
     @staticmethod
     def reset_for_edit_in_session(

@@ -108,8 +108,7 @@ class ConversationTaskContextService:
             sequence=seq,
             transport_metadata=metadata,
         )
-        self._crud.create(record, session=session)
-        return True
+        return self._crud.create(record, session=session) is not False
 
     def append_user_message_once(
         self,
@@ -181,6 +180,13 @@ class ConversationTaskContextService:
             for record in records
         ]
 
+    def reset_run_for_fresh(
+        self, task_id: int, run_id: int, session: Session | None = None
+    ) -> None:
+        """清理 fresh 重试生成的消息，并保留已创建的 canonical HumanMessage 身份。"""
+
+        self._crud.delete_generated_by_run_id(task_id, run_id, session=session)
+
     def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""
 
@@ -243,18 +249,25 @@ class ConversationTaskContextService:
 
         self._crud.delete_by_run_id(task_id, run_id, session=session)
 
-    def recover_interrupted_run(self, task_id: int, run_id: int) -> None:
+    def recover_interrupted_run(
+        self, task_id: int, run_id: int, session: Session | None = None
+    ) -> list[str]:
         """为崩溃遗留的未闭合 tool call 补写 context 终止消息。
 
         context 与 snapshot/Run 独立收敛；重复执行按 tool_call_id 幂等跳过。
         """
 
-        entries = self.entries_in_context(task_id)
+        entries = (
+            self._entries_in_context_with_session(task_id, session)
+            if session is not None
+            else self.entries_in_context(task_id)
+        )
         completed = {
             str(entry.message.tool_call_id)
             for entry in entries
             if entry.run_id == run_id and isinstance(entry.message, ToolMessage)
         }
+        repaired: list[str] = []
         for entry in entries:
             if entry.run_id != run_id or not isinstance(entry.message, AIMessage):
                 continue
@@ -262,7 +275,7 @@ class ConversationTaskContextService:
                 call_id = str(tool_call.get("id") or "")
                 if not call_id or call_id in completed:
                     continue
-                self.append(
+                created = self.append(
                     task_id,
                     run_id,
                     ToolMessage(
@@ -271,5 +284,30 @@ class ConversationTaskContextService:
                         status="error",
                         id=f"tool-{call_id}",
                     ),
+                    session=session,
+                    tool_result={
+                        "status": "error",
+                        "display_data": {"status_hint": "执行已中断"},
+                        "status_hint": "执行已中断",
+                        "error": "execution_interrupted",
+                    },
                 )
-                completed.add(call_id)
+                if created:
+                    repaired.append(call_id)
+                    completed.add(call_id)
+        return repaired
+
+    def _entries_in_context_with_session(
+        self, task_id: int, session: Session
+    ) -> list[ContextEntry]:
+        """在调用方事务内读取 context，避免恢复时读写跨越提交边界。"""
+
+        records = self._crud.get(task_id, session=session) or []
+        return [
+            ContextEntry(
+                run_id=record.run_id,
+                message=record.message,
+                sequence=record.sequence,
+            )
+            for record in records
+        ]

@@ -25,6 +25,12 @@ class ConversationTaskContextModel(StorageBase):
     __tablename__ = "conversation_task_contexts"
     __table_args__ = (
         UniqueConstraint("task_id", "sequence", name="uq_task_context_task_seq"),
+        UniqueConstraint(
+            "task_id",
+            "run_id",
+            "tool_call_id",
+            name="uq_task_context_task_run_tool_call",
+        ),
         Index("idx_task_context_task_run", "task_id", "run_id"),
     )
 
@@ -35,6 +41,7 @@ class ConversationTaskContextModel(StorageBase):
         nullable=True,
         index=True,
     )
+    tool_call_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     message_json: Mapped[str] = mapped_column(Text, nullable=False)
     transport_metadata_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="{}", server_default="{}"

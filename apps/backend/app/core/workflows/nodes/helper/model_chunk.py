@@ -126,9 +126,9 @@ class ModelChunkProcessor:
 
         合并后保留 ``additional_kwargs``（含 DeepSeek 的 ``reasoning_content`` 等 provider 私有
         扩展字段）原样透传；思考内容已在流式阶段作为 ``MODEL_THINKING_DELTA`` 推送给前端，其
-        回传 / 剥离策略由下游持久化与回传边界负责，本处理器不在此处置。``content`` 经
-        ``content_to_text`` 抽为纯文本（防御含 ``tool_call`` block 的 list 形态，与落库口径一致），
-        避免回灌模型时重复携带工具结构。合并后的完整结构会经 ``_dump_merged_chunk_debug`` 落盘到
+        回传 / 剥离策略由下游持久化与回传边界负责，本处理器不在此处置。完整可序列化字段在
+        ``AIMessage`` 边界保留，仅转换消息类型 discriminator，不把结构化 content 压成文本。
+        合并后的完整结构会经 ``_dump_merged_chunk_debug`` 落盘到
         ``logs/debug_merged_chunks.jsonl`` 供排查。
 
         参数:
@@ -136,12 +136,8 @@ class ModelChunkProcessor:
 
         返回:
             可安全存入 graph state 并交给下一步模型调用的 ``AIMessage``：
-            - ``content`` 经 ``content_to_text`` 抽为纯文本；
-            - ``tool_calls`` / ``usage_metadata`` 透传（usage 由 ``add_usage`` 正确累加后的完整
-              统计）；
-            - ``additional_kwargs`` 原样透传（含 thinking 私有字段）；
-            - ``id`` 透传 merged 的消息运行 ID（``lc_run--<uuid>``），供日志与 trace 关联；缺失时为
-              ``None``。
+            - ``content``、``tool_calls``、``invalid_tool_calls``、``additional_kwargs``、``name``、
+              ``id``、``response_metadata``、``usage_metadata`` 及其他可序列化字段均透传。
             空输入返回空 ``AIMessage``。
 
         异常:
@@ -162,20 +158,9 @@ class ModelChunkProcessor:
         # 完整结构落调试文件（不受日志预算截断），先于常规摘要日志执行。
         _dump_merged_chunk_debug(merged)
 
-        # additional_kwargs 原样透传：thinking 字段的剥离/回传策略由下游负责，本处理器不处置。
-        additional = dict(merged.additional_kwargs) if merged.additional_kwargs else {}
-
-        # content 统一抽纯文本：防御 DeepSeek 偶发把工具调用 block 带进 content list 的形态，
-        # 与 RuntimeContextManager 落库口径保持一致，避免回灌模型时重复携带工具结构。
-        return AIMessage(
-            content=content_to_text(merged.content),  # 合并后的纯文本（已防御 list 形态）
-            tool_calls=merged.tool_calls or [],  # 工具调用（可能为空）
-            invalid_tool_calls=merged.invalid_tool_calls,
-            additional_kwargs=additional,  # 原样透传 provider 私有扩展字段
-            usage_metadata=merged.usage_metadata,  # 透传完整 token 统计（唯一来源）
-            id=getattr(merged, "id", None),  # 消息 id 透传
-            response_metadata=merged.response_metadata,
-        )
+        serialized = merged.model_dump()
+        serialized["type"] = "ai"
+        return AIMessage.model_validate(serialized)
 
     def build_transport_parts(
         self,
@@ -191,6 +176,7 @@ class ModelChunkProcessor:
         """
 
         parts: list[dict[str, Any]] = []
+        tool_part_indexes: dict[str, int] = {}
         for chunk in chunks:
             text = content_to_text(chunk.content)
             if text:
@@ -202,6 +188,20 @@ class ModelChunkProcessor:
                 call_id = raw_call.get("id")
                 if not isinstance(call_id, str) or not call_id:
                     continue
+                if call_id in tool_part_indexes:
+                    continue
+                tool_part_indexes[call_id] = len(parts)
+                parts.append(
+                    {
+                        "type": "tool-call",
+                        "toolCallId": call_id,
+                        "toolName": str(raw_call.get("name") or ""),
+                        "status": "pending",
+                        "args": {},
+                        "presentation": copy.deepcopy((presentations or {}).get(call_id, {})),
+                        "isError": False,
+                    }
+                )
 
         final_calls = {
             str(call.get("id")): call
@@ -210,6 +210,11 @@ class ModelChunkProcessor:
         }
         for call_id, call in final_calls.items():
             args = call.get("args")
+            if call_id in tool_part_indexes:
+                part = parts[tool_part_indexes[call_id]]
+                part["toolName"] = str(call.get("name") or part["toolName"])
+                part["args"] = copy.deepcopy(args) if isinstance(args, dict) else {}
+                continue
             parts.append(
                 {
                     "type": "tool-call",

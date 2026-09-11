@@ -6,7 +6,7 @@
 
 from typing import cast
 
-from sqlalchemy import Engine, Table, inspect
+from sqlalchemy import Engine, Table, inspect, text
 
 from app.storage.model.base import StorageBase
 from app.storage.model.conversation_command_model import ConversationCommandModel
@@ -55,8 +55,41 @@ def initialize_app_schema(engine: Engine) -> None:
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
+    _ensure_context_tool_call_id_schema(engine)
     _ensure_tasks_sqlite_autoincrement(engine)
     _remove_legacy_checkpoint_unique_constraint(engine)
+
+
+def _ensure_context_tool_call_id_schema(engine: Engine) -> None:
+    """为已有主库补齐工具调用幂等键及其 SQLite 唯一索引。"""
+
+    if engine.dialect.name != "sqlite":
+        return
+    table_name = ConversationTaskContextModel.__tablename__
+    columns = {column["name"] for column in inspect(engine).get_columns(table_name)}
+    with engine.begin() as connection:
+        if "tool_call_id" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE conversation_task_contexts "
+                    "ADD COLUMN tool_call_id TEXT"
+                )
+            )
+        connection.execute(
+            text(
+                "UPDATE conversation_task_contexts "
+                "SET tool_call_id = json_extract(message_json, '$.data.tool_call_id') "
+                "WHERE tool_call_id IS NULL "
+                "AND json_extract(message_json, '$.type') = 'tool'"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_context_task_run_tool_call_idx "
+                "ON conversation_task_contexts (task_id, run_id, tool_call_id) "
+                "WHERE tool_call_id IS NOT NULL"
+            )
+        )
 
 
 def _quote_sqlite_identifier(identifier: str) -> str:

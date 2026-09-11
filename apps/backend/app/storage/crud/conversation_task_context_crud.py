@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from langchain_core.messages import HumanMessage, ToolMessage
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -79,12 +81,15 @@ class ConversationTaskContextCrud:
         self,
         record: ConversationTaskContextRecord,
         session: Session | None = None,
-    ) -> None:
+    ) -> bool:
         """写入一条上下文消息行。
 
         参数:
             record: 待持久化的记录（含 task_id、run_id、message、include_in_context、sequence）。
             session: 外部事务 Session；为 ``None`` 时自建事务并提交。
+
+        返回:
+            ``True`` 表示新增；违反工具调用唯一性时返回 ``False``。其他数据库错误继续抛出。
 
         副作用:
             传入 ``session`` 时仅 ``add`` 不提交（由调用方事务收口）；
@@ -93,12 +98,39 @@ class ConversationTaskContextCrud:
 
         model = record._to_model()
         if session is None:
-            with self._session_factory.begin() as session:
+            with self._session_factory.begin() as owned_session:
+                return self.create(record, session=owned_session)
+        try:
+            with session.begin_nested():
                 session.add(model)
                 session.flush()
+        except IntegrityError:
+            if isinstance(record.message, ToolMessage) and record.message.tool_call_id:
+                return False
+            raise
+        return True
+
+    def delete_generated_by_run_id(
+        self, task_id: int, run_id: int, session: Session | None = None
+    ) -> None:
+        """删除 fresh 重试生成的消息，但保留该 Run 的 canonical HumanMessage。"""
+
+        stmt = select(ConversationTaskContextModel).where(
+            ConversationTaskContextModel.task_id == task_id,
+            ConversationTaskContextModel.run_id == run_id,
+        )
+
+        def delete_rows(active_session: Session) -> None:
+            for row in active_session.scalars(stmt).all():
+                record = ConversationTaskContextRecord._from_model(row)
+                if not isinstance(record.message, HumanMessage):
+                    active_session.delete(row)
+
+        if session is None:
+            with self._session_factory.begin() as owned_session:
+                delete_rows(owned_session)
             return
-        session.add(model)
-        session.flush()
+        delete_rows(session)
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 task 下某 run 的全部上下文消息行。

@@ -158,13 +158,22 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
     class _FreshContextService:
         def __init__(self) -> None:
             self.entries = [user]
+            self.reset_calls = 0
+            self.user_append_calls = 0
 
         def delete_by_run_id(self, _task_id: int, _run_id: int) -> None:
             self.entries = []
 
+        def reset_run_for_fresh(self, _task_id: int, _run_id: int) -> None:
+            self.reset_calls += 1
+            self.entries = [
+                entry for entry in self.entries if isinstance(entry.message, HumanMessage)
+            ]
+
         def append_user_message_once(
             self, _task_id: int, run_id: int, text: str, **kwargs: Any
         ) -> bool:
+            self.user_append_calls += 1
             if any(
                 entry.run_id == run_id and isinstance(entry.message, HumanMessage)
                 for entry in self.entries
@@ -193,6 +202,38 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
 
     assert [entry.message for entry in service.entries] == [user.message]
     assert [entry.message for entry in manager._entries] == [user.message]
+    assert service.reset_calls == 1
+    assert service.user_append_calls == 0
+    assert service.entries[0] is user
+
+
+def test_model_processor_collect_preserves_complete_langchain_message_semantics() -> None:
+    processor = ModelChunkProcessor("reasoning_content")
+    chunk = AIMessageChunk(
+        content=[{"type": "text", "text": "structured", "index": 0}],
+        name="assistant",
+        id="msg-1",
+        additional_kwargs={"provider_flag": True, "reasoning_content": "think"},
+        response_metadata={"model_name": "model-x"},
+        usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
+        invalid_tool_calls=[{"name": "broken", "args": "{", "id": "call-bad", "error": "bad"}],
+        tool_call_chunks=[
+            {"name": "read_file", "args": '{"path":"a.py"}', "id": "call-1", "index": 0}
+        ],
+    )
+
+    collected = processor.collect([chunk])
+
+    assert isinstance(collected, AIMessage)
+    assert collected.content == chunk.content
+    assert collected.name == chunk.name
+    assert collected.id == chunk.id
+    assert collected.additional_kwargs == chunk.additional_kwargs
+    assert collected.response_metadata == chunk.response_metadata
+    assert collected.usage_metadata == chunk.usage_metadata
+    assert collected.tool_calls == chunk.tool_calls
+    assert collected.invalid_tool_calls == chunk.invalid_tool_calls
 
 
 def test_model_processor_builds_ordered_persisted_parts_with_frozen_presentation() -> None:
@@ -221,6 +262,30 @@ def test_model_processor_builds_ordered_persisted_parts_with_frozen_presentation
     assert [part["type"] for part in parts] == ["text", "reasoning", "tool-call"]
     assert parts[2]["presentation"] == {"verb": "Read"}
     assert parts[2]["args"] == {"path": "a.py"}
+
+
+def test_model_processor_keeps_tool_call_at_its_original_stream_position() -> None:
+    processor = ModelChunkProcessor("reasoning_content")
+    chunks = [
+        AIMessageChunk(content="before "),
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {"name": "read_file", "args": '{"path":"a.py"}', "id": "call-1", "index": 0}
+            ],
+        ),
+        AIMessageChunk(content="after"),
+    ]
+    message = AIMessage(
+        content="before after",
+        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
+    )
+
+    parts = processor.build_transport_parts(chunks, message, {"call-1": {"verb": "Read"}})
+
+    assert [part["type"] for part in parts] == ["text", "tool-call", "text"]
+    assert parts[1]["toolCallId"] == "call-1"
+    assert parts[1]["args"] == {"path": "a.py"}
 
 
 def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypatch) -> None:
@@ -318,6 +383,161 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
 
     assert order == ["database", "event"]
     assert second.lifecycle.calls["call-1"].status == "completed"
+
+
+def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non_fatal(
+    monkeypatch,
+) -> None:
+    events: list[Any] = []
+
+    class _RuntimeContext:
+        def add_message(self, message: ToolMessage, **kwargs: Any) -> None:
+            assert kwargs["tool_result"]["display_data"] == {"status_hint": "执行失败"}
+
+    runtime_config = SimpleNamespace(
+        operations=SimpleNamespace(
+            to_tool_model_message=lambda observation: ToolMessage(
+                content=observation.content,
+                tool_call_id=observation.tool_call_id,
+                status=observation.status,
+            ),
+            model_tools=[],
+        )
+    )
+    manager = ToolCallLifecycleManager(
+        calls={
+            "call-1": ToolCallLifecycleRecord(
+                tool_call_id="call-1", tool_name="read_file", status="running"
+            )
+        }
+    )
+    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: _RuntimeContext())
+
+    def failing_writer(_event: Any) -> None:
+        events.append(_event)
+        raise RuntimeError("stream disconnected")
+
+    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: failing_writer)
+
+    updated, status = manager.settle(
+        task_id=7,
+        run_id=11,
+        step_id="step-1",
+        summary={**_tool_summary(), "status": "error", "error": "raw provider detail"},
+    )
+
+    assert status == "failed"
+    assert updated.calls["call-1"].status == "failed"
+    assert events[0].display_data == {"status_hint": "执行失败"}
+
+
+def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_duplicate(
+    monkeypatch,
+) -> None:
+    events: list[Any] = []
+
+    class _RuntimeContext:
+        def add_message(self, _message: ToolMessage, **_kwargs: Any) -> bool:
+            return False
+
+    runtime_config = SimpleNamespace(
+        operations=SimpleNamespace(
+            to_tool_model_message=lambda observation: ToolMessage(
+                content=observation.content,
+                tool_call_id=observation.tool_call_id,
+                status=observation.status,
+            ),
+            model_tools=[],
+        )
+    )
+    manager = ToolCallLifecycleManager(
+        calls={
+            "call-1": ToolCallLifecycleRecord(
+                tool_call_id="call-1", tool_name="read_file", status="running"
+            )
+        }
+    )
+    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: _RuntimeContext())
+    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
+
+    manager.settle(
+        task_id=7,
+        run_id=11,
+        step_id="step-1",
+        summary=_tool_summary(),
+    )
+
+    assert events == []
+
+
+def test_runtime_context_post_commit_listener_failure_does_not_hide_durable_write() -> None:
+    service = _RecordingContextService()
+    manager = _runtime_manager(service)
+
+    class _FailingListener:
+        main_agent_only = False
+        order = 0
+
+        def listen(self, *_args: Any) -> None:
+            raise RuntimeError("projector unavailable")
+
+    manager.add_change_listener(_FailingListener())
+
+    manager.add_message(AIMessage(content="durable"))
+
+    assert len(service.appended) == 1
+    assert manager._entries[-1].message.content == "durable"
+
+
+def test_orphan_recovery_commits_run_and_context_repair_before_projector(monkeypatch) -> None:
+    order: list[str] = []
+    recovered_run = SimpleNamespace(id=11, task_id=7, status="cancelled")
+
+    class _Transaction:
+        def __enter__(self):
+            order.append("begin")
+            return object()
+
+        def __exit__(self, *_args: object) -> None:
+            order.append("commit")
+
+    class _SessionFactory:
+        def begin(self):
+            return _Transaction()
+
+    class _RunCrud:
+        def list_recoverable(self):
+            return [recovered_run]
+
+        def cancel_recoverable_for_restart(self, run_id: int, end_reason: str, **kwargs: Any):
+            assert kwargs["session"] is not None
+            order.append("run")
+            return recovered_run
+
+    class _ContextService:
+        def recover_interrupted_run(self, task_id: int, run_id: int, **kwargs: Any) -> list[str]:
+            assert (task_id, run_id) == (7, 11)
+            assert kwargs["session"] is not None
+            order.append("context")
+            return ["call-1"]
+
+    class _Projector:
+        def process(self, _event: Any) -> None:
+            order.append("projector")
+            assert order == ["begin", "run", "context", "commit", "projector"]
+
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = _RunCrud()
+    service._context = _ContextService()
+    service._session_factory = _SessionFactory()
+    monkeypatch.setattr(
+        "app.service.depends.get_conversation_event_projector", lambda: _Projector()
+    )
+
+    assert service.recover_orphaned_runs() == [recovered_run]
+    assert order == ["begin", "run", "context", "commit", "projector"]
 
 
 def test_create_run_writes_user_context_and_task_current_run_before_projector(monkeypatch) -> None:
