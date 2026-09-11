@@ -67,10 +67,10 @@ class _ModelHarness:
                 to_dict=lambda: {},
             ),
         )
-        self.runtime_context = SimpleNamespace(
-            load_message=lambda: [],
-            add_message=self.messages.append,
-        )
+        def add_message(message: Any, **_kwargs: Any) -> None:
+            self.messages.append(message)
+
+        self.runtime_context = SimpleNamespace(load_message=lambda: [], add_message=add_message)
 
     async def _astream(self, _messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
         """返回一个占位 chunk；collector 在测试中被替换为固定消息。"""
@@ -237,7 +237,10 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
         ),
     )
     runtime_config = SimpleNamespace(operations=observe_harness.operations, usage_stats=None)
-    runtime_context = SimpleNamespace(add_message=observe_harness.messages.append)
+    def add_message(message: Any, **_kwargs: Any) -> None:
+        observe_harness.messages.append(message)
+
+    runtime_context = SimpleNamespace(add_message=add_message)
     observe_harness.runtime_config = runtime_config
     observe_harness.runtime_context = runtime_context
     monkeypatch.setattr(observe_module, "_runtime_config", lambda: runtime_config)

@@ -4,8 +4,8 @@
 
 职责边界：
 - 负责：run 创建（含任务最新 run 更新）、run 查询与状态更新、pending run 的原子启动。
-- 不负责：直接 SQL 操作（委托给 ``ConversationRunCrud``/``TaskCrud``）；不负责对话消息事实读写
-  （由 Transport snapshot owner 与 Task context owner 负责）。
+- 不负责：直接 SQL 操作（委托给 ``ConversationRunCrud``/``TaskCrud``）；Run 创建期的
+  canonical 初始 user message 通过 Task context owner 写入。
 """
 
 from uuid import uuid4
@@ -21,9 +21,12 @@ from app.assistant_transport.event import (
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunRecord, ConversationRunStatus
+from app.models.json_helpers import ConversationRunError
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
+from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
+from app.utils.message_content import content_to_text
 
 
 class ConversationRunService:
@@ -47,7 +50,33 @@ class ConversationRunService:
 
         self._task = service_depends.get_task_crud()
         self._run = service_depends.get_conversation_run_crud()
+        self._context = ConversationTaskContextService()
         self._session_factory = main_session_factory()
+
+    @staticmethod
+    def _terminal_usage(
+        usage_stats: ConversationRunUsageStats | None,
+    ) -> dict[str, int | None]:
+        """Return the exact six-key usage payload for every terminal Run."""
+
+        return (usage_stats or ConversationRunUsageStats()).to_dict()
+
+    @staticmethod
+    def _terminal_error(
+        status: ConversationRunStatus, end_reason: str | None
+    ) -> ConversationRunError | None:
+        """Map a terminal status to a short controlled persisted error contract."""
+
+        if status is ConversationRunStatus.COMPLETED:
+            return None
+        code = end_reason if isinstance(end_reason, str) and end_reason.isidentifier() else None
+        if code is None:
+            code = "run_cancelled" if status is ConversationRunStatus.CANCELLED else "run_failed"
+        return {
+            "code": code,
+            "message": "运行已取消" if status is ConversationRunStatus.CANCELLED else "运行失败",
+            "retryable": False,
+        }
 
     def have_run_in_runing(self, task_id: int, session: Session | None = None) -> bool:
         """检查任务是否正在运行中。
@@ -136,25 +165,36 @@ class ConversationRunService:
                     f"model_name {model_name} not in provider capability "
                     f"{provider_capability.models}"
                 )
-        run = self._run.create(
-            task_id,
-            input_text,
-            status,
-            agent_id=agent_id,
-            provider_id=provider_id,
-            model_name=model_name,
-            reasoning_effort=reasoning_effort,
-            session=session,
-        )
+        context = getattr(self, "_context", None) or ConversationTaskContextService()
+
+        def persist_facts(persist_session: Session | None) -> ConversationRunRecord:
+            run = self._run.create(
+                task_id,
+                input_text,
+                status,
+                agent_id=agent_id,
+                provider_id=provider_id,
+                model_name=model_name,
+                reasoning_effort=reasoning_effort,
+                session=persist_session,
+            )
+            context.append_user_message_once(task_id, run.id, input_text, session=persist_session)
+            self._task.set_current_run_id(task_id, run.id, session=persist_session)
+            return run
+
+        if session is not None:
+            run = persist_facts(session)
+        elif self._session_factory is not None:
+            with self._session_factory.begin() as owned_session:
+                run = persist_facts(owned_session)
+        else:
+            # Lightweight unit-test harnesses may deliberately omit storage setup.
+            run = persist_facts(None)
+
+        # The database transaction is complete before projector/snapshot side effects begin.
         projector = service_depends.get_conversation_event_projector()
-        projector.process(
-            RunInitializedEvent(task_id=task_id, run_id=run.id),
-            session=session,
-        )
-        projector.process(
-            UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text),
-            session=session,
-        )
+        projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
+        projector.process(UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text))
         return run
 
     def get_run(self, run_id: int) -> ConversationRunRecord:
@@ -178,8 +218,8 @@ class ConversationRunService:
     ) -> ConversationRunRecord | None:
         """原地重置一个已结束 run，替换输入并创建新的 checkpoint 身份。
 
-            仅允许非 active run 编辑；调用方负责在同一 task 锁内清理 context 与 snapshot。
-            传入 ``session`` 时复用外部事务且不自行提交。
+        仅允许非 active run 编辑；调用方负责在同一 task 锁内清理 context 与 snapshot。
+        传入 ``session`` 时复用外部事务且不自行提交。
         """
 
         if not input_text.strip():
@@ -226,7 +266,12 @@ class ConversationRunService:
 
         recovered: list[ConversationRunRecord] = []
         for run in self.list_recoverable():
-            record = self._run.cancel_recoverable_for_restart(run.id, end_reason)
+            record = self._run.cancel_recoverable_for_restart(
+                run.id,
+                end_reason,
+                usage=self._terminal_usage(None),
+                error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+            )
             if record is not None:
                 recovered.append(record)
         return recovered
@@ -246,7 +291,7 @@ class ConversationRunService:
         参数:
             run_id: 待完成的 Conversation Run 标识。
             final_output: 可选，Agent 对该轮次的最终回答文本；为 None 时不修改该列。
-            usage_stats: 可选，运行用量统计，随状态变更事件一并发布（用于快照展示，不落库）。
+            usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -265,6 +310,8 @@ class ConversationRunService:
             (ConversationRunStatus.RUNNING.value,),
             None,
             final_output=final_output,
+            usage=self._terminal_usage(usage_stats),
+            error=self._terminal_error(ConversationRunStatus.COMPLETED, None),
         )
         if record is None:
             return None
@@ -279,7 +326,11 @@ class ConversationRunService:
         return self._run.get(run_id)
 
     def complete_run_with_message(
-        self, run_id: int, message: AIMessage, end_reason: str | None = None
+        self,
+        run_id: int,
+        message: AIMessage,
+        end_reason: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """将 Run 标记 completed，并更新其 snapshot 展示状态。"""
 
@@ -288,6 +339,9 @@ class ConversationRunService:
             ConversationRunStatus.COMPLETED.value,
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
+            final_output=content_to_text(message.content),
+            usage=self._terminal_usage(usage_stats),
+            error=self._terminal_error(ConversationRunStatus.COMPLETED, end_reason),
         )
         if record is None:
             return None
@@ -297,6 +351,7 @@ class ConversationRunService:
                 run_id=run_id,
                 status=ConversationRunStatus.COMPLETED,
                 end_reason=end_reason,
+                usage_stats=usage_stats,
             )
         )
         return self._run.get(run_id)
@@ -318,7 +373,7 @@ class ConversationRunService:
             run_id: 待失败落定的 Conversation Run 标识。
             end_reason: 可选失败原因。
             final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
-            usage_stats: 可选，运行用量统计，随状态变更事件一并发布（用于快照展示，不落库）。
+            usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
 
         返回:
             成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -338,6 +393,8 @@ class ConversationRunService:
             (ConversationRunStatus.RUNNING.value,),
             end_reason,
             final_output=final_output,
+            usage=self._terminal_usage(usage_stats),
+            error=self._terminal_error(ConversationRunStatus.FAILED, end_reason),
         )
         if record is None:
             return None
@@ -357,6 +414,7 @@ class ConversationRunService:
         run_id: int,
         end_reason: str | None = None,
         final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """将尚未启动或正在执行的 Conversation Run 原子落定为 failed。
 
@@ -371,6 +429,8 @@ class ConversationRunService:
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
             final_output=final_output,
+            usage=self._terminal_usage(usage_stats),
+            error=self._terminal_error(ConversationRunStatus.FAILED, end_reason),
         )
         if record is None:
             return None
@@ -380,6 +440,7 @@ class ConversationRunService:
                 run_id=run_id,
                 status=ConversationRunStatus.FAILED,
                 end_reason=end_reason,
+                usage_stats=usage_stats,
             )
         )
         return self._run.get(run_id)
@@ -400,7 +461,7 @@ class ConversationRunService:
             run_id: 待取消的 Conversation Run 标识。
             end_reason: 稳定的取消原因。
             final_output: 可选，随终态一并写入的取消说明/部分输出文本，供委派场景主 Agent 感知。
-            usage_stats: 可选，运行用量统计，随状态变更事件一并发布（用于快照展示，不落库）。
+            usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
         """
 
         record = self._run.update_status_if_in(
@@ -409,6 +470,8 @@ class ConversationRunService:
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
             final_output=final_output,
+            usage=self._terminal_usage(usage_stats),
+            error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
         )
         if record is None:
             return None

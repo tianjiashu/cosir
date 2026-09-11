@@ -9,6 +9,7 @@ from typing import Literal
 
 from sqlalchemy.orm import Session
 
+from app.assistant_transport.event import RunInitializedEvent, UserInputAppendedEvent
 from app.assistant_transport.service.conversation_task_snapshot_service import (
     ConversationTaskSnapshotService,
 )
@@ -92,9 +93,7 @@ class ConversationRunCommandService:
         if existing is None:
             return None
         if existing.payload_hash != payload_hash:
-            raise RuntimeError(
-                f"command {command_id!r} already exists with a different payload"
-            )
+            raise RuntimeError(f"command {command_id!r} already exists with a different payload")
         if existing.run_id is None:
             raise RuntimeError(f"command {command_id!r} exists without a bound run")
         run = self._conversation_run.get_run(existing.run_id)
@@ -186,7 +185,15 @@ class ConversationRunCommandService:
                     run_id=run.id,
                     session=session,
                 )
-                snapshot = self._snapshots.ensure_state_snapshot(task_id, session)
+                # Establish the empty snapshot baseline inside the transaction, but defer
+                # projecting Run/user events until all canonical DB facts are committed.
+                self._snapshots.ensure_state_snapshot(task_id, session)
+            projector = service_depends.get_conversation_event_projector()
+            projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
+            projector.process(
+                UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text)
+            )
+            snapshot = self._snapshots.ensure_state_snapshot(task_id)
             return ConversationRunStartResult(
                 command=command,
                 run=run,
@@ -226,7 +233,6 @@ class ConversationRunCommandService:
             if existing_result is not None:
                 return existing_result
 
-
             with main_session_factory().begin() as session:
                 self._assert_no_active_run(task_id, session)
                 reset = self._conversation_run.reset_run_for_edit(
@@ -261,9 +267,7 @@ class ConversationRunCommandService:
                 mode="edit",
             )
 
-    def resume_latest_run(
-        self, task_id: int, run_id: int
-    ) -> ConversationRunStartResult:
+    def resume_latest_run(self, task_id: int, run_id: int) -> ConversationRunStartResult:
         """校验 task 最近 run 并返回业务续跑的执行结果。
 
         该用例只负责领域身份和持久状态资格判断；真正的 executor 启动由 API 编排层
@@ -293,11 +297,7 @@ class ConversationRunCommandService:
 
         with self._task_run_operation(task_id):
             latest_run = self._task.get_latest_run(task_id)
-            if (
-                latest_run is None
-                or latest_run.id != run_id
-                or latest_run.status != "cancelled"
-            ):
+            if latest_run is None or latest_run.id != run_id or latest_run.status != "cancelled":
                 raise ValueError(f"run {run_id} is not resumable")
             state = self._snapshots.ensure_state_snapshot(task_id)
             if state["current_run_id"] != run_id:

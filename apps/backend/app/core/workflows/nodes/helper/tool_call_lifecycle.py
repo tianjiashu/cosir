@@ -38,6 +38,7 @@ class ToolCallLifecycleRecord(BaseModel):
     tool_name: str = Field(min_length=1)
     status: ToolCallEventStatus = "pending"
     args: dict[str, object] = Field(default_factory=dict)
+    presentation: dict[str, object] = Field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -101,7 +102,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
         reason=summary["reason"],
         retryable=summary["retryable"],
         tool_call_id=summary["tool_call_id"],
-        display_data=None,
+        display_data=copy.deepcopy(_ui_data(summary)),
     )
 
 
@@ -173,6 +174,7 @@ class ToolCallLifecycleManager(BaseModel):
             ):
                 continue
             assert isinstance(tool_name, str)
+            presentation = self._presentation_for(tool_name)
             stream_writer(
                 ToolCallCreatedEvent(
                     task_id=task_id,
@@ -180,12 +182,13 @@ class ToolCallLifecycleManager(BaseModel):
                     step_id=step_id,
                     tool_call_id=call_id,
                     tool_name=tool_name,
-                    presentation=self._presentation_for(tool_name),
+                    presentation=copy.deepcopy(presentation),
                 )
             )
             updated.calls[call_id] = ToolCallLifecycleRecord(
                 tool_call_id=call_id,
                 tool_name=tool_name,
+                presentation=presentation,
             )
         return updated
 
@@ -233,9 +236,7 @@ class ToolCallLifecycleManager(BaseModel):
                     task_id=task_id,
                     run_id=run_id,
                     step_id=step_id,
-                    raw_tool_calls=[
-                        {"id": tool_call.call_id, "name": tool_call.tool_name}
-                    ],
+                    raw_tool_calls=[{"id": tool_call.call_id, "name": tool_call.tool_name}],
                 )
             record = updated.calls.get(tool_call.call_id)
             if record is None or record.status != "pending":
@@ -291,29 +292,49 @@ class ToolCallLifecycleManager(BaseModel):
         observation = _summary_to_observation(summary)
         event_status = _event_status(observation.status)
         call_id = summary["tool_call_id"]
+        existing = self.calls.get(call_id)
+        if existing is not None and existing.status in {"completed", "failed", "cancelled"}:
+            return self._copy(), event_status
         updated = self._copy()
+        record = updated.calls.get(call_id)
+        if record is None:
+            # 正常路径一定先 create；保留记录可让恢复后的 state 反映实际终态。
+            presentation = self._presentation_for(summary["tool_name"])
+            updated.calls[call_id] = ToolCallLifecycleRecord(
+                tool_call_id=call_id,
+                tool_name=summary["tool_name"],
+                status="pending",
+                presentation=presentation,
+            )
+        runtime_context: RuntimeContextManager = _runtime_context()
+        operations: WorkflowOperations = _runtime_config().operations
+        record = updated.calls[call_id]
+        record.status = event_status
+        result_display_data = _ui_data(summary)
+        status_hint = _ui_error(summary, event_status)
+        if event_status != "completed":
+            result_display_data = {"status_hint": status_hint} if status_hint else None
+        tool_result = {
+            "status": observation.status,
+            "display_data": result_display_data,
+            "status_hint": status_hint,
+            "error": observation.error or None,
+        }
+        runtime_context.add_message(
+            operations.to_tool_model_message(observation),
+            tool_result=tool_result,
+        )
+        # DB-backed context write is deliberately before the event so the projector never
+        # publishes a terminal tool state that cannot be rebuilt from context.
         updated._emit_status(
             task_id=task_id,
             run_id=run_id,
             step_id=step_id,
             call_id=call_id,
             to_status=event_status,
-            error=_ui_error(summary, event_status),
+            error=status_hint,
             display_data=_ui_data(summary),
         )
-        record = updated.calls.get(call_id)
-        if record is not None:
-            record.status = event_status
-        else:
-            # 正常路径一定先 create；保留记录可让恢复后的 state 反映实际终态。
-            updated.calls[call_id] = ToolCallLifecycleRecord(
-                tool_call_id=call_id,
-                tool_name=summary["tool_name"],
-                status=event_status,
-            )
-        runtime_context: RuntimeContextManager = _runtime_context()
-        operations: WorkflowOperations = _runtime_config().operations
-        runtime_context.add_message(operations.to_tool_model_message(observation))
         return updated, event_status
 
     def settle_batch(

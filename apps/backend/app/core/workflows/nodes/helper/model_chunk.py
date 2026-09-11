@@ -17,6 +17,7 @@
 原样透传 ``additional_kwargs``）。
 """
 
+import copy
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -175,6 +176,52 @@ class ModelChunkProcessor:
             id=getattr(merged, "id", None),  # 消息 id 透传
             response_metadata=merged.response_metadata,
         )
+
+    def build_transport_parts(
+        self,
+        chunks: list[AIMessageChunk],
+        message: AIMessage,
+        presentations: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """把流式顺序和完整 AIMessage 工具身份冻结为可持久化 Transport parts。
+
+        文本与 reasoning 只从流式 chunk 读取，工具参数与身份以完整消息为准；因此未完成的
+        chunk 不会被当成持久化事实，工具 presentation 则由调用方传入的运行期静态声明快照提供。
+        本方法是纯转换，不写数据库或发送 Transport 事件。
+        """
+
+        parts: list[dict[str, Any]] = []
+        for chunk in chunks:
+            text = content_to_text(chunk.content)
+            if text:
+                parts.append({"type": "text", "text": text, "status": "completed"})
+            reasoning = self.extract_reasoning(chunk)
+            if reasoning:
+                parts.append({"type": "reasoning", "text": reasoning, "status": "completed"})
+            for raw_call in self.extract_tool_calls(chunk):
+                call_id = raw_call.get("id")
+                if not isinstance(call_id, str) or not call_id:
+                    continue
+
+        final_calls = {
+            str(call.get("id")): call
+            for call in (message.tool_calls or [])
+            if isinstance(call.get("id"), str) and call.get("id")
+        }
+        for call_id, call in final_calls.items():
+            args = call.get("args")
+            parts.append(
+                {
+                    "type": "tool-call",
+                    "toolCallId": call_id,
+                    "toolName": str(call.get("name") or ""),
+                    "status": "pending",
+                    "args": copy.deepcopy(args) if isinstance(args, dict) else {},
+                    "presentation": copy.deepcopy((presentations or {}).get(call_id, {})),
+                    "isError": False,
+                }
+            )
+        return parts
 
 
 def _extract_thought_blocks(content: Any) -> str:

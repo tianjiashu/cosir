@@ -217,9 +217,7 @@ class ConversationRunCrud:
         return ConversationRunRecord.from_model(row)
 
     @staticmethod
-    def list_by_task_in_session(
-        session: Session, task_id: int
-    ) -> list[ConversationRunRecord]:
+    def list_by_task_in_session(session: Session, task_id: int) -> list[ConversationRunRecord]:
         """在调用方事务中按创建顺序读取任务全部 run。"""
 
         rows = (
@@ -355,15 +353,19 @@ class ConversationRunCrud:
         """
 
         with self._session_factory() as session:
-            row: ConversationRunModel | None = session.execute(
-                select(ConversationRunModel)
-                .where(ConversationRunModel.task_id == task_id)
-                .order_by(
-                    desc(ConversationRunModel.created_at),
-                    desc(ConversationRunModel.id),
+            row: ConversationRunModel | None = (
+                session.execute(
+                    select(ConversationRunModel)
+                    .where(ConversationRunModel.task_id == task_id)
+                    .order_by(
+                        desc(ConversationRunModel.created_at),
+                        desc(ConversationRunModel.id),
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
         if row is None:
             return None
         return ConversationRunRecord.from_model(row)
@@ -413,6 +415,8 @@ class ConversationRunCrud:
         allowed_statuses: tuple[str, ...],
         end_reason: str | None = None,
         final_output: str | None = None,
+        usage: ConversationRunUsage | None = None,
+        error: ConversationRunError | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """以乐观锁方式把 run 更新为目标状态，仅当其当前状态在允许集合内。
@@ -443,11 +447,25 @@ class ConversationRunCrud:
         """
         if session is not None:
             return self.update_status_if_in_session(
-                session, run_id, target_status, allowed_statuses, end_reason, final_output
+                session,
+                run_id,
+                target_status,
+                allowed_statuses,
+                end_reason,
+                final_output,
+                usage,
+                error,
             )
         with self._session_factory.begin() as session:
             return self.update_status_if_in_session(
-                session, run_id, target_status, allowed_statuses, end_reason, final_output
+                session,
+                run_id,
+                target_status,
+                allowed_statuses,
+                end_reason,
+                final_output,
+                usage,
+                error,
             )
 
     def reset_for_edit(
@@ -497,9 +515,7 @@ class ConversationRunCrud:
             return self.resume_cancelled_in_session(managed_session, run_id)
 
     @staticmethod
-    def resume_cancelled_in_session(
-        session: Session, run_id: int
-    ) -> ConversationRunRecord | None:
+    def resume_cancelled_in_session(session: Session, run_id: int) -> ConversationRunRecord | None:
         """在外部事务中恢复任意 cancelled run。"""
 
         result = session.execute(
@@ -520,7 +536,11 @@ class ConversationRunCrud:
         return ConversationRunCrud.get_in_session(session, run_id)
 
     def cancel_recoverable_for_restart(
-        self, run_id: int, end_reason: str = "runtime_restarted"
+        self,
+        run_id: int,
+        end_reason: str = "runtime_restarted",
+        usage: ConversationRunUsage | None = None,
+        error: ConversationRunError | None = None,
     ) -> ConversationRunRecord | None:
         """把进程重启时遗留的 active run 原子收敛为 cancelled。
 
@@ -544,6 +564,8 @@ class ConversationRunCrud:
                     status=ConversationRunStatus.CANCELLED.value,
                     end_reason=end_reason,
                     final_output=None,
+                    usage_json=serialize_run_usage(usage),
+                    error_json=serialize_run_error(error) if error is not None else None,
                 )
             )
             if not result.rowcount:
@@ -579,6 +601,8 @@ class ConversationRunCrud:
                 reasoning_effort=reasoning_effort,
                 end_reason=None,
                 final_output=None,
+                usage_json=None,
+                error_json=None,
             )
         )
         if not result.rowcount:
@@ -588,22 +612,29 @@ class ConversationRunCrud:
 
     @staticmethod
     def update_status_if_in_session(
-            session: Session,
-            run_id: int,
-            target_status: str,
-            allowed_statuses: tuple[str, ...],
-            end_reason: str | None = None,
-            final_output: str | None = None,
+        session: Session,
+        run_id: int,
+        target_status: str,
+        allowed_statuses: tuple[str, ...],
+        end_reason: str | None = None,
+        final_output: str | None = None,
+        usage: ConversationRunUsage | None = None,
+        error: ConversationRunError | None = None,
     ) -> ConversationRunRecord | None:
         """在给定事务中按状态白名单原子更新 run。"""
 
-        values: dict[str, object] = {
-            "status": target_status
-        }
+        values: dict[str, object] = {"status": target_status}
         if end_reason is not None:
             values["end_reason"] = end_reason
         if final_output is not None:
             values["final_output"] = final_output
+        if target_status in {
+            ConversationRunStatus.COMPLETED.value,
+            ConversationRunStatus.FAILED.value,
+            ConversationRunStatus.CANCELLED.value,
+        }:
+            values["usage_json"] = serialize_run_usage(usage)
+            values["error_json"] = serialize_run_error(error) if error is not None else None
         result = session.execute(
             update(ConversationRunModel)
             .where(
@@ -734,9 +765,7 @@ class ConversationRunCrud:
         ).all()
         return {row[0] for row in rows if row[0]}
 
-    def delete_by_ids(
-        self, run_ids: list[int], session: Session | None = None
-    ) -> None:
+    def delete_by_ids(self, run_ids: list[int], session: Session | None = None) -> None:
         """按标识批量删除 run。
 
         参数:

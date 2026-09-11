@@ -12,7 +12,6 @@ from time import perf_counter
 from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.config.logging.logger import log
@@ -213,9 +212,6 @@ class ReactLikeWorkflow(AgentWorkflow):
             execution_mode,
             tool_schemas=tool_schemas,
         )
-        if execution_mode == "fresh":
-            # 只有 fresh 才写入新的用户消息；resume 必须保留已有 ContextEntry。
-            runtime_context_manager.add_message(HumanMessage(content=run.input_text))
         config = {
             "configurable": {
                 "thread_id": run.checkpoint_thread_id,

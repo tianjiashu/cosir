@@ -65,7 +65,6 @@ class ContextUsageComputeListener(ContextListener):
     ) -> None:
         """通过显式事件发布器发布上下文占用事件。"""
 
-
         ratio = used / total if total > 0 else 0.0
         self.event_projector.process(
             ContextUsageUpdatedEvent(
@@ -111,17 +110,10 @@ class ContextUsageComputeListener(ContextListener):
         # tool schema 是本次模型请求的输入配置，不属于持久化 message entries，因此由
         # ListenerEvent 单独携带并在此处合并计算。
         result.usage = self._compute(event.entries, event.tool_schemas)
-        self._emit_context_usage(
-            self.task_id,
-            result.usage,
-            event.total_tokens,
-            event.type is ContextEventType.LOAD_HISTORY,
-        )
         try:
-            get_task_service().update_context_usage(self.task_id, result.usage)
+            get_task_service().update_context_usage(self.task_id, result.usage, event.total_tokens)
         except Exception:
-            # snapshot 是实时事实源，Task 表只是可恢复的历史/侧栏旁路；旁路失败不能
-            # 让上下文变更失败。下一次 context 事件会再次尝试回写。
+            # Task 表是可恢复的上下文事实；数据库失败时不发布无法从持久化事实重建的事件。
             log.exception(
                 "context_usage_task_update_failed",
                 extra={
@@ -129,6 +121,13 @@ class ContextUsageComputeListener(ContextListener):
                     "data": {"task_id": self.task_id, "used_tokens": result.usage},
                 },
             )
+            return
+        self._emit_context_usage(
+            self.task_id,
+            result.usage,
+            event.total_tokens,
+            event.type is ContextEventType.LOAD_HISTORY,
+        )
 
     def _compute(
         self,

@@ -24,6 +24,7 @@ from app.core.context.context_listener.listener_event import ContextEventType, L
 from app.core.context.context_listener.listener_result import ListenerResult
 from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+from app.models.json_helpers import TransportPart, TransportToolResult
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 
@@ -55,9 +56,9 @@ class RuntimeContextManager:
 
     @staticmethod
     def ensure_get_runtime_context_manager(
-            agent_profile: AgentProfile,
-            current_workspace: WorkspaceRecord,
-            current_task: TaskRecord,
+        agent_profile: AgentProfile,
+        current_workspace: WorkspaceRecord,
+        current_task: TaskRecord,
     ) -> RuntimeContextManager:
         """获取或创建 task 级 context 管理器。
 
@@ -88,9 +89,7 @@ class RuntimeContextManager:
             current_task=current_task,
         )
 
-    def fork_context_manager(
-        self, task_id: int
-    ) -> RuntimeContextManager:
+    def fork_context_manager(self, task_id: int) -> RuntimeContextManager:
         """为已复制 context 的目标 Task 创建独立的 fork manager。
 
         参数:
@@ -107,7 +106,6 @@ class RuntimeContextManager:
             从目标 Task 的持久化 context 加载独立 working copy；不修改源 manager。
         """
 
-
         return RuntimeContextManager(
             current_task_id=task_id,
             agent_profile=copy.deepcopy(self.agent_profile),
@@ -117,16 +115,24 @@ class RuntimeContextManager:
         )
 
     def __post_init__(self) -> None:
-        """初始化不持久化的 system prompt 条目。"""
+        """确保并加载 Task 级 system prompt，再建立内存 working copy。"""
 
-        self._system_entry = ContextEntry(
-            SystemMessage(
-                content=SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
+        service = self._require_context_service()
+        prompt = SystemMessage(
+            content=SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
+        )
+        service.ensure_system_message(self.current_task_id, prompt)
+        entries = service.entries_in_context(self.current_task_id)
+        persisted_system = next(
+            (
+                entry
+                for entry in entries
+                if entry.run_id is None and isinstance(entry.message, SystemMessage)
             ),
             None,
-            -1,
         )
-        self._entries = self._require_context_service().entries_in_context(self.current_task_id)
+        self._system_entry = persisted_system or ContextEntry(prompt, None, -1)
+        self._entries = [entry for entry in entries if entry is not persisted_system]
         self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
 
     def _require_context_service(self) -> ConversationTaskContextService:
@@ -137,10 +143,10 @@ class RuntimeContextManager:
         return self.context_service
 
     def begin_run(
-            self,
-            run: ConversationRunRecord,
-            execution_mode: ExecutionMode = "fresh",
-            tool_schemas: Sequence[Mapping[str, Any]] = (),
+        self,
+        run: ConversationRunRecord,
+        execution_mode: ExecutionMode = "fresh",
+        tool_schemas: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
@@ -172,19 +178,32 @@ class RuntimeContextManager:
             # 追加 user/tool message。正常首次执行没有同 run 条目，因此是幂等空操作。
             self._require_context_service().delete_by_run_id(self.current_task_id, run.id)
             self._entries = [entry for entry in self._entries if entry.run_id != run.id]
+            # The initial user row is a canonical Run fact. Recreate it immediately after
+            # clearing an old attempt so fresh starts remain idempotent without relying on the
+            # workflow to manufacture UI history.
+            service = self._require_context_service()
+            append_user = getattr(service, "append_user_message_once", None)
+            if append_user is not None:
+                append_user(self.current_task_id, run.id, run.input_text)
+                self._entries = service.entries_in_context(self.current_task_id)
         else:
             # resume 可能发生在后端重启后，必须从 SQLite 重新装载 working copy；同进程
             # 恢复也通过同一条路径，确保 ContextEntry.run_id/sequence 与持久化一致。
-            self._entries = self._require_context_service().entries_in_context(
+            loaded_entries = self._require_context_service().entries_in_context(
                 self.current_task_id
             )
+            self._entries = [
+                entry
+                for entry in loaded_entries
+                if not (entry.run_id is None and isinstance(entry.message, SystemMessage))
+            ]
         # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
         # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
-        self._message_sequence = self._require_context_service().max_sequence(
-            self.current_task_id
-        ) + 1
+        self._message_sequence = (
+            self._require_context_service().max_sequence(self.current_task_id) + 1
+        )
         self.current_run_id = run.id
         self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
         if execution_mode == "resume":
@@ -212,10 +231,12 @@ class RuntimeContextManager:
         return self
 
     def add_message(
-            self,
-            message: BaseMessage,
-            *,
-            include_in_context: bool = True,
+        self,
+        message: BaseMessage,
+        *,
+        include_in_context: bool = True,
+        transport_parts: Sequence[TransportPart] | None = None,
+        tool_result: TransportToolResult | None = None,
     ) -> None:
         """追加一条完整 LangChain 消息到 Task context。
 
@@ -234,19 +255,16 @@ class RuntimeContextManager:
             通过 context owner 持久化完整消息，并更新当前内存副本。
         """
 
-        if isinstance(message, AIMessage):
-            # 仅保留 AIMessage 中的 content、 additional_kwargs、 tool_calls
-            message = AIMessage(
-                content=message.content,
-                additional_kwargs=message.additional_kwargs,
-                tool_calls=message.tool_calls,
+        if (
+            include_in_context
+            and isinstance(message, ToolMessage)
+            and message.tool_call_id
+            and any(
+                entry.run_id == self.current_run_id
+                and isinstance(entry.message, ToolMessage)
+                and entry.message.tool_call_id == message.tool_call_id
+                for entry in self._entries
             )
-
-        if include_in_context and isinstance(message, ToolMessage) and message.tool_call_id and any(
-            entry.run_id == self.current_run_id
-            and isinstance(entry.message, ToolMessage)
-            and entry.message.tool_call_id == message.tool_call_id
-            for entry in self._entries
         ):
             log.info(
                 "runtime_context_tool_message_duplicate_ignored",
@@ -282,13 +300,21 @@ class RuntimeContextManager:
                 return
 
         sequence = self._message_sequence
-        self._require_context_service().append(
+        append_kwargs: dict[str, object] = {}
+        if transport_parts is not None:
+            append_kwargs["transport_parts"] = list(transport_parts)
+        if tool_result is not None:
+            append_kwargs["tool_result"] = tool_result
+        created = self._require_context_service().append(
             self.current_task_id,
             self.current_run_id,
             message,
             sequence,
             include_in_context,
+            **append_kwargs,
         )
+        if created is False:
+            return
         self._message_sequence += 1
         if not include_in_context:
             return
@@ -326,9 +352,7 @@ class RuntimeContextManager:
         for index, entry in enumerate(entries):
             message = entry.message
             if isinstance(message, ToolMessage) and message.tool_call_id:
-                tool_entries_by_call_id.setdefault(message.tool_call_id, []).append(
-                    (index, entry)
-                )
+                tool_entries_by_call_id.setdefault(message.tool_call_id, []).append((index, entry))
 
         normalized: list[ContextEntry] = []
         claimed_tool_entry_indices: set[int] = set()
@@ -431,9 +455,7 @@ class RuntimeContextManager:
             normalized.append(entry)
             if isinstance(message, AIMessage):
                 pending_call_ids.update(
-                    str(call.get("id"))
-                    for call in message.tool_calls
-                    if call.get("id")
+                    str(call.get("id")) for call in message.tool_calls if call.get("id")
                 )
             elif isinstance(message, ToolMessage) and message.tool_call_id:
                 pending_call_ids.discard(message.tool_call_id)
@@ -483,9 +505,9 @@ class RuntimeContextManager:
         return [self._system_entry, *self._entries]
 
     def mark_context_changed(
-            self,
-            event_type: ContextEventType,
-            entries: list[ContextEntry],
+        self,
+        event_type: ContextEventType,
+        entries: list[ContextEntry],
     ) -> None:
         """向 listener 发布 context 完整快照。"""
 

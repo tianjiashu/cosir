@@ -183,16 +183,18 @@ class TaskService:
         """
         return self._task.get(task_id)
 
-    def update_context_usage(self, task_id: int, used: int) -> TaskRecord:
-        """持久化任务最近一次上下文窗口已用 token。
+    def update_context_usage(
+        self, task_id: int, used: int, context_window_total: int | None = None
+    ) -> TaskRecord:
+        """持久化任务最近一次上下文占用与对应窗口上限。
 
         供运行时在每次模型步产出上下文占用事件后调用，使「打开历史任务」时可回显
-        该任务最近一次的真实占用。total 不落库，由 ``resolve_context_window``
-        动态计算（见 ``get_task`` API）。
+        该任务最近一次的真实占用与窗口上限。
 
         参数:
             task_id: 任务标识。
             used: 最近一次上下文窗口已用 token 数。
+            context_window_total: 本次 Run 使用的模型上下文窗口上限。
 
         返回:
             更新后的 ``TaskRecord``。
@@ -217,22 +219,19 @@ class TaskService:
             )
             used = 0
 
-        return self._task.update_context_usage(task_id, used)
+        return self._task.update_context_usage(task_id, used, context_window_total)
 
     def is_fork_available(self, task_id: int) -> bool:
         """返回任务的所有 Run 是否均处于已知终态。"""
 
         return not any(
-            run.status not in _TERMINAL_RUN_STATUSES
-            for run in self._turn.list_by_task(task_id)
+            run.status not in _TERMINAL_RUN_STATUSES for run in self._turn.list_by_task(task_id)
         )
 
     async def fork_task(self, source_task_id: int, source_run_id: int) -> TaskRecord:
         """在指定历史 Run 处创建一个独立的 fork Task。"""
 
-        supervisor = asyncio.create_task(
-            self._fork_task_with_lock(source_task_id, source_run_id)
-        )
+        supervisor = asyncio.create_task(self._fork_task_with_lock(source_task_id, source_run_id))
         try:
             return await asyncio.shield(supervisor)
         except asyncio.CancelledError:
@@ -241,9 +240,7 @@ class TaskService:
             supervisor.add_done_callback(self._consume_detached_fork_result)
             raise
 
-    async def _fork_task_with_lock(
-        self, source_task_id: int, source_run_id: int
-    ) -> TaskRecord:
+    async def _fork_task_with_lock(self, source_task_id: int, source_run_id: int) -> TaskRecord:
         """在独立 supervisor 中运行带 workspace/task 锁的同步 Fork 事务。"""
 
         return await asyncio.to_thread(self._fork_task_locked, source_task_id, source_run_id)
@@ -404,8 +401,6 @@ class TaskService:
         # 直接返回事务内记录，避免“已提交但最后 get 失败”伪装成 Fork 失败。
         return target
 
-
-
     def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务）。
 
@@ -511,9 +506,7 @@ class TaskService:
             current = self._task.get(parent_id)
         return ancestors
 
-    def _collect_task_tree_ids(
-        self, root_task_id: int, session: Session | None = None
-    ) -> set[int]:
+    def _collect_task_tree_ids(self, root_task_id: int, session: Session | None = None) -> set[int]:
         """收集待删除任务树的全部 task id。
 
         参数:
@@ -537,8 +530,7 @@ class TaskService:
                 continue
             collected.add(current_id)
             frontier.extend(
-                child.id
-                for child in self._task.list_by_parent_task(current_id, session=session)
+                child.id for child in self._task.list_by_parent_task(current_id, session=session)
             )
         return collected
 
@@ -574,9 +566,7 @@ class TaskService:
         remaining = set(all_ids)
         order: list[int] = []
         while remaining:
-            parents_in_remaining = {
-                parent_of[tid] for tid in remaining if tid in parent_of
-            }
+            parents_in_remaining = {parent_of[tid] for tid in remaining if tid in parent_of}
             leaves = [tid for tid in remaining if tid not in parents_in_remaining]
             if not leaves:
                 # 防御性兜底：仅当任务关系出现环时触发，直接收尾避免死循环。
@@ -606,9 +596,7 @@ class TaskService:
             在当前事务中删除 task 树及全部子产物；不提交、不卸载 runtime space。
         """
 
-        task_ids_postorder = self._collect_task_tree_ids_postorder(
-            root_task_id, session=session
-        )
+        task_ids_postorder = self._collect_task_tree_ids_postorder(root_task_id, session=session)
         orphan_threads: set[str] = set()
         for current_id in task_ids_postorder:
             orphan_threads |= self._delete_single_task_in_session(current_id, session)
@@ -656,9 +644,7 @@ class TaskService:
                 try:
                     from app.config.configuration import get_tool_system
 
-                    clear_tool_state = getattr(
-                        get_tool_system().executor, "clear_task_state", None
-                    )
+                    clear_tool_state = getattr(get_tool_system().executor, "clear_task_state", None)
                     if callable(clear_tool_state):
                         clear_tool_state(current_id)
                 except RuntimeError:
@@ -679,9 +665,7 @@ class TaskService:
                     },
                 )
 
-    def delete_single_task(
-        self, task_id: int, session: Session | None = None
-    ) -> set[str]:
+    def delete_single_task(self, task_id: int, session: Session | None = None) -> set[str]:
         """删除单个任务及其全部产物，不递归删除其子任务。
 
         给定单个 task_id，在单一事务内清理该任务自身及其全部产物（run / command / context /
@@ -723,9 +707,7 @@ class TaskService:
             return orphan_threads
         return self._delete_single_task_in_session(task_id, session)
 
-    def _delete_single_task_in_session(
-        self, task_id: int, session: Session
-    ) -> set[str]:
+    def _delete_single_task_in_session(self, task_id: int, session: Session) -> set[str]:
         """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
 
         顺序：先解除本任务行对 run / delegation 的引用（双向外键环），再按外键依赖逆序
@@ -763,9 +745,7 @@ class TaskService:
         self._delegation.delete_by_task_ids([task_id], session)
         # command.run_id 外键指向 run，必须先删 command 再删 run。
         self._command.delete_by_task_ids([task_id], session)
-        service_depends.get_terminal_session_service().delete_task_sessions(
-            [task_id], session
-        )
+        service_depends.get_terminal_session_service().delete_task_sessions([task_id], session)
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
 

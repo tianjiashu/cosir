@@ -52,7 +52,7 @@ class ConversationTaskContextCrud:
                 rows = session.scalars(stmt).all()
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
-    def max_sequence(self, task_id: int) -> int:
+    def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回指定 task 下 ``sequence`` 列的最大值；无行时返回 0。
 
         参数:
@@ -65,12 +65,14 @@ class ConversationTaskContextCrud:
             sqlalchemy.exc.SQLAlchemyError: 查询失败时抛出。
         """
 
-        with self._session_factory.begin() as session:
-            current = session.scalar(
-                select(
-                    func.coalesce(func.max(ConversationTaskContextModel.sequence), 0)
-                ).where(ConversationTaskContextModel.task_id == task_id)
-            )
+        statement = select(func.coalesce(func.max(ConversationTaskContextModel.sequence), 0)).where(
+            ConversationTaskContextModel.task_id == task_id
+        )
+        if session is not None:
+            current = session.scalar(statement)
+        else:
+            with self._session_factory.begin() as owned_session:
+                current = owned_session.scalar(statement)
         return int(current or 0)
 
     def create(
@@ -98,9 +100,7 @@ class ConversationTaskContextCrud:
         session.add(model)
         session.flush()
 
-    def delete_by_run_id(
-        self, task_id: int, run_id: int, session: Session | None = None
-    ) -> None:
+    def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 task 下某 run 的全部上下文消息行。
 
         参数:
@@ -125,9 +125,7 @@ class ConversationTaskContextCrud:
         for row in session.scalars(stmt).all():
             session.delete(row)
 
-    def delete_by_task_ids(
-        self, task_ids: list[int], session: Session | None = None
-    ) -> None:
+    def delete_by_task_ids(self, task_ids: list[int], session: Session | None = None) -> None:
         """按一批 task 的标识批量删除其全部上下文消息行。
 
         参数:

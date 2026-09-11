@@ -38,11 +38,14 @@ class _LifecycleHarness:
         self.messages: list[Any] = []
         self.operations = SimpleNamespace(
             to_tool_model_message=lambda observation: ("tool-message", observation.tool_call_id),
-            model_tools=model_tools
-            or [SimpleNamespace(name="read_file", display=None)],
+            model_tools=model_tools or [SimpleNamespace(name="read_file", display=None)],
         )
         self.runtime_config = SimpleNamespace(operations=self.operations)
-        self.runtime_context = SimpleNamespace(add_message=self.messages.append)
+
+        def add_message(message: Any, **_kwargs: Any) -> None:
+            self.messages.append(message)
+
+        self.runtime_context = SimpleNamespace(add_message=add_message)
         self.manager = ToolCallLifecycleManager()
 
     def _patch_runtime(self):
@@ -124,8 +127,8 @@ def test_status_mapping_success_error_cancelled() -> None:
         [
             _summary(tool_call_id="a", status="success", content="ok"),
             _summary(
-                    tool_call_id="b",
-                    status="error",
+                tool_call_id="b",
+                status="error",
                 error="boom",
                 display_data={"status_hint": "命令失败"},
             ),

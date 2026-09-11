@@ -10,10 +10,10 @@ from app.core.context.context_listener.listener_result import ListenerResult
 
 class _TaskService:
     def __init__(self) -> None:
-        self.updates: list[tuple[int, int]] = []
+        self.updates: list[tuple[int, int, int | None]] = []
 
-    def update_context_usage(self, task_id: int, used: int) -> None:
-        self.updates.append((task_id, used))
+    def update_context_usage(self, task_id: int, used: int, total: int | None = None) -> None:
+        self.updates.append((task_id, used, total))
 
 
 class _Projector:
@@ -54,7 +54,7 @@ def test_context_usage_publishes_event_and_persists_absolute_window(monkeypatch)
     assert projector.events[0].run_id == 11
     assert projector.events[0].used_tokens == 1
     assert projector.events[0].context_window_tokens == 100
-    assert task_service.updates == [(7, 1)]
+    assert task_service.updates == [(7, 1, 100)]
 
 
 def test_context_usage_task_write_is_failure_safe(monkeypatch) -> None:
@@ -68,7 +68,8 @@ def test_context_usage_task_write_is_failure_safe(monkeypatch) -> None:
         "app.core.context.context_listener.context_usage_compute_listener.get_conversation_event_projector",
         lambda: projector,
     )
-    def fail_update(_task_id: int, _used: int) -> None:
+
+    def fail_update(_task_id: int, _used: int, _total: int | None = None) -> None:
         raise RuntimeError("database unavailable")
 
     task_service.update_context_usage = fail_update  # type: ignore[method-assign]
@@ -84,9 +85,7 @@ def test_context_usage_task_write_is_failure_safe(monkeypatch) -> None:
         ListenerResult(usage=0),
     )
 
-    assert len(projector.events) == 1
-    assert projector.events[0].reproject is True
-    assert projector.events[0].run_id is None
+    assert len(projector.events) == 0
 
 
 def test_context_usage_includes_system_prompt_and_tool_schemas(monkeypatch) -> None:
@@ -134,7 +133,7 @@ def test_context_usage_includes_system_prompt_and_tool_schemas(monkeypatch) -> N
     expected_tools = listener._tool_schema_tokens(tool_schemas)
     assert expected_tools > 0
     assert projector.events[0].used_tokens == expected_messages + expected_tools
-    assert task_service.updates == [(7, expected_messages + expected_tools)]
+    assert task_service.updates == [(7, expected_messages + expected_tools, 100)]
 
 
 def test_context_usage_includes_tool_message_call_id() -> None:

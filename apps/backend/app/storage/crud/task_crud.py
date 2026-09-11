@@ -270,16 +270,43 @@ class TaskCrud:
             raise KeyError(task_id)
         return TaskRecord.from_model(row)
 
-    def update_context_usage(self, task_id: int, used: int) -> TaskRecord:
+    def set_current_run_id(
+        self, task_id: int, run_id: int, session: Session | None = None
+    ) -> TaskRecord:
+        """在 task 事实中记录当前 Run；可复用调用方事务。"""
+
+        statement = (
+            update(TaskModel)
+            .where(TaskModel.id == task_id)
+            .values(current_run_id=run_id, updated_at=to_text(utc_now()))
+        )
+        if session is not None:
+            result = session.execute(statement)
+            if not result.rowcount:
+                raise KeyError(task_id)
+            session.flush()
+            row = session.get(TaskModel, task_id)
+            assert row is not None
+            return TaskRecord.from_model(row)
+        with self._session_factory.begin() as owned_session:
+            result = owned_session.execute(statement)
+            if not result.rowcount:
+                raise KeyError(task_id)
+        return self.get(task_id)
+
+    def update_context_usage(
+        self, task_id: int, used: int, context_window_total: int | None = None
+    ) -> TaskRecord:
         """更新 task 最近一次上下文窗口已用 token 并刷新更新时间。
 
         先校验 task 存在（不存在则抛出），再更新 ``context_usage_used`` 与 ``updated_at``。
         供运行时在每次模型步产出上下文占用事件后持久化，使「打开历史任务」时可回显
-        该任务最近一次的真实占用（total 不落库，由 ``resolve_context_window`` 动态计算）。
+        该任务最近一次的真实占用与模型窗口。
 
         参数:
             task_id: 任务标识（整数 id）。
             used: 最近一次上下文窗口已用 token 数。
+            context_window_total: 本次 Run 使用的模型上下文窗口上限。
 
         返回:
             更新后的 ``TaskRecord``。
@@ -292,17 +319,21 @@ class TaskCrud:
             更新 ``tasks`` 表中对应行的 context_usage_used 与 updated_at。
         """
         self.get(task_id)
+        values: dict[str, object] = {
+            "context_usage_used": used,
+            "updated_at": to_text(utc_now()),
+        }
+        if context_window_total is not None:
+            values["context_window_total"] = context_window_total
         with self._session_factory.begin() as session:
             session.execute(
                 update(TaskModel)
                 .where(TaskModel.id == task_id)
-                .values(context_usage_used=used, updated_at=to_text(utc_now()))
+                .values(**values)
             )
         return self.get(task_id)
 
-    def list_ids_by_workspace(
-        self, workspace_id: int, session: Session | None = None
-    ) -> list[int]:
+    def list_ids_by_workspace(self, workspace_id: int, session: Session | None = None) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。
 
         相比 ``list_by_workspace``，本方法只查 ``id`` 一列，用于跨表级联删除等只需 id
@@ -359,9 +390,7 @@ class TaskCrud:
         with self._session_factory() as owned_session:
             return list(owned_session.scalars(stmt).all())
 
-    def delete_by_ids(
-        self, task_ids: list[int], session: Session | None = None
-    ) -> None:
+    def delete_by_ids(self, task_ids: list[int], session: Session | None = None) -> None:
         """按标识批量删除 task。
 
         参数:
@@ -388,9 +417,7 @@ class TaskCrud:
         with self._session_factory.begin() as session:
             session.execute(delete(TaskModel).where(TaskModel.id.in_(task_ids)))
 
-    def clear_parent_run_id(
-        self, task_ids: list[int], session: Session | None = None
-    ) -> None:
+    def clear_parent_run_id(self, task_ids: list[int], session: Session | None = None) -> None:
         """把指定 task 的 ``parent_run_id`` 置空，解除与 ``conversation_runs`` 的双向外键环。
 
         删除单个任务的 run 之前必须先解除该列对 run 的引用，否则 SQLite 即时外键检查会因
@@ -416,21 +443,15 @@ class TaskCrud:
             return
         if session is not None:
             session.execute(
-                update(TaskModel)
-                .where(TaskModel.id.in_(task_ids))
-                .values(parent_run_id=None)
+                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
             )
             return
         with self._session_factory.begin() as session:
             session.execute(
-                update(TaskModel)
-                .where(TaskModel.id.in_(task_ids))
-                .values(parent_run_id=None)
+                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
             )
 
-    def clear_delegation_id(
-        self, task_ids: list[int], session: Session | None = None
-    ) -> None:
+    def clear_delegation_id(self, task_ids: list[int], session: Session | None = None) -> None:
         """把指定 task 的 ``delegation_id`` 置空，解除与 ``delegations`` 的外键引用。
 
         删除创建本任务的委派记录（``delegations.child_task_id`` 指向本任务）之前必须先
@@ -456,14 +477,10 @@ class TaskCrud:
             return
         if session is not None:
             session.execute(
-                update(TaskModel)
-                .where(TaskModel.id.in_(task_ids))
-                .values(delegation_id=None)
+                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(delegation_id=None)
             )
             return
         with self._session_factory.begin() as session:
             session.execute(
-                update(TaskModel)
-                .where(TaskModel.id.in_(task_ids))
-                .values(delegation_id=None)
+                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(delegation_id=None)
             )

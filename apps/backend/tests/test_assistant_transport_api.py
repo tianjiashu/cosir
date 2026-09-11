@@ -400,7 +400,9 @@ def test_restart_recovery_only_updates_run_persistence() -> None:
         def list_recoverable(self) -> list[object]:
             return [SimpleNamespace(id=7), SimpleNamespace(id=8)]
 
-        def cancel_recoverable_for_restart(self, run_id: int, end_reason: str) -> object:
+        def cancel_recoverable_for_restart(
+            self, run_id: int, end_reason: str, **_kwargs: object
+        ) -> object:
             calls.append((run_id, end_reason))
             return SimpleNamespace(id=run_id)
 

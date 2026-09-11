@@ -192,7 +192,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     ai_message = chunk_processor.collect(chunks)
     parts.finish()
 
-    _runtime_context().add_message(ai_message)
+    _runtime_context().add_message(
+        ai_message,
+        transport_parts=chunk_processor.build_transport_parts(
+            chunks,
+            ai_message,
+            {call_id: record.presentation for call_id, record in lifecycle.calls.items()},
+        ),
+    )
 
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
@@ -201,7 +208,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
     requested_tool = bool(ai_message.tool_calls)
 
-    tool_calls:list[ToolCall] = [
+    tool_calls: list[ToolCall] = [
         ToolCall.from_from_langchain(call) for call in ai_message.tool_calls
     ]
 
@@ -276,7 +283,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                         "invalid_count": len(repair_data),
                     },
                 }
-
 
     log.info(
         "model_node_completed",

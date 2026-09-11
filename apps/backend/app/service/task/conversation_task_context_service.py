@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import copy
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy.orm import Session
 
 from app.core.context.context_entry import ContextEntry
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.json_helpers import (
+    TransportPart,
+    TransportToolResult,
+    empty_transport_metadata,
+)
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 
 
@@ -19,7 +24,8 @@ class ConversationTaskContextService:
     运行时仅经 CRUD 读写，不存在进程内 context working copy（避免与数据库双写漂移）。
 
     职责边界：
-    - 负责：消息的追加、按 run 删除、序列号分配、纳入过滤读取。
+    - 负责：消息与 Transport metadata 的追加、初始 user/system 幂等初始化、按 run 删除、
+      序列号分配、纳入过滤读取。
     - 不负责：消息内容语义校验、压缩策略（由上下文管理器负责）。
     """
 
@@ -35,7 +41,11 @@ class ConversationTaskContextService:
         message: BaseMessage,
         seq: int | None = None,
         include_in_context: bool = True,
-    ) -> None:
+        *,
+        transport_parts: list[TransportPart] | None = None,
+        tool_result: TransportToolResult | None = None,
+        session: Session | None = None,
+    ) -> bool:
         """以独立事务追加一条完整 LangChain 消息。
 
         参数顺序保持 ``task_id, run_id, message, seq, include_in_context``，以兼容调用点的
@@ -44,13 +54,17 @@ class ConversationTaskContextService:
         参数:
             task_id: 目标任务标识。
             run_id: 产生消息的 Conversation Run 标识；system 消息可为 ``None``。
-            message: 完整 LangChain 消息对象。
+            message: 完整 LangChain 消息对象；不会被重建或裁剪字段。
             seq: 显式序号；为 ``None`` 时自动取 ``max_sequence(task_id) + 1``，
                 避免与现有行 ``(task_id, sequence)`` 唯一约束冲突。
             include_in_context: 该消息是否纳入上下文视图，默认 ``True``。
+            transport_parts: 完整消息对应的 Assistant Transport parts；由本 service
+                组装并交给严格 metadata serializer，不允许调用方手写 metadata JSON。
+            tool_result: ToolMessage 的结构化 Transport 结果；普通消息必须为 ``None``。
+            session: 可选外部事务；传入时复用该事务，不自行提交。
 
         返回:
-            无。
+            ``True`` 表示新增；同一 run 的同一 tool_call_id 已存在时返回 ``False``。
 
         异常:
             持久化失败时由 CRUD 回滚并向上传播。
@@ -59,16 +73,87 @@ class ConversationTaskContextService:
             新增一行上下文消息；``seq`` 为 ``None`` 时会产生一次 ``max_sequence`` 查询。
         """
 
+        def all_records() -> list[ConversationTaskContextRecord]:
+            if session is None:
+                return self._crud.get(task_id, include_in_context=False)
+            return self._crud.get(task_id, include_in_context=False, session=session)
+
+        if isinstance(message, ToolMessage) and message.tool_call_id:
+            existing = all_records()
+            if any(
+                record.run_id == run_id
+                and isinstance(record.message, ToolMessage)
+                and record.message.tool_call_id == message.tool_call_id
+                for record in existing
+            ):
+                return False
+
         if seq is None:
-            seq = self._crud.max_sequence(task_id) + 1
+            seq = (
+                self._crud.max_sequence(task_id)
+                if session is None
+                else self._crud.max_sequence(task_id, session=session)
+            )
+            seq += 1
+        metadata = empty_transport_metadata()
+        if transport_parts is not None:
+            metadata["parts"] = copy.deepcopy(transport_parts)
+        if tool_result is not None:
+            metadata["tool_result"] = copy.deepcopy(tool_result)
         record = ConversationTaskContextRecord(
             task_id=task_id,
             run_id=run_id,
             message=message,
             include_in_context=include_in_context,
             sequence=seq,
+            transport_metadata=metadata,
         )
-        self._crud.create(record)
+        self._crud.create(record, session=session)
+        return True
+
+    def append_user_message_once(
+        self,
+        task_id: int,
+        run_id: int,
+        text: str,
+        session: Session | None = None,
+    ) -> bool:
+        """持久化一次 Run 的初始 HumanMessage，并按 ``(task, run)`` 幂等。"""
+
+        if session is None:
+            existing = self._crud.get(task_id, include_in_context=False)
+        else:
+            existing = self._crud.get(task_id, include_in_context=False, session=session)
+        if any(
+            record.run_id == run_id and isinstance(record.message, HumanMessage)
+            for record in existing
+        ):
+            return False
+        return self.append(
+            task_id,
+            run_id,
+            HumanMessage(content=text),
+            session=session,
+        )
+
+    def ensure_system_message(
+        self,
+        task_id: int,
+        message: SystemMessage,
+        session: Session | None = None,
+    ) -> bool:
+        """确保 Task 只有一条历史 system prompt；已有历史内容永不静默替换。"""
+
+        if session is None:
+            existing = self._crud.get(task_id, include_in_context=False)
+        else:
+            existing = self._crud.get(task_id, include_in_context=False, session=session)
+        if any(
+            record.run_id is None and isinstance(record.message, SystemMessage)
+            for record in existing
+        ):
+            return False
+        return self.append(task_id, None, message, session=session)
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         """返回纳入上下文的 Task context entry 列表（仅取 ``include_in_context`` 为真）。"""
@@ -96,10 +181,12 @@ class ConversationTaskContextService:
             for record in records
         ]
 
-    def max_sequence(self, task_id: int) -> int:
+    def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""
 
-        return self._crud.max_sequence(task_id)
+        if session is None:
+            return self._crud.max_sequence(task_id)
+        return self._crud.max_sequence(task_id, session=session)
 
     def clone_for_fork(
         self,
@@ -111,7 +198,7 @@ class ConversationTaskContextService:
         """在外部事务中复制指定 Run 前缀的全部 context entries。
 
         目标序号从 1 重新分配；序号数值不属于业务契约，只保证目标 Task 内严格递增且
-        不重复。系统提示词不落库，因此不会从源 Task 复制。
+        不重复。system prompt 是 Task 级事实，不属于任一 Run，因此不会从源 Task 复制。
         """
 
         source_entries = self._crud.get(
@@ -137,9 +224,7 @@ class ConversationTaskContextService:
             )
             next_sequence += 1
 
-    def delete_by_run_id(
-        self, task_id: int, run_id: int, session: Session | None = None
-    ) -> None:
+    def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 run 的全部 context entry。
 
         参数:

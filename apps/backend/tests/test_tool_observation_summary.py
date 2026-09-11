@@ -63,10 +63,10 @@ class _WorkflowHarness:
             ),
         )
         self.runtime_config = SimpleNamespace(operations=self.operations, usage_stats=None)
-        self.runtime_context = SimpleNamespace(
-            add_message=self.messages.append,
-            load_message=lambda: [],
-        )
+        def add_message(message: Any, **_kwargs: Any) -> None:
+            self.messages.append(message)
+
+        self.runtime_context = SimpleNamespace(add_message=add_message, load_message=lambda: [])
 
     def patch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """把 tools/observe/lifecycle 三个模块的运行期依赖绑定到本桩。"""
