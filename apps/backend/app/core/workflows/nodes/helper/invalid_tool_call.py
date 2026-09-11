@@ -7,7 +7,7 @@
 与兄弟模块的分工：
 - ``InvalidToolOutcome`` 枚举表达处置结论；三个模块级纯函数承载判定 / 决策 / 消息构造。
 - 不负责：把修复消息写进 ``RuntimeContextManager``（由 ``model_node`` 按情形 a/b 决定落库/延后）、
-  ``invalid_tool_calls`` 的解析（归 ``chunk_assembler``）。
+  ``invalid_tool_calls`` 的解析（归 ``model_chunk`` 的 chunk 合并）。
 """
 
 import re

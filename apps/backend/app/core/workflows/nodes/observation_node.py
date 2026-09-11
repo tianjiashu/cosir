@@ -6,7 +6,7 @@
 1. **执行后取消判断**：run 已取消时先分发本批结果（终态事件 + 模型上下文），
    再落定取消终态——工具已执行、结果已产生，取消不能让前端 tool-call part
    永久停留在 running；
-2. **结果分发**：经 ``tool_observation_dispatcher`` 把已治理观察分发到前端事件流
+2. **结果分发**：经 ``ToolCallLifecycleManager`` 把已治理观察分发到前端事件流
    （``ToolCallStatusChangedEvent`` 终态）与模型上下文（``ToolMessage`` 配对闭合）；
 3. **错误计数与上限判定**：从分发结果重算连续失败计数，达到
    ``Settings.TOOL_ERROR_LIMIT`` 时经 ``RuntimeOperations`` 标记失败终态；
@@ -31,11 +31,36 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_context
 from app.core.workflows.nodes.helper.invalid_tool_call import TOOL_CALL_REPAIR_MESSAGE_KIND
-from app.core.workflows.nodes.helper.tool_observation_dispatcher import (
-    dispatch_tool_observations,
-)
 
 from ..react.state import ReactGraphState
+
+
+def _normalize_observation_summary(observation: dict[str, Any]) -> dict[str, Any]:
+    """兼容旧 checkpoint 中仍使用 ``tool_call_id`` 的工具摘要。
+
+    新的 ``tools`` 节点会在写入 graph state 前把执行层字段归一化为 ``call_id``；
+    这里保留对历史 checkpoint 的兼容，避免后端重启或恢复旧 Run 时再次丢弃合法
+    工具结果。下游 lifecycle 仍只消费 graph 内部的 ``call_id`` 契约。
+
+    参数:
+        observation: ``last_tool_results`` 中的一条可序列化工具摘要。
+
+    返回:
+        至少包含 ``call_id`` 的摘要副本；已经符合契约或缺少任何调用标识时返回原对象。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if observation.get("call_id"):
+        return observation
+    tool_call_id = observation.get("tool_call_id")
+    if not tool_call_id:
+        return observation
+    return {**observation, "call_id": str(tool_call_id)}
 
 
 async def _observe_node(state: ReactGraphState) -> dict:
@@ -76,24 +101,24 @@ async def _observe_node(state: ReactGraphState) -> dict:
     rc = _runtime_config()  # 取运行时配置（含 operations / langfuse_trace_id）
     operations = rc.operations  # 领域操作
     # tools 节点产出的结果摘要
-    summaries: list[dict[str, Any]] = state.last_tool_results["observations"]
+    observations = state.last_tool_results["observations"]
     instruction = state.last_tool_results["instruction"]
     task_id = operations.get_current_task().id
     run_id = operations.get_current_run().id
     step_id = f"step-{state.step_count}"  # 工具是 model 步的延续，复用同一步 step_id
-
+    lifecycle = state.tool_call_lifecycle
+    if lifecycle is None:
+        raise RuntimeError("tool_call_lifecycle is required before observing tool results")
     expected_call_ids = {
-        str(call_id)
-        for call_id in state.last_tool_results.get("expected_call_ids", [])
-        if call_id
+        str(call_id) for call_id in state.last_tool_results.get("expected_call_ids", []) if call_id
     }
     if expected_call_ids:
         accepted_summaries: list[dict[str, Any]] = []
         observed_call_ids: set[str] = set()
         unexpected_call_ids: set[str] = set()
         duplicate_call_ids: set[str] = set()
-        for summary in summaries:
-            call_id = str(summary.get("call_id") or "")
+        for observation in observations:
+            call_id = str(observation.get("tool_call_id") or "")
             if call_id not in expected_call_ids:
                 unexpected_call_ids.add(call_id or "<empty>")
                 continue
@@ -101,7 +126,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 duplicate_call_ids.add(call_id)
                 continue
             observed_call_ids.add(call_id)
-            accepted_summaries.append(summary)
+            accepted_summaries.append(observation)
         if unexpected_call_ids or duplicate_call_ids:
             log.error(
                 "observe_node_invalid_tool_result_ids",
@@ -114,23 +139,21 @@ async def _observe_node(state: ReactGraphState) -> dict:
                     },
                 },
             )
-        summaries = accepted_summaries
+        observations = accepted_summaries
 
     # 1. 结果分发（先于取消判断）：终态事件 + 模型上下文 + 连续失败计数重算。
     # 取消场景工具已执行完毕，结果必须先到达前端与上下文，再落取消终态。
-    dispatch = dispatch_tool_observations(
-        summaries,
+    dispatch = lifecycle.settle_batch(
         task_id=task_id,
         run_id=run_id,
         step_id=step_id,
+        summaries=observations,
         inherited_error_count=state.tool_error_count,
     )
-    tool_error_count = dispatch["tool_error_count"]
+    tool_error_count = dispatch.tool_error_count
 
     observed_call_ids = {
-        str(summary["call_id"])
-        for summary in summaries
-        if summary.get("call_id")
+        str(summary["call_id"]) for summary in observations if summary.get("call_id")
     }
     missing_call_ids = expected_call_ids - observed_call_ids
     if missing_call_ids:
@@ -156,10 +179,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
         log.info(
             "observe_node_cancelled_after_execution",
             extra={
-                "msg": (
-                    "工具结果观察时检测到 run 已取消，停止后续模型调用，"
-                    f"step_id={step_id}"
-                ),
+                "msg": ("工具结果观察时检测到 run 已取消，停止后续模型调用，" f"step_id={step_id}"),
                 "data": {
                     "step_id": step_id,
                     "tool_error_count": tool_error_count,
@@ -174,6 +194,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
             "tool_error_count": tool_error_count,
             "terminal": True,
             "deferred_repair_message": "",
+            "tool_call_lifecycle": dispatch.lifecycle,
         }
 
     # model 节点在同一轮发现「合法 + 可修复非法」调用时，只能把修复提示延迟到这里。
@@ -181,7 +202,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
     # 始终是 AIMessage(tool_calls) -> ToolMessage × N -> SystemMessage。
     deferred_repair_message = state.deferred_repair_message
     if deferred_repair_message:
-        if not summaries:
+        if not observations:
             # 正常 tools 节点会为每个 approved call 产出观察；空批次属于异常恢复路径。
             # 先让 RuntimeContextManager 闭合悬空 tool call，再追加修复提示，避免把非法
             # SystemMessage 插到仍未闭合的 AIMessage(tool_calls) 后面。
@@ -210,13 +231,13 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 "msg": "工具结果之后已追加延迟修复提示",
                 "data": {
                     "step_id": step_id,
-                    "result_count": len(summaries),
+                    "result_count": len(observations),
                     "repair_message_length": len(deferred_repair_message),
                 },
             },
         )
 
-    if not summaries:
+    if not observations:
         # 无本批工具结果：不计数也不判定，避免对无新结果时误发 RUN_FAILED。
         # 「连续失败计数滞留」是有意为之——本批没有任何 success/error 信号，既无法证明
         # 连续失败在延续，也无法证明已中断；无信息即不改写，把继承的 tool_error_count
@@ -224,17 +245,17 @@ async def _observe_node(state: ReactGraphState) -> dict:
         log.info(
             "observe_node_no_results",
             extra={
-                "msg": (
-                    f"无本批工具结果，跳过观察判定，保留继承计数，"
-                    f"step_id={step_id}"
-                ),
+                "msg": (f"无本批工具结果，跳过观察判定，保留继承计数，" f"step_id={step_id}"),
                 "data": {
                     "step_id": step_id,
                     "tool_error_count": state.tool_error_count,
                 },
             },
         )
-        return {"deferred_repair_message": ""}
+        return {
+            "deferred_repair_message": "",
+            "tool_call_lifecycle": dispatch.lifecycle,
+        }
 
     log.info(
         "observe_node_completed",
@@ -242,8 +263,8 @@ async def _observe_node(state: ReactGraphState) -> dict:
             "msg": f"工具结果观察完成，step_id={step_id}",
             "data": {
                 "step_id": step_id,
-                "result_count": len(summaries),
-                "error_count": dispatch["error_count"],
+                "result_count": len(observations),
+                "error_count": dispatch.error_count,
                 "tool_error_count": tool_error_count,
             },
         },
@@ -268,6 +289,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 "tool_error_count": tool_error_count,
                 "terminal": True,
                 "deferred_repair_message": "",
+                "tool_call_lifecycle": dispatch.lifecycle,
             }
         log.warning(
             "observe_node_error_limit",
@@ -286,7 +308,12 @@ async def _observe_node(state: ReactGraphState) -> dict:
             "tool_error_count": tool_error_count,
             "terminal": True,
             "deferred_repair_message": "",
+            "tool_call_lifecycle": dispatch.lifecycle,
         }
 
     # 正常返回：把更新后的计数写回 state。
-    return {"tool_error_count": tool_error_count, "deferred_repair_message": ""}
+    return {
+        "tool_error_count": tool_error_count,
+        "deferred_repair_message": "",
+        "tool_call_lifecycle": dispatch.lifecycle,
+    }

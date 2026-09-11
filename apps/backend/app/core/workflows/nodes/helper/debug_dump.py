@@ -6,7 +6,7 @@
 对所有 ``data`` 字符串施加 ``MAX_LOG_TEXT_LENGTH`` 截断，无法承载完整消息 JSON；
 本模块绕过该预算，以单行 JSON 落盘，使开发者能在不被截断的前提下查看 chunk 结构。
 
-与思考提取（``thinking_extractor``）、chunk 组装（``chunk_assembler``）职责分离：
+与思考提取、chunk 组装（统归 ``model_chunk`` 的 ``ModelChunkProcessor``）职责分离：
 本模块只关心「写盘」，不关心「抽出什么 / 如何合并」。无循环导入：本模块不
 import ``model_node`` / ``common``。
 """

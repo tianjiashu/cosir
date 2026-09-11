@@ -1,11 +1,12 @@
 """ReAct-like 工作流的工具节点（``_tools_node``）。
 
-本模块只承载「工具节点」单一职责：审批恢复后的工具执行与运行中的 running 事件。
-工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事实经明确的开始/完成回调写入
-canonical conversation state。本节点**不再**分发终态事件（``completed`` /
+本模块只承载「工具节点」单一职责：审批恢复后的工具执行与执行前取消。
+工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事实由
+``ToolCallLifecycleManager`` 写入 canonical conversation state。本节点**不再**分发终态事件
+（``completed`` /
 ``failed`` / ``cancelled``）、不再写回模型上下文、不做错误计数/上限判定——
-全部收敛到 ``observe`` 节点做「工具结果观察处理」的单一收口（见
-``observation_node`` 与 ``tool_observation_dispatcher``）。
+全部收敛到 ``observe`` 节点做「工具结果观察处理」的单一收口（见 ``observation_node`` 与
+``tool_call_lifecycle`` 的 ``ToolCallLifecycleManager``）。
 
 本节点产出经 ``tool_observation_summary`` 治理的可序列化摘要（``last_tool_results``）
 供 ``observe`` 消费；执行前取消分支（工具尚未执行、无结果可观察）仍保留在本节点，
@@ -17,16 +18,10 @@ canonical conversation state。本节点**不再**分发终态事件（``complet
 import asyncio
 import dataclasses
 
-from langgraph.config import get_stream_writer
-
-from app.assistant_transport.event import ToolCallStatusChangedEvent
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
-from app.core.tools.schemas import ToolCall
+from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.nodes.helper.common import _runtime_config
-from app.core.workflows.nodes.helper.tool_observation_summary import (
-    build_tool_result_summaries,
-)
 
 from ..react.state import ReactGraphState
 
@@ -35,7 +30,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：执行工具并产出结果摘要供 observe 观察。
 
     工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事实经明确的开始/完成回调写入
-    canonical state。本节点只负责「执行前取消检查 + running 事件 + 执行 + 产出摘要」；
+    canonical state。本节点只负责「执行前取消检查 + 执行 + 产出摘要」；
     终态事件（``completed`` / ``failed`` / ``cancelled``）、模型上下文写回、错误计数
     与上限判定全部下沉到 ``observe`` 节点。
 
@@ -57,8 +52,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
         ``terminal`` 时直接 END、不进 observe，返回摘要既无人消费又会撑大 checkpoint。
 
     副作用:
-        - 经 stream writer 发出本批 ``running`` 状态事件（执行前取消分支为
-          ``cancelled`` 事件）；终态事件不在本节点发出；
+        - 执行前取消分支经 ``ToolCallLifecycleManager`` 发出 ``cancelled`` 事件；
+          ``running`` 与终态事件不在本节点发出；
         - 执行前取消分支（工具尚未执行、无结果可观察，不能下沉 observe）置
           ``terminal=True`` 让 graph 走 END；因提前 return 不进入 ``run_tool_calls``，
           模型协议层面的配对闭合统一由 ``RuntimeContextManager.load_message`` 在下次
@@ -75,29 +70,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
     task_id = task.id
     run_id = operations.get_current_run().id
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-    stream_writer = get_stream_writer()
-
     approved_dicts = tool_calls
     approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
-
-    # 业务 resume 可能从取消时保存的 tools checkpoint 重新进入本节点。此处不重放
-    # 旧工具批次，而是先经过 observe 回到 model；model_node 的 load_message() 会统一
-    # 用 _close_unclosed_tool_calls() 闭合上下文协议。
-    if rc.execution_mode == "resume":
-        log.info(
-            "tools_node_skipped_on_resume",
-            extra={
-                "msg": "业务恢复时跳过 checkpoint 中的旧工具批次",
-                "data": {"run_id": run_id, "step_id": step_id},
-            },
-        )
-        return {
-            "pending_tool_calls": {},
-            "tool_error_count": state.tool_error_count,
-            "terminal": False,
-            "last_tool_results": {"observations": [], "instruction": ""},
-            "deferred_repair_message": state.deferred_repair_message,
-        }
+    lifecycle = state.tool_call_lifecycle
 
     # 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
     # 未完成调用的上下文闭合由下一次 model_node.load_message() 统一兜底；本分支只负责
@@ -110,16 +85,14 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": operations.get_current_run().id},
             },
         )
-        for tool_call in approved_calls:
-            stream_writer(
-                ToolCallStatusChangedEvent(
-                    task_id=task_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    tool_call_id=tool_call.call_id,
-                    status="cancelled",
-                )
-            )
+        if lifecycle is None:
+            raise RuntimeError("tool_call_lifecycle is required before tools_node cancellation")
+        lifecycle = lifecycle.cancel(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            tool_calls=approved_calls,
+        )
 
         # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
         # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
@@ -131,6 +104,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "terminal": True,
             "last_tool_results": {},
             "deferred_repair_message": "",
+            "tool_call_lifecycle": lifecycle,
         }
 
     log.info(
@@ -144,16 +118,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    for tool_call in approved_calls:
-        stream_writer(
-            ToolCallStatusChangedEvent(
-                task_id=task_id,
-                run_id=run_id,
-                step_id=step_id,
-                tool_call_id=tool_call.call_id,
-                status="running",
-            )
-        )
     tool_task = asyncio.create_task(
         asyncio.to_thread(
             operations.run_tool_calls,
@@ -193,8 +157,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
     observations = tool_run.observations  # 每个工具调用的观察结果
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（tool_observation_dispatcher），本节点只产出治理摘要。
-
-    success_count = sum(1 for o in observations if o.status == "success")
     log.info(
         "tools_node_completed",
         extra={
@@ -202,17 +164,17 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "data": {
                 "step_id": step_id,
                 "tool_count": len(observations),
-                "success_count": success_count,
-                "error_count": len(observations) - success_count,
             },
         },
     )
 
-    result_summaries = build_tool_result_summaries(observations, instruction)
-    # 将本批应有的 call id 一并落入摘要，供 observe 检测执行层异常丢结果；正常情况下
-    # observations 与该列表一一对应，异常时由 RuntimeContextManager 补齐协议占位。
-    result_summaries["expected_call_ids"] = [call.call_id for call in approved_calls]
     return {
         "pending_tool_calls": {},  # 清空待执行工具调用
-        "last_tool_results": result_summaries,
+        "last_tool_results": {
+            "instruction": instruction or "",
+            "observations": [
+                dataclasses.asdict(observation) for observation in observations
+            ],
+            "expected_call_ids": [call.call_id for call in approved_calls],
+        },
     }

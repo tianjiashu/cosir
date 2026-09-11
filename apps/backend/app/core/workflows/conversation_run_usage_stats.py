@@ -1,6 +1,6 @@
-"""一次 turn 的 token 与耗时统计（运行时累加器）。
+"""一次 run 的 token 与耗时统计（运行时累加器）。
 
-本值对象作为 ``RuntimeConfig`` 的可变成员被 model 节点写入、被 ``run_finished`` 事件读取；
+本值对象作为 ``RuntimeConfig`` 的可变成员被 model 节点写入、被 Run 终态事件读取；
 不进入 LangGraph checkpoint，只在单次 graph 执行期间生效。
 """
 

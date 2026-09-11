@@ -1,13 +1,15 @@
 """ReAct-like 工作流的 graph state 定义。
 
-本模块只承载交给 LangGraph 管理的 graph state 数据契约，不依赖任何节点、边或编排逻辑。
-state 是 graph 各节点之间传递的唯一数据通道，由 LangGraph 在节点返回增量后自动合并并
+本模块只承载交给 LangGraph 管理的 graph state 数据契约。state 是 graph 各节点之间传递的
+唯一数据通道，由 LangGraph 在节点返回增量后自动合并并
 经 ``AsyncSqliteSaver`` checkpointer 持久化（断点续跑与审批中断重放的依据）。
 """
 
 from typing import Any
 
 from pydantic import BaseModel
+
+from app.core.workflows.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
 
 
 class ReactGraphState(BaseModel):
@@ -43,6 +45,9 @@ class ReactGraphState(BaseModel):
         last_tool_results: 本批工具结果摘要（可序列化 dict，content 与 UI data 均已由执行层
             预算治理）。tools 节点写；observe 节点做事件分发、错误计数与错误上限判定，
             其中 UI data 不会进入模型消息。
+        tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
+            节点写入创建/运行状态，tools 节点写入执行前取消，observe 节点写入终态；不含
+            operations、stream writer 或 runtime context。
         continuation_error_data: 终态排查用错误明细（可序列化 dict，通常含 ``error_kind`` /
             ``invalid_count``）。编排层初始化置 ``None``；model_node 在 REPAIR 工具分支写入
             脱敏计数、REPAIR 回流时置 ``None``；``_finalize_max_steps`` 消费并并入 ``RUN_FAILED``。
@@ -58,5 +63,6 @@ class ReactGraphState(BaseModel):
     max_steps: int
     final_text: str
     last_tool_results: dict[str, Any]
+    tool_call_lifecycle: ToolCallLifecycleManager | None = None
     deferred_repair_message: str = ""
     continuation_error_data: Any = None
