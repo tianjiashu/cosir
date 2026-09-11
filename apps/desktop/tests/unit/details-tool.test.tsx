@@ -21,7 +21,7 @@ function renderDetails(
       artifact={{
         backendStatus: "completed",
         presentation: options.presentation ?? { expand_layout: "list", default_open: true },
-        data,
+        display_data: data,
       }}
     />,
   );
@@ -56,5 +56,50 @@ describe("DetailsTool", () => {
 
     expect(html).toContain("空文件");
     expect(html).not.toContain("L1-Lnull");
+  });
+
+  it("renders read-file metadata in the quiet row", () => {
+    const html = renderDetails(
+      { kind: "read-file-meta", path: "src/app.ts", line_range: { start: 4, end: 18 }, file_size: 2048 },
+      { toolName: "read_file", presentation: { expand_layout: "none", expandable: false } },
+    );
+
+    expect(html).toContain("src/app.ts");
+    expect(html).toContain("L4-L18");
+    expect(html).toContain("2.0 KB");
+  });
+
+  it("renders search and directory counts in their rows", () => {
+    const searchHtml = renderDetails(
+      { kind: "file-list", pattern: "TODO", target: "content", files: [{ path: "a.ts" }], match_count: 3 },
+      { toolName: "search_files" },
+    );
+    const directoryHtml = renderDetails(
+      { kind: "directory-list", path: "src", entries: [{ name: "app.ts", type: "file" }], total_entries: 7 },
+      { toolName: "list_directory" },
+    );
+
+    expect(searchHtml).toContain("TODO · content · 3 个命中");
+    expect(directoryHtml).toContain("src · 7 个条目");
+  });
+
+  it("renders web search links and web extract status without extracted body", () => {
+    const searchHtml = renderDetails({
+      kind: "web-search-results",
+      query: "local agents",
+      results: [{ title: "Result", url: "https://example.com/result" }],
+    });
+    const extractHtml = renderDetails({
+      kind: "web-extract-urls",
+      urls: [{ url: "https://example.com/article" }],
+      status_hint: "部分成功",
+      content: "must never render",
+    }, { toolName: "web_extract", presentation: { expand_layout: "none", expandable: false } });
+
+    expect(searchHtml).toContain("local agents · 1 个结果");
+    expect(searchHtml).toContain("https://example.com/result");
+    expect(extractHtml).toContain("example.com · 部分成功");
+    expect(extractHtml).not.toContain("https://example.com/article");
+    expect(extractHtml).not.toContain("must never render");
   });
 });

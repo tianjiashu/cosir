@@ -63,31 +63,52 @@ describe("assistant transport converter", () => {
   it("maps all backend tool lifecycle states and preserves artifact data", () => {
     const pending = toToolCallPart(tool("pending"));
     const running = toToolCallPart(tool("running"));
-    const completed = toToolCallPart(tool("completed", { data: { kind: "terminal-result" } }));
-    const failed = toToolCallPart(tool("failed", { error: "full diagnostic", data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
+    const completed = toToolCallPart(tool("completed", { display_data: { kind: "terminal-result" } }));
+    const failed = toToolCallPart(tool("failed", { error: "full diagnostic", display_data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
     const cancelled = toToolCallPart(tool("cancelled"));
 
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: { backendStatus: "pending" } });
     expect(running).toMatchObject({ artifact: { backendStatus: "running" } });
-    expect(completed).toMatchObject({ isError: false, artifact: { backendStatus: "completed", data: { kind: "terminal-result" } } });
+    expect(completed).toMatchObject({ isError: false, artifact: { backendStatus: "completed", display_data: { kind: "terminal-result" } } });
     expect(failed).toMatchObject({ isError: true, artifact: { backendStatus: "failed", errorCode: "DENIED" } });
     expect(failed).toMatchObject({ artifact: { error: "权限不足" } });
-    expect(failed).not.toHaveProperty("result");
+    expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
-    expect(cancelled).not.toHaveProperty("result");
+    expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
+  });
+
+  it("让后端终态覆盖 transport 的 sending 标记", () => {
+    const state = emptyState();
+    state.runs = [
+      { ...completedRun(1), status: "failed", messages: [] },
+      { ...completedRun(2), status: "cancelled", messages: [] },
+    ];
+
+    state.current_run_id = 1;
+    expect(toTransportThreadView(state, { pendingCommands: [], isSending: true }).isRunning).toBe(false);
+
+    state.current_run_id = 2;
+    expect(toTransportThreadView(state, { pendingCommands: [], isSending: true }).isRunning).toBe(false);
+  });
+
+  it("没有当前 Run 时仍保留新命令的 sending 状态", () => {
+    const state = emptyState();
+    const pendingCommand = { type: "add-message" };
+
+    expect(toTransportThreadView(state, { pendingCommands: [pendingCommand], isSending: false }).isRunning).toBe(true);
   });
 
   it("hides a tool result when the generic presentation disables it", () => {
     const converted = toToolCallPart(tool("completed", {
       toolName: "web_extract",
       presentation: { expand_layout: "list", show_result: false },
-      data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
+      display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
     }));
 
     expect(converted).not.toHaveProperty("result");
     expect(converted).toMatchObject({
       artifact: {
-        data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
+        display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
       },
     });
     expect(JSON.stringify(converted)).not.toContain("private document body");

@@ -25,7 +25,7 @@ describe("ToolFallback", () => {
     const html = renderFallback({
       backendStatus: "failed",
       presentation: { verb: "读取文件", icon: "eye", expand_layout: "none" },
-      data: { status_hint: "路径无效" },
+      display_data: { status_hint: "路径无效" },
       error: "full diagnostic",
       errorCode: "path_outside_workspace",
     });
