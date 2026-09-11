@@ -48,5 +48,8 @@ def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
     defaulted = tool_error("read_file", "missing", "fix it")
     assert defaulted.display_data == {"status_hint": "读取失败"}
 
+    replace_defaulted = tool_error("replace", "missing", "fix it")
+    assert replace_defaulted.display_data == {"status_hint": "替换失败"}
+
     long_hint = tool_error("read_file", "missing", "fix it", status_hint="完整错误原因泄漏到前端")
     assert long_hint.display_data == {"status_hint": "读取失败"}

@@ -1,4 +1,4 @@
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_usage_compute_listener import (
@@ -135,3 +135,11 @@ def test_context_usage_includes_system_prompt_and_tool_schemas(monkeypatch) -> N
     assert expected_tools > 0
     assert projector.events[0].used_tokens == expected_messages + expected_tools
     assert task_service.updates == [(7, expected_messages + expected_tools)]
+
+
+def test_context_usage_includes_tool_message_call_id() -> None:
+    without_call_id = ToolMessage(content="", tool_call_id="")
+    with_call_id = ToolMessage(content="", tool_call_id="call-1234567890")
+
+    assert ContextUsageComputeListener._message_tokens(without_call_id) == 0
+    assert ContextUsageComputeListener._message_tokens(with_call_id) > 0

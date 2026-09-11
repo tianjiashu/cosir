@@ -442,13 +442,13 @@ def test_post_transport_error_is_logged_and_propagated(
 
     failed = [r for r in caplog.records if r.msg == "firecrawl_api_call_failed"]
     assert failed, "传输层失败必须落 firecrawl_api_call_failed 日志"
-    assert failed[0].display_data["endpoint"] == "search"
+    assert failed[0].data["endpoint"] == "search"
     # 2) 传输层失败拿不到响应对象，状态码必须是 None（而非某个真实 HTTP 码）。
-    assert failed[0].display_data["status_code"] is None
+    assert failed[0].data["status_code"] is None
     # 3) error 字段必须包含失败原因。
-    assert "connect failed" in failed[0].display_data["error"]
+    assert "connect failed" in failed[0].data["error"]
     # 4) 必须标记是否携带 api_key，且为 True。
-    assert failed[0].display_data["has_api_key"] is True
+    assert failed[0].data["has_api_key"] is True
     # 5) 绝对不能把 api_key 原文写进任何日志。
     assert api_key not in _log_full_text(caplog.records)
 
@@ -473,13 +473,13 @@ def test_log_call_failure_direct_writes_structured_fields(
         if r.levelno == logging.ERROR and r.msg == "firecrawl_api_call_failed"
     ]
     assert failed, "expected firecrawl_api_call_failed error record"
-    assert failed[0].display_data["endpoint"] == "scrape"
+    assert failed[0].data["endpoint"] == "scrape"
     # 传输层失败形参 status_code 为 None 时，日志中必须保持 None。
-    assert failed[0].display_data["status_code"] is None
-    assert "timed out" in failed[0].display_data["error"]
-    assert isinstance(failed[0].display_data["latency_ms"], int | float)
-    assert "endpoint" in failed[0].display_data and "has_api_key" in failed[0].display_data
-    assert failed[0].display_data["has_api_key"] is True
+    assert failed[0].data["status_code"] is None
+    assert "timed out" in failed[0].data["error"]
+    assert isinstance(failed[0].data["latency_ms"], int | float)
+    assert "endpoint" in failed[0].data and "has_api_key" in failed[0].data
+    assert failed[0].data["has_api_key"] is True
     # api_key 原文绝不应出现在任何日志中（仅 has_api_key 布尔）。
     assert api_key not in _log_full_text(caplog.records)
 
@@ -530,9 +530,9 @@ def test_post_http_error_logs_failed_event_with_fields(
         if r.levelno == logging.ERROR and r.msg == "firecrawl_api_call_failed"
     ]
     assert failed, "expected firecrawl_api_call_failed error record"
-    assert failed[0].display_data["endpoint"] == "search"
-    assert failed[0].display_data["status_code"] == 503
-    assert "error" in failed[0].display_data
+    assert failed[0].data["endpoint"] == "search"
+    assert failed[0].data["status_code"] == 503
+    assert "error" in failed[0].data
     # api_key 原文绝不应出现在任何日志中（仅 has_api_key 布尔）。
     assert api_key not in _log_full_text(caplog.records)
 
@@ -560,9 +560,9 @@ def test_post_success_false_logs_reported_failure_event(
         if r.levelno == logging.ERROR and r.msg == "firecrawl_api_reported_failure"
     ]
     assert failed, "expected firecrawl_api_reported_failure error record"
-    assert failed[0].display_data["endpoint"] == "scrape"
-    assert failed[0].display_data["status_code"] == 200
-    assert failed[0].display_data["error"] == "rate limited"
+    assert failed[0].data["endpoint"] == "scrape"
+    assert failed[0].data["status_code"] == 200
+    assert failed[0].data["error"] == "rate limited"
     assert api_key not in _log_full_text(caplog.records)
 
 
@@ -591,9 +591,9 @@ def test_post_success_logs_info_and_not_response_body(
         if r.levelno == logging.INFO and r.msg == "firecrawl_api_call_succeeded"
     ]
     assert succeeded, "expected firecrawl_api_call_succeeded info record"
-    assert succeeded[0].display_data["endpoint"] == "scrape"
-    assert succeeded[0].display_data["status_code"] == 200
-    assert "latency_ms" in succeeded[0].display_data
+    assert succeeded[0].data["endpoint"] == "scrape"
+    assert succeeded[0].data["status_code"] == 200
+    assert "latency_ms" in succeeded[0].data
     full_text = _log_full_text(caplog.records)
     assert body_marker not in full_text  # 响应正文不得落日志
     assert api_key not in full_text  # api_key 原文不得落日志
@@ -622,8 +622,8 @@ def test_scrape_one_page_failure_logs_warning(
         if r.levelno == logging.WARNING and r.msg == "web_extract_page_failed"
     ]
     assert warnings, "expected web_extract_page_failed warning record"
-    assert warnings[0].display_data["url"] == bad_url
-    assert "boom on page" in warnings[0].display_data["error"]
+    assert warnings[0].data["url"] == bad_url
+    assert "boom on page" in warnings[0].data["error"]
     full_text = _log_full_text(caplog.records)
     assert api_key not in full_text
     # 单页失败不中断：返回带 error 的 item，不向上抛。

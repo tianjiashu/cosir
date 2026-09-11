@@ -219,6 +219,38 @@ def test_load_message_closes_then_repairs_legacy_missing_tool_result() -> None:
     assert messages[3].content == "repair"
 
 
+def test_load_message_moves_existing_tool_result_before_later_human_message() -> None:
+    """取消后追加新输入时，已有 ToolMessage 也必须紧跟原 tool call。"""
+
+    context_service = _ContextService(max_sequence=4)
+    context_service.loaded = [
+        ContextEntry(
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "execute_terminal", "args": {}, "id": "call-1"}],
+            ),
+            1,
+            1,
+        ),
+        ContextEntry(HumanMessage(content="continue"), 2, 2),
+        ContextEntry(ToolMessage(content="cancelled", tool_call_id="call-1"), 2, 3),
+    ]
+    manager = _manager(context_service)
+    manager._entries = list(context_service.loaded)
+
+    messages = manager.load_message()
+
+    assert [type(message) for message in messages] == [
+        SystemMessage,
+        AIMessage,
+        ToolMessage,
+        HumanMessage,
+    ]
+    assert messages[2].tool_call_id == "call-1"
+    assert messages[3].content == "continue"
+    assert context_service.appended == []
+
+
 def test_runtime_context_message_writes_are_idempotent_for_recovery() -> None:
     """恢复重放不得重复追加同一 tool result 或 repair prompt。"""
 

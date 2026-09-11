@@ -14,7 +14,12 @@ from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, To
 
 from app.core.workflows.nodes import model_node as model_module
 from app.core.workflows.nodes import observation_node as observe_module
-from app.core.workflows.nodes.helper import tool_observation_dispatcher as dispatcher
+from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
+from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
+from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+    ToolCallLifecycleManager,
+    ToolCallLifecycleRecord,
+)
 from app.core.workflows.react.state import ReactGraphState
 
 
@@ -74,6 +79,13 @@ class _ModelHarness:
             yield chunk
 
 
+def _patch_lifecycle_runtime(monkeypatch: Any, harness: Any) -> None:
+    """把 lifecycle 的 graph runtime 依赖绑定到测试桩。"""
+
+    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: harness.events.append)
+
 def test_reasoning_closes_before_tool_call_created(monkeypatch: Any) -> None:
     """工具创建前必须先收口仍在运行的 reasoning part。"""
 
@@ -93,7 +105,8 @@ def test_reasoning_closes_before_tool_call_created(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
-    monkeypatch.setattr(model_module, "_collect_chunk_to_ai_message", lambda _chunks: message)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -112,6 +125,59 @@ def test_reasoning_closes_before_tool_call_created(monkeypatch: Any) -> None:
     assert harness.events[closed_index].part == "reasoning"
 
 
+def test_multiple_tool_calls_are_created_and_started_independently(monkeypatch: Any) -> None:
+    """同一模型响应中的多个 tool_call 必须按 index 分别累积和发射生命周期事件。"""
+
+    message = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "read_file", "args": {"path": "a.py"}, "id": "call-a"},
+            {"name": "read_file", "args": {"path": "b.py"}, "id": "call-b"},
+        ],
+    )
+    chunks = [
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {"name": "read_file", "args": '{"path":', "id": "call-a", "index": 0},
+                {"name": "read_file", "args": '{"path":', "id": "call-b", "index": 1},
+            ],
+        ),
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {"name": None, "args": '"a.py"}', "id": None, "index": 0},
+                {"name": None, "args": '"b.py"}', "id": None, "index": 1},
+            ],
+        ),
+    ]
+    harness = _ModelHarness(message, chunks)
+    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
+
+    result = asyncio.run(model_module._model_node(_state()))
+
+    assert result["requested_tool"] is True
+    lifecycle_events = [
+        event
+        for event in harness.events
+        if event.type in {"tool_call_created", "tool_call_status_changed"}
+    ]
+    assert [(event.type, event.tool_call_id) for event in lifecycle_events] == [
+        ("tool_call_created", "call-a"),
+        ("tool_call_created", "call-b"),
+        ("tool_call_status_changed", "call-a"),
+        ("tool_call_status_changed", "call-b"),
+    ]
+    status_args = [
+        event.args for event in lifecycle_events if event.type == "tool_call_status_changed"
+    ]
+    assert status_args == [{"path": "a.py"}, {"path": "b.py"}]
+
+
 def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> None:
     """全无效但可识别的调用应追加修复提示并设置 repair_requested。"""
 
@@ -125,7 +191,7 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
     monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
-    monkeypatch.setattr(model_module, "_collect_chunk_to_ai_message", lambda _chunks: message)
+    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -149,7 +215,8 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
     monkeypatch.setattr(model_module, "_runtime_config", lambda: model_harness.runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: model_harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: model_harness.events.append)
-    monkeypatch.setattr(model_module, "_collect_chunk_to_ai_message", lambda _chunks: message)
+    _patch_lifecycle_runtime(monkeypatch, model_harness)
+    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     model_result = asyncio.run(model_module._model_node(_state()))
     deferred = model_result["deferred_repair_message"]
@@ -171,18 +238,19 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
     )
     runtime_config = SimpleNamespace(operations=observe_harness.operations, usage_stats=None)
     runtime_context = SimpleNamespace(add_message=observe_harness.messages.append)
+    observe_harness.runtime_config = runtime_config
+    observe_harness.runtime_context = runtime_context
     monkeypatch.setattr(observe_module, "_runtime_config", lambda: runtime_config)
     monkeypatch.setattr(observe_module, "_runtime_context", lambda: runtime_context)
-    monkeypatch.setattr(dispatcher, "_runtime_config", lambda: runtime_config)
-    monkeypatch.setattr(dispatcher, "_runtime_context", lambda: runtime_context)
-    monkeypatch.setattr(dispatcher, "get_stream_writer", lambda: observe_harness.events.append)
+    _patch_lifecycle_runtime(monkeypatch, observe_harness)
 
     observe_result = asyncio.run(
         observe_module._observe_node(
-            _state(
-                step_count=model_result["step_count"],
-                requested_tool=True,
-                deferred_repair_message=deferred,
+                _state(
+                    step_count=model_result["step_count"],
+                    requested_tool=True,
+                    tool_call_lifecycle=model_result["tool_call_lifecycle"],
+                    deferred_repair_message=deferred,
                 last_tool_results={
                     "instruction": "先读取文件。",
                     "expected_call_ids": ["valid-1"],
@@ -195,7 +263,7 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
                             "reason": "",
                             "content": "file body",
                             "retryable": False,
-                            "data": {},
+                            "display_data": {},
                         },
                         {
                             "call_id": "unexpected-1",
@@ -205,7 +273,7 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
                             "reason": "",
                             "content": "must be dropped",
                             "retryable": False,
-                            "data": {},
+                            "display_data": {},
                         },
                     ],
                 },
@@ -233,10 +301,26 @@ def test_all_valid_calls_have_no_deferred_repair(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
-    monkeypatch.setattr(model_module, "_collect_chunk_to_ai_message", lambda _chunks: message)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
-    result = asyncio.run(model_module._model_node(_state()))
+    result = asyncio.run(
+        model_module._model_node(
+            _state(
+                tool_call_lifecycle=ToolCallLifecycleManager(
+                    calls={
+                        "previous-call": ToolCallLifecycleRecord(
+                            tool_call_id="previous-call",
+                            tool_name="read_file",
+                            status="completed",
+                        )
+                    }
+                )
+            )
+        )
+    )
 
     assert result["requested_tool"] is True
     assert result["deferred_repair_message"] == ""
     assert result["continuation_error_data"] is None
+    assert set(result["tool_call_lifecycle"].calls) == {"valid-1"}

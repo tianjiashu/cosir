@@ -17,7 +17,6 @@ from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
-    UsageUpdatedEvent,
     UserInputAppendedEvent,
 )
 from app.assistant_transport.service.conversation_event_projector import (
@@ -149,7 +148,6 @@ def test_tool_lifecycle_and_settlement(
             run_id=1,
             tool_call_id="call-1",
             tool_name="read_file",
-            args={"path": "a.py"},
             presentation={
                 "verb": "读取文件",
                 "icon": "eye",
@@ -161,7 +159,13 @@ def test_tool_lifecycle_and_settlement(
         )
     )
     event_projector.process(
-        ToolCallStatusChangedEvent(task_id=1, run_id=1, tool_call_id="call-1", status="running")
+        ToolCallStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            tool_call_id="call-1",
+            status="running",
+            args={"path": "a.py"},
+        )
     )
     event_projector.process(
         ToolCallStatusChangedEvent(
@@ -169,12 +173,12 @@ def test_tool_lifecycle_and_settlement(
             run_id=1,
             tool_call_id="call-1",
             status="completed",
-            data={"kind": "read-file-meta", "path": "a.py", "total_lines": 10},
+            display_data={"kind": "read-file-meta", "path": "a.py", "total_lines": 10},
         )
     )
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=1, tool_call_id="call-2", tool_name="write_file", args={}
+            task_id=1, run_id=1, tool_call_id="call-2", tool_name="write_file"
         )
     )
     event_projector.process(
@@ -183,7 +187,7 @@ def test_tool_lifecycle_and_settlement(
     parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
     assert parts[0]["status"] == "completed"
     assert parts[0]["presentation"]["expandable"] is False
-    assert parts[0]["data"] == {"kind": "read-file-meta", "path": "a.py", "total_lines": 10}
+    assert parts[0]["display_data"] == {"kind": "read-file-meta", "path": "a.py", "total_lines": 10}
     assert parts[1]["status"] == "failed"
     assert parts[1]["error"] == "执行异常"
 
@@ -194,9 +198,6 @@ def test_run_status_usage_and_context_usage(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        UsageUpdatedEvent(task_id=1, run_id=1, input_tokens=10, output_tokens=4, total_tokens=14)
-    )
-    event_projector.process(
         ContextUsageUpdatedEvent(
             task_id=1,
             run_id=1,
@@ -206,7 +207,14 @@ def test_run_status_usage_and_context_usage(
         )
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            status=ConversationRunStatus.COMPLETED,
+            usage_stats=ConversationRunUsageStats(
+                input_tokens=10, output_tokens=4, total_tokens=14
+            ),
+        )
     )
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
@@ -217,20 +225,19 @@ def test_run_status_usage_and_context_usage(
     assert _run(state, 1)["status"] == "completed"
 
 
-def test_terminal_usage_cannot_rewind_confirmed_cumulative_usage(
+def test_terminal_usage_is_projected(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        UsageUpdatedEvent(task_id=1, run_id=1, input_tokens=100, output_tokens=50, total_tokens=150)
-    )
-    event_projector.process(
         RunStatusChangedEvent(
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,
-            usage_stats=ConversationRunUsageStats(input_tokens=1, output_tokens=2, total_tokens=3),
+            usage_stats=ConversationRunUsageStats(
+                input_tokens=100, output_tokens=50, total_tokens=150
+            ),
         )
     )
     assert _run(snapshots.states[1], 1)["usage"]["total_tokens"] == 150
@@ -242,10 +249,14 @@ def test_new_run_clears_previous_run_usage(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        UsageUpdatedEvent(task_id=1, run_id=1, input_tokens=10, output_tokens=4, total_tokens=14)
-    )
-    event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            status=ConversationRunStatus.COMPLETED,
+            usage_stats=ConversationRunUsageStats(
+                input_tokens=10, output_tokens=4, total_tokens=14
+            ),
+        )
     )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
     state = snapshots.states[1]
@@ -265,14 +276,12 @@ def test_late_previous_run_events_cannot_overwrite_current_run(
     )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
     event_projector.process(
-        UsageUpdatedEvent(task_id=1, run_id=1, input_tokens=99, total_tokens=99)
-    )
-    event_projector.process(
         RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.FAILED)
     )
     state = snapshots.states[1]
     assert _run(state, 2)["status"] == "pending"
-    assert _run(state, 1)["usage"]["total_tokens"] == 99
+    assert _run(state, 1)["status"] == "completed"
+    assert _run(state, 1)["usage"] is None
 
 
 def test_historical_run_status_event_updates_its_own_run(
@@ -305,9 +314,16 @@ def test_unknown_run_event_is_logged_and_not_projected(
 ) -> None:
     event_projector, snapshots = projector
     caplog.set_level("WARNING")
-    change = event_projector.process(UsageUpdatedEvent(
-        task_id=1, run_id=404, input_tokens=1, output_tokens=1, total_tokens=2,
-    ))
+    change = event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=404,
+            status=ConversationRunStatus.COMPLETED,
+            usage_stats=ConversationRunUsageStats(
+                input_tokens=1, output_tokens=1, total_tokens=2
+            ),
+        )
+    )
     assert change is not None and change.mutations == ()
     assert snapshots.states[1] == empty_snapshot()
     record = next(
@@ -315,7 +331,7 @@ def test_unknown_run_event_is_logged_and_not_projected(
     )
     assert record.data["task_id"] == 1
     assert record.data["run_id"] == 404
-    assert record.data["event_type"] == "usage_updated"
+    assert record.data["event_type"] == "run_status_changed"
     assert record.data["event_id"]
 
 
