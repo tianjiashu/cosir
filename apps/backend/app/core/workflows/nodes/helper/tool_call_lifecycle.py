@@ -86,7 +86,12 @@ def _ui_error(summary: dict[str, Any], event_status: str) -> str | None:
 
 
 def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
-    """把观察摘要转回 ``ToolObservation``，供模型上下文写入 ToolMessage。"""
+    """把观察摘要转回 ``ToolObservation``，供模型上下文写入 ToolMessage。
+
+    摘要键名与执行层观察字段一致（``tool_call_id`` 等），由 ``tools`` 节点对
+    ``ToolObservation`` 的 ``dataclasses.asdict`` 投影产出；缺少必需键时按契约错误抛
+    ``KeyError``，由调用方（workflow 终态路径）记录并落定失败。
+    """
 
     return ToolObservation(
         tool_name=summary["tool_name"],
@@ -95,7 +100,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
         error=summary["error"],
         reason=summary["reason"],
         retryable=summary["retryable"],
-        tool_call_id=summary["call_id"],
+        tool_call_id=summary["tool_call_id"],
         display_data=None,
     )
 
@@ -285,7 +290,7 @@ class ToolCallLifecycleManager(BaseModel):
 
         observation = _summary_to_observation(summary)
         event_status = _event_status(observation.status)
-        call_id = summary["call_id"]
+        call_id = summary["tool_call_id"]
         updated = self._copy()
         updated._emit_status(
             task_id=task_id,

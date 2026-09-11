@@ -28,7 +28,7 @@ _TOOL_PART_KEYS = {
     "error",
     "errorCode",
     "presentation",
-    "data",
+    "display_data",
     "isError",
     "approvalRequestId",
 }
@@ -234,7 +234,7 @@ def _validate_part(part: object) -> None:
             raise ValueError("snapshot tool args must be an object")
         if not isinstance(part.get("presentation", {}), dict):
             raise ValueError("snapshot tool presentation must be an object")
-        if part.get("data") is not None and not isinstance(part.get("data"), dict):
-            raise ValueError("snapshot tool data must be an object or null")
+        if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
+            raise ValueError("snapshot tool display_data must be an object or null")
         return
     raise ValueError("snapshot contains an unknown message part")

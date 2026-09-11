@@ -13,6 +13,7 @@ from app.models.log_query_result import LogQueryResult
 from app.models.model_entry_record import ModelEntryRecord
 from app.models.provider_record import ProviderRecord
 from app.models.task_record import TaskRecord
+from app.models.terminal_session_record import TerminalSessionRecord
 from app.models.trace_context import TraceContext
 from app.models.workspace_record import WorkspaceRecord
 
@@ -27,6 +28,7 @@ __all__ = [
     "ModelEntryRecord",
     "ProviderRecord",
     "TaskRecord",
+    "TerminalSessionRecord",
     "TraceContext",
     "WorkspaceRecord",
 ]

@@ -23,7 +23,7 @@
   返回 False（不索引）——若后续需要，应在 ``_HIDDEN_CONFIG_NAMES`` 之外另行显式声明。
 
 与 CodeGraph 扩展名集合的关系（刻意解耦，避免漂移）：
-- CodeGraph 的 ``third_party/codegraph/src/extraction/grammars.ts`` 中 ``EXTENSION_MAP``
+- CodeGraph 的 ``apps/codeIndex/src/extraction/grammars.ts`` 中 ``EXTENSION_MAP``
   是"可被 tree-sitter 解析"的单一来源，口径偏窄（仅含有解析器的语言，不含 ``.md``/
   ``.json``/``.yaml`` 等纯索引项）。
 - 本模块的口径偏宽：目标是"该文件是否值得进入语义索引（含配置/标记语言）"，

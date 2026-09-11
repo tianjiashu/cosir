@@ -35,34 +35,6 @@ from app.core.workflows.nodes.helper.invalid_tool_call import TOOL_CALL_REPAIR_M
 from ..react.state import ReactGraphState
 
 
-def _normalize_observation_summary(observation: dict[str, Any]) -> dict[str, Any]:
-    """兼容旧 checkpoint 中仍使用 ``tool_call_id`` 的工具摘要。
-
-    新的 ``tools`` 节点会在写入 graph state 前把执行层字段归一化为 ``call_id``；
-    这里保留对历史 checkpoint 的兼容，避免后端重启或恢复旧 Run 时再次丢弃合法
-    工具结果。下游 lifecycle 仍只消费 graph 内部的 ``call_id`` 契约。
-
-    参数:
-        observation: ``last_tool_results`` 中的一条可序列化工具摘要。
-
-    返回:
-        至少包含 ``call_id`` 的摘要副本；已经符合契约或缺少任何调用标识时返回原对象。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    if observation.get("call_id"):
-        return observation
-    tool_call_id = observation.get("tool_call_id")
-    if not tool_call_id:
-        return observation
-    return {**observation, "call_id": str(tool_call_id)}
-
-
 async def _observe_node(state: ReactGraphState) -> dict:
     """工具结果观察节点：终态事件分发 + 模型上下文写回 + 取消判断 + 错误上限判定。
 
@@ -153,7 +125,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
     tool_error_count = dispatch.tool_error_count
 
     observed_call_ids = {
-        str(summary["call_id"]) for summary in observations if summary.get("call_id")
+        str(summary["tool_call_id"]) for summary in observations if summary.get("tool_call_id")
     }
     missing_call_ids = expected_call_ids - observed_call_ids
     if missing_call_ids:

@@ -15,6 +15,7 @@ from app.assistant_transport.service.conversation_task_snapshot_service import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
+from app.config.logging.logger import log
 from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunRecord
 from app.models.conversation_command_record import ConversationCommandRecord
@@ -267,6 +268,27 @@ class ConversationRunCommandService:
 
         该用例只负责领域身份和持久状态资格判断；真正的 executor 启动由 API 编排层
         完成，Transport 层只负责随后建立 snapshot response。
+
+        执行顺序刻意把所有可能失败的只读步骤放在唯一写操作之前：先校验 run 身份与状态、
+        snapshot 归属与用户消息、驱动命令可读，再原子恢复 run 状态。否则一旦写操作之后才
+        暴露错误，run 会停在 ``running`` 却没有执行器，后续 resume 会被状态校验永久拒绝。
+        写操作之后的 snapshot 重读若失败，会补偿收敛该 run。
+
+        参数:
+            task_id: 目标任务标识。
+            run_id: 待续跑的 Conversation Run 标识。
+
+        返回:
+            ``created=True``、``execution_mode="resume"`` 的启动结果；``command`` 为该 run
+            最近一次提交的命令记录（一个 run 可绑定多条 command）。
+
+        异常:
+            ValueError: run 不是 task 最近 run、不是 ``cancelled``、snapshot 归属失效、
+                缺少用户消息，或恢复时已被其它路径落定终态。
+
+        副作用:
+            事务性把 ``cancelled`` run 恢复为 ``running``（清空旧终态字段）并发布 RUNNING
+            状态事件；补偿路径会把该 run 收敛回终态，避免留下无执行器的 active run。
         """
 
         with self._task_run_operation(task_id):
@@ -287,12 +309,30 @@ class ConversationRunCommandService:
                 for message in run["messages"]
             ):
                 raise ValueError(f"run {run_id} has no user message")
+            # 驱动命令读取是最后一个只读步骤：一个 run 可绑定多条 command（同轮编辑重跑会
+            # 追加一条），这里取最近一条。必须在写操作之前完成，避免失败时留下已恢复的 run。
+            command = self._command.get_by_run(run_id)
             resumed = self._conversation_run.resume_cancelled_run(run_id)
             if resumed is None:
                 raise ValueError(f"run {run_id} is no longer resumable")
-            state = self._snapshots.ensure_state_snapshot(task_id)
+            try:
+                state = self._snapshots.ensure_state_snapshot(task_id)
+            except Exception:
+                # run 已置 running，但本次续跑不会启动执行器；收敛回终态，让用户可重试，
+                # 而不是留下一个永远无法 resume 的 active run。
+                log.exception(
+                    "assistant_transport_resume_setup_failed",
+                    extra={
+                        "msg": "续跑读取快照失败，已收敛该 run，避免留下无执行器的 active run",
+                        "data": {"task_id": task_id, "run_id": run_id},
+                    },
+                )
+                self._conversation_run.cancel_run_if_running(
+                    run_id, end_reason="resume_setup_failed"
+                )
+                raise
             return ConversationRunStartResult(
-                command=self._command.get_by_run(run_id),
+                command=command,
                 run=resumed,
                 initial_state=state,
                 created=True,

@@ -763,6 +763,9 @@ class TaskService:
         self._delegation.delete_by_task_ids([task_id], session)
         # command.run_id 外键指向 run，必须先删 command 再删 run。
         self._command.delete_by_task_ids([task_id], session)
+        service_depends.get_terminal_session_service().delete_task_sessions(
+            [task_id], session
+        )
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
 

@@ -43,4 +43,5 @@ class TaskModel(StorageBase):
             "creation_command_id",
             unique=True,
         ),
+        {"sqlite_autoincrement": True},
     )

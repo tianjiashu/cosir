@@ -19,6 +19,7 @@ from app.storage.model.log_model import LogEntryModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.task_model import TaskModel
+from app.storage.model.terminal_session_model import TerminalSessionModel
 from app.storage.model.workspace_model import WorkspaceModel
 
 APP_MODELS = (
@@ -32,6 +33,7 @@ APP_MODELS = (
     ConversationTaskContextModel,
     FileSnapshotModel,
     DelegationModel,
+    TerminalSessionModel,
 )
 LOG_MODELS = (LogEntryModel,)
 
@@ -55,6 +57,7 @@ def initialize_app_schema(engine: Engine) -> None:
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
+    _ensure_tasks_sqlite_autoincrement(engine)
     _remove_legacy_checkpoint_unique_constraint(engine)
 
 
@@ -62,6 +65,71 @@ def _quote_sqlite_identifier(identifier: str) -> str:
     """引用一个由 schema 元数据提供的 SQLite 标识符。"""
 
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def _ensure_tasks_sqlite_autoincrement(engine: Engine) -> None:
+    """为历史 SQLite ``tasks`` 表补上不可复用的主键语义。
+
+    参数:
+        engine: 已初始化的主库 SQLAlchemy 引擎。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: SQLite 表重建或数据复制失败时抛出，事务由
+            SQLAlchemy 回滚。
+
+    副作用:
+        如果现有 ``tasks`` 表未声明 ``AUTOINCREMENT``，在本地写事务中按当前 ORM
+        metadata 重建该表并原样复制数据。该迁移不删除业务行；显式复制原主键会同步
+        SQLite 的 ``sqlite_sequence``，保证后续新任务不会复用已存在的最大 ID。
+    """
+
+    if engine.dialect.name != "sqlite":
+        return
+
+    table_name = TaskModel.__tablename__
+    with engine.connect() as connection:
+        table_sql = connection.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).scalar_one_or_none()
+        if not isinstance(table_sql, str) or "AUTOINCREMENT" in table_sql.upper():
+            return
+
+        legacy_table_name = f"{table_name}__legacy_autoincrement"
+        table = cast(Table, TaskModel.__table__)
+        columns = ", ".join(_quote_sqlite_identifier(column.name) for column in table.columns)
+        quoted_table = _quote_sqlite_identifier(table_name)
+        quoted_legacy_table = _quote_sqlite_identifier(legacy_table_name)
+
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.exec_driver_sql("PRAGMA legacy_alter_table=ON")
+        connection.commit()
+        try:
+            with connection.begin():
+                for index in inspect(connection).get_indexes(table_name):
+                    index_name = index.get("name")
+                    if index_name:
+                        connection.exec_driver_sql(
+                            f"DROP INDEX IF EXISTS {_quote_sqlite_identifier(index_name)}"
+                        )
+                connection.exec_driver_sql(
+                    f"ALTER TABLE {quoted_table} RENAME TO {quoted_legacy_table}"
+                )
+                table.create(bind=connection, checkfirst=False)
+                connection.exec_driver_sql(
+                    f"INSERT INTO {quoted_table} ({columns}) "  # noqa: S608 - identifiers come from internal SQLAlchemy metadata
+                    f"SELECT {columns} FROM {quoted_legacy_table}"
+                )
+                connection.exec_driver_sql(f"DROP TABLE {quoted_legacy_table}")
+                for index in table.indexes:
+                    index.create(bind=connection, checkfirst=True)
+        finally:
+            connection.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
 
 
 def _remove_legacy_checkpoint_unique_constraint(engine: Engine) -> None:

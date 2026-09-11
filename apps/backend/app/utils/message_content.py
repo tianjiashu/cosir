@@ -5,10 +5,10 @@
 （源码 capability.py:262-292）：只抽取字符串块与 ``type == "text"`` 的文本块，其它
 类型块（如 ``image_url``）一律忽略；``text`` 非字符串时跳过，避免 join 报错。
 
-两处旧实现（``chunk_assembler._extract_text`` / ``runtime_context_manager.
-_content_to_text``）口径不一致——后者不校验 ``type`` 会把多模态副文本混入落库，
-污染历史上下文。统一收口到此处后，未来若 LangChain 调整语义只需同步一处，
-或直接改用 ``BaseMessage.text`` 彻底删掉本模块（进一步零自研）。
+两处旧实现（``AIMessageChunk`` 抽取 / ``runtime_context_manager._content_to_text``）
+口径不一致——后者不校验 ``type`` 会把多模态副文本混入落库，污染历史上下文。统一收口到此处后，
+未来若 LangChain 调整语义只需同步一处，或直接改用 ``BaseMessage.text`` 彻底删掉本模块
+（进一步零自研）。
 """
 
 from typing import Any

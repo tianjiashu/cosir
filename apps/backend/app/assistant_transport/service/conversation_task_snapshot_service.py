@@ -10,7 +10,7 @@ from typing import Any, ClassVar, cast
 
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.event import RunStatusChangedEvent
+from app.assistant_transport.event import RunStatusChangedEvent, ToolCallsSettledEvent
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
@@ -125,9 +125,7 @@ class ConversationTaskSnapshotService:
         with self._lock:
             source = self._crud.get_in_session(session, source_task_id)
             if source is None:
-                raise SnapshotNotReadyError(
-                    f"snapshot for task {source_task_id} is not ready"
-                )
+                raise SnapshotNotReadyError(f"snapshot for task {source_task_id} is not ready")
             try:
                 state = copy.deepcopy(source)
                 validate_snapshot(state)
@@ -155,9 +153,7 @@ class ConversationTaskSnapshotService:
             self._crud.upsert_in_session(session, target_task_id, state)
             return copy.deepcopy(state)
 
-    def cache_committed_snapshot(
-        self, task_id: int, state: ConversationStateSnapshot
-    ) -> None:
+    def cache_committed_snapshot(self, task_id: int, state: ConversationStateSnapshot) -> None:
         """在 fork 事务提交后登记目标 snapshot 的进程缓存。"""
 
         with self._lock:
@@ -251,9 +247,7 @@ class ConversationTaskSnapshotService:
         for message in target_run["messages"]:
             if message["role"] == "user":
                 user_found = True
-                message["parts"] = [
-                    {"type": "text", "text": input_text, "status": "completed"}
-                ]
+                message["parts"] = [{"type": "text", "text": input_text, "status": "completed"}]
             else:
                 message["parts"] = []
         if not user_found:
@@ -282,8 +276,7 @@ class ConversationTaskSnapshotService:
         change = SnapshotChange(
             task_id,
             copy.deepcopy(state),
-            mutations
-            or (ConversationStateMutation("set", (), copy.deepcopy(state)),),
+            mutations or (ConversationStateMutation("set", (), copy.deepcopy(state)),),
         )
         with self._lock:
             self._publish(change)
@@ -357,35 +350,12 @@ class ConversationTaskSnapshotService:
         run_service = get_conversation_run_service()
         projector = get_conversation_event_projector()
         task_space = task_runtime_spaces.get_or_create(task_id)
+
         async def read_locked() -> ConversationStateSnapshot:
             """在已取得 Task 闸门后执行 snapshot recovery 读取。"""
 
             state: ConversationStateSnapshot = self.ensure_state_snapshot(task_id)
             runs = run_service.list_runs_for_task(task_id)
-            existing_context_manager = getattr(task_space, "existing_context_manager", None)
-            ensure_context_projection = getattr(
-                task_space, "ensure_context_usage_projection", None
-            )
-            if (
-                runs
-                and callable(existing_context_manager)
-                and existing_context_manager() is None
-                and callable(ensure_context_projection)
-            ):
-                latest_run = max(runs, key=lambda item: (item.created_at, item.id))
-                try:
-                    ensure_context_projection(latest_run)
-                    state = self.ensure_state_snapshot(task_id)
-                except Exception:
-                    # context reproject 是 snapshot 的恢复旁路；不能让能力目录或 context
-                    # 数据异常阻断用户读取已有对话，下一次真实 run 仍会重算。
-                    log.exception(
-                        "conversation_context_reproject_failed",
-                        extra={
-                            "msg": "backend 重启后的 context snapshot 重投影失败",
-                            "data": {"task_id": task_id, "run_id": latest_run.id},
-                        },
-                    )
             for run in runs:
                 snapshot_run = next(
                     (item for item in state["runs"] if item["runId"] == run.id),
@@ -413,7 +383,37 @@ class ConversationTaskSnapshotService:
                         )
                     )
                     state = self.ensure_state_snapshot(task_id)
-                    continue
+                if (
+                    run.status
+                    in {
+                        ConversationRunStatus.COMPLETED.value,
+                        ConversationRunStatus.FAILED.value,
+                        ConversationRunStatus.CANCELLED.value,
+                    }
+                    and snapshot_run is not None
+                    and _has_open_tool_calls(snapshot_run)
+                ):
+                    # A historical workflow can finish the Run after dropping its tool
+                    # observation result. Do not leave the Transport part spinning forever:
+                    # close the orphaned UI facts at the read boundary without replaying a
+                    # tool or changing the authoritative Run row.
+                    projector.process(
+                        ToolCallsSettledEvent(
+                            task_id=task_id,
+                            run_id=run.id,
+                            status=(
+                                "cancelled"
+                                if run.status == ConversationRunStatus.CANCELLED.value
+                                else "failed"
+                            ),
+                            reason="snapshot_reconciled_open_tool_calls",
+                        )
+                    )
+                    state = self.ensure_state_snapshot(task_id)
+                    snapshot_run = next(
+                        (item for item in state["runs"] if item["runId"] == run.id),
+                        None,
+                    )
                 if run.status not in {
                     ConversationRunStatus.PENDING.value,
                     ConversationRunStatus.RUNNING.value,
@@ -451,6 +451,20 @@ class ConversationTaskSnapshotService:
             return await read_locked()
         finally:
             task_space.lock.release()
+
+
+def _has_open_tool_calls(snapshot_run: dict[str, Any]) -> bool:
+    """判断终态 Run 的 snapshot 是否仍包含未收口工具 part。"""
+
+    return any(
+        isinstance(part, dict)
+        and part.get("type") == "tool-call"
+        and part.get("status") in {"pending", "running"}
+        for message in snapshot_run.get("messages", [])
+        if isinstance(message, dict)
+        for part in message.get("parts", [])
+    )
+
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
     """在 JSON state 上应用官方 set/append-text 操作。"""

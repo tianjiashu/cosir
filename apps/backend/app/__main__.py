@@ -22,6 +22,7 @@ from app.bootstate import (
     write_bootstate,
 )
 from app.config.logging.configuration import install_logging_for_current_process
+from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.service.depends import initialize_service_dependencies
 
@@ -45,7 +46,8 @@ def main() -> None:
 
     副作用:
         初始化 SQLite 存储引擎（含日志库 schema）；向 ``logs/logs-YYYY-MM-DD.log``
-        挂载文件日志处理器并向 SQLite 日志库挂载异步写入 handler；按需启动
+        挂载文件日志处理器并向 SQLite 日志库挂载异步写入 handler；同步系统代理
+        环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
         uvicorn 进程；按环境决定是否写入 ``storage/backend.bootstate.json``
         启动状态文件。
     """
@@ -69,7 +71,6 @@ def main() -> None:
             max_bytes=Settings.LOG_MAX_BYTES,
             backup_count=Settings.LOG_BACKUP_COUNT,
         )
-
         port = int(os.environ.get("CODING_AGENT_PORT", "8000"))
         reload_enabled = os.environ.get("CODING_AGENT_RELOAD", "true").lower() == "true"
         log_level = os.environ.get("CODING_AGENT_LOG_LEVEL", "info").lower()
@@ -80,6 +81,8 @@ def main() -> None:
             port=port,
             reload=reload_enabled,
             log_level=log_level,
+            ws_ping_interval=30,
+            ws_ping_timeout=90,
         )
     except Exception as exc:
         if boot_state_file is not None:

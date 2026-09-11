@@ -8,8 +8,10 @@
 全部收敛到 ``observe`` 节点做「工具结果观察处理」的单一收口（见 ``observation_node`` 与
 ``tool_call_lifecycle`` 的 ``ToolCallLifecycleManager``）。
 
-本节点产出经 ``tool_observation_summary`` 治理的可序列化摘要（``last_tool_results``）
-供 ``observe`` 消费；执行前取消分支（工具尚未执行、无结果可观察）仍保留在本节点，
+本节点产出可序列化摘要（``last_tool_results``，即本批 ``ToolObservation`` 的
+``dataclasses.asdict`` 投影，键名与执行层字段一致，含 ``tool_call_id`` /
+``display_data``）供 ``observe`` 消费；执行前取消分支（工具尚未执行、无结果可观察）
+仍保留在本节点，
 仅收口取消事件并落定取消终态；业务恢复 checkpoint 时本节点跳过旧工具批次，随后由
 ``model_node.load_message`` 统一闭合未完成调用。与模型节点共享的运行时原语见
 ``common``。
@@ -20,7 +22,7 @@ import dataclasses
 
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
-from app.core.tools.schemas import ToolCall, ToolObservation
+from app.core.tools.schemas import ToolCall
 from app.core.workflows.nodes.helper.common import _runtime_config
 
 from ..react.state import ReactGraphState
@@ -43,9 +45,10 @@ async def _tools_node(state: ReactGraphState) -> dict:
         state: 当前 graph state，含待执行工具调用。
 
     返回:
-        需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具结果
-        治理摘要（经 ``build_tool_result_summaries`` 脱敏、截断并携带预算后的 UI data，
-        可落 checkpoint，供 ``observe`` 节点分发与判定），并清空 ``pending_tool_calls``；
+        需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具观察的
+        ``dataclasses.asdict`` 投影（键名即执行层字段名 ``tool_call_id`` /
+        ``display_data``，可落 checkpoint，供 ``observe`` 节点分发与判定），
+        并清空 ``pending_tool_calls``；
         业务恢复时跳过 checkpoint 中的旧工具调用，返回空摘要并置 ``terminal=False``，让
         ``observe`` 把 Agent 推回下一轮推理；执行前取消分支置 ``terminal=True`` 且返回空摘要——
         因为 ``_after_tools`` 在
@@ -170,11 +173,10 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     return {
         "pending_tool_calls": {},  # 清空待执行工具调用
-        "last_tool_results": {
-            "instruction": instruction or "",
-            "observations": [
-                dataclasses.asdict(observation) for observation in observations
-            ],
-            "expected_call_ids": [call.call_id for call in approved_calls],
-        },
+        "last_tool_results":
+            {
+                "instruction": instruction or "",
+                "observations": [dataclasses.asdict(observation) for observation in observations],
+                "expected_call_ids": [call.call_id for call in approved_calls],
+            },
     }

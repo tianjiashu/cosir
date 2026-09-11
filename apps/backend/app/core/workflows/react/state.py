@@ -42,9 +42,10 @@ class ReactGraphState(BaseModel):
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
             写默认失败说明。
-        last_tool_results: 本批工具结果摘要（可序列化 dict，content 与 UI data 均已由执行层
-            预算治理）。tools 节点写；observe 节点做事件分发、错误计数与错误上限判定，
-            其中 UI data 不会进入模型消息。
+        last_tool_results: 本批工具结果摘要（可序列化 dict，由 tools 节点对本批
+            ``ToolObservation`` 做 ``dataclasses.asdict`` 投影，键名即执行层字段名
+            ``tool_call_id`` / ``display_data``）。tools 节点写；observe 节点做事件分发、
+            错误计数与错误上限判定，其中 ``display_data`` 不会进入模型消息。
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
             节点写入创建/运行状态，tools 节点写入执行前取消，observe 节点写入终态；不含
             operations、stream writer 或 runtime context。

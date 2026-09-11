@@ -36,11 +36,56 @@ class ConversationCommandCrud:
         return None if row is None else ConversationCommandRecord.from_model(row)
 
     def get_by_run(self, run_id: int) -> ConversationCommandRecord | None:
-        """按运行标识读取绑定命令。"""
+        """按运行标识读取该 run **最近一次**提交的命令。
+
+        一个 Conversation Run 可以绑定多条命令：``new`` 建 run 时写一条，之后每次
+        「编辑重跑」（``edit``）都会再写一条并复用同一 ``run_id``——``conversation_commands``
+        只对 ``(task_id, command_id)`` 唯一，``run_id`` 是普通索引。因此本方法按主键倒序取
+        最近一条，语义是「这条 run 最后是被哪次提交驱动的」；不能用单行断言读取，否则多命令
+        run 会抛 ``MultipleResultsFound``。
+
+        参数:
+            run_id: 目标 Conversation Run 标识。
+
+        返回:
+            该 run 最近提交的命令记录；没有任何命令绑定时返回 ``None``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询失败。
+
+        副作用:
+            无（只读查询）。
+        """
         with self._session_factory() as session:
-            row = session.execute(
-                select(ConversationCommandModel).where(ConversationCommandModel.run_id == run_id)
-            ).scalar_one_or_none()
+            return self.get_by_run_in_session(session, run_id)
+
+    @staticmethod
+    def get_by_run_in_session(
+        session: Session, run_id: int
+    ) -> ConversationCommandRecord | None:
+        """在调用方事务内读取该 run 最近一次提交的命令。
+
+        与 :meth:`get_by_run` 同语义，供需要把「读取命令」纳入同一事务的调用方使用。
+
+        参数:
+            session: 调用方持有的数据库事务会话。
+            run_id: 目标 Conversation Run 标识。
+
+        返回:
+            该 run 最近提交的命令记录；没有任何命令绑定时返回 ``None``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询失败。
+
+        副作用:
+            仅在当前事务内执行只读查询。
+        """
+        row = session.execute(
+            select(ConversationCommandModel)
+            .where(ConversationCommandModel.run_id == run_id)
+            .order_by(ConversationCommandModel.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
         return None if row is None else ConversationCommandRecord.from_model(row)
 
     @staticmethod

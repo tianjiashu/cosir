@@ -51,6 +51,7 @@ from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_run_service,
     get_delegation_service,
+    get_terminal_session_service,
     initialize_service_dependencies,
     set_runtime,
 )
@@ -81,8 +82,9 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         无。Runtime 内部会记录关闭失败。
 
     副作用:
-        关闭 SQLite 存储等运行时资源（经 ``close_storage``）；Runtime 本身不持有需显式
-        释放的资源，故无需对其调用 close。
+        启动早期同步系统代理环境变量到当前进程；关闭 SQLite 存储等运行时资源
+        （经 ``close_storage``）；Terminal Worker 由 ``TerminalSessionService`` 在 SQLite
+        关闭前统一清理。
     """
 
     # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）初始化存储并配置日志。
@@ -112,6 +114,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             },
         )
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
+    get_terminal_session_service().initialize()
 
     # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
     # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
@@ -147,6 +150,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         if _kernel_supervisor is not None:
             _kernel_supervisor.shutdown()
         await get_conversation_run_executor().close()
+        await asyncio.to_thread(get_terminal_session_service().shutdown)
         flush_langfuse()
         close_service_dependencies()
         # 模型 HTTP 连接由 litellm 内部管理，无需进程级显式释放。
@@ -191,6 +195,7 @@ importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")
+importlib.import_module("app.api.terminal_api")
 importlib.import_module("app.assistant_transport.assistant_api")
 
 

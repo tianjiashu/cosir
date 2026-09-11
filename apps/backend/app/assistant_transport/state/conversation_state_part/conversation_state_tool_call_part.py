@@ -25,6 +25,6 @@ class ConversationStateToolCallPart(TypedDict):
     args: NotRequired[dict[str, object]]
     error: NotRequired[str | None]
     presentation: NotRequired[dict[str, object]]
-    data: NotRequired[dict[str, object] | None]
+    display_data: NotRequired[dict[str, object] | None]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]

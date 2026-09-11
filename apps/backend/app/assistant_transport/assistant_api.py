@@ -105,11 +105,24 @@ async def assistant_transport(
                     execution_mode=start_result.execution_mode,
                 ),
             )
-        except Exception as exc:
-            log.exception(
+        except ValueError as exc:
+            # 该 run 在进程内已被认领（仍在执行或取消尚未收束）：本请求退化为纯订阅。
+            # 此处不能收敛 run——它确实有执行器在驱动，收敛会误杀别人的执行。
+            log.warning(
                 "assistant_transport_executor_already_claimed",
                 extra={
                     "msg": "执行器已被其他请求认领，本请求退化为纯订阅",
+                    "data": {"run_id": run.id, "task_id": task_id, "reason": str(exc)},
+                },
+            )
+        except Exception as exc:
+            # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
+            # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
+            transport_service.settle_run_start_failure(run.id)
+            log.exception(
+                "assistant_transport_executor_start_failed",
+                extra={
+                    "msg": "执行器启动失败，已尝试收敛该 run",
                     "data": {"run_id": run.id, "task_id": task_id},
                 },
             )
@@ -117,7 +130,7 @@ async def assistant_transport(
                 500,
                 "RUN_START_FAILED",
                 str(exc),
-                retryable=False,
+                retryable=True,
                 command_id=command.commandId if command is not None else None,
                 run_id=request.runId,
             )

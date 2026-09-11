@@ -78,6 +78,59 @@ class TransportAssistantService:
         response.headers["X-Cosir-Thread-Id"] = thread_id
         return response
 
+    def settle_run_start_failure(
+        self, run_id: int, *, end_reason: str = "run_start_failed"
+    ) -> None:
+        """收敛「执行器启动失败但仍处于 active」的 run。
+
+        run 在 ``prepare_run_start`` 阶段已被置为 active；若随后执行器启动失败，就只剩一个
+        没有任何执行器驱动的 active run——该 task 之后既无法再发新消息（``already has an
+        active run``），也无法 resume（状态不是 ``cancelled``）。本方法把该 run 条件收敛为
+        ``cancelled``，把「重试入口」还给用户。
+
+        参数:
+            run_id: 启动失败的 Conversation Run 标识。
+            end_reason: 写入持久化事实的收敛原因，默认 ``run_start_failed``。
+
+        返回:
+            无。
+
+        异常:
+            无。收敛本身失败只记录 error 日志并由调用方继续抛出原始启动异常，不覆盖根因。
+
+        副作用:
+            条件更新 run 状态为 cancelled 并发布对应状态变更事件；run 已不是 active 时不做
+            任何写入。
+        """
+
+        try:
+            settled = self._runs.cancel_run_if_running(run_id, end_reason=end_reason)
+        except Exception:
+            log.exception(
+                "run_start_failure_settle_failed",
+                extra={
+                    "msg": "启动失败后收敛 run 失败，该 run 可能残留为 active",
+                    "data": {"run_id": run_id, "end_reason": end_reason},
+                },
+            )
+            return
+        if settled is None:
+            log.info(
+                "run_start_failure_settle_skipped",
+                extra={
+                    "msg": "启动失败的 run 已由其它路径落定终态，无需收敛",
+                    "data": {"run_id": run_id, "end_reason": end_reason},
+                },
+            )
+            return
+        log.warning(
+            "run_start_failure_settled",
+            extra={
+                "msg": "执行器未能启动，已将 run 收敛为 cancelled",
+                "data": {"run_id": run_id, "end_reason": end_reason},
+            },
+        )
+
     @staticmethod
     def classify_run_command(
         command: AddMessageCommand | None,

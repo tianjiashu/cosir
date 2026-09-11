@@ -14,17 +14,15 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from app.config.logging.logger import log
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
 from app.core.context.context_listener.context_usage_compute_listener import (
     ContextUsageComputeListener,
 )
-from app.service.depends import get_task_service
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
     from app.core.context.runtime_context_manager import RuntimeContextManager
-    from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+    from app.models import TaskRecord, WorkspaceRecord
 
 
 @dataclass
@@ -166,51 +164,6 @@ class TaskRuntimeSpace:
                 )
             self._context_manager = manager
             return manager
-
-    def ensure_context_usage_projection(self, run: ConversationRunRecord) -> bool:
-        """在本进程首次读取 Task 时重算并投影已持久化 context 占用。"""
-
-        with self._context_guard:
-            if self._context_manager is not None:
-                return False
-
-        from app.config.configuration import get_agent_registry
-        from app.service.depends import get_workspace_service
-
-        task = get_task_service().get_task(run.task_id)
-        workspace = get_workspace_service().get_workspace(task.workspace_id)
-        profile = get_agent_registry().resolve(run.agent_id or "main_agent")
-        if profile is None:
-            log.warning(
-                "context_usage_projection_skipped",
-                extra={
-                    "msg": "无法解析 context 重投影所需的 agent profile",
-                    "data": {"task_id": run.task_id, "run_id": run.id},
-                },
-            )
-            return False
-        manager = self.get_context_manager(
-            agent_profile=profile,
-            current_workspace=workspace,
-            current_task=task,
-        )
-        manager.reproject_context_usage(run)
-        return True
-
-    def _update_task_context_usage(self, task_id: int, used: int) -> None:
-        """以旁路方式更新 task 上下文占用，失败只记录日志。"""
-
-        try:
-            get_task_service().update_context_usage(task_id, used)
-        except Exception as exc:
-            log.error(
-                "context_usage_task_update_failed",
-                extra={
-                    "msg": "context usage write-back failed",
-                    "data": {"task_id": task_id, "used": used, "error": str(exc)},
-                },
-                exc_info=True,
-            )
 
     def existing_context_manager(self) -> RuntimeContextManager | None:
         """返回已物化的 context manager；不因查询而触发懒加载。"""

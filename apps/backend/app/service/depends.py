@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     )
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
     from app.service.task.workspace_service import WorkspaceService
+    from app.service.terminal.terminal_session_service import TerminalSessionService
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -134,6 +135,13 @@ def close_service_dependencies() -> None:
     from app.storage.store_engines import close_storage
     from app.task_runtime.workspace_operation_registry import workspace_operations
 
+    terminal_service = (
+        get_terminal_session_service()
+        if get_terminal_session_service.cache_info().currsize
+        else None
+    )
+    if terminal_service is not None:
+        terminal_service.shutdown()
     reset_service_dependencies()
     workspace_operations.close()
     close_storage()
@@ -249,6 +257,16 @@ def get_delegation_service() -> DelegationService:
     return DelegationService(
         delegation_crud=get_delegation_crud(),
     )
+
+
+@lru_cache(maxsize=1)
+def get_terminal_session_service() -> TerminalSessionService:
+    """返回进程级 terminal session service 单例。"""
+
+    from app.service.terminal.terminal_session_service import TerminalSessionService
+    from app.storage.crud.terminal_session_crud import TerminalSessionCrud
+
+    return TerminalSessionService(crud=TerminalSessionCrud())
 
 
 @lru_cache(maxsize=1)
@@ -605,3 +623,4 @@ def reset_service_dependencies() -> None:
     get_conversation_task_context_service.cache_clear()
     get_provider_service.cache_clear()
     get_model_entry_service.cache_clear()
+    get_terminal_session_service.cache_clear()
