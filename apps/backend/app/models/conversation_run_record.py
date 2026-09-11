@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-from app.models.json_helpers import deserialize_json_object, serialize_json_object
+from app.models.json_helpers import (
+    ConversationRunError,
+    deserialize_json_object,
+    deserialize_run_error,
+    serialize_json_object,
+    serialize_run_error,
+)
 from app.utils.datetime_utils import from_text, to_text
 
 if TYPE_CHECKING:
@@ -40,10 +46,15 @@ def _validate_usage(value: object) -> ConversationRunUsage:
             "cache_hit_tokens, cache_miss_tokens, and reasoning_tokens"
         )
     for key, token_count in value.items():
+        if token_count is None and key != "cache_miss_tokens":
+            raise TypeError(f"usage.{key} must be a non-negative integer")
         if token_count is not None and (
             isinstance(token_count, bool) or not isinstance(token_count, int) or token_count < 0
         ):
-            raise TypeError(f"usage.{key} must be a non-negative integer or null")
+            raise TypeError(
+                f"usage.{key} must be a non-negative integer"
+                + (" or null" if key == "cache_miss_tokens" else "")
+            )
     return value  # type: ignore[return-value]
 
 
@@ -84,7 +95,7 @@ class ConversationRunRecord:
     reasoning_effort: str | None = None
     extra: dict[str, Any] | None = None
     usage: ConversationRunUsage | None = None
-    error: dict[str, Any] | None = None
+    error: ConversationRunError | None = None
 
     def to_dict(self) -> dict[str, object]:
         """将轮次状态转换为可序列化为 JSON 的字典。
@@ -157,7 +168,7 @@ class ConversationRunRecord:
             extra=row.extra,
             usage=deserialize_run_usage(row.usage_json),
             error=(
-                deserialize_json_object(row.error_json, "error")
+                deserialize_run_error(row.error_json)
                 if row.error_json is not None
                 else None
             ),
@@ -183,7 +194,7 @@ class ConversationRunRecord:
             "extra": self.extra,
             "usage_json": serialize_run_usage(self.usage),
             "error_json": (
-                serialize_json_object(self.error, "error") if self.error is not None else None
+                serialize_run_error(self.error) if self.error is not None else None
             ),
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),

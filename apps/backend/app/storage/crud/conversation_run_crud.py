@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.models import ConversationRunRecord
 from app.models.conversation_run_record import ConversationRunUsage, serialize_run_usage
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.models.json_helpers import serialize_json_object
+from app.models.json_helpers import ConversationRunError, serialize_run_error
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text
@@ -63,7 +63,7 @@ class ConversationRunCrud:
         reasoning_effort: str | None = None,
         extra: dict[str, Any] | None = None,
         usage: ConversationRunUsage | None = None,
-        error: dict[str, Any] | None = None,
+        error: ConversationRunError | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord:
         """新建一条 run 记录并落库。
@@ -143,7 +143,7 @@ class ConversationRunCrud:
         reasoning_effort: str | None,
         extra: dict[str, Any] | None,
         usage: ConversationRunUsage | None,
-        error: dict[str, Any] | None,
+        error: ConversationRunError | None,
     ) -> ConversationRunRecord:
         """在给定 session 内插入 run 行并 flush 取回自增 id。
 
@@ -179,7 +179,7 @@ class ConversationRunCrud:
             reasoning_effort=reasoning_effort,
             extra=extra,
             usage_json=serialize_run_usage(usage),
-            error_json=serialize_json_object(error, "error") if error is not None else None,
+            error_json=serialize_run_error(error) if error is not None else None,
         )
         session.add(model)
         session.flush()
@@ -258,7 +258,7 @@ class ConversationRunCrud:
             extra=copy.deepcopy(source.extra),
             usage_json=serialize_run_usage(copy.deepcopy(source.usage)),
             error_json=(
-                serialize_json_object(copy.deepcopy(source.error), "error")
+                serialize_run_error(copy.deepcopy(source.error))
                 if source.error is not None
                 else None
             ),

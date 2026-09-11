@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
 
 from langchain_core.messages import BaseMessage, _message_from_dict, message_to_dict
 
-from app.models.json_helpers import deserialize_json_object, serialize_json_object
+from app.models.json_helpers import (
+    TransportMetadata,
+    deserialize_transport_metadata,
+    empty_transport_metadata,
+    serialize_transport_metadata,
+)
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 
 
@@ -19,7 +23,7 @@ class ConversationTaskContextRecord:
     message: BaseMessage
     include_in_context: bool
     sequence: int
-    transport_metadata: dict[str, Any] = field(default_factory=dict)
+    transport_metadata: TransportMetadata = field(default_factory=empty_transport_metadata)
     message_schema_version: int = 1
     id: int | None = None
 
@@ -37,8 +41,8 @@ class ConversationTaskContextRecord:
         异常:
             json.JSONDecodeError: ``message_json`` 不是合法 JSON。
             KeyError: ``message_json`` 反序列化结果不是 ``message_to_dict`` 约定结构。
-            TypeError: ``transport_metadata_json`` 不是 JSON 文本。
-            ValueError: ``transport_metadata_json`` 不是 JSON object。
+            TypeError: ``transport_metadata_json`` 不是 JSON 文本或 metadata 含非法值。
+            ValueError: ``transport_metadata_json`` 不符合 typed metadata 契约。
 
         副作用:
             无副作用；纯映射。
@@ -52,9 +56,7 @@ class ConversationTaskContextRecord:
             message=_message_from_dict(message_doc),
             include_in_context=model.include_in_context,
             sequence=model.sequence,
-            transport_metadata=deserialize_json_object(
-                model.transport_metadata_json, "transport_metadata"
-            ),
+            transport_metadata=deserialize_transport_metadata(model.transport_metadata_json),
             message_schema_version=model.message_schema_version,
         )
 
@@ -69,7 +71,7 @@ class ConversationTaskContextRecord:
 
         异常:
             TypeError: ``message`` 无法被 ``message_to_dict`` 序列化。
-            TypeError: ``transport_metadata`` 无法编码为 JSON object。
+            TypeError: ``transport_metadata`` 无法编码为 typed JSON metadata。
 
         副作用:
             无副作用；纯映射。
@@ -80,9 +82,7 @@ class ConversationTaskContextRecord:
             task_id=self.task_id,
             run_id=self.run_id,
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
-            transport_metadata_json=serialize_json_object(
-                self.transport_metadata, "transport_metadata"
-            ),
+            transport_metadata_json=serialize_transport_metadata(self.transport_metadata),
             message_schema_version=self.message_schema_version,
             include_in_context=self.include_in_context,
             sequence=self.sequence,

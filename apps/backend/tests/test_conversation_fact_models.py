@@ -3,13 +3,15 @@ from datetime import UTC, datetime
 
 import pytest
 from langchain_core.messages import HumanMessage
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session
 
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
+from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
+from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.init_schema import initialize_app_schema
 from app.storage.model.base import StorageBase
@@ -22,6 +24,11 @@ def _timestamp() -> datetime:
 
 
 def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None:
+    metadata = {
+        "schema_version": 1,
+        "parts": [{"type": "text", "text": "hello", "status": "completed"}],
+        "tool_result": None,
+    }
     record = ConversationTaskContextRecord(
         task_id=7,
         run_id=11,
@@ -29,7 +36,7 @@ def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None
         include_in_context=True,
         sequence=3,
         id=41,
-        transport_metadata={"parts": [{"type": "text"}]},
+        transport_metadata=metadata,
         message_schema_version=2,
     )
 
@@ -39,9 +46,9 @@ def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None
     assert model.id == 41
     assert restored.id == 41
     assert restored.message == record.message
-    assert restored.transport_metadata == {"parts": [{"type": "text"}]}
+    assert restored.transport_metadata == metadata
     assert restored.message_schema_version == 2
-    assert json.loads(model.transport_metadata_json) == {"parts": [{"type": "text"}]}
+    assert json.loads(model.transport_metadata_json) == metadata
 
 
 def test_context_record_rejects_non_object_metadata_json() -> None:
@@ -59,6 +66,45 @@ def test_context_record_rejects_non_object_metadata_json() -> None:
         ConversationTaskContextRecord._from_model(model)
 
 
+@pytest.mark.parametrize(
+    "metadata_json",
+    [
+        "{}",
+        json.dumps({"schema_version": 1, "parts": []}),
+        json.dumps({"schema_version": "1", "parts": [], "tool_result": None}),
+        json.dumps({"schema_version": 1, "parts": [{"type": "text"}], "tool_result": None}),
+    ],
+)
+def test_context_record_rejects_malformed_metadata_shapes(metadata_json: str) -> None:
+    model = ConversationTaskContextModel(
+        task_id=7,
+        run_id=11,
+        message_json=json.dumps({"type": "human", "data": {"content": "hello"}}),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata_json=metadata_json,
+        message_schema_version=1,
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        ConversationTaskContextRecord._from_model(model)
+
+
+def test_context_record_rejects_malformed_metadata_json() -> None:
+    model = ConversationTaskContextModel(
+        task_id=7,
+        run_id=11,
+        message_json=json.dumps({"type": "human", "data": {"content": "hello"}}),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata_json="{not-json",
+        message_schema_version=1,
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        ConversationTaskContextRecord._from_model(model)
+
+
 def test_run_record_round_trips_usage_and_error() -> None:
     usage = {
         "input_tokens": 10,
@@ -68,7 +114,7 @@ def test_run_record_round_trips_usage_and_error() -> None:
         "cache_miss_tokens": 8,
         "reasoning_tokens": 1,
     }
-    error = {"code": "provider_error", "retryable": True}
+    error = {"code": "provider_error", "message": "provider unavailable", "retryable": True}
     record = ConversationRunRecord(
         id=11,
         task_id=7,
@@ -108,7 +154,7 @@ def test_run_crud_clone_preserves_usage_and_error() -> None:
         updated_at=_timestamp(),
         checkpoint_thread_id="thread-11",
         usage=usage,
-        error={"code": "provider_error"},
+        error={"code": "provider_error", "message": "provider unavailable", "retryable": True},
     )
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
@@ -118,7 +164,129 @@ def test_run_crud_clone_preserves_usage_and_error() -> None:
 
         assert cloned.task_id == 8
         assert cloned.usage == usage
-        assert cloned.error == {"code": "provider_error"}
+        assert cloned.error == {
+            "code": "provider_error",
+            "message": "provider unavailable",
+            "retryable": True,
+        }
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "nullable_field",
+    [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_hit_tokens",
+        "reasoning_tokens",
+    ],
+)
+def test_run_usage_rejects_null_for_non_cache_miss_fields(nullable_field: str) -> None:
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "total_tokens": 14,
+        "cache_hit_tokens": 2,
+        "cache_miss_tokens": 8,
+        "reasoning_tokens": 1,
+    }
+    usage[nullable_field] = None
+    record = ConversationRunRecord(
+        id=11,
+        task_id=7,
+        input_text="run input",
+        status="completed",
+        created_at=_timestamp(),
+        updated_at=_timestamp(),
+        checkpoint_thread_id="thread-11",
+        usage=usage,
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record.to_model()
+
+
+@pytest.mark.parametrize("field", ["provider_response", "stack", "prompt"])
+def test_run_error_rejects_uncontrolled_fields(field: str) -> None:
+    error = {
+        "code": "provider_error",
+        "message": "provider unavailable",
+        "retryable": True,
+        field: {"secret": "must not persist"},
+    }
+    record = ConversationRunRecord(
+        id=11,
+        task_id=7,
+        input_text="run input",
+        status="failed",
+        created_at=_timestamp(),
+        updated_at=_timestamp(),
+        checkpoint_thread_id="thread-11",
+        error=error,
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record.to_model()
+
+
+def test_run_error_rejects_malformed_json() -> None:
+    model = ConversationRunRecord(
+        id=11,
+        task_id=7,
+        input_text="run input",
+        status="failed",
+        created_at=_timestamp(),
+        updated_at=_timestamp(),
+        checkpoint_thread_id="thread-11",
+    ).to_model()
+    model.error_json = "{not-json"
+
+    with pytest.raises((TypeError, ValueError)):
+        ConversationRunRecord.from_model(model)
+
+
+def test_context_clone_copies_transport_fields_to_real_row() -> None:
+    metadata = {
+        "schema_version": 1,
+        "parts": [{"type": "text", "text": "source", "status": "completed"}],
+        "tool_result": None,
+    }
+    engine = create_engine("sqlite://")
+    StorageBase.metadata.create_all(engine)
+    try:
+        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+        service = ConversationTaskContextService.__new__(ConversationTaskContextService)
+        service._crud = crud
+        with Session(engine) as session:
+            session.add(
+                ConversationTaskContextModel(
+                    id=41,
+                    task_id=7,
+                    run_id=11,
+                    message_json=json.dumps(
+                        {"type": "human", "data": {"content": "source"}}
+                    ),
+                    include_in_context=True,
+                    sequence=3,
+                    transport_metadata_json=json.dumps(metadata),
+                    message_schema_version=2,
+                )
+            )
+            session.flush()
+
+            service.clone_for_fork(7, 8, {11: 22}, session)
+            cloned_row = session.scalar(
+                select(ConversationTaskContextModel).where(
+                    ConversationTaskContextModel.task_id == 8
+                )
+            )
+
+            assert cloned_row is not None
+            assert cloned_row.run_id == 22
+            assert json.loads(cloned_row.transport_metadata_json) == metadata
+            assert cloned_row.message_schema_version == 2
     finally:
         engine.dispose()
 

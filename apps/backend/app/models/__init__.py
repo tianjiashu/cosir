@@ -5,7 +5,11 @@ model，文件名与 model 相关。不承载服务、适配或 helper 逻辑。
 """
 
 from app.models.conversation_command_record import ConversationCommandRecord
-from app.models.conversation_run_record import ConversationRunRecord, ConversationRunUsage
+from app.models.conversation_run_record import (
+    ConversationRunError,
+    ConversationRunRecord,
+    ConversationRunUsage,
+)
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.log_entry_record import LogEntryRecord
 from app.models.log_query import LogQuery, LogSortOrder
@@ -20,6 +24,7 @@ from app.models.workspace_record import WorkspaceRecord
 __all__ = [
     "ConversationCommandRecord",
     "ConversationRunRecord",
+    "ConversationRunError",
     "ConversationRunStatus",
     "ConversationRunUsage",
     "LogEntryRecord",
