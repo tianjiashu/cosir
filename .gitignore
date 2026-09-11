@@ -34,9 +34,12 @@ apps/backend/.env.local
 # CodeGraph 锁定 node 运行时（随应用分发，不提交仓库）
 apps/backend/.workspace_payload-node/
 
-# Tauri 生成产物
+# Tauri 生成产物（gen/ 仍按 crate 相对路径生成）
 apps/desktop/src-tauri/gen/
-apps/desktop/src-tauri/target/
+# 统一 Rust 构建产物目录（由仓库根 .cargo/config.toml 的 target-dir 指定）
+/target/
+# Tauri bundle staging（由 build:bundle 按当前平台生成）
+apps/desktop/src-tauri/resources/terminal-worker/
 
 # 临时调试脚本（环境可能重建为空文件，避免误提交）
 apps/backend/tests/_tmp_*.py
@@ -109,3 +112,4 @@ temp_gen_out.txt
 # 本地 IDE 配置（Trae）
 .trae/
 /.uv-cache/
+/.tauri-target-terminal/

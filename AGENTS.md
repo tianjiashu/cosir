@@ -125,6 +125,15 @@ Tauri 桌面应用
 - CodeGraph 分为两层：`codegraph/` 负责 Kernel 子进程、RPC、握手、健康、有限重启和关闭；`CodeGraphLifecycleService` 负责 workspace index 的初始化、同步、singleflight 和降级。工具与 Hook 只消费 client，不直接管理 Kernel。
 - provider/model 配置是数据库事实，由 provider service 管理；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
 - Observability 是可降级旁路。workflow/service 通过窄接口记录 trace，不直接依赖具体观测实现；初始化、记录或 flush 失败不得改变 Run 结果。
+- RuntimeContextManager 是agent上下文唯一管理事实源，负责系统提示词构建、上下文修复加载、run续跑/恢复的上下文管理、上下文压缩（未实现）、上下文token计算、上下文序列管理、模型消息存储和持久化。
+    - ContextEntry 作为上下文消息单位，记录消息的run_id、message、sequence。
+- context 和 snapshot不需要事务保持强一致性，只需要在读取的时候，保持最终一致性即可
+
+
+### 架构取舍
+
+context和snapshot允许不一致。比如，AI说：好，我来看看... 。还没完整message，这个时候无需保持一致，允许context有一定滞后。
+context是由app/core/context/runtime_context_manager.py维护，ConversationEventProjector和ConversationTaskSnapshotService仅维护快照
 
 ## 代码目录边界
 
@@ -153,4 +162,4 @@ Tauri 桌面应用
 - 涉及生命周期时的初始化、关闭、取消、重试或恢复条件；
 - 涉及边界转换时，从输入契约到输出契约的转换规则。
 
-docstring 必须随代码事实更新；算法、字段和短期实现细节只在确有必要时进入对应源码 docstring 或测试契约。
+docstring 必须随代码事实更新；算法、字
