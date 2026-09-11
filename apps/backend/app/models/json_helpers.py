@@ -115,11 +115,16 @@ def deserialize_json_object(raw: str, field_name: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def serialize_transport_metadata(value: TransportMetadata) -> str:
-    """Serialize the exact context transport metadata contract."""
+def serialize_transport_metadata(value: object) -> str:
+    """Normalize wire metadata, then serialize the exact persisted contract.
+
+    Canonical context writers must use this API (or call
+    :func:`normalize_transport_metadata` explicitly) before persistence. It fills only
+    omitted wire tool-call fields; explicit ``None`` and wrong types remain errors.
+    """
 
     return serialize_json_object(
-        cast(dict[str, Any], _validate_transport_metadata(value)), "transport_metadata"
+        cast(dict[str, Any], normalize_transport_metadata(value)), "transport_metadata"
     )
 
 
@@ -145,6 +150,35 @@ def empty_transport_metadata() -> TransportMetadata:
     """Return the valid empty metadata baseline for a new context row."""
 
     return {"schema_version": 1, "parts": [], "tool_result": None}
+
+
+def normalize_transport_metadata(value: object) -> TransportMetadata:
+    """Convert optional wire tool-call fields to explicit persisted defaults.
+
+    ``args``, ``presentation`` and ``isError`` may be omitted by the Assistant
+    Transport wire event. Persistence requires them, so omitted values become ``{}``,
+    ``{}`` and ``False`` respectively. The input is copied; explicit nulls, wrong
+    types, unknown fields and all other structural errors are rejected by the strict
+    validator instead of being silently repaired.
+    """
+
+    if not isinstance(value, dict):
+        raise TypeError("transport_metadata must be a JSON object")
+    normalized = dict(value)
+    parts = value.get("parts")
+    if isinstance(parts, list):
+        normalized_parts: list[object] = []
+        for part in parts:
+            if isinstance(part, dict) and part.get("type") == "tool-call":
+                normalized_part = dict(part)
+                normalized_part.setdefault("args", {})
+                normalized_part.setdefault("presentation", {})
+                normalized_part.setdefault("isError", False)
+                normalized_parts.append(normalized_part)
+            else:
+                normalized_parts.append(part)
+        normalized["parts"] = normalized_parts
+    return _validate_transport_metadata(normalized)
 
 
 def _validate_transport_metadata(value: object) -> TransportMetadata:

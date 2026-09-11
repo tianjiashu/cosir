@@ -184,3 +184,46 @@ $env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_
 结果：`46 passed in 0.78s`；指定文件 Ruff 检查结果为 `All checks passed!`。
 
 本轮仍未修改 Task 4 snapshot cleanup，未恢复 `conversation_task_snapshots` 表。
+
+## 第 3 轮复核修复（wire metadata persistence normalization）
+
+### 修改文件
+
+- `apps/backend/app/models/json_helpers.py`
+  - 新增 `normalize_transport_metadata()` persistence normalization helper：只为 wire tool-call 中缺省的 `args`、`presentation`、`isError` 填充 `{}`、`{}`、`False`，然后进入既有严格校验。
+  - `serialize_transport_metadata()` 委托该 helper，作为 canonical context writer 的持久化入口；显式 null、错误类型、未知字段不会被默认值掩盖。
+- `apps/backend/tests/test_conversation_fact_models.py`
+  - 增加缺省 tool-call 字段可被规范化并以明确 persisted row JSON 落库的测试；保留并覆盖显式 null/错误类型拒绝测试。
+
+接口约束：Task 3 canonical writer 必须调用 `normalize_transport_metadata()` 后再落库，或统一调用会委托该 helper 的 `serialize_transport_metadata()`；不得直接把 wire event 原字典写入 `transport_metadata_json`。本轮未修改 Assistant Transport wire schema。
+
+### 第 3 轮 TDD 证据
+
+RED 命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py -q -k "normalizes_wire_tool_call_defaults or wrong_type_for_required_tool_part_fields" --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round3-red'
+```
+
+结果：`1 failed, 3 passed, 38 deselected in 0.91s`。缺省 wire tool-call 因 persisted contract 要求字段齐全而失败；错误类型拒绝行为保持有效。
+
+GREEN 命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py -q --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round3-green'
+```
+
+结果：`42 passed in 0.63s`。
+
+相关回归命令：
+
+```text
+cd apps/backend
+$env:PYTHONPATH='.'; .venv/Scripts/python.exe -m pytest tests/test_conversation_fact_models.py tests/test_sqlite_schema.py tests/test_context_usage_compute_listener.py tests/test_conversation_run_usage_stats.py -q --basetemp='H:\\coding-agent\\apps\\backend\\.pytest-task1-round3-related'
+```
+
+结果：`50 passed in 0.84s`；指定文件 Ruff 检查结果为 `All checks passed!`。
+
+本轮仍未处理 Task 4 snapshot cleanup，未恢复 `conversation_task_snapshots` 表。

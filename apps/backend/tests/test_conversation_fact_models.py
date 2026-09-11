@@ -139,6 +139,77 @@ def test_context_metadata_rejects_null_for_required_tool_part_fields(field: str)
         record._to_model()
 
 
+def test_context_metadata_normalizes_wire_tool_call_defaults_before_persistence() -> None:
+    wire_metadata = {
+        "schema_version": 1,
+        "parts": [
+            {
+                "type": "tool-call",
+                "toolCallId": "call-1",
+                "toolName": "read_file",
+                "status": "pending",
+            }
+        ],
+        "tool_result": None,
+    }
+    record = ConversationTaskContextRecord(
+        task_id=7,
+        run_id=11,
+        message=HumanMessage(content="hello"),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata=wire_metadata,
+    )
+
+    model = record._to_model()
+
+    assert json.loads(model.transport_metadata_json) == {
+        "schema_version": 1,
+        "parts": [
+            {
+                "type": "tool-call",
+                "toolCallId": "call-1",
+                "toolName": "read_file",
+                "status": "pending",
+                "args": {},
+                "presentation": {},
+                "isError": False,
+            }
+        ],
+        "tool_result": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("args", []), ("presentation", []), ("isError", "false")],
+)
+def test_context_metadata_rejects_wrong_type_for_required_tool_part_fields(
+    field: str, value: object
+) -> None:
+    part = {
+        "type": "tool-call",
+        "toolCallId": "call-1",
+        "toolName": "read_file",
+        "status": "pending",
+        "args": {},
+        "presentation": {},
+        "isError": False,
+    }
+    part[field] = value
+    record = ConversationTaskContextRecord(
+        task_id=7,
+        run_id=11,
+        message=HumanMessage(content="hello"),
+        include_in_context=True,
+        sequence=3,
+        transport_metadata={"schema_version": 1, "parts": [part], "tool_result": None},
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        record._to_model()
+
+
 def test_context_metadata_rejects_explicit_null_text_status() -> None:
     record = ConversationTaskContextRecord(
         task_id=7,
