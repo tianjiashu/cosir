@@ -19,6 +19,7 @@ from app.assistant_transport.event.conversation_event_envelope import (
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.logging.logger import log
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
 
@@ -65,20 +66,30 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
 
         返回:
             单条 ``set`` mutation（在 assistant 消息尾部新建 tool-call part）；若同名
-            toolCallId 已存在则回空列表（幂等）。
+            toolCallId 已存在则回空列表（幂等）；若该 Run 已是终态或 assistant 消息骨架
+            缺失，则回空列表并记 warning。
 
         异常:
-            KeyError: 该 run 的 assistant message 不存在。
+            无（终态 Run 与缺失骨架都降级为跳过，不以异常中断 Run）。
 
         副作用:
-            无。
+            无；跳过时额外写一条 warning 日志。
         """
 
         run_index = self._find_run(state, self.run_id)
         if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
             return []
-        located = self._find_assistant_message(state, self.run_id)
-        assert located is not None
+        located = self._find_assistant_message(state, self.run_id, required=False)
+        if located is None:
+            # assistant 骨架缺失属于展示事实不完整，不得以断言中断整个 Run。
+            log.warning(
+                "tool_call_part_creation_skipped_missing_assistant_message",
+                extra={
+                    "msg": "assistant 消息骨架缺失，跳过 tool-call part 建立",
+                    "data": {"run_id": self.run_id, "tool_call_id": self.tool_call_id},
+                },
+            )
+            return []
         _, message_index = located
         parts = state["runs"][run_index]["messages"][message_index]["parts"]
         if any(
@@ -143,17 +154,32 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
 
         返回:
             更新 ``status`` / ``args`` / ``error`` / ``isError``（及可选 ``display_data``）的
-            mutation 列表。
+            mutation 列表；对应 tool-call part 不存在时返回空列表并记 warning。
 
         异常:
             ValueError: 目标状态不是当前状态允许迁移到的状态。
-            KeyError: 对应 tool-call part 不存在。
 
         副作用:
-            无。
+            无；part 缺失时额外写一条 warning 日志。
         """
 
-        run_index, message_index, part_index = self._find_tool(state, self.tool_call_id)
+        located = self._find_tool(state, self.tool_call_id, required=False)
+        if located is None:
+            # 状态事件不携带 toolName / presentation，缺少 part 时无法补建合法 part；此处只
+            # 降级为「展示事实缺失」并继续后续投影，绝不让展示层缺口中断 Agent 执行。
+            log.warning(
+                "tool_call_part_missing_for_status_change",
+                extra={
+                    "msg": "工具调用 part 缺失，跳过本次状态投影",
+                    "data": {
+                        "run_id": self.run_id,
+                        "tool_call_id": self.tool_call_id,
+                        "status": self.status,
+                    },
+                },
+            )
+            return []
+        run_index, message_index, part_index = located
         part = state["runs"][run_index]["messages"][message_index]["parts"][part_index]
         current = str(part["status"])
         allowed = {

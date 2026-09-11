@@ -15,6 +15,7 @@
 from pathlib import Path
 
 from app.core.tools.display.file_change_display import (
+    build_file_change_artifact_data,
     build_file_change_display_data,
 )
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
@@ -197,6 +198,7 @@ class WriteFileTool(HandlerBase):
         status = "modified" if existed else "added"
         snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
         display_data = build_file_change_display_data([snapshot])
+        artifact_data = build_file_change_artifact_data([snapshot])
 
         # 语法检查是模型侧诊断，不改变文件写入成功的 UI 状态；前端只看到统一文件 Diff。
         result = check_source_syntax(str(resolved), content)
@@ -209,7 +211,7 @@ class WriteFileTool(HandlerBase):
                     + format_syntax_reason(result)
                 ),
                 display_data=display_data,
-                artifact_data=display_data,
+                artifact_data=artifact_data,
             )
 
         return tool_success(
@@ -217,7 +219,7 @@ class WriteFileTool(HandlerBase):
             permission=self.permission,
             content=content,
             display_data=display_data,
-            artifact_data=display_data,
+            artifact_data=artifact_data,
         )
 
     def to_definition(self) -> ToolDefinition:

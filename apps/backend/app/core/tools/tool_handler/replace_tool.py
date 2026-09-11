@@ -16,6 +16,7 @@ edit_file 逻辑。成功后返回 unified diff 回显（``content``）与结构
 from pathlib import Path
 
 from app.core.tools.display.file_change_display import (
+    build_file_change_artifact_data,
     build_file_change_display_data,
 )
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
@@ -246,6 +247,7 @@ class ReplaceTool(HandlerBase):
         # 经 reason 引导 Agent 二次编辑覆盖自修复。
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
         display_data = build_file_change_display_data([snapshot])
+        artifact_data = build_file_change_artifact_data([snapshot])
         result = check_source_syntax(str(resolved), new_content)
         if result.has_error:
             return tool_success(
@@ -256,14 +258,14 @@ class ReplaceTool(HandlerBase):
                     + format_syntax_reason(result)
                 ),
                 display_data=display_data,
-                artifact_data=display_data,
+                artifact_data=artifact_data,
             )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=format_patch_diff([snapshot]),
             display_data=display_data,
-            artifact_data=display_data,
+            artifact_data=artifact_data,
         )
 
     def to_definition(self) -> ToolDefinition:

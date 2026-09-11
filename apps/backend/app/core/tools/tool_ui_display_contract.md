@@ -227,7 +227,7 @@ worker 和跨平台集成验收后作为独立变更完成。
 
 ### 3.2 文件修改
 
-`write_file`、`replace`、`apply_patch` 共用 `file-changes`。`changes` 中可以包含 diff 所需的 `before`、`after`、`status`、路径和增删行数；完整回退事实仍放在 `artifact_data`。
+`write_file`、`replace`、`apply_patch` 共用 `file-changes`。`display_data.changes` 只携带可由客户端直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整文件正文；patch 超过展示预算时应返回 `patch: null` 和 `truncated: true`。完整回退与审计事实（包括 `before`/`after`）仍只放在 `artifact_data`。
 
 ```json
 {
@@ -237,8 +237,7 @@ worker 和跨平台集成验收后作为独立变更完成。
       "path": "src/example.py",
       "new_path": null,
       "status": "modified",
-      "before": "...",
-      "after": "...",
+      "patch": "diff --git a/src/example.py b/src/example.py\n--- a/src/example.py\n+++ b/src/example.py\n@@ -1,2 +1,3 @@\n ...",
       "insertions": 2,
       "deletions": 1
     }
@@ -250,6 +249,8 @@ worker 和跨平台集成验收后作为独立变更完成。
   }
 }
 ```
+
+`patch` 必须以 `diff --git` 开头，并包含标准 `---`、`+++` 和 hunk 头；客户端不得根据 `before`/`after` 重新拼接 patch。`artifact_data` 与 `display_data` 是两个不同投影：展示预算只能影响 `display_data`，不能用被截断的展示 patch 执行回退。
 
 文件写入后的语法检查属于后端和模型通道，不属于 UI 展示契约。无论语法检查是否通过，`display_data` 都只描述实际发生的文件变更，不得加入 `verification`、`syntax_errors` 或诊断正文。
 

@@ -22,6 +22,20 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
+# Run 状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）一律丢弃。
+# ``cancelled -> running`` 是「续跑恢复」的合法迁移，由
+# ``ConversationRunService.resume_cancelled_run`` 在数据库条件更新
+# （``WHERE status='cancelled'``）成功之后才发出；若在此丢弃，snapshot 会永久
+# 停在终态，后续 tool-call 创建事件随之被终态短路丢弃，最终在工具状态迁移事件上抛 KeyError 中断
+# 整个 Run。``completed`` / ``failed`` 仍不可逆，避免迟到事件把已结束的 Run 拉回 active。
+_ALLOWED_RUN_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending": frozenset({"pending", "running", "completed", "failed", "cancelled"}),
+    "running": frozenset({"running", "completed", "failed", "cancelled"}),
+    "cancelled": frozenset({"cancelled", "running"}),
+    "failed": frozenset({"failed"}),
+    "completed": frozenset({"completed"}),
+}
+
 
 class RunInitializedEvent(ConversationEventEnvelope):
     """一个 Conversation Run 已被创建并绑定到 Task。
@@ -145,7 +159,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         返回:
             更新 ``run`` 状态（及可选 ``usage``）的 mutation；若 assistant message 存在，
             额外更新其 ``status`` / ``endReason``，并把仍 running 的 text / reasoning part
-            收口为 completed。
+            收口为 completed。目标状态不在白名单矩阵内时（陈旧或重复投递的迁移）返回空列表。
 
         异常:
             KeyError: 事件引用的 Run 或 assistant message 不存在。
@@ -155,10 +169,9 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         """
 
         run_index = self._find_run(state, self.run_id)
-        current_status = state["runs"][run_index]["status"]
-        if (
-            current_status in {"completed", "failed", "cancelled"}
-            and self.status.value != current_status
+        current_status = str(state["runs"][run_index]["status"])
+        if self.status.value not in _ALLOWED_RUN_STATUS_TRANSITIONS.get(
+            current_status, frozenset()
         ):
             return []
         mutations: list[ConversationStateMutation] = [

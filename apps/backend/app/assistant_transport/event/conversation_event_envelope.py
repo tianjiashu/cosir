@@ -92,8 +92,23 @@ class ConversationEventEnvelope(BaseModel):
     def _find_tool(
         state: ConversationStateSnapshot,
         tool_call_id: str,
-    ) -> tuple[int, int, int]:
-        """按 Task 内唯一 toolCallId 返回 ``(run_index, message_index, part_index)``。"""
+        *,
+        required: bool = True,
+    ) -> tuple[int, int, int] | None:
+        """按 Task 内唯一 toolCallId 返回 ``(run_index, message_index, part_index)``。
+
+        参数:
+            state: 当前 Task snapshot。
+            tool_call_id: 目标工具调用标识。
+            required: 找不到 part 时是否视为契约错误。``True`` 时抛 ``KeyError``；
+                ``False`` 时返回 ``None``，供调用方把「展示事实缺失」降级为可跳过状态。
+
+        返回:
+            命中时返回三元组下标；``required=False`` 且未命中时返回 ``None``。
+
+        异常:
+            KeyError: ``required=True`` 且整个 snapshot 内不存在该 toolCallId 的 part。
+        """
 
         for run_index, run in enumerate(state["runs"]):
             for message_index, message in enumerate(run["messages"]):
@@ -104,4 +119,6 @@ class ConversationEventEnvelope(BaseModel):
                         and part.get("toolCallId") == tool_call_id
                     ):
                         return run_index, message_index, part_index
-        raise KeyError(tool_call_id)
+        if required:
+            raise KeyError(tool_call_id)
+        return None

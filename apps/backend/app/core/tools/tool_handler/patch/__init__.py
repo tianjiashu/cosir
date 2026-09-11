@@ -18,6 +18,7 @@ from app.core.tools.tool_handler.patch.patch_apply import (
 from app.core.tools.tool_handler.patch.patch_diff import (
     FileDiffResult,
     build_diff_stats,
+    format_git_diff,
     format_patch_diff,
     format_unified_diff,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "apply_all_with_diff",
     "build_diff_stats",
     "format_no_match_hint",
+    "format_git_diff",
     "format_patch_diff",
     "format_unified_diff",
     "fuzzy_find_and_replace",

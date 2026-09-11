@@ -1,15 +1,45 @@
 """文件修改工具的展示数据构造。
 
-只产出客户端渲染所需的结构化事实数据（变更列表 + 统计），不产出任何展示文本或
-展示条目；diff 条目与摘要由客户端渲染规则层生成。
+只产出客户端渲染所需的结构化事实数据（变更列表 + 受控 Git patch + 统计），不产出
+摘要或展示条目；展示布局由客户端渲染规则层生成。
 """
 
 from typing import Any
 
+from app.core.tools.guard.display_data_budget import DEFAULT_DISPLAY_TEXT_MAX_CHARS
 from app.core.tools.tool_handler.patch.patch_diff import (
     FileDiffResult,
     build_diff_stats,
+    format_git_diff,
 )
+
+
+def build_file_change_artifact_data(results: list[FileDiffResult]) -> dict[str, Any]:
+    """把文件修改快照投影为内部回退与审计工件数据。
+
+    参数:
+        results: 文件修改前后的完整内容快照。
+
+    返回:
+        包含完整 ``before``/``after``、路径、状态和统计的内部数据。
+
+    异常:
+        无。
+
+    副作用:
+        无；不读写文件或数据库。
+
+    说明:
+        该数据只供后端 Hook、ChangeSet 和回退流程使用，不进入 Assistant Transport。
+    """
+
+    stats = build_diff_stats(results)
+    file_stats = stats.get("files", [])
+    changes = [
+        _build_file_artifact_change(result, file_stat)
+        for result, file_stat in zip(results, file_stats, strict=True)
+    ]
+    return {"changes": changes, "diff_stats": stats}
 
 
 def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, Any]:
@@ -19,7 +49,8 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
         results: 文件修改前后的内容快照。
 
     返回:
-        包含 ``changes`` 与 ``diff_stats`` 的展示元数据。
+        包含 ``changes`` 与 ``diff_stats`` 的展示元数据。每个 change 使用受控长度的
+        Git 风格 ``patch``；过长时 ``patch`` 为 None 且 ``truncated`` 为 True。
 
     异常:
         无。
@@ -34,7 +65,7 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
     stats = build_diff_stats(results)
     file_stats = stats.get("files", [])
     changes = [
-        _build_file_change(result, file_stat)
+        _build_file_display_change(result, file_stat)
         for result, file_stat in zip(results, file_stats, strict=True)
     ]
     return {
@@ -44,22 +75,11 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
     }
 
 
-def _build_file_change(result: FileDiffResult, file_stat: dict[str, Any]) -> dict[str, Any]:
-    """构造单文件修改展示元数据。
-
-    参数:
-        result: 单文件修改快照。
-        file_stat: ``build_diff_stats`` 产出的单文件统计。
-
-    返回:
-        包含路径、状态、diff 和增删行数的字典。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
+def _build_file_artifact_change(
+    result: FileDiffResult,
+    file_stat: dict[str, Any],
+) -> dict[str, Any]:
+    """构造单文件完整快照工件。"""
 
     return {
         "path": result.path,
@@ -67,6 +87,25 @@ def _build_file_change(result: FileDiffResult, file_stat: dict[str, Any]) -> dic
         "status": result.status,
         "before": result.before,
         "after": result.after,
+        "insertions": int(file_stat.get("insertions", 0)),
+        "deletions": int(file_stat.get("deletions", 0)),
+    }
+
+
+def _build_file_display_change(
+    result: FileDiffResult,
+    file_stat: dict[str, Any],
+) -> dict[str, Any]:
+    """构造单文件受控展示数据，不携带完整文件快照。"""
+
+    patch = format_git_diff(result)
+    truncated = len(patch) > DEFAULT_DISPLAY_TEXT_MAX_CHARS
+    return {
+        "path": result.path,
+        "new_path": result.new_path,
+        "status": result.status,
+        "patch": None if truncated else patch,
+        **({"truncated": True} if truncated else {}),
         "insertions": int(file_stat.get("insertions", 0)),
         "deletions": int(file_stat.get("deletions", 0)),
     }
