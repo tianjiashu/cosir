@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
-import { useContext, createContext, useEffect, useState, type FC, type ComponentType } from "react";
+import { useContext, createContext, useEffect, useMemo, useState, type ComponentType, type FC, type ReactNode } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -30,6 +30,7 @@ import {
   ToolGroupRoot,
   ToolGroupTrigger,
 } from "@/components/assistant-ui/elements/tool-group.aui";
+import { summarizeToolGroup } from "@/components/assistant-ui/elements/tool-group-status";
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
 import { readToolArtifact } from "@/components/assistant-ui/tools/types";
 import { Button } from "@/components/ui/button";
@@ -39,8 +40,8 @@ import {
   isEditableLatestRunUserMessage,
   isResumableCancelledRun,
 } from "@/lib/assistant/conversation-actions";
-import type { TransportState } from "@/lib/assistant/contract";
-import { frontendLog } from "@/lib/logging/frontend-log";
+import type { TransportState, TransportToolStatus } from "@/lib/assistant/contract";
+import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 
 export type ThreadComponents = {
@@ -67,6 +68,40 @@ type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
+
+type ToolTraceGroupProps = {
+  indices: readonly number[];
+  children: ReactNode;
+};
+
+/**
+ * Render a grouped tool trace using each tool's backend lifecycle status.
+ *
+ * assistant-ui derives a tool part's standard status from the assistant
+ * message status when no tool result is present. That makes completed tools
+ * appear running while the assistant continues with a later step, so this
+ * component deliberately reads the transport artifact for the aggregate.
+ */
+const ToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
+  const statusKey = useAuiState((state) => indices.map((index) => {
+    const part = state.message.parts[index];
+    if (part?.type !== "tool-call") return "unknown";
+    return readToolArtifact(part.artifact).backendStatus;
+  }).join("|"));
+  const summary = useMemo(
+    () => summarizeToolGroup(
+      (statusKey ? statusKey.split("|") : []) as TransportToolStatus[],
+    ),
+    [statusKey],
+  );
+
+  return (
+    <ToolGroupRoot variant="ghost">
+      <ToolGroupTrigger count={summary.total} summary={summary} />
+      <ToolGroupContent>{children}</ToolGroupContent>
+    </ToolGroupRoot>
+  );
+};
 
 const assistantMessageGroupBy = (
   part: { type: string; artifact?: unknown },
@@ -181,7 +216,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
         }
       } catch (error) {
         setResuming(false);
-        setResumeError(error instanceof Error ? error.message : "继续运行失败");
+        setResumeError(safeFrontendErrorMessage(error, "继续运行失败，请检查本机后端状态"));
       }
     };
 
@@ -222,29 +257,41 @@ const UserMessage: FC = () => {
 const UserMessageView: FC = () => {
   const messageId = useAuiState((state) => state.message.id);
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const canEdit = useAuiState((state) => !isRunning && isEditableLatestRunUserMessage(
-    state.thread.state as unknown as TransportState,
-    messageId,
-  ));
+  const canEdit = useAuiState((state) => {
+    if (isRunning || !isEditableLatestRunUserMessage(
+      state.thread.state as unknown as TransportState,
+      messageId,
+    )) return false;
+
+    // The transport runtime may render a new user command optimistically
+    // before its canonical snapshot arrives. During that window the old
+    // snapshot must not make the previous user message editable again.
+    const latestRenderedUserMessageId = [...state.thread.messages]
+      .reverse()
+      .find((message) => message.role === "user")?.id;
+    return latestRenderedUserMessageId === messageId;
+  });
 
   return (
     <MessagePrimitive.Root data-role="user" className="group flex flex-col items-end px-2">
       <div className="bg-muted text-foreground max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
         <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <MarkdownText status={part.status} /> : null}</MessagePrimitive.Parts>
       </div>
-      <ActionBarPrimitive.Root
-        className="mt-1 flex gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-      >
-        {canEdit && (
-          <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
-            <PencilIcon />
-          </ActionBarPrimitive.Edit>
-        )}
-        <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" aria-label="复制" size="sm" />}>
-          <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
-          <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
-        </ActionBarPrimitive.Copy>
-      </ActionBarPrimitive.Root>
+      <div className="mt-1 h-6 shrink-0">
+        <ActionBarPrimitive.Root
+          className="flex h-6 gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+        >
+          {canEdit && (
+            <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
+              <PencilIcon />
+            </ActionBarPrimitive.Edit>
+          )}
+          <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" aria-label="复制" size="sm" />}>
+            <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
+            <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
+          </ActionBarPrimitive.Copy>
+        </ActionBarPrimitive.Root>
+      </div>
     </MessagePrimitive.Root>
   );
 };
@@ -307,13 +354,7 @@ const AssistantMessageDefault: FC = () => {
           {({ part, children }) => {
             switch (part.type) {
               case "group-tool-trace": {
-                const isToolRunning = part.status.type === "running";
-                return (
-                  <ToolGroupRoot variant="ghost">
-                    <ToolGroupTrigger count={part.indices.length} active={isToolRunning} />
-                    <ToolGroupContent>{children}</ToolGroupContent>
-                  </ToolGroupRoot>
-                );
+                return <ToolTraceGroup indices={part.indices}>{children}</ToolTraceGroup>;
               }
               case "group-reasoning": {
                 const isReasoningStreaming = part.status.type === "running";

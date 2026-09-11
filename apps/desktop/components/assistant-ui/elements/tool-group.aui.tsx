@@ -8,7 +8,7 @@ import {
   type FC,
   type PropsWithChildren,
 } from "react";
-import { LoaderIcon, WrenchIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon, LoaderIcon, WrenchIcon, XCircleIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
 import {
@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { DisclosureRow } from "./disclosure-row.aui";
 import { DISCLOSURE_CONTENT_CLASS } from "./disclosure-tokens";
+import { toolGroupSummaryLabel, type ToolGroupSummary } from "./tool-group-status";
 
 const ANIMATION_DURATION = 200;
 
@@ -97,13 +98,25 @@ function ToolGroupRoot({
 function ToolGroupTrigger({
   count,
   active = false,
+  summary,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   count: number;
   active?: boolean;
+  summary?: ToolGroupSummary;
 }) {
-  const label = `${count} 个工具调用`;
+  const isActive = summary?.phase === "running" || (summary === undefined && active);
+  const label = summary === undefined ? `${count} 个工具调用` : toolGroupSummaryLabel(summary);
+  const statusIcon = summary?.phase === "failed"
+    ? <CircleAlertIcon className="aui-tool-group-trigger-status text-destructive size-3.5" aria-label={summary.failed === summary.total ? "全部工具执行失败" : "部分工具执行失败"} />
+    : summary?.phase === "cancelled"
+      ? <XCircleIcon className="aui-tool-group-trigger-status text-amber-600 size-3.5" aria-label={summary.cancelled === summary.total ? "全部工具已取消" : "部分工具已取消"} />
+      : summary?.phase === "unknown"
+        ? <CircleAlertIcon className="aui-tool-group-trigger-status text-amber-600 size-3.5" aria-label="工具状态待确认" />
+        : summary?.phase === "completed"
+          ? <CheckIcon className="aui-tool-group-trigger-status text-emerald-600 size-3.5" aria-label="全部工具已完成" />
+          : undefined;
 
   return (
     <DisclosureRow
@@ -120,19 +133,19 @@ function ToolGroupTrigger({
           className={cn(
             "aui-tool-group-trigger-label-wrapper inline-block text-start text-sm leading-none font-medium",
             "group-data-[variant=ghost]/tool-group-root:font-normal",
-            active && "shimmer motion-reduce:animate-none",
+            isActive && "shimmer motion-reduce:animate-none",
           )}
         >
           {label}
         </span>
       }
-      trailing={active ? (
+      trailing={isActive ? (
         <LoaderIcon
           data-slot="tool-group-trigger-loader"
           className="aui-tool-group-trigger-loader size-3.5 animate-spin [animation-duration:0.6s]"
           aria-label="工具执行中"
         />
-      ) : undefined}
+      ) : statusIcon}
       className={cn(
         "aui-tool-group-trigger origin-left",
         "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground",

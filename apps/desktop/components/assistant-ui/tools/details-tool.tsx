@@ -12,6 +12,87 @@ function toolTitle(toolName: string, verb?: string): string {
   return verb ?? toolName;
 }
 
+function formatFileSize(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "文件大小未知";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatToolStatus(status: string): string {
+  switch (status) {
+    case "pending": return "等待中";
+    case "running": return "执行中";
+    case "completed": return "已完成";
+    case "failed": return "失败";
+    case "cancelled": return "已取消";
+    default: return "未知状态";
+  }
+}
+
+function formatUrlSite(value: unknown): string {
+  if (typeof value !== "string" || !value) return "网站未知";
+  const safeUrl = safeExternalUrl(value);
+  if (!safeUrl) return value;
+  try {
+    return new URL(safeUrl).hostname;
+  } catch {
+    return value;
+  }
+}
+
+function readFileSummary(data: Record<string, unknown>): string {
+  const path = typeof data.path === "string" ? data.path : "文件未知";
+  const lineRange = asRecord(data.line_range);
+  const range = data.file_size === 0
+    ? "空文件"
+    : typeof lineRange.start === "number" && lineRange.end === "END"
+      ? `L${String(lineRange.start)}-END`
+      : typeof lineRange.start === "number" && typeof lineRange.end === "number"
+        ? `L${String(lineRange.start)}-L${String(lineRange.end)}`
+        : lineRange.end === null
+          ? "指定范围没有返回内容"
+          : "读取范围由后端提供";
+  return `${path} · ${range} · ${formatFileSize(data.file_size)}`;
+}
+
+function displaySummary(data: Record<string, unknown>, backendStatus: string): string {
+  switch (data.kind) {
+    case "read-file-meta":
+      return readFileSummary(data);
+    case "file-list": {
+      const target = typeof data.target === "string" ? data.target : "文件";
+      const pattern = typeof data.pattern === "string" ? data.pattern : "搜索";
+      const count = typeof data.match_count === "number"
+        ? data.match_count
+        : Array.isArray(data.files) ? data.files.length : 0;
+      return `${pattern} · ${target} · ${count} 个命中`;
+    }
+    case "directory-list": {
+      const path = typeof data.path === "string" ? data.path : "目录未知";
+      const count = typeof data.total_entries === "number"
+        ? data.total_entries
+        : Array.isArray(data.entries) ? data.entries.length : 0;
+      return `${path} · ${count} 个条目`;
+    }
+    case "web-search-results": {
+      const query = typeof data.query === "string" ? data.query : "搜索";
+      const count = Array.isArray(data.results) ? data.results.length : 0;
+      return `${query} · ${count} 个结果`;
+    }
+    case "web-extract-urls": {
+      const urls = Array.isArray(data.urls) ? data.urls : [];
+      const firstUrl = urls.length > 0 ? asRecord(urls[0]).url : undefined;
+      const target = urls.length > 1 ? `${formatUrlSite(firstUrl)} 等 ${urls.length} 个网站` : formatUrlSite(firstUrl);
+      const overallStatus = typeof data.status_hint === "string" ? data.status_hint : formatToolStatus(backendStatus);
+      return `${target} · ${overallStatus}`;
+    }
+    default:
+      return typeof data.path === "string" ? data.path : typeof data.pattern === "string" ? data.pattern : "";
+  }
+}
+
 function ListEntries({ data }: { data: Record<string, unknown> }) {
   const isWebSearch = data.kind === "web-search-results";
   const isWebExtract = data.kind === "web-extract-urls";
@@ -98,26 +179,15 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
 
 export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
-  const data = artifact.data ?? {};
+  const data = artifact.display_data ?? {};
   const presentation = artifact.presentation;
-  const path = typeof data.path === "string" ? data.path : undefined;
-  const pattern = typeof data.pattern === "string" ? data.pattern : undefined;
   const title = toolTitle(toolName, presentation.verb);
-  const summary = path ?? (pattern ? `${pattern}${typeof data.target === "string" ? ` · ${data.target}` : ""}` : "");
-  const expandable = presentation.expandable !== false;
-  const defaultOpen = artifact.backendStatus === "running" || presentation.default_open === true;
+  const summary = displaySummary(data, artifact.backendStatus);
+  const hasDisplayData = typeof data.kind === "string";
+  const expandable = presentation.expandable !== false && hasDisplayData;
+  const defaultOpen = hasDisplayData && presentation.default_open === true;
   const isList = presentation.expand_layout === "list" || data.kind === "directory-list" || data.kind === "file-list" || data.kind === "web-search-results" || data.kind === "web-extract-urls" || Array.isArray(data.entries);
   const isTerminalState = artifact.backendStatus === "failed" || artifact.backendStatus === "cancelled";
-  const lineRange = asRecord(data.line_range);
-  const readFileRange = data.file_size === 0
-    ? "空文件"
-    : typeof lineRange.start === "number" && lineRange.end === "END"
-      ? `L${String(lineRange.start)}-END`
-      : typeof lineRange.start === "number" && typeof lineRange.end === "number"
-        ? `L${String(lineRange.start)}-L${String(lineRange.end)}`
-        : lineRange.end === null
-          ? "指定范围没有返回内容"
-          : "读取范围由后端提供";
 
   const body = (
     <div className="space-y-2 px-3 pb-3 text-sm">
@@ -125,8 +195,7 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
         <p className="text-destructive text-xs">{artifact.backendStatus === "cancelled" ? "已取消" : artifact.error ?? "执行失败"}</p>
       ) : isList ? <ListEntries data={data} /> : data.kind === "read-file-meta" ? (
         <p className="text-muted-foreground text-xs">
-          {readFileRange}
-          {typeof data.file_size === "number" ? ` · ${String(data.file_size)} B` : ""}
+          {readFileSummary(data)}
           {data.truncated === true ? ` · ${String(data.status_hint ?? "文件过大，已截断")}` : ""}
         </p>
       ) : data.kind === "delegation-result" ? (
@@ -149,7 +218,7 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
     trailing: <ToolStatus status={artifact.backendStatus} />,
   };
 
-  const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen);
+  const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen, { openWhileRunning: false });
 
   if (!expandable) {
     return <DisclosureRowStatic {...rowProps} className={cn(artifact.backendStatus === "failed" && "text-destructive")} />;

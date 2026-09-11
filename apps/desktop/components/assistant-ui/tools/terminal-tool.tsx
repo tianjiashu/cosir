@@ -8,7 +8,7 @@ import { useToolDisclosure } from "./tool-disclosure";
 
 export function TerminalTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
-  const data = artifact.data ?? {};
+  const data = artifact.display_data ?? {};
   const command = typeof data.command === "string" ? data.command : toolName;
   const output = typeof data.output === "string" ? data.output : "";
   const exitCode = typeof data.exit_code === "number" ? data.exit_code : undefined;

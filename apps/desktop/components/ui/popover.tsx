@@ -31,7 +31,7 @@ function PopoverContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        className="isolate z-50"
+        className="isolate z-50 max-w-[calc(100vw-1rem)]"
       >
         <PopoverPrimitive.Popup
           data-slot="popover-content"

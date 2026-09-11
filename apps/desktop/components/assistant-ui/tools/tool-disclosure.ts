@@ -1,25 +1,35 @@
 import { useEffect, useRef, useState } from "react";
 
+type ToolDisclosureOptions = {
+  /** Whether an execution with no result body should be opened automatically. */
+  openWhileRunning?: boolean;
+};
+
 /**
- * Keep a tool panel open while its backend invocation is running, then close it
- * once after the invocation reaches a terminal state. User toggles are kept
- * until the lifecycle status changes again.
+ * Manage a tool disclosure without treating the backend execution state as UI content.
+ * Long-running tools can stay as a static status row until display_data is available;
+ * user toggles are kept until the lifecycle status changes again.
  */
-export function useToolDisclosure(status: string, defaultOpen = false): [boolean, (open: boolean) => void] {
-  const wasRunning = useRef(status === "running");
-  const [open, setOpen] = useState(defaultOpen || status === "running");
+export function useToolDisclosure(
+  status: string,
+  defaultOpen = false,
+  options: ToolDisclosureOptions = {},
+): [boolean, (open: boolean) => void] {
+  const openWhileRunning = options.openWhileRunning ?? true;
+  const wasRunning = useRef(openWhileRunning && status === "running");
+  const [open, setOpen] = useState(defaultOpen || (openWhileRunning && status === "running"));
 
   useEffect(() => {
     if (status === "running") {
-      wasRunning.current = true;
-      setOpen(true);
+      wasRunning.current = openWhileRunning;
+      if (openWhileRunning) setOpen(true);
       return;
     }
     if (wasRunning.current) {
       wasRunning.current = false;
       setOpen(false);
     }
-  }, [status]);
+  }, [openWhileRunning, status]);
 
   return [open, setOpen];
 }

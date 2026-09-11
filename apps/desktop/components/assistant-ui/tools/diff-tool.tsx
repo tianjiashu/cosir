@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
 import { ToolIcon } from "./tool-icons";
-import { DisclosureRow } from "../elements/disclosure-row.aui";
+import { DisclosureRow, DisclosureRowStatic } from "../elements/disclosure-row.aui";
 import { useToolDisclosure } from "./tool-disclosure";
 
 type Change = {
@@ -51,33 +51,40 @@ function FileDiff({ change }: { change: Change }) {
 
 export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
-  const data = artifact.data ?? {};
+  const data = artifact.display_data ?? {};
   const changes = readChanges(data.changes);
   const stats = asRecord(data.diff_stats);
   const totalFiles = typeof stats.total_files === "number" ? stats.total_files : changes.length;
   const insertions = typeof stats.total_insertions === "number" ? stats.total_insertions : changes.reduce((sum, item) => sum + (item.insertions ?? 0), 0);
   const deletions = typeof stats.total_deletions === "number" ? stats.total_deletions : changes.reduce((sum, item) => sum + (item.deletions ?? 0), 0);
   const title = artifact.presentation.verb ?? toolName;
-  const defaultOpen = artifact.backendStatus === "running" || artifact.presentation.default_open === true;
+  const hasDisplayData = data.kind === "file-changes";
+  const defaultOpen = hasDisplayData && artifact.presentation.default_open === true;
   const isTerminalState = artifact.backendStatus === "failed" || artifact.backendStatus === "cancelled";
-  const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen);
+  const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen, { openWhileRunning: false });
+
+  const rowProps = {
+      leading: <ToolIcon name={artifact.presentation.icon} aria-hidden="true" />,
+      label: <span className="text-foreground text-sm font-medium">{title}</span>,
+      meta: isTerminalState ? (
+        <span className="text-destructive">{artifact.error ?? "执行失败"}</span>
+      ) : hasDisplayData ? (
+        <>
+          <span className="text-muted-foreground">{totalFiles} 个文件</span>
+          <span className="ml-2 text-emerald-600">+{insertions}</span>
+          <span className="ml-2 text-destructive">−{deletions}</span>
+        </>
+      ) : undefined,
+      trailing: <ToolStatus status={artifact.backendStatus} />,
+  };
+
+  if (!hasDisplayData || artifact.presentation.expandable === false) {
+    return <DisclosureRowStatic {...rowProps} className="group/tool-call" />;
+  }
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="group/tool-call">
-      <DisclosureRow
-        leading={<ToolIcon name={artifact.presentation.icon} aria-hidden="true" />}
-        label={<span className="text-foreground text-sm font-medium">{title}</span>}
-        meta={isTerminalState ? (
-          <span className="text-destructive">{artifact.error ?? "执行失败"}</span>
-        ) : (
-          <>
-            <span className="text-muted-foreground">{totalFiles} 个文件</span>
-            <span className="ml-2 text-emerald-600">+{insertions}</span>
-            <span className="ml-2 text-destructive">−{deletions}</span>
-          </>
-        )}
-        trailing={<ToolStatus status={artifact.backendStatus} />}
-      />
+      <DisclosureRow {...rowProps} />
       <CollapsibleContent className="ml-6 space-y-2 pl-2 pt-2">
         {isTerminalState ? (
           <p className="text-destructive px-2 text-xs">{artifact.error ?? "执行失败"}</p>

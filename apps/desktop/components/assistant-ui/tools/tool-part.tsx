@@ -10,6 +10,18 @@ import { readToolArtifact } from "./types";
 export type ToolPartRoute = "delete" | "diff" | "terminal" | "details" | "fallback";
 
 const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
+const KNOWN_DISPLAY_KINDS = new Set([
+  "read-file-meta",
+  "file-list",
+  "directory-list",
+  "file-changes",
+  "delete-result",
+  "web-search-results",
+  "web-extract-urls",
+  "terminal-result",
+  "delegation-result",
+  "repeated-call",
+]);
 
 /**
  * 依据后端稳定工具名、data.kind 和 presentation 语义选择只读 renderer。
@@ -17,7 +29,8 @@ const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
  */
 export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
   const artifact = readToolArtifact(rawArtifact);
-  const kind = typeof artifact.data?.kind === "string" ? artifact.data.kind : undefined;
+  const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : undefined;
+  if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return "fallback";
   if (DELETE_TOOL_NAMES.has(toolName) || kind === "delete-result") return "delete";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
   if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";

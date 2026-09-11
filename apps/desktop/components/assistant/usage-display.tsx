@@ -155,7 +155,7 @@ export function TaskContextUsage(): ReactElement {
         <GaugeIcon className="size-3.5" aria-hidden="true" />
         <span className="hidden sm:inline">{presentation.label}</span>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64">
+       <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
         <PopoverHeader>
           <PopoverTitle>上下文窗口</PopoverTitle>
           <PopoverDescription>{presentation.detail}</PopoverDescription>
