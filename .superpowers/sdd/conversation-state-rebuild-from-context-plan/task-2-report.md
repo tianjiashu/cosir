@@ -73,6 +73,7 @@
 
 ## Fix round 2（scoped re-review）
 
+-实现提交：`f06dffb1f0d09334b27bb87e69d10b02d75bdbb0`（`fix: tighten state rebuild error projection`）。
 - RED：先更新 `test_conversation_task_state_rebuilder.py`，加入终态未匹配 tool-call 清除旧
   `display_data`/`errorCode`、失败/取消丢弃成功态展示数据、Human/System 任意非空 parts 拒绝、
   ToolMessage 缺省 `errorCode` 清除，以及长/不可打印 `status_hint` 测试。第一轮新增断言运行结果为
