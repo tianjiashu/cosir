@@ -1,7 +1,7 @@
 """CodeGraph Kernel stdio JSON-line 协议的 Python 侧常量与类型镜像。
 
 单一职责：承载后端 Client / Supervisor 所需的协议常量与数据结构定义，与
-``third_party/workspace_payload/src/agent-kernel/protocol.ts`` 保持字段一致（该文件为
+``apps/codeIndex/src/agent-kernel/protocol.ts`` 保持字段一致（该文件为
 单一事实来源）。之所以在 Python 侧镜像而非共享，是因为前后端分属不同语言、
 agent-kernel 经 tsc 编译为独立 dist，不暴露类型给 Python 侧。
 

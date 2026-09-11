@@ -66,15 +66,15 @@ def _server_script_path() -> Path:
         无。
 
     路径约定:
-        agent-kernel 是 ``third_party/codegraph`` vendor 内的窄适配层（源码位于
-        ``third_party/codegraph/src/agent-kernel/``），随 codegraph 主工程 ``tsc``
-        构建一并产出到 ``third_party/codegraph/dist/agent-kernel/server.js``
+        agent-kernel 是 ``apps/codeIndex`` vendor 内的窄适配层（源码位于
+        ``apps/codeIndex/src/agent-kernel/``），随 codegraph 主工程 ``tsc``
+        构建一并产出到 ``apps/codeIndex/dist/agent-kernel/server.js``
         （见 docs/codegraph-docs/codegraph-agent-kernel-design.md）。早期实现误指到
-        不存在的 ``third_party/workspace_payload`` 目录，导致 Kernel 启动报
-        ``agent-kernel server not built``；此处以真实 vendor 路径为准。
+        不存在的 vendor 目录，导致 Kernel 启动报
+        ``agent-kernel server not built``；此处以真实 vendor 路径（``apps/codeIndex``）为准。
     """
     root = Settings.repository_root()
-    return root / "third_party" / "codegraph" / "dist" / "agent-kernel" / "server.js"
+    return root / "apps" / "codeIndex" / "dist" / "agent-kernel" / "server.js"
 
 
 class CodeGraphKernelSupervisor:
