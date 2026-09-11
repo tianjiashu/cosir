@@ -9,8 +9,9 @@ from app.storage.model.base import StorageBase
 class ConversationTaskContextModel(StorageBase):
     """``conversation_task_contexts`` 表：任务级上下文单条消息的持久化事实。
 
-    按 (task, run) 一行存储一条 ``BaseMessage`` 的 JSON 序列化结果，配合 ``sequence``
-    维持跨 run 的全局插入顺序，``include_in_context`` 标记该消息是否纳入上下文视图。
+    按 (task, run) 一行存储一条 ``BaseMessage`` 的 JSON 序列化结果及其 Transport
+    metadata，配合 ``sequence`` 维持跨 run 的全局插入顺序，``include_in_context``
+    标记该消息是否纳入上下文视图。
 
     该表是上下文消息的**唯一持久化真相**，与
     :class:`app.models.conversation_task_context.ConversationTaskContextRecord` 一一对应；
@@ -35,5 +36,11 @@ class ConversationTaskContextModel(StorageBase):
         index=True,
     )
     message_json: Mapped[str] = mapped_column(Text, nullable=False)
+    transport_metadata_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}", server_default="{}"
+    )
+    message_schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     include_in_context: Mapped[bool] = mapped_column(default=True, nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)

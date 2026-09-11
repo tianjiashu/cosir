@@ -19,7 +19,9 @@ from sqlalchemy import asc, delete, desc, select, update
 from sqlalchemy.orm import Session
 
 from app.models import ConversationRunRecord
+from app.models.conversation_run_record import ConversationRunUsage, serialize_run_usage
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.json_helpers import serialize_json_object
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text
@@ -60,6 +62,8 @@ class ConversationRunCrud:
         image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         extra: dict[str, Any] | None = None,
+        usage: ConversationRunUsage | None = None,
+        error: dict[str, Any] | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord:
         """新建一条 run 记录并落库。
@@ -76,6 +80,8 @@ class ConversationRunCrud:
             image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
             reasoning_effort: 可选，思考努力等级；None 表示未指定。
             extra: 可选，运行期附加结构化数据。
+            usage: 可选，符合六键契约的运行 token 用量。
+            error: 可选，结构化运行错误。
             session: 可选，外部事务 session；传入时复用该事务不自行提交，
                 None 时自行开启并提交事务。
 
@@ -104,6 +110,8 @@ class ConversationRunCrud:
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 extra=extra,
+                usage=usage,
+                error=error,
             )
         with self._session_factory.begin() as managed_session:
             return self._insert_and_flush(
@@ -117,6 +125,8 @@ class ConversationRunCrud:
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 extra=extra,
+                usage=usage,
+                error=error,
             )
 
     @staticmethod
@@ -132,6 +142,8 @@ class ConversationRunCrud:
         image_paths: list[str] | None,
         reasoning_effort: str | None,
         extra: dict[str, Any] | None,
+        usage: ConversationRunUsage | None,
+        error: dict[str, Any] | None,
     ) -> ConversationRunRecord:
         """在给定 session 内插入 run 行并 flush 取回自增 id。
 
@@ -166,6 +178,8 @@ class ConversationRunCrud:
             image_paths=image_paths,
             reasoning_effort=reasoning_effort,
             extra=extra,
+            usage_json=serialize_run_usage(usage),
+            error_json=serialize_json_object(error, "error") if error is not None else None,
         )
         session.add(model)
         session.flush()
@@ -242,6 +256,12 @@ class ConversationRunCrud:
             end_reason=source.end_reason,
             final_output=source.final_output,
             extra=copy.deepcopy(source.extra),
+            usage_json=serialize_run_usage(copy.deepcopy(source.usage)),
+            error_json=(
+                serialize_json_object(copy.deepcopy(source.error), "error")
+                if source.error is not None
+                else None
+            ),
             status=source.status,
             created_at=to_text(source.created_at),
             updated_at=to_text(source.updated_at),

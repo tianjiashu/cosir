@@ -162,6 +162,8 @@ class TaskCrud:
             creation_command_id=creation_command_id,
             extra=extra,
             context_usage_used=0,
+            current_run_id=None,
+            context_window_total=None,
         )
         session.add(model)
         session.flush()

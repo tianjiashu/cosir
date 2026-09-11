@@ -31,6 +31,8 @@ class TaskRecord:
     parent_run_id: int | None = None
     delegation_id: int | None = None
     context_usage_used: int | None = None
+    current_run_id: int | None = None
+    context_window_total: int | None = None
 
     @property
     def is_child(self) -> bool:
@@ -58,9 +60,9 @@ class TaskRecord:
             无。
 
         返回:
-            包含任务字段的字典，``latest_run_id`` / ``execution_status`` /
-            ``parent_task_id`` / ``parent_run_id`` / ``delegation_id`` /
-            ``context_usage_used`` 可能为 None。
+            包含任务字段的字典；``current_run_id``、``context_window_total``、
+            ``execution_status``、``parent_task_id``、``parent_run_id``、``delegation_id``
+            与 ``context_usage_used`` 可能为 None。
 
         异常:
             无。
@@ -79,6 +81,8 @@ class TaskRecord:
             "parent_run_id": self.parent_run_id,
             "delegation_id": self.delegation_id,
             "context_usage_used": self.context_usage_used,
+            "current_run_id": self.current_run_id,
+            "context_window_total": self.context_window_total,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
@@ -111,4 +115,27 @@ class TaskRecord:
             parent_run_id=row.parent_run_id,
             delegation_id=row.delegation_id,
             context_usage_used=row.context_usage_used,
+            current_run_id=row.current_run_id,
+            context_window_total=row.context_window_total,
         )
+
+    def to_model(self) -> TaskModel:
+        """将 task 记录转换为 ORM 行。"""
+
+        model_kwargs: dict[str, object] = {
+            "workspace_id": self.workspace_id,
+            "title": self.title,
+            "extra": self.extra,
+            "task_type": self.task_type,
+            "parent_task_id": self.parent_task_id,
+            "parent_run_id": self.parent_run_id,
+            "current_run_id": self.current_run_id,
+            "delegation_id": self.delegation_id,
+            "context_usage_used": self.context_usage_used,
+            "context_window_total": self.context_window_total,
+            "created_at": to_text(self.created_at),
+            "updated_at": to_text(self.updated_at),
+        }
+        if self.id:
+            model_kwargs["id"] = self.id
+        return TaskModel(**model_kwargs)

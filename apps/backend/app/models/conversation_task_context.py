@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from langchain_core.messages import BaseMessage, _message_from_dict, message_to_dict
 
+from app.models.json_helpers import deserialize_json_object, serialize_json_object
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 
 
 @dataclass(frozen=True)
 class ConversationTaskContextRecord:
-
     task_id: int
     run_id: int | None
     message: BaseMessage
     include_in_context: bool
     sequence: int
+    transport_metadata: dict[str, Any] = field(default_factory=dict)
+    message_schema_version: int = 1
+    id: int | None = None
 
     @classmethod
     def _from_model(cls, model: ConversationTaskContextModel) -> ConversationTaskContextRecord:
@@ -27,11 +31,14 @@ class ConversationTaskContextRecord:
             model: ``conversation_task_contexts`` 行实例，列已含单条消息的全部字段。
 
         返回:
-            含 task_id、run_id、反序列化消息、纳入标记与排序的记录。
+            含 row id、task_id、run_id、反序列化消息、Transport metadata、schema version、
+            纳入标记与排序的记录。
 
         异常:
             json.JSONDecodeError: ``message_json`` 不是合法 JSON。
             KeyError: ``message_json`` 反序列化结果不是 ``message_to_dict`` 约定结构。
+            TypeError: ``transport_metadata_json`` 不是 JSON 文本。
+            ValueError: ``transport_metadata_json`` 不是 JSON object。
 
         副作用:
             无副作用；纯映射。
@@ -39,11 +46,16 @@ class ConversationTaskContextRecord:
 
         message_doc = json.loads(model.message_json)
         return cls(
+            id=model.id,
             task_id=model.task_id,
             run_id=model.run_id,
             message=_message_from_dict(message_doc),
             include_in_context=model.include_in_context,
             sequence=model.sequence,
+            transport_metadata=deserialize_json_object(
+                model.transport_metadata_json, "transport_metadata"
+            ),
+            message_schema_version=model.message_schema_version,
         )
 
     def _to_model(self) -> ConversationTaskContextModel:
@@ -57,15 +69,21 @@ class ConversationTaskContextRecord:
 
         异常:
             TypeError: ``message`` 无法被 ``message_to_dict`` 序列化。
+            TypeError: ``transport_metadata`` 无法编码为 JSON object。
 
         副作用:
             无副作用；纯映射。
         """
 
         return ConversationTaskContextModel(
+            id=self.id,
             task_id=self.task_id,
             run_id=self.run_id,
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
+            transport_metadata_json=serialize_json_object(
+                self.transport_metadata, "transport_metadata"
+            ),
+            message_schema_version=self.message_schema_version,
             include_in_context=self.include_in_context,
             sequence=self.sequence,
         )

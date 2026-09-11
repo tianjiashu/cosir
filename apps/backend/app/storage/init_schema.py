@@ -12,7 +12,6 @@ from app.storage.model.base import StorageBase
 from app.storage.model.conversation_command_model import ConversationCommandModel
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.conversation_task_snapshot_model import ConversationTaskSnapshotModel
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.log_model import LogEntryModel
@@ -29,7 +28,6 @@ APP_MODELS = (
     TaskModel,
     ConversationRunModel,
     ConversationCommandModel,
-    ConversationTaskSnapshotModel,
     ConversationTaskContextModel,
     FileSnapshotModel,
     DelegationModel,
