@@ -43,6 +43,8 @@ class TransportToolResult(TypedDict):
     display_data: dict[str, JSONValue] | None
     status_hint: str | None
     error: str | None
+    errorCode: NotRequired[str | None]
+    isError: NotRequired[bool]
 
 
 class TransportMetadata(TypedDict):
@@ -78,6 +80,7 @@ _TOOL_PART_KEYS = {
 }
 _TOOL_STATUSES = {"pending", "running", "completed", "failed", "cancelled"}
 _TOOL_RESULT_KEYS = {"status", "display_data", "status_hint", "error"}
+_OPTIONAL_TOOL_RESULT_KEYS = {"errorCode", "isError"}
 _TOOL_RESULT_STATUSES = {"success", "error", "cancelled"}
 _REQUIRED_TOOL_PART_KEYS = {
     "type",
@@ -132,6 +135,12 @@ def deserialize_transport_metadata(raw: str) -> TransportMetadata:
     """Deserialize and validate context transport metadata."""
 
     return _validate_transport_metadata(deserialize_json_object(raw, "transport_metadata"))
+
+
+def validate_transport_metadata(value: object) -> TransportMetadata:
+    """Validate already-materialized metadata without applying wire defaults."""
+
+    return _validate_transport_metadata(value)
 
 
 def serialize_run_error(value: ConversationRunError) -> str:
@@ -249,10 +258,12 @@ def _validate_transport_part(part: object) -> None:
 
 
 def _validate_tool_result(value: object) -> TransportToolResult:
-    if not isinstance(value, dict) or set(value) != _TOOL_RESULT_KEYS:
+    if not isinstance(value, dict) or not _TOOL_RESULT_KEYS.issubset(value) or set(value) - (
+        _TOOL_RESULT_KEYS | _OPTIONAL_TOOL_RESULT_KEYS
+    ):
         raise ValueError(
-            "transport_metadata.tool_result must contain exactly status, display_data, "
-            "status_hint, and error"
+            "transport_metadata.tool_result must contain status, display_data, status_hint, "
+            "and error; optional errorCode and isError are allowed"
         )
     if value["status"] not in _TOOL_RESULT_STATUSES:
         raise ValueError("transport_metadata.tool_result status is invalid")
@@ -262,6 +273,12 @@ def _validate_tool_result(value: object) -> TransportToolResult:
         raise ValueError("transport_metadata.tool_result status_hint must be a string or null")
     if value["error"] is not None and not isinstance(value["error"], str):
         raise ValueError("transport_metadata.tool_result error must be a string or null")
+    if "errorCode" in value and value["errorCode"] is not None and not isinstance(
+        value["errorCode"], str
+    ):
+        raise ValueError("transport_metadata.tool_result errorCode must be a string or null")
+    if "isError" in value and not isinstance(value["isError"], bool):
+        raise ValueError("transport_metadata.tool_result isError must be a boolean")
     _validate_json_value(value, "transport_metadata.tool_result")
     return cast(TransportToolResult, value)
 
