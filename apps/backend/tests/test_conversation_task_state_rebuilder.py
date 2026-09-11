@@ -247,6 +247,9 @@ def test_rebuild_settles_unmatched_terminal_tool_calls(
         "status": "running",
         "args": {},
         "presentation": {},
+        "error": "stale diagnostic",
+        "errorCode": "stale_error_code",
+        "display_data": {"kind": "read-file-meta", "path": "stale.py"},
         "isError": False,
     }
 
@@ -256,16 +259,25 @@ def test_rebuild_settles_unmatched_terminal_tool_calls(
         [_row(202, AIMessage(content=""), metadata=_metadata([tool_call]))],
     )
 
-    assert state["runs"][0]["messages"][0]["parts"][0] == {
+    expected_part = {
         **tool_call,
         "status": expected_status,
         "error": expected_error,
         "isError": expected_is_error,
     }
+    expected_part.pop("errorCode")
+    expected_part.pop("display_data")
+    assert state["runs"][0]["messages"][0]["parts"][0] == expected_part
 
 
 @pytest.mark.parametrize(
-    ("result", "expected_status", "expected_error", "expected_is_error"),
+    (
+        "result",
+        "expected_status",
+        "expected_error",
+        "expected_is_error",
+        "expected_display_data",
+    ),
     [
         (
             {
@@ -277,6 +289,7 @@ def test_rebuild_settles_unmatched_terminal_tool_calls(
             "completed",
             None,
             False,
+            {"kind": "file"},
         ),
         (
             {
@@ -290,6 +303,7 @@ def test_rebuild_settles_unmatched_terminal_tool_calls(
             "failed",
             "文件不存在",
             True,
+            {"status_hint": "文件不存在"},
         ),
         (
             {
@@ -301,6 +315,35 @@ def test_rebuild_settles_unmatched_terminal_tool_calls(
             "cancelled",
             "已取消",
             False,
+            {"status_hint": "已取消"},
+        ),
+        (
+            {
+                "status": "error",
+                "display_data": {
+                    "kind": "read-file-meta",
+                    "path": "secret.txt",
+                    "result": "must not reach UI",
+                },
+                "status_hint": "raw provider error details",
+                "error": "full provider error must stay out of UI",
+            },
+            "failed",
+            "读取失败",
+            True,
+            {"status_hint": "读取失败"},
+        ),
+        (
+            {
+                "status": "error",
+                "display_data": {"kind": "file-list", "files": ["secret.txt"]},
+                "status_hint": "坏\n误",
+                "error": "invalid UI hint",
+            },
+            "failed",
+            "读取失败",
+            True,
+            {"status_hint": "读取失败"},
         ),
     ],
 )
@@ -309,6 +352,7 @@ def test_rebuild_projects_tool_result_to_controlled_ui_error(
     expected_status: str,
     expected_error: str | None,
     expected_is_error: bool,
+    expected_display_data: dict[str, object],
 ) -> None:
     tool_call = {
         "type": "tool-call",
@@ -317,6 +361,7 @@ def test_rebuild_projects_tool_result_to_controlled_ui_error(
         "status": "running",
         "args": {},
         "presentation": {},
+        "errorCode": "stale_error_code",
         "isError": False,
     }
     state = ConversationTaskStateRebuilder.rebuild(
@@ -337,8 +382,11 @@ def test_rebuild_projects_tool_result_to_controlled_ui_error(
     assert part["status"] == expected_status
     assert part["error"] == expected_error
     assert part["isError"] is expected_is_error
+    assert part["display_data"] == expected_display_data
     if result.get("errorCode") is not None:
         assert part["errorCode"] == "not_found"
+    else:
+        assert "errorCode" not in part
 
 
 @pytest.mark.parametrize(
@@ -395,6 +443,14 @@ def test_rebuild_projects_tool_result_to_controlled_ui_error(
                     }
                 ]
             ),
+        ),
+        (
+            HumanMessage(content="human"),
+            _metadata([{"type": "text", "text": "ordinary text"}]),
+        ),
+        (
+            SystemMessage(content="system"),
+            _metadata([{"type": "reasoning", "text": "ordinary reasoning"}]),
         ),
     ],
 )

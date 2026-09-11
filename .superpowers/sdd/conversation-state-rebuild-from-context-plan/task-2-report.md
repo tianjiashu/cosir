@@ -70,3 +70,28 @@
   `apps/backend/tests/test_conversation_task_state_rebuilder.py`、本报告。
 - 未扩展到 Task 3：未修改 canonical context/tool/run 写路径、API/SSE、Projector、snapshot
   removal 或其它持久化集成。
+
+## Fix round 2（scoped re-review）
+
+- RED：先更新 `test_conversation_task_state_rebuilder.py`，加入终态未匹配 tool-call 清除旧
+  `display_data`/`errorCode`、失败/取消丢弃成功态展示数据、Human/System 任意非空 parts 拒绝、
+  ToolMessage 缺省 `errorCode` 清除，以及长/不可打印 `status_hint` 测试。第一轮新增断言运行结果为
+  `9 failed, 19 passed`；再加入不可打印提示回归后运行结果为 `1 failed, 28 passed`。
+- GREEN：修复后 focused `uv run pytest tests/test_conversation_task_state_rebuilder.py -q`
+  结果为 `29 passed`。
+- 相关回归：重建器、事实模型、RuntimeContextManager、Projector、工具错误工厂与生命周期测试
+  结果为 `113 passed`。
+- 静态检查：修改文件 Ruff 通过；
+  `uv run mypy --config-file mypy.strict.ini --follow-imports=skip
+  app/assistant_transport/service/conversation_task_state_rebuilder.py
+  app/core/context/agent_context_loader.py` 结果为 `Success: no issues found in 2 source files`。
+- 修复内容：失败结果只投影受控短 `status_hint`，取消结果固定为“已取消”，二者均不保留成功态
+  `kind`/path/list/diff/result 数据；成功结果保持嵌套深拷贝。终态未匹配调用清除旧展示数据和
+  错误码。Human/System 只有空 parts 才合法。`errorCode` 只从 ToolMessage 的 tool result 写入，
+  缺省时显式清除旧值。`tool_error` 与重建器共用长度、空白和可打印性归一化规则。
+- Fix round 2 修改文件：
+  `apps/backend/app/assistant_transport/service/conversation_task_state_rebuilder.py`、
+  `apps/backend/app/core/tools/tool_execute/tool_error.py`、
+  `apps/backend/tests/test_conversation_task_state_rebuilder.py`、本报告。
+- 未扩展到 Task 3：未修改 snapshot removal、canonical writers、API/SSE、Projector read/write
+  path 或其它持久化集成。

@@ -31,6 +31,22 @@ _DEFAULT_STATUS_HINTS = {
     "web_extract": "提取失败",
     "delegate_task": "委派失败",
 }
+STATUS_HINT_MAX_LENGTH = 8
+
+
+def normalize_status_hint(tool_name: str, status_hint: object) -> str:
+    """Return the bounded UI hint used by failed tool observations.
+
+    The persisted transport result is untrusted reconstruction input, so its hint
+    follows the same fallback rule as :func:`tool_error`: only a non-empty,
+    trimmed string within the UI length budget is retained.  Otherwise the
+    tool's controlled default (or the generic failure hint) is returned.
+    """
+
+    hint = status_hint.strip() if isinstance(status_hint, str) else ""
+    if not hint or len(hint) > STATUS_HINT_MAX_LENGTH or not hint.isprintable():
+        return _DEFAULT_STATUS_HINTS.get(tool_name, "执行失败")
+    return hint
 
 
 def os_error_message(exc: OSError, action: str) -> str:
@@ -207,8 +223,6 @@ def tool_error(
         tool_call_id=tool_call_id,
     )
     # 错误 UI 通道只保留后端显式传入的短提示；完整 error/reason/content 仅供模型通道。
-    hint = status_hint.strip() if isinstance(status_hint, str) else ""
-    if not hint or len(hint) > 8:
-        hint = _DEFAULT_STATUS_HINTS.get(tool_name, "执行失败")
+    hint = normalize_status_hint(tool_name, status_hint)
     observation.display_data = {"status_hint": hint}
     return observation

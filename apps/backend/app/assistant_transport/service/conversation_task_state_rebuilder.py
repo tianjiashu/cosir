@@ -16,6 +16,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.core.context.agent_context_loader import AgentContextLoader, load_agent_context
+from app.core.tools.tool_execute.tool_error import normalize_status_hint
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.json_helpers import validate_transport_metadata
@@ -245,6 +246,8 @@ class ConversationTaskStateRebuilder:
                 part["status"] = "failed"
                 part["error"] = "执行异常"
                 part["isError"] = True
+            part.pop("display_data", None)
+            part.pop("errorCode", None)
 
         for run in sorted(run_records, key=lambda item: (item.created_at, item.id)):
             snapshot_runs.append(
@@ -352,7 +355,6 @@ class ConversationTaskStateRebuilder:
                 context_row_id=row.id,
             )
         tool_result = metadata["tool_result"]
-        has_tool_part = any(part.get("type") == "tool-call" for part in metadata["parts"])
         message_name = type(row.message).__name__
         if isinstance(row.message, AIMessage) and tool_result is not None:
             raise ConversationStateRebuildError(
@@ -371,7 +373,7 @@ class ConversationTaskStateRebuilder:
                 context_row_id=row.id,
             )
         if isinstance(row.message, HumanMessage | SystemMessage) and (
-            tool_result is not None or has_tool_part
+            tool_result is not None or metadata["parts"]
         ):
             raise ConversationStateRebuildError(
                 "misplaced_transport_metadata",
@@ -394,15 +396,22 @@ class ConversationTaskStateRebuilder:
         if result_status == "success":
             part["error"] = None
             part["isError"] = False
+            part["display_data"] = copy.deepcopy(result["display_data"])
         elif result_status == "error":
-            part["error"] = result["status_hint"] or "执行失败"
+            status_hint = normalize_status_hint(
+                str(part["toolName"]), result["status_hint"]
+            )
+            part["error"] = status_hint
             part["isError"] = True
+            part["display_data"] = {"status_hint": status_hint}
         else:
             part["error"] = "已取消"
             part["isError"] = False
-        part["display_data"] = copy.deepcopy(result["display_data"])
+            part["display_data"] = {"status_hint": "已取消"}
         if "errorCode" in result:
             part["errorCode"] = result["errorCode"]
+        else:
+            part.pop("errorCode", None)
 __all__ = [
     "AgentContextLoader",
     "ConversationStateRebuildError",
