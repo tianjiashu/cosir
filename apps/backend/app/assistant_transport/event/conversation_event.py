@@ -31,12 +31,9 @@ from app.assistant_transport.event.tool_call_event import (
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
 )
-from app.assistant_transport.event.usage_event import (
-    ContextUsageUpdatedEvent,
-    UsageUpdatedEvent,
-)
+from app.assistant_transport.event.usage_event import ContextUsageUpdatedEvent
 
-# 按「产生顺序」而非字母序排列：run 建立 → 用户输入 → assistant 输出 → 工具 → 计量，
+# 按「产生顺序」而非字母序排列：run 建立 → 用户输入 → assistant 输出 → 工具 → 状态/计量，
 # 使本清单同时充当一次 run 的时间线说明。
 ConversationEvent = Annotated[
     RunInitializedEvent
@@ -47,7 +44,6 @@ ConversationEvent = Annotated[
     | ToolCallCreatedEvent
     | ToolCallStatusChangedEvent
     | ToolCallsSettledEvent
-    | UsageUpdatedEvent
     | ContextUsageUpdatedEvent,
     Field(discriminator="type"),
 ]

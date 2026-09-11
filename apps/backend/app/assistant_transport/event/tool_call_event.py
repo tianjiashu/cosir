@@ -25,14 +25,14 @@ from app.models.enums.tool_call_status import ToolCallEventStatus
 class ToolCallCreatedEvent(ConversationEventEnvelope):
     """模型已请求一次工具调用。
 
-    事实语义：模型产出了一个工具调用（参数已确定），Transport 侧应在 assistant 消息中
-    建立对应的 tool-call part 并置 ``pending``。本事件在进入审批或执行**之前**发出，
+    事实语义：模型产出了一个工具调用身份，Transport 侧应在 assistant 消息中建立对应的
+    tool-call part 并置 ``pending``。参数可能仍在模型流中累积，由后续
+    ``ToolCallStatusChangedEvent.args`` 写入。本事件在进入审批或执行**之前**发出，
     使前端能在工具真正跑起来之前就看到「模型打算做什么」。
 
     Attributes:
         tool_call_id: 工具调用在 Task 内唯一的稳定标识（模型提供或由执行链生成）。
         tool_name: 被调用工具名。
-        args: 工具入参；非对象形态的入参在投影时归一为空对象。
         presentation: 「怎么展示」的静态外壳声明，由 ``ToolDefinition.display``
             （``ToolDisplayHints``）经 ``to_dict()`` 序列化得到，**同一种工具每次调用
             完全相同**。只含字面量字段（``verb`` 动词、``icon`` 图标、``surface`` 展示面、
@@ -40,16 +40,10 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
             ``show_result`` 是否展示模型结果）；
             不含 Callable、摘要文本或条目内容。前端据此决定外壳布局与图标。
             **不进入模型上下文**。
-        data: 「展示什么内容」的动态载荷。它是执行后由
-            ``ToolCallStatusChangedEvent.data`` 写入的通用结构化 UI 数据（文件列表、diff、
-            读取元数据等）；执行前通常为 ``None``。**不进入模型上下文**。
-
-        二者对比：``presentation`` 是 UI 外壳与行为配置（同工具恒定），``data`` 是 UI 内容
-            载荷（逐次调用不同、随执行推进刷新）；二者均由 ``plan`` 原样拷入 snapshot 的
-            tool-call part，再经 converter 映射为前端 ``artifact``，均不进入模型上下文。
+        本事件只携带工具身份与静态展示声明，不携带参数或执行结果。
 
     异常:
-        pydantic.ValidationError: 标识或工具名为空、``args`` 非对象，或出现未声明字段时抛出。
+        pydantic.ValidationError: 标识或工具名为空，或出现未声明字段时抛出。
 
     副作用:
         无；本事件只描述已发生的事实，不执行任何写入。
@@ -58,9 +52,7 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
     type: Literal["tool_call_created"] = "tool_call_created"
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
-    args: dict[str, object] = Field(default_factory=dict)
     presentation: dict[str, object] = Field(default_factory=dict)
-    data: dict[str, object] | None = None
 
     def plan(
         self,
@@ -102,10 +94,8 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
                     "toolCallId": self.tool_call_id,
                     "toolName": self.tool_name,
                     "status": "pending",
-                    "args": copy.deepcopy(self.args),
                     "error": None,
                     "presentation": copy.deepcopy(self.presentation),
-                    "data": copy.deepcopy(self.data) if self.data is not None else None,
                     "isError": False,
                     "approvalRequestId": None,
                 },
@@ -116,15 +106,17 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
 class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     """一次工具调用的状态已经迁移。
 
-    事实语义：工具已被开始执行，或已执行结束（成功 / 失败 / 取消），Transport 侧应把
-    对应 tool-call part 迁移到目标状态，并写入错误与展示数据（均不进入模型上下文）。
+    事实语义：工具已准备执行、开始执行，或已执行结束（成功 / 失败 / 取消），Transport
+    侧应把对应 tool-call part 迁移到目标状态，并按需写入已累积的参数、错误与展示数据
+    （均不进入模型上下文）。
     所有非终态与终态迁移统一由本类型表达，不为每个目标状态单开事件类型。
 
     Attributes:
         tool_call_id: 目标工具调用标识。
         status: 迁移后的状态。
+        args: 已完成解析的工具入参；通常随 ``running`` 一起发送，为 ``None`` 时保留已有参数。
         error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
-        data: 面向 UI 的结构化展示结果；不进入模型上下文。
+        display_data: 面向 UI 的结构化展示结果；不进入模型上下文。
 
     异常:
         pydantic.ValidationError: 标识为空、``status`` 取值非法，或出现未声明字段时抛出。
@@ -136,8 +128,9 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     type: Literal["tool_call_status_changed"] = "tool_call_status_changed"
     tool_call_id: str = Field(min_length=1)
     status: ToolCallEventStatus
+    args: dict[str, object] | None = None
     error: str | None = None
-    data: dict[str, object] | None = None
+    display_data: dict[str, object] | None = None
 
     def plan(
         self,
@@ -149,7 +142,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             state: 当前 Task snapshot。
 
         返回:
-            更新 ``status`` / ``error`` / ``isError``（及可选 ``data``）的
+            更新 ``status`` / ``args`` / ``error`` / ``isError``（及可选 ``display_data``）的
             mutation 列表。
 
         异常:
@@ -184,10 +177,17 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             ),
             ConversationStateMutation("set", (*base, "isError"), self.status == "failed"),
         ]
-        if self.data is not None:
+        if self.args is not None:
+            mutations.insert(
+                1,
+                ConversationStateMutation("set", (*base, "args"), copy.deepcopy(self.args)),
+            )
+        if self.display_data is not None:
             mutations.insert(
                 2,
-                ConversationStateMutation("set", (*base, "data"), copy.deepcopy(self.data)),
+                ConversationStateMutation(
+                    "set", (*base, "display_data"), copy.deepcopy(self.display_data)
+                ),
             )
         return mutations
 

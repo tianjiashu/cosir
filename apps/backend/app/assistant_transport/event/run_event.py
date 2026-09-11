@@ -6,8 +6,7 @@ run 执行状态的迁移（含终态）。run 内消息与工具的细节事实
 
 状态词表直接复用 ``ConversationRunStatus``（领域枚举单一事实源），不在本模块重复字面量。
 
-不负责：用户输入的文本内容（见 ``message_event``）、工具调用生命周期（见 ``tool_call_event``）、
-token 计量（见 ``usage_event``）。
+不负责：用户输入的文本内容（见 ``message_event``）、工具调用生命周期（见 ``tool_call_event``）。
 """
 
 from collections.abc import Sequence
@@ -119,6 +118,8 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         status: 迁移后的 run 状态，取值受 ``ConversationRunStatus`` 约束。
         end_reason: 终态原因（如 ``"invalid_model_output"`` / ``"user_cancelled"`` /
             ``"backend_restarted"``）；非终态迁移为 ``None``。
+        usage_stats: Run 终态时随事件附带的完整累计 token 用量；未获得 provider usage 时为
+            ``None``。
 
     异常:
         pydantic.ValidationError: ``status`` 不在枚举内，或出现未声明字段时抛出。
@@ -147,7 +148,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             收口为 completed。
 
         异常:
-            KeyError: 携带 ``usage_stats`` 或终态时，对应 assistant message 不存在。
+            KeyError: 事件引用的 Run 或 assistant message 不存在。
 
         副作用:
             无。
@@ -167,9 +168,8 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         if self.usage_stats is not None:
             incoming_usage = self.usage_stats.to_dict()
             current_usage = state["runs"][run_index]["usage"]
-            # 终态事件可能在最后一个 UsageUpdatedEvent 之前或之后到达；它携带的
-            # provider usage 仍然必须遵守完整累计值的单调替换语义，不能把较大的
-            # 已确认累计值回滚成较小的终态摘要。
+            # 用量只在终态事件中写入；保留单调替换保护，避免重复投递或恢复流程中
+            # 较小的终态摘要覆盖已经确认的累计值。
             if current_usage is None or all(
                 current_usage[key] is None
                 or incoming_usage[key] is None

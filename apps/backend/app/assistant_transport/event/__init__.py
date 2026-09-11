@@ -41,7 +41,6 @@ from app.assistant_transport.event.tool_call_event import (
 )
 from app.assistant_transport.event.usage_event import (
     ContextUsageUpdatedEvent,
-    UsageUpdatedEvent,
 )
 
 __all__ = [
@@ -57,6 +56,5 @@ __all__ = [
     "ToolCallEventStatus",
     "ToolCallStatusChangedEvent",
     "ToolCallsSettledEvent",
-    "UsageUpdatedEvent",
     "UserInputAppendedEvent",
 ]

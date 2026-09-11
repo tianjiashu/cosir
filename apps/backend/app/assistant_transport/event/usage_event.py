@@ -1,11 +1,7 @@
-"""计量类事件（token 消耗与上下文占用）。
+"""上下文窗口占用事件。
 
-本模块只承载「一次 run 的资源计量」这一单一职责：模型 token 消耗与上下文窗口占用。二者都是
-**展示与配额提示**性质的事实，不参与 Agent 控制流，因此与 run / message / tool_call 事件分开
-成模块。每个事件把自身的投影逻辑实现在 ``plan`` 中。
-
-字段与 ``ConversationRunUsageStats.to_dict()`` 的键一一对应，使投影时无需推导或补齐逻辑——
-event 携带什么，快照就存什么。
+模型 token 用量不再通过独立事件流式投影，而是在 Run 终态的
+``RunStatusChangedEvent.usage_stats`` 中一次性写入；本模块只承载上下文窗口占用事实。
 """
 
 import math
@@ -77,67 +73,4 @@ class ContextUsageUpdatedEvent(ConversationEventEnvelope):
             ConversationStateMutation(
                 "set", ("context_window_total",), self.context_window_tokens
             ),
-        ]
-
-
-class UsageUpdatedEvent(ConversationEventEnvelope):
-    """一次模型调用后的累计 token 用量已经更新。"""
-
-    type: Literal["usage_updated"] = "usage_updated"
-    input_tokens: StrictInt = Field(default=0, ge=0)
-    output_tokens: StrictInt = Field(default=0, ge=0)
-    total_tokens: StrictInt = Field(default=0, ge=0)
-    cache_hit_tokens: StrictInt = Field(default=0, ge=0)
-    cache_miss_tokens: StrictInt | None = Field(default=None, ge=0)
-    reasoning_tokens: StrictInt = Field(default=0, ge=0)
-
-    def plan(
-        self,
-        state: ConversationStateSnapshot,
-    ) -> Sequence[ConversationStateMutation]:
-        """规划累计模型用量的完整替换。
-
-        参数:
-            _state: 未使用；累计用量由事件自带字段完整描述。
-
-        返回:
-            单条 ``set`` mutation，把 ``usage`` 设为事件携带的用量字典。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        run_index = self._find_run(state, self.run_id)
-        current_usage = state["runs"][run_index]["usage"]
-        incoming_usage = {
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "total_tokens": self.total_tokens,
-            "cache_hit_tokens": self.cache_hit_tokens,
-            "cache_miss_tokens": self.cache_miss_tokens,
-            "reasoning_tokens": self.reasoning_tokens,
-        }
-        if current_usage is not None and any(
-            current_usage[key] is not None
-            and incoming_usage[key] is not None
-            and current_usage[key] > incoming_usage[key]
-            for key in incoming_usage
-        ):
-            return []
-        return [
-            ConversationStateMutation(
-                "set",
-                ("runs", run_index, "usage"),
-                {
-                    "input_tokens": self.input_tokens,
-                    "output_tokens": self.output_tokens,
-                    "total_tokens": self.total_tokens,
-                    "cache_hit_tokens": self.cache_hit_tokens,
-                    "cache_miss_tokens": self.cache_miss_tokens,
-                    "reasoning_tokens": self.reasoning_tokens,
-                },
-            )
         ]
