@@ -33,12 +33,12 @@ from app.models.task_record import TaskRecord
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_run_service import ConversationRunService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.init_schema import initialize_app_schema
 from app.task_runtime.service.task_service import TaskService
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 def _timestamp(second: int = 0) -> datetime:
