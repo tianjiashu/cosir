@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.event import RunStatusChangedEvent
@@ -553,6 +554,35 @@ def test_context_storage_has_durable_tool_settle_uniqueness_and_crud_reports_dup
             assert crud.create(first, session=session) is True
             assert crud.create(duplicate, session=session) is False
             assert len(session.scalars(select(ConversationTaskContextModel)).all()) == 1
+    finally:
+        engine.dispose()
+
+
+def test_context_crud_does_not_swallow_non_tool_uniqueness_integrity_error() -> None:
+    """A sequence collision for another tool id is a real DB failure, not a duplicate settle."""
+
+    engine = create_engine("sqlite://")
+    StorageBase.metadata.create_all(engine)
+    try:
+        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+        first = ConversationTaskContextRecord(
+            task_id=7,
+            run_id=11,
+            message=ToolMessage(content="done", tool_call_id="call-1", status="success"),
+            include_in_context=True,
+            sequence=1,
+        )
+        conflicting_sequence = ConversationTaskContextRecord(
+            task_id=7,
+            run_id=11,
+            message=ToolMessage(content="other", tool_call_id="call-2", status="success"),
+            include_in_context=True,
+            sequence=1,
+        )
+        with Session(engine) as session:
+            assert crud.create(first, session=session) is True
+            with pytest.raises(IntegrityError):
+                crud.create(conflicting_sequence, session=session)
     finally:
         engine.dispose()
 

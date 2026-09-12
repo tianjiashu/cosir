@@ -393,6 +393,7 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
     class _RuntimeContext:
         def add_message(self, message: ToolMessage, **kwargs: Any) -> None:
             assert kwargs["tool_result"]["display_data"] == {"status_hint": "执行失败"}
+            assert kwargs["tool_result"]["error"] is None
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
@@ -647,6 +648,38 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
 
     assert result is run
     assert order == ["database", "event"]
+
+
+def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> None:
+    run = _run_record()
+    committed: list[str] = []
+
+    class _RunCrud:
+        def update_status_if_in(self, *args: Any, **kwargs: Any):
+            committed.append("database")
+            run.status = "completed"
+            return run
+
+        def get(self, _run_id: int):
+            return run
+
+    class _Projector:
+        def process(self, _event: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("transport unavailable")
+
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = _RunCrud()
+    import app.service.depends as depends
+
+    original_getter = depends.get_conversation_event_projector
+    depends.get_conversation_event_projector = lambda: _Projector()
+    try:
+        result = service.complete_run_if_running(11, final_output="done")
+    finally:
+        depends.get_conversation_event_projector = original_getter
+
+    assert result is run
+    assert committed == ["database"]
 
 
 def test_context_usage_persists_window_before_publishing_event(monkeypatch) -> None:

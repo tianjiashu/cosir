@@ -106,7 +106,16 @@ class ConversationTaskContextCrud:
                 session.flush()
         except IntegrityError:
             if isinstance(record.message, ToolMessage) and record.message.tool_call_id:
-                return False
+                duplicate = session.scalar(
+                    select(ConversationTaskContextModel.id).where(
+                        ConversationTaskContextModel.task_id == record.task_id,
+                        ConversationTaskContextModel.run_id == record.run_id,
+                        ConversationTaskContextModel.tool_call_id
+                        == record.message.tool_call_id,
+                    )
+                )
+                if duplicate is not None:
+                    return False
             raise
         return True
 

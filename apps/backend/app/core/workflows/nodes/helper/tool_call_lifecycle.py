@@ -318,7 +318,10 @@ class ToolCallLifecycleManager(BaseModel):
             "status": observation.status,
             "display_data": result_display_data,
             "status_hint": status_hint,
-            "error": observation.error or None,
+            # Full observation errors are model-facing diagnostics and may contain provider
+            # details. Transport metadata is durable UI data, so only the controlled hint is
+            # persisted here; the ToolMessage retains the diagnostic for the model.
+            "error": None,
         }
         created = runtime_context.add_message(
             operations.to_tool_model_message(observation),

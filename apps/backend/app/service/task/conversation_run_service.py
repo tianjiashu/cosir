@@ -79,6 +79,31 @@ class ConversationRunService:
             "retryable": False,
         }
 
+    @staticmethod
+    def _publish_post_commit_event(event: object, event_name: str) -> None:
+        """Publish a post-commit transport event without hiding durable DB failures.
+
+        Run/context persistence is the business fact boundary. Once its transaction has
+        committed, a projector or subscriber failure is a degraded read-model/transport
+        condition and must be logged rather than aborting the Agent execution. Callers must
+        invoke this helper only after the owning database write has succeeded.
+        """
+
+        try:
+            service_depends.get_conversation_event_projector().process(event)
+        except Exception:
+            log.exception(
+                "conversation_post_commit_event_failed",
+                extra={
+                    "msg": "业务事实已提交，Transport 事件失败并被降级",
+                    "data": {
+                        "event_name": event_name,
+                        "task_id": getattr(event, "task_id", None),
+                        "run_id": getattr(event, "run_id", None),
+                    },
+                },
+            )
+
     def have_run_in_runing(self, task_id: int, session: Session | None = None) -> bool:
         """检查任务是否正在运行中。
 
@@ -247,12 +272,13 @@ class ConversationRunService:
         record = self._run.resume_cancelled(run_id)
         if record is None:
             return None
-        service_depends.get_conversation_event_projector().process(
+        self._publish_post_commit_event(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.RUNNING,
-            )
+            ),
+            "run_running",
         )
         return record
 
@@ -349,13 +375,14 @@ class ConversationRunService:
         )
         if record is None:
             return None
-        service_depends.get_conversation_event_projector().process(
+        self._publish_post_commit_event(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.COMPLETED,
                 usage_stats=usage_stats,
-            )
+            ),
+            "run_completed",
         )
         return self._run.get(run_id)
 
@@ -379,14 +406,15 @@ class ConversationRunService:
         )
         if record is None:
             return None
-        service_depends.get_conversation_event_projector().process(
+        self._publish_post_commit_event(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.COMPLETED,
                 end_reason=end_reason,
                 usage_stats=usage_stats,
-            )
+            ),
+            "run_completed",
         )
         return self._run.get(run_id)
 
@@ -432,14 +460,15 @@ class ConversationRunService:
         )
         if record is None:
             return None
-        service_depends.get_conversation_event_projector().process(
+        self._publish_post_commit_event(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.FAILED,
                 end_reason=end_reason,
                 usage_stats=usage_stats,
-            )
+            ),
+            "run_failed",
         )
         return self._run.get(run_id)
 
@@ -468,14 +497,15 @@ class ConversationRunService:
         )
         if record is None:
             return None
-        service_depends.get_conversation_event_projector().process(
+        self._publish_post_commit_event(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.FAILED,
                 end_reason=end_reason,
                 usage_stats=usage_stats,
-            )
+            ),
+            "run_failed",
         )
         return self._run.get(run_id)
 
@@ -509,14 +539,15 @@ class ConversationRunService:
         )
         if record is None:
             return None
-        service_depends.get_conversation_event_projector().process(
+        self._publish_post_commit_event(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.CANCELLED,
                 end_reason=end_reason,
                 usage_stats=usage_stats,
-            )
+            ),
+            "run_cancelled",
         )
         return self._run.get(run_id)
 
