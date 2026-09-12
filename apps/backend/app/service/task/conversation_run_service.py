@@ -340,7 +340,7 @@ class ConversationRunService:
                     extra={
                         "msg": "orphan Run terminal status 已持久化",
                         "data": {
-                            "task_id": record.task_id,
+                            "task_id": getattr(record, "task_id", None),
                             "run_id": record.id,
                             "status": ConversationRunStatus.CANCELLED.value,
                         },
@@ -352,7 +352,7 @@ class ConversationRunService:
                         extra={
                             "msg": "orphan tool repair 已提交",
                             "data": {
-                                "task_id": record.task_id,
+                                "task_id": getattr(record, "task_id", None),
                                 "run_id": record.id,
                                 "tool_call_id": tool_call_id,
                                 "status": "cancelled",
