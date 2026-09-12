@@ -2,7 +2,9 @@
 
 ## 结果
 
-状态：实现完成，待提交哈希写回本报告。
+状态：DONE
+
+实现提交：`2d337a7`（`feat: rebuild assistant state from canonical context`）。
 
 ConversationStateSnapshot 现在只作为 Assistant Transport 进程内 working state 存在。冷读
 统一从 `TaskRecord`、该 Task 的 `ConversationRunRecord[]` 与
@@ -56,4 +58,4 @@ ConversationStateSnapshot 现在只作为 Assistant Transport 进程内 working 
 
 ## 提交
 
-- 实现提交：将在本报告写回实现提交哈希后单独提交报告。
+- 报告更新提交：实现提交后写回哈希并单独提交。
