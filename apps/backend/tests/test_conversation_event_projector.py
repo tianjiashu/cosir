@@ -46,9 +46,12 @@ class InMemorySnapshotService:
         state = self.states.setdefault(task_id, empty_snapshot())
         return copy.deepcopy(state)
 
-    def apply_planned(self, task_id: int, planner: Any) -> SnapshotChange:
+    def apply_planned(self, event: object) -> SnapshotChange:
+        """按生产口径投影一条事件：由事件自带 ``plan`` 产出 mutation 后落回进程内状态。"""
+
+        task_id = event.task_id
         state = self.get_state(task_id)
-        mutations = tuple(planner(copy.deepcopy(state)))
+        mutations = tuple(event.plan(copy.deepcopy(state)))
         for mutation in mutations:
             _apply_mutation(state, mutation)
         validate_snapshot(state)
@@ -414,31 +417,24 @@ def test_historical_run_status_event_updates_its_own_run(
     assert _run(state, 2)["status"] == "pending"
 
 
-def test_unknown_run_event_is_logged_and_not_projected(
+def test_unknown_run_event_raises_and_is_not_projected(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """事件引用快照里不存在的 Run 时按契约 fail-fast，不写入任何 mutation。"""
+
     event_projector, snapshots = projector
-    caplog.set_level("WARNING")
-    change = event_projector.process(
-        RunStatusChangedEvent(
-            task_id=1,
-            run_id=404,
-            status=ConversationRunStatus.COMPLETED,
-            usage_stats=ConversationRunUsageStats(
-                input_tokens=1, output_tokens=1, total_tokens=2
-            ),
+    with pytest.raises(KeyError, match="run 404 not found"):
+        event_projector.process(
+            RunStatusChangedEvent(
+                task_id=1,
+                run_id=404,
+                status=ConversationRunStatus.COMPLETED,
+                usage_stats=ConversationRunUsageStats(
+                    input_tokens=1, output_tokens=1, total_tokens=2
+                ),
+            )
         )
-    )
-    assert change is not None and change.mutations == ()
-    assert snapshots.states[1] == empty_snapshot()
-    record = next(
-        record for record in caplog.records if record.msg == "conversation_event_unknown_run"
-    )
-    assert record.data["task_id"] == 1
-    assert record.data["run_id"] == 404
-    assert record.data["event_type"] == "run_status_changed"
-    assert record.data["event_id"]
+    assert snapshots.states.get(1, empty_snapshot()) == empty_snapshot()
 
 
 def test_late_run_initialization_cannot_rewind_terminal_newer_run(

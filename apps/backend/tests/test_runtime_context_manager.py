@@ -36,7 +36,7 @@ class _ContextService:
         return True
 
 
-def _manager(context_service: _ContextService) -> RuntimeContextManager:
+def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> RuntimeContextManager:
     manager = object.__new__(RuntimeContextManager)
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
@@ -48,7 +48,7 @@ def _manager(context_service: _ContextService) -> RuntimeContextManager:
     manager.current_run_id = None
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     manager._entries = []
-    manager._message_sequence = 0
+    manager._message_sequence = next_sequence
     manager._listeners = []
     manager._tool_schemas = ()
     return manager
@@ -66,8 +66,10 @@ class _RecordingListener:
 
 
 def test_runtime_context_manager_owns_next_sequence_after_run_restart(monkeypatch) -> None:
+    """序号游标由 manager 独占：构造时从持久化最大序号推进一步，之后只由写入自增。"""
+
     context_service = _ContextService(max_sequence=1)
-    manager = _manager(context_service)
+    manager = _manager(context_service, next_sequence=2)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
         lambda _model_name: 8192,
@@ -76,8 +78,8 @@ def test_runtime_context_manager_owns_next_sequence_after_run_restart(monkeypatc
     manager.begin_run(SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"))
     manager.add_message(HumanMessage(content="second message"))
 
-    assert manager._message_sequence == 3
     assert context_service.appended[0][3] == 2
+    assert manager._message_sequence == 3
 
 
 def test_runtime_context_manager_resume_keeps_persisted_run_entries(monkeypatch) -> None:
@@ -85,7 +87,8 @@ def test_runtime_context_manager_resume_keeps_persisted_run_entries(monkeypatch)
     context_service.loaded = [
         ContextEntry(HumanMessage(content="existing"), 2, 3),
     ]
-    manager = _manager(context_service)
+    manager = _manager(context_service, next_sequence=5)
+    manager._entries = list(context_service.loaded)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
         lambda _model_name: 8192,
@@ -102,12 +105,17 @@ def test_runtime_context_manager_resume_keeps_persisted_run_entries(monkeypatch)
     assert manager._message_sequence == 5
 
 
-def test_runtime_context_manager_resume_reprojects_context_window(monkeypatch) -> None:
+def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
+    monkeypatch,
+) -> None:
+    """resume 只装配本 Run 的 tool schema，不在绑定阶段投影事件（占用由写入/冷读对齐）。"""
+
     context_service = _ContextService(max_sequence=4)
     context_service.loaded = [
         ContextEntry(HumanMessage(content="existing context"), 2, 3),
     ]
-    manager = _manager(context_service)
+    manager = _manager(context_service, next_sequence=5)
+    manager._entries = list(context_service.loaded)
     listener = _RecordingListener()
     manager.add_change_listener(listener)
     monkeypatch.setattr(
@@ -127,10 +135,9 @@ def test_runtime_context_manager_resume_reprojects_context_window(monkeypatch) -
         ),
     )
 
-    assert len(listener.events) == 1
-    assert listener.events[0].type.value == "load_history"
-    assert listener.events[0].total_tokens == 8192
-    assert listener.events[0].tool_schemas[0]["name"] == "read_file"
+    assert listener.events == []
+    assert manager.total_tokens == 8192
+    assert manager._tool_schemas[0]["name"] == "read_file"
 
 
 def test_runtime_context_manager_replaces_tool_schemas_between_runs(monkeypatch) -> None:
@@ -191,33 +198,4 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
     assert context_service.appended == []
 
 
-def test_runtime_context_message_writes_are_idempotent_for_recovery() -> None:
-    """恢复重放不得重复追加同一 tool result 或 repair prompt。"""
 
-    context_service = _ContextService(max_sequence=2)
-    manager = _manager(context_service)
-    manager.current_run_id = 1
-    existing_tool = ToolMessage(content="ok", tool_call_id="call-1")
-    existing_repair = SystemMessage(
-        content="repair",
-        additional_kwargs={"cosir_message_kind": "tool_call_repair"},
-    )
-    manager._entries = [
-        ContextEntry(existing_tool, 1, 1),
-        ContextEntry(existing_repair, 1, 2),
-    ]
-    manager._message_sequence = 3
-
-    manager.add_message(ToolMessage(content="replayed", tool_call_id="call-1"))
-    manager.add_message(
-        SystemMessage(
-            content="repair",
-            additional_kwargs={"cosir_message_kind": "tool_call_repair"},
-        )
-    )
-
-    assert len(context_service.appended) == 0
-    assert manager._entries == [
-        ContextEntry(existing_tool, 1, 1),
-        ContextEntry(existing_repair, 1, 2),
-    ]

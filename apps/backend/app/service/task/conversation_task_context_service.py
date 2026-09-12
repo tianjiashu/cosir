@@ -109,19 +109,6 @@ class ConversationTaskContextService:
             for record in records
         ]
 
-    def entries(self, task_id: int) -> list[ContextEntry]:
-        """返回 Task 全部 context entry（不分纳入标记）。"""
-
-        records = self._crud.get(task_id, include_in_context=False) or []
-        return [
-            ContextEntry(
-                run_id=record.run_id,
-                message=record.message,
-                sequence=record.sequence,
-            )
-            for record in records
-        ]
-
     def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""
 
@@ -253,18 +240,3 @@ class ConversationTaskContextService:
             repaired.append(slot.call_id)
             next_sequence += 1
         return repaired
-
-    def _entries_in_context_with_session(
-        self, task_id: int, session: Session
-    ) -> list[ContextEntry]:
-        """在调用方事务内读取 context，避免恢复时读写跨越提交边界。"""
-
-        records = self._crud.get(task_id, session=session) or []
-        return [
-            ContextEntry(
-                run_id=record.run_id,
-                message=record.message,
-                sequence=record.sequence,
-            )
-            for record in records
-        ]

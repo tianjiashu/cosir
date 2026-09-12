@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypedDict
+
 from app.utils.datetime_utils import from_text, to_text
 
 if TYPE_CHECKING:
@@ -156,9 +157,13 @@ class ConversationRunRecord:
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "extra": self.extra,
-            "usage_json": json.dumps(self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False),
+            "usage_json": json.dumps(
+                self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False
+            ),
             "error_json": (
-                json.dumps(self.error, ensure_ascii=False, sort_keys=True, allow_nan=False) if self.error is not None else None
+                json.dumps(self.error, ensure_ascii=False, sort_keys=True, allow_nan=False)
+                if self.error is not None
+                else None
             ),
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),

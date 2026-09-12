@@ -81,6 +81,7 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell smoke test is Windows-only")
+@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
 def test_real_worker_powershell_command_exits(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
     exited = threading.Event()

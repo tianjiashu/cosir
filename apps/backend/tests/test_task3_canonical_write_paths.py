@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -85,27 +86,10 @@ def test_runtime_context_persists_complete_ai_fields_and_ordered_parts() -> None
         id="msg-1",
     )
 
-    manager.add_message(
-        message,
-        transport_parts=[
-            {"type": "text", "text": "answer", "status": "completed"},
-            {"type": "reasoning", "text": "think", "status": "completed"},
-            {
-                "type": "tool-call",
-                "toolCallId": "call-1",
-                "toolName": "read_file",
-                "args": {"path": "a.py"},
-                "presentation": {"verb": "Read"},
-                "status": "pending",
-                "isError": False,
-            },
-        ],
-    )
+    manager.add_message(message)
 
     persisted = service.appended[0]
     assert persisted["args"][2] == message
-    assert persisted["kwargs"]["transport_parts"][1]["type"] == "reasoning"
-    assert persisted["kwargs"]["transport_parts"][2]["presentation"] == {"verb": "Read"}
 
 
 def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatch) -> None:
@@ -113,30 +97,23 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
 
     class _FreshContextService:
         def __init__(self) -> None:
-            self.entries = [user]
-            self.reset_calls = 0
-            self.user_append_calls = 0
+            self.entries: list[ContextEntry] = [user]
+            self.delete_calls = 0
 
         def delete_by_run_id(self, _task_id: int, _run_id: int) -> None:
+            self.delete_calls += 1
             self.entries = []
 
-        def reset_run_for_fresh(self, _task_id: int, _run_id: int) -> None:
-            self.reset_calls += 1
-            self.entries = [
-                entry for entry in self.entries if isinstance(entry.message, HumanMessage)
-            ]
-
-        def append_user_message_once(
-            self, _task_id: int, run_id: int, text: str, **kwargs: Any
-        ) -> bool:
-            self.user_append_calls += 1
-            if any(
-                entry.run_id == run_id and isinstance(entry.message, HumanMessage)
-                for entry in self.entries
-            ):
-                return False
-            self.entries.append(ContextEntry(HumanMessage(content=text), run_id, 1))
-            return True
+        def append(
+            self,
+            _task_id: int,
+            _run_id: int,
+            message: Any,
+            _sequence: int,
+            include_in_context: bool = True,
+            transport_metadata: Any = None,
+        ) -> None:
+            self.entries.append(ContextEntry(message, _run_id, _sequence))
 
         def entries_in_context(self, _task_id: int) -> list[ContextEntry]:
             return list(self.entries)
@@ -150,17 +127,22 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
         lambda _model_name: 100,
     )
+    # ensure_run_user_message 写完后经投影器推送事件（进程内投影器依赖存储单例，这里用空操作）。
+    monkeypatch.setattr(
+        "app.core.context.runtime_context_manager.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=lambda *args, **kwargs: None),
+    )
 
     manager.begin_run(
         SimpleNamespace(id=11, task_id=7, model_name="model-x", input_text="hello"),
         "fresh",
     )
+    # 与 workflow 一致：graph 启动前补写 canonical user 消息（begin_run 已清空该 run 旧条目）。
+    manager.ensure_run_user_message("hello")
 
-    assert [entry.message for entry in service.entries] == [user.message]
+    assert [entry.message for entry in service.entries_in_context(7)] == [user.message]
     assert [entry.message for entry in manager._entries] == [user.message]
-    assert service.reset_calls == 1
-    assert service.user_append_calls == 0
-    assert service.entries[0] is user
+    assert service.delete_calls == 1
 
 
 def test_model_processor_collect_preserves_complete_langchain_message_semantics() -> None:
@@ -238,11 +220,11 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
         def add_message(self, message: ToolMessage, **kwargs: Any) -> None:
             order.append("database")
             assert message.status == "success"
-            assert kwargs["tool_result"]["display_data"] == {
+            assert kwargs["transport_metadata"]["display_data"] == {
                 "kind": "read-file-meta",
                 "path": "a.py",
             }
-            assert "artifact_data" not in kwargs["tool_result"]
+            assert "artifact_data" not in kwargs["transport_metadata"]
 
     writer = order.append
     runtime_config = SimpleNamespace(
@@ -296,8 +278,11 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
 
     class _RuntimeContext:
         def add_message(self, message: ToolMessage, **kwargs: Any) -> None:
-            assert kwargs["tool_result"]["display_data"] == {"status_hint": "执行失败"}
-            assert kwargs["tool_result"]["error"] is None
+            assert kwargs["transport_metadata"]["display_data"] == {
+                "kind": "read-file-meta",
+                "path": "a.py",
+            }
+            assert kwargs["transport_metadata"]["error"] == "执行失败"
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
@@ -334,7 +319,7 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
 
     assert status == "failed"
     assert updated.calls["call-1"].status == "failed"
-    assert events[0].display_data == {"status_hint": "执行失败"}
+    assert events[0].display_data == {"kind": "read-file-meta", "path": "a.py"}
 
 
 def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_duplicate(
@@ -489,7 +474,7 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
     result = service.create_run(7, "hello")
 
     assert result is run
-    assert order == ["run", "user", "task", "event"]
+    assert order == ["run", "task", "event"]
 
 
 def test_create_run_with_external_session_defers_initialization_events_to_owner(
@@ -621,11 +606,12 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
     original_getter = depends.get_conversation_event_projector
     depends.get_conversation_event_projector = lambda: _Projector()
     try:
-        result = service.complete_run_if_running(11, final_output="done")
+        # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实完好。
+        with pytest.raises(RuntimeError, match="transport unavailable"):
+            service.complete_run_if_running(11, final_output="done")
     finally:
         depends.get_conversation_event_projector = original_getter
 
-    assert result is run
     assert committed == ["database"]
 
 

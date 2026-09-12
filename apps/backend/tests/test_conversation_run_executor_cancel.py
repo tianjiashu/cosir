@@ -64,12 +64,14 @@ async def test_user_cancel_projects_tool_settlement_and_returns_normally(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _RunService()
-    executor = ConversationRunExecutor(
-        run_service=service,
-        cancellation_signal=_Signal(),
-        persist_status=False,
-    )
+    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
+    executor._run_service = service
     executor._persist_status = True
+    executor._event_projector = None
+    executor._signal = _Signal()
+    executor._executions = {}
+    executor._cancelling_run_ids = set()
+    executor._cancellation_cleanup_tasks = set()
     projected: list[tuple[int, str, str]] = []
     monkeypatch.setattr(
         executor,

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, ToolMessage
 from sqlalchemy import delete, func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -104,28 +102,6 @@ class ConversationTaskContextCrud:
             session.add(model)
             session.flush()
         return True
-
-    def delete_generated_by_run_id(
-        self, task_id: int, run_id: int, session: Session | None = None
-    ) -> None:
-        """删除 fresh 重试生成的消息，但保留该 Run 的 canonical HumanMessage。"""
-
-        stmt = select(ConversationTaskContextModel).where(
-            ConversationTaskContextModel.task_id == task_id,
-            ConversationTaskContextModel.run_id == run_id,
-        )
-
-        def delete_rows(active_session: Session) -> None:
-            for row in active_session.scalars(stmt).all():
-                record = ConversationTaskContextRecord._from_model(row)
-                if not isinstance(record.message, HumanMessage):
-                    active_session.delete(row)
-
-        if session is None:
-            with self._session_factory.begin() as owned_session:
-                delete_rows(owned_session)
-            return
-        delete_rows(session)
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 task 下某 run 的全部上下文消息行。

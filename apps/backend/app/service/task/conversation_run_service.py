@@ -19,7 +19,12 @@ from app.assistant_transport.event import (
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunError, ConversationRunRecord, ConversationRunStatus
+from app.models import (
+    ConversationRunError,
+    ConversationRunRecord,
+    ConversationRunStatus,
+    ConversationRunUsage,
+)
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -49,6 +54,27 @@ class ConversationRunService:
         self._run = service_depends.get_conversation_run_crud()
         self._context = ConversationTaskContextService()
         self._session_factory = main_session_factory()
+
+    @staticmethod
+    def _usage_payload(
+        usage_stats: ConversationRunUsageStats | None,
+    ) -> ConversationRunUsage | None:
+        """把运行时 token 累加器转成 Run 行可持久化的六键字典。
+
+        参数:
+            usage_stats: 运行期累加器；``None`` 表示本次不写用量列（例如崩溃恢复）。
+
+        返回:
+            ``ConversationRunUsage`` 字典或 ``None``。
+
+        异常:
+            无；累加器自身保证返回可 JSON 序列化的整数/None 字段。
+
+        副作用:
+            无。
+        """
+
+        return usage_stats.to_dict() if usage_stats is not None else None
 
     @staticmethod
     def _terminal_error(
@@ -360,7 +386,7 @@ class ConversationRunService:
             (ConversationRunStatus.RUNNING.value,),
             None,
             final_output=final_output,
-            usage=usage_stats,
+            usage=self._usage_payload(usage_stats),
             error=None,
         )
         if record is None:
@@ -412,7 +438,7 @@ class ConversationRunService:
             (ConversationRunStatus.RUNNING.value,),
             end_reason,
             final_output=final_output,
-            usage=usage_stats,
+            usage=self._usage_payload(usage_stats),
             error=self._terminal_error(ConversationRunStatus.FAILED, end_reason),
         )
         if record is None:
@@ -453,7 +479,7 @@ class ConversationRunService:
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
             final_output=final_output,
-            usage=usage_stats,
+            usage=self._usage_payload(usage_stats),
             error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
         )
         if record is None:

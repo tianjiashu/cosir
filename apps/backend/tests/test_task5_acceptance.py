@@ -18,6 +18,9 @@ from app.assistant_transport.service.conversation_event_projector import (
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
 )
+from app.assistant_transport.service.conversation_task_state_rebuilder import (
+    ConversationTaskStateRebuilder,
+)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -25,7 +28,7 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunStatus, ConversationRunError
+from app.models import ConversationRunError, ConversationRunStatus
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.service.task.conversation_run_service import ConversationRunService
@@ -81,6 +84,13 @@ def canonical_store(tmp_path: Path, monkeypatch):
     context_service._crud = contexts
     workspace = workspaces.create("acceptance", str(tmp_path))
     task = tasks.create(workspace.id, "canonical task")
+    # 快照重建按工具名查 display 定义；本文件只验证状态契约，给出最小合法 presentation
+    # （``validate_snapshot`` 要求它是对象），不依赖工具系统装配。
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder,
+        "get_tool_display",
+        staticmethod(lambda _name: {"verb": "Read"}),
+    )
     ConversationTaskStateService.clear_process_state()
     # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
     # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
@@ -135,10 +145,10 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
     """Persist canonical user, AI/tool-call, and optional ToolMessage facts.
 
-    AI 消息按「只携带 tool_calls、无正文」的真实形态构造（``content=None``）：快照重建按
-    ``reasoning -> content -> tool_calls`` 顺序取分支，带空正文会把 tool part 挤成 text part。
-    工具结果行随行写入 wire 口径的 ``TransportMetadata``（``status`` 取终态、``display_data``
-    与短提示分列），与运行期 ``ToolCallLifecycleManager.settle`` 的写入口径一致。
+    AI 消息与运行期同形：``content=""`` + ``additional_kwargs["reasoning_content"]=None``
+    （快照重建按这两个通道取文本/reasoning part）。工具结果行随行写入 wire 口径的
+    ``TransportMetadata``（``status`` 取终态、``display_data`` 与短提示分列），与运行期
+    ``ToolCallLifecycleManager.settle`` 的写入口径一致。
     """
 
     _append(store, run.id, HumanMessage(content=f"user-{run.id}"))
@@ -146,7 +156,7 @@ def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = N
         store,
         run.id,
         AIMessage(
-            content=None,
+            content="",
             tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": call_id}],
             additional_kwargs={"reasoning_content": None},
         ),
@@ -247,14 +257,19 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     assert [run["runId"] for run in state["runs"]] == [completed.id, failed.id, cancelled.id]
     assert state["current_run_id"] == cancelled.id
     assert [message["id"] for message in state["runs"][0]["messages"]] == [
-        str(row.id)
-        for row in store.contexts.get(store.task.id, include_in_context=False)
-        if row.run_id == completed.id and isinstance(row.message, HumanMessage | AIMessage)
+        f"user-{completed.id}",
+        f"assistant-{completed.id}",
     ]
-    parts = state["runs"][0]["messages"][1]["parts"]
-    assert parts[0]["status"] == "completed"
-    assert state["runs"][1]["messages"][1]["parts"][0]["status"] == "failed"
-    assert state["runs"][2]["messages"][1]["parts"][0]["status"] == "cancelled"
+    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
+    # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
+    tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
+        store.contexts.get(store.task.id, include_in_context=False)
+    )
+    assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
+        "call-success": "completed",
+        "call-failed": "failed",
+        "call-cancelled": "cancelled",
+    }
     assert all(
         "run summary must not become a UI message" not in str(message)
         for run in state["runs"]
@@ -308,12 +323,13 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)
-    completed = service.complete_run_if_running(
-        run.id,
-        final_output="durable final summary",
-        usage_stats=stats,
-    )
-    assert completed is not None
+    # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实与用量必须完好。
+    with pytest.raises(RuntimeError, match="SSE failed after commit"):
+        service.complete_run_if_running(
+            run.id,
+            final_output="durable final summary",
+            usage_stats=stats,
+        )
     persisted = store.runs.get(run.id)
     assert persisted.status == "completed"
     assert persisted.final_output == "durable final summary"
@@ -333,7 +349,11 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
     store = canonical_store
     run = _create_run(store, current=True)
     _append(store, run.id, HumanMessage(content="user"))
-    _append(store, run.id, AIMessage(content="canonical"))
+    _append(
+        store,
+        run.id,
+        AIMessage(content="canonical", additional_kwargs={"reasoning_content": None}),
+    )
     stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     stream_service._snapshots = store.state
     stream = stream_service.stream(store.task.id, run.id, lambda: False)
@@ -403,7 +423,8 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
     )
     assert sorted(result.created for result in results) == [False, True]
     assert len(store.runs.list_by_task(store.task.id)) == 1
-    assert len(store.contexts.get(store.task.id, include_in_context=False)) == 1
+    # 幂等只体现在 Run 行：user 消息由 workflow 在 graph 启动前写入，命令服务不写 context。
+    assert store.contexts.get(store.task.id, include_in_context=False) == []
     first_run = store.runs.list_by_task(store.task.id)[0]
     completed = store.runs.update_status_if_in(
         first_run.id,
@@ -528,7 +549,13 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
     assert state["runs"][0]["status"] == "cancelled"
-    assert state["runs"][0]["messages"][1]["parts"][0]["status"] == "cancelled"
+    # 工具终态由 Run 分组配对产出（占位行写入 wire 口径的 cancelled）。
+    repaired_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
+        store.contexts.get(store.task.id, include_in_context=False)
+    )
+    assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
+        "call-interrupted": "cancelled"
+    }
 
 
 

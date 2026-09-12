@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import copy
-import json
 from collections.abc import Sequence
 from itertools import groupby
 from operator import attrgetter
-from typing import Any, cast, List
+from typing import cast
 
-from langchain_core.messages.tool import ToolCall, ToolMessage
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages.tool import ToolCall
 
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
-from app.assistant_transport.state.conversation_state_part import ConversationStatePart, ConversationStateTextPart, \
-    ConversationStateToolCallPart
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateTextPart,
+    ConversationStateToolCallPart,
+)
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
-    validate_snapshot,
 )
 from app.config.configuration import get_tool_registry
 from app.models.conversation_run_record import ConversationRunRecord
@@ -30,8 +29,10 @@ class ConversationTaskStateRebuilder:
     """Rebuild a Task Transport snapshot from Task, Run, and context records only."""
 
     @staticmethod
-    def build_pair_tool_part(rows: List[ConversationTaskContextRecord]) -> dict[str, ConversationStateToolCallPart]:
-        tool_parts: dict[str, ConversationStateToolCallPart] = dict()
+    def build_pair_tool_part(
+        rows: list[ConversationTaskContextRecord],
+    ) -> dict[str, ConversationStateToolCallPart]:
+        tool_parts: dict[str, ConversationStateToolCallPart] = {}
         for row in rows:
             message: BaseMessage = row.message
             if isinstance(message, AIMessage) and cast(AIMessage, message).tool_calls:
@@ -68,7 +69,7 @@ class ConversationTaskStateRebuilder:
             return None
         tool_registry = get_tool_registry()
         tool_definition = tool_registry.get_tool_definition(tool_name)
-        if not tool_definition:
+        if not tool_definition or not tool_definition.display:
             return None
         return tool_definition.display.to_dict()
 
@@ -109,15 +110,18 @@ class ConversationTaskStateRebuilder:
         snapshot_runs: list[ConversationRunSnapshot] = []
 
         for run in run_records:
-            message_list = run_groups.get(run.id, None)
-            if message_list is None:
-                continue
-            rows: List[ConversationTaskContextRecord] = sorted(message_list, key=lambda row: row.sequence)
+            # Run 没有 context 行也必须出现在快照里：`current_run_id` 必须指向快照中的某个
+            # Run（``validate_snapshot`` 强校验），而新建 Run 在写入首条消息前正是这个状态。
+            rows: list[ConversationTaskContextRecord] = sorted(
+                run_groups.get(run.id, []), key=lambda row: row.sequence
+            )
 
             tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
 
             snapshot_messages: list[ConversationStateMessage] = []
-            assistant_message = ConversationStateMessage(id=f"assistant-{run.id}", role="assistant", parts=[])
+            assistant_message = ConversationStateMessage(
+                id=f"assistant-{run.id}", role="assistant", parts=[]
+            )
             for row in rows:
                 message = row.message
                 if isinstance(message, HumanMessage):
@@ -131,7 +135,7 @@ class ConversationTaskStateRebuilder:
                         )]))
                 elif isinstance(message, AIMessage):
                     ai_message: AIMessage = cast(AIMessage, message)
-                    if ai_message.additional_kwargs["reasoning_content"] is not None:
+                    if ai_message.additional_kwargs.get("reasoning_content") is not None:
                         assistant_message["parts"].append(
                             ConversationStateTextPart(
                                 type="reasoning",
@@ -142,7 +146,7 @@ class ConversationTaskStateRebuilder:
                     if ai_message.content is not None:
                         assistant_message["parts"].append(
                             ConversationStateTextPart(
-                                type="reasoning",
+                                type="text",
                                 text=ai_message.content,
                                 status="completed"
                             )

@@ -20,6 +20,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -137,9 +138,14 @@ async def test_executor_persists_failed_run_before_nonfatal_tool_projector(
             order.append("projector")
             raise RuntimeError("projector unavailable")
 
-    executor = ConversationRunExecutor(run_service=RunService(), persist_status=False)
+    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
+    executor._run_service = RunService()
     executor._persist_status = True
     executor._event_projector = FailingProjector()
+    executor._signal = cancellation_registry
+    executor._executions = {}
+    executor._cancelling_run_ids = set()
+    executor._cancellation_cleanup_tasks = set()
 
     async def runner(_run: object) -> None:
         raise RuntimeError("runner failed")
@@ -176,9 +182,14 @@ async def test_executor_persists_cancelled_run_before_nonfatal_tool_projector() 
             order.append("projector")
             raise RuntimeError("projector unavailable")
 
-    executor = ConversationRunExecutor(run_service=RunService(), persist_status=False)
+    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
+    executor._run_service = RunService()
     executor._persist_status = True
     executor._event_projector = FailingProjector()
+    executor._signal = cancellation_registry
+    executor._executions = {}
+    executor._cancelling_run_ids = set()
+    executor._cancellation_cleanup_tasks = set()
 
     async def runner(_run: object) -> None:
         raise asyncio.CancelledError()
@@ -232,7 +243,15 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     assert [getattr(event, "type", None) for event in events] == ["run_initialized"]
 
 
-def test_rebuilder_scopes_same_provider_tool_call_id_per_run() -> None:
+def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 重建按 AI 消息的 tool_calls 配对工具结果；tool registry 未在本测试初始化，给出最小展示。
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder,
+        "get_tool_display",
+        staticmethod(lambda _name: {"verb": "Read"}),
+    )
     call_id = "provider-call-reused"
     tool_part = {
         "type": "tool-call",
@@ -245,22 +264,52 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run() -> None:
     }
     rows = [
         _context_row(101, 11, HumanMessage(content="one"), 1, _plain_metadata()),
-        _context_row(102, 11, AIMessage(content=""), 2, _call_metadata([tool_part])),
+        _context_row(
+            102,
+            11,
+            AIMessage(
+                content="answer",
+                tool_calls=[{"name": "read_file", "args": {}, "id": call_id}],
+                additional_kwargs={"reasoning_content": None},
+            ),
+            2,
+            _call_metadata([tool_part]),
+        ),
         _context_row(
             103,
             11,
             ToolMessage(content="one result", tool_call_id=call_id),
             3,
-            _metadata([], "success"),
+            {
+                "status": "completed",
+                "display_data": {"kind": "read-file-meta"},
+                "status_hint": None,
+                "error": None,
+            },
         ),
         _context_row(201, 12, HumanMessage(content="two"), 4, _plain_metadata()),
-        _context_row(202, 12, AIMessage(content=""), 5, _call_metadata([tool_part])),
+        _context_row(
+            202,
+            12,
+            AIMessage(
+                content="answer",
+                tool_calls=[{"name": "read_file", "args": {}, "id": call_id}],
+                additional_kwargs={"reasoning_content": None},
+            ),
+            5,
+            _call_metadata([tool_part]),
+        ),
         _context_row(
             203,
             12,
             ToolMessage(content="two result", tool_call_id=call_id),
             6,
-            _metadata([], "success"),
+            {
+                "status": "completed",
+                "display_data": {"kind": "read-file-meta"},
+                "status_hint": None,
+                "error": None,
+            },
         ),
     ]
 

@@ -550,9 +550,17 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     }
 
 
-def test_ensure_run_user_message_writes_once_per_run(env: SimpleNamespace) -> None:
+def test_ensure_run_user_message_writes_once_per_run(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """fresh Run 补写一次初始 user 消息；重复调用不再写（幂等）。"""
 
+    projected: list[object] = []
+    # 写入后经投影器把 user 消息推给 Transport（进程内投影器依赖存储单例，这里只记录事件）。
+    monkeypatch.setattr(
+        "app.core.context.runtime_context_manager.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=projected.append),
+    )
     run = env.seed_run("running")
     manager = _manager(
         context_service=env.context,
@@ -569,6 +577,8 @@ def test_ensure_run_user_message_writes_once_per_run(env: SimpleNamespace) -> No
     assert [(row.run_id, row.message.content) for row in users] == [(run.id, "你好")]
     assert manager.load_message()[-1].content == "你好"
     assert [type(message) for message in manager.load_message()] == [SystemMessage, HumanMessage]
+    # 只有真正写入的那一次投影事件（幂等调用不重复投影）。
+    assert [type(event).__name__ for event in projected] == ["UserInputAppendedEvent"]
 
 
 def test_ensure_run_user_message_keeps_existing_message_on_resume(env: SimpleNamespace) -> None:

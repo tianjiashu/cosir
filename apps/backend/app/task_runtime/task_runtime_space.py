@@ -53,9 +53,9 @@ class TaskRuntimeSpace:
     _context_manager: weakref.ReferenceType[RuntimeContextManager] | None = field(
         default=None, init=False
     )
-    _snapshot: weakref.ReferenceType[ConversationStateSnapshot] | None = field(
-        default=None, init=False
-    )
+    # snapshot 是 TypedDict（运行时即 dict），无法被弱引用包裹，因此按 task 维度强引用缓存，
+    # 由 ``unload_snapshot`` / 进程内清理显式释放。
+    _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
     _snapshot_guard: threading.Lock = field(init=False)
 
@@ -160,44 +160,33 @@ class TaskRuntimeSpace:
             透传 ``loader`` 的重建异常；失败时不会缓存不完整 snapshot。
 
         副作用:
-            首次调用在 ``_snapshot_guard`` 下重建并以**弱引用**缓存 snapshot；后续调用
-            复用同一 task 的进程内 working copy（只要它仍被某处强引用），不再读取数据库
-            或重复重建。当 space 是唯一持有者时弱引用会自然失效，下次访问重新懒加载。
+            首次调用在 ``_snapshot_guard`` 下重建并缓存进程内 working copy；后续调用复用同一
+            task 的副本，不再读取数据库或重复重建，直到 ``unload_snapshot`` 或进程内清理。
         """
 
-        snapshot_ref = self._snapshot
-        if snapshot_ref is not None:
-            cached = snapshot_ref()
-            if cached is not None:
-                return copy.deepcopy(cached)
         with self._snapshot_guard:
-            snapshot_ref = self._snapshot
-            cached = snapshot_ref() if snapshot_ref is not None else None
-            if cached is None:
-                snapshot = loader()
-                self._snapshot = _weak_ref(copy.deepcopy(snapshot))
-                cached = snapshot
-            return copy.deepcopy(cached)
+            if self._snapshot is None:
+                self._snapshot = copy.deepcopy(loader())
+            return copy.deepcopy(self._snapshot)
 
     def existing_snapshot(self) -> ConversationStateSnapshot | None:
         """返回已物化的 task snapshot，不触发数据库读取或懒加载。
 
-        当弱引用已失效（外部不再持有 snapshot）时返回 None。
+        尚未物化或已被 ``unload_snapshot`` 清理时返回 None。
         """
 
         with self._snapshot_guard:
-            cached = self._snapshot() if self._snapshot is not None else None
-            return copy.deepcopy(cached) if cached is not None else None
+            return copy.deepcopy(self._snapshot) if self._snapshot is not None else None
 
     def replace_snapshot(self, snapshot: ConversationStateSnapshot) -> None:
         """替换 task 的进程内 snapshot working copy。
 
         仅供已完成 canonical 数据库提交后的显式重建或 Transport projector 使用；不会
-        写数据库，也不会通知 SSE subscriber。新 snapshot 以弱引用缓存。
+        写数据库，也不会通知 SSE subscriber。
         """
 
         with self._snapshot_guard:
-            self._snapshot = _weak_ref(copy.deepcopy(snapshot))
+            self._snapshot = copy.deepcopy(snapshot)
 
     def unload_snapshot(self) -> None:
         """卸载 task snapshot，使下一次访问重新从 canonical records 懒加载。"""

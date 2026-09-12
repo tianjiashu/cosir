@@ -59,6 +59,18 @@ def _reset_task_runtime_spaces() -> None:
     ConversationTaskStateService.clear_process_state()
 
 
+def _make_state_service(
+    task_source: object, run_source: object, context_source: object
+) -> ConversationTaskStateService:
+    """按当前生产构造装配一个状态服务并注入三个来源（构造器从 depends 读取，这里直接注入）。"""
+
+    service = ConversationTaskStateService.__new__(ConversationTaskStateService)
+    service._task_source = task_source
+    service._run_source = run_source
+    service._context_source = context_source
+    return service
+
+
 def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
     task = _task()
     runs = [_run(2, "completed"), _run(1, "failed")]
@@ -82,14 +94,10 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
 
         def list_by_task(self, task_id: int) -> list[ConversationRunRecord]:
             assert task_id == 7
-            return runs
+            return sorted(runs, key=lambda run: run.id)
 
     sources = CanonicalSources()
-    service = ConversationTaskStateService(
-        task_source=sources,
-        run_source=sources,
-        context_source=sources,
-    )
+    service = _make_state_service(sources, sources, sources)
 
     state = service.get_state(7)
 
@@ -129,16 +137,9 @@ def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
             return [run]
 
     try:
-        first_service = ConversationTaskStateService(
-            task_source=CanonicalSources(),
-            run_source=CanonicalSources(),
-            context_source=CanonicalSources(),
-        )
-        second_service = ConversationTaskStateService(
-            task_source=CanonicalSources(),
-            run_source=CanonicalSources(),
-            context_source=CanonicalSources(),
-        )
+        sources = CanonicalSources()
+        first_service = _make_state_service(sources, sources, sources)
+        second_service = _make_state_service(sources, sources, sources)
 
         first = first_service.get_state(7)
         second = first_service.get_state(7)
@@ -177,21 +178,13 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
         def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
             return [run]
 
-    service = ConversationTaskStateService(
-        task_source=CanonicalSources(),
-        run_source=CanonicalSources(),
-        context_source=CanonicalSources(),
-    )
+    service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     first = service.get_state(7)
     assert [run["runId"] for run in first["runs"]] == [2]
     assert service.get_state(7) == first
 
     ConversationTaskStateService.clear_process_state()
-    restarted = ConversationTaskStateService(
-        task_source=CanonicalSources(),
-        run_source=CanonicalSources(),
-        context_source=CanonicalSources(),
-    )
+    restarted = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     rebuilt = restarted.get_state(7)
     assert rebuilt["runs"][0]["messages"][0]["parts"][0]["text"] == "durable"
 
@@ -203,11 +196,7 @@ def test_canonical_state_sources_failures_are_logged_and_not_replaced_by_empty_s
         def get(self, _task_id: int) -> TaskRecord:
             raise RuntimeError("canonical read failed")
 
-    service = ConversationTaskStateService(
-        task_source=BrokenSources(),
-        run_source=BrokenSources(),
-        context_source=BrokenSources(),
-    )
+    service = _make_state_service(BrokenSources(), BrokenSources(), BrokenSources())
 
     with caplog.at_level("INFO"), pytest.raises(RuntimeError, match="canonical read failed"):
         service.get_state(7)
@@ -258,11 +247,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
         def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
             return [run]
 
-    service = ConversationTaskStateService(
-        task_source=CanonicalSources(),
-        run_source=CanonicalSources(),
-        context_source=CanonicalSources(),
-    )
+    service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     task_runtime_spaces.get_or_create(7).replace_snapshot({
         "runs": [
             {
@@ -300,10 +285,11 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
     ]
 
 
-@pytest.mark.parametrize("method_name", ["claim_pending_run", "claim_or_resume_run"])
-def test_claim_run_is_not_aborted_by_post_commit_projector_failure(
-    monkeypatch: pytest.MonkeyPatch, method_name: str
+def test_claim_run_propagates_post_commit_projector_failure(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """认领 Run 在原子更新成功之后投影失败必须向上传播（与 create_run/complete_run 一致）。"""
+
     class RunCrud:
         def update_status_if_in(self, **_kwargs: object) -> SimpleNamespace:
             return SimpleNamespace(task_id=7)
@@ -323,7 +309,8 @@ def test_claim_run_is_not_aborted_by_post_commit_projector_failure(
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = RunCrud()
 
-    assert getattr(service, method_name)(7) is True
+    with pytest.raises(RuntimeError, match="transport unavailable"):
+        service.claim_or_resume_run(7)
 
 
 def test_malformed_context_deserialization_fails_at_state_read_boundary() -> None:
@@ -339,10 +326,8 @@ def test_malformed_context_deserialization_fails_at_state_read_boundary() -> Non
         def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
             return []
 
-    service = ConversationTaskStateService(
-        task_source=MalformedContextSource(),
-        run_source=CanonicalRuns(),
-        context_source=MalformedContextSource(),
+    service = _make_state_service(
+        MalformedContextSource(), CanonicalRuns(), MalformedContextSource()
     )
 
     with pytest.raises(ValueError, match="malformed persisted context"):
@@ -370,11 +355,7 @@ async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
         def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
             return [_run(2, "completed")]
 
-    state_service = ConversationTaskStateService(
-        task_source=CanonicalSources(),
-        run_source=CanonicalSources(),
-        context_source=CanonicalSources(),
-    )
+    state_service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     stream_service._snapshots = state_service
 

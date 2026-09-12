@@ -233,7 +233,7 @@ async def test_attach_run_only_subscribes_existing_executor(
             return SimpleNamespace(id=7, task_id=1, status="running")
 
     class _SnapshotService:
-        async def read(self, _task_id: int) -> dict[str, object]:
+        def get_state(self, _task_id: int) -> dict[str, object]:
             return state
 
     class _Executor:
@@ -268,7 +268,7 @@ async def test_attach_run_rejects_terminal_run_even_when_snapshot_matches() -> N
             return SimpleNamespace(id=7, task_id=1, status="cancelled")
 
     class _SnapshotService:
-        async def read(self, _task_id: int) -> dict[str, object]:
+        def get_state(self, _task_id: int) -> dict[str, object]:
             return state
 
     service = TransportAssistantService.__new__(TransportAssistantService)
@@ -381,7 +381,7 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
             return object()
 
     class _TransportService:
-        async def read(self, _task_id: int) -> dict[str, object]:
+        def get_state(self, _task_id: int) -> dict[str, object]:
             return snapshot
 
     result = await assistant_transport_state(1, _TaskService(), _TransportService())
