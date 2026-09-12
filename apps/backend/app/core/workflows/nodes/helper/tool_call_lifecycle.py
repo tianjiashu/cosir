@@ -329,6 +329,18 @@ class ToolCallLifecycleManager(BaseModel):
         )
         if created is False:
             return updated, event_status
+        log.info(
+            "tool_observation_persisted",
+            extra={
+                "msg": "canonical tool observation 已持久化",
+                "data": {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "tool_call_id": call_id,
+                    "status": event_status,
+                },
+            },
+        )
         # DB-backed context write is deliberately before the event so the projector never
         # publishes a terminal tool state that cannot be rebuilt from context.
         try:

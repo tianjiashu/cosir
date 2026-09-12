@@ -89,6 +89,19 @@ class ConversationRunService:
         """
 
         try:
+            status = getattr(event, "status", None)
+            if status is not None:
+                log.info(
+                    "run_status_persisted",
+                    extra={
+                        "msg": "canonical Run status 已持久化",
+                        "data": {
+                            "task_id": getattr(event, "task_id", None),
+                            "run_id": getattr(event, "run_id", None),
+                            "status": getattr(status, "value", status),
+                        },
+                    },
+                )
             service_depends.get_conversation_event_projector().process(event)
         except Exception:
             log.exception(

@@ -7,6 +7,7 @@ import copy
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy.orm import Session
 
+from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.json_helpers import (
@@ -108,7 +109,21 @@ class ConversationTaskContextService:
             sequence=seq,
             transport_metadata=metadata,
         )
-        return self._crud.create(record, session=session) is not False
+        created = self._crud.create(record, session=session) is not False
+        if created:
+            log.info(
+                "context_message_persisted",
+                extra={
+                    "msg": "canonical context message 已持久化",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "message_type": type(message).__name__,
+                        "sequence": seq,
+                    },
+                },
+            )
+        return created
 
     def append_user_message_once(
         self,
