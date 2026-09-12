@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
@@ -67,6 +68,21 @@ def _make_executor(tmp_path: Path) -> ToolExecutor:
     (tmp_path / "sample.txt").write_text("hello world", encoding="utf-8")
     registry = ToolRegistry([ReadFileTool().to_definition()])
     return ToolExecutor(registry=registry)
+
+
+def test_output_budget_normalizes_nullable_observation_content() -> None:
+    """拒绝型 observation 的空 content 也必须安全通过统一输出预算。"""
+
+    observation = ToolObservation(
+        tool_name="read_file",
+        status="error",
+        content=None,
+        error="denied",
+    )
+
+    result = ToolOutputBudget().apply(observation, execution_context=None)
+
+    assert result.content == ""
 
 
 def test_unknown_tool_returns_denial_observation(tmp_path: Path) -> None:

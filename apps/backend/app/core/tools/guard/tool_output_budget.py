@@ -57,11 +57,12 @@ class ToolOutputBudget:
             超限且有 workspace 时在 ``.coding-agent/tool-artifacts`` 写入完整输出。
         """
 
-        # 对终端输出进行脱敏
-        redacted_content = redact_terminal_output(observation.content)
+        # 对终端输出进行脱敏；ToolObservation 允许没有正文的失败/取消观察。
+        content = observation.content or ""
+        redacted_content = redact_terminal_output(content)
         safe_observation = (
             observation
-            if redacted_content == observation.content
+            if redacted_content == content and observation.content is not None
             else replace(observation, content=redacted_content)
         )
 
@@ -81,7 +82,7 @@ class ToolOutputBudget:
         artifact_data.update(
             {
                 "output_truncated": True,
-                "original_chars": len(observation.content),
+                "original_chars": len(content),
                 "artifact_path": artifact_path,
             }
         )
@@ -150,7 +151,7 @@ class ToolOutputBudget:
         try:
             atomic_write_text(
                 resolved,
-                redact_terminal_output(observation.content),
+                redact_terminal_output(observation.content or ""),
                 preserve_eol=False,
                 containment_root=execution_context.workspace_root,
             )

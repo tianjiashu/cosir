@@ -248,6 +248,10 @@ class ConversationTaskContextService:
         """
 
         self._crud.delete_by_run_id(task_id, run_id, session=session)
+        if session is not None:
+            # 外部事务通常关闭 autoflush；编辑用例随后会在同一 session 中重新写入
+            # canonical HumanMessage，先 flush 才能让幂等读取看见删除事实。
+            session.flush()
 
     def recover_interrupted_run(
         self, task_id: int, run_id: int, session: Session | None = None

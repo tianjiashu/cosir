@@ -63,6 +63,7 @@ class ConversationTaskStateService:
     _live_message_mutations: ClassVar[dict[int, list[ConversationStateMutation]]] = {}
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
+    _generation: ClassVar[int] = 0
 
     def __init__(
         self,
@@ -82,6 +83,8 @@ class ConversationTaskStateService:
         self._task_source = task_source
         self._run_source = run_source
         self._context_source = context_source
+        with self._lock:
+            self._owner_generation = type(self)._generation
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """Return a validated working copy, rebuilding it when this process has no copy.
@@ -97,6 +100,8 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
+            if not self.is_current_generation():
+                return copy.deepcopy(self._rebuild(task_id))
             self._ensure_not_deleted(task_id)
             working = self._states.get(task_id)
             if working is None:
@@ -125,6 +130,8 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
+            if not self.is_current_generation():
+                return copy.deepcopy(self._rebuild(task_id))
             self._ensure_not_deleted(task_id)
             state = self._rebuild(task_id)
             self._states[task_id] = copy.deepcopy(state)
@@ -144,6 +151,15 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
+            if not self.is_current_generation():
+                log.info(
+                    "conversation_state_stale_generation_ignored",
+                    extra={
+                        "msg": "忽略旧 backend generation 的 Transport mutation",
+                        "data": {"task_id": task_id},
+                    },
+                )
+                return SnapshotChange(task_id, self.get_state(task_id), ())
             self._ensure_not_deleted(task_id)
             existing = self._states.get(task_id)
             state = copy.deepcopy(existing if existing is not None else self._rebuild(task_id))
@@ -171,6 +187,16 @@ class ConversationTaskStateService:
     ) -> SnapshotChange:
         """Publish a state whose canonical database transaction has already committed."""
 
+        with self._lock:
+            if not self.is_current_generation():
+                log.info(
+                    "conversation_state_stale_generation_ignored",
+                    extra={
+                        "msg": "忽略旧 backend generation 的 Transport state",
+                        "data": {"task_id": task_id},
+                    },
+                )
+                return SnapshotChange(task_id, self.get_state(task_id), ())
         validate_snapshot(state)
         change = SnapshotChange(
             task_id,
@@ -223,6 +249,12 @@ class ConversationTaskStateService:
             self._live_message_mutations.pop(task_id, None)
             self._subscribers.pop(task_id, None)
 
+    def is_current_generation(self) -> bool:
+        """Return whether this state owner belongs to the current backend generation."""
+
+        with self._lock:
+            return self._owner_generation == type(self)._generation
+
     @classmethod
     def clear_process_state(cls) -> None:
         """Discard all ephemeral state when the backend storage lifecycle ends.
@@ -233,6 +265,7 @@ class ConversationTaskStateService:
         """
 
         with cls._lock:
+            cls._generation += 1
             cls._states.clear()
             cls._live_message_mutations.clear()
             cls._subscribers.clear()

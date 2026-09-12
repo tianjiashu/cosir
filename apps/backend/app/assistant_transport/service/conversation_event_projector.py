@@ -98,6 +98,16 @@ class ConversationEventProjector:
         event = self._parse(raw_event)
         if event is None:
             return None
+        generation_check = getattr(self._state_service, "is_current_generation", None)
+        if generation_check is not None and not generation_check():
+            log.info(
+                "conversation_event_stale_generation_ignored",
+                extra={
+                    "msg": "忽略旧 backend generation 的 conversation event",
+                    "data": {"task_id": event.task_id, "event_id": event.event_id},
+                },
+            )
+            return None
         with self._lock:
             if event.task_id in self._deleted_task_ids:
                 log.info(
