@@ -3,21 +3,25 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from langchain_core.messages import HumanMessage
 from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
 from app.config.settings import Settings
+from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_crud,
+    get_conversation_task_context_crud,
     get_task_crud,
     get_task_service,
     get_workspace_crud,
     get_workspace_service,
 )
 from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_session_factory
@@ -63,13 +67,33 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
         task_type="delegation",
         parent_task_id=root.id,
     )
-    get_conversation_run_crud().create(root.id, "root input", status="completed")
-    get_conversation_run_crud().create(child.id, "child input", status="failed")
+    root_run = get_conversation_run_crud().create(root.id, "root input", status="completed")
+    child_run = get_conversation_run_crud().create(child.id, "child input", status="failed")
+    context_crud = get_conversation_task_context_crud()
+    context_crud.create(
+        ConversationTaskContextRecord(
+            task_id=root.id,
+            run_id=root_run.id,
+            message=HumanMessage(content="root canonical message"),
+            include_in_context=True,
+            sequence=1,
+        )
+    )
+    context_crud.create(
+        ConversationTaskContextRecord(
+            task_id=child.id,
+            run_id=child_run.id,
+            message=HumanMessage(content="child canonical message"),
+            include_in_context=True,
+            sequence=1,
+        )
+    )
 
     get_task_service().delete_task(root.id)
 
     assert _count(TaskModel) == 0
     assert _count(ConversationRunModel) == 0
+    assert _count(ConversationTaskContextModel) == 0
     assert _count(WorkspaceModel) == 1
 
 

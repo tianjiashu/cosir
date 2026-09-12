@@ -240,11 +240,10 @@ class ConversationRunCrud:
         source: ConversationRunRecord,
         target_task_id: int,
     ) -> ConversationRunRecord:
-        """在调用方事务中静默复制一条历史 run，并让数据库生成新主键。"""
+        """在调用方事务中静默复制历史 run，并为 fork 生成独立 checkpoint 身份。"""
 
         model = ConversationRunModel(
             task_id=target_task_id,
-            checkpoint_thread_id=source.checkpoint_thread_id,
             input_text=source.input_text,
             agent_id=source.agent_id,
             provider_id=source.provider_id,

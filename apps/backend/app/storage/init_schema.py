@@ -167,8 +167,8 @@ def _remove_legacy_checkpoint_unique_constraint(engine: Engine) -> None:
     """重建仍带旧 checkpoint 全局唯一约束的 SQLite 表。
 
     ``create_all`` 不会修改已存在的表，而历史开发库曾把
-    ``checkpoint_thread_id`` 声明成全局唯一；Fork 需要多个 cloned Run 共享该引用，
-    因此只在检测到这条旧约束时重建表，保留现有数据和当前模型索引。
+    ``checkpoint_thread_id`` 声明成全局唯一；当前 Run 与 fork 模型为每个 Run
+    分配独立身份，因此只在检测到这条旧约束时重建表，保留现有数据和当前模型索引。
     """
 
     if engine.dialect.name != "sqlite":

@@ -341,7 +341,7 @@ def test_run_record_round_trips_usage_and_error() -> None:
     assert restored.error == error
 
 
-def test_run_crud_clone_preserves_usage_and_error() -> None:
+def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -> None:
     usage = {
         "input_tokens": 10,
         "output_tokens": 4,
@@ -374,6 +374,7 @@ def test_run_crud_clone_preserves_usage_and_error() -> None:
             "message": "provider unavailable",
             "retryable": True,
         }
+        assert cloned.checkpoint_thread_id != source.checkpoint_thread_id
     finally:
         engine.dispose()
 

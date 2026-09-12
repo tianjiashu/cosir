@@ -35,8 +35,8 @@ class ConversationRunModel(StorageBase):
     )
 
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
-    # LangGraph checkpoint 身份在新 run 创建时固定；历史 fork 只复制这个引用，
-    # 不复制 checkpoint 内容，也不会恢复 cloned historical run。
+    # LangGraph checkpoint 身份在新 run 创建时固定；历史 fork 只复制 durable run facts，
+    # 不复制 checkpoint 内容，也不共享源 run 的 checkpoint 身份。
     checkpoint_thread_id: Mapped[str] = mapped_column(
         String(36), nullable=False, default=lambda: str(uuid4())
     )

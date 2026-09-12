@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
+from app.assistant_transport.service.conversation_task_state_rebuilder import (
+    ConversationStateRebuildError,
+)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -17,6 +21,8 @@ from app.assistant_transport.service.transport_stream_service import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
+from app.service.task import conversation_run_service as conversation_run_service_module
+from app.service.task.conversation_run_service import ConversationRunService
 
 
 def _task() -> TaskRecord:
@@ -156,6 +162,139 @@ def test_canonical_state_sources_failures_are_logged_and_not_replaced_by_empty_s
 
     assert "state_rebuild_started" in {record.message for record in caplog.records}
     assert "state_rebuild_failed" in {record.message for record in caplog.records}
+
+
+def test_canonical_messages_replace_stale_active_memory_after_projector_failure() -> None:
+    task = _task()
+    run = _run(2, "running")
+    rows = [
+        ConversationTaskContextRecord(
+            id=11,
+            task_id=7,
+            run_id=2,
+            message=HumanMessage(content="committed user"),
+            include_in_context=True,
+            sequence=1,
+        ),
+        ConversationTaskContextRecord(
+            id=12,
+            task_id=7,
+            run_id=2,
+            message=AIMessage(content="committed assistant fact"),
+            include_in_context=True,
+            sequence=2,
+            transport_metadata={
+                "schema_version": 1,
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "committed assistant fact",
+                        "status": "completed",
+                    }
+                ],
+                "tool_result": None,
+            },
+        ),
+    ]
+
+    class CanonicalSources:
+        def get(
+            self, _task_id: int, include_in_context: bool = True
+        ) -> TaskRecord | list[ConversationTaskContextRecord]:
+            return task if include_in_context else rows
+
+        def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
+            return [run]
+
+    service = ConversationTaskStateService(
+        task_source=CanonicalSources(),
+        run_source=CanonicalSources(),
+        context_source=CanonicalSources(),
+    )
+    service._states[7] = {
+        "runs": [
+            {
+                "runId": 2,
+                "status": "running",
+                "endReason": None,
+                "messages": [
+                    {
+                        "id": "stale-user",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "stale", "status": "completed"}],
+                    },
+                    {
+                        "id": "stale-assistant",
+                        "role": "assistant",
+                        "parts": [{"type": "text", "text": "stale", "status": "running"}],
+                    },
+                ],
+                "usage": None,
+            }
+        ],
+        "current_run_id": 2,
+        "approvals": {},
+        "context_usage_ratio": None,
+        "context_usage_used": None,
+        "context_window_total": None,
+        "error": None,
+    }
+
+    state = service.get_state(7)
+
+    assert [message["id"] for message in state["runs"][0]["messages"]] == ["11", "12"]
+    assert state["runs"][0]["messages"][1]["parts"][0]["text"] == "committed assistant fact"
+
+
+@pytest.mark.parametrize("method_name", ["claim_pending_run", "claim_or_resume_run"])
+def test_claim_run_is_not_aborted_by_post_commit_projector_failure(
+    monkeypatch: pytest.MonkeyPatch, method_name: str
+) -> None:
+    class RunCrud:
+        def update_status_if_in(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(task_id=7)
+
+        def get(self, _run_id: int) -> SimpleNamespace:
+            return SimpleNamespace(status="running")
+
+    class FailingProjector:
+        def process(self, _event: object) -> None:
+            raise RuntimeError("transport unavailable")
+
+    monkeypatch.setattr(
+        conversation_run_service_module.service_depends,
+        "get_conversation_event_projector",
+        lambda: FailingProjector(),
+    )
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = RunCrud()
+
+    assert getattr(service, method_name)(7) is True
+
+
+def test_malformed_context_deserialization_is_structured_at_state_read_boundary() -> None:
+    class MalformedContextSource:
+        def get(
+            self, _task_id: int, include_in_context: bool = True
+        ) -> TaskRecord | list[ConversationTaskContextRecord]:
+            if include_in_context:
+                return _task()
+            raise ValueError("malformed persisted context JSON")
+
+    class CanonicalRuns:
+        def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
+            return []
+
+    service = ConversationTaskStateService(
+        task_source=MalformedContextSource(),
+        run_source=CanonicalRuns(),
+        context_source=MalformedContextSource(),
+    )
+
+    with pytest.raises(ConversationStateRebuildError) as caught:
+        service.get_state(7)
+
+    assert caught.value.code == "malformed_context_record"
 
 
 def test_persisted_snapshot_model_and_crud_are_removed() -> None:

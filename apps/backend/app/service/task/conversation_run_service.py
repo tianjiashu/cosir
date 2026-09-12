@@ -587,12 +587,13 @@ class ConversationRunService:
             allowed_statuses=(ConversationRunStatus.PENDING.value,),
         )
         if row is not None:
-            service_depends.get_conversation_event_projector().process(
+            self._publish_post_commit_event(
                 RunStatusChangedEvent(
                     task_id=row.task_id,
                     run_id=run_id,
                     status=ConversationRunStatus.RUNNING,
-                )
+                ),
+                "run_running",
             )
         return row is not None
 
@@ -624,12 +625,13 @@ class ConversationRunService:
             allowed_statuses=(ConversationRunStatus.PENDING.value,),
         )
         if row is not None:
-            service_depends.get_conversation_event_projector().process(
+            self._publish_post_commit_event(
                 RunStatusChangedEvent(
                     task_id=row.task_id,
                     run_id=run_id,
                     status=ConversationRunStatus.RUNNING,
-                )
+                ),
+                "run_running",
             )
             return True
 
