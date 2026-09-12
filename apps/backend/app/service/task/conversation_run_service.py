@@ -217,10 +217,18 @@ class ConversationRunService:
             # Lightweight unit-test harnesses may deliberately omit storage setup.
             run = persist_facts(None)
 
-        # The database transaction is complete before projector/snapshot side effects begin.
-        projector = service_depends.get_conversation_event_projector()
-        projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
-        projector.process(UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text))
+        # With an external session, the caller owns the transaction and must publish only
+        # after it commits. ConversationRunCommandService is that owner. Publishing here
+        # would expose uncommitted facts and duplicate the owner's events.
+        if session is None:
+            self._publish_post_commit_event(
+                RunInitializedEvent(task_id=task_id, run_id=run.id),
+                "run_initialized",
+            )
+            self._publish_post_commit_event(
+                UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text),
+                "user_input_appended",
+            )
         return run
 
     def get_run(self, run_id: int) -> ConversationRunRecord:

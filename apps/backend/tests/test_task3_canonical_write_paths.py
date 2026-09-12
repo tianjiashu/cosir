@@ -582,6 +582,41 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
     assert order == ["run", "user", "task", "event", "event"]
 
 
+def test_create_run_with_external_session_defers_initialization_events_to_owner(monkeypatch) -> None:
+    events: list[Any] = []
+    run = SimpleNamespace(id=11, task_id=7, input_text="hello")
+
+    class _RunCrud:
+        def create(self, *args: Any, **kwargs: Any):
+            return run
+
+    class _TaskCrud:
+        def set_current_run_id(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    class _ContextService:
+        def append_user_message_once(self, *args: Any, **kwargs: Any) -> bool:
+            return True
+
+    class _Projector:
+        def process(self, event: Any, **kwargs: Any) -> None:
+            events.append(event)
+
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = _RunCrud()
+    service._task = _TaskCrud()
+    service._context = _ContextService()
+    service._session_factory = None
+    monkeypatch.setattr(
+        "app.service.depends.get_conversation_event_projector", lambda: _Projector()
+    )
+
+    result = service.create_run(7, "hello", session=object())
+
+    assert result is run
+    assert events == []
+
+
 def _run_record() -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(

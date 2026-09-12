@@ -57,6 +57,25 @@ class ConversationRunCommandService:
         self._context = ConversationTaskContextService()
         self._task = service_depends.get_task_service()
 
+    @staticmethod
+    def _publish_post_commit_event(event: object, event_name: str) -> None:
+        """Publish an initialization event after commit without failing the Run."""
+
+        try:
+            service_depends.get_conversation_event_projector().process(event)
+        except Exception:
+            log.exception(
+                "conversation_run_command_event_failed",
+                extra={
+                    "msg": "Run 事实已提交，初始化 Transport 事件失败并被降级",
+                    "data": {
+                        "event_name": event_name,
+                        "task_id": getattr(event, "task_id", None),
+                        "run_id": getattr(event, "run_id", None),
+                    },
+                },
+            )
+
     def _resolve_existing_command(
         self,
         task_id: int,
@@ -188,10 +207,13 @@ class ConversationRunCommandService:
                 # Establish the empty snapshot baseline inside the transaction, but defer
                 # projecting Run/user events until all canonical DB facts are committed.
                 self._snapshots.ensure_state_snapshot(task_id, session)
-            projector = service_depends.get_conversation_event_projector()
-            projector.process(RunInitializedEvent(task_id=task_id, run_id=run.id))
-            projector.process(
-                UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text)
+            self._publish_post_commit_event(
+                RunInitializedEvent(task_id=task_id, run_id=run.id),
+                "run_initialized",
+            )
+            self._publish_post_commit_event(
+                UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text),
+                "user_input_appended",
             )
             snapshot = self._snapshots.ensure_state_snapshot(task_id)
             return ConversationRunStartResult(
