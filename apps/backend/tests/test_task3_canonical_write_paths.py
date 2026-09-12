@@ -579,10 +579,12 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
     result = service.create_run(7, "hello")
 
     assert result is run
-    assert order == ["run", "user", "task", "event", "event"]
+    assert order == ["run", "user", "task", "event"]
 
 
-def test_create_run_with_external_session_defers_initialization_events_to_owner(monkeypatch) -> None:
+def test_create_run_with_external_session_defers_initialization_events_to_owner(
+    monkeypatch,
+) -> None:
     events: list[Any] = []
     run = SimpleNamespace(id=11, task_id=7, input_text="hello")
 

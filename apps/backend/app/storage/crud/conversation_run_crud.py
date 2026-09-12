@@ -527,6 +527,8 @@ class ConversationRunCrud:
                 status=ConversationRunStatus.RUNNING.value,
                 end_reason=None,
                 final_output=None,
+                usage_json=None,
+                error_json=None,
             )
         )
         if not result.rowcount:

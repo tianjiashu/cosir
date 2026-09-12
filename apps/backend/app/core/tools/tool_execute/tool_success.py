@@ -17,7 +17,7 @@ from app.core.tools.schemas import ToolObservation
 def tool_success(
     tool_name: str,
     permission: str,
-    content: str,
+    content: str| None,
     tool_call_id: str = "",
     display_data: Mapping[str, Any] | None = None,
     artifact_data: Mapping[str, Any] | None = None,

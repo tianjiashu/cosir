@@ -114,9 +114,9 @@ class ConversationTaskStateRebuilder:
         snapshot_runs: list[ConversationRunSnapshot] = []
         messages_by_run: dict[int, list[ConversationStateMessage]] = {}
         assistant_by_run: dict[int, ConversationStateMessage] = {}
-        tool_parts: dict[str, tuple[int, dict[str, Any]]] = {}
+        tool_parts: dict[tuple[int, str], dict[str, Any]] = {}
         tool_rows: list[ConversationTaskContextRecord] = []
-        settled_tool_call_ids: set[str] = set()
+        settled_tool_call_ids: set[tuple[int, str]] = set()
 
         for row in rows:
             message = row.message
@@ -173,7 +173,8 @@ class ConversationTaskStateRebuilder:
                             run_id=row.run_id,
                             context_row_id=row.id,
                         )
-                    if call_id in tool_parts:
+                    tool_key = (row.run_id, call_id)
+                    if tool_key in tool_parts:
                         raise ConversationStateRebuildError(
                             "duplicate_tool_call_id",
                             "context metadata contains a duplicate tool-call id",
@@ -181,7 +182,7 @@ class ConversationTaskStateRebuilder:
                             run_id=row.run_id,
                             context_row_id=row.id,
                         )
-                    tool_parts[call_id] = (row.run_id, copied_part)
+                    tool_parts[tool_key] = copied_part
                 parts.append(cast(ConversationStatePart, copied_part))
 
         for row in tool_rows:
@@ -195,7 +196,8 @@ class ConversationTaskStateRebuilder:
                     run_id=row.run_id,
                     context_row_id=row.id,
                 )
-            if call_id not in tool_parts:
+            tool_key = (row.run_id, call_id)
+            if tool_key not in tool_parts:
                 raise ConversationStateRebuildError(
                     "orphan_tool_message",
                     "tool message has no matching AI tool-call part",
@@ -203,16 +205,8 @@ class ConversationTaskStateRebuilder:
                     run_id=row.run_id,
                     context_row_id=row.id,
                 )
-            owner_run_id, part = tool_parts[call_id]
-            if owner_run_id != row.run_id:
-                raise ConversationStateRebuildError(
-                    "tool_run_mismatch",
-                    "tool message and AI tool-call belong to different runs",
-                    task_id=task.id,
-                    run_id=row.run_id,
-                    context_row_id=row.id,
-                )
-            if call_id in settled_tool_call_ids:
+            part = tool_parts[tool_key]
+            if tool_key in settled_tool_call_ids:
                 raise ConversationStateRebuildError(
                     "duplicate_tool_call_id",
                     "multiple tool messages reference one tool-call id",
@@ -229,11 +223,12 @@ class ConversationTaskStateRebuilder:
                     run_id=row.run_id,
                     context_row_id=row.id,
                 )
-            settled_tool_call_ids.add(call_id)
+            settled_tool_call_ids.add(tool_key)
             ConversationTaskStateRebuilder._apply_tool_result(part, result)
 
-        for call_id, (owner_run_id, part) in tool_parts.items():
-            if call_id in settled_tool_call_ids:
+        for (owner_run_id, call_id), part in tool_parts.items():
+            tool_key = (owner_run_id, call_id)
+            if tool_key in settled_tool_call_ids:
                 continue
             run_status = run_by_id[owner_run_id].status
             if run_status not in _TERMINAL_RUN_STATUSES:

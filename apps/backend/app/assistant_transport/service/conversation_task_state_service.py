@@ -187,7 +187,16 @@ class ConversationTaskStateService:
     ) -> SnapshotChange:
         """Publish a state whose canonical database transaction has already committed."""
 
+        validate_snapshot(state)
+        change = SnapshotChange(
+            task_id,
+            copy.deepcopy(state),
+            mutations or (ConversationStateMutation("set", (), copy.deepcopy(state)),),
+        )
         with self._lock:
+            # Validation may yield to a backend restart. Recheck while holding the same lock
+            # used by clear_process_state and the actual state publication; an old owner must
+            # never install its pre-restart state into the new generation.
             if not self.is_current_generation():
                 log.info(
                     "conversation_state_stale_generation_ignored",
@@ -197,13 +206,6 @@ class ConversationTaskStateService:
                     },
                 )
                 return SnapshotChange(task_id, self.get_state(task_id), ())
-        validate_snapshot(state)
-        change = SnapshotChange(
-            task_id,
-            copy.deepcopy(state),
-            mutations or (ConversationStateMutation("set", (), copy.deepcopy(state)),),
-        )
-        with self._lock:
             self._ensure_not_deleted(task_id)
             self._live_message_mutations.pop(task_id, None)
             self._publish(change)

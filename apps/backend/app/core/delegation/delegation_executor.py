@@ -559,7 +559,6 @@ class DelegationExecutor(DelegateTaskExecutor):
                     f"assumed non-retryable; adapt your plan based on the cancellation and "
                     f"any new instruction."
                 ),
-                error=f"delegate_task child cancelled: {error}",
                 permission="delegate_task",
             )
         error = result.error or "child run failed"

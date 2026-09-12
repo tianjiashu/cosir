@@ -462,16 +462,16 @@ class ConversationRunExecutor:
                     current.status == ConversationRunStatus.CANCELLED.value
                     and current.end_reason == "user_cancelled"
                 ):
-                    self._project_tools_settled(run_id, "cancelled", "executor_cancelled")
                     self._run_service.cancel_run_if_running(
                         run_id, end_reason="executor_cancelled"
                     )
+                    self._project_tools_settled(run_id, "cancelled", "executor_cancelled")
             await self._set_status(run_id, ConversationRunStatus.CANCELLED)
             raise
         except Exception:
             if self._persist_status:
-                self._project_tools_settled(run_id, "failed", "runtime_failed")
                 self._run_service.fail_run_if_running(run_id, end_reason="runtime_failed")
+                self._project_tools_settled(run_id, "failed", "runtime_failed")
             await self._set_status(run_id, ConversationRunStatus.FAILED)
             log.exception(
                 "conversation_run_failed",
@@ -479,19 +479,32 @@ class ConversationRunExecutor:
             )
 
     def _project_tools_settled(self, run_id: int, status: str, reason: str) -> None:
-        """通过统一 event projector 收束执行器遗留的工具调用。"""
+        """通过统一 event projector 收束执行器遗留的工具调用。
 
-        if self._event_projector is None:
-            return
-        run = self._run_service.get_run(run_id)
-        self._event_projector.process(
-            ToolCallsSettledEvent(
-                task_id=run.task_id,
-                run_id=run_id,
-                status="cancelled" if status == "cancelled" else "failed",
-                reason=reason,
+        这是 canonical Run 终态提交后的 Transport 旁路；任何读取或投影失败都只记录，
+        不得把已收束的 workflow 再次打回 active/failed 异常路径。
+        """
+
+        try:
+            if self._event_projector is None:
+                return
+            run = self._run_service.get_run(run_id)
+            self._event_projector.process(
+                ToolCallsSettledEvent(
+                    task_id=run.task_id,
+                    run_id=run_id,
+                    status="cancelled" if status == "cancelled" else "failed",
+                    reason=reason,
+                )
             )
-        )
+        except Exception:
+            log.exception(
+                "conversation_run_tool_settlement_projector_failed",
+                extra={
+                    "msg": "Run 终态已提交，工具收束 projector 失败并被降级",
+                    "data": {"run_id": run_id, "status": status, "reason": reason},
+                },
+            )
 
     async def _set_status(self, run_id: int, status: ConversationRunStatus) -> None:
         """更新指定 run 的进程内状态快照。

@@ -2,16 +2,15 @@
 
 Date: 2026-09-12
 Branch: `codex/conversation-runtime-rebuild`
-Commit: `test: complete conversation state acceptance` (final commit is reported with the
-verification handoff; the hash is intentionally not self-embedded because amending this report
-changes the hash).
+Commit: `fix: close Task 5 final review blockers` (final hash is reported with the verification
+handoff; it is intentionally not self-embedded because amending this report changes the hash).
 
 ## Result
 
-The conversation-state rebuild passes the Task 5 acceptance coverage in code. The full backend
-suite has one remaining failure, classified as an environment-only missing artifact:
-`apps/terminal-worker/target/debug/terminal-worker.exe`. No compatibility migration, legacy
-snapshot fallback, persisted Transport snapshot, or snapshot test was added.
+The independent final-review blockers are covered by deterministic regression tests and pass in
+code. The full backend suite has one remaining failure, classified as an environment-only
+missing artifact: `apps/terminal-worker/target/debug/terminal-worker.exe`. No compatibility
+migration, legacy snapshot fallback, persisted Transport snapshot, or snapshot test was added.
 
 ## Acceptance coverage
 
@@ -46,6 +45,30 @@ An additional regression test in `tests/test_tool_executor_pipeline.py` covers n
    after restart. The stale-projector acceptance test failed before the fix and passed after
    generation ownership checks and projector suppression were added.
 
+## TDD fixes from the independent final-review round
+
+RED was captured before the implementation changes:
+
+```text
+uv --cache-dir H:\coding-agent\.uv-cache-task5 run pytest tests/test_task5_final_review_regressions.py -q --tb=short --basetemp H:\coding-agent\apps\backend\.pytest-basetemp-final-review-red3
+7 failed
+```
+
+The failures reproduced the six requested blockers, including the cold-rebuild
+`duplicate_tool_call_id` error and the deterministic generation race. After each fix, the final
+regression suite is GREEN:
+
+```text
+uv --cache-dir H:\coding-agent\.uv-cache-task5 run pytest tests/test_task5_final_review_regressions.py -q --tb=short --basetemp H:\coding-agent\apps\backend\.pytest-basetemp-final-review-green-final
+8 passed in 0.98s
+```
+
+The fix round makes Run terminal facts commit before tool-settlement projection, swallows
+projector failures at the workflow/settlement boundary, rechecks generation while holding the
+publication lock, removes the duplicate direct-create user event (including child/delegation
+creation), scopes tool-call matching by run, reads the persisted task context window, and clears
+stale usage/error JSON on resume.
+
 ## Verification evidence
 
 Focused baseline before Task 5 additions:
@@ -63,8 +86,8 @@ Task 5 acceptance after fixes:
 Final full backend run, with the workspace cache/temp workaround:
 
 ```text
-uv --cache-dir H:\coding-agent\.uv-cache-task5 run pytest -q --tb=short --basetemp H:\coding-agent\apps\backend\.pytest-basetemp-task5-full-final2
-1 failed, 377 passed, 1 skipped in 9.73s
+uv --cache-dir H:\coding-agent\.uv-cache-task5 run pytest -q --tb=short --basetemp H:\coding-agent\apps\backend\.pytest-basetemp-final-review-full-final
+1 failed, 388 passed, 1 skipped in 9.99s
 ```
 
 The sole failure is `tests/test_terminal_worker_integration.py::test_real_worker_powershell_command_exits`:
@@ -84,19 +107,29 @@ Static checks:
   removed; remaining errors include existing Transport TypedDict, storage, logging, workflow,
   and unrelated tooling issues.
 
-## Changed files in this acceptance commit
+## Changed files in this final-review fix commit
 
-- `apps/backend/tests/test_task5_acceptance.py`
-- `apps/backend/tests/test_tool_executor_pipeline.py`
-- `apps/backend/app/assistant_transport/service/conversation_event_projector.py`
+- `apps/backend/tests/test_task5_final_review_regressions.py`
+- `apps/backend/tests/test_task3_canonical_write_paths.py`
+- `apps/backend/tests/test_apply_patch_tool_errors.py`
+- `apps/backend/tests/test_workflow_operations_tool_message.py`
+- `apps/backend/app/assistant_transport/service/conversation_run_executor.py`
+- `apps/backend/app/assistant_transport/service/conversation_task_state_rebuilder.py`
 - `apps/backend/app/assistant_transport/service/conversation_task_state_service.py`
-- `apps/backend/app/service/task/conversation_task_context_service.py`
-- `apps/backend/app/core/tools/guard/tool_output_budget.py`
+- `apps/backend/app/core/delegation/delegation_executor.py`
+- `apps/backend/app/core/tools/schemas/tool_observation.py`
+- `apps/backend/app/core/tools/tool_execute/tool_cancelled.py`
+- `apps/backend/app/core/tools/tool_execute/tool_error.py`
+- `apps/backend/app/core/tools/tool_execute/tool_handler_runner.py`
+- `apps/backend/app/core/tools/tool_execute/tool_success.py`
+- `apps/backend/app/core/tools/tool_handler/apply_patch_tool.py`
+- `apps/backend/app/core/tools/tool_contract.md`
+- `apps/backend/app/core/workflows/workflow_operations.py`
+- `apps/backend/app/service/task/conversation_run_service.py`
+- `apps/backend/app/storage/crud/conversation_run_crud.py`
+- `apps/backend/app/task_runtime/service/task_service.py`
 - this report
 
-The worktree also contains unrelated pre-existing user changes and generated test scratch
-directories; they are intentionally not included in this commit.
-
-Independent subagent review could not be executed because this runtime exposes no subagent
-dispatch tool. A local diff review and the verification above were completed; this limitation is
-reported rather than presented as an independent review.
+The preceding acceptance commit contains the original acceptance tests and baseline fixes. The
+worktree also contains unrelated pre-existing progress/plan/backup changes and generated test
+scratch directories; they are intentionally not included in this commit.

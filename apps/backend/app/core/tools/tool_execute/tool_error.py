@@ -115,15 +115,14 @@ def internal_execution_error_reason(header: str) -> str:
     该助手是执行器在调用 ``ToolExecutor.execute`` 时捕获到**非工具语义异常**（即
     执行链自身 bug：执行管线内部、事件构造、trace span、序列化等抛出的意外异常，而非
     工具 handler 主动返回的业务失败）的唯一收口：区分于工具语义失败，明确告诉模型
-    「工具本体没跑起来，是 runtime 出了内部错误」，并给出确定性失败的重试提示。
+    「工具本体没跑起来，是 runtime 出了内部错误」，并给出停止或处理建议。
 
     参数:
         header: 已点明失败位置与人读原因的英文短句（如 ``"internal execution error
             before the tool ran: ..."``），作为说明前缀。
 
     返回:
-        面向模型的富文本说明（根因已由 ``header`` 给出 + 修正建议 + 确定性失败
-        的重试提示：需先排查 runtime 内部错误，原样重试无效）。
+        面向模型的富文本说明（只提供处理建议，不重复 ``header`` 的错误事实）。
 
     异常:
         无。
@@ -132,9 +131,8 @@ def internal_execution_error_reason(header: str) -> str:
         无（纯函数）。
     """
     return (
-        f"{header} the tool itself never ran, so this is an internal runtime failure "
-        f"rather than a tool-reported error; retrying with identical arguments will "
-        f"fail again until the runtime issue is fixed."
+        "the tool itself never ran because the runtime failed; inspect and fix the "
+        "runtime issue before calling the tool again."
     )
 
 
@@ -143,7 +141,7 @@ def handler_exception_reason(header: str) -> str:
 
     该助手是 :class:`ToolHandlerRunner` 各 ``handler_exception`` 失败分支（进程通信
     断裂、子进程 handler 抛异常、线程内 handler 抛异常）复用的唯一收口：统一追加
-    「确定性失败 + 原样重试无效 + 先读 message 修正根因」的提示，确保三处语义一致，
+    统一追加「不可继续重试 + 先读 message 处理根因」的提示，确保三处语义一致，
     且与 ``retryable=False`` 的重试信号保持一致。
 
     参数:
@@ -151,8 +149,7 @@ def handler_exception_reason(header: str) -> str:
             an exception: ..."``），作为说明前缀。
 
     返回:
-        面向模型的富文本说明（根因已由 ``header`` 给出 + 修正建议 + 确定性失败
-        的重试提示）。
+        面向模型的富文本说明（只提供处理建议，不重复 ``header`` 的错误事实）。
 
     异常:
         无。
@@ -161,11 +158,7 @@ def handler_exception_reason(header: str) -> str:
         无（纯函数）。
     """
 
-    return (
-        f"{header} this is a deterministic failure from the tool, so retrying with "
-        f"identical arguments will fail again; read the message to fix the underlying "
-        f"cause before calling the tool again."
-    )
+    return "inspect the underlying tool failure and change the plan before calling the tool again."
 
 
 def tool_error(
@@ -188,13 +181,12 @@ def tool_error(
             docstring/注释不在此限。
         reason: 「为什么失败、该如何修正、是否值得重试」——面向模型的**富文本**
             说明，**不是**稳定机器短码。须包含失败根因、可操作修正建议，以及与
-            ``retryable`` 一致的重试提示（瞬态失败写「重试可能成功」，确定性失败写
-            「须先修正再调用」）。该值回传给模型，供其理解失败并决定下一步动作；
+            ``retryable`` 一致的处理建议。该值回传给模型，供其理解失败并决定下一步
+            动作；
             开发者向的中文 docstring/注释不在此限。
-        retryable: 「原样重试是否可能成功」，默认 False。仅瞬态失败（如
-            ``timeout``、临时文件占用）应传 True——用相同参数重试有意义；确定性
-            失败（参数非法、路径越界等）保持 False，模型须先按 ``error`` 中的
-            建议修正再调用。
+        retryable: 仅供模型判断「按 ``reason`` 修正或处理后是否可以再次调用」，默认
+            False。它不触发执行器自动重试，也不表示必须使用相同参数；如果模型可以
+            修正参数、目标或当前状态后再次调用，则传 True，否则传 False。
         permission: 触发工具所需权限标识（用于审计/展示），默认空字符串；权限被
             拒时由调用方回填被拒的权限值。
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
@@ -203,8 +195,8 @@ def tool_error(
             ``display_data`` 固定只包含该提示，不承载目标、结果或完整错误原因。
 
     返回:
-        不可变的 :class:`ToolObservation`：``status="error"``，``content`` 与
-        ``error`` 均包含人类可读错误，其余诊断字段按入参填充。
+        不可变的 :class:`ToolObservation`：``status="error"``，``error`` 与
+        ``reason`` 按入参填充，``content`` 不承载重复错误文本。
 
     异常:
         无。
@@ -215,7 +207,7 @@ def tool_error(
     observation = ToolObservation(
         tool_name=tool_name,
         status="error",
-        content=error,
+        content=None,
         error=error,
         reason=reason,
         retryable=retryable,

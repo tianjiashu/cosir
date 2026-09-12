@@ -141,9 +141,27 @@ class WorkflowOperations:
         return self._current_workspace
 
     def process_event(self, event: object) -> object | None:
-        """把 workflow event 交给唯一的 snapshot projector。"""
+        """把 workflow event 交给唯一的 snapshot projector。
 
-        return self._event_projector.process(event)
+        projector 属于 Transport 旁路；workflow 的 canonical facts 已由各自的持久化
+        owner 写入，projector 失败只能记录降级，不能把异常传播回工作流节点。
+        """
+
+        try:
+            return self._event_projector.process(event)
+        except Exception:
+            log.exception(
+                "workflow_event_projector_failed",
+                extra={
+                    "msg": "workflow Transport event projector 失败，已降级继续执行",
+                    "data": {
+                        "event_type": getattr(event, "type", type(event).__name__),
+                        "task_id": getattr(event, "task_id", None),
+                        "run_id": getattr(event, "run_id", None),
+                    },
+                },
+            )
+            return None
 
     def is_current_run_cancelled(self) -> bool:
         """Return whether the currently bound run should stop.
@@ -524,12 +542,19 @@ class WorkflowOperations:
         return self._to_model_message(observation)
 
     def _to_model_message(self, observation: ToolObservation) -> ToolMessage:
-        """把工具观察序列化为模型可见的 ``role="tool"`` 消息（markdown 结构）。
+        """把工具观察压缩为模型可消费的 ``role="tool"`` 消息。
 
-        ``content_text`` 以 markdown 区块组织**对模型可见**的字段：``## Tool`` 承载
-        ``tool_name`` / ``status`` / ``retryable``，``## Output`` 承载 ``content``，
-        ``## Error`` 承载 ``error``，``## Reason`` 承载 ``reason``；空值跳过对应区块。
-        ``tool_call_id``（置于 ``metadata``）、``data``、``permission`` 对模型不可见。
+        三类终态使用不同的最小消息契约：
+
+        - ``success``：只发送成功内容；没有内容时发送 ``"success"``。
+        - ``error``：发送 ``error``、``retryable``、可选的重试判断提示和 ``reason``，
+          避免重复发送 ``content``（失败观察的 ``content`` 通常就是 ``error`` 的副本）。
+        - ``cancelled``：只发送取消说明，不把取消伪装成可重试错误。
+
+        LangChain 当前 ``ToolMessage.status`` 只接受 ``"success"`` / ``"error"``，
+        没有 ``"cancelled"``。取消的真实生命周期仍由 ``ToolObservation.status`` 和
+        Transport 保存；写入模型上下文时将其映射为 ``status="error"``，并通过消息
+        content 中的 ``cancelled`` 标记保留语义，避免构造 ``ToolMessage`` 时抛异常。
 
         参数:
             observation: 已产出的工具观察（含正常结果、错误占位、取消占位）。
@@ -544,27 +569,36 @@ class WorkflowOperations:
         副作用:
             无（不修改入参观察对象）。
         """
-        # 仅向模型暴露面向人读的文本通道（content / error / reason）与执行元信息
-        # （tool_name / status / retryable）。tool_call_id / data / permission 对模型不可见
-        # （前者在 metadata、后者由模型消息构造逻辑显式忽略）。None 与空串视为
-        # 无信息，跳过对应区块。其余字段以 markdown 结构组织，使模型能区分「元信息 / 输出 /
-        # 错误 / 修正建议」四个语义维度。
-        sections: list[str] = []
-        meta_lines: list[str] = []
-        if observation.tool_name:
-            meta_lines.append(f"- name: {observation.tool_name}")
-        if observation.status:
-            meta_lines.append(f"- status: {observation.status}")
-        meta_lines.append(f"- retryable: {observation.retryable}")
-        if meta_lines:
-            sections.append("## Tool\n\n" + "\n".join(meta_lines))
-        if observation.content:
-            sections.append(f"## Output\n\n{observation.content}")
-        if observation.error:
-            sections.append(f"## Error\n\n{observation.error}")
-        if observation.reason:
-            sections.append(f"## Reason\n\n{observation.reason}")
-        content_text = "\n\n".join(sections)
+        content = observation.content.strip() if isinstance(observation.content, str) else ""
+        error = observation.error.strip() if isinstance(observation.error, str) else ""
+        reason = observation.reason.strip() if isinstance(observation.reason, str) else ""
+
+        if observation.status == "success":
+            content_text = content or "success"
+            message_status = "success"
+        elif observation.status == "cancelled":
+            cancellation_detail = reason
+            content_text = (
+                f"cancelled: {cancellation_detail}" if cancellation_detail else "cancelled"
+            )
+            # ToolMessage 没有 cancelled 状态；不能把非法值传给 LangChain。
+            message_status = "error"
+        else:
+            error_detail = error or "the tool call failed"
+            lines = [
+                f"error: {error_detail}",
+                f"retryable: {str(observation.retryable).lower()}",
+            ]
+            if observation.retryable:
+                lines.append(
+                    "hint: this error can be retried; decide from the context whether "
+                    "retrying is appropriate."
+                )
+            if reason:
+                lines.append(f"reason: {reason}")
+            content_text = "\n".join(lines)
+            message_status = "error"
+
         return ToolMessage(
-            content=content_text, tool_call_id=observation.tool_call_id, status=observation.status
+            content=content_text, tool_call_id=observation.tool_call_id, status=message_status
         )

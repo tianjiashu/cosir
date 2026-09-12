@@ -2,10 +2,10 @@
 
 本模块只承载 apply_patch（V4A 多文件补丁）这一个工具：解析并应用 V4A 补丁，复刻
 原 apply_patch 逻辑。成功后返回 unified diff 回显（``content``）与结构化 diff 统计
-（``data["diff_stats"]``），对齐 Hermes ``patch_tool`` 的 patch 分支。落盘后逐文件
-经 ``guard.syntax_check`` 做多语言语法检查（error 驱动）：任一文件命中语法错误即
-返回 error 观察（文件已写），聚合诊断经 ``reason`` 引导 Agent 逐文件二次编辑覆盖
-自修复。
+（``display_data["diff_stats"]``），对齐 Hermes ``patch_tool`` 的 patch 分支。落盘后逐文件
+经 ``guard.syntax_check`` 做多语言语法检查；语法诊断作为成功结果中的模型侧后续
+修复提示，不改变已经落盘的文件变更展示状态。应用阶段的异常按瞬态文件系统错误、
+确定性失败和部分落盘失败分类，分别填充 ``retryable``、``error`` 与 ``reason``。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``。
@@ -13,6 +13,9 @@
 - 成功/失败观察统一经 ``tool_execute.tool_success`` / ``tool_error`` 工厂构造。
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
+
+import errno
+import os
 
 from app.core.tools.display.file_change_display import (
     build_file_change_artifact_data,
@@ -34,7 +37,6 @@ from app.core.tools.tool_handler.file_io.atomic_write import looks_like_line_num
 from app.core.tools.tool_handler.patch import (
     PatchApplyError,
     apply_all_with_diff,
-    format_patch_diff,
     parse_v4a_patch,
     validate_all,
 )
@@ -49,6 +51,42 @@ APPLY_PATCH_DESCRIPTION = (
     "PATCH MODE: apply a V4A patch that can update, add, delete, or move multiple files "
     "in one call. Each operation references a file path and a diff/hunk block."
 )
+
+
+def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
+    """判断 patch 失败后是否允许模型修正或处理后再次调用。
+
+    ``retryable`` 只是模型提示，不触发执行器自动重试，也不要求使用完全相同的
+    patch。内容/路径竞态需要重新读取并生成新 patch，因此属于可修正后重试；已经
+    部分落盘的失败始终不允许模型直接重放。
+
+    参数:
+        error: patch 应用阶段归一化后的异常。
+
+    返回:
+        未发生部分落盘且失败可以通过等待或修正当前状态后再次调用时返回 ``True``。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if error.partial_applied:
+        return False
+    cause = error.__cause__
+    if isinstance(cause, RuntimeError):
+        return True
+    if not isinstance(cause, OSError):
+        return False
+    if os.name == "nt" and getattr(cause, "winerror", None) in {32, 33}:
+        return True
+    return cause.errno in {
+        errno.EAGAIN,
+        errno.EBUSY,
+        getattr(errno, "ETXTBSY", -1),
+    }
 
 
 class ApplyPatchTool(HandlerBase):
@@ -116,86 +154,52 @@ class ApplyPatchTool(HandlerBase):
         resolver = PathResolver(execution_context.workspace_root)
         if not patch:
             return tool_error(
-                self.name,
-                "apply_patch requires patch (V4A)",
-                reason=(
-                    "apply_patch needs the 'patch' argument containing a non-empty V4A "
-                    "patch. Provide the V4A patch text; the same empty patch will always "
-                    "fail."
-                ),
+                tool_name=self.name,
+                error="missing patch input",
+                reason="provide a non-empty V4A patch in the 'patch' argument.",
+                retryable=True,
                 permission=self.permission,
             )
         text = patch.strip()
         if looks_like_line_numbered(text):
             return tool_error(
-                self.name,
-                "patch appears to be line-numbered read_file output; remove the 'N| ' "
-                "prefixes before applying.",
-                reason=(
-                    "the patch text looks like line-numbered read_file output (most lines "
-                    "start with a 'N| ' prefix). These prefixes are display metadata, not "
-                    "patch content. Strip the 'N| ' prefix from the patch and retry; the "
-                    "same content will always be rejected."
-                ),
+                tool_name=self.name,
+                error="patch contains line-number prefixes",
+                reason="remove the 'N| ' display prefixes and provide the actual V4A patch.",
+                retryable=True,
                 permission=self.permission,
             )
         operations, parse_error = parse_v4a_patch(patch)
         if parse_error:
             return tool_error(
-                self.name,
-                parse_error,
-                reason=(
-                    "the V4A patch could not be parsed (syntax error in the patch text). "
-                    "Fix the patch format (correct headers, valid hunk ranges) and retry; "
-                    "the same malformed patch will always fail."
-                ),
+                tool_name=self.name,
+                error=f"invalid V4A patch: {parse_error}",
+                reason="fix the V4A headers and hunk ranges, then submit a new patch.",
+                retryable=True,
                 permission=self.permission,
             )
         if not operations:
             return tool_error(
-                self.name,
-                "patch contains no operations",
-                reason=(
-                    "the patch parsed successfully but contains no file operations. Add "
-                    "at least one update/add/delete/move operation to the patch and retry; "
-                    "the same empty patch will always fail."
-                ),
+                tool_name=self.name,
+                error="patch contains no file operations",
+                reason="add at least one update, add, delete, or move operation.",
+                retryable=True,
                 permission=self.permission,
             )
         validation_errors = validate_all(operations, resolver)
         if validation_errors:
             return tool_error(
-                self.name,
-                "Patch validation failed (no files were modified):\n"
+                tool_name=self.name,
+                error="patch validation failed (no files were modified):\n"
                 + "\n".join(f"  • {e}" for e in validation_errors),
-                reason=(
-                    "patch validation failed, so no files were modified. The error list "
-                    "above shows which operations were rejected (e.g. paths outside the "
-                    "workspace or unsupported operations). Fix the listed operations and "
-                    "retry; the same invalid patch will always fail."
-                ),
+                reason="fix the listed operations before submitting a new patch.",
+                retryable=True,
                 permission=self.permission,
             )
         try:
             results = apply_all_with_diff(operations, resolver)
         except PatchApplyError as exc:
-            return tool_error(
-                self.name,
-                f"patch apply failed: {exc}",
-                reason=(
-                    "the patch could not be fully applied"
-                    + (
-                        " (some operations were already applied before the failure)"
-                        if exc.partial_applied
-                        else ""
-                    )
-                    + ". This is usually a transient write/lock issue or a conflicting "
-                    "concurrent edit. Resolve the conflict or free the file, then retry "
-                    "the same patch."
-                ),
-                retryable=True,
-                permission=self.permission,
-            )
+            return self._patch_apply_error_observation(exc)
         # 展示数据先基于文件变更事实构造；语法检查只作为模型侧诊断，不改变 UI 成功状态。
         display_data = build_file_change_display_data(results)
         artifact_data = build_file_change_artifact_data(results)
@@ -215,8 +219,7 @@ class ApplyPatchTool(HandlerBase):
                 tool_name=self.name,
                 permission=self.permission,
                 content=(
-                    format_patch_diff(results)
-                    + "\n\nPost-write syntax check reported issues:\n"
+                    "success\nPost-write syntax check reported issues:\n"
                     + self._format_multi_file_syntax_reason(diagnostics_all)
                 ),
                 display_data=display_data,
@@ -225,13 +228,66 @@ class ApplyPatchTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=format_patch_diff(results),
+            content=None,
             display_data=display_data,
             artifact_data=artifact_data,
         )
 
+    def _patch_apply_error_observation(self, error: PatchApplyError) -> ToolObservation:
+        """把 patch 应用异常转换为不重复诊断信息的工具错误观察。
+
+        ``error`` 只描述已经发生的事实；``reason`` 只描述模型下一步应采取的动作。
+        未落盘的文件锁/忙碌状态，以及可通过重新读取状态修正的内容竞态，允许模型
+        处理后再次调用。部分落盘失败必须先检查当前文件状态，禁止模型盲目重放。
+
+        参数:
+            error: patch 应用阶段异常，可能携带底层异常 cause 和部分落盘标记。
+
+        返回:
+            ``status="error"`` 的 ``ToolObservation``，并正确填充 ``retryable``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        if error.partial_applied:
+            return tool_error(
+                tool_name=self.name,
+                error="patch application stopped after partial changes",
+                reason=(
+                    "inspect the changed files and create a new patch from the current "
+                    "contents; do not replay this patch unchanged."
+                ),
+                retryable=False,
+                permission=self.permission,
+            )
+        if _is_patch_retryable_after_correction(error):
+            return tool_error(
+                tool_name=self.name,
+                error=f"patch apply failed: {error}",
+                reason=(
+                    "resolve the reported condition or regenerate the patch from current "
+                    "file contents before retrying."
+                ),
+                retryable=True,
+                permission=self.permission,
+            )
+        return tool_error(
+            tool_name=self.name,
+            error=f"patch apply failed: {error}",
+            reason=(
+                "re-read the affected files and create a new patch for the current contents; "
+                "do not retry this patch unchanged."
+            ),
+            retryable=False,
+            permission=self.permission,
+        )
+
     def _format_multi_file_syntax_reason(self, diagnostics: list[SyntaxDiagnostic]) -> str:
-        """聚合多个文件的语法诊断为英文 reason（apply_patch 多文件自修复引导）。
+        """聚合多个文件的语法诊断为英文后续修复提示。
 
         参数:
             diagnostics: 各文件语法诊断的扁平集合（含 ``language`` / ``row`` /

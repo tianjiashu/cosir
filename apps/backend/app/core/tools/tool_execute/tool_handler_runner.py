@@ -248,7 +248,6 @@ class ToolHandlerRunner:
             return tool_cancelled(
                 tool.name,
                 reason=CANCEL_NOT_EXECUTED_REASON,
-                error="the current turn was cancelled while this tool was running",
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
@@ -510,7 +509,6 @@ class ToolHandlerRunner:
             return tool_cancelled(
                 tool.name,
                 reason=CANCEL_NOT_EXECUTED_REASON,
-                error="the current turn was cancelled before this tool started executing",
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
@@ -551,7 +549,6 @@ class ToolHandlerRunner:
             return tool_cancelled(
                 tool.name,
                 reason=CANCEL_NOT_EXECUTED_REASON,
-                error="the current turn was cancelled while this tool was running",
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )

@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
-    UserInputAppendedEvent,
 )
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
@@ -224,10 +223,6 @@ class ConversationRunService:
             self._publish_post_commit_event(
                 RunInitializedEvent(task_id=task_id, run_id=run.id),
                 "run_initialized",
-            )
-            self._publish_post_commit_event(
-                UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text),
-                "user_input_appended",
             )
         return run
 

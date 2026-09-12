@@ -18,7 +18,6 @@ CANCEL_NOT_EXECUTED_REASON = (
 def tool_cancelled(
     tool_name: str,
     reason: str,
-    error: str = "",
     permission: str = "",
     tool_call_id: str = "",
 ) -> ToolObservation:
@@ -53,13 +52,11 @@ def tool_cancelled(
     副作用:
         无（仅构造并返回新对象，不修改任何入参、不触发任何执行）。
     """
-    if not error:
-        error = reason.split(".", 1)[0] if reason else "the tool call was cancelled"
     observation = ToolObservation(
         tool_name=tool_name,
         status="cancelled",
-        content=error,
-        error=error,
+        content=None,
+        error=None,
         reason=reason,
         retryable=False,
         permission=permission,

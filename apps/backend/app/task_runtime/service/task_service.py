@@ -22,7 +22,6 @@ from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
-from app.service.provider.capability_service import CapabilityService
 from app.storage.checkpoint_gc import cleanup_orphan_checkpoint_threads
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
@@ -132,36 +131,22 @@ class TaskService:
         return self._turn.get_latest_by_task(task_id)
 
     def get_context_window_total(self, task_id: int) -> int | None:
-        """返回任务最近一次 run 可确定的有效上下文窗口。
+        """返回 Task 持久化的上下文窗口上限。
 
         参数:
             task_id: 任务标识。
 
         返回:
-            按最近 run 的模型和当前软上限解析出的窗口；没有 run、模型或能力元数据时为
-            ``None``，不使用固定兜底值。
+            ``tasks.context_window_total`` 的持久化值；尚未记录时为 ``None``。
 
         异常:
-            底层任务读取异常会原样抛出；未知模型仅记录告警并返回 ``None``。
+            底层任务读取异常会原样抛出。
 
         副作用:
-            无（仅读取任务和模型能力配置）。
+            无（仅读取 Task 持久化事实）。
         """
 
-        run = self.get_latest_run(task_id)
-        if run is None or not run.model_name:
-            return None
-        try:
-            return CapabilityService.get_model_context_window(run.model_name)
-        except (KeyError, TypeError, ValueError):
-            log.warning(
-                "task_context_window_unavailable",
-                extra={
-                    "msg": "无法解析任务最近 run 的上下文窗口",
-                    "data": {"task_id": task_id, "model_name": run.model_name},
-                },
-            )
-            return None
+        return self._task.get(task_id).context_window_total
 
     def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
