@@ -10,6 +10,29 @@ ConversationStateSnapshot 现在只作为 Assistant Transport 进程内 working 
 统一从 `TaskRecord`、该 Task 的 `ConversationRunRecord[]` 与
 `ConversationTaskContextRecord[]` 重建；LangGraph checkpoint 仍只保留给显式 business resume。
 
+## 独立审查修复轮次 1
+
+状态：DONE
+
+- canonical context、Run 状态、usage 与 Task 生命周期事实现在是 cold/read merge 的权威来源；
+  只有活动 Run 中由 projector 产生、尚未落入 canonical context 的 assistant stream delta，
+  且满足确定性的 prefix-extension 规则时，才会保留在进程内 SSE working state 中。
+- `claim_pending_run` 与 `claim_or_resume_run` 的 post-commit running 事件统一经失败隔离发布器，
+  projector 故障不会阻止已提交 Run 启动 executor。
+- fork clone 不再复制源 `checkpoint_thread_id`；ORM 为目标 Run 生成独立 checkpoint 身份。
+- malformed canonical context deserialization 在 state read boundary 转换为结构化
+  `ConversationStateRebuildError`；删除回归增加真实 SQLite canonical context 行断言。
+
+修复轮次 TDD：先加入 stale-memory/projector-failure、claim projector-failure、malformed-context
+及独立 checkpoint 回归测试，RED 结果为 `4 failed, 5 passed`；随后实现并通过上述测试。
+
+修复轮次验证：
+
+- focused/related：`61 passed`；Transport/Projector/Run 回归 `52 passed`。
+- 完整后端：`361 passed, 1 skipped, 1 failed`。唯一失败仍是 Windows terminal worker 集成测试
+  找不到 `apps/terminal-worker/target/debug/terminal-worker.exe`，与 Task 4 无关。
+- 本轮涉及文件 Ruff 通过；`uv ... run python -m compileall -q app` 通过。
+
 ## TDD 记录
 
 - RED：先新增 `apps/backend/tests/test_task4_state_lifecycle.py`，运行
@@ -51,11 +74,13 @@ ConversationStateSnapshot 现在只作为 Assistant Transport 进程内 working 
 
 ## 边界与审查要点
 
-- 没有旧数据库迁移、legacy fallback、双 schema 或空 state fallback。
+- 没有 snapshot compatibility/fallback、双 schema 或空 state fallback；既有 checkpoint schema
+  正规化仅移除开发库遗留的错误全局唯一约束，不复制 checkpoint 内容。
 - 没有从冷读路径导入/查询 checkpoint、ToolRegistry 或 frontend runtime。
 - `docs/plan/conversation-state-rebuild-from-context-plan.md`、进度账本中的既有用户修改，以及
   `apps/backend/app/assistant_transport/request/assistant_transport_request.py~` 未纳入本次提交。
 
 ## 提交
 
+- 修复轮次实现提交：`ee66a21`（`fix: harden task 4 canonical state rebuild`）。
 - 报告更新提交：实现提交后写回哈希并单独提交。
