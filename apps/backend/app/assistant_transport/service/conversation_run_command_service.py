@@ -188,7 +188,11 @@ class ConversationRunCommandService:
                 "context_message_persisted",
                 extra={
                     "msg": "Run 初始 user context 已提交",
-                    "data": {"task_id": task_id, "run_id": run.id, "message_type": "HumanMessage"},
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run.id,
+                        "message_type": "HumanMessage",
+                    },
                 },
             )
             snapshot = self._state.rebuild_state(task_id)
@@ -259,7 +263,11 @@ class ConversationRunCommandService:
                 "context_message_persisted",
                 extra={
                     "msg": "Run 初始 user context 已提交",
-                    "data": {"task_id": task_id, "run_id": run.id, "message_type": "HumanMessage"},
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": reset.id,
+                        "message_type": "HumanMessage",
+                    },
                 },
             )
             snapshot = self._state.rebuild_state(task_id)
