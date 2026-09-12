@@ -311,6 +311,7 @@ class ConversationRunService:
             session_factory = getattr(self, "_session_factory", None)
             context = getattr(self, "_context", None)
             publish_status = session_factory is not None and context is not None
+            repaired_tool_call_ids: list[str] = []
             if session_factory is None or context is None:
                 record = self._run.cancel_recoverable_for_restart(
                     run.id,
@@ -328,9 +329,36 @@ class ConversationRunService:
                         session=session,
                     )
                     if record is not None:
-                        context.recover_interrupted_run(run.task_id, run.id, session=session)
+                        repaired_tool_call_ids = context.recover_interrupted_run(
+                            run.task_id, run.id, session=session
+                        )
             if record is not None:
                 recovered.append(record)
+            if record is not None:
+                log.info(
+                    "run_status_persisted",
+                    extra={
+                        "msg": "orphan Run terminal status 已持久化",
+                        "data": {
+                            "task_id": record.task_id,
+                            "run_id": record.id,
+                            "status": ConversationRunStatus.CANCELLED.value,
+                        },
+                    },
+                )
+                for tool_call_id in repaired_tool_call_ids:
+                    log.info(
+                        "tool_observation_persisted",
+                        extra={
+                            "msg": "orphan tool repair 已提交",
+                            "data": {
+                                "task_id": record.task_id,
+                                "run_id": record.id,
+                                "tool_call_id": tool_call_id,
+                                "status": "cancelled",
+                            },
+                        },
+                    )
             if record is not None and publish_status:
                 try:
                     service_depends.get_conversation_event_projector().process(

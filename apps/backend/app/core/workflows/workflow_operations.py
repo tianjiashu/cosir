@@ -547,8 +547,8 @@ class WorkflowOperations:
         三类终态使用不同的最小消息契约：
 
         - ``success``：只发送成功内容；没有内容时发送 ``"success"``。
-        - ``error``：发送 ``error``、``retryable``、可选的重试判断提示和 ``reason``，
-          避免重复发送 ``content``（失败观察的 ``content`` 通常就是 ``error`` 的副本）。
+        - ``error``：发送 ``error``、``retryable``、重试判断提示和 ``reason``，避免重复
+          发送 ``content``（失败观察的 ``content`` 通常就是 ``error`` 的副本）。
         - ``cancelled``：只发送取消说明，不把取消伪装成可重试错误。
 
         LangChain 当前 ``ToolMessage.status`` 只接受 ``"success"`` / ``"error"``，
@@ -594,6 +594,8 @@ class WorkflowOperations:
                     "hint: this error can be retried; decide from the context whether "
                     "retrying is appropriate."
                 )
+            else:
+                lines.append("hint: do not retry this tool call.")
             if reason:
                 lines.append(f"reason: {reason}")
             content_text = "\n".join(lines)

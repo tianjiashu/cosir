@@ -32,7 +32,6 @@ def cancelled_observation(tool_name: str, permission: str) -> ToolObservation:
 
     return tool_cancelled(
         tool_name,
-        "the terminal tool call was cancelled before or during its wait; the session remains alive",
         permission=permission,
     )
 

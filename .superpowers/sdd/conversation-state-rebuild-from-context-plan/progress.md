@@ -141,3 +141,69 @@ cycle and each task must receive an independent review before the next task.
   fresh-start HumanMessage row identity; share sanitized failed-tool display data between persistence
   and event.
 - Changed files and final commit are recorded in `task-3-report.md` after commit.
+- Task 3 fix-round-1 re-review: Spec compliance FAIL; one Important blocker remains.
+- Blocking finding: `ConversationTaskContextCrud.create` swallows every `IntegrityError` for ToolMessage
+  rows as duplicate, including sequence conflicts, foreign-key failures and other schema errors. Only
+  the intended `(task_id, run_id, tool_call_id)` uniqueness violation may return duplicate; all other
+  database failures must roll back and propagate.
+- Additional review findings: normal completed/failed/cancelled Run projector failures are not uniformly
+  isolated after commit; raw observation error text can still enter Transport metadata. Treat the former
+  as required post-commit degradation and the latter as controlled metadata hardening.
+- Task 3 fix round 2/5 dispatched to Locke; independent re-review required.
+- Fix round 2 was interrupted by the implementer usage limit; the controller completed the remaining
+  TDD fixes locally. RED covered non-target sequence IntegrityError and external-session event deferral;
+  GREEN focused Task 3/fact-model suite `64 passed`.
+- Controller commits: `b0b3a53` (duplicate DB failure semantics and terminal event degradation),
+  `a4a9d4c` (external-session initialization event ownership and safe command publisher).
+- Final independent review: Spec compliance PASS; Task quality PASS; Task 3 can complete. Focused
+  Task 3/fact-model tests `63 passed`, related `43 passed` with one known legacy snapshot-recovery
+  failure, compileall and diff check passed.
+
+## Task 4
+
+- Brief: `.superpowers/sdd/conversation-state-rebuild-from-context-plan/task-4-brief.md`.
+- Implementer: Jason (`01a093e0-4430-7021-b9df-480c8d785515`).
+- Implementation commits: `2d337a7`, report `51ef989`, verification correction `dd7256c`.
+- Implementer evidence: core regression `152 passed`; full backend `356 passed, 1 skipped`, with
+  only the environment-missing `terminal-worker.exe` failure; Ruff/compileall/focused MyPy passed.
+- Claimed scope: removed conversation snapshot model/CRUD/service and switched API, SSE,
+  attach/resume, fork/edit/delete/recovery cold reads to the three-model state service; preserved live
+  projector/SSE and explicit checkpoint continuation.
+- Status: implementation complete, independent review pending.
+- Fix round 1 implementation commits: `ee66a21`; report/verification updates are recorded in the
+  Task 4 report and latest HEAD `0dd66ac`.
+- Task 4 fix evidence: implementer reports focused/core `152+` passing, full backend `356 passed,
+  1 skipped` with only missing `terminal-worker.exe`; Ruff/compileall/focused MyPy passed.
+- Task 4 fix round 1 independent review pending; Task 5 remains blocked.
+- Task 4 fix-round-1 final review: Spec compliance PASS; Task quality PASS; no Important/Minor
+  findings. Focused/related suite `156 passed`; full backend `364 passed, 1 skipped, 1 failed`, sole
+  failure missing Windows `terminal-worker.exe`; Ruff/compileall passed. Task 4 complete.
+
+## Task 5
+
+- Brief: `.superpowers/sdd/conversation-state-rebuild-from-context-plan/task-5-brief.md`.
+- Status: ready to dispatch after Task 4 passed independent review.
+- Task 4 review verdict: Spec compliance FAIL; Task quality partial; Task 4 blocked.
+- Important findings: `_merge_canonical_facts` lets active in-memory messages hide committed context
+  after projector failure; `claim_or_resume_run` publishes directly and can orphan a committed Run as
+  running when projection fails; forked Run clone still copies source `checkpoint_thread_id` despite the
+  plan requiring a fresh checkpoint identity.
+- Minor findings: malformed metadata from SQLite can escape as an unclassified exception before the
+  structured rebuild error boundary; Task 4 tests are overly mocked and deletion coverage does not
+  verify canonical rows/side-effect boundaries.
+- Ruling: canonical facts must win over stale memory while preserving only uncommitted active deltas;
+  all post-commit claim/resume events must be failure-isolated; fork clone must never share checkpoint
+  identity. Add real-storage/lifecycle tests and explicit malformed-data coverage.
+- Task 4 fix round 1/5 dispatched to the original implementer; independent re-review required.
+- Implementer: Halley (`01a09411-125f-70c2-9c13-033238752b92`).
+- Acceptance commit: `7fc5b166cda6ce2b4863237c2d7be4d8fe8ed6ea`.
+- Evidence: Task 5 acceptance `9 passed`, post-commit/tool regression `20 passed`, full backend
+  `377 passed, 1 skipped` with one environment-only missing `terminal-worker.exe` failure; Ruff,
+  compileall, forbidden-reference grep and diff check passed. TDD fixes covered nullable tool output,
+  edit/restart external transaction flush and stale generation protection.
+- Implementer did not perform the required independent subagent review; final acceptance review pending.
+- Independent final review rejected the candidate despite all six blockers being closed: required
+  persistence-boundary logs were absent, and `tool_contract.md` had an EOF whitespace issue.
+- Controller fix: added `context_message_persisted`, `tool_observation_persisted`, and
+  `run_status_persisted` structured logs; removed the EOF whitespace. Focused regression remains
+  required before the final review is repeated.

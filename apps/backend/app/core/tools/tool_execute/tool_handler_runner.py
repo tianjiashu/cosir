@@ -14,10 +14,7 @@ from typing import Any
 from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
-from app.core.tools.tool_execute.tool_cancelled import (
-    CANCEL_NOT_EXECUTED_REASON,
-    tool_cancelled,
-)
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import handler_exception_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_execute.windows_job_object import (
@@ -247,7 +244,6 @@ class ToolHandlerRunner:
             )
             return tool_cancelled(
                 tool.name,
-                reason=CANCEL_NOT_EXECUTED_REASON,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
@@ -508,7 +504,6 @@ class ToolHandlerRunner:
             )
             return tool_cancelled(
                 tool.name,
-                reason=CANCEL_NOT_EXECUTED_REASON,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
@@ -548,7 +543,6 @@ class ToolHandlerRunner:
             )
             return tool_cancelled(
                 tool.name,
-                reason=CANCEL_NOT_EXECUTED_REASON,
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )

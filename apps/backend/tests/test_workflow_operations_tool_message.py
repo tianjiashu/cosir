@@ -1,6 +1,7 @@
 from langchain_core.messages import ToolMessage
 
 from app.core.tools.schemas import ToolObservation
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.workflows.workflow_operations import WorkflowOperations
 
 
@@ -62,21 +63,28 @@ def test_non_retryable_error_does_not_emit_optional_retry_hint() -> None:
         )
     )
 
-    assert "hint:" not in message.content
+    assert message.content == (
+        "error: invalid patch\n"
+        "retryable: false\n"
+        "hint: do not retry this tool call.\n"
+        "reason: fix the patch format before calling again"
+    )
 
 
 def test_cancelled_message_is_distinct_and_uses_langchain_compatible_status() -> None:
-    message = _to_message(
-        ToolObservation(
-            tool_name="execute_terminal",
-            status="cancelled",
-            content="cancelled",
-            error="cancelled",
-            reason="the user stopped the run",
-            tool_call_id="call-3",
-        )
+    observation = tool_cancelled(
+        "execute_terminal",
+        tool_call_id="call-3",
     )
+    message = _to_message(observation)
 
-    assert message.content == "cancelled: the user stopped the run"
+    assert observation.content is None
+    assert observation.error is None
+    assert observation.reason == (
+        "the tool call was cancelled before completion; no result was produced."
+    )
+    assert message.content == (
+        "cancelled: the tool call was cancelled before completion; no result was produced."
+    )
     assert message.status == "error"
     assert "retryable" not in message.content

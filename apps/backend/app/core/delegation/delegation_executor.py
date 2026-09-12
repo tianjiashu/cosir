@@ -551,14 +551,6 @@ class DelegationExecutor(DelegateTaskExecutor):
             )
             return tool_cancelled(
                 "delegate_task",
-                reason=(
-                    f"the delegated child agent was cancelled: {error}. this was an active "
-                    f"stop initiated by the user or system (e.g. the parent run was "
-                    f"cancelled), not a tool failure, so whether to retry is decided by the "
-                    f"user's next instruction or the surrounding context rather than being "
-                    f"assumed non-retryable; adapt your plan based on the cancellation and "
-                    f"any new instruction."
-                ),
                 permission="delegate_task",
             )
         error = result.error or "child run failed"

@@ -184,6 +184,13 @@ class ConversationRunCommandService:
                     run_id=run.id,
                     session=session,
                 )
+            log.info(
+                "context_message_persisted",
+                extra={
+                    "msg": "Run 初始 user context 已提交",
+                    "data": {"task_id": task_id, "run_id": run.id, "message_type": "HumanMessage"},
+                },
+            )
             snapshot = self._state.rebuild_state(task_id)
             return ConversationRunStartResult(
                 command=command,
@@ -248,6 +255,13 @@ class ConversationRunCommandService:
                     run_id=latest_run.id,
                     session=session,
                 )
+            log.info(
+                "context_message_persisted",
+                extra={
+                    "msg": "Run 初始 user context 已提交",
+                    "data": {"task_id": task_id, "run_id": run.id, "message_type": "HumanMessage"},
+                },
+            )
             snapshot = self._state.rebuild_state(task_id)
             self._state.publish_state(task_id, snapshot)
             return ConversationRunStartResult(

@@ -110,7 +110,7 @@ class ConversationTaskContextService:
             transport_metadata=metadata,
         )
         created = self._crud.create(record, session=session) is not False
-        if created:
+        if created and session is None:
             log.info(
                 "context_message_persisted",
                 extra={
@@ -215,7 +215,7 @@ class ConversationTaskContextService:
         target_task_id: int,
         run_id_map: dict[int, int],
         session: Session,
-    ) -> None:
+    ) -> int:
         """在外部事务中复制指定 Run 前缀的全部 context entries。
 
         目标序号从 1 重新分配；序号数值不属于业务契约，只保证目标 Task 内严格递增且
@@ -228,10 +228,11 @@ class ConversationTaskContextService:
             session=session,
         )
         next_sequence = 1
+        cloned_count = 0
         for source_entry in source_entries:
             if source_entry.run_id not in run_id_map:
                 continue
-            self._crud.create(
+            created = self._crud.create(
                 ConversationTaskContextRecord(
                     task_id=target_task_id,
                     run_id=run_id_map[source_entry.run_id],
@@ -243,7 +244,10 @@ class ConversationTaskContextService:
                 ),
                 session=session,
             )
+            if created:
+                cloned_count += 1
             next_sequence += 1
+        return cloned_count
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 run 的全部 context entry。

@@ -522,7 +522,51 @@ database locked”，应通过并发测试验证锁等待和重试是否足够�
 7. 从新 schema 移除 snapshot 表及无用 CRUD。
 8. 执行验收矩阵和并发/重启测试；不添加旧数据兼容 fallback。
 
-## 11. 需要产品/实现确认的唯一选项
+## 11. 可执行任务拆分（TDD）
+
+以下任务按顺序执行。每个任务必须先新增一个能证明目标行为缺失的失败测试，确认失败原因
+是生产能力尚未实现，再写最小实现，最后运行相关回归测试。任务之间共享接口时，以前一项
+已经通过的测试和目标 schema 为输入；不得绕过失败测试直接改生产代码。
+
+### Task 1 — 三类事实模型与序列化契约
+
+为 `TaskModel`、`ConversationRunModel`、`ConversationTaskContextModel` 及对应 Record/CRUD
+建立目标字段和 typed serialization。覆盖 `current_run_id`、`context_window_total`、Run
+usage/error、Context row id、Transport metadata、SystemMessage 持久化，以及新 schema 不
+创建 `conversation_task_snapshots`。先写模型/record/schema 失败测试，再实现；不修改 HTTP
+读路径和 workflow 行为。
+
+### Task 2 — 三模型重建器与 Agent context loader
+
+实现无副作用的 `ConversationTaskStateRebuilder` 和 context loader。只接受一个 Task record、
+该 Task 的 Run records、Context records，不读取 snapshot、checkpoint、ToolRegistry 或内存
+state。覆盖多 AI row 合并、`str(ConversationTaskContextModel.id)` message id、tool result
+回填、缺失 metadata 显式失败、usage/current run/error 映射和 `validate_snapshot`。先写失败
+单测，再实现纯函数；不切换线上读写路径。
+
+### Task 3 — canonical message/tool 写路径
+
+将初始 user message、完整 AI message、ToolMessage 和 Transport metadata 收敛到
+`ConversationTaskContextService`。保证数据库事实成功提交后才更新内存 Transport state；不
+在二者之间建立事务。覆盖 AI part 顺序、工具 presentation/display_data/status/error、幂等
+tool settle、完整 AIMessage 字段保留，以及 Run 终态一次性持久化 usage/error/final_output。
+先写会观察到旧双写/错误顺序的失败测试，再修改 runtime/context/tool/run service。
+
+### Task 4 — 移除持久化 snapshot 并切换生命周期路径
+
+删除 snapshot model/CRUD/初始化注册和所有 state_json upsert/clone/delete；将 GET、SSE 首帧、
+attach、fork、edit、reset、orphan recovery 切换到“三模型重建 + 内存 Transport state”。
+保留 attach 与 business resume 语义差异；checkpoint 只参与显式 workflow continuation，
+不参与重建。先写失败的 schema、冷读、SSE 顺序、fork/edit/restart 和重启恢复测试，再完成
+删除和切换。
+
+### Task 5 — 全量验收与并发回归
+
+基于目标 schema 建立正常 Run、多 AI step、多工具、工具失败/取消、edit、fork、后端重启和
+空 Task fixture。验证三模型重建、数据库优先时序、前端既有 wire schema、同 Task 互斥及多
+Task 并发。该任务只补验收测试和必要的生产修复，不引入兼容路径或第二事实源。
+
+## 12. 需要产品/实现确认的唯一选项
 
 1. 新生成的 context 是否要求 UI part/display_data 完全可重建；本方案默认要求，缺失即失败。
 2. Run usage/error 使用显式 JSON 列还是 typed fields；两者都必须归 ConversationRunModel 所有。

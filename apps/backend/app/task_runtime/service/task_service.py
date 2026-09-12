@@ -320,11 +320,19 @@ class TaskService:
                 cloned = self._turn.clone_for_task(session, source_run, target.id)
                 run_id_map[source_run.id] = cloned.id
 
-            self._context.clone_for_fork(
+            cloned_context_count = self._context.clone_for_fork(
                 source_task_id,
                 target.id,
                 run_id_map,
                 session,
+            )
+        for _ in range(cloned_context_count):
+            log.info(
+                "context_message_persisted",
+                extra={
+                    "msg": "fork context message 已提交",
+                    "data": {"task_id": target.id, "message_type": "cloned"},
+                },
             )
         source_space = task_runtime_spaces.get_or_create(source_task_id)
         source_manager = source_space.existing_context_manager()
