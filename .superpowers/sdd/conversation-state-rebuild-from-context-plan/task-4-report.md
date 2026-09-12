@@ -18,7 +18,7 @@ ConversationStateSnapshot 现在只作为 Assistant Transport 进程内 working 
 - GREEN：同一测试在实现后为 `5 passed`。
 - 相关回归：
   `uv --cache-dir H:\\coding-agent\\.uv-cache-task4 run pytest tests/test_task4_state_lifecycle.py tests/test_conversation_task_state_rebuilder.py tests/test_conversation_event_projector.py tests/test_assistant_transport_api.py tests/test_conversation_fact_models.py tests/test_task3_canonical_write_paths.py tests/test_task_workspace_deletion.py -q --basetemp H:\\coding-agent\\apps\\backend\\.pytest-basetemp-task4`
-  为 `151 passed`。
+  为 `152 passed`。
 - 完整后端回归：同一 uv cache/basetemp 配置下为 `356 passed, 1 skipped, 1 failed`。唯一失败是
   Windows terminal worker 集成测试找不到 `apps/terminal-worker/target/debug/terminal-worker.exe`；
   与本任务无关。默认 uv cache 目录也因权限不足不可用，改用 workspace cache 后测试正常运行。
