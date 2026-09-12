@@ -253,12 +253,8 @@ class ExecuteTerminalTool(HandlerBase):
             return tool_error(
                 self.name,
                 "could not run the command: execution context is missing",
-                reason=(
-                    "the runtime did not provide a workspace root for this command. This "
-                    "is an internal execution wiring error; retry after the runtime injects "
-                    "ToolExecutionContext."
-                ),
-                retryable=True,
+                reason="continue without retrying until the runtime supplies an execution context.",
+                retryable=False,
                 permission=self.permission,
             )
 
@@ -269,7 +265,7 @@ class ExecuteTerminalTool(HandlerBase):
                 reason=(
                     f"choose one of the available shell values: {', '.join(self._available_shells)}"
                 ),
-                retryable=False,
+                retryable=True,
                 permission=self.permission,
             )
 
@@ -312,10 +308,8 @@ class ExecuteTerminalTool(HandlerBase):
                 self.name,
                 content,
                 reason=(
-                    "the command was killed because it exceeded the command-level "
-                    f"timeout ({effective:.0f}s). Its output above is partial and the "
-                    "exit code is meaningless; rerun with a larger `timeout` if the "
-                    "command is legitimately slow, or split it into smaller steps."
+                    f"use a larger timeout (up to {self.max_command_timeout:.0f}s) or split "
+                    "the command into smaller steps."
                 ),
                 retryable=True,
                 permission=self.permission,
@@ -407,17 +401,10 @@ class ExecuteTerminalTool(HandlerBase):
         """构造灾难级命令被拒的错误观测。"""
         return tool_error(
             self.name,
-            f"Command blocked: {verdict.description}. Dangerous commands are not allowed; "
-            f"use file tools (read_file / write_file / patch / delete) for filesystem changes.",
+            f"command blocked by the safety policy: {verdict.description}",
             reason=(
-                "the command matches the deny-list of destructive commands (rm / del / "
-                "rd / Remove-Item / irreversible git operations such as reset --hard, "
-                "push --force, clean -f, checkout --, branch -D, config --global, "
-                "commit --amend / etc.) that could irreversibly damage the repository, "
-                "filesystem, or system, so it is always rejected. Use the dedicated file "
-                "tools (read_file / write_file / patch / delete) for filesystem changes "
-                "and avoid destructive git commands; the same command will always be "
-                "blocked."
+                "use a dedicated file tool for filesystem changes or choose a "
+                "non-destructive command."
             ),
             permission=self.permission,
         )
@@ -453,12 +440,8 @@ class ExecuteTerminalTool(HandlerBase):
         return tool_error(
             self.name,
             err,
-            reason=(
-                "the working directory could not be used. Common causes: it contains "
-                "shell-injection characters (rejected for safety), it points outside the "
-                "workspace root, or it does not exist. Provide a safe, in-workspace "
-                "directory path; the same invalid workdir will always fail."
-            ),
+            reason="provide a safe, existing directory inside the workspace root.",
+            retryable=True,
             permission=self.permission,
         )
 

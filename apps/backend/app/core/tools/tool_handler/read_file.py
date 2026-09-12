@@ -10,8 +10,6 @@
 - 工具执行只读文件系统，不写入任何文件，不执行 shell 命令。
 """
 
-import dataclasses
-import json
 from pathlib import Path
 from typing import ClassVar
 
@@ -29,13 +27,9 @@ from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import ReadFileArgs
 from app.core.tools.tool_models.text_read_result import TextReadResult
 
-# 「为什么失败」富文本：路径指向系统设备/敏感伪文件，无法读取（read_file 两处
-# blocked_device 分支共用，避免重复长串）。与新契约一致：reason 不再是短码。
+# 设备路径是确定性失败；reason 只提供替代动作，不重复 error 的事实。
 _BLOCKED_DEVICE_REASON = (
-    "the requested path points to an OS device or sensitive pseudo-file "
-    "(e.g. NUL/CON/COM1 on Windows, /dev/* or /proc/* on POSIX) and cannot be read; "
-    "pass a regular text file path inside the project instead. The same path will "
-    "always be rejected, so choose a different file."
+    "use a regular text file path inside the project instead."
 )
 
 
@@ -146,9 +140,9 @@ class ReadFileTool(HandlerBase):
                 边界限制，故不消费该值。
 
         返回:
-            ``ToolObservation``。成功时 ``content`` 包含 ``LINE_NUM|CONTENT`` 格式的
-            带行号文本；失败时 ``status`` 为 ``error``，``error``/``reason`` 提供面向模型的
-            富文本诊断（``error``=发生了什么、``reason``=为什么失败+如何修正+是否重试）。
+            ``ToolObservation``。成功时 ``content`` 仅包含模型后续工作所需的
+            ``LINE_NUM|CONTENT`` 文本；失败时 ``status`` 为 ``error``，``error``
+            描述事实，``reason`` 提供下一步动作。
 
         异常:
             不主动向上抛出异常。文件不存在、路径无法解析、二进制文件和读取失败都会被
@@ -176,12 +170,8 @@ class ReadFileTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not read the file: {error}",
-                reason=(
-                    "the path argument could not be resolved to a readable file "
-                    "(common causes: empty value, NUL characters, or a malformed path). "
-                    "Provide a valid, non-empty file path -- absolute, or relative to the "
-                    "project root -- and retry; the same invalid value will always fail."
-                ),
+                reason="provide a valid file path inside or under the project root.",
+                retryable=True,
                 permission=self.permission,
                 status_hint="路径无效",
             )
@@ -214,7 +204,7 @@ class ReadFileTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=json.dumps(dataclasses.asdict(result)),
+            content=result.content,
             display_data=build_read_file_display_data(
                 path,
                 start_line=normalized_offset,
@@ -291,7 +281,7 @@ class ReadFileTool(HandlerBase):
             ``TextReadResult``。成功时 ``content`` 包含带行号文本；失败时 ``error`` 非空。
 
         异常:
-            不主动向上抛出文件系统异常。读取失败会返回富文本 ``reason``（含根因与重试提示）。
+            不主动向上抛出文件系统异常。读取失败会返回简短的 ``reason`` 修正建议。
 
         副作用:
             只读文件系统，不写入任何文件。
@@ -300,21 +290,14 @@ class ReadFileTool(HandlerBase):
         if not path.exists():
             return TextReadResult(
                 error=f"could not read the file: no such file at '{path}'",
-                reason=(
-                    "the file does not exist at the given path. Check for a typo, confirm "
-                    "the file was not moved or deleted, or pass an absolute path. The same "
-                    "non-existent path will always fail, so retry only after the file "
-                    "exists or the path is corrected."
-                ),
+                reason="provide the current path of an existing file.",
+                retryable=True,
             )
         if path.is_dir():
             return TextReadResult(
                 error=f"could not read '{path}': it is a directory, not a file",
-                reason=(
-                    "the path resolves to a directory; read_file reads only files. Point "
-                    "to a specific file, or use a directory listing tool to inspect the "
-                    "directory's contents. Retrying the same directory path will always fail."
-                ),
+                reason="provide a file path, or use list_directory for this directory.",
+                retryable=True,
             )
         if self._is_likely_binary(path):
             return TextReadResult(
@@ -374,21 +357,13 @@ class ReadFileTool(HandlerBase):
                     "different encoding (e.g. GBK on Windows) or be a binary file. "
                     "Re-save it as UTF-8, or convert it before reading."
                 ),
-                reason=(
-                    "read_file refuses to silently replace invalid bytes, because doing so "
-                    "would feed corrupted text (replacement characters) back to the model. "
-                    "Convert the file to UTF-8 and retry the same read; the same non-UTF-8 "
-                    "file will always be rejected."
-                ),
+                reason="convert the file to UTF-8 or use a tool that supports its encoding.",
+                retryable=True,
             )
         except OSError as exc:
             return TextReadResult(
                 error=os_error_message(exc, "read the file"),
-                reason=(
-                    "the read failed, usually because the file is locked by another process "
-                    "or the current user lacks read permission; close the program holding "
-                    "the file or adjust permissions, then retry the same read."
-                ),
+                reason="make the file readable, then call read_file again.",
                 retryable=True,
             )
 

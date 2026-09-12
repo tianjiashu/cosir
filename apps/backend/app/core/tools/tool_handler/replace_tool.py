@@ -1,10 +1,9 @@
 """replace 工具实现（从原合并 patch_tool 的 replace 模式平移）。
 
 本模块只承载 patch（replace 模式）这一个工具：单文件模糊查找替换，复刻原
-edit_file 逻辑。成功后返回 unified diff 回显（``content``）与结构化 diff 统计
-（``data["diff_stats"]``），对齐 Hermes ``patch_tool`` 的 replace 分支。落盘后经
-``guard.syntax_check`` 做多语言语法检查（error 驱动）：命中语法错误返回 error 观察
-（文件已写），经 ``reason`` 引导 Agent 二次编辑覆盖自修复。
+edit_file 逻辑。成功后的文件变更由 display_data/artifact_data 提供给 UI 和审计，
+不把 diff 回显给模型。落盘后的语法检查只在发现问题时通过 success content 提供
+简短警告，不改变替换成功状态。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``。
@@ -38,7 +37,6 @@ from app.core.tools.tool_handler.file_io.atomic_write import (
 )
 from app.core.tools.tool_handler.patch import (
     format_no_match_hint,
-    format_patch_diff,
     fuzzy_find_and_replace,
 )
 from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
@@ -50,7 +48,7 @@ REPLACE_DESCRIPTION = (
     "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "
     "Uses fuzzy matching (9 strategies) so minor whitespace/indentation "
     "differences won't break it. "
-    "Returns a unified diff. Auto-runs syntax checks after editing.\n\n"
+    "Reports the file change in the tool UI. Auto-runs syntax checks after editing.\n\n"
     "REPLACE MODE: find a unique string and replace it. "
     "REQUIRED PARAMETERS: path, old_string, new_string (replace_all is optional)."
 )
@@ -115,10 +113,9 @@ class ReplaceTool(HandlerBase):
             replace_all: 是否替换所有命中（默认 False，要求唯一命中）。
 
         返回:
-            ``ToolObservation``：成功时 ``content`` 为 unified diff 回显、
-            ``data["diff_stats"]`` 为结构化统计；失败时 ``status`` 为 error，
-            ``error``/``reason`` 提供面向模型的
-            富文本诊断（``error``=发生了什么、``reason``=为什么失败+如何修正+是否重试）。
+            ``ToolObservation``：成功时 content 为空，除非语法检查发现问题并返回
+            简短警告；文件变更通过 display_data/artifact_data 提供。失败时
+            ``error`` 描述事实，``reason`` 提供下一步动作。
 
         异常:
             不主动向上抛出；所有失败路径均归一化为错误观察。
@@ -131,23 +128,16 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 "replace requires path, old_string, new_string",
-                reason=(
-                    "replace mode needs all of path, old_string and new_string; at least "
-                    "one is missing. Provide a target file path, the exact text to find, "
-                    "and its replacement; the same incomplete arguments will always fail."
-                ),
+                reason="provide path, old_string, and new_string, then call patch again.",
+                retryable=True,
                 permission=self.permission,
             )
         if old_string == new_string:
             return tool_error(
                 self.name,
                 "old_string and new_string are identical, no changes would be made",
-                reason=(
-                    "old_string and new_string are exactly the same, so this edit is a "
-                    "no-op and the file would not change. This is deterministic: provide "
-                    "a new_string that differs from old_string, or skip the call if no "
-                    "change is actually needed."
-                ),
+                reason="provide a different new_string, or skip the call if no change is needed.",
+                retryable=True,
                 permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path)
@@ -163,13 +153,8 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not patch the file: {error}",
-                reason=(
-                    "the path escapes the project workspace and cannot be patched. The "
-                    "resolver rejects paths that point outside the workspace root for "
-                    "safety. Pass a path inside the project (relative to the workspace "
-                    "root, or an absolute path under it); the same out-of-bounds path will "
-                    "always be rejected."
-                ),
+                reason="provide a file path inside the project workspace.",
+                retryable=True,
                 permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, resolved)
@@ -186,12 +171,7 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 os_error_message(exc, "read the file"),
-                reason=(
-                    "the file could not be read before patching, usually because it is "
-                    "locked by another process or the current user lacks read permission. "
-                    "Close the program holding the file or adjust permissions, then retry "
-                    "the same patch."
-                ),
+                reason="make the file readable, then call patch again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -205,23 +185,18 @@ class ReplaceTool(HandlerBase):
                 self.name,
                 message,
                 reason=(
-                    "old_string was not found in the file (or occurred more than once "
-                    "without replace_all). Show the exact current text via read_file and "
-                    "retry with an old_string that matches uniquely; the same old_string "
-                    "will always fail until the file content changes."
+                    "read the current file and provide an old_string with a unique match, "
+                    "or set replace_all=true."
                 ),
+                retryable=True,
                 permission=self.permission,
             )
         if looks_like_line_numbered(new_content):
             return tool_error(
                 self.name,
-                "resulting content appears line-numbered; remove 'N| ' prefixes first.",
-                reason=(
-                    "the patched content looks like line-numbered read_file output (most "
-                    "lines start with a 'N| ' prefix). These prefixes are display metadata, "
-                    "not file content. Strip the 'N| ' prefix from the new_string and retry; "
-                    "the same content will always be rejected."
-                ),
+                "resulting content appears line-numbered",
+                reason="remove the 'N| ' display prefixes from new_string.",
+                retryable=True,
                 permission=self.permission,
             )
         try:
@@ -234,12 +209,7 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 os_error_message(exc, "write the file"),
-                reason=(
-                    "the patched file could not be written, usually because it is locked "
-                    "by another process or the current user lacks write permission. Close "
-                    "the program holding the file or adjust permissions, then retry the "
-                    "same patch."
-                ),
+                reason="make the file writable, then call patch again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -254,7 +224,7 @@ class ReplaceTool(HandlerBase):
                 tool_name=self.name,
                 permission=self.permission,
                 content=(
-                    "File patched successfully. Post-write syntax check reported issues:\n"
+                    "success\nsyntax warning:\n"
                     + format_syntax_reason(result)
                 ),
                 display_data=display_data,
@@ -263,7 +233,7 @@ class ReplaceTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=format_patch_diff([snapshot]),
+            content=None,
             display_data=display_data,
             artifact_data=artifact_data,
         )

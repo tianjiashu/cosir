@@ -81,18 +81,16 @@ def os_error_message(exc: OSError, action: str) -> str:
 
 
 def blocked_device_reason(action: str) -> str:
-    """构造「路径指向 OS 设备/敏感伪文件」的富文本 ``reason``（共享助手）。
+    """构造设备路径错误的简短修正建议。
 
     文件类工具（read / write / search 等）命中 ``ProjectPathResolver`` 的 blocked
-    设备分支时共用这一模板，避免各 handler 重复长串；按 ``action`` 动名词定制提示，
-    与确定性失败的「same path will always be rejected」重试提示保持一致。
+    设备分支时共用这一模板，避免把错误事实重复写入 ``reason``。
 
     参数:
-        action: 受影响的动作英文动名词（如 ``"read"`` / ``"written"`` /
-            ``"searched recursively"``），用于定制说明。
+        action: 保留用于兼容现有调用方的动作描述；当前建议不需要动作名。
 
     返回:
-        面向模型的富文本说明（根因 + 修正建议 + 确定性失败的重试提示）。
+        面向模型的下一步修正建议。
 
     异常:
         无。
@@ -101,12 +99,8 @@ def blocked_device_reason(action: str) -> str:
         无（纯函数）。
     """
 
-    return (
-        f"the requested path points to an OS device or sensitive pseudo-file "
-        f"(e.g. NUL/CON/COM1 on Windows, /dev/* or /proc/* on POSIX) and cannot be "
-        f"{action}; pass a regular file path inside the project instead. The same "
-        f"path will always be rejected, so choose a different target."
-    )
+    del action
+    return "use a regular file path inside the project instead."
 
 
 def internal_execution_error_reason(header: str) -> str:
@@ -176,13 +170,11 @@ def tool_error(
         tool_name: 触发失败的工具名称。
         error: 「发生了什么错误」——面向模型的英文描述，点明失败动作与直接人读原因
             （如 ``could not write the file: permission denied``），**不得**塞原始
-            异常噪声或堆栈摘要。该值同时写入 ``error`` 与 ``content`` 字段并直接回传
-            给模型，模型据此立刻知道「错在哪一步、直接原因是什么」；开发者向的中文
-            docstring/注释不在此限。
-        reason: 「为什么失败、该如何修正、是否值得重试」——面向模型的**富文本**
-            说明，**不是**稳定机器短码。须包含失败根因、可操作修正建议，以及与
-            ``retryable`` 一致的处理建议。该值回传给模型，供其理解失败并决定下一步
-            动作；
+            异常噪声或堆栈摘要。该值只写入 ``error``，由 workflow 与 ``reason`` 一起
+            组织成模型消息；开发者向的中文 docstring/注释不在此限。
+        reason: 面向模型的下一步动作建议，不能重复 ``error`` 的错误事实。该值应与
+            ``retryable`` 语义一致，但不强制模型重试；开发者向的中文 docstring/注释
+            不在此限。
             开发者向的中文 docstring/注释不在此限。
         retryable: 仅供模型判断「按 ``reason`` 修正或处理后是否可以再次调用」，默认
             False。它不触发执行器自动重试，也不表示必须使用相同参数；如果模型可以
@@ -196,7 +188,7 @@ def tool_error(
 
     返回:
         不可变的 :class:`ToolObservation`：``status="error"``，``error`` 与
-        ``reason`` 按入参填充，``content`` 不承载重复错误文本。
+        ``reason`` 按入参填充，``content=None``。
 
     异常:
         无。

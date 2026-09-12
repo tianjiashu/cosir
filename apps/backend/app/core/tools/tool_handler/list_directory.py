@@ -98,9 +98,8 @@ class ListDirectoryTool(HandlerBase):
                 本工具只读，但解析相对路径仍需工作区根，故消费其 ``workspace_root``。
 
         返回:
-            ``ToolObservation``；成功时 content 为紧凑的条目表，失败时 status 为
-            error，``error``/``reason`` 提供面向模型的富文本诊断（``error``=发生了什么、
-            ``reason``=为什么失败+如何修正+是否重试）。
+            ``ToolObservation``；成功时 content 为模型继续工作所需的紧凑条目表；
+            失败时 ``error`` 描述事实，``reason`` 提供下一步动作。
 
         异常:
             不主动向上抛出；路径解析失败、目录不存在、非目录、以及列举时的
@@ -128,12 +127,8 @@ class ListDirectoryTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not list the directory: {error}",
-                reason=(
-                    "the directory path could not be resolved (common causes: empty value, "
-                    "NUL characters, or a malformed path). Provide a valid, non-empty "
-                    "directory path -- absolute, or relative to the project root -- and "
-                    "retry; the same invalid value will always fail."
-                ),
+                reason="provide a valid directory path.",
+                retryable=True,
                 permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, resolved)
@@ -148,23 +143,16 @@ class ListDirectoryTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not list the directory: no such path at '{resolved}'",
-                reason=(
-                    "the directory does not exist at the given path. Check for a typo, "
-                    "confirm it was not moved or deleted, or pass an absolute path. The "
-                    "same non-existent path will always fail, so retry only after the path "
-                    "is corrected."
-                ),
+                reason="provide the current path of an existing directory.",
+                retryable=True,
                 permission=self.permission,
             )
         if not resolved.is_dir():
             return tool_error(
                 self.name,
                 f"could not list '{resolved}': it is a file, not a directory",
-                reason=(
-                    "the path resolves to a regular file; list_directory lists only "
-                    "directories. Point to a directory, or use read_file to inspect a "
-                    "file's contents; the same file path will always fail."
-                ),
+                reason="provide a directory path, or use read_file for a file.",
+                retryable=True,
                 permission=self.permission,
             )
 
@@ -193,10 +181,10 @@ class ListDirectoryTool(HandlerBase):
                 self.name,
                 f"could not list '{resolved}': {exc}",
                 reason=(
-                    "the directory could not be read (it may have been removed, moved, or "
-                    "its permissions changed between the pre-check and reading). Retry the "
-                    "same path; if it persists, the directory is unavailable."
+                    "check that the directory remains available and readable, then call "
+                    "list_directory again."
                 ),
+                retryable=True,
                 permission=self.permission,
             )
         page = children[offset : offset + limit]

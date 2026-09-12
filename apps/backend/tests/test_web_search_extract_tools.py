@@ -822,7 +822,7 @@ def test_extract_partial_success_marks_partial_and_failed_count() -> None:
     import json
 
     payload = json.loads(obs.content)
-    assert payload["success"] is True
+    assert "success" not in payload
     assert payload["partial"] is True
     assert payload["failed_count"] == 1
 
@@ -882,7 +882,7 @@ def test_extract_url_count_over_limit_returns_error() -> None:
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
-    assert obs.retryable is False
+    assert obs.retryable is True
 
 
 # ---------------------------------------------------------------------------

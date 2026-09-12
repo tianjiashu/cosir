@@ -100,10 +100,9 @@ class DeleteTool(HandlerBase):
                 破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
         返回:
-            ``ToolObservation``；成功时 content 为删除确认（删目录且 recursive 时
-            标注 "(recursive)"），data 含 ``path`` / ``type``（"file" 或 "dir"）/
-            ``recursive``；失败时 status 为 error，``error``/``reason`` 提供面向模型的
-            富文本诊断（``error``=发生了什么、``reason``=为什么失败+如何修正+是否重试）。
+            ``ToolObservation``；成功时 content 为空，删除目标的类型、路径和递归
+            信息放在 display_data/artifact_data；失败时 status 为 error，``error``
+            描述事实，``reason`` 提供下一步动作。
 
         异常:
             不主动向上抛出；路径/删除错误归一化为结构化观察。
@@ -128,13 +127,8 @@ class DeleteTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not delete the target: {error}",
-                reason=(
-                    "the path escapes the project workspace and cannot be deleted. The "
-                    "resolver rejects paths that point outside the workspace root for "
-                    "safety. Pass a path inside the project (relative to the workspace "
-                    "root, or an absolute path under it); the same out-of-bounds path will "
-                    "always be rejected."
-                ),
+                reason="provide a file or directory path inside the project workspace.",
+                retryable=True,
                 permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, entry)
@@ -149,12 +143,7 @@ class DeleteTool(HandlerBase):
             return tool_error(
                 self.name,
                 "refusing to delete the project root",
-                reason=(
-                    "the path resolves to the project root itself; deleting the entire "
-                    "workspace is refused to prevent catastrophic data loss. Pass a "
-                    "specific file or subdirectory inside the project; the project root "
-                    "will always be rejected."
-                ),
+                reason="choose a specific file or subdirectory inside the project root.",
                 permission=self.permission,
             )
         is_symlink = entry.is_symlink()
@@ -175,19 +164,13 @@ class DeleteTool(HandlerBase):
                 return tool_error(
                     self.name,
                     os_error_message(exc, "delete the target"),
-                    reason=(
-                        "the link entry could not be removed, usually because it is "
-                        "locked by another process, the current user lacks delete "
-                        "permission, or the target changed concurrently. Close the "
-                        "program holding it or adjust permissions, then retry the same "
-                        "delete."
-                    ),
+                    reason="make the link available and deletable, then call delete again.",
                     retryable=True,
                     permission=self.permission,
                 )
             return tool_success(
                 tool_name=self.name,
-                content=f"Deleted link entry: {entry}",
+                content=None,
                 permission=self.permission,
                 display_data=build_delete_display_data(
                     path=path, target_type="link", recursive=False
@@ -197,12 +180,8 @@ class DeleteTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not delete the target: no such file or directory at '{entry}'",
-                reason=(
-                    "the target does not exist at the given path. Check for a typo, "
-                    "confirm the file or directory was not moved or deleted, or pass an "
-                    "absolute path. The same non-existent path will always fail, so retry "
-                    "only after the target exists or the path is corrected."
-                ),
+                reason="provide the current path of an existing file or directory.",
+                retryable=True,
                 permission=self.permission,
             )
         resolved, error = resolver.resolve_within_workspace(path)
@@ -210,25 +189,15 @@ class DeleteTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not delete the target: {error}",
-                reason=(
-                    "the path escapes the project workspace and cannot be deleted. The "
-                    "resolver rejects paths that point outside the workspace root for "
-                    "safety. Pass a path inside the project (relative to the workspace "
-                    "root, or an absolute path under it); the same out-of-bounds path will "
-                    "always be rejected."
-                ),
+                reason="provide a file or directory path inside the project workspace.",
+                retryable=True,
                 permission=self.permission,
             )
         if resolved == root_resolved:
             return tool_error(
                 self.name,
                 "refusing to delete the project root",
-                reason=(
-                    "the path resolves to the project root itself; deleting the entire "
-                    "workspace is refused to prevent catastrophic data loss. Pass a "
-                    "specific file or subdirectory inside the project; the project root "
-                    "will always be rejected."
-                ),
+                reason="choose a specific file or subdirectory inside the project root.",
                 permission=self.permission,
             )
         if resolved.is_dir():
@@ -249,30 +218,21 @@ class DeleteTool(HandlerBase):
                     return tool_error(
                         self.name,
                         f"directory not empty: {resolved}; pass recursive=true to delete",
-                        reason=(
-                            "the directory is not empty, so it cannot be deleted without "
-                            "recursive=true. Either pass recursive=true to delete the whole "
-                            "tree, or first remove its contents; the same non-empty "
-                            "directory will always fail unless recursive=true is set."
-                        ),
+                        reason="set recursive=true or remove the directory contents first.",
+                        retryable=True,
                         permission=self.permission,
                     )
                 return tool_error(
                     self.name,
                     os_error_message(exc, "delete the target"),
-                    reason=(
-                        "the directory could not be removed, usually because it is locked "
-                        "by another process, the current user lacks delete permission, or "
-                        "its contents changed concurrently. Close the program holding it "
-                        "or adjust permissions, then retry the same delete."
-                    ),
+                    reason="make the directory available and deletable, then call delete again.",
                     retryable=True,
                     permission=self.permission,
                 )
             return tool_success(
                 tool_name=self.name,
                 permission=self.permission,
-                content=f"Deleted directory: {resolved}" + (" (recursive)" if recursive else ""),
+                content=None,
                 display_data=build_delete_display_data(
                     path=path, target_type="directory", recursive=recursive
                 ),
@@ -304,12 +264,7 @@ class DeleteTool(HandlerBase):
             return tool_error(
                 self.name,
                 os_error_message(exc, "delete the target"),
-                reason=(
-                    "the delete failed, usually because the target is locked by another "
-                    "process, the current user lacks write/delete permission, or the path "
-                    "was removed concurrently. Close the program holding the file or "
-                    "adjust permissions, then retry the same delete."
-                ),
+                reason="make the target available and deletable, then call delete again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -327,7 +282,7 @@ class DeleteTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=f"Deleted file: {resolved}",
+            content=None,
             display_data=build_delete_display_data(
                 path=path, target_type="file", recursive=False
             ),

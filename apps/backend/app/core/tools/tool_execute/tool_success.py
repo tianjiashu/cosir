@@ -17,7 +17,7 @@ from app.core.tools.schemas import ToolObservation
 def tool_success(
     tool_name: str,
     permission: str,
-    content: str| None,
+    content: str | None,
     tool_call_id: str = "",
     display_data: Mapping[str, Any] | None = None,
     artifact_data: Mapping[str, Any] | None = None,
@@ -28,9 +28,9 @@ def tool_success(
         tool_name: 触发本次成功的工具名称（与 :class:`ToolDefinition.name` 对应）。
         permission: 触发工具所需的权限标识（透传自 :class:`ToolDefinition`），
             便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
-        content: 面向模型/用户的可读成功正文（即工具输出文本）。
-            必须**用英文**撰写、对模型友好（简洁、结构化、便于模型直接消费与纠正）；
-            开发者向的中文 docstring/注释不在此限。
+        content: 面向模型的最小成功正文。只有模型继续工作所需的工具结果或额外
+            警告才应返回；如果仅需表达成功可传 ``None``，由 workflow 生成 success。
+            不要回显已经存在于工具调用参数或 UI/artifact 数据中的内容。
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
         display_data: 仅供客户端展示消费的结构化数据；会写入
             ``ToolObservation.display_data``，不会回传给模型。
@@ -47,14 +47,11 @@ def tool_success(
         无（仅构造并返回新对象，不修改入参 ``tool``、不触发任何执行）。
 
     content 与 display_data 的区别:
-        - ``content`` 是「人读文本」：给模型/用户看的故事（命令回显、文件
-          摘要等），类型恒为 ``str``；必须英文、对模型友好（见 :func:`tool_success`
-          的 ``content`` 参数约定）；失败时由 :func:`tool_error` 填入与 ``error``
-          相同的错误描述（并非置空），保证模型总能从 ``content`` 读到正文。
+        - ``content`` 是模型可见文本：只保留命令回显、文件内容、网页正文等后续
+          推理所需的结果，或语法检查等额外警告；无额外信息时为空。
         - ``display_data`` 是「机读字典」：给上层程序逻辑消费的账本（退出码、对象
-          类型等），类型恒为 ``dict``；例如删除文件时 ``content`` 写「已删除
-          文件 xxx」、``display_data`` 写 ``{"type": "file", "path": "..."}``，上层
-          既能展示文本，也能不解析文本就直接拿到类型/路径做后续判断。
+          类型等），类型恒为 ``dict``；例如删除文件时不把路径确认文本重复写入
+          ``content``，而由 ``display_data`` 提供展示所需的类型与路径。
 
     返回对象的 ``display_data`` 不变量:
         ``display_data`` 只包含调用方显式提供的 UI 展示数据，不会自动混入观察对象的其它字段；

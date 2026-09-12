@@ -2,9 +2,8 @@
 
 本模块只承载 write_file 这一个工具。写盘经由 ``file_io.atomic_write`` 做原子写
 并保留目标文件既有 BOM/CRLF；落盘前做行号污染门禁（拒绝把 read_file 的带行号
-输出回写），成功后额外返回统一 diff 展示数据。落盘后经 ``guard.syntax_check``
-做多语言语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
-经 ``reason`` 引导 Agent 二次编辑覆盖自修复。
+输出回写），成功后返回文件变更展示数据。落盘后的语法检查只在发现问题时通过
+success content 提供简短警告，不改变写入成功状态。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``，不内联路径规则。
@@ -98,9 +97,9 @@ class WriteFileTool(HandlerBase):
                 破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
         返回:
-            ``ToolObservation``；成功时 content 保持为写入内容，
-            失败时 status 为 error，``error``/``reason`` 提供面向模型的富文本诊断
-            （``error``=发生了什么、``reason``=为什么失败+如何修正+是否重试）。
+            ``ToolObservation``；成功时 content 为空，除非语法检查发现问题并返回
+            简短警告；
+            失败时 status 为 error，``error`` 描述事实，``reason`` 提供下一步动作。
 
         异常:
             不主动向上抛出；路径/设备/行号/写入错误都被转换为结构化观察。
@@ -123,13 +122,8 @@ class WriteFileTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not write the file: {error}",
-                reason=(
-                    "the path escapes the project workspace and cannot be written. The "
-                    "resolver rejects paths that point outside the workspace root for "
-                    "safety. Pass a path inside the project (relative to the workspace "
-                    "root, or an absolute path under it); the same out-of-bounds path "
-                    "will always be rejected."
-                ),
+                reason="provide a file path inside the project workspace.",
+                retryable=True,
                 permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, resolved)
@@ -143,17 +137,9 @@ class WriteFileTool(HandlerBase):
         if looks_like_line_numbered(content):
             return tool_error(
                 self.name,
-                "content looks like line-numbered read_file output: most lines start "
-                "with a 'N| ' prefix (e.g. '12| code'). These prefixes are display "
-                "metadata, not file content. Strip the leading 'N| ' from every line "
-                "and retry with the raw content only.",
-                reason=(
-                    "the content you are trying to write looks like line-numbered "
-                    "read_file output (most lines start with a 'N| ' prefix). These "
-                    "prefixes are display metadata added by read_file, not real file "
-                    "content. Strip the leading 'N| ' from every line and retry with the "
-                    "raw content only; the same content will always be rejected."
-                ),
+                "content appears to be line-numbered read_file output",
+                reason="remove the 'N| ' display prefixes and provide the raw file content.",
+                retryable=True,
                 permission=self.permission,
             )
         existed = resolved.exists()
@@ -165,12 +151,7 @@ class WriteFileTool(HandlerBase):
                 return tool_error(
                     self.name,
                     os_error_message(exc, "read the file"),
-                    reason=(
-                        "the existing file could not be read before writing, usually "
-                        "because it is locked by another process or the current user lacks "
-                        "read permission. Close the program holding the file or adjust "
-                        "permissions, then retry the same write."
-                    ),
+                    reason="make the existing file readable, then call write_file again.",
                     retryable=True,
                     permission=self.permission,
                 )
@@ -185,12 +166,7 @@ class WriteFileTool(HandlerBase):
             return tool_error(
                 tool_name=self.name,
                 error=os_error_message(exc, "write the file"),
-                reason=(
-                    "the write failed, usually because the target file is locked by "
-                    "another process or the current user lacks write permission in that "
-                    "directory; close the program holding the file or adjust permissions, "
-                    "then retry the same write."
-                ),
+                reason="make the target writable, then call write_file again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -207,7 +183,7 @@ class WriteFileTool(HandlerBase):
                 tool_name=self.name,
                 permission=self.permission,
                 content=(
-                    "File written successfully. Post-write syntax check reported issues:\n"
+                    "success\nsyntax warning:\n"
                     + format_syntax_reason(result)
                 ),
                 display_data=display_data,
@@ -217,7 +193,7 @@ class WriteFileTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=content,
+            content=None,
             display_data=display_data,
             artifact_data=artifact_data,
         )

@@ -207,3 +207,11 @@ cycle and each task must receive an independent review before the next task.
 - Controller fix: added `context_message_persisted`, `tool_observation_persisted`, and
   `run_status_persisted` structured logs; removed the EOF whitespace. Focused regression remains
   required before the final review is repeated.
+- Final closure: commit `51732e1` added the persistence-boundary logging/Tool cancellation contract;
+  `dec36e0f` corrected the new/edit Run ids in those logs; `78073fea` made orphan-recovery logging
+  defensive for lightweight test doubles. Targeted acceptance/compile/Ruff checks passed.
+- Final independent subagent review on `78073fea`: Spec compliance PASS, Task quality PASS, no
+  Important or Minor findings. Focused acceptance `89 passed`; full backend `388 passed, 1 skipped`
+  with one environment-only failure because `apps/terminal-worker/target/debug/terminal-worker.exe`
+  is absent (`WinError 2`).
+- Task 5 and the conversation-state rebuild plan are complete.

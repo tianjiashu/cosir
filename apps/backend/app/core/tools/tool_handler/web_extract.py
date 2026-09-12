@@ -52,8 +52,8 @@ class WebExtractTool(HandlerBase):
         "by the per-page char_limit (result marked truncated=true when hit); when the "
         "combined output exceeds the global tool output budget, the full text is saved "
         "to disk with a [output truncated; full output: <path>] marker you can "
-        "read_file. If a URL fails, retry once; if it keeps failing, pick another "
-        "source URL instead of retrying the same one."
+        "read_file. If a URL fails, inspect the result and choose whether to use another "
+        "URL or provider."
     )
     permission: ClassVar[str] = "network"
     args_model: type[WebExtractArgs] = WebExtractArgs
@@ -122,10 +122,8 @@ class WebExtractTool(HandlerBase):
                     "Web extraction accepts at most "
                     f"{Settings.WEB_EXTRACT_URL_LIMIT_MAX} URLs per call."
                 ),
-                reason=(
-                    "Split the request into smaller batches, then retry. "
-                    "No network request was made."
-                ),
+                reason="split the URLs into smaller batches and call web_extract again.",
+                retryable=True,
                 permission=self.permission,
             )
 
@@ -142,21 +140,15 @@ class WebExtractTool(HandlerBase):
             return tool_error(
                 self.name,
                 unsupported_extract_format_message(provider.display_name, format),
-                reason=(
-                    "Select a format supported by the configured extraction provider, "
-                    "then retry. "
-                    "No network request was made."
-                ),
+                reason="select a format supported by the configured extraction provider.",
+                retryable=True,
                 permission=self.permission,
             )
         if not provider.is_available():
             return tool_error(
                 self.name,
                 provider.missing_configuration_message(),
-                reason=(
-                    "Configure the selected web extraction provider locally, then retry. "
-                    "No network request was made."
-                ),
+                reason="configure the selected extraction provider locally before calling again.",
                 permission=self.permission,
             )
         try:
@@ -177,11 +169,7 @@ class WebExtractTool(HandlerBase):
             return tool_error(
                 self.name,
                 str(exc),
-                reason=(
-                    "The selected web extraction provider is not configured on this "
-                    "machine. This is deterministic, so fix the provider configuration "
-                    "and retry; the same call will keep failing until then."
-                ),
+                reason="configure the selected provider locally before calling web_extract again.",
                 retryable=False,
                 permission=self.permission,
             )
@@ -197,11 +185,7 @@ class WebExtractTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"Web extraction failed using provider '{provider_name}'.",
-                reason=(
-                    "The provider could not complete the extraction. Retry once; "
-                    "if it keeps failing, "
-                    "select another configured extract-capable web provider."
-                ),
+                reason="try the extraction again or choose another configured provider.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -218,10 +202,7 @@ class WebExtractTool(HandlerBase):
             return tool_error(
                 self.name,
                 "Web extraction result assembly failed.",
-                reason=(
-                    "The provider returned data that could not be normalized. "
-                    "Retry once; if it keeps failing, select another provider."
-                ),
+                reason="inspect the provider configuration or choose another extraction provider.",
                 retryable=False,
                 permission=self.permission,
             )
@@ -238,15 +219,11 @@ class WebExtractTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"Web extraction failed for all {len(results)} URL(s): " + "; ".join(failures),
-                reason=(
-                    "Every page failed to extract. This is usually transient (target "
-                    "site unreachable, provider rate limit or timeout), so retry once "
-                    "with fewer URLs; if it keeps failing, choose different sources."
-                ),
+                reason="try fewer URLs or choose different source URLs.",
                 retryable=True,
                 permission=self.permission,
             )
-        payload: dict[str, object] = {"success": True, "results": results}
+        payload: dict[str, object] = {"results": results}
         if failures:
             payload["partial"] = True
             payload["failed_count"] = len(failures)
@@ -291,19 +268,15 @@ class WebExtractTool(HandlerBase):
                     self.name,
                     f"Web extraction backend '{backend}' is not registered.",
                     reason=(
-                        "Fix WEB_EXTRACT_BACKEND or WEB_BACKEND to name a registered "
-                        "extract-capable provider, then retry. "
-                        "No network request was made."
+                        "configure WEB_EXTRACT_BACKEND or WEB_BACKEND with a registered "
+                        "extraction provider."
                     ),
                     permission=self.permission,
                 )
             return tool_error(
                 self.name,
                 "No web extraction provider configured.",
-                reason=(
-                    "Configure an extract-capable web provider, then retry. "
-                    "No network request was made."
-                ),
+                reason="configure an extract-capable web provider before calling again.",
                 permission=self.permission,
             )
         if not provider.supports_extract():
@@ -311,8 +284,8 @@ class WebExtractTool(HandlerBase):
                 self.name,
                 self._search_only_provider_message(provider),
                 reason=(
-                    "Select an extract-capable backend through WEB_EXTRACT_BACKEND or "
-                    "WEB_BACKEND, then retry. No network request was made."
+                    "select an extract-capable backend through WEB_EXTRACT_BACKEND or "
+                    "WEB_BACKEND."
                 ),
                 permission=self.permission,
             )
@@ -341,25 +314,25 @@ class WebExtractTool(HandlerBase):
             if not extracted_url:
                 return self._blocked_url_error(
                     "Blocked: each item must be a non-empty URL string.",
-                    "Pass non-empty URL strings, then retry.",
+                    "provide non-empty URL strings.",
                 )
             normalized_url = normalize_url_for_request(extracted_url)
             sensitive_name = sensitive_query_param_name(normalized_url)
             if sensitive_name is not None:
                 return self._blocked_url_error(
                     f"Blocked: URL contains credential-like query parameter '{sensitive_name}'.",
-                    "Remove credential-like query parameters and retry with a public URL.",
+                    "remove credential-like query parameters and provide a public URL.",
                 )
             if url_contains_secret(extracted_url) or url_contains_secret(normalized_url):
                 return self._blocked_url_error(
                     "Blocked: URL appears to contain an embedded secret.",
-                    "Remove credentials or secret values from the URL and retry.",
+                    "remove credentials or secret values and provide a public URL.",
                 )
             is_safe, safety_error = is_safe_public_url(normalized_url, self._resolver)
             if not is_safe:
                 return self._blocked_url_error(
                     safety_error,
-                    "Use a publicly routable HTTP(S) URL without credentials, then retry.",
+                    "use a publicly routable HTTP(S) URL without credentials.",
                 )
             if normalized_url in normalized_urls:
                 continue
@@ -475,11 +448,7 @@ class WebExtractTool(HandlerBase):
             无。
         """
 
-        return (
-            f"{provider.display_name} is a search-only backend and cannot extract URL content. "
-            "Configure an extract-capable backend (for example firecrawl) through "
-            "WEB_EXTRACT_BACKEND, then retry."
-        )
+        return f"{provider.display_name} is a search-only backend and cannot extract URL content."
 
     def to_definition(self) -> ToolDefinition:
         """构造可注册的网页正文提取工具定义。

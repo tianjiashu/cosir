@@ -17,8 +17,10 @@
   但必须接受 ``execution_context`` 关键字参数，由执行链在调用时强制注入。
 - ``to_definition() -> ToolDefinition``: 返回可注册到 ``ToolRegistry`` 的工具定义。
 
-后端不承载任何渲染职责：handler 只产出模型可见的 ``content`` 与客户端渲染所需的
-结构化 ``ToolObservation.display_data``；摘要文本与展示条目一律由客户端渲染。
+后端不承载任何渲染职责：handler 只产出模型继续工作所需的 ``content``，以及客户端
+展示和系统审计所需的 ``display_data`` / ``artifact_data``。成功结果应保持最小；错误
+通过 ``error`` 描述事实、``reason`` 描述下一步、``retryable`` 仅提示模型是否可在
+修正后再次调用，不触发自动重试。
 """
 
 from abc import ABC, abstractmethod
@@ -80,7 +82,8 @@ class HandlerBase(ABC):
                 解包后传入的关键字参数。
 
         返回:
-            成功或失败均归一化为 ``ToolObservation``。
+            成功或失败均归一化为 ``ToolObservation``。成功时 ``content`` 可以为空；
+            失败时 ``error`` 只描述事实，``reason`` 只描述下一步动作。
 
         异常:
             不主动抛出；失败路径均归一化为 ``ToolObservation(status="error")``。

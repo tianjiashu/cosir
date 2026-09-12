@@ -96,9 +96,8 @@ class WebSearchTool(HandlerBase):
                         self.name,
                         f"Web search backend '{backend}' is not registered.",
                         reason=(
-                            "Fix WEB_SEARCH_BACKEND or WEB_BACKEND to name a registered "
-                            "search-capable provider, then retry. "
-                            "No network request was made."
+                            "configure WEB_SEARCH_BACKEND or WEB_BACKEND with a registered "
+                            "search-capable provider before continuing."
                         ),
                         permission=self.permission,
                     )
@@ -106,8 +105,7 @@ class WebSearchTool(HandlerBase):
                     self.name,
                     "No web search provider configured.",
                     reason=(
-                        "Configure a supported web search provider, then retry the search. "
-                        "No network request was made."
+                        "configure a supported web search provider before continuing."
                     ),
                     permission=self.permission,
                 )
@@ -116,8 +114,8 @@ class WebSearchTool(HandlerBase):
                     self.name,
                     f"Web search provider '{provider.name}' does not support search.",
                     reason=(
-                        "Select a provider with search capability through WEB_SEARCH_BACKEND "
-                        "or WEB_BACKEND, then retry."
+                        "select a provider with search capability through WEB_SEARCH_BACKEND "
+                        "or WEB_BACKEND before continuing."
                     ),
                     permission=self.permission,
                 )
@@ -126,8 +124,7 @@ class WebSearchTool(HandlerBase):
                     self.name,
                     provider.missing_configuration_message(),
                     reason=(
-                        "Configure the selected web search provider locally, then retry. "
-                        "No network request was made."
+                        "configure the selected web search provider locally before continuing."
                     ),
                     permission=self.permission,
                 )
@@ -143,11 +140,7 @@ class WebSearchTool(HandlerBase):
             return tool_error(
                 self.name,
                 str(exc),
-                reason=(
-                    "The selected web search provider is not configured on this "
-                    "machine. This is deterministic, so fix the provider configuration "
-                    "and retry; the same call will keep failing until then."
-                ),
+                reason="configure the selected provider locally before continuing.",
                 retryable=False,
                 permission=self.permission,
             )
@@ -165,10 +158,7 @@ class WebSearchTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"Web search failed using provider '{provider_name}'.",
-                reason=(
-                    "The provider could not complete the search. Retry once; if it keeps "
-                    "failing, select another configured web search provider."
-                ),
+                reason="try the search again or choose another configured provider.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -186,7 +176,7 @@ class WebSearchTool(HandlerBase):
             tool_name=self.name,
             permission=self.permission,
             content=json.dumps(
-                {"success": True, "data": {"web": web_results}},
+                {"web": web_results},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),

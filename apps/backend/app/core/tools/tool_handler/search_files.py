@@ -107,10 +107,8 @@ class SearchFilesTool(HandlerBase):
                 边界限制，故不消费该值。
 
         返回:
-            ``ToolObservation``；成功时 content 为格式化搜索结果（无命中时为提示、
-            分页截断时含 offset 续读提示），失败时 status 为 error，``error``/``reason``
-            提供面向模型的富文本诊断（``error``=发生了什么、``reason``=为什么失败+
-            如何修正+是否重试）。
+            ``ToolObservation``；成功时 content 为模型继续工作所需的格式化搜索结果；
+            失败时 ``error`` 描述事实，``reason`` 提供下一步动作。
 
         异常:
             不主动向上抛出；搜索错误归一化为结构化观察。
@@ -134,13 +132,8 @@ class SearchFilesTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"could not search: {path_error}",
-                reason=(
-                    "the search path could not be resolved to a readable directory "
-                    "(common causes: empty value, NUL characters, or a malformed path). "
-                    "Provide a valid, non-empty directory path -- absolute, or relative "
-                    "to the project root -- and retry; the same invalid value will "
-                    "always fail."
-                ),
+                reason="provide a valid directory path.",
+                retryable=True,
                 permission=self.permission,
             )
         device_error = resolver.blocked_recursive_search_reason(search_path, resolved_path)
@@ -181,25 +174,16 @@ class SearchFilesTool(HandlerBase):
             return tool_error(
                 self.name,
                 result,
-                reason=(
-                    "the search pattern is not a valid regular expression, so the content "
-                    "search could not run. Fix the pattern (escape literal special "
-                    "characters such as . * + ? ( ) [ ] { } | ^ $ with a backslash, or "
-                    "use a simpler substring) and retry; the same malformed pattern will "
-                    "always fail."
-                ),
+                reason="correct the regular expression, then call search_files again.",
+                retryable=True,
                 permission=self.permission,
             )
         if result.startswith(PATH_NOT_FOUND_PREFIX):
             return tool_error(
                 self.name,
                 result,
-                reason=(
-                    "the search path does not exist (no such directory), so nothing "
-                    "could be searched. Check the path for a typo or confirm the "
-                    "directory exists, and retry with a valid path; the same missing "
-                    "path will always fail."
-                ),
+                reason="provide the current path of an existing directory.",
+                retryable=True,
                 permission=self.permission,
             )
         if not result:
