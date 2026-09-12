@@ -14,8 +14,8 @@ from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunStartResult,
     RunCommandMode,
 )
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
+from app.assistant_transport.service.conversation_task_state_service import (
+    ConversationTaskStateService,
 )
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
@@ -38,7 +38,7 @@ class TransportAssistantService:
     def __init__(self) -> None:
         """初始化 run 校验、生命周期与流式订阅依赖。"""
 
-        self._snapshots = ConversationTaskSnapshotService()
+        self._snapshots = ConversationTaskStateService()
         from app.service.depends import get_conversation_run_executor
 
         self.run_executor = get_conversation_run_executor()

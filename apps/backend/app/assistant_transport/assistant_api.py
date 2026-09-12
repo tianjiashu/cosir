@@ -16,8 +16,8 @@ from app.assistant_transport.request import (
     AssistantTransportRequest,
 )
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
+from app.assistant_transport.service.conversation_task_state_service import (
+    ConversationTaskStateService,
 )
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
@@ -28,7 +28,7 @@ from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
 from app.service.depends import (
     get_conversation_run_executor,
-    get_conversation_task_snapshot_service,
+    get_conversation_task_state_service,
     get_runtime,
     get_task_service,
     get_transport_assistant_service,
@@ -47,7 +47,7 @@ async def assistant_transport(
 
     参数:
         request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。
-        snapshot_service: 负责读取 Task snapshot 的唯一 owner。
+        state_service: 负责读取 Task Transport state 的唯一 owner。
         run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。
         run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。
 
@@ -230,8 +230,8 @@ async def assistant_transport_attach(
 async def assistant_transport_state(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
-    snapshot_service: ConversationTaskSnapshotService = Depends(
-        get_conversation_task_snapshot_service
+    state_service: ConversationTaskStateService = Depends(
+        get_conversation_task_state_service
     ),
 ) -> ConversationStateSnapshot:
     """返回某任务的首屏历史 state（服务端权威对话视图）。
@@ -239,7 +239,7 @@ async def assistant_transport_state(
     参数:
         task_id: URL 中的任务标识。
         task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。
-        snapshot_service: Task snapshot 唯一事实源。
+        state_service: Task Transport state 的读取边界。
 
     返回:
         与 Assistant Transport state 形状一致的中性 wire state 字典；任务无 Run 时
@@ -250,8 +250,8 @@ async def assistant_transport_state(
         ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。
 
     副作用:
-        不修改 Run、Context 或执行器；snapshot service 可能在发现 Run 已进入终态而
-        snapshot 尚未投影时，执行幂等的 snapshot 对账写入，然后返回最终一致的 state。
+        不修改 Run、Context 或执行器；state service 在冷读时从 canonical Task、Run 与
+        Context 记录重建 state，并校正进程内 working copy 的生命周期事实。
     """
     # 先校验任务存在：不存在时 ``get_task`` 抛 KeyError → 映射为 404。
     # 不能在投影阶段再判，因为空 task 与不存在 task 在投影层都表现为空 runs。
@@ -259,7 +259,7 @@ async def assistant_transport_state(
         task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    state = await snapshot_service.read(task_id)
+    state = await state_service.read(task_id)
     log.info(
         "assistant_snapshot_read",
         extra={

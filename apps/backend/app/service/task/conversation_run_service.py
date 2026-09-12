@@ -137,7 +137,7 @@ class ConversationRunService:
         reasoning_effort: str | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord:
-        """Create a Conversation Run and initialize its parent task snapshot.
+        """Create a Conversation Run and initialize its canonical context.
 
         附件在创建阶段即完成处理：非图片附件（文件 / 目录 / 链接）渲染为文本前缀拼进
         ``input_text`` 落库，运行期模型用已有工具（read_file / list_directory /
@@ -252,7 +252,7 @@ class ConversationRunService:
     ) -> ConversationRunRecord | None:
         """原地重置一个已结束 run，替换输入并创建新的 checkpoint 身份。
 
-        仅允许非 active run 编辑；调用方负责在同一 task 锁内清理 context 与 snapshot。
+        仅允许非 active run 编辑；调用方负责在同一 task 锁内清理并重建 context。
         传入 ``session`` 时复用外部事务且不自行提交。
         """
 
@@ -401,7 +401,7 @@ class ConversationRunService:
         end_reason: str | None = None,
         usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
-        """将 Run 标记 completed，并更新其 snapshot 展示状态。"""
+        """将 Run 标记 completed，并发布其 Transport 展示状态。"""
 
         record = self._run.update_status_if_in(
             run_id,
@@ -524,7 +524,7 @@ class ConversationRunService:
         final_output: str | None = None,
         usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
-        """将 active Run 标记 cancelled，并更新 snapshot 展示状态。
+        """将 active Run 标记 cancelled，并发布其 Transport 展示状态。
 
         终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便被取消，主 Agent
         也能从委派结果中感知其已产出（或被中断）的内容，而非仅看到一个空终态。

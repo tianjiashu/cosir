@@ -546,7 +546,7 @@ class ConversationRunCrud:
         """把进程重启时遗留的 active run 原子收敛为 cancelled。
 
         此方法只修改 ConversationRun 持久化事实，不发布 snapshot/projector 事件；
-        snapshot 的最终一致性由 ConversationTaskSnapshotService.read 在读取边界完成。
+        Transport state 的最终一致性由 ConversationTaskStateService.read 在读取边界完成。
         """
 
         if session is None:

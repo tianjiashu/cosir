@@ -8,7 +8,3 @@ class TaskForkConflictError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-class SnapshotNotReadyError(RuntimeError):
-    """源 Task snapshot 缺失或未通过 canonical schema 校验。"""

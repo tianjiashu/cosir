@@ -5,7 +5,7 @@
 职责边界：
 - 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
   （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationCommandCrud``/
-  ``ConversationTaskContextCrud``/``ConversationTaskSnapshotCrud``/``FileSnapshotCrud``/
+  ``ConversationTaskContextCrud``/``FileSnapshotCrud``/
   ``DelegationCrud`` 在单事务内逐个清理，孤儿 checkpoint 线程交 ``checkpoint_gc`` 回收）。
 - 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
   service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
@@ -70,12 +70,11 @@ class TaskService:
         self._turn = service_depends.get_conversation_run_crud()
         self._workspace = service_depends.get_workspace_crud()
         self._context = service_depends.get_conversation_task_context_service()
-        self._snapshot = service_depends.get_conversation_task_snapshot_service()
+        self._state = service_depends.get_conversation_task_state_service()
         self._command = service_depends.get_conversation_command_crud()
         self._delegation = service_depends.get_delegation_crud()
         self._file_snapshot = service_depends.get_file_snapshot_crud()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
-        self._task_snapshot_crud = service_depends.get_conversation_task_snapshot_crud()
         self._session_factory = main_session_factory()
 
     def get_or_create_task(
@@ -263,8 +262,8 @@ class TaskService:
         """在指定历史 Run 处创建一个独立的 fork Task。
 
         所有跨表写入使用同一个 SQLite 事务，并在源 Task runtime lock 内完成。Run 的
-        新主键通过 ``ConversationRunCrud.clone_for_task`` 生成，再用映射表改写 context
-        与 snapshot；不触发普通 run 创建事件，也不复制 LangGraph checkpoint 内容。
+        新主键通过 ``ConversationRunCrud.clone_for_task`` 生成，再用映射表改写 context；
+        不触发普通 run 创建事件，也不复制 LangGraph checkpoint 内容。
 
         参数:
             source_task_id: 被 fork 的源 Task 标识。
@@ -276,10 +275,8 @@ class TaskService:
         异常:
             KeyError: 源 Task 或边界 Run 不存在/不属于源 Task。
             TaskForkConflictError: 源 Task 存在活动 Run。
-            SnapshotNotReadyError: 源 snapshot 缺失或无法通过校验。
-
         副作用:
-            新增目标 Task、历史 cloned Runs、context entries 与 idle snapshot；源 Task 不变。
+            新增目标 Task、历史 cloned Runs 与 context entries；源 Task 不变。
         """
 
         source = self._task.get(source_task_id)
@@ -298,7 +295,6 @@ class TaskService:
     ) -> TaskRecord:
         """在已持有 workspace/task 闸门时执行 Fork 数据库事务。"""
 
-        cloned_snapshot = None
         with begin_immediate(self._session_factory) as session:
             source = self._task.ensure_task(session, source_task_id)
             runs = self._turn.list_by_task_in_session(session, source_task_id)
@@ -345,15 +341,6 @@ class TaskService:
                 run_id_map,
                 session,
             )
-            cloned_snapshot = self._snapshot.clone_for_fork(
-                source_task_id,
-                target.id,
-                run_id_map,
-                session,
-            )
-
-        if cloned_snapshot is None:
-            raise RuntimeError("fork snapshot was not produced")
         source_space = task_runtime_spaces.get_or_create(source_task_id)
         source_manager = source_space.existing_context_manager()
         if source_manager is not None:
@@ -376,16 +363,6 @@ class TaskService:
                         },
                     },
                 )
-        try:
-            self._snapshot.cache_committed_snapshot(target.id, cloned_snapshot)
-        except Exception:
-            log.exception(
-                "task_fork_snapshot_cache_failed",
-                extra={
-                    "msg": "fork 目标 snapshot 缓存失败，持久化数据仍可重新读取",
-                    "data": {"target_task_id": target.id},
-                },
-            )
         log.info(
             "task_forked",
             extra={
@@ -441,8 +418,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``conversation_task_snapshots`` /
-            ``file_snapshots`` / ``conversation_commands`` / ``conversation_runs`` /
+            从 ``conversation_task_contexts`` / ``file_snapshots`` /
+            ``conversation_commands`` / ``conversation_runs`` /
             ``delegations`` / ``tasks`` 表删除该任务树相关数据；并提交后清理已删任务遗留的
             孤儿 LangGraph checkpoint 线程、卸载进程内 runtime space。
         """
@@ -630,9 +607,7 @@ class TaskService:
         for current_id in task_ids:
             try:
                 self._task_register.mark_deleted(current_id)
-                mark_snapshot_deleted = getattr(self._snapshot, "mark_task_deleted", None)
-                if callable(mark_snapshot_deleted):
-                    mark_snapshot_deleted(current_id)
+                self._state.mark_task_deleted(current_id)
                 projector = service_depends.get_conversation_event_projector()
                 mark_projector_deleted = getattr(projector, "mark_task_deleted", None)
                 if callable(mark_projector_deleted):
@@ -711,7 +686,7 @@ class TaskService:
         """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
 
         顺序：先解除本任务行对 run / delegation 的引用（双向外键环），再按外键依赖逆序
-        删除 context / snapshot / 文件快照 / delegation / command / run，最后删除 task 行。
+        删除 context / 文件快照 / delegation / command / run，最后删除 task 行。
         delegation 同时按 ``task_id`` 与 ``child_task_id`` 删除，覆盖本任务发起的委派与
         创建本任务的委派记录。
 
@@ -739,7 +714,6 @@ class TaskService:
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)
-        self._task_snapshot_crud.delete_by_task_ids([task_id], session)
         self._file_snapshot.delete_by_task_ids([task_id], session)
         # delegation 同时覆盖 task_id / child_task_id 两个外键方向。
         self._delegation.delete_by_task_ids([task_id], session)

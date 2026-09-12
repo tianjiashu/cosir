@@ -1,29 +1,12 @@
 """Conversation mutation 的低耦合端口。
 
-具体的 Assistant Transport snapshot/context writer 仍位于
-``app.assistant_transport``；本模块只声明 service/core 使用的协作协议，避免下层直接
-依赖 Transport 实现。
+具体的 Assistant Transport/context writer 仍位于 ``app.assistant_transport``；本模块只
+声明 service/core 使用的协作协议，避免下层直接依赖 Transport 实现。
 """
 
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
-
-
-class ConversationSnapshotPort(Protocol):
-    """声明事务内 snapshot owner 所需的最小接口。"""
-
-    def ensure_in_session(self, session: Session, task_id: int, fallback: Any) -> Any:
-        """在给定事务中读取或创建 snapshot。"""
-
-    def load(self, task_id: int) -> Any:
-        """读取 Task snapshot。"""
-
-    def hydrate(self, task_id: int, state: Any) -> None:
-        """安装 snapshot working copy。"""
-
-    def publish_transaction(self, session: Session) -> None:
-        """在事务提交后发布 snapshot 变化。"""
 
 
 class ConversationMutationPort(Protocol):

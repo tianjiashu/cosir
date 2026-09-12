@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_run_executor import (
         ConversationRunExecutor,
     )
-    from app.assistant_transport.service.conversation_task_snapshot_service import (
-        ConversationTaskSnapshotService,
+    from app.assistant_transport.service.conversation_task_state_service import (
+        ConversationTaskStateService,
     )
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-    from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud
     from app.storage.crud.delegation_crud import DelegationCrud
     from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
     from app.storage.crud.log_crud import LogCrud
@@ -314,14 +313,14 @@ def get_task_service() -> TaskService:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_task_snapshot_service() -> ConversationTaskSnapshotService:
-    """返回进程级 Task snapshot owner。"""
+def get_conversation_task_state_service() -> ConversationTaskStateService:
+    """返回进程级 Task Transport state owner。"""
 
-    from app.assistant_transport.service.conversation_task_snapshot_service import (
-        ConversationTaskSnapshotService,
+    from app.assistant_transport.service.conversation_task_state_service import (
+        ConversationTaskStateService,
     )
 
-    return ConversationTaskSnapshotService()
+    return ConversationTaskStateService()
 
 
 @lru_cache(maxsize=1)
@@ -437,14 +436,6 @@ def get_conversation_task_context_crud() -> ConversationTaskContextCrud:
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 
     return ConversationTaskContextCrud()
-
-
-@lru_cache(maxsize=1)
-def get_conversation_task_snapshot_crud() -> ConversationTaskSnapshotCrud:
-    """返回进程级 ConversationTaskSnapshotCrud 单例。"""
-    from app.storage.crud.conversation_task_snapshot_crud import ConversationTaskSnapshotCrud
-
-    return ConversationTaskSnapshotCrud()
 
 
 @lru_cache(maxsize=1)
@@ -597,6 +588,11 @@ def reset_service_dependencies() -> None:
         清空本模块所有 lru_cache 单例；测试切换 storage 路径后应调用。
     """
 
+    from app.assistant_transport.service.conversation_task_state_service import (
+        ConversationTaskStateService,
+    )
+
+    ConversationTaskStateService.clear_process_state()
     get_log_query_service.cache_clear()
     get_workspace_service.cache_clear()
     get_conversation_run_workspace_resolver.cache_clear()
@@ -612,14 +608,13 @@ def reset_service_dependencies() -> None:
     get_model_entry_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
-    get_conversation_task_snapshot_crud.cache_clear()
     get_file_snapshot_crud.cache_clear()
     get_conversation_run_command_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()
     get_conversation_event_projector.cache_clear()
-    get_conversation_task_snapshot_service.cache_clear()
+    get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
     get_provider_service.cache_clear()
     get_model_entry_service.cache_clear()

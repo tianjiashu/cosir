@@ -6,8 +6,8 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, ClassVar
 
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
+from app.assistant_transport.service.conversation_task_state_service import (
+    ConversationTaskStateService,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
@@ -43,7 +43,7 @@ class AssistantTransportStreamService:
     def __init__(self) -> None:
         """初始化 snapshot 订阅与 run 状态查询依赖。"""
 
-        self._snapshots = ConversationTaskSnapshotService()
+        self._snapshots = ConversationTaskStateService()
         from app.service.depends import get_conversation_run_service
 
         self._runs = get_conversation_run_service()
@@ -156,7 +156,7 @@ class AssistantTransportStreamService:
                         )
                         return
                     if is_terminal is not None and await is_terminal():
-                        latest = self._snapshots.ensure_state_snapshot(task_id)
+                        latest = self._snapshots.get_state(task_id)
                         latest_run = self._run(latest, run_id)
                         if latest_run["status"] in self.terminal_statuses:
                             log.info(
@@ -279,7 +279,7 @@ class AssistantTransportStreamService:
                 status = run.status
                 if status is None:
                     snapshot: ConversationStateSnapshot = (
-                        self._snapshots.ensure_state_snapshot(task_id)
+                        self._snapshots.get_state(task_id)
                     )
                     return self._run(snapshot, run_id)["status"] in self.terminal_statuses
                 return status in self.terminal_statuses

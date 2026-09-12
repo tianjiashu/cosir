@@ -7,7 +7,6 @@ from threading import RLock
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy.orm import Session
 
 from app.assistant_transport.event import (
     ConversationEvent,
@@ -21,7 +20,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import SnapshotChange
 from app.config.logging.logger import log
-from app.service.depends import get_conversation_task_snapshot_service
+from app.service.depends import get_conversation_task_state_service
 
 _EVENT_ADAPTER: TypeAdapter[ConversationEvent] = TypeAdapter(ConversationEvent)
 _KNOWN_EVENT_TYPES = {
@@ -47,24 +46,24 @@ class ConversationEventProjector:
     ``event_id`` 用于抵御同一事件的重复投递，尤其是不可重复追加的文本 delta。
     """
 
-    def __init__(self, snapshot_service: Any | None = None) -> None:
+    def __init__(self, state_service: Any | None = None) -> None:
         """初始化 snapshot 投影器。
 
         参数:
-            snapshot_service: 承载 snapshot 读写的 owner；省略时使用进程级默认实例，
+            state_service: 承载进程内 state 的 owner；省略时使用进程级默认实例，
                 测试可注入内存实现以脱离 SQLite 运行。
 
         返回:
             无。
 
         异常:
-            RuntimeError: 省略 ``snapshot_service`` 且主库存储尚未初始化。
+            RuntimeError: 省略 ``state_service`` 且主库存储尚未初始化。
 
         副作用:
             无；projector 的去重集合仅存在于当前 backend 进程内。
         """
 
-        self._snapshot_service = snapshot_service or get_conversation_task_snapshot_service()
+        self._state_service = state_service or get_conversation_task_state_service()
         self._lock = RLock()
         self._seen_event_ids: dict[int, set[str]] = {}
         self._deleted_task_ids: set[int] = set()
@@ -79,14 +78,11 @@ class ConversationEventProjector:
     def process(
         self,
         raw_event: object,
-        session: Session | None = None,
     ) -> SnapshotChange | None:
         """校验并投影一条事件。
 
         参数:
             raw_event: workflow custom stream 产出的 event 对象或其 JSON 字典。
-            session: 可选的外部数据库会话。传入时复用调用方事务，不创建新的写事务。
-
         返回:
             已提交的 ``SnapshotChange``；未知事件返回 ``None``；重复事件返回无 mutation
             的 change。未知事件只记 warning，已知但格式非法的事件抛出 ``ValueError``。
@@ -96,7 +92,7 @@ class ConversationEventProjector:
             KeyError: 事件引用的消息、part 或工具调用不存在。
 
         副作用:
-            经 snapshot owner 持久化 snapshot，并通知 Transport 订阅者。
+            只更新进程内 Transport state 并通知订阅者；不写入数据库。
         """
 
         event = self._parse(raw_event)
@@ -114,7 +110,7 @@ class ConversationEventProjector:
                 return None
             seen = self._seen_event_ids.setdefault(event.task_id, set())
             if event.event_id in seen:
-                state = self._snapshot_service.ensure_state_snapshot(event.task_id)
+                state = self._state_service.get_state(event.task_id)
                 return SnapshotChange(event.task_id, state, ())
 
             def planner(state: ConversationStateSnapshot) -> Sequence[ConversationStateMutation]:
@@ -137,14 +133,7 @@ class ConversationEventProjector:
                     return []
                 return event.plan(state)
 
-            if session is None:
-                change = self._snapshot_service.apply_planned(event.task_id, planner)
-            else:
-                change = self._snapshot_service.apply_planned(
-                    event.task_id,
-                    planner,
-                    session=session,
-                )
+            change = self._state_service.apply_planned(event.task_id, planner)
             # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。
             if change.mutations:
                 seen.add(event.event_id)
@@ -180,7 +169,7 @@ class ConversationEventProjector:
             raise ValueError("invalid conversation event") from exc
 
     @property
-    def snapshot_service(self) -> Any:
-        """返回本投影器使用的 snapshot owner，供重复事件构造无 mutation change。"""
+    def state_service(self) -> Any:
+        """返回本投影器使用的进程内 state owner。"""
 
-        return self._snapshot_service
+        return self._state_service

@@ -18,7 +18,7 @@ from app.api.schemas import (
 )
 from app.app import app
 from app.models.errors.deletion_errors import DeletionBusyError
-from app.models.errors.task_fork_errors import SnapshotNotReadyError, TaskForkConflictError
+from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service.depends import get_task_service
 from app.task_runtime.service.task_service import TaskService
 
@@ -67,15 +67,6 @@ async def fork_task(
         target = await task_service.fork_task(task_id, payload.run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task or run not found") from exc
-    except SnapshotNotReadyError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "SNAPSHOT_NOT_READY",
-                "message": str(exc),
-                "retryable": True,
-            },
-        ) from exc
     except TaskForkConflictError as exc:
         raise HTTPException(
             status_code=409,

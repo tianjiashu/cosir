@@ -9,9 +9,8 @@ from typing import Literal
 
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.event import RunInitializedEvent, UserInputAppendedEvent
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
+from app.assistant_transport.service.conversation_task_state_service import (
+    ConversationTaskStateService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
@@ -53,28 +52,9 @@ class ConversationRunCommandService:
 
         self._command = service_depends.get_conversation_command_crud()
         self._conversation_run = service_depends.get_conversation_run_service()
-        self._snapshots = ConversationTaskSnapshotService()
+        self._state = ConversationTaskStateService()
         self._context = ConversationTaskContextService()
         self._task = service_depends.get_task_service()
-
-    @staticmethod
-    def _publish_post_commit_event(event: object, event_name: str) -> None:
-        """Publish an initialization event after commit without failing the Run."""
-
-        try:
-            service_depends.get_conversation_event_projector().process(event)
-        except Exception:
-            log.exception(
-                "conversation_run_command_event_failed",
-                extra={
-                    "msg": "Run 事实已提交，初始化 Transport 事件失败并被降级",
-                    "data": {
-                        "event_name": event_name,
-                        "task_id": getattr(event, "task_id", None),
-                        "run_id": getattr(event, "run_id", None),
-                    },
-                },
-            )
 
     def _resolve_existing_command(
         self,
@@ -119,7 +99,7 @@ class ConversationRunCommandService:
         return ConversationRunStartResult(
             command=existing,
             run=run,
-            initial_state=self._snapshots.ensure_state_snapshot(task_id),
+            initial_state=self._state.get_state(task_id),
             created=False,
             execution_mode="fresh",
             mode=mode,
@@ -171,7 +151,7 @@ class ConversationRunCommandService:
             KeyError: 任务或 run 不存在。
 
         副作用:
-            首次调用在一个数据库事务内写入 command、run 和 snapshot baseline；重复调用只读
+            首次调用在一个数据库事务内写入 command、run 和 context baseline；重复调用只读
             已有 command/run，不创建第二个 run。
         """
 
@@ -204,18 +184,7 @@ class ConversationRunCommandService:
                     run_id=run.id,
                     session=session,
                 )
-                # Establish the empty snapshot baseline inside the transaction, but defer
-                # projecting Run/user events until all canonical DB facts are committed.
-                self._snapshots.ensure_state_snapshot(task_id, session)
-            self._publish_post_commit_event(
-                RunInitializedEvent(task_id=task_id, run_id=run.id),
-                "run_initialized",
-            )
-            self._publish_post_commit_event(
-                UserInputAppendedEvent(task_id=task_id, run_id=run.id, text=input_text),
-                "user_input_appended",
-            )
-            snapshot = self._snapshots.ensure_state_snapshot(task_id)
+            snapshot = self._state.rebuild_state(task_id)
             return ConversationRunStartResult(
                 command=command,
                 run=run,
@@ -239,7 +208,7 @@ class ConversationRunCommandService:
     ) -> ConversationRunStartResult:
         """原地编辑当前 run 的最后一条用户消息并重置执行基线。
 
-        ``run_id`` 必须是 task 最近 run，且 snapshot 中必须存在该 run 的 user 消息。
+        ``run_id`` 必须是 task 最近 run，且 canonical context 中必须存在该 run 的 user 消息。
         旧 run 的 context entries 按 ``ContextEntry.run_id`` 删除，run 保留原 id，
         但会换用新的 checkpoint thread；Assistant UI ``sourceId`` 不参与本用例。
         """
@@ -268,7 +237,7 @@ class ConversationRunCommandService:
                 if reset is None:
                     raise ValueError(f"run {latest_run.id} is not editable in its current state")
                 self._context.delete_by_run_id(task_id, latest_run.id, session=session)
-                snapshot = self._snapshots.reset_run_for_edit(
+                self._context.append_user_message_once(
                     task_id, latest_run.id, input_text, session=session
                 )
                 command = self._command.create(
@@ -279,7 +248,8 @@ class ConversationRunCommandService:
                     run_id=latest_run.id,
                     session=session,
                 )
-            self._snapshots.publish_committed_snapshot(task_id, snapshot)
+            snapshot = self._state.rebuild_state(task_id)
+            self._state.publish_state(task_id, snapshot)
             return ConversationRunStartResult(
                 command=command,
                 run=reset,
@@ -321,9 +291,9 @@ class ConversationRunCommandService:
             latest_run = self._task.get_latest_run(task_id)
             if latest_run is None or latest_run.id != run_id or latest_run.status != "cancelled":
                 raise ValueError(f"run {run_id} is not resumable")
-            state = self._snapshots.ensure_state_snapshot(task_id)
+            state = self._state.get_state(task_id)
             if state["current_run_id"] != run_id:
-                raise ValueError(f"run {run_id} snapshot is stale")
+                raise ValueError(f"run {run_id} is not the current task run")
             if not any(
                 message["role"] == "user"
                 for run in state["runs"]
@@ -338,7 +308,7 @@ class ConversationRunCommandService:
             if resumed is None:
                 raise ValueError(f"run {run_id} is no longer resumable")
             try:
-                state = self._snapshots.ensure_state_snapshot(task_id)
+                state = self._state.get_state(task_id)
             except Exception:
                 # run 已置 running，但本次续跑不会启动执行器；收敛回终态，让用户可重试，
                 # 而不是留下一个永远无法 resume 的 active run。

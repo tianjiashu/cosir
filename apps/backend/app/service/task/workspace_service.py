@@ -209,7 +209,7 @@ class WorkspaceService:
 
         副作用:
             删除工作区下全部 task 树（task / turn / run / trace / delegation / file_snapshot /
-            context / snapshot）及其孤儿 checkpoint；并删除 ``workspaces`` 表记录（旧 Runtime
+            context）及其孤儿 checkpoint；并删除 ``workspaces`` 表记录（旧 Runtime
             事件体系已删除，不再参与级联删除）。
         """
 

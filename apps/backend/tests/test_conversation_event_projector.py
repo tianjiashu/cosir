@@ -42,12 +42,12 @@ class InMemorySnapshotService:
     def __init__(self) -> None:
         self.states: dict[int, ConversationStateSnapshot] = {}
 
-    def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+    def get_state(self, task_id: int) -> ConversationStateSnapshot:
         state = self.states.setdefault(task_id, empty_snapshot())
         return copy.deepcopy(state)
 
     def apply_planned(self, task_id: int, planner: Any) -> SnapshotChange:
-        state = self.ensure_state_snapshot(task_id)
+        state = self.get_state(task_id)
         mutations = tuple(planner(copy.deepcopy(state)))
         for mutation in mutations:
             _apply_mutation(state, mutation)
@@ -565,9 +565,9 @@ async def test_stream_delivers_queued_terminal_change_before_exit() -> None:
         def subscribe_with_snapshot(
             self, task_id: int
         ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.ensure_state_snapshot(task_id)
+            return queue, lambda: None, self.get_state(task_id)
 
-        def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+        def get_state(self, task_id: int) -> ConversationStateSnapshot:
             return copy.deepcopy(initial)
 
         def is_task_deleted(self, task_id: int) -> bool:
@@ -603,9 +603,9 @@ async def test_stream_waits_for_terminal_snapshot_projection() -> None:
         def subscribe_with_snapshot(
             self, task_id: int
         ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.ensure_state_snapshot(task_id)
+            return queue, lambda: None, self.get_state(task_id)
 
-        def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+        def get_state(self, task_id: int) -> ConversationStateSnapshot:
             return copy.deepcopy(initial)
 
         def is_task_deleted(self, task_id: int) -> bool:
@@ -642,9 +642,9 @@ async def test_stream_does_not_close_while_run_is_still_active() -> None:
         def subscribe_with_snapshot(
             self, task_id: int
         ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.ensure_state_snapshot(task_id)
+            return queue, lambda: None, self.get_state(task_id)
 
-        def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+        def get_state(self, task_id: int) -> ConversationStateSnapshot:
             return copy.deepcopy(initial)
 
         def is_task_deleted(self, task_id: int) -> bool:
@@ -698,9 +698,9 @@ async def test_stream_disconnect_only_unsubscribes_and_does_not_cancel_run() -> 
             self, task_id: int
         ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
             assert task_id == 1
-            return queue, unsubscribe, self.ensure_state_snapshot(task_id)
+            return queue, unsubscribe, self.get_state(task_id)
 
-        def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+        def get_state(self, task_id: int) -> ConversationStateSnapshot:
             assert task_id == 1
             return copy.deepcopy(initial)
 
@@ -742,9 +742,9 @@ async def test_stream_fallback_sends_terminal_snapshot() -> None:
         def subscribe_with_snapshot(
             self, task_id: int
         ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.ensure_state_snapshot(task_id)
+            return queue, lambda: None, self.get_state(task_id)
 
-        def ensure_state_snapshot(self, task_id: int) -> ConversationStateSnapshot:
+        def get_state(self, task_id: int) -> ConversationStateSnapshot:
             self.read_count += 1
             return copy.deepcopy(initial if self.read_count == 1 else terminal)
 

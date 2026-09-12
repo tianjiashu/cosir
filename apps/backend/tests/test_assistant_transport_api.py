@@ -14,13 +14,9 @@ from app.assistant_transport.assistant_api import (
 )
 from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
 from app.assistant_transport.service import conversation_run_command_service as command_module
-from app.assistant_transport.service import conversation_task_snapshot_service as snapshot_module
 from app.assistant_transport.service import transport_assistant_service as transport_module
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
-)
-from app.assistant_transport.service.conversation_task_snapshot_service import (
-    ConversationTaskSnapshotService,
 )
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.assistant_transport.service.transport_stream_service import (
@@ -141,8 +137,8 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
         def get_latest_run(self, _task_id: int) -> object:
             return latest_run
 
-    class _SnapshotService:
-        def ensure_state_snapshot(self, _task_id: int) -> dict[str, object]:
+    class _StateService:
+        def get_state(self, _task_id: int) -> dict[str, object]:
             return state
 
     class _RunService:
@@ -171,7 +167,7 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
 
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
-    service._snapshots = _SnapshotService()
+    service._state = _StateService()
     service._conversation_run = _RunService()
     service._command = _CommandCrud()
     monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
@@ -309,90 +305,6 @@ async def test_attach_endpoint_rejects_business_commands() -> None:
     assert error.value.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_state_read_reconciles_terminal_run_without_starting_executor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    active = _snapshot(7, "running")
-    terminal = _snapshot(7, "cancelled")
-    state_reads = 0
-    projector_events: list[object] = []
-
-    class _Lock:
-        def acquire(self, *, blocking: bool, timeout: float) -> bool:
-            assert blocking is True
-            assert timeout == 10
-            return True
-
-        def release(self) -> None:
-            return None
-
-    class _TaskSpace:
-        lock = _Lock()
-
-        def __init__(self) -> None:
-            self.projection_runs: list[int] = []
-
-        def existing_context_manager(self) -> None:
-            return None
-
-        def ensure_context_usage_projection(self, run: object) -> None:
-            self.projection_runs.append(run.id)
-            raise RuntimeError("projection probe keeps snapshot recovery test isolated")
-
-    class _TaskSpaces:
-        def __init__(self) -> None:
-            self.space = _TaskSpace()
-
-        def get_or_create(self, _task_id: int) -> _TaskSpace:
-            return self.space
-
-    class _RunService:
-        def list_runs_for_task(self, _task_id: int) -> list[object]:
-            return [
-                SimpleNamespace(
-                    id=7,
-                    status="cancelled",
-                    end_reason="runtime_restarted",
-                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
-                )
-            ]
-
-    class _Executor:
-        def is_locally_running(self, _run_id: int) -> bool:
-            return False
-
-    class _Projector:
-        def process(self, event: object) -> None:
-            projector_events.append(event)
-
-    service = ConversationTaskSnapshotService.__new__(ConversationTaskSnapshotService)
-
-    def ensure_state_snapshot(_task_id: int) -> dict[str, object]:
-        nonlocal state_reads
-        state_reads += 1
-        return active if state_reads == 1 else terminal
-
-    service.ensure_state_snapshot = ensure_state_snapshot  # type: ignore[method-assign]
-    task_spaces = _TaskSpaces()
-    monkeypatch.setattr(snapshot_module, "task_runtime_spaces", task_spaces)
-
-    # ``read`` imports dependency getters lazily, so patch the provider module
-    # used by that import rather than pretending recovery is a snapshot write.
-    import app.service.depends as depends
-
-    monkeypatch.setattr(depends, "get_conversation_run_executor", lambda: _Executor())
-    monkeypatch.setattr(depends, "get_conversation_run_service", lambda: _RunService())
-    monkeypatch.setattr(depends, "get_conversation_event_projector", lambda: _Projector())
-
-    result = await service.read(1)
-
-    assert next(run for run in result["runs"] if run["runId"] == 7)["status"] == "cancelled"
-    assert state_reads == 3
-    assert len(projector_events) == 1
-    assert task_spaces.space.projection_runs == [7]
-
-
 def test_restart_recovery_only_updates_run_persistence() -> None:
     calls: list[tuple[int, str]] = []
 
@@ -462,7 +374,7 @@ async def test_sse_callback_logs_and_returns_on_normal_completion(
 
     service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
-    service._snapshots = SimpleNamespace(ensure_state_snapshot=lambda _t: _snapshot(7, "completed"))
+    service._snapshots = SimpleNamespace(get_state=lambda _t: _snapshot(7, "completed"))
     service.run_executor = SimpleNamespace(status=lambda *_a: None)
     service.stream = _noop_stream
 
@@ -484,7 +396,7 @@ async def test_sse_callback_logs_and_propagates_cancellation(
 
     service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
-    service._snapshots = SimpleNamespace(ensure_state_snapshot=lambda _t: _snapshot(7, "completed"))
+    service._snapshots = SimpleNamespace(get_state=lambda _t: _snapshot(7, "completed"))
     service.run_executor = SimpleNamespace(status=lambda *_a: None)
     service.stream = _cancelling_stream
 
@@ -502,7 +414,7 @@ async def test_sse_callback_logs_and_propagates_failures(caplog: pytest.LogCaptu
 
     service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
-    service._snapshots = SimpleNamespace(ensure_state_snapshot=lambda _t: _snapshot(7, "completed"))
+    service._snapshots = SimpleNamespace(get_state=lambda _t: _snapshot(7, "completed"))
     service.run_executor = SimpleNamespace(status=lambda *_a: None)
     service.stream = _failing_stream
 
@@ -549,8 +461,8 @@ async def test_resume_setup_failure_settles_run(monkeypatch: pytest.MonkeyPatch)
         def get_latest_run(self, _task_id: int) -> object:
             return SimpleNamespace(id=7, status="cancelled", end_reason="user_cancelled")
 
-    class _SnapshotService:
-        def ensure_state_snapshot(self, _task_id: int) -> dict[str, object]:
+    class _StateService:
+        def get_state(self, _task_id: int) -> dict[str, object]:
             nonlocal snapshot_reads
             snapshot_reads += 1
             if snapshot_reads > 1:
@@ -577,7 +489,7 @@ async def test_resume_setup_failure_settles_run(monkeypatch: pytest.MonkeyPatch)
 
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
-    service._snapshots = _SnapshotService()
+    service._state = _StateService()
     service._conversation_run = _RunService()
     service._command = _CommandCrud()
     monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
@@ -600,8 +512,8 @@ async def test_resume_reads_command_before_restoring_run(monkeypatch: pytest.Mon
         def get_latest_run(self, _task_id: int) -> object:
             return SimpleNamespace(id=7, status="cancelled", end_reason="user_cancelled")
 
-    class _SnapshotService:
-        def ensure_state_snapshot(self, _task_id: int) -> dict[str, object]:
+    class _StateService:
+        def get_state(self, _task_id: int) -> dict[str, object]:
             return state
 
     class _RunService:
@@ -619,7 +531,7 @@ async def test_resume_reads_command_before_restoring_run(monkeypatch: pytest.Mon
 
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
-    service._snapshots = _SnapshotService()
+    service._state = _StateService()
     service._conversation_run = _RunService()
     service._command = _CommandCrud()
     monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
