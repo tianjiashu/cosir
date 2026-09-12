@@ -240,7 +240,6 @@ class ConversationTaskContextService:
                     include_in_context=source_entry.include_in_context,
                     sequence=next_sequence,
                     transport_metadata=copy.deepcopy(source_entry.transport_metadata),
-                    message_schema_version=source_entry.message_schema_version,
                 ),
                 session=session,
             )

@@ -109,7 +109,6 @@ def _context_row(
         include_in_context=True,
         sequence=sequence,
         transport_metadata=metadata or _metadata([]),
-        message_schema_version=1,
     )
 
 

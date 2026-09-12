@@ -23,7 +23,6 @@ from app.models.json_helpers import validate_transport_metadata
 from app.models.task_record import TaskRecord
 from app.utils.message_content import content_to_text
 
-_SUPPORTED_MESSAGE_SCHEMA_VERSION = 1
 _SUPPORTED_TRANSPORT_SCHEMA_VERSION = 1
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -299,14 +298,6 @@ class ConversationTaskStateRebuilder:
                 "persisted context row has no id",
                 task_id=task_id,
                 run_id=row.run_id,
-            )
-        if row.message_schema_version != _SUPPORTED_MESSAGE_SCHEMA_VERSION:
-            raise ConversationStateRebuildError(
-                "unsupported_context_schema",
-                "context message schema version is unsupported",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
             )
         try:
             metadata = validate_transport_metadata(row.transport_metadata)

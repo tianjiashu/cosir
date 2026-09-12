@@ -143,8 +143,6 @@ user/assistant message 只从 ContextModel 读取。`input_text` 由创建 Run �
   对 AI row 保存最终 part 段序列（text/reasoning/tool-call 及工具声明）；对 Tool row 保存
   执行后的 `display_data`、受控错误短语和必要的展示状态。这里不重复保存 message id，
   id 永远来自 ContextModel.id。
-- 可选 `message_schema_version`：用于未来 LangChain 序列化格式升级。
-
 这些字段仍属于同一张 context 表，不建立第二张 message/tool 事实表。边界如下：
 
 | 数据 | `message_json` | `transport_metadata_json` | 其他存储 |

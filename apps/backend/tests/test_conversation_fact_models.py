@@ -27,7 +27,7 @@ def _timestamp() -> datetime:
     return datetime.now(UTC)
 
 
-def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None:
+def test_context_record_round_trips_with_row_identity_and_transport_metadata() -> None:
     metadata = {
         "schema_version": 1,
         "parts": [{"type": "text", "text": "hello", "status": "completed"}],
@@ -46,7 +46,6 @@ def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None
         sequence=3,
         id=41,
         transport_metadata=metadata,
-        message_schema_version=2,
     )
 
     model = record._to_model()
@@ -56,8 +55,22 @@ def test_context_record_round_trips_row_id_metadata_and_schema_version() -> None
     assert restored.id == 41
     assert restored.message == record.message
     assert restored.transport_metadata == metadata
-    assert restored.message_schema_version == 2
     assert json.loads(model.transport_metadata_json) == metadata
+
+
+def test_context_storage_exposes_only_canonical_message_fields() -> None:
+    assert {column.name for column in ConversationTaskContextModel.__table__.columns} == {
+        "id",
+        "task_id",
+        "run_id",
+        "tool_call_id",
+        "message_json",
+        "transport_metadata_json",
+        "include_in_context",
+        "sequence",
+        "created_at",
+        "updated_at",
+    }
 
 
 def test_context_record_rejects_non_object_metadata_json() -> None:
@@ -68,7 +81,6 @@ def test_context_record_rejects_non_object_metadata_json() -> None:
         include_in_context=True,
         sequence=3,
         transport_metadata_json="[]",
-        message_schema_version=1,
     )
 
     with pytest.raises((TypeError, ValueError)):
@@ -92,7 +104,6 @@ def test_context_record_rejects_malformed_metadata_shapes(metadata_json: str) ->
         include_in_context=True,
         sequence=3,
         transport_metadata_json=metadata_json,
-        message_schema_version=1,
     )
 
     with pytest.raises((TypeError, ValueError)):
@@ -107,7 +118,6 @@ def test_context_record_rejects_malformed_metadata_json() -> None:
         include_in_context=True,
         sequence=3,
         transport_metadata_json="{not-json",
-        message_schema_version=1,
     )
 
     with pytest.raises((TypeError, ValueError)):
@@ -506,7 +516,6 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
                     include_in_context=True,
                     sequence=3,
                     transport_metadata_json=json.dumps(metadata),
-                    message_schema_version=2,
                 )
             )
             session.flush()
@@ -521,7 +530,6 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             assert cloned_row is not None
             assert cloned_row.run_id == 22
             assert json.loads(cloned_row.transport_metadata_json) == metadata
-            assert cloned_row.message_schema_version == 2
     finally:
         engine.dispose()
 

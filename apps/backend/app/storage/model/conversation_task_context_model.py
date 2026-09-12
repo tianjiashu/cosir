@@ -46,8 +46,5 @@ class ConversationTaskContextModel(StorageBase):
     transport_metadata_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="{}", server_default="{}"
     )
-    message_schema_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default="1"
-    )
     include_in_context: Mapped[bool] = mapped_column(default=True, nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)

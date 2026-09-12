@@ -75,7 +75,6 @@ def _row(
     sequence: int = 1,
     include_in_context: bool = True,
     metadata: dict[str, object] | None = None,
-    message_schema_version: int = 1,
 ) -> ConversationTaskContextRecord:
     return ConversationTaskContextRecord(
         id=row_id,
@@ -85,7 +84,6 @@ def _row(
         include_in_context=include_in_context,
         sequence=sequence,
         transport_metadata=metadata or _metadata([]),
-        message_schema_version=message_schema_version,
     )
 
 
@@ -508,15 +506,14 @@ def test_rebuild_maps_task_usage_current_run_and_stably_sorts_runs() -> None:
 
 
 @pytest.mark.parametrize(
-    ("metadata", "message_schema_version", "code"),
+    ("metadata", "code"),
     [
-        (_metadata([], schema_version=2), 1, "unsupported_context_schema"),
-        (_metadata([{"type": "unknown", "text": "bad"}]), 1, "malformed_context_metadata"),
-        (_metadata([]), 2, "unsupported_context_schema"),
+        (_metadata([], schema_version=2), "unsupported_context_schema"),
+        (_metadata([{"type": "unknown", "text": "bad"}]), "malformed_context_metadata"),
     ],
 )
 def test_rebuild_rejects_malformed_or_unsupported_context_metadata(
-    metadata: dict[str, object], message_schema_version: int, code: str
+    metadata: dict[str, object], code: str
 ) -> None:
     with pytest.raises(ConversationStateRebuildError) as exc_info:
         ConversationTaskStateRebuilder.rebuild(
@@ -527,7 +524,6 @@ def test_rebuild_rejects_malformed_or_unsupported_context_metadata(
                     201,
                     AIMessage(content=""),
                     metadata=metadata,
-                    message_schema_version=message_schema_version,
                 )
             ],
         )

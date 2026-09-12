@@ -24,7 +24,6 @@ class ConversationTaskContextRecord:
     include_in_context: bool
     sequence: int
     transport_metadata: TransportMetadata = field(default_factory=empty_transport_metadata)
-    message_schema_version: int = 1
     id: int | None = None
 
     @classmethod
@@ -57,7 +56,6 @@ class ConversationTaskContextRecord:
             include_in_context=model.include_in_context,
             sequence=model.sequence,
             transport_metadata=deserialize_transport_metadata(model.transport_metadata_json),
-            message_schema_version=model.message_schema_version,
         )
 
     def _to_model(self) -> ConversationTaskContextModel:
@@ -86,7 +84,6 @@ class ConversationTaskContextRecord:
             ),
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
             transport_metadata_json=serialize_transport_metadata(self.transport_metadata),
-            message_schema_version=self.message_schema_version,
             include_in_context=self.include_in_context,
             sequence=self.sequence,
         )
