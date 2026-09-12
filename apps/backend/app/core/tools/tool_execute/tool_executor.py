@@ -164,11 +164,13 @@ class ToolExecutor:
                 透传给执行器并由 handler 在执行期消费，便于后续扩展更多执行参数。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
-            should_cancel: 可选取消检查回调；透传给 process 工具执行器用于中止长工具。
+            should_cancel: 可选取消检查回调；透传给工具执行器，由 process 模式在等待
+                结果时轮询、thread 模式在 handler 执行前后边界检查，命中即返回取消观察。
             output_sink: 可选实时输出回调；透传给执行器，使 process 工具（当前仅
                 ``execute_terminal``）的运行期输出可增量回传上层做实时展示。
-                **当前接线状态**：仅直接调用方（单测 / 未来事件桥）注入；workflow 链路
-                （``WorkflowOperations``）尚未构造该回调下穿，终端实时流式展示仍未接通。
+                **当前接线状态**：``should_cancel`` 已由 workflow 链路
+                （``WorkflowOperations``）下穿，但 ``output_sink`` 尚未接入，
+                终端实时流式展示仍未接通；目前仅直接调用方（单测 / 未来事件桥）注入。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"；

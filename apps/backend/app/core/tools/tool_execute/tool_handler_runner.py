@@ -80,7 +80,8 @@ class ToolHandlerRunner:
             arguments: 已通过准入门禁与参数校验的关键字参数字典。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
-            should_cancel: 可选取消检查回调；process 模式等待结果时会轮询该回调。
+            should_cancel: 可选取消检查回调；process 模式等待结果时轮询该回调，
+                thread 模式在 handler 执行前后边界检查，命中即返回取消观察。
             output_sink: 可选实时输出回调，签名 ``(text, truncated) -> None``。
                 **仅 process 模式支持**：父进程轮询跨进程队列后在调用线程内回调它；
                 thread 模式忽略该参数（当前无流式产出的 thread 工具）。
@@ -104,7 +105,13 @@ class ToolHandlerRunner:
                 should_cancel=should_cancel,
                 output_sink=output_sink,
             )
-        return self._execute_in_thread(tool, arguments, execution_context, tool_call_id)
+        return self._execute_in_thread(
+            tool,
+            arguments,
+            execution_context,
+            tool_call_id,
+            should_cancel=should_cancel,
+        )
 
     # ------------------------------------------------------------------
     # Process-isolated execution (hard timeout kill)
@@ -459,6 +466,7 @@ class ToolHandlerRunner:
         arguments: Mapping[str, Any],
         execution_context: ToolExecutionContext | None,
         tool_call_id: str,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> ToolObservation:
         """在当前调用线程直接执行 handler 并归一化结果（无子进程隔离）。
 
@@ -468,9 +476,13 @@ class ToolHandlerRunner:
             execution_context: 本次执行的运行时边界，直接作为关键字参数注入 handler
                 （同进程，无需 pickle 序列化）。
             tool_call_id: 关联本次执行的模型工具调用 id。
+            should_cancel: 可选取消检查回调；本方法仅在 handler 执行**前**与执行**后**
+                两个边界检查，命中即返回取消观察，但**不中止正在执行的同步 handler**
+                —— 中途打断交由 process 隔离路径的硬超时强杀负责。
 
         返回:
-            归一化后的 :class:`ToolObservation`。
+            归一化后的 :class:`ToolObservation`：成功为 status="success"；handler 抛
+            异常为 status="error"；执行前后任一边界检出取消为 status="cancelled"。
 
         异常:
             不向上抛出：handler 抛出的任意异常被捕获并归一化为
@@ -480,8 +492,28 @@ class ToolHandlerRunner:
             在调用方线程内同步执行 handler；直接用主进程 ``log`` 单例；**不启动
             子进程、不建 Queue、不挂载日志桥、不做硬超时强杀**。`execution_mode
             != "process"` 时 ``tool.timeout_seconds`` 仅作元数据，本方法不据此
-            监控 / 强杀线程。
+            监控 / 强杀线程。取消检查仅发生在 handler 调用前后两个边界，长耗时
+            同步 handler 执行中途不会被本方法中断。
         """
+        # 执行前边界：turn 已取消则不进入 handler，直接返回取消观察。
+        if should_cancel is not None and should_cancel():
+            log.info(
+                "tool_execution_cancelled",
+                extra={
+                    "msg": "工具执行因 turn 取消而在开始前中止",
+                    "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                        "tool_name": tool.name,
+                    },
+                },
+            )
+            return tool_cancelled(
+                tool.name,
+                reason=CANCEL_NOT_EXECUTED_REASON,
+                error="the current turn was cancelled before this tool started executing",
+                permission=tool.permission,
+                tool_call_id=tool_call_id,
+            )
         try:
             result = tool.handler(**arguments, execution_context=execution_context)
         except Exception as exc:
@@ -501,6 +533,25 @@ class ToolHandlerRunner:
                 str(exc),
                 reason=handler_exception_reason(f"the tool handler raised an exception: {exc}"),
                 retryable=False,
+                permission=tool.permission,
+                tool_call_id=tool_call_id,
+            )
+        # 执行后边界：handler 已跑完但执行期间被取消，丢弃结果转取消观察。
+        if should_cancel is not None and should_cancel():
+            log.info(
+                "tool_execution_cancelled",
+                extra={
+                    "msg": "工具执行因 turn 取消而在完成后转取消",
+                    "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                        "tool_name": tool.name,
+                    },
+                },
+            )
+            return tool_cancelled(
+                tool.name,
+                reason=CANCEL_NOT_EXECUTED_REASON,
+                error="the current turn was cancelled while this tool was running",
                 permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
