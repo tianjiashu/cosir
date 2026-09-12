@@ -53,3 +53,58 @@ def test_validate_snapshot_rejects_current_run_that_is_not_present() -> None:
 
     with pytest.raises(ValueError, match="current_run_id must refer to a run"):
         validate_snapshot(invalid_state)  # type: ignore[arg-type]
+
+
+def test_get_tool_display_returns_empty_dict_for_missing_definition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 未注册工具 / 无 display 时返回 {} 而非 None，保证重建快照的 presentation
+    # 是合法对象、能通过 validate_snapshot（修复前返回 None 会让整张快照冷读崩）。
+
+    class _FakeRegistry:
+        def get_tool_definition(self, _name: str):
+            return None
+
+    monkeypatch.setattr(
+        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
+        lambda: _FakeRegistry(),
+    )
+    assert ConversationTaskStateRebuilder.get_tool_display("unknown_tool") == {}
+
+
+def test_validate_snapshot_tolerates_none_presentation() -> None:
+    # 防御性：presentation 为显式 None 视作缺省，不再使整张快照校验崩溃
+    # （旧实现 ``isinstance(part.get("presentation", {}), dict)`` 会命中 None）。
+    state = {
+        "runs": [
+            {
+                "runId": 1,
+                "status": "completed",
+                "endReason": None,
+                "usage": None,
+                "messages": [
+                    {
+                        "id": "m1",
+                        "role": "user",
+                        "parts": [
+                            {
+                                "type": "tool-call",
+                                "toolCallId": "c1",
+                                "toolName": "read_file",
+                                "status": "cancelled",
+                                "presentation": None,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "current_run_id": 1,
+        "approvals": {},
+        "context_usage_ratio": None,
+        "context_usage_used": None,
+        "context_window_total": None,
+        "error": None,
+    }
+
+    validate_snapshot(state)  # 不应抛 ValueError

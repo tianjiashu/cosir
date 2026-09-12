@@ -232,7 +232,8 @@ def _validate_part(part: object) -> None:
             raise ValueError("snapshot tool isError must be a boolean")
         if part.get("args") is not None and not isinstance(part.get("args"), dict):
             raise ValueError("snapshot tool args must be an object")
-        if not isinstance(part.get("presentation", {}), dict):
+        presentation = part.get("presentation")
+        if presentation is not None and not isinstance(presentation, dict):
             raise ValueError("snapshot tool presentation must be an object")
         if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
             raise ValueError("snapshot tool display_data must be an object or null")

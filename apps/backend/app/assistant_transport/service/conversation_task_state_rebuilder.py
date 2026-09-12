@@ -64,13 +64,26 @@ class ConversationTaskStateRebuilder:
         return tool_parts
 
     @staticmethod
-    def get_tool_display(tool_name: str) -> dict[str, object] | None:
+    def get_tool_display(tool_name: str) -> dict[str, object]:
+        """Return the static display hints for ``tool_name`` as a plain dict.
+
+        Parameters:
+            tool_name: Registered tool name carried by the AI tool call.
+
+        Returns:
+            The ``ToolDisplayHints`` serialized to dict. Returns an **empty dict**
+            (never ``None``) when ``tool_name`` is empty, the tool is not registered,
+            or it declares no ``display``. This keeps the rebuilt snapshot part's
+            ``presentation`` field a valid object so ``validate_snapshot`` accepts it,
+            matching the streaming projection path which always emits ``{}`` for the
+            same missing-display case.
+        """
         if not tool_name:
-            return None
+            return {}
         tool_registry = get_tool_registry()
         tool_definition = tool_registry.get_tool_definition(tool_name)
         if not tool_definition or not tool_definition.display:
-            return None
+            return {}
         return tool_definition.display.to_dict()
 
     @staticmethod
