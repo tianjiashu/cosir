@@ -12,8 +12,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 
+from app.assistant_transport.event import UserInputAppendedEvent
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import SystemPromptBuilder
@@ -22,9 +27,14 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
+from app.core.context.tool_call_closure import (
+    build_placeholder_tool_message,
+    plan_tool_call_closure,
+)
 from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
-from app.models.json_helpers import TransportPart, TransportToolResult
+from app.models.conversation_task_context import TransportMetadata
+from app.service.depends import get_conversation_event_projector
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 
@@ -56,9 +66,9 @@ class RuntimeContextManager:
 
     @staticmethod
     def ensure_get_runtime_context_manager(
-        agent_profile: AgentProfile,
-        current_workspace: WorkspaceRecord,
-        current_task: TaskRecord,
+            agent_profile: AgentProfile,
+            current_workspace: WorkspaceRecord,
+            current_task: TaskRecord,
     ) -> RuntimeContextManager:
         """获取或创建 task 级 context 管理器。
 
@@ -121,19 +131,12 @@ class RuntimeContextManager:
         prompt = SystemMessage(
             content=SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
         )
-        service.ensure_system_message(self.current_task_id, prompt)
         entries = service.entries_in_context(self.current_task_id)
-        persisted_system = next(
-            (
-                entry
-                for entry in entries
-                if entry.run_id is None and isinstance(entry.message, SystemMessage)
-            ),
-            None,
+        self._system_entry = ContextEntry(prompt, None, -1)
+        self._entries = [entry for entry in entries]
+        self._message_sequence = (
+                self._require_context_service().max_sequence(self.current_task_id) + 1
         )
-        self._system_entry = persisted_system or ContextEntry(prompt, None, -1)
-        self._entries = [entry for entry in entries if entry is not persisted_system]
-        self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
 
     def _require_context_service(self) -> ConversationTaskContextService:
         """返回已装配的 context service；未装配时立即失败。"""
@@ -143,10 +146,10 @@ class RuntimeContextManager:
         return self.context_service
 
     def begin_run(
-        self,
-        run: ConversationRunRecord,
-        execution_mode: ExecutionMode = "fresh",
-        tool_schemas: Sequence[Mapping[str, Any]] = (),
+            self,
+            run: ConversationRunRecord,
+            execution_mode: ExecutionMode = "fresh",
+            tool_schemas: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
@@ -177,38 +180,14 @@ class RuntimeContextManager:
             # fresh 仍按持久化 run 身份清理，而不是依赖进程内指针，避免重跑时重复
             # 追加 user/tool message。正常首次执行没有同 run 条目，因此是幂等空操作。
             service = self._require_context_service()
-            reset_fresh = getattr(service, "reset_run_for_fresh", None)
-            if callable(reset_fresh):
-                reset_fresh(self.current_task_id, run.id)
-            else:
-                service.delete_by_run_id(self.current_task_id, run.id)
+            service.delete_by_run_id(self.current_task_id, run.id)
             self._entries = [entry for entry in self._entries if entry.run_id != run.id]
-            if callable(reset_fresh):
-                self._entries = service.entries_in_context(self.current_task_id)
-        else:
-            # resume 可能发生在后端重启后，必须从 SQLite 重新装载 working copy；同进程
-            # 恢复也通过同一条路径，确保 ContextEntry.run_id/sequence 与持久化一致。
-            loaded_entries = self._require_context_service().entries_in_context(
-                self.current_task_id
-            )
-            self._entries = [
-                entry
-                for entry in loaded_entries
-                if not (entry.run_id is None and isinstance(entry.message, SystemMessage))
-            ]
         # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
         # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
-        self._message_sequence = (
-            self._require_context_service().max_sequence(self.current_task_id) + 1
-        )
         self.current_run_id = run.id
         self.total_tokens = CapabilityService.get_model_context_window(run.model_name or "")
-        if execution_mode == "resume":
-            # resume 不会走 fresh 的 add_message，但 UI 仍需要立即得到已有
-            # context 的 used/window；重新投影完整 working copy，避免重启后只看到 0/null。
-            self.mark_context_changed(ContextEventType.LOAD_HISTORY, self._effective_entries())
 
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
         """注册一个按 order 执行的 context listener。
@@ -230,19 +209,21 @@ class RuntimeContextManager:
         return self
 
     def add_message(
-        self,
-        message: BaseMessage,
-        *,
-        include_in_context: bool = True,
-        transport_parts: Sequence[TransportPart] | None = None,
-        tool_result: TransportToolResult | None = None,
+            self,
+            message: BaseMessage,
+            *,
+            include_in_context: bool = True,
+            transport_metadata: TransportMetadata | None = None,
+            run_id: int | None = None,
     ) -> bool:
         """追加一条完整 LangChain 消息到 Task context。
 
         参数:
             message: 完整 LangChain 消息；不接受流式 chunk。
             include_in_context: 是否加入当前模型输入；默认 True。
-            allow_write_event_failure: listener 旁路失败时是否继续。
+            transport_metadata: 该消息对应的 Transport 元数据；无则为 None。
+            run_id: 该消息归属的 Conversation Run；为 None 时归属当前 Run。协议占位需要
+                写回**产生该工具调用的 Run**，避免把历史调用的闭合结果记到新 Run 上。
 
         返回:
             ``True`` 表示 canonical context 新增；``False`` 表示同一工具结果已存在。
@@ -253,155 +234,167 @@ class RuntimeContextManager:
         副作用:
             通过 context owner 持久化完整消息，并更新当前内存副本。
         """
-
-        if (
-            include_in_context
-            and isinstance(message, ToolMessage)
-            and message.tool_call_id
-            and any(
-                entry.run_id == self.current_run_id
-                and isinstance(entry.message, ToolMessage)
-                and entry.message.tool_call_id == message.tool_call_id
-                for entry in self._entries
-            )
-        ):
-            log.info(
-                "runtime_context_tool_message_duplicate_ignored",
-                extra={
-                    "msg": "重复恢复的 ToolMessage 已幂等忽略",
-                    "data": {
-                        "task_id": self.current_task_id,
-                        "tool_call_id": message.tool_call_id,
-                    },
-                },
-            )
-            return False
-
-        if include_in_context and isinstance(message, SystemMessage):
-            message_kind = message.additional_kwargs.get("cosir_message_kind")
-            if message_kind == "tool_call_repair" and any(
-                entry.run_id == self.current_run_id
-                and isinstance(entry.message, SystemMessage)
-                and entry.message.additional_kwargs.get("cosir_message_kind") == message_kind
-                and entry.message.content == message.content
-                for entry in self._entries
-            ):
-                log.info(
-                    "runtime_context_repair_message_duplicate_ignored",
-                    extra={
-                        "msg": "重复恢复的工具调用修复提示已幂等忽略",
-                        "data": {
-                            "task_id": self.current_task_id,
-                            "run_id": self.current_run_id,
-                        },
-                    },
-                )
-                return False
-
+        target_run_id = self.current_run_id if run_id is None else run_id
         sequence = self._message_sequence
-        append_kwargs: dict[str, object] = {}
-        if transport_parts is not None:
-            append_kwargs["transport_parts"] = list(transport_parts)
-        if tool_result is not None:
-            append_kwargs["tool_result"] = tool_result
         created = self._require_context_service().append(
             self.current_task_id,
-            self.current_run_id,
+            target_run_id,
             message,
             sequence,
             include_in_context,
-            **append_kwargs,
+            transport_metadata,
         )
         if created is False:
             return False
         self._message_sequence += 1
         if not include_in_context:
             return True
-        self._entries.append(ContextEntry(message, self.current_run_id, sequence))
+        self._entries.append(ContextEntry(message, target_run_id, sequence))
         self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
         return True
 
+    def ensure_run_user_message(self, text: str) -> bool:
+        """确保当前 Run 在上下文中恰好有一条初始 user 消息。
+
+        该消息是 Run 的 canonical 输入事实（``ConversationRunRecord.input_text``）：
+        ``begin_run(fresh)`` 会清空该 Run 的旧条目，因此 fresh 执行需要在此补写；
+        resume 时同一 Run 的 user 消息已在上下文中，本方法为幂等空操作。调用方必须在
+        启动 graph 之前调用，使首个 ``load_message`` 能把用户输入交给模型。
+
+        参数:
+            text: 该 Run 的输入文本。
+
+        返回:
+            ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示已存在，或文本
+            为空被跳过。
+
+        异常:
+            无；持久化失败由 ``add_message`` 向上传播。
+
+        副作用:
+            经 ``add_message`` 落库一条 ``HumanMessage`` 并触发上下文变更监听；空文本时写
+            一条 warning 日志（历史空输入 Run 不应因此中断执行）。不负责多模态 block
+            （视觉通道尚未接线）。
+        """
+        if not text or not text.strip():
+            log.warning(
+                "runtime_context_run_user_message_skipped",
+                extra={
+                    "msg": "Run 输入文本为空，跳过 user 消息写入",
+                    "data": {"task_id": self.current_task_id, "run_id": self.current_run_id},
+                },
+            )
+            return False
+        if any(
+            entry.run_id == self.current_run_id and isinstance(entry.message, HumanMessage)
+            for entry in self._entries
+        ):
+            return False
+        message = self.add_message(HumanMessage(content=text))
+        get_conversation_event_projector().process(
+            UserInputAppendedEvent(task_id=self.current_task_id, run_id=self.current_run_id,text=text)
+        )
+        return message
+
     def _close_unclosed_tool_calls(self) -> None:
-        """闭合并规范化上下文中未配对或错位的工具调用结果。
+        """闭合最后一条工具调用消息上未配对的结果，并把结果归位到该消息之后。
 
-        未闭合指某个 ``AIMessage`` 携带 ``tool_calls``，但后续上下文中不存在
-        ``tool_call_id`` 与之匹配的 ``ToolMessage``。通常由 run 崩溃或被取消导致
-        （模型已请求工具但结果未落库）。此处作为**唯一收口点**，为每个未闭合调用补
-        一条 ``ToolMessage`` 占位，写回内存与数据库，使模型协议始终闭合、可继续。
+        未闭合指某个 ``AIMessage`` 携带 ``tool_calls``，但上下文中不存在 ``tool_call_id``
+        与之匹配的 ``ToolMessage``（模型已请求工具但结果未落库，通常由 run 崩溃或取消
+        导致）。链路里这**只可能出现在最后一条携带 tool_calls 的 ``AIMessage`` 上**：
 
-        历史上下文还可能已经存在匹配的 ``ToolMessage``，但它被追加在后续
-        ``HumanMessage`` / ``SystemMessage`` 之后。仅按 ``tool_call_id`` 判断存在会把这种
-        序列误认为合法；本方法会把匹配结果移动到对应 ``AIMessage`` 后面，并保留其他
-        消息的相对顺序。
+        - 该消息必然是它所属 Run 的最后一条消息：``model_node`` 落库后只会再有同批
+          ``ToolMessage``、本 Run 的延迟修复 ``SystemMessage``（写在占位之后），或下一
+          Run 的 ``HumanMessage``；
+        - 每个 model 步入场都会取数一次，未闭合不跨 model 步，因此历史里不会留下更早
+          的未闭合调用。
 
-        不论原因是取消还是崩溃，占位的业务语义统一标记为 ``cancelled``；canonical
-        工具执行事实的终态由取消分支经 ``cancel_tool_calls`` 单独写入，本方法只负责
-        模型协议层面的配对闭合，不触碰领域事实。
+        因此本方法只从尾部定位这一条消息，不再扫描/认领更早的 AI 消息：更早的消息都不
+        可能带着未配对调用留存至今（每步入场都会取数收口，真出现也早已被 provider 以协议
+        错误暴露），不存在需要修复的「历史未闭合」状态。
+
+        一个 assistant 消息的多个 tool call 必须按 ``tool_calls`` 顺序紧随其后。结果即使
+        已经落库，也可能被后续消息（下一 Run 的 ``HumanMessage``、延迟修复 ``SystemMessage``）
+        隔开，或因为占位的全局序号更大而排在它们之后；此时把匹配结果搬回该消息之后，并
+        保留其他消息的相对顺序。
+
+        占位与其闭合的调用归属**同一个 Run**（取该 ``AIMessage`` 的 ``run_id``）：快照重建
+        按 Run 分组配对，若把占位记到当前 Run，重建会在新 Run 分组里看到一条没有对应 AI
+        调用的 ``ToolMessage`` 而失败。
+
+        不论原因是取消还是崩溃，占位的业务语义统一标记为 ``cancelled``（模型通道正文与
+        Transport ``status`` 同口径）；canonical 工具执行事实的终态由取消分支经
+        ``cancel_tool_calls`` 单独写入，本方法只负责模型协议层面的配对闭合，不触碰领域事实。
 
         返回:
             无。
 
-        副作用:
-            为每个未闭合调用调用 ``add_message``：写回 ``_entries``、经
-            ``context_service.append`` 落库（``include_in_context=True``）并触发
-            上下文变更监听；已有但错位的 ToolMessage 只在当前 working copy 中重排，
-            不改写上下文事实。占位落库后下次加载即命中配对，天然幂等。
-        """
-        entries = list(self._entries)
-        tool_entries_by_call_id: dict[str, list[tuple[int, ContextEntry]]] = {}
-        for index, entry in enumerate(entries):
-            message = entry.message
-            if isinstance(message, ToolMessage) and message.tool_call_id:
-                tool_entries_by_call_id.setdefault(message.tool_call_id, []).append((index, entry))
+        异常:
+            无；持久化异常由 ``add_message`` 向上传播。
 
-        normalized: list[ContextEntry] = []
-        claimed_tool_entry_indices: set[int] = set()
+        副作用:
+            为每个未配对调用调用 ``add_message``：写回 ``_entries``、经
+            ``context_service.append`` 落库（``include_in_context=True``、随行写入调用所属
+            ``run_id`` 与 ``TransportMetadata(status="cancelled")``）并触发上下文变更监听；
+            已有但错位的 ToolMessage 只在当前 working copy 中重排，不改写上下文事实。占位
+            落库后下次加载即命中配对，天然幂等。
+        """
+        entries = self._entries
+        plan = plan_tool_call_closure(entries)
+        if plan is None:
+            return
+
+        # 占位会追加到 ``entries`` 末尾，因此后续按索引遍历必须固定原长度。
+        original_length = len(entries)
+        normalized: list[ContextEntry] = list(entries[: plan.target_index + 1])
         created_placeholder_count = 0
         reordered_tool_count = 0
+        appended_count = 0
 
-        for index, entry in enumerate(entries):
-            if index in claimed_tool_entry_indices:
+        for slot in plan.slots:
+            if slot.tool_index is not None:
+                normalized.append(entries[slot.tool_index])
+                if slot.tool_index != plan.target_index + 1 + appended_count:
+                    reordered_tool_count += 1
+                appended_count += 1
                 continue
 
-            message = entry.message
-            normalized.append(entry)
-            if not isinstance(message, AIMessage) or not message.tool_calls:
-                continue
-
-            # 一个 assistant 消息的多个 tool call 必须按 tool_calls 顺序紧随其后。
-            # 结果即使已经落库，也可能因为取消后追加新用户消息而出现在更后面；只要
-            # 它位于该 assistant 消息之后且尚未被其他调用认领，就把它移动到这里。
-            result_offset = 0
-            for call in message.tool_calls:
-                call_id = call.get("id")
-                if not call_id:
-                    continue
-                candidates = [
-                    (tool_index, tool_entry)
-                    for tool_index, tool_entry in tool_entries_by_call_id.get(call_id, [])
-                    if tool_index > index and tool_index not in claimed_tool_entry_indices
-                ]
-                if candidates:
-                    tool_index, tool_entry = candidates[0]
-                    claimed_tool_entry_indices.add(tool_index)
-                    normalized.append(tool_entry)
-                    if tool_index != index + 1 + result_offset:
-                        reordered_tool_count += 1
-                    result_offset += 1
-                    continue
-
-                placeholder = ToolMessage(
-                    content=(
-                        f"The tool call '{call.get('name') or 'unknown'}' (id={call_id}) "
-                        f"did not produce a result because the run was cancelled or "
-                        f"interrupted; no tool output is available."
-                    ),
-                    tool_call_id=call_id,
+            previous_length = len(self._entries)
+            created = self.add_message(
+                build_placeholder_tool_message(slot.call_id, slot.tool_name),
+                include_in_context=True,
+                # 占位必须随行写入 Transport 终态：快照重建按 Run 分组配对时直接读
+                # ``transport_metadata["status"]``，缺失 metadata 会让重建在取 status 时崩溃，
+                # 或产出不在 wire 白名单内的 None 状态。取值与 build_pair_tool_part 对未配对
+                # 调用的默认终态保持一致。
+                transport_metadata=TransportMetadata(status="cancelled"),
+                # 归属产生该调用的 Run，而不是恰好正在执行的新 Run。
+                run_id=plan.target_run_id,
+            )
+            if created is False:
+                # 同 (task, run, tool_call_id) 已落库但不在当前 working copy（例如未纳入
+                # 上下文的历史行）：不能重复写入，也不凭空构造条目，记 warning 后跳过。
+                log.warning(
+                    "runtime_context_tool_call_placeholder_skipped",
+                    extra={
+                        "msg": "该工具调用已有同名结果行，跳过占位写入",
+                        "data": {
+                            "task_id": self.current_task_id,
+                            "run_id": plan.target_run_id,
+                            "tool_call_id": slot.call_id,
+                        },
+                    },
                 )
-                previous_length = len(self._entries)
-                self.add_message(placeholder, include_in_context=True)
-                normalized.append(self._entries[previous_length])
-                created_placeholder_count += 1
+                continue
+            normalized.append(self._entries[previous_length])
+            created_placeholder_count += 1
+            appended_count += 1
+
+        claimed_tool_indices = plan.claimed_tool_indices
+        for index in range(plan.target_index + 1, original_length):
+            if index in claimed_tool_indices:
+                continue
+            normalized.append(entries[index])
 
         if not created_placeholder_count and not reordered_tool_count:
             return
@@ -419,82 +412,17 @@ class RuntimeContextManager:
             },
         )
 
-    def _normalize_tool_call_message_order(self) -> None:
-        """把历史遗留的修复 ``SystemMessage`` 移到关联工具结果之后。
-
-        新代码通过 ``deferred_repair_message`` 保证消息顺序，但旧版本可能已经持久化了
-        ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage``。该顺序会在下一次请求时
-        再次触发 provider 的 400，因此每次加载模型上下文前做一次内存侧兼容修复。这里只
-        调整模型输入副本的顺序，不删除或重写 canonical context 事实；后续追加消息仍使用
-        原有序号，下一次加载会再次得到同样的规范顺序。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            无。无法识别的消息保持原顺序，不阻断上下文加载。
-
-        副作用:
-            可能调整 ``_entries`` 的内存顺序并写一条结构化诊断日志；不直接写数据库。
-        """
-        normalized: list[ContextEntry] = []
-        deferred_systems: list[ContextEntry] = []
-        pending_call_ids: set[str] = set()
-        moved_count = 0
-
-        for entry in self._entries:
-            message = entry.message
-            if isinstance(message, SystemMessage) and pending_call_ids:
-                deferred_systems.append(entry)
-                moved_count += 1
-                continue
-
-            normalized.append(entry)
-            if isinstance(message, AIMessage):
-                pending_call_ids.update(
-                    str(call.get("id")) for call in message.tool_calls if call.get("id")
-                )
-            elif isinstance(message, ToolMessage) and message.tool_call_id:
-                pending_call_ids.discard(message.tool_call_id)
-
-            if not pending_call_ids and deferred_systems:
-                normalized.extend(deferred_systems)
-                deferred_systems = []
-
-        # 悬空调用没有结果时，仍把被延迟的 system 消息放到当前可见历史末尾；调用方已在
-        # 本方法前执行 ``_close_unclosed_tool_calls``，因此此处不会再把占位插到它后面。
-        normalized.extend(deferred_systems)
-        if moved_count:
-            self._entries = normalized
-            log.warning(
-                "runtime_context_tool_message_order_repaired",
-                extra={
-                    "msg": "加载上下文时修复历史 SystemMessage 与 ToolMessage 的顺序",
-                    "data": {
-                        "task_id": self.current_task_id,
-                        "moved_system_message_count": moved_count,
-                    },
-                },
-            )
-
     def load_message(self) -> list[BaseMessage]:
         """返回 system prompt 加 Task context 的模型输入副本。
 
-        取数前先统一闭合未配对的工具调用占位（崩溃/取消遗留），保证返回给模型的
+        取数前先闭合最后一条工具调用消息上未配对的结果（崩溃/取消遗留），保证返回给模型的
         上下文协议闭合。
 
         副作用:
-            若检测到悬空调用，经 ``_close_unclosed_tool_calls`` -> ``add_message`` 补占位会
-            写回上下文并触发变更通知；无悬空时不修改上下文。
+            若检测到未配对调用，经 ``_close_unclosed_tool_calls`` -> ``add_message`` 补占位会
+            写回上下文并触发变更通知；无未配对调用时不修改上下文。
         """
-        # 先补齐悬空 tool call，再移动修复 SystemMessage；否则历史形如
-        # AI(tool_calls) -> SystemMessage（无 ToolMessage）会在排序后重新被占位插到 System
-        # 后面，仍然触发 provider 400。
         self._close_unclosed_tool_calls()
-        self._normalize_tool_call_message_order()
         return [entry.message for entry in copy.deepcopy(self._effective_entries())]
 
     def _effective_entries(self) -> list[ContextEntry]:
@@ -505,9 +433,9 @@ class RuntimeContextManager:
         return [self._system_entry, *self._entries]
 
     def mark_context_changed(
-        self,
-        event_type: ContextEventType,
-        entries: list[ContextEntry],
+            self,
+            event_type: ContextEventType,
+            entries: list[ContextEntry],
     ) -> None:
         """向 listener 发布 context 完整快照。"""
 

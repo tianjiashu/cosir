@@ -212,6 +212,12 @@ class ReactLikeWorkflow(AgentWorkflow):
             execution_mode,
             tool_schemas=tool_schemas,
         )
+        # 本 Run 的初始 user 消息属于该 Run 的 canonical 上下文事实：fresh 时
+        # ``begin_run`` 已清空该 Run 的旧条目，这里补写基线；resume 时同一 Run 的
+        # user 消息已存在，方法自身幂等。必须在 graph 启动前完成，使首个 model 步的
+        # ``load_message`` 能把用户输入交给模型；写入失败由异常向上收敛为 Run 失败。
+        runtime_context_manager.ensure_run_user_message(run.input_text)
+
         config = {
             "configurable": {
                 "thread_id": run.checkpoint_thread_id,

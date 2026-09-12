@@ -100,23 +100,9 @@ class ConversationTaskContextCrud:
         if session is None:
             with self._session_factory.begin() as owned_session:
                 return self.create(record, session=owned_session)
-        try:
-            with session.begin_nested():
-                session.add(model)
-                session.flush()
-        except IntegrityError:
-            if isinstance(record.message, ToolMessage) and record.message.tool_call_id:
-                duplicate = session.scalar(
-                    select(ConversationTaskContextModel.id).where(
-                        ConversationTaskContextModel.task_id == record.task_id,
-                        ConversationTaskContextModel.run_id == record.run_id,
-                        ConversationTaskContextModel.tool_call_id
-                        == record.message.tool_call_id,
-                    )
-                )
-                if duplicate is not None:
-                    return False
-            raise
+        with session.begin_nested():
+            session.add(model)
+            session.flush()
         return True
 
     def delete_generated_by_run_id(

@@ -29,10 +29,8 @@ from app.core.workflows.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.task.conversation_run_service import ConversationRunService
-from app.service.task.conversation_task_context_service import ConversationTaskContextService
 
 
 class _RecordingContextService:
@@ -108,48 +106,6 @@ def test_runtime_context_persists_complete_ai_fields_and_ordered_parts() -> None
     assert persisted["args"][2] == message
     assert persisted["kwargs"]["transport_parts"][1]["type"] == "reasoning"
     assert persisted["kwargs"]["transport_parts"][2]["presentation"] == {"verb": "Read"}
-
-
-class _UserCrud:
-    def __init__(self) -> None:
-        self.records: list[ConversationTaskContextRecord] = []
-
-    def get(self, _task_id: int, include_in_context: bool = True, session: Any = None):
-        if include_in_context:
-            return [record for record in self.records if record.include_in_context]
-        return list(self.records)
-
-    def max_sequence(self, _task_id: int) -> int:
-        return max((record.sequence for record in self.records), default=0)
-
-    def create(self, record: ConversationTaskContextRecord, session: Any = None) -> None:
-        self.records.append(record)
-
-
-def test_context_service_initial_user_write_is_idempotent() -> None:
-    service = ConversationTaskContextService.__new__(ConversationTaskContextService)
-    service._crud = _UserCrud()
-
-    first = service.append_user_message_once(7, 11, "hello")
-    second = service.append_user_message_once(7, 11, "hello")
-
-    assert first is True
-    assert second is False
-    assert len(service._crud.records) == 1
-    assert isinstance(service._crud.records[0].message, HumanMessage)
-    assert service._crud.records[0].message.content == "hello"
-
-
-def test_context_service_persists_system_prompt_once() -> None:
-    service = ConversationTaskContextService.__new__(ConversationTaskContextService)
-    service._crud = _UserCrud()
-    prompt = SystemMessage(content="system prompt")
-
-    assert service.ensure_system_message(7, prompt) is True
-    assert service.ensure_system_message(7, prompt) is False
-    assert len(service._crud.records) == 1
-    assert service._crud.records[0].run_id is None
-    assert service._crud.records[0].message == prompt
 
 
 def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatch) -> None:
@@ -234,58 +190,6 @@ def test_model_processor_collect_preserves_complete_langchain_message_semantics(
     assert collected.usage_metadata == chunk.usage_metadata
     assert collected.tool_calls == chunk.tool_calls
     assert collected.invalid_tool_calls == chunk.invalid_tool_calls
-
-
-def test_model_processor_builds_ordered_persisted_parts_with_frozen_presentation() -> None:
-    processor = ModelChunkProcessor("reasoning_content")
-    chunks = [
-        AIMessageChunk(content="answer"),
-        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "think"}),
-        AIMessageChunk(
-            content="",
-            tool_call_chunks=[
-                {"name": "read_file", "args": '{"path":"a.py"}', "id": "call-1", "index": 0}
-            ],
-        ),
-    ]
-    message = AIMessage(
-        content="answer",
-        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-    )
-
-    parts = processor.build_transport_parts(
-        chunks,
-        message,
-        {"call-1": {"verb": "Read"}},
-    )
-
-    assert [part["type"] for part in parts] == ["text", "reasoning", "tool-call"]
-    assert parts[2]["presentation"] == {"verb": "Read"}
-    assert parts[2]["args"] == {"path": "a.py"}
-
-
-def test_model_processor_keeps_tool_call_at_its_original_stream_position() -> None:
-    processor = ModelChunkProcessor("reasoning_content")
-    chunks = [
-        AIMessageChunk(content="before "),
-        AIMessageChunk(
-            content="",
-            tool_call_chunks=[
-                {"name": "read_file", "args": '{"path":"a.py"}', "id": "call-1", "index": 0}
-            ],
-        ),
-        AIMessageChunk(content="after"),
-    ]
-    message = AIMessage(
-        content="before after",
-        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-    )
-
-    parts = processor.build_transport_parts(chunks, message, {"call-1": {"verb": "Read"}})
-
-    assert [part["type"] for part in parts] == ["text", "tool-call", "text"]
-    assert parts[1]["toolCallId"] == "call-1"
-    assert parts[1]["args"] == {"path": "a.py"}
 
 
 def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypatch) -> None:
@@ -492,7 +396,9 @@ def test_runtime_context_post_commit_listener_failure_does_not_hide_durable_writ
     assert manager._entries[-1].message.content == "durable"
 
 
-def test_orphan_recovery_commits_run_and_context_repair_before_projector(monkeypatch) -> None:
+def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
+    """恢复：Run 终态与工具收口在同一个事务内提交，提交后不再投影快照。"""
+
     order: list[str] = []
     recovered_run = SimpleNamespace(id=11, task_id=7, status="cancelled")
 
@@ -512,33 +418,37 @@ def test_orphan_recovery_commits_run_and_context_repair_before_projector(monkeyp
         def list_recoverable(self):
             return [recovered_run]
 
-        def cancel_recoverable_for_restart(self, run_id: int, end_reason: str, **kwargs: Any):
-            assert kwargs["session"] is not None
+        def update_status_if_in(
+            self,
+            run_id: int,
+            target_status: str,
+            allowed_statuses: tuple[str, ...],
+            end_reason: str | None = None,
+            final_output: str | None = None,
+            usage: object = None,
+            error: object = None,
+            session: object = None,
+        ) -> object:
+            assert session is not None
             order.append("run")
             return recovered_run
 
     class _ContextService:
-        def recover_interrupted_run(self, task_id: int, run_id: int, **kwargs: Any) -> list[str]:
+        def close_unclosed_tool_calls_for_run(
+            self, task_id: int, run_id: int, session: object = None
+        ) -> list[str]:
             assert (task_id, run_id) == (7, 11)
-            assert kwargs["session"] is not None
+            assert session is not None
             order.append("context")
             return ["call-1"]
-
-    class _Projector:
-        def process(self, _event: Any) -> None:
-            order.append("projector")
-            assert order == ["begin", "run", "context", "commit", "projector"]
 
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = _RunCrud()
     service._context = _ContextService()
     service._session_factory = _SessionFactory()
-    monkeypatch.setattr(
-        "app.service.depends.get_conversation_event_projector", lambda: _Projector()
-    )
 
     assert service.recover_orphaned_runs() == [recovered_run]
-    assert order == ["begin", "run", "context", "commit", "projector"]
+    assert order == ["begin", "run", "context", "commit"]
 
 
 def test_create_run_writes_user_context_and_task_current_run_before_projector(monkeypatch) -> None:

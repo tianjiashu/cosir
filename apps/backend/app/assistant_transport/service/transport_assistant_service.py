@@ -398,7 +398,7 @@ class TransportAssistantService:
                 run_id=run_id,
             )
 
-        state = await self._snapshots.read(task_id)
+        state = self._snapshots.get_state(task_id)
         if state["current_run_id"] != run_id:
             _raise_transport_error(
                 409,

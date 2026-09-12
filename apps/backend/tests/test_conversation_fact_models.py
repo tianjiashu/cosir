@@ -673,13 +673,11 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         assert run_row.end_reason == "runtime_restarted"
         assert len(repaired) == 1
         assert repaired[0].message.tool_call_id == "call-1"
-        assert repaired[0].transport_metadata["tool_result"] == {
-            "status": "error",
-            "display_data": {"status_hint": "执行已中断"},
-            "status_hint": "执行已中断",
-            "error": "execution_interrupted",
-        }
-        assert projected[0].status.value == "cancelled"
+        assert repaired[0].run_id == 11
+        # 统一收口为取消：占位与 Run 终态同口径，冷读重建据此得到 cancelled tool part。
+        assert repaired[0].transport_metadata == {"status": "cancelled"}
+        # 不处理快照：恢复路径不投影任何事件。
+        assert projected == []
     finally:
         engine.dispose()
 

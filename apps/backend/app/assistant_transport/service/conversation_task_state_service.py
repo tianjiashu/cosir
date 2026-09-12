@@ -6,10 +6,10 @@ import asyncio
 import copy
 from collections.abc import Callable, Sequence
 from threading import RLock
-from typing import Any, ClassVar, Protocol, cast
+from typing import Any, ClassVar, cast
 
+from app.assistant_transport.event import ConversationEvent
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationStateRebuildError,
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
@@ -20,24 +20,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import SnapshotChange
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.task_record import TaskRecord
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-
-class _TaskSource(Protocol):
-    def get(self, task_id: int) -> TaskRecord: ...
-
-
-class _RunSource(Protocol):
-    def list_by_task(self, task_id: int) -> list[ConversationRunRecord]: ...
-
-
-class _ContextSource(Protocol):
-    def get(
-        self, task_id: int, include_in_context: bool = True
-    ) -> list[ConversationTaskContextRecord]: ...
 
 
 class ConversationTaskStateService:
@@ -64,75 +47,38 @@ class ConversationTaskStateService:
     _lock: ClassVar[RLock] = RLock()
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
-    _generation: ClassVar[int] = 0
 
     def __init__(
-        self,
-        *,
-        task_source: _TaskSource | None = None,
-        run_source: _RunSource | None = None,
-        context_source: _ContextSource | None = None,
+            self,
     ) -> None:
         """Bind the canonical record sources used by cold reads."""
-
-        if task_source is None or run_source is None or context_source is None:
-            from app.service import depends
-
-            task_source = task_source or depends.get_task_crud()
-            run_source = run_source or depends.get_conversation_run_crud()
-            context_source = context_source or depends.get_conversation_task_context_crud()
-        self._task_source = task_source
-        self._run_source = run_source
-        self._context_source = context_source
-        with self._lock:
-            self._owner_generation = type(self)._generation
+        from app.service import depends
+        self._task_source = depends.get_task_crud()
+        self._run_source = depends.get_conversation_run_crud()
+        self._context_source = depends.get_conversation_task_context_crud()
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """Return a validated task-local working copy, lazily rebuilding it on first access.
 
         A present ``TaskRuntimeSpace`` snapshot is returned without canonical reads. Database
-        changes become visible through the normal projector/update path or an explicit
-        ``rebuild_state`` call; ordinary reads do not rebuild or merge a second copy.
+        changes become visible through the normal projector/update path; ordinary reads do not
+        rebuild or merge a second copy.
 
         Raises:
             KeyError: If the Task does not exist or was deleted in this process.
-            ConversationStateRebuildError: If canonical records cannot form valid wire state.
             sqlalchemy.exc.SQLAlchemyError: If a canonical source read fails.
         """
 
         with self._lock:
-            if not self.is_current_generation():
-                return copy.deepcopy(self._rebuild(task_id))
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_snapshot(lambda: self._rebuild(task_id))
             validate_snapshot(state)
-            return copy.deepcopy(state)
-
-    async def read(self, task_id: int) -> ConversationStateSnapshot:
-        """Read state without blocking the event loop; never starts or resumes a Run."""
-
-        return await asyncio.to_thread(self.get_state, task_id)
-
-    def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
-        """Force a canonical rebuild and install it as the new process-local working copy.
-
-        This is used after edit/fork database commits where old in-memory message parts must not
-        survive as the new Transport baseline.
-        """
-
-        with self._lock:
-            if not self.is_current_generation():
-                return copy.deepcopy(self._rebuild(task_id))
-            self._ensure_not_deleted(task_id)
-            state = self._rebuild(task_id)
-            task_runtime_spaces.get_or_create(task_id).replace_snapshot(state)
-            return copy.deepcopy(state)
+            return state
 
     def apply_planned(
-        self,
-        task_id: int,
-        planner: Callable[[ConversationStateSnapshot], Sequence[ConversationStateMutation]],
+            self,
+            event: ConversationEvent
     ) -> SnapshotChange:
         """Apply a live projector plan to process-local state and notify subscribers.
 
@@ -140,21 +86,12 @@ class ConversationTaskStateService:
         The planner and mutations run under the same lock as subscriber registration so a first
         SSE frame cannot race with a queued change.
         """
-
+        task_id = event.task_id
         with self._lock:
-            if not self.is_current_generation():
-                log.info(
-                    "conversation_state_stale_generation_ignored",
-                    extra={
-                        "msg": "忽略旧 backend generation 的 Transport mutation",
-                        "data": {"task_id": task_id},
-                    },
-                )
-                return SnapshotChange(task_id, self.get_state(task_id), ())
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_snapshot(lambda: self._rebuild(task_id))
-            mutations = tuple(planner(copy.deepcopy(state)))
+            mutations = tuple(event.plan(state))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
             validate_snapshot(state)
@@ -164,10 +101,10 @@ class ConversationTaskStateService:
             return change
 
     def publish_state(
-        self,
-        task_id: int,
-        state: ConversationStateSnapshot,
-        mutations: tuple[ConversationStateMutation, ...] | None = None,
+            self,
+            task_id: int,
+            state: ConversationStateSnapshot,
+            mutations: tuple[ConversationStateMutation, ...] | None = None,
     ) -> SnapshotChange:
         """Publish a state whose canonical database transaction has already committed."""
 
@@ -178,24 +115,12 @@ class ConversationTaskStateService:
             mutations or (ConversationStateMutation("set", (), copy.deepcopy(state)),),
         )
         with self._lock:
-            # Validation may yield to a backend restart. Recheck while holding the same lock
-            # used by clear_process_state and the actual state publication; an old owner must
-            # never install its pre-restart state into the new generation.
-            if not self.is_current_generation():
-                log.info(
-                    "conversation_state_stale_generation_ignored",
-                    extra={
-                        "msg": "忽略旧 backend generation 的 Transport state",
-                        "data": {"task_id": task_id},
-                    },
-                )
-                return SnapshotChange(task_id, self.get_state(task_id), ())
             self._ensure_not_deleted(task_id)
             self._publish(change)
         return change
 
     def subscribe_with_snapshot(
-        self, task_id: int
+            self, task_id: int
     ) -> tuple[asyncio.Queue[SnapshotChange], Callable[[], None], ConversationStateSnapshot]:
         """Atomically register an SSE subscriber and return its first state frame."""
 
@@ -235,23 +160,16 @@ class ConversationTaskStateService:
             if space is not None:
                 space.unload_snapshot()
 
-    def is_current_generation(self) -> bool:
-        """Return whether this state owner belongs to the current backend generation."""
-
-        with self._lock:
-            return self._owner_generation == type(self)._generation
-
     @classmethod
     def clear_process_state(cls) -> None:
-        """Discard all ephemeral state when the backend storage lifecycle ends.
+        """Discard all ephemeral process-local state.
 
-        This is a process-lifecycle hook, not a persistence operation. It prevents a later
-        storage initialization in the same interpreter (notably test/application reloads) from
-        inheriting working copies or deleted-task tombstones from the previous backend lifetime.
+        Process-lifecycle hook, not a persistence operation. Clears subscriber queues and
+        deleted-task tombstones so a later storage re-initialization in the same interpreter
+        does not inherit stale working copies from the previous backend lifetime.
         """
 
         with cls._lock:
-            cls._generation += 1
             cls._subscribers.clear()
             cls._deleted_task_ids.clear()
         task_runtime_spaces.close()
@@ -281,14 +199,7 @@ class ConversationTaskStateService:
         try:
             task = self._task_source.get(task_id)
             runs = self._run_source.list_by_task(task_id)
-            try:
-                context_rows = self._context_source.get(task_id, include_in_context=False)
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ConversationStateRebuildError(
-                    "malformed_context_record",
-                    "canonical context record could not be deserialized",
-                    task_id=task_id,
-                ) from exc
+            context_rows = self._context_source.get(task_id, include_in_context=False)
             state = ConversationTaskStateRebuilder.rebuild(task, runs, context_rows)
         except Exception as exc:
             log.exception(

@@ -278,7 +278,7 @@ class TaskCrud:
         statement = (
             update(TaskModel)
             .where(TaskModel.id == task_id)
-            .values(current_run_id=run_id, updated_at=to_text(utc_now()))
+            .values(current_run_id=run_id)
         )
         if session is not None:
             result = session.execute(statement)

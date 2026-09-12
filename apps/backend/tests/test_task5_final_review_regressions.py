@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
-import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,11 +17,7 @@ from app.assistant_transport.service.conversation_run_executor import Conversati
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
-)
 from app.assistant_transport.state.conversation_state_snapshot import (
-    empty_snapshot,
     validate_snapshot,
 )
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -38,7 +32,6 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.init_schema import initialize_app_schema
 from app.task_runtime.service.task_service import TaskService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 def _timestamp(second: int = 0) -> datetime:
@@ -209,56 +202,6 @@ def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
     assert operations.process_event(RunInitializedEvent(task_id=7, run_id=11)) is None
 
 
-def test_publish_state_rechecks_generation_after_validation_race(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ConversationTaskStateService.clear_process_state()
-    state_service = ConversationTaskStateService(
-        task_source=SimpleNamespace(get=lambda _task_id: _task(7)),
-        run_source=SimpleNamespace(list_by_task=lambda _task_id: []),
-        context_source=SimpleNamespace(get=lambda _task_id, **_kwargs: []),
-    )
-    canonical = empty_snapshot()
-    state_service._rebuild = lambda _task_id: copy.deepcopy(canonical)  # type: ignore[method-assign]
-    stale = empty_snapshot()
-    stale["error"] = {"code": "stale", "message": "stale", "retryable": False}
-
-    validation_started = threading.Event()
-    release_validation = threading.Event()
-    original_validate = validate_snapshot
-
-    def blocking_validate(snapshot: Any) -> None:
-        validation_started.set()
-        assert release_validation.wait(5)
-        original_validate(snapshot)
-
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_service.validate_snapshot",
-        blocking_validate,
-    )
-    result: list[object] = []
-
-    def publish() -> None:
-        result.append(state_service.publish_state(7, stale))
-
-    worker = threading.Thread(target=publish)
-    worker.start()
-    assert validation_started.wait(5)
-    ConversationTaskStateService.clear_process_state()
-    fresh_service = ConversationTaskStateService(
-        task_source=SimpleNamespace(get=lambda _task_id: _task(7)),
-        run_source=SimpleNamespace(list_by_task=lambda _task_id: []),
-        context_source=SimpleNamespace(get=lambda _task_id, **_kwargs: []),
-    )
-    fresh_service._rebuild = lambda _task_id: copy.deepcopy(canonical)  # type: ignore[method-assign]
-    release_validation.set()
-    worker.join(timeout=5)
-
-    assert not worker.is_alive()
-    assert len(result) == 1
-    assert task_runtime_spaces.get(7) is None
-    assert fresh_service.get_state(7) == canonical
-
 
 def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     monkeypatch: pytest.MonkeyPatch,
@@ -274,10 +217,6 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         def set_current_run_id(self, *_args: Any, **_kwargs: Any) -> None:
             return None
 
-    class ContextService:
-        def append_user_message_once(self, *_args: Any, **_kwargs: Any) -> bool:
-            return True
-
     class Projector:
         def process(self, event: object, **_kwargs: Any) -> None:
             events.append(event)
@@ -285,7 +224,6 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = RunCrud()
     service._task = TaskCrud()
-    service._context = ContextService()
     service._session_factory = None
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
 

@@ -3,68 +3,80 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Sequence
-from typing import Any, cast
+from itertools import groupby
+from operator import attrgetter
+from typing import Any, cast, List
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages.tool import ToolCall, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, BaseMessage
 
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
-from app.assistant_transport.state.conversation_state_part import ConversationStatePart
+from app.assistant_transport.state.conversation_state_part import ConversationStatePart, ConversationStateTextPart, \
+    ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     validate_snapshot,
 )
-from app.core.context.agent_context_loader import AgentContextLoader, load_agent_context
-from app.core.tools.tool_execute.tool_error import normalize_status_hint
+from app.config.configuration import get_tool_registry
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.json_helpers import validate_transport_metadata
 from app.models.task_record import TaskRecord
-from app.utils.message_content import content_to_text
-
-_SUPPORTED_TRANSPORT_SCHEMA_VERSION = 1
-_TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
-
-
-class ConversationStateRebuildError(ValueError):
-    """Structured failure raised when canonical facts cannot form a valid snapshot."""
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        task_id: int,
-        run_id: int | None = None,
-        context_row_id: int | None = None,
-    ) -> None:
-        self.code = code
-        self.task_id = task_id
-        self.run_id = run_id
-        self.context_row_id = context_row_id
-        super().__init__(message)
-
-    def as_dict(self) -> dict[str, object]:
-        """Return safe structured diagnostics without including message content or metadata."""
-
-        return {
-            "code": self.code,
-            "message": str(self),
-            "task_id": self.task_id,
-            "run_id": self.run_id,
-            "context_row_id": self.context_row_id,
-        }
 
 
 class ConversationTaskStateRebuilder:
     """Rebuild a Task Transport snapshot from Task, Run, and context records only."""
 
     @staticmethod
+    def build_pair_tool_part(rows: List[ConversationTaskContextRecord]) -> dict[str, ConversationStateToolCallPart]:
+        tool_parts: dict[str, ConversationStateToolCallPart] = dict()
+        for row in rows:
+            message: BaseMessage = row.message
+            if isinstance(message, AIMessage) and cast(AIMessage, message).tool_calls:
+                ai_message = cast(AIMessage, message)
+                calls: list[ToolCall] = ai_message.tool_calls
+                for call in calls:
+                    tool_parts[call.get("id")] = ConversationStateToolCallPart(
+                        type="tool-call",
+                        toolCallId=call.get("id"),
+                        toolName=call.get("name"),
+                        args=call.get("args"),
+                        presentation=ConversationTaskStateRebuilder.get_tool_display(call.get("name")),
+                        status="cancelled",
+                    )
+            if isinstance(message, ToolMessage):
+                tool_message = cast(ToolMessage, message)
+                tool_part: ConversationStateToolCallPart = tool_parts.get(tool_message.tool_call_id)
+                if tool_part is None:
+                    raise RuntimeError("未闭合tool")
+                tool_part["status"] = row.transport_metadata.get("status")
+                tool_part["display_data"] = row.transport_metadata.get("display_data")
+                if tool_part["status"] == "failed":
+                    tool_part["isError"] = True
+                    tool_part["error"] = row.transport_metadata.get("error")
+                else:
+                    tool_part["isError"] = False
+                    tool_part["error"] = None
+
+        return tool_parts
+
+    @staticmethod
+    def get_tool_display(tool_name: str) -> dict[str, object] | None:
+        if not tool_name:
+            return None
+        tool_registry = get_tool_registry()
+        tool_definition = tool_registry.get_tool_definition(tool_name)
+        if not tool_definition:
+            return None
+        return tool_definition.display.to_dict()
+
+    @staticmethod
     def rebuild(
-        task: TaskRecord,
-        runs: Sequence[ConversationRunRecord],
-        context_rows: Sequence[ConversationTaskContextRecord],
+            task: TaskRecord,
+            runs: Sequence[ConversationRunRecord],
+            context_rows: Sequence[ConversationTaskContextRecord],
     ) -> ConversationStateSnapshot:
         """Return a validated snapshot assembled from the three canonical record types.
 
@@ -78,9 +90,7 @@ class ConversationTaskStateRebuilder:
             assistant rows for one Run are merged and all message ids come from context row ids.
 
         Raises:
-            ConversationStateRebuildError: If records cross Task boundaries, reference an
-                orphan Run/tool call, contain unsupported schema or metadata, or would produce
-                an invalid snapshot.
+            RuntimeError: If a tool result row has no matching AI tool call in the same Run.
 
         Side effects:
             None. This method does not access sessions, snapshot storage, checkpoints, tools,
@@ -88,319 +98,83 @@ class ConversationTaskStateRebuilder:
         """
 
         run_records = list(runs)
-        run_by_id: dict[int, ConversationRunRecord] = {}
-        for run in run_records:
-            if run.task_id != task.id:
-                raise ConversationStateRebuildError(
-                    "run_task_mismatch",
-                    "run record belongs to another task",
-                    task_id=task.id,
-                    run_id=run.id,
-                )
-            if run.id in run_by_id:
-                raise ConversationStateRebuildError(
-                    "duplicate_run_id",
-                    "run records contain a duplicate id",
-                    task_id=task.id,
-                    run_id=run.id,
-                )
-            run_by_id[run.id] = run
-
-        rows = sorted(context_rows, key=lambda row: row.sequence)
-        for row in rows:
-            ConversationTaskStateRebuilder._validate_context_row(task.id, row, run_by_id)
+        run_groups = {
+            run_id: list(rows)
+            for run_id, rows in groupby(
+                sorted(context_rows, key=attrgetter("run_id")),
+                key=attrgetter("run_id"),
+            )
+        }
 
         snapshot_runs: list[ConversationRunSnapshot] = []
-        messages_by_run: dict[int, list[ConversationStateMessage]] = {}
-        assistant_by_run: dict[int, ConversationStateMessage] = {}
-        tool_parts: dict[tuple[int, str], dict[str, Any]] = {}
-        tool_rows: list[ConversationTaskContextRecord] = []
-        settled_tool_call_ids: set[tuple[int, str]] = set()
 
-        for row in rows:
-            message = row.message
-            if isinstance(message, ToolMessage):
-                tool_rows.append(row)
+        for run in run_records:
+            message_list = run_groups.get(run.id, None)
+            if message_list is None:
                 continue
-            if isinstance(message, SystemMessage):
-                continue
+            rows: List[ConversationTaskContextRecord] = sorted(message_list, key=lambda row: row.sequence)
 
-            assert row.run_id is not None
-            run_messages = messages_by_run.setdefault(row.run_id, [])
-            if isinstance(message, HumanMessage):
-                run_messages.append(
-                    {
-                        "id": str(row.id),
-                        "role": "user",
-                        "parts": [
-                            {
-                                "type": "text",
-                                "text": content_to_text(message.content),
-                                "status": "completed",
-                            }
-                        ],
-                    }
-                )
-                continue
+            tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
 
-            if not isinstance(message, AIMessage):
-                raise ConversationStateRebuildError(
-                    "unsupported_context_message",
-                    "context message type is unsupported",
-                    task_id=task.id,
-                    run_id=row.run_id,
-                    context_row_id=row.id,
-                )
-            assistant = assistant_by_run.get(row.run_id)
-            if assistant is None:
-                assistant = cast(
-                    ConversationStateMessage,
-                    {"id": str(row.id), "role": "assistant", "parts": []},
-                )
-                assistant_by_run[row.run_id] = assistant
-                run_messages.append(assistant)
-            parts = assistant["parts"]
-            for part in row.transport_metadata["parts"]:
-                copied_part = cast(dict[str, Any], copy.deepcopy(dict(part)))
-                if copied_part.get("type") == "tool-call":
-                    call_id = copied_part.get("toolCallId")
-                    if not isinstance(call_id, str) or not call_id:
-                        raise ConversationStateRebuildError(
-                            "malformed_context_metadata",
-                            "tool-call metadata has an empty id",
-                            task_id=task.id,
-                            run_id=row.run_id,
-                            context_row_id=row.id,
+            snapshot_messages: list[ConversationStateMessage] = []
+            assistant_message = ConversationStateMessage(id=f"assistant-{run.id}", role="assistant", parts=[])
+            for row in rows:
+                message = row.message
+                if isinstance(message, HumanMessage):
+                    snapshot_messages.append(ConversationStateMessage(
+                        id=f"user-{run.id}",
+                        role="user",
+                        parts=[ConversationStateTextPart(
+                            type="text",
+                            text=message.content,
+                            status="completed"
+                        )]))
+                elif isinstance(message, AIMessage):
+                    ai_message: AIMessage = cast(AIMessage, message)
+                    if ai_message.additional_kwargs["reasoning_content"] is not None:
+                        assistant_message["parts"].append(
+                            ConversationStateTextPart(
+                                type="reasoning",
+                                text=ai_message.additional_kwargs["reasoning_content"],
+                                status="completed"
+                            )
                         )
-                    tool_key = (row.run_id, call_id)
-                    if tool_key in tool_parts:
-                        raise ConversationStateRebuildError(
-                            "duplicate_tool_call_id",
-                            "context metadata contains a duplicate tool-call id",
-                            task_id=task.id,
-                            run_id=row.run_id,
-                            context_row_id=row.id,
+                    if ai_message.content is not None:
+                        assistant_message["parts"].append(
+                            ConversationStateTextPart(
+                                type="reasoning",
+                                text=ai_message.content,
+                                status="completed"
+                            )
                         )
-                    tool_parts[tool_key] = copied_part
-                parts.append(cast(ConversationStatePart, copied_part))
-
-        for row in tool_rows:
-            assert row.run_id is not None
-            call_id = cast(ToolMessage, row.message).tool_call_id
-            if not isinstance(call_id, str) or not call_id:
-                raise ConversationStateRebuildError(
-                    "orphan_tool_message",
-                    "tool message has no tool-call id",
-                    task_id=task.id,
-                    run_id=row.run_id,
-                    context_row_id=row.id,
-                )
-            tool_key = (row.run_id, call_id)
-            if tool_key not in tool_parts:
-                raise ConversationStateRebuildError(
-                    "orphan_tool_message",
-                    "tool message has no matching AI tool-call part",
-                    task_id=task.id,
-                    run_id=row.run_id,
-                    context_row_id=row.id,
-                )
-            part = tool_parts[tool_key]
-            if tool_key in settled_tool_call_ids:
-                raise ConversationStateRebuildError(
-                    "duplicate_tool_call_id",
-                    "multiple tool messages reference one tool-call id",
-                    task_id=task.id,
-                    run_id=row.run_id,
-                    context_row_id=row.id,
-                )
-            result = row.transport_metadata.get("tool_result")
-            if not isinstance(result, dict):
-                raise ConversationStateRebuildError(
-                    "malformed_tool_result",
-                    "tool message is missing a structured tool result",
-                    task_id=task.id,
-                    run_id=row.run_id,
-                    context_row_id=row.id,
-                )
-            settled_tool_call_ids.add(tool_key)
-            ConversationTaskStateRebuilder._apply_tool_result(part, result)
-
-        for (owner_run_id, call_id), part in tool_parts.items():
-            tool_key = (owner_run_id, call_id)
-            if tool_key in settled_tool_call_ids:
-                continue
-            run_status = run_by_id[owner_run_id].status
-            if run_status not in _TERMINAL_RUN_STATUSES:
-                continue
-            if run_status == "cancelled":
-                part["status"] = "cancelled"
-                part["error"] = "已取消"
-                part["isError"] = False
-            else:
-                part["status"] = "failed"
-                part["error"] = "执行异常"
-                part["isError"] = True
-            part.pop("display_data", None)
-            part.pop("errorCode", None)
-
-        for run in sorted(run_records, key=lambda item: (item.created_at, item.id)):
-            snapshot_runs.append(
-                {
-                    "runId": run.id,
-                    "status": run.status,
-                    "endReason": run.end_reason,
-                    "messages": messages_by_run.get(run.id, []),
-                    "usage": copy.deepcopy(run.usage),
-                }
-            )
-
+                    if ai_message.tool_calls is not None and len(ai_message.tool_calls) > 0:
+                        calls: list[ToolCall] = ai_message.tool_calls
+                        for call in calls:
+                            assistant_message["parts"].append(
+                                tool_parts_dict[call.get("id")]
+                            )
+            snapshot_messages.append(assistant_message)
+            snapshot_runs.append(ConversationRunSnapshot(
+                runId=run.id,
+                status=run.status,
+                endReason=run.end_reason,
+                messages=snapshot_messages,
+                usage=run.usage
+            ))
         used = task.context_usage_used
         total = task.context_window_total
         ratio = None if used is None or total is None or total == 0 else used / total
-        state: ConversationStateSnapshot = {
-            "runs": snapshot_runs,
-            "current_run_id": task.current_run_id,
-            "approvals": {},
-            "context_usage_ratio": ratio,
-            "context_usage_used": used,
-            "context_window_total": total,
-            "error": None,
-        }
-        try:
-            validate_snapshot(state)
-        except (TypeError, ValueError, KeyError) as exc:
-            raise ConversationStateRebuildError(
-                "invalid_snapshot",
-                "rebuilt conversation state failed snapshot validation",
-                task_id=task.id,
-            ) from exc
-        return state
+        return ConversationStateSnapshot(
+            runs=snapshot_runs,
+            current_run_id=task.current_run_id,
+            context_usage_used=used,
+            context_window_total=total,
+            error=None,
+            context_usage_ratio=ratio,
+            approvals={}
+        )
 
-    @staticmethod
-    def _validate_context_row(
-        task_id: int,
-        row: ConversationTaskContextRecord,
-        run_by_id: dict[int, ConversationRunRecord],
-    ) -> None:
-        """Validate row ownership, schema, message type, and persisted metadata."""
 
-        if row.task_id != task_id:
-            raise ConversationStateRebuildError(
-                "context_task_mismatch",
-                "context row belongs to another task",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-        if row.id is None:
-            raise ConversationStateRebuildError(
-                "context_row_missing_id",
-                "persisted context row has no id",
-                task_id=task_id,
-                run_id=row.run_id,
-            )
-        try:
-            metadata = validate_transport_metadata(row.transport_metadata)
-        except (TypeError, ValueError, KeyError) as exc:
-            raise ConversationStateRebuildError(
-                "malformed_context_metadata",
-                "context transport metadata is malformed",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            ) from exc
-        if metadata["schema_version"] != _SUPPORTED_TRANSPORT_SCHEMA_VERSION:
-            raise ConversationStateRebuildError(
-                "unsupported_context_schema",
-                "transport metadata schema version is unsupported",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-        if row.run_id is not None and row.run_id not in run_by_id:
-            raise ConversationStateRebuildError(
-                "orphan_context_run",
-                "context row references an unknown run",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-        if not isinstance(row.message, HumanMessage | AIMessage | ToolMessage | SystemMessage):
-            raise ConversationStateRebuildError(
-                "unsupported_context_message",
-                "context message type is unsupported",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-        if not isinstance(row.message, SystemMessage) and row.run_id is None:
-            raise ConversationStateRebuildError(
-                "context_message_without_run",
-                "non-system context message has no run",
-                task_id=task_id,
-                context_row_id=row.id,
-            )
-        tool_result = metadata["tool_result"]
-        message_name = type(row.message).__name__
-        if isinstance(row.message, AIMessage) and tool_result is not None:
-            raise ConversationStateRebuildError(
-                "misplaced_transport_metadata",
-                f"{message_name} context row cannot carry tool_result metadata",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-        if isinstance(row.message, ToolMessage) and (metadata["parts"] or tool_result is None):
-            raise ConversationStateRebuildError(
-                "misplaced_transport_metadata",
-                f"{message_name} context row requires only tool_result metadata",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-        if isinstance(row.message, HumanMessage | SystemMessage) and (
-            tool_result is not None or metadata["parts"]
-        ):
-            raise ConversationStateRebuildError(
-                "misplaced_transport_metadata",
-                f"{message_name} context row cannot carry tool UI metadata",
-                task_id=task_id,
-                run_id=row.run_id,
-                context_row_id=row.id,
-            )
-
-    @staticmethod
-    def _apply_tool_result(part: dict[str, Any], result: dict[str, Any]) -> None:
-        """Project persisted tool result facts into safe Transport tool-call fields."""
-
-        result_status = result["status"]
-        part["status"] = {
-            "success": "completed",
-            "error": "failed",
-            "cancelled": "cancelled",
-        }[result_status]
-        if result_status == "success":
-            part["error"] = None
-            part["isError"] = False
-            part["display_data"] = copy.deepcopy(result["display_data"])
-        elif result_status == "error":
-            status_hint = normalize_status_hint(
-                str(part["toolName"]), result["status_hint"]
-            )
-            part["error"] = status_hint
-            part["isError"] = True
-            part["display_data"] = {"status_hint": status_hint}
-        else:
-            part["error"] = "已取消"
-            part["isError"] = False
-            part["display_data"] = {"status_hint": "已取消"}
-        if "errorCode" in result:
-            part["errorCode"] = result["errorCode"]
-        else:
-            part.pop("errorCode", None)
 __all__ = [
-    "AgentContextLoader",
-    "ConversationStateRebuildError",
     "ConversationTaskStateRebuilder",
-    "load_agent_context",
 ]

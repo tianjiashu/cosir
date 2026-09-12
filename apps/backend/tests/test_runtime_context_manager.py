@@ -29,9 +29,11 @@ class _ContextService:
         message: object,
         seq: int,
         include_in_context: bool,
-    ) -> None:
+        transport_metadata: object = None,
+    ) -> bool:
         self.appended.append((task_id, run_id, message, seq, include_in_context))
         self.current_max_sequence = seq
+        return True
 
 
 def _manager(context_service: _ContextService) -> RuntimeContextManager:
@@ -155,68 +157,6 @@ def test_runtime_context_manager_replaces_tool_schemas_between_runs(monkeypatch)
     )
 
     assert manager._tool_schemas == ()
-
-
-def test_load_message_repairs_legacy_system_message_between_tool_messages() -> None:
-    """历史坏顺序应在模型输入中恢复为 AI -> Tool* -> System。"""
-
-    context_service = _ContextService(max_sequence=3)
-    context_service.loaded = [
-        ContextEntry(
-            AIMessage(
-                content="",
-                tool_calls=[{"name": "read_file", "args": {}, "id": "call-1"}],
-            ),
-            1,
-            1,
-        ),
-        ContextEntry(SystemMessage(content="repair"), 1, 2),
-        ContextEntry(ToolMessage(content="ok", tool_call_id="call-1"), 1, 3),
-    ]
-    manager = _manager(context_service)
-    manager._entries = list(context_service.loaded)
-
-    messages = manager.load_message()
-
-    assert [type(message) for message in messages] == [
-        SystemMessage,
-        AIMessage,
-        ToolMessage,
-        SystemMessage,
-    ]
-    assert messages[-1].content == "repair"
-
-
-def test_load_message_closes_then_repairs_legacy_missing_tool_result() -> None:
-    """历史坏顺序且缺结果时，应先补 ToolMessage 再放置 repair SystemMessage。"""
-
-    context_service = _ContextService(max_sequence=2)
-    context_service.loaded = [
-        ContextEntry(
-            AIMessage(
-                content="",
-                tool_calls=[{"name": "read_file", "args": {}, "id": "call-1"}],
-            ),
-            1,
-            1,
-        ),
-        ContextEntry(SystemMessage(content="repair"), 1, 2),
-    ]
-    manager = _manager(context_service)
-    manager._entries = list(context_service.loaded)
-    manager.current_run_id = 1
-    manager._message_sequence = 3
-
-    messages = manager.load_message()
-
-    assert [type(message) for message in messages] == [
-        SystemMessage,
-        AIMessage,
-        ToolMessage,
-        SystemMessage,
-    ]
-    assert messages[2].tool_call_id == "call-1"
-    assert messages[3].content == "repair"
 
 
 def test_load_message_moves_existing_tool_result_before_later_human_message() -> None:

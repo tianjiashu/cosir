@@ -66,14 +66,6 @@ class ConversationEventProjector:
         self._state_service = state_service or get_conversation_task_state_service()
         self._lock = RLock()
         self._seen_event_ids: dict[int, set[str]] = {}
-        self._deleted_task_ids: set[int] = set()
-
-    def mark_task_deleted(self, task_id: int) -> None:
-        """标记 Task 已删除并丢弃其进程内事件去重状态。"""
-
-        with self._lock:
-            self._deleted_task_ids.add(task_id)
-            self._seen_event_ids.pop(task_id, None)
 
     def process(
         self,
@@ -95,55 +87,16 @@ class ConversationEventProjector:
             只更新进程内 Transport state 并通知订阅者；不写入数据库。
         """
 
-        event = self._parse(raw_event)
+        event:ConversationEvent = self._parse(raw_event)
         if event is None:
             return None
-        generation_check = getattr(self._state_service, "is_current_generation", None)
-        if generation_check is not None and not generation_check():
-            log.info(
-                "conversation_event_stale_generation_ignored",
-                extra={
-                    "msg": "忽略旧 backend generation 的 conversation event",
-                    "data": {"task_id": event.task_id, "event_id": event.event_id},
-                },
-            )
-            return None
         with self._lock:
-            if event.task_id in self._deleted_task_ids:
-                log.info(
-                    "conversation_event_ignored_for_deleted_task",
-                    extra={
-                        "msg": "忽略已删除 task 的迟到 conversation event",
-                        "data": {"task_id": event.task_id, "event_id": event.event_id},
-                    },
-                )
-                return None
             seen = self._seen_event_ids.setdefault(event.task_id, set())
             if event.event_id in seen:
                 state = self._state_service.get_state(event.task_id)
                 return SnapshotChange(event.task_id, state, ())
 
-            def planner(state: ConversationStateSnapshot) -> Sequence[ConversationStateMutation]:
-                if event.type not in {"run_initialized", "context_usage_updated"} and (
-                    event.run_id is None
-                    or not any(run["runId"] == event.run_id for run in state["runs"])
-                ):
-                    log.warning(
-                        "conversation_event_unknown_run",
-                        extra={
-                            "msg": "忽略引用未知 Run 的 conversation event",
-                            "data": {
-                                "task_id": event.task_id,
-                                "run_id": event.run_id,
-                                "event_id": event.event_id,
-                                "event_type": event.type,
-                            },
-                        },
-                    )
-                    return []
-                return event.plan(state)
-
-            change = self._state_service.apply_planned(event.task_id, planner)
+            change = self._state_service.apply_planned(event)
             # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。
             if change.mutations:
                 seen.add(event.event_id)

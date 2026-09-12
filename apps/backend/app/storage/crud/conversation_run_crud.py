@@ -13,18 +13,44 @@
 """
 
 import copy
+import json
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import asc, delete, desc, select, update
 from sqlalchemy.orm import Session
 
-from app.models import ConversationRunRecord
-from app.models.conversation_run_record import ConversationRunUsage, serialize_run_usage
+from app.models import ConversationRunError, ConversationRunRecord
+from app.models.conversation_run_record import ConversationRunUsage
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.models.json_helpers import ConversationRunError, serialize_run_error
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text
+
+
+def _serialize_typed_json(value: object | None) -> str | None:
+    """把可选的 typed JSON 字段（usage / error）序列化为列值。
+
+    与 ``ConversationRunRecord.to_model`` 使用同一组序列化参数（排序键 + 拒绝 NaN），
+    保证 CRUD 直接写列的内容仍可被 ``ConversationRunRecord.from_model`` 严格还原；
+    ``None`` 表示该列不写（读取侧按缺失处理）。
+
+    参数:
+        value: typed JSON 字典或 ``None``。
+
+    返回:
+        JSON 文本；``value`` 为 ``None`` 时返回 ``None``。
+
+    异常:
+        TypeError: ``value`` 含无法 JSON 序列化的对象或 NaN。
+
+    副作用:
+        无。
+    """
+
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
 class ConversationRunCrud:
@@ -147,22 +173,29 @@ class ConversationRunCrud:
     ) -> ConversationRunRecord:
         """在给定 session 内插入 run 行并 flush 取回自增 id。
 
+        直接构造 ``ConversationRunModel``：``id`` / ``created_at`` / ``updated_at`` 由存储基类
+        在写入时填充，本方法只负责业务列；``checkpoint_thread_id`` 是本次执行的 LangGraph
+        身份，每条新 Run 都重新生成。
+
         参数:
             session: 处于事务中的 SQLAlchemy session。
             task_id: 所属任务标识。
             input_text: 输入文本（调用方已校验非空）。
-            status: 初始状态字符串。
+            status: 初始状态字符串；空值回退 ``pending``。
             agent_id: agent 标识或 None。
             provider_id: 厂商标识或 None。
             model_name: 模型名或 None。
             image_paths: 图片路径列表或 None。
             reasoning_effort: 思考努力等级或 None。
             extra: 附加结构化数据或 None。
+            usage: 初始 token 用量或 None。
+            error: 初始结构化错误或 None。
 
         返回:
             由落库 model 映射得到的 ``ConversationRunRecord``。
 
         异常:
+            TypeError: usage / error 不符合 typed JSON 契约。
             sqlalchemy.exc.SQLAlchemyError: 如果 flush 失败（如外键约束不满足）。
 
         副作用:
@@ -172,15 +205,18 @@ class ConversationRunCrud:
             task_id=task_id,
             input_text=input_text,
             status=status or ConversationRunStatus.PENDING.value,
+            # 每条新 Run 必须拿到全新的 checkpoint 身份，不能复用任何已读到的历史身份。
+            checkpoint_thread_id=str(uuid4()),
             agent_id=agent_id,
             provider_id=provider_id,
             model_name=model_name,
             image_paths=image_paths,
             reasoning_effort=reasoning_effort,
             extra=extra,
-            usage_json=serialize_run_usage(usage),
-            error_json=serialize_run_error(error) if error is not None else None,
+            usage_json=_serialize_typed_json(usage),
+            error_json=_serialize_typed_json(error),
         )
+
         session.add(model)
         session.flush()
         return ConversationRunRecord.from_model(model)
@@ -253,12 +289,8 @@ class ConversationRunCrud:
             end_reason=source.end_reason,
             final_output=source.final_output,
             extra=copy.deepcopy(source.extra),
-            usage_json=serialize_run_usage(copy.deepcopy(source.usage)),
-            error_json=(
-                serialize_run_error(copy.deepcopy(source.error))
-                if source.error is not None
-                else None
-            ),
+            usage_json=_serialize_typed_json(source.usage),
+            error_json=_serialize_typed_json(source.error),
             status=source.status,
             created_at=to_text(source.created_at),
             updated_at=to_text(source.updated_at),
@@ -536,49 +568,6 @@ class ConversationRunCrud:
         session.flush()
         return ConversationRunCrud.get_in_session(session, run_id)
 
-    def cancel_recoverable_for_restart(
-        self,
-        run_id: int,
-        end_reason: str = "runtime_restarted",
-        usage: ConversationRunUsage | None = None,
-        error: ConversationRunError | None = None,
-        session: Session | None = None,
-    ) -> ConversationRunRecord | None:
-        """把进程重启时遗留的 active run 原子收敛为 cancelled。
-
-        此方法只修改 ConversationRun 持久化事实，不发布 snapshot/projector 事件；
-        Transport state 的最终一致性由 ConversationTaskStateService.read 在读取边界完成。
-        """
-
-        if session is None:
-            with self._session_factory.begin() as owned_session:
-                return self.cancel_recoverable_for_restart(
-                    run_id, end_reason, usage=usage, error=error, session=owned_session
-                )
-        result = session.execute(
-            update(ConversationRunModel)
-            .where(
-                ConversationRunModel.id == run_id,
-                ConversationRunModel.status.in_(
-                    (
-                        ConversationRunStatus.PENDING.value,
-                        ConversationRunStatus.RUNNING.value,
-                    )
-                ),
-            )
-            .values(
-                status=ConversationRunStatus.CANCELLED.value,
-                end_reason=end_reason,
-                final_output=None,
-                usage_json=serialize_run_usage(usage),
-                error_json=serialize_run_error(error) if error is not None else None,
-            )
-        )
-        if not result.rowcount:
-            return None
-        session.flush()
-        return ConversationRunCrud.get_in_session(session, run_id)
-
     @staticmethod
     def reset_for_edit_in_session(
         session: Session,
@@ -634,13 +623,10 @@ class ConversationRunCrud:
             values["end_reason"] = end_reason
         if final_output is not None:
             values["final_output"] = final_output
-        if target_status in {
-            ConversationRunStatus.COMPLETED.value,
-            ConversationRunStatus.FAILED.value,
-            ConversationRunStatus.CANCELLED.value,
-        }:
-            values["usage_json"] = serialize_run_usage(usage)
-            values["error_json"] = serialize_run_error(error) if error is not None else None
+        if usage is not None:
+            values["usage_json"] = _serialize_typed_json(usage)
+        if error is not None:
+            values["error_json"] = _serialize_typed_json(error)
         result = session.execute(
             update(ConversationRunModel)
             .where(

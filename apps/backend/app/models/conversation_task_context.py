@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-
+from typing import TypedDict, NotRequired
 from langchain_core.messages import BaseMessage, ToolMessage, _message_from_dict, message_to_dict
-
-from app.models.json_helpers import (
-    TransportMetadata,
-    deserialize_transport_metadata,
-    empty_transport_metadata,
-    serialize_transport_metadata,
-)
+from app.assistant_transport.state.conversation_state_part import ToolCallStatus
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+
+class TransportMetadata(TypedDict):
+
+    status: ToolCallStatus
+    error: NotRequired[str | None]
+    display_data: NotRequired[dict[str, object] | None]
+    approvalRequestId: NotRequired[None]
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,7 @@ class ConversationTaskContextRecord:
     message: BaseMessage
     include_in_context: bool
     sequence: int
-    transport_metadata: TransportMetadata = field(default_factory=empty_transport_metadata)
+    transport_metadata: TransportMetadata = None
     id: int | None = None
 
     @classmethod
@@ -55,7 +56,7 @@ class ConversationTaskContextRecord:
             message=_message_from_dict(message_doc),
             include_in_context=model.include_in_context,
             sequence=model.sequence,
-            transport_metadata=deserialize_transport_metadata(model.transport_metadata_json),
+            transport_metadata=json.loads(model.transport_metadata_json),
         )
 
     def _to_model(self) -> ConversationTaskContextModel:
@@ -83,7 +84,7 @@ class ConversationTaskContextRecord:
                 self.message.tool_call_id if isinstance(self.message, ToolMessage) else None
             ),
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
-            transport_metadata_json=serialize_transport_metadata(self.transport_metadata),
+            transport_metadata_json=json.dumps(self.transport_metadata, ensure_ascii=False, sort_keys=True, allow_nan=False),
             include_in_context=self.include_in_context,
             sequence=self.sequence,
         )

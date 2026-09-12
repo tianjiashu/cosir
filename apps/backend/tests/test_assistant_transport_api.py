@@ -305,26 +305,60 @@ async def test_attach_endpoint_rejects_business_commands() -> None:
     assert error.value.status_code == 400
 
 
-def test_restart_recovery_only_updates_run_persistence() -> None:
-    calls: list[tuple[int, str]] = []
+def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
+    """重启恢复只写持久化事实（Run 终态 + 工具收口），不触碰 snapshot。"""
+
+    calls: list[tuple[int, str | None]] = []
+    repaired: list[tuple[int, int]] = []
+
+    class _Transaction:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class _SessionFactory:
+        def begin(self) -> _Transaction:
+            return _Transaction()
 
     class _RunCrud:
         def list_recoverable(self) -> list[object]:
-            return [SimpleNamespace(id=7), SimpleNamespace(id=8)]
+            return [SimpleNamespace(id=7, task_id=1), SimpleNamespace(id=8, task_id=2)]
 
-        def cancel_recoverable_for_restart(
-            self, run_id: int, end_reason: str, **_kwargs: object
+        def update_status_if_in(
+            self,
+            run_id: int,
+            target_status: str,
+            allowed_statuses: tuple[str, ...],
+            end_reason: str | None = None,
+            final_output: str | None = None,
+            usage: object = None,
+            error: object = None,
+            session: object = None,
         ) -> object:
+            assert session is not None
             calls.append((run_id, end_reason))
             return SimpleNamespace(id=run_id)
 
+    class _ContextService:
+        def close_unclosed_tool_calls_for_run(
+            self, task_id: int, run_id: int, session: object = None
+        ) -> list[str]:
+            assert session is not None
+            repaired.append((task_id, run_id))
+            return [f"call-{run_id}"]
+
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = _RunCrud()
+    service._context = _ContextService()
+    service._session_factory = _SessionFactory()
 
     result = service.recover_orphaned_runs()
 
     assert [record.id for record in result] == [7, 8]
     assert calls == [(7, "runtime_restarted"), (8, "runtime_restarted")]
+    assert repaired == [(1, 7), (2, 8)]
 
 
 def test_state_route_has_one_read_method() -> None:

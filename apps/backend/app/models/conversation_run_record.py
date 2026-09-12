@@ -6,21 +6,15 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypedDict, cast
-
-from app.models.json_helpers import (
-    ConversationRunError,
-    deserialize_json_object,
-    deserialize_run_error,
-    serialize_json_object,
-    serialize_run_error,
-)
+from typing import TYPE_CHECKING, Any, TypedDict
 from app.utils.datetime_utils import from_text, to_text
 
 if TYPE_CHECKING:
     from app.storage.model.conversation_run_model import ConversationRunModel
+
 
 
 class ConversationRunUsage(TypedDict):
@@ -33,46 +27,12 @@ class ConversationRunUsage(TypedDict):
     cache_miss_tokens: int | None
     reasoning_tokens: int
 
+class ConversationRunError(TypedDict):
+    """Controlled, user-safe error contract persisted for a failed run."""
 
-_USAGE_KEYS = frozenset(ConversationRunUsage.__annotations__)
-
-
-def _validate_usage(value: object) -> ConversationRunUsage:
-    """Validate the exact persisted run usage shape."""
-
-    if not isinstance(value, dict) or frozenset(value) != _USAGE_KEYS:
-        raise ValueError(
-            "usage must contain exactly input_tokens, output_tokens, total_tokens, "
-            "cache_hit_tokens, cache_miss_tokens, and reasoning_tokens"
-        )
-    for key, token_count in value.items():
-        if token_count is None and key != "cache_miss_tokens":
-            raise TypeError(f"usage.{key} must be a non-negative integer")
-        if token_count is not None and (
-            isinstance(token_count, bool) or not isinstance(token_count, int) or token_count < 0
-        ):
-            raise TypeError(
-                f"usage.{key} must be a non-negative integer"
-                + (" or null" if key == "cache_miss_tokens" else "")
-            )
-    return value  # type: ignore[return-value]
-
-
-def serialize_run_usage(value: ConversationRunUsage | None) -> str | None:
-    """Serialize the exact six-field run usage contract."""
-
-    if value is None:
-        return None
-    return serialize_json_object(cast(dict[str, Any], _validate_usage(value)), "usage")
-
-
-def deserialize_run_usage(raw: str | None) -> ConversationRunUsage | None:
-    """Deserialize and validate a persisted run usage contract."""
-
-    if raw is None:
-        return None
-    return _validate_usage(deserialize_json_object(raw, "usage"))
-
+    code: str
+    message: str
+    retryable: bool
 
 @dataclass
 class ConversationRunRecord:
@@ -166,9 +126,13 @@ class ConversationRunRecord:
             model_name=row.model_name,
             provider_id=row.provider_id,
             extra=row.extra,
-            usage=deserialize_run_usage(row.usage_json),
+            usage=(
+                json.loads(row.usage_json)
+                if row.usage_json is not None
+                else None
+            ),
             error=(
-                deserialize_run_error(row.error_json)
+                json.loads(row.error_json)
                 if row.error_json is not None
                 else None
             ),
@@ -192,9 +156,9 @@ class ConversationRunRecord:
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "extra": self.extra,
-            "usage_json": serialize_run_usage(self.usage),
+            "usage_json": json.dumps(self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False),
             "error_json": (
-                serialize_run_error(self.error) if self.error is not None else None
+                json.dumps(self.error, ensure_ascii=False, sort_keys=True, allow_nan=False) if self.error is not None else None
             ),
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),

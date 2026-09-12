@@ -192,9 +192,6 @@ async def _observe_node(state: ReactGraphState) -> dict:
         _runtime_context().add_message(
             SystemMessage(
                 content=deferred_repair_message,
-                additional_kwargs={
-                    "cosir_message_kind": TOOL_CALL_REPAIR_MESSAGE_KIND,
-                },
             )
         )
         log.warning(

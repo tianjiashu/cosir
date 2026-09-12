@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import threading
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
 from app.core.context.context_listener.context_usage_compute_listener import (
@@ -27,14 +28,34 @@ if TYPE_CHECKING:
     from app.models import TaskRecord, WorkspaceRecord
 
 
+_T = TypeVar("_T")
+
+
+def _weak_ref(obj: _T) -> weakref.ReferenceType[_T]:
+    """以弱引用包裹对象，消除类型检查器对 ``weakref.ref`` 返回泛型的推断偏差。
+
+    参数:
+        obj: 需要弱引用的对象。
+
+    返回:
+        指向 ``obj`` 的弱引用；``obj`` 被回收后该引用解引用返回 None。
+    """
+
+    return cast(weakref.ReferenceType[_T], weakref.ref(obj))
+
+
 @dataclass
 class TaskRuntimeSpace:
     """一个持久化 Task 对应的运行时资源空间。"""
 
     task_id: int
     lock: threading.Lock = field(init=False)
-    _context_manager: RuntimeContextManager | None = field(default=None, init=False)
-    _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
+    _context_manager: weakref.ReferenceType[RuntimeContextManager] | None = field(
+        default=None, init=False
+    )
+    _snapshot: weakref.ReferenceType[ConversationStateSnapshot] | None = field(
+        default=None, init=False
+    )
     _context_guard: threading.Lock = field(init=False)
     _snapshot_guard: threading.Lock = field(init=False)
 
@@ -139,35 +160,44 @@ class TaskRuntimeSpace:
             透传 ``loader`` 的重建异常；失败时不会缓存不完整 snapshot。
 
         副作用:
-            首次调用在 ``_snapshot_guard`` 下重建并缓存 snapshot；后续调用复用同一
-            task 的进程内 working copy，不再读取数据库或重复重建。
+            首次调用在 ``_snapshot_guard`` 下重建并以**弱引用**缓存 snapshot；后续调用
+            复用同一 task 的进程内 working copy（只要它仍被某处强引用），不再读取数据库
+            或重复重建。当 space 是唯一持有者时弱引用会自然失效，下次访问重新懒加载。
         """
 
-        snapshot = self._snapshot
-        if snapshot is not None:
-            return copy.deepcopy(snapshot)
+        snapshot_ref = self._snapshot
+        if snapshot_ref is not None:
+            cached = snapshot_ref()
+            if cached is not None:
+                return copy.deepcopy(cached)
         with self._snapshot_guard:
-            snapshot = self._snapshot
-            if snapshot is None:
+            snapshot_ref = self._snapshot
+            cached = snapshot_ref() if snapshot_ref is not None else None
+            if cached is None:
                 snapshot = loader()
-                self._snapshot = copy.deepcopy(snapshot)
-            return copy.deepcopy(snapshot)
+                self._snapshot = _weak_ref(copy.deepcopy(snapshot))
+                cached = snapshot
+            return copy.deepcopy(cached)
 
     def existing_snapshot(self) -> ConversationStateSnapshot | None:
-        """返回已物化的 task snapshot，不触发数据库读取或懒加载。"""
+        """返回已物化的 task snapshot，不触发数据库读取或懒加载。
+
+        当弱引用已失效（外部不再持有 snapshot）时返回 None。
+        """
 
         with self._snapshot_guard:
-            return copy.deepcopy(self._snapshot)
+            cached = self._snapshot() if self._snapshot is not None else None
+            return copy.deepcopy(cached) if cached is not None else None
 
     def replace_snapshot(self, snapshot: ConversationStateSnapshot) -> None:
         """替换 task 的进程内 snapshot working copy。
 
         仅供已完成 canonical 数据库提交后的显式重建或 Transport projector 使用；不会
-        写数据库，也不会通知 SSE subscriber。
+        写数据库，也不会通知 SSE subscriber。新 snapshot 以弱引用缓存。
         """
 
         with self._snapshot_guard:
-            self._snapshot = copy.deepcopy(snapshot)
+            self._snapshot = _weak_ref(copy.deepcopy(snapshot))
 
     def unload_snapshot(self) -> None:
         """卸载 task snapshot，使下一次访问重新从 canonical records 懒加载。"""
@@ -196,15 +226,19 @@ class TaskRuntimeSpace:
             无（构造失败会向上抛出 ``RuntimeContextManager`` 构造期的异常）。
 
         副作用:
-            首次调用时在持有 ``_context_guard`` 的前提下惰性构造并缓存 context manager；
-            后续调用直接返回缓存实例。
+            首次调用时在持有 ``_context_guard`` 的前提下惰性构造并以**弱引用**缓存 context
+            manager；后续调用直接返回仍存活的缓存实例。当外部不再持有该 manager 时弱引用
+            会自然失效，下次访问重新创建。
         """
 
-        manager = self._context_manager
-        if manager is not None:
-            return manager
+        manager_ref = self._context_manager
+        if manager_ref is not None:
+            manager = manager_ref()
+            if manager is not None:
+                return manager
         with self._context_guard:
-            manager = self._context_manager
+            manager_ref = self._context_manager
+            manager = manager_ref() if manager_ref is not None else None
             if manager is None:
                 from app.core.context.runtime_context_manager import RuntimeContextManager
                 from app.service.depends import get_conversation_task_context_service
@@ -220,22 +254,26 @@ class TaskRuntimeSpace:
                     .add_change_listener(ContextUsageComputeListener(current_task.id))
                     .add_change_listener(ContextCompressListener())
                 )
-            self._context_manager = manager
+                self._context_manager = _weak_ref(manager)
             return manager
 
     def existing_context_manager(self) -> RuntimeContextManager | None:
-        """返回已物化的 context manager；不因查询而触发懒加载。"""
+        """返回已物化的 context manager；不因查询而触发懒加载。
+
+        当弱引用已失效（外部不再持有 manager）时返回 None。
+        """
 
         with self._context_guard:
-            return self._context_manager
+            return self._context_manager() if self._context_manager is not None else None
 
     def install_fork_context_manager(self, manager: RuntimeContextManager) -> None:
         """安装已由源 manager fork 出来的目标 context manager。"""
 
         with self._context_guard:
-            if self._context_manager is not None:
+            if self._context_manager is not None and self._context_manager() is not None:
                 return
-            self._context_manager = (
+            installed = (
                 manager.add_change_listener(ContextUsageComputeListener(self.task_id))
                 .add_change_listener(ContextCompressListener())
             )
+            self._context_manager = _weak_ref(installed)

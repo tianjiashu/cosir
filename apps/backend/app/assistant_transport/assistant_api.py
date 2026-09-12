@@ -259,7 +259,7 @@ async def assistant_transport_state(
         task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    state = await state_service.read(task_id)
+    state = state_service.get_state(task_id)
     log.info(
         "assistant_snapshot_read",
         extra={

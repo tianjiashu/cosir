@@ -10,7 +10,6 @@
 
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.event import (
@@ -20,13 +19,11 @@ from app.assistant_transport.event import (
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunRecord, ConversationRunStatus
-from app.models.json_helpers import ConversationRunError
+from app.models import ConversationRunError, ConversationRunRecord, ConversationRunStatus
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
-from app.utils.message_content import content_to_text
 
 
 class ConversationRunService:
@@ -54,14 +51,6 @@ class ConversationRunService:
         self._session_factory = main_session_factory()
 
     @staticmethod
-    def _terminal_usage(
-        usage_stats: ConversationRunUsageStats | None,
-    ) -> dict[str, int | None]:
-        """Return the exact six-key usage payload for every terminal Run."""
-
-        return (usage_stats or ConversationRunUsageStats()).to_dict()
-
-    @staticmethod
     def _terminal_error(
         status: ConversationRunStatus, end_reason: str | None
     ) -> ConversationRunError | None:
@@ -72,49 +61,11 @@ class ConversationRunService:
         code = end_reason if isinstance(end_reason, str) and end_reason.isidentifier() else None
         if code is None:
             code = "run_cancelled" if status is ConversationRunStatus.CANCELLED else "run_failed"
-        return {
-            "code": code,
-            "message": "运行已取消" if status is ConversationRunStatus.CANCELLED else "运行失败",
-            "retryable": False,
-        }
-
-    @staticmethod
-    def _publish_post_commit_event(event: object, event_name: str) -> None:
-        """Publish a post-commit transport event without hiding durable DB failures.
-
-        Run/context persistence is the business fact boundary. Once its transaction has
-        committed, a projector or subscriber failure is a degraded read-model/transport
-        condition and must be logged rather than aborting the Agent execution. Callers must
-        invoke this helper only after the owning database write has succeeded.
-        """
-
-        try:
-            status = getattr(event, "status", None)
-            if status is not None:
-                log.info(
-                    "run_status_persisted",
-                    extra={
-                        "msg": "canonical Run status 已持久化",
-                        "data": {
-                            "task_id": getattr(event, "task_id", None),
-                            "run_id": getattr(event, "run_id", None),
-                            "status": getattr(status, "value", status),
-                        },
-                    },
-                )
-            service_depends.get_conversation_event_projector().process(event)
-        except Exception:
-            log.exception(
-                "conversation_post_commit_event_failed",
-                extra={
-                    "msg": "业务事实已提交，Transport 事件失败并被降级",
-                    "data": {
-                        "event_name": event_name,
-                        "task_id": getattr(event, "task_id", None),
-                        "run_id": getattr(event, "run_id", None),
-                    },
-                },
-            )
+        return ConversationRunError(
+            code=code,
+            message="运行已取消" if status is ConversationRunStatus.CANCELLED else "运行失败",
+            retryable=False,
+        )
 
     def have_run_in_runing(self, task_id: int, session: Session | None = None) -> bool:
         """检查任务是否正在运行中。
@@ -203,7 +154,6 @@ class ConversationRunService:
                     f"model_name {model_name} not in provider capability "
                     f"{provider_capability.models}"
                 )
-        context = getattr(self, "_context", None) or ConversationTaskContextService()
 
         def persist_facts(persist_session: Session | None) -> ConversationRunRecord:
             run = self._run.create(
@@ -216,7 +166,6 @@ class ConversationRunService:
                 reasoning_effort=reasoning_effort,
                 session=persist_session,
             )
-            context.append_user_message_once(task_id, run.id, input_text, session=persist_session)
             self._task.set_current_run_id(task_id, run.id, session=persist_session)
             return run
 
@@ -233,9 +182,8 @@ class ConversationRunService:
         # after it commits. ConversationRunCommandService is that owner. Publishing here
         # would expose uncommitted facts and duplicate the owner's events.
         if session is None:
-            self._publish_post_commit_event(
+            service_depends.get_conversation_event_projector().process(
                 RunInitializedEvent(task_id=task_id, run_id=run.id),
-                "run_initialized",
             )
         return run
 
@@ -244,10 +192,6 @@ class ConversationRunService:
 
     def list_runs_for_task(self, task_id: int) -> list[ConversationRunRecord]:
         return self._run.list_by_task(task_id)
-
-    def list_recoverable(self) -> list[ConversationRunRecord]:
-        """返回应用启动时可恢复的 pending/running 运行。"""
-        return self._run.list_recoverable()
 
     def reset_run_for_edit(
         self,
@@ -288,96 +232,98 @@ class ConversationRunService:
         record = self._run.resume_cancelled(run_id)
         if record is None:
             return None
-        self._publish_post_commit_event(
+        service_depends.get_conversation_event_projector().process(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.RUNNING,
             ),
-            "run_running",
         )
         return record
 
     def recover_orphaned_runs(
         self, end_reason: str = "runtime_restarted"
     ) -> list[ConversationRunRecord]:
-        """把当前进程启动前遗留的 pending/running run 收敛为 cancelled。
+        """把进程重启前遗留的 active Run 与其未闭合工具调用统一收口为 cancelled。
 
-        Run 终态与未闭合工具结果在同一个数据库事务内收敛；事务提交后再投影 Run 状态。
+        崩溃或被强杀会留下两类未收敛事实，两者在**同一个事务**内收口：
+
+        1. Run 行仍是 ``pending``/``running``，但驱动它的进程内执行器已随进程消失；
+        2. 该 Run 最后一个 ``AIMessage`` 上的 ``tool_calls`` 没有结果行——工具可能已执行完但
+           结果未落库，也可能根本没执行。
+
+        收口方式：先以 ``pending/running -> cancelled`` 条件更新作为原子闸门（重复调用不会
+        二次生效，也不会覆盖已被其他路径收敛的终态），再按该 Run 最后一个 ``AIMessage`` 补齐
+        ``cancelled`` 占位 ``ToolMessage``（与运行时收口同一套配对规则与文案）。
+
+        不处理 Transport snapshot：启动期没有订阅者，且冷读（懒加载）会按 Run 行与 context 行
+        重建，Run 终态与工具 part 终态自然对齐，无需在恢复路径里额外投影。
+
+        参数:
+            end_reason: 写入 Run 的终态原因，默认 ``runtime_restarted``。
+
+        返回:
+            本次真正完成状态迁移的 Run 列表（按 ``created_at``、``id`` 升序）；无遗留 active
+            Run、或迁移已被其他路径抢先时为空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 单个 Run 的收敛事务失败时向上传播；该 Run 保持原
+            状态与上下文，下次启动重试。
+
+        副作用:
+            每个 Run 一个事务：更新 ``conversation_runs`` 终态并追加缺失的占位 ``ToolMessage``
+            行；每个 Run 与每个占位各写一条结构化日志。
         """
 
         recovered: list[ConversationRunRecord] = []
-        for run in self.list_recoverable():
-            session_factory = getattr(self, "_session_factory", None)
-            context = getattr(self, "_context", None)
-            publish_status = session_factory is not None and context is not None
+        for run in self._run.list_recoverable():
             repaired_tool_call_ids: list[str] = []
-            if session_factory is None or context is None:
-                record = self._run.cancel_recoverable_for_restart(
-                    run.id,
-                    end_reason,
-                    usage=self._terminal_usage(None),
+            with self._session_factory.begin() as session:
+                record = self._run.update_status_if_in(
+                    run_id=run.id,
+                    target_status=ConversationRunStatus.CANCELLED.value,
+                    allowed_statuses=(
+                        ConversationRunStatus.PENDING.value,
+                        ConversationRunStatus.RUNNING.value,
+                    ),
+                    end_reason=end_reason,
+                    usage=None,
                     error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+                    session=session,
                 )
-            else:
-                with session_factory.begin() as session:
-                    record = self._run.cancel_recoverable_for_restart(
-                        run.id,
-                        end_reason,
-                        usage=self._terminal_usage(None),
-                        error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
-                        session=session,
+                if record is not None:
+                    repaired_tool_call_ids = self._context.close_unclosed_tool_calls_for_run(
+                        run.task_id, run.id, session=session
                     )
-                    if record is not None:
-                        repaired_tool_call_ids = context.recover_interrupted_run(
-                            run.task_id, run.id, session=session
-                        )
-            if record is not None:
-                recovered.append(record)
-            if record is not None:
+            if record is None:
+                continue
+            recovered.append(record)
+            log.info(
+                "run_status_persisted",
+                extra={
+                    "msg": "orphan Run 终态与未闭合工具调用已收口为取消",
+                    "data": {
+                        "task_id": run.task_id,
+                        "run_id": record.id,
+                        "status": ConversationRunStatus.CANCELLED.value,
+                        "end_reason": end_reason,
+                        "repaired_tool_call_count": len(repaired_tool_call_ids),
+                    },
+                },
+            )
+            for tool_call_id in repaired_tool_call_ids:
                 log.info(
-                    "run_status_persisted",
+                    "tool_observation_persisted",
                     extra={
-                        "msg": "orphan Run terminal status 已持久化",
+                        "msg": "orphan Run 的未闭合工具调用已补取消占位",
                         "data": {
-                            "task_id": getattr(record, "task_id", None),
+                            "task_id": run.task_id,
                             "run_id": record.id,
+                            "tool_call_id": tool_call_id,
                             "status": ConversationRunStatus.CANCELLED.value,
                         },
                     },
                 )
-                for tool_call_id in repaired_tool_call_ids:
-                    log.info(
-                        "tool_observation_persisted",
-                        extra={
-                            "msg": "orphan tool repair 已提交",
-                            "data": {
-                                "task_id": getattr(record, "task_id", None),
-                                "run_id": record.id,
-                                "tool_call_id": tool_call_id,
-                                "status": "cancelled",
-                            },
-                        },
-                    )
-            if record is not None and publish_status:
-                try:
-                    service_depends.get_conversation_event_projector().process(
-                        RunStatusChangedEvent(
-                            task_id=record.task_id,
-                            run_id=record.id,
-                            status=ConversationRunStatus.CANCELLED,
-                            end_reason=end_reason,
-                            usage_stats=ConversationRunUsageStats(),
-                        )
-                    )
-                except Exception:
-                    log.exception(
-                        "orphan_recovery_projector_failed",
-                        extra={
-                            "msg": "孤儿 Run 已提交，状态 projector 失败并被降级",
-                            "data": {"task_id": record.task_id, "run_id": record.id},
-                        },
-                    )
         return recovered
 
     def complete_run_if_running(
@@ -414,51 +360,18 @@ class ConversationRunService:
             (ConversationRunStatus.RUNNING.value,),
             None,
             final_output=final_output,
-            usage=self._terminal_usage(usage_stats),
-            error=self._terminal_error(ConversationRunStatus.COMPLETED, None),
+            usage=usage_stats,
+            error=None,
         )
         if record is None:
             return None
-        self._publish_post_commit_event(
+        service_depends.get_conversation_event_projector().process(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.COMPLETED,
                 usage_stats=usage_stats,
             ),
-            "run_completed",
-        )
-        return self._run.get(run_id)
-
-    def complete_run_with_message(
-        self,
-        run_id: int,
-        message: AIMessage,
-        end_reason: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-    ) -> ConversationRunRecord | None:
-        """将 Run 标记 completed，并发布其 Transport 展示状态。"""
-
-        record = self._run.update_status_if_in(
-            run_id,
-            ConversationRunStatus.COMPLETED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-            end_reason,
-            final_output=content_to_text(message.content),
-            usage=self._terminal_usage(usage_stats),
-            error=self._terminal_error(ConversationRunStatus.COMPLETED, end_reason),
-        )
-        if record is None:
-            return None
-        self._publish_post_commit_event(
-            RunStatusChangedEvent(
-                task_id=record.task_id,
-                run_id=run_id,
-                status=ConversationRunStatus.COMPLETED,
-                end_reason=end_reason,
-                usage_stats=usage_stats,
-            ),
-            "run_completed",
         )
         return self._run.get(run_id)
 
@@ -499,12 +412,12 @@ class ConversationRunService:
             (ConversationRunStatus.RUNNING.value,),
             end_reason,
             final_output=final_output,
-            usage=self._terminal_usage(usage_stats),
+            usage=usage_stats,
             error=self._terminal_error(ConversationRunStatus.FAILED, end_reason),
         )
         if record is None:
             return None
-        self._publish_post_commit_event(
+        service_depends.get_conversation_event_projector().process(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
@@ -512,44 +425,6 @@ class ConversationRunService:
                 end_reason=end_reason,
                 usage_stats=usage_stats,
             ),
-            "run_failed",
-        )
-        return self._run.get(run_id)
-
-    def fail_run_if_pending_or_running(
-        self,
-        run_id: int,
-        end_reason: str | None = None,
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-    ) -> ConversationRunRecord | None:
-        """将尚未启动或正在执行的 Conversation Run 原子落定为 failed。
-
-        参数:
-            run_id: 待失败落定的 Conversation Run 标识。
-            end_reason: 可选失败原因。
-            final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
-        """
-        record = self._run.update_status_if_in(
-            run_id,
-            ConversationRunStatus.FAILED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-            end_reason,
-            final_output=final_output,
-            usage=self._terminal_usage(usage_stats),
-            error=self._terminal_error(ConversationRunStatus.FAILED, end_reason),
-        )
-        if record is None:
-            return None
-        self._publish_post_commit_event(
-            RunStatusChangedEvent(
-                task_id=record.task_id,
-                run_id=run_id,
-                status=ConversationRunStatus.FAILED,
-                end_reason=end_reason,
-                usage_stats=usage_stats,
-            ),
-            "run_failed",
         )
         return self._run.get(run_id)
 
@@ -578,12 +453,12 @@ class ConversationRunService:
             (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
             end_reason,
             final_output=final_output,
-            usage=self._terminal_usage(usage_stats),
+            usage=usage_stats,
             error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
         )
         if record is None:
             return None
-        self._publish_post_commit_event(
+        service_depends.get_conversation_event_projector().process(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
@@ -591,47 +466,8 @@ class ConversationRunService:
                 end_reason=end_reason,
                 usage_stats=usage_stats,
             ),
-            "run_cancelled",
         )
         return self._run.get(run_id)
-
-    def claim_pending_run(self, run_id: int) -> bool:
-        """以条件更新方式将 pending Conversation Run 标记为 running。
-
-        业务语义：仅 ``pending`` 可抢占为 ``running``，该约束收敛在本方法（service 层），
-        CRUD 层只做通用的「状态白名单 + 原子更新」。返回 ``bool`` 表示本次是否成功抢占，
-            供上层（runner / delegation executor）判断「是否由我执行该 run」。
-
-        参数:
-            run_id: 待抢占的 Conversation Run 标识。
-
-        返回:
-            抢占成功（本次确实把 pending 更新为 running）返回 True；run 已被其他执行者抢占或
-            非 pending 状态返回 False。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            条件满足时更新 run 状态为 running，并发布 running 状态变更事件（以数据库更新成功为
-            幂等闸门，重复认领不会重复发布）。
-        """
-        row = self._run.update_status_if_in(
-            run_id=run_id,
-            target_status=ConversationRunStatus.RUNNING.value,
-            allowed_statuses=(ConversationRunStatus.PENDING.value,),
-        )
-        if row is not None:
-            self._publish_post_commit_event(
-                RunStatusChangedEvent(
-                    task_id=row.task_id,
-                    run_id=run_id,
-                    status=ConversationRunStatus.RUNNING,
-                ),
-                "run_running",
-            )
-        return row is not None
 
     def claim_or_resume_run(self, run_id: int) -> bool:
         """认领一个待执行或后端重启后遗留的 Conversation Run。
@@ -661,13 +497,12 @@ class ConversationRunService:
             allowed_statuses=(ConversationRunStatus.PENDING.value,),
         )
         if row is not None:
-            self._publish_post_commit_event(
+            service_depends.get_conversation_event_projector().process(
                 RunStatusChangedEvent(
                     task_id=row.task_id,
                     run_id=run_id,
                     status=ConversationRunStatus.RUNNING,
                 ),
-                "run_running",
             )
             return True
 

@@ -9,9 +9,6 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationStateRebuildError,
-)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -219,7 +216,7 @@ def test_canonical_state_sources_failures_are_logged_and_not_replaced_by_empty_s
     assert "state_rebuild_failed" in {record.message for record in caplog.records}
 
 
-def test_cached_snapshot_is_reused_until_explicit_rebuild() -> None:
+def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
     task = _task()
     run = _run(2, "running")
     rows = [
@@ -301,9 +298,6 @@ def test_cached_snapshot_is_reused_until_explicit_rebuild() -> None:
         "stale-user",
         "stale-assistant",
     ]
-    rebuilt = service.rebuild_state(7)
-    assert [message["id"] for message in rebuilt["runs"][0]["messages"]] == ["11", "12"]
-    assert rebuilt["runs"][0]["messages"][1]["parts"][0]["text"] == "committed assistant fact"
 
 
 @pytest.mark.parametrize("method_name", ["claim_pending_run", "claim_or_resume_run"])
@@ -332,7 +326,7 @@ def test_claim_run_is_not_aborted_by_post_commit_projector_failure(
     assert getattr(service, method_name)(7) is True
 
 
-def test_malformed_context_deserialization_is_structured_at_state_read_boundary() -> None:
+def test_malformed_context_deserialization_fails_at_state_read_boundary() -> None:
     class MalformedContextSource:
         def get(
             self, _task_id: int, include_in_context: bool = True
@@ -351,10 +345,8 @@ def test_malformed_context_deserialization_is_structured_at_state_read_boundary(
         context_source=MalformedContextSource(),
     )
 
-    with pytest.raises(ConversationStateRebuildError) as caught:
+    with pytest.raises(ValueError, match="malformed persisted context"):
         service.get_state(7)
-
-    assert caught.value.code == "malformed_context_record"
 
 
 def test_persisted_snapshot_model_and_crud_are_removed() -> None:

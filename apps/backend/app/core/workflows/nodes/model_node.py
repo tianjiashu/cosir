@@ -138,68 +138,54 @@ async def _model_node(state: ReactGraphState) -> dict:
     state.tool_call_lifecycle = ToolCallLifecycleManager()
     lifecycle = state.tool_call_lifecycle
 
-    try:
-        async for chunk in model.astream(messages):
-            # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
-            _dump_raw_chunk_debug(chunk, chunk_index)
-            chunk_index += 1
+    async for chunk in model.astream(messages):
+        # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
+        _dump_raw_chunk_debug(chunk, chunk_index)
+        chunk_index += 1
 
-            if operations.is_current_run_cancelled():
-                # 取消直接落定 cancelled 终态，而不是把协作取消误记为失败。
-                usage_summary = rc.usage_stats.to_dict()
-                log.warning(
-                    "model_node_cancelled_usage_summary",
-                    extra={
-                        "msg": f"模型流式因取消提前终止，本轮已消耗 token 摘要，step_id={step_id}",
-                        "data": {"step_id": step_id, "usage": usage_summary},
-                    },
-                )
-                parts.finish()
-                operations.cancel_run_if_running(
-                    end_reason="runtime_cancelled",
-                    usage_stats=rc.usage_stats,
-                    final_output="模型流式因取消提前终止",
-                )
-                return terminal_state(step_count)
+        if operations.is_current_run_cancelled():
+            # 取消直接落定 cancelled 终态，而不是把协作取消误记为失败。
+            log.warning(
+                "model_node_cancelled_usage_summary",
+                extra={
+                    "msg": f"模型流式因取消提前终止，本轮已消耗 token 摘要，step_id={step_id}",
+                    "data": {"step_id": step_id, "usage": rc.usage_stats.to_dict()},
+                },
+            )
+            parts.finish()
+            operations.cancel_run_if_running(
+                end_reason="runtime_cancelled",
+                usage_stats=rc.usage_stats,
+                final_output="模型流式因取消提前终止",
+            )
+            return terminal_state(step_count)
 
-            chunks.append(chunk)
-            # 提取文本与 reasoning 内容。
-            text = content_to_text(chunk.content)
-            # 提取 reasoning 内容。
-            reasoning = chunk_processor.extract_reasoning(chunk)
-            # 模型把 "\n"、" \n" 单独作为 chunk 时，也要保留
-            if text:
-                parts.text(text)
-            if reasoning and reasoning.strip():
-                parts.reasoning(reasoning)
-            raw_tool_calls = chunk_processor.extract_tool_calls(chunk)
-            if raw_tool_calls:
-                # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
-                parts.tool_call()
-                lifecycle = lifecycle.create(
-                    task_id=task_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    raw_tool_calls=raw_tool_calls,
-                )
-    finally:
-        # 流式消费被异常打断时也要先发出待发缓冲再收口 part：异常绕过下方的正常收口，
-        # 会让模型已产出的尾部增量（≤ 一个合并阈值窗口）丢失、part 悬挂在 running。
-        # finish() 幂等，正常完成与取消路径的既有调用不受影响。
-        parts.finish()
+        chunks.append(chunk)
+        # 提取文本与 reasoning 内容。
+        text = content_to_text(chunk.content)
+        # 提取 reasoning 内容。
+        reasoning = chunk_processor.extract_reasoning(chunk)
+        # 模型把 "\n"、" \n" 单独作为 chunk 时，也要保留
+        if text:
+            parts.text(text)
+        if reasoning and reasoning.strip():
+            parts.reasoning(reasoning)
+        raw_tool_calls = chunk_processor.extract_tool_calls(chunk)
+        if raw_tool_calls:
+            # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
+            parts.tool_call()
+            lifecycle = lifecycle.create(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                raw_tool_calls=raw_tool_calls,
+            )
 
     # 合并 chunk 到 AIMessage。
     ai_message = chunk_processor.collect(chunks)
     parts.finish()
 
-    _runtime_context().add_message(
-        ai_message,
-        transport_parts=chunk_processor.build_transport_parts(
-            chunks,
-            ai_message,
-            {call_id: record.presentation for call_id, record in lifecycle.calls.items()},
-        ),
-    )
+    _runtime_context().add_message(ai_message)
 
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
@@ -265,9 +251,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 _runtime_context().add_message(
                     SystemMessage(
                         content=repair_message,
-                        additional_kwargs={
-                            "cosir_message_kind": TOOL_CALL_REPAIR_MESSAGE_KIND,
-                        },
                     )
                 )
                 return {

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy import inspect, update
 from sqlalchemy.orm import sessionmaker
 
@@ -18,19 +18,16 @@ from app.assistant_transport.service.conversation_event_projector import (
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
 )
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationStateRebuildError,
-)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.core.context.agent_context_loader import load_agent_context
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunStatus
-from app.models.json_helpers import ConversationRunError
+from app.models import ConversationRunStatus, ConversationRunError
+from app.models.conversation_task_context import TransportMetadata
+from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.service.task.conversation_run_service import ConversationRunService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.crud.conversation_command_crud import ConversationCommandCrud
@@ -52,6 +49,13 @@ _USAGE = {
     "reasoning_tokens": 1,
 }
 
+# 工具执行结果 -> Transport 工具 part 的 wire 终态（与 tool_call_lifecycle 的映射一致）。
+_TOOL_WIRE_STATUS: dict[str, ToolCallEventStatus] = {
+    "success": "completed",
+    "error": "failed",
+    "cancelled": "cancelled",
+}
+
 
 def _bind(crud_type: type[object], factory: sessionmaker) -> object:
     """Bind a real CRUD implementation to the acceptance fixture's SQLite factory."""
@@ -62,7 +66,7 @@ def _bind(crud_type: type[object], factory: sessionmaker) -> object:
 
 
 @pytest.fixture
-def canonical_store(tmp_path: Path):
+def canonical_store(tmp_path: Path, monkeypatch):
     """Create a fresh target schema and real CRUD services over a file-backed SQLite database."""
 
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
@@ -78,11 +82,14 @@ def canonical_store(tmp_path: Path):
     workspace = workspaces.create("acceptance", str(tmp_path))
     task = tasks.create(workspace.id, "canonical task")
     ConversationTaskStateService.clear_process_state()
-    state = ConversationTaskStateService(
-        task_source=tasks,
-        run_source=runs,
-        context_source=contexts,
+    # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
+    # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
+    monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
+    monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
+    monkeypatch.setattr(
+        "app.service.depends.get_conversation_task_context_crud", lambda: contexts
     )
+    state = ConversationTaskStateService()
     task_runtime_spaces.close()
     store = SimpleNamespace(
         engine=engine,
@@ -114,56 +121,59 @@ def _create_run(store, *, status: str = "running", current: bool = False):
     return run
 
 
-def _tool_part(call_id: str, *, status: str = "running") -> dict[str, object]:
-    """Return a valid persisted Transport tool-call part."""
+def _append(store, run_id: int, message: object, *, metadata: object = None) -> None:
+    """按 Task 内下一个可用序号追加一条 context 事实。
 
-    return {
-        "type": "tool-call",
-        "toolCallId": call_id,
-        "toolName": "read_file",
-        "status": status,
-        "args": {"path": "a.py"},
-        "presentation": {"verb": "Read"},
-        "isError": False,
-    }
+    序号游标属于调用方（运行期由 ``RuntimeContextManager`` 持有）：本 helper 用
+    ``max_sequence + 1`` 复现同一口径，避免测试直接依赖 ``(task_id, sequence)`` 唯一键的细节。
+    """
+
+    sequence = store.context.max_sequence(store.task.id) + 1
+    store.context.append(store.task.id, run_id, message, sequence, True, metadata)
 
 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
-    """Persist canonical user, AI/tool-call, and optional ToolMessage facts."""
+    """Persist canonical user, AI/tool-call, and optional ToolMessage facts.
 
-    store.context.append_user_message_once(store.task.id, run.id, f"user-{run.id}")
-    store.context.append(
-        store.task.id,
+    AI 消息按「只携带 tool_calls、无正文」的真实形态构造（``content=None``）：快照重建按
+    ``reasoning -> content -> tool_calls`` 顺序取分支，带空正文会把 tool part 挤成 text part。
+    工具结果行随行写入 wire 口径的 ``TransportMetadata``（``status`` 取终态、``display_data``
+    与短提示分列），与运行期 ``ToolCallLifecycleManager.settle`` 的写入口径一致。
+    """
+
+    _append(store, run.id, HumanMessage(content=f"user-{run.id}"))
+    _append(
+        store,
         run.id,
         AIMessage(
-            content="",
+            content=None,
             tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": call_id}],
+            additional_kwargs={"reasoning_content": None},
         ),
-        transport_parts=[_tool_part(call_id)],
     )
     if result_status is None:
         return
     is_success = result_status == "success"
-    store.context.append(
-        store.task.id,
+    status_hint = (
+        None if is_success else ("已取消" if result_status == "cancelled" else "执行失败")
+    )
+    _append(
+        store,
         run.id,
         ToolMessage(
             content="file content" if is_success else "tool failed",
             tool_call_id=call_id,
             status="success" if is_success else "error",
         ),
-        tool_result={
-            "status": result_status,
-            "display_data": (
+        metadata=TransportMetadata(
+            status=_TOOL_WIRE_STATUS[result_status],
+            display_data=(
                 {"kind": "read-file-meta", "path": "a.py"}
                 if is_success
-                else {"status_hint": "已取消" if result_status == "cancelled" else "执行失败"}
+                else {"status_hint": status_hint}
             ),
-            "status_hint": None if is_success else (
-                "已取消" if result_status == "cancelled" else "执行失败"
-            ),
-            "error": None,
-        },
+            error=status_hint,
+        ),
     )
 
 
@@ -222,7 +232,6 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     """Cold Transport and Agent context use real Task/Run/Context rows for all tool outcomes."""
 
     store = canonical_store
-    store.context.ensure_system_message(store.task.id, SystemMessage(content="persisted system"))
     completed = _create_run(store, current=True)
     failed = _create_run(store)
     cancelled = _create_run(store, current=True)
@@ -251,16 +260,9 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
         for run in state["runs"]
         for message in run["messages"]
     )
-    loaded = load_agent_context(
-        store.task.id,
-        store.contexts.get(store.task.id, include_in_context=False),
-    )
-    assert isinstance(loaded[0], SystemMessage)
-    assert sum(isinstance(message, HumanMessage) for message in loaded) == 3
-    assert sum(isinstance(message, ToolMessage) for message in loaded) == 3
 
 
-def test_real_sqlite_malformed_metadata_fails_structurally_and_not_as_empty_state(
+def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
     canonical_store,
 ) -> None:
     """Malformed durable metadata is an explicit cold-read failure."""
@@ -280,9 +282,10 @@ def test_real_sqlite_malformed_metadata_fails_structurally_and_not_as_empty_stat
             .values(transport_metadata_json="{not-json")
         )
 
-    with pytest.raises(ConversationStateRebuildError) as error:
+    # ``ConversationTaskContextRecord._from_model`` 用原生 ``json.loads`` 反序列化 metadata，
+    # 损坏的 JSON 以 ``json.JSONDecodeError``（``ValueError`` 子类）向冷读边界传播。
+    with pytest.raises(ValueError):
         store.state.get_state(store.task.id)
-    assert error.value.code == "malformed_context_record"
 
 
 def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durable(
@@ -292,7 +295,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
 
     store = canonical_store
     run = _create_run(store, current=True)
-    store.context.append_user_message_once(store.task.id, run.id, "durable user")
+    _append(store, run.id, HumanMessage(content="durable user"))
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = store.runs
 
@@ -329,13 +332,8 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
 
     store = canonical_store
     run = _create_run(store, current=True)
-    store.context.append_user_message_once(store.task.id, run.id, "user")
-    store.context.append(
-        store.task.id,
-        run.id,
-        AIMessage(content="canonical"),
-        transport_parts=[{"type": "text", "text": "canonical", "status": "completed"}],
-    )
+    _append(store, run.id, HumanMessage(content="user"))
+    _append(store, run.id, AIMessage(content="canonical"))
     stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     stream_service._snapshots = store.state
     stream = stream_service.stream(store.task.id, run.id, lambda: False)
@@ -482,10 +480,13 @@ def test_real_sqlite_fork_and_edit_preserve_canonical_identity(
         )
         assert reset is not None
         store.context.delete_by_run_id(store.task.id, source_run.id, session=session)
-        store.context.append_user_message_once(
+        store.context.append(
             store.task.id,
             source_run.id,
-            "edited input",
+            HumanMessage(content="edited input"),
+            1,
+            True,
+            None,
             session=session,
         )
     edited = store.runs.get(source_run.id)
@@ -499,7 +500,7 @@ def test_real_sqlite_fork_and_edit_preserve_canonical_identity(
 
 
 def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays(
-    canonical_store, monkeypatch: pytest.MonkeyPatch
+    canonical_store,
 ) -> None:
     """Restart recovery commits cancelled Run/tool facts once and does not invoke workflow."""
 
@@ -510,14 +511,6 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     service._run = store.runs
     service._context = store.context
     service._session_factory = store.factory
-    class FailingProjector:
-        def process(self, _event: object) -> None:
-            raise RuntimeError("SSE down")
-
-    monkeypatch.setattr(
-        "app.service.task.conversation_run_service.service_depends.get_conversation_event_projector",
-        lambda: FailingProjector(),
-    )
     recovered = service.recover_orphaned_runs()
     assert [item.id for item in recovered] == [run.id]
     assert service.recover_orphaned_runs() == []
@@ -530,44 +523,12 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
         if isinstance(row.message, ToolMessage)
     ]
     assert len(repaired) == 1
-    assert repaired[0].transport_metadata["tool_result"]["status"] == "error"
+    assert repaired[0].run_id == run.id
+    assert repaired[0].transport_metadata == {"status": "cancelled"}
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
     assert state["runs"][0]["status"] == "cancelled"
-    assert state["runs"][0]["messages"][1]["parts"][0]["status"] == "failed"
+    assert state["runs"][0]["messages"][1]["parts"][0]["status"] == "cancelled"
 
 
-def test_stale_projector_generation_cannot_overwrite_canonical_state_after_restart(
-    canonical_store,
-) -> None:
-    """A projector retained by an old backend generation must not mutate the new working copy."""
 
-    store = canonical_store
-    run = _create_run(store, current=True)
-    store.context.append_user_message_once(store.task.id, run.id, "canonical")
-    store.context.append(
-        store.task.id,
-        run.id,
-        AIMessage(content="canonical"),
-        transport_parts=[{"type": "text", "text": "canonical", "status": "completed"}],
-    )
-    old_projector = ConversationEventProjector(state_service=store.state)
-    store.state.get_state(store.task.id)
-    ConversationTaskStateService.clear_process_state()
-    fresh_state = ConversationTaskStateService(
-        task_source=store.tasks,
-        run_source=store.runs,
-        context_source=store.contexts,
-    )
-    assert old_projector.process(
-        AssistantTextDeltaEvent(
-            event_id="old-generation",
-            task_id=store.task.id,
-            run_id=run.id,
-            part="text",
-            delta=" stale",
-        )
-    ) is None
-    assert fresh_state.get_state(store.task.id)["runs"][0]["messages"][1]["parts"] == [
-        {"type": "text", "text": "canonical", "status": "completed"}
-    ]

@@ -26,6 +26,7 @@ from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_context
 from app.core.workflows.workflow_operations import WorkflowOperations
+from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
 
@@ -312,20 +313,10 @@ class ToolCallLifecycleManager(BaseModel):
         record.status = event_status
         result_display_data = _ui_data(summary)
         status_hint = _ui_error(summary, event_status)
-        if event_status != "completed":
-            result_display_data = {"status_hint": status_hint} if status_hint else None
-        tool_result = {
-            "status": observation.status,
-            "display_data": result_display_data,
-            "status_hint": status_hint,
-            # Full observation errors are model-facing diagnostics and may contain provider
-            # details. Transport metadata is durable UI data, so only the controlled hint is
-            # persisted here; the ToolMessage retains the diagnostic for the model.
-            "error": None,
-        }
+        transport_metadata = TransportMetadata(status=event_status, display_data=result_display_data, error=status_hint)
         created = runtime_context.add_message(
             operations.to_tool_model_message(observation),
-            tool_result=tool_result,
+            transport_metadata=transport_metadata,
         )
         if created is False:
             return updated, event_status

@@ -195,7 +195,7 @@ class ConversationRunCommandService:
                     },
                 },
             )
-            snapshot = self._state.rebuild_state(task_id)
+            snapshot = self._state.get_state(task_id)
             return ConversationRunStartResult(
                 command=command,
                 run=run,
@@ -248,9 +248,6 @@ class ConversationRunCommandService:
                 if reset is None:
                     raise ValueError(f"run {latest_run.id} is not editable in its current state")
                 self._context.delete_by_run_id(task_id, latest_run.id, session=session)
-                self._context.append_user_message_once(
-                    task_id, latest_run.id, input_text, session=session
-                )
                 command = self._command.create(
                     task_id=task_id,
                     command_id=command_id,
@@ -270,7 +267,7 @@ class ConversationRunCommandService:
                     },
                 },
             )
-            snapshot = self._state.rebuild_state(task_id)
+            snapshot:ConversationStateSnapshot = self._state.get_state(task_id)
             self._state.publish_state(task_id, snapshot)
             return ConversationRunStartResult(
                 command=command,

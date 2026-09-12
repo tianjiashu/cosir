@@ -19,40 +19,6 @@ ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
 CANCEL_WAIT_TIMEOUT_SECONDS = 5.0
 
 
-class _RunService(Protocol):
-    """Conversation Run service operations required by the executor."""
-
-    def get_run(self, run_id: int) -> ConversationRunRecord: ...
-
-    def claim_pending_run(self, run_id: int) -> bool: ...
-
-    def claim_or_resume_run(self, run_id: int) -> bool: ...
-
-    def complete_run_if_running(self, run_id: int) -> ConversationRunRecord | None: ...
-
-    def cancel_run_if_running(
-        self,
-        run_id: int,
-        end_reason: str = "user_cancelled",
-        final_output: str | None = None,
-    ) -> ConversationRunRecord | None: ...
-
-    def fail_run_if_running(
-        self,
-        run_id: int,
-        end_reason: str | None = None,
-        final_output: str | None = None,
-    ) -> ConversationRunRecord | None: ...
-
-
-class _CancellationSignal(Protocol):
-    """Process-local cancellation signal operations required by the executor."""
-
-    def mark_cancelled(self, run_id: int) -> None: ...
-
-    def clear(self, run_id: int) -> None: ...
-
-
 @dataclass(frozen=True)
 class ConversationRunState:
     """进程内运行状态的不可变快照。"""
@@ -74,16 +40,11 @@ class ConversationRunExecutor:
 
     def __init__(
         self,
-        run_service: _RunService | None = None,
-        cancellation_signal: _CancellationSignal | None = None,
-        *,
         persist_status: bool = True,
     ) -> None:
         """初始化执行器及其进程内运行注册表。
 
         参数:
-            run_service: 可选 run 状态与查询 service；None 时使用进程级默认实例。
-            cancellation_signal: 可选取消信号源；None 时使用进程级取消注册表。
             persist_status: 是否把 run 终态落库并投影到 Transport snapshot；False 时
                 执行器只维护进程内状态（供注入了替代 run_service 的场景使用）。
 
@@ -97,10 +58,10 @@ class ConversationRunExecutor:
             无；进程内运行注册表初始为空。
         """
 
-        self._run_service: _RunService = run_service or get_conversation_run_service()
+        self._run_service = get_conversation_run_service()
         self._persist_status = persist_status
         self._event_projector = ConversationEventProjector() if persist_status else None
-        self._signal: _CancellationSignal = cancellation_signal or cancellation_registry
+        self._signal = cancellation_registry
         self._executions: dict[int, _Execution] = {}
         self._cancelling_run_ids: set[int] = set()
         self._cancellation_cleanup_tasks: set[asyncio.Task[None]] = set()
@@ -148,12 +109,6 @@ class ConversationRunExecutor:
                 *(execution.thread_task for execution in executions), return_exceptions=True
             )
         task_runtime_spaces.close()
-
-    def mark_task_deleted(self, task_id: int) -> None:
-        """阻止该执行器实例继续投影已删除 Task 的迟到事件。"""
-
-        if self._event_projector is not None:
-            self._event_projector.mark_task_deleted(task_id)
 
     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
         """显式取消一个 run：标记运行时信号、仲裁落库、中断后台执行。
