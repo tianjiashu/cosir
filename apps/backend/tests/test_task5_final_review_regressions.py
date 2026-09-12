@@ -33,6 +33,7 @@ from app.models.task_record import TaskRecord
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_run_service import ConversationRunService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
@@ -255,7 +256,7 @@ def test_publish_state_rechecks_generation_after_validation_race(
 
     assert not worker.is_alive()
     assert len(result) == 1
-    assert ConversationTaskStateService._states.get(7) is None
+    assert task_runtime_spaces.get(7) is None
     assert fresh_service.get_state(7) == canonical
 
 

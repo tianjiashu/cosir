@@ -23,6 +23,7 @@ from app.config.logging.logger import log
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class _TaskSource(Protocol):
@@ -40,11 +41,13 @@ class _ContextSource(Protocol):
 
 
 class ConversationTaskStateService:
-    """Own process-local Transport state and rebuild it from canonical records when cold.
+    """Own process-local Transport state and lazily rebuild it from canonical records.
 
-    The working copy is intentionally ephemeral: projector mutations and subscriber changes
-    never write a database row. A cold read loads one Task, all its Runs, and all context rows,
-    then delegates the pure wire-state construction to ``ConversationTaskStateRebuilder``.
+    The working copy is intentionally ephemeral and mounted in the task's
+    ``TaskRuntimeSpace``: projector mutations and subscriber changes never write a database
+    row. The first read for a task loads one Task, all its Runs, and all context rows, then
+    delegates the pure wire-state construction to ``ConversationTaskStateRebuilder``. Later
+    reads reuse that task-local in-memory snapshot until an explicit rebuild or process reset.
 
     Parameters:
         task_source: Task CRUD-like source; defaults to the process dependency.
@@ -59,8 +62,6 @@ class ConversationTaskStateService:
     """
 
     _lock: ClassVar[RLock] = RLock()
-    _states: ClassVar[dict[int, ConversationStateSnapshot]] = {}
-    _live_message_mutations: ClassVar[dict[int, list[ConversationStateMutation]]] = {}
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
     _generation: ClassVar[int] = 0
@@ -87,11 +88,11 @@ class ConversationTaskStateService:
             self._owner_generation = type(self)._generation
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
-        """Return a validated working copy, rebuilding it when this process has no copy.
+        """Return a validated task-local working copy, lazily rebuilding it on first access.
 
-        A present working copy is merged with a canonical rebuild only at a read boundary. Run
-        lifecycle, Run usage, Task current Run, and Task context-window fields always come from
-        canonical records; active in-memory message deltas remain available to live SSE.
+        A present ``TaskRuntimeSpace`` snapshot is returned without canonical reads. Database
+        changes become visible through the normal projector/update path or an explicit
+        ``rebuild_state`` call; ordinary reads do not rebuild or merge a second copy.
 
         Raises:
             KeyError: If the Task does not exist or was deleted in this process.
@@ -103,18 +104,9 @@ class ConversationTaskStateService:
             if not self.is_current_generation():
                 return copy.deepcopy(self._rebuild(task_id))
             self._ensure_not_deleted(task_id)
-            working = self._states.get(task_id)
-            if working is None:
-                state = self._rebuild(task_id)
-            else:
-                canonical = self._rebuild(task_id)
-                state = self._merge_canonical_facts(
-                    working,
-                    canonical,
-                    tuple(self._live_message_mutations.get(task_id, ())),
-                )
+            space = task_runtime_spaces.get_or_create(task_id)
+            state = space.get_snapshot(lambda: self._rebuild(task_id))
             validate_snapshot(state)
-            self._states[task_id] = copy.deepcopy(state)
             return copy.deepcopy(state)
 
     async def read(self, task_id: int) -> ConversationStateSnapshot:
@@ -134,8 +126,7 @@ class ConversationTaskStateService:
                 return copy.deepcopy(self._rebuild(task_id))
             self._ensure_not_deleted(task_id)
             state = self._rebuild(task_id)
-            self._states[task_id] = copy.deepcopy(state)
-            self._live_message_mutations.pop(task_id, None)
+            task_runtime_spaces.get_or_create(task_id).replace_snapshot(state)
             return copy.deepcopy(state)
 
     def apply_planned(
@@ -161,20 +152,13 @@ class ConversationTaskStateService:
                 )
                 return SnapshotChange(task_id, self.get_state(task_id), ())
             self._ensure_not_deleted(task_id)
-            existing = self._states.get(task_id)
-            state = copy.deepcopy(existing if existing is not None else self._rebuild(task_id))
+            space = task_runtime_spaces.get_or_create(task_id)
+            state = space.get_snapshot(lambda: self._rebuild(task_id))
             mutations = tuple(planner(copy.deepcopy(state)))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
             validate_snapshot(state)
             change = SnapshotChange(task_id, copy.deepcopy(state), mutations)
-            self._states[task_id] = copy.deepcopy(state)
-            live_mutations = self._live_message_mutations.setdefault(task_id, [])
-            live_mutations.extend(
-                mutation
-                for mutation in mutations
-                if _is_live_message_mutation(state, mutation)
-            )
             if mutations:
                 self._publish(change)
             return change
@@ -207,7 +191,6 @@ class ConversationTaskStateService:
                 )
                 return SnapshotChange(task_id, self.get_state(task_id), ())
             self._ensure_not_deleted(task_id)
-            self._live_message_mutations.pop(task_id, None)
             self._publish(change)
         return change
 
@@ -247,9 +230,10 @@ class ConversationTaskStateService:
 
         with self._lock:
             self._deleted_task_ids.add(task_id)
-            self._states.pop(task_id, None)
-            self._live_message_mutations.pop(task_id, None)
             self._subscribers.pop(task_id, None)
+            space = task_runtime_spaces.get(task_id)
+            if space is not None:
+                space.unload_snapshot()
 
     def is_current_generation(self) -> bool:
         """Return whether this state owner belongs to the current backend generation."""
@@ -268,10 +252,9 @@ class ConversationTaskStateService:
 
         with cls._lock:
             cls._generation += 1
-            cls._states.clear()
-            cls._live_message_mutations.clear()
             cls._subscribers.clear()
             cls._deleted_task_ids.clear()
+        task_runtime_spaces.close()
 
     def is_task_deleted(self, task_id: int) -> bool:
         """Return whether this process has finalized deletion for the Task."""
@@ -333,65 +316,10 @@ class ConversationTaskStateService:
         )
         return state
 
-    @staticmethod
-    def _merge_canonical_facts(
-        working: ConversationStateSnapshot,
-        canonical: ConversationStateSnapshot,
-        live_mutations: Sequence[ConversationStateMutation],
-    ) -> ConversationStateSnapshot:
-        """Make canonical messages authoritative while retaining only active stream deltas.
-
-        Canonical state is always the base. User messages, completed AI/tool facts, and every
-        lifecycle/usage field therefore cannot be replaced by stale memory. The only memory data
-        admitted back is an assistant message delta produced by a live projector mutation for an
-        active Run: a missing assistant part is appended, and a longer text value is accepted only
-        when it is a strict prefix extension of the canonical text. Non-prefix stale text and
-        changes to an existing tool part are discarded deterministically.
-        """
-
-        state = copy.deepcopy(canonical)
-        if not live_mutations:
-            return state
-
-        working_runs = {run["runId"]: run for run in working["runs"]}
-        for canonical_run in state["runs"]:
-            if canonical_run["status"] in {"completed", "failed", "cancelled"}:
-                continue
-            working_run = working_runs.get(canonical_run["runId"])
-            if working_run is None:
-                continue
-            canonical_assistant = next(
-                (
-                    message
-                    for message in canonical_run["messages"]
-                    if message["role"] == "assistant"
-                ),
-                None,
-            )
-            working_assistant = next(
-                (
-                    message
-                    for message in working_run["messages"]
-                    if message["role"] == "assistant"
-                ),
-                None,
-            )
-            if working_assistant is None:
-                continue
-            if canonical_assistant is None:
-                canonical_run["messages"].append(copy.deepcopy(working_assistant))
-                continue
-            _merge_live_assistant_parts(canonical_assistant, working_assistant)
-        state["current_run_id"] = canonical["current_run_id"]
-        state["context_usage_ratio"] = canonical["context_usage_ratio"]
-        state["context_usage_used"] = canonical["context_usage_used"]
-        state["context_window_total"] = canonical["context_window_total"]
-        return state
-
     def _publish(self, change: SnapshotChange) -> None:
         """Install a working copy and enqueue the change for current subscribers."""
 
-        self._states[change.task_id] = copy.deepcopy(change.state)
+        task_runtime_spaces.get_or_create(change.task_id).replace_snapshot(change.state)
         subscribers = tuple(self._subscribers.get(change.task_id, set()))
         for subscriber in subscribers:
             try:
@@ -433,76 +361,6 @@ def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStat
     if not isinstance(current, str):
         raise TypeError("append-text target must be a string")
     parent[key] = current + mutation.value
-
-
-def _is_live_message_mutation(
-    state: ConversationStateSnapshot,
-    mutation: ConversationStateMutation,
-) -> bool:
-    """Return whether a mutation targets an active assistant message in the working state."""
-
-    path = mutation.path
-    if (
-        len(path) < 4
-        or path[0] != "runs"
-        or not isinstance(path[1], int)
-        or path[2] != "messages"
-        or not isinstance(path[3], int)
-    ):
-        return False
-    try:
-        role = state["runs"][path[1]]["messages"][path[3]]["role"]
-    except (IndexError, KeyError, TypeError):
-        return False
-    return role == "assistant"
-
-
-def _merge_live_assistant_parts(
-    canonical_assistant: dict[str, Any],
-    working_assistant: dict[str, Any],
-) -> None:
-    """Merge only prefix-extending live assistant parts into canonical message facts."""
-
-    canonical_parts = cast(list[dict[str, Any]], canonical_assistant["parts"])
-    working_parts = cast(list[dict[str, Any]], working_assistant["parts"])
-    for live_part in working_parts:
-        if not isinstance(live_part, dict):
-            continue
-        part_type = live_part.get("type")
-        if part_type == "tool-call":
-            call_id = live_part.get("toolCallId")
-            if not isinstance(call_id, str) or any(
-                part.get("type") == "tool-call" and part.get("toolCallId") == call_id
-                for part in canonical_parts
-            ):
-                continue
-            canonical_parts.append(copy.deepcopy(live_part))
-            continue
-        if part_type not in {"text", "reasoning"}:
-            continue
-        matching = next(
-            (
-                part
-                for part in canonical_parts
-                if part.get("type") == part_type
-            ),
-            None,
-        )
-        if matching is None:
-            canonical_parts.append(copy.deepcopy(live_part))
-            continue
-        canonical_text = matching.get("text")
-        live_text = live_part.get("text")
-        if (
-            isinstance(canonical_text, str)
-            and isinstance(live_text, str)
-            and len(live_text) > len(canonical_text)
-            and live_text.startswith(canonical_text)
-        ):
-            matching["text"] = live_text
-            live_status = live_part.get("status")
-            if isinstance(live_status, str):
-                matching["status"] = live_status
 
 
 __all__ = ["ConversationTaskStateService"]

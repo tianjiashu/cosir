@@ -1,15 +1,16 @@
 """一个持久化 Task 对应的运行时资源空间。
 
-本模块只拥有统一的执行闸门（Task 操作锁）与延迟创建的运行时 context 投影；持久化的
-task / run / context 记录仍由 SQLite 负责。多个 space 的进程内生命周期管理见
+本模块只拥有统一的执行闸门（Task 操作锁）与延迟创建的运行时 context/snapshot working
+copy；持久化的 task / run / context 记录仍由 SQLite 负责。多个 space 的进程内生命周期管理见
 ``app.task_runtime.task_runtime_space_registry``。
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -20,6 +21,7 @@ from app.core.context.context_listener.context_usage_compute_listener import (
 )
 
 if TYPE_CHECKING:
+    from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
     from app.core.agents.agent_profile import AgentProfile
     from app.core.context.runtime_context_manager import RuntimeContextManager
     from app.models import TaskRecord, WorkspaceRecord
@@ -32,13 +34,16 @@ class TaskRuntimeSpace:
     task_id: int
     lock: threading.Lock = field(init=False)
     _context_manager: RuntimeContextManager | None = field(default=None, init=False)
+    _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
+    _snapshot_guard: threading.Lock = field(init=False)
 
     def __post_init__(self) -> None:
         """初始化统一执行闸门和延迟创建的 context 槽位。"""
 
         self.lock = threading.Lock()
         self._context_guard = threading.Lock()
+        self._snapshot_guard = threading.Lock()
 
     def _acquire_lock(self, timeout: float | None) -> bool:
         """在同步线程中取得 Task 操作闸门。"""
@@ -116,6 +121,59 @@ class TaskRuntimeSpace:
 
         with self._context_guard:
             self._context_manager = None
+
+    def get_snapshot(
+        self, loader: Callable[[], ConversationStateSnapshot]
+    ) -> ConversationStateSnapshot:
+        """返回 task snapshot；首次调用时从 canonical records 懒加载重建。
+
+        参数:
+            loader: 在 snapshot 尚未物化时执行的重建函数。函数应只读取 canonical
+                Task/Run/Context records，不得写入本 space 的 snapshot。
+
+        返回:
+            当前 task 的 snapshot 深拷贝。调用方可以安全修改返回值而不污染 space 内的
+            working copy。
+
+        异常:
+            透传 ``loader`` 的重建异常；失败时不会缓存不完整 snapshot。
+
+        副作用:
+            首次调用在 ``_snapshot_guard`` 下重建并缓存 snapshot；后续调用复用同一
+            task 的进程内 working copy，不再读取数据库或重复重建。
+        """
+
+        snapshot = self._snapshot
+        if snapshot is not None:
+            return copy.deepcopy(snapshot)
+        with self._snapshot_guard:
+            snapshot = self._snapshot
+            if snapshot is None:
+                snapshot = loader()
+                self._snapshot = copy.deepcopy(snapshot)
+            return copy.deepcopy(snapshot)
+
+    def existing_snapshot(self) -> ConversationStateSnapshot | None:
+        """返回已物化的 task snapshot，不触发数据库读取或懒加载。"""
+
+        with self._snapshot_guard:
+            return copy.deepcopy(self._snapshot)
+
+    def replace_snapshot(self, snapshot: ConversationStateSnapshot) -> None:
+        """替换 task 的进程内 snapshot working copy。
+
+        仅供已完成 canonical 数据库提交后的显式重建或 Transport projector 使用；不会
+        写数据库，也不会通知 SSE subscriber。
+        """
+
+        with self._snapshot_guard:
+            self._snapshot = copy.deepcopy(snapshot)
+
+    def unload_snapshot(self) -> None:
+        """卸载 task snapshot，使下一次访问重新从 canonical records 懒加载。"""
+
+        with self._snapshot_guard:
+            self._snapshot = None
 
     def get_context_manager(
         self,

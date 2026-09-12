@@ -59,9 +59,9 @@ delta；它在重启后丢弃，并按持久化事实重新开始，而不是隐
   `final_output` 以及模型/provider 路由字段，但当前没有独立 usage/error 字段。
 - `TaskModel` 已经保存 `context_usage_used`，但当前没有持久化 `current_run_id` 和
   `context_window_total`。
-- `ConversationTaskSnapshotService` 当前在
-  `apply_planned()` 中读取、校验并全量 UPDATE 整个 `state_json`；流式 event 因此会
-  反复写入越来越大的 JSON。
+- 历史 `ConversationTaskSnapshotService` 曾在 `apply_planned()` 中读取、校验并全量
+  UPDATE 整个 `state_json`；该持久化 snapshot 事实源已移除，当前 snapshot 只由
+  `TaskRuntimeSpace` 按 taskId 持有。
 - `ConversationEventProjector` 负责把 conversation event 变成 snapshot mutation；
   它不是 Agent 的事实写入入口。
 - `RuntimeContextManager` 会把完整的 AI/tool message 写入 context，但当前重建所需的
@@ -284,13 +284,17 @@ snapshot 的反查。
   manager 和 CRUD 各自实现一套规则。
 
 因此 context 和 Transport snapshot 可以短暂不一致：模型完整 message 尚未写入时，实时
-snapshot 可以暂时显示流式 part；读取 snapshot 时以 RunModel/TaskModel 校正终态和当前 Run。
+snapshot 可以暂时显示流式 part。snapshot 按 taskId 挂载在 `TaskRuntimeSpace`，首次读取
+时从 Task/Run/Context 懒加载重建，之后复用该 space 的进程内 working copy；编辑、fork、
+重启恢复等明确边界才调用显式 rebuild。普通读取不再重复读取数据库或重建 snapshot。
 这属于最终一致性，不通过把数据库写入和内存 snapshot 更新包进一个事务来解决。
 
 ### 4.4 活跃 Run 的内存叠加
 
-冷读路径为“数据库重建 → 放入进程内 working copy”。活跃 Run 仍可由
-`ConversationEventProjector` 将事件应用到内存 state，供 SSE 实时发送；该 state：
+冷读路径为“数据库重建 → 放入对应 task 的 `TaskRuntimeSpace` working copy”。活跃 Run
+仍可由 `ConversationEventProjector` 将事件应用到该 task space 的内存 state，供 SSE 实时
+发送；`ConversationTaskStateService` 负责重建/投影编排，`TaskRuntimeSpace` 负责按 taskId
+持有 snapshot；该 state：
 
 - 不写入数据库作为事实；
 - 不跨后端重启恢复；
@@ -379,7 +383,7 @@ state，并发布 `RunStatusChangedEvent`。usage/error 不再只存在 snapshot
 
 ### 6.1 读路径
 
-以下入口统一改为“内存 working copy 命中则读内存，否则三模型重建”：
+以下入口统一改为“TaskRuntimeSpace 已有 snapshot 则读内存，否则首次按三模型懒加载重建”：
 
 - `GET /assistant/state`；
 - SSE `subscribe_with_snapshot` 首帧；
@@ -422,7 +426,8 @@ projector 继续负责实时 Transport mutation，但删除对 snapshot 表的 u
 - Run command/service、workflow operations、所有 completed/failed/cancelled/restart 路径；
 - fork、edit、reset、orphan recovery 和 delegation summary；
 - `init_schema.py` 的 model 注册、表约束和 schema test；
-- `ConversationTaskSnapshotService` 的持久化职责拆分，以及 projector/transport 的依赖注入。
+- `ConversationTaskStateService`、`TaskRuntimeSpace` 的 snapshot 懒加载/复用，以及
+  projector/transport 的依赖注入。
 
 `TaskModel.parent_run_id` 仅表示父任务/分叉关系，不能用来代替新增的
 `TaskModel.current_run_id`。

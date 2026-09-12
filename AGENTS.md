@@ -89,8 +89,8 @@ Tauri 桌面应用
 - 主业务库默认是 `storage/app.sqlite3`；日志库是 `storage/logs.sqlite3`；LangGraph checkpoint 使用独立的 `storage/langgraph_checkpoints.sqlite`。三者职责和访问路径分离，不得跨层复用 session 或事实模型。
 - `ConversationRunModel.status` 是 Run 生命周期状态的唯一事实源。Transport snapshot、Agent context 和 LangGraph checkpoint 都不能演化成第二套 Run 状态机。
 - Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
-- `ConversationTaskSnapshotService` 是 Transport snapshot 的 owner；`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。
-- context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。读取 snapshot 时必须以 Run 数据库状态校正生命周期状态，不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。
+- `ConversationTaskStateService` 负责 Transport snapshot 的重建与投影编排；`TaskRuntimeSpace` 按 taskId 持有 snapshot working copy，首次读取时懒加载重建，后续复用内存对象。`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。
+- context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。snapshot 普通读取不重复重建；数据库写入后由 projector 或明确的 rebuild 边界更新内存 snapshot。不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。
 - LangGraph checkpoint 只服务 workflow 恢复，不代表 Run 生命周期状态；file snapshot/change set 只服务文件变更审阅、保留和回退，不是 Conversation snapshot。
 - `task_runtime`、取消 registry、snapshot subscriber 等属于当前后端进程内的协调状态，不是持久化事实。
 - WebView `localStorage` 只保存模型选择、最近 workspace 等用户偏好；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
@@ -133,7 +133,7 @@ Tauri 桌面应用
 ### 架构取舍
 
 context和snapshot允许不一致。比如，AI说：好，我来看看... 。还没完整message，这个时候无需保持一致，允许context有一定滞后。
-context是由app/core/context/runtime_context_manager.py维护，ConversationEventProjector和ConversationTaskSnapshotService仅维护快照
+context是由app/core/context/runtime_context_manager.py维护，snapshot由TaskRuntimeSpace按taskId持有，ConversationTaskStateService和ConversationEventProjector负责重建与投影
 
 ## 代码目录边界
 
