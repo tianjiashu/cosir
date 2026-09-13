@@ -69,7 +69,7 @@ async def _finalize_max_steps(
         )
         return _terminal_state(effective_step_count)
 
-    event_data = dict(state.continuation_error_data or {})
+    event_data = dict()
     event_data["final_text"] = _MAX_STEPS_FINAL_TEXT
     log.warning(
         "max_steps_node_failed",

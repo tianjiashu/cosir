@@ -28,6 +28,13 @@ from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_con
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.utils.trace_infra.redaction import redact_terminal_output
+
+# 非法工具调用参数预览截断长度
+INVALID_TOOL_ARGS_PREVIEW_CHARS = 500
+
+# 修复提示整体字符预算上限（超出整体截断并加末尾说明）
+INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS = 2000
 
 
 class ToolCallLifecycleRecord(BaseModel):
@@ -40,6 +47,9 @@ class ToolCallLifecycleRecord(BaseModel):
     status: ToolCallEventStatus = "pending"
     args: dict[str, object] = Field(default_factory=dict)
     presentation: dict[str, object] = Field(default_factory=dict)
+    # 模型输出中参数非法但工具名合法的调用，挂载原始 invalid_tool_call（name/args/error），
+    # 供 observe 节点构造修复提示并收口前端 pending part；合法调用此字段恒为 None。
+    invalid_detail: dict[str, object] | None = None
 
 
 @dataclasses.dataclass
@@ -52,7 +62,8 @@ class SettlementResult:
 
     tool_error_count: int
     error_count: int
-    lifecycle: Any = dataclasses.field(default=None, compare=False, repr=False)
+    # settle_batch / settle 始终返回非空的 manager（未命中调用会即时补建），无需 Optional。
+    lifecycle: ToolCallLifecycleManager = dataclasses.field(compare=False, repr=False)
 
 
 def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
@@ -107,6 +118,94 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
     )
 
 
+def build_invalid_tool_call_repair_message(
+    repair_datas: list[dict[str, Any]],
+) -> str:
+    """构造要求模型修复非法工具调用的结构化英文提示文本。
+
+    面向模型、纯英文。返回单条 ``str``（不是消息对象），由调用方自行包装为
+    ``SystemMessage`` 写进 ``RuntimeContextManager``。结构：
+
+    - 顶部一句总领：说明上次非法工具调用未执行、请重试、只发严格合法 tool_calls。
+    - 每个 repair 条目（受 ``INVALID_TOOL_CALL_SUMMARY_LIMIT`` 限条）输出：
+      ``## <tool_name>`` + ``name`` / ``args`` 预览（经 ``redact_terminal_output``
+      脱敏后截断到 ``INVALID_TOOL_ARGS_PREVIEW_CHARS``、超出加 ``...[truncated]``）/
+      ``error``（若有）。``args`` 预览在脱敏后再截断，确保 secret 不进上下文。
+    - 整体字符预算受 ``INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS`` 约束：逐条拼接，一旦
+      累计超预算即停止追加并附末尾截断说明，保证不超过预算且每条仍含可定位的
+      ``tool_name`` 与 ``error`` 关键字段。
+
+    参数:
+        repair_datas: 待修复的非法调用明细列表，每项形如
+            ``{"tool_name": <命中工具名>,
+            "invalid_tool_call": <LangChain invalid_tool_call>}``。
+
+    返回:
+        结构化英文提示 ``str``，可直接包装为 ``SystemMessage`` 注入模型上下文。
+
+    异常:
+        无（对所有字段做 ``get`` / ``str`` 容错，解析失败的非 JSON 片段也能安全处理）。
+
+    副作用:
+        无（只读入参；脱敏与截断均为纯函数式处理，不改外部状态）。
+    """
+    header = (
+        "The previous assistant message contained invalid tool call output that "
+        "could not be parsed; the tool calls were NOT executed. Retry this step. "
+        "If you still need the tool(s), emit valid tool_calls only with strict JSON "
+        "arguments matching the schema. Do not claim a tool or child agent started "
+        "unless the call is valid and executed."
+    )
+
+    sections: list[str] = []
+    total_chars = len(header)
+    budget = INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS
+    truncated = False
+
+    for repair_data in repair_datas:
+        tool_name = repair_data.get("tool_name", "")
+        invalid_tc = repair_data.get("invalid_tool_call", {})
+        if not isinstance(invalid_tc, dict):
+            invalid_tc = {}
+
+        # args 预览：先脱敏再截断，防止 secret 进上下文。
+        raw_args = str(invalid_tc.get("args", ""))
+        redacted_args = redact_terminal_output(raw_args)
+        if len(redacted_args) > INVALID_TOOL_ARGS_PREVIEW_CHARS:
+            redacted_args = redacted_args[:INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
+
+        error = invalid_tc.get("error")
+        error_line = f"error: {error}\n" if error else ""
+
+        section = (
+            f"## {tool_name}\n" f"name: {tool_name}\n" f"args: {redacted_args}\n" f"{error_line}"
+        )
+
+        # 整体预算约束：加上本段与段间换行后若超预算则停止并加末尾说明。
+        if total_chars + len(section) + 1 > budget:
+            truncated = True
+            break
+        sections.append(section)
+        total_chars += len(section) + 1
+
+    body = "\n".join(sections)
+    if truncated:
+        truncation_note = (
+            "\n[truncated] Further invalid tool calls omitted due to length budget; "
+            "fix the listed calls first and retry."
+        )
+        # 整条丢弃而非字符切片：保证每个已输出条目字段完整（计划 §6.2）。
+        # 从后往前逐个丢弃 section，直至 header + 分隔符 + body + 说明 整体 ≤ 预算。
+        while sections:
+            candidate = "\n".join(sections) + truncation_note
+            if len(header) + 2 + len(candidate) <= budget:
+                break
+            sections.pop()
+        body = "\n".join(sections) + truncation_note
+
+    return f"{header}\n\n{body}".rstrip()
+
+
 class ToolCallLifecycleManager(BaseModel):
     """工具调用生命周期的 LangGraph state 与事件发射门面。
 
@@ -128,6 +227,20 @@ class ToolCallLifecycleManager(BaseModel):
         """复制 state，确保生命周期迁移以新快照返回。"""
 
         return self.model_copy(deep=True)
+
+    @property
+    def invalid_count(self) -> int:
+        return sum(
+            1 for record in self.calls.values() if record.invalid_detail is not None
+        )
+
+    @property
+    def has_call(self) -> bool:
+        return len(self.calls) > 0
+
+    @property
+    def invalid_tools(self) -> list[ToolCallLifecycleRecord]:
+        return [record for record in self.calls.values() if record.invalid_detail is not None]
 
     @staticmethod
     def _valid_tool_name(tool_name: object) -> bool:
@@ -255,6 +368,93 @@ class ToolCallLifecycleManager(BaseModel):
             updated.calls[tool_call.call_id].args = copy.deepcopy(tool_call.arguments)
         return updated
 
+    def classify(
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        tool_calls: list[ToolCall],
+        invalid_tool_calls: list[dict[str, Any]],
+    ) -> ToolCallLifecycleManager:
+        """把模型输出拆解为生命周期记录：合法调用置 running，命中非法 id 的调用挂 invalid_detail。
+
+        判定契约改为按 id 对齐（不再使用基于工具名的名称匹配）：
+
+        - 以 ``invalid_tool_calls`` 的 ``id`` 建立索引；仅携带 ``id`` 的非法调用可被对齐，
+          缺失 ``id`` 的视为解析噪声，仅记 warning、不建记录、不阻塞；
+        - 合法（工具名已注册且参数已解析）且 id 未命中非法集合的调用经 ``begin`` 置为
+          ``running`` 并写入完整参数；
+        - id 命中非法集合的调用（无论是否同时出现在合法 ``tool_calls`` 中）不进入 running，
+          而是挂载 ``invalid_detail``（原始 invalid_tool_call 的 name/args/error）并维持
+          ``pending``，供 observe 节点统一收口并构造修复提示；命中但尚无 lifecycle 记录的
+          非法调用合成一条 ``pending`` 记录，维持可修复语义。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            tool_calls: 模型解析成功的工具调用（``ai_message.tool_calls``）。
+            invalid_tool_calls: 模型未解析成功的工具调用（``ai_message.invalid_tool_calls``）。
+
+        返回:
+            更新后的 manager（合法调用 running、命中非法的调用 pending 并带 invalid_detail）。
+        """
+
+        invalid_by_id = {str(itc["id"]): itc for itc in invalid_tool_calls if itc.get("id")}
+        if not invalid_by_id:
+            return self.begin(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                tool_calls=tool_calls,
+            )
+        # 合法调用中 id 命中非法集合的，不应进入 running，留给下方挂 invalid_detail。
+        valid_tool_calls = [tc for tc in tool_calls if tc.call_id not in invalid_by_id]
+        updated = self.begin(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            tool_calls=valid_tool_calls,
+        )
+        for itc_id, invalid_tc in invalid_by_id.items():
+            detail: dict[str, object] = {
+                "name": invalid_tc.get("name"),
+                "args": invalid_tc.get("args"),
+                "error": invalid_tc.get("error"),
+            }
+            existing = updated.calls.get(itc_id)
+            if existing is not None:
+                existing.invalid_detail = detail
+                # 非法调用从未真正执行：若 begin 已置 running 则回退 pending，
+                # 使其进入 observe 的非法结算分支而非被当作合法结果分发。
+                if existing.status == "running":
+                    existing.status = "pending"
+                continue
+            # 流式期未建对应条目、但 id 已知的非法调用：合成 pending 记录，
+            # 使其经 observe 统一结算为 failed 并注入修复提示。
+            tool_name = invalid_tc.get("name")
+            presentation = (
+                updated._presentation_for(tool_name)
+                if isinstance(tool_name, str) and tool_name
+                else {}
+            )
+            updated.calls[itc_id] = ToolCallLifecycleRecord(
+                tool_call_id=itc_id,
+                tool_name=tool_name or "",
+                presentation=presentation,
+                invalid_detail=detail,
+            )
+        # 缺失 id 的非法调用无法与生命周期对齐，视为解析噪声忽略。
+        unmatched = [itc for itc in invalid_tool_calls if not itc.get("id")]
+        if unmatched:
+            log.warning(
+                "lifecycle_invalid_tool_call_no_id",
+                extra={
+                    "msg": "非法工具调用缺少 id，无法与生命周期对齐，视为解析噪声忽略",
+                    "data": {"step_id": step_id, "count": len(unmatched)},
+                },
+            )
+        return updated
+
     def cancel(
         self,
         *,
@@ -278,6 +478,45 @@ class ToolCallLifecycleManager(BaseModel):
                 to_status="cancelled",
             )
             updated.calls[tool_call.call_id].status = "cancelled"
+        return updated
+
+    def fail_invalid(
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        call_id: str,
+        status_hint: str,
+    ) -> ToolCallLifecycleManager:
+        """收口参数非法的调用：置 failed 并发终态事件，但不写回模型上下文 ToolMessage。
+
+        参数非法的调用从未真正执行，不应产生 ``ToolMessage`` 与合法调用配对；本方法只补发
+        终态 ``tool_call_status_changed`` 事件以关闭前端 pending part（``pending`` ->
+        ``failed``）。修复提示由 observe 节点经 ``SystemMessage`` 注入，不在此写模型消息。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            call_id: 待收口的非法调用 id。
+            status_hint: 面向前端的短提示（如「参数无效」）。
+
+        返回:
+            更新后的 manager。
+        """
+
+        updated = self._copy()
+        record = updated.calls.get(call_id)
+        if record is None or record.status != "pending":
+            return updated
+        updated._emit_status(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            call_id=call_id,
+            to_status="failed",
+            error=status_hint,
+        )
+        updated.calls[call_id].status = "failed"
         return updated
 
     def settle(

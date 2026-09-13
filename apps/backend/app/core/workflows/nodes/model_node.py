@@ -10,13 +10,14 @@ stream；用 ``model.astream()`` 累积 ``AIMessage``，
 "我先用 grep 查一下文件结构" 再给出一个 ``search_files`` 调用）。此时文本**不计入最终
 回复**（最终回复只来自纯文本分支），但模型这段说明并非丢弃——
 它会经 canonical conversation facts 写入、经 ``RuntimeContextManager.add_message``
-落库进历史上下文，并在进入工具分支时作为 ``instruction`` 键随 ``pending_tool_calls``
-下传给 ``tools`` / ``observe`` 节点，使下游执行与错误排查能看到模型当时的意图。
+落库进历史上下文，并随 state ``instruction`` 字段下传给 ``tools`` / ``observe`` 节点，
+使下游执行与错误排查能看到模型当时的意图。
 
 模型侧数据处理辅助（流式 chunk 解析 ``ModelChunkProcessor``、chunk debug 落盘、流式 part 生命周期）
 已拆为独立模块，本模块仅 import 使用；节点共享运行时原语见 ``common``。
 """
 
+import asyncio
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk, SystemMessage
@@ -31,20 +32,86 @@ from app.core.workflows.nodes.helper.common import (
 )
 from app.core.workflows.nodes.helper.debug_dump import _dump_raw_chunk_debug
 from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
-from app.core.workflows.nodes.helper.invalid_tool_call import (
-    TOOL_CALL_REPAIR_MESSAGE_KIND,
-    InvalidToolOutcome,
-    build_invalid_tool_call_repair_message,
-    decide_invalid_tool_handling,
-)
 from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.nodes.helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
 from app.core.workflows.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.vision_input import resolve_messages_for_model
 from app.utils.message_content import content_to_text
 
 from ..react.state import ReactGraphState
+
+# ``finish_reason`` 是 Provider 语义，不直接等同于工作流终态。不同兼容层可能使用
+# ``stop``、``end`` 或 ``end_turn`` 表示正常文本结束；在 model 节点内做最小归一化，避免
+# 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
+_NORMAL_FINISH_REASONS = frozenset({"stop", "end", "end_turn"})
+_CONTINUATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def _extract_finish_reason(message: Any) -> str | None:
+    """从完整 ``AIMessage`` 提取并归一化 Provider 的完成原因。
+
+    LangChain 通常把 OpenAI-compatible 的 ``finish_reason`` 放在
+    ``response_metadata``；部分 Provider 使用 ``stop_reason``。本函数只做字段读取与
+    小写归一化，不把 Provider 原始值改写进消息或 Run 事实。取消/连接中断导致没有终止
+    chunk 时返回 ``None``，由模型节点按不完整响应处理。
+
+    参数:
+        message: 流式 chunk 聚合后的 LangChain 消息。
+
+    返回:
+        规范化后的小写完成原因；字段缺失、类型不正确或空字符串时返回 ``None``。
+
+    异常:
+        无；非标准 Provider metadata 安全降级为 ``None``。
+
+    副作用:
+        无。
+    """
+
+    metadata = getattr(message, "response_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    raw_reason = metadata.get("finish_reason") or metadata.get("stop_reason")
+    if not isinstance(raw_reason, str):
+        return None
+    normalized = raw_reason.strip().lower()
+    return normalized or None
+
+
+def _build_continuation_prompt(finish_reason: str | None) -> str:
+    """为未完成的模型输出构造一次模型可消费的继续提示。
+
+    ``length`` 类原因明确表示达到输出上限；缺失或未知原因则表示 Provider/适配器没有
+    提供可确认的正常结束信号。两类情况都不应把已有文本直接标记为最终回答，提示内容
+    要求模型从已有输出之后继续，避免重复已完成部分。
+
+    参数:
+        finish_reason: 已归一化的 Provider 完成原因，可为 ``None``。
+
+    返回:
+        追加到 canonical context 的 ``SystemMessage`` 文本。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    if finish_reason in _CONTINUATION_FINISH_REASONS:
+        return (
+            "Your previous response was truncated by the output length limit. "
+            "Continue from where it stopped, do not repeat completed content, and finish the "
+            "answer. If a tool is required, issue the tool call instead of describing it."
+        )
+    reason_text = finish_reason or "missing"
+    return (
+        "Your previous response did not provide a recognized completion signal "
+        f"(finish_reason={reason_text}). Treat it as incomplete, continue from where it stopped, "
+        "do not repeat completed content, and finish the answer."
+    )
 
 
 async def _model_node(state: ReactGraphState) -> dict:
@@ -71,11 +138,12 @@ async def _model_node(state: ReactGraphState) -> dict:
         - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
-        - ``invalid_tool_calls`` 按双轨消费：未命中工具名的 ``IGNORE`` 仅记 warning；
-          命中工具名的 ``REPAIR`` 在无合法调用时于当前 AIMessage 之后立即注入并回流
-          model，在存在合法调用时只写入 ``deferred_repair_message``，由 observe 在全部
-          ToolMessage 之后追加，避免产生 ``AIMessage(tool_calls) -> SystemMessage ->
-          ToolMessage`` 的非法顺序。
+        - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：未命中工具名
+          的 ``IGNORE`` 仅记 warning；命中工具名的 ``REPAIR`` 挂 ``invalid_detail``，由 observe 节点
+          在全部 ToolMessage 之后统一注入修复 ``SystemMessage``，避免产生
+          ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序。
+        - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断、
+          缺失或未知完成原因会追加继续提示并通过 ``continue_model`` 回到模型节点。
     """
 
     rc = _runtime_config()
@@ -106,6 +174,13 @@ async def _model_node(state: ReactGraphState) -> dict:
         return terminal_state(step_count)
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages = _runtime_context().load_message()
+    messages = await asyncio.to_thread(
+        resolve_messages_for_model,
+        messages,
+        task_id=task_id,
+        model_name=getattr(rc.run, "model_name", None) or "",
+        vision_input_format=getattr(rc, "vision_input_format", "openai_url"),
+    )
     log.info(
         "model_node_started",
         extra={
@@ -125,7 +200,11 @@ async def _model_node(state: ReactGraphState) -> dict:
         "model_node_model_requested",
         extra={
             "msg": f"模型节点请求模型，step_id={step_id}",
-            "data": {"messages": [m.model_dump() for m in messages]},
+            "data": {
+                "step_id": step_id,
+                "run_id": rc.run.id,
+                "message_count": len(messages),
+            },
         },
     )
     # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
@@ -185,87 +264,27 @@ async def _model_node(state: ReactGraphState) -> dict:
     ai_message = chunk_processor.collect(chunks)
     parts.finish()
 
+    finish_reason = _extract_finish_reason(ai_message)
+
     _runtime_context().add_message(ai_message)
 
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
-    # 非法工具调用不静默丢弃：决策（纯函数）与执行（下方分支）分离，见 docstring 双轨。
+
+    # 把模型输出拆解为工具调用生命周期：合法调用置 running，可修复非法调用挂 invalid_detail
+    # （由 observe 节点统一结算并构造修复提示），未命中工具名的噪声仅记 warning。invalid
+    # 判定从 model_node 下沉到 ToolCallLifecycleManager，本节点不再分支处理，职责收敛为
+    # 「消费模型输出、决定工具/最终回答/非法输出」三类走向。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
-    # requested_tool 在消费 invalid_tool_calls 前确定，供 REPAIR 块与工具分支共用。
-    requested_tool = bool(ai_message.tool_calls)
+    tool_calls = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
+    lifecycle = lifecycle.classify(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=step_id,
+        tool_calls=tool_calls,
+        invalid_tool_calls=invalid_tool_calls,
+    )
 
-    tool_calls: list[ToolCall] = [
-        ToolCall.from_from_langchain(call) for call in ai_message.tool_calls
-    ]
-
-    repair_data: list[dict[str, Any]] = []
-    repair_message = ""
-    if invalid_tool_calls:
-        available_tool_names = {tool.name for tool in operations.model_tools}
-        result = decide_invalid_tool_handling(
-            invalid_tool_calls=invalid_tool_calls, available_tool_names=available_tool_names
-        )
-
-        if result[InvalidToolOutcome.IGNORE]:
-            # 未命中工具名、无法推断意图：仅记 warning（脱敏 args），不修复、不阻塞。
-            log.warning(
-                "model_node_invalid_tool_calls_ignored",
-                extra={
-                    "msg": (
-                        "非法工具调用未命中已注册工具名，视为解析噪声忽略，"
-                        f"保留合法工具继续执行，step_id={step_id}"
-                    ),
-                    "data": {
-                        "step_id": step_id,
-                        "invalid_tool_calls": result[InvalidToolOutcome.IGNORE],
-                    },
-                },
-            )
-
-        repair_data = result[InvalidToolOutcome.REPAIR]
-        if repair_data:
-            repair_message = build_invalid_tool_call_repair_message(repair_datas=repair_data)
-            if not requested_tool:
-                output_text = content_to_text(ai_message.content)
-                if output_text:
-                    repair_message = (
-                        f"{repair_message}\n\n上一轮模型的部分输出"
-                        f"（请基于此继续完善，勿丢弃）：\n{output_text}"
-                    )
-                log.warning(
-                    "model_node_invalid_tool_calls_no_tool_repair",
-                    extra={
-                        "msg": (
-                            "非法工具调用命中已注册工具名但本轮无合法工具，"
-                            f"追加修复提示并回流 model，step_id={step_id}"
-                        ),
-                        "data": {
-                            "step_id": step_id,
-                            "invalid_count": len(repair_data),
-                            "repair_message_length": len(repair_message),
-                        },
-                    },
-                )
-                # 没有合法 tool_calls 时，当前 AIMessage 不携带工具调用，SystemMessage
-                # 可以安全地紧随其后；下一轮由 repair_requested 回流 model。
-                _runtime_context().add_message(
-                    SystemMessage(
-                        content=repair_message,
-                    )
-                )
-                return {
-                    "step_count": step_count,
-                    "repair_requested": True,
-                    "requested_tool": False,
-                    "final_response": False,
-                    "terminal": False,
-                    "pending_tool_calls": {},
-                    "deferred_repair_message": "",
-                    "continuation_error_data": {
-                        "error_kind": "invalid_tool_call_repair",
-                        "invalid_count": len(repair_data),
-                    },
-                }
 
     log.info(
         "model_node_completed",
@@ -273,51 +292,30 @@ async def _model_node(state: ReactGraphState) -> dict:
             "msg": f"模型产出完成，step_id={step_id}",
             "data": {
                 "step_id": step_id,
-                "has_tool_calls": requested_tool,
                 "tool_count": len(tool_calls),
+                "invalid_count": lifecycle.invalid_count,
                 "output_text_length": len(ai_message.content),
+                "finish_reason": finish_reason,
             },
         },
     )
 
-    if requested_tool:
-        lifecycle = lifecycle.begin(
-            task_id=task_id,
-            run_id=run_id,
-            step_id=step_id,
-            tool_calls=tool_calls,
-        )
+    if lifecycle.has_call:
+        # 有任意工具调用（合法或非法）都进 tools 节点：合法调用执行，非法调用由 observe 结算。
+        # 不再区分 requested_tool / repair_requested —— observe 非终态即经 _after_observe
+        # 回流 model。
         return {
             "step_count": step_count,
-            "repair_requested": False,
             "requested_tool": True,
+            "continue_model": False,
             "final_response": False,
             "terminal": False,
-            "deferred_repair_message": repair_message,
-            "continuation_error_data": (
-                {
-                    "error_kind": "invalid_tool_call_repair",
-                    "invalid_count": len(repair_data),
-                }
-                if repair_data
-                else None
-            ),
-            "pending_tool_calls": {
-                "tool_calls": [
-                    {
-                        "tool_name": tool_call.tool_name,
-                        "arguments": tool_call.arguments,
-                        "call_id": tool_call.call_id,
-                    }
-                    for tool_call in tool_calls
-                ],
-                # 文本说明作为 instruction 随工具调用下传，供 tools/observe 节点看到模型意图。
-                "instruction": ai_message.content,
-            },
+            "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
             "tool_call_lifecycle": lifecycle,
         }
 
-    if ai_message.content:  # 没有工具调用，上下文没有变化但有文本 → 最终回答
+    if finish_reason in _NORMAL_FINISH_REASONS and ai_message.content:
+        # 没有工具调用且 Provider 明确报告正常结束 → 最终回答。
         final_answer = ai_message.content if isinstance(ai_message.content, str) else None
         completed_run = operations.complete_run_if_running(
             rc.usage_stats, final_output=final_answer
@@ -330,7 +328,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "run_id": rc.run.id},
                 },
             )
-            return terminal_state(step_count)
+            return terminal_state(step_count, requested_tool=False)
         log.info(
             "model_node_final_response",
             extra={
@@ -339,8 +337,38 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         return {
-            **terminal_state(step_count, final_response=True),
+            **terminal_state(step_count, final_response=True, requested_tool=False),
             "final_text": ai_message.content,
+        }
+
+    if finish_reason not in _NORMAL_FINISH_REASONS:
+        # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
+        # AIMessage 已先落库，SystemMessage 紧跟其后作为下一模型步的显式续写指令。
+        continuation_prompt = _build_continuation_prompt(finish_reason)
+        _runtime_context().add_message(SystemMessage(content=continuation_prompt))
+        log.warning(
+            "model_node_output_requires_continuation",
+            extra={
+                "msg": "模型输出没有可接受的正常完成原因，追加继续提示并回到模型节点",
+                "data": {
+                    "step_id": step_id,
+                    "run_id": rc.run.id,
+                    "finish_reason": finish_reason,
+                    "output_text_length": len(ai_message.content),
+                },
+            },
+        )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "continue_model": True,
+            "final_response": False,
+            "terminal": False,
+            "instruction": "",
+            "continuation_error_data": {
+                "error_kind": "incomplete_model_output",
+                "finish_reason": finish_reason,
+            },
         }
 
     log.warning(
@@ -363,4 +391,4 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
-    return terminal_state(step_count)
+    return terminal_state(step_count, requested_tool=False)

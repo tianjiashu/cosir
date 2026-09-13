@@ -6,8 +6,6 @@
 - ``model_chunk``：模型流式 chunk 解析（``ModelChunkProcessor``：思考抽取 + 工具调用提前抽取
   + chunk 合并为 ``AIMessage``）。
 - ``debug_dump``：模型 chunk 调试落盘（``logs/debug_merged_chunks.jsonl`` 等）。
-- ``invalid_tool_call``：非法工具调用的纯决策与修复提示构造（``InvalidToolOutcome`` +
-  模块级纯函数）。
 - ``tools_node``：``tools`` 节点（``_tools_node``）及工具观察的增量落库/写回
   （``_persist_tool_observations``）。
 - ``observation_node``：``observe`` 节点（``_observe_node``），从 ``last_tool_results``

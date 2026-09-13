@@ -25,7 +25,7 @@ def _should_continue(state: ReactGraphState) -> str:
 
     if state.terminal or state.final_response:
         return END
-    if state.repair_requested:
+    if state.continue_model:
         return "model"
     if state.requested_tool:
         return "tools"

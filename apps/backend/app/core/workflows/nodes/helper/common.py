@@ -55,28 +55,23 @@ def _runtime_context() -> RuntimeContextManager:
 def terminal_state(
     step_count: int,
     *,
-    repair_requested: bool = False,
     requested_tool: bool = False,
     final_response: bool = False,
 ) -> dict[str, Any]:
     """构造统一的终态 state patch（graph 走到 END 用）。
 
     model / max_steps / observe 多个节点都把「终态」写成一组重复的硬字段字典
-    （``step_count`` / ``repair_requested`` / ``requested_tool`` / ``final_response`` /
-        ``terminal`` / ``pending_tool_calls`` / ``deferred_repair_message``），手写易错且
-        各处分歧。本函数收口为单一来源。
+    （``step_count`` / ``requested_tool`` / ``final_response`` / ``terminal``），手写易错且
+    各处分歧。本函数收口为单一来源。
     终态不再有后续模型步，统一收口为单一来源，避免各节点手写硬字段字典发散（P2-5 一致性收口）。
 
     参数:
         step_count: 当前步编号，直接落入 patch。
-        repair_requested: 是否需要修复重写，``bool`` 类型，与 ``ReactGraphState.repair_requested``
-            声明一致（历史遗留的 ``str`` 三值语义已收敛为纯 ``bool``），默认 ``False``。
         requested_tool: 本步是否请求了工具，默认 ``False``。
         final_response: 是否产出终态文本，默认 ``False``。
 
     返回:
-        可直接 ``return`` 给 LangGraph 合并的 state patch 字典
-        （``pending_tool_calls`` 恒为 ``{}``）。
+        可直接 ``return`` 给 LangGraph 合并的 state patch 字典。
 
     异常:
         无。
@@ -86,10 +81,7 @@ def terminal_state(
     """
     return {
         "step_count": step_count,
-        "repair_requested": repair_requested,
         "requested_tool": requested_tool,
         "final_response": final_response,
         "terminal": True,
-        "pending_tool_calls": {},
-        "deferred_repair_message": "",
     }

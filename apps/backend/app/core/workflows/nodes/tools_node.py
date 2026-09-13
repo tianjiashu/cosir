@@ -47,8 +47,9 @@ async def _tools_node(state: ReactGraphState) -> dict:
     返回:
         需要合并回 graph state 的增量：正常分支 ``last_tool_results`` 为本批次工具观察的
         ``dataclasses.asdict`` 投影（键名即执行层字段名 ``tool_call_id`` /
-        ``display_data``，可落 checkpoint，供 ``observe`` 节点分发与判定），
-        并清空 ``pending_tool_calls``；
+        ``display_data``，可落 checkpoint，供 ``observe`` 节点分发与判定）；
+        本节点从 ``ToolCallLifecycleManager`` 读取 ``running`` 调用执行；无 running 调用时
+        直接短路返回；
         业务恢复时跳过 checkpoint 中的旧工具调用，返回空摘要并置 ``terminal=False``，让
         ``observe`` 把 Agent 推回下一轮推理；执行前取消分支置 ``terminal=True`` 且返回空摘要——
         因为 ``_after_tools`` 在
@@ -67,15 +68,47 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     rc = _runtime_config()  # 取运行时配置
     operations = rc.operations  # 领域操作
-    tool_calls = state.pending_tool_calls["tool_calls"]  # 来自 model 节点写入的待执行工具调用
-    instruction = state.pending_tool_calls["instruction"]
+    lifecycle = state.tool_call_lifecycle
+    if lifecycle is None:
+        raise RuntimeError("tool_call_lifecycle is required before tools_node execution")
+    # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
+    approved_calls = [
+        ToolCall.from_dict(
+            {
+                "tool_name": record.tool_name,
+                "arguments": record.args,
+                "call_id": record.tool_call_id,
+            }
+        )
+        for record in lifecycle.calls.values()
+        if record.status == "running"
+    ]
+    instruction = state.instruction
+    step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
+
+    if not approved_calls:
+        # 本轮无 running 调用（仅参数非法 pending）：不执行、不 spawn worker，直接进入 observe
+        # 结算非法调用，避免产生空的结果集合与无谓的并发开销。放在取 task 之前，使取消/任务
+        # 等运行时查询无需为「无执行」场景付出开销。
+        log.info(
+            "tools_node_no_runnable_calls",
+            extra={
+                "msg": f"本轮无 running 工具调用，跳过执行，step_id={step_id}",
+                "data": {"step_id": step_id, "lifecycle_size": len(lifecycle.calls)},
+            },
+        )
+        return {
+            "tool_call_lifecycle": lifecycle,
+            "last_tool_results": {
+                "instruction": instruction or "",
+                "observations": [],
+                "expected_call_ids": [],
+            },
+        }
+
     task = operations.get_current_task()  # 任务（工具执行需要 task_id）
     task_id = task.id
     run_id = operations.get_current_run().id
-    step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-    approved_dicts = tool_calls
-    approved_calls = [ToolCall.from_dict(item) for item in approved_dicts]
-    lifecycle = state.tool_call_lifecycle
 
     # 取消检查：审批恢复后（或自动放行时）、工具执行前，若 run 已被取消则跳过工具执行。
     # 未完成调用的上下文闭合由下一次 model_node.load_message() 统一兜底；本分支只负责
@@ -88,25 +121,34 @@ async def _tools_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": operations.get_current_run().id},
             },
         )
+        # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
+        # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
+        # 经统一 emit_run_cancelled 构造（携带 langfuse_trace_id，与 model/observe 一致）。
+        # 取消前已发射的 pending tool_call 事件（含参数非法的 pending）由 lifecycle.cancel
+        # 全部收口为 cancelled，避免任何悬空 part。
+        all_calls = [
+            ToolCall.from_dict(
+                {
+                    "tool_name": record.tool_name,
+                    "call_id": record.tool_call_id,
+                    "arguments": record.args,
+                }
+            )
+            for record in (lifecycle.calls.values() if lifecycle else [])
+        ]
         if lifecycle is None:
             raise RuntimeError("tool_call_lifecycle is required before tools_node cancellation")
         lifecycle = lifecycle.cancel(
             task_id=task_id,
             run_id=run_id,
             step_id=step_id,
-            tool_calls=approved_calls,
+            tool_calls=all_calls,
         )
-
-        # 收口取消终态事件：本分支是实际检测到 run 取消的执行点，须发出
-        # RUN_CANCELLED 供前端 StatusBadge 渲染；工具尚未执行无 token 累积，
-        # 经统一 emit_run_cancelled 构造（携带 langfuse_trace_id，与 model/observe 一致）。
         operations.cancel_run_if_running(end_reason="runtime_cancelled", usage_stats=rc.usage_stats)
         return {
-            "pending_tool_calls": {},
             "tool_error_count": state.tool_error_count,
             "terminal": True,
             "last_tool_results": {},
-            "deferred_repair_message": "",
             "tool_call_lifecycle": lifecycle,
         }
 
@@ -172,7 +214,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
     )
 
     return {
-        "pending_tool_calls": {},  # 清空待执行工具调用
         "last_tool_results":
             {
                 "instruction": instruction or "",

@@ -216,7 +216,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         # ``begin_run`` 已清空该 Run 的旧条目，这里补写基线；resume 时同一 Run 的
         # user 消息已存在，方法自身幂等。必须在 graph 启动前完成，使首个 model 步的
         # ``load_message`` 能把用户输入交给模型；写入失败由异常向上收敛为 Run 失败。
-        runtime_context_manager.ensure_run_user_message(run.input_text)
+        runtime_context_manager.ensure_run_user_message(run.input_text, run.image_paths)
 
         config = {
             "configurable": {
@@ -239,12 +239,10 @@ class ReactLikeWorkflow(AgentWorkflow):
                 step_count=0,
                 tool_error_count=0,
                 requested_tool=False,
-                repair_requested=False,
-                continuation_error_data=None,
+                continue_model=False,
                 final_response=False,
                 terminal=False,
-                pending_tool_calls={},
-                deferred_repair_message="",
+                instruction="",
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
