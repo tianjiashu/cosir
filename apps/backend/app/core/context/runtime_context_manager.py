@@ -2,17 +2,21 @@
 
 本模块只维护模型调用所需的内存工作副本；持久化事实由
 ``ConversationTaskContextService`` 负责，``ContextEntry.run_id`` 始终随消息保存。
-流式 ``AIMessageChunk`` 不进入本模块，只有完整消息才会追加到 context。
+流式 ``AIMessageChunk`` 通过 ``add_message_chunk`` 写入不纳入模型上下文的持久化草稿；
+只有收口后的完整消息才会进入模型 context。
 """
 
 from __future__ import annotations
 
 import copy
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast, Literal
 
 from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -33,10 +37,27 @@ from app.core.context.tool_call_closure import (
 )
 from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
-from app.models.conversation_task_context import TransportMetadata
-from app.service.depends import get_conversation_event_projector
+from app.models.conversation_task_context import (
+    ConversationTaskContextRecord,
+    TransportMetadata,
+)
+from app.service.depends import get_conversation_event_projector, get_conversation_task_context_service
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
+from app.utils.message_content import content_to_text
+
+STREAMING_PERSIST_MIN_CHARS = 64
+STREAMING_PERSIST_MAX_INTERVAL_SECONDS = 0.25
+
+
+@dataclass
+class _StreamingMessageState:
+    """一条流式 assistant 草稿的进程内聚合状态。"""
+
+    chunk: AIMessageChunk
+    sequence: int
+    persisted_text_length: int
+    last_persisted_at: float
 
 
 @dataclass
@@ -49,7 +70,6 @@ class RuntimeContextManager:
     total_tokens: int = 0
     used_tokens: int = 0
     compressor: ContextCompressor | None = None
-    context_service: ConversationTaskContextService | None = None
     current_run_id: int | None = None
     # fork Task 的运行时标记；它只描述 Task 身份，不改变 context 持久化规则。
     is_fork: bool = False
@@ -63,6 +83,11 @@ class RuntimeContextManager:
     _listeners: list[ContextListener] = field(default_factory=list, init=False)
     # 当前 Conversation Run 实际暴露给模型的工具 schema；只保存运行时配置，不落库。
     _tool_schemas: tuple[Mapping[str, Any], ...] = field(default_factory=tuple, init=False)
+    # key=(run_id, stream_id) → 一条流式草稿的进程内聚合状态。复合 key 区分不同 run / step
+    # 的草稿；partial 不进 _entries，避免被下一次模型调用误读。
+    _streaming_messages: dict[tuple[int | None, str], _StreamingMessageState] = field(
+        default_factory=dict, init=False
+    )
 
     @staticmethod
     def ensure_get_runtime_context_manager(
@@ -76,8 +101,9 @@ class RuntimeContextManager:
             agent_profile: 当前 Agent 档案。
             current_workspace: 当前工作区记录。
             current_task: 当前任务记录。
-            context_service: Task context 唯一持久化 owner；纯内存测试可传 None。
-            run: 用于设置模型窗口的当前 Conversation Run。、
+
+            纯内存测试可通过在实例上挂载 ``context_service`` 属性注入 mock，由
+            ``_require_context_service`` 优先采用，从而绕过全局 service 装配。
 
             ** agent启动时已经有task锁，无需再加锁。**
 
@@ -120,7 +146,6 @@ class RuntimeContextManager:
             current_task_id=task_id,
             agent_profile=copy.deepcopy(self.agent_profile),
             workspace_root=self.workspace_root,
-            context_service=self._require_context_service(),
             is_fork=True,
         )
 
@@ -133,17 +158,21 @@ class RuntimeContextManager:
         )
         entries = service.entries_in_context(self.current_task_id)
         self._system_entry = ContextEntry(prompt, None, -1)
-        self._entries = [entry for entry in entries]
+        self._entries = list(entries)
         self._message_sequence = (
                 self._require_context_service().max_sequence(self.current_task_id) + 1
         )
 
     def _require_context_service(self) -> ConversationTaskContextService:
-        """返回已装配的 context service；未装配时立即失败。"""
+        """返回已装配的 context service；未装配时立即失败。
 
-        if self.context_service is None:
-            raise RuntimeError("context_service is required for persisted context operations")
-        return self.context_service
+        若实例持有注入的 ``context_service``（纯内存测试场景）则优先返回，否则回落到
+        全局 ``get_conversation_task_context_service()``。生产路径不设置该属性，故始终走全局。
+        """
+        injected = getattr(self, "context_service", None)
+        if injected is not None:
+            return injected
+        return get_conversation_task_context_service()
 
     def begin_run(
             self,
@@ -182,6 +211,11 @@ class RuntimeContextManager:
             service = self._require_context_service()
             service.delete_by_run_id(self.current_task_id, run.id)
             self._entries = [entry for entry in self._entries if entry.run_id != run.id]
+            self._streaming_messages = {
+                key: value
+                for key, value in self._streaming_messages.items()
+                if key[0] != run.id
+            }
         # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
         # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
@@ -253,7 +287,155 @@ class RuntimeContextManager:
         self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
         return True
 
-    def ensure_run_user_message(self, text: str) -> bool:
+    def add_message_chunk(
+            self,
+            chunk: AIMessageChunk,
+            *,
+            stream_id: str,
+            run_id: int | None = None,
+    ) -> AIMessage:
+        """累计并持久化一条模型流式 assistant 草稿。
+
+        同一 ``(run_id, stream_id)`` 只占用一个 context sequence；后续 chunk 原子替换该
+        行，而不是追加新消息。草稿标记为 ``is_streaming=True`` 且不纳入模型上下文，因而
+        可被 Transport 冷重建，但不会在取消/崩溃后的 resume 中误作为完整 assistant message
+        发送给 provider。
+
+        参数:
+            chunk: 模型 ``astream`` 产出的 ``AIMessageChunk``。
+            stream_id: 当前模型步骤的稳定标识，通常为 ``step-N``。
+            run_id: 消息归属 Run；缺省使用当前 Run。
+
+        返回:
+            截至当前 chunk 的聚合 ``AIMessage``。
+
+        异常:
+            ValueError: chunk 类型不正确或 stream_id 为空；持久化错误向上传播。
+
+        副作用:
+            首个 chunk 新增一条 partial context 行，后续 chunk 更新该行；不会触发 context
+            usage listener 或 ADD_MESSAGE 事件，实时 Transport 增量仍由 workflow stream 负责。
+        """
+
+        if not isinstance(chunk, AIMessageChunk):
+            raise ValueError("add_message_chunk requires AIMessageChunk")
+        if not stream_id or not stream_id.strip():
+            raise ValueError("stream_id must not be empty")
+        target_run_id = self.current_run_id if run_id is None else run_id
+        key = (target_run_id, stream_id)
+        state = self._streaming_messages.get(key)
+        if state is None:
+            merged_chunk = chunk
+            sequence = self._message_sequence
+            self._require_context_service().append(
+                self.current_task_id,
+                target_run_id,
+                _as_ai_message(merged_chunk),
+                sequence,
+                False,
+                None,
+                True,
+            )
+            self._message_sequence += 1
+            state = _StreamingMessageState(
+                chunk=merged_chunk,
+                sequence=sequence,
+                persisted_text_length=len(content_to_text(merged_chunk.content)),
+                last_persisted_at=time.monotonic(),
+            )
+        else:
+            merged_chunk = state.chunk + chunk
+
+        state.chunk = merged_chunk
+        if self._streaming_needs_flush(state):
+            self.flush_message_chunk(stream_id=stream_id, run_id=target_run_id)
+        self._streaming_messages[key] = state
+        return _as_ai_message(merged_chunk)
+
+    def flush_message_chunk(
+            self,
+            *,
+            stream_id: str,
+            run_id: int | None = None,
+            mode: Literal["complete", "cancel", "running"] = "running",
+    ) -> AIMessage | None:
+        """把当前流式草稿刷入数据库；按 ``mode`` 分三种语义态。
+
+        - ``running``（默认）：以 partial 状态（``is_streaming=True``）落库，**保留**内存
+          state 供后续 chunk 继续累积。add_message_chunk 的节流刷写即走此态。
+        - ``cancel``：同样 partial 落盘，但 run 已终止不再累积，故**丢弃**内存 state；不加入
+          模型上下文、不触发 listener。
+        - ``complete``：收口为普通 canonical assistant 消息，复用原 ``sequence`` 更新同一行，
+          并仅在收口时加入模型上下文与触发 ``ADD_MESSAGE`` listener。
+
+        参数:
+            stream_id: 本次流式会话的唯一标识，通常为 ``step-N``。
+            run_id: 消息归属 Run；缺省使用当前 Run。
+            mode: ``running`` / ``cancel`` / ``complete``。
+
+        返回:
+            本次刷写得到的 ``AIMessage``；无对应草稿时返回 ``None``。
+
+        异常:
+            持久化错误向上传播。
+
+        副作用:
+            running / cancel 更新 partial 行但不触发 listener；complete 触发 ``ADD_MESSAGE``
+            并把消息加入内存 entries；实时 Transport 增量由 workflow stream 负责。
+        """
+
+        target_run_id = self.current_run_id if run_id is None else run_id
+        key = (target_run_id, stream_id)
+        # 收口 flush 与取消 flush 都消费草稿并移除内存 state；中途 flush 保留 state 以便继续累积。
+        state = (
+            self._streaming_messages.pop(key, None)
+            if mode in {"complete", "cancel"}
+            else self._streaming_messages.get(key)
+        )
+        if state is None:
+            return None
+        if mode == "complete":
+            finalized = _as_ai_message(state.chunk)
+            self._require_context_service().replace_streaming_message(
+                ConversationTaskContextRecord(
+                    task_id=self.current_task_id,
+                    run_id=target_run_id,
+                    message=finalized,
+                    include_in_context=True,
+                    sequence=state.sequence,
+                    is_streaming=False,
+                )
+            )
+            self._entries.append(ContextEntry(finalized, target_run_id, state.sequence))
+            self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
+            return _as_ai_message(state.chunk)
+        # 中途 flush：保持 partial 状态，不触发 listener。
+        self._require_context_service().replace_streaming_message(
+            ConversationTaskContextRecord(
+                task_id=self.current_task_id,
+                run_id=run_id,
+                message=_as_ai_message(state.chunk),
+                include_in_context=False,
+                sequence=state.sequence,
+                is_streaming=True,
+            )
+        )
+        state.persisted_text_length = len(content_to_text(state.chunk.content))
+        state.last_persisted_at = time.monotonic()
+        return _as_ai_message(state.chunk)
+
+    def _streaming_needs_flush(self, state: _StreamingMessageState) -> bool:
+        """根据字符和时间阈值决定是否刷写流式草稿。"""
+
+        text_length = len(content_to_text(state.chunk.content))
+        return (
+                text_length - state.persisted_text_length >= STREAMING_PERSIST_MIN_CHARS
+                or time.monotonic() - state.last_persisted_at >= STREAMING_PERSIST_MAX_INTERVAL_SECONDS
+        )
+
+    def ensure_run_user_message(
+            self, text: str, image_paths: Sequence[str] | None = None
+    ) -> bool:
         """确保当前 Run 在上下文中恰好有一条初始 user 消息。
 
         该消息是 Run 的 canonical 输入事实（``ConversationRunRecord.input_text``）：
@@ -263,20 +445,23 @@ class RuntimeContextManager:
 
         参数:
             text: 该 Run 的输入文本。
+            image_paths: 已最终化的 workspace-relative 图片路径；只作为自定义 image ref
+                写入 canonical context，模型调用前由 model-input boundary 解析成 provider block。
 
         返回:
-            ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示已存在，或文本
-            为空被跳过。
+            ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示已存在，或文本和
+            图片均为空被跳过。
 
         异常:
             无；持久化失败由 ``add_message`` 向上传播。
 
         副作用:
-            经 ``add_message`` 落库一条 ``HumanMessage`` 并触发上下文变更监听；空文本时写
-            一条 warning 日志（历史空输入 Run 不应因此中断执行）。不负责多模态 block
-            （视觉通道尚未接线）。
+            经 ``add_message`` 落库一条 ``HumanMessage`` 并触发上下文变更监听；文本和图片
+            均为空时写一条 warning 日志（历史空输入 Run 不应因此中断执行）。图片 ref 不
+            包含二进制。
         """
-        if not text or not text.strip():
+        paths = tuple(path.strip() for path in (image_paths or ()) if path and path.strip())
+        if (not text or not text.strip()) and not paths:
             log.warning(
                 "runtime_context_run_user_message_skipped",
                 extra={
@@ -286,14 +471,27 @@ class RuntimeContextManager:
             )
             return False
         if any(
-            entry.run_id == self.current_run_id and isinstance(entry.message, HumanMessage)
-            for entry in self._entries
+                entry.run_id == self.current_run_id and isinstance(entry.message, HumanMessage)
+                for entry in self._entries
         ):
             return False
-        message = self.add_message(HumanMessage(content=text))
-        get_conversation_event_projector().process(
-            UserInputAppendedEvent(task_id=self.current_task_id, run_id=self.current_run_id,text=text)
-        )
+        if paths:
+            content_blocks: list[dict[str, str]] = []
+            if text and text.strip():
+                content_blocks.append({"type": "text", "text": text})
+            content_blocks.extend({"type": "cosir_image_ref", "path": path} for path in paths)
+            content: str | list[dict[str, str]] = content_blocks
+        else:
+            content = text
+        message = self.add_message(HumanMessage(content=cast(Any, content)))
+        if text and text.strip():
+            get_conversation_event_projector().process(
+                UserInputAppendedEvent(
+                    task_id=self.current_task_id,
+                    run_id=self.current_run_id,
+                    text=text,
+                )
+            )
         return message
 
     def _close_unclosed_tool_calls(self) -> None:
@@ -423,6 +621,18 @@ class RuntimeContextManager:
             写回上下文并触发变更通知；无未配对调用时不修改上下文。
         """
         self._close_unclosed_tool_calls()
+        message_list = []
+        for entry in self._effective_entries():
+            if entry.message.type == "ai":
+                source_ai_message = cast(AIMessage, entry.message)
+                entry.message = AIMessage(
+                    id=source_ai_message.id,
+                    content=source_ai_message.content,
+                    tool_calls=source_ai_message.tool_calls,
+                    additional_kwargs=source_ai_message.additional_kwargs,
+
+                )
+            message_list.append(entry)
         return [entry.message for entry in copy.deepcopy(self._effective_entries())]
 
     def _effective_entries(self) -> list[ContextEntry]:
@@ -467,3 +677,11 @@ class RuntimeContextManager:
                     },
                 )
         self.used_tokens = result.usage
+
+
+def _as_ai_message(chunk: AIMessageChunk) -> AIMessage:
+    """把聚合 chunk 转成可序列化的标准 ``AIMessage``。"""
+
+    serialized = chunk.model_dump()
+    serialized["type"] = "ai"
+    return AIMessage.model_validate(serialized)

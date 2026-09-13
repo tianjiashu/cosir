@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from langchain_core.messages import BaseMessage
 
 
-@dataclass(frozen=True)
+@dataclass
 class ContextEntry:
     """承载一条原生 LangChain 消息及其 Run 归属。
 
