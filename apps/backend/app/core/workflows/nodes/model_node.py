@@ -18,7 +18,6 @@ stream；用 ``model.astream()`` 累积 ``AIMessage``，
 """
 
 import asyncio
-from typing import Any
 
 from langchain_core.messages import AIMessageChunk, SystemMessage
 from langgraph.config import get_stream_writer
@@ -47,37 +46,6 @@ from ..react.state import ReactGraphState
 # 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
 _NORMAL_FINISH_REASONS = frozenset({"stop", "end", "end_turn"})
 _CONTINUATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
-
-
-def _extract_finish_reason(message: Any) -> str | None:
-    """从完整 ``AIMessage`` 提取并归一化 Provider 的完成原因。
-
-    LangChain 通常把 OpenAI-compatible 的 ``finish_reason`` 放在
-    ``response_metadata``；部分 Provider 使用 ``stop_reason``。本函数只做字段读取与
-    小写归一化，不把 Provider 原始值改写进消息或 Run 事实。取消/连接中断导致没有终止
-    chunk 时返回 ``None``，由模型节点按不完整响应处理。
-
-    参数:
-        message: 流式 chunk 聚合后的 LangChain 消息。
-
-    返回:
-        规范化后的小写完成原因；字段缺失、类型不正确或空字符串时返回 ``None``。
-
-    异常:
-        无；非标准 Provider metadata 安全降级为 ``None``。
-
-    副作用:
-        无。
-    """
-
-    metadata = getattr(message, "response_metadata", None)
-    if not isinstance(metadata, dict):
-        return None
-    raw_reason = metadata.get("finish_reason") or metadata.get("stop_reason")
-    if not isinstance(raw_reason, str):
-        return None
-    normalized = raw_reason.strip().lower()
-    return normalized or None
 
 
 def _build_continuation_prompt(finish_reason: str | None) -> str:
@@ -264,7 +232,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     ai_message = chunk_processor.collect(chunks)
     parts.finish()
 
-    finish_reason = _extract_finish_reason(ai_message)
+    finish_reason = chunk_processor.extract_finish_reason(ai_message)
 
     _runtime_context().add_message(ai_message)
 

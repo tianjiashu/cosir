@@ -1,12 +1,14 @@
 """模型节点「流式 chunk 解析」处理器。
 
-把模型 ``astream`` 产出的 ``AIMessageChunk`` 流转为模型节点需要的三个结构化产物：
+把模型 ``astream`` 产出的 ``AIMessageChunk`` 流转为模型节点需要的四类结构化产物：
 
 - 思考分片抽取（``ModelChunkProcessor.extract_reasoning``）：按厂商 thinking 通道抽思考过程文本；
 - 工具调用提前抽取（``ModelChunkProcessor.extract_tool_calls``）：从单个 chunk 尽快拿到模型意图
   调用的工具集合；
 - chunk 合并（``ModelChunkProcessor.collect``）：把累积的 ``AIMessageChunk`` 列表合并为标准的
-  ``AIMessage``。
+  ``AIMessage``；
+- 完成原因归一化（``ModelChunkProcessor.extract_finish_reason``）：从合并后的 ``AIMessage`` 读取并
+  归一化 Provider 的 ``finish_reason`` / ``stop_reason``，供模型节点判定终态走向。
 
 只承载「模型 chunk → 结构化 parts」单一职责：不触达运行时上下文、不写日志、不落外部状态（仅
 ``collect`` 合并后会经 ``debug_dump`` 落盘完整 chunk JSON，属调试旁路）；
@@ -158,6 +160,41 @@ class ModelChunkProcessor:
         serialized = merged.model_dump()
         serialized["type"] = "ai"
         return AIMessage.model_validate(serialized)
+
+    @staticmethod
+    def extract_finish_reason(message: Any) -> str | None:
+        """从完整 ``AIMessage`` 提取并归一化 Provider 的完成原因。
+
+        LangChain 通常把 OpenAI-compatible 的 ``finish_reason`` 放在
+        ``response_metadata``；部分 Provider 使用 ``stop_reason``。本方法只做字段读取与
+        小写归一化，不把 Provider 原始值改写进消息或 Run 事实。取消/连接中断导致没有终止
+        chunk 时返回 ``None``，由模型节点按不完整响应处理。
+
+        参数为 ``collect`` 合并后的完整 ``AIMessage``，不依赖实例状态，故声明为
+        ``staticmethod``；与 ``extract_reasoning`` / ``extract_tool_calls`` / ``collect``
+        同为「模型输出 → 结构化产物」的纯转换。
+
+        参数:
+            message: ``collect`` 合并后的 LangChain 消息。
+
+        返回:
+            规范化后的小写完成原因；字段缺失、类型不正确或空字符串时返回 ``None``。
+
+        异常:
+            无；非标准 Provider metadata 安全降级为 ``None``。
+
+        副作用:
+            无。
+        """
+
+        metadata = getattr(message, "response_metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        raw_reason = metadata.get("finish_reason") or metadata.get("stop_reason")
+        if not isinstance(raw_reason, str):
+            return None
+        normalized = raw_reason.strip().lower()
+        return normalized or None
 
 
 def _extract_thought_blocks(content: Any) -> str:
