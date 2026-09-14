@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 # 单一依赖来源：迁移自 requirements.txt，由 uv.lock 锁定。
 dependencies = [
     "fastapi==0.115.6",
+    "python-multipart==0.0.20",
     "httpx==0.28.1",
     "jsonschema==4.23.0",
     "langchain-litellm==0.7.0 ; python_version >= '3.11'",

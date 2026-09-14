@@ -3,6 +3,7 @@ mod backend_readiness;
 mod backend_runtime;
 mod backend_supervisor;
 mod desktop_log;
+mod file_access;
 #[cfg(windows)]
 mod webview_diagnostics;
 
@@ -33,6 +34,8 @@ pub fn run() {
             backend_runtime_config,
             restart_backend,
             write_frontend_log,
+            file_access::read_selected_attachment_file,
+            file_access::resolve_selected_attachment_path,
         ])
         .setup(|app| {
             let supervisor = app.state::<BackendSupervisor>().inner().clone();

@@ -5,7 +5,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import {
   getBackendStatusError,
+  getBackendRuntimeSnapshot,
   initializeBackendRuntime,
+  setBackendBaseUrl,
   type BackendStatus,
 } from "@/src/runtime-config";
 
@@ -42,6 +44,7 @@ describe("backend runtime startup", () => {
       .mockResolvedValueOnce({ state: "ready" })
       .mockResolvedValueOnce({
         backendBaseUrl: "http://127.0.0.1:49152/",
+        generation: 1,
         status: { state: "ready" },
       });
 
@@ -60,5 +63,25 @@ describe("backend runtime startup", () => {
     const emptyMessageError = getBackendStatusError({ state: "failed", message: "" });
     expect(emptyMessageError?.message).toContain("请点击重试");
     expect(getBackendStatusError({ state: "stopped" })?.message).toContain("未运行");
+  });
+
+  it("publishes a new generation when a restarted backend reuses its URL", () => {
+    setBackendBaseUrl("http://127.0.0.1:49152");
+    const before = getBackendRuntimeSnapshot();
+
+    setBackendBaseUrl("http://127.0.0.1:49152", { generation: before.generation + 1, runtimeChanged: true });
+    const after = getBackendRuntimeSnapshot();
+
+    expect(after.backendBaseUrl).toBe(before.backendBaseUrl);
+    expect(after.generation).toBe(before.generation + 1);
+  });
+
+  it("ignores a stale runtime config response", () => {
+    setBackendBaseUrl("http://127.0.0.1:49152", { generation: 8 });
+    setBackendBaseUrl("http://127.0.0.1:49153", { generation: 7 });
+
+    const current = getBackendRuntimeSnapshot();
+    expect(current.backendBaseUrl).toBe("http://127.0.0.1:49152");
+    expect(current.generation).toBe(8);
   });
 });

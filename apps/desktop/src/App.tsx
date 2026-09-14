@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { WorkspaceShell } from "@/components/workspace-shell";
+import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { initializeBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
 
 type TaskRouteState = {
   initialMessage?: string;
+  initialAttachments?: InitialConversationAttachment[];
 };
 
 function TaskRoute() {
@@ -19,7 +21,7 @@ function TaskRoute() {
   const parsedTaskId = Number(taskPath[1]);
   const routeState = state as TaskRouteState | null;
   return Number.isInteger(parsedTaskId) && parsedTaskId > 0
-    ? <WorkspaceShell routeTaskId={parsedTaskId} initialMessage={routeState?.initialMessage} />
+    ? <WorkspaceShell routeTaskId={parsedTaskId} initialMessage={routeState?.initialMessage} initialAttachments={routeState?.initialAttachments} />
     : <div className="p-6 text-sm">任务标识无效。</div>;
 }
 

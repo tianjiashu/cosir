@@ -2,7 +2,7 @@
 
 单一职责：承载项目级、与具体业务模型无关、但被多个分层（api / core / service /
 models / utils）共同引用的基础常量。放在最底层 leaf 模块，避免上层互相引用造成的
-循环依赖（如 ``file_utils`` 与 ``models.attachment_ref`` 互引）。
+循环依赖（如文件工具与业务模型互引）。
 
 图片判定以标准库 ``mimetypes`` 为优先事实源（见 ``app.utils.image_utils.is_image_path``）；
 本模块的 ``IMAGE_EXTENSIONS`` 是**标准库未覆盖时的业务补充白名单**，仅保留标准库在

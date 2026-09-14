@@ -19,9 +19,9 @@ import json
 
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolObservation
-from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult, build_diff_stats
-from app.core.tools.tool_handler.patch.patch_parser import PatchOperation
-from app.core.tools.tool_handler.patch.v4a_reverse import (
+from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult, build_diff_stats
+from app.core.tools.tool_handler.patch_write.patch_parser import PatchOperation
+from app.core.tools.tool_handler.patch_write.v4a_reverse import (
     build_forward_operations,
     reverse_v4a_operation,
 )

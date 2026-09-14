@@ -121,7 +121,7 @@ class ConversationRunCrud:
         副作用:
             向 ``conversation_runs`` 表插入一行。
         """
-        if not input_text.strip():
+        if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
 
         if session is not None:
@@ -508,6 +508,7 @@ class ConversationRunCrud:
         session: Session | None = None,
         provider_id: int | None = None,
         model_name: str | None = None,
+        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
     ) -> ConversationRunRecord | None:
         """原子替换一个非活动 run 的输入与执行基线。"""
@@ -521,6 +522,7 @@ class ConversationRunCrud:
                 allowed_statuses,
                 provider_id,
                 model_name,
+                image_paths,
                 reasoning_effort,
             )
         with self._session_factory.begin() as managed_session:
@@ -532,6 +534,7 @@ class ConversationRunCrud:
                 allowed_statuses,
                 provider_id,
                 model_name,
+                image_paths,
                 reasoning_effort,
             )
 
@@ -577,6 +580,7 @@ class ConversationRunCrud:
         allowed_statuses: tuple[str, ...],
         provider_id: int | None = None,
         model_name: str | None = None,
+        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
     ) -> ConversationRunRecord | None:
         """在外部事务中把 run 重置为待执行，并清空旧输出。"""
@@ -593,6 +597,7 @@ class ConversationRunCrud:
                 status=ConversationRunStatus.PENDING.value,
                 provider_id=provider_id,
                 model_name=model_name,
+                image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 end_reason=None,
                 final_output=None,

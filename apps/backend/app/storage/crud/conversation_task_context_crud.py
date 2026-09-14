@@ -103,6 +103,41 @@ class ConversationTaskContextCrud:
             session.flush()
         return True
 
+    def replace_message(
+        self,
+        task_id: int,
+        sequence: int,
+        record: ConversationTaskContextRecord,
+        session: Session | None = None,
+    ) -> None:
+        """原子替换同一条 context 行的消息正文及流式标记。
+
+        该方法只服务于稳定 sequence 的流式 assistant 草稿更新，不改变行身份、顺序或
+        归属。调用方必须保证 ``record`` 与目标 task/sequence 匹配。
+        """
+
+        if record.task_id != task_id or record.sequence != sequence:
+            raise ValueError("context replacement target does not match record")
+        statement = select(ConversationTaskContextModel).where(
+            ConversationTaskContextModel.task_id == task_id,
+            ConversationTaskContextModel.sequence == sequence,
+        )
+        if session is None:
+            with self._session_factory.begin() as owned_session:
+                self.replace_message(task_id, sequence, record, session=owned_session)
+            return
+        model = session.scalar(statement)
+        if model is None:
+            raise KeyError(f"context row {task_id}/{sequence} not found")
+        replacement = record._to_model()
+        model.run_id = replacement.run_id
+        model.tool_call_id = replacement.tool_call_id
+        model.message_json = replacement.message_json
+        model.transport_metadata_json = replacement.transport_metadata_json
+        model.include_in_context = replacement.include_in_context
+        model.is_streaming = replacement.is_streaming
+        session.flush()
+
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 task 下某 run 的全部上下文消息行。
 

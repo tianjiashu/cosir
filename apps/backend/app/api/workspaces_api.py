@@ -200,7 +200,7 @@ async def create_workspace_task(
     """创建工作区下的任务容器，不启动 ConversationRun。"""
     try:
         task = await asyncio.to_thread(
-            workspace_service.create_task, workspace_id, preview(payload.text)
+            workspace_service.create_task, workspace_id, preview(payload.text) or "新对话"
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

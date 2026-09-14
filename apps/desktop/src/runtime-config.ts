@@ -11,8 +11,17 @@ declare global {
 const runtimeConfigListeners = new Set<() => void>();
 const STARTUP_TIMEOUT_MS = 95_000;
 
+export type BackendRuntimeSnapshot = {
+  backendBaseUrl: string;
+  generation: number;
+};
+
+let backendRuntimeGeneration = 0;
+let backendRuntimeSnapshot: BackendRuntimeSnapshot | null = null;
+
 export type BackendRuntimeConfig = {
   backendBaseUrl: string;
+  generation: number;
   status: BackendStatus;
 };
 
@@ -24,9 +33,30 @@ export function getBackendBaseUrl(): string | null {
   return window.__COSIR_RUNTIME_CONFIG__?.backendBaseUrl ?? null;
 }
 
-/** 返回当前后端地址，供 React 外部 store 订阅使用。 */
-export function getBackendBaseUrlSnapshot(): string {
+function resolveBackendBaseUrl(): string {
   return getBackendBaseUrl() ?? import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000";
+}
+
+/**
+ * 返回当前后端实例快照，供 React 外部 store 订阅使用。
+ *
+ * `generation` 表示后端进程实例变化，而不是 URL 变化。后端重启可能复用同一个
+ * localhost 端口，因此 UI 不能仅依赖 `backendBaseUrl` 判断是否需要重新同步状态。
+ */
+export function getBackendRuntimeSnapshot(): BackendRuntimeSnapshot {
+  const backendBaseUrl = resolveBackendBaseUrl();
+  if (backendRuntimeSnapshot?.backendBaseUrl !== backendBaseUrl) {
+    backendRuntimeSnapshot = {
+      backendBaseUrl,
+      generation: backendRuntimeGeneration,
+    };
+  }
+  return backendRuntimeSnapshot;
+}
+
+/** 返回当前后端地址。 */
+export function getBackendBaseUrlSnapshot(): string {
+  return getBackendRuntimeSnapshot().backendBaseUrl;
 }
 
 /** 订阅 Tauri supervisor 切换后端进程或端口的通知。 */
@@ -82,7 +112,7 @@ export async function initializeBackendRuntime(): Promise<string> {
         const config = await invoke<BackendRuntimeConfig>("backend_runtime_config");
         const configError = getBackendStatusError(config.status);
         if (configError) throw configError;
-        setBackendBaseUrl(config.backendBaseUrl);
+        setBackendBaseUrl(config.backendBaseUrl, { generation: config.generation });
         return config.backendBaseUrl.replace(/\/$/, "");
       } catch (error) {
         if (error instanceof Error && error.message) lastError = error.message;
@@ -94,13 +124,38 @@ export async function initializeBackendRuntime(): Promise<string> {
   throw new Error(lastError);
 }
 
-export function setBackendBaseUrl(baseUrl: string): void {
-  window.__COSIR_RUNTIME_CONFIG__ = { backendBaseUrl: baseUrl.replace(/\/$/, "") };
+export function setBackendBaseUrl(
+  baseUrl: string,
+  options: { generation?: number; runtimeChanged?: boolean } = {},
+): void {
+  const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+  if (
+    options.generation !== undefined
+    && options.generation < backendRuntimeGeneration
+  ) {
+    // Polling responses can arrive out of order. A stale supervisor snapshot must not
+    // move the frontend back to an older backend instance.
+    return;
+  }
+  const previousBaseUrl = getBackendBaseUrl();
+  const endpointChanged = previousBaseUrl !== null && previousBaseUrl !== normalizedBaseUrl;
+  const runtimeChanged = options.runtimeChanged === true || endpointChanged;
+  if (options.generation !== undefined) {
+    backendRuntimeGeneration = options.generation;
+  } else if (runtimeChanged) {
+    backendRuntimeGeneration += 1;
+  }
+
+  window.__COSIR_RUNTIME_CONFIG__ = { backendBaseUrl: normalizedBaseUrl };
+  backendRuntimeSnapshot = {
+    backendBaseUrl: normalizedBaseUrl,
+    generation: backendRuntimeGeneration,
+  };
   for (const listener of runtimeConfigListeners) listener();
 }
 
 export async function restartBackendRuntime(): Promise<BackendRuntimeConfig> {
   const config = await invoke<BackendRuntimeConfig>("restart_backend");
-  setBackendBaseUrl(config.backendBaseUrl);
+  setBackendBaseUrl(config.backendBaseUrl, { generation: config.generation, runtimeChanged: true });
   return config;
 }

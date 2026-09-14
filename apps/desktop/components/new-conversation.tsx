@@ -1,23 +1,67 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
-import { Loader2Icon, SendIcon } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
-import { ComposerInput } from "@/components/composer/composer-input";
+import {
+  InlineAttachmentInput,
+  type InlineFileAttachment,
+} from "@/components/composer/inline-attachment-input";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
+import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
+import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
+
+export type InitialConversationAttachment = PickedComposerAttachment;
+
+function NewConversationAttachmentChip({ attachment, onRemove }: {
+  attachment: PickedComposerAttachment;
+  onRemove: () => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (attachment.kind !== "image") return;
+    const url = URL.createObjectURL(attachment.file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachment.file, attachment.kind]);
+
+  if (attachment.kind === "image") {
+    return <ImageAttachmentCard src={previewUrl} name={attachment.name} onRemove={onRemove} />;
+  }
+
+  return (
+    <div className="bg-muted flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs">
+      <FileTextIcon className="size-3.5 shrink-0" />
+      <span className="max-w-56 truncate">{attachment.name}</span>
+      <button
+        type="button"
+        className="text-muted-foreground hover:text-foreground rounded-sm"
+        aria-label={`移除附件 ${attachment.name}`}
+        onClick={onRemove}
+      >
+        <XIcon className="size-3.5" />
+      </button>
+    </div>
+  );
+}
 
 type NewConversationProps = {
   workspaces: Workspace[];
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
   onWorkspaceCreated: () => Promise<void>;
-  onStarted: (conversation: StartedConversation, initialText: string) => void;
+  onStarted: (
+    conversation: StartedConversation,
+    initialText: string,
+    attachments: InitialConversationAttachment[],
+  ) => void;
 };
 
 export function NewConversation({
@@ -32,11 +76,20 @@ export function NewConversation({
   const [submitting, setSubmitting] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<PickedComposerAttachment[]>([]);
+  const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
+  const fileAttachments: InlineFileAttachment[] = attachments
+    .filter((attachment) => attachment.kind === "file")
+    .map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+    }));
+  const hasDraft = Boolean(text.trim() || attachments.length > 0);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedText = text.trim();
-    if (!selectedWorkspaceId || !modelReady || !trimmedText || submitting) return;
+    if (!selectedWorkspaceId || !modelReady || !hasDraft || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -48,7 +101,11 @@ export function NewConversation({
         modelName: selection.modelName,
         reasoningEffort: selection.reasoningEffort ?? null,
       });
-      onStarted(task, trimmedText);
+      onStarted(
+        task,
+        trimmedText,
+        attachments,
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "创建对话失败，请重试");
       setSubmitting(false);
@@ -78,12 +135,27 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          <ComposerInput
+          {attachments.some((attachment) => attachment.kind === "image") && (
+            <div className="flex flex-wrap gap-2 px-2 pt-1" aria-label="待发送附件">
+              {attachments.filter((attachment) => attachment.kind === "image").map((attachment) => (
+                <NewConversationAttachmentChip
+                  key={attachment.path}
+                  attachment={attachment}
+                  onRemove={() => setAttachments((current) => current.filter((item) => item.path !== attachment.path))}
+                />
+              ))}
+            </div>
+          )}
+          <InlineAttachmentInput
             value={text}
-            onTextChange={setText}
-            onSubmitText={() => {
-              if (!selectedWorkspaceId || !modelReady || !text.trim() || submitting) return;
+            onChange={setText}
+            onSubmit={() => {
+              if (!selectedWorkspaceId || !modelReady || !hasDraft || submitting) return;
               formRef.current?.requestSubmit();
+            }}
+            attachments={fileAttachments}
+            onRemoveAttachment={(fileId) => {
+              setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
             }}
             placeholder="你想让我们在这个工作区中构建什么？"
             className="min-h-24 w-full resize-none bg-transparent px-2 py-1 text-base outline-none"
@@ -98,9 +170,21 @@ export function NewConversation({
                 onModelReadyChange={setModelReady}
               />
             </div>
-            <Button type="submit" className="shrink-0 rounded-full" disabled={!selectedWorkspaceId || !modelReady || !text.trim() || submitting}>
+            <div className="flex items-center gap-1">
+              <AttachmentPicker
+                workspaceRoot={selectedWorkspace?.root_path}
+                onPicked={async (picked) => {
+                  setAttachments((current) => {
+                    const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
+                    return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];
+                  });
+                }}
+                onError={setError}
+              />
+              <Button type="submit" className="shrink-0 rounded-full" disabled={!selectedWorkspaceId || !modelReady || !hasDraft || submitting}>
               {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}开始对话
-            </Button>
+              </Button>
+            </div>
           </div>
         </ComposerSurface>
         {error && <p className="text-destructive mt-3 text-center text-sm">{error}</p>}

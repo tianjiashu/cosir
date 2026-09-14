@@ -71,15 +71,15 @@ describe("DetailsTool", () => {
 
   it("renders search and directory counts in their rows", () => {
     const searchHtml = renderDetails(
-      { kind: "file-list", pattern: "TODO", target: "content", files: [{ path: "a.ts" }], match_count: 3 },
-      { toolName: "search_files" },
+      { kind: "content-search-results", pattern: "TODO", matches: [{ path: "a.ts", line: 3, content: "TODO", is_match: true }], match_count: 3 },
+      { toolName: "search_content" },
     );
     const directoryHtml = renderDetails(
       { kind: "directory-list", path: "src", entries: [{ name: "app.ts", type: "file" }], total_entries: 7 },
       { toolName: "list_directory" },
     );
 
-    expect(searchHtml).toContain("TODO · content · 3 个命中");
+    expect(searchHtml).toContain("TODO · 3 个命中");
     expect(directoryHtml).toContain("src · 7 个条目");
   });
 

@@ -21,7 +21,10 @@ from app.core.tools.schemas import ToolObservation
 from app.core.workflows.nodes import observation_node as observe_module
 from app.core.workflows.nodes import tools_node as tools_module
 from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+    ToolCallLifecycleManager,
+    ToolCallLifecycleRecord,
+)
 from app.core.workflows.react.state import ReactGraphState
 
 
@@ -32,15 +35,13 @@ def _state(**overrides: Any) -> ReactGraphState:
         "step_count": 1,
         "tool_error_count": 0,
         "requested_tool": False,
-        "repair_requested": False,
         "final_response": False,
         "terminal": False,
-        "pending_tool_calls": {},
+        "instruction": "",
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
         "tool_call_lifecycle": ToolCallLifecycleManager(),
-        "deferred_repair_message": "",
     }
     values.update(overrides)
     return ReactGraphState(**values)
@@ -79,10 +80,12 @@ class _WorkflowHarness:
         monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: self.events.append)
 
 
-def _pending_call(call_id: str) -> dict[str, Any]:
-    """构造 model 节点写入 ``pending_tool_calls`` 的内部调用 dict。"""
+def _running_call(call_id: str, status: str = "running") -> ToolCallLifecycleRecord:
+    """构造 lifecycle 中处于给定状态的合法调用记录（供 tools/observe 节点读取 running 调用）。"""
 
-    return {"tool_name": "list_directory", "arguments": {}, "call_id": call_id}
+    return ToolCallLifecycleRecord(
+        tool_call_id=call_id, tool_name="list_directory", status=status
+    )
 
 
 def test_tools_summary_uses_tool_call_id_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,10 +107,10 @@ def test_tools_summary_uses_tool_call_id_key(monkeypatch: pytest.MonkeyPatch) ->
     tools_result = asyncio.run(
         tools_module._tools_node(
             _state(
-                pending_tool_calls={
-                    "tool_calls": [_pending_call("call-1")],
-                    "instruction": "看看目录",
-                }
+                tool_call_lifecycle=ToolCallLifecycleManager(
+                    calls={"call-1": _running_call("call-1")}
+                ),
+                instruction="看看目录",
             )
         )
     )
@@ -137,7 +140,8 @@ def test_tools_summary_feeds_observe_without_key_error(
     )
     harness.patch(monkeypatch)
     state = _state(
-        pending_tool_calls={"tool_calls": [_pending_call("call-1")], "instruction": "看看目录"}
+        tool_call_lifecycle=ToolCallLifecycleManager(calls={"call-1": _running_call("call-1")}),
+        instruction="看看目录",
     )
 
     tools_result = asyncio.run(tools_module._tools_node(state))
@@ -183,7 +187,12 @@ def test_observe_settles_failed_observation_from_tools_summary(
 
     tools_result = asyncio.run(
         tools_module._tools_node(
-            _state(pending_tool_calls={"tool_calls": [_pending_call("call-9")], "instruction": ""})
+            _state(
+                tool_call_lifecycle=ToolCallLifecycleManager(
+                    calls={"call-9": _running_call("call-9")}
+                ),
+                instruction="",
+            )
         )
     )
     summaries = tools_result["last_tool_results"]

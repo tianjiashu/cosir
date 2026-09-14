@@ -3,11 +3,13 @@
 from datetime import UTC, datetime
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
+from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
 
 
@@ -108,3 +110,70 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
     }
 
     validate_snapshot(state)  # 不应抛 ValueError
+
+
+def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
+    """冷重建应保留 partial 文本，并仅对 active Run 恢复 running。"""
+
+    timestamp = _timestamp()
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 1,
+            "task_id": 7,
+            "status": "running",
+            "end_reason": None,
+            "usage": None,
+            "created_at": timestamp,
+        },
+    )()
+    row = ConversationTaskContextRecord(
+        id=1,
+        task_id=7,
+        run_id=1,
+        message=AIMessage(content="输出到一半"),
+        include_in_context=False,
+        sequence=1,
+        is_streaming=True,
+    )
+
+    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+
+    assert state["runs"][0]["messages"][0]["parts"] == [
+        {"type": "text", "text": "输出到一半", "status": "running"}
+    ]
+    validate_snapshot(state)
+
+
+def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> None:
+    """重启恢复会先取消遗留 Run，partial 不应在终态快照中继续显示 running。"""
+
+    timestamp = _timestamp()
+    run = type(
+        "Run",
+        (),
+        {
+            "id": 1,
+            "task_id": 7,
+            "status": "cancelled",
+            "end_reason": "backend_restarted",
+            "usage": None,
+            "created_at": timestamp,
+        },
+    )()
+    row = ConversationTaskContextRecord(
+        id=1,
+        task_id=7,
+        run_id=1,
+        message=AIMessage(content="输出到一半"),
+        include_in_context=False,
+        sequence=1,
+        is_streaming=True,
+    )
+
+    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+
+    assert state["runs"][0]["messages"][0]["parts"] == [
+        {"type": "text", "text": "输出到一半", "status": "completed"}
+    ]

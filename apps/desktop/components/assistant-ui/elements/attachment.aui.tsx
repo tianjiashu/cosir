@@ -2,13 +2,13 @@
 
 import {
   type PropsWithChildren,
+  useMemo,
   useState,
   type FC,
   isValidElement,
 } from "react";
 import {
   XIcon,
-  PlusIcon,
   FileText,
   Loader2Icon,
   AlertCircleIcon,
@@ -17,6 +17,7 @@ import {
   AttachmentPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
+  unstable_useComposerInput,
   useAuiState,
   useAui,
 } from "@assistant-ui/react";
@@ -32,10 +33,17 @@ import {
   DialogContent,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
+import { useAttachmentTaskId } from "@/components/assistant-ui/elements/attachment-context";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
+import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
+import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
+import {
+  InlineAttachmentInput,
+  type InlineFileAttachment,
+} from "@/components/composer/inline-attachment-input";
 
 type AttachmentPreviewProps = {
   src: string;
@@ -60,7 +68,7 @@ const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
 };
 
 const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
-  const src = useAttachmentSrc();
+  const src = useAttachmentSrc(useAttachmentTaskId());
 
   if (!src) return children;
 
@@ -90,20 +98,8 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
 };
 
 const AttachmentThumb: FC = () => {
-  const src = useAttachmentSrc();
-
-  return (
-    <Avatar className="aui-attachment-tile-avatar h-full w-full rounded-none after:hidden">
-      <AvatarImage
-        src={src}
-        alt="Attachment preview"
-        className="aui-attachment-tile-image rounded-none object-cover"
-      />
-      <AvatarFallback>
-        <FileText className="aui-attachment-tile-fallback-icon text-muted-foreground/80 size-6 stroke-[1.5]" />
-      </AvatarFallback>
-    </Avatar>
-  );
+  const src = useAttachmentSrc(useAttachmentTaskId());
+  return <ImageAttachmentCard src={src} name="图片附件" className="aui-attachment-tile-avatar size-full rounded-none border-0 shadow-none" />;
 };
 
 const AttachmentUI: FC = () => {
@@ -142,6 +138,26 @@ const AttachmentUI: FC = () => {
       ? (s.attachment.status.message ?? "Upload failed")
       : undefined,
   );
+
+  if (!isImage) {
+    return (
+      <AttachmentPrimitive.Root
+        className={cn(
+          "aui-attachment-file-chip bg-muted/70 text-foreground inline-flex max-w-64 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs",
+          isError && "border-destructive/50 text-destructive",
+        )}
+        title={errorMessage}
+      >
+        {isUploading ? (
+          <Loader2Icon className="text-muted-foreground size-3.5 shrink-0 animate-spin" />
+        ) : (
+          <FileText className="text-muted-foreground size-3.5 shrink-0" />
+        )}
+        <span className="min-w-0 truncate font-medium"><AttachmentPrimitive.Name /></span>
+        {isComposer && <AttachmentRemove compact />}
+      </AttachmentPrimitive.Root>
+    );
+  }
 
   return (
     <TooltipProvider>
@@ -209,13 +225,18 @@ const AttachmentUI: FC = () => {
   );
 };
 
-const AttachmentRemove: FC = () => {
+const AttachmentRemove: FC<{ compact?: boolean }> = ({ compact = false }) => {
   return (
     <AttachmentPrimitive.Remove
       render={
         <TooltipIconButton
           tooltip="Remove file"
-          className="aui-attachment-tile-remove absolute end-1 top-1 size-5 rounded-full bg-black/50! text-white after:absolute after:-inset-1.5 hover:bg-black/70! hover:text-white! active:scale-[0.96] motion-reduce:transition-none"
+          className={cn(
+            "aui-attachment-tile-remove size-5 rounded-full active:scale-[0.96] motion-reduce:transition-none",
+            compact
+              ? "text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+              : "absolute end-1 top-1 bg-black/50! text-white after:absolute after:-inset-1.5 hover:bg-black/70! hover:text-white!",
+          )}
           side="top"
         />
       }
@@ -239,27 +260,71 @@ export const ComposerAttachments: FC = () => {
   return (
     <div className="aui-composer-attachments flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden">
       <ComposerPrimitive.Attachments>
-        {() => <AttachmentUI />}
+        {({ attachment }) => attachment.type === "image" ? <AttachmentUI /> : null}
       </ComposerPrimitive.Attachments>
     </div>
   );
 };
 
-export const ComposerAddAttachment: FC = () => {
+type InlineComposerInputProps = {
+  placeholder?: string;
+  className?: string;
+  autoFocus?: boolean;
+  "aria-label"?: string;
+};
+
+export const InlineComposerInput: FC<InlineComposerInputProps> = ({
+  placeholder,
+  className,
+  autoFocus,
+  "aria-label": ariaLabel,
+}) => {
+  const composer = unstable_useComposerInput();
+  const aui = useAui();
+  const attachments = useAuiState((state) => state.composer.attachments);
+  const fileAttachments = useMemo(
+    () => attachments
+      .filter((attachment) => attachment.type !== "image")
+      .map<InlineFileAttachment>((attachment) => ({ id: attachment.id, name: attachment.name })),
+    [attachments],
+  );
+
+  const removeAttachment = (fileId: string) => {
+    const attachments = aui.composer.getState().attachments;
+    const attachmentIndex = attachments.findIndex((attachment) => attachment.type !== "image" && attachment.id === fileId);
+    if (attachmentIndex >= 0) {
+      void aui.composer.attachment({ index: attachmentIndex }).remove();
+    }
+  };
+
   return (
-    <ComposerPrimitive.AddAttachment
-      render={
-        <TooltipIconButton
-          tooltip="Add Attachment"
-          side="bottom"
-          variant="ghost"
-          size="icon"
-          className="aui-composer-add-attachment text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full active:scale-[0.96] motion-reduce:transition-none"
-          aria-label="Add Attachment"
-        />
-      }
-    >
-      <PlusIcon className="aui-attachment-add-icon size-4" />
-    </ComposerPrimitive.AddAttachment>
+    <InlineAttachmentInput
+      value={composer.value}
+      onChange={composer.setText}
+      onSubmit={() => composer.send()}
+      attachments={fileAttachments}
+      onRemoveAttachment={removeAttachment}
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      disabled={composer.isDisabled}
+      className={className}
+      aria-label={ariaLabel}
+    />
+  );
+};
+
+export const ComposerAttachmentButton: FC<{ workspaceRoot?: string }> = ({ workspaceRoot }) => {
+  const aui = useAui();
+
+  const addPicked = async (picked: PickedComposerAttachment[]) => {
+    for (const attachment of picked) await aui.composer.addAttachment(attachment.file);
+  };
+
+  return (
+    <AttachmentPicker
+      workspaceRoot={workspaceRoot}
+      onPicked={addPicked}
+      onError={(message) => void frontendLog("WARNING", "attachment_picker_rejected", message, { data: {} })}
+    />
   );
 };

@@ -24,7 +24,7 @@ import type {
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import { newTraceId } from "@/lib/trace";
 import {
-  getBackendBaseUrlSnapshot,
+  getBackendRuntimeSnapshot,
   subscribeBackendRuntime,
 } from "@/src/runtime-config";
 
@@ -36,20 +36,23 @@ type RuntimeSessionProps = AssistantRuntimeProps & {
 export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   taskId,
   workspaceId,
+  workspaceRoot,
   initialState,
   setIssue,
   initialMessage,
+  initialAttachments,
   forkAvailable,
   forkingRunId,
   onForkRun,
   onTaskStateChanged,
   onRunStateChange,
 }: RuntimeSessionProps) {
-  const backendBaseUrl = useSyncExternalStore(
+  const backendRuntime = useSyncExternalStore(
     subscribeBackendRuntime,
-    getBackendBaseUrlSnapshot,
-    getBackendBaseUrlSnapshot,
+    getBackendRuntimeSnapshot,
+    getBackendRuntimeSnapshot,
   );
+  const { backendBaseUrl, generation: backendRuntimeGeneration } = backendRuntime;
   const [traceId] = useState(() => newTraceId());
   const initialStateRef = useRef(initialState);
   const sessionInitialState = initialStateRef.current;
@@ -68,6 +71,9 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const registerComposerRestore = useCallback((restore: ComposerRestore) => {
     composerRestoreRef.current = restore;
   }, []);
+  const handleInitialMessageError = useCallback((message: string) => {
+    setIssue({ message, retryable: true });
+  }, [setIssue]);
   const notifyTaskStateChanged = useCallback(() => {
     onTaskStateChangedRef.current?.();
   }, []);
@@ -86,8 +92,10 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const context = useMemo<RuntimeSessionContext>(() => ({
     taskId,
     workspaceId,
+    workspaceRoot,
     initialState: sessionInitialState,
     backendBaseUrl,
+    backendRuntimeGeneration,
     traceId,
     setIssue,
     onTaskStateChanged: notifyTaskStateChanged,
@@ -96,7 +104,17 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     cancelRequestedRunIdRef,
     lastTransportErrorRef,
     composerRestoreRef,
-  }), [backendBaseUrl, notifyTaskStateChanged, sessionInitialState, setIssue, taskId, traceId, workspaceId]);
+  }), [
+    backendBaseUrl,
+    backendRuntimeGeneration,
+    notifyTaskStateChanged,
+    sessionInitialState,
+    setIssue,
+    taskId,
+    traceId,
+    workspaceId,
+    workspaceRoot,
+  ]);
 
   useRuntimeDiagnostics(context);
   const cancellation = useRuntimeCancellation(context);
@@ -117,6 +135,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       <div className="flex h-full min-h-0 flex-col">
         <Thread
           taskId={taskId}
+          workspaceRoot={workspaceRoot}
           forkAvailable={forkAvailable}
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
@@ -127,9 +146,12 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       </div>
       <InitialMessageBridge
         text={initialMessage}
+        attachments={initialAttachments}
         sentRef={initialMessageSentRef}
         initialState={sessionInitialState}
         taskId={taskId}
+        traceId={traceId}
+        onError={handleInitialMessageError}
       />
     </AssistantRuntimeProvider>
   );

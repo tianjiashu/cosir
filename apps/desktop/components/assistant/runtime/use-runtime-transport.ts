@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { requestJson } from "@/lib/http/client";
 import {
+  extractUserAddMessageAttachments,
   extractUserAddMessageText,
   getOrCreateTransportCommandId,
   getUserAddMessageSourceId,
@@ -22,6 +23,8 @@ import type { TransportIssue } from "@/components/assistant/transport-status";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
+import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 
 type RuntimeTransport = ReturnType<typeof useTaskAssistantTransportRuntime>;
 const RECOVERY_FEEDBACK_DELAY_MS = 350;
@@ -41,6 +44,10 @@ export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
 ): RuntimeTransport {
+  const attachmentAdapter = useMemo(
+    () => createAttachmentAdapter(context.taskId),
+    [context.taskId],
+  );
   const finishCountRef = useRef(0);
   const recoveryIssueTimerRef = useRef<number | null>(null);
   const errorSnapshotAbortControllerRef = useRef<AbortController | null>(null);
@@ -106,17 +113,22 @@ export function useRuntimeTransport(
     });
 
     const failedCommands = [...params.commands].reverse();
-    const failedText = failedCommands.map(extractUserAddMessageText).find((text) => text.trim().length > 0);
     const failedEditCommand = failedCommands.find((command) => getUserAddMessageSourceId(command) !== null);
-    if (failedText && failedEditCommand) {
+    const failedCommand = failedEditCommand ?? failedCommands.find((command) => {
+      return extractUserAddMessageText(command).trim().length > 0
+        || extractUserAddMessageAttachments(command).length > 0;
+    });
+    const failedText = failedCommand ? extractUserAddMessageText(failedCommand) : "";
+    const failedAttachments = failedCommand ? extractUserAddMessageAttachments(failedCommand) : [];
+    if (failedCommand && failedEditCommand && (failedText.trim() || failedAttachments.length > 0)) {
       const sourceId = getUserAddMessageSourceId(failedEditCommand);
       const restored = sourceId !== null
-        && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText) === true;
+        && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
       if (!restored) {
         context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", retryable: true });
       }
-    } else if (failedText) {
-      context.composerRestoreRef.current?.restoreNewMessage(failedText);
+    } else if (failedCommand && (failedText.trim() || failedAttachments.length > 0)) {
+      context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
     }
 
     const transportError = parseTransportError(error);
@@ -191,6 +203,7 @@ export function useRuntimeTransport(
     initialState: context.initialState,
     protocol: "assistant-transport",
     capabilities: { edit: true },
+    adapters: { attachments: attachmentAdapter },
     api: `${context.backendBaseUrl}/assistant`,
     resumeApi: `${context.backendBaseUrl}/tasks/${context.taskId}/assistant/attach`,
     headers: async () => ({
@@ -239,7 +252,10 @@ export function useRuntimeTransport(
       const commands = body.commands.map((command) => {
         const key = command as object;
         const commandId = getOrCreateTransportCommandId(key);
-        return command.type === "add-message" ? { ...command, commandId } : command;
+        const prepared = prepareUserCommand(command);
+        return prepared && typeof prepared === "object" && "type" in prepared && prepared.type === "add-message"
+          ? { ...prepared, commandId }
+          : prepared;
       });
       // A new user command starts a fresh transport recovery budget. Empty
       // command batches are attach/resume operations and must not reset the
@@ -258,7 +274,11 @@ export function useRuntimeTransport(
           threadId: `task-${context.taskId}`,
           commandCount: commands.length,
           runId: requestRunId,
-          commandTypes: commands.map((command) => command.type),
+          commandTypes: commands.map((command) => (
+            typeof command === "object" && command !== null && "type" in command
+              ? command.type
+              : "unknown"
+          )),
           stateStripped: Object.prototype.hasOwnProperty.call(body, "state"),
           parentIdPresent: Object.prototype.hasOwnProperty.call(body, "parentId"),
         },

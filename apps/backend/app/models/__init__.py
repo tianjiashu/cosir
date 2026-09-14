@@ -23,8 +23,8 @@ from app.models.workspace_record import WorkspaceRecord
 
 __all__ = [
     "ConversationCommandRecord",
-    "ConversationRunRecord",
     "ConversationRunError",
+    "ConversationRunRecord",
     "ConversationRunStatus",
     "ConversationRunUsage",
     "LogEntryRecord",

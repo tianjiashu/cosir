@@ -88,13 +88,13 @@ function toolLifecycleState(previous, text, runId, status, toolStatus) {
     {
       type: "tool-call",
       toolCallId: `tool-lifecycle-${runId}`,
-      toolName: "search_files",
+      toolName: "search_content",
       args: { pattern: "lifecycle" },
       status: toolStatus,
       error: null,
       presentation: { verb: "搜索文件", icon: "search", surface: "standalone", expandable: true, expand_layout: "list" },
       data: toolStatus === "completed"
-        ? { kind: "file-list", files: [{ path: "lifecycle.test.ts" }] }
+        ? { kind: "content-search-results", matches: [{ path: "lifecycle.test.ts", line: 1, content: "lifecycle", is_match: true }] }
         : null,
       isError: false,
     },
@@ -153,7 +153,7 @@ function toolTraceState() {
           {
             type: "tool-call",
             toolCallId: "trace-search-files",
-            toolName: "search_files",
+            toolName: "search_content",
             args: { pattern: "assistant-ui" },
             status: "completed",
             error: null,

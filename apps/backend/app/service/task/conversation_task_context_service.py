@@ -20,11 +20,12 @@ from app.storage.crud.conversation_task_context_crud import ConversationTaskCont
 class ConversationTaskContextService:
     """维护 LangChain 原生消息的 Task 级有序 context。
 
-    以 ``conversation_task_contexts`` 表为唯一持久化真相，每条消息一行；
+    以 ``conversation_task_contexts`` 表为唯一持久化真相，每条完整消息或 assistant
+    partial 草稿一行；
     运行时仅经 CRUD 读写，不存在进程内 context working copy（避免与数据库双写漂移）。
 
     职责边界：
-    - 负责：消息与 Transport metadata 的追加、按 run 删除、
+    - 负责：消息与 Transport metadata 的追加、assistant 草稿原地替换、按 run 删除、
       序列号分配、纳入过滤读取。
     - 不负责：消息内容语义校验、压缩策略（由上下文管理器负责）。
     """
@@ -42,6 +43,7 @@ class ConversationTaskContextService:
         seq: int | None = None,
         include_in_context: bool = True,
         transport_metadata: TransportMetadata | None = None,
+        is_streaming: bool = False,
         session: Session | None = None,
     ) -> bool:
         """以独立事务追加一条完整 LangChain 消息。
@@ -56,6 +58,8 @@ class ConversationTaskContextService:
             seq: 显式序号；为 ``None`` 时自动取 ``max_sequence(task_id) + 1``，
                 避免与现有行 ``(task_id, sequence)`` 唯一约束冲突。
             include_in_context: 该消息是否纳入上下文视图，默认 ``True``。
+            is_streaming: 是否为仅供 Transport 冷重建的 assistant 流式草稿。草稿必须同时
+                使用 ``include_in_context=False``，避免半截消息进入下一次模型请求。
             transport_parts: 完整消息对应的 Assistant Transport parts；由本 service
                 组装并交给严格 metadata serializer，不允许调用方手写 metadata JSON。
             tool_result: ToolMessage 的结构化 Transport 结果；普通消息必须为 ``None``。
@@ -79,7 +83,10 @@ class ConversationTaskContextService:
             include_in_context=include_in_context,
             sequence=seq,
             transport_metadata=transport_metadata,
+            is_streaming=is_streaming,
         )
+        if is_streaming and include_in_context:
+            raise ValueError("streaming context messages must not enter model context")
         created = self._crud.create(record, session=session) is not False
         if created and session is None:
             log.info(
@@ -95,6 +102,36 @@ class ConversationTaskContextService:
                 },
             )
         return created
+
+    def streaming_messages_for_run(
+        self, task_id: int, run_id: int
+    ) -> list[ConversationTaskContextRecord]:
+        """返回指定 Run 尚未收口的流式 assistant 草稿，按 sequence 排序。"""
+
+        return [
+            record
+            for record in self._crud.get(task_id, include_in_context=False)
+            if record.run_id == run_id and record.is_streaming
+        ]
+
+    def replace_streaming_message(
+        self,
+        record: ConversationTaskContextRecord,
+        *,
+        session: Session | None = None,
+    ) -> None:
+        """更新一条已存在的流式草稿或将其收口为完整消息。
+
+        ``record.sequence`` 是流式消息的稳定身份；方法不新增行，避免每个 chunk 形成一
+        条上下文消息。持久化层异常向调用方传播，由模型节点的运行终态处理。
+        """
+
+        self._crud.replace_message(
+            record.task_id,
+            record.sequence,
+            record,
+            session=session,
+        )
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         """返回纳入上下文的 Task context entry 列表（仅取 ``include_in_context`` 为真）。"""
@@ -147,6 +184,7 @@ class ConversationTaskContextService:
                     include_in_context=source_entry.include_in_context,
                     sequence=next_sequence,
                     transport_metadata=copy.deepcopy(source_entry.transport_metadata),
+                    is_streaming=source_entry.is_streaming,
                 ),
                 session=session,
             )

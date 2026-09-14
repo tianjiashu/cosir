@@ -56,6 +56,7 @@ def initialize_app_schema(engine: Engine) -> None:
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
     _ensure_context_tool_call_id_schema(engine)
+    _ensure_context_streaming_schema(engine)
     _ensure_tasks_sqlite_autoincrement(engine)
     _remove_legacy_checkpoint_unique_constraint(engine)
 
@@ -88,6 +89,24 @@ def _ensure_context_tool_call_id_schema(engine: Engine) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_context_task_run_tool_call_idx "
                 "ON conversation_task_contexts (task_id, run_id, tool_call_id) "
                 "WHERE tool_call_id IS NOT NULL"
+            )
+        )
+
+
+def _ensure_context_streaming_schema(engine: Engine) -> None:
+    """为已有主库补齐流式 assistant 草稿标记。"""
+
+    if engine.dialect.name != "sqlite":
+        return
+    table_name = ConversationTaskContextModel.__tablename__
+    columns = {column["name"] for column in inspect(engine).get_columns(table_name)}
+    if "is_streaming" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE conversation_task_contexts "
+                "ADD COLUMN is_streaming BOOLEAN NOT NULL DEFAULT 0"
             )
         )
 

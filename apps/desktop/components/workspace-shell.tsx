@@ -17,6 +17,7 @@ import {
 import { TaskPage } from "@/components/task-page";
 import { Button } from "@/components/ui/button";
 import { NewConversation } from "@/components/new-conversation";
+import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ResourceActionMenu } from "@/components/resource-action-menu";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
@@ -41,7 +42,7 @@ type DeleteTarget =
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-export function WorkspaceShell({ routeTaskId, initialMessage }: { routeTaskId: number | null; initialMessage?: string }) {
+export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments }: { routeTaskId: number | null; initialMessage?: string; initialAttachments?: InitialConversationAttachment[] }) {
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => (
     typeof window !== "undefined" && window.matchMedia(NARROW_VIEWPORT_QUERY).matches
@@ -173,6 +174,10 @@ export function WorkspaceShell({ routeTaskId, initialMessage }: { routeTaskId: n
     () => workspaces.flatMap((workspace) => workspace.tasks).find((task) => task.task_id === activeTaskId)
       ?? (routeTask?.task_id === activeTaskId ? routeTask : undefined),
     [activeTaskId, routeTask, workspaces],
+  );
+  const activeWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.workspace_id === (activeTask?.workspace_id ?? selectedWorkspaceId)),
+    [activeTask?.workspace_id, selectedWorkspaceId, workspaces],
   );
   const activeTaskWorkspaceId = useMemo(() => {
     if (activeTaskId === null) return selectedWorkspaceId;
@@ -366,13 +371,15 @@ export function WorkspaceShell({ routeTaskId, initialMessage }: { routeTaskId: n
             taskId={activeTaskId}
             initialTask={activeTask}
             initialMessage={initialMessage}
+            initialAttachments={initialAttachments}
+            workspaceRoot={activeWorkspace?.root_path}
             forkAvailable={activeTask?.fork_available}
             forkingRunId={forkingRunId}
             onForkRun={(runId) => void handleForkRun(runId)}
             onTaskLoaded={handleTaskLoaded}
             onTaskStateChanged={refreshTaskState}
             onRunStateChange={handleRunStateChange}
-          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText) => { navigate(`/tasks/${conversation.task_id}`, { state: { initialMessage: initialText } }); void load(); }} />}
+          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText, attachments) => { navigate(`/tasks/${conversation.task_id}`, { state: { initialMessage: initialText, initialAttachments: attachments } }); void load(); }} />}
         </div>
       </main>
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}

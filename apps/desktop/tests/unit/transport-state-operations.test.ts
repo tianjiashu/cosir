@@ -18,7 +18,7 @@ function state(): TransportState {
           id: "assistant-1",
           role: "assistant",
           parts: [
-            { type: "tool-call", toolCallId: "tool-1", toolName: "search_files", status: "pending", args: {} },
+            { type: "tool-call", toolCallId: "tool-1", toolName: "search_content", status: "pending", args: {} },
             { type: "tool-call", toolCallId: "tool-2", toolName: "read_file", status: "running", args: {} },
           ],
         }],

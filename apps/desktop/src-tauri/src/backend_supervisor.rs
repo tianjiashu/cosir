@@ -38,6 +38,7 @@ pub enum BackendStatus {
 #[serde(rename_all = "camelCase")]
 pub struct BackendRuntimeConfig {
     pub backend_base_url: String,
+    pub generation: usize,
     pub status: BackendStatus,
 }
 
@@ -322,6 +323,10 @@ impl BackendSupervisor {
             .ok()
             .and_then(|value| value.clone())
     }
+
+    pub fn lifecycle_generation(&self) -> usize {
+        self.inner.lifecycle_generation.load(Ordering::Acquire)
+    }
     fn fail(&self, message: String) -> Result<(), String> {
         self.set_status(BackendStatus::Failed {
             message: message.clone(),
@@ -556,6 +561,7 @@ pub fn backend_runtime_config(
         .ok_or_else(|| "本地 Agent 后端尚未就绪".to_string())?;
     Ok(BackendRuntimeConfig {
         backend_base_url,
+        generation: supervisor.lifecycle_generation(),
         status: supervisor.status(),
     })
 }
@@ -583,6 +589,7 @@ pub fn restart_backend(
         .ok_or_else(|| "本地 Agent 后端重启后未提供地址".to_string())?;
     Ok(BackendRuntimeConfig {
         backend_base_url,
+        generation: supervisor.lifecycle_generation(),
         status: supervisor.status(),
     })
 }

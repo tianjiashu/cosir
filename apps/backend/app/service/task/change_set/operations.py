@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.core.tools.tool_handler.patch.patch_apply import PatchApplyError, apply_all_with_diff
+from app.core.tools.tool_handler.patch_write.patch_apply import PatchApplyError, apply_all_with_diff
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.models.result.change_set import ChangeFileEntry
 from app.service.depends import get_task_service, get_workspace_service

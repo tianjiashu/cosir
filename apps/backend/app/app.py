@@ -196,6 +196,7 @@ importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")
 importlib.import_module("app.api.terminal_api")
+importlib.import_module("app.api.attachments_api")
 importlib.import_module("app.assistant_transport.assistant_api")
 
 

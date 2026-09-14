@@ -62,9 +62,10 @@ class WorkspaceService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
 
         副作用:
-            向 ``workspaces`` 表插入一行记录；并在 ``<root_path>/.cosir`` 处创建元数据目录
-            （已存在则幂等跳过）。元数据目录创建失败属于非致命降级：不阻断工作区创建，
-            仅记 error 日志，便于事后排查。
+            向 ``workspaces`` 表插入一行记录；并在 ``<root_path>/.cosir/Attachment`` 处
+            创建元数据与图片附件目录（已存在则幂等跳过）。目录创建失败属于非致命降级：
+            不阻断工作区创建，仅记 error 日志，便于事后排查；附件上传会再以稳定错误提示
+            目录不可用。
         """
         normalized_path = self._normalize_root_path(root_path)
         if any(
@@ -80,6 +81,8 @@ class WorkspaceService:
         cosir_dir = Path(normalized_path) / ".cosir"
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)
+            attachment_dir = cosir_dir / "Attachment"
+            attachment_dir.mkdir(parents=True, exist_ok=True)
             log.info(
                 "workspace_cosir_initialized",
                 extra={
@@ -88,6 +91,7 @@ class WorkspaceService:
                         "workspace_name": name,
                         "root_path": normalized_path,
                         "cosir_dir": str(cosir_dir),
+                        "attachment_dir": str(attachment_dir),
                     },
                 },
             )
@@ -213,7 +217,7 @@ class WorkspaceService:
             事件体系已删除，不再参与级联删除）。
         """
 
-        self._workspace.get(workspace_id)
+        workspace = self._workspace.get(workspace_id)
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 task_ids = set(self._task_crud.list_ids_by_workspace(workspace_id))

@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from typing import TypedDict, NotRequired
-from langchain_core.messages import BaseMessage, ToolMessage, _message_from_dict, message_to_dict
+from dataclasses import dataclass
+from typing import NotRequired, TypedDict
+
+from langchain_core.messages import (
+    BaseMessage,
+    ToolMessage,
+    _message_from_dict,
+    message_to_dict,
+)
+
 from app.assistant_transport.state.conversation_state_part import ToolCallStatus
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+
 
 class TransportMetadata(TypedDict):
 
@@ -25,6 +33,7 @@ class ConversationTaskContextRecord:
     include_in_context: bool
     sequence: int
     transport_metadata: TransportMetadata = None
+    is_streaming: bool = False
     id: int | None = None
 
     @classmethod
@@ -57,6 +66,7 @@ class ConversationTaskContextRecord:
             include_in_context=model.include_in_context,
             sequence=model.sequence,
             transport_metadata=json.loads(model.transport_metadata_json),
+            is_streaming=model.is_streaming,
         )
 
     def _to_model(self) -> ConversationTaskContextModel:
@@ -84,7 +94,13 @@ class ConversationTaskContextRecord:
                 self.message.tool_call_id if isinstance(self.message, ToolMessage) else None
             ),
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
-            transport_metadata_json=json.dumps(self.transport_metadata, ensure_ascii=False, sort_keys=True, allow_nan=False),
+            transport_metadata_json=json.dumps(
+                self.transport_metadata,
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            ),
             include_in_context=self.include_in_context,
+            is_streaming=self.is_streaming,
             sequence=self.sequence,
         )

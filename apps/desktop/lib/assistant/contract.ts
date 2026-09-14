@@ -103,11 +103,18 @@ export type TransportToolCallPart = {
   isError?: boolean | null;
 };
 
+/** 用户图片 part：只携带后端生成的稳定 locator。 */
+export type TransportImagePart = {
+  type: "image";
+  image: string;
+};
+
+/** 用户普通文件 part：只携带稳定 locator 与展示元数据。 */
 /** 单条 Transport 消息：Run 内的 canonical conversation 消息。 */
 export type TransportMessage = {
   id: string;
   role: "user" | "assistant";
-  parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart>;
+  parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart | TransportImagePart>;
 };
 
 export type ConversationStateUsage = {

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  extractUserAddMessageAttachments,
   toMessageStatus,
   toThreadMessage,
   toToolCallPart,
   toTransportThreadView,
 } from "@/lib/assistant/converter";
+import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportState, TransportToolCallPart } from "@/lib/assistant/contract";
 
 const emptyState = (): TransportState => ({
@@ -37,6 +39,63 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 });
 
 describe("assistant transport converter", () => {
+  it("rebuilds ordinary attachments from inline token ids for failure restore", () => {
+    const file = registerLocalAttachment(new File([], "设计 说明.md", { type: "text/markdown" }), {
+      id: "local-file-restore",
+      path: "C:\\workspace\\设计 说明.md",
+      name: "设计 说明.md",
+      contentType: "text/markdown",
+      kind: "file",
+    });
+    const attachments = extractUserAddMessageAttachments({
+      type: "add-message",
+      message: {
+        role: "user",
+        parts: [{ type: "text", text: "请查看 [[cosir-file:local-file-restore]]" }],
+      },
+    });
+    expect(file.name).toBe("设计 说明.md");
+    expect(attachments).toMatchObject([{
+      id: "local-file-restore",
+      type: "file",
+      content: [{ data: "cosir-local-file:local-file-restore" }],
+    }]);
+  });
+
+  it("keeps the local registry ID when restoring a sent file part", () => {
+    const attachments = extractUserAddMessageAttachments({
+      type: "add-message",
+      message: {
+        role: "user",
+        parts: [{
+          type: "file",
+          data: "cosir-local-file:local-file-restore",
+          filename: "设计 说明.md",
+          mimeType: "text/markdown",
+        }],
+      },
+    });
+
+    expect(attachments).toMatchObject([{ id: "local-file-restore" }]);
+  });
+
+  it("does not use a file path or remote locator as an attachment ID", () => {
+    const attachments = extractUserAddMessageAttachments({
+      type: "add-message",
+      message: {
+        role: "user",
+        parts: [{
+          type: "file",
+          data: "C:\\workspace\\leftHook.yml",
+          filename: "leftHook.yml",
+          mimeType: "text/yaml",
+        }],
+      },
+    });
+
+    expect(attachments).toEqual([]);
+  });
+
   it("keeps an empty snapshot empty and does not invent a run", () => {
     const state = emptyState();
     const result = toTransportThreadView(state, { pendingCommands: [], isSending: false });

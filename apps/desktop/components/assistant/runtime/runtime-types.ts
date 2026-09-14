@@ -1,4 +1,6 @@
 import type { MutableRefObject } from "react";
+import type { CreateAttachment } from "@assistant-ui/core";
+import type { InitialConversationAttachment } from "@/components/new-conversation";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { TransportIssue } from "@/components/assistant/transport-status";
@@ -6,8 +8,10 @@ import type { TransportIssue } from "@/components/assistant/transport-status";
 export type AssistantRuntimeProps = {
   taskId: number;
   workspaceId?: number | null;
+  workspaceRoot?: string;
   initialState: TransportState;
   initialMessage?: string;
+  initialAttachments?: InitialConversationAttachment[];
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
@@ -16,8 +20,8 @@ export type AssistantRuntimeProps = {
 };
 
 export type ComposerRestore = {
-  restoreNewMessage: (text: string) => void;
-  restoreEditMessage: (sourceId: string, text: string) => boolean;
+  restoreNewMessage: (text: string, attachments?: readonly CreateAttachment[]) => void;
+  restoreEditMessage: (sourceId: string, text: string, attachments?: readonly CreateAttachment[]) => boolean;
 };
 
 export type RuntimeControls = {
@@ -28,8 +32,10 @@ export type RuntimeControls = {
 export type RuntimeSessionContext = {
   taskId: number;
   workspaceId?: number | null;
+  workspaceRoot?: string;
   initialState: TransportState;
   backendBaseUrl: string;
+  backendRuntimeGeneration: number;
   traceId: string;
   setIssue: (issue: TransportIssue | null) => void;
   onTaskStateChanged?: () => void;

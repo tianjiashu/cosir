@@ -102,7 +102,7 @@ def test_context_usage_includes_system_prompt_and_tool_schemas(monkeypatch) -> N
     listener = ContextUsageComputeListener(task_id=7, run_id=11)
     tool_schemas = (
         {
-            "name": "search_files",
+            "name": "search_content",
             "description": "Search files in the workspace.",
             "parameters": {
                 "type": "object",

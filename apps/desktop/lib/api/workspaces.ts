@@ -25,7 +25,7 @@ export type WorkspaceTask = {
 export type StartedConversation = Pick<WorkspaceTask, "task_id">;
 
 export type CreateWorkspaceInput = { name: string; root_path: string };
-export type CreateTaskInput = { text: string };
+export type CreateTaskInput = { text?: string };
 
 export const getWorkspaces = (options?: ReadRequestOptions) => requestJson<Workspace[]>("/workspaces", options);
 export const createWorkspace = (input: CreateWorkspaceInput) =>

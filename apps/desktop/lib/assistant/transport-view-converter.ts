@@ -83,7 +83,12 @@ function pendingCommandSignature(command: UserAddMessageCommand): string {
   const partsSignature = command.message.parts
     .map((part) => [
       signaturePart(part.type),
-      signaturePart(part.text ?? null),
+      signaturePart(
+        part.type === "text" ? part.text
+          : part.type === "image" ? part.image
+          : part.type === "file" ? `${part.data}:${part.filename ?? ""}:${part.mimeType}`
+              : "",
+      ),
     ].join(SIGNATURE_SEPARATOR))
     .join(SIGNATURE_SEPARATOR);
   return [

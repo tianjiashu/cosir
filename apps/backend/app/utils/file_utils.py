@@ -10,45 +10,6 @@ leaf 层可被 ``api`` / ``core`` / ``service`` 任意层无循环依赖地引�
 
 from pathlib import Path
 
-from app.models.attachment_ref import AttachmentRef
-
-
-def render_attachment_refs_to_text(attachments: list[AttachmentRef]) -> str:
-    """把非图片附件引用渲染为模型可读的文本前缀块。
-
-    图片附件不进入文本（走多模态 block 通道），故本函数仅处理 ``file`` /
-    ``directory`` / ``url`` 三类。渲染结果形如：
-
-        [附件参考]
-        - 文件: /a/b.py
-        - 目录: /src/ （请用 list_directory / search_files 探索）
-        - 链接: https://example.com （请用 web_extract 抓取）
-
-    参数:
-        attachments: 已分类的附件列表（图片应事先过滤掉）。
-
-    返回:
-        多行文本块；当 ``attachments`` 为空时返回空字符串（调用方据此决定是否拼接）。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-    if not attachments:
-        return ""
-    lines = ["[附件参考]"]
-    for att in attachments:
-        if att.kind == "file":
-            lines.append(f"- 文件: {att.ref}")
-        elif att.kind == "directory":
-            lines.append(f"- 目录: {att.ref} （请用 list_directory / search_files 探索）")
-        elif att.kind == "url":
-            lines.append(f"- 链接: {att.ref} （请用 web_extract 抓取）")
-    return "\n".join(lines)
-
-
 def read_text_file(path: str | Path) -> str:
     """读取文本文件的全部内容。
 

@@ -4,7 +4,7 @@
 两类**纯路径判断**逻辑，不触碰文件系统读取、不依赖模型能力、不依赖任何业务模型。
 
 为什么放在 utils（leaf）而非 vision_content_blocks：
-- 这两类判断被多处复用：附件类型推断（``models.attachment_ref``）、运行期视觉预筛
+- 这两类判断被多处复用：附件类型推断、运行期视觉预筛
   （``core/workflows/.../vision_content_blocks`` 编排层）、workflow 图片路径过滤。
   放在编排层会导致其它层跨层引用其私有函数，违反分层依赖。
 - 它们只依赖标准库 ``mimetypes`` / ``os`` 与 ``app.utils.constants.IMAGE_EXTENSIONS``
@@ -43,7 +43,7 @@ def is_image_path(ref: str) -> bool:
         扩展名经 ``mimetypes`` 判为图片，或落在 ``IMAGE_EXTENSIONS`` 业务白名单内返回
         ``True``；否则返回 ``False``。空/非法引用一律返回 ``False``。注意这是**纯字符串**
         判断，不区分本地路径与 URL——``https://x.com/a.png`` 也会返回 ``True``；
-        URL 的归属判定由上层（``AttachmentRef._is_url``）先于本函数完成。
+    URL 的归属判定由调用方先于本函数完成。
 
     副作用:
         无。

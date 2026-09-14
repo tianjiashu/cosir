@@ -1,4 +1,5 @@
 import type { MessageStatus } from "@assistant-ui/core";
+import type { CompleteAttachment, CreateAttachment } from "@assistant-ui/core";
 import type {
   ThreadAssistantMessage,
   ThreadMessage,
@@ -8,6 +9,7 @@ import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/uti
 
 import type {
   TransportError,
+  TransportImagePart,
   TransportMessage,
   TransportReasoningPart,
   TransportRun,
@@ -16,6 +18,8 @@ import type {
   TransportToolCallPart,
   TransportToolStatus,
 } from "@/lib/assistant/contract";
+import { getLocalAttachmentById, LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
+import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 
 export type UserAddMessageCommand = {
   type: "add-message";
@@ -23,7 +27,13 @@ export type UserAddMessageCommand = {
   parentId?: string | null;
   message: {
     role: "user";
-    parts: ReadonlyArray<{ type: string; text?: string }>;
+    parts: ReadonlyArray<
+      | { type: "text"; text: string }
+      | { type: "image"; image: string }
+      // assistant-ui composer-only part. use-runtime-transport resolves it to
+      // a local path embedded in text before the HTTP request is serialized.
+      | { type: "file"; data: string; filename?: string; mimeType: string; sourceType?: "id" }
+    >;
   };
 };
 
@@ -70,6 +80,43 @@ function toPartStatus(status: string | undefined) {
 
 function toTextPart(part: TransportTextPart, role: TransportMessage["role"]): ThreadMessage["content"][number] {
   return { type: "text", text: part.text, status: role === "user" && part.status === undefined ? { type: "complete" } : toPartStatus(part.status) };
+}
+
+function toImageAttachment(part: TransportImagePart, index: number): CompleteAttachment {
+  return {
+    id: part.image,
+    type: "image" as const,
+    name: `image-${index + 1}`,
+    contentType: "image/*",
+    content: [{ type: "image" as const, image: part.image }],
+    status: { type: "complete" as const },
+  };
+}
+
+function toFileAttachment(part: { file: string; id?: string; name: string; contentType: string }): CompleteAttachment | null {
+  const localId = part.file.startsWith(LOCAL_FILE_DATA_PREFIX)
+    ? part.file.slice(LOCAL_FILE_DATA_PREFIX.length)
+    : undefined;
+  const id = part.id ?? localId;
+  // A file path or remote locator is content data, never an attachment identity.
+  // Only explicit IDs and our local-file locator can be restored safely.
+  if (!id) return null;
+  return {
+    // Restore must use the same registry ID that appears in the inline text
+    // token, while the content keeps its local-file data locator.
+    id,
+    type: "file" as const,
+    name: part.name,
+    contentType: part.contentType,
+    content: [{
+      type: "file" as const,
+      data: part.file,
+      filename: part.name,
+      mimeType: part.contentType,
+      sourceType: "id" as const,
+    }],
+    status: { type: "complete" as const },
+  };
 }
 
 function toReasoningPart(part: TransportReasoningPart): ThreadMessage["content"][number] {
@@ -204,6 +251,7 @@ function toThreadMessageWithContext(
   message: TransportMessage,
   context: TransportMessageRenderContext,
 ): ThreadMessage {
+  const imageParts = message.parts.filter((part): part is TransportImagePart => part.type === "image");
   const content = message.parts
     .map((part) => {
       switch (part.type) {
@@ -213,6 +261,8 @@ function toThreadMessageWithContext(
           return toReasoningPart(part);
         case "tool-call":
           return toToolCallPart(part);
+        case "image":
+          return null;
         default:
           return null;
       }
@@ -224,7 +274,9 @@ function toThreadMessageWithContext(
       id: message.id,
       role: "user",
       content: content as ThreadUserMessage["content"],
-      attachments: [],
+      attachments: [
+        ...imageParts.map(toImageAttachment),
+      ],
       createdAt: new Date(),
       metadata: {
         unstable_state: undefined,
@@ -300,14 +352,27 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
 
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   if (!isUserAddMessageCommand(command)) return null;
-  const parts = command.message.parts
-    .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string" && part.text.length > 0)
+  const textParts = command.message.parts
+    .filter((part): part is { type: "text"; text: string } => part.type === "text" && part.text.length > 0)
     .map((part) => ({ type: "text" as const, text: part.text }));
-  if (parts.length === 0) return null;
-  return toThreadMessage({
+  const imageParts = command.message.parts
+    .filter((part): part is { type: "image"; image: string } => part.type === "image")
+    .map((part, index) => toImageAttachment(part, index));
+  const fileParts = command.message.parts
+    .filter((part): part is { type: "file"; data: string; filename?: string; mimeType: string; sourceType?: "id" } => part.type === "file")
+    .flatMap((part) => {
+      const attachment = toFileAttachment({
+      file: part.data,
+      name: part.filename ?? "附件",
+      contentType: part.mimeType,
+      });
+      return attachment ? [attachment] : [];
+    });
+  if (textParts.length === 0 && imageParts.length === 0 && fileParts.length === 0) return null;
+  const pending = toThreadMessage({
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
-    parts,
+    parts: textParts,
   }, {
     runId: -1,
     status: "completed",
@@ -315,6 +380,38 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     messages: [],
     usage: null,
   });
+  return pending.role === "user" ? { ...pending, attachments: [...imageParts, ...fileParts] } : pending;
+}
+
+export function extractUserAddMessageAttachments(command: unknown): CreateAttachment[] {
+  if (!isUserAddMessageCommand(command)) return [];
+  const attachments = command.message.parts.flatMap((part, index) => {
+    if (part.type === "image") return [toImageAttachment(part, index)];
+    if (part.type === "file") {
+      const attachment = toFileAttachment({
+        file: part.data,
+        name: part.filename ?? "附件",
+        contentType: part.mimeType,
+      });
+      return attachment ? [attachment] : [];
+    }
+    return [];
+  });
+  const knownIds = new Set(attachments.map((attachment) => attachment.id));
+  const localFiles = localFileTokenIds(extractUserAddMessageText(command)).flatMap((id) => {
+    if (knownIds.has(id)) return [];
+    const local = getLocalAttachmentById(id);
+    if (!local) return [];
+    knownIds.add(id);
+    const attachment = toFileAttachment({
+      id,
+      file: `${LOCAL_FILE_DATA_PREFIX}${id}`,
+      name: local.name,
+      contentType: local.contentType,
+    });
+    return attachment ? [attachment] : [];
+  });
+  return [...attachments, ...localFiles];
 }
 
 export function toSnapshotErrorMessage(error: TransportError): ThreadAssistantMessage {

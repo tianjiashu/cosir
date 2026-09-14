@@ -12,7 +12,7 @@ type FrontendLogEntry = {
   event: string;
   msg: string;
   data: Record<string, unknown>;
-  error: { type?: string; message: string; truncated: boolean } | null;
+  error: { type?: string; message: string; stack?: string; truncated: boolean } | null;
   truncated: boolean;
 };
 
@@ -70,14 +70,35 @@ export async function frontendLog(
 /** 返回不会复述服务端响应体的固定 UI 错误文案。 */
 export function safeFrontendErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.name === "AbortError") return "请求已取消";
+  if (error instanceof Error && error.name === "LocalAttachmentUnavailableError") {
+    return "附件已失效，请重新选择附件";
+  }
   return fallback;
 }
 
-function serializeFrontendError(value: unknown): { type?: string; message: string; truncated: boolean } {
+const MAX_ERROR_MESSAGE_LENGTH = 512;
+const MAX_ERROR_STACK_LENGTH = 4096;
+
+function redactDiagnosticText(value: string, maxLength: number): { value: string; truncated: boolean } {
+  const redacted = value
+    .replace(/(authorization|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|secret)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;}]+)/gi, "$1=[REDACTED]")
+    .replace(/\bBearer\s+[^\s]+/gi, "Bearer [REDACTED]")
+    .replace(/\b(?:sk|key)-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED]");
+  return {
+    value: redacted.slice(0, maxLength),
+    truncated: redacted.length > maxLength,
+  };
+}
+
+function serializeFrontendError(value: unknown): { type?: string; message: string; stack?: string; truncated: boolean } {
   const rawMessage = value instanceof Error ? value.message : String(value);
+  const message = redactDiagnosticText(rawMessage, MAX_ERROR_MESSAGE_LENGTH);
+  const rawStack = value instanceof Error && typeof value.stack === "string" ? value.stack : "";
+  const stack = redactDiagnosticText(rawStack, MAX_ERROR_STACK_LENGTH);
   return {
     ...(value instanceof Error ? { type: value.name } : {}),
-    message: "客户端请求失败（错误正文已省略）",
-    truncated: rawMessage.length > 0,
+    message: message.value || "未提供异常消息",
+    ...(stack.value ? { stack: stack.value } : {}),
+    truncated: message.truncated || stack.truncated,
   };
 }

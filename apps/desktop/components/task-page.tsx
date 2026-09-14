@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Assistant } from "@/app/assistant";
+import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
@@ -10,6 +11,8 @@ type TaskSessionProps = {
   taskId: number;
   initialTask?: WorkspaceTask;
   initialMessage?: string;
+  initialAttachments?: InitialConversationAttachment[];
+  workspaceRoot?: string;
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
@@ -28,6 +31,8 @@ export function TaskPage({
   taskId,
   initialTask,
   initialMessage,
+  initialAttachments,
+  workspaceRoot,
   forkAvailable,
   forkingRunId,
   onForkRun,
@@ -113,7 +118,9 @@ export function TaskPage({
     <Assistant
       taskId={taskId}
       workspaceId={loadedTask.workspace_id}
+      workspaceRoot={workspaceRoot}
       initialMessage={initialMessage}
+      initialAttachments={initialAttachments}
       forkAvailable={forkAvailable ?? loadedTask.fork_available}
       forkingRunId={forkingRunId}
       onForkRun={onForkRun}

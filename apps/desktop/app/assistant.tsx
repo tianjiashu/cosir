@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAssistantInitialState } from "@/hooks/use-assistant-initial-state";
 import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
 import { useState } from "react";
+import type { InitialConversationAttachment } from "@/components/new-conversation";
 
 /**
  * 桌面端主入口：先拉取服务端首屏历史，state 就绪后再挂载 runtime。
@@ -23,7 +24,9 @@ import { useState } from "react";
 export const Assistant = ({
   taskId,
   workspaceId,
+  workspaceRoot,
   initialMessage,
+  initialAttachments,
   forkAvailable,
   forkingRunId,
   onForkRun,
@@ -32,7 +35,9 @@ export const Assistant = ({
 }: {
   taskId: number;
   workspaceId?: number | null;
+  workspaceRoot?: string;
   initialMessage?: string;
+  initialAttachments?: InitialConversationAttachment[];
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
@@ -74,8 +79,10 @@ export const Assistant = ({
     <AssistantRuntime
       taskId={taskId}
       workspaceId={sessionWorkspaceId}
+      workspaceRoot={workspaceRoot}
       initialState={initialState}
       initialMessage={initialMessage}
+      initialAttachments={initialAttachments}
       forkAvailable={forkAvailable}
       forkingRunId={forkingRunId}
       onForkRun={onForkRun}

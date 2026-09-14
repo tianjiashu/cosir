@@ -27,9 +27,10 @@ class _ToolRegistryStub:
         return [
             "read_file",
             "write_file",
-            "patch",
+            "patch_write",
             "apply_patch",
-            "search_files",
+            "search_content",
+            "find_files",
             "list_directory",
             "delete",
             "execute_terminal",

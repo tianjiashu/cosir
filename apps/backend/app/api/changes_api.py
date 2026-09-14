@@ -10,7 +10,7 @@ from fastapi import HTTPException, Query
 from app.api.schemas.request.ChangeSetActionRequest import ChangeSetActionRequest
 from app.api.schemas.response.ChangeSetResponse import ChangeSetResponse
 from app.app import app
-from app.core.tools.tool_handler.patch.patch_apply import PatchApplyError
+from app.core.tools.tool_handler.patch_write.patch_apply import PatchApplyError
 from app.service.task.change_set import (
     ChangeSetConflictError,
     keep_file,

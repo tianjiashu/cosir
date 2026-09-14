@@ -45,8 +45,9 @@ def main() -> None:
         其余启动期异常：捕获后写入 ``failed`` 启动状态并原样向上抛出。
 
     副作用:
-        初始化 SQLite 存储引擎（含日志库 schema）；向 ``logs/logs-YYYY-MM-DD.log``
-        挂载文件日志处理器并向 SQLite 日志库挂载异步写入 handler；同步系统代理
+        初始化 SQLite 存储引擎（含日志库 schema）；向 ``logs/backend-YYYY-MM-DD.log``
+        挂载按日期和 5MB 大小轮转的文件日志处理器，并向 SQLite 日志库挂载异步写入
+        handler；同步系统代理
         环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
         uvicorn 进程；按环境决定是否写入 ``storage/backend.bootstate.json``
         启动状态文件。

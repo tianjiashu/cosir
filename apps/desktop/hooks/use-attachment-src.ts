@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { useShallow } from "zustand/react/shallow";
+import { getApiBaseUrl } from "@/lib/http/client";
 
 const useFileSrc = (file: File | undefined) => {
   const [entry, setEntry] = useState<{ file: File; url: string } | undefined>(
@@ -24,7 +25,7 @@ const useFileSrc = (file: File | undefined) => {
   return file && entry && entry.file === file ? entry.url : undefined;
 };
 
-export const useAttachmentSrc = () => {
+export const useAttachmentSrc = (taskId?: number) => {
   const { file, src } = useAuiState(
     useShallow((s): { file?: File; src?: string } => {
       if (s.attachment.type !== "image") return {};
@@ -36,5 +37,9 @@ export const useAttachmentSrc = () => {
     }),
   );
 
-  return useFileSrc(file) ?? src;
+  const locator = src?.match(/^cosir-attachment:\/\/([0-9a-f]{64})$/)?.[1];
+  const backendSrc = locator && taskId !== undefined
+    ? `${getApiBaseUrl()}/tasks/${taskId}/attachments/${locator}/content`
+    : undefined;
+  return useFileSrc(file) ?? backendSrc ?? (src && !src.includes("://") ? undefined : src);
 };

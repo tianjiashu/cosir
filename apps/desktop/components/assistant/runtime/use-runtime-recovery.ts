@@ -20,11 +20,11 @@ const RECONNECT_DELAYS_MS = [0, 250, 500, 1_000, 2_000] as const;
 const RECONCILE_TIMEOUT_MS = 15_000;
 const BUSINESS_RESUME_TIMEOUT_MS = 15_000;
 
-/** Own backend URL changes, bounded transport reconciliation, and business resume. */
+/** Own backend instance changes, bounded transport reconciliation, and business resume. */
 export function useRuntimeRecovery(
   context: RuntimeSessionContext,
 ): RuntimeRecovery {
-  const previousBackendBaseUrlRef = useRef(context.backendBaseUrl);
+  const previousBackendRuntimeGenerationRef = useRef(context.backendRuntimeGeneration);
   const reconnectAttemptRef = useRef(0);
   const reconcileInFlightRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -129,25 +129,25 @@ export function useRuntimeRecovery(
   }, [context, resetRecovery]);
 
   useEffect(() => {
-    const previousBaseUrl = previousBackendBaseUrlRef.current;
-    previousBackendBaseUrlRef.current = context.backendBaseUrl;
-    if (previousBaseUrl === context.backendBaseUrl) return;
+    const previousGeneration = previousBackendRuntimeGenerationRef.current;
+    previousBackendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
+    if (previousGeneration === context.backendRuntimeGeneration) return;
 
-    void frontendLog("INFO", "assistant_backend_runtime_url_changed", "Assistant 后端地址已变化", {
+    void frontendLog("INFO", "assistant_backend_runtime_changed", "Assistant 后端实例已变化", {
       traceId: context.traceId,
       data: {
         taskId: context.taskId,
-        previousBaseUrl,
+        previousGeneration,
+        generation: context.backendRuntimeGeneration,
         backendBaseUrl: context.backendBaseUrl,
       },
     });
 
-    const status = currentTransportRun(context.latestStateRef.current)?.status;
-    if (status === "pending" || status === "running") {
-      resetRecovery();
-      context.setIssue({ message: "本机后端已重启，正在恢复当前对话…", retryable: true });
-      void reconcileAfterTransportFinish();
-    }
+    // 后端实例变化后，无论前端旧缓存是 active 还是 terminal，都必须以 canonical
+    // snapshot 重新对齐。active Run 会继续 attach，cancelled Run 则只恢复按钮资格。
+    resetRecovery();
+    context.setIssue({ message: "本机后端已重启，正在同步当前对话…", retryable: true });
+    void reconcileAfterTransportFinish();
   }, [context, reconcileAfterTransportFinish, resetRecovery]);
 
   const resumeBusinessRun = useCallback(async () => {

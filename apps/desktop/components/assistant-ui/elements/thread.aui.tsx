@@ -43,6 +43,13 @@ import {
 import type { TransportState, TransportToolStatus } from "@/lib/assistant/contract";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
+import { AttachmentTaskContext } from "@/components/assistant-ui/elements/attachment-context";
+import {
+  ComposerAttachmentButton,
+  ComposerAttachments,
+  InlineComposerInput,
+  UserMessageAttachments,
+} from "@/components/assistant-ui/elements/attachment.aui";
 
 export type ThreadComponents = {
   AssistantMessage?: ComponentType;
@@ -53,6 +60,7 @@ export type ThreadProps = {
   components?: ThreadComponents;
   autoFocus?: boolean;
   taskId?: number;
+  workspaceRoot?: string;
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
@@ -64,7 +72,7 @@ export type ThreadProps = {
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -114,11 +122,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }) => {
   const isEmpty = useAuiState(isNewChatView);
   return (
-    <ThreadContext.Provider value={{ taskId, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }}>
+    <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }}>
     <ThreadComponentsContext.Provider value={components}>
+      <AttachmentTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
           Top anchor pins the turn's user message while the answer grows below
@@ -144,26 +153,28 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
               >
                 <ArrowDownIcon />
               </ThreadPrimitive.ScrollToBottom>
-              <Composer autoFocus={autoFocus} taskId={taskId} />
+              <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />
             </ThreadPrimitive.ViewportFooter>
           </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
+      </AttachmentTaskContext.Provider>
     </ThreadComponentsContext.Provider>
     </ThreadContext.Provider>
   );
 };
 
-const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, taskId }) => (
+const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string }> = ({ autoFocus, taskId, workspaceRoot }) => (
   <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
-    <ComposerPrimitive.Input
-      placeholder="输入任务，例如：帮我查找登录相关代码…"
-      className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-      rows={2}
-      autoFocus={autoFocus}
-      enterKeyHint="send"
-      aria-label="消息输入"
-    />
+    <ComposerPrimitive.AttachmentDropzone>
+      <ComposerAttachments />
+      <InlineComposerInput
+        placeholder="输入任务，例如：帮我查找登录相关代码…"
+        className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+        autoFocus={autoFocus}
+        aria-label="消息输入"
+      />
+    </ComposerPrimitive.AttachmentDropzone>
     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         <TaskContextUsage />
@@ -174,6 +185,7 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number }> = ({ autoFocus, task
           />
         </div>
       </div>
+      <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
       <ComposerAction taskId={taskId ?? null} />
     </div>
   </ComposerPrimitive.Root>
@@ -183,7 +195,9 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const draftLength = useAuiState((state) => state.composer.text.length);
-  const isDraftEmpty = useAuiState((state) => state.composer.text.trim().length === 0);
+  const isDraftEmpty = useAuiState((state) =>
+    state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
+  );
   const canResume = useAuiState((state) => isResumableCancelledRun(state.thread.state as unknown as TransportState));
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume });
   const [resuming, setResuming] = useState(false);
@@ -290,6 +304,7 @@ const UserMessageView: FC = () => {
       data-role="user"
       className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
     >
+      <UserMessageAttachments />
       <div className="bg-muted text-foreground max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
         <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <MarkdownText status={part.status} /> : null}</MessagePrimitive.Parts>
       </div>
@@ -313,17 +328,18 @@ const UserMessageView: FC = () => {
 };
 
 const UserEditMessage: FC = () => {
-  const { taskId } = useContext(ThreadContext);
+  const { taskId, workspaceRoot } = useContext(ThreadContext);
   return (
       <MessagePrimitive.Root data-role="user" className="min-w-0 px-2">
       <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
-        <ComposerPrimitive.Input
-          className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-          rows={2}
-          autoFocus
-          enterKeyHint="send"
-          aria-label="编辑消息"
-        />
+        <ComposerPrimitive.AttachmentDropzone>
+          <ComposerAttachments />
+          <InlineComposerInput
+            className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+            autoFocus
+            aria-label="编辑消息"
+          />
+        </ComposerPrimitive.AttachmentDropzone>
         <div className="flex flex-wrap items-center justify-between gap-2 px-1">
           <div className="min-w-0 flex-1">
             <ComposerControls
@@ -331,6 +347,7 @@ const UserEditMessage: FC = () => {
             />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
             <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
               <XIcon />
             </ComposerPrimitive.Cancel>

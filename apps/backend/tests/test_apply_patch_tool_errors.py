@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.patch.patch_apply import PatchApplyError
-from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
+from app.core.tools.tool_handler.patch_write.patch_apply import PatchApplyError
+from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -56,8 +56,8 @@ def test_empty_patch_can_be_corrected_and_retried_separately_from_its_reason(
     observation = ApplyPatchTool().execute(_context(tmp_path), patch="")
 
     assert observation.retryable is True
-    assert observation.error == "missing patch input"
-    assert observation.reason == "provide a non-empty V4A patch in the 'patch' argument."
+    assert observation.error == "missing patch_write input"
+    assert observation.reason == "provide a non-empty V4A patch_write in the 'patch_write' argument."
 
 
 def test_transient_apply_failure_is_retryable_without_duplicate_diagnostics(
@@ -87,9 +87,9 @@ def test_transient_apply_failure_is_retryable_without_duplicate_diagnostics(
     )
 
     assert observation.retryable is True
-    assert observation.error == "patch apply failed: file is locked"
+    assert observation.error == "patch_write apply failed: file is locked"
     assert observation.reason == (
-        "resolve the reported condition or regenerate the patch from current file contents "
+        "resolve the reported condition or regenerate the patch_write from current file contents "
         "before retrying."
     )
     assert "file is locked" not in observation.reason
@@ -123,10 +123,10 @@ def test_partial_apply_failure_is_non_retryable_even_when_cause_is_transient(
     )
 
     assert observation.retryable is False
-    assert observation.error == "patch application stopped after partial changes"
+    assert observation.error == "patch_write application stopped after partial changes"
     assert observation.reason == (
-        "inspect the changed files and create a new patch from the current contents; "
-        "do not replay this patch unchanged."
+        "inspect the changed files and create a new patch_write from the current contents; "
+        "do not replay this patch_write unchanged."
     )
     assert "file is locked" not in observation.reason
 
@@ -160,9 +160,9 @@ def test_patch_content_race_is_retryable_after_regenerating_the_patch(
     )
 
     assert observation.retryable is True
-    assert observation.error == "patch apply failed: hunk no longer matches"
+    assert observation.error == "patch_write apply failed: hunk no longer matches"
     assert observation.reason == (
-        "resolve the reported condition or regenerate the patch from current file contents "
+        "resolve the reported condition or regenerate the patch_write from current file contents "
         "before retrying."
     )
     assert "hunk no longer matches" not in observation.reason

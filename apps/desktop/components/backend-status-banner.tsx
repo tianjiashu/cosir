@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  getBackendRuntimeSnapshot,
   setBackendBaseUrl,
   type BackendRuntimeConfig,
   type BackendStatus,
@@ -11,19 +12,21 @@ import {
 export function BackendStatusBanner() {
   const [status, setStatus] = useState<BackendStatus | null>(null);
   const [retrying, setRetrying] = useState(false);
-  const previousStatusRef = useRef<BackendStatus["state"] | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const nextStatus = await invoke<BackendStatus>("backend_status");
       setStatus(nextStatus);
-      if (nextStatus.state === "ready" && previousStatusRef.current !== "ready") {
+      if (nextStatus.state === "ready") {
         const config = await invoke<BackendRuntimeConfig>("backend_runtime_config");
-        // Always notify: a restarted process may reuse the same port, but its
-        // in-flight Assistant runtime still needs one new resume opportunity.
-        setBackendBaseUrl(config.backendBaseUrl);
+        const current = getBackendRuntimeSnapshot();
+        const backendBaseUrl = config.backendBaseUrl.replace(/\/$/, "");
+        if (current.generation !== config.generation || current.backendBaseUrl !== backendBaseUrl) {
+          // Compare the supervisor generation, not only the URL: a restarted process may reuse
+          // the same port and still requires the Assistant runtime to reconcile its snapshot.
+          setBackendBaseUrl(config.backendBaseUrl, { generation: config.generation });
+        }
       }
-      previousStatusRef.current = nextStatus.state;
     } catch {
       // Normal browser development does not expose Tauri commands.
       setStatus(null);
@@ -45,7 +48,7 @@ export function BackendStatusBanner() {
     setRetrying(true);
     try {
       const config = await invoke<BackendRuntimeConfig>("restart_backend");
-      setBackendBaseUrl(config.backendBaseUrl);
+      setBackendBaseUrl(config.backendBaseUrl, { generation: config.generation, runtimeChanged: true });
       setStatus(config.status);
     } catch {
       await refresh();

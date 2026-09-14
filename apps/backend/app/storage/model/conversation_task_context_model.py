@@ -11,7 +11,8 @@ class ConversationTaskContextModel(StorageBase):
 
     按 (task, run) 一行存储一条 ``BaseMessage`` 的 JSON 序列化结果及其 Transport
     metadata，配合 ``sequence`` 维持跨 run 的全局插入顺序，``include_in_context``
-    标记该消息是否纳入上下文视图。
+    标记该消息是否纳入上下文视图；``is_streaming`` 标记仅供 Transport 冷重建的
+    assistant partial 草稿。
 
     该表是上下文消息的**唯一持久化真相**，与
     :class:`app.models.conversation_task_context.ConversationTaskContextRecord` 一一对应；
@@ -47,4 +48,6 @@ class ConversationTaskContextModel(StorageBase):
         Text, nullable=False, default="{}", server_default="{}"
     )
     include_in_context: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # 流式 assistant 草稿只用于 Transport 冷重建，不进入模型上下文。
+    is_streaming: Mapped[bool] = mapped_column(default=False, nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)

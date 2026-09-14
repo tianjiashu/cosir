@@ -7,7 +7,7 @@
 
 import json
 
-from app.core.tools.tool_handler.patch.patch_parser import (
+from app.core.tools.tool_handler.patch_write.patch_parser import (
     Hunk,
     HunkLine,
     OperationType,

@@ -99,11 +99,11 @@ class Settings:
     # ``CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES`` 覆盖。
     RUNTIME_CONTEXT_MAX_BYTES: ClassVar[int] = 4_000
 
-    # Layer 3：Workspace 项目指令扫描配置与预算闸门；经 ``CODING_AGENT_WORKSPACE_INSTRUCTION_*``
-    # 覆盖。总量 token 上限另受窗口比例闸门（0 表示仅用固定上限）。
+    # Layer 3：Workspace 项目指令定位配置与预算闸门；经 ``CODING_AGENT_WORKSPACE_INSTRUCTION_*``
+    # 覆盖。``WORKSPACE_INSTRUCTION_FILE_NAMES`` 的顺序即文件名优先级，最终只加载唯一一个
+    # 指令文件，因此不存在文件数闸门；总量 token 上限另受窗口比例闸门（0 表示仅用固定上限）。
     WORKSPACE_INSTRUCTION_FILE_NAMES: ClassVar[tuple[str, ...]] = ("AGENTS.md", "CLAUDE.md")
     WORKSPACE_INSTRUCTION_MAX_DEPTH: ClassVar[int] = 2
-    WORKSPACE_INSTRUCTION_MAX_FILES: ClassVar[int] = 20
     WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: ClassVar[int] = 200_000
     WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
     WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS: ClassVar[int] = 4_000
@@ -287,8 +287,6 @@ class Settings:
             raise ValueError("RUNTIME_CONTEXT_MAX_BYTES must be greater than zero")
         if cls.WORKSPACE_INSTRUCTION_MAX_DEPTH < 1:
             raise ValueError("WORKSPACE_INSTRUCTION_MAX_DEPTH must be greater than zero")
-        if cls.WORKSPACE_INSTRUCTION_MAX_FILES < 1:
-            raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILES must be greater than zero")
         if cls.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES < 1:
             raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_BYTES must be greater than zero")
         if cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS < 1:
@@ -412,9 +410,6 @@ class Settings:
         )
         cls.WORKSPACE_INSTRUCTION_MAX_DEPTH = int(
             os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_DEPTH", "2")
-        )
-        cls.WORKSPACE_INSTRUCTION_MAX_FILES = int(
-            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILES", "20")
         )
         cls.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES = int(
             os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_BYTES", "200000")

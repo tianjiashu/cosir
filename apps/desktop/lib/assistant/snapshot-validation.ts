@@ -78,6 +78,14 @@ function validatePart(value: unknown, path: string): void {
     }
     return;
   }
+  if (type === "image") {
+    requireExactKeys(part, ["type", "image"], path);
+    const image = requireString(part.image, `${path}.image`);
+    if (!/^cosir-attachment:\/\/[0-9a-f]{64}$/.test(image)) {
+      throw new TransportSnapshotValidationError(`${path}.image`, "合法的附件 locator");
+    }
+    return;
+  }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
   const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "isError", "approvalRequestId"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");

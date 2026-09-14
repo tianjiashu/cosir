@@ -9,38 +9,23 @@ class CreateTaskRequest(BaseModel):
     属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。
 
     参数:
-        text: 非空的纯文本任务输入。
+        text: 可选的纯文本任务输入；纯附件新对话允许为空。
 
     返回:
         Pydantic 请求模型。
 
     异常:
-        ValueError: 当 ``text`` 为空白时抛出。
+        无。空文本由 workspace API 转换为默认任务标题。
 
     副作用:
         无。
     """
 
-    text: str
+    text: str = ""
 
     @field_validator("text")
     @classmethod
-    def text_must_not_be_blank(cls, value: str) -> str:
-        """校验任务文本不为空白。
+    def normalize_text(cls, value: str) -> str:
+        """把缺省或空白任务文本归一化为空字符串。"""
 
-        参数:
-            value: 从请求体解析出的文本值。
-
-        返回:
-            校验通过时返回原始文本值。
-
-        异常:
-            ValueError: 当文本为空白时抛出。
-
-        副作用:
-            无。
-        """
-
-        if not value.strip():
-            raise ValueError("text must not be blank")
-        return value
+        return value.strip()

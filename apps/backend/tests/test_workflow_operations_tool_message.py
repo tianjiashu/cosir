@@ -57,17 +57,17 @@ def test_non_retryable_error_does_not_emit_optional_retry_hint() -> None:
         ToolObservation(
             tool_name="apply_patch",
             status="error",
-            error="invalid patch",
-            reason="fix the patch format before calling again",
+            error="invalid patch_write",
+            reason="fix the patch_write format before calling again",
             retryable=False,
         )
     )
 
     assert message.content == (
-        "error: invalid patch\n"
+        "error: invalid patch_write\n"
         "retryable: false\n"
         "hint: do not retry this tool call.\n"
-        "reason: fix the patch format before calling again"
+        "reason: fix the patch_write format before calling again"
     )
 
 

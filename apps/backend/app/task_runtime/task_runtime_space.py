@@ -230,14 +230,12 @@ class TaskRuntimeSpace:
             manager = manager_ref() if manager_ref is not None else None
             if manager is None:
                 from app.core.context.runtime_context_manager import RuntimeContextManager
-                from app.service.depends import get_conversation_task_context_service
 
                 manager = (
                     RuntimeContextManager(
                         current_task_id=current_task.id,
                         agent_profile=agent_profile,
                         workspace_root=current_workspace.root_path,
-                        context_service=get_conversation_task_context_service(),
                         is_fork=current_task.task_type == "fork",
                     )
                     .add_change_listener(ContextUsageComputeListener(current_task.id))

@@ -1,8 +1,9 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
+import type { CreateAttachment } from "@assistant-ui/core";
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
-import { frontendLog } from "@/lib/logging/frontend-log";
+import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import {
   currentTransportRun,
   isTransportState,
@@ -13,6 +14,12 @@ import type {
   ComposerRestore,
   RuntimeControls,
 } from "@/components/assistant/runtime/runtime-types";
+import type { PickedComposerAttachment } from "@/components/composer/attachment-picker";
+import {
+  getLocalAttachment,
+  registerLocalAttachment,
+} from "@/lib/assistant/attachments/local-attachment-registry";
+import { LOCAL_FILE_TOKEN } from "@/lib/assistant/attachments/local-file-token";
 
 type TransportStateCommitBridgeProps = {
   initialState: TransportState;
@@ -124,34 +131,81 @@ export function RuntimeControlBridge({
 
 export function InitialMessageBridge({
   text,
+  attachments = [],
   sentRef,
   initialState,
   taskId,
+  traceId,
+  onError,
 }: {
   text?: string;
+  attachments?: readonly (PickedComposerAttachment | CreateAttachment)[];
   sentRef: MutableRefObject<boolean>;
   initialState: TransportState;
   taskId: number;
+  traceId?: string;
+  onError?: (message: string) => void;
 }) {
   const aui = useAui();
   const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
 
   useEffect(() => {
     if (
-      !text?.trim()
+      !text?.trim() && attachments.length === 0
       || sentRef.current
       || remoteThreadId !== `task-${taskId}`
       || transportMessageCount(initialState) > 0
       || (currentTransportRun(initialState)?.status ?? "idle") !== "idle"
     ) return;
-    aui.thread.composer().setText(text);
-    const timer = window.setTimeout(() => {
-      if (sentRef.current) return;
-      sentRef.current = true;
-      aui.thread.composer().send();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [aui, initialState, remoteThreadId, sentRef, taskId, text]);
+    const composer = aui.thread.composer();
+    composer.setText(text ?? "");
+    let cancelled = false;
+    const reportError = (error: unknown, stage: "add_attachment" | "send") => {
+      if (cancelled) return;
+      const message = safeFrontendErrorMessage(error, "初始消息发送失败，请重试");
+      void frontendLog("ERROR", "assistant_initial_message_failed", "初始消息发送失败", {
+        traceId,
+        data: { taskId, attachmentCount: attachments.length, stage },
+        error,
+      });
+      onError?.(message);
+    };
+
+    void (async () => {
+      try {
+        for (const attachment of attachments) {
+          if (cancelled) return;
+          if ("path" in attachment && !getLocalAttachment(attachment.file)) {
+            registerLocalAttachment(attachment.file, {
+              id: attachment.id,
+              path: attachment.path,
+              name: attachment.name,
+              contentType: attachment.file.type,
+              kind: attachment.kind,
+            });
+          }
+          await composer.addAttachment("path" in attachment ? attachment.file : attachment);
+        }
+        const timer = window.setTimeout(() => {
+          if (cancelled || sentRef.current) return;
+          try {
+            sentRef.current = true;
+            void Promise.resolve(composer.send()).catch((error: unknown) => {
+              sentRef.current = false;
+              reportError(error, "send");
+            });
+          } catch (error) {
+            sentRef.current = false;
+            reportError(error, "send");
+          }
+        }, 0);
+        if (cancelled) window.clearTimeout(timer);
+      } catch (error) {
+        reportError(error, "add_attachment");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [attachments, aui, initialState, onError, remoteThreadId, sentRef, taskId, text, traceId]);
 
   return null;
 }
@@ -164,13 +218,43 @@ export function ComposerRestoreBridge({
   const aui = useAui();
 
   useEffect(() => {
+    const restoreAttachments = async (
+      composer: ReturnType<typeof aui.thread.composer>,
+      attachments: readonly CreateAttachment[],
+    ): Promise<void> => {
+      for (const attachment of attachments) {
+        await composer.addAttachment(attachment);
+      }
+    };
+    const restoreIntoComposer = async (
+      composer: ReturnType<typeof aui.thread.composer>,
+      text: string,
+      attachments: readonly CreateAttachment[],
+    ) => {
+      try {
+        await restoreAttachments(composer, attachments);
+        composer.setText(text);
+      } catch (error) {
+        // Do not leave an unresolved internal token in the editable value when
+        // an attachment cannot be restored. The transport error already owns
+        // the user-facing failure state; this fallback only keeps the draft
+        // readable and guarantees a handled Promise rejection.
+        composer.setText(text.replace(LOCAL_FILE_TOKEN, "附件"));
+        void frontendLog("ERROR", "assistant_composer_restore_failed", "失败消息恢复附件失败", {
+          error,
+        });
+      }
+    };
     register({
-      restoreNewMessage: (text) => aui.thread.composer().setText(text),
-      restoreEditMessage: (sourceId, text) => {
+      restoreNewMessage: (text, attachments = []) => {
+        const composer = aui.thread.composer();
+        void restoreIntoComposer(composer, text, attachments);
+      },
+      restoreEditMessage: (sourceId, text, attachments = []) => {
         try {
           const composer = aui.thread.message({ id: sourceId }).composer();
           if (!composer.getState().isEditing) composer.beginEdit();
-          composer.setText(text);
+          void restoreIntoComposer(composer, text, attachments);
           return true;
         } catch {
           return false;

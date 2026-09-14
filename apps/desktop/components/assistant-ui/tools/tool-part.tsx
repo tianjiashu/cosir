@@ -13,6 +13,7 @@ const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
 const KNOWN_DISPLAY_KINDS = new Set([
   "read-file-meta",
   "file-list",
+  "content-search-results",
   "directory-list",
   "file-changes",
   "delete-result",
@@ -38,6 +39,7 @@ export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartR
     kind === "read-file-meta" ||
     kind === "directory-list" ||
     kind === "file-list" ||
+    kind === "content-search-results" ||
     artifact.presentation.expand_layout === "details" ||
     artifact.presentation.expand_layout === "list" ||
     artifact.presentation.expand_layout === "write" ||

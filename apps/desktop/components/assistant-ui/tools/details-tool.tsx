@@ -62,12 +62,16 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
     case "read-file-meta":
       return readFileSummary(data);
     case "file-list": {
-      const target = typeof data.target === "string" ? data.target : "文件";
       const pattern = typeof data.pattern === "string" ? data.pattern : "搜索";
       const count = typeof data.match_count === "number"
         ? data.match_count
         : Array.isArray(data.files) ? data.files.length : 0;
-      return `${pattern} · ${target} · ${count} 个命中`;
+      return `${pattern} · ${count} 个文件`;
+    }
+    case "content-search-results": {
+      const pattern = typeof data.pattern === "string" ? data.pattern : "搜索";
+      const count = typeof data.match_count === "number" ? data.match_count : 0;
+      return `${pattern} · ${count} 个命中`;
     }
     case "directory-list": {
       const path = typeof data.path === "string" ? data.path : "目录未知";
@@ -96,11 +100,13 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
 function ListEntries({ data }: { data: Record<string, unknown> }) {
   const isWebSearch = data.kind === "web-search-results";
   const isWebExtract = data.kind === "web-extract-urls";
+  const isContentSearch = data.kind === "content-search-results";
   const entries = !isWebSearch && !isWebExtract && Array.isArray(data.entries) ? data.entries : [];
   const files = !isWebSearch && !isWebExtract && Array.isArray(data.files) ? data.files : [];
+  const matches = isContentSearch && Array.isArray(data.matches) ? data.matches : [];
   const results = isWebSearch && Array.isArray(data.results) ? data.results : [];
   const urls = Array.isArray(data.urls) ? data.urls : [];
-  if (entries.length === 0 && files.length === 0 && results.length === 0 && urls.length === 0) {
+  if (entries.length === 0 && files.length === 0 && matches.length === 0 && results.length === 0 && urls.length === 0) {
     const emptyMessage = data.kind === "directory-list"
       ? data.total_entries === 0 ? "目录为空" : "当前页没有条目"
       : "未找到匹配";
@@ -135,6 +141,13 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
         const item = asRecord(entry);
         const path = String(item.path ?? "未知文件");
         return <li key={`${path}-${index}`} className="truncate px-2.5 py-1.5">{path}</li>;
+      })}
+      {matches.map((entry, index) => {
+        const item = asRecord(entry);
+        const path = String(item.path ?? "未知文件");
+        const line = typeof item.line === "number" ? `:${item.line}` : "";
+        const content = typeof item.content === "string" ? item.content : "";
+        return <li key={`${path}-${line}-${index}`} className="truncate px-2.5 py-1.5">{path}{line} {content}</li>;
       })}
       {results.map((entry, index) => {
         const item = asRecord(entry);
@@ -186,7 +199,7 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
   const hasDisplayData = typeof data.kind === "string";
   const expandable = presentation.expandable !== false && hasDisplayData;
   const defaultOpen = hasDisplayData && presentation.default_open === true;
-  const isList = presentation.expand_layout === "list" || data.kind === "directory-list" || data.kind === "file-list" || data.kind === "web-search-results" || data.kind === "web-extract-urls" || Array.isArray(data.entries);
+  const isList = presentation.expand_layout === "list" || data.kind === "directory-list" || data.kind === "file-list" || data.kind === "content-search-results" || data.kind === "web-search-results" || data.kind === "web-extract-urls" || Array.isArray(data.entries);
   const isTerminalState = artifact.backendStatus === "failed" || artifact.backendStatus === "cancelled";
 
   const body = (

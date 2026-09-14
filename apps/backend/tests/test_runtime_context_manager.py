@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
@@ -30,10 +36,17 @@ class _ContextService:
         seq: int,
         include_in_context: bool,
         transport_metadata: object = None,
+        is_streaming: bool = False,
     ) -> bool:
         self.appended.append((task_id, run_id, message, seq, include_in_context))
         self.current_max_sequence = seq
         return True
+
+    def streaming_messages_for_run(self, _task_id: int, _run_id: int) -> list[object]:
+        return []
+
+    def replace_streaming_message(self, record: object, **_kwargs: object) -> None:
+        self.appended.append((7, 2, record, getattr(record, "sequence", 0), False))
 
 
 def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> RuntimeContextManager:
@@ -51,6 +64,7 @@ def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> Run
     manager._message_sequence = next_sequence
     manager._listeners = []
     manager._tool_schemas = ()
+    manager._streaming_messages = {}
     return manager
 
 
@@ -196,6 +210,56 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
     assert messages[2].tool_call_id == "call-1"
     assert messages[3].content == "continue"
     assert context_service.appended == []
+
+
+def test_add_message_chunk_reuses_one_partial_sequence_and_finalizes_it() -> None:
+    """流式 chunk 只更新一行 partial，收口时才进入模型上下文。"""
+
+    context_service = _ContextService(max_sequence=4)
+    manager = _manager(context_service, next_sequence=5)
+    manager.current_run_id = 2
+
+    first = manager.add_message_chunk(AIMessageChunk(content="你好"), stream_id="step-1")
+    manager.add_message_chunk(AIMessageChunk(content="，世界"), stream_id="step-1")
+
+    assert first.content == "你好"
+    assert manager._message_sequence == 6
+    assert manager._entries == []
+    assert len(context_service.appended) == 1
+
+    manager.flush_message_chunk(stream_id="step-1")
+    assert len(context_service.appended) == 2
+    assert context_service.appended[0][3] == context_service.appended[1][3] == 5
+
+    manager.flush_message_chunk(stream_id="step-1", mode="complete")
+
+    assert manager._entries[0].message.content == "你好，世界"
+    assert manager._streaming_messages == {}
+
+
+def test_flush_message_chunk_cancel_drops_state_but_persists_partial() -> None:
+    """取消 flush 以 partial 落盘并丢弃内存 state，不进入模型上下文、不触发收口。"""
+
+    context_service = _ContextService(max_sequence=4)
+    manager = _manager(context_service, next_sequence=5)
+    manager.current_run_id = 2
+
+    manager.add_message_chunk(AIMessageChunk(content="你好"), stream_id="step-1")
+    manager.add_message_chunk(AIMessageChunk(content="，世界"), stream_id="step-1")
+    assert manager._streaming_messages != {}
+
+    result = manager.flush_message_chunk(stream_id="step-1", mode="cancel")
+
+    # 内存 state 已丢弃，run 终止后不会悬挂
+    assert manager._streaming_messages == {}
+    # 取消是 partial，不收口进模型上下文
+    assert manager._entries == []
+    # partial 已落盘：replace_streaming_message 写入记录保持 is_streaming=True
+    record = context_service.appended[-1][2]
+    assert record.is_streaming is True
+    assert record.include_in_context is False
+    # 返回截至当前的聚合消息
+    assert result is not None and result.content == "你好，世界"
 
 
 

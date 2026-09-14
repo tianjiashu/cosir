@@ -67,6 +67,7 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
         "message_json",
         "transport_metadata_json",
         "include_in_context",
+        "is_streaming",
         "sequence",
         "created_at",
         "updated_at",

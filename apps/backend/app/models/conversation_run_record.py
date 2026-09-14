@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import TypedDict
 
 from app.utils.datetime_utils import from_text, to_text
 
@@ -27,6 +29,7 @@ class ConversationRunUsage(TypedDict):
     cache_hit_tokens: int
     cache_miss_tokens: int | None
     reasoning_tokens: int
+
 
 class ConversationRunError(TypedDict):
     """Controlled, user-safe error contract persisted for a failed run."""

@@ -123,16 +123,14 @@ class ConversationRunService:
         status: str = "pending",
         provider_id: int | None = None,
         model_name: str | None = None,
+        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord:
         """Create a Conversation Run and initialize its canonical context.
 
-        附件在创建阶段即完成处理：非图片附件（文件 / 目录 / 链接）渲染为文本前缀拼进
-        ``input_text`` 落库，运行期模型用已有工具（read_file / list_directory /
-        search_files / web_extract）按需读取；图片附件单独抽出为 ``image_paths``
-        落库，运行期走多模态 block 通道（build_user_content_blocks）。视觉能力拦截
-        按附件类型判定，模型不支持视觉时提前报错。
+        图片在创建阶段保存为 workspace-relative 路径；普通文件已经在前端发送前
+        转换为正文中的本机路径，不进入后端附件协议。
 
         参数:
             task_id: 所属任务标识。
@@ -146,13 +144,14 @@ class ConversationRunService:
                 抛 ``ValueError``。
             model_name: 可选，本次请求的模型名（litellm 路由名）；None 表示用户
                 未选择模型（前端优先校验、后端兜底报错）。
+            image_paths: 已按最终模型 capability 归一化后的 workspace-relative 图片路径。
             reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
             session: 可选，由上层跨表事务传入的数据库会话。传入时本方法不提交事务，
                 由调用方统一提交；未传入时保持独立创建事务的行为。
 
         返回:
-            新创建的 ``ConversationRunRecord``（``input_text`` 已含附件文本前缀，``image_paths``
-            仅含图片路径）。
+            新创建的 ``ConversationRunRecord``；``input_text`` 保持正文，图片通过
+            ``image_paths`` 结构化保存。
 
         异常:
             ValueError: 如果 ``input_text`` 为空或全空白，或模型不在厂商能力范围内。
@@ -160,10 +159,10 @@ class ConversationRunService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
 
         副作用:
-            将命令行更新为一次持久化 Conversation Run（``input_text`` 含附件前缀、
+            将命令行更新为一次持久化 Conversation Run（正文与附件结构化分离、
             ``image_paths`` 仅图片、``model_name`` 为解析后的最终模型名）；
             更新所属任务最新轮次信息；
-            写入创建期附件构成日志。
+            写入创建期图片构成日志。
         """
         # 厂商-模型契约校验：仅当两者皆非 None 时按厂商能力校验模型归属。
         # provider_id 为 None 但 model_name 已设，属契约不完整（前端应配对传入），
@@ -189,6 +188,7 @@ class ConversationRunService:
                 agent_id=agent_id,
                 provider_id=provider_id,
                 model_name=model_name,
+                image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 session=persist_session,
             )
@@ -209,7 +209,12 @@ class ConversationRunService:
         # would expose uncommitted facts and duplicate the owner's events.
         if session is None:
             service_depends.get_conversation_event_projector().process(
-                RunInitializedEvent(task_id=task_id, run_id=run.id),
+                RunInitializedEvent(
+                    task_id=task_id,
+                    run_id=run.id,
+                    image_paths=image_paths or [],
+                    include_text_part=bool(input_text.strip()),
+                ),
             )
         return run
 
@@ -225,6 +230,7 @@ class ConversationRunService:
         input_text: str,
         provider_id: int | None = None,
         model_name: str | None = None,
+        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord | None:
@@ -234,7 +240,7 @@ class ConversationRunService:
         传入 ``session`` 时复用外部事务且不自行提交。
         """
 
-        if not input_text.strip():
+        if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
         allowed_statuses = (
             ConversationRunStatus.COMPLETED.value,
@@ -248,6 +254,7 @@ class ConversationRunService:
             allowed_statuses=allowed_statuses,
             provider_id=provider_id,
             model_name=model_name,
+            image_paths=image_paths,
             reasoning_effort=reasoning_effort,
             session=session,
         )

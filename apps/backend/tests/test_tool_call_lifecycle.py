@@ -49,7 +49,7 @@ class _LifecycleHarness:
         self.manager = ToolCallLifecycleManager()
 
     def _patch_runtime(self):
-        """返回 lifecycle 模块依赖的可恢复 patch 上下文。"""
+        """返回 lifecycle 模块依赖的可恢复 patch_write 上下文。"""
 
         from unittest.mock import patch
 
@@ -146,7 +146,7 @@ def test_status_mapping_success_error_cancelled() -> None:
     assert harness.events[0].error is None
     assert harness.events[1].error == "命令失败"
     assert harness.events[2].error == "已取消"
-    assert result == SettlementResult(tool_error_count=1, error_count=1)
+    assert result.tool_error_count == 1 and result.error_count == 1
     assert harness.manager.calls["a"].status == "completed"
 
 
@@ -190,7 +190,7 @@ def test_unknown_status_falls_back_to_failed() -> None:
     )
 
     assert harness.events[0].status == "failed"
-    assert result == SettlementResult(tool_error_count=1, error_count=1)
+    assert result.tool_error_count == 1 and result.error_count == 1
 
 
 def test_create_begin_and_cancel_update_serializable_state() -> None:
@@ -252,10 +252,9 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
         step_count=0,
         tool_error_count=0,
         requested_tool=False,
-        repair_requested=False,
         final_response=False,
         terminal=False,
-        pending_tool_calls={},
+        instruction="",
         max_steps=1,
         final_text="",
         last_tool_results={},

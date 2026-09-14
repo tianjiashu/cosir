@@ -209,6 +209,12 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   expect(assistantStateRequests).toHaveLength(stateReadsBeforeCancel);
   expect(assistantRequests).toHaveLength(1);
 
+  // A cold Assistant runtime must derive the same business-resume action from the
+  // canonical cancelled snapshot, rather than relying on the optimistic local state.
+  await page.reload();
+  await expect(page.getByText("cancel-me", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
+
   const resumeResponse = page.waitForResponse((response) => (
     response.url().endsWith("/assistant") && response.request().method() === "POST"
   ));

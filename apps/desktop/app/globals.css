@@ -152,3 +152,40 @@
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+
+@layer components {
+  .cosir-inline-file-token {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0 0.15rem;
+    padding: 0.1rem 0.35rem 0.1rem 0.45rem;
+    border: 1px solid color-mix(in oklab, var(--primary) 22%, transparent);
+    border-radius: 0.35rem;
+    background: color-mix(in oklab, var(--primary) 10%, transparent);
+    color: var(--primary);
+    vertical-align: baseline;
+    user-select: none;
+  }
+
+  .cosir-inline-file-token-name {
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8em;
+  }
+
+  .cosir-inline-file-token-remove {
+    border: 0;
+    background: transparent;
+    color: currentColor;
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.65;
+  }
+
+  .cosir-inline-file-token-remove:hover {
+    opacity: 1;
+  }
+}

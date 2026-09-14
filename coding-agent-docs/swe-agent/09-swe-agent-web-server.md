@@ -349,7 +349,7 @@ def main(data_path, directory, port):
             with open(data_path) as f:
                 data = json.load(f)
 
-    gold_patches = {d["instance_id"]: d["patch"] if "patch" in d else None for d in data}
+    gold_patches = {d["instance_id"]: d["patch_write"] if "patch_write" in d else None for d in data}
     test_patches = {d["instance_id"]: d["test_patch"] if "test_patch" in d else None for d in data}
 
     # 使用 partial 传递参数给 Handler
