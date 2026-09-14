@@ -2,10 +2,10 @@
 name: log-triage
 description: |
   Use when investigating or root-causing problems in the local coding-agent desktop project:
-  bugs, exceptions, crashes, hangs, failed turns, stuck tasks, missing UI updates, tool failures,
+  bugs, exceptions, crashes, hangs, stuck runs, missing UI updates, tool failures,
   unexpected Agent behavior, or requests to "看日志排查", "从数据库排查", "不启动服务直连数据库",
-  "查 task/turn/runtime_events", "trace 在哪", "logs.sqlite3", "app.sqlite3", "desktop.log",
-  "Agent 回放", or "复现问题".
+  "查 task/run/conversation_runs/conversation_task_contexts", "trace 在哪", "logs.sqlite3",
+  "app.sqlite3", "frontend.log", "backend.bootstate.json", "Agent 回放", or "复现问题".
 allowed-tools: Read,Write,Bash
 ---
 
@@ -16,188 +16,323 @@ allowed-tools: Read,Write,Bash
 
 ---
 
-## 0. 两种 trace 铁律（最先读，最容易混淆）
+## 0. 三套标识别混用（最先读，最容易误判）
 
-本项目里"trace"一词出现**两**套体系，**形态都是 32 位小写 hex，但来源、生成机制、查询通道完全不同，绝不能混用**：
+排查入口是一个 id。本项目并存**三种**标识，形态相近但来源与查询通道完全不同：
 
-| 维度 | 后端日志 trace_id | Agent turn trace |
-|------|-------------------|------------------------|
-| 是什么 | 后端结构化日志的**链路键**，由 `LogContextStore` 的 `ContextVar` 维护（入口层绑定，下层继承） | 每次 **turn** 由 `turn_trace()` 预分配的 Agent trace_id，用于排查 Agent 执行过程 |
-| 产生点 | 入口中间件 `apps/backend/app/api/middleware/api_logging.py` 从 HTTP 头 `x-trace-id`（前端透传）绑定进 `LogContextStore`；落库时由 `apps/backend/app/config/logging/filter/log_context_filter.py` 自动回填 `trace_id` | `apps/backend/app/utils/trace_infra/ids.py:new_trace_id()`（`uuid4().hex`），经 `apps/backend/app/core/observability/langfuse_tracing.py:turn_trace()` 注入 `CallbackHandler` |
-| 写入 | 落盘到 `storage/logs.sqlite3` 的 `log_entries.trace_id` 列 | Agent 执行内容落盘到 `storage/app.sqlite3` 的 `turn_messages` / `runtime_events` / `turns` 等表 |
-| 查询通道 | `skills/log-triage/scripts/query_logs.py trace <id>`（skill 内置副本，也可直接用仓库根 `scripts/query_logs.py` 原版） | `skills/log-triage/scripts/query_app_db.py turn <TURN_ID>` / `events --contains <TRACE_OR_KEYWORD>` |
-| 前端是否有 | 前端 `logs/desktop.log` 的 `context.trace_id` **就是前端经 `x-trace-id` 注入、后端日志复用的同一链路 trace_id**（同源、同坐标系），可直接 `query_logs.py trace` 反查 | 无（前端不直接持有 Agent turn trace） |
+| 标识 | 是什么 | 产生点 | 落盘/可见位置 | 查询通道 |
+|------|--------|--------|----------------|----------|
+| **链路 trace_id**（32 位小写 hex） | 唯一能**跨前端与后端日志**串起一条请求的键 | 前端 `apps/desktop/lib/trace.ts:newTraceId()`（`crypto.getRandomValues` 128-bit）；后端缺失时由 `new_trace_id()`（`uuid4().hex`）补生成 | 后端 `storage/logs.sqlite3` 的 `log_entries.trace_id`；后端文件日志 `backend-*.log` 的 `trace_id`；前端 `frontend-*.log` 的 `trace_id` | `query_logs.py trace <ID>` |
+| **Langfuse trace_id**（32 位小写 hex） | LLM/工具调用的可观测 trace，仅用于 Langfuse 平台 | `conversation_run_trace()`（`core/observability/langfuse_tracing.py`）用 `start_as_current_observation(as_type="span")` 建根 span，Langfuse `CallbackHandler` 经 OTel current context 生成该 trace_id，再经 `ConversationRunTraceResult.trace_id` 回读 | 终态 SSE 事件 payload；Langfuse UI。**不落 `app.sqlite3`，也不落 `log_entries`** | Langfuse 平台 |
+| **run_id / task_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run | `conversation_runs.id` / `tasks.id` | `storage/app.sqlite3` | `query_app_db.py` |
 
-> **前端 trace 的真相（重要，避免误判）**：前端 `clientTraceStore` 生成的 `traceId`（`randomHex(16)`，
-> 32 位 hex）随请求以 HTTP 头 `x-trace-id` 发出；后端 `api_logging` 中间件读到后**直接作为后端日志链路
-> trace_id** 绑定进 `LogContextStore`。所以 `logs/desktop.log` 里的 `trace_id` 与 `storage/logs.sqlite3`
-> 里的 `trace_id` **是同一坐标系**——前端日志里的 trace_id 可以、也应该拿去 `query_logs.py trace` 查。
-> 它"不是 Agent turn trace"这一点是真的，但"与后端日志 trace_id 不是同一坐标系"是**错的**。
+**链路 trace_id 的前后端同源链路（照此反查）**：
+`frontendLog(..., { traceId })` 把同一 id 写进前端日志 → `lib/http/client.ts:requestRaw` 以
+`X-Trace-Id` 头发出 → 后端请求日志中间件（`api/middleware/api_logging.py`，由
+`install_request_logging` 安装）从 `x-trace-id` 读头并 `merge_log_context(trace_id=...)` →
+`LogContextFilter` 自动回填每条 `LogRecord` → 落 `log_entries` 与 `backend-*.log`。因此
+**前端日志里的 trace_id 可以直接拿去 `query_logs.py trace` 反查后端全链路**。
+
+**已废弃、不要再用**：`turn_id`、`turns`、`turn_messages`、`runtime_events` 表均已从 schema 删除；
+`turn_trace()` 已不存在（改为 `conversation_run_trace()`）。历史文档若提到这些名字，视为过时。
 
 **实战要点**：
-- 用户给一个 32 位 hex，**先问清楚它从哪来**：是后端日志 / 前端日志里看到的（→ 后端日志 trace，用 `query_logs.py trace` 查），还是 Agent turn / runtime event payload 里看到的（→ 用 `query_app_db.py` 查业务库）。
-- 不要拿 Agent turn trace 去 `query_logs.py trace` 查（查不到或串错链路）；反之亦然。
-- 两套 trace 由**不同机制**生成：Agent turn trace 由 `turn_trace()` 在 runner 内预分配；后端日志 trace_id 由 `api_logging` 入口层从 `x-trace-id`（前端透传，或后端补生成）绑定。**两者不要互相替代查询**。
-- 一次 turn 里两套 trace 可并存，但**来源不同、数值无关**，不要用其中一套去关联另一套。
+- 拿到 32 位 hex **先问来源**：在前端/后端日志里看到的 → 链路 trace_id，用 `query_logs.py trace`；在 Langfuse UI 或 SSE payload 里看到的 → Langfuse trace，**用日志脚本查不到**（数值不同源，纯属巧合才会命中）。
+- 排查 Agent 行为/状态一律用整数 `task_id` / `run_id` 走 `query_app_db.py`；不要拿它当 trace_id，反之亦然。
+- 两条链路可同时存在但数值无关，不要用其中一条去校验另一条。
 
 ---
 
-## 1. 三类证据源与位置
+## 1. 证据源与落盘位置（唯一事实清单）
 
-| 源 | 落盘位置 | 形态 | 查询方式 |
-|----|----------|------|----------|
-| 前端日志 | `logs/desktop.log`（仓库根，Tauri `tauri dev` / 生产落盘；纯浏览器 `vite dev` 不落盘） | 单行文本 + 结构化 `context`/`stack` | 直接 `Read` 文件，或 `grep` 关键字 |
-| 后端日志 | `storage/logs.sqlite3`（`log_entries` 表，JSON 字段） | 结构化 9 列：ts/level/logger/trace_id/caller/event/msg/data/error/truncated | `skills/log-triage/scripts/query_logs.py`（skill 内置副本） |
-| 业务数据库 / Agent 回放 | `storage/app.sqlite3`（表以 `apps/backend/app/storage/model` 为事实源） | `workspaces/tasks/turns/turn_messages/runtime_events/delegations/file_snapshots`；Agent 回放直接从 `turn_messages` / `runtime_events` 读 | `skills/log-triage/scripts/query_app_db.py`（只读直连，不启动服务，不导入 `app.*`） |
+`<repo>` = 仓库根；`<data_dir>` = 桌面应用数据目录：Windows `%APPDATA%\com.cosir.desktop`、
+macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/com.cosir.desktop`。
 
-**前置确认**：开始排查前，先用 CodeGraph / 读代码确认相关模块的真实代码位置（不要凭记忆猜路径）。
+| 源 | 位置 | 形态 | 查询方式 |
+|----|------|------|----------|
+| 前端日志 | `<data_dir>/runtime/frontend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated（`logger=coding_agent.frontend`） | 直接 `Read`/grep；trace_id 可反查后端 |
+| 桌面宿主日志 | `<data_dir>/runtime/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；WebView2 进程失败等宿主级诊断 | 直接 `Read` |
+| 后端控制台原文 | `<data_dir>/runtime/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（Rust 侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
+| 后端结构化文件日志 | 桌面模式 `<data_dir>/runtime/backend-YYYY-MM-DD.log`；纯后端模式 `<repo>/logs/backend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated | 直接 `Read`/grep |
+| 后端日志库 | `<repo>/storage/logs.sqlite3` → `log_entries` | 结构化列：id/ts/level/logger/trace_id/caller/event/msg/data_json/error_json/truncated | `query_logs.py`（首选，支持 trace/级别/时间窗过滤） |
+| 业务库 / Agent 回放 | `<repo>/storage/app.sqlite3` | 见 §3 表清单 | `query_app_db.py`（只读直连，不启动服务） |
+| LangGraph checkpoint | `<repo>/storage/langgraph_checkpoints.sqlite` | `checkpoints` / `writes`，按 `thread_id` 分片 | `sqlite3` 直连；`thread_id` = `conversation_runs.checkpoint_thread_id` |
+| 后端启动状态 | `<data_dir>/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；Tauri 据此判定启动失败 |
+
+**为什么后端文件日志有两个可能目录（关键）**：桌面模式下 Rust 宿主 spawn 后端时注入
+`CODING_AGENT_LOG_DIR=<data_dir>/runtime`，因此后端结构化日志、控制台日志、前端日志、宿主日志
+**同目录**；而 `uv run --project apps/backend python -m app` / `pytest` 不注入该变量，回落
+`Settings.LOG_DIR` 默认值 `<repo>/logs`。排查前先确认后端是**怎么起的**，别只看一个目录。
+
+**分片规则**：单文件上限 5MB，同日历史分片为 `.1.log` … `.7.log`（保留 7 个）。日期切分与大小
+分片叠加：跨日自动换新日期文件，但 `.1`…`.7` 序号在**当日**内累计，不跨日延续。日志目录与库路径
+可被覆盖：`CODING_AGENT_LOG_DIR` / `CODING_AGENT_LOG_DATABASE_FILE` / `CODING_AGENT_CHECKPOINT_FILE`
+（见 `apps/backend/app/config/settings.py:Settings.load`）。
+
+**HTTP 通道（后端在跑时可替代直连）**：`GET /logs/query?trace_id=...` 与 `GET /logs/recent`
+（`apps/backend/app/api/logs_api.py`），返回结构化 entries 与可直接渲染的 text。
 
 ---
 
-## 2. 排查工作流（严格按顺序）
+## 2. 日志写入契约（决定「你能从日志里查到什么」）
+
+排查前必须知道日志的**能力边界**，否则会在错误的方向上找证据。
+
+**后端怎么写（照抄）**：统一用 `log` 单例，禁止 `print`/`console` 当系统日志。
+
+```python
+from app.config.logging.logger import log
+
+# 第一个位置参数 = 机器可筛事件名（snake_case 英文）
+# extra["msg"] = 给人看的中文消息；业务字段收进 extra["data"]
+log.info("file_written", extra={"msg": "已写入文件", "data": {"path": path, "run_id": run_id}})
+log.warning("retry", extra={"msg": "第 2 次失败将降级", "data": {"attempt": 2}})
+try:
+    ...
+except Exception:
+    log.error("op_failed", extra={"msg": "执行失败", "data": {"retryable": False}}, exc_info=True)
+```
+
+字段提取规则（事实来源：`app/models/mapped_log_record.py`）：
+
+- `event` = `record.msg` 的**首个空白分隔 token**，必须匹配 `^[a-z][a-z0-9_]*$`，否则落为 `log_event`（`query_logs.py --event-prefix` 查的就是它）。
+- `msg` = `extra["msg"]`（由 `install_msg_relocation` 在 `makeRecord` 阶段重定位到 `display_message`）；缺失时回退为 `event`。
+- `data` = `extra["data"]` 与其余未保留 extra 字段**合并**后统一脱敏；单字段文本上限 **2000 字符**，超限追加 `[TRUNCATED:n]` 并把 `truncated` 置 true。
+- `trace_id` 由 `LogContextFilter` 自动回填，**不要手动传**；`task_id`/`run_id` 等业务 id 放 `extra["data"]`。
+- 子进程工具的日志经 `SubprocessQueueHandler` 回传父进程统一落盘，不另开日志文件。
+
+> **⚠️ 持久化日志里没有异常堆栈。** `MappedLogRecord` 会把 `error.message` 与 `error.stack`
+> 统一替换为「异常详情已省略」，只保留 `error.type`。也就是说 `log.exception(..., exc_info=True)`
+> 在文件日志与 `log_entries` 里只贡献**异常类型**。
+> 因此排查异常时：① 在 `except` 里把关键上下文（入参、分支、业务 id）写进 `extra["data"]`；
+> ② 依赖 `event` + `caller` + `data` 定位到具体阶段；③ 需要堆栈就**本地复现**（见阶段 D），
+> 不要指望日志文件。
+
+**前端怎么写（照抄）**：统一从 `@/lib/logging/frontend-log` 调，禁止 `console.log` 当系统日志。
+
+```ts
+import { frontendLog } from "@/lib/logging/frontend-log";
+
+// 签名 (level, event, msg, { traceId, data, error })；level 仅 DEBUG|INFO|WARNING|ERROR
+await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
+  traceId,
+  data: { path, method: "GET" },
+  error,
+});
+```
+
+- 前端日志与后端日志**同为同一套字段的同构结构**（`logger=coding_agent.frontend`、`caller=desktop.frontend`）；`event` 必须 snake_case，且 Rust 侧 `write_frontend_log` 强制 `trace_id` 为 32 位 hex（`len()==32` 且逐字符校验）。
+- `error` 只保留 `type`，message 固定为「客户端请求失败（错误正文已省略）」。
+- 落盘经 Tauri IPC `write_frontend_log`；纯浏览器 `vite dev` 没有该 IPC，只写控制台与内存环形缓冲，**不会落盘**。
+
+---
+
+## 3. 业务库表 → 承载事实 → 典型症状
+
+`storage/app.sqlite3` 的表结构以 `apps/backend/app/storage/model` 为事实源（`schema` 子命令会从在线库读真实结构）。
+
+| 表 | 承载事实 | 典型症状 / 排查点 |
+|----|----------|-------------------|
+| `workspaces` | 工作区身份与根路径 | 路径越界、找不到文件、工作区切换异常 |
+| `tasks` | 任务身份、`current_run_id`、上下文窗口用量（`context_usage_used` / `context_window_total`）；父子/fork 关系由 `parent_task_id` / `parent_run_id` / `delegation_id` 显式承载，`extra` 为自由 JSON（fork 场景实测含 `{"fork": {"source_task_id", "source_run_id"}}`） | 任务列表状态不对、上下文占用异常、fork 关系 |
+| `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / provider+model / `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
+| `conversation_commands` | Transport 命令幂等占用：`(task_id, command_id)` 唯一、`payload_hash`、`error_code` | 重复提交被拒、幂等冲突、命令失败码 |
+| `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `tool_call_id` / `is_streaming` / `include_in_context` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
+| `file_snapshots` | 文件变更反向 V4A 快照：`seq`（task 内递增）/ `stable` / `status` | 改动没展示、不能回退、变更集缺失 |
+| `delegations` | 子 Agent 委派：父子 run/task/agent、`status`、`summary`、`error` | 委派卡住、子任务结果丢失 |
+| `terminal_sessions` | 终端会话元数据（PTY 与输出缓存不落库） | 终端断连、worker 崩溃、会话未收口 |
+| `attachment_assets` | 附件资产：`content_sha256`、`idempotency_key`、`storage_state`、尺寸 | 图片上传失败、去重异常 |
+| `providers` / `models` | 模型厂商与模型条目（`api_key` 为**明文 secret，任何输出都不得包含**） | 模型解析失败、窗口/能力标志错 |
+
+**状态词表（唯一事实源）**：
+
+- Run：典型路径 `pending → running → completed | failed | cancelled`（`cancelled` 允许在用户明确操作后再次转 `running`，用于续跑恢复）。**权威迁移白名单在 `assistant_transport/event/run_event.py:_ALLOWED_RUN_STATUS_TRANSITIONS`**（投影层闸门）：若后端已落定终态但 UI 状态不更新，优先怀疑该白名单把事件丢弃了（`completed` / `failed` 不可逆，迟到的 active 事件会被丢弃）。
+- 工具调用生命周期：`pending / running / completed / failed / cancelled`（Transport `transport_metadata_json.status`）。
+  **判读口径**：run 被取消或后端重启恢复时，`ConversationTaskContextService.close_unclosed_tool_calls_for_run`
+  （配合 `ConversationRunService.recover_orphaned_runs`）会为未闭合调用**补一行占位 ToolMessage** 并记
+  `cancelled`，所以「取消导致未闭合」通常表现为 `cancelled`；只有占位补行未执行（进程被强杀且之后未再启动）
+  才表现为缺结果的 `pending`。`tools` 子命令按 `tool_call_id` 配对即可还原两者。
+- 消息类型：`ai` / `human` / `tool` / `system`。AI 的工具调用在 `message_json.data.tool_calls[]`（`{id, name, args}`）；工具结果在 `tool` 消息的 `data.content` + `data.tool_call_id` + `data.status`（`success` / `error`）。
+
+**边界提醒**：`app.sqlite3`（业务事实）、`logs.sqlite3`（日志旁路）、`langgraph_checkpoints.sqlite`
+（workflow 恢复）三者职责分离，不要跨库关联判断 Run 状态——**Run 状态只看 `conversation_runs`**。
+
+---
+
+## 4. 排查工作流（严格按顺序）
 
 ### 阶段 A — 收集症状与入口
-1. 问清/确认：问题现象、最早出现时机、是否必现、用户手头有什么（报错文本、某个 trace id、截图）。
-2. 若有 trace id，**先按 §0 判断它是日志 trace 还是 Agent turn trace**。
-3. 若有任务/turn/run id，也能在日志反查表（进程内 `run_id/task_id -> trace_id`）关联，但注意反查表是运行进程内态，
-   离线排查时优先直接用日志 `trace_id` 或 `--contains <task_id>`。
+
+1. 问清/确认：问题现象、最早出现时机、是否必现、用户手头有什么（报错文本、截图、某个 id）。
+2. 若有 id，先按 §0 判定类型：链路 trace_id → 日志脚本；run_id/task_id → 业务库脚本；Langfuse trace → Langfuse 平台。
+3. 若只有现象没有 id：用 `query_logs.py recent --errors-only` 与 `query_app_db.py stuck` 反查最近的异常与未收敛记录，再向用户确认时间点。
+4. **先用 `Read` / 代码确认相关模块的真实位置**，不要凭记忆猜路径或表名。
 
 ### 阶段 B — 拉取证据
 
-> 脚本位置：本 skill 内置 `scripts/query_logs.py` 与 `scripts/query_app_db.py`，从**仓库根**执行
-> （路径含 `skills/log-triage/`）。Agent 回放直接读取业务数据库，不需要额外 replay 脚本。
+> 脚本位置：本 skill 内置 `scripts/query_logs.py`、`scripts/query_app_db.py`（及其 `appdb_*.py` 查询模块），
+> 从**仓库根**执行。所有 Python 脚本一律 `uv run --project apps/backend python <script>`（Python 3.11，uv 托管）。
+> 输出若含中文/表情符号，脚本已自行把 stdout 切到 UTF-8，Windows GBK 控制台不会再崩。
 
-- **前端相关**（UI 卡死/报错/不更新）：`Read logs/desktop.log`，按时间倒序看最近的 ERROR/WARN，
-  关注 `context`（含前端 trace_id、task_id）与 `stack`。
+- **前端相关**（UI 卡死/报错/不更新/白屏）：直接 `Read <data_dir>/runtime/frontend-YYYY-MM-DD.log`，
+  按时间倒序看 ERROR/WARNING，关注 `context.trace_id`、`event`、`data`；宿主级问题看 `desktop-*.log`。
+
 - **后端相关**（API 报错/任务失败/工具执行异常）：
-  ```bash
-  # 按 trace 拉完整链路（优先，若已知日志 trace_id）
-  uv run --project apps/backend python skills/log-triage/scripts/query_logs.py trace <LOG_TRACE_ID> --format json --save /tmp/trace.json
-  # 或按时间倒序看最近错误
-  uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --errors-only --limit 100
-  # 按关键字/事件/调用方过滤
-  uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --contains "<关键词>" --caller-contains "<模块>"
-  ```
-- **业务状态相关**（不启动服务，直连业务库排查 task/turn/event/委派/文件变更）：
-  ```bash
-  # 看业务库表结构、行数，确认是否查对库
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py schema
-  # 最近任务 / 最近轮次
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tasks --limit 20
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py turns --limit 20
-  # 单个 task / turn 的完整排障快照
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py task <TASK_ID> --format json
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py turn <TURN_ID> --format json
-  # 查 runtime_events，定位工具调用、模型输出、错误 payload
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py events --task-id <TASK_ID> --order asc
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py events --contains "<关键词>" --limit 100
-  # 查疑似未收敛的 task/turn
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py stuck --limit 50
-  ```
-- **Agent 行为相关**（答非所问/工具调用异常/模型输出错误）：
-  ```bash
-  # 直接从业务库读取 Agent 回放内容：turn_messages 是消息轨迹，runtime_events 是执行时间线
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py turn <TURN_ID> --format json
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py events --turn-id <TURN_ID> --order asc --format json
-  uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py events --contains "<TOOL_CALL_ID_OR_TRACE_OR_KEYWORD>" --format json
-  ```
-
-### 阶段 C — 交叉验证（关键）
-- 同一问题应优先在**后端日志**和**业务数据库 runtime_events/turns/tasks** 两处互相印证；若涉及 agent 行为，用 `turn_messages` 对齐上下文消息，用 `runtime_events.sequence` 对齐执行时间线。
-- 用日志里的 `ts` / `event`、业务库里的 `created_at` / `sequence` 对齐时间，确认是否同一事件。
-- **若日志里有关键事件但业务库缺失对应 turn/event**（或反之）：说明某一侧观测缺失或持久化失败——这是"证据不完整"的信号，进入阶段 D。
-- **若日志显示请求成功但业务库状态异常**：优先查 `turns.status/end_reason/response_text`、`runtime_events.event_type/payload_json`、`delegations.status/error`，不要只凭日志判断执行结果。
-
-### 阶段 D — 证据不足：补日志 + 复现
-当信息不足以定位根因（日志缺失上下文、只有"失败了"无堆栈、关键分支无记录）时：
-
-1. **补日志**（遵循项目规范《通用日志开发规范》第六章）：
-   - 必须带**上下文**：trace_id、task_id/run_id、关键业务 id、操作名。
-   - 异常路径必须写 **error 日志（含异常类型、message、堆栈、可重试状态）**，禁止空 `catch`、禁止只 `return`。
-   - 外部依赖调用记：目标、操作名、耗时、状态码、失败原因。
-   - **绝不输出 secret / 敏感个人信息**（API Key、Token、Cookie、手机号、身份证等）。
-   - 日志必须分级（info/warn/error），调试日志不得污染生产默认输出。
-   - 补日志改动需同步更新对应函数 docstring，遵循项目"单一职责 / 不重复造轮子"铁律。
-
-   **后端怎么写（照抄）**：统一用 `log` 单例，禁止 `print`/`console` 当系统日志。
-   ```python
-   from app.config.logging.logger import log
-
-   # 第一个位置参数 = 机器可筛事件名（snake_case 英文，须匹配 ^[a-z][a-z0-9_]*$，否则落库为 log_event）
-   # extra["msg"] = 给人看的中文消息；业务字段建议收进 extra["data"]
-   log.info("file_written", extra={"msg": "已写入文件", "data": {"path": path}})
-   log.warning("retry", extra={"msg": "第2次失败将降级", "data": {"attempt": 2}})
-   # 异常路径：exc_info=True 自动带堆栈，error 级（stack 由框架提取，勿手填）
-   try:
-       ...
-   except Exception as e:
-       log.error("op_failed", extra={"msg": "执行失败", "data": {"retryable": False}}, exc_info=True)
-   ```
-   - 事件名是**第一个位置参数**（英文 snake_case），不是 extra 字段；`query_logs.py --event-prefix` 查的就是它。
-   - `extra["msg"]` 写给人看的中文消息；`trace_id` 由 `LogContextFilter` 自动回填，**不用手动传**；`task_id`/`run_id` 等业务 id 放 `extra["data"]`。
-
-   **前端怎么写（照抄）**：统一从 `@/lib/logger` 调，禁止 `console.log` 当系统日志。
-   ```ts
-   import { logInfo, logWarn, logError } from "@/lib/logger";
-
-   // 事件名写进 message，用 module 标识来源；业务字段放 context
-   logInfo("file_written", { module: "file_io", path });
-   logWarn("retry", { module: "file_io", attempt: 2 });
-   // logError 签名 (message, error, context?)：error 对象必须放第2位，stack 自动提取，勿手填
-   logError("op_failed", e, { module: "file_io", retryable: false });
-   ```
-   - `context` 自动带 `trace_id`（前端 `x-trace-id` 透传，与后端日志同源），**不用手动传**；前端用 `module` 标识模块，无 event 列。
-2. **复现问题（优先自己复现）**：
-   - 后端逻辑 bug：写/跑 **pytest** 复现（`uv run --project apps/backend pytest <test>`），让新日志落盘到 `storage/logs.sqlite3`，并按需检查 `storage/app.sqlite3` 的 task/turn/event 状态。
-   - 可端到端触发：起后端（`uv run --project apps/backend python -m app`）后调 API（curl / 现有 tests 辅助脚本），确认日志落盘。
-   - 前端纯 UI 交互（点击流、视觉）：**只能请用户复现**——明确要求用户"在 `tauri dev` 下操作复现，并把 `logs/desktop.log` 的最近片段贴给你"。纯浏览器 `vite dev` 不落盘，必须走 `tauri dev`。
-   - 复现时必须**带 trace**：后端日志自动带日志 trace_id；若排查 agent 行为，复现后必须能在业务库查到对应 `turn_id` / `runtime_events`。
-3. 复现后回到阶段 B，用新日志重新定位。
-
-### 阶段 E — 结论与修复
-- 给出**根因**（哪一行/哪个分支/哪个依赖），区分"日志看清了根因"还是"仍需用户补充信息"。
-- 若需改代码：按项目规范做最小、聚焦的修复（单一职责、改动聚焦、Docstring 同步、可排查日志）。
-- 交付前走开发-审查-测试闭环（独立审查 Agent + 独立测试 Agent），不自行宣布完成。
-- 若始终无法自证：给出**精确的复现请求**（操作步骤 + 期望看到哪个 trace + 用户应提供的日志片段），交给用户。
-
----
-
-## 3. 纪律（不可违反）
-
-- **日志优先于猜想**：任何"可能是 X"的假设，先去日志里找证据。
-- **两种 trace 必区分**（见 §0）：特指"后端日志链路 trace_id"与"Agent turn trace"两套体系——来源、机制、查询通道不同，不要互相替代查询（前者含前端 `x-trace-id` 透传，同源同坐标系；后者用于 Agent 执行排查）。拿错 trace 查错通道 = 白查。
-- **复现优先自己来**：pytest > 起后端调 API > 请用户前端复现。能自己复现就别打扰用户。
-- **补日志要合规**：上下文 + 堆栈 + 分级 + 不泄密，禁止空 catch。
-- **落盘可查**：自己复现时必须确认日志和业务状态已落盘（后端 `storage/logs.sqlite3` / 业务库 `storage/app.sqlite3` / 前端 `logs/desktop.log`），否则复现无效。
-- **不制造噪音**：查询脚本只读（`query_logs.py` / `query_app_db.py` 都用只读连接），不要为了排查改业务行为。
-
----
-
-## 4. 脚本速查（从仓库根执行）
 
 ```bash
-# 后端日志（skill 内置副本）
-uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent  [--errors-only|--warnings-up] [--contains T] [--event-prefix E] [--caller-contains C] [--since/--until/--around] [--limit N] [--format json] [--save F]
-uv run --project apps/backend python skills/log-triage/scripts/query_logs.py trace   <LOG_TRACE_ID> [共享选项] [--format json] [--save F]
-
-# 业务数据库（skill 内置副本；直连 storage/app.sqlite3，不启动服务）
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py schema
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tasks  [--status S] [--contains T] [--limit N] [--format json]
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py turns  [--status S] [--task-id ID] [--contains T] [--limit N] [--format json]
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py task   <TASK_ID> [--limit N] [--format json]
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py turn   <TURN_ID> [--limit N] [--format json]
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py events [--task-id ID] [--turn-id ID] [--type T] [--contains T] [--order asc|desc] [--limit N] [--format json]
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py stuck  [--limit N] [--format json]
-
-# 前端
-Read logs/desktop.log   # 直接读，按时间倒序关注 ERROR/WARN
+# 按链路 trace 拉完整链路（已知链路 trace_id 时首选，按时间升序）
+uv run --project apps/backend python skills/log-triage/scripts/query_logs.py trace <TRACE_ID> --format json --save /tmp/trace.json --force
+# 最近错误 / 关键字 / 事件前缀 / 调用方
+uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --errors-only --limit 100
+uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --contains "<关键词>" --caller-contains "tools_node"
+uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --event-prefix "tool_" --since 2026-09-13T10:00:00Z
+# 崩溃/起不来：看启动状态与控制台原文
+#   Read <data_dir>/runtime/backend.bootstate.json
+#   Read <data_dir>/runtime/backend-console-YYYY-MM-DD.log
 ```
 
-> `query_app_db.py` 是 skill 专用脚本，表结构以 `apps/backend/app/storage/model` 为事实源，但脚本自身不导入
-> `app.*`，只读直连 SQLite，适合服务未启动、启动失败、UI 无法打开时排查问题。
-> `query_logs.py` 内置副本与仓库根 `scripts/query_logs.py` 原版逻辑一致；唯一差异是仓库根定位改为"向上查找含 `apps/backend` 的目录"，
-> 因此无论从何处调用都能正确指向真实仓库根。也可直接改用仓库根原版脚本，效果相同。
-> 所有 Python 脚本一律用 `uv run --project apps/backend python <script>` 执行（Python 3.11，uv 托管）。
+- **业务状态相关**（不启动服务，直连业务库）：
+
+```bash
+# 先确认库与 schema 没漂移
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py schema --no-columns
+# 任务 / 运行
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tasks --limit 20
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py runs --limit 20 --status running
+# 单个 task / run 完整排障快照（任务/运行/命令/消息/工具/变更/委派一次拿全）
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py task <TASK_ID> --limit 30
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py run <RUN_ID> --format json
+# 未收敛体检（活跃 run / 指向活跃 run 的 task / 残留流式草稿）
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py stuck
+```
+
+- **Agent 行为相关**（答非所问/工具调用异常/工具参数错/上下文缺口）：
+
+```bash
+# 工具调用与结果的配对汇总（排查「模型给错参数」「工具一直失败」的首选视图）
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <TASK_ID> --limit 50
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <TASK_ID> --failures-only
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <TASK_ID> --contains "search_files"
+# 逐条回放上下文消息（message_json 解析后的 kind/text/tool_calls/usage/transport 状态）
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py messages <TASK_ID> --limit 50
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py messages <TASK_ID> --run-id <RUN_ID> --exclude-streaming
+```
+
+### 阶段 C — 交叉验证（关键）
+
+- **同一条链路两边印证**：带链路 trace_id 的问题，应在 `log_entries`（后端日志）与前端日志里都能找到同一 `trace_id` 的记录；只有一侧有 → 说明另一侧观测缺失（进入阶段 D）。
+- **同一时间两种坐标对齐**：日志 `ts`（UTC RFC3339 毫秒）与业务库 `created_at` / `updated_at` /
+  `sequence` 对齐；`conversation_task_contexts.sequence` 是 task 内全局插入序，用它排列执行时间线，而不是靠时间戳猜测顺序。
+- **状态不要只看日志**：日志显示请求成功 ≠ 业务状态正确。以 `conversation_runs.status` / `end_reason` /
+  `error_json`、`conversation_task_contexts` 的 `transport_metadata_json.status`、`file_snapshots.status`
+  为准；日志是旁路，不是事实源。
+- **工具结局三处对齐**：Transport 侧生命周期（`transport_metadata_json.status`）、执行结果
+  （tool 消息 `data.status` / content 是否以 `error:` 开头）、业务副作用（`file_snapshots` 是否落库）
+  ——三者不一致本身就是重要线索（如「已成功但快照缺失」「显示 running 但已有结果」）。
+
+### 阶段 D — 证据不足：补日志 + 复现
+
+当信息不足以定位根因（日志只有事件名、无关键入参、关键分支无记录）时：
+
+1. **补日志**（遵循项目《通用日志开发规范》与 AGENTS.md 日志章节）：
+   - 必须带**上下文**：`extra["data"]` 中放 task_id / run_id / 路径 / 命令 / 重试状态等定位字段。
+   - 异常路径必须写 error 日志；**注意堆栈不会落盘（见 §2）**，因此要把「异常类型之外的因果」显式写进 `data`。
+   - 外部依赖调用记：目标、操作名、耗时、状态码、失败原因。
+   - **绝不输出 secret / 敏感信息**（API Key、Token、Cookie、手机号、身份证、完整请求正文）。
+   - 日志必须分级（DEBUG/INFO/WARNING/ERROR），调试日志不得污染生产默认输出。
+   - 补日志改动需同步更新对应函数 docstring，遵循项目「单一职责 / 不重复造轮子」铁律。
+2. **复现问题（优先自己复现）**：
+   - 后端逻辑 bug：写/跑 pytest 复现（`uv run --project apps/backend pytest <test>`）；新日志会落
+     `<repo>/storage/logs.sqlite3`（pytest 未注入 `CODING_AGENT_LOG_DIR` 时文件日志落 `<repo>/logs`），
+     业务状态落临时库。
+   - 可端到端触发：起后端（`uv run --project apps/backend python -m app`）后调 API（curl 等），
+     确认日志落盘与 `app.sqlite3` 状态变化。
+   - 前端纯 UI 交互（点击流、视觉、白屏）：**只能请用户复现** —— 明确要求「在 `tauri dev` 下操作复现，
+     并把 `<data_dir>/runtime/frontend-YYYY-MM-DD.log` 的最近片段贴给你」。纯浏览器 `vite dev` 不落盘。
+   - 复现后必须能定位到具体 `run_id`：`query_app_db.py runs --limit 5` 找到新 run，再用 `run <RUN_ID>` 看全貌。
+3. 复现后回到阶段 B，用新证据重新定位；不要停在「可能是 X」。
+
+### 阶段 E — 结论与修复
+
+- 给出**根因**（哪一行/哪个分支/哪个依赖/哪张表），并区分「证据看清了根因」与「仍需用户补充信息」。
+- 若需改代码：按项目规范做聚焦修复（单一职责、Docstring 同步、可排查日志）。
+- 交付前走开发-审查-测试闭环（独立审查 Agent + 独立测试 Agent），**不自行宣布完成**。
+- 若始终无法自证：给出**精确的复现请求**（操作步骤 + 期望看到的哪个 trace/run + 用户应提供的日志片段）。
+
+---
+
+## 5. 纪律（不可违反）
+
+- **日志优先于猜想**：任何「可能是 X」的假设，先去日志/业务库里找证据。
+- **三套标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；Langfuse trace 只在 Langfuse；业务排查用 run_id/task_id。拿错标识查错通道 = 白查。
+- **日志不是事实源**：Run/Tool/文件变更的权威状态在业务库；日志只做旁路印证。
+- **复现优先自己来**：pytest > 起后端调 API > 请用户前端复现。能自己复现就别打扰用户。
+- **补日志要合规**：上下文 + 分级 + 不泄密、禁止空 catch；记住**堆栈不落盘**，因果要写进 `data`。
+- **落盘可查**：自己复现时必须确认证据已落盘（`logs.sqlite3` / `app.sqlite3` / `frontend-*.log`），否则复现无效。
+- **不制造噪音**：查询脚本全部只读（`mode=ro`），不要为了排查改业务行为或写库。
+
+---
+
+## 6. 脚本速查（从仓库根执行）
+
+```bash
+# ---------- 后端日志库 ----------
+uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent [--errors-only|--warnings-up|--min-level L|--level L] \
+    [--contains T] [--event E] [--event-prefix P] [--caller-contains C] [--logger-contains L] \
+    [--since/--until/--around T] [--window 2m] [--limit N] [--format text|json] [--save F] [--force]
+uv run --project apps/backend python skills/log-triage/scripts/query_logs.py trace <TRACE_ID> [共享选项]
+
+# ---------- 业务库（只读直连，不启动服务） ----------
+# 下同：uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py <子命令>
+schema      [--table T] [--no-columns]                        # 真实表清单/行数/列
+workspaces  [--limit N]
+tasks       [--workspace-id I] [--contains T] [--limit N]
+runs        [--task-id I] [--status S] [--contains T] [--limit N]
+run         <RUN_ID> [--limit N]                              # run 排障快照
+task        <TASK_ID> [--limit N]                             # task 排障快照
+commands    [--task-id I] [--run-id I] [--limit N]
+messages    <TASK_ID> [--run-id I] [--order asc|desc] [--exclude-streaming] [--limit N]
+tools       <TASK_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
+changes     [--task-id I] [--run-id I] [--limit N]
+delegations [--task-id I] [--limit N]
+sessions    [--task-id I] [--status S] [--limit N]
+attachments [--task-id I] [--limit N]
+providers   [--limit N]                                       # 不含明文 api_key
+models      [--provider-id I] [--limit N]
+stuck       [--limit N]
+# 共享选项：--db PATH  --format text|json  --save FILE  --force
+
+# ---------- 文件与 HTTP ----------
+# Read <data_dir>/runtime/frontend-YYYY-MM-DD.log        # 前端日志
+# Read <data_dir>/runtime/desktop-YYYY-MM-DD.log          # 宿主日志
+# Read <data_dir>/runtime/backend-console-YYYY-MM-DD.log  # 后端 stdout/stderr 原文
+# Read <data_dir>/runtime/backend.bootstate.json          # 启动状态
+# GET  /logs/query?trace_id=... | /logs/recent            # 后端在跑时的 HTTP 通道
+```
+
+> **实现约定**：`query_app_db.py` 是 CLI 表现层（参数解析/分发/渲染），SQL 与业务语义拆在
+> `appdb_readonly.py`（只读访问原语）、`appdb_schema.py`、`appdb_agent_facts.py`、
+> `appdb_snapshots.py`、`appdb_context.py`、`appdb_side_effects.py`、`appdb_health.py` 七个模块中；
+> 脚本**不导入 `app.*`**，表结构事实以在线库与 `apps/backend/app/storage/model` 为准，因此可在服务
+> 未启动、启动失败或 UI 打不开时使用。
+> `--format json` 给出未经截断的完整字段（文本模式会压缩长文本），排查细节优先用 json。
 >
-> **维护说明（双份脚本风险）**：本 skill 内置 `query_logs.py` 与仓库根 `scripts/query_logs.py` 原版应保持一致。
-> 修改任一脚本后需同步另一份；`query_app_db.py` 是 skill 专用排障脚本，随 `apps/backend/app/storage/model` 表结构演进。
+> **维护说明（双份副本风险）**：仓库 `skills/log-triage/` 是受版本管理的**唯一源**；
+> 运行时从用户级目录加载（Windows `%USERPROFILE%\.codebuddy\skills\log-triage\`）。
+> 修改任一文件后必须同步 `SKILL.md` 与 `scripts/` 到用户级目录，否则 `use_skill` 加载到的仍是旧版本。
+> `test/` 只服务仓库内回归，运行时不需要，**不随安装副本同步**。
+> `appdb_*.py` 各查询模块必须随 `apps/backend/app/storage/model` 的表结构演进同步更新。
+>
+> **回归测试（改脚本后必跑）**：`skills/log-triage/test/` 下有 200+ 用例，覆盖布尔归一的
+> Python/SQL 双侧一致性、消息回放流式过滤口径、工具调用配对（含跨 run 复用 `tool_call_id`）、
+> 未收敛体检、缺表可诊断性、CLI 参数面与 `--save`。从仓库根执行：
+> `uv run --project apps/backend pytest -c apps/backend/pyproject.toml skills/log-triage/test -q`
+> 改动 `sqlite_values.py` 或任一过滤条件时，务必确认该套件全绿——口径分叉类缺陷不会报错，只会
+> 静默给出错误结论。
+> 脚本与测试同时受项目 ruff 规则约束：
+> `uv run --project apps/backend ruff check --config apps/backend/pyproject.toml skills/log-triage/scripts skills/log-triage/test`。
+>
+> **路径解析约定**：两个脚本的默认库路径都先按「脚本所在目录」、再按「当前工作目录」向上查找
+> 含 `apps/backend` 的目录作为仓库根。因此**只要 cwd 在仓库根**，用仓库内相对路径或用户级
+> 安装路径调用都能正确定位 `storage/app.sqlite3` 与 `storage/logs.sqlite3`；两条路径都找不到
+> 时会明确报错，此时用 `--db` 显式指定库路径即可。

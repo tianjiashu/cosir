@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""本地业务数据库排查 CLI（log-triage skill 内置脚本）。
+"""本地业务数据库排查 CLI（log-triage skill 内置）。
 
-单一职责：以只读方式查询 ``storage/app.sqlite3`` 中由
-``apps/backend/app/storage/model`` 定义的业务表，帮助 Agent 在不启动 FastAPI / Tauri /
-LangGraph 的情况下排查任务、轮次、事件流、委派与文件变更问题。
+单一职责：CLI 表现层——解析参数、把子命令分发给对应查询模块、把结果渲染为文本或 JSON。
+脚本以只读方式直连 ``storage/app.sqlite3``，不启动 FastAPI / Tauri / LangGraph，也不导入
+``app.*``，因此可在服务未启动、启动失败或 UI 打不开时使用。
 
-脚本刻意不导入 ``app.*``，避免触发后端配置、storage 初始化或三方运行时副作用。
+职责边界：
+- 负责：argparse 参数面、子命令分发、输出渲染（文本/JSON）、退出码。
+- 不负责：SQL 与业务语义（见 ``appdb_readonly`` / ``appdb_agent_facts`` /
+  ``appdb_context`` / ``appdb_side_effects`` / ``appdb_snapshots`` / ``appdb_health`` /
+  ``appdb_schema``）、任何写操作。
+
+表结构事实以 ``apps/backend/app/storage/model`` 的 ORM 定义为准；本脚本子命令与字段随该
+目录演进，不硬编码表名清单（``schema`` 子命令从在线库读取真实结构）。
 """
 
 from __future__ import annotations
@@ -14,117 +21,203 @@ import argparse
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from appdb_agent_facts import (
+    list_models,
+    list_providers,
+    recent_commands,
+    recent_runs,
+    recent_tasks,
+    recent_workspaces,
+)
+from appdb_context import list_messages, summarize_tool_calls
+from appdb_health import find_unsettled
+from appdb_readonly import list_tables, open_readonly, resolve_db_path
+from appdb_schema import database_overview, table_detail
+from appdb_side_effects import (
+    list_attachment_assets,
+    list_delegations,
+    list_file_snapshots,
+    list_terminal_sessions,
+)
+from appdb_snapshots import run_snapshot, task_snapshot
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 10000
 _ORDERS = ("asc", "desc")
-_KNOWN_TABLES = (
-    "workspaces",
-    "tasks",
-    "turns",
-    "turn_messages",
-    "runtime_events",
-    "delegations",
-    "file_snapshots",
-)
-_TASK_COLUMNS = (
-    "task_id",
-    "workspace_id",
-    "agent_id",
-    "title",
-    "status",
-    "task_type",
-    "parent_task_id",
-    "parent_turn_id",
-    "delegation_id",
-    "context_usage_used",
-    "created_at",
-    "updated_at",
-)
-_TURN_COLUMNS = (
-    "turn_id",
-    "task_id",
-    "input_text",
-    "status",
-    "end_reason",
-    "response_text",
-    "created_at",
-    "updated_at",
-)
-_EVENT_COLUMNS = (
-    "turn_id",
-    "sequence",
-    "event_id",
-    "event_type",
-    "task_id",
-    "payload_json",
-    "created_at",
-)
+_DEFAULT_MAX_CHARS = 200
 
 
-def repository_root() -> Path:
-    """向上查找真正的仓库根。
+def build_parser() -> argparse.ArgumentParser:
+    """构造命令行参数解析器。
 
     参数:
         无。
+
     返回:
-        包含 ``apps/backend`` 的仓库根路径。
+        配置好的 ``ArgumentParser``，子命令覆盖结构、事实、上下文、副作用与体检五类查询。
+
     异常:
         无。
-    副作用:
-        解析当前脚本路径。
-    """
 
-    current = Path(__file__).resolve().parent
-    for candidate in (current, *current.parents):
-        if (candidate / "apps" / "backend" / "app" / "storage" / "model").exists():
-            return candidate
-    return Path(__file__).resolve().parent.parent
-
-
-def default_db_path() -> Path:
-    """推导默认业务数据库路径。
-
-    参数:
-        无。
-    返回:
-        仓库根目录下 ``storage/app.sqlite3`` 的路径。
-    异常:
-        无。
-    副作用:
-        解析当前脚本路径。
-    """
-
-    return repository_root() / "storage" / "app.sqlite3"
-
-
-def resolve_db_path(raw: str) -> Path:
-    """解析 ``--db`` 参数。
-
-    参数:
-        raw: 命令行传入的数据库路径；空字符串表示使用默认路径。
-    返回:
-        展开后的数据库路径。
-    异常:
-        无。
     副作用:
         无。
     """
 
-    return Path(raw).expanduser() if raw.strip() else default_db_path()
+    parser = argparse.ArgumentParser(
+        prog="query_app_db",
+        description="只读查询 coding-agent 本地业务库 storage/app.sqlite3。",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    schema = subparsers.add_parser("schema", help="查看库内真实表清单、行数与列定义。")
+    _add_common_options(schema)
+    schema.add_argument("--table", default="", help="只看单张表的详细列定义。")
+    schema.add_argument("--no-columns", action="store_true", help="只输出表名与行数。")
+
+    workspaces = subparsers.add_parser("workspaces", help="列出工作区。")
+    _add_common_options(workspaces)
+    _add_limit(workspaces)
+
+    tasks = subparsers.add_parser("tasks", help="列出任务及其当前运行状态。")
+    _add_common_options(tasks)
+    _add_limit(tasks)
+    tasks.add_argument("--workspace-id", type=int, default=None)
+    tasks.add_argument("--contains", default="", help="按标题或任务 id 模糊搜索。")
+
+    runs = subparsers.add_parser("runs", help="列出运行（一次 Agent 执行）。")
+    _add_common_options(runs)
+    _add_limit(runs)
+    runs.add_argument("--task-id", type=int, default=None)
+    runs.add_argument("--status", default="", help="pending/running/completed/failed/cancelled。")
+    runs.add_argument("--contains", default="", help="按输入/终态原因/最终回复/错误模糊搜索。")
+
+    run = subparsers.add_parser("run", help="查看单次运行的排障快照。")
+    _add_common_options(run)
+    _add_limit(run)
+    run.add_argument("run_id", type=int)
+
+    task = subparsers.add_parser("task", help="查看单个任务的排障快照。")
+    _add_common_options(task)
+    _add_limit(task)
+    task.add_argument("task_id", type=int)
+
+    commands = subparsers.add_parser("commands", help="列出 Transport 命令（幂等占用）。")
+    _add_common_options(commands)
+    _add_limit(commands)
+    commands.add_argument("--task-id", type=int, default=None)
+    commands.add_argument("--run-id", type=int, default=None)
+
+    messages = subparsers.add_parser("messages", help="按顺序回放会话上下文消息。")
+    _add_common_options(messages)
+    _add_limit(messages)
+    messages.add_argument("task_id", type=int)
+    messages.add_argument("--run-id", type=int, default=None)
+    messages.add_argument("--order", choices=_ORDERS, default="asc")
+    messages.add_argument("--exclude-streaming", action="store_true", help="排除流式草稿行。")
+
+    tools = subparsers.add_parser("tools", help="汇总工具调用与结果的配对结局。")
+    _add_common_options(tools)
+    _add_limit(tools)
+    tools.add_argument("task_id", type=int)
+    tools.add_argument("--run-id", type=int, default=None)
+    tools.add_argument("--contains", default="", help="按工具名/参数/结果模糊搜索。")
+    tools.add_argument("--failures-only", action="store_true", help="只显示失败调用。")
+
+    changes = subparsers.add_parser("changes", help="列出文件变更快照。")
+    _add_common_options(changes)
+    _add_limit(changes)
+    changes.add_argument("--task-id", type=int, default=None)
+    changes.add_argument("--run-id", type=int, default=None)
+
+    delegations = subparsers.add_parser("delegations", help="列出子 Agent 委派。")
+    _add_common_options(delegations)
+    _add_limit(delegations)
+    delegations.add_argument("--task-id", type=int, default=None)
+
+    sessions = subparsers.add_parser("sessions", help="列出终端会话。")
+    _add_common_options(sessions)
+    _add_limit(sessions)
+    sessions.add_argument("--task-id", type=int, default=None)
+    sessions.add_argument("--status", default="")
+
+    attachments = subparsers.add_parser("attachments", help="列出附件资产。")
+    _add_common_options(attachments)
+    _add_limit(attachments)
+    attachments.add_argument("--task-id", type=int, default=None)
+
+    providers = subparsers.add_parser("providers", help="列出模型厂商（不含明文 Key）。")
+    _add_common_options(providers)
+    _add_limit(providers)
+
+    models = subparsers.add_parser("models", help="列出模型条目。")
+    _add_common_options(models)
+    _add_limit(models)
+    models.add_argument("--provider-id", type=int, default=None)
+
+    stuck = subparsers.add_parser("stuck", help="体检未收敛的 run / task / 流式草稿。")
+    _add_common_options(stuck)
+    _add_limit(stuck)
+
+    return parser
+
+
+def _add_limit(sub: argparse.ArgumentParser) -> None:
+    """为子命令追加 ``--limit``。
+
+    参数:
+        sub: 子命令解析器。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        向子命令注册参数。
+    """
+
+    sub.add_argument("--limit", type=int, default=_DEFAULT_LIMIT, help="最大返回行数。")
+
+
+def _add_common_options(sub: argparse.ArgumentParser) -> None:
+    """为子命令追加通用连接与输出选项。
+
+    参数:
+        sub: 子命令解析器。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        向子命令注册 ``--db`` / ``--format`` / ``--save`` / ``--force``。
+    """
+
+    sub.add_argument("--db", default="", help="业务 SQLite 路径，默认 storage/app.sqlite3。")
+    sub.add_argument("--format", choices=("text", "json"), default="text", help="输出格式。")
+    sub.add_argument("--save", default="", help="把结果写入指定文件（UTF-8）。")
+    sub.add_argument("--force", action="store_true", help="允许 --save 覆盖已有文件。")
 
 
 def normalize_limit(limit: int) -> int:
-    """校验查询数量上限。
+    """校验返回行数上限。
 
     参数:
         limit: 命令行传入的 limit。
+
     返回:
         合法 limit。
+
     异常:
-        ValueError: 如果 limit 不在允许范围。
+        ValueError: limit 小于 1 或超过上限。
+
     副作用:
         无。
     """
@@ -136,666 +229,186 @@ def normalize_limit(limit: int) -> int:
     return limit
 
 
-def normalize_order(order: str) -> str:
-    """校验排序方向。
-
-    参数:
-        order: 命令行传入的排序方向。
-    返回:
-        ``asc`` 或 ``desc``。
-    异常:
-        ValueError: 如果排序方向非法。
-    副作用:
-        无。
-    """
-
-    normalized = order.strip().lower()
-    if normalized not in _ORDERS:
-        raise ValueError("order must be asc or desc")
-    return normalized
-
-
-def escape_like(value: str) -> str:
-    """转义 SQLite LIKE 通配符。
-
-    参数:
-        value: 用户输入的字面搜索文本。
-    返回:
-        可用于 ``LIKE ... ESCAPE '\\'`` 的转义文本。
-    异常:
-        无。
-    副作用:
-        无。
-    """
-
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def open_readonly(db_path: Path) -> sqlite3.Connection:
-    """以只读模式打开业务库连接。
-
-    参数:
-        db_path: 业务数据库路径。
-    返回:
-        ``sqlite3.Connection``，行工厂为 ``sqlite3.Row``。
-    异常:
-        FileNotFoundError: 如果数据库文件不存在。
-        sqlite3.OperationalError: 如果无法以只读模式打开。
-    副作用:
-        打开 SQLite 连接。
-    """
-
-    if not db_path.exists():
-        raise FileNotFoundError(f"app database not found: {db_path}")
-    uri = f"file:{db_path.as_posix()}?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    """把 SQLite 行转换为普通字典。
-
-    参数:
-        row: 查询得到的行。
-    返回:
-        普通字典。
-    异常:
-        无。
-    副作用:
-        无。
-    """
-
-    return {key: row[key] for key in row.keys()}
-
-
-def table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
-    """判断表是否存在。
+def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
+    """把已解析的子命令分发到对应查询。
 
     参数:
         connection: 只读 SQLite 连接。
-        table_name: 表名。
+        args: argparse 解析后的命名空间。
+
     返回:
-        表存在返回 True，否则 False。
+        查询结果（列表或字典），由调用方渲染。
+
     异常:
-        sqlite3.Error: 如果读取 schema 失败。
+        ValueError: 子命令未知或参数非法。
+        sqlite3.Error: 查询失败。
+
     副作用:
-        无。
+        无（仅读库）。
     """
 
-    row = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table_name,),
-    ).fetchone()
-    return row is not None
+    limit = normalize_limit(args.limit) if hasattr(args, "limit") else _DEFAULT_LIMIT
+    handlers: dict[str, Callable[[], Any]] = {
+        "schema": lambda: (
+            table_detail(connection, args.table.strip())
+            if args.table.strip()
+            else database_overview(connection, include_columns=not args.no_columns)
+        ),
+        "workspaces": lambda: recent_workspaces(connection, limit=limit),
+        "tasks": lambda: recent_tasks(
+            connection, limit=limit, workspace_id=args.workspace_id, contains=args.contains.strip()
+        ),
+        "runs": lambda: recent_runs(
+            connection,
+            limit=limit,
+            task_id=args.task_id,
+            status=args.status.strip(),
+            contains=args.contains.strip(),
+        ),
+        "run": lambda: run_snapshot(connection, run_id=args.run_id, limit=limit),
+        "task": lambda: task_snapshot(connection, task_id=args.task_id, limit=limit),
+        "commands": lambda: recent_commands(
+            connection, limit=limit, task_id=args.task_id, run_id=args.run_id
+        ),
+        "messages": lambda: list_messages(
+            connection,
+            task_id=args.task_id,
+            run_id=args.run_id,
+            limit=limit,
+            order=args.order,
+            include_streaming=not args.exclude_streaming,
+        ),
+        "tools": lambda: summarize_tool_calls(
+            connection,
+            task_id=args.task_id,
+            run_id=args.run_id,
+            contains=args.contains.strip(),
+            failures_only=args.failures_only,
+            limit=limit,
+        ),
+        "changes": lambda: list_file_snapshots(
+            connection, limit=limit, task_id=args.task_id, run_id=args.run_id
+        ),
+        "delegations": lambda: list_delegations(connection, limit=limit, task_id=args.task_id),
+        "sessions": lambda: list_terminal_sessions(
+            connection, limit=limit, task_id=args.task_id, status=args.status.strip()
+        ),
+        "attachments": lambda: list_attachment_assets(
+            connection, limit=limit, task_id=args.task_id
+        ),
+        "providers": lambda: list_providers(connection, limit=limit),
+        "models": lambda: list_models(connection, limit=limit, provider_id=args.provider_id),
+        "stuck": lambda: find_unsettled(connection, limit=limit),
+    }
+    handler = handlers.get(args.command)
+    if handler is None:
+        raise ValueError(f"unknown command: {args.command}")
+    return handler()
 
 
-def require_table(connection: sqlite3.Connection, table_name: str) -> None:
-    """要求指定表存在。
+def compact_text(value: Any, *, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
+    """把任意值压缩为单行短文本。
 
     参数:
-        connection: 只读 SQLite 连接。
-        table_name: 表名。
-    返回:
-        无。
-    异常:
-        ValueError: 如果表不存在。
-        sqlite3.Error: 如果读取 schema 失败。
-    副作用:
-        无。
-    """
-
-    if not table_exists(connection, table_name):
-        raise ValueError(f"table not found: {table_name}")
-
-
-def safe_json(raw: str | None, *, default: Any) -> Any:
-    """宽容解析 JSON 文本。
-
-    参数:
-        raw: 原始 JSON 字符串。
-        default: 输入为空或解析失败时的返回值。
-    返回:
-        JSON 解析结果或 default。
-    异常:
-        无。
-    副作用:
-        无。
-    """
-
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return default
-
-
-def compact_text(value: Any, *, max_chars: int = 160) -> str:
-    """压缩长文本，便于终端排查。
-
-    参数:
-        value: 待渲染的任意值。
+        value: 待渲染的值。
         max_chars: 最大字符数。
+
     返回:
-        单行短文本。
+        折叠空白并截断后的单行文本；``None`` 渲染为空字符串。
+
     异常:
         无。
+
     副作用:
         无。
     """
 
-    text = "" if value is None else str(value)
+    if value is None:
+        return ""
+    if isinstance(value, dict | list):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value)
     text = " ".join(text.split())
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 3] + "..."
 
 
-def summarize_payload(payload_json: str | None) -> dict[str, Any]:
-    """从 runtime event payload 中提取排障摘要。
+def render_mapping(row: dict[str, Any]) -> str:
+    """把一行结果渲染为单行 ``key=value`` 文本。
 
     参数:
-        payload_json: ``runtime_events.payload_json`` 原文。
+        row: 结果行字典。
+
     返回:
-        包含关键字段的摘要字典。
+        跳过空值的单行文本。
+
     异常:
         无。
+
     副作用:
         无。
     """
 
-    payload = safe_json(payload_json, default={})
-    if not isinstance(payload, dict):
-        return {"raw": compact_text(payload_json)}
-
-    summary: dict[str, Any] = {}
-    for key in (
-        "status",
-        "message",
-        "text",
-        "reason",
-        "error",
-        "tool_name",
-        "tool_call_id",
-        "agent_id",
-        "trace_id",
-        "run_id",
-        "step_id",
-    ):
-        if key in payload and payload[key] not in (None, "", [], {}):
-            summary[key] = compact_text(payload[key])
-    for nested_key in ("data", "metadata"):
-        nested = payload.get(nested_key)
-        if isinstance(nested, dict):
-            for key in ("task_id", "turn_id", "path", "command", "exit_code", "duration_ms"):
-                if key in nested and nested[key] not in (None, "", [], {}):
-                    summary[f"{nested_key}.{key}"] = compact_text(nested[key])
-    if not summary:
-        summary["keys"] = ",".join(sorted(str(key) for key in payload.keys())[:12])
-    return summary
-
-
-def query_rows(
-    connection: sqlite3.Connection,
-    sql: str,
-    params: tuple[Any, ...] = (),
-) -> list[dict[str, Any]]:
-    """执行只读查询并返回字典列表。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        sql: SELECT 语句。
-        params: 占位符参数。
-    返回:
-        查询结果字典列表。
-    异常:
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    return [row_to_dict(row) for row in connection.execute(sql, params).fetchall()]
-
-
-def get_one(
-    connection: sqlite3.Connection,
-    sql: str,
-    params: tuple[Any, ...],
-) -> dict[str, Any] | None:
-    """查询单行记录。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        sql: SELECT 语句。
-        params: 占位符参数。
-    返回:
-        匹配行字典；无匹配时返回 None。
-    异常:
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    row = connection.execute(sql, params).fetchone()
-    return row_to_dict(row) if row is not None else None
-
-
-def inspect_schema(connection: sqlite3.Connection) -> dict[str, Any]:
-    """读取业务库表结构与行数概览。
-
-    参数:
-        connection: 只读 SQLite 连接。
-    返回:
-        表结构概览。
-    异常:
-        sqlite3.Error: 如果读取失败。
-    副作用:
-        无。
-    """
-
-    tables: list[dict[str, Any]] = []
-    for table_name in _KNOWN_TABLES:
-        if not table_exists(connection, table_name):
-            tables.append({"table": table_name, "exists": False})
+    parts = []
+    for key, value in row.items():
+        if value is None or value == "":
             continue
-        count = int(connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
-        columns = [
-            {"name": row["name"], "type": row["type"], "notnull": bool(row["notnull"])}
-            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
-        ]
-        tables.append({"table": table_name, "exists": True, "count": count, "columns": columns})
-    return {"database": str(default_db_path()), "tables": tables}
+        parts.append(f"{key}={compact_text(value)}")
+    return " ".join(parts)
 
 
-def recent_tasks(
-    connection: sqlite3.Connection,
-    *,
-    limit: int,
-    status: str,
-    contains: str,
-) -> list[dict[str, Any]]:
-    """查询最近更新的任务。
+def render(value: Any) -> str:
+    """把查询结果渲染为适合终端阅读的多行文本。
 
     参数:
-        connection: 只读 SQLite 连接。
-        limit: 最大返回数量。
-        status: 可选任务状态过滤。
-        contains: 可选标题 / id / agent 模糊搜索。
-    返回:
-        任务列表。
-    异常:
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
+        value: 查询结果（列表或字典）。
 
-    require_table(connection, "tasks")
-    where: list[str] = []
-    params: list[Any] = []
-    if status:
-        where.append("status = ?")
-        params.append(status)
-    if contains:
-        pattern = f"%{escape_like(contains)}%"
-        where.append(
-            "(task_id LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR agent_id LIKE ? ESCAPE '\\')"
-        )
-        params.extend([pattern, pattern, pattern])
-    sql = f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY updated_at DESC, task_id DESC LIMIT ?"
-    params.append(limit)
-    return query_rows(connection, sql, tuple(params))
-
-
-def recent_turns(
-    connection: sqlite3.Connection,
-    *,
-    limit: int,
-    status: str,
-    task_id: str,
-    contains: str,
-) -> list[dict[str, Any]]:
-    """查询最近更新的轮次。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        limit: 最大返回数量。
-        status: 可选 turn 状态过滤。
-        task_id: 可选 task_id 过滤。
-        contains: 可选输入 / 输出 / id 模糊搜索。
-    返回:
-        轮次列表。
-    异常:
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    require_table(connection, "turns")
-    where: list[str] = []
-    params: list[Any] = []
-    if status:
-        where.append("status = ?")
-        params.append(status)
-    if task_id:
-        where.append("task_id = ?")
-        params.append(task_id)
-    if contains:
-        pattern = f"%{escape_like(contains)}%"
-        where.append(
-            "("
-            "turn_id LIKE ? ESCAPE '\\' OR input_text LIKE ? ESCAPE '\\' "
-            "OR response_text LIKE ? ESCAPE '\\' OR end_reason LIKE ? ESCAPE '\\'"
-            ")"
-        )
-        params.extend([pattern, pattern, pattern, pattern])
-    sql = f"SELECT {', '.join(_TURN_COLUMNS)} FROM turns"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY updated_at DESC, turn_id DESC LIMIT ?"
-    params.append(limit)
-    return query_rows(connection, sql, tuple(params))
-
-
-def search_events(
-    connection: sqlite3.Connection,
-    *,
-    limit: int,
-    order: str,
-    task_id: str,
-    turn_id: str,
-    event_type: str,
-    contains: str,
-) -> list[dict[str, Any]]:
-    """查询 runtime event 流。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        limit: 最大返回数量。
-        order: 排序方向。
-        task_id: 可选 task_id。
-        turn_id: 可选 turn_id。
-        event_type: 可选事件类型精确过滤。
-        contains: 可选 payload / event_type / event_id 模糊搜索。
-    返回:
-        事件列表，附带 ``payload_summary``。
-    异常:
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    require_table(connection, "runtime_events")
-    where: list[str] = []
-    params: list[Any] = []
-    for column, value in (("task_id", task_id), ("turn_id", turn_id), ("event_type", event_type)):
-        if value:
-            where.append(f"{column} = ?")
-            params.append(value)
-    if contains:
-        pattern = f"%{escape_like(contains)}%"
-        where.append(
-            "("
-            "event_id LIKE ? ESCAPE '\\' OR event_type LIKE ? ESCAPE '\\' "
-            "OR payload_json LIKE ? ESCAPE '\\'"
-            ")"
-        )
-        params.extend([pattern, pattern, pattern])
-    direction = "ASC" if order == "asc" else "DESC"
-    sql = f"SELECT {', '.join(_EVENT_COLUMNS)} FROM runtime_events"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += f" ORDER BY created_at {direction}, sequence {direction} LIMIT ?"
-    params.append(limit)
-    rows = query_rows(connection, sql, tuple(params))
-    for row in rows:
-        row["payload_summary"] = summarize_payload(row.get("payload_json"))
-    return rows
-
-
-def get_task_snapshot(
-    connection: sqlite3.Connection,
-    *,
-    task_id: str,
-    limit: int,
-) -> dict[str, Any]:
-    """读取单个 task 的排障快照。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        task_id: 任务标识。
-        limit: 每类明细最大返回数量。
-    返回:
-        task 相关的 workspace、turn、event、delegation 聚合信息。
-    异常:
-        ValueError: 如果 task 不存在。
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    require_table(connection, "tasks")
-    task = get_one(connection, f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks WHERE task_id = ?", (task_id,))
-    if task is None:
-        raise ValueError(f"task not found: {task_id}")
-
-    workspace = None
-    if table_exists(connection, "workspaces"):
-        workspace = get_one(
-            connection,
-            "SELECT workspace_id, name, root_path, created_at, updated_at FROM workspaces "
-            "WHERE workspace_id = ?",
-            (task["workspace_id"],),
-        )
-    turns = recent_turns(connection, limit=limit, status="", task_id=task_id, contains="")
-    event_counts = query_rows(
-        connection,
-        "SELECT event_type, COUNT(*) AS count FROM runtime_events "
-        "WHERE task_id = ? GROUP BY event_type ORDER BY count DESC, event_type ASC",
-        (task_id,),
-    ) if table_exists(connection, "runtime_events") else []
-    last_events = search_events(
-        connection,
-        limit=limit,
-        order="desc",
-        task_id=task_id,
-        turn_id="",
-        event_type="",
-        contains="",
-    ) if table_exists(connection, "runtime_events") else []
-    delegations = query_rows(
-        connection,
-        "SELECT * FROM delegations WHERE task_id = ? OR child_task_id = ? "
-        "ORDER BY updated_at DESC LIMIT ?",
-        (task_id, task_id, limit),
-    ) if table_exists(connection, "delegations") else []
-    child_tasks = query_rows(
-        connection,
-        f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks WHERE parent_task_id = ? "
-        "ORDER BY created_at ASC LIMIT ?",
-        (task_id, limit),
-    )
-    return {
-        "task": task,
-        "workspace": workspace,
-        "turns": turns,
-        "child_tasks": child_tasks,
-        "event_counts": event_counts,
-        "last_events": last_events,
-        "delegations": delegations,
-    }
-
-
-def get_turn_snapshot(
-    connection: sqlite3.Connection,
-    *,
-    turn_id: str,
-    limit: int,
-) -> dict[str, Any]:
-    """读取单个 turn 的排障快照。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        turn_id: 轮次标识。
-        limit: 每类明细最大返回数量。
-    返回:
-        turn 相关的 task、messages、runtime events、文件快照与委派信息。
-    异常:
-        ValueError: 如果 turn 不存在。
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    require_table(connection, "turns")
-    turn = get_one(connection, f"SELECT {', '.join(_TURN_COLUMNS)} FROM turns WHERE turn_id = ?", (turn_id,))
-    if turn is None:
-        raise ValueError(f"turn not found: {turn_id}")
-
-    task = get_one(
-        connection,
-        f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks WHERE task_id = ?",
-        (turn["task_id"],),
-    ) if table_exists(connection, "tasks") else None
-    messages = query_rows(
-        connection,
-        "SELECT turn_id, sequence, role, content_text, metadata_json, in_context "
-        "FROM turn_messages WHERE turn_id = ? ORDER BY sequence ASC LIMIT ?",
-        (turn_id, limit),
-    ) if table_exists(connection, "turn_messages") else []
-    events = search_events(
-        connection,
-        limit=limit,
-        order="asc",
-        task_id="",
-        turn_id=turn_id,
-        event_type="",
-        contains="",
-    ) if table_exists(connection, "runtime_events") else []
-    file_snapshots = query_rows(
-        connection,
-        "SELECT id, turn_id, tool_call_id, tool_name, path, action, seq, additions, deletions, "
-        "stable, status, reverted_at FROM file_snapshots WHERE turn_id = ? ORDER BY seq ASC LIMIT ?",
-        (turn_id, limit),
-    ) if table_exists(connection, "file_snapshots") else []
-    delegations = query_rows(
-        connection,
-        "SELECT * FROM delegations WHERE parent_turn_id = ? OR child_turn_id = ? "
-        "ORDER BY updated_at DESC LIMIT ?",
-        (turn_id, turn_id, limit),
-    ) if table_exists(connection, "delegations") else []
-    return {
-        "turn": turn,
-        "task": task,
-        "messages": messages,
-        "events": events,
-        "file_snapshots": file_snapshots,
-        "delegations": delegations,
-    }
-
-
-def find_stuck_records(connection: sqlite3.Connection, *, limit: int) -> dict[str, Any]:
-    """查找疑似未收敛的任务和轮次。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        limit: 每类最大返回数量。
-    返回:
-        非终态 task / turn 列表。
-    异常:
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        无。
-    """
-
-    terminal_statuses = ("completed", "failed", "cancelled", "canceled")
-    placeholders = ", ".join("?" for _ in terminal_statuses)
-    tasks = query_rows(
-        connection,
-        f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks "
-        f"WHERE lower(status) NOT IN ({placeholders}) "
-        "ORDER BY updated_at ASC, task_id ASC LIMIT ?",
-        (*terminal_statuses, limit),
-    ) if table_exists(connection, "tasks") else []
-    turns = query_rows(
-        connection,
-        f"SELECT {', '.join(_TURN_COLUMNS)} FROM turns "
-        f"WHERE lower(status) NOT IN ({placeholders}) "
-        "ORDER BY updated_at ASC, turn_id ASC LIMIT ?",
-        (*terminal_statuses, limit),
-    ) if table_exists(connection, "turns") else []
-    return {"tasks": tasks, "turns": turns}
-
-
-def render_text(value: Any) -> str:
-    """把查询结果渲染为适合终端阅读的文本。
-
-    参数:
-        value: 查询结果。
     返回:
         多行文本。
+
     异常:
         无。
+
     副作用:
         无。
     """
 
     if isinstance(value, list):
-        return "\n".join(render_mapping(item) for item in value)
+        if not value:
+            return "(no rows)"
+        return "\n".join(render_mapping(row) for row in value)
     if isinstance(value, dict):
         lines: list[str] = []
         for key, item in value.items():
             lines.append(f"[{key}]")
             if isinstance(item, list):
-                lines.extend(render_mapping(row) for row in item)
+                if item:
+                    lines.extend(render_mapping(row) for row in item)
+                else:
+                    lines.append("(none)")
             elif isinstance(item, dict):
-                lines.append(render_mapping(item))
-            elif item is None:
-                lines.append("(none)")
+                lines.append(render_mapping(item) or "(none)")
             else:
-                lines.append(compact_text(item))
-        return "\n".join(line for line in lines if line != "")
+                lines.append(compact_text(item) or "(none)")
+        return "\n".join(lines)
     return compact_text(value)
 
 
-def render_mapping(row: dict[str, Any]) -> str:
-    """渲染单个字典为一行文本。
-
-    参数:
-        row: 待渲染字典。
-    返回:
-        单行文本。
-    异常:
-        无。
-    副作用:
-        无。
-    """
-
-    parts: list[str] = []
-    for key, value in row.items():
-        if key == "payload_json":
-            continue
-        if key in {"input_text", "response_text", "content_text", "prompt", "summary", "error"}:
-            value = compact_text(value)
-        elif isinstance(value, dict | list):
-            value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        parts.append(f"{key}={value}")
-    return " ".join(parts)
-
-
-def emit_result(value: Any, *, output_format: str) -> None:
-    """输出查询结果。
+def emit(value: Any, *, output_format: str) -> None:
+    """输出渲染结果。
 
     参数:
         value: 查询结果。
         output_format: ``text`` 或 ``json``。
+
     返回:
         无。
+
     异常:
-        ValueError: 如果输出格式非法。
+        ValueError: 输出格式非法。
+
     副作用:
         写 stdout。
     """
@@ -804,151 +417,64 @@ def emit_result(value: Any, *, output_format: str) -> None:
         print(json.dumps(value, ensure_ascii=False, indent=2))
         return
     if output_format == "text":
-        print(render_text(value))
+        print(render(value))
         return
     raise ValueError("format must be text or json")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """构造命令行参数解析器。
+def save_output(path: Path, value: Any, *, output_format: str, force: bool) -> None:
+    """把结果写入文件（UTF-8），绕开 Windows 控制台编码。
+
+    参数:
+        path: 输出文件路径。
+        value: 查询结果。
+        output_format: ``text`` 或 ``json``。
+        force: 是否允许覆盖已有文件。
+
+    返回:
+        无。
+
+    异常:
+        FileExistsError: 目标文件已存在且未指定 ``--force``。
+        OSError: 创建目录或写文件失败。
+        ValueError: 输出格式非法。
+
+    副作用:
+        创建父目录并写入文件。
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"output file already exists: {path}")
+    if output_format == "json":
+        content = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    elif output_format == "text":
+        content = render(value) + "\n"
+    else:
+        raise ValueError("format must be text or json")
+    path.write_text(content, encoding="utf-8")
+
+
+def force_utf8_streams() -> None:
+    """把 stdout/stderr 切到 UTF-8，避免 Windows 控制台代码页导致输出崩溃。
 
     参数:
         无。
-    返回:
-        配置好的 ``ArgumentParser``。
-    异常:
-        无。
-    副作用:
-        无。
-    """
 
-    parser = argparse.ArgumentParser(
-        prog="query_app_db",
-        description="只读查询 coding-agent 本地业务数据库 storage/app.sqlite3。",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    schema = subparsers.add_parser("schema", help="查看业务表是否存在、行数与列。")
-    _add_common_options(schema)
-
-    tasks = subparsers.add_parser("tasks", help="查询最近任务。")
-    _add_common_options(tasks)
-    tasks.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
-    tasks.add_argument("--status", default="", help="按任务状态过滤。")
-    tasks.add_argument("--contains", default="", help="按 task_id/title/agent_id 模糊搜索。")
-
-    turns = subparsers.add_parser("turns", help="查询最近轮次。")
-    _add_common_options(turns)
-    turns.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
-    turns.add_argument("--status", default="", help="按 turn 状态过滤。")
-    turns.add_argument("--task-id", default="", help="按 task_id 过滤。")
-    turns.add_argument("--contains", default="", help="按 turn_id/input/response/end_reason 搜索。")
-
-    task = subparsers.add_parser("task", help="查看单个 task 的排障快照。")
-    _add_common_options(task)
-    task.add_argument("task_id")
-    task.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
-
-    turn = subparsers.add_parser("turn", help="查看单个 turn 的排障快照。")
-    _add_common_options(turn)
-    turn.add_argument("turn_id")
-    turn.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
-
-    events = subparsers.add_parser("events", help="查询 runtime_events 事件流。")
-    _add_common_options(events)
-    events.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
-    events.add_argument("--order", choices=_ORDERS, default="desc")
-    events.add_argument("--task-id", default="", help="按 task_id 过滤。")
-    events.add_argument("--turn-id", default="", help="按 turn_id 过滤。")
-    events.add_argument("--type", dest="event_type", default="", help="按 event_type 精确过滤。")
-    events.add_argument("--contains", default="", help="搜索 event_id/event_type/payload_json。")
-
-    stuck = subparsers.add_parser("stuck", help="查找疑似未进入终态的任务和轮次。")
-    _add_common_options(stuck)
-    stuck.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
-    return parser
-
-
-def _add_common_options(sub: argparse.ArgumentParser) -> None:
-    """为子命令追加通用输出选项。
-
-    参数:
-        sub: 子命令解析器。
     返回:
         无。
+
     异常:
-        无。
+        无（不支持 ``reconfigure`` 的流直接跳过）。
+
     副作用:
-        向子命令注册 ``--db`` 与 ``--format``，使选项可放在子命令之后。
+        修改进程标准流的编码设置。
     """
 
-    sub.add_argument("--db", default="", help="业务 SQLite 文件路径，默认 storage/app.sqlite3。")
-    sub.add_argument("--format", choices=("text", "json"), default="text", help="输出格式。")
-
-
-def run(args: argparse.Namespace) -> Any:
-    """按命令执行查询。
-
-    参数:
-        args: argparse 解析后的命名空间。
-    返回:
-        查询结果。
-    异常:
-        ValueError: 如果参数或数据状态非法。
-        sqlite3.Error: 如果查询失败。
-    副作用:
-        打开并关闭 SQLite 连接。
-    """
-
-    db_path = resolve_db_path(args.db)
-    connection = open_readonly(db_path)
-    try:
-        if args.command == "schema":
-            result = inspect_schema(connection)
-            result["database"] = str(db_path)
-            return result
-        if args.command == "tasks":
-            return recent_tasks(
-                connection,
-                limit=normalize_limit(args.limit),
-                status=args.status.strip(),
-                contains=args.contains.strip(),
-            )
-        if args.command == "turns":
-            return recent_turns(
-                connection,
-                limit=normalize_limit(args.limit),
-                status=args.status.strip(),
-                task_id=args.task_id.strip(),
-                contains=args.contains.strip(),
-            )
-        if args.command == "task":
-            return get_task_snapshot(
-                connection,
-                task_id=args.task_id.strip(),
-                limit=normalize_limit(args.limit),
-            )
-        if args.command == "turn":
-            return get_turn_snapshot(
-                connection,
-                turn_id=args.turn_id.strip(),
-                limit=normalize_limit(args.limit),
-            )
-        if args.command == "events":
-            return search_events(
-                connection,
-                limit=normalize_limit(args.limit),
-                order=normalize_order(args.order),
-                task_id=args.task_id.strip(),
-                turn_id=args.turn_id.strip(),
-                event_type=args.event_type.strip(),
-                contains=args.contains.strip(),
-            )
-        if args.command == "stuck":
-            return find_stuck_records(connection, limit=normalize_limit(args.limit))
-        raise ValueError(f"unknown command: {args.command}")
-    finally:
-        connection.close()
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -956,22 +482,67 @@ def main(argv: list[str] | None = None) -> int:
 
     参数:
         argv: 命令行参数列表；省略时使用 ``sys.argv[1:]``。
+
     返回:
-        进程退出码，0 表示成功，1 表示用户错误或查询失败。
+        进程退出码：0 成功，1 用户错误或查询失败。
+
     异常:
         无。
+
     副作用:
-        读取 SQLite；写 stdout/stderr。
+        读取 SQLite；写 stdout/stderr；可选写 ``--save`` 文件。
     """
 
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    force_utf8_streams()
+    args = build_parser().parse_args(argv)
+    connection: sqlite3.Connection | None = None
     try:
-        emit_result(run(args), output_format=args.format)
-    except (ValueError, FileNotFoundError, sqlite3.Error, OSError) as exc:
+        db_path = resolve_db_path(args.db)
+        connection = open_readonly(db_path)
+        result = dispatch(connection, args)
+        if args.save.strip():
+            save_output(
+                Path(args.save).expanduser(),
+                result,
+                output_format=args.format,
+                force=args.force,
+            )
+        emit(result, output_format=args.format)
+    except sqlite3.OperationalError as exc:
+        # 缺表/缺列一律附上库内真实表清单，避免只能拿到裸 SQLite 报错而无法判断 schema 漂移。
+        print(f"error: {exc}{_table_inventory_hint(connection)}", file=sys.stderr)
+        return 1
+    except (ValueError, FileNotFoundError, FileExistsError, sqlite3.Error, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if connection is not None:
+            connection.close()
     return 0
+
+
+def _table_inventory_hint(connection: sqlite3.Connection | None) -> str:
+    """为 SQLite 运行期错误补充库内表清单提示。
+
+    参数:
+        connection: 已建立的只读连接；为 None 时无法探测。
+
+    返回:
+        形如 ``"; tables in this database: a, b"`` 的提示；无法探测时为空字符串。
+
+    异常:
+        无（探测失败静默降级为空提示）。
+
+    副作用:
+        无（只读 schema）。
+    """
+
+    if connection is None:
+        return ""
+    try:
+        return f"; tables in this database: {', '.join(list_tables(connection))}"
+    except sqlite3.Error:
+        return ""
 
 
 if __name__ == "__main__":

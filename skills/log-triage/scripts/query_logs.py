@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""本地结构化日志查询 CLI（log-triage skill 内置副本）。
+"""本地结构化日志查询 CLI（log-triage skill 内置）。
 
 单一职责：以只读方式查询 ``storage/logs.sqlite3`` 的 ``log_entries`` 表，并按开发者
 或 Agent 排查问题所需的过滤条件输出日志。脚本刻意不导入 ``app.*``，避免触发后端初始化。
 
-本文件是 ``scripts/query_logs.py`` 的 skill 内置副本；仅修改了 ``default_db_path``
-以从任意调用位置定位到真正的仓库根（向上查找包含 ``apps/backend`` 的目录），其余逻辑与
-上游保持一致。
+唯一事实来源：本文件是 log-triage skill 的**唯一副本**，版本受仓库
+``skills/log-triage/scripts/query_logs.py`` 管理；``default_db_path`` 会从任意调用位置向上
+查找包含 ``apps/backend`` 的目录作为仓库根，因此支持从任意工作目录执行。
+
+日志字段契约（与 ``app/models/mapped_log_record.py`` 一致）：``event`` 取 ``record.msg``
+的首个空白分隔 token 且须匹配 ``^[a-z][a-z0-9_]*$``，否则落为 ``log_event``；``msg`` 取
+``extra["msg"]``；``data`` 为 ``extra["data"]`` 与其余 extra 字段的合并结果（已脱敏、
+单字段上限 2000 字符）；``error`` 只保留异常类型，message/stack 被统一替换为
+「异常详情已省略」——**持久化日志中不存在异常堆栈原文**。
 """
 
 from __future__ import annotations
@@ -18,6 +24,8 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from sqlite_values import as_bool
 
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _LEVEL_RANK = {level: index for index, level in enumerate(_LEVELS)}
@@ -41,22 +49,28 @@ _COLUMNS = (
 def repository_root() -> Path:
     """向上查找真正的仓库根（包含 ``apps/backend`` 的目录）。
 
+    查找顺序：先按**脚本所在目录**向上找，再按**当前工作目录**向上找。后者用于 skill 被
+    安装到用户级目录（如 ``~/.codebuddy/skills/``）后仍从仓库根调用的场景——此时仅靠脚本
+    路径永远找不到仓库。
+
     参数:
         无。
     返回:
         仓库根绝对路径。
     异常:
-        无。
+        ValueError: 两条路径向上都找不到仓库根；调用方应改用 ``--db`` 显式指定日志库路径。
     副作用:
-        解析当前脚本路径。
+        解析当前脚本路径与当前工作目录。
     """
 
-    current = Path(__file__).resolve().parent
-    for candidate in (current, *current.parents):
-        if (candidate / "apps" / "backend").exists():
-            return candidate
-    # 兜底：退回到脚本两级之上的旧假设（与原脚本行为一致），避免在无仓库结构的场景下崩溃。
-    return Path(__file__).resolve().parent.parent
+    for start in (Path(__file__).resolve().parent, Path.cwd()):
+        for candidate in (start, *start.parents):
+            if (candidate / "apps" / "backend").exists():
+                return candidate
+    raise ValueError(
+        "cannot locate repository root (no 'apps/backend' found from the script path or the "
+        "current working directory); pass --db <path> to point at the log database explicitly"
+    )
 
 
 def default_db_path() -> Path:
@@ -367,7 +381,7 @@ def row_to_entry(row: sqlite3.Row) -> dict[str, Any]:
         "msg": row["msg"],
         "data": data if isinstance(data, dict) else {},
         "error": error if isinstance(error, dict) else None,
-        "truncated": bool(row["truncated"]),
+        "truncated": as_bool(row["truncated"]),
     }
 
 
@@ -642,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
         读取 SQLite；向 stdout/stderr 写文本；可选写保存文件。
     """
 
+    force_utf8_streams()
     args = build_parser().parse_args(argv)
     try:
         level = normalize_level(args.level)
@@ -688,9 +703,36 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.format == "json":
         print(json.dumps(entries, ensure_ascii=False, indent=2))
-    else:
+    elif entries:
         print(render_text(entries))
+    else:
+        print("(no entries)")
     return 0
+
+
+def force_utf8_streams() -> None:
+    """把 stdout/stderr 切到 UTF-8，避免 Windows 控制台代码页导致输出崩溃。
+
+    日志正文含中文与表情符号，而 Windows 控制台默认代码页（如 GBK）无法编码这些字符，
+    会让 ``print`` 抛 ``UnicodeEncodeError`` 并丢掉整次查询结果。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无（不支持 ``reconfigure`` 的流直接跳过）。
+
+    副作用:
+        修改进程标准流的编码设置。
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":
