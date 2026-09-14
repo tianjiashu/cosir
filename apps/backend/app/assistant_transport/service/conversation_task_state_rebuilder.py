@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from itertools import groupby
 from operator import attrgetter
+from pathlib import Path
 from typing import cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -13,6 +14,8 @@ from langchain_core.messages.tool import ToolCall
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateImagePart,
+    ConversationStatePart,
     ConversationStateTextPart,
     ConversationStateToolCallPart,
 )
@@ -23,6 +26,7 @@ from app.config.configuration import get_tool_registry
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
+from app.utils.message_content import content_to_text
 
 
 class ConversationTaskStateRebuilder:
@@ -102,6 +106,8 @@ class ConversationTaskStateRebuilder:
         Returns:
             A new ``ConversationStateSnapshot``. Run ordering is ``created_at`` then id;
             assistant rows for one Run are merged and all message ids come from context row ids.
+            Streaming assistant drafts are retained in the assistant message; their text parts
+            are ``running`` only when the owning Run is still active.
 
         Raises:
             RuntimeError: If a tool result row has no matching AI tool call in the same Run.
@@ -138,30 +144,53 @@ class ConversationTaskStateRebuilder:
             for row in rows:
                 message = row.message
                 if isinstance(message, HumanMessage):
+                    image_parts: list[ConversationStateImagePart] = [
+                        ConversationStateImagePart(
+                            type="image",
+                            image=(
+                                "cosir-attachment://"
+                                f"{Path(path).name.split('.', 1)[0]}"
+                            ),
+                        )
+                        for path in (getattr(run, "image_paths", None) or [])
+                    ]
+                    text = content_to_text(message.content)
+                    user_parts: list[ConversationStatePart] = []
+                    if text:
+                        user_parts.append(
+                            ConversationStateTextPart(
+                                type="text", text=text, status="completed"
+                            )
+                        )
+                    user_parts.extend(image_parts)
                     snapshot_messages.append(ConversationStateMessage(
                         id=f"user-{run.id}",
                         role="user",
-                        parts=[ConversationStateTextPart(
-                            type="text",
-                            text=message.content,
-                            status="completed"
-                        )]))
+                        parts=user_parts,
+                    ))
                 elif isinstance(message, AIMessage):
                     ai_message: AIMessage = cast(AIMessage, message)
+                    text_status = (
+                        "running"
+                        if row.is_streaming and run.status in {"pending", "running"}
+                        else "completed"
+                    )
                     if ai_message.additional_kwargs.get("reasoning_content") is not None:
                         assistant_message["parts"].append(
                             ConversationStateTextPart(
                                 type="reasoning",
-                                text=ai_message.additional_kwargs["reasoning_content"],
-                                status="completed"
+                                text=content_to_text(
+                                    ai_message.additional_kwargs["reasoning_content"]
+                                ),
+                                status=text_status,
                             )
                         )
                     if ai_message.content is not None:
                         assistant_message["parts"].append(
                             ConversationStateTextPart(
                                 type="text",
-                                text=ai_message.content,
-                                status="completed"
+                                text=content_to_text(ai_message.content),
+                                status=text_status,
                             )
                         )
                     if ai_message.tool_calls is not None and len(ai_message.tool_calls) > 0:

@@ -1,6 +1,7 @@
 """Conversation Transport Task snapshot 的中性 JSON 契约。"""
 
 import math
+import re
 
 from typing_extensions import TypedDict
 
@@ -19,6 +20,8 @@ _SNAPSHOT_KEYS = {
 _RUN_KEYS = {"runId", "status", "endReason", "messages", "usage"}
 _MESSAGE_KEYS = {"id", "role", "parts"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
+_IMAGE_PART_KEYS = {"type", "image"}
+_IMAGE_LOCATOR = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
 _TOOL_PART_KEYS = {
     "type",
     "toolCallId",
@@ -208,6 +211,13 @@ def _validate_part(part: object) -> None:
             raise ValueError("snapshot text part text must be a string")
         if part.get("status") not in {None, "running", "completed"}:
             raise ValueError("snapshot text part status is invalid")
+        return
+    if part_type == "image":
+        if set(part) != _IMAGE_PART_KEYS:
+            raise ValueError("snapshot image part contains unknown fields")
+        image = part.get("image")
+        if not isinstance(image, str) or not _IMAGE_LOCATOR.fullmatch(image):
+            raise ValueError("snapshot image part locator is invalid")
         return
     if part_type == "tool-call":
         if set(part) - _TOOL_PART_KEYS:

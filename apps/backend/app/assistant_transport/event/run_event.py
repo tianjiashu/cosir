@@ -10,6 +10,7 @@ run 执行状态的迁移（含终态）。run 内消息与工具的细节事实
 """
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -17,7 +18,9 @@ from pydantic import Field
 from app.assistant_transport.event.conversation_event_envelope import (
     ConversationEventEnvelope,
 )
+from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_part import ConversationStatePart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -41,12 +44,16 @@ class RunInitializedEvent(ConversationEventEnvelope):
     """一个 Conversation Run 已被创建并绑定到 Task。
 
     事实语义：命令已被幂等占用、run 已落库，Transport 侧应为其建立 user / assistant
-    两条空消息骨架与 ``run.runId`` 基线。本事件**不携带用户输入文本**——文本由紧随其后的
+    两条消息骨架与 ``run.runId`` 基线。本事件**不携带用户输入文本**——文本由紧随其后的
     ``UserInputAppendedEvent`` 追加，与流式 assistant 文本共用同一条 ``append-text`` 通道，
-    使「run 已存在但输入尚未写完」这个中间态也是合法且可渲染的。
+    使「run 已存在但输入尚未写完」这个中间态也是合法且可渲染的。图片只以受控的
+    workspace-relative 路径派生 locator；编辑重跑也可用
+    ``replace_existing`` 重建骨架。
 
     Attributes:
-        仅继承信封字段；本事件无额外 payload。
+        image_paths: 已最终化的 workspace-relative 图片路径，不包含二进制。
+        include_text_part: 是否为后续文本追加保留空 text part。
+        replace_existing: 编辑重跑时是否替换已有 Run 的 Transport 骨架。
 
     异常:
         pydantic.ValidationError: 信封字段非法或出现未声明字段时抛出。
@@ -57,6 +64,9 @@ class RunInitializedEvent(ConversationEventEnvelope):
 
     # 判别式字段显式给出默认值：生产者不必重复书写字面量，判别式路由行为不变。
     type: Literal["run_initialized"] = "run_initialized"
+    image_paths: list[str] = Field(default_factory=list)
+    include_text_part: bool = True
+    replace_existing: bool = False
 
     def plan(
         self,
@@ -68,8 +78,8 @@ class RunInitializedEvent(ConversationEventEnvelope):
             state: 当前 Task snapshot。
 
         返回:
-            建立 user / assistant 两条空消息骨架与 ``run`` 基线的 mutation 列表；若该 run
-            的消息骨架已存在则回空列表（幂等）。
+            建立 user / assistant 消息骨架与 ``run`` 基线的 mutation 列表；普通初始化在
+            已存在同一 Run 时回空列表（幂等），``replace_existing`` 则用于编辑重跑。
 
         异常:
             无。
@@ -77,6 +87,26 @@ class RunInitializedEvent(ConversationEventEnvelope):
         副作用:
             无。
         """
+
+        existing_index = next(
+            (index for index, run in enumerate(state["runs"]) if run["runId"] == self.run_id),
+            None,
+        )
+        if existing_index is not None:
+            if not self.replace_existing:
+                return []
+            return [
+                ConversationStateMutation(
+                    "set",
+                    ("runs", existing_index),
+                    self._run_snapshot(),
+                ),
+                ConversationStateMutation("set", ("current_run_id",), self.run_id),
+                ConversationStateMutation("set", ("context_usage_ratio",), None),
+                ConversationStateMutation("set", ("context_usage_used",), None),
+                ConversationStateMutation("set", ("context_window_total",), None),
+                ConversationStateMutation("set", ("error",), None),
+            ]
 
         current_run_id = state["current_run_id"]
         if self.run_id is None:
@@ -98,14 +128,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
                     "runId": self.run_id,
                     "status": "pending",
                     "endReason": None,
-                    "messages": [
-                        self._message(
-                            f"user-{self.run_id}",
-                            "user",
-                            [{"type": "text", "text": "", "status": "completed"}],
-                        ),
-                        self._message(f"assistant-{self.run_id}", "assistant", []),
-                    ],
+                    "messages": self._messages(),
                     "usage": None,
                 },
             ),
@@ -115,6 +138,35 @@ class RunInitializedEvent(ConversationEventEnvelope):
             ConversationStateMutation("set", ("context_window_total",), None),
             ConversationStateMutation("set", ("error",), None),
         ]
+
+    def _messages(self) -> list[ConversationStateMessage]:
+        """Build the user/assistant skeleton without reading attachment content."""
+
+        user_parts: list[ConversationStatePart] = []
+        if self.include_text_part:
+            user_parts.append({"type": "text", "text": "", "status": "completed"})
+        user_parts.extend(
+            {
+                "type": "image",
+                "image": f"cosir-attachment://{Path(path).name.split('.', 1)[0]}",
+            }
+            for path in self.image_paths
+        )
+        return [
+            self._message(f"user-{self.run_id}", "user", user_parts),
+            self._message(f"assistant-{self.run_id}", "assistant", []),
+        ]
+
+    def _run_snapshot(self) -> dict[str, object]:
+        """Build the reset Run snapshot used by the edit projection."""
+
+        return {
+            "runId": self.run_id,
+            "status": "pending",
+            "endReason": None,
+            "messages": self._messages(),
+            "usage": None,
+        }
 
 
 class RunStatusChangedEvent(ConversationEventEnvelope):

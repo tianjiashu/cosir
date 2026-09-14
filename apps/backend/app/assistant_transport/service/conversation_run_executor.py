@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
 
 from app.assistant_transport.event import ToolCallsSettledEvent
 from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector

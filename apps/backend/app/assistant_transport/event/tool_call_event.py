@@ -10,7 +10,7 @@ snapshot 的 ``ConversationStateToolCallPart.status`` 共用同一 Literal，避
 
 import copy
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import Field
 
@@ -18,6 +18,7 @@ from app.assistant_transport.event.conversation_event_envelope import (
     ConversationEventEnvelope,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_part import ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.models.enums.tool_call_status import ToolCallEventStatus
@@ -180,7 +181,10 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             )
             return []
         run_index, message_index, part_index = located
-        part = state["runs"][run_index]["messages"][message_index]["parts"][part_index]
+        part = cast(
+            ConversationStateToolCallPart,
+            state["runs"][run_index]["messages"][message_index]["parts"][part_index],
+        )
         current = str(part["status"])
         allowed = {
             "pending": {"pending", "running", "completed", "failed", "cancelled"},

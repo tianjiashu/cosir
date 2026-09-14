@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from threading import RLock
 from typing import Any
 
@@ -11,12 +10,6 @@ from pydantic import TypeAdapter, ValidationError
 from app.assistant_transport.event import (
     ConversationEvent,
     ConversationEventEnvelope,
-)
-from app.assistant_transport.state.conversation_state_mutation import (
-    ConversationStateMutation,
-)
-from app.assistant_transport.state.conversation_state_snapshot import (
-    ConversationStateSnapshot,
 )
 from app.assistant_transport.stream import SnapshotChange
 from app.config.logging.logger import log

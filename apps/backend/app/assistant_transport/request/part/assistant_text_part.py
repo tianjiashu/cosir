@@ -4,7 +4,6 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # text part：用户输入的文本内容块；
-# file part：附件内容块；
 # image part：图片内容块。
 class AssistantTextPart(BaseModel):
     """校验 Assistant UI 用户消息中的文本 part。"""

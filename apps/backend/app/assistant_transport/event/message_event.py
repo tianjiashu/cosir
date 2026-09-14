@@ -17,7 +17,9 @@ from app.assistant_transport.event.conversation_event_envelope import (
     ConversationEventEnvelope,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
-from app.assistant_transport.state.conversation_state_part import ConversationStateTextPart
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationStatePart,
+)
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 
 AssistantTextPartKind = Literal["text", "reasoning"]
@@ -72,7 +74,7 @@ class AssistantTextDeltaEvent(ConversationEventEnvelope):
         located = self._find_assistant_message(state, self.run_id)
         assert located is not None
         _, message_index = located
-        parts: list[ConversationStateTextPart] = state["runs"][run_index]["messages"][
+        parts: list[ConversationStatePart] = state["runs"][run_index]["messages"][
             message_index
         ]["parts"]
         for part_index in range(len(parts) - 1, -1, -1):

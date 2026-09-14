@@ -9,6 +9,7 @@ from typing import Literal
 
 from sqlalchemy.orm import Session
 
+from app.assistant_transport.event import RunInitializedEvent
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -110,7 +111,6 @@ class ConversationRunCommandService:
 
         if self._conversation_run.have_run_in_runing(task_id, session=session):
             raise ValueError(f"task {task_id} already has an active run")
-
     @contextmanager
     def _task_run_operation(self, task_id: int) -> Iterator[None]:
         """在 task 运行时空间内执行一个带超时的独占操作。"""
@@ -129,6 +129,7 @@ class ConversationRunCommandService:
         model_name: str | None,
         reasoning_effort: str | None = None,
         task_id: int | None = None,
+        image_asset_ids: list[str] | None = None,
     ) -> ConversationRunStartResult:
         """创建新 run，或为相同 command_id 返回原 run。
 
@@ -137,6 +138,8 @@ class ConversationRunCommandService:
             command_type: Transport 命令类型。
             payload_hash: 命令业务载荷指纹。
             input_text: 用户输入文本。
+            image_paths: 已按模型 capability 最终化的 workspace-relative 图片路径（兼容内部调用）。
+            image_asset_ids: 尚未最终化的附件 id；会在 task 独占锁内按模型 capability 处理。
             provider_id: 模型厂商标识。
             model_name: 模型名称。
             reasoning_effort: 可选推理深度。
@@ -165,6 +168,10 @@ class ConversationRunCommandService:
             if existing_result is not None:
                 return existing_result
 
+            image_paths = self._finalize_image_assets(
+                task_id, image_asset_ids, model_name
+            )
+
             with main_session_factory().begin() as session:
                 self._assert_no_active_run(task_id, session)
                 run = self._conversation_run.create_run(
@@ -173,6 +180,7 @@ class ConversationRunCommandService:
                     agent_id="main_agent",
                     provider_id=provider_id,
                     model_name=model_name,
+                    image_paths=image_paths,
                     reasoning_effort=reasoning_effort,
                     session=session,
                 )
@@ -195,6 +203,14 @@ class ConversationRunCommandService:
                     },
                 },
             )
+            service_depends.get_conversation_event_projector().process(
+                RunInitializedEvent(
+                    task_id=task_id,
+                    run_id=run.id,
+                    image_paths=image_paths or [],
+                    include_text_part=bool(input_text.strip()),
+                )
+            )
             snapshot = self._state.get_state(task_id)
             return ConversationRunStartResult(
                 command=command,
@@ -216,6 +232,7 @@ class ConversationRunCommandService:
         provider_id: int | None,
         model_name: str | None,
         reasoning_effort: str | None = None,
+        image_asset_ids: list[str] | None = None,
     ) -> ConversationRunStartResult:
         """原地编辑当前 run 的最后一条用户消息并重置执行基线。
 
@@ -235,6 +252,10 @@ class ConversationRunCommandService:
             if existing_result is not None:
                 return existing_result
 
+            image_paths = self._finalize_image_assets(
+                task_id, image_asset_ids, model_name
+            )
+
             with main_session_factory().begin() as session:
                 self._assert_no_active_run(task_id, session)
                 reset = self._conversation_run.reset_run_for_edit(
@@ -242,6 +263,7 @@ class ConversationRunCommandService:
                     input_text,
                     provider_id,
                     model_name,
+                    image_paths,
                     reasoning_effort,
                     session=session,
                 )
@@ -267,6 +289,15 @@ class ConversationRunCommandService:
                     },
                 },
             )
+            service_depends.get_conversation_event_projector().process(
+                RunInitializedEvent(
+                    task_id=task_id,
+                    run_id=reset.id,
+                    image_paths=image_paths or [],
+                    include_text_part=bool(input_text.strip()),
+                    replace_existing=True,
+                )
+            )
             snapshot:ConversationStateSnapshot = self._state.get_state(task_id)
             self._state.publish_state(task_id, snapshot)
             return ConversationRunStartResult(
@@ -277,6 +308,26 @@ class ConversationRunCommandService:
                 execution_mode="fresh",
                 mode="edit",
             )
+
+    @staticmethod
+    def _finalize_image_assets(
+        task_id: int,
+        image_asset_ids: list[str] | None,
+        model_name: str | None,
+    ) -> list[str] | None:
+        """在 task 独占锁内把附件 id 转成模型可用的 workspace-relative 路径。"""
+
+        from app.service.attachment.attachment_service import AttachmentService
+
+        attachment_service = AttachmentService()
+        finalized = [
+            attachment_service.finalize(task_id, asset_id, model_name or "")
+            for asset_id in image_asset_ids
+        ]
+        return [
+            attachment_service.relative_path(task_id, result.path)
+            for result in finalized
+        ]
 
     def resume_latest_run(self, task_id: int, run_id: int) -> ConversationRunStartResult:
         """校验 task 最近 run 并返回业务续跑的执行结果。

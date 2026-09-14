@@ -26,6 +26,7 @@ from app.assistant_transport.service.transport_assistant_service import (
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.core.runtime.runner import AgentRuntime
+from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_task_state_service,
@@ -146,6 +147,15 @@ async def assistant_transport(
         # reach FastAPI unchanged.  Converting them to RUN_START_FAILED would
         # hide actionable states such as RUN_CANCELLING and RUN_NOT_RESUMABLE.
         raise
+    except ImageNormalizationError as exc:
+        _raise_transport_error(
+            503 if exc.code == "ATTACHMENT_STORAGE_UNAVAILABLE" else 400,
+            exc.code,
+            exc.message,
+            retryable=exc.code in {"IMAGE_CONVERSION_FAILED", "ATTACHMENT_STORAGE_UNAVAILABLE"},
+            command_id=command.commandId if command is not None else None,
+            run_id=request.runId,
+        )
     except ValueError as exc:
         operation_code = (
             "RUN_NOT_RESUMABLE"

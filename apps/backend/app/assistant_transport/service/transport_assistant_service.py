@@ -10,6 +10,7 @@ from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import HTTPException
 
 from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
+from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunStartResult,
     RunCommandMode,
@@ -25,9 +26,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     find_run,
 )
 from app.config.logging.logger import log
+from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.models import ConversationRunStatus
-
-
 class TransportAssistantService:
     """负责 Assistant Transport 入口的 run 前置校验、生命周期编排与响应构造。
 
@@ -330,7 +330,28 @@ class TransportAssistantService:
             )
         # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
         assert command is not None
-        input_text = "\n".join(part.text for part in command.message.parts)
+        payload_hash = request.payload_hash()
+        input_text = "\n".join(
+            part.text
+            for part in command.message.parts
+            if isinstance(part, AssistantTextPart)
+        )
+
+        if not input_text or input_text.strip() == "":
+            raise ValueError("input text is empty")
+
+        image_parts = [
+            part
+            for part in command.message.parts
+            if isinstance(part, AssistantImagePart)
+        ]
+
+        if image_parts is not None and not ModelCapability.get_capability(request.modelName).supports_image:
+            raise ValueError("model does not support image")
+
+        image_asset_ids = [
+            part.image.removeprefix("cosir-attachment://") for part in image_parts
+        ]
         provider_id = request.providerId
         model_name = request.modelName
         if mode == "edit":
@@ -339,8 +360,9 @@ class TransportAssistantService:
                 self._commands.edit_or_restart,
                 command_id=command.commandId,
                 command_type=command.type,
-                payload_hash=request.payload_hash(),
+                payload_hash=payload_hash,
                 input_text=input_text,
+                image_asset_ids=image_asset_ids,
                 task_id=task_id,
                 run_id=request.runId,
                 provider_id=provider_id,
@@ -351,8 +373,9 @@ class TransportAssistantService:
             self._commands.start_or_attach,
             command_id=command.commandId,
             command_type=command.type,
-            payload_hash=request.payload_hash(),
+            payload_hash=payload_hash,
             input_text=input_text,
+            image_asset_ids=image_asset_ids,
             provider_id=provider_id,
             model_name=model_name,
             reasoning_effort=request.reasoningEffort,

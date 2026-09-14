@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from threading import RLock
 from typing import Any, ClassVar, cast
 
