@@ -1,7 +1,6 @@
 """配置后端文件日志。"""
 
 import logging
-from logging.handlers import RotatingFileHandler
 from multiprocessing.queues import Queue
 from pathlib import Path
 
@@ -9,6 +8,7 @@ from app.config.logging.common import current_log_file
 from app.config.logging.filter.caller_filter import CallerFilter
 from app.config.logging.filter.log_context_filter import LogContextFilter
 from app.config.logging.formatter.jsonl_formatter import JsonlFormatter
+from app.config.logging.handler.date_size_rotating import DateSizeRotatingFileHandler
 from app.config.logging.handler.sqlite_handler import SQLiteLogHandler
 from app.config.logging.process_bridge import (
     install_log_queue_bridge,
@@ -25,7 +25,7 @@ def configure_logging(
     queue_size: int = 1000,
     batch_size: int = 50,
     flush_interval_ms: int = 1000,
-    max_bytes: int = 10 * 1024 * 1024,
+    max_bytes: int = 5 * 1024 * 1024,
     backup_count: int = 7,
 ) -> logging.Logger:
     """配置并返回后端应用日志器。
@@ -37,6 +37,8 @@ def configure_logging(
         queue_size: SQLite 日志队列容量。
         batch_size: SQLite 日志批量写入大小。
         flush_interval_ms: SQLite 日志最大刷盘间隔毫秒数。
+        max_bytes: 单个日期日志分片的最大字节数，默认 5MB。
+        backup_count: 同一日期保留的历史大小分片数量。
 
     返回:
         名为 ``coding_agent.backend`` 且已挂载处理器的日志器。
@@ -51,7 +53,7 @@ def configure_logging(
 
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # 日志文件路径 logs-YYYY-MM-DD.log
+    # 传入逻辑文件名，由 handler 生成 backend-YYYY-MM-DD.log 及大小分片。
     log_file = current_log_file(log_dir)
     # 返回一个以 name 为标识的 logger 对象。相同名字多次调用拿到的是同一个 logger 实例（单例）
     logger = logging.getLogger("coding_agent.backend")
@@ -73,7 +75,7 @@ def configure_logging(
 
     context_filter = LogContextFilter()
     caller_filter = CallerFilter()
-    file_handler = RotatingFileHandler(
+    file_handler = DateSizeRotatingFileHandler(
         log_file,
         maxBytes=max_bytes,
         backupCount=backup_count,
@@ -109,7 +111,7 @@ def install_logging_for_current_process(
     queue_size: int = 1000,
     batch_size: int = 50,
     flush_interval_ms: int = 1000,
-    max_bytes: int = 10 * 1024 * 1024,
+    max_bytes: int = 5 * 1024 * 1024,
     backup_count: int = 7,
     log_queue: "Queue | None" = None,
 ) -> logging.Logger:

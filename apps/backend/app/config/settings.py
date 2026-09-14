@@ -43,9 +43,9 @@ class Settings:
     LOG_BATCH_SIZE: ClassVar[int] = 50
     LOG_FLUSH_INTERVAL_MS: ClassVar[int] = 1000
     LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
-    LOG_MAX_BYTES: ClassVar[int] = 10 * 1024 * 1024
+    LOG_MAX_BYTES: ClassVar[int] = 5 * 1024 * 1024
     LOG_BACKUP_COUNT: ClassVar[int] = 7
-    TOOL_ERROR_LIMIT: ClassVar[int] = 3
+    TOOL_ERROR_LIMIT: ClassVar[int] = 10
     MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
     # 避免把大体积工具输出塞进 checkpoint。
@@ -342,7 +342,7 @@ class Settings:
             os.environ.get("CODING_AGENT_LOG_FLUSH_INTERVAL_MS", "1000")
         )
         cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
-        cls.LOG_MAX_BYTES = int(os.environ.get("CODING_AGENT_LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+        cls.LOG_MAX_BYTES = int(os.environ.get("CODING_AGENT_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
         cls.LOG_BACKUP_COUNT = int(os.environ.get("CODING_AGENT_LOG_BACKUP_COUNT", "7"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
         cls.MAX_PARALLEL_TOOL_CALLS = int(
@@ -496,7 +496,8 @@ class Settings:
             无。
 
             返回:
-                ``Settings.LOG_DIR / backend.log``；轮转文件使用 ``backend.log.1`` 等后缀。
+                ``Settings.LOG_DIR / backend-YYYY-MM-DD.log``；同日大小分片使用
+                ``backend-YYYY-MM-DD.1.log`` 等后缀。
 
         异常:
             无。
