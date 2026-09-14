@@ -24,7 +24,7 @@ class PathResolver:
 
     单一职责：解析路径并拦截 Windows 设备名与 POSIX 敏感设备/伪文件路径，并提供
     三种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment
-    （供 write / delete / patch 等破坏性工具，越界即拒绝）；
+    （供 write / delete / patch_write 等破坏性工具，越界即拒绝）；
     :meth:`resolve_entry_within_workspace` 解析目录项自身、不跟随末级符号链接
     （供 delete 删除符号链接本身，防越界逃逸）；
     :meth:`resolve_without_boundary` 不强制 containment

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
-from app.core.tools.tool_handler.file_io.atomic_write import atomic_write_text
+from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.utils.trace_infra.redaction import redact_terminal_output
 

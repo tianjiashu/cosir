@@ -211,7 +211,7 @@ class ToolCallLifecycleManager(BaseModel):
 
     state 中只保留 ``calls``，键为 ``tool_call_id``，值为可序列化记录。所有状态方法都
     返回深拷贝后的新 manager，避免节点继续持有旧快照；调用节点必须将返回值放入返回的
-    state patch。事件发射和模型上下文写回是方法的运行期副作用，依赖从当前 LangGraph
+    state patch_write。事件发射和模型上下文写回是方法的运行期副作用，依赖从当前 LangGraph
     execution context 解析，不会被 Pydantic 或 LangGraph 序列化。
 
     异常:
@@ -552,7 +552,11 @@ class ToolCallLifecycleManager(BaseModel):
         record.status = event_status
         result_display_data = _ui_data(summary)
         status_hint = _ui_error(summary, event_status)
-        transport_metadata = TransportMetadata(status=event_status, display_data=result_display_data, error=status_hint)
+        transport_metadata = TransportMetadata(
+            status=event_status,
+            display_data=result_display_data,
+            error=status_hint,
+        )
         created = runtime_context.add_message(
             operations.to_tool_model_message(observation),
             transport_metadata=transport_metadata,

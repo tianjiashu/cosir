@@ -1,18 +1,18 @@
 """V4A 文件变更反向操作构造。
 
-把一次 turn 内文件工具（write_file / patch / delete / move）成功执行产生的
+把一次 turn 内文件工具（write_file / patch_write / delete / move）成功执行产生的
 ``artifact_data["changes"]``（采集层事实快照）转换为「反向 V4A 操作」列表，落库后
 供 task 级变更集（``service.task.change_set``）用 ``apply_all_with_diff`` 逆向应用，
 将文件还原到该变更执行前的状态。
 
 设计边界：
 - 只做「采集快照 → 反向 PatchOperation」的纯转换，不读写文件、不关心工具权限。
-- 反向语义严格基于采集层 diff 对调（before/after / 路径对调），不依赖原始 patch hunks，
+- 反向语义严格基于采集层 diff 对调（before/after / 路径对调），不依赖原始 patch_write hunks，
   避免「原始 hunk 已无法在逆向时匹配」的脆弱性（见方案 §六 风险说明）。
 - 反向操作与 ``apply_all_with_diff`` 共用 ``PatchOperation`` 契约，复用成熟应用逻辑。
 """
 
-from app.core.tools.tool_handler.patch.patch_parser import (
+from app.core.tools.tool_handler.patch_write.patch_parser import (
     Hunk,
     HunkLine,
     OperationType,
@@ -101,7 +101,7 @@ def build_forward_operations(changes: list[dict]) -> list[PatchOperation]:
 def reverse_v4a_operation(forward: PatchOperation) -> PatchOperation:
     """把单个正向 PatchOperation 反向为「还原」操作。
 
-    反向语义（基于采集 diff 对调，不依赖原始 patch hunks）：
+    反向语义（基于采集 diff 对调，不依赖原始 patch_write hunks）：
     - ADD  → DELETE（新建的文件应被删除）。
     - DELETE → ADD（删除的文件应被重建，content = 采集的 before 全文）。
     - UPDATE → UPDATE（after 换回 before：查找文本用原 after，替换文本用原 before）。

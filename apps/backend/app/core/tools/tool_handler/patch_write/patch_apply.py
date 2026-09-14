@@ -1,4 +1,4 @@
-"""patch 两阶段校验与应用。
+"""patch_write 两阶段校验与应用。
 
 把 ``patch_parser`` 产出的 ``PatchOperation`` 列表先整体校验（路径合法、目标
 存在/不存在符合预期、hunk 上下文可匹配），校验通过后再逐文件应用（Add/Update/
@@ -6,21 +6,21 @@ Delete/Move）。校验失败整体不落盘；但应用阶段为逐文件顺序
 已落盘文件自动回滚（已知限制，见风险清单）。
 
 设计边界：
-- 只做 patch 解析与应用，不关心工具权限。
+- 只做 patch_write 解析与应用，不关心工具权限。
 - hunk 上下文匹配复用 ``fuzzy_match.fuzzy_find_and_replace``。
-- 路径合法性委托 ``ProjectPathResolver``；落盘复用 ``file_io.atomic_write``。
+- 路径合法性委托 ``ProjectPathResolver``；落盘复用 ``patch_write.atomic_write``。
 """
 
 import os
 from pathlib import Path
 
-from app.core.tools.tool_handler.file_io.atomic_write import atomic_write_text
-from app.core.tools.tool_handler.patch.fuzzy_match import (
+from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
+from app.core.tools.tool_handler.patch_write.fuzzy_match import (
     format_no_match_hint,
     fuzzy_find_and_replace,
 )
-from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
-from app.core.tools.tool_handler.patch.patch_parser import (
+from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
+from app.core.tools.tool_handler.patch_write.patch_parser import (
     Hunk,
     OperationType,
     PatchOperation,
@@ -30,10 +30,10 @@ from app.core.tools.tool_handler.security.path_resolver import PathResolver
 
 
 class PatchApplyError(RuntimeError):
-    """表示 patch 应用阶段失败，并标记此前是否已有操作落盘。"""
+    """表示 patch_write 应用阶段失败，并标记此前是否已有操作落盘。"""
 
     def __init__(self, message: str, *, partial_applied: bool) -> None:
-        """初始化 patch 应用错误。
+        """初始化 patch_write 应用错误。
 
         参数:
             message: 原始失败说明。
@@ -54,11 +54,11 @@ class PatchApplyError(RuntimeError):
 
 
 def _resolve_patch_path(resolver: PathResolver, path: str) -> tuple[Path | None, str]:
-    """解析并校验 patch header 中的单个路径。
+    """解析并校验 patch_write header 中的单个路径。
 
     参数:
         resolver: workspace 路径解析器。
-        path: patch header 中的原始路径。
+        path: patch_write header 中的原始路径。
 
     返回:
         ``(resolved, "")`` 表示成功；``(None, error)`` 表示设备路径或越界路径。
@@ -124,10 +124,10 @@ def validate_all(
     operations: list[PatchOperation],
     resolver: PathResolver,
 ) -> list[str]:
-    """校验全部 patch 操作而不落盘。
+    """校验全部 patch_write 操作而不落盘。
 
     参数:
-        operations: 待校验的 patch 操作列表。
+        operations: 待校验的 patch_write 操作列表。
         resolver: 项目路径解析器，提供路径合法性校验。
 
     返回:
@@ -209,10 +209,10 @@ def apply_all(
     operations: list[PatchOperation],
     resolver: PathResolver,
 ) -> None:
-    """在校验通过后逐文件应用 patch 操作。
+    """在校验通过后逐文件应用 patch_write 操作。
 
     参数:
-        operations: 待应用的 patch 操作列表（应先经 ``validate_all`` 校验通过）。
+        operations: 待应用的 patch_write 操作列表（应先经 ``validate_all`` 校验通过）。
         resolver: 项目路径解析器，提供路径合法性校验。
 
     返回:
@@ -238,10 +238,10 @@ def apply_all_with_diff(
     operations: list[PatchOperation],
     resolver: PathResolver,
 ) -> list[FileDiffResult]:
-    """在校验通过后逐文件应用 patch 操作并捕获 before/after 快照。
+    """在校验通过后逐文件应用 patch_write 操作并捕获 before/after 快照。
 
     参数:
-        operations: 待应用的 patch 操作列表（应先经 ``validate_all`` 校验通过）。
+        operations: 待应用的 patch_write 操作列表（应先经 ``validate_all`` 校验通过）。
         resolver: 项目路径解析器，提供路径合法性校验。
 
     返回:
@@ -268,10 +268,10 @@ def apply_all_with_diff(
 
 
 def _apply_operation(operation: PatchOperation, resolver: PathResolver) -> FileDiffResult:
-    """应用单个已校验的 patch 操作并返回差异快照。
+    """应用单个已校验的 patch_write 操作并返回差异快照。
 
     参数:
-        operation: 已通过整体预校验的 patch 操作。
+        operation: 已通过整体预校验的 patch_write 操作。
         resolver: workspace 路径解析器。
 
     返回:
@@ -400,7 +400,7 @@ def _require_same_resolution(
 
     参数:
         resolver: workspace 路径解析器。
-        path: patch 中的原始路径。
+        path: patch_write 中的原始路径。
         expected: 预校验或读取阶段得到的解析路径。
 
     返回:

@@ -1,13 +1,13 @@
 """文件修改工具的展示数据构造。
 
-只产出客户端渲染所需的结构化事实数据（变更列表 + 受控 Git patch + 统计），不产出
+只产出客户端渲染所需的结构化事实数据（变更列表 + 受控 Git patch_write + 统计），不产出
 摘要或展示条目；展示布局由客户端渲染规则层生成。
 """
 
 from typing import Any
 
 from app.core.tools.guard.display_data_budget import DEFAULT_DISPLAY_TEXT_MAX_CHARS
-from app.core.tools.tool_handler.patch.patch_diff import (
+from app.core.tools.tool_handler.patch_write.patch_diff import (
     FileDiffResult,
     build_diff_stats,
     format_git_diff,
@@ -50,7 +50,7 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
 
     返回:
         包含 ``changes`` 与 ``diff_stats`` 的展示元数据。每个 change 使用受控长度的
-        Git 风格 ``patch``；过长时 ``patch`` 为 None 且 ``truncated`` 为 True。
+        Git 风格 ``patch_write``；过长时 ``patch_write`` 为 None 且 ``truncated`` 为 True。
 
     异常:
         无。
@@ -104,7 +104,7 @@ def _build_file_display_change(
         "path": result.path,
         "new_path": result.new_path,
         "status": result.status,
-        "patch": None if truncated else patch,
+        "patch_write": None if truncated else patch,
         **({"truncated": True} if truncated else {}),
         "insertions": int(file_stat.get("insertions", 0)),
         "deletions": int(file_stat.get("deletions", 0)),

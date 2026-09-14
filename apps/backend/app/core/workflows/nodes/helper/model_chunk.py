@@ -21,9 +21,7 @@
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, AIMessageChunk
-
-from .debug_dump import _dump_merged_chunk_debug
+from langchain_core.messages import AIMessageChunk
 
 
 class ModelChunkProcessor:
@@ -119,47 +117,6 @@ class ModelChunkProcessor:
             return calls
         # 回退：聚合末 chunk 已把调用解析进 tool_calls。
         return _collect_tool_calls(getattr(chunk, "tool_calls", None))
-
-    def collect(self, chunks: list[AIMessageChunk]) -> AIMessage:
-        """把累积的 ``AIMessageChunk`` 列表合并为标准的 ``AIMessage``。
-
-        合并后保留 ``additional_kwargs``（含 DeepSeek 的 ``reasoning_content`` 等 provider 私有
-        扩展字段）原样透传；思考内容已在流式阶段作为 ``MODEL_THINKING_DELTA`` 推送给前端，其
-        回传 / 剥离策略由下游持久化与回传边界负责，本处理器不在此处置。完整可序列化字段在
-        ``AIMessage`` 边界保留，仅转换消息类型 discriminator，不把结构化 content 压成文本。
-        合并后的完整结构会经 ``_dump_merged_chunk_debug`` 落盘到
-        ``logs/debug_merged_chunks.jsonl`` 供排查。
-
-        参数:
-            chunks: 模型流式产出的分块列表（可能为空）。
-
-        返回:
-            可安全存入 graph state 并交给下一步模型调用的 ``AIMessage``：
-            - ``content``、``tool_calls``、``invalid_tool_calls``、``additional_kwargs``、``name``、
-              ``id``、``response_metadata``、``usage_metadata`` 及其他可序列化字段均透传。
-            空输入返回空 ``AIMessage``。
-
-        异常:
-            无（chunk 合并与调试落盘均不向外抛出；落盘失败已在 ``_dump_merged_chunk_debug`` 内降级为
-            warning）。
-
-        副作用:
-            经 ``_dump_merged_chunk_debug`` 向 ``Settings.LOG_DIR / debug_merged_chunks.jsonl``
-            追加一行完整 chunk JSON（调试通道，不受常规日志预算截断）。
-        """
-
-        merged: AIMessageChunk | None = None
-        for chunk in chunks:
-            merged = chunk if merged is None else merged + chunk  # LangChain chunk 支持 + 累加
-        if merged is None:
-            return AIMessage(content="")  # 空输入返回空消息
-
-        # 完整结构落调试文件（不受日志预算截断），先于常规摘要日志执行。
-        _dump_merged_chunk_debug(merged)
-
-        serialized = merged.model_dump()
-        serialized["type"] = "ai"
-        return AIMessage.model_validate(serialized)
 
     @staticmethod
     def extract_finish_reason(message: Any) -> str | None:

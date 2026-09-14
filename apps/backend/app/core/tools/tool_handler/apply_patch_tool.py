@@ -1,15 +1,15 @@
-"""apply_patch 工具实现（从原合并 patch_tool 的 patch 模式平移）。
+"""apply_patch 工具实现（从原合并 patch_tool 的 patch_write 模式平移）。
 
 本模块只承载 apply_patch（V4A 多文件补丁）这一个工具：解析并应用 V4A 补丁，复刻
 原 apply_patch 逻辑。成功后返回 unified diff 回显（``content``）与结构化 diff 统计
-（``display_data["diff_stats"]``），对齐 Hermes ``patch_tool`` 的 patch 分支。落盘后逐文件
+（``display_data["diff_stats"]``），对齐 Hermes ``patch_tool`` 的 patch_write 分支。落盘后逐文件
 经 ``guard.syntax_check`` 做多语言语法检查；语法诊断作为成功结果中的模型侧后续
 修复提示，不改变已经落盘的文件变更展示状态。应用阶段的异常按瞬态文件系统错误、
 确定性失败和部分落盘失败分类，分别填充 ``retryable``、``error`` 与 ``reason``。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``。
-- patch 的解析/应用复用 ``patch.patch_parser`` / ``patch.patch_apply``。
+- patch_write 的解析/应用复用 ``patch_write.patch_parser`` / ``patch_write.patch_apply``。
 - 成功/失败观察统一经 ``tool_execute.tool_success`` / ``tool_error`` 工厂构造。
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
@@ -33,8 +33,8 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_handler.file_io.atomic_write import looks_like_line_numbered
-from app.core.tools.tool_handler.patch import (
+from app.core.tools.tool_handler.patch_write.atomic_write import looks_like_line_numbered
+from app.core.tools.tool_handler.patch_write import (
     PatchApplyError,
     apply_all_with_diff,
     parse_v4a_patch,
@@ -46,22 +46,22 @@ from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 APPLY_PATCH_DESCRIPTION = (
     "Apply V4A multi-file patches for bulk changes. "
-    "REQUIRED PARAMETER: patch (V4A patch content). "
+    "REQUIRED PARAMETER: patch_write (V4A patch_write content). "
     "Auto-runs syntax checks after editing.\n\n"
-    "PATCH MODE: apply a V4A patch that can update, add, delete, or move multiple files "
+    "PATCH MODE: apply a V4A patch_write that can update, add, delete, or move multiple files "
     "in one call. Each operation references a file path and a diff/hunk block."
 )
 
 
 def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
-    """判断 patch 失败后是否允许模型修正或处理后再次调用。
+    """判断 patch_write 失败后是否允许模型修正或处理后再次调用。
 
     ``retryable`` 只是模型提示，不触发执行器自动重试，也不要求使用完全相同的
-    patch。内容/路径竞态需要重新读取并生成新 patch，因此属于可修正后重试；已经
+    patch_write。内容/路径竞态需要重新读取并生成新 patch_write，因此属于可修正后重试；已经
     部分落盘的失败始终不允许模型直接重放。
 
     参数:
-        error: patch 应用阶段归一化后的异常。
+        error: patch_write 应用阶段归一化后的异常。
 
     返回:
         未发生部分落盘且失败可以通过等待或修正当前状态后再次调用时返回 ``True``。
@@ -90,7 +90,7 @@ def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
 
 
 class ApplyPatchTool(HandlerBase):
-    """解析并应用 V4A 多文件补丁的工具类（原 patch 工具的 patch 模式）。
+    """解析并应用 V4A 多文件补丁的工具类（原 patch_write 工具的 patch_write 模式）。
 
     参数:
         无。
@@ -139,7 +139,7 @@ class ApplyPatchTool(HandlerBase):
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
                 破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
-            patch: V4A 格式 patch 文本（必填，输入仅 V4A）。
+            patch_write: V4A 格式 patch_write 文本（必填，输入仅 V4A）。
 
         返回:
             ``ToolObservation``；成功经 :func:`tool_success` 返回 unified diff 回显
@@ -155,8 +155,8 @@ class ApplyPatchTool(HandlerBase):
         if not patch:
             return tool_error(
                 tool_name=self.name,
-                error="missing patch input",
-                reason="provide a non-empty V4A patch in the 'patch' argument.",
+                error="missing patch_write input",
+                reason="provide a non-empty V4A patch_write in the 'patch_write' argument.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -164,8 +164,8 @@ class ApplyPatchTool(HandlerBase):
         if looks_like_line_numbered(text):
             return tool_error(
                 tool_name=self.name,
-                error="patch contains line-number prefixes",
-                reason="remove the 'N| ' display prefixes and provide the actual V4A patch.",
+                error="patch_write contains line-number prefixes",
+                reason="remove the 'N| ' display prefixes and provide the actual V4A patch_write.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -173,15 +173,15 @@ class ApplyPatchTool(HandlerBase):
         if parse_error:
             return tool_error(
                 tool_name=self.name,
-                error=f"invalid V4A patch: {parse_error}",
-                reason="fix the V4A headers and hunk ranges, then submit a new patch.",
+                error=f"invalid V4A patch_write: {parse_error}",
+                reason="fix the V4A headers and hunk ranges, then submit a new patch_write.",
                 retryable=True,
                 permission=self.permission,
             )
         if not operations:
             return tool_error(
                 tool_name=self.name,
-                error="patch contains no file operations",
+                error="patch_write contains no file operations",
                 reason="add at least one update, add, delete, or move operation.",
                 retryable=True,
                 permission=self.permission,
@@ -190,9 +190,9 @@ class ApplyPatchTool(HandlerBase):
         if validation_errors:
             return tool_error(
                 tool_name=self.name,
-                error="patch validation failed (no files were modified):\n"
+                error="patch_write validation failed (no files were modified):\n"
                 + "\n".join(f"  • {e}" for e in validation_errors),
-                reason="fix the listed operations before submitting a new patch.",
+                reason="fix the listed operations before submitting a new patch_write.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -234,14 +234,14 @@ class ApplyPatchTool(HandlerBase):
         )
 
     def _patch_apply_error_observation(self, error: PatchApplyError) -> ToolObservation:
-        """把 patch 应用异常转换为不重复诊断信息的工具错误观察。
+        """把 patch_write 应用异常转换为不重复诊断信息的工具错误观察。
 
         ``error`` 只描述已经发生的事实；``reason`` 只描述模型下一步应采取的动作。
         未落盘的文件锁/忙碌状态，以及可通过重新读取状态修正的内容竞态，允许模型
         处理后再次调用。部分落盘失败必须先检查当前文件状态，禁止模型盲目重放。
 
         参数:
-            error: patch 应用阶段异常，可能携带底层异常 cause 和部分落盘标记。
+            error: patch_write 应用阶段异常，可能携带底层异常 cause 和部分落盘标记。
 
         返回:
             ``status="error"`` 的 ``ToolObservation``，并正确填充 ``retryable``。
@@ -256,10 +256,10 @@ class ApplyPatchTool(HandlerBase):
         if error.partial_applied:
             return tool_error(
                 tool_name=self.name,
-                error="patch application stopped after partial changes",
+                error="patch_write application stopped after partial changes",
                 reason=(
-                    "inspect the changed files and create a new patch from the current "
-                    "contents; do not replay this patch unchanged."
+                    "inspect the changed files and create a new patch_write from the current "
+                    "contents; do not replay this patch_write unchanged."
                 ),
                 retryable=False,
                 permission=self.permission,
@@ -267,9 +267,9 @@ class ApplyPatchTool(HandlerBase):
         if _is_patch_retryable_after_correction(error):
             return tool_error(
                 tool_name=self.name,
-                error=f"patch apply failed: {error}",
+                error=f"patch_write apply failed: {error}",
                 reason=(
-                    "resolve the reported condition or regenerate the patch from current "
+                    "resolve the reported condition or regenerate the patch_write from current "
                     "file contents before retrying."
                 ),
                 retryable=True,
@@ -277,10 +277,10 @@ class ApplyPatchTool(HandlerBase):
             )
         return tool_error(
             tool_name=self.name,
-            error=f"patch apply failed: {error}",
+            error=f"patch_write apply failed: {error}",
             reason=(
-                "re-read the affected files and create a new patch for the current contents; "
-                "do not retry this patch unchanged."
+                "re-read the affected files and create a new patch_write for the current contents; "
+                "do not retry this patch_write unchanged."
             ),
             retryable=False,
             permission=self.permission,
@@ -306,7 +306,7 @@ class ApplyPatchTool(HandlerBase):
         if not diagnostics:
             return (
                 "the patched file(s) have syntax errors; fix them with follow-up edits "
-                "(write_file or patch or apply_patch)."
+                "(write_file or patch_write or apply_patch)."
             )
         parts = [
             f"line {d.row} col {d.column}"
@@ -318,7 +318,7 @@ class ApplyPatchTool(HandlerBase):
             + "; ".join(parts)
             + "); the files have been written but are not valid. "
             "Fix each with a follow-up edit "
-            "(write_file or patch or apply_patch) that corrects the "
+            "(write_file or patch_write or apply_patch) that corrects the "
             "syntax at the reported location."
         )
 

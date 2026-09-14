@@ -77,8 +77,8 @@ class ToolDefinition:
         """Project to the model-facing tool definition (name/description/schema).
 
         仅做投影：用本类 ``name`` / ``description`` 覆盖 pydantic 类名（如
-        ``SearchFilesArgs``），确保 registry / tools_node / 前端全链路使用注册名
-        （如 ``search_files``）这一唯一事实来源，不被 pydantic 类名污染。直接返回
+        ``SearchContentArgs``），确保 registry / tools_node / 前端全链路使用注册名
+        （如 ``search_content``）这一唯一事实来源，不被 pydantic 类名污染。直接返回
         ``parameters_schema``（存在时）或 ``args_model.model_json_schema()`` 的 schema，
         **不做 strict 化**（交由下游 ``bind_tools(strict=True)`` 统一承担）。
 

@@ -6,7 +6,7 @@
 - ``_runtime_config`` / ``_runtime_context``：从 LangGraph 运行上下文取运行时配置与
   task 级上下文。
 - ``emit_run_cancelled``：统一经 ``RuntimeOperations`` 条件落定取消终态。
-- ``terminal_state``：统一构造终态 state patch，消除各节点
+- ``terminal_state``：统一构造终态 state patch_write，消除各节点
   重复的 ``{"terminal": True, ...}`` 字典字面量。
 
 节点各自的数据处理辅助不放这里；``content → text`` 归一统一收口于
@@ -58,7 +58,7 @@ def terminal_state(
     requested_tool: bool = False,
     final_response: bool = False,
 ) -> dict[str, Any]:
-    """构造统一的终态 state patch（graph 走到 END 用）。
+    """构造统一的终态 state patch_write（graph 走到 END 用）。
 
     model / max_steps / observe 多个节点都把「终态」写成一组重复的硬字段字典
     （``step_count`` / ``requested_tool`` / ``final_response`` / ``terminal``），手写易错且
@@ -66,12 +66,12 @@ def terminal_state(
     终态不再有后续模型步，统一收口为单一来源，避免各节点手写硬字段字典发散（P2-5 一致性收口）。
 
     参数:
-        step_count: 当前步编号，直接落入 patch。
+        step_count: 当前步编号，直接落入 patch_write。
         requested_tool: 本步是否请求了工具，默认 ``False``。
         final_response: 是否产出终态文本，默认 ``False``。
 
     返回:
-        可直接 ``return`` 给 LangGraph 合并的 state patch 字典。
+        可直接 ``return`` 给 LangGraph 合并的 state patch_write 字典。
 
     异常:
         无。

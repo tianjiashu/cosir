@@ -7,9 +7,10 @@ stream；用 ``model.astream()`` 累积 ``AIMessage``，
 状态写入 **run**。
 
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
-"我先用 grep 查一下文件结构" 再给出一个 ``search_files`` 调用）。此时文本**不计入最终
+"我先用 grep 查一下文件结构" 再给出一个 ``search_content`` 调用）。此时文本**不计入最终
 回复**（最终回复只来自纯文本分支），但模型这段说明并非丢弃——
-它会经 canonical conversation facts 写入、经 ``RuntimeContextManager.add_message``
+它会经 canonical conversation facts 写入、经 ``RuntimeContextManager.add_message`` /
+``add_message_chunk``
 落库进历史上下文，并随 state ``instruction`` 字段下传给 ``tools`` / ``observe`` 节点，
 使下游执行与错误排查能看到模型当时的意图。
 
@@ -19,7 +20,7 @@ stream；用 ``model.astream()`` 累积 ``AIMessage``，
 
 import asyncio
 
-from langchain_core.messages import AIMessageChunk, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.config import get_stream_writer
 
 from app.config.logging.logger import log
@@ -96,13 +97,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     返回:
         需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）；当本次推理
         已超配额（``step_count > max_steps``）时不发起推理，直接返回
-        ``_finalize_max_steps`` 的终态 patch。
+        ``_finalize_max_steps`` 的终态 patch_write。
 
     副作用:
         - 发起推理前若本次已超配额，直接调用 ``_finalize_max_steps`` 收口终态（发
           把 run 标记为 failed），不再触发推理；
-        - 经 ``_runtime_context().add_message`` 把本轮 ``AIMessage`` 落库并写回内存
-          （``RuntimeContextManager`` 唯一写入入口），使下一模型步能累积看到本轮输出；
+        - 经 ``RuntimeContextManager.add_message_chunk`` 增量持久化本轮 assistant 草稿，
+          正常结束后由 ``flush_message_chunk(complete=True)`` 收口为完整 ``AIMessage``，
+          使下一模型步能累积看到本轮输出；
         - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
@@ -190,6 +192,11 @@ async def _model_node(state: ReactGraphState) -> dict:
         _dump_raw_chunk_debug(chunk, chunk_index)
         chunk_index += 1
 
+        chunks.append(chunk)
+        message_chunk = _runtime_context().add_message_chunk(
+            chunk, stream_id=step_id, run_id=run_id
+        )
+
         if operations.is_current_run_cancelled():
             # 取消直接落定 cancelled 终态，而不是把协作取消误记为失败。
             log.warning(
@@ -199,6 +206,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": rc.usage_stats.to_dict()},
                 },
             )
+            _runtime_context().flush_message_chunk(
+                stream_id=step_id, run_id=run_id, mode="cancel"
+            )
             parts.finish()
             operations.cancel_run_if_running(
                 end_reason="runtime_cancelled",
@@ -207,7 +217,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             )
             return terminal_state(step_count)
 
-        chunks.append(chunk)
         # 提取文本与 reasoning 内容。
         text = content_to_text(chunk.content)
         # 提取 reasoning 内容。
@@ -217,7 +226,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             parts.text(text)
         if reasoning and reasoning.strip():
             parts.reasoning(reasoning)
-        raw_tool_calls = chunk_processor.extract_tool_calls(chunk)
+        raw_tool_calls = chunk_processor.extract_tool_calls(message_chunk)
         if raw_tool_calls:
             # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
             parts.tool_call()
@@ -227,14 +236,11 @@ async def _model_node(state: ReactGraphState) -> dict:
                 step_id=step_id,
                 raw_tool_calls=raw_tool_calls,
             )
-
-    # 合并 chunk 到 AIMessage。
-    ai_message = chunk_processor.collect(chunks)
     parts.finish()
-
+    ai_message: AIMessage = _runtime_context().flush_message_chunk(
+        stream_id=step_id, run_id=run_id, mode="complete"
+    )
     finish_reason = chunk_processor.extract_finish_reason(ai_message)
-
-    _runtime_context().add_message(ai_message)
 
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
@@ -252,7 +258,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         tool_calls=tool_calls,
         invalid_tool_calls=invalid_tool_calls,
     )
-
 
     log.info(
         "model_node_completed",
@@ -280,6 +285,11 @@ async def _model_node(state: ReactGraphState) -> dict:
             "terminal": False,
             "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
             "tool_call_lifecycle": lifecycle,
+            "continuation_error_data": (
+                {"error_kind": "invalid_tool_call_repair", "invalid_count": lifecycle.invalid_count}
+                if lifecycle.invalid_count
+                else None
+            ),
         }
 
     if finish_reason in _NORMAL_FINISH_REASONS and ai_message.content:

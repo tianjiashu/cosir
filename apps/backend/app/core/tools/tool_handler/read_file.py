@@ -63,7 +63,9 @@ class ReadFileTool(HandlerBase):
         "cat/head/tail in terminal. Output format: 'LINE_NUM| CONTENT'. Use offset "
         "and limit for large files. Reads exceeding about 100K characters are "
         "truncated on a line boundary and return a next_offset; continue with "
-        "offset to read the rest. NOTE: Cannot read images or other binary files."
+        "offset to read the rest. Files larger than 5 MB cannot be read by "
+        "read_file at all (use search_files to find specific content). NOTE: "
+        "Cannot read images or other binary files."
     )
     permission = "safe_read"
     args_model = ReadFileArgs
@@ -107,6 +109,8 @@ class ReadFileTool(HandlerBase):
     max_line_chars = 2_000
     binary_sample_bytes = 4_096
     utf8_bom = "\ufeff"
+    # 单文件体积硬上限：超过此值的文件一律禁止读取，分页也不放行。
+    max_file_bytes = 5_000_000
 
     def __init__(self) -> None:
         """初始化 read_file 工具实例。
@@ -153,38 +157,40 @@ class ReadFileTool(HandlerBase):
         """
         root = execution_context.workspace_root
         resolver = PathResolver(root)
+        resolved = None
         ## 阶段1：对原始字符串做设备名/posix 禁止路径的 fail-fast 拦截
-        device_error = resolver.blocked_device_reason(path)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-                reason=_BLOCKED_DEVICE_REASON,
-                permission=self.permission,
-                status_hint="无法读取",
-            )
-
-        # 解析路径、相对路径转绝对路径
-        resolved, error = resolver.resolve_without_boundary(path)
         if resolved is None:
-            return tool_error(
-                self.name,
-                f"could not read the file: {error}",
-                reason="provide a valid file path inside or under the project root.",
-                retryable=True,
-                permission=self.permission,
-                status_hint="路径无效",
-            )
+            device_error = resolver.blocked_device_reason(path)
+            if device_error:
+                return tool_error(
+                    self.name,
+                    device_error,
+                    reason=_BLOCKED_DEVICE_REASON,
+                    permission=self.permission,
+                    status_hint="无法读取",
+                )
 
-        device_error = resolver.blocked_device_reason(path, resolved)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-                reason=_BLOCKED_DEVICE_REASON,
-                permission=self.permission,
-                status_hint="无法读取",
-            )
+            # 解析路径、相对路径转绝对路径
+            resolved, error = resolver.resolve_without_boundary(path)
+            if resolved is None:
+                return tool_error(
+                    self.name,
+                    f"could not read the file: {error}",
+                    reason="provide a valid file path inside or under the project root.",
+                    retryable=True,
+                    permission=self.permission,
+                    status_hint="路径无效",
+                )
+
+            device_error = resolver.blocked_device_reason(path, resolved)
+            if device_error:
+                return tool_error(
+                    self.name,
+                    device_error,
+                    reason=_BLOCKED_DEVICE_REASON,
+                    permission=self.permission,
+                    status_hint="无法读取",
+                )
 
         result = self._read_text_page(resolved, offset, limit)
         if result.error:
@@ -278,7 +284,8 @@ class ReadFileTool(HandlerBase):
             limit: 最多读取多少行。
 
         返回:
-            ``TextReadResult``。成功时 ``content`` 包含带行号文本；失败时 ``error`` 非空。
+            ``TextReadResult``。成功时 ``content`` 包含带行号文本；失败（文件不存在、
+            是目录、超过 5MB 体积上限、二进制或编码错误）时 ``error`` 非空。
 
         异常:
             不主动向上抛出文件系统异常。读取失败会返回简短的 ``reason`` 修正建议。
@@ -299,6 +306,22 @@ class ReadFileTool(HandlerBase):
                 reason="provide a file path, or use list_directory for this directory.",
                 retryable=True,
             )
+        file_size = self._safe_file_size(path)
+        if file_size > self.max_file_bytes:
+            return TextReadResult(
+                file_size=file_size,
+                error=(
+                    f"File is too large to read: {file_size} bytes "
+                    f"exceeds the {self.max_file_bytes} byte limit."
+                ),
+                reason=(
+                    "read_file cannot open files larger than 5 MB, even with "
+                    "pagination. Use search_files to locate specific content, or "
+                    "read a smaller exported or sampled copy of the file."
+                ),
+                retryable=False,
+            )
+
         if self._is_likely_binary(path):
             return TextReadResult(
                 file_size=self._safe_file_size(path),

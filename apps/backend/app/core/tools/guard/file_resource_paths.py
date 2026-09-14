@@ -25,7 +25,7 @@ from typing import Any
 
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_execute.tool_error import blocked_device_reason
-from app.core.tools.tool_handler.patch import OperationType, parse_v4a_patch
+from app.core.tools.tool_handler.patch_write import OperationType, parse_v4a_patch
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 
 
@@ -115,13 +115,13 @@ class FileResourceResolver:
             用于 revision、重复调用检测和路径锁的资源路径；未知工具返回空资源。
 
         说明:
-            对 ``patch``（replace 语义）与 ``apply_patch``（V4A 语义）两个工具，
+            对 ``patch_write``（replace 语义）与 ``apply_patch``（V4A 语义）两个工具，
             直接按 ``tool_name`` 分流，不再依赖 ``arguments["mode"]`` 入参（拆分后工具
             已无 ``mode`` 入参）；二者分别委托 :meth:`_patch_resources` 并传入
             ``is_v4a=False`` / ``is_v4a=True``。
 
         异常:
-            无。无法解析的 patch 文本交由 handler 返回正式错误。
+            无。无法解析的 patch_write 文本交由 handler 返回正式错误。
 
         副作用:
             无。
@@ -136,8 +136,10 @@ class FileResourceResolver:
                 scope_root=scope,
                 scope_recursive=False,
             )
-        if tool_name == "search_files":
+        if tool_name in {"search_content", "find_files"}:
             scope = self._resolve_read_path(arguments.get("path"), recursive=True)
+            if scope.is_file():
+                return FileResourcePaths(read_paths=(scope,))
             # 越界只读根（如 C:/Windows/System32）允许读取但禁止 prepare 阶段全量遍历，
             # 避免模型输入触发目录遍历 DoS；重复调用检测仅对 workspace 内 scope 生效。
             return FileResourcePaths(
@@ -164,15 +166,15 @@ class FileResourceResolver:
                 write_paths=(target,),
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, (target,)),
             )
-        if tool_name == "patch":
-            # patch 工具固定 replace 语义（原 mode=="replace" 分支）。
+        if tool_name == "patch_write":
+            # patch_write 工具固定 replace 语义（原 mode=="replace" 分支）。
             resources = self._patch_resources(arguments, is_v4a=False)
             return FileResourcePaths(
                 write_paths=resources.write_paths,
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, resources.write_paths),
             )
         if tool_name == "apply_patch":
-            # apply_patch 工具固定 V4A 语义（原 mode=="patch" 分支）。
+            # apply_patch 工具固定 V4A 语义（原 mode=="patch_write" 分支）。
             resources = self._patch_resources(arguments, is_v4a=True)
             return FileResourcePaths(
                 write_paths=resources.write_paths,
@@ -181,17 +183,17 @@ class FileResourceResolver:
         return FileResourcePaths()
 
     def _patch_resources(self, arguments: Mapping[str, Any], *, is_v4a: bool) -> FileResourcePaths:
-        """推导 replace / V4A patch 涉及的写路径。
+        """推导 replace / V4A patch_write 涉及的写路径。
 
         参数:
-            arguments: 已校验 patch 参数。
-            is_v4a: ``False`` 时为 replace 语义（``patch`` 工具，原 ``mode=="replace"``
+            arguments: 已校验 patch_write 参数。
+            is_v4a: ``False`` 时为 replace 语义（``patch_write`` 工具，原 ``mode=="replace"``
                 分支），直接按 ``path`` 推导单文件写路径；``True`` 时为 V4A 语义
-                （``apply_patch`` 工具，原 ``mode=="patch"`` 分支），解析 V4A 文本后
+                （``apply_patch`` 工具，原 ``mode=="patch_write"`` 分支），解析 V4A 文本后
                 提取多个文件写路径。
 
         返回:
-            patch 涉及的去重写路径；无有效路径时返回空资源。
+            patch_write 涉及的去重写路径；无有效路径时返回空资源。
 
         异常:
             :class:`FileResourcePathError`：写路径解析为空、含 NUL 或越界 workspace
@@ -203,14 +205,14 @@ class FileResourceResolver:
         """
 
         if not is_v4a:
-            # replace 语义（patch 工具）：直接按 path 推导单文件写路径，无需解析 V4A。
+            # replace 语义（patch_write 工具）：直接按 path 推导单文件写路径，无需解析 V4A。
             path = arguments.get("path")
             if isinstance(path, str) and path:
                 return FileResourcePaths(write_paths=(self._resolve_containment_path(path),))
             return FileResourcePaths()
 
         # V4A 语义（apply_patch 工具）：解析 V4A 文本后提取多文件写路径。
-        patch_text = arguments.get("patch")
+        patch_text = arguments.get("patch_write")
         if not isinstance(patch_text, str):
             return FileResourcePaths()
         operations, parse_error = parse_v4a_patch(patch_text)
@@ -235,7 +237,7 @@ class FileResourceResolver:
 
         空串 / NUL / 越界三类校验与 ``PathResolver._validate_path`` 语义对齐，仅在此
         定制富文本 ``reason``。``resolve_entry`` 控制末级符号链接是否跟随：``False`` 时
-        调用 ``resolver.resolve_within_workspace``（write/patch handler 同源，跟随链接），
+        调用 ``resolver.resolve_within_workspace``（write/patch_write handler 同源，跟随链接），
         ``True`` 时调用 ``resolver.resolve_entry_within_workspace``（delete handler 首位解析
         同源，不跟随末级链接，使 prepare 的锁/写键与"删链接自身"一致）。越界路径在调度前
         即被拦截，不再泄漏哨兵、不纳入锁。
@@ -390,7 +392,7 @@ def resolve_file_resource_paths(
         用于 revision、重复调用检测和路径锁的资源路径；缺 context 时返回空资源。
 
     异常:
-        无。无法解析的 patch 文本交由 handler 返回正式错误。
+        无。无法解析的 patch_write 文本交由 handler 返回正式错误。
 
     副作用:
         无。

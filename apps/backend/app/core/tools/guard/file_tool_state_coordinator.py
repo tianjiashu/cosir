@@ -44,7 +44,7 @@ from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObs
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.search.file_walker import iter_files
 
-_REPEATED_TOOLS = frozenset({"read_file", "search_files"})
+_REPEATED_TOOLS = frozenset({"read_file", "search_content", "find_files"})
 
 
 def _canonical_path(root: Path, value: Any) -> Any:
@@ -86,7 +86,7 @@ def normalize_repeated_call_arguments(
     返回:
         仅含签名相关字段的字典；路径字段经 :func:`_canonical_path` 归一，
         非路径字段原样保留，保证等价路径（相对 / 绝对 / 双斜杠）产生相同签名。
-        其中 ``mode`` 字段为**工具语义标记**，用于区分 ``patch`` 工具（值
+        其中 ``mode`` 字段为**工具语义标记**，用于区分 ``patch_write`` 工具（值
         ``"replace"``，replace 语义）与 ``apply_patch`` 工具（值 ``"apply_patch"``，
         V4A 语义）。该 ``mode`` 是内部生成的语义标记，**并非**模型传入的
         ``arguments["mode"]`` 入参——拆分后的工具已不再接收 ``mode`` 入参。
@@ -98,23 +98,21 @@ def normalize_repeated_call_arguments(
         无。
     """
 
-    if tool_name == "patch":
-        # patch 工具：固定 replace 语义（mode 为工具语义标记，非用户入参），
+    if tool_name == "patch_write":
+        # patch_write 工具：固定 replace 语义（mode 为工具语义标记，非用户入参），
         # 以 path 作为重复调用签名键。
         return {"mode": "replace", "path": _canonical_path(root, arguments.get("path"))}
     if tool_name == "apply_patch":
         # apply_patch 工具：固定 V4A 语义（mode 为工具语义标记，非用户入参），
-        # 以 patch 文本作为重复调用签名键。
-        return {"mode": "apply_patch", "patch": arguments.get("patch")}
-    if tool_name == "search_files":
-        # 搜索结果由 pattern/target/file_glob/output_mode/分页等全部参数共同决定，
+        # 以 patch_write 文本作为重复调用签名键。
+        return {"mode": "apply_patch", "patch_write": arguments.get("patch_write")}
+    if tool_name in {"search_content", "find_files"}:
+        # 搜索结果由 path/pattern/file_glob/分页等全部参数共同决定，
         # 仅归一 path 会导致「不同检索词搜索同一范围」被误判为重复而拦截。
         return {
             "path": _canonical_path(root, arguments.get("path")),
             "pattern": arguments.get("pattern"),
-            "target": arguments.get("target"),
             "file_glob": arguments.get("file_glob"),
-            "output_mode": arguments.get("output_mode"),
             "limit": arguments.get("limit"),
             "offset": arguments.get("offset"),
             "context": arguments.get("context"),
@@ -223,7 +221,7 @@ class FileToolStateCoordinator:
         # 快照。这份快照会在 complete 时回写，作为后续重复调用检测与 stale 判定的基线。
         observed_paths, snapshot_complete = self._observed_paths(resources)
         observed_snapshot = self._revisions.snapshot_token(observed_paths)
-        # 仅 read_file/search_files 参与重复调用检测；若目录遍历超容量导致快照不完整，
+        # 仅 read_file/search_content/find_files 参与重复调用检测；若目录遍历超容量导致快照不完整，
         # 也跳过重复检测（避免「未看全却判重复」误拦截）。其余工具直接返回计划，交由
         # lock/check_stale/complete 走状态协调，但跳过重复拦截。
         if tool.name not in _REPEATED_TOOLS or not snapshot_complete:
@@ -234,7 +232,8 @@ class FileToolStateCoordinator:
                 snapshot_complete=snapshot_complete,
             )
 
-        # 第三步（仅 read_file/search_files）：构造归一化调用签名并查询重复调用 registry。
+        # 第三步（仅 read_file/search_content/find_files）：构造归一化调用签名并查询
+        # 重复调用 registry。
         # 签名含路径归一（等价路径映射到同一键）；快照参与比对，文件变了就不算重复。
         signature = self._signature(
             tool.name,
@@ -301,9 +300,9 @@ class FileToolStateCoordinator:
         )
         if not stale_paths:
             return None
-        # patch / apply_patch 对文本敏感用 stale_patch 语义（patch=replace 语义、
+        # patch_write / apply_patch 对文本敏感用 stale_patch 语义（patch_write=replace 语义、
         # apply_patch=V4A 语义），其余写工具统一 stale_file。
-        reason = "stale_patch" if tool.name in ("patch", "apply_patch") else "stale_file"
+        reason = "stale_patch" if tool.name in ("patch_write", "apply_patch") else "stale_file"
         path_text = ", ".join(str(path) for path in stale_paths)
         return tool_error(
             tool.name,
@@ -472,7 +471,8 @@ class FileToolStateCoordinator:
         snapshot_complete = True
         try:
             if resources.scope_recursive:
-                # list_directory/search_files：递归遍历 scope 下所有文件，最多取 max 个。
+                # list_directory/search_content/find_files：递归遍历 scope 下所有文件，
+                # 最多取 max 个。
                 sampled = list(islice(iter_files(scope_root), self._max_scope_paths))
             elif scope_root.is_dir():
                 # list_directory 顶层：仅列一层子项。
@@ -536,8 +536,8 @@ class FileToolStateCoordinator:
 
         # registry 判定的四种动作：
         # - execute：允许真正执行，无需拦截（返回 None）。
-        # - block：search_files 连续重复（>=2 次未变），硬阻断为 error。
-        # - warning：search_files 首次重复，跳过但给 warning（success + 提示）。
+        # - block：search_content/find_files 连续重复（>=2 次未变），硬阻断为 error。
+        # - warning：search_content/find_files 首次重复，跳过但给 warning（success + 提示）。
         # - unchanged：read_file 重复（每次重复都跳过），成功但提示复用上次结果。
         if action == "execute":
             return None

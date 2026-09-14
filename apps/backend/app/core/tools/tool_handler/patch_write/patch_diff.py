@@ -1,7 +1,7 @@
-"""patch 应用结果的 diff 回显与统计。
+"""patch_write 应用结果的 diff 回显与统计。
 
 把 apply 阶段捕获的 before/after 内容投影为模型侧 unified diff、客户端侧 Git 风格
-patch 与结构化 diff 统计，供工具成功观察回显。
+patch_write 与结构化 diff 统计，供工具成功观察回显。
 
 设计边界：
 - 只做 diff 投影，不读写文件、不关心工具权限。
@@ -95,13 +95,13 @@ def format_unified_diff(old_text: str, new_text: str, path: str) -> str:
 
 
 def format_git_diff(result: FileDiffResult) -> str:
-    """生成可供客户端 diff 解析器消费的单文件 Git 风格 patch。
+    """生成可供客户端 diff 解析器消费的单文件 Git 风格 patch_write。
 
     参数:
         result: 文件变更前后的完整快照与状态。
 
     返回:
-        以 ``diff --git`` 开头的 Git 风格 patch。文本未变化时返回空字符串；
+        以 ``diff --git`` 开头的 Git 风格 patch_write。文本未变化时返回空字符串；
         Move 返回 rename 元数据而不生成伪造的逐行 hunk。
 
     异常:
@@ -112,7 +112,7 @@ def format_git_diff(result: FileDiffResult) -> str:
 
     说明:
         该结果只用于 UI 展示。回退与审计仍使用 ``artifact_data`` 中的完整快照，
-        不依赖这个可能受展示预算限制的 patch。
+        不依赖这个可能受展示预算限制的 patch_write。
     """
 
     old_path = result.path

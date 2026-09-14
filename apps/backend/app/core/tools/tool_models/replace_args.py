@@ -1,4 +1,4 @@
-"""replace 工具（原 patch 工具的 replace 模式）的 Pydantic 参数模型。
+"""replace 工具（原 patch_write 工具的 replace 模式）的 Pydantic 参数模型。
 
 字段全部必填（除 ``replace_all`` 外），必需性由模型静态校验保证，不再像原
 ``PatchArgs`` 那样把所有字段压进一个模型后在 handler 内按 ``mode`` 运行时校验。

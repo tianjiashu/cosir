@@ -1,8 +1,8 @@
 """ReAct-like 工作流的最大步数终态收口。
 
 本模块承载「步数耗尽统一落定失败」的逻辑，不是 LangGraph graph 节点：它由 ``model_node``
-作为普通 async 函数直接调用（不再经条件边路由），输出终态 state patch。保持独立文件
-（而非并入 model_node）是因为该逻辑横跨 canonical writer / run 标记 / 终态 patch 构造，
+作为普通 async 函数直接调用（不再经条件边路由），输出终态 state patch_write。保持独立文件
+（而非并入 model_node）是因为该逻辑横跨 canonical writer / run 标记 / 终态 patch_write 构造，
 职责清晰。
 """
 
@@ -27,14 +27,14 @@ _MAX_STEPS_FINAL_TEXT = (
 async def _finalize_max_steps(
     state: ReactGraphState, *, step_count: int | None = None
 ) -> dict[str, Any]:
-    """统一落定 ``max_steps_reached`` 失败，返回终态 state patch。
+    """统一落定 ``max_steps_reached`` 失败，返回终态 state patch_write。
 
     这是被 ``model_node`` 直接调用的收口函数（非 LangGraph graph 节点）。``model_node``
     在发起推理前发现本次推理超配额（``step_count > max_steps``）时调用本函数，保证超配额
     后不再发起推理、终态分类恒为 ``max_steps_reached``。``step_count`` 缺省时回退读
     ``state.step_count``（主要供测试直接调用；生产路径 ``model_node`` 恒显式传入）。
 
-    终态 patch 会把 ``_MAX_STEPS_FINAL_TEXT`` 写入 ``final_text``（供 checkpoint 留存），
+    终态 patch_write 会把 ``_MAX_STEPS_FINAL_TEXT`` 写入 ``final_text``（供 checkpoint 留存），
     且 canonical run 终态经 ``end_reason="max_steps_reached"`` 保存，使前端与父 Agent
     能按稳定原因分类渲染「因步数耗尽而停止」的可读说明。
 
@@ -69,8 +69,7 @@ async def _finalize_max_steps(
         )
         return _terminal_state(effective_step_count)
 
-    event_data = dict()
-    event_data["final_text"] = _MAX_STEPS_FINAL_TEXT
+    event_data = {"final_text": _MAX_STEPS_FINAL_TEXT}
     log.warning(
         "max_steps_node_failed",
         extra={
@@ -89,7 +88,7 @@ async def _finalize_max_steps(
 
 
 def _terminal_state(step_count: int) -> dict[str, Any]:
-    """构造最大步数收口函数返回的终态 state patch。
+    """构造最大步数收口函数返回的终态 state patch_write。
 
     复用 ``common.terminal_state`` 的终态字段（统一收口终态硬字段，与 observe 节点各分支口径一致），
     并补回本节点特有的 ``continuation_error_data=None``

@@ -12,7 +12,7 @@ import copy
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast, Literal
+from typing import Any, Literal, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -41,7 +41,10 @@ from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
     TransportMetadata,
 )
-from app.service.depends import get_conversation_event_projector, get_conversation_task_context_service
+from app.service.depends import (
+    get_conversation_event_projector,
+    get_conversation_task_context_service,
+)
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.utils.message_content import content_to_text
@@ -430,11 +433,14 @@ class RuntimeContextManager:
         text_length = len(content_to_text(state.chunk.content))
         return (
                 text_length - state.persisted_text_length >= STREAMING_PERSIST_MIN_CHARS
-                or time.monotonic() - state.last_persisted_at >= STREAMING_PERSIST_MAX_INTERVAL_SECONDS
+                or time.monotonic() - state.last_persisted_at
+                >= STREAMING_PERSIST_MAX_INTERVAL_SECONDS
         )
 
     def ensure_run_user_message(
-            self, text: str, image_paths: Sequence[str] | None = None
+            self,
+            text: str,
+            image_paths: Sequence[str] | None = None,
     ) -> bool:
         """确保当前 Run 在上下文中恰好有一条初始 user 消息。
 
@@ -447,7 +453,6 @@ class RuntimeContextManager:
             text: 该 Run 的输入文本。
             image_paths: 已最终化的 workspace-relative 图片路径；只作为自定义 image ref
                 写入 canonical context，模型调用前由 model-input boundary 解析成 provider block。
-
         返回:
             ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示已存在，或文本和
             图片均为空被跳过。
@@ -461,20 +466,6 @@ class RuntimeContextManager:
             包含二进制。
         """
         paths = tuple(path.strip() for path in (image_paths or ()) if path and path.strip())
-        if (not text or not text.strip()) and not paths:
-            log.warning(
-                "runtime_context_run_user_message_skipped",
-                extra={
-                    "msg": "Run 输入文本为空，跳过 user 消息写入",
-                    "data": {"task_id": self.current_task_id, "run_id": self.current_run_id},
-                },
-            )
-            return False
-        if any(
-                entry.run_id == self.current_run_id and isinstance(entry.message, HumanMessage)
-                for entry in self._entries
-        ):
-            return False
         if paths:
             content_blocks: list[dict[str, str]] = []
             if text and text.strip():

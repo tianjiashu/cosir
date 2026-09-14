@@ -54,14 +54,14 @@ _CODE_GRAPH_EXPLORE_DESCRIPTION: str = (
     "(Read-equivalent — treat the shown source as already Read; do NOT re-open those files), "
     "plus the call path among them. Usually the ONLY call you need — more accurate context, "
     "in far fewer tokens than a search/Read/Grep loop. "
-    "Only fall back to search_files/read_file when you need pure-text/regex matching or CodeGraph "
+    "Only fall back to search_content/read_file when you need pure-text/regex matching or "
     "is unavailable."
 )
 
 _CODE_GRAPH_SEARCH_DESCRIPTION = (
     "Quick symbol search by name; returns locations only (no code). Use to find where a symbol "
     "is defined, then feed the result to codegraph_node to read the source, or use "
-    "codegraph_explore to understand an area in one call. Fall back to search_files for "
+    "codegraph_explore to understand an area in one call. Fall back to search_content for "
     "text/regex search."
 )
 
@@ -206,7 +206,7 @@ class CodegraphQueryTool(HandlerBase):
                 reason=(
                     "There is no associated workspace for this query, so CodeGraph cannot run. "
                     "Use CodeGraph tools inside a workspace, or fall back to "
-                    "search_files/read_file."
+                    "search_content/read_file."
                 ),
                 permission=self.permission,
             )
@@ -217,7 +217,7 @@ class CodegraphQueryTool(HandlerBase):
                 "CodeGraph unavailable",
                 reason=(
                     "The CodeGraph Kernel is not ready, so this query cannot run. "
-                    "Fall back to search_files/read_file."
+                    "Fall back to search_content/read_file."
                 ),
                 permission=self.permission,
             )
@@ -239,7 +239,7 @@ class CodegraphQueryTool(HandlerBase):
                 reason=(
                     "The CodeGraph query could not complete. This may be transient "
                     "(retry may succeed) or the index may be unavailable — if it persists, "
-                    "fall back to search_files/read_file."
+                    "fall back to search_content/read_file."
                 ),
                 retryable=exc.retryable if hasattr(exc, "retryable") else False,
                 permission=self.permission,

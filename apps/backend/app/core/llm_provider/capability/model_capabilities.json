@@ -1,20 +1,4 @@
 {
-  "deepseek-v4-flash": {
-    "context_window": 1048576,
-    "max_output_tokens": 393216,
-    "supports_thinking": true,
-    "supports_image": false,
-    "supports_video": false,
-    "need_reasoning_content": true,
-    "supports_reasoning_effort": {
-      "supported": true,
-      "effort_map": {
-        "low": "low",
-        "high": "high",
-        "max": "max"
-      }
-    }
-  },
   "deepseek-v4-pro": {
     "context_window": 1048576,
     "max_output_tokens": 393216,
@@ -31,7 +15,7 @@
       }
     }
   },
-  "deepseek-v4-flash-vision-exp": {
+  "deepseek-flash": {
     "context_window": 1048576,
     "max_output_tokens": 393216,
     "supports_thinking": true,

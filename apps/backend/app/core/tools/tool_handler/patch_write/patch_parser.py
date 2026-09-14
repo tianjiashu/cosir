@@ -1,6 +1,6 @@
-"""patch 格式解析（仅 V4A）。
+"""patch_write 格式解析（仅 V4A）。
 
-把 V4A 格式 patch 文本解析为 ``PatchOperation``（Add/Update/Delete/Move），
+把 V4A 格式 patch_write 文本解析为 ``PatchOperation``（Add/Update/Delete/Move），
 供 ``patch_apply`` 做两阶段校验与应用。hunk 上下文匹配复用
 ``fuzzy_match.fuzzy_find_and_replace``，不自写行邻接匹配。
 
@@ -16,7 +16,7 @@ from enum import Enum
 
 
 class OperationType(Enum):
-    """patch 操作类型。"""
+    """patch_write 操作类型。"""
 
     ADD = "add"
     UPDATE = "update"
@@ -26,7 +26,7 @@ class OperationType(Enum):
 
 @dataclass
 class HunkLine:
-    """patch hunk 中的单行。"""
+    """patch_write hunk 中的单行。"""
 
     prefix: str  # ' '（上下文）/ '-'（删除）/ '+'（新增）
     content: str
@@ -34,7 +34,7 @@ class HunkLine:
 
 @dataclass
 class Hunk:
-    """patch 中一组相邻变更。"""
+    """patch_write 中一组相邻变更。"""
 
     context_hint: str | None = None
     lines: list[HunkLine] = field(default_factory=list)
@@ -42,7 +42,7 @@ class Hunk:
 
 @dataclass
 class PatchOperation:
-    """一个统一的 patch 操作。"""
+    """一个统一的 patch_write 操作。"""
 
     operation: OperationType
     file_path: str
@@ -75,13 +75,13 @@ def hunk_content(hunks: list[Hunk], prefix: str) -> str:
 
 
 def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | None]:
-    """解析 V4A 格式 patch。
+    """解析 V4A 格式 patch_write。
 
     参数:
-        patch_content: V4A 格式 patch 文本。
+        patch_content: V4A 格式 patch_write 文本。
 
     返回:
-        ``(operations, None)`` 表示成功；``([], error)`` 表示解析失败。空 patch
+        ``(operations, None)`` 表示成功；``([], error)`` 表示解析失败。空 patch_write
         返回 ``([], None)``（由调用方决定如何处理）。
 
     异常:

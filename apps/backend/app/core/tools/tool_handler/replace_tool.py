@@ -1,13 +1,13 @@
 """replace 工具实现（从原合并 patch_tool 的 replace 模式平移）。
 
-本模块只承载 patch（replace 模式）这一个工具：单文件模糊查找替换，复刻原
+本模块只承载 patch_write（replace 模式）这一个工具：单文件模糊查找替换，复刻原
 edit_file 逻辑。成功后的文件变更由 display_data/artifact_data 提供给 UI 和审计，
 不把 diff 回显给模型。落盘后的语法检查只在发现问题时通过 success content 提供
 简短警告，不改变替换成功状态。
 
 设计边界：
 - 路径安全委托 ``security.ProjectPathResolver``。
-- replace 的模糊匹配复用 ``patch.fuzzy_match``。
+- replace 的模糊匹配复用 ``patch_write.fuzzy_match``。
 - 成功/失败观察统一经 ``tool_execute.tool_success`` / ``tool_error`` 工厂构造。
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
@@ -31,15 +31,15 @@ from app.core.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_handler.file_io.atomic_write import (
+from app.core.tools.tool_handler.patch_write.atomic_write import (
     atomic_write_text,
     looks_like_line_numbered,
 )
-from app.core.tools.tool_handler.patch import (
+from app.core.tools.tool_handler.patch_write import (
     format_no_match_hint,
     fuzzy_find_and_replace,
 )
-from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
+from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.replace_args import ReplaceArgs
@@ -55,7 +55,7 @@ REPLACE_DESCRIPTION = (
 
 
 class ReplaceTool(HandlerBase):
-    """在文件内做查找替换的工具类（原 patch 工具的 replace 模式）。
+    """在文件内做查找替换的工具类（原 patch_write 工具的 replace 模式）。
 
     参数:
         无。
@@ -70,7 +70,7 @@ class ReplaceTool(HandlerBase):
         仅保存工具元数据；不读取、不写入文件。
     """
 
-    name = "patch"
+    name = "patch_write"
     description = REPLACE_DESCRIPTION
     permission = "file_write"
     args_model = ReplaceArgs
@@ -128,7 +128,7 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 "replace requires path, old_string, new_string",
-                reason="provide path, old_string, and new_string, then call patch again.",
+                reason="provide path, old_string, and new_string, then call patch_write again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -152,7 +152,7 @@ class ReplaceTool(HandlerBase):
         if resolved is None:
             return tool_error(
                 self.name,
-                f"could not patch the file: {error}",
+                f"could not patch_write the file: {error}",
                 reason="provide a file path inside the project workspace.",
                 retryable=True,
                 permission=self.permission,
@@ -171,7 +171,7 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 os_error_message(exc, "read the file"),
-                reason="make the file readable, then call patch again.",
+                reason="make the file readable, then call patch_write again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -209,7 +209,7 @@ class ReplaceTool(HandlerBase):
             return tool_error(
                 self.name,
                 os_error_message(exc, "write the file"),
-                reason="make the file writable, then call patch again.",
+                reason="make the file writable, then call patch_write again.",
                 retryable=True,
                 permission=self.permission,
             )
@@ -275,7 +275,7 @@ class ReplaceTool(HandlerBase):
 
 
 def build_replace_definition() -> ToolDefinition:
-    """构造 replace（patch 工具）工具定义。
+    """构造 replace（patch_write 工具）工具定义。
 
     参数:
         无。

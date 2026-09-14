@@ -105,7 +105,8 @@ def reviewer_agent() -> AgentProfile:
         allowed_tools=[
             "read_file",
             "list_directory",
-            "search_files",
+            "search_content",
+            "find_files",
             *_codegraph_tool_names(),
         ],
         max_steps=50,
@@ -144,7 +145,8 @@ def explorer_agent() -> AgentProfile:
         allowed_tools=[
             "read_file",
             "list_directory",
-            "search_files",
+            "search_content",
+            "find_files",
             "web_search",
             "web_extract",
             *_codegraph_tool_names(),
@@ -219,9 +221,10 @@ def coder_agent() -> AgentProfile:
         allowed_tools=[
             "read_file",
             "list_directory",
-            "search_files",
+            "search_content",
+            "find_files",
             "write_file",
-            "patch",
+            "patch_write",
             "apply_patch",
             "delete",
             "execute_terminal",

@@ -1,6 +1,6 @@
 """write_file 工具实现。
 
-本模块只承载 write_file 这一个工具。写盘经由 ``file_io.atomic_write`` 做原子写
+本模块只承载 write_file 这一个工具。写盘经由 ``patch_write.atomic_write`` 做原子写
 并保留目标文件既有 BOM/CRLF；落盘前做行号污染门禁（拒绝把 read_file 的带行号
 输出回写），成功后返回文件变更展示数据。落盘后的语法检查只在发现问题时通过
 success content 提供简短警告，不改变写入成功状态。
@@ -30,11 +30,11 @@ from app.core.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_handler.file_io.atomic_write import (
+from app.core.tools.tool_handler.patch_write.atomic_write import (
     atomic_write_text,
     looks_like_line_numbered,
 )
-from app.core.tools.tool_handler.patch.patch_diff import FileDiffResult
+from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.write_file_args import WriteFileArgs

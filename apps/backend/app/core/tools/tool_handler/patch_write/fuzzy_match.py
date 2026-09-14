@@ -11,7 +11,7 @@ context_aware。
 对外导出：
 - ``fuzzy_find_and_replace``：主入口，返回 ``(新内容, 命中数, 策略名, 错误)``。
 - ``format_no_match_hint``：独立模块级函数，不被 ``fuzzy_find_and_replace``
-  调用；由 patch 工具在调用点显式拼装 "Did you mean" 提示。
+  调用；由 patch_write 工具在调用点显式拼装 "Did you mean" 提示。
 """
 
 import re

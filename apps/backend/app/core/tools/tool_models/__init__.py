@@ -13,10 +13,11 @@ from app.core.tools.tool_models.execute_terminal_args import (
     ExecuteTerminalArgs,
     ExecuteTerminalShell,
 )
+from app.core.tools.tool_models.find_files_args import FindFilesArgs
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
 from app.core.tools.tool_models.read_file_args import ReadFileArgs
 from app.core.tools.tool_models.replace_args import ReplaceArgs
-from app.core.tools.tool_models.search_files_args import SearchFilesArgs
+from app.core.tools.tool_models.search_content_args import SearchContentArgs
 from app.core.tools.tool_models.terminal_session_args import (
     TerminalCloseArgs,
     TerminalReadArgs,
@@ -38,10 +39,11 @@ __all__ = [
     "DeleteArgs",
     "ExecuteTerminalArgs",
     "ExecuteTerminalShell",
+    "FindFilesArgs",
     "ListDirectoryArgs",
     "ReadFileArgs",
     "ReplaceArgs",
-    "SearchFilesArgs",
+    "SearchContentArgs",
     "TerminalCloseArgs",
     "TerminalReadArgs",
     "TerminalSignalArgs",

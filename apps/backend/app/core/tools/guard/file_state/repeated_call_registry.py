@@ -63,7 +63,7 @@ class RepeatedCallRegistry:
             task_id: 状态所属任务。
             signature: 归一化调用签名。
             fingerprint: 当前文件或搜索范围快照。
-            tool_name: 当前工具名，仅支持 read_file / search_files 特定策略。
+            tool_name: 当前工具名，仅支持 read_file / search_content / find_files 特定策略。
 
         返回:
             ``execute`` / ``unchanged`` / ``warning`` / ``block`` 动作。

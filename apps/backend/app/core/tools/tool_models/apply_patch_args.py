@@ -1,4 +1,4 @@
-"""apply_patch 工具（原 patch 工具的 patch 模式）的 Pydantic 参数模型。
+"""apply_patch 工具（原 patch_write 工具的 patch_write 模式）的 Pydantic 参数模型。
 
 字段单一必填，必需性由模型静态校验保证，不再像原 ``PatchArgs`` 那样把所有字段
 压进一个模型后在 handler 内按 ``mode`` 运行时校验。
@@ -13,7 +13,7 @@ class ApplyPatchArgs(BaseModel):
     """apply_patch 工具接受的校验参数（V4A 多文件补丁）。
 
     字段：
-        patch: V4A 格式 patch 文本（必填）。
+        patch_write: V4A 格式 patch_write 文本（必填）。
 
     校验边界：``extra="forbid"`` 拒绝任何多余字段，``strict=True`` 拒绝类型错误。
     """
@@ -22,8 +22,8 @@ class ApplyPatchArgs(BaseModel):
 
     patch: str = Field(
         description=(
-            "A single V4A-format patch that can modify multiple files at once. Use this "
-            "tool instead of 'patch' (single-file replace) when you need to edit several "
+            "A single V4A-format patch_write that can modify multiple files at once. Use this "
+            "tool instead of 'patch_write' (single-file replace) when you need to edit several "
             "files in one atomic operation.\n"
             "Format (Hermes-style, required exactly):\n"
             "  *** Begin Patch\n"

@@ -18,10 +18,11 @@ from app.core.tools.tool_handler.codegraph_query import (
 from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
 from app.core.tools.tool_handler.delete import build_delete_definition
 from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_definition
+from app.core.tools.tool_handler.find_files import build_find_files_definition
 from app.core.tools.tool_handler.list_directory import build_list_directory_definition
 from app.core.tools.tool_handler.read_file import build_read_file_definition
 from app.core.tools.tool_handler.replace_tool import build_replace_definition
-from app.core.tools.tool_handler.search_files import build_search_files_definition
+from app.core.tools.tool_handler.search_content import build_search_content_definition
 from app.core.tools.tool_handler.web_extract import build_web_extract_definition
 from app.core.tools.tool_handler.web_search import build_web_search_definition
 from app.core.tools.tool_handler.write_file import build_write_file_definition
@@ -60,11 +61,11 @@ class ToolSystem:
     ) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册工具定义：11 个非 CodeGraph 工具恒注册（包含
+        按内置清单注册工具定义：12 个非 CodeGraph 工具恒注册（包含
         ``delegate_task``）；``Settings.CODEGRAPH_ENABLED`` 为 True 时额外注册 6 个
-        CodeGraph 查询工具（共 17 个），为 False 时仅注册 11 个工具（模型侧完全无
-        codegraph 入口）。其中原 patch 工具已拆分为 replace(patch) 与 apply_patch(V4A)
-        两个独立工具，故非 CodeGraph 工具由 10 个增至 11 个，总数由 16 个增至 17 个。本方法用
+        CodeGraph 查询工具（共 18 个），为 False 时仅注册 12 个工具（模型侧完全无
+        codegraph 入口）。其中原 patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(V4A)，
+        搜索工具已拆分为 find_files 与 search_content。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
         构造输出预算上限，装配执行管线（``ToolExecutor``）。工具拦截（Pre/PostToolUse）通过
         ``app.hook.hook_interceptor.HookInterceptor`` 静态方法直接收口，
@@ -99,10 +100,11 @@ class ToolSystem:
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
         registry.register(build_write_file_definition())
-        # patch 工具已拆分为 replace(patch) 与 apply_patch(V4A) 两个独立工具
+        # patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(V4A) 两个独立工具
         registry.register(build_replace_definition())
         registry.register(build_apply_patch_definition())
-        registry.register(build_search_files_definition())
+        registry.register(build_search_content_definition())
+        registry.register(build_find_files_definition())
         registry.register(build_list_directory_definition())
         registry.register(build_delete_definition())
         registry.register(build_execute_terminal_definition())

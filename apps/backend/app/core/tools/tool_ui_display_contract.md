@@ -138,7 +138,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `write_file` | `写入失败`、`路径无效`、`无法写入` |
 | `replace` | `未找到文本`、`内容冲突`、`替换失败` |
 | `apply_patch` | `补丁无效`、`目标已变更`、`应用失败` |
-| `search_files` | `搜索失败`、`正则无效`、`路径不存在` |
+| `search_content` / `find_files` | `搜索失败`、`正则无效`、`路径不存在` |
 | `list_directory` | `目录不存在`、`无法读取`、`路径无效` |
 | `delete` | `目标不存在`、`权限不足`、`目录非空`、`删除失败` |
 | `execute_terminal` | `命令超时`、`命令失败`、`目录无效`、`命令被拦截` |
@@ -150,7 +150,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 
 ## 3. 非 CodeGraph 工具契约
 
-当前非 CodeGraph 工具共 11 个，包括 `delegate_task`。
+当前非 CodeGraph 工具共 12 个，包括 `delegate_task`。
 
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
@@ -158,7 +158,8 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `write_file` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | `changes`、`diff_stats` |
 | `patch`（replace） | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 与 `write_file` 相同 |
 | `apply_patch` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 多文件 `changes`、`diff_stats` |
-| `search_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`target`、`path`、`files`、`page`、`match_count` |
+| `search_content` | `trace`、可展开、`list`、`search` | `content-search-results` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
+| `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
 | `delete` | `standalone`、不可展开、`none`、`trash-2` | `delete-result` | `path`、`target_type`、`recursive` |
 | `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 脱敏后的 `command`、`workdir`、`output`、`exit_code`、`timed_out`、`truncated` |
@@ -258,22 +259,25 @@ worker 和跨平台集成验收后作为独立变更完成。
 
 ### 3.3 搜索和目录
 
-`search_files` 和 `list_directory` 都使用列表布局，但必须保持不同的 `kind`。搜索结果当前以文件路径为主；如果将来展示命中行或摘要，应新增有界的结构化字段，不解析模型正文。
+`search_content`、`find_files` 和 `list_directory` 都使用列表布局，但必须保持不同的 `kind`。
+`search_content` 的命中行通过有界的 `content-search-results.matches` 展示，不解析模型正文。
 
 ```json
 {
-  "kind": "file-list",
+  "kind": "content-search-results",
   "pattern": "ToolObservation",
-  "target": "content",
   "path": ".",
-  "files": [{"path": "apps/backend/app/core/tools/schemas/tool_observation.py"}],
+  "matches": [{"path": "apps/backend/app/core/tools/schemas/tool_observation.py", "line": 1, "content": "...", "is_match": true}],
   "page": {
     "offset": 0,
     "limit": 50,
     "has_more": false,
     "next_offset": null
   },
-  "match_count": 1
+  "total_rows": 1,
+  "match_count": 1,
+  "scanned_files": 1,
+  "skipped_files": 0
 }
 ```
 
