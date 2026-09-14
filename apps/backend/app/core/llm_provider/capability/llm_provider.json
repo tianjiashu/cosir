@@ -3,8 +3,7 @@
     "provider_type": "api",
     "base_url": "https://api.deepseek.com",
     "models": [
-      "deepseek-v4-flash-vision-exp",
-      "deepseek-v4-flash",
+      "deepseek-flash",
       "deepseek-v4-pro"
     ],
     "error_code": {
