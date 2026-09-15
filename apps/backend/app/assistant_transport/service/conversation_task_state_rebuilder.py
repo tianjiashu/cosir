@@ -14,6 +14,7 @@ from langchain_core.messages.tool import ToolCall
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateFilePart,
     ConversationStateImagePart,
     ConversationStatePart,
     ConversationStateTextPart,
@@ -23,6 +24,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
 from app.config.configuration import get_tool_registry
+from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -91,6 +93,43 @@ class ConversationTaskStateRebuilder:
         return tool_definition.display.to_dict()
 
     @staticmethod
+    def build_user_message(run: ConversationRunRecord) -> ConversationStateMessage:
+        """从 Run 输入事实构造可冷重建的 user 消息。
+
+        正常执行会先写入 Human context；若进程恰好在该写入前崩溃，Run.extra 仍是已提交
+        的普通附件事实，因此 snapshot 不能因为缺少 context 行而丢失用户消息或附件。
+        """
+        image_parts: list[ConversationStateImagePart] = [
+            ConversationStateImagePart(
+                type="image",
+                image="cosir-attachment://" f"{Path(path).name.split('.', 1)[0]}",
+            )
+            for path in (getattr(run, "image_paths", None) or [])
+        ]
+        user_parts: list[ConversationStatePart] = []
+        extra: ConversationRunExtra | None = getattr(run, "extra", None)
+        text = extra.display_text if extra is not None else run.input_text
+        if text:
+            user_parts.append(
+                ConversationStateTextPart(type="text", text=text, status="completed")
+            )
+        user_parts.extend(image_parts)
+        user_parts.extend(
+            ConversationStateFilePart(
+                type="file",
+                file=f"cosir-local-file:{attachment['id']}",
+                name=attachment["name"],
+                contentType=attachment["content_type"],
+            )
+            for attachment in (extra.attachments if extra is not None else [])
+        )
+        return ConversationStateMessage(
+            id=f"user-{run.id}",
+            role="user",
+            parts=user_parts,
+        )
+
+    @staticmethod
     def rebuild(
             task: TaskRecord,
             runs: Sequence[ConversationRunRecord],
@@ -141,33 +180,12 @@ class ConversationTaskStateRebuilder:
             assistant_message = ConversationStateMessage(
                 id=f"assistant-{run.id}", role="assistant", parts=[]
             )
+            has_user_message = False
             for row in rows:
                 message = row.message
                 if isinstance(message, HumanMessage):
-                    image_parts: list[ConversationStateImagePart] = [
-                        ConversationStateImagePart(
-                            type="image",
-                            image=(
-                                "cosir-attachment://"
-                                f"{Path(path).name.split('.', 1)[0]}"
-                            ),
-                        )
-                        for path in (getattr(run, "image_paths", None) or [])
-                    ]
-                    text = content_to_text(message.content)
-                    user_parts: list[ConversationStatePart] = []
-                    if text:
-                        user_parts.append(
-                            ConversationStateTextPart(
-                                type="text", text=text, status="completed"
-                            )
-                        )
-                    user_parts.extend(image_parts)
-                    snapshot_messages.append(ConversationStateMessage(
-                        id=f"user-{run.id}",
-                        role="user",
-                        parts=user_parts,
-                    ))
+                    has_user_message = True
+                    snapshot_messages.append(ConversationTaskStateRebuilder.build_user_message(run))
                 elif isinstance(message, AIMessage):
                     ai_message: AIMessage = cast(AIMessage, message)
                     text_status = (
@@ -199,6 +217,13 @@ class ConversationTaskStateRebuilder:
                             assistant_message["parts"].append(
                                 tool_parts_dict[call.get("id")]
                             )
+            run_extra: ConversationRunExtra | None = getattr(run, "extra", None)
+            if not has_user_message and (
+                getattr(run, "input_text", "").strip()
+                or getattr(run, "image_paths", None)
+                or (run_extra.attachments if run_extra is not None else [])
+            ):
+                snapshot_messages.append(ConversationTaskStateRebuilder.build_user_message(run))
             snapshot_messages.append(assistant_message)
             snapshot_runs.append(ConversationRunSnapshot(
                 runId=run.id,

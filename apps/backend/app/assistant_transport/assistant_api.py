@@ -77,75 +77,77 @@ async def assistant_transport(
         mode=mode,
     )
 
+
     try:
-        # 准备 run 启动结果
-        start_result = await transport_service.prepare_run_start(
-            task_id=task_id,
-            command=command,
-            mode=mode,
-            request=request,
-        )
-        run = start_result.run
-        initial_state = start_result.initial_state
+        with transport_service.task_run_operation(task_id=task_id):
+            # 准备 run 启动结果
+            start_result = await transport_service.prepare_run_start(
+                task_id=task_id,
+                command=command,
+                mode=mode,
+                request=request,
+            )
+            run = start_result.run
+            initial_state = start_result.initial_state
 
-        if not start_result.created:
-            _raise_transport_error(
-                409,
-                "RUN_START_CONFLICT",
-                "run already exists",
-                retryable=True,
-                command_id=command.commandId if command is not None else None,
-                run_id=request.runId,
-            )
+            if not start_result.created:
+                _raise_transport_error(
+                    409,
+                    "RUN_START_CONFLICT",
+                    "run already exists",
+                    retryable=True,
+                    command_id=command.commandId if command is not None else None,
+                    run_id=request.runId,
+                )
 
-        try:
-            await run_executor.start(
-                run.id,
-                lambda execution_run: runtime.execute_run(
-                    execution_run,
-                    execution_mode=start_result.execution_mode,
-                ),
-            )
-        except ValueError as exc:
-            # 该 run 在进程内已被认领（仍在执行或取消尚未收束）：本请求退化为纯订阅。
-            # 此处不能收敛 run——它确实有执行器在驱动，收敛会误杀别人的执行。
-            log.warning(
-                "assistant_transport_executor_already_claimed",
-                extra={
-                    "msg": "执行器已被其他请求认领，本请求退化为纯订阅",
-                    "data": {"run_id": run.id, "task_id": task_id, "reason": str(exc)},
-                },
-            )
-        except Exception as exc:
-            # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
-            # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
-            transport_service.settle_run_start_failure(run.id)
-            log.exception(
-                "assistant_transport_executor_start_failed",
-                extra={
-                    "msg": "执行器启动失败，已尝试收敛该 run",
-                    "data": {"run_id": run.id, "task_id": task_id},
-                },
-            )
-            _raise_transport_error(
-                500,
-                "RUN_START_FAILED",
-                str(exc),
-                retryable=True,
-                command_id=command.commandId if command is not None else None,
-                run_id=request.runId,
-            )
+            try:
+                await run_executor.start(
+                    run.id,
+                    lambda execution_run: runtime.execute_run(
+                        execution_run,
+                        execution_mode=start_result.execution_mode,
+                    ),
+                )
+            except ValueError as exc:
+                # 该 run 在进程内已被另一请求认领（仍在执行）：本请求退化为纯订阅。
+                # 此处不能收敛 run——它确实有执行器在驱动，收敛会误杀别人的执行。
+                log.warning(
+                    "assistant_transport_executor_already_claimed",
+                    extra={
+                        "msg": "执行器已被其他请求认领，本请求退化为纯订阅",
+                        "data": {"run_id": run.id, "task_id": task_id, "reason": str(exc)},
+                    },
+                )
+            except Exception as exc:
+                # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
+                # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
+                transport_service.settle_run_start_failure(run.id)
+                log.exception(
+                    "assistant_transport_executor_start_failed",
+                    extra={
+                        "msg": "执行器启动失败，已尝试收敛该 run",
+                        "data": {"run_id": run.id, "task_id": task_id},
+                    },
+                )
+                _raise_transport_error(
+                    500,
+                    "RUN_START_FAILED",
+                    str(exc),
+                    retryable=True,
+                    command_id=command.commandId if command is not None else None,
+                    run_id=request.runId,
+                )
 
-        return transport_service.build_response(
-            task_id=task_id,
-            thread_id=f"task-{task_id}",
-            run_id=run.id,
-            state=initial_state,
-        )
+            return transport_service.build_response(
+                task_id=task_id,
+                thread_id=f"task-{task_id}",
+                run_id=run.id,
+                state=initial_state,
+            )
     except HTTPException:
         # Domain conflict responses raised by ``_raise_transport_error`` must
         # reach FastAPI unchanged.  Converting them to RUN_START_FAILED would
-        # hide actionable states such as RUN_CANCELLING and RUN_NOT_RESUMABLE.
+        # hide actionable states such as RUN_NOT_RESUMABLE and TASK_BUSY.
         raise
     except ImageNormalizationError as exc:
         _raise_transport_error(
@@ -168,6 +170,17 @@ async def assistant_transport(
             409,
             operation_code,
             str(exc),
+            retryable=True,
+            command_id=command.commandId if command is not None else None,
+            run_id=request.runId,
+        )
+    except TimeoutError:
+        # Task 操作闸门 10s 内未释放：该 task 上有另一个执行正持有运行期闸门。这是
+        # "忙"，不是服务故障，映射为可重试的 409 而不是 500。
+        _raise_transport_error(
+            409,
+            "TASK_BUSY",
+            "该对话正在执行其它操作，请稍后重试",
             retryable=True,
             command_id=command.commandId if command is not None else None,
             run_id=request.runId,
@@ -300,26 +313,32 @@ async def cancel_run(
     """显式取消一个 Conversation Run。
 
     表现层只做输入校验、调用业务层与异常映射，不再编排「先落库再中断」的业务时序——
-    取消编排（进程内取消信号 → 事务性状态转移 → 中断后台 task）已收口到
+    取消编排（令牌置位 → 事务性状态转移 → 中断后台 task）已收口到
     ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会调用本端点，重复取消
     不会覆盖已落定的终态。
 
+    取消**不等待**旧执行收束：本端点返回 ``status=cancelled`` 只代表取消已落库、旧执行
+    已被要求停止；旧工具 worker 可能仍在收束（``settling=true``），这一点作为信息返回，
+    前端可据此展示"正在停止"。它**不是**续跑的准入条件——续跑领取新的取消令牌，与旧
+    执行互不干扰。
+
     参数:
         run_id: Conversation Run 标识。
-        run_executor: 取消编排唯一入口（信号标记 + 仲裁落库 + task 中断）。
+        run_executor: 取消编排唯一入口（令牌置位 + 仲裁落库 + task 中断）。
 
     返回:
-        包含 ``run_id`` 与 ``status`` 的 JSON 对象。
+        包含 ``run_id``、``status`` 与 ``settling`` 的 JSON 对象。
 
     异常:
         HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409；
         取消编排内部失败时返回 500。
 
     副作用:
-        经执行器先标记进程内取消信号，再落库取消终态，再尽力中断当前进程中的执行任务。
+        经执行器先置位进程内取消令牌，再落库取消终态并投影工具收束，最后向活动执行
+        task 发出取消请求（不等待其结束）。
     """
     try:
-        cancelled = await run_executor.cancel(run_id, end_reason="user_cancelled")
+        result = await run_executor.cancel(run_id, end_reason="user_cancelled")
     except KeyError as exc:
         log.warning(
             "conversation_run_cancel_not_found",
@@ -332,7 +351,7 @@ async def cancel_run(
             extra={"msg": "取消 Conversation Run 失败", "data": {"run_id": run_id}},
         )
         raise HTTPException(status_code=500, detail="failed to cancel run") from exc
-    if not cancelled:
+    if not result.cancelled:
         log.info(
             "conversation_run_cancel_rejected",
             extra={"msg": "Conversation Run 当前状态不允许取消", "data": {"run_id": run_id}},
@@ -340,6 +359,15 @@ async def cancel_run(
         raise HTTPException(status_code=409, detail="run is not in a cancellable state")
     log.info(
         "conversation_run_cancelled",
-        extra={"msg": "Conversation Run 已取消", "data": {"run_id": run_id}},
+        extra={
+            "msg": "Conversation Run 已取消",
+            "data": {"run_id": run_id, "settling": result.settling},
+        },
     )
-    return JSONResponse(content={"run_id": run_id, "status": "cancelled"})
+    return JSONResponse(
+        content={
+            "run_id": run_id,
+            "status": "cancelled",
+            "settling": result.settling,
+        }
+    )

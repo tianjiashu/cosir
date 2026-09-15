@@ -42,6 +42,16 @@ class ConversationTaskStateService:
         copy. ``apply_planned`` and ``publish_state`` update process-local state and notify SSE
         subscribers. No method accesses checkpoints, tools, frontend runtime state, or persisted
         Transport snapshots.
+
+    Concurrency:
+        ``_lock`` (class-level ``RLock``) is the **sole serialization point** for every
+        ``TaskRuntimeSpace`` snapshot working copy: lazy rebuild, projector mutation, publish,
+        subscriber registration and deletion cleanup all pass through it. That is why the space
+        itself carries no snapshot lock (see ``app.task_runtime.task_runtime_space`` module
+        docstring). Direct space access is valid only single-threaded (state-lifecycle tests do
+        so); a multi-threaded caller must serialize itself, and the preferred fix is to route it
+        back through this service instead of re-adding a per-space lock. Reviewers must not treat
+        the missing per-space lock as a defect.
     """
 
     _lock: ClassVar[RLock] = RLock()

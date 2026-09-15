@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import NoReturn
+import re
+from contextlib import contextmanager
+from typing import NoReturn, Iterator
 
 from assistant_stream import create_run
 from assistant_stream.serialization import AssistantTransportResponse
@@ -26,8 +28,16 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     find_run,
 )
 from app.config.logging.logger import log
-from app.core.llm_provider.capability.model_capability import ModelCapability
-from app.models import ConversationRunStatus
+from app.models import (
+    ConversationRunAttachmentInput,
+    ConversationRunCommand,
+    ConversationRunStatus,
+)
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+_HIDDEN_LOCAL_FILE_TOKEN = re.compile(r"<!--\s*(\[\[cosir-file:[^\]]+\]\])\s*-->")
+
+
 class TransportAssistantService:
     """负责 Assistant Transport 入口的 run 前置校验、生命周期编排与响应构造。
 
@@ -53,13 +63,34 @@ class TransportAssistantService:
         self._commands = get_conversation_run_command_service()
         self._stream = AssistantTransportStreamService()
 
+    @contextmanager
+    def task_run_operation(self, task_id: int) -> Iterator[None]:
+        """在 task 运行时空间内执行一个带超时的独占操作。
+
+        参数:
+            task_id: 目标任务标识。
+
+        返回:
+            持有该 task 操作闸门的上下文管理器。
+
+        异常:
+            TimeoutError: 10 秒内未取得闸门（该 task 有长任务在执行或收束）。
+
+        副作用:
+            进入上下文后阻止同一 task 的其它 run 创建/编辑/续跑与结构性删除。
+        """
+
+        task_space = task_runtime_spaces.get_or_create(task_id)
+        with task_space.operation(timeout=10):
+            yield
+
     def build_response(
-        self,
-        *,
-        task_id: int,
-        thread_id: str,
-        run_id: int,
-        state: ConversationStateSnapshot,
+            self,
+            *,
+            task_id: int,
+            thread_id: str,
+            run_id: int,
+            state: ConversationStateSnapshot,
     ) -> AssistantTransportResponse:
         """为指定 run 构造统一的 Assistant Transport snapshot response。"""
 
@@ -79,7 +110,7 @@ class TransportAssistantService:
         return response
 
     def settle_run_start_failure(
-        self, run_id: int, *, end_reason: str = "run_start_failed"
+            self, run_id: int, *, end_reason: str = "run_start_failed"
     ) -> None:
         """收敛「执行器启动失败但仍处于 active」的 run。
 
@@ -133,8 +164,8 @@ class TransportAssistantService:
 
     @staticmethod
     def classify_run_command(
-        command: AddMessageCommand | None,
-        run_id: int | None,
+            command: AddMessageCommand | None,
+            run_id: int | None,
     ) -> RunCommandMode:
         """将 Assistant Transport command batch 归一化为本项目的 Run 模式。
 
@@ -160,11 +191,11 @@ class TransportAssistantService:
         raise ValueError("run command requires a message or run_id")
 
     def ensure_run_target(
-        self,
-        *,
-        request: AssistantTransportRequest,
-        command: AddMessageCommand | None,
-        mode: RunCommandMode,
+            self,
+            *,
+            request: AssistantTransportRequest,
+            command: AddMessageCommand | None,
+            mode: RunCommandMode,
     ) -> int:
         """校验 assistant 入口 run 前置条件并返回目标 task_id。
 
@@ -213,14 +244,6 @@ class TransportAssistantService:
                     "请先创建运行切片",
                     retryable=False,
                 )
-            if self.run_executor.is_cancelling(request.runId):
-                _raise_transport_error(
-                    409,
-                    "RUN_CANCELLING",
-                    "运行正在取消，请稍后重新提交恢复请求",
-                    retryable=True,
-                    run_id=request.runId,
-                )
             if self.run_executor.is_locally_running(request.runId):
                 _raise_transport_error(
                     409,
@@ -243,14 +266,6 @@ class TransportAssistantService:
                     "COMMAND_REQUIRED",
                     "编辑请求需要携带 add-message 命令",
                     retryable=False,
-                    run_id=request.runId,
-                )
-            if self.run_executor.is_cancelling(request.runId):
-                _raise_transport_error(
-                    409,
-                    "RUN_CANCELLING",
-                    "运行正在取消，请稍后再编辑并重跑",
-                    retryable=True,
                     run_id=request.runId,
                 )
         else:  # new
@@ -288,12 +303,12 @@ class TransportAssistantService:
         return task_id
 
     async def prepare_run_start(
-        self,
-        *,
-        task_id: int,
-        command: AddMessageCommand | None,
-        mode: RunCommandMode,
-        request: AssistantTransportRequest,
+            self,
+            *,
+            task_id: int,
+            command: AddMessageCommand | None,
+            mode: RunCommandMode,
+            request: AssistantTransportRequest,
     ) -> ConversationRunStartResult:
         """在 command service 层原子占用/创建/恢复 run，返回启动编排所需的 start result。
 
@@ -336,22 +351,26 @@ class TransportAssistantService:
             for part in command.message.parts
             if isinstance(part, AssistantTextPart)
         )
-
-        if not input_text or input_text.strip() == "":
-            raise ValueError("input text is empty")
-
-        image_parts = [
-            part
-            for part in command.message.parts
-            if isinstance(part, AssistantImagePart)
-        ]
-
-        if image_parts is not None and not ModelCapability.get_capability(request.modelName).supports_image:
-            raise ValueError("model does not support image")
-
-        image_asset_ids = [
-            part.image.removeprefix("cosir-attachment://") for part in image_parts
-        ]
+        # UI 为了正常渲染，会把规范 token 藏进 HTML 注释里；在持久化或把文本发给模型前，
+        # 先把这种展示包装归一化回裸 token 形态，避免编辑/重发时污染模型输入。
+        display_text = _HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", input_text)
+        run_command = ConversationRunCommand(
+            display_text=display_text,
+            image_asset_ids=[
+                part.image.removeprefix("cosir-attachment://")
+                for part in command.message.parts
+                if isinstance(part, AssistantImagePart)
+            ],
+            attachments=[
+                ConversationRunAttachmentInput(
+                    id=attachment.id,
+                    name=attachment.name,
+                    content_type=attachment.contentType,
+                    path=attachment.path,
+                )
+                for attachment in command.message.attachments
+            ],
+        )
         provider_id = request.providerId
         model_name = request.modelName
         if mode == "edit":
@@ -361,33 +380,31 @@ class TransportAssistantService:
                 command_id=command.commandId,
                 command_type=command.type,
                 payload_hash=payload_hash,
-                input_text=input_text,
-                image_asset_ids=image_asset_ids,
                 task_id=task_id,
                 run_id=request.runId,
                 provider_id=provider_id,
                 model_name=model_name,
                 reasoning_effort=request.reasoningEffort,
+                run_command=run_command,
             )
         return await asyncio.to_thread(
             self._commands.start_or_attach,
             command_id=command.commandId,
             command_type=command.type,
             payload_hash=payload_hash,
-            input_text=input_text,
-            image_asset_ids=image_asset_ids,
             provider_id=provider_id,
             model_name=model_name,
             reasoning_effort=request.reasoningEffort,
+            run_command=run_command,
             task_id=task_id,
         )
 
     async def attach_run(
-        self,
-        *,
-        task_id: int,
-        thread_id: str,
-        run_id: int,
+            self,
+            *,
+            task_id: int,
+            thread_id: str,
+            run_id: int,
     ) -> AssistantTransportResponse:
         """只订阅一个已有 run 的 canonical snapshot，不启动或恢复执行。
 
@@ -400,8 +417,9 @@ class TransportAssistantService:
             使用 ``assistant-stream`` 编码的 snapshot subscription 响应。
 
         异常:
-            HTTPException: run 不属于 task、不是当前 latest run、或 snapshot 尚未
-                收敛时抛出结构化 transport 错误。
+            HTTPException: run 不存在（404）；run 不属于该 task、不是当前 latest run、
+                状态非 active，或本进程没有该 run 的执行器（后端重启遗留的 active run）
+                时抛出结构化 transport 错误。
 
         副作用:
             只注册 snapshot subscriber；不会创建 executor、修改 Run status、写入
@@ -441,10 +459,9 @@ class TransportAssistantService:
                 retryable=False,
                 run_id=run_id,
             )
-        if run.status in {
-            ConversationRunStatus.PENDING.value,
-            ConversationRunStatus.RUNNING.value,
-        } and not self.run_executor.is_locally_running(run_id):
+        # 上面分支已保证 run.status ∈ {pending, running}，此处**刻意不重复**该状态谓词：
+        # 同一条件写成两个 if 会让后来者误以为两个分支的前置条件不同。
+        if not self.run_executor.is_locally_running(run_id):
             _raise_transport_error(
                 409,
                 "RUN_RECOVERY_REQUIRED",
@@ -462,13 +479,13 @@ class TransportAssistantService:
 
 
 def _raise_transport_error(
-    status_code: int,
-    code: str,
-    message: str,
-    *,
-    retryable: bool,
-    command_id: str | None = None,
-    run_id: int | None = None,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        command_id: str | None = None,
+        run_id: int | None = None,
 ) -> NoReturn:
     """抛出统一的 Assistant Transport HTTP 错误。
 
