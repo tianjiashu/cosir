@@ -17,9 +17,9 @@ def test_display_data_uses_git_patch_and_artifact_keeps_full_snapshots() -> None
     artifact = build_file_change_artifact_data([result])
 
     change = display["changes"][0]
-    assert change["patch_write"].startswith("diff --git a/src/app.py b/src/app.py\n")
-    assert "--- a/src/app.py" in change["patch_write"]
-    assert "+++ b/src/app.py" in change["patch_write"]
+    assert change["patch"].startswith("diff --git a/src/app.py b/src/app.py\n")
+    assert "--- a/src/app.py" in change["patch"]
+    assert "+++ b/src/app.py" in change["patch"]
     assert "before" not in change
     assert "after" not in change
     assert artifact["changes"][0]["before"] == result.before
@@ -47,7 +47,7 @@ def test_git_patch_handles_added_deleted_and_moved_files() -> None:
     assert "rename to new.py" in moved
 
 
-def test_display_data_does_not_send_an_unparseable_oversized_patch() -> None:
+def test_display_data_keeps_the_complete_oversized_patch() -> None:
     result = FileDiffResult(
         path="large.py",
         status="modified",
@@ -57,5 +57,5 @@ def test_display_data_does_not_send_an_unparseable_oversized_patch() -> None:
 
     change = build_file_change_display_data([result])["changes"][0]
 
-    assert change["patch_write"] is None
-    assert change["truncated"] is True
+    assert change["patch"] == format_git_diff(result)
+    assert "truncated" not in change

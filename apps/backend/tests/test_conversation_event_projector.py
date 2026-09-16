@@ -18,6 +18,7 @@ from app.assistant_transport.event import (
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
     UserInputAppendedEvent,
+    build_user_input_parts,
 )
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -98,13 +99,129 @@ def test_run_initialized_and_user_input(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
-    event_projector.process(UserInputAppendedEvent(task_id=1, run_id=1, text="你好"))
+    event_projector.process(
+        UserInputAppendedEvent(
+            task_id=1,
+            run_id=1,
+            parts=[{"type": "text", "text": "你好", "status": "completed"}],
+        )
+    )
     state = snapshots.states[1]
     current = _run(state, 1)
     assert state["current_run_id"] == 1
     assert current["status"] == "pending"
     assert current["messages"][0]["parts"][0]["text"] == "你好"
     assert current["messages"][1]["parts"] == []
+
+
+def test_user_input_projects_ordered_text_image_and_file_parts(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    event_projector, snapshots = projector
+    _start(event_projector)
+    parts = [
+        {"type": "text", "text": "请看", "status": "completed"},
+        {
+            "type": "file",
+            "file": "cosir-local-file:readme",
+            "name": "README.md",
+            "contentType": "text/markdown",
+        },
+        {"type": "text", "text": "和这张图", "status": "completed"},
+        {"type": "image", "image": "cosir-attachment://" + "a" * 64},
+    ]
+
+    event_projector.process(UserInputAppendedEvent(task_id=1, run_id=1, parts=parts))
+
+    user_parts = _run(snapshots.states[1], 1)["messages"][0]["parts"]
+    assert user_parts == parts
+    assert all(part.get("path") is None for part in user_parts if isinstance(part, dict))
+
+
+def test_user_input_supports_attachment_only_and_duplicate_event(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event = UserInputAppendedEvent(
+        task_id=1,
+        run_id=1,
+        parts=[
+            {
+                "type": "file",
+                "file": "cosir-local-file:only-file",
+                "name": "a.txt",
+                "contentType": "text/plain",
+            }
+        ],
+    )
+
+    first = event_projector.process(event)
+    second = event_projector.process(event)
+
+    assert first is not None
+    assert second is not None
+    assert len(second.mutations) == 0
+    assert _run(snapshots.states[1], 1)["messages"][0]["parts"] == event.parts
+
+
+def test_build_user_input_parts_preserves_mixed_composer_order() -> None:
+    """既有 display_text marker 必须恢复文本、图片、普通文件的原始交错顺序。"""
+
+    image_id = "a" * 64
+    parts = build_user_input_parts(
+        f"前文\n[[cosir-image:{image_id}]]\n中间\n[[cosir-file:readme]]\n后文",
+        [f"attachments/{image_id}.png"],
+        [
+            {
+                "id": "readme",
+                "name": "README.md",
+                "content_type": "text/markdown",
+            }
+        ],
+    )
+
+    assert [part["type"] for part in parts] == ["text", "image", "text", "file", "text"]
+    assert parts[1] == {"type": "image", "image": f"cosir-attachment://{image_id}"}
+    assert parts[3] == {
+        "type": "file",
+        "file": "cosir-local-file:readme",
+        "name": "README.md",
+        "contentType": "text/markdown",
+    }
+
+
+def test_build_user_input_parts_deduplicates_repeated_attachment_markers() -> None:
+    """重复提交同一 marker 时，canonical user parts 仍只保留一个附件。"""
+
+    image_id = "b" * 64
+    parts = build_user_input_parts(
+        f"前[[cosir-image:{image_id}]]中[[cosir-image:{image_id}]]后 "
+        "[[cosir-file:readme]][[cosir-file:readme]]",
+        [f"attachments/{image_id}.png"],
+        [{"id": "readme", "name": "README.md", "content_type": "text/markdown"}],
+    )
+
+    assert [part["type"] for part in parts] == ["text", "image", "text", "text", "file"]
+    assert sum(part["type"] == "image" for part in parts) == 1
+    assert sum(part["type"] == "file" for part in parts) == 1
+
+
+def test_build_user_input_parts_rejects_unsafe_file_attachment_id() -> None:
+    """helper 直接被调用时也不能把不安全 id 投影为 file locator。"""
+
+    with pytest.raises(ValueError, match="malformed"):
+        build_user_input_parts(
+            "[[cosir-file:../../secret]]",
+            [],
+            [
+                {
+                    "id": "../../secret",
+                    "name": "secret",
+                    "content_type": "text/plain",
+                }
+            ],
+        )
 
 
 def test_assistant_text_and_reasoning_parts(

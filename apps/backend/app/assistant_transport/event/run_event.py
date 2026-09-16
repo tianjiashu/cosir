@@ -6,21 +6,27 @@ run 执行状态的迁移（含终态）。run 内消息与工具的细节事实
 
 状态词表直接复用 ``ConversationRunStatus``（领域枚举单一事实源），不在本模块重复字面量。
 
-不负责：用户输入的文本内容（见 ``message_event``）、工具调用生命周期（见 ``tool_call_event``）。
+不负责：assistant 消息内容与工具调用生命周期（分别见 ``message_event``、
+``tool_call_event``）；本模块只定义用户输入事实事件的 Transport parts。
 """
 
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.assistant_transport.event.conversation_event_envelope import (
     ConversationEventEnvelope,
 )
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
-from app.assistant_transport.state.conversation_state_part import ConversationStatePart
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateFilePart,
+    ConversationStateImagePart,
+    ConversationStateTextPart,
+)
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -45,14 +51,10 @@ class RunInitializedEvent(ConversationEventEnvelope):
 
     事实语义：命令已被幂等占用、run 已落库，Transport 侧应为其建立 user / assistant
     两条消息骨架与 ``run.runId`` 基线。本事件**不携带用户输入文本**——文本由紧随其后的
-    ``UserInputAppendedEvent`` 追加，与流式 assistant 文本共用同一条 ``append-text`` 通道，
-    使「run 已存在但输入尚未写完」这个中间态也是合法且可渲染的。图片只以受控的
-    workspace-relative 路径派生 locator；编辑重跑也可用
-    ``replace_existing`` 重建骨架。
+    ``UserInputAppendedEvent`` 追加，使「run 已存在但输入尚未写完」这个中间态也是合法且
+    可渲染的。编辑重跑也可用 ``replace_existing`` 重建骨架。
 
     Attributes:
-        image_paths: 已最终化的 workspace-relative 图片路径，不包含二进制。
-        include_text_part: 是否为后续文本追加保留空 text part。
         replace_existing: 编辑重跑时是否替换已有 Run 的 Transport 骨架。
 
     异常:
@@ -64,9 +66,6 @@ class RunInitializedEvent(ConversationEventEnvelope):
 
     # 判别式字段显式给出默认值：生产者不必重复书写字面量，判别式路由行为不变。
     type: Literal["run_initialized"] = "run_initialized"
-    image_paths: list[str] = Field(default_factory=list)
-    file_attachments: list[dict[str, str]] = Field(default_factory=list)
-    include_text_part: bool = True
     replace_existing: bool = False
 
     def plan(
@@ -141,30 +140,10 @@ class RunInitializedEvent(ConversationEventEnvelope):
         ]
 
     def _messages(self) -> list[ConversationStateMessage]:
-        """Build the user/assistant skeleton without reading attachment content."""
+        """Build the empty user/assistant skeleton without user input content."""
 
-        user_parts: list[ConversationStatePart] = []
-        if self.include_text_part:
-            user_parts.append({"type": "text", "text": "", "status": "completed"})
-        user_parts.extend(
-            {
-                "type": "image",
-                "image": f"cosir-attachment://{Path(path).name.split('.', 1)[0]}",
-            }
-            for path in self.image_paths
-        )
-        user_parts.extend(
-            {
-                "type": "file",
-                "file": f"cosir-local-file:{attachment['id']}",
-                "name": attachment["name"],
-                "contentType": attachment["content_type"],
-            }
-            for attachment in self.file_attachments
-            if attachment.get("id") and attachment.get("name") and attachment.get("content_type")
-        )
         return [
-            self._message(f"user-{self.run_id}", "user", user_parts),
+            self._message(f"user-{self.run_id}", "user", []),
             self._message(f"assistant-{self.run_id}", "assistant", []),
         ]
 
@@ -277,38 +256,156 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         return mutations
 
 
+_IMAGE_LOCATOR = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
+_FILE_LOCATOR = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
+_INPUT_TOKEN = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
+UserInputPart = ConversationStateTextPart | ConversationStateImagePart | ConversationStateFilePart
+
+
+def build_user_input_parts(
+    display_text: str,
+    image_paths: Sequence[str],
+    file_attachments: Sequence[Mapping[str, str]],
+) -> list[UserInputPart]:
+    """Build ordered safe Transport parts from persisted user-input facts.
+
+    The existing ``display_text`` value carries internal image/file markers solely to preserve
+    the composer order across the existing Run JSON extra field. The markers are converted to
+    safe locator parts here; the resulting parts contain no local path or binary content. Old
+    records without image markers retain the historical image-path append fallback.
+
+    Raises:
+        ValueError: If a display token has no matching attachment or no part can be built.
+    """
+
+    attachments_by_id: dict[str, Mapping[str, str]] = {}
+    for attachment_record in file_attachments:
+        attachment_id = attachment_record.get("id")
+        if (
+            not attachment_id
+            or not _FILE_LOCATOR.fullmatch(f"cosir-local-file:{attachment_id}")
+            or not attachment_record.get("name")
+            or not attachment_record.get("content_type")
+        ):
+            raise ValueError("ordinary file attachment is malformed")
+        attachments_by_id[attachment_id] = attachment_record
+
+    image_paths_by_id: dict[str, str] = {}
+    for path in image_paths:
+        image_id = Path(path).name.split(".", 1)[0]
+        locator = f"cosir-attachment://{image_id}"
+        if not _IMAGE_LOCATOR.fullmatch(locator):
+            raise ValueError("image attachment locator is invalid")
+        image_paths_by_id[image_id] = path
+
+    parts: list[UserInputPart] = []
+    cursor = 0
+    referenced_image_ids: set[str] = set()
+    referenced_file_ids: set[str] = set()
+    for match in _INPUT_TOKEN.finditer(display_text):
+        text_part = display_text[cursor:match.start()]
+        if text_part:
+            parts.append({"type": "text", "text": text_part, "status": "completed"})
+        marker_kind, token_id = match.groups()
+        if marker_kind == "file":
+            attachment = attachments_by_id.get(token_id)
+            if attachment is None:
+                raise ValueError("ordinary file attachment is unavailable")
+            if token_id in referenced_file_ids:
+                cursor = match.end()
+                continue
+            parts.append(
+                {
+                    "type": "file",
+                    "file": f"cosir-local-file:{attachment['id']}",
+                    "name": attachment["name"],
+                    "contentType": attachment["content_type"],
+                }
+            )
+            referenced_file_ids.add(token_id)
+        else:
+            if token_id not in image_paths_by_id:
+                raise ValueError("image attachment is unavailable")
+            if token_id in referenced_image_ids:
+                cursor = match.end()
+                continue
+            parts.append({"type": "image", "image": f"cosir-attachment://{token_id}"})
+            referenced_image_ids.add(token_id)
+        cursor = match.end()
+    remaining_text = display_text[cursor:]
+    if remaining_text:
+        parts.append({"type": "text", "text": remaining_text, "status": "completed"})
+    parts.extend(
+        {"type": "image", "image": f"cosir-attachment://{image_id}"}
+        for image_id in image_paths_by_id
+        if image_id not in referenced_image_ids
+    )
+    if not parts:
+        raise ValueError("user input event must contain at least one part")
+    return parts
+
+
 class UserInputAppendedEvent(ConversationEventEnvelope):
-    """用户输入文本已追加到该 Run 的 user 消息。
+    """用户本轮完整输入已落库并追加到该 Run 的 user 消息。
 
-    事实语义：用户输入已落库为 canonical user 消息，Transport 侧应把这段文本增量追加到
-    该 run 的 user 消息 text part。之所以叫「追加」而不是「设置」：与
-    ``AssistantTextDeltaEvent`` 同构，复用同一条 ``append-text`` 投影通道，避免为
-    「一次性写入」和「流式写入」维护两套投影逻辑。
-
-    Attributes:
-        text: 非空用户输入文本增量。
+    事实语义：canonical context 已成功写入本轮 HumanMessage，Transport 侧应将完整且有序
+    的文本、图片和普通文件 parts 一次性写入 user 消息。附件 part 只携带受控 locator 与
+    展示元数据；本事件不读取磁盘、不查询附件内容，也不生成附件文件。
 
     异常:
-        pydantic.ValidationError: ``text`` 为空串，或出现未声明字段时抛出。
+        pydantic.ValidationError: parts 为空、包含 reasoning/tool part、locator 非法或
+            普通文件 part 缺少展示字段时抛出。
 
     副作用:
         无；本事件只描述已发生的事实，不执行任何写入。
     """
 
     type: Literal["user_input_appended"] = "user_input_appended"
-    text: str = Field(min_length=1)
+    parts: list[UserInputPart] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_parts(self) -> "UserInputAppendedEvent":
+        """Validate the user-only Transport part subset and its safe locators."""
+
+        for part in self.parts:
+            part_type = part.get("type")
+            if part_type == "text":
+                text_part = cast(ConversationStateTextPart, part)
+                if set(text_part) - {"type", "text", "status"} or not text_part["text"]:
+                    raise ValueError("user text part is malformed")
+                if text_part.get("status") not in {None, "completed"}:
+                    raise ValueError("user text part status is invalid")
+            elif part_type == "image":
+                image_part = cast(ConversationStateImagePart, part)
+                if (
+                    set(image_part) != {"type", "image"}
+                    or not _IMAGE_LOCATOR.fullmatch(image_part["image"])
+                ):
+                    raise ValueError("user image part locator is invalid")
+            elif part_type == "file":
+                file_part = cast(ConversationStateFilePart, part)
+                if (
+                    set(file_part) != {"type", "file", "name", "contentType"}
+                    or not _FILE_LOCATOR.fullmatch(file_part["file"])
+                    or not file_part["name"]
+                    or not file_part["contentType"]
+                ):
+                    raise ValueError("user file part is malformed")
+            else:
+                raise ValueError("user input event contains an unsupported part")
+        return self
 
     def plan(
         self,
         state: ConversationStateSnapshot,
     ) -> Sequence[ConversationStateMutation]:
-        """规划 user text part 的增量追加。
+        """规划 user 消息完整有序 parts 的一次性写入。
 
         参数:
             state: 当前 Task snapshot。
 
         返回:
-            单条 ``append-text`` mutation（向 user 消息的 text part 追加输入文本）。
+            单条 ``set`` mutation（将完整有序 parts 写入 user 消息）。
 
         异常:
             KeyError: 该 run 的 user text part 不存在。
@@ -317,13 +414,27 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
             无。
         """
 
-        run_index, message_index, part_index = self._find_message_part(
-            state, self.run_id, "user", "text"
+        run_index = self._find_run(state, self.run_id)
+        message_index = next(
+            (
+                index
+                for index, message in enumerate(state["runs"][run_index]["messages"])
+                if message["role"] == "user"
+            ),
+            None,
         )
+        if message_index is None:
+            raise KeyError(f"user message for run {self.run_id} not found")
+        current_parts = state["runs"][run_index]["messages"][message_index]["parts"]
+        next_parts: list[dict[str, object]] = [
+            cast(dict[str, object], dict(part)) for part in self.parts
+        ]
+        if current_parts == next_parts:
+            return []
         return [
             ConversationStateMutation(
-                "append-text",
-                ("runs", run_index, "messages", message_index, "parts", part_index, "text"),
-                self.text,
+                "set",
+                ("runs", run_index, "messages", message_index, "parts"),
+                next_parts,
             )
         ]

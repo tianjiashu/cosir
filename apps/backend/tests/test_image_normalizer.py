@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.assistant_transport.event import RunInitializedEvent
+from app.assistant_transport.event import RunInitializedEvent, UserInputAppendedEvent
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.service.attachment.attachment_service import collect_workspace_orphans
@@ -62,18 +62,20 @@ def test_normalize_uses_model_capability_as_format_source() -> None:
     assert set(capability.image_limit.supported_formats) == {"jpeg", "png", "gif", "webp"}
 
 
-def test_run_initialized_projects_image_locator_without_binary() -> None:
-    event = RunInitializedEvent(
+def test_run_initialized_creates_empty_user_skeleton_and_input_event_projects_image() -> None:
+    initialized = RunInitializedEvent(task_id=1, run_id=1)
+    initialized_snapshot = initialized.plan(empty_snapshot())[0].value
+    assert initialized_snapshot["messages"][0]["parts"] == []
+
+    input_event = UserInputAppendedEvent(
         task_id=1,
         run_id=1,
-        image_paths=[".cosir/Attachment/" + "1" * 64 + ".png"],
-        include_text_part=False,
+        parts=[{"type": "image", "image": "cosir-attachment://" + "1" * 64}],
     )
-
-    mutations = event.plan(empty_snapshot())
-
-    run_snapshot = mutations[0].value
-    assert run_snapshot["messages"][0]["parts"] == [
+    input_snapshot = dict(initialized_snapshot)
+    input_snapshot["runs"] = [initialized_snapshot]
+    mutations = input_event.plan(input_snapshot)
+    assert mutations[0].value == [
         {"type": "image", "image": "cosir-attachment://" + "1" * 64}
     ]
 

@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import groupby
 from operator import attrgetter
-from pathlib import Path
 from typing import cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
 
+from app.assistant_transport.event import build_user_input_parts
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import (
-    ConversationStateFilePart,
-    ConversationStateImagePart,
     ConversationStatePart,
     ConversationStateTextPart,
     ConversationStateToolCallPart,
@@ -99,29 +97,18 @@ class ConversationTaskStateRebuilder:
         正常执行会先写入 Human context；若进程恰好在该写入前崩溃，Run.extra 仍是已提交
         的普通附件事实，因此 snapshot 不能因为缺少 context 行而丢失用户消息或附件。
         """
-        image_parts: list[ConversationStateImagePart] = [
-            ConversationStateImagePart(
-                type="image",
-                image="cosir-attachment://" f"{Path(path).name.split('.', 1)[0]}",
-            )
-            for path in (getattr(run, "image_paths", None) or [])
-        ]
-        user_parts: list[ConversationStatePart] = []
         extra: ConversationRunExtra | None = getattr(run, "extra", None)
         text = extra.display_text if extra is not None else run.input_text
-        if text:
-            user_parts.append(
-                ConversationStateTextPart(type="text", text=text, status="completed")
-            )
-        user_parts.extend(image_parts)
-        user_parts.extend(
-            ConversationStateFilePart(
-                type="file",
-                file=f"cosir-local-file:{attachment['id']}",
-                name=attachment["name"],
-                contentType=attachment["content_type"],
-            )
-            for attachment in (extra.attachments if extra is not None else [])
+        user_parts: list[ConversationStatePart] = cast(
+            list[ConversationStatePart],
+            build_user_input_parts(
+                text,
+                getattr(run, "image_paths", None) or [],
+                cast(
+                    Sequence[Mapping[str, str]],
+                    extra.attachments if extra is not None else [],
+                ),
+            ),
         )
         return ConversationStateMessage(
             id=f"user-{run.id}",

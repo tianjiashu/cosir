@@ -7,7 +7,7 @@
         → FileToolStateCoordinator（prepare / lock / check_stale / complete）
         → ToolHandlerRunner（thread 直跑 或 process 隔离 + 硬超时强杀）
         → PostToolUse Hook
-        → ToolObservationBudget（模型通道脱敏截断落盘 + 展示通道截断）
+        → ToolObservationBudget（模型通道脱敏截断落盘）
 
 管线只做编排：每个阶段的实现各自收口在对应协作者中，本模块不含隔离执行细节、
 权限文案或预算算法。上层（``WorkflowOperations``）只依赖 ``execute`` 一个入口，
@@ -16,7 +16,6 @@
 
 from collections.abc import Collection
 
-from app.core.tools.guard.display_data_budget import DisplayDataBudget
 from app.core.tools.guard.file_resource_paths import FileResourcePathError
 from app.core.tools.guard.file_tool_state_coordinator import (
     FileToolStateCoordinator,
@@ -60,7 +59,6 @@ class ToolExecutor:
         registry: ToolRegistry,
         state_coordinator: FileToolStateCoordinator | None = None,
         output_budget: ToolOutputBudget | None = None,
-        display_data_budget: DisplayDataBudget | None = None,
     ) -> None:
         """初始化执行管线并装配各阶段协作者。
 
@@ -68,7 +66,6 @@ class ToolExecutor:
             registry: 工具注册表，提供工具定义查询。
             state_coordinator: 文件 revision、重复调用和路径锁协作者。
             output_budget: 模型可见 ``content`` 的统一输出预算。
-            display_data_budget: 客户端展示数据通道的统一字符预算。
 
         返回:
             无。
@@ -85,7 +82,7 @@ class ToolExecutor:
         self._gate = ToolAccessGate(registry)
         self._state_coordinator = state_coordinator or FileToolStateCoordinator()
         self._runner = ToolHandlerRunner()
-        self._budget = ToolObservationBudget(output_budget, display_data_budget)
+        self._budget = ToolObservationBudget(output_budget)
 
     def list_tools(self) -> list[ToolDefinition]:
         """返回全部已注册工具定义。

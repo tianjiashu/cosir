@@ -609,6 +609,53 @@ def test_ensure_run_user_message_keeps_existing_message_on_resume(env: SimpleNam
     assert len(users) == 1
 
 
+def test_ensure_run_user_message_emits_ordered_safe_attachment_parts(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """初始 HumanMessage 写入成功后，事件包含有序附件 part 且不泄漏本机路径。"""
+
+    projected: list[object] = []
+    monkeypatch.setattr(
+        "app.core.context.runtime_context_manager.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=projected.append),
+    )
+    run = env.seed_run("running")
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=[],
+        next_sequence=1,
+    )
+
+    manager.ensure_run_user_message(
+        "前 C:/workspace/notes.md 后",
+        [f".cosir/Attachment/{'a' * 64}.png"],
+        "前 [[cosir-file:file-1]] 后",
+        [{
+            "id": "file-1",
+            "name": "notes.md",
+            "content_type": "text/markdown",
+            "path": "C:/workspace/notes.md",
+        }],
+    )
+
+    event = projected[0]
+    assert type(event).__name__ == "UserInputAppendedEvent"
+    assert event.parts == [
+        {"type": "text", "text": "前 ", "status": "completed"},
+        {
+            "type": "file",
+            "file": "cosir-local-file:file-1",
+            "name": "notes.md",
+            "contentType": "text/markdown",
+        },
+        {"type": "text", "text": " 后", "status": "completed"},
+        {"type": "image", "image": "cosir-attachment://" + "a" * 64},
+    ]
+    assert "path" not in event.model_dump_json()
+
+
 def test_ensure_run_user_message_skips_blank_input(env: SimpleNamespace) -> None:
     """空输入 Run：记 warning 并跳过，不落空 user 消息、不抛异常。"""
 

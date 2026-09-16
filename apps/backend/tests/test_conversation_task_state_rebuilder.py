@@ -9,9 +9,9 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
-from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
+from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
 
 
@@ -213,7 +213,7 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
     assert state["runs"][0]["messages"][0]["parts"] == [
-        {"type": "text", "text": "请查看 [[cosir-file:file-1]]", "status": "completed"},
+        {"type": "text", "text": "请查看 ", "status": "completed"},
         {
             "type": "file",
             "file": "cosir-local-file:file-1",

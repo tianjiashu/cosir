@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from typing import NoReturn, Iterator
+from typing import NoReturn
 
 from assistant_stream import create_run
 from assistant_stream.serialization import AssistantTransportResponse
@@ -35,7 +36,34 @@ from app.models import (
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-_HIDDEN_LOCAL_FILE_TOKEN = re.compile(r"<!--\s*(\[\[cosir-file:[^\]]+\]\])\s*-->")
+_HIDDEN_LOCAL_FILE_TOKEN = re.compile(
+    r"<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->"
+)
+
+
+def _build_ordered_display_text(
+    parts: Sequence[AssistantTextPart | AssistantImagePart],
+) -> str:
+    """Encode composer text/image order into the existing Run display text value."""
+
+    image_token = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
+    emitted_image_ids = {
+        image_id
+        for part in parts
+        if isinstance(part, AssistantTextPart)
+        for image_id in image_token.findall(_HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
+    }
+    segments: list[str] = []
+    for part in parts:
+        if isinstance(part, AssistantTextPart):
+            segments.append(_HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
+        else:
+            asset_id = part.image.removeprefix("cosir-attachment://")
+            if asset_id in emitted_image_ids:
+                continue
+            segments.append(f"[[cosir-image:{asset_id}]]")
+            emitted_image_ids.add(asset_id)
+    return "\n".join(segments)
 
 
 class TransportAssistantService:
@@ -337,21 +365,17 @@ class TransportAssistantService:
         # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
         assert command is not None
         payload_hash = request.payload_hash()
-        input_text = "\n".join(
-            part.text
+        # image_paths 仍由 Run 记录保存；marker 只复用既有 extra.display_text，用于冷重建
+        # 时恢复图片与文字/文件的原始顺序，不新增数据库字段。
+        display_text = _build_ordered_display_text(command.message.parts)
+        image_asset_ids = list(dict.fromkeys(
+            part.image.removeprefix("cosir-attachment://")
             for part in command.message.parts
-            if isinstance(part, AssistantTextPart)
-        )
-        # UI 为了正常渲染，会把规范 token 藏进 HTML 注释里；在持久化或把文本发给模型前，
-        # 先把这种展示包装归一化回裸 token 形态，避免编辑/重发时污染模型输入。
-        display_text = _HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", input_text)
+            if isinstance(part, AssistantImagePart)
+        ))
         run_command = ConversationRunCommand(
             display_text=display_text,
-            image_asset_ids=[
-                part.image.removeprefix("cosir-attachment://")
-                for part in command.message.parts
-                if isinstance(part, AssistantImagePart)
-            ],
+            image_asset_ids=image_asset_ids,
             attachments=[
                 ConversationRunAttachmentInput(
                     id=attachment.id,

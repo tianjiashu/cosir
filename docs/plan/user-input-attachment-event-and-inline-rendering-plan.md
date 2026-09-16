@@ -1,6 +1,9 @@
 # 用户输入附件事件与对话内渲染改造方案
 
-> 状态：设计方案，已确认，未修改业务代码。
+> 状态：已实施，待子 Agent 按本方案独立验收。
+>
+> 实现范围已落地：后端初始化事件已收缩为纯骨架，用户输入事件改为有序 parts，前端用户
+> 消息已在同一气泡内按 parts 区分渲染图片和普通文件；未新增数据库、迁移、附件存储或进程。
 >
 > 本方案只调整现有事件、Transport snapshot、前端 converter 和消息渲染逻辑，不新增数据库、
 > 数据表、迁移脚本、附件存储文件或新的运行时进程。现有 `conversation_runs.image_paths`、
@@ -153,6 +156,12 @@ UserInputAppendedEvent(
 
 `UserInputAppendedEvent` 必须在 canonical context 写入成功后发布，避免 Transport 显示了尚未
 成功保存的用户输入。
+
+为在不新增数据库字段的前提下保留 Composer 中图片与文字/普通文件的交错顺序，发送适配层
+在现有 `ConversationRunExtra.display_text` 中写入内部 `[[cosir-image:<sha256>]]` marker；
+`ConversationRunService` 将该 marker 从模型输入中移除，`ConversationTaskStateRebuilder` 与
+事件生产共用的纯函数再按 marker 还原 image part。旧记录没有 marker 时，仍按现有
+`image_paths` 顺序追加图片。
 
 对于“只有附件没有文本”的输入，也必须发布事件，不能继续用当前 `text: min_length=1`
 的契约把这类输入静默跳过。

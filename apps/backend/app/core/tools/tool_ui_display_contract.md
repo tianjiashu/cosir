@@ -67,8 +67,8 @@ Tauri Rust 主进程
 - 不放 `content`、`reason`、堆栈、原始异常、完整 prompt、原始 provider 响应或凭据。
 - 不由客户端从 `result`、`args` 或模型正文推导展示结果。
 - 不把 `display_data` 当作后端业务事实源。
-- 字段投影和敏感字段过滤必须先于 `DisplayDataBudget`；大小预算不能替代安全 allowlist。
-- 所有字符串、列表、diff 和终端输出都必须服从有界大小；被截断时应有明确的 `truncated` 标记。
+- 字段投影和敏感字段过滤必须先于 Transport；安全 allowlist 不能由大小预算替代。
+- `display_data` 仅服务前端展示，不按模型 `content` 预算截断；工具自身业务语义需要截断时，必须通过明确的 `truncated` 标记表达。
 - 外层工具状态使用 Transport 的 `pending`、`running`、`completed`、`failed`、`cancelled`，不在 payload 中重复建立第二套 Run 状态机。
 - 失败时 UI 默认只展示由 `ToolObservation.status` 投影出的失败状态“失败”，以及 `tool_error` `display_data` 中由后端受控生成的短提示；不得把模型侧的完整错误原因直接展示给用户。
 
@@ -228,7 +228,7 @@ worker 和跨平台集成验收后作为独立变更完成。
 
 ### 3.2 文件修改
 
-`write_file`、`replace`、`apply_patch` 共用 `file-changes`。`display_data.changes` 只携带可由客户端直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整文件正文；patch 超过展示预算时应返回 `patch: null` 和 `truncated: true`。完整回退与审计事实（包括 `before`/`after`）仍只放在 `artifact_data`。
+`write_file`、`replace`、`apply_patch` 共用 `file-changes`。`display_data.changes` 只携带可由客户端直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整文件正文；Diff patch 不因模型输出预算截断。完整回退与审计事实（包括 `before`/`after`）仍只放在 `artifact_data`。
 
 ```json
 {

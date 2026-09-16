@@ -38,6 +38,7 @@ from app.service.task.conversation_task_context_service import ConversationTaskC
 from app.storage.store_engines import main_session_factory
 
 _LOCAL_FILE_TOKEN = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
+_LOCAL_IMAGE_TOKEN = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +85,8 @@ class ConversationRunService:
         """把领域输入命令解析为 Run 持久化所需的最终事实。
 
         普通附件 token 只保留在 ``ConversationRunExtra.display_text``；传给模型的
-        ``input_text`` 则把 token 替换为已经校验存在的本机路径。编辑命令可以从旧
+        ``input_text`` 则把 token 替换为已经校验存在的本机路径。图片顺序 marker 同样
+        只存在于既有 ``display_text`` JSON 值中，并在模型输入边界移除。编辑命令可以从旧
         Run 恢复请求中省略的附件路径。图片附件在这里 finalize 为 workspace-relative
         路径，避免 ``ConversationRunCommandService`` 和其它入口重复实现该规则。
         """
@@ -117,7 +119,7 @@ class ConversationRunService:
                     display_text=command.display_text,
                     attachments=file_attachments,
                 )
-                if file_attachments
+                if file_attachments or image_paths
                 else None
             ),
         )
@@ -185,7 +187,7 @@ class ConversationRunService:
                 raise ValueError("ordinary file attachment is unavailable")
             return attachment["path"]
 
-        return _LOCAL_FILE_TOKEN.sub(replace, text)
+        return _LOCAL_IMAGE_TOKEN.sub("", _LOCAL_FILE_TOKEN.sub(replace, text))
 
     @staticmethod
     def _finalize_image_assets(
@@ -320,27 +322,8 @@ class ConversationRunService:
         # after it commits. ConversationRunCommandService is that owner. Publishing here
         # would expose uncommitted facts and duplicate the owner's events.
         if session is None:
-            run_extra = getattr(run, "extra", None)
             service_depends.get_conversation_event_projector().process(
-                RunInitializedEvent(
-                    task_id=task_id,
-                    run_id=run.id,
-                    image_paths=image_paths or [],
-                    file_attachments=(
-                        [
-                            {
-                                "id": attachment["id"],
-                                "name": attachment["name"],
-                                "content_type": attachment["content_type"],
-                                "path": attachment["path"],
-                            }
-                            for attachment in run_extra.attachments
-                        ]
-                        if run_extra is not None
-                        else []
-                    ),
-                    include_text_part=bool(input_text.strip()),
-                ),
+                RunInitializedEvent(task_id=task_id, run_id=run.id),
             )
         return run
 

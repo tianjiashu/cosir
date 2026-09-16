@@ -1,12 +1,11 @@
 """文件修改工具的展示数据构造。
 
-只产出客户端渲染所需的结构化事实数据（变更列表 + 受控 Git patch_write + 统计），不产出
-摘要或展示条目；展示布局由客户端渲染规则层生成。
+只产出客户端渲染所需的结构化事实数据（变更列表 + 完整 Git patch + 统计），不产出
+摘要或展示条目；展示布局由客户端渲染规则层生成。展示数据不经过模型输出预算截断。
 """
 
 from typing import Any
 
-from app.core.tools.guard.display_data_budget import DEFAULT_DISPLAY_TEXT_MAX_CHARS
 from app.core.tools.tool_handler.patch_write.patch_diff import (
     FileDiffResult,
     build_diff_stats,
@@ -49,8 +48,8 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
         results: 文件修改前后的内容快照。
 
     返回:
-        包含 ``changes`` 与 ``diff_stats`` 的展示元数据。每个 change 使用受控长度的
-        Git 风格 ``patch_write``；过长时 ``patch_write`` 为 None 且 ``truncated`` 为 True。
+        包含 ``changes`` 与 ``diff_stats`` 的展示元数据。每个 change 使用完整的
+        Git 风格 ``patch``，不因文本长度设置 ``truncated``。
 
     异常:
         无。
@@ -96,16 +95,14 @@ def _build_file_display_change(
     result: FileDiffResult,
     file_stat: dict[str, Any],
 ) -> dict[str, Any]:
-    """构造单文件受控展示数据，不携带完整文件快照。"""
+    """构造单文件完整 Diff 展示数据，不携带完整文件快照。"""
 
     patch = format_git_diff(result)
-    truncated = len(patch) > DEFAULT_DISPLAY_TEXT_MAX_CHARS
     return {
         "path": result.path,
         "new_path": result.new_path,
         "status": result.status,
-        "patch_write": None if truncated else patch,
-        **({"truncated": True} if truncated else {}),
+        "patch": patch,
         "insertions": int(file_stat.get("insertions", 0)),
         "deletions": int(file_stat.get("deletions", 0)),
     }

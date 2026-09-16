@@ -225,31 +225,7 @@ class ConversationRunCommandService:
             },
         )
         service_depends.get_conversation_event_projector().process(
-            RunInitializedEvent(
-                task_id=task_id,
-                run_id=run.id,
-                image_paths=run.image_paths or [],
-                file_attachments=(
-                    [
-                        {
-                            "id": attachment["id"],
-                            "name": attachment["name"],
-                            "content_type": attachment["content_type"],
-                            "path": attachment["path"],
-                        }
-                        for attachment in run.extra.attachments
-                    ]
-                    if run.extra is not None
-                    else []
-                ),
-                include_text_part=bool(
-                    (
-                        run.extra.display_text
-                        if run.extra is not None
-                        else run.input_text
-                    ).strip()
-                ),
-            )
+            RunInitializedEvent(task_id=task_id, run_id=run.id)
         )
         running_run = self._run_state.claim_pending_run(run.id)
         if running_run is None:
@@ -359,27 +335,6 @@ class ConversationRunCommandService:
             RunInitializedEvent(
                 task_id=task_id,
                 run_id=reset.id,
-                image_paths=reset.image_paths or [],
-                file_attachments=(
-                    [
-                        {
-                            "id": attachment["id"],
-                            "name": attachment["name"],
-                            "content_type": attachment["content_type"],
-                            "path": attachment["path"],
-                        }
-                        for attachment in reset.extra.attachments
-                    ]
-                    if reset.extra is not None
-                    else []
-                ),
-                include_text_part=bool(
-                    (
-                        reset.extra.display_text
-                        if reset.extra is not None
-                        else reset.input_text
-                    ).strip()
-                ),
                 replace_existing=True,
             )
         )

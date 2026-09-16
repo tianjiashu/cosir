@@ -33,7 +33,12 @@ _ADAPTER: TypeAdapter[ConversationEvent] = TypeAdapter(ConversationEvent)
 _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     ({"type": "run_initialized", "task_id": 1, "run_id": 1}, RunInitializedEvent),
     (
-        {"type": "user_input_appended", "task_id": 1, "run_id": 1, "text": "读一下这个文件"},
+        {
+            "type": "user_input_appended",
+            "task_id": 1,
+            "run_id": 1,
+            "parts": [{"type": "text", "text": "读一下这个文件", "status": "completed"}],
+        },
         UserInputAppendedEvent,
     ),
     (
@@ -173,7 +178,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"type": "user_input_appended", "task_id": 1, "run_id": 1, "text": ""},
+        {"type": "user_input_appended", "task_id": 1, "run_id": 1, "parts": []},
         {"type": "assistant_text_delta", "task_id": 1, "run_id": 1, "part": "text", "delta": ""},
         {
             "type": "assistant_text_delta",
@@ -200,6 +205,13 @@ def test_envelope_defaults_and_optional_fields() -> None:
         {"type": "run_status_changed", "task_id": 1, "run_id": 1, "status": "half_done"},
         {"type": "run_initialized", "task_id": 0, "run_id": 1},
         {"type": "run_initialized", "task_id": 1, "run_id": 1, "typo_field": 1},
+        {"type": "run_initialized", "task_id": 1, "run_id": 1, "image_paths": []},
+        {
+            "type": "user_input_appended",
+            "task_id": 1,
+            "run_id": 1,
+            "text": "旧契约字段",
+        },
         {"type": "context_usage_updated", "task_id": 1, "run_id": 1, "ratio": True},
         {"type": "context_usage_updated", "task_id": 1, "run_id": 1, "used_tokens": True},
     ],
@@ -213,6 +225,8 @@ def test_envelope_defaults_and_optional_fields() -> None:
         "unknown_run_status",
         "non_positive_task_id",
         "unknown_field",
+        "run_initialized_user_input_fields",
+        "user_input_text_field",
         "boolean_ratio",
         "boolean_context_tokens",
     ],
@@ -253,9 +267,13 @@ def test_event_is_frozen() -> None:
         无；只做内存内校验。
     """
 
-    event = UserInputAppendedEvent(task_id=1, run_id=1, text="原始输入")
+    event = UserInputAppendedEvent(
+        task_id=1,
+        run_id=1,
+        parts=[{"type": "text", "text": "原始输入", "status": "completed"}],
+    )
     with pytest.raises(ValidationError):
-        event.text = "被改写"
+        event.parts = []
 
 
 def test_run_status_uses_domain_enumeration() -> None:

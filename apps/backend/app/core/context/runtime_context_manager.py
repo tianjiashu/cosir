@@ -22,7 +22,7 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from app.assistant_transport.event import UserInputAppendedEvent
+from app.assistant_transport.event import UserInputAppendedEvent, build_user_input_parts
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import SystemPromptBuilder
@@ -37,7 +37,12 @@ from app.core.context.tool_call_closure import (
     plan_tool_call_closure,
 )
 from app.core.runtime.execution_mode import ExecutionMode
-from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+from app.models import (
+    ConversationRunFileAttachment,
+    ConversationRunRecord,
+    TaskRecord,
+    WorkspaceRecord,
+)
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
     TransportMetadata,
@@ -433,6 +438,7 @@ class RuntimeContextManager:
             text: str,
             image_paths: Sequence[str] | None = None,
             display_text: str | None = None,
+            file_attachments: Sequence[ConversationRunFileAttachment] | None = None,
     ) -> bool:
         """确保当前 Run 在上下文中恰好有一条初始 user 消息。
 
@@ -457,6 +463,8 @@ class RuntimeContextManager:
                 写入 canonical context，模型调用前由 model-input boundary 解析成 provider block。
             display_text: 可选的 Transport 用户展示文本。普通文件 token 保留在此文本中，
                 不把本机路径泄漏到历史消息 UI；canonical context 仍使用 ``text`` 供模型读取。
+            file_attachments: 已持久化的普通文件元数据；只用于构造 Transport file parts，
+                不会把其中的本机路径发送到 Transport。
         返回:
             ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示该 Run 已存在，或
             文本和图片均为空被跳过。
@@ -498,14 +506,17 @@ class RuntimeContextManager:
         else:
             content = text
         message = self.add_message(HumanMessage(content=cast(Any, content)))
-        if text and text.strip():
-            get_conversation_event_projector().process(
-                UserInputAppendedEvent(
-                    task_id=self.current_task_id,
-                    run_id=self.current_run_id,
-                    text=display_text if display_text is not None else text,
-                )
+        get_conversation_event_projector().process(
+            UserInputAppendedEvent(
+                task_id=self.current_task_id,
+                run_id=self.current_run_id,
+                parts=build_user_input_parts(
+                    display_text if display_text is not None else text,
+                    paths,
+                    cast(Sequence[Mapping[str, str]], file_attachments or ()),
+                ),
             )
+        )
         return message
 
     def _current_run_has_user_message(self) -> bool:

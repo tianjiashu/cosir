@@ -3,7 +3,7 @@
 覆盖调度层合并（单一执行入口收口）后的执行管线核心行为：
 - ``ToolAccessGate`` 四段准入（注册表命中 / Agent profile 门禁 / 参数校验 / PreToolUse Hook 短路）
 - ``ToolExecutor`` 编排（成功执行 / 拒绝归一化 / 缺 execution_context 抛 ValueError / list_tools）
-- 拒绝观察一律经 ``ToolObservationBudget`` 治理（脱敏 + 截断口径与成功路径一致）
+- 拒绝观察一律经 ``ToolObservationBudget`` 治理（模型通道脱敏 + 截断口径与成功路径一致）
 """
 
 from pathlib import Path
@@ -83,6 +83,22 @@ def test_output_budget_normalizes_nullable_observation_content() -> None:
     result = ToolOutputBudget().apply(observation, execution_context=None)
 
     assert result.content == ""
+
+
+def test_observation_budget_keeps_display_data_complete() -> None:
+    """展示数据只服务前端，不应复用模型 content 的字符预算。"""
+
+    patch = "x" * 5_000
+    observation = ToolObservation(
+        tool_name="write_file",
+        status="success",
+        content="ok",
+        display_data={"kind": "file-changes", "changes": [{"patch": patch}]},
+    )
+
+    result = ToolObservationBudget().apply(observation, execution_context=None)
+
+    assert result.display_data == observation.display_data
 
 
 def test_unknown_tool_returns_denial_observation(tmp_path: Path) -> None:

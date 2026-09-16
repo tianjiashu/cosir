@@ -13,11 +13,15 @@ from app.assistant_transport.assistant_api import (
     assistant_transport_state,
 )
 from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
+from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service import transport_assistant_service as transport_module
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
 )
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.assistant_transport.service.transport_assistant_service import (
+    TransportAssistantService,
+    _build_ordered_display_text,
+)
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
@@ -49,6 +53,35 @@ def _snapshot(
         "context_window_total": None,
         "error": None,
     }
+
+
+def test_ordered_display_text_encodes_image_between_text_parts() -> None:
+    """Transport 入口必须把 composer 中图片位置编码进既有展示文本。"""
+
+    image_id = "b" * 64
+    display_text = _build_ordered_display_text(
+        [
+            AssistantTextPart(type="text", text="前"),
+            AssistantImagePart(type="image", image=f"cosir-attachment://{image_id}"),
+            AssistantTextPart(type="text", text="后"),
+        ]
+    )
+
+    assert display_text == f"前\n[[cosir-image:{image_id}]]\n后"
+
+
+def test_ordered_display_text_does_not_duplicate_image_marker_from_edit_text() -> None:
+    """编辑草稿已有图片 marker 时，附件 parts 不能再追加第二个 marker。"""
+
+    image_id = "c" * 64
+    display_text = _build_ordered_display_text(
+        [
+            AssistantTextPart(type="text", text=f"前[[cosir-image:{image_id}]]后"),
+            AssistantImagePart(type="image", image=f"cosir-attachment://{image_id}"),
+        ]
+    )
+
+    assert display_text == f"前[[cosir-image:{image_id}]]后"
 
 
 @pytest.mark.parametrize(

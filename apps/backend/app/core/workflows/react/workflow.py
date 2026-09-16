@@ -238,6 +238,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             run.input_text,
             run.image_paths,
             run.extra.display_text if run.extra is not None else run.input_text,
+            run.extra.attachments if run.extra is not None else None,
         )
 
         config = {
