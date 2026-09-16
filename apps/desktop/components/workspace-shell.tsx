@@ -20,6 +20,7 @@ import { NewConversation } from "@/components/new-conversation";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ResourceActionMenu } from "@/components/resource-action-menu";
+import { TaskTree } from "@/components/task-tree/task-tree";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
 import {
   deleteTask,
@@ -347,13 +348,13 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
                         </button>
                         <ResourceActionMenu label={workspace.name} onDelete={() => requestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })} />
                       </div>
-                      {expanded && <div className="ml-5 space-y-0.5 border-l pl-2">
-                        {workspace.tasks.map((task) => <div className="group flex items-center" key={task.task_id}>
-                          <button type="button" className={`hover:bg-muted flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-xs ${activeTaskId === task.task_id ? "bg-muted font-medium" : ""}`} onClick={() => { setForkError(null); writeLastWorkspaceId(workspace.workspace_id); setSelectedWorkspaceId(workspace.workspace_id); navigate(`/tasks/${task.task_id}`); }}>
-                            <span className="flex min-w-0 items-center gap-1.5"><span className="truncate">{task.title}</span>{task.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5 shrink-0" aria-label="Fork Task" />}</span><span className="text-muted-foreground shrink-0">{new Date(task.updated_at).toLocaleDateString()}</span>
-                          </button>
-                          <ResourceActionMenu label={task.title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.title, taskCount: 0 })} />
-                        </div>)}
+                      {expanded && <div className="ml-5 border-l pl-2">
+                        <TaskTree
+                          tasks={workspace.tasks}
+                          activeTaskId={activeTaskId}
+                          onSelectTask={(task) => { setForkError(null); writeLastWorkspaceId(workspace.workspace_id); setSelectedWorkspaceId(workspace.workspace_id); navigate(`/tasks/${task.task_id}`); }}
+                          renderActions={(task) => <ResourceActionMenu label={task.title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.title, taskCount: 0 })} />}
+                        />
                       </div>}
                     </section>
                   );

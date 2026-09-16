@@ -10,11 +10,19 @@ export type Workspace = {
   updated_at: string;
 };
 
+export type ForkTaskMetadata = {
+  source_task_id: number;
+  source_run_id: number;
+};
+
 export type WorkspaceTask = {
   task_id: number;
   workspace_id: number;
   title: string;
   task_type: "user" | "fork" | "delegation" | string;
+  extra?: {
+    fork?: ForkTaskMetadata;
+  } | null;
   fork_available: boolean;
   execution_status: string | null;
   context_usage_used: number | null;
