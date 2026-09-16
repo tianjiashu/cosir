@@ -1,11 +1,11 @@
 """ReAct-like 工作流节点间共享的运行时辅助。
 
-本模块只承载「model / tools / observe 三个节点都要用」的公共原语，不包含任何单节点专属逻辑：
+本模块只承载「各节点按需复用」的公共原语，不包含任何单节点专属逻辑（``_runtime_config``
+为 model / tools / observe 共用；``_runtime_context`` 为 model / observe 共用；
+``terminal_state`` 为 model 与超步数收口共用）：
 
-- ``_make_write_event``：为工具执行服务提供 canonical fact writer 适配。
 - ``_runtime_config`` / ``_runtime_context``：从 LangGraph 运行上下文取运行时配置与
   task 级上下文。
-- ``emit_run_cancelled``：统一经 ``RuntimeOperations`` 条件落定取消终态。
 - ``terminal_state``：统一构造终态 state patch_write，消除各节点
   重复的 ``{"terminal": True, ...}`` 字典字面量。
 

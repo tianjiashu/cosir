@@ -25,15 +25,16 @@ class ReactGraphState(BaseModel):
         step_count: 当前模型步骤序号（model 节点进入时 +1）。发起推理前按
             ``step_count > max_steps`` 拦截，超配额调用 ``_finalize_max_steps`` 收口终态。
         tool_error_count: 连续工具失败次数，成功即清零。observe 节点从本批
-            ``last_tool_results`` 重算并消费（超 ``tool_error_limit`` 判定）。
+            ``last_tool_results`` 重算并消费（超 ``Settings.TOOL_ERROR_LIMIT`` 判定）。
         requested_tool: 当前步骤是否请求工具调用。model 节点写；``_should_continue``
             消费（决定走 tools 还是 END）。
         continue_model: 当前模型输出未以可接受的完成原因结束，需要追加恢复提示并重新调用
             model。model 节点写；``_should_continue`` 消费。它不表示工具调用，避免用
             ``requested_tool`` 伪造一条空工具路径。
         final_response: 当前步骤是否已产出最终回答。model 节点写；``_should_continue`` 消费。
-        terminal: 是否进入完成/失败/取消等终止态。model / tools / observe 节点写；编排层
-            结合 ``aget_state().tasks`` 判定结束。
+        terminal: 是否进入完成 / 失败 / 超步数等终止态。``model`` / ``observe`` 节点写
+            （``tools`` 节点不写终态）；编排层结合 ``aget_state().next`` 判定图是否结束。
+            协作取消不走本字段。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``

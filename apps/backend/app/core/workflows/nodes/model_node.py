@@ -30,6 +30,7 @@ from app.core.workflows.nodes.helper.common import (
     _runtime_context,
     terminal_state,
 )
+from langgraph.types import interrupt
 from app.core.workflows.nodes.helper.debug_dump import _dump_raw_chunk_debug
 from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
@@ -100,14 +101,16 @@ async def _model_node(state: ReactGraphState) -> dict:
         ``_finalize_max_steps`` 的终态 patch_write。
 
     副作用:
-        - 发起推理前若本次已超配额，直接调用 ``_finalize_max_steps`` 收口终态（发
-          把 run 标记为 failed），不再触发推理；
+        - 发起推理前若本次已超配额，调用 ``_finalize_max_steps`` 收口终态，由 canonical
+          writer 把 run 标记为 ``max_steps_reached`` 失败，不再触发推理；
         - 经 ``RuntimeContextManager.add_message_chunk`` 增量持久化本轮 assistant 草稿，
           正常结束后由 ``flush_message_chunk(complete=True)`` 收口为完整 ``AIMessage``，
           使下一模型步能累积看到本轮输出；
         - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
-        - 非法输出经 ``RuntimeOperations`` 落定失败；请求前/流式中取消经同一门面落定取消；
+        - 非法输出经 ``RuntimeOperations`` 落定失败；请求前 / 流式中 / 流式结束后检测到协作
+          取消时，经 ``RuntimeOperations.cancel_run_if_running`` 落定取消终态并 ``interrupt``
+          挂起本节点（不写路由标志、不结束图，该 run 仍可由续跑恢复）；
         - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：未命中工具名
           的 ``IGNORE`` 仅记 warning；命中工具名的 ``REPAIR`` 挂 ``invalid_detail``，由 observe 节点
           在全部 ToolMessage 之后统一注入修复 ``SystemMessage``，避免产生
@@ -139,9 +142,8 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
-        # 请求前取消同样走统一 canonical 终态，与流式中取消/工具取消保持语义一致。
-        operations.cancel_run_if_running(end_reason="runtime_cancelled", usage_stats=rc.usage_stats)
-        return terminal_state(step_count)
+        operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
+        interrupt({"reason":"user_cancelled"})
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages = _runtime_context().load_message()
     messages = await asyncio.to_thread(
@@ -186,6 +188,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 下一次进入 model 时从空快照开始，避免混入上一轮已结束的 tool call。
     state.tool_call_lifecycle = ToolCallLifecycleManager()
     lifecycle = state.tool_call_lifecycle
+    ai_message: AIMessage | None = None
 
     async for chunk in model.astream(messages):
         # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
@@ -198,7 +201,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
 
         if operations.is_current_run_cancelled():
-            # 取消直接落定 cancelled 终态，而不是把协作取消误记为失败。
             log.warning(
                 "model_node_cancelled_usage_summary",
                 extra={
@@ -206,16 +208,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": rc.usage_stats.to_dict()},
                 },
             )
-            _runtime_context().flush_message_chunk(
-                stream_id=step_id, run_id=run_id, mode="cancel"
-            )
+            ai_message = _runtime_context().flush_message_chunk(stream_id=step_id, run_id=run_id, mode="cancel")
             parts.finish()
-            operations.cancel_run_if_running(
-                end_reason="runtime_cancelled",
-                usage_stats=rc.usage_stats,
-                final_output="模型流式因取消提前终止",
-            )
-            return terminal_state(step_count)
+            break
 
         # 提取文本与 reasoning 内容。
         text = content_to_text(chunk.content)
@@ -236,10 +231,17 @@ async def _model_node(state: ReactGraphState) -> dict:
                 step_id=step_id,
                 raw_tool_calls=raw_tool_calls,
             )
-    parts.finish()
-    ai_message: AIMessage = _runtime_context().flush_message_chunk(
-        stream_id=step_id, run_id=run_id, mode="complete"
-    )
+
+    if not operations.is_current_run_cancelled():
+        parts.finish()
+        ai_message: AIMessage = _runtime_context().flush_message_chunk(
+            stream_id=step_id, run_id=run_id, mode="complete"
+        )
+
+    if ai_message is None:
+        operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
+        interrupt({"reason": "user_cancelled"})
+
     finish_reason = chunk_processor.extract_finish_reason(ai_message)
 
     # 累加 usage_metadata 到 run 级共享累加器。
@@ -285,12 +287,12 @@ async def _model_node(state: ReactGraphState) -> dict:
             "terminal": False,
             "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
             "tool_call_lifecycle": lifecycle,
-            "continuation_error_data": (
-                {"error_kind": "invalid_tool_call_repair", "invalid_count": lifecycle.invalid_count}
-                if lifecycle.invalid_count
-                else None
-            ),
         }
+
+    if operations.is_current_run_cancelled():
+
+        operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
+        interrupt({"reason": "user_cancelled"})
 
     if finish_reason in _NORMAL_FINISH_REASONS and ai_message.content:
         # 没有工具调用且 Provider 明确报告正常结束 → 最终回答。
@@ -343,10 +345,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             "final_response": False,
             "terminal": False,
             "instruction": "",
-            "continuation_error_data": {
-                "error_kind": "incomplete_model_output",
-                "finish_reason": finish_reason,
-            },
         }
 
     log.warning(

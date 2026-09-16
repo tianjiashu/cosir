@@ -1,7 +1,7 @@
 """默认 ReAct-like 工作流编排，由 LangGraph StateGraph 驱动。
 
-本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` 节点 +
-条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
+本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` /
+``pause`` 节点 + 条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
 ``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
 
@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
@@ -214,11 +215,14 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
         # 本 Run 的初始 user 消息属于该 Run 的 canonical 上下文事实：fresh 时
         # ``begin_run`` 已清空该 Run 的旧条目，这里补写基线；resume 时同一 Run 的
-        # user 消息已存在，方法自身幂等。必须在 graph 启动前完成，使首个 model 步的
-        # ``load_message`` 能把用户输入交给模型；写入失败由异常向上收敛为 Run 失败。
+        # user 消息已存在。是否「已存在」由方法内部按 canonical context 事实判定，
+        # **不能**用 ``execution_mode`` 代替：续跑在「上次崩于写入之前」时仍需补写。
+        # 必须在 graph 启动前完成，使首个 model 步的 ``load_message`` 能把用户输入交给
+        # 模型；写入失败由异常向上收敛为 Run 失败。
         runtime_context_manager.ensure_run_user_message(
             run.input_text,
             run.image_paths,
+            run.extra.display_text if run.extra is not None else run.input_text,
         )
 
         config = {
@@ -252,34 +256,51 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
-            input_state: ReactGraphState | None = (
-                initial_state if execution_mode == "fresh" else None
-            )
-            while True:
-                try:
-                    async for mode, value in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["values", "custom"],
-                    ):
-                        # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
-                        # 统一写入 snapshot。两者都不是 Agent context 的来源。
-                        self._write_stream_item(operations, mode, value)
-                except Exception:
-                    log.exception(
-                        "workflow_graph_failed",
+            # 因此 ``resume`` 分支要求 ``run.checkpoint_thread_id`` 指向的线程上已有
+            # checkpoint：续跑**不可**轮换该字段，否则会落到一个空线程上无从继续。
+            input_state: Any = initial_state
+            if execution_mode != "fresh":
+                # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
+                # 返回（协程永久挂起），因此必须先拒绝并收敛该 run，再决定恢复输入。
+                snapshot = await graph.aget_state(config)
+                if not snapshot.next:
+                    log.warning(
+                        "workflow_resume_rejected_graph_finished",
                         extra={
-                            "msg": "langgraph execution failed during workflow run",
-                            "data": {
-                                "task_id": current_task.id,
-                                "run_id": operations.get_current_run().id,
-                            },
+                            "msg": "续跑被拒绝：该 run 的图已结束（无可执行节点）",
+                            "data": {"task_id": current_task.id, "run_id": run_id},
                         },
                     )
-                    raise
-
-                state_snap = await graph.aget_state(config)
-                tasks = state_snap.tasks
-                if not tasks:
-                    break
-                break
+                    operations.fail_run_if_running(
+                        end_reason="graph_already_finished",
+                        final_output="该轮次的工作流已结束，无法继续续跑，请新建轮次",
+                    )
+                    return
+                # 停在 ``pause``（协作取消落点）时必须用 ``Command(resume=...)`` 恢复；
+                # 其余情况传 ``None``，语义为「从既有 checkpoint 继续」。
+                input_state = (
+                    Command(resume={"action": "resume"})
+                    if any(task.interrupts for task in snapshot.tasks)
+                    else None
+                )
+            try:
+                async for mode, value in graph.astream(
+                    input_state,
+                    config,
+                    stream_mode=["values", "custom"],
+                ):
+                    # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
+                    # 统一写入 snapshot。两者都不是 Agent context 的来源。
+                    self._write_stream_item(operations, mode, value)
+            except Exception:
+                log.exception(
+                    "workflow_graph_failed",
+                    extra={
+                        "msg": "langgraph execution failed during workflow run",
+                        "data": {
+                            "task_id": current_task.id,
+                            "run_id": operations.get_current_run().id,
+                        },
+                    },
+                )
+                raise

@@ -461,23 +461,43 @@ class ToolCallLifecycleManager(BaseModel):
         task_id: int,
         run_id: int,
         step_id: str,
-        tool_calls: list[ToolCall],
+        tool_calls: list[ToolCall] | None = None,
     ) -> ToolCallLifecycleManager:
-        """把尚未结束的调用迁移到 cancelled。"""
+        """把尚未结束的调用迁移到 cancelled，并为每条发出终态事件。
+
+        取消有两个入口，两者都经本方法收口，避免前端留下悬空的「执行中」part：
+
+        - **工具执行前**（``tools_node`` 检测到 run 已取消）：调用已置 ``running``，直接整批收口；
+        - **模型流式生成中**（``model_node`` 检测到 run 已取消）：流式期 ``create`` 已把调用
+          登记为 ``pending`` 并投影给前端，而 graph 不会进入 tools 节点，须在此一并收口。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            tool_calls: 待收口的调用；为 ``None`` 时收口本 manager 当前**全部** ``pending`` /
+                ``running`` 调用（取消场景通常无需先枚举，因为收口判据就是状态本身）。
+
+        返回:
+            更新后的 manager；已终态的调用不受影响。
+        """
 
         updated = self._copy()
-        for tool_call in tool_calls:
-            record = updated.calls.get(tool_call.call_id)
+        call_ids = (
+            list(updated.calls)
+            if tool_calls is None
+            else [tool_call.call_id for tool_call in tool_calls]
+        )
+        for call_id in call_ids:
+            record = updated.calls.get(call_id)
             if record is None or record.status not in {"pending", "running"}:
                 continue
             updated._emit_status(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
-                call_id=tool_call.call_id,
+                call_id=call_id,
                 to_status="cancelled",
             )
-            updated.calls[tool_call.call_id].status = "cancelled"
+            updated.calls[call_id].status = "cancelled"
         return updated
 
     def fail_invalid(

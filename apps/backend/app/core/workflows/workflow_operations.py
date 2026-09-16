@@ -16,7 +16,9 @@ from app.core.observability.tool_trace_recorder import (
     ToolTraceRecorder,
     _NullToolTraceRecorder,
 )
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.runtime.conversation_run_cancellation_registry import (
+    cancellation_registry,
+)
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
@@ -30,7 +32,7 @@ from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.models.enums.error_kind import ErrorKind
 from app.service.depends import (
     get_conversation_event_projector,
-    get_conversation_run_service,
+    get_conversation_run_state_service,
 )
 
 if TYPE_CHECKING:
@@ -71,7 +73,6 @@ class WorkflowOperations:
                 会合并进 ``ToolExecutionContext.runtime_dependencies`` 透传给 handler。
             tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
                 工具执行不产生 trace，行为与集成前一致。
-
         返回:
             无。
 
@@ -80,10 +81,10 @@ class WorkflowOperations:
 
         副作用:
             构造工具执行所需的私有协作者（执行器、可见工具集、并行模式、trace 记录器、
-            取消回调），存储执行上下文与 canonical writer，记初始化日志。
+            取消判定），存储执行上下文与 canonical writer，记初始化日志。
         """
 
-        self._conversation_run_service = get_conversation_run_service()
+        self._conversation_run_state_service = get_conversation_run_state_service()
         self._event_projector = get_conversation_event_projector()
         self._executor = tool_executor
         self.model_tools: list[ToolDefinition] = list(model_tools or [])
@@ -101,7 +102,6 @@ class WorkflowOperations:
             definition.name: definition.parallel_mode for definition in self.model_tools
         }
         self._trace_recorder = tool_trace_recorder or _NullToolTraceRecorder()
-        self._should_cancel = self.is_current_run_cancelled
 
         log.info(
             "runtime_ops_initialized",
@@ -166,9 +166,12 @@ class WorkflowOperations:
     def is_current_run_cancelled(self) -> bool:
         """Return whether the currently bound run should stop.
 
-        取消检测只读进程内取消注册表（运行时信号源）：取消入口由
-        ``ConversationRunExecutor.cancel`` 统一标记信号并落库，本方法不做 DB 兜底查询，
+        取消检测只读**本次执行的取消令牌**（运行时信号源）：取消入口由
+        ``ConversationRunExecutor.cancel`` 置位当前令牌并落库，本方法不做 DB 兜底查询，
         避免协作取消检查在 process 模式工具的 50ms 轮询中产生高频数据库读。
+
+        令牌是「一次执行」专属的一次性信号：置位后不复位，因此即使该 run 随后续跑
+        （领取了新令牌），旧执行链路的判定仍保持"已取消"，不会误判为可继续执行。
 
         参数:
             无。
@@ -185,7 +188,12 @@ class WorkflowOperations:
         current_run = self._current_run
         if current_run is None:
             return False
-        return cancellation_registry.is_cancelled(str(current_run.id))
+        should_cancel = None
+        if self._execution_context is not None:
+            should_cancel = self._execution_context.runtime_dependencies.is_run_cancelled
+        if should_cancel is not None:
+            return should_cancel(current_run.id)
+        return cancellation_registry.is_cancelled(current_run.id)
 
     def complete_run_if_running(
         self,
@@ -217,7 +225,7 @@ class WorkflowOperations:
                 "data": {"run_id": run_id},
             },
         )
-        record = self._conversation_run_service.complete_run_if_running(
+        record = self._conversation_run_state_service.complete_run_if_running(
             run_id, final_output=final_output, usage_stats=usage_stats
         )
         return record
@@ -257,7 +265,7 @@ class WorkflowOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        record = self._conversation_run_service.fail_run_if_running(
+        record = self._conversation_run_state_service.fail_run_if_running(
             run_id, end_reason, final_output=final_output, usage_stats=usage_stats
         )
         return record
@@ -297,14 +305,14 @@ class WorkflowOperations:
                 "data": {"run_id": run_id, "end_reason": end_reason},
             },
         )
-        record = self._conversation_run_service.cancel_run_if_running(
+        record = self._conversation_run_state_service.cancel_run_if_running(
             run_id, end_reason, final_output=final_output, usage_stats=usage_stats
         )
         return record
 
-    def run_tool_calls(
+    async def run_tool_calls(
         self,
-        task_id: str,
+        task_id: int,
         calls: list[ToolCall],
         step_id: str | None = None,
         running_loop: asyncio.AbstractEventLoop | None = None,
@@ -313,6 +321,12 @@ class WorkflowOperations:
 
         工具生命周期通过明确的 callback 写入 canonical conversation facts。门面持有的
         ``execution_context`` 在内部透传给执行链，最终在执行期注入各 handler。
+
+        执行线程：串行工具调用经 ``asyncio.to_thread`` 移出事件循环线程（避免同步阻塞
+        的 thread 模式 handler 占死 loop，连带卡死 SSE 与并发请求）；``to_thread`` 内部以
+        ``copy_context().run`` 提交，保留父 turn 的 OTel/trace 上下文，语义与并行分支的
+        ``ThreadPoolExecutor`` 提交一致。并行工具调用组仍由 ``_run_calls_with_parallel_modes``
+        的线程池执行。
 
         参数:
             task_id: 当前任务标识符。
@@ -333,13 +347,15 @@ class WorkflowOperations:
                 serial_calls.append((index, call))
 
         indexed_observations: list[tuple[int, ToolObservation]] = []
+        # 串行工具调用经 asyncio.to_thread 移出事件循环线程：thread 模式工具同步阻塞
+        # （如大仓库 search_files、重 CPU/IO handler）会连带卡死 SSE 推送与并发请求。
+        # to_thread 内部以 copy_context().run 提交，保留父 turn 的 OTel/trace 上下文，
+        # 与并行分支 copy_context().run 语义一致；逐调用 await 让取消可在工具间被观察到。
         for index, call in serial_calls:
-            if self._should_cancel():
-                break
-            observation = self._execute_tool_call(task_id, call, step_id)
+            observation = await asyncio.to_thread(self._execute_tool_call, task_id, call, step_id)
             indexed_observations.append((index, observation))
 
-        if parallel_calls and not self._should_cancel():
+        if parallel_calls:
             indexed_observations.extend(
                 self._run_calls_with_parallel_modes(task_id, parallel_calls, step_id)
             )
@@ -349,7 +365,7 @@ class WorkflowOperations:
 
     def _run_calls_with_parallel_modes(
         self,
-        task_id: str,
+        task_id: int,
         calls: list[tuple[int, ToolCall]],
         step_id: str | None,
     ) -> list[tuple[int, ToolObservation]]:
@@ -375,7 +391,7 @@ class WorkflowOperations:
         副作用:
             启动临时线程池执行工具；每任务复制一份 contextvars 快照，不引入跨线程可变状态。
         """
-        if not calls or self._should_cancel():
+        if not calls:
             return []
 
         completed: list[tuple[int, ToolObservation]] = []
@@ -392,7 +408,6 @@ class WorkflowOperations:
                 while (
                     pending_calls
                     and len(future_by_call) < max_workers
-                    and not self._should_cancel()
                 ):
                     batch_index, batch_call = pending_calls.pop()
                     run_ctx = contextvars.copy_context()
@@ -421,7 +436,7 @@ class WorkflowOperations:
 
     def _execute_tool_call(
         self,
-        task_id: str,
+        task_id: int,
         call: ToolCall,
         step_id: str | None,
     ) -> ToolObservation:
@@ -447,7 +462,6 @@ class WorkflowOperations:
                     call,
                     execution_context=self._execution_context,
                     allowed_tool_names=self._allowed_tool_names,
-                    should_cancel=self._should_cancel,
                 )
                 tool_span.record(observation)
                 return observation
@@ -456,7 +470,7 @@ class WorkflowOperations:
 
     def _internal_error_observation(
         self,
-        task_id: str,
+        task_id: int,
         call: ToolCall,
         exc: Exception,
         step_id: str | None = None,
@@ -522,9 +536,10 @@ class WorkflowOperations:
     def to_tool_model_message(self, observation: ToolObservation) -> ToolMessage:
         """把已治理的工具观察转为模型上下文消息（``observe`` 节点的共享契约）。
 
-        面向 workflow 节点的公开端口：``tool_observation_dispatcher`` 在观察分发阶段
-        调用本方法把观察写回 ``RuntimeContextManager``，闭合 ``AIMessage.tool_calls``
-        配对。内部委托 :meth:`_to_model_message`，序列化规则以其为准。
+        面向 workflow 节点的公开端口：``observe`` 节点在观察分发阶段（经
+        ``ToolCallLifecycleManager.settle_batch``）调用本方法把观察写回
+        ``RuntimeContextManager``，闭合 ``AIMessage.tool_calls`` 配对。内部委托
+        :meth:`_to_model_message`，序列化规则以其为准。
 
         参数:
             observation: 已治理的工具观察（含正常结果、错误占位、取消占位）。

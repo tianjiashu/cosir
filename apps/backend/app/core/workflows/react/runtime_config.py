@@ -42,8 +42,13 @@ class RuntimeConfig:
         vision_input_format: 按厂商分派的视觉输入格式（如 ``"openai_url"``）；供 workflow 在
             构造用户消息时选择图片 block 拼装方式。空串表示本期未支持的厂商格式，由 workflow
             转 ``VisionNotSupportedError``。
-        execution_mode: 当前 graph 是新运行（``fresh``）还是从既有 checkpoint 恢复
-            （``resume``）；工具节点用它避免业务恢复时重放旧工具批次。
+        execution_mode: 本次 graph 是新运行（``fresh``）还是从既有 checkpoint 恢复
+            （``resume``），并据此决定是否清空该 run 的旧上下文条目（``fresh`` 清、
+            ``resume`` 保留，见 ``RuntimeContextManager.begin_run``）。工作流据此选择
+            传入 graph 的输入：``fresh`` 传初始 state，``resume`` 传 ``None`` 表示从
+            ``checkpoint_thread_id`` 指向线程的既有 checkpoint 继续（因此续跑**不可**
+            换线程）。工具节点不依赖本字段判断重放，重放由工具调用自身的生命周期状态
+            决定（见 ``tools_node``）。
     """
 
     operations: WorkflowOperations
