@@ -5,6 +5,17 @@ import { useAuiState } from "@assistant-ui/react";
 import { useShallow } from "zustand/react/shallow";
 import { getApiBaseUrl } from "@/lib/http/client";
 
+export const resolveTransportImageSrc = (
+  src: string,
+  taskId?: number,
+): string | undefined => {
+  const locator = src.match(/^cosir-attachment:\/\/([0-9a-f]{64})$/)?.[1];
+  if (locator && taskId !== undefined) {
+    return `${getApiBaseUrl()}/tasks/${taskId}/attachments/${locator}/content`;
+  }
+  return /^(?:data:|blob:|https?:\/\/)/i.test(src) ? src : undefined;
+};
+
 const useFileSrc = (file: File | undefined) => {
   const [entry, setEntry] = useState<{ file: File; url: string } | undefined>(
     undefined,
@@ -37,9 +48,5 @@ export const useAttachmentSrc = (taskId?: number) => {
     }),
   );
 
-  const locator = src?.match(/^cosir-attachment:\/\/([0-9a-f]{64})$/)?.[1];
-  const backendSrc = locator && taskId !== undefined
-    ? `${getApiBaseUrl()}/tasks/${taskId}/attachments/${locator}/content`
-    : undefined;
-  return useFileSrc(file) ?? backendSrc ?? (src && !src.includes("://") ? undefined : src);
+  return useFileSrc(file) ?? (src ? resolveTransportImageSrc(src, taskId) : undefined);
 };

@@ -353,7 +353,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
                           tasks={workspace.tasks}
                           activeTaskId={activeTaskId}
                           onSelectTask={(task) => { setForkError(null); writeLastWorkspaceId(workspace.workspace_id); setSelectedWorkspaceId(workspace.workspace_id); navigate(`/tasks/${task.task_id}`); }}
-                          renderActions={(task) => <ResourceActionMenu label={task.title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.title, taskCount: 0 })} />}
+                          renderActions={(task) => <ResourceActionMenu label={task.full_title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.full_title, taskCount: 0 })} />}
                         />
                       </div>}
                     </section>

@@ -27,6 +27,8 @@ import type {
   ImageMessagePartComponent,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
+import { useAttachmentTaskId } from "@/components/assistant-ui/elements/attachment-context";
+import { resolveTransportImageSrc } from "@/hooks/use-attachment-src";
 
 const extensionForMimeType = (mimeType?: string): string => {
   switch (mimeType) {
@@ -479,6 +481,7 @@ function ImageActions({ part, onRegenerate, className }: ImageActionsProps) {
 
 const ImageImpl: ImageMessagePartComponent = (props) => {
   const { image, filename, status } = props;
+  const imageSrc = resolveTransportImageSrc(image, useAttachmentTaskId());
 
   if (status?.type === "running") {
     return (
@@ -497,10 +500,21 @@ const ImageImpl: ImageMessagePartComponent = (props) => {
     );
   }
 
+  if (!imageSrc) {
+    return (
+      <ImageRoot>
+        <div className="bg-muted/50 flex min-h-32 items-center justify-center p-4">
+          <ImageIcon className="text-muted-foreground size-8" />
+        </div>
+        <ImageFilename>{filename}</ImageFilename>
+      </ImageRoot>
+    );
+  }
+
   return (
     <ImageRoot>
-      <ImageZoom src={image} alt={filename || "Image content"}>
-        <ImagePreview src={image} alt={filename || "Image content"} />
+      <ImageZoom src={imageSrc} alt={filename || "Image content"}>
+        <ImagePreview src={imageSrc} alt={filename || "Image content"} />
       </ImageZoom>
       <ImageFilename>{filename}</ImageFilename>
     </ImageRoot>

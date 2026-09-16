@@ -16,7 +16,6 @@ import {
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
-  MessagePrimitive,
   unstable_useComposerInput,
   useAuiState,
   useAui,
@@ -42,8 +41,10 @@ import { ImageAttachmentCard } from "@/components/composer/image-attachment-card
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import {
   InlineAttachmentInput,
+  useInlineAttachmentInsertion,
   type InlineFileAttachment,
 } from "@/components/composer/inline-attachment-input";
+import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
 
 type AttachmentPreviewProps = {
   src: string;
@@ -177,7 +178,7 @@ const AttachmentUI: FC = () => {
               render={
                 <div
                   className={cn(
-                    "aui-attachment-tile bg-muted hover:after:bg-foreground/10 focus-visible:ring-ring/50 relative size-14 cursor-pointer overflow-hidden rounded-[calc(var(--composer-radius,1.5rem)-var(--composer-padding,8px))] transition-transform outline-none after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:ring-1 after:ring-black/10 after:transition-colors after:ring-inset focus-visible:ring-1 active:scale-[0.96] motion-reduce:transition-none dark:after:ring-white/10",
+                    "aui-attachment-tile bg-muted hover:after:bg-foreground/10 focus-visible:ring-ring/50 relative size-16 cursor-pointer overflow-hidden rounded-[calc(var(--composer-radius,1.5rem)-var(--composer-padding,8px))] transition-transform outline-none after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:ring-1 after:ring-black/10 after:transition-colors after:ring-inset focus-visible:ring-1 active:scale-[0.96] motion-reduce:transition-none dark:after:ring-white/10",
                     isError &&
                       "after:ring-destructive/60 dark:after:ring-destructive/60",
                   )}
@@ -246,19 +247,9 @@ const AttachmentRemove: FC<{ compact?: boolean }> = ({ compact = false }) => {
   );
 };
 
-export const UserMessageAttachments: FC = () => {
-  return (
-    <div className="aui-user-message-attachments-end col-span-full col-start-1 row-start-1 flex w-full flex-row justify-end gap-2">
-      <MessagePrimitive.Attachments>
-        {() => <AttachmentUI />}
-      </MessagePrimitive.Attachments>
-    </div>
-  );
-};
-
 export const ComposerAttachments: FC = () => {
   return (
-    <div className="aui-composer-attachments flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden">
+    <div className="aui-composer-attachments flex max-h-16 w-full flex-row items-center gap-2 overflow-x-auto py-0.5 empty:hidden">
       <ComposerPrimitive.Attachments>
         {({ attachment }) => attachment.type === "image" ? <AttachmentUI /> : null}
       </ComposerPrimitive.Attachments>
@@ -266,10 +257,26 @@ export const ComposerAttachments: FC = () => {
   );
 };
 
+export const UserMessageFilePart: FC<{
+  filename: string;
+  mimeType: string;
+}> = ({ filename, mimeType }) => (
+  <span
+    data-slot="user-message-file-part"
+    data-content-type={mimeType}
+    className="bg-muted/70 text-foreground inline-flex max-w-64 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 align-middle text-xs"
+    title={filename}
+  >
+    <FileText className="text-muted-foreground size-3.5 shrink-0" />
+    <span className="min-w-0 truncate font-medium">{filename}</span>
+  </span>
+);
+
 type InlineComposerInputProps = {
   placeholder?: string;
   className?: string;
   autoFocus?: boolean;
+  suspendAttachmentReconciliation?: boolean;
   "aria-label"?: string;
 };
 
@@ -277,6 +284,7 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   placeholder,
   className,
   autoFocus,
+  suspendAttachmentReconciliation = false,
   "aria-label": ariaLabel,
 }) => {
   const composer = unstable_useComposerInput();
@@ -285,16 +293,42 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   const fileAttachments = useMemo(
     () => attachments
       .filter((attachment) => attachment.type !== "image")
-      .map<InlineFileAttachment>((attachment) => ({ id: attachment.id, name: attachment.name })),
+      .map<InlineFileAttachment>((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        kind: "file",
+        // 与文本 token 共用同一身份归一规则，避免「同步中」被误判为「已失效」。
+        tokenId: inlineAttachmentTokenId(attachment),
+      })),
     [attachments],
   );
-
+  /**
+   * 移除附件列表中的普通文件附件（内联 token 的 × 会经此转到附件对象）。
+   *
+   * 副作用：同步读取 composer 状态；命中时派发异步 `remove()`，不等待结果。
+   * 显式移除是用户意图，不做静默忽略——草稿同步期间输入框本身处于禁用态，无需在此二次
+   * 拦截；找不到附件时记日志，便于复盘「点了 × 没反应」。
+   */
   const removeAttachment = (fileId: string) => {
     const attachments = aui.composer.getState().attachments;
-    const attachmentIndex = attachments.findIndex((attachment) => attachment.type !== "image" && attachment.id === fileId);
-    if (attachmentIndex >= 0) {
-      void aui.composer.attachment({ index: attachmentIndex }).remove();
+    const attachmentIndex = attachments.findIndex((attachment) => attachment.id === fileId);
+    if (attachmentIndex < 0) {
+      void frontendLog("WARNING", "inline_attachment_remove_missing", "附件列表中不存在待移除附件", {
+        data: { fileId, attachmentIds: attachments.map((attachment) => attachment.id) },
+      });
+      return;
     }
+    void aui.composer.attachment({ index: attachmentIndex }).remove();
+    void frontendLog("DEBUG", "inline_attachment_remove_dispatched", "已派发附件移除", {
+      data: {
+        fileId,
+        attachmentIndex,
+        attachmentType: attachments[attachmentIndex]?.type ?? null,
+        remainingAttachmentIds: attachments
+          .filter((_, index) => index !== attachmentIndex)
+          .map((attachment) => attachment.id),
+      },
+    });
   };
 
   return (
@@ -306,23 +340,36 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
       onRemoveAttachment={removeAttachment}
       placeholder={placeholder}
       autoFocus={autoFocus}
-      disabled={composer.isDisabled}
+      disabled={composer.isDisabled || suspendAttachmentReconciliation}
+      suspendAttachmentReconciliation={suspendAttachmentReconciliation}
       className={className}
       aria-label={ariaLabel}
     />
   );
 };
 
-export const ComposerAttachmentButton: FC<{ workspaceRoot?: string }> = ({ workspaceRoot }) => {
+export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
   const aui = useAui();
+  const insertion = useInlineAttachmentInsertion();
 
   const addPicked = async (picked: PickedComposerAttachment[]) => {
-    for (const attachment of picked) await aui.composer.addAttachment(attachment.file);
+    const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
+    const insertedFiles: InlineFileAttachment[] = [];
+    for (const attachment of picked) {
+      if (existingIds.has(attachment.id)) continue;
+      await aui.composer.addAttachment(attachment.file);
+      existingIds.add(attachment.id);
+      if (attachment.kind === "file") {
+        insertedFiles.push({ id: attachment.id, name: attachment.name, kind: "file" });
+      }
+    }
+    insertion.insert(insertedFiles);
   };
 
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
+      disabled={disabled}
       onPicked={addPicked}
       onError={(message) => void frontendLog("WARNING", "attachment_picker_rejected", message, { data: {} })}
     />

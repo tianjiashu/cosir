@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import { buildTaskTreeModel, getTaskAncestorIds } from "@/components/task-tree/task-tree-model";
+import {
+  TASK_TITLE_DISPLAY_LIMIT,
+  buildTaskTreeModel,
+  getTaskAncestorIds,
+  taskDisplayTitle,
+} from "@/components/task-tree/task-tree-model";
 
 function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {}): WorkspaceTask {
   return {
@@ -52,5 +57,40 @@ describe("buildTaskTreeModel", () => {
 
     expect(model.roots.map((node) => node.task_id).sort()).toEqual([2, 3, 4]);
     expect(model.nodesById.has(5)).toBe(false);
+  });
+});
+
+describe("task display title", () => {
+  it("strips inline attachment tokens before measuring length", () => {
+    expect(taskDisplayTitle("[[cosir-file:abc]]帮我优化这个文档")).toBe("帮我优化这个文档");
+    expect(taskDisplayTitle("<!-- [[cosir-file:abc]] -->前文 [[cosir-image:def]]后文")).toBe("前文 后文");
+  });
+
+  it("falls back when the title has no visible text", () => {
+    expect(taskDisplayTitle("[[cosir-file:abc]]")).toBe("新对话");
+    expect(taskDisplayTitle("   ")).toBe("新对话");
+  });
+
+  it("truncates long titles with a single ellipsis", () => {
+    expect(taskDisplayTitle("x".repeat(TASK_TITLE_DISPLAY_LIMIT + 5))).toBe(
+      `${"x".repeat(TASK_TITLE_DISPLAY_LIMIT)}…`,
+    );
+    expect(taskDisplayTitle("短标题", 2)).toBe("短标…");
+  });
+
+  it("does not stack an ellipsis onto a trailing ASCII dot", () => {
+    // 后端标题以 "..." 结尾时，切点可能落在点号上。
+    expect(taskDisplayTitle(`${"x".repeat(TASK_TITLE_DISPLAY_LIMIT - 1)}..`)).toBe(
+      `${"x".repeat(TASK_TITLE_DISPLAY_LIMIT - 1)}…`,
+    );
+  });
+
+  it("exposes both display and full titles on tree nodes", () => {
+    const visibleTitle = "长标题".repeat(20);
+    const model = buildTaskTreeModel([task(1, `[[cosir-file:abc]]${visibleTitle}`)]);
+    const node = model.roots[0];
+
+    expect(node.full_title).toBe(visibleTitle);
+    expect(node.display_title).toBe(`${visibleTitle.slice(0, TASK_TITLE_DISPLAY_LIMIT)}…`);
   });
 });

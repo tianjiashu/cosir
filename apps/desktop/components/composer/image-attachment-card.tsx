@@ -11,6 +11,7 @@ type ImageAttachmentCardProps = {
   loading?: boolean;
   error?: boolean;
   onRemove?: () => void;
+  onPreview?: () => void;
   remove?: ReactNode;
   className?: string;
 };
@@ -22,15 +23,29 @@ export function ImageAttachmentCard({
   loading = false,
   error = false,
   onRemove,
+  onPreview,
   remove,
   className,
 }: ImageAttachmentCardProps) {
+  const preview = src ? (
+    <img src={src} alt={name} className="size-full object-cover" />
+  ) : (
+    <ImageIcon className="text-muted-foreground absolute inset-0 m-auto size-6" />
+  );
+
   return (
-    <div className={cn("relative size-20 shrink-0 overflow-hidden rounded-xl border bg-muted shadow-sm", className)}>
-      {src ? (
-        <img src={src} alt={name} className="size-full object-cover" />
+    <div className={cn("relative size-16 shrink-0 overflow-hidden rounded-xl border bg-muted shadow-sm", className)}>
+      {onPreview ? (
+        <button
+          type="button"
+          className="absolute inset-0 size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          aria-label={`预览图片 ${name}`}
+          onClick={onPreview}
+        >
+          {preview}
+        </button>
       ) : (
-        <ImageIcon className="text-muted-foreground absolute inset-0 m-auto size-6" />
+        preview
       )}
       {loading && (
         <div className="bg-background/60 absolute inset-0 flex items-center justify-center backdrop-blur-[2px]">

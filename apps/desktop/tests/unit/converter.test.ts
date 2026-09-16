@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractUserAddMessageAttachments,
   toMessageStatus,
+  toEditableUserMessageDraft,
   toThreadMessage,
   toToolCallPart,
   toTransportThreadView,
@@ -79,7 +80,7 @@ describe("assistant transport converter", () => {
     expect(attachments).toMatchObject([{ id: "local-file-restore" }]);
   });
 
-  it("projects a canonical file part into a message attachment", () => {
+  it("keeps canonical attachments in ordered content instead of a second top-level source", () => {
     const converted = toThreadMessage(
       {
         id: "user-1",
@@ -96,17 +97,16 @@ describe("assistant transport converter", () => {
 
     expect(converted).toMatchObject({
       role: "user",
-      attachments: [{
-        id: "file-1",
+      attachments: [],
+      content: [{
         type: "file",
-        name: "notes.md",
-        contentType: "text/markdown",
-        content: [{ data: "cosir-local-file:file-1" }],
+        data: "cosir-local-file:file-1",
+        filename: "notes.md",
       }],
     });
   });
 
-  it("does not render internal ordinary-file tokens as visible message text", () => {
+  it("keeps ordinary files as ordered message parts while hiding internal tokens", () => {
     const converted = toThreadMessage(
       {
         id: "user-2",
@@ -126,7 +126,106 @@ describe("assistant transport converter", () => {
 
     expect(converted.content).toMatchObject([
       { type: "text", text: "请查看 <!-- [[cosir-file:file-1]] -->" },
+      {
+        type: "file",
+        data: "cosir-local-file:file-1",
+        filename: "notes.md",
+        mimeType: "text/markdown",
+        sourceType: "id",
+      },
     ]);
+  });
+
+  it("keeps text, file, and image parts in canonical order", () => {
+    const converted = toThreadMessage(
+      {
+        id: "user-ordered",
+        role: "user",
+        parts: [
+          { type: "text", text: "请看", status: "completed" },
+          { type: "file", file: "cosir-local-file:file-1", name: "notes.md", contentType: "text/markdown" },
+          { type: "text", text: "和图片", status: "completed" },
+          { type: "image", image: "cosir-attachment://" + "a".repeat(64) },
+        ],
+      },
+      completedRun(1),
+    );
+
+    expect(converted.content.map((part) => part.type)).toEqual(["text", "file", "text", "image"]);
+  });
+
+  it("builds one edit attachment list and preserves file token positions", () => {
+    const converted = toThreadMessage(
+      {
+        id: "user-edit-order",
+        role: "user",
+        parts: [
+          { type: "text", text: "前文", status: "completed" },
+          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown" },
+          { type: "text", text: "中间", status: "completed" },
+          { type: "file", file: "cosir-local-file:file-b", name: "b.md", contentType: "text/markdown" },
+          { type: "text", text: "后文", status: "completed" },
+        ],
+      },
+      completedRun(1),
+    );
+
+    if (converted.role !== "user") throw new Error("expected user message");
+    const draft = toEditableUserMessageDraft(converted);
+
+    expect(draft.text).toBe(
+      "前文[[cosir-file:file-a]]中间[[cosir-file:file-b]]后文",
+    );
+    expect(draft.attachments.map((attachment) => attachment.id)).toEqual(["file-a", "file-b"]);
+  });
+
+  it("preserves mixed image and file positions in the edit draft", () => {
+    const imageLocator = `cosir-attachment://${"a".repeat(64)}`;
+    const converted = toThreadMessage(
+      {
+        id: "user-edit-mixed",
+        role: "user",
+        parts: [
+          { type: "text", text: "文字 A", status: "completed" },
+          { type: "image", image: imageLocator },
+          { type: "text", text: "文字 B", status: "completed" },
+          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown" },
+          { type: "text", text: "文字 C", status: "completed" },
+        ],
+      },
+      completedRun(1),
+    );
+
+    if (converted.role !== "user") throw new Error("expected user message");
+    const draft = toEditableUserMessageDraft(converted);
+
+    expect(draft.text).toBe("文字 A文字 B[[cosir-file:file-a]]文字 C");
+    expect(draft.document.inlineFiles.map((attachment) => attachment.id)).toEqual(["file-a"]);
+    expect(draft.document.previewImages.map((attachment) => attachment.id)).toEqual([imageLocator]);
+  });
+
+  it("deduplicates edit attachments even when the message model contains both sources", () => {
+    const converted = toThreadMessage(
+      {
+        id: "user-edit-dedup",
+        role: "user",
+        parts: [
+          { type: "text", text: "查看", status: "completed" },
+          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown" },
+        ],
+      },
+      completedRun(1),
+    );
+
+    if (converted.role !== "user") throw new Error("expected user message");
+    const draft = toEditableUserMessageDraft({
+      ...converted,
+      attachments: [...converted.attachments, ...converted.attachments],
+    });
+
+    expect(draft.text).toBe("查看[[cosir-file:file-a]]");
+    expect(draft.attachments).toHaveLength(1);
+    expect(draft.attachments[0]?.id).toBe("file-a");
   });
 
   it("does not use a file path or remote locator as an attachment ID", () => {

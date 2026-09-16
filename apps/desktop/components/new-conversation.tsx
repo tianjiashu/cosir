@@ -6,6 +6,8 @@ import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import {
   InlineAttachmentInput,
+  InlineAttachmentInsertionProvider,
+  useInlineAttachmentInsertion,
   type InlineFileAttachment,
 } from "@/components/composer/inline-attachment-input";
 import { ComposerSurface } from "@/components/composer/composer-surface";
@@ -16,6 +18,11 @@ import { createWorkspaceTask, type Workspace, type StartedConversation } from "@
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export type InitialConversationAttachment = PickedComposerAttachment;
 
@@ -24,6 +31,7 @@ function NewConversationAttachmentChip({ attachment, onRemove }: {
   onRemove: () => void;
 }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     if (attachment.kind !== "image") return;
@@ -33,7 +41,24 @@ function NewConversationAttachmentChip({ attachment, onRemove }: {
   }, [attachment.file, attachment.kind]);
 
   if (attachment.kind === "image") {
-    return <ImageAttachmentCard src={previewUrl} name={attachment.name} onRemove={onRemove} />;
+    return (
+      <>
+        <ImageAttachmentCard
+          src={previewUrl}
+          name={attachment.name}
+          onPreview={() => setPreviewOpen(true)}
+          onRemove={onRemove}
+        />
+        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+          <DialogContent className="p-2 sm:max-w-3xl">
+            <DialogTitle className="sr-only">预览图片：{attachment.name}</DialogTitle>
+            <div className="flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
+              {previewUrl && <img src={previewUrl} alt={attachment.name} className="max-h-[80dvh] max-w-full object-contain" />}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </>
+    );
   }
 
   return (
@@ -49,6 +74,34 @@ function NewConversationAttachmentChip({ attachment, onRemove }: {
         <XIcon className="size-3.5" />
       </button>
     </div>
+  );
+}
+
+function NewConversationAttachmentPicker({
+  workspaceRoot,
+  existingPaths,
+  onPicked,
+  onError,
+}: {
+  workspaceRoot?: string;
+  existingPaths: ReadonlySet<string>;
+  onPicked: (attachments: PickedComposerAttachment[]) => void | Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const insertion = useInlineAttachmentInsertion();
+  return (
+    <AttachmentPicker
+      workspaceRoot={workspaceRoot}
+      onPicked={async (picked) => {
+        const accepted = picked.filter((attachment) => !existingPaths.has(attachment.path.toLowerCase()));
+        if (accepted.length === 0) return;
+        await onPicked(accepted);
+        insertion.insert(accepted
+          .filter((attachment) => attachment.kind === "file")
+          .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const })));
+      }}
+      onError={onError}
+    />
   );
 }
 
@@ -114,6 +167,7 @@ export function NewConversation({
 
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl items-center justify-center px-6">
+      <InlineAttachmentInsertionProvider>
       <form ref={formRef} onSubmit={submit} className="w-full">
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <CosirMark className="text-foreground size-16" />
@@ -136,7 +190,7 @@ export function NewConversation({
             />
           </div>
           {attachments.some((attachment) => attachment.kind === "image") && (
-            <div className="flex flex-wrap gap-2 px-2 pt-1" aria-label="待发送附件">
+            <div className="flex h-16 max-h-16 flex-nowrap gap-2 overflow-x-auto px-2" aria-label="待发送附件">
               {attachments.filter((attachment) => attachment.kind === "image").map((attachment) => (
                 <NewConversationAttachmentChip
                   key={attachment.path}
@@ -171,8 +225,9 @@ export function NewConversation({
               />
             </div>
             <div className="flex items-center gap-1">
-              <AttachmentPicker
+              <NewConversationAttachmentPicker
                 workspaceRoot={selectedWorkspace?.root_path}
+                existingPaths={new Set(attachments.map((attachment) => attachment.path.toLowerCase()))}
                 onPicked={async (picked) => {
                   setAttachments((current) => {
                     const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
@@ -189,6 +244,7 @@ export function NewConversation({
         </ComposerSurface>
         {error && <p className="text-destructive mt-3 text-center text-sm">{error}</p>}
       </form>
+      </InlineAttachmentInsertionProvider>
     </div>
   );
 }

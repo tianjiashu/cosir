@@ -43,4 +43,26 @@ describe("inline attachment HTML rendering", () => {
     expect(html).not.toContain("-->");
     expect(html).toContain('data-file-id="file-1"');
   });
+
+  it("renders image tokens as a distinct inline attachment capsule", () => {
+    const imageId = "a".repeat(64);
+    const html = renderInlineAttachmentHtml(
+      `前文[[cosir-image:${imageId}]]后文`,
+      [{ id: `cosir-attachment://${imageId}`, name: "截图.png", kind: "image", tokenId: imageId }],
+    );
+
+    expect(html).toContain("cosir-inline-image-token");
+    expect(html).toContain("图片：截图.png");
+    expect(html).toContain(`data-attachment-id="cosir-attachment://${imageId}"`);
+  });
+
+  it("renders an unmatched token as synchronizing while the draft is still being written", () => {
+    const value = `${FILE_ATTACHMENT_TOKEN_PREFIX}file-1${FILE_ATTACHMENT_TOKEN_SUFFIX}`;
+
+    const html = renderInlineAttachmentHtml(value, [], { unmatchedAsPending: true });
+
+    expect(html).toContain("附件同步中");
+    expect(html).not.toContain("附件已失效");
+    expect(html).toContain("cosir-inline-file-token-pending");
+  });
 });

@@ -19,7 +19,15 @@ import {
   getLocalAttachment,
   registerLocalAttachment,
 } from "@/lib/assistant/attachments/local-attachment-registry";
-import { LOCAL_FILE_TOKEN } from "@/lib/assistant/attachments/local-file-token";
+import {
+  applyEditDraftToComposer,
+  beginEditComposerOperation,
+  discardPendingEditComposerDraft,
+  editableDraftAttachments,
+  endEditComposerOperation,
+  isCurrentEditComposerOperation,
+  setPendingEditComposerDraft,
+} from "@/lib/assistant/edit-composer-draft";
 
 type TransportStateCommitBridgeProps = {
   initialState: TransportState;
@@ -218,30 +226,31 @@ export function ComposerRestoreBridge({
   const aui = useAui();
 
   useEffect(() => {
-    const restoreAttachments = async (
-      composer: ReturnType<typeof aui.thread.composer>,
-      attachments: readonly CreateAttachment[],
-    ): Promise<void> => {
-      for (const attachment of attachments) {
-        await composer.addAttachment(attachment);
-      }
-    };
+    // 草稿写入只保留一份实现（applyEditDraftToComposer）：新增消息与失败恢复共用同一
+    // 顺序与同一去重规则，避免两条路径各自演化出「文本有 token、附件缺失」的中间态。
     const restoreIntoComposer = async (
       composer: ReturnType<typeof aui.thread.composer>,
       text: string,
       attachments: readonly CreateAttachment[],
+      messageId?: string,
+      generation?: number,
     ) => {
-      try {
-        await restoreAttachments(composer, attachments);
-        composer.setText(text);
-      } catch (error) {
-        // Do not leave an unresolved internal token in the editable value when
-        // an attachment cannot be restored. The transport error already owns
-        // the user-facing failure state; this fallback only keeps the draft
-        // readable and guarantees a handled Promise rejection.
-        composer.setText(text.replace(LOCAL_FILE_TOKEN, "附件"));
+      const result = await applyEditDraftToComposer({
+        composer,
+        text,
+        attachments: editableDraftAttachments(attachments),
+        isStillCurrent: messageId !== undefined && generation !== undefined
+          ? () => isCurrentEditComposerOperation(messageId, generation)
+          : () => true,
+      });
+      if (result.error) {
         void frontendLog("ERROR", "assistant_composer_restore_failed", "失败消息恢复附件失败", {
-          error,
+          data: {
+            attachmentCount: result.expectedCount,
+            addedCount: result.addedCount,
+            superseded: result.superseded,
+          },
+          error: result.error,
         });
       }
     };
@@ -253,10 +262,26 @@ export function ComposerRestoreBridge({
       restoreEditMessage: (sourceId, text, attachments = []) => {
         try {
           const composer = aui.thread.message({ id: sourceId }).composer();
-          if (!composer.getState().isEditing) composer.beginEdit();
-          void restoreIntoComposer(composer, text, attachments);
+          const generation = beginEditComposerOperation(sourceId);
+          if (!composer.getState().isEditing) {
+            setPendingEditComposerDraft(sourceId, { text, attachments });
+            try {
+              composer.beginEdit();
+            } catch (error) {
+              discardPendingEditComposerDraft(sourceId);
+              endEditComposerOperation(sourceId, generation);
+              throw error;
+            }
+          } else {
+            void restoreIntoComposer(composer, text, attachments, sourceId, generation)
+              .finally(() => endEditComposerOperation(sourceId, generation));
+          }
           return true;
-        } catch {
+        } catch (error) {
+          void frontendLog("WARNING", "assistant_edit_composer_restore_rejected", "编辑草稿恢复未能交给输入框", {
+            data: { sourceId },
+            error,
+          });
           return false;
         }
       },

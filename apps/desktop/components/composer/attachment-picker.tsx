@@ -22,6 +22,7 @@ type AttachmentPickerProps = {
   workspaceRoot?: string;
   onPicked: (attachments: PickedComposerAttachment[]) => void | Promise<void>;
   onError?: (message: string) => void;
+  disabled?: boolean;
 };
 
 async function readSelectedFile(path: string, name: string): Promise<File> {
@@ -35,11 +36,12 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
   workspaceRoot,
   onPicked,
   onError,
+  disabled = false,
 }) => {
   const [opening, setOpening] = useState(false);
 
   const choose = async () => {
-    if (opening) return;
+    if (opening || disabled) return;
     setOpening(true);
     try {
       const selected = await open({
@@ -91,7 +93,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
       size="icon"
       className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 size-7 rounded-full"
       aria-label={opening ? "正在选择附件" : "添加图片或附件"}
-      disabled={opening}
+      disabled={opening || disabled}
       onClick={() => void choose()}
     >
       <PaperclipIcon className="size-4" />

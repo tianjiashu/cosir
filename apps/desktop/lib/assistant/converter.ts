@@ -9,7 +9,6 @@ import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/uti
 
 import type {
   TransportError,
-  TransportFilePart,
   TransportImagePart,
   TransportMessage,
   TransportReasoningPart,
@@ -21,6 +20,11 @@ import type {
 } from "@/lib/assistant/contract";
 import { getLocalAttachmentById, LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
+import {
+  createEditableUserDocument,
+  editableDocumentAttachments,
+  type EditableUserDocument,
+} from "@/lib/assistant/editable-user-document";
 
 export type UserAddMessageCommand = {
   type: "add-message";
@@ -92,7 +96,15 @@ function toTextPart(part: TransportTextPart, role: TransportMessage["role"]): Th
 function hideLocalFileTokens(text: string): string {
   // Keep the token in the underlying editable text for edit/resend recovery,
   // but render it as an HTML comment so internal IDs never appear in chat UI.
-  return text.replace(/\[\[cosir-file:[^\]]+\]\]/g, (token) => `<!-- ${token} -->`);
+  return text.replace(/\[\[cosir-(?:file|image):[^\]]+\]\]/g, (token) => `<!-- ${token} -->`);
+}
+
+function revealLocalFileTokens(text: string): string {
+  return text.replace(/<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g, "$1");
+}
+
+function revealEditableFileTokens(text: string): string {
+  return revealLocalFileTokens(text).replace(/\[\[cosir-image:[^\]]+\]\]/g, "");
 }
 
 function toImageAttachment(part: TransportImagePart, index: number): CompleteAttachment {
@@ -129,6 +141,132 @@ function toFileAttachment(part: { file: string; id?: string; name: string; conte
       sourceType: "id" as const,
     }],
     status: { type: "complete" as const },
+  };
+}
+
+export type EditableUserMessageDraft = {
+  document: EditableUserDocument;
+  text: string;
+  attachments: readonly CompleteAttachment[];
+};
+
+function attachmentForUserPart(
+  part: Extract<ThreadUserMessage["content"][number], { type: "file" | "image" }>,
+  attachments: readonly CompleteAttachment[],
+): CompleteAttachment | null {
+  if (part.type === "image") {
+    return attachments.find((attachment) => attachment.type === "image" && attachment.id === part.image)
+      ?? toImageAttachment({ type: "image", image: part.image }, 0);
+  }
+
+  const localId = part.data.startsWith(LOCAL_FILE_DATA_PREFIX)
+    ? part.data.slice(LOCAL_FILE_DATA_PREFIX.length)
+    : undefined;
+  return attachments.find((attachment) =>
+    attachment.type !== "image"
+      && (attachment.id === localId
+        || attachment.content.some((content) => content.type === "file" && content.data === part.data)),
+  ) ?? (localId ? toFileAttachment({
+    id: localId,
+    file: part.data,
+    name: part.filename ?? "附件",
+    contentType: part.mimeType,
+  }) : null);
+}
+
+/**
+ * Project a canonical user message into the text-plus-attachments shape used
+ * by the edit composer.
+ *
+ * Canonical user content keeps files and images as ordered message parts so
+ * the sent bubble can render them inline. assistant-ui's edit runtime lifts
+ * those non-text parts into attachments, but it cannot retain their position
+ * in the text and also combines them with `message.attachments`. This helper
+ * creates one stable attachment per canonical non-text part and inserts each
+ * ordinary file token at its original text position. Images are projected to
+ * the separate preview surface. The caller owns
+ * replacing the edit composer state with this result; this function performs
+ * no runtime or persistence side effects.
+ */
+export function toEditableUserMessageDraft(message: ThreadUserMessage): EditableUserMessageDraft {
+  const knownAttachmentTokens = new Set(
+    message.content
+      .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+      .flatMap((part) => [...part.text.matchAll(/\[\[cosir-file:([^\]]+)\]\]/g)]
+        .map((match) => `file:${match[1]}`)),
+  );
+  const orderedAttachments: CompleteAttachment[] = [];
+  const seenAttachmentIds = new Set<string>();
+  const textParts: string[] = [];
+  let pendingTokens = "";
+  let previousWasText = false;
+
+  const addAttachment = (attachment: CompleteAttachment | null) => {
+    if (!attachment || seenAttachmentIds.has(attachment.id)) return;
+    seenAttachmentIds.add(attachment.id);
+    orderedAttachments.push(attachment);
+  };
+
+  message.content.forEach((part, index) => {
+    if (part.type === "text") {
+      textParts.push(`${pendingTokens}${revealEditableFileTokens(part.text)}`);
+      pendingTokens = "";
+      previousWasText = true;
+      return;
+    }
+
+    if (part.type !== "file" && part.type !== "image") {
+      previousWasText = false;
+      return;
+    }
+
+    const attachment = attachmentForUserPart(part, message.attachments);
+    addAttachment(attachment);
+
+    if (!attachment) {
+      previousWasText = false;
+      return;
+    }
+
+    // Images are rendered by the separate preview surface in edit mode. They
+    // must not become inline text tokens, otherwise the contenteditable and
+    // the preview surface represent the same attachment twice.
+    if (part.type === "image") {
+      previousWasText = false;
+      return;
+    }
+    const tokenId = attachment.id;
+    if (knownAttachmentTokens.has(`file:${tokenId}`)) {
+      previousWasText = false;
+      return;
+    }
+    const token = `[[cosir-file:${tokenId}]]`;
+    if (previousWasText && textParts.length > 0) {
+      textParts[textParts.length - 1] += token;
+    } else if (message.content[index + 1]?.type === "text") {
+      pendingTokens += token;
+    } else {
+      textParts.push(token);
+    }
+    previousWasText = false;
+  });
+
+  if (pendingTokens) textParts.push(pendingTokens);
+
+  // Keep any attachment metadata not represented by content as a deterministic
+  // fallback. Canonical messages should not normally take this branch, but it
+  // prevents an edit from silently dropping an attachment if a partial
+  // snapshot is observed during reconnect.
+  for (const attachment of message.attachments) addAttachment(attachment);
+
+  const document = createEditableUserDocument(textParts.join(""), orderedAttachments);
+  return {
+    document,
+    // Transport text parts are the exact fragments around attachment parts;
+    // inserting formatting separators here would move the attachment relative
+    // to the user's original text.
+    text: document.text,
+    attachments: editableDocumentAttachments(document),
   };
 }
 
@@ -264,8 +402,6 @@ function toThreadMessageWithContext(
   message: TransportMessage,
   context: TransportMessageRenderContext,
 ): ThreadMessage {
-  const imageParts = message.parts.filter((part): part is TransportImagePart => part.type === "image");
-  const fileParts = message.parts.filter((part): part is TransportFilePart => part.type === "file");
   const content = message.parts
     .map((part) => {
       switch (part.type) {
@@ -279,8 +415,15 @@ function toThreadMessageWithContext(
         case "tool-call":
           return toToolCallPart(part);
         case "image":
+          return { type: "image", image: part.image };
         case "file":
-          return null;
+          return {
+            type: "file",
+            data: part.file,
+            filename: part.name,
+            mimeType: part.contentType,
+            sourceType: "id",
+          };
         default:
           return null;
       }
@@ -292,13 +435,10 @@ function toThreadMessageWithContext(
       id: message.id,
       role: "user",
       content: content as ThreadUserMessage["content"],
-      attachments: [
-        ...imageParts.map(toImageAttachment),
-        ...fileParts.flatMap((part) => {
-          const attachment = toFileAttachment(part);
-          return attachment ? [attachment] : [];
-        }),
-      ],
+      // Canonical user attachments live in ordered content parts. Keeping a
+      // second top-level copy makes assistant-ui lift both sources and creates
+      // duplicate edit attachments with different generated IDs.
+      attachments: [],
       createdAt: new Date(),
       metadata: {
         unstable_state: undefined,
@@ -374,27 +514,26 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
 
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   if (!isUserAddMessageCommand(command)) return null;
-  const textParts = command.message.parts
-    .filter((part): part is { type: "text"; text: string } => part.type === "text" && part.text.length > 0)
-    .map((part) => ({ type: "text" as const, text: part.text }));
-  const imageParts = command.message.parts
-    .filter((part): part is { type: "image"; image: string } => part.type === "image")
-    .map((part, index) => toImageAttachment(part, index));
-  const fileParts = command.message.parts
-    .filter((part): part is { type: "file"; data: string; filename?: string; mimeType: string; sourceType?: "id" } => part.type === "file")
-    .flatMap((part) => {
-      const attachment = toFileAttachment({
-      file: part.data,
-      name: part.filename ?? "附件",
-      contentType: part.mimeType,
+  const messageParts: TransportMessage["parts"] = [];
+  for (const part of command.message.parts) {
+    if (part.type === "text") {
+      if (part.text.length > 0) messageParts.push({ type: "text", text: part.text });
+    } else if (part.type === "image") {
+      messageParts.push({ type: "image", image: part.image });
+    } else {
+      messageParts.push({
+        type: "file",
+        file: part.data,
+        name: part.filename ?? "附件",
+        contentType: part.mimeType,
       });
-      return attachment ? [attachment] : [];
-    });
-  if (textParts.length === 0 && imageParts.length === 0 && fileParts.length === 0) return null;
+    }
+  }
+  if (messageParts.length === 0) return null;
   const pending = toThreadMessage({
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
-    parts: textParts,
+    parts: messageParts,
   }, {
     runId: -1,
     status: "completed",
@@ -402,7 +541,9 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     messages: [],
     usage: null,
   });
-  return pending.role === "user" ? { ...pending, attachments: [...imageParts, ...fileParts] } : pending;
+  // The optimistic message follows the same single-source shape as the
+  // canonical projection. The content parts already carry all attachments.
+  return pending.role === "user" ? { ...pending, attachments: [] } : pending;
 }
 
 export function extractUserAddMessageAttachments(command: unknown): CreateAttachment[] {

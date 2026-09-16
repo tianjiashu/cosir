@@ -13,8 +13,9 @@ import {
   LOCAL_FILE_DATA_PREFIX,
   LocalAttachmentUnavailableError,
 } from "./local-attachment-registry";
+import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./local-file-token";
 
-const locatorFor = (assetId: string) => `cosir-attachment://${assetId}`;
+const locatorFor = (assetId: string) => `${LOCAL_IMAGE_LOCATOR_PREFIX}${assetId}`;
 const uploadByDigest = new Map<string, Promise<UploadedImage>>();
 
 async function digestFile(file: File): Promise<string> {
