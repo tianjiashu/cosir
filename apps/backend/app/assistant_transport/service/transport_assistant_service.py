@@ -52,9 +52,9 @@ class TransportAssistantService:
         from app.service.depends import get_conversation_run_executor
 
         self.run_executor = get_conversation_run_executor()
-        from app.service.depends import get_conversation_run_service
+        from app.service.depends import get_conversation_run_state_service
 
-        self._runs = get_conversation_run_service()
+        self._runs = get_conversation_run_state_service()
         from app.service.depends import get_task_service
 
         self._tasks = get_task_service()
@@ -215,8 +215,7 @@ class TransportAssistantService:
 
         异常:
             HTTPException: 经由 ``_raise_transport_error`` 抛出，覆盖 TASK_NOT_FOUND /
-                RUN_ID_REQUIRED / RUN_CANCELLING / RUN_ALREADY_RUNNING /
-                COMMAND_REQUIRED / TASK_WORKSPACE_MISMATCH。
+                RUN_ID_REQUIRED / COMMAND_REQUIRED / TASK_WORKSPACE_MISMATCH。
 
         副作用:
             仅做读校验与一条 info 日志；不修改 Run / Task / Context。
@@ -243,14 +242,6 @@ class TransportAssistantService:
                     "RUN_ID_REQUIRED",
                     "请先创建运行切片",
                     retryable=False,
-                )
-            if self.run_executor.is_locally_running(request.runId):
-                _raise_transport_error(
-                    409,
-                    "RUN_ALREADY_RUNNING",
-                    "对话运行当前正在运行，请使用 attach 重新订阅",
-                    retryable=True,
-                    run_id=request.runId,
                 )
         elif mode == "edit":
             if request.runId is None:
@@ -417,9 +408,9 @@ class TransportAssistantService:
             使用 ``assistant-stream`` 编码的 snapshot subscription 响应。
 
         异常:
-            HTTPException: run 不存在（404）；run 不属于该 task、不是当前 latest run、
-                状态非 active，或本进程没有该 run 的执行器（后端重启遗留的 active run）
-                时抛出结构化 transport 错误。
+            HTTPException: run 不存在（404）；run 不属于该 task、不是当前 task 的最新
+                run、或持久化状态不是 ``pending`` / ``running`` 时抛出结构化 transport
+                错误（RUN_TASK_MISMATCH / RUN_NOT_ATTACHABLE）。
 
         副作用:
             只注册 snapshot subscriber；不会创建 executor、修改 Run status、写入
@@ -457,16 +448,6 @@ class TransportAssistantService:
                 "RUN_NOT_ATTACHABLE",
                 "只有仍在执行的运行可以建立状态订阅",
                 retryable=False,
-                run_id=run_id,
-            )
-        # 上面分支已保证 run.status ∈ {pending, running}，此处**刻意不重复**该状态谓词：
-        # 同一条件写成两个 if 会让后来者误以为两个分支的前置条件不同。
-        if not self.run_executor.is_locally_running(run_id):
-            _raise_transport_error(
-                409,
-                "RUN_RECOVERY_REQUIRED",
-                "本机后端尚未恢复该运行，请先读取最新状态",
-                retryable=True,
                 run_id=run_id,
             )
 

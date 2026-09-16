@@ -1,8 +1,8 @@
 """ReAct-like 工作流节点间共享的运行时辅助。
 
 本模块只承载「各节点按需复用」的公共原语，不包含任何单节点专属逻辑（``_runtime_config``
-为 model / tools / observe 共用；``_runtime_context`` 为 model / observe 共用；
-``terminal_state`` 为 model 与超步数收口共用）：
+为 model / tools / observe 与工具调用生命周期共用；``_runtime_context`` 为 model / observe
+与工具调用生命周期共用；``terminal_state`` 为 model 与超步数收口共用）：
 
 - ``_runtime_config`` / ``_runtime_context``：从 LangGraph 运行上下文取运行时配置与
   task 级上下文。
@@ -60,10 +60,9 @@ def terminal_state(
 ) -> dict[str, Any]:
     """构造统一的终态 state patch_write（graph 走到 END 用）。
 
-    model / max_steps / observe 多个节点都把「终态」写成一组重复的硬字段字典
+    ``model`` 节点的各终态分支与 ``_finalize_max_steps`` 都要写同一组硬字段
     （``step_count`` / ``requested_tool`` / ``final_response`` / ``terminal``），手写易错且
-    各处分歧。本函数收口为单一来源。
-    终态不再有后续模型步，统一收口为单一来源，避免各节点手写硬字段字典发散（P2-5 一致性收口）。
+    各处分歧；本函数把它收口为单一来源。
 
     参数:
         step_count: 当前步编号，直接落入 patch_write。
@@ -71,7 +70,8 @@ def terminal_state(
         final_response: 是否产出终态文本，默认 ``False``。
 
     返回:
-        可直接 ``return`` 给 LangGraph 合并的 state patch_write 字典。
+        可直接 ``return`` 给 LangGraph 合并的 state patch_write 字典（``terminal`` 恒为
+        ``True``）；需要附加终态字段（如 ``final_text``）的调用方在其结果上叠加。
 
     异常:
         无。

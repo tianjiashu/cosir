@@ -37,6 +37,10 @@ class ConversationRunUsageStats:
         cache_hit_tokens: 累计缓存命中 token 数。
         cache_miss_tokens: 累计缓存未命中 token 数。
         reasoning_tokens: 累计推理 token 数。
+
+    另有一个**非 dataclass 字段**的实例状态 ``_cache_details_complete``：记录历史模型调用是否
+    每次都给出了缓存明细。它只用于决定 ``cache_miss_tokens`` 能否由累计值推导，因此不进字段表、
+    也不参与 ``to_dict``。
     """
 
     input_tokens: int = 0
@@ -45,9 +49,23 @@ class ConversationRunUsageStats:
     cache_hit_tokens: int = 0
     cache_miss_tokens: int | None = None
     reasoning_tokens: int = 0
+
     @staticmethod
     def _safe_int(value: Any) -> int:
-        """把非负有限整数安全转为 int；异常值返回 0。"""
+        """把非负有限整数安全转为 int；异常值返回 0。
+
+        参数:
+            value: provider ``usage_metadata`` 中的原始值。
+
+        返回:
+            非负整数；``bool`` / ``None`` / 非数值 / 负值 / 非有限浮点 / 含小数浮点均返回 0。
+
+        异常:
+            无（内部捕获 ``TypeError`` / ``ValueError`` / ``OverflowError``）。
+
+        副作用:
+            无。
+        """
         if isinstance(value, bool) or value is None:
             return 0
         if isinstance(value, float) and (
@@ -85,8 +103,8 @@ class ConversationRunUsageStats:
             不抛出异常；字段缺失或类型异常时仅跳过该字段。
 
         副作用:
-            就地累加本对象各字段。本对象为 turn 级共享累加器，多次模型调用（含 REPAIR 回流）
-            会依次累加，不会相互覆盖。
+            就地累加本对象各字段。本对象是 run 级共享累加器，同一 run 的多次模型调用（含输出
+            不完整时的续写回流）会依次累加，不会相互覆盖。
         """
         if not usage_metadata:
             return
@@ -121,7 +139,14 @@ class ConversationRunUsageStats:
             无。
 
         返回:
-            各字段均为 int 的字典，供 ``RunFinishedPayload`` 使用。
+            六字段字典，供 ``RunFinishedPayload`` 使用；``cache_miss_tokens`` 在 provider 从未
+            返回缓存明细时为 ``None``，其余字段均为 int。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
         return {

@@ -19,8 +19,8 @@ def _should_continue(state: ReactGraphState) -> str:
         state: 当前 graph state。
 
     返回:
-        ``"tools"`` 进入工具节点；``"model"`` 表示 REPAIR 修复回流重试；``END``
-        表示工作流结束。
+        ``"tools"`` 进入工具节点；``"model"`` 表示继续推理（模型输出未以可接受原因结束
+        时的续写回流）；``END`` 表示工作流结束（已终态或已产出最终回答）。
     """
 
     if state.terminal or state.final_response:
@@ -33,10 +33,10 @@ def _should_continue(state: ReactGraphState) -> str:
 
 
 def _after_tools(state: ReactGraphState) -> str:
-    """工具节点出口：正常执行后进入 observe 节点，取消/终态直接结束。
+    """工具节点出口：进入 observe 节点，终态则直接结束。
 
-    ``observe`` 节点独立承载「观察工具结果」步骤（阶段二接入 LLM 观察推理）。取消或
-    终态分支不进 observe，避免对无观察价值的终态多做一次推理。
+    ``observe`` 节点独立承载「观察工具结果」步骤。终态或已产出最终回答时不再进 observe，
+    避免对无观察价值的分支多做一次推理。
 
     参数:
         state: 当前 graph state。
@@ -51,14 +51,15 @@ def _after_tools(state: ReactGraphState) -> str:
 
 
 def _after_observe(state: ReactGraphState) -> str:
-    """观察节点出口：根据错误上限判定决定继续模型推理还是结束。
+    """观察节点出口：回流模型继续推理，或结束工作流。
 
     参数:
         state: 当前 graph state（``observe`` 节点写回 ``terminal`` 与更新后的
             ``tool_error_count``）。
 
     返回:
-        ``"model"`` 表示回到模型节点继续推理；``END`` 表示工作流结束（达错误上限）。
+        ``"model"`` 表示回到模型节点继续推理；``END`` 表示工作流结束（终态或已产出
+        最终回答）。
     """
 
     if state.terminal or state.final_response:

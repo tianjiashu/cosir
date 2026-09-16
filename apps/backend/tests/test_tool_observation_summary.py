@@ -53,12 +53,17 @@ class _WorkflowHarness:
     def __init__(self, observations: list[ToolObservation]) -> None:
         self.events: list[Any] = []
         self.messages: list[Any] = []
+
+        async def run_tool_calls(*_args: Any, **_kwargs: Any) -> ToolRunResult:
+            """模拟工具批次执行；当前契约下 ``tools`` 节点对 ``run_tool_calls`` 使用 await。"""
+            return ToolRunResult(observations=observations)
+
         self.operations = SimpleNamespace(
             model_tools=[SimpleNamespace(name="list_directory", display=None)],
             get_current_task=lambda: SimpleNamespace(id=1),
             get_current_run=lambda: SimpleNamespace(id=2),
             is_current_run_cancelled=lambda: False,
-            run_tool_calls=lambda *_args, **_kwargs: ToolRunResult(observations=observations),
+            run_tool_calls=run_tool_calls,
             to_tool_model_message=lambda observation: ToolMessage(
                 content=observation.content, tool_call_id=observation.tool_call_id
             ),

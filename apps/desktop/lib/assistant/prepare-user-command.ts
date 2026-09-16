@@ -1,14 +1,12 @@
 import { isUserAddMessageCommand, type UserAddMessageCommand } from "@/lib/assistant/converter";
-import {
-  getLocalAttachmentById,
-  LocalAttachmentUnavailableError,
-} from "@/lib/assistant/attachments/local-attachment-registry";
-import { LOCAL_FILE_TOKEN } from "@/lib/assistant/attachments/local-file-token";
+import { getLocalAttachmentById } from "@/lib/assistant/attachments/local-attachment-registry";
+import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 
 /**
- * Convert composer-only ordinary-file tokens into local paths at the HTTP
- * boundary. The assistant-ui converter supplies text/image parts only, so the
- * token set in text is the source of truth for ordinary attachments.
+ * Preserve composer-only ordinary-file tokens at the HTTP boundary and attach
+ * the selected local-file descriptors explicitly. The backend resolves paths
+ * and persists the binding in Run.extra so a reloaded WebView does not depend
+ * on the in-memory local attachment registry.
  */
 export function prepareUserCommand(command: unknown): unknown {
   if (!isUserAddMessageCommand(command)) return command;
@@ -19,12 +17,24 @@ export function prepareUserCommand(command: unknown): unknown {
       parts.push(part);
       continue;
     }
-    const text = part.text.replace(LOCAL_FILE_TOKEN, (_token, id: string) => {
-      const path = getLocalAttachmentById(id)?.path;
-      if (!path) throw new LocalAttachmentUnavailableError();
-      return path;
-    });
-    parts.push({ type: "text", text });
+    parts.push({ type: "text", text: part.text });
   }
-  return { ...command, message: { ...command.message, parts } } satisfies UserAddMessageCommand;
+  const attachments = localFileTokenIds(
+    parts.filter((part): part is { type: "text"; text: string } => part.type === "text")
+      .map((part) => part.text)
+      .join("\n"),
+  ).flatMap((id) => {
+    const local = getLocalAttachmentById(id);
+    if (!local || local.kind !== "file") return [];
+    return [{
+      id: local.id,
+      name: local.name,
+      contentType: local.contentType,
+      path: local.path,
+    }];
+  });
+  if (attachments.length === 0) {
+    return { ...command, message: { ...command.message, parts } } satisfies UserAddMessageCommand;
+  }
+  return { ...command, message: { ...command.message, parts, attachments } } satisfies UserAddMessageCommand;
 }

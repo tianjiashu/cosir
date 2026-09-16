@@ -108,16 +108,6 @@ async def assistant_transport(
                         execution_mode=start_result.execution_mode,
                     ),
                 )
-            except ValueError as exc:
-                # 该 run 在进程内已被另一请求认领（仍在执行）：本请求退化为纯订阅。
-                # 此处不能收敛 run——它确实有执行器在驱动，收敛会误杀别人的执行。
-                log.warning(
-                    "assistant_transport_executor_already_claimed",
-                    extra={
-                        "msg": "执行器已被其他请求认领，本请求退化为纯订阅",
-                        "data": {"run_id": run.id, "task_id": task_id, "reason": str(exc)},
-                    },
-                )
             except Exception as exc:
                 # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
                 # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
@@ -312,30 +302,27 @@ async def cancel_run(
 ) -> Response:
     """显式取消一个 Conversation Run。
 
-    表现层只做输入校验、调用业务层与异常映射，不再编排「先落库再中断」的业务时序——
-    取消编排（令牌置位 → 事务性状态转移 → 中断后台 task）已收口到
-    ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会调用本端点，重复取消
-    不会覆盖已落定的终态。
+    表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内取消信号源
+    标记该 run」已收口到 ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会
+    调用本端点；重复取消只返回既有信号状态，不重复标记，也不改变任何持久化事实。
 
-    取消**不等待**旧执行收束：本端点返回 ``status=cancelled`` 只代表取消已落库、旧执行
-    已被要求停止；旧工具 worker 可能仍在收束（``settling=true``），这一点作为信息返回，
-    前端可据此展示"正在停止"。它**不是**续跑的准入条件——续跑领取新的取消令牌，与旧
-    执行互不干扰。
+    本端点只表示**取消信号已被接受**，不表示 run 已经终结：run 的终态转移
+    （active → cancelled）由 workflow 经 run_service 落定，前端需继续以 canonical
+    snapshot 为准判断该 run 是否已收束。
 
     参数:
         run_id: Conversation Run 标识。
-        run_executor: 取消编排唯一入口（令牌置位 + 仲裁落库 + task 中断）。
+        run_executor: 进程内取消信号标记的唯一入口。
 
     返回:
-        包含 ``run_id``、``status`` 与 ``settling`` 的 JSON 对象。
+        包含 ``run_id`` 与 ``cancelled`` 的 JSON 对象。
 
     异常:
-        HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409；
-        取消编排内部失败时返回 500。
+        HTTPException: run 不存在时返回 404；该 run 此前已标记过取消（信号已存在）时
+        返回 409；标记内部失败时返回 500。
 
     副作用:
-        经执行器先置位进程内取消令牌，再落库取消终态并投影工具收束，最后向活动执行
-        task 发出取消请求（不等待其结束）。
+        向进程内取消信号源写入该 run；不落库 run 状态、不取消后台执行 task。
     """
     try:
         result = await run_executor.cancel(run_id, end_reason="user_cancelled")
@@ -351,7 +338,7 @@ async def cancel_run(
             extra={"msg": "取消 Conversation Run 失败", "data": {"run_id": run_id}},
         )
         raise HTTPException(status_code=500, detail="failed to cancel run") from exc
-    if not result.cancelled:
+    if not result:
         log.info(
             "conversation_run_cancel_rejected",
             extra={"msg": "Conversation Run 当前状态不允许取消", "data": {"run_id": run_id}},
@@ -361,13 +348,12 @@ async def cancel_run(
         "conversation_run_cancelled",
         extra={
             "msg": "Conversation Run 已取消",
-            "data": {"run_id": run_id, "settling": result.settling},
+            "data": {"run_id": run_id, "result": result},
         },
     )
     return JSONResponse(
         content={
             "run_id": run_id,
-            "status": "cancelled",
-            "settling": result.settling,
+            "cancelled": result,
         }
     )

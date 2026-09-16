@@ -1,4 +1,13 @@
-"""Runtime operations exposed to workflow strategies."""
+"""暴露给工作流策略的运行时操作门面。
+
+本模块只承载「工作流可用的运行期副作用」这一层边界：工作流节点经 ``WorkflowOperations``
+使用模型、工具与状态能力，不直接持有 CRUD、service 或执行器。门面的状态事实来源是当前绑定的
+Conversation Run；run 状态迁移与事件发布委托 ``ConversationRunStateService``，Transport 投影
+委托 conversation event projector。
+
+不负责：工作流路由（见 ``react`` 包）、工具实现（见 ``core/tools``）、Run 状态机本身
+（见 ``service/task``）。
+"""
 
 from __future__ import annotations
 
@@ -40,10 +49,10 @@ if TYPE_CHECKING:
 
 
 class WorkflowOperations:
-    """Expose runtime-owned side effects through a narrow workflow boundary.
+    """以窄接口向工作流暴露运行时拥有的副作用。
 
-    状态单一事实来源是 ``ConversationRun``：本门面暴露的状态和当前 run 方法都作用于
-    run，不再写 task 执行态（task 执行态由最新 run 派生）。
+    状态单一事实来源是 ``ConversationRun``：本门面暴露的状态查询与状态迁移方法都作用于 run，
+    不写 task 执行态（task 执行态由最新 run 派生）。
     """
 
     def __init__(
@@ -117,25 +126,46 @@ class WorkflowOperations:
         )
 
     def get_current_run(self) -> ConversationRunRecord:
-        """Return the Conversation Run identified by ``current_run_id``.
+        """返回本门面绑定的 Conversation Run 记录。
 
-        用于工作流取「当前要跑的 run」。
+        返回:
+            构造门面时注入的 ``ConversationRunRecord``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
         return self._current_run
 
     def get_current_task(self) -> TaskRecord:
-        """Return the task identified by ``current_task_id``.
+        """返回本门面绑定的任务记录。
 
-        用于工作流取「当前要跑的任务」.
+        返回:
+            构造门面时注入的 ``TaskRecord``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
         return self._current_task
 
     def get_current_workspace(self) -> WorkspaceRecord:
-        """Return the workspace identified by ``current_workspace_id``.
+        """返回本门面绑定的工作区记录。
 
-        用于工作流取「当前要跑的任务」.
+        返回:
+            构造门面时注入的 ``WorkspaceRecord``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
         """
 
         return self._current_workspace
@@ -164,14 +194,15 @@ class WorkflowOperations:
             return None
 
     def is_current_run_cancelled(self) -> bool:
-        """Return whether the currently bound run should stop.
+        """返回当前绑定的 run 是否已被要求停止。
 
-        取消检测只读**本次执行的取消令牌**（运行时信号源）：取消入口由
-        ``ConversationRunExecutor.cancel`` 置位当前令牌并落库，本方法不做 DB 兜底查询，
-        避免协作取消检查在 process 模式工具的 50ms 轮询中产生高频数据库读。
+        取消信号来自进程内 run 级取消注册表（set 语义，``cancellation_registry``）：执行上下文
+        注入的 ``ToolRuntimeDependencies.is_run_cancelled`` 优先（它已冻结 run_id、直查同一
+        注册表），未注入时本方法按 run id 兜底查询。
 
-        令牌是「一次执行」专属的一次性信号：置位后不复位，因此即使该 run 随后续跑
-        （领取了新令牌），旧执行链路的判定仍保持"已取消"，不会误判为可继续执行。
+        本方法刻意不做 DB 兜底查询：工具取消检查会在 process 模式工具的 50ms 轮询中被反复调用，
+        高频读库不可接受。信号在 run 执行结束时由 ``ConversationRunRunner`` 清空；注册表属当前
+        后端进程内状态，不跨重启。
 
         参数:
             无。
@@ -183,7 +214,7 @@ class WorkflowOperations:
             无。
 
         副作用:
-            无。
+            无（只读进程内信号）。
         """
         current_run = self._current_run
         if current_run is None:
@@ -200,10 +231,11 @@ class WorkflowOperations:
         usage_stats: ConversationRunUsageStats | None = None,
         final_output: str | None = None,
     ) -> ConversationRunRecord | None:
-        """Complete the Conversation Run only if it is still running.
+        """仅当 run 仍处于 running 时把它落定为 completed。
 
         参数:
-            usage_stats: 可选的运行用量统计，透传给 ConversationRunService 以发布带用量的状态事件。
+            usage_stats: 可选的运行用量统计，透传给 ``ConversationRunStateService`` 以发布
+                带用量的状态事件。
             final_output: 可选，Agent 对该轮次的最终回答文本，随终态一并写入 run 行。
 
         返回:
@@ -214,8 +246,8 @@ class WorkflowOperations:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时同事务写入 completed 状态、回复文本与可选的最终回答；状态变更事件已由
-            ConversationRunService 在数据库更新成功后统一发布，本方法不再直接处理事件。
+            条件满足时把 run 更新为 ``completed``（写入 ``final_output`` 与用量列）；状态变更
+            事件已由 ``ConversationRunStateService`` 在条件更新命中后统一发布，本方法不直接发事件。
         """
         run_id = self._current_run.id
         log.info(
@@ -236,7 +268,7 @@ class WorkflowOperations:
         usage_stats: ConversationRunUsageStats | None = None,
         final_output: str | None = None,
     ) -> ConversationRunRecord | None:
-        """Fail the Conversation Run only if it is still running.
+        """仅当 run 仍处于 running 时把它落定为 failed。
 
         终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便失败，主 Agent 也能从
         委派结果中感知其终态输出，而非仅看到一个空终态。
@@ -254,8 +286,9 @@ class WorkflowOperations:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时写入 failed 状态与 final_output；状态变更事件已由 ConversationRunService
-            在数据库更新成功后统一发布，本方法不再直接处理事件。
+            条件满足时把 run 更新为 ``failed``（写入 ``end_reason`` / ``final_output`` / 用量与
+            受控错误契约）；状态变更事件由 ``ConversationRunStateService`` 在条件更新命中后发布，
+            本方法不直接发事件。
         """
         run_id = self._current_run.id
         log.info(
@@ -276,7 +309,7 @@ class WorkflowOperations:
         usage_stats: ConversationRunUsageStats | None = None,
         final_output: str | None = None,
     ) -> ConversationRunRecord | None:
-        """Cancel the Conversation Run through the canonical writer if it is still active.
+        """经 canonical writer 把仍处于 active 的 run 落定为 cancelled。
 
         终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便被取消，主 Agent 也能从
         委派结果中感知其已产出（或被中断）的内容，而非仅看到一个空终态。
@@ -294,8 +327,9 @@ class WorkflowOperations:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            通过 canonical writer 条件事务将运行和助手消息一并标记为 cancelled 与 final_output；
-            状态变更事件由 ConversationRunService 在数据库更新成功后发布；本方法不再直接处理事件。
+            条件满足时把 ``pending`` / ``running`` 的 run 更新为 ``cancelled``（写入
+            ``end_reason`` / ``final_output`` / 用量与受控错误契约）；状态变更事件由
+            ``ConversationRunStateService`` 在条件更新命中后发布，本方法不直接发事件。
         """
         run_id = self._current_run.id
         log.info(
@@ -317,7 +351,7 @@ class WorkflowOperations:
         step_id: str | None = None,
         running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
-        """Execute model-requested tool calls through the tool system.
+        """经工具系统执行模型请求的工具调用。
 
         工具生命周期通过明确的 callback 写入 canonical conversation facts。门面持有的
         ``execution_context`` 在内部透传给执行链，最终在执行期注入各 handler。
@@ -332,11 +366,20 @@ class WorkflowOperations:
             task_id: 当前任务标识符。
             calls: 模型请求的工具调用列表。
             step_id: 请求这些工具调用的步骤标识符。
-            running_loop: 异步工具节点提供的事件循环，用于工具执行期输出桥接。
-        返回:
-            工具观察结果与供下一步模型使用的消息。
-        """
+            running_loop: 兼容历史签名的保留参数，**当前实现不使用**（工具执行期输出桥接已由
+                执行层 handler 自行处理）。
 
+        返回:
+            ``ToolRunResult``；其 ``observations`` 由「串行组按传入顺序」与「并行组按实际完成
+            顺序」拼接而成（未按原始下标重排）。
+
+        异常:
+            无。单个工具的执行链路异常在 ``_execute_tool_call`` 内收口为 error 观察。
+
+        副作用:
+            实际执行工具（文件、终端、搜索、委派等）；串行调用逐个 ``await``，并行调用进入临时
+            线程池；状态写入 **run**。
+        """
 
         serial_calls: list[tuple[int, ToolCall]] = []
         parallel_calls: list[tuple[int, ToolCall]] = []
@@ -383,13 +426,14 @@ class WorkflowOperations:
             step_id: 请求这些工具调用的步骤标识符。
 
         返回:
-            带原始位置的已执行观察列表（按实际完成顺序）。批次中途取消时可能少于传入数量。
+            带原始位置的已执行观察列表，顺序为**实际完成顺序**（未按原始下标重排）；每个传入
+            调用都会产出条观察。
 
         异常:
             无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。
 
         副作用:
-            启动临时线程池执行工具；每任务复制一份 contextvars 快照，不引入跨线程可变状态。
+            启动临时线程池执行工具；每次提交前复制一份 contextvars 快照，不引入跨线程可变状态。
         """
         if not calls:
             return []
@@ -404,7 +448,11 @@ class WorkflowOperations:
             future_by_call: dict[Future[ToolObservation], tuple[int, ToolCall]] = {}
 
             def _submit_until_full() -> None:
-                """提交待执行调用，直到达到 worker 上限或检测到取消。"""
+                """提交待执行调用，直到在途任务数达到 worker 上限或没有待提交调用。
+
+                副作用:
+                    向线程池提交任务并登记 ``future -> (index, call)`` 映射；不改动工具调用本身。
+                """
                 while (
                     pending_calls
                     and len(future_by_call) < max_workers

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_handler.find_files import FindFilesTool
 from app.core.tools.tool_handler.search.content_engine import search_content
 from app.core.tools.tool_handler.search.result import ContentSearchPage
@@ -9,13 +8,12 @@ from app.core.tools.tool_handler.search.scope import SearchScope
 from app.core.tools.tool_handler.search_content import SearchContentTool
 
 
-def _context(root: Path, *, cancelled=None, run_id: int = 1) -> ToolExecutionContext:
+def _context(root: Path, *, run_id: int = 1) -> ToolExecutionContext:
     return ToolExecutionContext(
         task_id=1,
         workspace_id=1,
         workspace_root=root,
         run_id=run_id,
-        runtime_dependencies=ToolRuntimeDependencies(is_run_cancelled=cancelled),
     )
 
 
@@ -94,26 +92,6 @@ def test_search_content_rejects_invalid_path(tmp_path: Path) -> None:
     assert "existing file or directory" in (observation.reason or "")
 
 
-def test_search_content_honors_cancellation(tmp_path: Path) -> None:
-    source = tmp_path / "main.py"
-    source.write_text("needle\n" * 20, encoding="utf-8")
-    checks = 0
-
-    def cancel_after_some_work(_run_id: int) -> bool:
-        nonlocal checks
-        checks += 1
-        return checks > 3
-
-    observation = SearchContentTool().execute(
-        pattern="needle",
-        path=".",
-        execution_context=_context(tmp_path, cancelled=cancel_after_some_work),
-    )
-
-    assert observation.status == "cancelled"
-    assert checks > 3
-
-
 def test_search_content_has_cooperative_thread_timeout(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "main.py"
     source.write_text("needle\n" * 20, encoding="utf-8")
@@ -158,18 +136,6 @@ def test_search_tool_schemas_are_split_and_thread_based() -> None:
     assert files_definition.execution_mode == "thread"
     assert "target" not in content_definition.args_model.model_json_schema()["properties"]
     assert "target" not in files_definition.args_model.model_json_schema()["properties"]
-
-
-def test_find_files_honors_cancellation(tmp_path: Path) -> None:
-    (tmp_path / "main.py").write_text("x\n", encoding="utf-8")
-
-    observation = FindFilesTool().execute(
-        pattern="*.py",
-        path=".",
-        execution_context=_context(tmp_path, cancelled=lambda _run_id: True),
-    )
-
-    assert observation.status == "cancelled"
 
 
 def test_find_files_has_cooperative_thread_timeout(tmp_path: Path, monkeypatch) -> None:

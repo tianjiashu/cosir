@@ -3,13 +3,15 @@
 from datetime import UTC, datetime
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_record import ConversationRunRecord
 from app.models.task_record import TaskRecord
 
 
@@ -177,3 +179,108 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
     assert state["runs"][0]["messages"][0]["parts"] == [
         {"type": "text", "text": "输出到一半", "status": "completed"}
     ]
+
+
+def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
+    timestamp = _timestamp()
+    run = ConversationRunRecord(
+        id=1,
+        task_id=7,
+        input_text="请查看 C:/workspace/notes.md",
+        status="completed",
+        created_at=timestamp,
+        updated_at=timestamp,
+        checkpoint_thread_id="checkpoint-1",
+        extra=ConversationRunExtra(
+            display_text="请查看 [[cosir-file:file-1]]",
+            attachments=[{
+                "id": "file-1",
+                "name": "notes.md",
+                "content_type": "text/markdown",
+                "path": "C:/workspace/notes.md",
+            }],
+        ),
+    )
+    row = ConversationTaskContextRecord(
+        id=1,
+        task_id=7,
+        run_id=1,
+        message=HumanMessage(content=run.input_text),
+        include_in_context=True,
+        sequence=1,
+    )
+
+    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+
+    assert state["runs"][0]["messages"][0]["parts"] == [
+        {"type": "text", "text": "请查看 [[cosir-file:file-1]]", "status": "completed"},
+        {
+            "type": "file",
+            "file": "cosir-local-file:file-1",
+            "name": "notes.md",
+            "contentType": "text/markdown",
+        },
+    ]
+    validate_snapshot(state)
+
+
+def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None:
+    timestamp = _timestamp()
+    run = ConversationRunRecord(
+        id=1,
+        task_id=7,
+        input_text="请查看 C:/workspace/notes.md",
+        status="pending",
+        created_at=timestamp,
+        updated_at=timestamp,
+        checkpoint_thread_id="checkpoint-1",
+        extra=ConversationRunExtra(
+            display_text="请查看 [[cosir-file:file-1]]",
+            attachments=[{
+                "id": "file-1",
+                "name": "notes.md",
+                "content_type": "text/markdown",
+                "path": "C:/workspace/notes.md",
+            }],
+        ),
+    )
+
+    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [])
+
+    assert state["runs"][0]["messages"][0]["parts"][-1] == {
+        "type": "file",
+        "file": "cosir-local-file:file-1",
+        "name": "notes.md",
+        "contentType": "text/markdown",
+    }
+    validate_snapshot(state)
+
+
+def test_malformed_conversation_run_extra_is_ignored() -> None:
+    assert ConversationRunExtra.from_dict({
+        "assistant_input": {
+            "version": 1,
+            "display_text": "请查看 [[cosir-file:bad:id]]",
+            "attachments": [{
+                "id": "bad:id",
+                "name": "notes.md",
+                "content_type": "text/markdown",
+                "path": "C:/workspace/notes.md",
+            }],
+        }
+    }) is None
+
+
+def test_blank_file_path_is_treated_as_malformed_extra() -> None:
+    assert ConversationRunExtra.from_dict({
+        "assistant_input": {
+            "version": 1,
+            "display_text": "请查看 [[cosir-file:file-1]]",
+            "attachments": [{
+                "id": "file-1",
+                "name": "notes.md",
+                "content_type": "text/markdown",
+                "path": "   ",
+            }],
+        }
+    }) is None

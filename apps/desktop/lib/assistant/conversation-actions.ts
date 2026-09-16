@@ -1,6 +1,6 @@
 import type { TransportState } from "@/lib/assistant/contract";
 
-export type ComposerAction = "send" | "stop" | "resume";
+export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
 
 /**
  * 返回当前 canonical snapshot 中最后一条用户消息的 id。
@@ -60,7 +60,9 @@ export function deriveComposerAction(input: {
   isRunning: boolean;
   isDraftEmpty: boolean;
   canResume: boolean;
+  isCancelling?: boolean;
 }): ComposerAction {
+  if (input.isCancelling) return "cancelling";
   if (input.isRunning) return "stop";
   if (input.canResume && input.isDraftEmpty) return "resume";
   return "send";

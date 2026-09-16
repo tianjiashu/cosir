@@ -14,7 +14,7 @@
 拿到的始终是已治理、可落库、可回传的 :class:`ToolObservation`。
 """
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 
 from app.core.tools.guard.display_data_budget import DisplayDataBudget
 from app.core.tools.guard.file_resource_paths import FileResourcePathError
@@ -147,7 +147,6 @@ class ToolExecutor:
         call: ToolCall,
         execution_context: ToolExecutionContext | None = None,
         allowed_tool_names: Collection[str] | None = None,
-        should_cancel: Callable[[], bool] | None = None,
         output_sink: OutputSink | None = None,
     ) -> ToolObservation:
         """执行单次工具调用并返回归一化观察结果。
@@ -256,7 +255,6 @@ class ToolExecutor:
                     gate_outcome.arguments,
                     execution_context=execution_context,
                     tool_call_id=call.call_id,
-                    should_cancel=should_cancel,
                     output_sink=output_sink,
                 )
                 self._state_coordinator.complete(

@@ -1,5 +1,7 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -8,6 +10,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.event import RunStatusChangedEvent
+from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
+from app.models.conversation_run_command import ConversationRunCommand
+from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -121,6 +126,126 @@ def test_run_record_round_trips_usage_and_error() -> None:
     assert json.loads(model.error_json) == error
     assert restored.usage == usage
     assert restored.error == error
+
+
+def test_run_extra_serializes_direct_shape_without_version() -> None:
+    extra = ConversationRunExtra(
+        display_text="请阅读 [[cosir-file:readme.md]]",
+        attachments=[
+            {
+                "id": "readme.md",
+                "name": "README.md",
+                "content_type": "text/markdown",
+                "path": "attachments/readme.md",
+            }
+        ],
+    )
+
+    serialized = extra.to_dict()
+    assert serialized == {
+        "display_text": "请阅读 [[cosir-file:readme.md]]",
+        "attachments": [
+            {
+                "id": "readme.md",
+                "name": "README.md",
+                "content_type": "text/markdown",
+                "path": "attachments/readme.md",
+            }
+        ],
+    }
+    assert "version" not in serialized
+    assert ConversationRunExtra.from_dict(serialized) == extra
+
+
+def test_run_extra_reads_legacy_assistant_input_wrapper() -> None:
+    restored = ConversationRunExtra.from_dict(
+        {
+            "assistant_input": {
+                "version": 1,
+                "display_text": "请阅读 [[cosir-file:readme.md]]",
+                "attachments": [
+                    {
+                        "id": "readme.md",
+                        "name": "README.md",
+                        "content_type": "text/markdown",
+                        "path": "attachments/readme.md",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert restored is not None
+    assert restored.display_text == "请阅读 [[cosir-file:readme.md]]"
+    assert restored.attachments[0]["id"] == "readme.md"
+
+
+def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
+    attachment_path = Path(__file__)
+    service = ConversationRunService.__new__(ConversationRunService)
+    command = ConversationRunCommand(
+        display_text="请阅读 [[cosir-file:readme]]",
+        attachments=[
+            ConversationRunAttachmentInput(
+                id="readme",
+                name="README.md",
+                content_type="text/markdown",
+                path=str(attachment_path),
+            )
+        ],
+    )
+
+    prepared = service._prepare_command(  # type: ignore[attr-defined]
+        7,
+        command,
+        run_id=None,
+        model_name=None,
+    )
+
+    assert prepared.input_text == f"请阅读 {attachment_path}"
+    assert prepared.extra is not None
+    assert prepared.extra.display_text == command.display_text
+    assert prepared.extra.attachments[0]["id"] == "readme"
+
+
+def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
+    attachment_path = Path(__file__)
+    existing_extra = ConversationRunExtra(
+        display_text="请阅读 [[cosir-file:readme]]",
+        attachments=[
+            {
+                "id": "readme",
+                "name": "README.md",
+                "content_type": "text/markdown",
+                "path": str(attachment_path),
+            }
+        ],
+    )
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = SimpleNamespace(
+        get=lambda _run_id: SimpleNamespace(extra=existing_extra)
+    )
+    command = ConversationRunCommand(
+        display_text="请再次阅读 [[cosir-file:readme]]",
+        attachments=[
+            ConversationRunAttachmentInput(
+                id="readme",
+                name="README.md",
+                content_type="text/markdown",
+            )
+        ],
+    )
+
+    prepared = service._prepare_command(  # type: ignore[attr-defined]
+        7,
+        command,
+        run_id=11,
+        model_name=None,
+    )
+
+    assert prepared.input_text == f"请再次阅读 {attachment_path}"
+    assert prepared.extra is not None
+    assert prepared.extra.attachments[0]["path"] == str(attachment_path)
 
 
 def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -> None:

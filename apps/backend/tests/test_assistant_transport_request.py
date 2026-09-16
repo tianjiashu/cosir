@@ -120,3 +120,28 @@ def test_run_id_changes_payload_hash() -> None:
     second = _request(runId=42)
 
     assert first.payload_hash() != second.payload_hash()
+
+
+def test_accepts_explicit_ordinary_file_attachment_metadata() -> None:
+    request = AssistantTransportRequest(
+        commands=[{
+            "type": "add-message",
+            "commandId": "command-file-1",
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": "查看 [[cosir-file:file-1]]"}],
+                "attachments": [{
+                    "id": "file-1",
+                    "name": "notes.md",
+                    "contentType": "text/markdown",
+                    "path": "C:/workspace/notes.md",
+                }],
+            },
+        }],
+        threadId="task-1",
+        taskId=1,
+        providerId=1,
+        modelName="deepseek-chat",
+    )
+
+    assert request.commands[0].message.attachments[0].id == "file-1"

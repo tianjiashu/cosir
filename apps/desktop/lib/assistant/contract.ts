@@ -110,11 +110,17 @@ export type TransportImagePart = {
 };
 
 /** 用户普通文件 part：只携带稳定 locator 与展示元数据。 */
+export type TransportFilePart = {
+  type: "file";
+  file: string;
+  name: string;
+  contentType: string;
+};
 /** 单条 Transport 消息：Run 内的 canonical conversation 消息。 */
 export type TransportMessage = {
   id: string;
   role: "user" | "assistant";
-  parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart | TransportImagePart>;
+  parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart | TransportImagePart | TransportFilePart>;
 };
 
 export type ConversationStateUsage = {

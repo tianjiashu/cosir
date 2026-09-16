@@ -2,9 +2,9 @@
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
 取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
-stream；用 ``model.astream()`` 累积 ``AIMessage``，
-根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大步数终止。
-状态写入 **run**。
+stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContextManager`` 累积并收口成完整
+``AIMessage``），根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大
+步数终止。run 状态变更经 ``WorkflowOperations`` 落到 ``ConversationRun``（唯一事实源）。
 
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_content`` 调用）。此时文本**不计入最终
@@ -22,6 +22,7 @@ import asyncio
 
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.config import get_stream_writer
+from langgraph.types import interrupt
 
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
@@ -30,7 +31,6 @@ from app.core.workflows.nodes.helper.common import (
     _runtime_context,
     terminal_state,
 )
-from langgraph.types import interrupt
 from app.core.workflows.nodes.helper.debug_dump import _dump_raw_chunk_debug
 from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
@@ -88,9 +88,10 @@ async def _model_node(state: ReactGraphState) -> dict:
     """ReAct 模型节点：流式消费模型输出并决定下一步动作。
 
     节点从运行上下文取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量
-    写入 workflow stream；用 ``model.astream()`` 累积
-    ``AIMessage``。根据模型最终输出决定进入工具分支、
-    最终回答分支，还是因无效输出 / 超过最大步数而终止。状态写入 **run**。
+    写入 workflow stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContextManager``
+    累积并收口成完整 ``AIMessage``）。根据模型最终输出决定进入工具分支、最终回答分支，还是因
+    无效输出 / 超过最大步数而终止。run 状态变更经 ``WorkflowOperations`` 落到
+    ``ConversationRun``（唯一事实源）。
 
     参数:
         state: 当前 graph state。
@@ -111,12 +112,17 @@ async def _model_node(state: ReactGraphState) -> dict:
         - 非法输出经 ``RuntimeOperations`` 落定失败；请求前 / 流式中 / 流式结束后检测到协作
           取消时，经 ``RuntimeOperations.cancel_run_if_running`` 落定取消终态并 ``interrupt``
           挂起本节点（不写路由标志、不结束图，该 run 仍可由续跑恢复）；
-        - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：未命中工具名
-          的 ``IGNORE`` 仅记 warning；命中工具名的 ``REPAIR`` 挂 ``invalid_detail``，由 observe 节点
-          在全部 ToolMessage 之后统一注入修复 ``SystemMessage``，避免产生
-          ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序。
+        - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：按 ``id``
+          对齐模型未解析成功的调用，命中者挂 ``invalid_detail`` 并维持 ``pending``，由 observe
+          节点统一结算并注入修复 ``SystemMessage``（排在全部 ToolMessage 之后，避免产生
+          ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序）；缺失 ``id``
+          的非法调用无法对齐，仅记 warning。
         - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断、
           缺失或未知完成原因会追加继续提示并通过 ``continue_model`` 回到模型节点。
+
+    异常:
+        RuntimeError: 超步数收口时 ``RuntimeConfig`` 未携带 run id（见 ``_finalize_max_steps``）。
+        Exception: 模型调用或流式消费失败时向上传播，由 runner 收敛 run 终态。
     """
 
     rc = _runtime_config()
@@ -208,7 +214,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": rc.usage_stats.to_dict()},
                 },
             )
-            ai_message = _runtime_context().flush_message_chunk(stream_id=step_id, run_id=run_id, mode="cancel")
+            ai_message = _runtime_context().flush_message_chunk(
+                stream_id=step_id, run_id=run_id, mode="cancel"
+            )
             parts.finish()
             break
 
@@ -221,6 +229,9 @@ async def _model_node(state: ReactGraphState) -> dict:
             parts.text(text)
         if reasoning and reasoning.strip():
             parts.reasoning(reasoning)
+        # 传入的是本步累积后的 AIMessage（``add_message_chunk`` 的返回），而非原始
+        # chunk：``extract_tool_calls`` 按属性读取 ``tool_call_chunks`` / ``tool_calls``，
+        # 两种形态都适用（聚合后调用通常已落在 ``tool_calls``）。
         raw_tool_calls = chunk_processor.extract_tool_calls(message_chunk)
         if raw_tool_calls:
             # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。

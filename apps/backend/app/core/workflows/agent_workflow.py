@@ -29,10 +29,12 @@ class AgentWorkflow(Protocol):
                 注入 ``graph.astream`` 的 ``config["callbacks"]``，使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选的 Langfuse trace 标识；工作流可在终态事件 payload
                 中携带，供前端展示与跳转。未启用 Langfuse 时为 None。
+            execution_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``）；
+                由工作流实现决定是否清空该 run 的旧上下文与如何构造 graph 输入。
 
-        生成:
-            无。工作流只驱动领域事实写入；Transport 通过 canonical conversation state
-            订阅事实变更。
+        返回:
+            无（协程）。工作流只驱动领域事实写入；Transport 通过 canonical conversation
+            state 订阅事实变更。
 
         异常:
             Exception: 工作流失败可能传播到运行时包装器。

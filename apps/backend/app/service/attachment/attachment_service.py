@@ -146,7 +146,7 @@ class AttachmentService:
     def __init__(self) -> None:
         self._tasks = service_depends.get_task_service()
         self._workspaces = service_depends.get_workspace_service()
-        self._runs = service_depends.get_conversation_run_service()
+        self._runs = service_depends.get_conversation_run_state_service()
 
     def _directory(self, task_id: int) -> Path:
         task = self._tasks.get_task(task_id)

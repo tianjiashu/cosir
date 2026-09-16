@@ -8,7 +8,10 @@ from collections.abc import Awaitable, Callable
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.models.result.delegation_result import DelegationResult
-from app.service.depends import get_conversation_run_executor, get_conversation_run_service
+from app.service.depends import (
+    get_conversation_run_executor,
+    get_conversation_run_state_service,
+)
 
 
 class ChildAgentRunner:
@@ -16,13 +19,14 @@ class ChildAgentRunner:
 
     def __init__(
         self,
-        run_agent: Callable[[AgentProfile], Awaitable[None]],
-        should_cancel: Callable[[str], bool] | None = None,
+        run_agent: Callable[..., Awaitable[None]],
+        should_cancel: Callable[[int], bool] | None = None,
     ) -> None:
         """初始化 child agent 运行桥接器。
 
         参数:
             run_agent: 现有 AgentRuntime.run_agent 入口。
+            should_cancel: 可选的按 run 查询取消状态的回调。
 
         返回:
             无。
@@ -171,7 +175,7 @@ class ChildAgentRunner:
                 child_run_id=run_id,
                 error="child run cancelled",
             )
-        child_run = get_conversation_run_service().get_run(run_id)
+        child_run = get_conversation_run_state_service().get_run(run_id)
         if child_run.status == "completed":
             return DelegationResult(
                 status="completed",
@@ -205,7 +209,7 @@ class ChildAgentRunner:
         返回:
             status="cancelled" 的 DelegationResult，其 summary 携带 run 的 final_output。
         """
-        service = get_conversation_run_service()
+        service = get_conversation_run_state_service()
         run = service.cancel_run_if_running(
             run_id,
             end_reason="runtime_cancelled",
@@ -234,7 +238,7 @@ class ChildAgentRunner:
         返回:
             status="failed" 的 DelegationResult，其 summary 携带 run 的 final_output。
         """
-        service = get_conversation_run_service()
+        service = get_conversation_run_state_service()
         run = service.fail_run_if_running(run_id, end_reason=error, final_output=error)
         if run is None:
             run = service.get_run(run_id)

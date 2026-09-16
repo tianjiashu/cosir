@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { TransportState } from "@/lib/assistant/contract";
 import {
   currentTransportRun,
-  markTransportStateCancelled,
   transportMessageCount,
 } from "@/lib/assistant/transport-state-operations";
 
@@ -48,17 +47,4 @@ describe("transport state operations", () => {
     expect(transportMessageCount(snapshot)).toBe(2);
   });
 
-  it("projects cancellation to active tool parts without mutating the input", () => {
-    const snapshot = state();
-    const cancelled = markTransportStateCancelled(snapshot, 1);
-    const parts = cancelled.runs[0]?.messages[0]?.parts;
-
-    expect(snapshot.runs[0]?.status).toBe("running");
-    expect(cancelled.current_run_id).toBe(1);
-    expect(cancelled.runs[0]?.status).toBe("cancelled");
-    expect(parts).toEqual([
-      expect.objectContaining({ status: "cancelled", error: "已取消", isError: false }),
-      expect.objectContaining({ status: "cancelled", error: "已取消", isError: false }),
-    ]);
-  });
 });

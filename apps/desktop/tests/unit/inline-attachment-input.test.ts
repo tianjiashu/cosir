@@ -32,4 +32,15 @@ describe("inline attachment HTML rendering", () => {
     expect(html).toContain("附件已失效");
     expect(html).not.toContain(value);
   });
+
+  it("hides the HTML comment wrapper while editing a canonical message", () => {
+    const html = renderInlineAttachmentHtml(
+      "请查看 <!-- [[cosir-file:file-1]] -->",
+      [{ id: "file-1", name: "notes.md" }],
+    );
+
+    expect(html).not.toContain("<!--");
+    expect(html).not.toContain("-->");
+    expect(html).toContain('data-file-id="file-1"');
+  });
 });

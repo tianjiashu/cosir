@@ -4,7 +4,7 @@ import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attac
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 
 describe("prepare user command", () => {
-  it("replaces ordinary-file tokens by registered paths and leaves only text/image parts", () => {
+  it("preserves ordinary-file tokens and adds explicit local attachment metadata", () => {
     registerLocalAttachment(new File([], "报告 final.md", { type: "text/markdown" }), {
       id: "local-file-prepare",
       path: "C:\\workspace\\报告 final.md",
@@ -27,20 +27,46 @@ describe("prepare user command", () => {
       message: {
         role: "user",
         parts: [
-          { type: "text", text: "读取 C:\\workspace\\报告 final.md" },
+          { type: "text", text: "读取 [[cosir-file:local-file-prepare]]" },
           { type: "image", image: "cosir-attachment://" + "a".repeat(64) },
         ],
+        attachments: [{
+          id: "local-file-prepare",
+          name: "报告 final.md",
+          contentType: "text/markdown",
+          path: "C:\\workspace\\报告 final.md",
+        }],
       },
     });
   });
 
-  it("rejects an unregistered ordinary-file token", () => {
-    expect(() => prepareUserCommand({
+  it("leaves an unresolved token for backend edit recovery", () => {
+    expect(prepareUserCommand({
       type: "add-message",
       message: {
         role: "user",
         parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
       },
-    })).toThrow("附件已失效，请重新选择附件");
+    })).toEqual({
+      type: "add-message",
+      message: {
+        role: "user",
+        parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
+      },
+    });
+  });
+
+  it("keeps canonical hidden token wrappers out of the new request path", () => {
+    expect(prepareUserCommand({
+      type: "add-message",
+      message: {
+        role: "user",
+        parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:missing]] -->" }],
+      },
+    })).toMatchObject({
+      message: {
+        parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:missing]] -->" }],
+      },
+    });
   });
 });

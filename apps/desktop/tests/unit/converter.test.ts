@@ -79,6 +79,56 @@ describe("assistant transport converter", () => {
     expect(attachments).toMatchObject([{ id: "local-file-restore" }]);
   });
 
+  it("projects a canonical file part into a message attachment", () => {
+    const converted = toThreadMessage(
+      {
+        id: "user-1",
+        role: "user",
+        parts: [{
+          type: "file",
+          file: "cosir-local-file:file-1",
+          name: "notes.md",
+          contentType: "text/markdown",
+        }],
+      },
+      completedRun(1),
+    );
+
+    expect(converted).toMatchObject({
+      role: "user",
+      attachments: [{
+        id: "file-1",
+        type: "file",
+        name: "notes.md",
+        contentType: "text/markdown",
+        content: [{ data: "cosir-local-file:file-1" }],
+      }],
+    });
+  });
+
+  it("does not render internal ordinary-file tokens as visible message text", () => {
+    const converted = toThreadMessage(
+      {
+        id: "user-2",
+        role: "user",
+        parts: [
+          { type: "text", text: "请查看 [[cosir-file:file-1]]" },
+          {
+            type: "file",
+            file: "cosir-local-file:file-1",
+            name: "notes.md",
+            contentType: "text/markdown",
+          },
+        ],
+      },
+      completedRun(1),
+    );
+
+    expect(converted.content).toMatchObject([
+      { type: "text", text: "请查看 <!-- [[cosir-file:file-1]] -->" },
+    ]);
+  });
+
   it("does not use a file path or remote locator as an attachment ID", () => {
     const attachments = extractUserAddMessageAttachments({
       type: "add-message",

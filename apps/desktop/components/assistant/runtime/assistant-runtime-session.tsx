@@ -77,17 +77,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const notifyTaskStateChanged = useCallback(() => {
     onTaskStateChangedRef.current?.();
   }, []);
-  const commitTransportState = useCallback((state: typeof sessionInitialState) => {
-    latestStateRef.current = state;
-    const run = currentTransportRun(state);
-    if (
-      cancelRequestedRunIdRef.current === (run?.runId ?? null)
-      && run?.status === "cancelled"
-    ) {
-      cancelRequestedRunIdRef.current = null;
-      lastTransportErrorRef.current = null;
-    }
-  }, [sessionInitialState]);
 
   const context = useMemo<RuntimeSessionContext>(() => ({
     taskId,
@@ -118,6 +107,10 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
 
   useRuntimeDiagnostics(context);
   const cancellation = useRuntimeCancellation(context);
+  const commitTransportState = useCallback((state: typeof sessionInitialState) => {
+    latestStateRef.current = state;
+    cancellation.onStateCommitted(state);
+  }, [cancellation.onStateCommitted, sessionInitialState]);
   const recovery = useRuntimeRecovery(context);
   const runtime = useRuntimeTransport(context, recovery);
 
@@ -142,6 +135,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
           onResumeBusiness={recovery.resumeBusinessRun}
           onCancelRequested={cancellation.onRequested}
           onCancelResult={cancellation.onResult}
+          cancellingRunId={cancellation.cancellingRunId}
         />
       </div>
       <InitialMessageBridge

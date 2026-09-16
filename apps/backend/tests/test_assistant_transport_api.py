@@ -13,7 +13,6 @@ from app.assistant_transport.assistant_api import (
     assistant_transport_state,
 )
 from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
-from app.assistant_transport.service import conversation_run_command_service as command_module
 from app.assistant_transport.service import transport_assistant_service as transport_module
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
@@ -126,7 +125,6 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
     "end_reason", [None, "user_cancelled", "runtime_restarted", "executor_cancelled"]
 )
 async def test_resume_task_accepts_any_cancelled_end_reason(
-    monkeypatch: pytest.MonkeyPatch,
     end_reason: str | None,
 ) -> None:
     status = "cancelled"
@@ -149,28 +147,11 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
         def get_by_run(self, _run_id: int) -> None:
             return None
 
-    class _Operation:
-        def __enter__(self) -> "_Operation":
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-    class _TaskSpace:
-        def operation(self, *, timeout: float) -> _Operation:
-            assert timeout == 10
-            return _Operation()
-
-    class _TaskSpaces:
-        def get_or_create(self, _task_id: int) -> _TaskSpace:
-            return _TaskSpace()
-
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
     service._state = _StateService()
-    service._conversation_run = _RunService()
+    service._run_state = _RunService()
     service._command = _CommandCrud()
-    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
 
     result = service.resume_latest_run(task_id=1, run_id=7)
 
@@ -180,33 +161,13 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
 
 
 @pytest.mark.asyncio
-async def test_resume_task_requires_cancelled_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_resume_task_requires_cancelled_status() -> None:
     class _TaskService:
         def get_latest_run(self, _task_id: int) -> object:
             return SimpleNamespace(id=7, status="running", end_reason="executor_cancelled")
 
-    class _TaskSpace:
-        def operation(self, *, timeout: float) -> object:
-            assert timeout == 10
-
-            class _Operation:
-                def __enter__(self) -> "_Operation":
-                    return self
-
-                def __exit__(self, *_args: object) -> None:
-                    return None
-
-            return _Operation()
-
-    class _TaskSpaces:
-        def get_or_create(self, _task_id: int) -> _TaskSpace:
-            return _TaskSpace()
-
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
-    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
     with pytest.raises(ValueError, match="not resumable"):
         service.resume_latest_run(task_id=1, run_id=7)
 
@@ -236,10 +197,6 @@ async def test_attach_run_only_subscribes_existing_executor(
         def get_state(self, _task_id: int) -> dict[str, object]:
             return state
 
-    class _Executor:
-        def is_locally_running(self, _run_id: int) -> bool:
-            return True
-
     class _Response:
         def __init__(self, value: object) -> None:
             self.value = value
@@ -248,7 +205,6 @@ async def test_attach_run_only_subscribes_existing_executor(
     service = TransportAssistantService.__new__(TransportAssistantService)
     service._runs = _RunService()
     service._snapshots = _SnapshotService()
-    service.run_executor = _Executor()
     service._stream = SimpleNamespace(subscribe_run_state=lambda *_args: None)  # type: ignore[attr-defined]
     monkeypatch.setattr(transport_module, "create_run", lambda _callback, state: state)
     monkeypatch.setattr(transport_module, "AssistantTransportResponse", _Response)
@@ -274,7 +230,6 @@ async def test_attach_run_rejects_terminal_run_even_when_snapshot_matches() -> N
     service = TransportAssistantService.__new__(TransportAssistantService)
     service._runs = _RunService()
     service._snapshots = _SnapshotService()
-    service.run_executor = SimpleNamespace(is_locally_running=lambda _run_id: False)
 
     with pytest.raises(HTTPException) as error:
         await service.attach_run(task_id=1, thread_id="task-1", run_id=7)
@@ -458,33 +413,8 @@ async def test_sse_callback_logs_and_propagates_failures(caplog: pytest.LogCaptu
     assert "assistant_sse_callback_failed" in {record.message for record in caplog.records}
 
 
-class _Operation:
-    """task 运行时空间的独占操作桩。"""
-
-    def __enter__(self) -> "_Operation":
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-
-class _TaskSpace:
-    """task 运行时空间桩。"""
-
-    def operation(self, *, timeout: float) -> _Operation:
-        assert timeout == 10
-        return _Operation()
-
-
-class _TaskSpaces:
-    """task 运行时空间注册表桩。"""
-
-    def get_or_create(self, _task_id: int) -> _TaskSpace:
-        return _TaskSpace()
-
-
 @pytest.mark.asyncio
-async def test_resume_setup_failure_settles_run(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resume_setup_failure_settles_run() -> None:
     """写操作之后再次读取快照失败时，必须补偿收敛 run，不能留下无执行器的 active run。"""
 
     state = _snapshot(7, "cancelled")
@@ -524,9 +454,8 @@ async def test_resume_setup_failure_settles_run(monkeypatch: pytest.MonkeyPatch)
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
     service._state = _StateService()
-    service._conversation_run = _RunService()
+    service._run_state = _RunService()
     service._command = _CommandCrud()
-    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
 
     with pytest.raises(RuntimeError, match="snapshot read failed"):
         service.resume_latest_run(task_id=1, run_id=7)
@@ -536,7 +465,7 @@ async def test_resume_setup_failure_settles_run(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_resume_reads_command_before_restoring_run(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resume_reads_command_before_restoring_run() -> None:
     """驱动命令读取必须在恢复 run 之前完成：读取失败时 run 仍是 cancelled。"""
 
     state = _snapshot(7, "cancelled")
@@ -566,9 +495,8 @@ async def test_resume_reads_command_before_restoring_run(monkeypatch: pytest.Mon
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
     service._state = _StateService()
-    service._conversation_run = _RunService()
+    service._run_state = _RunService()
     service._command = _CommandCrud()
-    monkeypatch.setattr(command_module, "task_runtime_spaces", _TaskSpaces())
 
     with pytest.raises(RuntimeError, match="command lookup failed"):
         service.resume_latest_run(task_id=1, run_id=7)

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from app.service.log_query_service import LogQueryService
     from app.service.provider import ModelEntryService, ProviderService
     from app.service.task.conversation_run_service import ConversationRunService
+    from app.service.task.conversation_run_state_service import ConversationRunStateService
     from app.service.task.conversation_run_workspace_resolver import (
         ConversationRunWorkspaceResolver,
     )
@@ -469,10 +470,48 @@ def get_conversation_run_command_service() -> ConversationRunCommandService:
 
 @lru_cache(maxsize=1)
 def get_conversation_run_service() -> ConversationRunService:
-    """返回进程级 ConversationRun 状态与执行 service 单例。"""
+    """返回进程级 Conversation Run 用例编排 service 单例。
+
+    只负责 Run 创建与编辑的编排（命令输入解析、附件处理、事务与事件发布所有权）；
+    Run 状态迁移与查询见 ``get_conversation_run_state_service``。
+
+    参数:
+        无。
+
+    返回:
+        已装配 CRUD / context service / 会话工厂的 ``ConversationRunService`` 单例
+        （``lru_cache`` 缓存）。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+    """
+
     from app.service.task.conversation_run_service import ConversationRunService
 
     return ConversationRunService()
+
+
+@lru_cache(maxsize=1)
+def get_conversation_run_state_service() -> ConversationRunStateService:
+    """返回进程级 Conversation Run 状态机单例。
+
+    只负责 Run 状态的条件迁移、对应事件发布与状态查询；Run 创建/编辑编排见
+    ``get_conversation_run_service``。
+
+    参数:
+        无。
+
+    返回:
+        已装配 run CRUD 与会话工厂的 ``ConversationRunStateService`` 单例
+        （``lru_cache`` 缓存）。
+
+    异常:
+        RuntimeError: 若存储初始化失败。
+    """
+
+    from app.service.task.conversation_run_state_service import ConversationRunStateService
+
+    return ConversationRunStateService()
 
 
 @lru_cache(maxsize=1)
@@ -489,14 +528,11 @@ def get_conversation_event_projector() -> ConversationEventProjector:
 def get_conversation_run_executor() -> ConversationRunExecutor:
     """返回进程级后台运行执行器。
 
-    参数:
-        cancellation_signal: 可选的进程内取消信号端口（``CancellationSignalPort``），
-            由 ``app.service.depends`` 注入 core 的取消注册表单例；service 层不直接
-            import core，经协议解耦。None 时执行器退化为空信号实现（仅中断 task，
-            无协作取消信号）。
+    无参数：执行器只依赖 run service。取消信号不再经 service 层注入端口——它由 core 的
+    ``cancellation_registry`` 承载，由 ``ConversationRunExecutor.cancel`` 标记。
 
     返回:
-        已装配 run service 与取消信号源的 ConversationRunExecutor 单例。
+        已装配 run service 的 ConversationRunExecutor 单例（``lru_cache`` 缓存）。
 
     异常:
         RuntimeError: 若存储初始化失败。
@@ -597,6 +633,7 @@ def reset_service_dependencies() -> None:
     get_workspace_service.cache_clear()
     get_conversation_run_workspace_resolver.cache_clear()
     get_conversation_run_service.cache_clear()
+    get_conversation_run_state_service.cache_clear()
     get_task_service.cache_clear()
     get_log_crud.cache_clear()
     get_delegation_service.cache_clear()
@@ -610,7 +647,7 @@ def reset_service_dependencies() -> None:
     get_conversation_task_context_crud.cache_clear()
     get_file_snapshot_crud.cache_clear()
     get_conversation_run_command_service.cache_clear()
-    get_conversation_run_service.cache_clear()
+    get_conversation_run_state_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()
     get_conversation_event_projector.cache_clear()

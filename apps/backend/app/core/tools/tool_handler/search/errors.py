@@ -1,4 +1,4 @@
-"""搜索 engine 的结构化错误与协作式终止信号。"""
+"""搜索 engine 的结构化错误。"""
 
 
 class SearchError(Exception):
@@ -15,10 +15,6 @@ class SearchPathUnreadable(SearchError):
 
 class InvalidSearchPattern(SearchError):
     """内容正则表达式无效。"""
-
-
-class SearchCancelled(SearchError):
-    """搜索期间检测到当前 Run 已取消。"""
 
 
 class SearchTimedOut(SearchError):

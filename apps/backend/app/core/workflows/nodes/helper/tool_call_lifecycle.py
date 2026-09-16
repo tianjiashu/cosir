@@ -67,7 +67,17 @@ class SettlementResult:
 
 
 def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
-    """把观察摘要状态映射为事件契约的终态状态。"""
+    """把观察摘要的 ``status`` 映射为事件契约的终态状态。
+
+    参数:
+        status: ``ToolObservation.status``（``success`` / ``cancelled`` / 其它错误态）。
+
+    返回:
+        ``completed`` / ``cancelled``；其余一律映射为 ``failed``。
+
+    副作用:
+        无。
+    """
 
     if status == "success":
         return "completed"
@@ -77,7 +87,17 @@ def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
 
 
 def _ui_data(summary: dict[str, Any]) -> dict[str, object] | None:
-    """返回终态事件需要更新的 ``display_data``；没有数据时返回 ``None``。"""
+    """取出终态事件需要更新的 ``display_data``（深拷贝，避免共享摘要结构）。
+
+    参数:
+        summary: 单条观察摘要。
+
+    返回:
+        摘要中的 ``display_data`` 深拷贝；缺失或不是映射时返回 ``None``。
+
+    副作用:
+        无。
+    """
 
     display_data = summary.get("display_data")
     if not isinstance(display_data, Mapping):
@@ -86,7 +106,19 @@ def _ui_data(summary: dict[str, Any]) -> dict[str, object] | None:
 
 
 def _ui_error(summary: dict[str, Any], event_status: str) -> str | None:
-    """只生成事件层的短错误提示；完整诊断保留在模型消息。"""
+    """生成事件层的短错误提示（完整诊断保留在模型消息里）。
+
+    参数:
+        summary: 单条观察摘要。
+        event_status: 事件终态（``completed`` / ``failed`` / ``cancelled``）。
+
+    返回:
+        取消返回「已取消」；失败优先返回后端分类映射的 ``display_data.status_hint``，缺失时
+        回退「执行失败」；``completed`` 返回 ``None``。
+
+    副作用:
+        无。
+    """
 
     if event_status == "cancelled":
         return "已取消"
@@ -102,8 +134,21 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
     """把观察摘要转回 ``ToolObservation``，供模型上下文写入 ToolMessage。
 
     摘要键名与执行层观察字段一致（``tool_call_id`` 等），由 ``tools`` 节点对
-    ``ToolObservation`` 的 ``dataclasses.asdict`` 投影产出；缺少必需键时按契约错误抛
-    ``KeyError``，由调用方（workflow 终态路径）记录并落定失败。
+    ``ToolObservation`` 的 ``dataclasses.asdict`` 投影产出。
+
+    参数:
+        summary: 单条观察摘要。
+
+    返回:
+        与摘要等价的 ``ToolObservation``（``display_data`` 已深拷贝）。
+
+    异常:
+        KeyError: 摘要缺少必需键（``tool_name`` / ``status`` / ``content`` / ``error`` /
+            ``reason`` / ``retryable`` / ``tool_call_id``）。本函数不做兜底，异常由
+            ``observe`` 节点向上冒泡为 workflow 执行异常。
+
+    副作用:
+        无（仅字段映射与深拷贝）。
     """
 
     return ToolObservation(
@@ -127,13 +172,13 @@ def build_invalid_tool_call_repair_message(
     ``SystemMessage`` 写进 ``RuntimeContextManager``。结构：
 
     - 顶部一句总领：说明上次非法工具调用未执行、请重试、只发严格合法 tool_calls。
-    - 每个 repair 条目（受 ``INVALID_TOOL_CALL_SUMMARY_LIMIT`` 限条）输出：
-      ``## <tool_name>`` + ``name`` / ``args`` 预览（经 ``redact_terminal_output``
-      脱敏后截断到 ``INVALID_TOOL_ARGS_PREVIEW_CHARS``、超出加 ``...[truncated]``）/
-      ``error``（若有）。``args`` 预览在脱敏后再截断，确保 secret 不进上下文。
-    - 整体字符预算受 ``INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS`` 约束：逐条拼接，一旦
-      累计超预算即停止追加并附末尾截断说明，保证不超过预算且每条仍含可定位的
-      ``tool_name`` 与 ``error`` 关键字段。
+    - 每个 repair 条目输出：``## <tool_name>`` + ``name`` / ``args`` 预览（经
+      ``redact_terminal_output`` 脱敏后截断到 ``INVALID_TOOL_ARGS_PREVIEW_CHARS``、超出加
+      ``...[truncated]``）/ ``error``（若有）。``args`` 预览在脱敏后再截断，确保 secret
+      不进上下文。
+    - 整体字符预算受 ``INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS`` 约束：逐条拼接，累计超预算即
+      停止追加并加末尾截断说明；随后从后往前**整条**丢弃已输出条目（而不是字符切片），
+      直至 header 与说明也在预算内，保证保留的每条仍含可定位的 ``tool_name`` 与 ``error``。
 
     参数:
         repair_datas: 待修复的非法调用明细列表，每项形如
@@ -230,16 +275,22 @@ class ToolCallLifecycleManager(BaseModel):
 
     @property
     def invalid_count(self) -> int:
+        """返回已挂 ``invalid_detail`` 的非法调用数量。"""
+
         return sum(
             1 for record in self.calls.values() if record.invalid_detail is not None
         )
 
     @property
     def has_call(self) -> bool:
+        """返回本快照是否登记了任意工具调用（合法或非法）。"""
+
         return len(self.calls) > 0
 
     @property
     def invalid_tools(self) -> list[ToolCallLifecycleRecord]:
+        """返回全部挂 ``invalid_detail`` 的非法调用记录。"""
+
         return [record for record in self.calls.values() if record.invalid_detail is not None]
 
     @staticmethod
@@ -273,6 +324,17 @@ class ToolCallLifecycleManager(BaseModel):
 
         ``raw_tool_calls`` 可来自单个流式 chunk；一个 chunk 中的多个调用会逐条处理。只有
         同时具备非空 ``id``、``name`` 且 name 已注册的调用才会建立记录。重复 id 幂等跳过。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            raw_tool_calls: 原始工具调用字典列表（每项含 ``id`` / ``name``）。
+
+        返回:
+            追加了本次新建记录的新 manager；未建立任何记录时返回等值的新快照。
+
+        副作用:
+            经 stream writer 为每条新建记录发出 ``ToolCallCreatedEvent``（该事件本身把前端
+            part 初始化为 ``pending``，所以不再单独发射 pending 状态事件）。
         """
 
         updated = self._copy()
@@ -318,7 +380,23 @@ class ToolCallLifecycleManager(BaseModel):
         error: str | None = None,
         display_data: dict[str, object] | None = None,
     ) -> None:
-        """发射一条状态迁移事件；合法迁移由 snapshot projector 校验。"""
+        """发射一条工具调用状态迁移事件。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            call_id: 目标工具调用 id。
+            to_status: 目标状态（``running`` / ``completed`` / ``failed`` / ``cancelled``）。
+            args: 可选，完整参数（仅合法调用迁移到 ``running`` 时携带）。
+            error: 可选，面向前端的短错误提示。
+            display_data: 可选，终态事件的展示数据。
+
+        返回:
+            无。
+
+        副作用:
+            经 stream writer 发出 ``ToolCallStatusChangedEvent``；迁移合法性由 snapshot
+            projector 校验（非法迁移只记日志、不杀死执行）。
+        """
 
         get_stream_writer()(
             ToolCallStatusChangedEvent(
@@ -341,7 +419,21 @@ class ToolCallLifecycleManager(BaseModel):
         step_id: str,
         tool_calls: list[ToolCall],
     ) -> ToolCallLifecycleManager:
-        """把 pending 调用迁移到 running，并写入完整解析后的参数。"""
+        """把 pending 调用迁移到 running，并写入完整解析后的参数。
+
+        未登记过的 ``call_id`` 先经 :meth:`create` 补建记录（流式期未捕获、聚合后才出现的
+        调用），仅 ``pending`` 记录会被迁移；已是 ``running`` 或终态的记录跳过。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            tool_calls: 模型解析成功的工具调用（``ai_message.tool_calls``）。
+
+        返回:
+            更新后的 manager：被迁移的调用状态为 ``running`` 且带完整 ``args``。
+
+        副作用:
+            每条迁移经 stream writer 发出一次 ``running`` 状态事件。
+        """
 
         updated = self
         for tool_call in tool_calls:
@@ -465,11 +557,13 @@ class ToolCallLifecycleManager(BaseModel):
     ) -> ToolCallLifecycleManager:
         """把尚未结束的调用迁移到 cancelled，并为每条发出终态事件。
 
-        取消有两个入口，两者都经本方法收口，避免前端留下悬空的「执行中」part：
+        收口判据是状态本身：只处理 ``pending`` / ``running`` 记录，已终态的跳过，因此可重复
+        调用；适用于「流式期 ``create`` 已把调用投影给前端、但该调用不会真正执行」的场景，
+        避免前端留下悬空的「执行中」part。
 
-        - **工具执行前**（``tools_node`` 检测到 run 已取消）：调用已置 ``running``，直接整批收口；
-        - **模型流式生成中**（``model_node`` 检测到 run 已取消）：流式期 ``create`` 已把调用
-          登记为 ``pending`` 并投影给前端，而 graph 不会进入 tools 节点，须在此一并收口。
+        注意：当前 workflow 生产路径没有调用方——协作取消由 ``model_node`` 经 ``interrupt``
+        中断图，工具侧取消由执行层的取消检查产生 ``cancelled`` 观察。本方法与其单测作为
+        取消收口能力保留，接入新的调用点时需同步确认图路由。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
@@ -478,6 +572,9 @@ class ToolCallLifecycleManager(BaseModel):
 
         返回:
             更新后的 manager；已终态的调用不受影响。
+
+        副作用:
+            经 stream writer 为每条被收口的调用发出一次 ``cancelled`` 终态事件。
         """
 
         updated = self._copy()
@@ -521,7 +618,10 @@ class ToolCallLifecycleManager(BaseModel):
             status_hint: 面向前端的短提示（如「参数无效」）。
 
         返回:
-            更新后的 manager。
+            更新后的 manager；目标记录不存在或不是 ``pending`` 时按原样返回新快照。
+
+        副作用:
+            经 stream writer 发出一次 ``failed`` 终态事件（``error`` 即 ``status_hint``）。
         """
 
         updated = self._copy()
@@ -547,7 +647,27 @@ class ToolCallLifecycleManager(BaseModel):
         step_id: str,
         summary: dict[str, Any],
     ) -> tuple[ToolCallLifecycleManager, Literal["completed", "failed", "cancelled"]]:
-        """发出终态事件、更新 state，并把 ToolMessage 写回模型上下文。"""
+        """结算单条观察：写回模型上下文、更新 state 并发出终态事件。
+
+        顺序是刻意的：先把 ``ToolMessage`` 写入 canonical context，再发终态 Transport 事件，
+        使 projector 不会发布一个无法从 context 重建的终态工具状态。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            summary: 单条工具观察摘要（``tools`` 节点的 ``dataclasses.asdict`` 投影）。
+
+        返回:
+            ``(更新后的 manager, 事件终态)``；调用已处于终态时原样返回新快照与既有终态，
+            不重复写上下文、不重复发事件。
+
+        异常:
+            KeyError: 摘要缺少必需字段（见 ``_summary_to_observation``）；本方法不兜底。
+
+        副作用:
+            写一条 ``ToolMessage`` 到 ``RuntimeContextManager``；``add_message`` 返回 ``False``
+            （该消息已存在）时直接返回、不再发事件；成功持久化后经 stream writer 发出终态事件，
+            事件发送失败只记 ``tool_terminal_event_failed`` 并降级继续。
+        """
 
         observation = _summary_to_observation(summary)
         event_status = _event_status(observation.status)
@@ -595,8 +715,8 @@ class ToolCallLifecycleManager(BaseModel):
                 },
             },
         )
-        # DB-backed context write is deliberately before the event so the projector never
-        # publishes a terminal tool state that cannot be rebuilt from context.
+        # 刻意先落库上下文、再发终态事件：否则 projector 可能发布一个无法从 context
+        # 重建的终态工具状态。
         try:
             updated._emit_status(
                 task_id=task_id,
@@ -631,7 +751,26 @@ class ToolCallLifecycleManager(BaseModel):
         summaries: list[dict[str, Any]],
         inherited_error_count: int,
     ) -> SettlementResult:
-        """结算一批观察摘要，返回错误计数和更新后的 lifecycle。"""
+        """结算一批观察摘要，返回错误计数和更新后的 lifecycle。
+
+        连续失败计数规则：``completed`` 清零、``failed`` 累加（同时累加本批 ``error_count``）、
+        ``cancelled`` 既不计也不清零；``inherited_error_count`` 是上一批留下的计数。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            summaries: 本批观察摘要列表。
+            inherited_error_count: 继承自 state 的连续失败计数。
+
+        返回:
+            ``SettlementResult``：更新后的连续失败计数、本批失败条数与 lifecycle 快照。
+
+        异常:
+            KeyError: 某条摘要缺少必需字段（见 :meth:`settle`）；本方法不兜底。
+
+        副作用:
+            逐条经 :meth:`settle` 写模型上下文并发终态事件；结束时记一条
+            ``observe_node_dispatch_completed`` 汇总日志。
+        """
 
         lifecycle = self
         tool_error_count = inherited_error_count

@@ -1,95 +1,101 @@
+"""ConversationRunExecutor 的进程内取消信号与启动闸门测试。"""
+
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+
+_RUN_ID = 1
 
 
 class _RunService:
-    def __init__(self) -> None:
-        self.run = SimpleNamespace(
-            id=1,
-            task_id=7,
-            status="pending",
-            end_reason=None,
-        )
+    """只实现执行器读取 run 所需的最小语义。"""
+
+    def __init__(self, status: str = "running") -> None:
+        self.run = SimpleNamespace(id=_RUN_ID, task_id=7, status=status)
 
     def get_run(self, _run_id: int) -> SimpleNamespace:
         return self.run
 
-    def claim_pending_run(self, _run_id: int) -> bool:
-        return True
 
-    def claim_or_resume_run(self, _run_id: int) -> bool:
-        self.run.status = "running"
-        return True
+def _build_executor(service: object) -> ConversationRunExecutor:
+    """绕过依赖装配构造只注入 run service 与进程内信号源的执行器实例。"""
 
-    def complete_run_if_running(self, _run_id: int) -> None:
-        return None
-
-    def cancel_run_if_running(
-        self,
-        _run_id: int,
-        end_reason: str = "user_cancelled",
-        final_output: str | None = None,
-    ) -> SimpleNamespace | None:
-        del final_output
-        if self.run.status != "running":
-            return None
-        self.run.status = "cancelled"
-        self.run.end_reason = end_reason
-        return self.run
-
-    def fail_run_if_running(
-        self,
-        _run_id: int,
-        end_reason: str | None = None,
-        final_output: str | None = None,
-    ) -> None:
-        del end_reason, final_output
-        return None
+    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
+    executor._run_service = service
+    executor._signal = cancellation_registry
+    executor._event_projector = None
+    executor._executions = {}
+    return executor
 
 
-class _Signal:
-    def mark_cancelled(self, _run_id: int) -> None:
-        return None
+@pytest.fixture(autouse=True)
+def _isolated_signal_registry():
+    """每个用例前后清空进程内取消信号，避免用例间串扰。"""
 
-    def clear(self, _run_id: int) -> None:
-        return None
+    cancellation_registry.clear(_RUN_ID)
+    yield
+    cancellation_registry.clear(_RUN_ID)
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_projects_tool_settlement_and_returns_normally(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = _RunService()
-    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
-    executor._run_service = service
-    executor._persist_status = True
-    executor._event_projector = None
-    executor._signal = _Signal()
-    executor._executions = {}
-    executor._cancelling_run_ids = set()
-    executor._cancellation_cleanup_tasks = set()
-    projected: list[tuple[int, str, str]] = []
-    monkeypatch.setattr(
-        executor,
-        "_project_tools_settled",
-        lambda run_id, status, reason: projected.append((run_id, status, reason)),
-    )
+async def test_cancel_marks_signal_and_returns_without_waiting_for_runner() -> None:
+    """runner 永不返回时取消依旧立即返回 True，且只标记进程内信号。"""
+
+    service = _RunService(status="running")
+    executor = _build_executor(service)
 
     async def runner(_run: object) -> None:
         await asyncio.Event().wait()
 
-    await executor.start(1, runner)
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if service.run.status == "running":
-            break
+    execution = await executor.start(_RUN_ID, runner)
+    try:
+        assert await asyncio.wait_for(executor.cancel(_RUN_ID), timeout=1.0) is True
+        assert cancellation_registry.is_cancelled(_RUN_ID) is True
+        # 取消只发信号：不落库 run 终态，也不取消后台执行 task。
+        assert service.run.status == "running"
+    finally:
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
 
-    assert service.run.status == "running"
-    assert await executor.cancel(1) is True
-    assert projected == [(1, "cancelled", "user_cancelled")]
-    assert service.run.status == "cancelled"
-    assert executor.is_cancelling(1) is False
+
+@pytest.mark.asyncio
+async def test_cancel_is_idempotent_for_already_marked_run() -> None:
+    """同一 run 重复取消返回 False，不重复标记。"""
+
+    executor = _build_executor(_RunService(status="running"))
+
+    assert await executor.cancel(_RUN_ID) is True
+    assert await executor.cancel(_RUN_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_rolls_back_signal_when_run_missing() -> None:
+    """run 不存在时撤销已标记的信号并抛 KeyError，API 据此映射 404。"""
+
+    class _MissingRunService(_RunService):
+        def get_run(self, _run_id: int) -> SimpleNamespace:
+            raise KeyError(_run_id)
+
+    executor = _build_executor(_MissingRunService())
+
+    with pytest.raises(KeyError):
+        await executor.cancel(_RUN_ID)
+    assert cancellation_registry.is_cancelled(_RUN_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_run_that_is_not_running() -> None:
+    """run 状态不是 running 时拒绝启动执行器，且不登记执行注册。"""
+
+    executor = _build_executor(_RunService(status="cancelled"))
+
+    async def runner(_run: object) -> None:
+        return None
+
+    with pytest.raises(ValueError):
+        await executor.start(_RUN_ID, runner)
+    assert executor._executions == {}

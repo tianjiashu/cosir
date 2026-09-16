@@ -31,6 +31,7 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
+from app.core.context.streaming_message_state import StreamingMessageState
 from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
     plan_tool_call_closure,
@@ -51,16 +52,6 @@ from app.utils.message_content import content_to_text
 
 STREAMING_PERSIST_MIN_CHARS = 64
 STREAMING_PERSIST_MAX_INTERVAL_SECONDS = 0.25
-
-
-@dataclass
-class _StreamingMessageState:
-    """一条流式 assistant 草稿的进程内聚合状态。"""
-
-    chunk: AIMessageChunk
-    sequence: int
-    persisted_text_length: int
-    last_persisted_at: float
 
 
 @dataclass
@@ -88,7 +79,7 @@ class RuntimeContextManager:
     _tool_schemas: tuple[Mapping[str, Any], ...] = field(default_factory=tuple, init=False)
     # key=(run_id, stream_id) → 一条流式草稿的进程内聚合状态。复合 key 区分不同 run / step
     # 的草稿；partial 不进 _entries，避免被下一次模型调用误读。
-    _streaming_messages: dict[tuple[int | None, str], _StreamingMessageState] = field(
+    _streaming_messages: dict[tuple[int | None, str], StreamingMessageState] = field(
         default_factory=dict, init=False
     )
 
@@ -340,7 +331,7 @@ class RuntimeContextManager:
                 True,
             )
             self._message_sequence += 1
-            state = _StreamingMessageState(
+            state = StreamingMessageState(
                 chunk=merged_chunk,
                 sequence=sequence,
                 persisted_text_length=len(content_to_text(merged_chunk.content)),
@@ -427,7 +418,7 @@ class RuntimeContextManager:
         state.last_persisted_at = time.monotonic()
         return _as_ai_message(state.chunk)
 
-    def _streaming_needs_flush(self, state: _StreamingMessageState) -> bool:
+    def _streaming_needs_flush(self, state: StreamingMessageState) -> bool:
         """根据字符和时间阈值决定是否刷写流式草稿。"""
 
         text_length = len(content_to_text(state.chunk.content))
@@ -441,31 +432,63 @@ class RuntimeContextManager:
             self,
             text: str,
             image_paths: Sequence[str] | None = None,
+            display_text: str | None = None,
     ) -> bool:
         """确保当前 Run 在上下文中恰好有一条初始 user 消息。
 
-        该消息是 Run 的 canonical 输入事实（``ConversationRunRecord.input_text``）：
-        ``begin_run(fresh)`` 会清空该 Run 的旧条目，因此 fresh 执行需要在此补写；
-        resume 时同一 Run 的 user 消息已在上下文中，本方法为幂等空操作。调用方必须在
-        启动 graph 之前调用，使首个 ``load_message`` 能把用户输入交给模型。
+        该消息是 Run 的 canonical 输入事实（``ConversationRunRecord.input_text``）；调用方
+        必须在启动 graph 之前调用，使首个 ``load_message`` 能把用户输入交给模型。
+
+        幂等判据取 **canonical context 事实**（该 Run 是否已有 ``HumanMessage`` 行），而不是
+        ``execution_mode``——三种启动场景对「是否已有」的期望恰好由这一步区分：
+
+        - **新 Run**（``fresh``）：``begin_run`` 未清到任何旧条目（首次执行）⇒ 无 ⇒ 写入；
+        - **编辑重跑**（``fresh``）：``begin_run`` 已按 run 清空该 Run 的条目 ⇒ 无 ⇒ 写入；
+        - **续跑**（``resume``）：``begin_run`` 保留该 Run 的既有条目 ⇒ 有 ⇒ 跳过；
+        - 续跑但上次崩在写入之前（``resume`` 且查无此消息）⇒ 补写，否则 graph 拿不到输入。
+
+        进程内 ``self._entries`` **不可**作判据：它只覆盖当前进程写入过的消息，后端重启后
+        为空，会把「已有」误判成「没有」而重复写入（历史缺陷：续跑曾因此写入第二条 user
+        消息，使快照重建出现重复 ``user-{run_id}``，并让整个 Task 的历史接口 500）。
 
         参数:
             text: 该 Run 的输入文本。
             image_paths: 已最终化的 workspace-relative 图片路径；只作为自定义 image ref
                 写入 canonical context，模型调用前由 model-input boundary 解析成 provider block。
+            display_text: 可选的 Transport 用户展示文本。普通文件 token 保留在此文本中，
+                不把本机路径泄漏到历史消息 UI；canonical context 仍使用 ``text`` 供模型读取。
         返回:
-            ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示已存在，或文本和
-            图片均为空被跳过。
+            ``True`` 表示本次写入了一条 ``HumanMessage``；``False`` 表示该 Run 已存在，或
+            文本和图片均为空被跳过。
 
         异常:
             无；持久化失败由 ``add_message`` 向上传播。
 
         副作用:
-            经 ``add_message`` 落库一条 ``HumanMessage`` 并触发上下文变更监听；文本和图片
-            均为空时写一条 warning 日志（历史空输入 Run 不应因此中断执行）。图片 ref 不
-            包含二进制。
+            经 ``add_message`` 落库一条 ``HumanMessage`` 并触发上下文变更监听；已存在时只记
+            一条 info 日志后返回；文本和图片均为空时写一条 warning 日志（历史空输入 Run 不应
+            因此中断执行）。图片 ref 不包含二进制。
         """
+
         paths = tuple(path.strip() for path in (image_paths or ()) if path and path.strip())
+        if not (text and text.strip()) and not paths:
+            log.warning(
+                "run_user_message_blank",
+                extra={
+                    "msg": "Run 输入文本与图片均为空，跳过初始 user 消息写入",
+                    "data": {"task_id": self.current_task_id, "run_id": self.current_run_id},
+                },
+            )
+            return False
+        if self._current_run_has_user_message():
+            log.info(
+                "run_user_message_exists",
+                extra={
+                    "msg": "当前 Run 已有初始 user 消息，跳过写入",
+                    "data": {"task_id": self.current_task_id, "run_id": self.current_run_id},
+                },
+            )
+            return False
         if paths:
             content_blocks: list[dict[str, str]] = []
             if text and text.strip():
@@ -480,10 +503,24 @@ class RuntimeContextManager:
                 UserInputAppendedEvent(
                     task_id=self.current_task_id,
                     run_id=self.current_run_id,
-                    text=text,
+                    text=display_text if display_text is not None else text,
                 )
             )
         return message
+
+    def _current_run_has_user_message(self) -> bool:
+        """返回当前 Run 是否已在 canonical context 中拥有初始 user 消息。
+
+        只读 ``conversation_task_contexts``（唯一持久化真相），**不**使用进程内
+        ``self._entries``：后者只覆盖当前进程写入过的消息，后端重启后为空，会把「已有」
+        误判成「没有」而重复写入。
+        """
+
+        entries = self._require_context_service().entries_in_context(self.current_task_id)
+        return any(
+            entry.run_id == self.current_run_id and isinstance(entry.message, HumanMessage)
+            for entry in entries
+        )
 
     def _close_unclosed_tool_calls(self) -> None:
         """闭合最后一条工具调用消息上未配对的结果，并把结果归位到该消息之后。

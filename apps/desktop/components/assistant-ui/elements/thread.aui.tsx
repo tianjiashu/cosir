@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import {
   deriveComposerAction,
+  getTransportRunId,
   isEditableLatestRunUserMessage,
   isResumableCancelledRun,
 } from "@/lib/assistant/conversation-actions";
@@ -67,12 +68,13 @@ export type ThreadProps = {
   onResumeBusiness?: () => Promise<void>;
   onCancelRequested?: (runId: number) => void;
   onCancelResult?: (runId: number, accepted: boolean) => void;
+  cancellingRunId?: number | null;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -122,10 +124,10 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
   const isEmpty = useAuiState(isNewChatView);
   return (
-    <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult }}>
+    <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -198,17 +200,19 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
+  const { cancellingRunId, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
+  const runId = useAuiState((state) => getTransportRunId(state.thread.state));
   const canResume = useAuiState((state) => isResumableCancelledRun(state.thread.state as unknown as TransportState));
-  const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume });
+  const isCancelling = cancellingRunId === runId;
+  const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  const { onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
 
   useEffect(() => {
     void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
-      data: { taskId, action, isRunning, isDraftEmpty, canResume, draftLength },
+      data: { taskId, action, isRunning, isDraftEmpty, canResume, isCancelling, cancellingRunId, runId, draftLength },
     });
-  }, [action, canResume, draftLength, isDraftEmpty, isRunning, taskId]);
+  }, [action, canResume, cancellingRunId, draftLength, isCancelling, isDraftEmpty, isRunning, runId, taskId]);
 
   useEffect(() => {
     if (isRunning || !canResume) {
@@ -228,6 +232,10 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
 
   if (action === "stop") {
     return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />;
+  }
+
+  if (action === "cancelling") {
+    return <StopButton taskId={taskId} isCancelling />;
   }
 
   if (action === "resume") {

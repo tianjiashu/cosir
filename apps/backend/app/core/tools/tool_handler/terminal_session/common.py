@@ -21,10 +21,24 @@ def require_service(context: ToolExecutionContext) -> TerminalSessionService:
 
 
 def cancelled(context: ToolExecutionContext) -> bool:
-    """查询当前 Agent Run 是否已取消。"""
+    """查询当前 Agent Run 是否已收到取消信号。
 
-    callback = context.runtime_dependencies.is_run_cancelled
-    return callback is not None and context.run_id > 0 and callback(context.run_id)
+    参数:
+        context: 本次工具调用的执行上下文，提供注入的取消查询与 run 标识。
+
+    返回:
+        该 run 已被取消时返回 True；未注入取消查询（process 副本或无 run 绑定）时返回
+        False，调用方视为「不可取消」。
+
+    异常:
+        无。
+
+    副作用:
+        无；每次调用重新读取进程内取消注册表。
+    """
+
+    should_cancel = context.runtime_dependencies.is_run_cancelled
+    return should_cancel is not None and should_cancel(context.run_id)
 
 
 def cancelled_observation(tool_name: str, permission: str) -> ToolObservation:

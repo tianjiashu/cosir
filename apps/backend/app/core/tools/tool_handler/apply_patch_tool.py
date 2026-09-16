@@ -17,6 +17,7 @@
 import errno
 import os
 
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import (
     build_file_change_artifact_data,
     build_file_change_display_data,
@@ -31,6 +32,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.patch_write.atomic_write import looks_like_line_numbered
@@ -197,6 +199,11 @@ class ApplyPatchTool(HandlerBase):
                 permission=self.permission,
             )
         try:
+            if cancellation_registry.is_cancelled(execution_context.run_id):
+                return tool_cancelled(
+                    tool_name=self.name,
+                    permission=self.permission,
+                )
             results = apply_all_with_diff(operations, resolver)
         except PatchApplyError as exc:
             return self._patch_apply_error_observation(exc)

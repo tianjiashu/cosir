@@ -18,8 +18,8 @@ from app.assistant_transport.service.transport_stream_service import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
-from app.service.task import conversation_run_service as conversation_run_service_module
-from app.service.task.conversation_run_service import ConversationRunService
+from app.service.task import conversation_run_state_service as conversation_run_state_service_module
+from app.service.task.conversation_run_state_service import ConversationRunStateService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -105,7 +105,9 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
     assert state["context_usage_used"] == 42
     assert state["context_usage_ratio"] == 0.42
     assert [run["runId"] for run in state["runs"]] == [1, 2]
-    assert state["runs"][1]["messages"][0]["parts"][0]["text"] == "from canonical context"
+    # user 消息文本取自 runs 行的 ``input_text``（``extra.display_text`` 优先），
+    # context 行只承载喂给模型的上下文序列，不参与 user 消息文本的重建。
+    assert state["runs"][1]["messages"][0]["parts"][0]["text"] == "input-2"
 
 
 def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
@@ -186,7 +188,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
     ConversationTaskStateService.clear_process_state()
     restarted = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     rebuilt = restarted.get_state(7)
-    assert rebuilt["runs"][0]["messages"][0]["parts"][0]["text"] == "durable"
+    assert rebuilt["runs"][0]["messages"][0]["parts"][0]["text"] == "input-2"
 
 
 def test_canonical_state_sources_failures_are_logged_and_not_replaced_by_empty_state(
@@ -302,15 +304,15 @@ def test_claim_run_propagates_post_commit_projector_failure(
             raise RuntimeError("transport unavailable")
 
     monkeypatch.setattr(
-        conversation_run_service_module.service_depends,
+        conversation_run_state_service_module.service_depends,
         "get_conversation_event_projector",
         lambda: FailingProjector(),
     )
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run = RunCrud()
 
     with pytest.raises(RuntimeError, match="transport unavailable"):
-        service.claim_or_resume_run(7)
+        service.claim_pending_run(7)
 
 
 def test_malformed_context_deserialization_fails_at_state_read_boundary() -> None:

@@ -9,6 +9,7 @@ import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/uti
 
 import type {
   TransportError,
+  TransportFilePart,
   TransportImagePart,
   TransportMessage,
   TransportReasoningPart,
@@ -27,6 +28,12 @@ export type UserAddMessageCommand = {
   parentId?: string | null;
   message: {
     role: "user";
+    attachments?: ReadonlyArray<{
+      id: string;
+      name: string;
+      contentType: string;
+      path?: string | null;
+    }>;
     parts: ReadonlyArray<
       | { type: "text"; text: string }
       | { type: "image"; image: string }
@@ -80,6 +87,12 @@ function toPartStatus(status: string | undefined) {
 
 function toTextPart(part: TransportTextPart, role: TransportMessage["role"]): ThreadMessage["content"][number] {
   return { type: "text", text: part.text, status: role === "user" && part.status === undefined ? { type: "complete" } : toPartStatus(part.status) };
+}
+
+function hideLocalFileTokens(text: string): string {
+  // Keep the token in the underlying editable text for edit/resend recovery,
+  // but render it as an HTML comment so internal IDs never appear in chat UI.
+  return text.replace(/\[\[cosir-file:[^\]]+\]\]/g, (token) => `<!-- ${token} -->`);
 }
 
 function toImageAttachment(part: TransportImagePart, index: number): CompleteAttachment {
@@ -252,16 +265,21 @@ function toThreadMessageWithContext(
   context: TransportMessageRenderContext,
 ): ThreadMessage {
   const imageParts = message.parts.filter((part): part is TransportImagePart => part.type === "image");
+  const fileParts = message.parts.filter((part): part is TransportFilePart => part.type === "file");
   const content = message.parts
     .map((part) => {
       switch (part.type) {
         case "text":
-          return toTextPart(part, message.role);
+          return toTextPart(
+            message.role === "user" ? { ...part, text: hideLocalFileTokens(part.text) } : part,
+            message.role,
+          );
         case "reasoning":
           return toReasoningPart(part);
         case "tool-call":
           return toToolCallPart(part);
         case "image":
+        case "file":
           return null;
         default:
           return null;
@@ -276,6 +294,10 @@ function toThreadMessageWithContext(
       content: content as ThreadUserMessage["content"],
       attachments: [
         ...imageParts.map(toImageAttachment),
+        ...fileParts.flatMap((part) => {
+          const attachment = toFileAttachment(part);
+          return attachment ? [attachment] : [];
+        }),
       ],
       createdAt: new Date(),
       metadata: {

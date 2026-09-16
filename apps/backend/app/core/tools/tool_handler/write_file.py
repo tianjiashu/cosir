@@ -13,6 +13,7 @@ success content 提供简短警告，不改变写入成功状态。
 
 from pathlib import Path
 
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import (
     build_file_change_artifact_data,
     build_file_change_display_data,
@@ -24,6 +25,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import (
     blocked_device_reason,
     os_error_message,
@@ -157,6 +159,11 @@ class WriteFileTool(HandlerBase):
                 )
 
         try:
+            if cancellation_registry.is_cancelled(execution_context.run_id):
+                return tool_cancelled(
+                    tool_name=self.name,
+                    permission=self.permission,
+                )
             atomic_write_text(
                 resolved,
                 content,

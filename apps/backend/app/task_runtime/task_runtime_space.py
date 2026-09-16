@@ -3,6 +3,30 @@
 本模块只拥有统一的执行闸门（Task 操作锁）与延迟创建的运行时 context/snapshot working
 copy；持久化的 task / run / context 记录仍由 SQLite 负责。多个 space 的进程内生命周期管理见
 ``app.task_runtime.task_runtime_space_registry``。
+
+加锁边界（**审查须知：请勿把"缺少内部锁"判定为缺陷**）：
+
+本类除 ``_context_guard`` 外不自行加锁，这是刻意的单一闸门设计，不是遗漏：
+
+- **snapshot working copy（``_snapshot``）没有任何内部锁，是刻意的。** 其全部读写入口
+  （``get_snapshot`` / ``existing_snapshot`` / ``replace_snapshot`` / ``unload_snapshot``）
+  的生产调用方只有 ``ConversationTaskStateService``；该 service 的类级 ``_lock``（RLock）是
+  snapshot working copy 的**唯一序列化点**，已在懒加载、事件投影、subscriber 注册、删除清理
+  所有路径上覆盖。此前额外存在的 ``_snapshot_guard`` 与外层 ``_lock`` 是同一临界区里的双层锁
+  （外层 RLock 完全覆盖内层普通 Lock），已按"不重复加锁"删除。
+- **直连约定（务必看清这一条，它决定"要不要加回锁"）**：既有单测
+  （``tests/test_task4_state_lifecycle.py``）会在**单线程**下直连 space 读写 snapshot 以断言
+  working copy 的生命周期，此时不存在并发，属允许用法。任何**多线程**直连（不持
+  ``_lock``）都是调用方缺陷：它会同时触发 check-then-set 造成的重复懒加载与
+  last-write-wins 覆盖，本类不为此兜底。出现这类调用方时，正确修法是让它回到
+  ``ConversationTaskStateService``，**不是**给本类加回内部锁。
+- **context manager 槽位的懒创建/查询/卸载不额外加锁**，因为其调用方本已持有该 task 的操作锁：
+  run 执行（``ConversationRunExecutor._execute`` 全程 ``async_operation()``）、task 删除
+  （``TaskService.delete_task`` 的 task 闸门）、task fork 的源 task 闸门。
+- **``_context_guard`` 保留的唯一理由**：task fork 在 ``begin_immediate`` 事务提交之后才安装
+  目标 context manager，此时调用线程持有的是**源** task 闸门与 workspace 闸门，**不持有目标
+  task 闸门**；因此「安装 fork manager」与「目标 task 首次 run 的懒创建 manager」之间存在真实
+  竞态，需要一把锁保证两者不互相覆盖。删除它会引入 fork hydrate 覆盖/丢失问题。
 """
 
 from __future__ import annotations
@@ -46,7 +70,12 @@ def _weak_ref(obj: _T) -> weakref.ReferenceType[_T]:
 
 @dataclass
 class TaskRuntimeSpace:
-    """一个持久化 Task 对应的运行时资源空间。"""
+    """一个持久化 Task 对应的运行时资源空间。
+
+    并发边界见模块 docstring：``lock`` 是唯一 Task 操作闸门；snapshot working copy **不**持有
+    内部锁（由 ``ConversationTaskStateService._lock`` 统一串行化）；``_context_manager`` 槽位
+    由 ``_context_guard`` 保护。
+    """
 
     task_id: int
     lock: threading.Lock = field(init=False)
@@ -55,16 +84,15 @@ class TaskRuntimeSpace:
     )
     # snapshot 是 TypedDict（运行时即 dict），无法被弱引用包裹，因此按 task 维度强引用缓存，
     # 由 ``unload_snapshot`` / 进程内清理显式释放。
+    # 该字段刻意不配内部锁：所有访问经 ``ConversationTaskStateService._lock`` 串行化。
     _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
-    _snapshot_guard: threading.Lock = field(init=False)
 
     def __post_init__(self) -> None:
-        """初始化统一执行闸门和延迟创建的 context 槽位。"""
+        """初始化统一执行闸门与 context manager 槽位锁。"""
 
         self.lock = threading.Lock()
         self._context_guard = threading.Lock()
-        self._snapshot_guard = threading.Lock()
 
     def _acquire_lock(self, timeout: float | None) -> bool:
         """在同步线程中取得 Task 操作闸门。"""
@@ -160,39 +188,51 @@ class TaskRuntimeSpace:
             透传 ``loader`` 的重建异常；失败时不会缓存不完整 snapshot。
 
         副作用:
-            首次调用在 ``_snapshot_guard`` 下重建并缓存进程内 working copy；后续调用复用同一
-            task 的副本，不再读取数据库或重复重建，直到 ``unload_snapshot`` 或进程内清理。
+            首次调用时重建并缓存进程内 working copy；后续调用复用同一 task 的副本，不再读取
+            数据库或重复重建，直到 ``unload_snapshot`` 或进程内清理。
+
+        并发:
+            **本方法刻意不自行加锁**（原 ``_snapshot_guard`` 已随"同一临界区双层锁"删除）。
+            读写 ``_snapshot`` 必须全部经 ``ConversationTaskStateService``：其类级 ``_lock``
+            是唯一序列化点，已在懒加载、事件投影、subscriber 注册与删除清理路径上覆盖。
+            若有调用方绕过该 service 直接调用本方法或其它 snapshot 方法，需自行保证互斥。
         """
 
-        with self._snapshot_guard:
-            if self._snapshot is None:
-                self._snapshot = copy.deepcopy(loader())
-            return copy.deepcopy(self._snapshot)
+        if self._snapshot is None:
+            self._snapshot = copy.deepcopy(loader())
+        return copy.deepcopy(self._snapshot)
 
     def existing_snapshot(self) -> ConversationStateSnapshot | None:
         """返回已物化的 task snapshot，不触发数据库读取或懒加载。
 
         尚未物化或已被 ``unload_snapshot`` 清理时返回 None。
+
+        并发:
+            与 ``get_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
         """
 
-        with self._snapshot_guard:
-            return copy.deepcopy(self._snapshot) if self._snapshot is not None else None
+        return copy.deepcopy(self._snapshot) if self._snapshot is not None else None
 
     def replace_snapshot(self, snapshot: ConversationStateSnapshot) -> None:
         """替换 task 的进程内 snapshot working copy。
 
         仅供已完成 canonical 数据库提交后的显式重建或 Transport projector 使用；不会
         写数据库，也不会通知 SSE subscriber。
+
+        并发:
+            与 ``get_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
         """
 
-        with self._snapshot_guard:
-            self._snapshot = copy.deepcopy(snapshot)
+        self._snapshot = copy.deepcopy(snapshot)
 
     def unload_snapshot(self) -> None:
-        """卸载 task snapshot，使下一次访问重新从 canonical records 懒加载。"""
+        """卸载 task snapshot，使下一次访问重新从 canonical records 懒加载。
 
-        with self._snapshot_guard:
-            self._snapshot = None
+        并发:
+            与 ``get_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
+        """
+
+        self._snapshot = None
 
     def get_context_manager(
         self,
@@ -212,12 +252,19 @@ class TaskRuntimeSpace:
             已创建或已缓存的 ``RuntimeContextManager`` 实例。
 
         异常:
-            无（构造失败会向上抛出 ``RuntimeContextManager`` 构造期的异常）。
+            ``RuntimeContextManager`` 构造或其 listener 装配失败时原样向上抛出，本方法不兜底；
+            此时 space 不会缓存半成品引用，调用方（run 执行、task fork）需自行处理。
 
         副作用:
             首次调用时在持有 ``_context_guard`` 的前提下惰性构造并以**弱引用**缓存 context
             manager；后续调用直接返回仍存活的缓存实例。当外部不再持有该 manager 时弱引用
             会自然失效，下次访问重新创建。
+
+        并发:
+            锁外快路径 + 锁内重检是刻意保留的 double-checked locking，**不是重复判断**：
+            ``install_fork_context_manager`` 会在同一把锁内写入槽位，若省掉锁内重检，
+            懒创建可能覆盖刚安装的 fork manager。run 执行路径本身还持有 Task 操作闸门，
+            这里的锁只覆盖 fork hydrate 与目标 task 首次 run 之间的竞态（详见模块 docstring）。
         """
 
         manager_ref = self._context_manager
@@ -248,13 +295,24 @@ class TaskRuntimeSpace:
         """返回已物化的 context manager；不因查询而触发懒加载。
 
         当弱引用已失效（外部不再持有 manager）时返回 None。
+
+        并发:
+            经 ``_context_guard`` 快照弱引用；调用方（task fork / task 删除）本已持有
+            Task 操作闸门，此处的锁仅保证与 ``install_fork_context_manager`` 的写入不交叉。
         """
 
         with self._context_guard:
             return self._context_manager() if self._context_manager is not None else None
 
     def install_fork_context_manager(self, manager: RuntimeContextManager) -> None:
-        """安装已由源 manager fork 出来的目标 context manager。"""
+        """安装已由源 manager fork 出来的目标 context manager。
+
+        仅在目标 space 尚无存活 manager 时安装，避免覆盖目标 task 已懒创建的真实 manager。
+
+        并发:
+            ``_context_guard`` 是唯一写入方之间的互斥点；调用方（``TaskService`` fork 事务）
+            持有源 task 闸门与 workspace 闸门，但**不持有目标 task 闸门**，故此处不能省略锁。
+        """
 
         with self._context_guard:
             if self._context_manager is not None and self._context_manager() is not None:

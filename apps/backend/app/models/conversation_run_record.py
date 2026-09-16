@@ -9,26 +9,17 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
+from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_usage import ConversationRunUsage
 from app.utils.datetime_utils import from_text, to_text
 
 if TYPE_CHECKING:
     from app.storage.model.conversation_run_model import ConversationRunModel
 
-
-
-class ConversationRunUsage(TypedDict):
-    """Persisted six-field token usage contract for one run."""
-
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    cache_hit_tokens: int
-    cache_miss_tokens: int | None
-    reasoning_tokens: int
 
 
 class ConversationRunError(TypedDict):
@@ -37,6 +28,7 @@ class ConversationRunError(TypedDict):
     code: str
     message: str
     retryable: bool
+
 
 @dataclass
 class ConversationRunRecord:
@@ -57,7 +49,7 @@ class ConversationRunRecord:
     model_name: str | None = None
     image_paths: list[str] | None = None
     reasoning_effort: str | None = None
-    extra: dict[str, Any] | None = None
+    extra: ConversationRunExtra | None = None
     usage: ConversationRunUsage | None = None
     error: ConversationRunError | None = None
 
@@ -89,7 +81,7 @@ class ConversationRunRecord:
             "agent_id": self.agent_id,
             "provider_id": self.provider_id,
             "model_name": self.model_name,
-            "extra": self.extra,
+            "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage": self.usage,
             "error": self.error,
             "created_at": to_text(self.created_at),
@@ -129,7 +121,7 @@ class ConversationRunRecord:
             reasoning_effort=row.reasoning_effort,
             model_name=row.model_name,
             provider_id=row.provider_id,
-            extra=row.extra,
+            extra=ConversationRunExtra.from_dict(row.extra),
             usage=(
                 json.loads(row.usage_json)
                 if row.usage_json is not None
@@ -159,7 +151,7 @@ class ConversationRunRecord:
             "model_name": self.model_name,
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
-            "extra": self.extra,
+            "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage_json": json.dumps(
                 self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False
             ),

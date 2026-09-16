@@ -44,8 +44,8 @@ class ReactGraphState(BaseModel):
             ``tool_call_id`` / ``display_data``）。tools 节点写；observe 节点做事件分发、
             错误计数与错误上限判定，其中 ``display_data`` 不会进入模型消息。
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
-            节点写入创建/运行状态，tools 节点写入执行前取消，observe 节点写入终态；不含
-            operations、stream writer 或 runtime context。
+            节点写入创建 / 运行状态与非法调用标记，tools 节点回写同一快照，observe 节点写入
+            终态；不含 operations、stream writer 或 runtime context。
     """
 
     step_count: int

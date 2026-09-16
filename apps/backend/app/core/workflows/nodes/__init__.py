@@ -4,21 +4,21 @@
 本包分两层，节点与共享辅助不混放：
 
 ``nodes/``（注册进 graph 的 LangGraph 节点，每文件一节点）：
-- ``model_node``：``model`` 节点（``_model_node``）及其强绑定辅助（成本估算 / 上下文占用
-  事件）。
-- ``tools_node``：``tools`` 节点（``_tools_node``）及工具批次执行与执行前取消检查。
-- ``observation_node``：``observe`` 节点（``_observe_node``）——协作取消的唯一收口点；
-  从 ``last_tool_results`` 重算连续失败计数并判定错误上限（阶段二将在此接入 LLM 观察推理）。
-- ``pause_node``：``pause`` 节点（``_pause_node``），协作取消的暂停点（图停在此处并保留
-  ``next``，使该 run 可被续跑）。
+- ``model_node``：``model`` 节点（``_model_node``）——流式消费模型输出、决定走向，并在
+  检测到协作取消时经 ``interrupt`` 中断图。
+- ``tools_node``：``tools`` 节点（``_tools_node``）——执行本批 ``running`` 工具调用并产出
+  可序列化观察摘要，不做终态事件与终态判定。
+- ``observation_node``：``observe`` 节点（``_observe_node``）——工具结果观察处理的单一收口：
+  终态事件分发、``ToolMessage`` 写回、非法调用结算、修复提示注入、连续失败计数与错误上限
+  判定（阶段二将在此接入 LLM 观察推理）。
 
 ``nodes/helper/``（节点共享的辅助，不注册为图节点）：
 - ``model_chunk``：模型流式 chunk 解析（``ModelChunkProcessor``：思考抽取 + 工具调用提前抽取
-  + chunk 合并为 ``AIMessage``）。
+  + 完成原因归一化）。
 - ``streaming_part_state_machine``：text / reasoning 增量合并与 part 收口。
 - ``tool_call_lifecycle``：工具调用生命周期快照、终态分发与非法调用修复提示构造。
-- ``finalize_max_steps``：超步数终态收口。
-- ``debug_dump``：模型 chunk 调试落盘（``logs/debug_merged_chunks.jsonl`` 等）。
+- ``finalize_max_steps``：超步数终态收口（被 ``model_node`` 直接调用的函数，非图节点）。
+- ``debug_dump``：模型 chunk 调试落盘（``logs/debug_raw_chunks.jsonl`` 等）。
 - ``common``：节点共享的运行时原语（runtime config / context 取出、``terminal_state``）。
 """
 
@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
     from app.core.workflows.nodes.model_node import _model_node
     from app.core.workflows.nodes.observation_node import _observe_node
-    from app.core.workflows.nodes.pause_node import _pause_node
     from app.core.workflows.nodes.tools_node import _tools_node
 
 
@@ -41,10 +40,6 @@ def __getattr__(name: str) -> Any:
         from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
 
         return _finalize_max_steps
-    if name == "_pause_node":
-        from app.core.workflows.nodes.pause_node import _pause_node
-
-        return _pause_node
     if name == "_model_node":
         from app.core.workflows.nodes.model_node import _model_node
 
@@ -63,6 +58,5 @@ __all__ = [
     "_finalize_max_steps",
     "_model_node",
     "_observe_node",
-    "_pause_node",
     "_tools_node",
 ]

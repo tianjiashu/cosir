@@ -42,10 +42,13 @@ async def _finalize_max_steps(
         state: 当前 graph state。
         step_count: 触发超配额的那一步序号（``model_node`` 传入 ``state.step_count + 1``）；
             缺省时用 ``state.step_count``。
+
     返回:
-        写回 LangGraph state 的终态字段。
+        写回 LangGraph state 的终态字段（含 ``final_text`` 的失败说明）。
+
     异常:
-        无。
+        RuntimeError: ``RuntimeConfig`` 未携带可用 run id（缺少 ``id``）。
+
     副作用:
         可能把当前 run 标记为 failed，并写入 canonical conversation state。
     """
@@ -90,16 +93,19 @@ async def _finalize_max_steps(
 def _terminal_state(step_count: int) -> dict[str, Any]:
     """构造最大步数收口函数返回的终态 state patch_write。
 
-    复用 ``common.terminal_state`` 的终态字段（统一收口终态硬字段，与 observe 节点各分支口径一致），
-    并补回默认 ``final_text``（步数耗尽没有最终回答，写给父 Agent / 用户的可见失败说明，
-    见 ``_MAX_STEPS_FINAL_TEXT``）。
+    复用 ``common.terminal_state`` 的终态硬字段（与 ``model_node`` 各终态分支同口径），并补上
+    ``final_text``（步数耗尽没有最终回答，写给父 Agent / 用户的可见失败说明，见
+    ``_MAX_STEPS_FINAL_TEXT``）。
 
     参数:
         step_count: 当前模型步数。
+
     返回:
         写回 LangGraph state 的终态字段。
+
     异常:
         无。
+
     副作用:
         无。
     """

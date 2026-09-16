@@ -44,9 +44,9 @@ class AssistantTransportStreamService:
         """初始化 snapshot 订阅与 run 状态查询依赖。"""
 
         self._snapshots = ConversationTaskStateService()
-        from app.service.depends import get_conversation_run_service
+        from app.service.depends import get_conversation_run_state_service
 
-        self._runs = get_conversation_run_service()
+        self._runs = get_conversation_run_state_service()
         from app.service.depends import get_conversation_run_executor
 
         self.run_executor = get_conversation_run_executor()

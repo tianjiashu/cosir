@@ -110,7 +110,14 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
         """用真实 run CRUD 建一条 Run，并返回快照重建所需的最小 Run 事实。"""
 
         record = runs.create(task.id, f"input for {status} run", status=status)
-        return SimpleNamespace(id=record.id, status=status, end_reason=None, usage=None)
+        # 快照重建按 ``ConversationRunRecord`` 读取 Run 输入事实，桩必须与真实记录同形。
+        return SimpleNamespace(
+            id=record.id,
+            input_text=record.input_text,
+            status=status,
+            end_reason=None,
+            usage=None,
+        )
 
     store = SimpleNamespace(
         engine=engine,
@@ -153,6 +160,8 @@ def _manager(
     manager._message_sequence = next_sequence
     manager._listeners = []
     manager._tool_schemas = ()
+    # 与真实 dataclass 字段同形：Run 重置路径会访问流式草稿表。
+    manager._streaming_messages = {}
     return manager
 
 

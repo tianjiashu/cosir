@@ -2,12 +2,14 @@
 
 from typing import ClassVar
 
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.delegate_task_args import PROMPT_MAX, TITLE_MAX, DelegateTaskArgs
@@ -110,6 +112,11 @@ class DelegateTaskTool(HandlerBase):
                 self.name,
                 "delegate_task_executor is not configured.",
                 reason="Configure a delegate_task runtime executor before delegating work.",
+                permission=self.permission,
+            )
+        if cancellation_registry.is_cancelled(execution_context.run_id):
+            return tool_cancelled(
+                tool_name=self.name,
                 permission=self.permission,
             )
         return executor.execute(

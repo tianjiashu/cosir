@@ -157,15 +157,36 @@
   .cosir-inline-file-token {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: 0.35rem;
     margin: 0 0.15rem;
-    padding: 0.1rem 0.35rem 0.1rem 0.45rem;
-    border: 1px solid color-mix(in oklab, var(--primary) 22%, transparent);
-    border-radius: 0.35rem;
-    background: color-mix(in oklab, var(--primary) 10%, transparent);
-    color: var(--primary);
-    vertical-align: baseline;
+    padding: 0.2rem 0.35rem 0.2rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--muted);
+    color: var(--foreground);
+    vertical-align: middle;
     user-select: none;
+    font-size: 0.85em;
+    line-height: 1.25;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .cosir-inline-file-token:hover {
+    border-color: color-mix(in oklab, var(--foreground) 18%, var(--border));
+  }
+
+  .cosir-inline-file-token-error {
+    border-style: dashed;
+    color: var(--muted-foreground);
+    background: color-mix(in oklab, var(--destructive) 6%, var(--muted));
+    border-color: color-mix(in oklab, var(--destructive) 25%, var(--border));
+  }
+
+  .cosir-inline-file-token-icon {
+    width: 0.9em;
+    height: 0.9em;
+    flex-shrink: 0;
+    opacity: 0.65;
   }
 
   .cosir-inline-file-token-name {
@@ -173,19 +194,26 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.8em;
   }
 
   .cosir-inline-file-token-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15em;
+    height: 1.15em;
     border: 0;
+    border-radius: 9999px;
     background: transparent;
     color: currentColor;
     cursor: pointer;
     line-height: 1;
-    opacity: 0.65;
+    opacity: 0.5;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
   }
 
   .cosir-inline-file-token-remove:hover {
     opacity: 1;
+    background-color: color-mix(in oklab, currentColor 12%, transparent);
   }
 }

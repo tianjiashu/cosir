@@ -19,17 +19,18 @@ type StopButtonProps = Omit<ComponentPropsWithoutRef<typeof Button>, "onClick"> 
   onClick?: MouseEventHandler<HTMLButtonElement>;
   onCancelRequested?: (runId: number) => void;
   onCancelResult?: (runId: number, accepted: boolean) => void;
+  isCancelling?: boolean;
 };
 
 export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
   function StopButton({
     taskId,
-    onClick: assistantOnClick,
     className,
     disabled,
     "aria-label": ariaLabel,
     onCancelRequested,
     onCancelResult,
+    isCancelling = false,
     ...props
   }, ref) {
     const runId = useAuiState((state) => getTransportRunId(state.thread.state));
@@ -54,17 +55,13 @@ export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
       return result;
     };
 
-    const handleClick: MouseEventHandler<HTMLButtonElement> = (event) => {
-      // The backend is the canonical owner of ConversationRun cancellation.
-      // Wait for its acknowledgement before invoking assistant-ui's Cancel;
-      // otherwise the primitive can immediately unmount this component and a
-      // rejected backend cancellation has nowhere to display its error.
-      void stop().then((result) => {
-        if (!result?.accepted) return;
-        // Keep assistant-ui's injected Cancel action: it aborts the active
-        // transport/runtime request on the client side.
-        assistantOnClick?.(event);
-      });
+    const handleClick = () => {
+      // 停止按钮只负责发送取消信号：ConversationRun 的终态由后端 workflow 落定，前端必须保持
+      // transport 订阅直到该终态快照到达，才能解除「取消中」。后端在 run 到达终态后会自行结束
+      // SSE（见 transport_stream_service 的 assistant_sse_stream_terminal），所以这里**不再**
+      // 触发 assistant-ui 注入的 Cancel —— 它会立刻 abort 前端请求，使终态快照无人接收，
+      // 界面将永久停在「取消中」。
+      void stop();
     };
 
     return (
@@ -75,12 +72,12 @@ export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
         variant="default"
         size="icon"
         className={cn("aui-composer-cancel size-7 rounded-full", className)}
-        aria-label={ariaLabel ?? (requesting ? "正在停止" : failureMessage ? "停止请求失败" : "停止")}
-        title={failureMessage ?? (requesting ? "正在停止" : "停止")}
-        disabled={disabled || requesting}
+        aria-label={ariaLabel ?? (isCancelling || requesting ? "正在停止" : failureMessage ? "停止请求失败" : "停止")}
+        title={failureMessage ?? (isCancelling || requesting ? "正在停止" : "停止")}
+        disabled={disabled || requesting || isCancelling}
         onClick={handleClick}
       >
-        {requesting ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : <SquareIcon className="size-3.5 fill-current" />}
+        {isCancelling || requesting ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : <SquareIcon className="size-3.5 fill-current" />}
       </Button>
     );
   },

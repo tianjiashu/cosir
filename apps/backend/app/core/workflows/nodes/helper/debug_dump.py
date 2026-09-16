@@ -1,12 +1,14 @@
 """模型节点「chunk debug 落盘」辅助集。
 
-本模块只承载「调试落盘」单一职责：把模型流式产出的原始 chunk 与合并后完整 chunk
-结构追加写入 ``logs/debug_merged_chunks.jsonl`` / ``logs/debug_raw_chunks.jsonl``，
-供本地逐 chunk 排查完整字段。常规结构化日志通道（JSONL 文件 + SQLite 日志库）
-对所有 ``data`` 字符串施加 ``MAX_LOG_TEXT_LENGTH`` 截断，无法承载完整消息 JSON；
-本模块绕过该预算，以单行 JSON 落盘，使开发者能在不被截断的前提下查看 chunk 结构。
+本模块只承载「调试落盘」单一职责：把模型流式产出的原始 chunk（``_dump_raw_chunk_debug``，
+由 ``model_node`` 逐 chunk 调用）与合并后的完整 chunk（``_dump_merged_chunk_debug``，当前无
+生产调用方，保留供本地排查）追加写入 ``logs/debug_raw_chunks.jsonl`` /
+``logs/debug_merged_chunks.jsonl``，供本地逐 chunk 排查完整字段。常规结构化日志通道
+（JSONL 文件 + SQLite 日志库）对所有 ``data`` 字符串施加 ``MAX_LOG_TEXT_LENGTH`` 截断，
+无法承载完整消息 JSON；本模块绕过该预算，以单行 JSON 落盘，使开发者能在不被截断的前提下
+查看 chunk 结构。
 
-与思考提取、chunk 组装（统归 ``model_chunk`` 的 ``ModelChunkProcessor``）职责分离：
+与思考提取、完成原因归一化（统归 ``model_chunk`` 的 ``ModelChunkProcessor``）职责分离：
 本模块只关心「写盘」，不关心「抽出什么 / 如何合并」。无循环导入：本模块不
 import ``model_node`` / ``common``。
 """
@@ -28,10 +30,9 @@ def _utc_now_iso() -> str:
 def _dump_merged_chunk_debug(merged: AIMessageChunk) -> None:
     """把合并后的完整 chunk 结构追加写入调试文件，供本地排查完整字段。
 
-    常规结构化日志通道（JSONL 文件 + SQLite 日志库）对所有 ``data`` 字符串施加
-    ``MAX_LOG_TEXT_LENGTH`` 截断，无法承载完整的消息 JSON；本函数绕过该预算，
-    把 ``merged.model_dump()`` 以单行 JSON 追加到 ``logs/debug_merged_chunks.jsonl``，
-    使开发者能在不被截断的前提下查看 chunk 累计后的完整结构。
+    与 ``_dump_raw_chunk_debug``（逐 chunk 落盘）互补：本函数落盘 ``merged.model_dump()``，
+    用于查看 chunk 累积后的完整结构。当前生产代码无调用方（chunk 累积合并已归
+    ``RuntimeContextManager``），保留供本地排查使用。
 
     参数:
         merged: 合并完成后的 ``AIMessageChunk``。
@@ -69,10 +70,9 @@ def _dump_merged_chunk_debug(merged: AIMessageChunk) -> None:
 def _dump_raw_chunk_debug(chunk: AIMessageChunk, index: int) -> None:
     """把单次流式产出的原始 chunk 结构追加写入调试文件，供本地逐 chunk 排查。
 
-    与 ``_dump_merged_chunk_debug``（合并后落盘）互补：本函数在 ``model.astream``
-    循环内逐条调用，记录每个原始分块的完整结构，使开发者能看到流式过程中 chunk
-    的形态演变（如 ``content`` 从空到累积、``tool_call_chunks`` 逐片到达、
-    ``usage_metadata`` 仅末 chunk 携带等）。同样绕过常规日志预算截断。
+    本函数在 ``model.astream`` 循环内逐条调用，记录每个原始分块的完整结构，使开发者能看到
+    流式过程中 chunk 的形态演变（如 ``content`` 从空到累积、``tool_call_chunks`` 逐片到达、
+    ``usage_metadata`` 仅末 chunk 携带等）。
 
     参数:
         chunk: 模型 ``astream`` 产出的单个原始消息分块。

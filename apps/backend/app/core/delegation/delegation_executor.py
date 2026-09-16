@@ -85,7 +85,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         runtime_event_loop = execution_context.runtime_dependencies.runtime_event_loop
         agent_registry = get_agent_registry()
         delegation_service = get_delegation_service()
-        conversation_run_state_service = get_conversation_run_service()
+        conversation_run_service = get_conversation_run_service()
         task_service = get_task_service()
 
         # 获取child agent profile
@@ -197,7 +197,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                 self._resolve_child_model_config(child_agent_profile)
             )
             try:
-                child_run = conversation_run_state_service.create_run(
+                child_run = conversation_run_service.create_run(
                     task_id=child_task.id,
                     input_text=agent_input_text,
                     agent_id=args.child_agent_id,

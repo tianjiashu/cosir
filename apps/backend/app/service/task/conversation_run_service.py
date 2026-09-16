@@ -1,34 +1,52 @@
-"""Conversation Run orchestration service.
+"""Conversation Run 创建与编辑的用例编排。
 
-单一职责：编排 run 的创建与管理——创建 run 时同步更新所属任务的最新 run ID 和消息预览。
+单一职责：把领域命令编排成一次 Run 创建或原地编辑——解析输入与附件、在事务内落库 run 与
+命令、更新所属 task 的最新 run，并按事务所有权决定是否发布 Transport 事件；另提供启动期的
+遗留 active run 收口。
 
 职责边界：
-- 负责：run 创建（含任务最新 run 更新）、run 查询与状态更新、pending run 的原子启动。
-- 不负责：直接 SQL 操作（委托给 ``ConversationRunCrud``/``TaskCrud``）；Run 创建期的
-  canonical 初始 user message 通过 Task context owner 写入。
+- 负责：``create_run`` / ``reset_run_for_edit`` 的用例编排、``recover_orphaned_runs`` 的
+  崩溃恢复收口（Run 终态与未闭合工具调用在同一事务内写入）、命令输入与附件解析。
+- 不负责：Run 状态迁移与查询（见 ``ConversationRunStateService``）；直接 SQL 操作
+  （委托给 ``ConversationRunCrud``/``TaskCrud``）；Run 创建期的 canonical 初始 user
+  message 通过 Task context owner 写入。
 """
 
+import re
+from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.event import (
-    RunInitializedEvent,
-    RunStatusChangedEvent,
-)
+from app.assistant_transport.event import RunInitializedEvent
 from app.config.logging.logger import log
+from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import (
-    ConversationRunError,
+    ConversationRunAttachmentInput,
+    ConversationRunCommand,
+    ConversationRunExtra,
+    ConversationRunFileAttachment,
     ConversationRunRecord,
     ConversationRunStatus,
-    ConversationRunUsage,
 )
 from app.service import depends as service_depends
 from app.service.depends import get_provider_service
+from app.service.task.conversation_run_state_service import terminal_error
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
+
+_LOCAL_FILE_TOKEN = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedConversationRunInput:
+    """Run command 经过领域校验和附件解析后的持久化输入。"""
+
+    input_text: str
+    image_paths: list[str]
+    extra: ConversationRunExtra | None
 
 
 class ConversationRunService:
@@ -55,86 +73,161 @@ class ConversationRunService:
         self._context = ConversationTaskContextService()
         self._session_factory = main_session_factory()
 
-    @staticmethod
-    def _usage_payload(
-        usage_stats: ConversationRunUsageStats | None,
-    ) -> ConversationRunUsage | None:
-        """把运行时 token 累加器转成 Run 行可持久化的六键字典。
+    def _prepare_command(
+        self,
+        task_id: int,
+        command: ConversationRunCommand,
+        *,
+        run_id: int | None,
+        model_name: str | None,
+    ) -> _PreparedConversationRunInput:
+        """把领域输入命令解析为 Run 持久化所需的最终事实。
 
-        参数:
-            usage_stats: 运行期累加器；``None`` 表示本次不写用量列（例如崩溃恢复）。
-
-        返回:
-            ``ConversationRunUsage`` 字典或 ``None``。
-
-        异常:
-            无；累加器自身保证返回可 JSON 序列化的整数/None 字段。
-
-        副作用:
-            无。
+        普通附件 token 只保留在 ``ConversationRunExtra.display_text``；传给模型的
+        ``input_text`` 则把 token 替换为已经校验存在的本机路径。编辑命令可以从旧
+        Run 恢复请求中省略的附件路径。图片附件在这里 finalize 为 workspace-relative
+        路径，避免 ``ConversationRunCommandService`` 和其它入口重复实现该规则。
         """
 
-        return usage_stats.to_dict() if usage_stats is not None else None
+        file_attachments = self._resolve_file_attachments(
+            command.attachments,
+            run_id=run_id,
+            display_text=command.display_text,
+        )
+        input_text = self._resolve_file_tokens(command.display_text, file_attachments)
 
-    @staticmethod
-    def _terminal_error(
-        status: ConversationRunStatus, end_reason: str | None
-    ) -> ConversationRunError | None:
-        """Map a terminal status to a short controlled persisted error contract."""
+        if command.image_asset_ids:
+            if not model_name:
+                raise ValueError("model_name is required when image attachments are present")
+            if not ModelCapability.get_capability(model_name).supports_image:
+                raise ValueError("model does not support image")
+        image_paths = self._finalize_image_assets(
+            task_id,
+            command.image_asset_ids,
+            model_name,
+        )
+        if not input_text.strip() and not image_paths:
+            raise ValueError("input_text must be a non-empty string")
 
-        if status is ConversationRunStatus.COMPLETED:
-            return None
-        code = end_reason if isinstance(end_reason, str) and end_reason.isidentifier() else None
-        if code is None:
-            code = "run_cancelled" if status is ConversationRunStatus.CANCELLED else "run_failed"
-        return ConversationRunError(
-            code=code,
-            message="运行已取消" if status is ConversationRunStatus.CANCELLED else "运行失败",
-            retryable=False,
+        return _PreparedConversationRunInput(
+            input_text=input_text,
+            image_paths=image_paths,
+            extra=(
+                ConversationRunExtra(
+                    display_text=command.display_text,
+                    attachments=file_attachments,
+                )
+                if file_attachments
+                else None
+            ),
         )
 
-    def have_run_in_runing(self, task_id: int, session: Session | None = None) -> bool:
-        """检查任务是否正在运行中。
+    def _resolve_file_attachments(
+        self,
+        requested: list[ConversationRunAttachmentInput],
+        *,
+        run_id: int | None,
+        display_text: str,
+    ) -> list[ConversationRunFileAttachment]:
+        """解析普通附件 token，并从既有 Run 恢复编辑请求缺失的路径。"""
 
-        参数:
-            task_id: 任务标识。
-            session: 可选，数据库会话；为 None 时从依赖获取。
+        existing_by_id: dict[str, ConversationRunFileAttachment] = {}
+        if run_id is not None:
+            try:
+                existing_run = self._run.get(run_id)
+                if existing_run.extra is not None:
+                    existing_by_id = {
+                        attachment["id"]: {
+                            "id": attachment["id"],
+                            "name": attachment["name"],
+                            "content_type": attachment["content_type"],
+                            "path": attachment["path"],
+                        }
+                        for attachment in existing_run.extra.attachments
+                    }
+            except KeyError:
+                pass
 
-        返回:
-            如果任务正在运行中，返回 True；否则返回 False。
+        merged: dict[str, ConversationRunFileAttachment] = dict(existing_by_id)
+        for attachment in requested:
+            if not attachment.id or attachment.path is None:
+                continue
+            candidate = Path(attachment.path)
+            if not candidate.is_file():
+                raise ValueError("ordinary file attachment is unavailable")
+            merged[attachment.id] = {
+                "id": attachment.id,
+                "name": attachment.name,
+                "content_type": attachment.content_type,
+                "path": attachment.path,
+            }
 
-        异常:
-            None。
+        result: list[ConversationRunFileAttachment] = []
+        for attachment_id in dict.fromkeys(_LOCAL_FILE_TOKEN.findall(display_text)):
+            resolved_attachment = merged.get(attachment_id)
+            if resolved_attachment is None or not Path(resolved_attachment["path"]).is_file():
+                raise ValueError("ordinary file attachment is unavailable")
+            result.append(resolved_attachment)
+        return result
 
-        副作用:
-            None。
-        """
-        statuses = (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value)
-        if session is not None:
-            return self._run.has_run_in_status(task_id, statuses, session)
-        with self._session_factory() as owned_session:
-            return self._run.has_run_in_status(task_id, statuses, owned_session)
+    @staticmethod
+    def _resolve_file_tokens(
+        text: str,
+        attachments: list[ConversationRunFileAttachment],
+    ) -> str:
+        """将用户可见文本中的普通文件 token 替换为模型可读的本机路径。"""
+
+        by_id = {attachment["id"]: attachment for attachment in attachments}
+
+        def replace(match: re.Match[str]) -> str:
+            attachment = by_id.get(match.group(1))
+            if attachment is None:
+                raise ValueError("ordinary file attachment is unavailable")
+            return attachment["path"]
+
+        return _LOCAL_FILE_TOKEN.sub(replace, text)
+
+    @staticmethod
+    def _finalize_image_assets(
+        task_id: int,
+        image_asset_ids: list[str],
+        model_name: str | None,
+    ) -> list[str]:
+        """把图片附件 id finalize 为模型使用的 workspace-relative 路径。"""
+
+        if not image_asset_ids:
+            return []
+        from app.service.attachment.attachment_service import AttachmentService
+
+        attachment_service = AttachmentService()
+        finalized = [
+            attachment_service.finalize(task_id, asset_id, model_name or "")
+            for asset_id in image_asset_ids
+        ]
+        return [
+            attachment_service.relative_path(task_id, result.path)
+            for result in finalized
+        ]
 
     def create_run(
         self,
         task_id: int,
-        input_text: str,
         agent_id: str | None = None,
         status: str = "pending",
         provider_id: int | None = None,
         model_name: str | None = None,
-        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
+        run_command: ConversationRunCommand | None = None,
     ) -> ConversationRunRecord:
         """Create a Conversation Run and initialize its canonical context.
 
-        图片在创建阶段保存为 workspace-relative 路径；普通文件已经在前端发送前
-        转换为正文中的本机路径，不进入后端附件协议。
+        图片在创建阶段保存为 workspace-relative 路径；普通文件的展示文本与本机
+        引用通过 ``ConversationRunExtra`` 保存，不新增附件表。
 
         参数:
             task_id: 所属任务标识。
-            input_text: 本轮用户输入文本。
+            input_text: 本轮用户输入文本；传入 ``run_command`` 时由领域命令解析结果替代。
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"main_agent"``
                 （与 Assistant Transport 主入口的默认值一致，非 ``"developer"``）。
@@ -146,8 +239,11 @@ class ConversationRunService:
                 未选择模型（前端优先校验、后端兜底报错）。
             image_paths: 已按最终模型 capability 归一化后的 workspace-relative 图片路径。
             reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
+            extra: 可选的 Run 扩展值对象；Assistant Transport 用其保存普通附件输入元数据。
             session: 可选，由上层跨表事务传入的数据库会话。传入时本方法不提交事务，
                 由调用方统一提交；未传入时保持独立创建事务的行为。
+            run_command: 可选的已归一化领域输入命令。传入时由本方法负责处理图片和普通
+                文件附件，并覆盖 ``input_text``、``image_paths`` 与 ``extra``。
 
         返回:
             新创建的 ``ConversationRunRecord``；``input_text`` 保持正文，图片通过
@@ -171,6 +267,9 @@ class ConversationRunService:
             raise ValueError(
                 f"provider_id is required when model_name is set (model_name={model_name})"
             )
+        input_text = None
+        image_paths = None
+        extra = None
         if provider_id is not None:
             provider = get_provider_service().get_provider(provider_id)
             provider_capability = ProviderCapability.get_capability(provider.name)
@@ -179,6 +278,18 @@ class ConversationRunService:
                     f"model_name {model_name} not in provider capability "
                     f"{provider_capability.models}"
                 )
+        if run_command is not None:
+            prepared = self._prepare_command(
+                task_id,
+                run_command,
+                run_id=None,
+                model_name=model_name,
+            )
+            input_text = prepared.input_text
+            image_paths = prepared.image_paths
+            extra = prepared.extra
+        if input_text is None:
+            raise ValueError("input_text is required when run_command is not provided")
 
         def persist_facts(persist_session: Session | None) -> ConversationRunRecord:
             run = self._run.create(
@@ -190,6 +301,7 @@ class ConversationRunService:
                 model_name=model_name,
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
+                extra=extra,
                 session=persist_session,
             )
             self._task.set_current_run_id(task_id, run.id, session=persist_session)
@@ -208,38 +320,62 @@ class ConversationRunService:
         # after it commits. ConversationRunCommandService is that owner. Publishing here
         # would expose uncommitted facts and duplicate the owner's events.
         if session is None:
+            run_extra = getattr(run, "extra", None)
             service_depends.get_conversation_event_projector().process(
                 RunInitializedEvent(
                     task_id=task_id,
                     run_id=run.id,
                     image_paths=image_paths or [],
+                    file_attachments=(
+                        [
+                            {
+                                "id": attachment["id"],
+                                "name": attachment["name"],
+                                "content_type": attachment["content_type"],
+                                "path": attachment["path"],
+                            }
+                            for attachment in run_extra.attachments
+                        ]
+                        if run_extra is not None
+                        else []
+                    ),
                     include_text_part=bool(input_text.strip()),
                 ),
             )
         return run
 
-    def get_run(self, run_id: int) -> ConversationRunRecord:
-        return self._run.get(run_id)
-
-    def list_runs_for_task(self, task_id: int) -> list[ConversationRunRecord]:
-        return self._run.list_by_task(task_id)
-
     def reset_run_for_edit(
         self,
         run_id: int,
-        input_text: str,
         provider_id: int | None = None,
         model_name: str | None = None,
-        image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
+        run_command: ConversationRunCommand | None = None,
     ) -> ConversationRunRecord | None:
         """原地重置一个已结束 run，替换输入并创建新的 checkpoint 身份。
 
         仅允许非 active run 编辑；调用方负责在同一 task 锁内清理并重建 context。
-        传入 ``session`` 时复用外部事务且不自行提交。
+        传入 ``run_command`` 时，本方法根据旧 Run 解析编辑请求中缺失的普通附件路径，
+        并生成最终的文本、图片路径和 ``ConversationRunExtra``。传入 ``session`` 时复用
+        外部事务且不自行提交。
         """
-
+        input_text = None
+        image_paths = None
+        extra = None
+        if run_command is not None:
+            existing_run = self._run.get(run_id)
+            prepared = self._prepare_command(
+                existing_run.task_id,
+                run_command,
+                run_id=run_id,
+                model_name=model_name,
+            )
+            input_text = prepared.input_text
+            image_paths = prepared.image_paths
+            extra = prepared.extra
+        if input_text is None:
+            raise ValueError("input_text is required when run_command is not provided")
         if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
         allowed_statuses = (
@@ -256,23 +392,9 @@ class ConversationRunService:
             model_name=model_name,
             image_paths=image_paths,
             reasoning_effort=reasoning_effort,
+            extra=extra,
             session=session,
         )
-
-    def resume_cancelled_run(self, run_id: int) -> ConversationRunRecord | None:
-        """恢复任意 cancelled run，并清理上一次执行的终态字段。"""
-
-        record = self._run.resume_cancelled(run_id)
-        if record is None:
-            return None
-        service_depends.get_conversation_event_projector().process(
-            RunStatusChangedEvent(
-                task_id=record.task_id,
-                run_id=run_id,
-                status=ConversationRunStatus.RUNNING,
-            ),
-        )
-        return record
 
     def recover_orphaned_runs(
         self, end_reason: str = "runtime_restarted"
@@ -321,7 +443,7 @@ class ConversationRunService:
                     ),
                     end_reason=end_reason,
                     usage=None,
-                    error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+                    error=terminal_error(ConversationRunStatus.CANCELLED, end_reason),
                     session=session,
                 )
                 if record is not None:
@@ -359,189 +481,4 @@ class ConversationRunService:
                 )
         return recovered
 
-    def complete_run_if_running(
-        self,
-        run_id: int,
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-    ) -> ConversationRunRecord | None:
-        """Complete a running Conversation Run atomically.
 
-        业务语义：仅 ``running`` 可进入 ``completed`` 终态并落库回复文本；约束收敛在
-        本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。Agent 对该
-        轮次的最终回答文本通过 ``final_output`` 一并写入，供快速检索与审计。
-
-        参数:
-            run_id: 待完成的 Conversation Run 标识。
-            final_output: 可选，Agent 对该轮次的最终回答文本；为 None 时不修改该列。
-            usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
-
-        返回:
-            成功完成时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            条件满足时更新 run 状态为 completed，可选的 final_output 列。
-        """
-
-        record = self._run.update_status_if_in(
-            run_id,
-            ConversationRunStatus.COMPLETED.value,
-            (ConversationRunStatus.RUNNING.value,),
-            None,
-            final_output=final_output,
-            usage=self._usage_payload(usage_stats),
-            error=None,
-        )
-        if record is None:
-            return None
-        service_depends.get_conversation_event_projector().process(
-            RunStatusChangedEvent(
-                task_id=record.task_id,
-                run_id=run_id,
-                status=ConversationRunStatus.COMPLETED,
-                usage_stats=usage_stats,
-            ),
-        )
-        return self._run.get(run_id)
-
-    def fail_run_if_running(
-        self,
-        run_id: int,
-        end_reason: str | None = None,
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-    ) -> ConversationRunRecord | None:
-        """Fail a running Conversation Run atomically.
-
-        业务语义：仅 ``running`` 可进入 ``failed`` 终态；约束收敛在本方法（service 层），
-        CRUD 层只做通用的「状态白名单 + 原子更新」。终态同时写入 ``final_output``，使复用
-        同一工作流的子 Agent 即便失败，主 Agent 也能从委派结果中感知其终态输出。
-
-        参数:
-            run_id: 待失败落定的 Conversation Run 标识。
-            end_reason: 可选失败原因。
-            final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
-            usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
-
-        返回:
-            成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
-
-        异常:
-            KeyError: 如果指定 run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            条件满足时更新 run 状态为 failed（并可选写入 end_reason 与 final_output），并发布
-            状态变更事件。
-        """
-
-        record = self._run.update_status_if_in(
-            run_id,
-            ConversationRunStatus.FAILED.value,
-            (ConversationRunStatus.RUNNING.value,),
-            end_reason,
-            final_output=final_output,
-            usage=self._usage_payload(usage_stats),
-            error=self._terminal_error(ConversationRunStatus.FAILED, end_reason),
-        )
-        if record is None:
-            return None
-        service_depends.get_conversation_event_projector().process(
-            RunStatusChangedEvent(
-                task_id=record.task_id,
-                run_id=run_id,
-                status=ConversationRunStatus.FAILED,
-                end_reason=end_reason,
-                usage_stats=usage_stats,
-            ),
-        )
-        return self._run.get(run_id)
-
-    def cancel_run_if_running(
-        self,
-        run_id: int,
-        end_reason: str = "user_cancelled",
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-    ) -> ConversationRunRecord | None:
-        """将 active Run 标记 cancelled，并发布其 Transport 展示状态。
-
-        终态同时写入 ``final_output``，使复用同一工作流的子 Agent 即便被取消，主 Agent
-        也能从委派结果中感知其已产出（或被中断）的内容，而非仅看到一个空终态。
-
-        参数:
-            run_id: 待取消的 Conversation Run 标识。
-            end_reason: 稳定的取消原因。
-            final_output: 可选，随终态一并写入的取消说明/部分输出文本，供委派场景主 Agent 感知。
-            usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
-        """
-
-        record = self._run.update_status_if_in(
-            run_id,
-            ConversationRunStatus.CANCELLED.value,
-            (ConversationRunStatus.PENDING.value, ConversationRunStatus.RUNNING.value),
-            end_reason,
-            final_output=final_output,
-            usage=self._usage_payload(usage_stats),
-            error=self._terminal_error(ConversationRunStatus.CANCELLED, end_reason),
-        )
-        if record is None:
-            return None
-        service_depends.get_conversation_event_projector().process(
-            RunStatusChangedEvent(
-                task_id=record.task_id,
-                run_id=run_id,
-                status=ConversationRunStatus.CANCELLED,
-                end_reason=end_reason,
-                usage_stats=usage_stats,
-            ),
-        )
-        return self._run.get(run_id)
-
-    def claim_or_resume_run(self, run_id: int) -> bool:
-        """认领一个待执行或后端重启后遗留的 Conversation Run。
-
-        ``pending`` 通过原子状态迁移进入 ``running``；``running`` 表示旧进程在
-        持久化层已经认领过，但进程内执行器已丢失，恢复入口可以继续驱动同一个 run。
-        任意 ``cancelled`` run 都允许恢复；``end_reason`` 只用于展示与审计，不参与资格判断。
-        调用方必须先持有 task 级运行锁，避免同一进程重复启动恢复执行。
-
-        参数:
-            run_id: 待认领的运行标识。
-
-        返回:
-            当前调用方可以继续执行返回 True；run 已进入终态或已被当前进程之外的执行
-            占用返回 False。
-
-        异常:
-            KeyError: run 不存在。
-
-        副作用:
-            pending run 成功迁移时发布一次 running 状态事件；running run 不重复发布。
-        """
-
-        row = self._run.update_status_if_in(
-            run_id=run_id,
-            target_status=ConversationRunStatus.RUNNING.value,
-            allowed_statuses=(ConversationRunStatus.PENDING.value,),
-        )
-        if row is not None:
-            service_depends.get_conversation_event_projector().process(
-                RunStatusChangedEvent(
-                    task_id=row.task_id,
-                    run_id=run_id,
-                    status=ConversationRunStatus.RUNNING,
-                ),
-            )
-            return True
-
-        resumed = self.resume_cancelled_run(run_id)
-        if resumed is not None:
-            return True
-
-        current = self._run.get(run_id)
-        return current.status == ConversationRunStatus.RUNNING.value

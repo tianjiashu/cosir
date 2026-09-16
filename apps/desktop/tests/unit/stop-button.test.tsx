@@ -99,4 +99,15 @@ describe("StopButton", () => {
     expect(captured.props?.disabled).toBe(true);
     expect(captured.props?.ref).toBe(ref);
   });
+
+  it("keeps the button disabled while the workflow settles cancellation", async () => {
+    const { StopButton } = await import("@/components/assistant/stop-button");
+
+    renderToStaticMarkup(
+      <StopButton taskId={42} isCancelling />,
+    );
+
+    expect(captured.props?.disabled).toBe(true);
+    expect(captured.props?.["aria-label"]).toBe("正在停止");
+  });
 });

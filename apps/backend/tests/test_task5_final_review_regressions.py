@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,10 +19,10 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.task_record import TaskRecord
 from app.service.provider.capability_service import CapabilityService
 from app.service.task.conversation_run_service import ConversationRunService
@@ -108,97 +107,57 @@ def _context_row(
 
 
 @pytest.mark.asyncio
-async def test_executor_persists_failed_run_before_nonfatal_tool_projector(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    order: list[str] = []
+async def test_executor_propagates_runner_error_and_swallows_projector_failure() -> None:
+    """runner 失败时执行器投影「工具失败收束」：投影异常被吞，runner 异常照常上抛。
+
+    执行器不拥有 run 终态——run 状态列由 workflow 经 run_service 落定。本用例锁定两点
+    当前行为：投影失败被降级为日志（不得替换 runner 的真实异常），且执行器不改写
+    run 状态列。
+    """
+
     run = SimpleNamespace(id=1, task_id=7, status="running", end_reason=None)
 
     class RunService:
         def get_run(self, _run_id: int) -> SimpleNamespace:
             return run
 
-        def fail_run_if_running(self, _run_id: int, end_reason: str | None = None) -> Any:
-            order.append("run")
-            run.status = "failed"
-            run.end_reason = end_reason
-            return run
-
-        def complete_run_if_running(self, _run_id: int) -> None:
-            return None
-
-        def cancel_run_if_running(self, _run_id: int, end_reason: str = "user_cancelled") -> Any:
-            order.append("run")
-            run.status = "cancelled"
-            run.end_reason = end_reason
-            return run
-
     class FailingProjector:
         def process(self, _event: object) -> None:
-            order.append("projector")
             raise RuntimeError("projector unavailable")
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = RunService()
-    executor._persist_status = True
     executor._event_projector = FailingProjector()
-    executor._signal = cancellation_registry
     executor._executions = {}
-    executor._cancelling_run_ids = set()
-    executor._cancellation_cleanup_tasks = set()
 
     async def runner(_run: object) -> None:
         raise RuntimeError("runner failed")
 
-    await executor._run_and_settle(1, run, runner)
+    with pytest.raises(RuntimeError, match="runner failed"):
+        await executor._execute(1, runner)
 
-    assert run.status == "failed"
-    assert order == ["run", "projector"]
+    assert run.status == "running"
 
 
-@pytest.mark.asyncio
-async def test_executor_persists_cancelled_run_before_nonfatal_tool_projector() -> None:
-    order: list[str] = []
-    run = SimpleNamespace(id=1, task_id=7, status="running", end_reason=None)
+def test_tool_settlement_projection_failure_is_swallowed() -> None:
+    """工具收束投影失败只记日志：不得把已收束的执行再次打回异常路径。"""
+
+    run = SimpleNamespace(id=1, task_id=7, status="failed", end_reason=None)
 
     class RunService:
         def get_run(self, _run_id: int) -> SimpleNamespace:
             return run
 
-        def cancel_run_if_running(self, _run_id: int, end_reason: str = "user_cancelled") -> Any:
-            order.append("run")
-            run.status = "cancelled"
-            run.end_reason = end_reason
-            return run
-
-        def complete_run_if_running(self, _run_id: int) -> None:
-            return None
-
-        def fail_run_if_running(self, _run_id: int, end_reason: str | None = None) -> Any:
-            return None
-
     class FailingProjector:
         def process(self, _event: object) -> None:
-            order.append("projector")
             raise RuntimeError("projector unavailable")
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = RunService()
-    executor._persist_status = True
     executor._event_projector = FailingProjector()
-    executor._signal = cancellation_registry
-    executor._executions = {}
-    executor._cancelling_run_ids = set()
-    executor._cancellation_cleanup_tasks = set()
 
-    async def runner(_run: object) -> None:
-        raise asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        await executor._run_and_settle(1, run, runner)
-
-    assert run.status == "cancelled"
-    assert order == ["run", "projector"]
+    # 不抛异常即通过：投影失败在 _project_tools_settled 内部被降级为日志。
+    executor._project_tools_settled(1, "failed", "runtime_failed")
 
 
 def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
@@ -367,7 +326,7 @@ def real_run_crud(tmp_path: Path) -> tuple[ConversationRunCrud, TaskRecord, Any]
         engine.dispose()
 
 
-def test_resume_cancelled_clears_usage_and_error(
+def test_resume_cancelled_run_clears_usage_and_error_and_reuses_checkpoint_thread(
     real_run_crud: tuple[ConversationRunCrud, TaskRecord, Any],
 ) -> None:
     run_crud, task, _engine = real_run_crud
@@ -389,7 +348,13 @@ def test_resume_cancelled_clears_usage_and_error(
         session=None,
     )
 
-    resumed = run_crud.resume_cancelled(run.id)
+    # 续跑由 update_status_if_in 承担：清空上一轮终态字段，但**必须复用原 checkpoint 线程**。
+    resumed = run_crud.update_status_if_in(
+        run.id,
+        ConversationRunStatus.RUNNING.value,
+        (ConversationRunStatus.CANCELLED.value,),
+        clear_terminal_fields=True,
+    )
 
     assert resumed is not None
     assert resumed.status == "running"
@@ -397,3 +362,6 @@ def test_resume_cancelled_clears_usage_and_error(
     assert resumed.final_output is None
     assert resumed.usage is None
     assert resumed.error is None
+    # resume 执行模式下 workflow 以 input_state=None 让 LangGraph 从该线程的既有 checkpoint
+    # 继续；换新线程会让续跑落到空线程上，因此这里必须保持不变。
+    assert resumed.checkpoint_thread_id == run.checkpoint_thread_id

@@ -21,7 +21,6 @@ from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
-    get_conversation_run_service,
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
@@ -39,7 +38,7 @@ class AgentRuntime:
     取消作用于 run 并中止该 run 的运行循环（模型节点检查取消状态后停止派发工具）。
 
     职责边界：
-    - 负责：任务执行编排、取消，以及把执行异常交给 ConversationRunExecutor 收束。
+    - 负责：任务执行编排、取消，以及把执行异常向上传播（run 终态由 workflow 落定）。
     - 不负责：checkpoint 回放与历史事件回看（由 Conversation service 提供，细粒度事件仅作
       审计）、工作区 / 任务 /
       轮次的 CRUD 与查询（委托给对应 service 层）；不对外暴露 service 访问器，
@@ -66,7 +65,6 @@ class AgentRuntime:
         """
 
         self._task_service = get_task_service()
-        self._conversation_run_state_service = get_conversation_run_service()
         self._tool_executor = get_tool_system().executor
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
@@ -85,8 +83,8 @@ class AgentRuntime:
         3. ``run`` 非 None 且为已认领 run。
 
         本方法只负责三件事：解析 run 绑定的 agent profile、为本次 run 派生独立副本、
-        驱动 workflow。所有终态（completed / cancelled / failed）收口与失败日志由
-        ConversationRunExecutor 统一负责，本方法不重复处理。
+        驱动 workflow。所有终态（completed / cancelled / failed）由 **workflow** 落定
+        （节点内经 ``WorkflowOperations`` 调 run state service），本方法不落任何终态。
 
         参数:
             run: 已被执行器认领的 Conversation Run 记录（非 None，状态 running）。
@@ -122,10 +120,11 @@ class AgentRuntime:
             RuntimeError: 当 ``agent.run`` 为 None 时抛出。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT/STOP hook、落库并收口对话事实、快照收口、
-            断连兜底终态；执行异常仅当 run 仍处于 running 时条件落定 failed
-            （``fail_run_if_running``），不覆写已取消/已完成的既有终态；终态已落定
-            时异常以降级 warning 留痕（含堆栈），不改变既有终态。
+            触发 USER_PROMPT_SUBMIT/STOP hook；run 的终态（completed / cancelled /
+            failed）**由 workflow 节点经 ``WorkflowOperations`` 落定**，本方法不落任何
+            终态；本轮消息落库、canonical conversation facts 与快照收口由
+            ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责；执行异常记
+            ``task_failed`` 后向上传播，并清理进程内取消信号。
         """
 
         if agent.run is None:
@@ -186,8 +185,8 @@ class AgentRuntime:
             )
             raise
         finally:
-            # 终态由 ConversationRunExecutor 条件收口；此处只做资源清理。
-            pass
+            cancellation_registry.clear(run_id)
+
 
     def _mark_stable_file_changes(self, run_id: int) -> None:
         """把某 run 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。

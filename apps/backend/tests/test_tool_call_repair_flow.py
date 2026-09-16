@@ -13,11 +13,11 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
 
+from app.core.context.runtime_context_manager import _as_ai_message
 from app.core.workflows.nodes import model_node as model_module
 from app.core.workflows.nodes import observation_node as observe_module
 from app.core.workflows.nodes import tools_node as tools_module
 from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
@@ -45,7 +45,16 @@ def _state(**overrides: Any) -> ReactGraphState:
 
 
 class _ModelHarness:
-    """为 model 节点提供最小运行时依赖。"""
+    """为 model 节点提供最小运行时依赖。
+
+    只模拟 model 节点实际协作的三方：``operations``（run 终态落定与取消判定）、
+    ``model``（``astream`` 产出的 chunk 流）与 ``runtime_context``。``runtime_context``
+    按 ``RuntimeContextManager`` 的当前契约实现：``add_message_chunk`` 累积 chunk 并返回
+    聚合后的 ``AIMessage``（model 节点用它做流式工具调用登记），
+    ``flush_message_chunk(mode="complete")`` 返回收口后的完整 ``AIMessage`` 并计入
+    canonical 消息序列——model 节点的后续判定完全基于该返回值，故其等于本 harness 构造时
+    传入的 ``message``（即本轮模型最终输出）。
+    """
 
     def __init__(self, message: AIMessage, chunks: list[AIMessageChunk] | None = None) -> None:
         self.messages: list[Any] = []
@@ -54,6 +63,7 @@ class _ModelHarness:
         self.failed = False
         self._message = message
         self._chunks = chunks or [AIMessageChunk(content="")]
+        self._merged_chunk: AIMessageChunk | None = None
 
         def complete_run_if_running(*_args: Any, **_kwargs: Any) -> object:
             self.completed = True
@@ -85,21 +95,33 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
+        def add_message_chunk(
+            chunk: AIMessageChunk, *, stream_id: str, run_id: Any = None
+        ) -> AIMessage:
+            del stream_id, run_id
+            self._merged_chunk = (
+                chunk if self._merged_chunk is None else self._merged_chunk + chunk
+            )
+            return _as_ai_message(self._merged_chunk)
+
         def flush_message_chunk(
             *,
             stream_id: str,
             run_id: Any = None,
-            message: Any = None,
-            complete: bool = False,
-            **_kwargs: Any,
-        ) -> None:
-            if complete:
-                self.messages.append(message)
+            mode: str = "running",
+        ) -> AIMessage | None:
+            del stream_id, run_id
+            if mode != "running":
+                self._merged_chunk = None
+            if mode != "complete":
+                return None
+            self.messages.append(self._message)
+            return self._message
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
-            add_message_chunk=lambda *_args, **_kwargs: None,
+            add_message_chunk=add_message_chunk,
             flush_message_chunk=flush_message_chunk,
         )
 
@@ -162,7 +184,6 @@ def test_reasoning_closes_before_tool_call_created(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -189,7 +210,6 @@ def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -213,7 +233,6 @@ def test_truncated_model_output_gets_continuation_prompt(monkeypatch: Any) -> No
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -235,7 +254,6 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -258,7 +276,6 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -298,7 +315,6 @@ def test_multiple_tool_calls_are_created_and_started_independently(monkeypatch: 
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -334,11 +350,10 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     model_result = asyncio.run(model_module._model_node(_state()))
 
-    # model 节点不再即时注入 SystemMessage，而是把非法调用挂进 lifecycle 并标记 continuation。
+    # model 节点不再即时注入 SystemMessage，而是把非法调用挂进 lifecycle 交 observe 结算。
     assert model_result["requested_tool"] is True
     invalid_records = [
         record
@@ -347,7 +362,7 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
     ]
     assert len(invalid_records) == 1
     assert invalid_records[0].tool_name == "read_file"
-    assert model_result["continuation_error_data"]["error_kind"] == "invalid_tool_call_repair"
+    assert model_result["tool_call_lifecycle"].invalid_count == 1
     assert [type(item) for item in harness.messages] == [AIMessage]
 
     # tools 节点：无 running 调用，直接短路返回空结果。
@@ -403,7 +418,6 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
     monkeypatch.setattr(model_module, "_runtime_context", lambda: model_harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: model_harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, model_harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     model_result = asyncio.run(model_module._model_node(_state()))
     assert model_result["requested_tool"] is True
@@ -496,7 +510,6 @@ def test_all_valid_calls_have_no_deferred_repair(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
-    monkeypatch.setattr(ModelChunkProcessor, "collect", lambda _self, _chunks: message)
 
     result = asyncio.run(
         model_module._model_node(
@@ -515,5 +528,4 @@ def test_all_valid_calls_have_no_deferred_repair(monkeypatch: Any) -> None:
     )
 
     assert result["requested_tool"] is True
-    assert result["continuation_error_data"] is None
     assert set(result["tool_call_lifecycle"].calls) == {"valid-1"}

@@ -11,12 +11,9 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import blocked_device_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_handler.search.cancellation import cancellation_callback
 from app.core.tools.tool_handler.search.errors import (
-    SearchCancelled,
     SearchPathNotFound,
     SearchPathUnreadable,
     SearchTimedOut,
@@ -87,11 +84,8 @@ class FindFilesTool(HandlerBase):
                 pattern,
                 limit=limit,
                 offset=offset,
-                is_cancelled=cancellation_callback(execution_context),
                 deadline=time.monotonic() + self.timeout_seconds,
             )
-        except SearchCancelled:
-            return tool_cancelled(self.name, permission=self.permission)
         except SearchTimedOut:
             return tool_error(
                 self.name,

@@ -1,4 +1,8 @@
-"""工具 handler 隔离执行器：在守护子进程中运行单个工具 handler 并提供硬超时强杀保护。"""
+"""工具 handler 隔离执行器：按 ``execution_mode`` 选择隔离策略运行单个工具 handler。
+
+process 路径在守护子进程中执行并提供硬超时强杀保护（含进程组 / Job Object 树杀），
+thread 路径在当前调用线程直接执行、无子进程隔离。
+"""
 
 import json
 import multiprocessing
@@ -9,10 +13,12 @@ import time
 import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
 from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import handler_exception_reason, tool_error
@@ -59,7 +65,6 @@ class ToolHandlerRunner:
         arguments: Mapping[str, Any],
         execution_context: ToolExecutionContext | None = None,
         tool_call_id: str = "",
-        should_cancel: Callable[[], bool] | None = None,
         output_sink: OutputSink | None = None,
     ) -> ToolObservation:
         """在隔离子进程或当前线程中执行单个工具 handler 并返回归一化结果。
@@ -75,23 +80,27 @@ class ToolHandlerRunner:
         参数:
             tool: 工具定义，提供 handler、权限、超时、``execution_mode`` 等执行契约。
             arguments: 已通过准入门禁与参数校验的关键字参数字典。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；其
+                ``run_id`` 决定取消检查的范围，见 :meth:`_build_cancel_check`。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
-            should_cancel: 可选取消检查回调；process 模式等待结果时轮询该回调，
-                thread 模式在 handler 执行前后边界检查，命中即返回取消观察。
             output_sink: 可选实时输出回调，签名 ``(text, truncated) -> None``。
                 **仅 process 模式支持**：父进程轮询跨进程队列后在调用线程内回调它；
                 thread 模式忽略该参数（当前无流式产出的 thread 工具）。
 
         返回:
-            归一化后的 :class:`ToolObservation`。
+            归一化后的 :class:`ToolObservation`：成功为 ``status="success"``，
+            启动前 / 执行途中检出取消为 ``status="cancelled"``，失败 / 超时 /
+            异常为 ``status="error"``。
 
         异常:
             不向上抛出：执行异常在分支方法内归一化为 ``status="error"``。
 
         副作用:
-            见各分支方法 docstring；本方法仅做分流，不直接启动进程或线程。
+            见各分支方法 docstring；本方法仅做分流，不直接启动进程或线程。取消回调
+            由本方法从 ``cancellation_registry`` 现场构造（调用方不传），且构造出的
+            是**实时查询**回调而非快照值——见 :meth:`_build_cancel_check`。
         """
+        should_cancel = self._build_cancel_check(execution_context)
 
         if tool.execution_mode == "process":
             return self._execute_in_process(
@@ -131,13 +140,16 @@ class ToolHandlerRunner:
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
                 跨进程序列化后由 handler 在执行期消费，便于后续扩展执行参数。
             tool_call_id: 关联本次执行的模型工具调用 id，用于回写观察结果。
-            should_cancel: 可选取消检查回调；返回 True 时终止子进程并返回取消观察。
+            should_cancel: 可选取消检查回调；**启动子进程前**命中则直接返回取消
+                观察（不派生进程），**等待结果期间**每轮轮询命中则抛出内部取消信号，
+                由本方法强杀子进程后返回取消观察。
             output_sink: 可选实时输出回调；非 None 时额外建立跨进程输出队列，
                 父进程在等待结果的轮询间隙 drain 队列并回调它。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"，
-            失败/超时/异常/启动失败为 status="error"（含 reason 与 retryable）。
+            失败/超时/异常/启动失败为 status="error"（含 reason 与 retryable），
+            取消命中为 status="cancelled"。
 
         异常:
             不向上抛出：``timeout_seconds`` 为 None / <=0 时直接返回 ``status="error"``
@@ -148,8 +160,9 @@ class ToolHandlerRunner:
 
         副作用:
             启动一个守护子进程执行 handler；按 ``timeout_seconds`` 软超时后
-            强制 terminate/kill 并清理进程；以 INFO/WARNING/ERROR 级别写入
-            执行、超时、失败日志；不修改 ``tool`` 或 ``arguments``。
+            强制 terminate/kill 并清理进程；取消命中时不启动子进程或强杀已启动的
+            子进程（含进程组 / Job Object 树杀）；以 INFO/WARNING/ERROR 级别写入
+            执行、取消、超时、失败日志；不修改 ``tool`` 或 ``arguments``。
         """
 
         # --- 1. 防御性地归一化超时参数 ---
@@ -169,7 +182,12 @@ class ToolHandlerRunner:
                 tool_call_id=tool_call_id,
             )
 
-        # --- 2. 启动隔离子进程 ---
+        # --- 2. 启动前取消检查：run 已取消时不得再派生新子进程（与 thread 路径
+        # 的执行前边界检查对称；避免为已取消的执行白付一次 spawn + 立刻强杀的代价）---
+        if should_cancel is not None and should_cancel():
+            return self._cancelled_observation(tool, tool_call_id, "在启动子进程前中止")
+
+        # --- 3. 启动隔离子进程 ---
         result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
         # 放弃等待 feeder 线程 flush：子进程已死或已 drain 后不阻塞父进程退出
         result_queue.cancel_join_thread()
@@ -232,21 +250,9 @@ class ToolHandlerRunner:
                 output_sink=output_sink,
             )
         except _ToolExecutionCancelled:
-            log.info(
-                "tool_execution_cancelled",
-                extra={
-                    "msg": "工具执行因 turn 取消而中止",
-                    "data": {
-                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
-                        "tool_name": tool.name,
-                    },
-                },
-            )
-            return tool_cancelled(
-                tool.name,
-                permission=tool.permission,
-                tool_call_id=tool_call_id,
-            )
+            # 取消观察先算好，随后对外返回；子进程（及其孙进程）的强杀由下方 finally
+            # 无条件执行，因此「先强杀再返回结果」的顺序由 finally 语义保证。
+            return self._cancelled_observation(tool, tool_call_id, "中止，子进程已强制终止")
         except TimeoutError:
             log.warning(
                 "tool_execution_timed_out",
@@ -492,21 +498,7 @@ class ToolHandlerRunner:
         """
         # 执行前边界：turn 已取消则不进入 handler，直接返回取消观察。
         if should_cancel is not None and should_cancel():
-            log.info(
-                "tool_execution_cancelled",
-                extra={
-                    "msg": "工具执行因 turn 取消而在开始前中止",
-                    "data": {
-                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
-                        "tool_name": tool.name,
-                    },
-                },
-            )
-            return tool_cancelled(
-                tool.name,
-                permission=tool.permission,
-                tool_call_id=tool_call_id,
-            )
+            return self._cancelled_observation(tool, tool_call_id, "在开始前中止")
         try:
             result = tool.handler(**arguments, execution_context=execution_context)
         except Exception as exc:
@@ -531,26 +523,88 @@ class ToolHandlerRunner:
             )
         # 执行后边界：handler 已跑完但执行期间被取消，丢弃结果转取消观察。
         if should_cancel is not None and should_cancel():
-            log.info(
-                "tool_execution_cancelled",
-                extra={
-                    "msg": "工具执行因 turn 取消而在完成后转取消",
-                    "data": {
-                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
-                        "tool_name": tool.name,
-                    },
-                },
-            )
-            return tool_cancelled(
-                tool.name,
-                permission=tool.permission,
-                tool_call_id=tool_call_id,
-            )
+            return self._cancelled_observation(tool, tool_call_id, "在完成后转取消")
         return self._normalize_result(tool, result, tool_call_id)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_cancel_check(
+        execution_context: ToolExecutionContext | None,
+    ) -> Callable[[], bool] | None:
+        """构造「本次执行是否已被取消」的实时检查回调。
+
+        返回的调用对象每次被调用都**重新读取**进程内取消注册表，因此调用方在轮询 /
+        边界检查间隙里能观察到执行途中发生的取消；若在此处取一次布尔快照再传给分支
+        方法，工具启动瞬间之后的取消将永远查不到，取消分支形同死代码。
+
+        参数:
+            execution_context: 本次执行的运行时边界；其 ``run_id`` 界定取消范围。
+
+        返回:
+            绑定 ``run_id`` 的 ``() -> bool`` 取消查询回调；``execution_context``
+            为 None 或 ``run_id <= 0``（无 run 绑定的直接调用）时返回 None，调用方
+            视为「不可取消」。
+
+        异常:
+            无（不在构造期读取注册表）。
+
+        副作用:
+            无；返回的调用对象被调用时只读注册表，不写任何状态。
+        """
+
+        if execution_context is None or execution_context.run_id <= 0:
+            return None
+        # partial 冻结查询目标（run_id）而非查询结果：每次调用都重新读注册表。
+        should_cancel = execution_context.runtime_dependencies.is_run_cancelled
+        if should_cancel is not None:
+            return partial(should_cancel, execution_context.run_id)
+        return partial(cancellation_registry.is_cancelled, execution_context.run_id)
+
+    @staticmethod
+    def _cancelled_observation(
+        tool: ToolDefinition,
+        tool_call_id: str,
+        stage: str,
+    ) -> ToolObservation:
+        """记录取消日志并构造统一的取消观察。
+
+        取消有四条触达路径（process 启动前、process 等待中、thread 执行前、thread
+        执行后），四处的日志与观察必须完全一致，避免只改一处的行为漂移。
+
+        参数:
+            tool: 被取消的工具定义，提供工具名与权限。
+            tool_call_id: 关联本次执行的模型工具调用 id。
+            stage: 取消发生环节的中文描述（如「在开始前中止」），仅进日志，用于
+                排查取消是在哪一步被检出。
+
+        返回:
+            ``status="cancelled"``、统一 ``reason`` 的 :class:`ToolObservation`。
+
+        异常:
+            无。
+
+        副作用:
+            以 INFO 级写入一条 ``tool_execution_cancelled`` 日志。
+        """
+
+        log.info(
+            "tool_execution_cancelled",
+            extra={
+                "msg": f"工具执行因 turn 取消而{stage}",
+                "data": {
+                    "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                    "tool_name": tool.name,
+                },
+            },
+        )
+        return tool_cancelled(
+            tool.name,
+            permission=tool.permission,
+            tool_call_id=tool_call_id,
+        )
 
     def _force_kill(self, process: multiprocessing.Process) -> None:
         """三轮强杀子进程及其可能的孙进程。

@@ -22,16 +22,16 @@ from app.core.context.context_listener.context_usage_compute_listener import (
 )
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.context_listener.listener_result import ListenerResult
-from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.task.conversation_run_service import ConversationRunService
+from app.service.task.conversation_run_state_service import ConversationRunStateService
 
 
 class _RecordingContextService:
@@ -69,6 +69,7 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeContextManager
     manager._message_sequence = 1
     manager._listeners = []
     manager._tool_schemas = ()
+    manager._streaming_messages = {}
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     return manager
 
@@ -145,8 +146,15 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
     assert service.delete_calls == 1
 
 
-def test_model_processor_collect_preserves_complete_langchain_message_semantics() -> None:
-    processor = ModelChunkProcessor("reasoning_content")
+def test_merged_chunk_preserves_complete_langchain_message_semantics() -> None:
+    """聚合 chunk 收口为 ``AIMessage`` 时必须保留完整 LangChain 消息语义。
+
+    合并职责已由 ``ModelChunkProcessor.collect`` 收敛到
+    ``RuntimeContextManager.add_message_chunk`` / ``flush_message_chunk`` 使用的
+    ``_as_ai_message``，本测试锁定该转换不丢失 content / name / id / additional_kwargs /
+    response_metadata / usage_metadata 以及 tool_calls / invalid_tool_calls。
+    """
+
     chunk = AIMessageChunk(
         content=[{"type": "text", "text": "structured", "index": 0}],
         name="assistant",
@@ -161,7 +169,7 @@ def test_model_processor_collect_preserves_complete_langchain_message_semantics(
         ],
     )
 
-    collected = processor.collect([chunk])
+    collected = _as_ai_message(chunk)
 
     assert isinstance(collected, AIMessage)
     assert collected.content == chunk.content
@@ -556,7 +564,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
             order.append("event")
             assert event.status is ConversationRunStatus.FAILED
 
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run = _RunCrud()
     service._session_factory = None
     import app.service.depends as depends
@@ -599,7 +607,7 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
         def process(self, _event: Any, **_kwargs: Any) -> None:
             raise RuntimeError("transport unavailable")
 
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run = _RunCrud()
     import app.service.depends as depends
 

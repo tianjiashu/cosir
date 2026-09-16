@@ -21,7 +21,9 @@ _RUN_KEYS = {"runId", "status", "endReason", "messages", "usage"}
 _MESSAGE_KEYS = {"id", "role", "parts"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
+_FILE_PART_KEYS = {"type", "file", "name", "contentType"}
 _IMAGE_LOCATOR = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
+_FILE_LOCATOR = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
 _TOOL_PART_KEYS = {
     "type",
     "toolCallId",
@@ -218,6 +220,16 @@ def _validate_part(part: object) -> None:
         image = part.get("image")
         if not isinstance(image, str) or not _IMAGE_LOCATOR.fullmatch(image):
             raise ValueError("snapshot image part locator is invalid")
+        return
+    if part_type == "file":
+        if set(part) != _FILE_PART_KEYS:
+            raise ValueError("snapshot file part contains unknown fields")
+        if not isinstance(part.get("file"), str) or not _FILE_LOCATOR.fullmatch(part["file"]):
+            raise ValueError("snapshot file part locator is invalid")
+        if not isinstance(part.get("name"), str) or not part["name"]:
+            raise ValueError("snapshot file part name is invalid")
+        if not isinstance(part.get("contentType"), str) or not part["contentType"]:
+            raise ValueError("snapshot file part contentType is invalid")
         return
     if part_type == "tool-call":
         if set(part) - _TOOL_PART_KEYS:

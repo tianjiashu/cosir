@@ -10,6 +10,9 @@ import { LOCAL_FILE_TOKEN } from "@/lib/assistant/attachments/local-file-token";
 export const FILE_ATTACHMENT_TOKEN_PREFIX = "[[cosir-file:";
 export const FILE_ATTACHMENT_TOKEN_SUFFIX = "]]";
 export const FILE_ATTACHMENT_TOKEN = LOCAL_FILE_TOKEN;
+const HIDDEN_FILE_TOKEN = /<!--\s*(\[\[cosir-file:[^\]]+\]\])\s*-->/g;
+
+const FILE_ICON_SVG = `<svg class="cosir-inline-file-token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>`;
 
 export type InlineFileAttachment = {
   id: string;
@@ -39,24 +42,28 @@ function escapeHtml(value: string): string {
 }
 
 export function renderInlineAttachmentHtml(value: string, attachments: readonly InlineFileAttachment[]): string {
+  // Canonical message rendering hides the internal token in an HTML comment.
+  // The editor removes only that wrapper before creating its chip; the DOM
+  // serializer still emits the original token for edit/resend recovery.
+  const editorValue = value.replace(HIDDEN_FILE_TOKEN, "$1");
   const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]));
   let cursor = 0;
   let html = "";
-  for (const match of value.matchAll(FILE_ATTACHMENT_TOKEN)) {
+  for (const match of editorValue.matchAll(FILE_ATTACHMENT_TOKEN)) {
     const token = match[0];
     const id = match[1] ?? "";
     const offset = match.index ?? cursor;
-    html += escapeHtml(value.slice(cursor, offset)).replaceAll("\n", "<br>");
+    html += escapeHtml(editorValue.slice(cursor, offset)).replaceAll("\n", "<br>");
     cursor = offset + token.length;
     const attachment = byId.get(id);
     if (!attachment) {
-      html += `<span class="cosir-inline-file-token cosir-inline-file-token-error" data-file-token="true" data-file-id="${escapeHtml(id)}" contenteditable="false"><span class="cosir-inline-file-token-name">附件已失效</span></span>`;
+      html += `<span class="cosir-inline-file-token cosir-inline-file-token-error" data-file-token="true" data-file-id="${escapeHtml(id)}" contenteditable="false">${FILE_ICON_SVG}<span class="cosir-inline-file-token-name">附件已失效</span></span>`;
       continue;
     }
     const label = escapeHtml(attachment.name);
-    html += `<span class="cosir-inline-file-token" data-file-token="true" data-file-id="${escapeHtml(id)}" contenteditable="false"><span class="cosir-inline-file-token-name">${label}</span><button type="button" class="cosir-inline-file-token-remove" data-file-remove="true" aria-label="移除附件 ${label}">×</button></span>`;
+    html += `<span class="cosir-inline-file-token" data-file-token="true" data-file-id="${escapeHtml(id)}" contenteditable="false">${FILE_ICON_SVG}<span class="cosir-inline-file-token-name">${label}</span><button type="button" class="cosir-inline-file-token-remove" data-file-remove="true" aria-label="移除附件 ${label}">×</button></span>`;
   }
-  return html + escapeHtml(value.slice(cursor)).replaceAll("\n", "<br>");
+  return html + escapeHtml(editorValue.slice(cursor)).replaceAll("\n", "<br>");
 }
 
 function serializeNode(node: Node): string {
@@ -91,10 +98,14 @@ function appendPlaceholders(value: string, attachments: readonly InlineFileAttac
 }
 
 function removePlaceholder(value: string, id: string): string {
-  return value.replace(
-    new RegExp(` ?${FILE_ATTACHMENT_TOKEN_PREFIX}${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${FILE_ATTACHMENT_TOKEN_SUFFIX}`),
-    "",
+  const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const hiddenToken = new RegExp(
+    ` ?<!--\\s*${FILE_ATTACHMENT_TOKEN_PREFIX}${escapedId}${FILE_ATTACHMENT_TOKEN_SUFFIX}\\s*-->`,
   );
+  const plainToken = new RegExp(
+    ` ?${FILE_ATTACHMENT_TOKEN_PREFIX}${escapedId}${FILE_ATTACHMENT_TOKEN_SUFFIX}`,
+  );
+  return value.replace(hiddenToken, "").replace(plainToken, "");
 }
 
 function removeMissingTokens(value: string, attachments: readonly InlineFileAttachment[]): string {

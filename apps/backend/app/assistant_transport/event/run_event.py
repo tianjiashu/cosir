@@ -27,7 +27,7 @@ from app.models.enums.conversation_run_status import ConversationRunStatus
 
 # Run 状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）一律丢弃。
 # ``cancelled -> running`` 是「续跑恢复」的合法迁移，由
-# ``ConversationRunService.resume_cancelled_run`` 在数据库条件更新
+# ``ConversationRunStateService.resume_cancelled_run`` 在数据库条件更新
 # （``WHERE status='cancelled'``）成功之后才发出；若在此丢弃，snapshot 会永久
 # 停在终态，后续 tool-call 创建事件随之被终态短路丢弃，最终在工具状态迁移事件上抛 KeyError 中断
 # 整个 Run。``completed`` / ``failed`` 仍不可逆，避免迟到事件把已结束的 Run 拉回 active。
@@ -65,6 +65,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
     # 判别式字段显式给出默认值：生产者不必重复书写字面量，判别式路由行为不变。
     type: Literal["run_initialized"] = "run_initialized"
     image_paths: list[str] = Field(default_factory=list)
+    file_attachments: list[dict[str, str]] = Field(default_factory=list)
     include_text_part: bool = True
     replace_existing: bool = False
 
@@ -151,6 +152,16 @@ class RunInitializedEvent(ConversationEventEnvelope):
                 "image": f"cosir-attachment://{Path(path).name.split('.', 1)[0]}",
             }
             for path in self.image_paths
+        )
+        user_parts.extend(
+            {
+                "type": "file",
+                "file": f"cosir-local-file:{attachment['id']}",
+                "name": attachment["name"],
+                "contentType": attachment["content_type"],
+            }
+            for attachment in self.file_attachments
+            if attachment.get("id") and attachment.get("name") and attachment.get("content_type")
         )
         return [
             self._message(f"user-{self.run_id}", "user", user_parts),

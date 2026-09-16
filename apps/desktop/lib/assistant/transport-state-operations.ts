@@ -30,39 +30,3 @@ export function isTransportState(value: unknown): value is TransportState {
       && Array.isArray(candidateRun.messages);
   });
 }
-
-/**
- * Project an accepted backend cancellation into the local transport state.
- *
- * This is only a race fallback for a stream that closes before its terminal
- * snapshot arrives. A later canonical snapshot may replace this projection.
- */
-export function markTransportStateCancelled(
-  state: TransportState,
-  runId: number,
-): TransportState {
-  const runIndex = state.runs.findIndex((run) => run.runId === runId);
-  if (runIndex < 0) return state;
-
-  const runs = state.runs.map((candidate, index) => index === runIndex
-    ? {
-      ...candidate,
-      status: "cancelled",
-      endReason: "user_cancelled",
-      messages: candidate.messages.map((message) => ({
-        ...message,
-        parts: message.parts.map((part) => (
-          part.type === "tool-call" && (part.status === "pending" || part.status === "running")
-            ? { ...part, status: "cancelled", error: "已取消", isError: false }
-            : part
-        )),
-      })),
-    }
-    : candidate);
-
-  return {
-    ...state,
-    runs,
-    current_run_id: runId,
-  };
-}

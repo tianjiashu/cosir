@@ -32,6 +32,7 @@ from app.models import ConversationRunError, ConversationRunStatus
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.service.task.conversation_run_service import ConversationRunService
+from app.service.task.conversation_run_state_service import ConversationRunStateService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.crud.conversation_command_crud import ConversationCommandCrud
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -311,7 +312,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     store = canonical_store
     run = _create_run(store, current=True)
     _append(store, run.id, HumanMessage(content="durable user"))
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run = store.runs
 
     class FailingProjector:
@@ -319,7 +320,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
             raise RuntimeError("SSE failed after commit")
 
     monkeypatch.setattr(
-        "app.service.task.conversation_run_service.service_depends.get_conversation_event_projector",
+        "app.service.task.conversation_run_state_service.service_depends.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)
@@ -383,9 +384,13 @@ def _command_service(store) -> ConversationRunCommandService:
     run_service._run = store.runs
     run_service._context = store.context
     run_service._session_factory = store.factory
+    run_state_service = ConversationRunStateService.__new__(ConversationRunStateService)
+    run_state_service._run = store.runs
+    run_state_service._session_factory = store.factory
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._command = store.commands
     service._conversation_run = run_service
+    service._run_state = run_state_service
     service._state = store.state
     service._context = store.context
     service._task = SimpleNamespace()

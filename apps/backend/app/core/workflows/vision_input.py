@@ -25,11 +25,27 @@ def resolve_messages_for_model(
     model_name: str,
     vision_input_format: str,
 ) -> list[BaseMessage]:
-    """将自定义 `cosir_image_ref` 转换为 provider 可消费的临时 data URL。
+    """把消息里的 ``cosir_image_ref`` 图片引用解析为 provider 可消费的 base64 data URL。
 
-    该函数只作用于模型请求的 deep copy，不修改 canonical context，也不写 SQLite。图片
-    数量、单图大小、总大小和最长边按 ``model_capabilities.json`` 的模型限制校验。若模型
-    声明不支持图片输入，则静默忽略图片 block（仅保留文本），不报错。
+    只作用于模型请求的 deep copy：不修改 canonical context，也不写 SQLite。图片数量、单图大小、
+    请求总大小与最长边按 ``model_capabilities.json`` 的模型限制校验；模型声明不支持图片输入时
+    静默忽略图片 block（仅保留文本），不报错。
+
+    参数:
+        messages: 本次要发给模型的消息序列（作为 deep copy 的来源）。
+        task_id: 附件归属的任务 id，用于解析工作区内的图片路径。
+        model_name: 目标模型名，用于读取该模型的图片能力限制。
+        vision_input_format: provider 的视觉输入格式；当前只实现 ``"openai_url"``。
+
+    返回:
+        可直接发给模型的消息列表；消息里没有图片引用时返回入参的深拷贝。
+
+    异常:
+        VisionFormatNotSupportedError: 消息带图片引用，但 ``vision_input_format`` 不是已实现的格式。
+        VisionImageError: 图片引用缺路径、单图超限、尺寸超限、数量超限或请求总大小超限。
+
+    副作用:
+        读取附件文件内容并做 base64 编码（仅读磁盘）；不写任何持久化状态。
     """
     resolved = copy.deepcopy(list(messages))
     has_image_ref = any(
@@ -43,6 +59,8 @@ def resolve_messages_for_model(
     )
     if not has_image_ref:
         return resolved
+    # 只实现了 openai_url 一种拼装方式；由于上面已对「无图片引用」提前返回，这里报错只会在
+    # 真正要发图片、且该 provider 格式未实现时发生。
     if vision_input_format != "openai_url":
         raise VisionFormatNotSupportedError("当前 provider 的视觉输入格式尚未实现")
     # 模型是否具备图片输入能力；不具备时图片 block 直接忽略（仅保留文本），不报错。
@@ -97,6 +115,7 @@ def resolve_messages_for_model(
             if max_side and max(normalized.width, normalized.height) > max_side:
                 raise VisionImageError("图片尺寸超过模型限制")
             encoded = base64.b64encode(normalized.path.read_bytes()).decode("ascii")
+            # 兼容层返回的 content_type 可能已带 ``data:`` 前缀，避免重复拼接。
             content.append(
                 {
                     "type": "image_url",

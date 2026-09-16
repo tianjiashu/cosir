@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 from app.core.tools.tool_handler.search.errors import (
     InvalidSearchPattern,
-    SearchCancelled,
     SearchTimedOut,
 )
 from app.core.tools.tool_handler.search.result import ContentSearchPage, SearchMatch
@@ -26,13 +24,12 @@ def search_content(
     context: int = 0,
     limit: int = 50,
     offset: int = 0,
-    is_cancelled: Callable[[], bool] | None = None,
     deadline: float | None = None,
 ) -> ContentSearchPage:
     """在文件或目录 scope 中搜索正则，并返回结构化分页结果。
 
     不负责路径安全、ToolObservation 或模型文本格式化。不可读/二进制文件会被跳过，
-    取消和超时通过异常交给 handler 转换为统一工具状态。
+    超时通过异常交给 handler 转换为统一工具状态。
     """
 
     try:
@@ -46,9 +43,9 @@ def search_content(
     skipped_files = 0
 
     for file_path in scope.iter_files(file_glob):
-        _check_interrupt(is_cancelled, deadline)
+        _check_deadline(deadline)
         try:
-            lines = _read_lines(file_path, is_cancelled, deadline)
+            lines = _read_lines(file_path, deadline)
         except (OSError, UnicodeDecodeError):
             skipped_files += 1
             continue
@@ -59,7 +56,7 @@ def search_content(
         scanned_files += 1
         hits: list[int] = []
         for index, line in enumerate(lines, start=1):
-            _check_interrupt(is_cancelled, deadline)
+            _check_deadline(deadline)
             if regex.search(line):
                 hits.append(index)
         if not hits:
@@ -91,7 +88,6 @@ def search_content(
 
 def _read_lines(
     file_path: Path,
-    is_cancelled: Callable[[], bool] | None,
     deadline: float | None,
 ) -> list[str] | None:
     """按行读取 UTF-8 文本；二进制或超长单行返回 None。"""
@@ -103,7 +99,7 @@ def _read_lines(
         file.seek(0)
         lines: list[str] = []
         for raw_line in file:
-            _check_interrupt(is_cancelled, deadline)
+            _check_deadline(deadline)
             if len(raw_line) > MAX_SEARCH_LINE_BYTES:
                 return None
             line = raw_line.decode("utf-8", errors="strict")
@@ -115,13 +111,10 @@ def _read_lines(
         return lines
 
 
-def _check_interrupt(
-    is_cancelled: Callable[[], bool] | None,
+def _check_deadline(
     deadline: float | None,
 ) -> None:
-    """在文件边界执行线程内取消和超时检查。"""
+    """在文件边界执行线程内超时检查。"""
 
-    if is_cancelled is not None and is_cancelled():
-        raise SearchCancelled()
     if deadline is not None and time.monotonic() >= deadline:
         raise SearchTimedOut()

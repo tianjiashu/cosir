@@ -1,22 +1,21 @@
 """模型节点「流式 chunk 解析」处理器。
 
-把模型 ``astream`` 产出的 ``AIMessageChunk`` 流转为模型节点需要的四类结构化产物：
+把模型 ``astream`` 产出的 ``AIMessageChunk`` 流转为模型节点需要的三类结构化产物：
 
 - 思考分片抽取（``ModelChunkProcessor.extract_reasoning``）：按厂商 thinking 通道抽思考过程文本；
 - 工具调用提前抽取（``ModelChunkProcessor.extract_tool_calls``）：从单个 chunk 尽快拿到模型意图
   调用的工具集合；
-- chunk 合并（``ModelChunkProcessor.collect``）：把累积的 ``AIMessageChunk`` 列表合并为标准的
-  ``AIMessage``；
-- 完成原因归一化（``ModelChunkProcessor.extract_finish_reason``）：从合并后的 ``AIMessage`` 读取并
-  归一化 Provider 的 ``finish_reason`` / ``stop_reason``，供模型节点判定终态走向。
+- 完成原因归一化（``ModelChunkProcessor.extract_finish_reason``）：从合并后的消息读取并归一化
+  Provider 的 ``finish_reason`` / ``stop_reason``，供模型节点判定终态走向。
 
-只承载「模型 chunk → 结构化 parts」单一职责：不触达运行时上下文、不写日志、不落外部状态（仅
-``collect`` 合并后会经 ``debug_dump`` 落盘完整 chunk JSON，属调试旁路）；
-全部为纯转换，便于独立测试。
+只承载「模型 chunk → 结构化产物」单一职责：不触达运行时上下文、不写日志、不落外部状态，
+全部为纯转换，便于独立测试。chunk 累积与 ``AIMessage`` 收口由
+``RuntimeContextManager.add_message_chunk`` 负责（本处理器不参与）；原始 chunk 的调试落盘由
+``model_node`` 经 ``debug_dump`` 完成，属调试旁路。
 
-构造时持有 per-run 的 ``thinking_channel``（来自 ``LLMRuntimeConfig.thinking_channel``），免去调用方
-每次传通道；思考字段的回传 / 剥离策略不在本处理器处置，由下游持久化与回传边界负责（``collect``
-原样透传 ``additional_kwargs``）。
+构造时持有 per-run 的 ``thinking_channel``（``RuntimeConfig.thinking_channel``，由 provider 能力
+目录解析得到），免去调用方每次传通道；思考字段的回传 / 剥离策略不在本处理器处置，由下游持久化
+与回传边界负责。
 """
 
 from typing import Any
@@ -31,7 +30,7 @@ class ModelChunkProcessor:
     （``reasoning_content`` / ``thought`` / ``thinking_blocks`` / ``reasoning``），
     ``extract_reasoning`` 据此抽思考文本；其余方法（工具调用抽取、chunk 合并）与通道无关。
 
-    本处理器只做纯转换，不写任何外部状态；``collect`` 的调试落盘属旁路，失败已降级。
+    本处理器只做纯转换，不写任何外部状态；调用方的调试落盘属旁路，失败已降级。
     """
 
     def __init__(self, thinking_channel: str) -> None:
@@ -92,12 +91,15 @@ class ModelChunkProcessor:
         末 chunk、``chunk_position == "last"`` 时工具调用已被解析进 ``tool_calls``）。任一口非空
         即返回该口全部条目，不做跨口去重或合并。
 
-        注意：流式分片中 ``args`` 通常是未闭合的部分 JSON（跨 chunk 拼接属于 ``collect`` 职责），
-        本函数只返回「当前 chunk 可见」的完整条目，不跨 chunk 拼接。需要最终完整工具调用请在工具
-        节点合并后从 ``tool_calls`` 读取。
+        注意：流式分片中 ``args`` 通常是未闭合的部分 JSON（跨 chunk 拼接由
+        ``RuntimeContextManager.add_message_chunk`` 的累积合并负责），本函数只返回「当前消息可见」
+        的完整条目，不跨 chunk 拼接。需要最终完整工具调用请读合并后的 ``AIMessage.tool_calls``。
+
+        实现按属性读取（``getattr``）上述两个字段，因此参数既可以是原始 ``AIMessageChunk``，
+        也可以是累积合并后的 ``AIMessage``（``model_node`` 当前传入后者）。
 
         参数:
-            chunk: 模型 ``astream`` 产出的 ``AIMessageChunk``（不要求已聚合）。
+            chunk: 模型 ``astream`` 产出的原始 ``AIMessageChunk``，或累积合并后的 ``AIMessage``。
 
         返回:
             当前 chunk 可见的全部完整工具调用（``list[dict[str, Any]]``，每项含
@@ -127,12 +129,11 @@ class ModelChunkProcessor:
         小写归一化，不把 Provider 原始值改写进消息或 Run 事实。取消/连接中断导致没有终止
         chunk 时返回 ``None``，由模型节点按不完整响应处理。
 
-        参数为 ``collect`` 合并后的完整 ``AIMessage``，不依赖实例状态，故声明为
-        ``staticmethod``；与 ``extract_reasoning`` / ``extract_tool_calls`` / ``collect``
-        同为「模型输出 → 结构化产物」的纯转换。
+        参数为累积合并后的完整消息，不依赖实例状态，故声明为 ``staticmethod``；与
+        ``extract_reasoning`` / ``extract_tool_calls`` 同为「模型输出 → 结构化产物」的纯转换。
 
         参数:
-            message: ``collect`` 合并后的 LangChain 消息。
+            message: 累积合并后的 LangChain 消息（``AIMessage`` 或 ``AIMessageChunk``）。
 
         返回:
             规范化后的小写完成原因；字段缺失、类型不正确或空字符串时返回 ``None``。

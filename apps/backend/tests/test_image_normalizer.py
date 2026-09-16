@@ -12,7 +12,7 @@ from app.service.attachment.image_normalizer import (
     normalize_image,
 )
 
-VISION_MODEL = "deepseek-v4-flash-vision-exp"
+VISION_MODEL = "deepseek-flash"
 
 
 def test_normalize_static_image_to_model_supported_format(tmp_path: Path) -> None:
@@ -47,7 +47,7 @@ def test_normalize_rejects_image_for_non_vision_model(tmp_path: Path) -> None:
     source = tmp_path / "source.bmp"
     target = tmp_path / ".normalized.part"
     Image.new("RGB", (2, 2), "white").save(source, format="BMP")
-    non_vision_model = "deepseek-v4-flash"
+    non_vision_model = "deepseek-v4-pro"
 
     with pytest.raises(ImageNormalizationError) as error:
         normalize_image(source, target, non_vision_model)

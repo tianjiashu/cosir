@@ -1,9 +1,12 @@
 """默认 ReAct-like 工作流编排，由 LangGraph StateGraph 驱动。
 
-本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` /
-``pause`` 节点 + 条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
+本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` 三个节点
++ 条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
 ``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
+
+协作取消是图内的唯一中断点：``model`` 节点落定取消终态后调用 ``interrupt`` 中断执行，图停在
+带 interrupt 的任务上（``next`` 非空），因此该 run 仍可由本模块的续跑分支恢复。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
@@ -51,7 +54,8 @@ class ReactLikeWorkflow(AgentWorkflow):
         """构建并编译 ReAct StateGraph。
 
         ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；graph 编译时挂入
-        ``checkpointer`` 以启用 graph 控制流持久化。
+        ``checkpointer`` 以启用 graph 控制流持久化。图内不设独立的暂停节点：协作取消由
+        ``model`` 节点的 ``interrupt`` 中断（见 ``nodes.model_node``）。
 
         参数:
             checkpointer: 已配置好的 LangGraph checkpointer。
@@ -95,7 +99,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             无。
 
         异常:
-            ValueError: custom stream 增量结构非法。
+            无。``operations.process_event`` 内部已把投影异常降级为日志，custom 增量结构
+            非法不会中断工作流。
 
         副作用:
             将文本或 reasoning 增量交给 ``RuntimeOperations``，由其更新 snapshot 并发布
@@ -119,7 +124,8 @@ class ReactLikeWorkflow(AgentWorkflow):
         工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state，
         模型流式增量由 graph custom stream 统一转发到 snapshot。
         模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
-        工具由服务端工具策略直接执行，工作流本身不暂停等待外部决策。
+        工具由服务端工具策略直接执行，工作流不等待审批类外部决策；唯一的图内中断是协作取消
+        触发的 ``interrupt``（见 ``model_node``）。
 
         参数:
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
@@ -127,9 +133,18 @@ class ReactLikeWorkflow(AgentWorkflow):
                 ``graph.astream`` 的 ``config["callbacks"]`` 使 LLM 调用被自动追踪。
             langfuse_trace_id: 可选 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
                 终态事件 payload 会携带该字段供前端展示。未启用 Langfuse 时为 None。
+            execution_mode: 本次执行是 ``fresh`` 还是 ``resume``；它决定注入 graph 的输入
+                （``fresh`` 传初始 state、``resume`` 传 ``None`` 或 ``Command(resume=...)``）
+                以及上下文是否清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。
 
-        生成:
-            无。该异步迭代器只保留工作流协议的可消费形状，不产生运行时事件。
+        返回:
+            无（协程）。工作流只驱动领域事实写入；Transport 通过 canonical conversation
+            state 订阅事实变更。
+
+        异常:
+            ValueError: Conversation Run 缺少 ``provider_id``。
+            Exception: 模型解析失败或 graph 执行失败时，记 ``workflow_graph_failed`` /
+                ``model_resolve_failed`` 后原样向上抛出，由 runner 收敛 run 终态。
         """
 
         run = operations.get_current_run()
@@ -240,8 +255,8 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
-            # get_stream_writer() 只在 graph 执行上下文内有效；首条 user message 在
-            # graph 建立前写入 context，因此 emitter 必须延迟到此处绑定。
+            # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
+            # RuntimeContextManager，后者经 config 注入）。
             initial_state = ReactGraphState(
                 step_count=0,
                 tool_error_count=0,
@@ -276,8 +291,9 @@ class ReactLikeWorkflow(AgentWorkflow):
                         final_output="该轮次的工作流已结束，无法继续续跑，请新建轮次",
                     )
                     return
-                # 停在 ``pause``（协作取消落点）时必须用 ``Command(resume=...)`` 恢复；
-                # 其余情况传 ``None``，语义为「从既有 checkpoint 继续」。
+                # 图停在带 interrupt 的任务上（当前唯一来源是 ``model_node`` 的协作取消）
+                # 时必须用 ``Command(resume=...)`` 恢复；其余情况传 ``None``，语义为
+                # 「从既有 checkpoint 继续」。
                 input_state = (
                     Command(resume={"action": "resume"})
                     if any(task.interrupts for task in snapshot.tasks)

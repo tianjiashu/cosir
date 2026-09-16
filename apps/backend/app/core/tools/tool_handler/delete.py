@@ -15,6 +15,7 @@ import errno
 import shutil
 
 from app.config.logging.logger import log
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.filesystem_display import build_delete_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
@@ -22,6 +23,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import (
     blocked_device_reason,
     os_error_message,
@@ -148,6 +150,11 @@ class DeleteTool(HandlerBase):
             )
         is_symlink = entry.is_symlink()
         is_junction = is_windows_directory_reparse_point(entry)
+        if cancellation_registry.is_cancelled(execution_context.run_id):
+            return tool_cancelled(
+                tool_name=self.name,
+                permission=self.permission,
+            )
         if is_symlink or is_junction:
             try:
                 current_entry, current_error = resolver.resolve_entry_within_workspace(path)
@@ -198,6 +205,11 @@ class DeleteTool(HandlerBase):
                 self.name,
                 "refusing to delete the project root",
                 reason="choose a specific file or subdirectory inside the project root.",
+                permission=self.permission,
+            )
+        if cancellation_registry.is_cancelled(execution_context.run_id):
+            return tool_cancelled(
+                tool_name=self.name,
                 permission=self.permission,
             )
         if resolved.is_dir():

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -23,7 +21,6 @@ from app.models.conversation_command_record import ConversationCommandRecord
 from app.service import depends as service_depends
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 RunCommandMode = Literal["new", "edit", "resume"]
 
@@ -49,10 +46,11 @@ class ConversationRunCommandService:
     """在任务边界内原子创建 run，或返回 command 已绑定的原 run。"""
 
     def __init__(self) -> None:
-        """初始化 command、run 和 snapshot 持久化依赖。"""
+        """初始化 command、run 编排、run 状态与 snapshot 持久化依赖。"""
 
         self._command = service_depends.get_conversation_command_crud()
         self._conversation_run = service_depends.get_conversation_run_service()
+        self._run_state = service_depends.get_conversation_run_state_service()
         self._state = ConversationTaskStateService()
         self._context = ConversationTaskContextService()
         self._task = service_depends.get_task_service()
@@ -96,7 +94,7 @@ class ConversationRunCommandService:
             raise RuntimeError(f"command {command_id!r} already exists with a different payload")
         if existing.run_id is None:
             raise RuntimeError(f"command {command_id!r} exists without a bound run")
-        run = self._conversation_run.get_run(existing.run_id)
+        run = self._run_state.get_run(existing.run_id)
         return ConversationRunStartResult(
             command=existing,
             run=run,
@@ -146,7 +144,7 @@ class ConversationRunCommandService:
             ('pending','running')`` 的部分唯一索引），而不是删掉校验。
         """
 
-        if self._conversation_run.have_run_in_runing(task_id, session=session):
+        if self._run_state.has_active_run(task_id, session=session):
             raise ValueError(f"task {task_id} already has an active run")
 
     def start_or_attach(
@@ -253,7 +251,7 @@ class ConversationRunCommandService:
                 ),
             )
         )
-        running_run = self._conversation_run.claim_pending_run(run.id)
+        running_run = self._run_state.claim_pending_run(run.id)
         if running_run is None:
             raise ValueError(f"run {run.id} is not editable in its current state")
         snapshot = self._state.get_state(task_id)
@@ -284,6 +282,33 @@ class ConversationRunCommandService:
         ``run_id`` 必须是 task 最近 run，且 canonical context 中必须存在该 run 的 user 消息。
         旧 run 的 context entries 按 ``ContextEntry.run_id`` 删除，run 保留原 id，
         但会换用新的 checkpoint thread；Assistant UI ``sourceId`` 不参与本用例。
+
+        参数:
+            command_id: Assistant Transport 命令幂等标识。
+            command_type: Transport 命令类型。
+            payload_hash: 命令业务载荷指纹。
+            task_id: 所属任务标识。
+            run_id: 被编辑的 Conversation Run 标识（必须是该 task 的最近 run）。
+            provider_id: 模型厂商标识。
+            model_name: 模型名称。
+            reasoning_effort: 可选推理深度。
+            run_command: 已由 Assistant Transport 转换的领域输入命令。
+
+        返回:
+            ``created=True``、``execution_mode="fresh"``、``mode="edit"`` 的启动结果；
+            ``run`` 为本次编辑的 run 记录，认领为 ``running`` 发生在返回之前。
+
+        异常:
+            ValueError: ``run_command`` 缺失、``run_id`` 不是该 task 最近 run、run 当前
+                状态不允许编辑，或 pending → running 认领未命中。
+            RuntimeError: 同 ``command_id`` 的命令已存在但 payload 冲突，或命令未绑定 run。
+            KeyError: task 或 run 不存在。
+
+        副作用:
+            在同一事务内重置 run（写回输入、换 checkpoint thread、清空终态字段）、删除该
+            run 的旧 context entries、写入新命令；随后投影 ``RunInitializedEvent``
+            （``replace_existing=True``）重建 Transport 骨架并刷新快照，最后把该 run
+            认领为 ``running``（发布一次 RUNNING 状态事件）。不会创建新的 run。
         """
 
         if run_command is None:
@@ -358,6 +383,9 @@ class ConversationRunCommandService:
                 replace_existing=True,
             )
         )
+        running_run = self._run_state.claim_pending_run(reset.id)
+        if running_run is None:
+            raise ValueError(f"run {reset.id} is not editable in its current state")
         snapshot: ConversationStateSnapshot = self._state.get_state(task_id)
         self._state.publish_state(task_id, snapshot)
         return ConversationRunStartResult(
@@ -414,7 +442,7 @@ class ConversationRunCommandService:
         # 驱动命令读取是最后一个只读步骤：一个 run 可绑定多条 command（同轮编辑重跑会
         # 追加一条），这里取最近一条。必须在写操作之前完成，避免失败时留下已恢复的 run。
         command = self._command.get_by_run(run_id)
-        resumed = self._conversation_run.resume_cancelled_run(run_id)
+        resumed = self._run_state.resume_cancelled_run(run_id)
         if resumed is None:
             raise ValueError(f"run {run_id} is no longer resumable")
         try:
@@ -429,7 +457,7 @@ class ConversationRunCommandService:
                     "data": {"task_id": task_id, "run_id": run_id},
                 },
             )
-            self._conversation_run.cancel_run_if_running(
+            self._run_state.cancel_run_if_running(
                 run_id, end_reason="resume_setup_failed"
             )
             raise

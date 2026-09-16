@@ -1,6 +1,6 @@
 "use client";
 
-import { GaugeIcon, InfoIcon } from "lucide-react";
+import { GaugeIcon, InfoIcon, ZapIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import { useAuiState } from "@assistant-ui/react";
 
@@ -39,6 +39,32 @@ export function formatTokenCount(value: number): string {
   const compact = value / 1_000_000;
   const rounded = Number(compact.toFixed(compact < 10 ? 1 : 0));
   return `${rounded.toLocaleString("en-US")}M`;
+}
+
+/**
+ * Calculate the provider-reported prompt cache hit rate.
+ *
+ * A null result means the provider did not supply enough data to make the
+ * percentage meaningful, usually because cache misses are unavailable or both
+ * counts are zero.
+ */
+export function getCacheHitRate(
+  cacheHitTokens: number | null,
+  cacheMissTokens: number | null,
+): number | null {
+  if (
+    cacheHitTokens === null
+    || cacheMissTokens === null
+    || !Number.isFinite(cacheHitTokens)
+    || !Number.isFinite(cacheMissTokens)
+    || cacheHitTokens < 0
+    || cacheMissTokens < 0
+  ) {
+    return null;
+  }
+  const measuredTokens = cacheHitTokens + cacheMissTokens;
+  if (measuredTokens <= 0) return null;
+  return Math.round((cacheHitTokens / measuredTokens) * 1000) / 10;
 }
 
 export function getContextUsagePresentation(
@@ -213,6 +239,7 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
   const total = usage?.total_tokens ?? null;
   const cacheHit = usage?.cache_hit_tokens ?? null;
   const cacheMiss = usage?.cache_miss_tokens ?? null;
+  const cacheHitRate = getCacheHitRate(cacheHit, cacheMiss);
   const reasoning = usage?.reasoning_tokens ?? null;
 
   if (!shouldDisplayRunUsage(visible, runId, run !== null)) return null;
@@ -231,7 +258,6 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
       <PopoverContent align="start" className="w-64">
         <PopoverHeader>
           <PopoverTitle>本次 Run 用量</PopoverTitle>
-          <PopoverDescription>{known ? "模型返回的 provider usage 累计值；重启或断连时可能不完整" : "当前 Run 尚未提供可用用量"}</PopoverDescription>
         </PopoverHeader>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <dt className="text-muted-foreground">输入</dt><dd className="text-right">{known ? formatTokenCount(input ?? 0) : "—"}</dd>
@@ -241,6 +267,41 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
           <dt className="text-muted-foreground">缓存未命中</dt><dd className="text-right">{known && cacheMiss !== null ? formatTokenCount(cacheMiss) : "—"}</dd>
           <dt className="text-muted-foreground">推理</dt><dd className="text-right">{known ? formatTokenCount(reasoning ?? 0) : "—"}</dd>
         </dl>
+        <div className="mt-3 border-t pt-3">
+          <div className="flex items-center justify-between text-xs">
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <ZapIcon className="size-3.5 text-amber-500" aria-hidden="true" />
+              缓存命中率
+            </span>
+            <span className={cn("font-semibold", cacheHitRate === null ? "text-muted-foreground" : "text-emerald-500")}>
+              {cacheHitRate === null ? "—" : `${cacheHitRate.toFixed(1)}%`}
+            </span>
+          </div>
+          <div
+            role="progressbar"
+            aria-label="缓存命中率"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={cacheHitRate ?? undefined}
+            aria-valuetext={cacheHitRate === null ? "暂无可用数据" : `${cacheHitRate.toFixed(1)}%`}
+            className="bg-muted mt-2 h-2 overflow-hidden rounded-full"
+          >
+            <div
+              className="h-full rounded-full bg-emerald-400 transition-[width]"
+              style={{ width: `${cacheHitRate ?? 0}%` }}
+            />
+          </div>
+          <div className="text-muted-foreground mt-2 flex items-center gap-3 text-[11px]">
+            <span className="inline-flex items-center gap-1">
+              <span className="size-2 rounded-sm bg-emerald-400" aria-hidden="true" />
+              命中
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="size-2 rounded-sm bg-rose-400" aria-hidden="true" />
+              未命中
+            </span>
+          </div>
+        </div>
       </PopoverContent>
     </Popover>
   );

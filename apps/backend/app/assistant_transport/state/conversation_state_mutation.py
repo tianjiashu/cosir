@@ -14,3 +14,6 @@ class ConversationStateMutation:
     kind: MutationKind
     path: SnapshotPath
     value: object
+
+
+__all__ = ["ConversationStateMutation", "MutationKind", "SnapshotPath"]
