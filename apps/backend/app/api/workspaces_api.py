@@ -36,9 +36,9 @@ async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> HealthResp
     当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。
     ``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。
 
-    真实探针（TODO，尚未实现）：聚合 storage 连通性、模型配置中心
-    （默认 Agent 的默认模型是否可解析 + Key 是否就位）、可选 CodeGraph
-    kernel 可达性，产出不含 secret 明文的健康摘要。届时将改为注入
+    真实探针（TODO，尚未实现）：聚合 storage 连通性与模型配置中心
+    （默认 Agent 的默认模型是否可解析 + Key 是否就位），产出不含 secret 明文的健康摘要。
+    届时将改为注入
     ``HealthProbeService`` 并移除无用的 ``runtime`` 参数。
 
     参数:

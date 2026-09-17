@@ -76,7 +76,7 @@ Node/npm 版本：
 | C-06 | P1 | 图标 | Windows 图标适配通知区域，macOS 使用 template 资源或明确记录限制 | ☐ |
 | C-07 | P1 | 安全边界 | 没有新增公网监听、认证、多租户、远程队列或把 tray 命令暴露给任意网页内容 | ☐ |
 | C-08 | P1 | 文档一致性 | 方案、验收文档和代码事实一致；未实现能力明确写成待办/未通过 | ☐ |
-| C-09 | P0 | 非 Windows 进程树 | macOS 真退出时，对后端派生的 CodeGraph/工具子进程有可验证的进程组或等价清理保证 | ☐ |
+| C-09 | P0 | 非 Windows 进程树 | macOS 真退出时，对后端派生的工具子进程有可验证的进程组或等价清理保证 | ☐ |
 
 ## 5. Windows 功能验收
 
@@ -135,7 +135,7 @@ Node/npm 版本：
 | ID | 级别 | 检查项 | 通过标准 | 证据 | 结果 |
 |---|---|---|---|---|---|
 | L-01 | P0 | 隐藏不停止后端 | 点击 X 后 supervisor 未进入 stopped，后端仍监听动态 loopback 端口 | 日志/端口 | ☐ |
-| L-02 | P0 | 真实退出清理 | 退出后 Tauri、FastAPI、CodeGraph 和工具子进程均不存在 | 进程树 | ☐ |
+| L-02 | P0 | 真实退出清理 | 退出后 Tauri、FastAPI 和工具子进程均不存在 | 进程树 | ☐ |
 | L-03 | P0 | 不重复恢复 | 退出竞态期间 supervisor 不重新拉起后端 | 日志/进程树 | ☐ |
 | L-04 | P0 | 单实例 | 任意时刻最多一个 Cosir Tauri 实例和一个对应后端 | 进程树 | ☐ |
 | L-05 | P1 | 关闭/恢复幂等 | 连续点击、快速隐藏恢复、已隐藏状态重复恢复不崩溃 | 操作记录 | ☐ |
@@ -151,7 +151,7 @@ Node/npm 版本：
 | B-03 | P0 | Windows 安装包/可执行发行形态 | 真实安装后 tray 图标、退出和单实例仍正常 | ☐ |
 | B-04 | P0 | macOS `.app` 发行形态 | 真实 `.app` 中状态栏、Dock reopen、Cmd+Q 和退出清理仍正常 | ☐ |
 | B-05 | P1 | 多显示器/高 DPI | 窗口恢复后位置、大小和焦点正常；tray 图标不变形 | ☐ |
-| B-06 | P0 | 发行资源完整性 | 核对 `tauri.conf.json` 的 resource 映射、安装后实际路径，并确认 `backend`、`backend-runtime`、Python/解释器及 CodeGraph 开启时所需 Node/server 资源随包提供；安装后可启动 `/health` | ☐ |
+| B-06 | P0 | 发行资源完整性 | 核对 `tauri.conf.json` 的 resource 映射、安装后实际路径，并确认 `backend`、`backend-runtime`、Python/解释器资源随包提供；安装后可启动 `/health` | ☐ |
 
 当前 `apps/desktop/src-tauri/tauri.conf.json` 的 `bundle.active` 为 `false`，且当前配置尚未声明 release 后端资源。发行包尚未启用或资源未闭环前，B-03/B-04/B-06 必须标记为“阻塞/未完成”，不能以开发模式结果替代。
 
@@ -187,7 +187,7 @@ W-12/M-08 不得依赖真实 LLM、外网或不可控的模型响应。验收前
 - 点击 X 后 FastAPI 或 Agent run 停止。
 - 托盘无法恢复窗口。
 - 没有明确的真正退出入口。
-- 退出后留下 FastAPI、CodeGraph 或工具子进程。
+- 退出后留下 FastAPI 或工具子进程。
 - 二次启动创建第二个实例。
 - macOS Cmd+Q 被错误地变成隐藏窗口。
 - 仅在开发模式验证，发行形态没有结果却标记整体通过。

@@ -26,13 +26,11 @@ storage/backend.bootstate.json
 apps/backend/.env
 apps/backend/.env.local
 
-# CodeGraph 索引缓存
+# 本地 workspace 索引数据（保留已有数据，不提交）
 .codegraph/
-# CodeGraph workspace 运行时数据库（本地运行产物，不提交）
+# 本地 workspace 运行时数据（不提交）
 .workspace_event/
 .workspace_payload/
-# CodeGraph 锁定 node 运行时（随应用分发，不提交仓库）
-apps/backend/.workspace_payload-node/
 
 # Tauri 生成产物（gen/ 仍按 crate 相对路径生成）
 apps/desktop/src-tauri/gen/
@@ -57,11 +55,6 @@ node_modules/
 /.superpowers/
 /temp/
 
-apps/backend/.workspace_event-node/
-
-# CodeGraph Kernel 运行/构建产物（运行时生成，不应提交）
-third_party/codegraph/dist/
-third_party/codegraph/node_modules/
 /apps/backend/_probe_atomic_tmp/
 
 # 临时调试产物（环境重建/测试跑出的零散文件，避免误提交）

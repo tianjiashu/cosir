@@ -262,9 +262,7 @@ def _cas_update_status(
 def _resolve_workspace_root(task_id: int) -> Path:
     """解析任务所属 workspace 的根路径（兜底路径）。
 
-    与 ``conversation_run_workspace_resolver`` 同构的「task → workspace → root_path」解析链，但
-    输入是 ``task_id``（而非 ``ConversationRunRecord``）、失败抛 ``KeyError``（而非静默返回 None），
-    故不复用 ``ConversationRunWorkspaceResolver``，只在此统一依赖获取——所有依赖经
+    解析 task → workspace → root_path，并在缺失时抛 ``KeyError``。依赖经
     ``service_depends`` 进程单例取得，不做裸 ``new`` 构造。
 
     参数:

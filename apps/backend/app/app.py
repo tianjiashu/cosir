@@ -32,7 +32,6 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
-from app.codegraph import CodeGraphKernelClient, CodeGraphKernelSupervisor
 from app.config.configuration import (
     build_agent_registry,
     set_agent_registry,
@@ -116,23 +115,13 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
     get_terminal_session_service().initialize()
 
-    # 预热常驻 CodeGraph Kernel（应用级预热，对齐「后端启动时预热 Node Kernel」设计）。
-    # 启动失败仅降级（CodeGraph 走文件搜索），不阻断后端启动。
-    # 必须先于 build_tool_system：workspace_payload 工具装配需要注入已就绪的 Kernel client，
-    # 否则 supervisor 未初始化，_codegraph_client() 恒返回 None，工具恒降级（审查暴露）。
-    # CodeGraph 总开关关闭时不挂载 Kernel（默认关闭）：不拉起 Kernel 子进程、不设 supervisor
-    # 单例，后续注册表/白名单/提示词同步不含 codegraph 入口。
-    _kernel_supervisor = (
-        await _start_codegraph_kernel() if Settings.CODEGRAPH_ENABLED else None
-    )
-
     # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
     # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
     from app.hook.hook_registry import initialize_hook_registry
 
     initialize_hook_registry()
 
-    tool_system = ToolSystem.build_tool_system(_codegraph_client())
+    tool_system = ToolSystem.build_tool_system()
     set_tool_system(tool_system)
     set_agent_registry(build_agent_registry())
     set_runtime(AgentRuntime())
@@ -147,8 +136,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
         HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-        if _kernel_supervisor is not None:
-            _kernel_supervisor.shutdown()
         await get_conversation_run_executor().close()
         await asyncio.to_thread(get_terminal_session_service().shutdown)
         flush_langfuse()
@@ -198,76 +185,6 @@ importlib.import_module("app.api.models_api")
 importlib.import_module("app.api.terminal_api")
 importlib.import_module("app.api.attachments_api")
 importlib.import_module("app.assistant_transport.assistant_api")
-
-
-async def _start_codegraph_kernel() -> CodeGraphKernelSupervisor | None:
-    """启动常驻 CodeGraph Kernel 子进程并设进程级单例；失败降级不阻断启动。
-
-    应用级预热：在应用装配完成后、标记 boot ready 前，拉起 CodeGraph Kernel 常驻
-    子进程（``supervisor.start()``），避免首次 Agent 工具调用才发现 Kernel 不可用。
-
-    启动失败不阻断后端启动：异常仅记录日志，supervisor 仍通过 ``set_kernel_supervisor``
-    设为进程级单例（state 为 failed），使 ``get_client()`` 抛 ``CodeGraphKernelUnavailableError``，
-    由 service 层（如 ``CodeGraphIndexPrepareHook`` 内置 Hook 的 ensure_ready 降级分支）
-    降级到文件搜索。
-
-    已知延迟：``supervisor.start()`` 内含握手（``client.hello``），极端场景（node 挂起
-    无响应）下可能阻塞最多一个 RPC 超时（默认 30s），从而延迟 ``_mark_boot_ready()``。
-    这是「延迟 ready」而非「不 ready」——握手失败会走降级不抛。正常场景握手秒级完成。
-
-    参数:
-        无。
-
-    返回:
-        已装配的 ``CodeGraphKernelSupervisor`` 单例；启动成功则 state=ready。
-        （当前实现始终返回非 None，因失败也保留 supervisor 供状态查询；预留 None 分支
-        供测试注入或未来「完全禁用 Kernel」配置。）
-
-    异常:
-        无（启动失败归一化为降级，不向上抛）。
-
-    副作用:
-        创建 Kernel 子进程并设进程级 supervisor 单例；失败时记录日志并保留 failed 状态。
-    """
-
-    from app.codegraph import CodeGraphKernelSupervisor, set_kernel_supervisor
-
-    supervisor = CodeGraphKernelSupervisor()
-    try:
-        # supervisor.start() 是同步阻塞（spawn + 握手），放进线程池避免卡事件循环。
-        await asyncio.to_thread(supervisor.start)
-    except Exception:
-        log.exception(
-            "codegraph_kernel_startup_failed",
-            extra={"msg": "CodeGraph Kernel 启动失败，降级到文件搜索"},
-        )
-    set_kernel_supervisor(supervisor)
-    return supervisor
-
-
-def _codegraph_client() -> CodeGraphKernelClient | None:
-    """安全取得 CodeGraph Kernel RPC 客户端；Kernel 未就绪返回 None。
-
-    参数:
-        无。
-
-    返回:
-        Kernel 就绪时的 ``CodeGraphKernelClient``；supervisor 未初始化或 Kernel 非
-        ready 时返回 None（CodeGraph 工具仍注册，execute 降级）。
-
-    异常:
-        无（内部捕获，不向上抛）。
-
-    副作用:
-        无。
-    """
-
-    from app.codegraph import CodeGraphKernelUnavailableError, get_kernel_supervisor
-
-    try:
-        return get_kernel_supervisor().get_client()
-    except (RuntimeError, CodeGraphKernelUnavailableError):
-        return None
 
 
 def _mark_boot_ready() -> None:

@@ -1,8 +1,8 @@
 # Tool UI 展示契约
 
-状态：方案契约，适用于非 CodeGraph 工具。
+状态：方案契约，适用于当前全部内置工具。
 
-本文定义工具执行结果如何被桌面端 UI 展示。CodeGraph 工具不适用本契约，保持独立。
+本文定义工具执行结果如何被桌面端 UI 展示。
 
 ## 1. 运行边界
 
@@ -148,9 +148,9 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 
 文件写入后的语法检查不属于 UI 感知范围：即使检查失败，也不生成“语法检查失败”短提示，不进入错误 `display_data`，并按文件写入本身的 UI 结果处理。
 
-## 3. 非 CodeGraph 工具契约
+## 3. 内置工具契约
 
-当前非 CodeGraph 工具共 12 个，包括 `delegate_task`。
+当前内置工具共 12 个，包括 `delegate_task`。
 
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
@@ -397,7 +397,7 @@ builder 应接收已校验的参数和领域结果，返回新的普通字典；
 
 ### 后端
 
-- 所有非 CodeGraph 工具的 `ToolDefinition` 都声明 `ToolDisplayHints`。
+- 所有内置工具的 `ToolDefinition` 都声明 `ToolDisplayHints`。
 - 每个成功、失败、取消路径都能在安全范围内构建对应的 `display_data`。
 - 失败路径的 `display_data` 只提供 `status_hint`，状态取自 `ToolObservation.status`，不把 `error` / `reason` 原文投影到 UI。
 - `display_data` 在 allowlist 投影后再进入统一大小预算。

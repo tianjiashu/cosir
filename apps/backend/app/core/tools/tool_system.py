@@ -2,19 +2,10 @@
 
 from dataclasses import dataclass
 
-from app.codegraph import CodeGraphKernelClient
 from app.config.settings import Settings
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
-from app.core.tools.tool_handler.codegraph_query import (
-    build_codegraph_callees_definition,
-    build_codegraph_callers_definition,
-    build_codegraph_explore_definition,
-    build_codegraph_impact_definition,
-    build_codegraph_node_definition,
-    build_codegraph_search_definition,
-)
 from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
 from app.core.tools.tool_handler.delete import build_delete_definition
 from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_definition
@@ -55,26 +46,16 @@ class ToolSystem:
     executor: ToolExecutor
 
     @classmethod
-    def build_tool_system(
-        cls,
-        client: CodeGraphKernelClient | None = None,
-    ) -> "ToolSystem":
+    def build_tool_system(cls) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册工具定义：12 个非 CodeGraph 工具恒注册（包含
-        ``delegate_task``）；``Settings.CODEGRAPH_ENABLED`` 为 True 时额外注册 6 个
-        CodeGraph 查询工具（共 18 个），为 False 时仅注册 12 个工具（模型侧完全无
-        codegraph 入口）。其中原 patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(V4A)，
+        按内置清单注册 12 个工具定义（包含 ``delegate_task``）。其中原 patch_write
+        工具已拆分为 replace(patch_write) 与 apply_patch(V4A)，
         搜索工具已拆分为 find_files 与 search_content。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
         构造输出预算上限，装配执行管线（``ToolExecutor``）。工具拦截（Pre/PostToolUse）通过
         ``app.hook.hook_interceptor.HookInterceptor`` 静态方法直接收口，
         无需注入拦截器实例。
-
-        参数:
-            client: 可选的 CodeGraph Kernel RPC 客户端；由调用方（api 装配层）从
-                supervisor 取得。为 None 时 CodeGraph 工具仍注册，execute 降级
-                （Kernel 不可用）。本方法**不自调** get_client，避免构造即抛破坏装配。
 
         返回:
             已初始化 registry 与 executor 的 ToolSystem。
@@ -106,15 +87,6 @@ class ToolSystem:
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
         registry.register(build_delegate_task_definition())
-        # CodeGraph 查询工具（client 可为 None，execute 降级）。总开关关闭时不注册，
-        # 模型侧完全无 codegraph 工具入口；开关开启时注册 6 个只读查询工具。
-        if Settings.CODEGRAPH_ENABLED:
-            registry.register(build_codegraph_explore_definition(client))
-            registry.register(build_codegraph_search_definition(client))
-            registry.register(build_codegraph_node_definition(client))
-            registry.register(build_codegraph_callers_definition(client))
-            registry.register(build_codegraph_callees_definition(client))
-            registry.register(build_codegraph_impact_definition(client))
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),

@@ -312,7 +312,7 @@ def injected_registry(monkeypatch):
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
-    configuration.set_tool_system(ToolSystem.build_tool_system(None))
+    configuration.set_tool_system(ToolSystem.build_tool_system())
     registry = configuration.build_agent_registry()
     configuration.set_agent_registry(registry)
     return registry
@@ -454,7 +454,7 @@ def test_static_description_has_no_catalog_and_live_projection_does(monkeypatch)
     assert "Available child agents" not in static_desc
     assert "CRITICAL BUDGET LIMIT" in static_desc
 
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
     configuration.set_agent_registry(configuration.build_agent_registry())
 
@@ -474,7 +474,7 @@ def tool_system_injected_after_build(monkeypatch) -> ToolSystem:
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
 
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
     with pytest.raises(RuntimeError):
         configuration.get_agent_registry()

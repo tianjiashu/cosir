@@ -71,8 +71,8 @@ def main_agent() -> AgentProfile:
 def reviewer_agent() -> AgentProfile:
     """构建只读的代码审查 Agent profile。
 
-    该 Agent 面向主 Agent 提供基于证据的代码、变更和设计审查；它只拥有读取、搜索
-    与 CodeGraph 查询能力，不承担代码修改、命令执行或测试运行。
+    该 Agent 面向主 Agent 提供基于证据的代码、变更和设计审查；它只拥有读取与搜索
+    能力，不承担代码修改、命令执行或测试运行。
 
     参数:
         无。

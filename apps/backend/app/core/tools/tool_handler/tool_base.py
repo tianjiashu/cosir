@@ -59,8 +59,8 @@ class HandlerBase(ABC):
 
     # --- 工具元数据（每个子类必须重新声明） ---
     # name / description / args_model 声明为实例可写属性而非 ClassVar：多数单用途工具
-    # 以类属性形式固化，但承载多工具的 handler（如 CodegraphQueryTool 按 name 分发 6 个
-    # 工具）需要按实例赋值。mypy 禁止用实例变量覆盖父类 ClassVar，故此处放开前三个。
+    # 以类属性形式固化；按实例承载多个定义的 handler 需要为前三项按实例赋值。
+    # mypy 禁止用实例变量覆盖父类 ClassVar，故此处放开前三个。
     # permission / timeout_seconds / risk_level 在工具族内始终为类级，保持 ClassVar。
     name: str
     description: str

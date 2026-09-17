@@ -76,7 +76,7 @@ def injected_catalog(monkeypatch) -> set[str]:
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
-    configuration.set_tool_system(ToolSystem.build_tool_system(None))
+    configuration.set_tool_system(ToolSystem.build_tool_system())
     registry = configuration.build_agent_registry()
     configuration.set_agent_registry(registry)
     return registry.child_agent_ids()
@@ -426,7 +426,7 @@ def tool_system_after_injection(monkeypatch) -> ToolSystem:
 
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
     with pytest.raises(RuntimeError):
         configuration.get_agent_registry()

@@ -36,7 +36,7 @@ Tauri Rust 宿主进程
   └─ BackendSupervisor
        └─ 本机 FastAPI 子进程（127.0.0.1 + 动态端口）
             ├─ LangGraph Agent Runtime
-            ├─ 工具/CodeGraph 子进程
+            ├─ 工具子进程
             └─ SQLite conversation/task 数据
 
 Tauri WebView / React renderer
@@ -63,7 +63,7 @@ Tauri Rust 宿主进程
   └─ BackendSupervisor
        └─ 本机 FastAPI 子进程（127.0.0.1 + 动态端口）
             ├─ LangGraph Agent Runtime
-            ├─ 工具/CodeGraph 子进程
+            ├─ 工具子进程
             └─ SQLite conversation/task 数据
 
 Tauri WebView / React renderer
@@ -232,7 +232,6 @@ tray 功能不能绕过 release 后端资源的装配。实现发行包时必须
 - `tauri.conf.json` 的 `bundle.resources` 或等价资源映射是否包含 `backend` 与 `backend-runtime`。
 - 安装后的实际资源路径是否符合 `backend_runtime.rs` 的 release 查找逻辑。
 - Python/解释器、uv cache 或其他 release 启动所需文件是否真实存在。
-- CodeGraph 开启时所需的 Node/server 资源是否随包提供。
 - 安装后的应用能启动后端、通过 `/health`，并能创建 tray；不能只验证窗口静态资源加载。
 
 ## 5. 生命周期与故障处理
@@ -259,7 +258,7 @@ tray 功能不能绕过 release 后端资源的装配。实现发行包时必须
 
 这是进程级故障，不属于托盘状态机。Windows 继续依赖已有 Job Object；macOS/其他平台继续按现有子进程生命周期事实验证是否会留下孤儿进程。实现本功能时不得把“窗口隐藏”误当成“进程存活保证”。
 
-macOS 的实现应优先采用 POSIX process group（例如后端启动时建立独立 process group，退出时先进行 graceful shutdown，再对该 group 执行 `killpg` fallback），或提供经过实机验证的等价机制。验收时在发出退出后等待不超过 5 秒，再采集 Tauri、FastAPI、CodeGraph 和工具进程快照；5 秒后仍有归属于 Cosir 的子进程即判定 C-09/L-02 失败。
+macOS 的实现应优先采用 POSIX process group（例如后端启动时建立独立 process group，退出时先进行 graceful shutdown，再对该 group 执行 `killpg` fallback），或提供经过实机验证的等价机制。验收时在发出退出后等待不超过 5 秒，再采集 Tauri、FastAPI 和工具进程快照；5 秒后仍有归属于 Cosir 的子进程即判定 C-09/L-02 失败。
 
 ### 5.5 真退出
 

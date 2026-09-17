@@ -53,7 +53,7 @@ def registry_injected_after_build(monkeypatch) -> ToolSystem:
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
 
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
 
     # 断言注册确实发生在注入之前（注册期 get_agent_registry 必须抛 RuntimeError）
@@ -118,7 +118,7 @@ def test_degraded_description_never_leaks_placeholder(monkeypatch) -> None:
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
 
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     definition = tool_system.registry.get_tool_definition("delegate_task")
     assert definition is not None
 
@@ -175,9 +175,6 @@ def test_static_tools_keep_explicit_schema(registry_injected_after_build: ToolSy
 
     registry = registry_injected_after_build.registry
     static_names = ["read_file", "execute_terminal", "search_content", "find_files"]
-    if "codegraph_explore" in registry.get_all_tool_names():
-        static_names.append("codegraph_explore")
-
     for name in static_names:
         definition = registry.get_tool_definition(name)
         assert definition is not None, f"{name} 未注册"
@@ -492,7 +489,7 @@ def test_rebuild_tool_system_after_injection_still_projects_live_catalog(
 ) -> None:
     """[对抗] 注册表注入后再重建工具系统，投影仍须读到实时注册表（无时序陷阱）。"""
 
-    rebuilt = ToolSystem.build_tool_system(None)
+    rebuilt = ToolSystem.build_tool_system()
     definition = rebuilt.registry.get_tool_definition("delegate_task")
     assert definition is not None
 

@@ -8,7 +8,7 @@
     "/tasks/{task_id}": {
       "get": {
         "summary": "Get Task",
-        "description": "返回任务状态（含生命周期 status、上下文窗口占用与派生 execution_status）。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    ``TaskResponse``：已存储的任务状态（含 ``status``/``execution_status``，\n    以及 ``context_usage_used`` 与动态计算的 ``context_window_total``）。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    无。",
+        "description": "返回单个任务及其派生状态。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    指定任务的 ``TaskResponse``。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    无（仅读取）。",
         "operationId": "get_task_tasks__task_id__get",
         "parameters": [
           {
@@ -133,54 +133,10 @@
         }
       }
     },
-    "/tasks/{task_id}/children": {
-      "get": {
-        "summary": "List Child Tasks",
-        "description": "列出某任务下的全部子任务（委派子任务）。\n\n子任务不出现在工作区对话列表，但可通过父任务的该端点下钻查看其轨迹。\n\n参数:\n    task_id: 来自路由的父任务标识。\n    task_service: 通过依赖注入的任务 service。\n\n返回:\n    该父任务的直接子任务 ``TaskResponse`` 列表；无子任务时返回空列表。\n\n异常:\n    HTTPException: 当父任务不存在（级联 KeyError）时抛出。\n\n副作用:\n    无（只读查询）。",
-        "operationId": "list_child_tasks_tasks__task_id__children_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TaskResponse"
-                  },
-                  "title": "Response List Child Tasks Tasks  Task Id  Children Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/health": {
       "get": {
         "summary": "Get Health",
-        "description": "后端存活探针（liveness check）。\n\n当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。\n``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。\n\n真实探针（TODO，尚未实现）：聚合 storage 连通性、模型配置中心\n（默认 Agent 的默认模型是否可解析 + Key 是否就位）、可选 CodeGraph\nkernel 可达性，产出不含 secret 明文的健康摘要。届时将改为注入\n``HealthProbeService`` 并移除无用的 ``runtime`` 参数。\n\n参数:\n    runtime: 通过依赖注入的运行时单例；当前占位实现未使用。\n\n返回:\n    表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。\n\n异常:\n    无。\n\n副作用:\n    无。",
+        "description": "后端存活探针（liveness check）。\n\n当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。\n``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。\n\n真实探针（TODO，尚未实现）：聚合 storage 连通性与模型配置中心\n（默认 Agent 的默认模型是否可解析 + Key 是否就位），产出不含 secret 明文的健康摘要。\n届时将改为注入\n``HealthProbeService`` 并移除无用的 ``runtime`` 参数。\n\n参数:\n    runtime: 通过依赖注入的运行时单例；当前占位实现未使用。\n\n返回:\n    表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。\n\n异常:\n    无。\n\n副作用:\n    无。",
         "operationId": "get_health_health_get",
         "responses": {
           "200": {
@@ -371,124 +327,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TaskResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/workspaces/{workspace_id}/events/stream": {
-      "get": {
-        "summary": "Stream Workspace Events",
-        "description": "以 SSE 流式返回 workspace 状态事件。\n\n通用 workspace 状态事件通道：当前承载创建时的准备进度（preparing/ready/degraded），\n后续可扩展其他 workspace 状态事件。客户端须先调用本端点建立订阅，再触发 prepare，\n避免错过 preparing 事件。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    event_bus: workspace 级状态事件总线。\n\n返回:\n    text/event-stream 的 StreamingResponse；终态事件（ready/degraded）后结束流。\n\n异常:\n    无（订阅缺失时流自然结束）。\n\n副作用:\n    注册并最终移除一条 workspace 状态事件订阅。",
-        "operationId": "stream_workspace_events_workspaces__workspace_id__events_stream_get",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Workspace Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/workspaces/{workspace_id}/events/prepare": {
-      "post": {
-        "summary": "Prepare Workspace",
-        "description": "同步触发一次 workspace 准备（prepare）。\n\n当前准备动作是 CodeGraph 索引就绪；该端点走通用 workspace 状态事件通道，后续可扩展\n其他 workspace 状态事件的准备动作。客户端应先连 ``/events/stream`` 建立订阅再触发本端点。\n\n参数:\n    workspace_id: 来自路由的 workspace 标识。\n    workspace_service: 工作区 service（用于取 root_path 与 404 守卫）。\n    event_service: workspace 状态事件编排 service；Kernel 不可用时为 None（降级）。\n    event_bus: workspace 级状态事件总线（用于 Kernel 不可用时主动发降级终态）。\n\n返回:\n    WorkspacePrepareResponse，含就绪状态与动作摘要。\n\n异常:\n    HTTPException: 当 workspace 不存在（404）时抛出。\n\n副作用:\n    发布 preparing/ready/degraded 工作状态事件到总线。\n\n设计要点:\n    Kernel 不可用时 event_service 为 None，属于设计明确的正常降级场景。此时不仅\n    HTTP 返回 unavailable，还**主动 emit 一条 WORKSPACE_DEGRADED 事件**到总线——\n    因为前端先连 SSE 再 POST prepare，若只靠 HTTP 响应而 SSE 订阅者未收到终态事件，\n    前端会永远停在 preparing（独立审查暴露的时序 bug 的另一半）。",
-        "operationId": "prepare_workspace_workspaces__workspace_id__events_prepare_post",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Workspace Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspacePrepareResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/workspaces/{workspace_id}/readiness": {
-      "get": {
-        "summary": "Get Workspace Readiness",
-        "description": "读取工作区准备状态快照。\n\nSSE 只负责唤醒客户端；刷新、断线或队列溢出后必须通过本端点从数据库重新水合。",
-        "operationId": "get_workspace_readiness_workspaces__workspace_id__readiness_get",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Workspace Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceReadinessResponse"
                 }
               }
             }
@@ -1105,10 +943,148 @@
         }
       }
     },
+    "/tasks/{task_id}/attachments": {
+      "post": {
+        "summary": "Upload Attachment",
+        "description": "上传并暂存一张图片；相同字节由 SHA-256 自动复用。",
+        "operationId": "upload_attachment_tasks__task_id__attachments_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_tasks__task_id__attachments_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Upload Attachment Tasks  Task Id  Attachments Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/attachments/{asset_id}": {
+      "delete": {
+        "summary": "Delete Attachment",
+        "operationId": "delete_attachment_tasks__task_id__attachments__asset_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/attachments/{asset_id}/content": {
+      "get": {
+        "summary": "Get Attachment Content",
+        "operationId": "get_attachment_content_tasks__task_id__attachments__asset_id__content_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/assistant": {
       "post": {
         "summary": "Assistant Transport",
-        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    snapshot_service: 负责读取 Task snapshot 的唯一 owner。\n    run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。\n    run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
+        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    state_service: 负责读取 Task Transport state 的唯一 owner。\n    run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。\n    run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
         "operationId": "assistant_transport_assistant_post",
         "requestBody": {
           "content": {
@@ -1142,10 +1118,58 @@
         }
       }
     },
+    "/tasks/{task_id}/assistant/attach": {
+      "post": {
+        "summary": "Assistant Transport Attach",
+        "description": "重新订阅已有 Run，不触发业务 resume。",
+        "operationId": "assistant_transport_attach_tasks__task_id__assistant_attach_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{task_id}/assistant/state": {
       "get": {
         "summary": "Assistant Transport State",
-        "description": "返回某任务的首屏历史 state（服务端权威对话视图）。\n\n参数:\n    task_id: URL 中的任务标识。\n    task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。\n    snapshot_service: Task snapshot 唯一事实源。\n\n返回:\n    与 Assistant Transport state 形状一致的中性 wire state 字典（含 ``messages`` / ``run``）；\n    任务无轮次时 ``messages`` 为空数组。\n\n异常:\n    HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的\n    ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。\n\n副作用:\n    以只读方式经 service 层读取任务存在性与轮次/消息事实，不写入任何数据。",
+        "description": "返回某任务的首屏历史 state（服务端权威对话视图）。\n\n参数:\n    task_id: URL 中的任务标识。\n    task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。\n    state_service: Task Transport state 的读取边界。\n\n返回:\n    与 Assistant Transport state 形状一致的中性 wire state 字典；任务无 Run 时\n    ``runs`` 为空数组。\n\n异常:\n    HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的\n    ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。\n\n副作用:\n    不修改 Run、Context 或执行器；state service 在冷读时从 canonical Task、Run 与\n    Context 记录重建 state，并校正进程内 working copy 的生命周期事实。",
         "operationId": "assistant_transport_state_tasks__task_id__assistant_state_get",
         "parameters": [
           {
@@ -1185,7 +1209,7 @@
     "/runs/{run_id}/cancel": {
       "post": {
         "summary": "Cancel Run",
-        "description": "显式取消一个 Conversation Run。\n\n表现层只做输入校验、调用业务层与异常映射，不再编排「先落库再中断」的业务时序——\n取消编排（进程内取消信号 → 事务性状态转移 → 中断后台 task）已收口到\n``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会调用本端点，重复取消\n不会覆盖已落定的终态。\n\n参数:\n    run_id: Conversation Run 标识。\n    run_executor: 取消编排唯一入口（信号标记 + 仲裁落库 + task 中断）。\n\n返回:\n    包含 ``run_id`` 与 ``status`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；run 已处于不可取消终态时返回 409；\n    取消编排内部失败时返回 500。\n\n副作用:\n    经执行器先标记进程内取消信号，再落库取消终态，再尽力中断当前进程中的执行任务。",
+        "description": "显式取消一个 Conversation Run。\n\n表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内取消信号源\n标记该 run」已收口到 ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会\n调用本端点；重复取消只返回既有信号状态，不重复标记，也不改变任何持久化事实。\n\n本端点只表示**取消信号已被接受**，不表示 run 已经终结：run 的终态转移\n（active → cancelled）由 workflow 经 run_service 落定，前端需继续以 canonical\nsnapshot 为准判断该 run 是否已收束。\n\n参数:\n    run_id: Conversation Run 标识。\n    run_executor: 进程内取消信号标记的唯一入口。\n\n返回:\n    包含 ``run_id`` 与 ``cancelled`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；该 run 此前已标记过取消（信号已存在）时\n    返回 409；标记内部失败时返回 500。\n\n副作用:\n    向进程内取消信号源写入该 run；不落库 run 状态、不取消后台执行 task。",
         "operationId": "cancel_run_runs__run_id__cancel_post",
         "parameters": [
           {
@@ -1270,6 +1294,110 @@
         ],
         "title": "AddMessageCommand",
         "description": "校验首版支持的 ``add-message`` 命令。"
+      },
+      "AssistantAttachRequest": {
+        "properties": {
+          "commands": {
+            "items": {},
+            "type": "array",
+            "title": "Commands"
+          },
+          "taskId": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taskid"
+          },
+          "threadId": {
+            "type": "string",
+            "pattern": "^task-[1-9][0-9]*$",
+            "title": "Threadid"
+          },
+          "runId": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Runid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "threadId",
+          "runId"
+        ],
+        "title": "AssistantAttachRequest",
+        "description": "只订阅已有 Conversation Run 的 transport 请求。\n\nattach 请求不携带业务命令（由 ``assistant_transport_attach`` 端点校验拒绝），仅用于\n重新订阅一个已存在、可能仍在运行的 Run 的 SSE 流。为兼容 assistant-ui resume 请求的\n通用 transport envelope，``commands`` 字段允许为空并被显式忽略。"
+      },
+      "AssistantFileAttachment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "contentType": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Contenttype"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "contentType"
+        ],
+        "title": "AssistantFileAttachment",
+        "description": "一次用户消息中的普通文件引用。\n\n``path`` 在首次发送新文件时必需；编辑重发或 snapshot 恢复后的请求可以只带\n``id``，由后端从当前 Run 的 ``extra`` 解析已有引用。该对象只描述本机路径，\n不上传或保存文件二进制。"
+      },
+      "AssistantImagePart": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "image",
+            "title": "Type"
+          },
+          "image": {
+            "type": "string",
+            "pattern": "^cosir-attachment://[0-9a-f]{64}$",
+            "title": "Image"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "image"
+        ],
+        "title": "AssistantImagePart",
+        "description": "校验用户消息中的 project-owned 图片 locator。"
       },
       "AssistantTextPart": {
         "properties": {
@@ -1478,14 +1606,37 @@
           },
           "parts": {
             "items": {
-              "$ref": "#/components/schemas/AssistantTextPart"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AssistantTextPart"
+                },
+                {
+                  "$ref": "#/components/schemas/AssistantImagePart"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "image": "#/components/schemas/AssistantImagePart",
+                  "text": "#/components/schemas/AssistantTextPart"
+                }
+              }
             },
             "type": "array",
             "maxItems": 32,
             "minItems": 1,
             "title": "Parts"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantFileAttachment"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Attachments"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "role",
@@ -1493,6 +1644,20 @@
         ],
         "title": "AssistantUserMessage",
         "description": "校验 Assistant UI 的用户消息。"
+      },
+      "Body_upload_attachment_tasks__task_id__attachments_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_attachment_tasks__task_id__attachments_post"
       },
       "ChangeCheckpointResponse": {
         "properties": {
@@ -1610,6 +1775,56 @@
         "title": "ChangeSetResponse",
         "description": "某 task 的累积变更集响应。"
       },
+      "ConversationRunSnapshot": {
+        "properties": {
+          "runId": {
+            "type": "integer",
+            "title": "Runid"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "endReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endreason"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationStateMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "runId",
+          "status",
+          "endReason",
+          "messages",
+          "usage"
+        ],
+        "title": "ConversationRunSnapshot",
+        "description": "一个 Run 的完整 UI 投影。\n\n``runId`` 是内部消息、tool part 和 Run usage 的共同归属键；Run 的状态、终态原因、\n消息及累计模型 usage 必须在同一对象内保持一致。"
+      },
       "ConversationStateError": {
         "properties": {
           "code": {
@@ -1634,22 +1849,61 @@
         "title": "ConversationStateError",
         "description": "面向 UI 的稳定错误结构。"
       },
+      "ConversationStateFilePart": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "file",
+            "title": "Type"
+          },
+          "file": {
+            "type": "string",
+            "title": "File"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "contentType": {
+            "type": "string",
+            "title": "Contenttype"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "file",
+          "name",
+          "contentType"
+        ],
+        "title": "ConversationStateFilePart",
+        "description": "只包含稳定本机 locator 与展示元数据的普通文件 part。"
+      },
+      "ConversationStateImagePart": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "image",
+            "title": "Type"
+          },
+          "image": {
+            "type": "string",
+            "title": "Image"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "image"
+        ],
+        "title": "ConversationStateImagePart",
+        "description": "只携带稳定附件 locator 的图片展示 part，不携带二进制。"
+      },
       "ConversationStateMessage": {
         "properties": {
           "id": {
             "type": "string",
             "title": "Id"
-          },
-          "runId": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runid"
           },
           "role": {
             "type": "string",
@@ -1659,26 +1913,17 @@
             ],
             "title": "Role"
           },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "endReason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Endreason"
-          },
           "parts": {
             "items": {
               "anyOf": [
                 {
                   "$ref": "#/components/schemas/ConversationStateTextPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationStateImagePart"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationStateFilePart"
                 },
                 {
                   "$ref": "#/components/schemas/ConversationStateToolCallPart"
@@ -1693,16 +1938,21 @@
         "required": [
           "id",
           "role",
-          "status",
-          "endReason",
           "parts"
         ],
         "title": "ConversationStateMessage",
-        "description": "一条面向 Transport 的 user/assistant 消息。"
+        "description": "一条 Run 内的 user/assistant 消息。\n\n消息不重复保存 Run 标识或 Run 终态。消息归属由外层\n``ConversationRunSnapshot.runId`` 确定，消息生命周期由外层 Run 状态派生；只有\n``parts`` 保留各自的流式与工具执行生命周期。"
       },
-      "ConversationStateRun": {
+      "ConversationStateSnapshot": {
         "properties": {
-          "runId": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationRunSnapshot"
+            },
+            "type": "array",
+            "title": "Runs"
+          },
+          "current_run_id": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1711,43 +1961,44 @@
                 "type": "null"
               }
             ],
-            "title": "Runid"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          }
-        },
-        "type": "object",
-        "required": [
-          "runId",
-          "status"
-        ],
-        "title": "ConversationStateRun",
-        "description": "当前 Task 的 UI 运行状态。"
-      },
-      "ConversationStateSnapshot": {
-        "properties": {
-          "messages": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationStateMessage"
-            },
-            "type": "array",
-            "title": "Messages"
-          },
-          "run": {
-            "$ref": "#/components/schemas/ConversationStateRun"
+            "title": "Current Run Id"
           },
           "approvals": {
             "type": "object",
             "title": "Approvals"
           },
-          "context_usage": {
-            "type": "number",
-            "title": "Context Usage"
+          "context_usage_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Usage Ratio"
           },
-          "usage": {
-            "$ref": "#/components/schemas/ConversationStateUsage"
+          "context_usage_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Usage Used"
+          },
+          "context_window_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window Total"
           },
           "error": {
             "anyOf": [
@@ -1762,15 +2013,16 @@
         },
         "type": "object",
         "required": [
-          "messages",
-          "run",
+          "runs",
+          "current_run_id",
           "approvals",
-          "context_usage",
-          "usage",
+          "context_usage_ratio",
+          "context_usage_used",
+          "context_window_total",
           "error"
         ],
         "title": "ConversationStateSnapshot",
-        "description": "一个 Task 的完整 Transport state。"
+        "description": "一个 Task 的完整 Transport state。\n\nTask 只持有当前 context window 测量结果；每个 Run 的消息、生命周期和模型 token\nusage 均位于 ``runs`` 中。该结构是 0-1 契约，不提供旧平铺 snapshot 兼容迁移。"
       },
       "ConversationStateTextPart": {
         "properties": {
@@ -1833,17 +2085,22 @@
             "type": "object",
             "title": "Args"
           },
-          "result": {
-            "title": "Result"
-          },
           "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Error"
           },
           "presentation": {
             "type": "object",
             "title": "Presentation"
           },
-          "data": {
+          "display_data": {
             "anyOf": [
               {
                 "type": "object"
@@ -1852,7 +2109,7 @@
                 "type": "null"
               }
             ],
-            "title": "Data"
+            "title": "Display Data"
           },
           "isError": {
             "type": "boolean",
@@ -1861,6 +2118,18 @@
           "approvalRequestId": {
             "type": "null",
             "title": "Approvalrequestid"
+          },
+          "child_task_id": {
+            "type": "integer",
+            "title": "Child Task Id"
+          },
+          "agent_role": {
+            "type": "string",
+            "title": "Agent Role"
+          },
+          "delegation_ref_seq": {
+            "type": "integer",
+            "title": "Delegation Ref Seq"
           }
         },
         "type": "object",
@@ -1871,7 +2140,7 @@
           "status"
         ],
         "title": "ConversationStateToolCallPart",
-        "description": "工具调用及其生命周期的 UI part。\n\n描述一次工具调用从待执行到完成/失败/取消的完整生命周期，并携带参数、结果\n与可能的错误信息。status 取值受限为 ToolCallStatus 的五个枚举。"
+        "description": "工具调用及其生命周期的 UI part。\n\n描述一次工具调用从待执行到完成/失败/取消的完整生命周期，并携带参数\n与可能的错误信息。status 取值受限为 ToolCallEventStatus（见\n``app.models.enums.tool_call_status``）的五个枚举。"
       },
       "ConversationStateUsage": {
         "properties": {
@@ -1892,7 +2161,14 @@
             "title": "Cache Hit Tokens"
           },
           "cache_miss_tokens": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cache Miss Tokens"
           },
           "reasoning_tokens": {
@@ -1910,21 +2186,19 @@
           "reasoning_tokens"
         ],
         "title": "ConversationStateUsage",
-        "description": "一次 Task 当前累计的模型 token 用量。"
+        "description": "一次 run 当前累计的模型 token 用量；cache miss 缺少 provider 明细时为 null。"
       },
       "CreateTaskRequest": {
         "properties": {
           "text": {
             "type": "string",
-            "title": "Text"
+            "title": "Text",
+            "default": ""
           }
         },
         "type": "object",
-        "required": [
-          "text"
-        ],
         "title": "CreateTaskRequest",
-        "description": "校验任务创建请求体（仅建 task 容器，不含首轮次）。\n\n任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段\n（``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等\n属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。\n\n参数:\n    text: 非空的纯文本任务输入。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``text`` 为空白时抛出。\n\n副作用:\n    无。"
+        "description": "校验任务创建请求体（仅建 task 容器，不含首轮次）。\n\n任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段\n（``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等\n属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。\n\n参数:\n    text: 可选的纯文本任务输入；纯附件新对话允许为空。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    无。空文本由 workspace API 转换为默认任务标题。\n\n副作用:\n    无。"
       },
       "CreateWorkspaceRequest": {
         "properties": {
@@ -2061,7 +2335,7 @@
           "status"
         ],
         "title": "HealthResponse",
-        "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心 / 可选 CodeGraph）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "LogEntryResponse": {
         "properties": {
@@ -2582,118 +2856,6 @@
           "type"
         ],
         "title": "ValidationError"
-      },
-      "WorkspacePrepareResponse": {
-        "properties": {
-          "workspace_id": {
-            "type": "integer",
-            "title": "Workspace Id"
-          },
-          "ready": {
-            "type": "boolean",
-            "title": "Ready"
-          },
-          "state": {
-            "type": "string",
-            "title": "State"
-          },
-          "action_taken": {
-            "type": "string",
-            "title": "Action Taken",
-            "default": "none"
-          },
-          "files_changed": {
-            "type": "integer",
-            "title": "Files Changed",
-            "default": 0
-          },
-          "duration_ms": {
-            "type": "integer",
-            "title": "Duration Ms",
-            "default": 0
-          },
-          "degraded_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Degraded Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "workspace_id",
-          "ready",
-          "state"
-        ],
-        "title": "WorkspacePrepareResponse",
-        "description": "POST /workspaces/{workspace_id}/events/prepare 的响应。\n\n触发一次 workspace 准备（当前为 CodeGraph 索引就绪）并立即返回；\n准备进度经 ``GET /workspaces/{workspace_id}/events/stream`` SSE 推送。\n\n属性:\n    workspace_id: 触发准备的 workspace 标识。\n    ready: 即时快照中 Kernel 是否已就绪（True / False）。\n    state: 即时状态快照，取值 ``ready`` / ``failed`` / ``unavailable`` /\n        ``unreachable`` / ``timeout``；任何非 ``ready`` 值均表示未就绪，前端应\n        降级到文件搜索但任务可继续。同步阻塞路径下通常为 ``accepted`` 初值，\n        终态以 SSE 事件为准。\n    action_taken: 采取的动作（``init`` / ``sync`` / ``none``）。\n    files_changed: 索引变更文件数（ready 时有效）。\n    duration_ms: 准备耗时（毫秒）。\n    degraded_reason: 降级原因（非 ready 时有效；脱敏，不记录 secret）。"
-      },
-      "WorkspaceReadinessResponse": {
-        "properties": {
-          "workspace_id": {
-            "type": "integer",
-            "title": "Workspace Id"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "action_taken": {
-            "type": "string",
-            "title": "Action Taken"
-          },
-          "files_changed": {
-            "type": "integer",
-            "title": "Files Changed"
-          },
-          "duration_ms": {
-            "type": "integer",
-            "title": "Duration Ms"
-          },
-          "revision": {
-            "type": "integer",
-            "title": "Revision"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "workspace_id",
-          "status",
-          "action_taken",
-          "files_changed",
-          "duration_ms",
-          "revision"
-        ],
-        "title": "WorkspaceReadinessResponse",
-        "description": "工作区准备状态的持久化快照。"
       },
       "WorkspaceResponse": {
         "properties": {

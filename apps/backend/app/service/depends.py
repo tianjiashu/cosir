@@ -32,9 +32,6 @@ if TYPE_CHECKING:
     from app.service.provider import ModelEntryService, ProviderService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
-    from app.service.task.conversation_run_workspace_resolver import (
-        ConversationRunWorkspaceResolver,
-    )
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
     from app.service.task.workspace_service import WorkspaceService
     from app.service.terminal.terminal_session_service import TerminalSessionService
@@ -356,30 +353,6 @@ def get_workspace_service() -> WorkspaceService:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_run_workspace_resolver() -> ConversationRunWorkspaceResolver:
-    """Return the process-local ConversationRunWorkspaceResolver singleton.
-
-    参数:
-        无。
-
-    返回:
-        ConversationRunWorkspaceResolver 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 ConversationRunWorkspaceResolver。
-    """
-
-    from app.service.task.conversation_run_workspace_resolver import (
-        ConversationRunWorkspaceResolver,
-    )
-
-    return ConversationRunWorkspaceResolver()
-
-
-@lru_cache(maxsize=1)
 def get_log_query_service() -> LogQueryService:
     """Return the process-local LogQueryService singleton.
 
@@ -631,7 +604,6 @@ def reset_service_dependencies() -> None:
     ConversationTaskStateService.clear_process_state()
     get_log_query_service.cache_clear()
     get_workspace_service.cache_clear()
-    get_conversation_run_workspace_resolver.cache_clear()
     get_conversation_run_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
     get_task_service.cache_clear()

@@ -38,7 +38,7 @@ def tool_system_with_broken_registry(monkeypatch) -> ToolSystem:
 
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _PermanentlyBrokenRegistry(), raising=False)
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
     return tool_system
 

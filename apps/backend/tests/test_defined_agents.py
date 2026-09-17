@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import (
@@ -47,7 +46,6 @@ def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
         "app.core.agents.define_agents.get_tool_registry",
         lambda: _ToolRegistryStub(),
     )
-    monkeypatch.setattr(Settings, "CODEGRAPH_ENABLED", False)
 
     profiles = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
 
@@ -78,7 +76,6 @@ def test_main_profile_uses_own_prompt_without_child_catalog(monkeypatch) -> None
         "app.core.agents.define_agents.get_tool_registry",
         lambda: _ToolRegistryStub(),
     )
-    monkeypatch.setattr(Settings, "CODEGRAPH_ENABLED", False)
 
     profile = main_agent()
     prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
@@ -104,7 +101,6 @@ def test_registry_exposes_non_main_profiles_as_delegation_targets(monkeypatch) -
         "app.core.agents.define_agents.get_tool_registry",
         lambda: _ToolRegistryStub(),
     )
-    monkeypatch.setattr(Settings, "CODEGRAPH_ENABLED", False)
 
     registry = AgentProfileRegistry()
     children = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
@@ -132,7 +128,6 @@ def test_builtin_child_profiles_leave_model_route_to_parent_run(monkeypatch) -> 
         "app.core.agents.define_agents.get_tool_registry",
         lambda: _ToolRegistryStub(),
     )
-    monkeypatch.setattr(Settings, "CODEGRAPH_ENABLED", False)
 
     profiles = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
 
@@ -148,7 +143,6 @@ def test_child_profile_model_settings_keep_custom_overrides(monkeypatch) -> None
         "app.core.agents.define_agents.get_tool_registry",
         lambda: _ToolRegistryStub(),
     )
-    monkeypatch.setattr(Settings, "CODEGRAPH_ENABLED", False)
     parent = main_agent()
     child = reviewer_agent()
     child.model_settings = ModelSettings(temperature=0.2)

@@ -15,7 +15,6 @@ Tauri 桌面应用
 └─ Python/FastAPI 后端子进程
    ├─ Agent Runtime / LangGraph workflow
    ├─ 本机 SQLite
-   ├─ 可选 CodeGraph Kernel Node 子进程
    └─ 按需创建的工具执行子进程
 ```
 
@@ -57,8 +56,8 @@ Tauri 桌面应用
 - Tauri Rust 主进程是桌面宿主，也是 FastAPI 后端子进程生命周期的唯一所有者。React 不得直接创建、停止或重启后端进程。
 - Tauri 显示 WebView 后在后台启动后端；窗口显示与后端 readiness 解耦。React 通过 boot gate 呈现 `starting`、`ready`、`failed`，不得假定页面出现时后端已经可用。
 - 后端绑定 `127.0.0.1`，桌面模式由 Tauri 动态分配端口。前端必须读取 runtime config，不得硬编码生产端口；开发或测试 fallback 端口不是桌面生产契约。
-- Tauri 负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树。`/health` 仅表示 liveness，不代表数据库、模型或 CodeGraph 已全部可用。
-- 后端 lifespan 负责初始化和关闭数据库、Run executor、运行期依赖、CodeGraph 与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
+- Tauri 负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树。`/health` 仅表示 liveness，不代表数据库和模型已全部可用。
+- 后端 lifespan 负责初始化和关闭数据库、Run executor、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
 - 后端重启时，遗留 active Run 收敛为 `cancelled`，遗留 active delegation 标记失败；不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
 
@@ -121,8 +120,7 @@ Tauri 桌面应用
 - Run 状态事件只能在数据库条件更新成功后发布，重复状态迁移不得重复发布。workflow 节点只产生普通 conversation event，经统一 workflow 消费边界交给 projector；不得直接发布 Run 状态事实。
 - `task_runtime` 是进程内并发协调层：task operation 串行化同一 task 的 Run 创建、编辑、resume 等互斥操作；workspace operation 仲裁运行、删除和关闭冲突。其锁和 registry 不跨进程、不跨重启。
 - AgentRuntime/workflow 在后端进程内运行。工具按 `execution_mode` 在线程内或独立进程执行；独立工具进程负责队列通信、取消、超时和进程树清理，但不拥有业务事实，也不构成新服务层。
-- Hook 是正式的运行期扩展边界：registry 负责注册和索引，interceptor 负责唯一触发、匹配、拒绝短路和失败安全。文件快照、CodeGraph 索引准备等旁路能力通过 Hook 接入；Hook 异常默认记录并放行，不阻断主 Run。
-- CodeGraph 分为两层：`codegraph/` 负责 Kernel 子进程、RPC、握手、健康、有限重启和关闭；`CodeGraphLifecycleService` 负责 workspace index 的初始化、同步、singleflight 和降级。工具与 Hook 只消费 client，不直接管理 Kernel。
+- Hook 是正式的运行期扩展边界：registry 负责注册和索引，interceptor 负责唯一触发、匹配、拒绝短路和失败安全。文件快照等旁路能力通过 Hook 接入；Hook 异常默认记录并放行，不阻断主 Run。
 - provider/model 配置是数据库事实，由 provider service 管理；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
 - Observability 是可降级旁路。workflow/service 通过窄接口记录 trace，不直接依赖具体观测实现；初始化、记录或 flush 失败不得改变 Run 结果。
 - RuntimeContextManager 是agent上下文唯一管理事实源，负责系统提示词构建、上下文修复加载、run续跑/恢复的上下文管理、上下文压缩（未实现）、上下文token计算、上下文序列管理、模型消息存储和持久化。
@@ -143,13 +141,12 @@ context是由app/core/context/runtime_context_manager.py维护，snapshot由Task
 - `apps/desktop/lib/assistant/`、`components/assistant*/`：Assistant Transport 契约、runtime 装配和 UI 呈现。
 - `apps/backend/app/api/`：HTTP 路由、schema 和错误映射。
 - `apps/backend/app/assistant_transport/`：Assistant wire 协议、SSE、命令幂等、snapshot 和事件投影。
-- `apps/backend/app/service/`：Task、Workspace、Provider、Run、Delegation、CodeGraph index 等领域用例。
+- `apps/backend/app/service/`：Task、Workspace、Provider、Run、Delegation 等领域用例。
 - `apps/backend/app/core/runtime/`、`core/workflows/`、`core/tools/`：Agent 执行、workflow、checkpoint、工具系统和工具隔离。
 - `apps/backend/app/hook/`：运行期 Hook 注册、触发和内置旁路能力。
 - `apps/backend/app/storage/`：SQLite engine、schema、CRUD、事务和持久化模型。
 - `apps/backend/app/task_runtime/`：进程内 task/workspace 并发协调。
 - `apps/backend/app/config/`、`core/observability/`：进程配置、日志和可降级观测。
-- `apps/backend/app/codegraph/`：CodeGraph Kernel 进程与 RPC 管理，不负责 workspace index 业务编排。
 
 ## docstring 约定
 

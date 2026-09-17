@@ -97,8 +97,8 @@ class SystemPromptBuilder:
     def _build_runtime_context(agent_profile: AgentProfile, workspace_root: str) -> str:
         """构建动态变量层：身份与角色、操作系统、工作区根目录与写入边界、工具集合、用户语言。
 
-        文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层不承载
-        日期与 CodeGraph 开关——它们不在当前实现的事实集合内，不要按旧文档在此处查找。
+        文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
+        当前实现确认的运行期事实。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。

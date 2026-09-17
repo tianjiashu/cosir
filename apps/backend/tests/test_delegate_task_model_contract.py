@@ -43,7 +43,7 @@ def registered_before_catalog(monkeypatch) -> tuple[ToolSystem, ToolDefinition]:
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
 
-    tool_system = ToolSystem.build_tool_system(None)
+    tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
 
     definition = tool_system.registry.get_tool_definition("delegate_task")

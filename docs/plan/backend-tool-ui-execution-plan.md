@@ -163,7 +163,7 @@ approval required?
 
 | 工具类别 | result 建议 | display/安全要求 |
 | --- | --- | --- |
-| `list_directory`、`search_files`、CodeGraph | 条目数组、总数、截断信息 | `list`/details；限制条目数和字段 |
+| `list_directory`、`search_content`、`find_files` | 条目数组、总数、截断信息 | `list`/details；限制条目数和字段 |
 | `read_file`、`web_extract` | 内容、路径/来源、截断信息 | details；脱敏并限制大小 |
 | `write_file`、`patch`、`apply_patch`、`delete` | 文件、变更摘要、diff/快照标识 | `diff`/write；写入前后均保留审计与撤销信息 |
 | `execute_terminal` | exit code、stdout、stderr、duration、截断信息 | terminal；禁止把密钥写入 result/log |

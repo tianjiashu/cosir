@@ -52,7 +52,6 @@ AssistantRuntimeProvider
 | `list_directory` | DirectoryToolUI | File tree / list |
 | `read_file` | ReadFileToolUI | 文件信息 + code block |
 | `search_files` | SearchFilesToolUI | 文件分组、行号、上下文 |
-| `codegraph_*` | CodegraphToolUI | 节点/关系；复杂图进入 Canvas/Flow graph |
 | `apply_patch`、`patch` | PatchToolUI | Code diff |
 | `write_file` | WriteFileToolUI | 文件摘要 + Code diff |
 | `delete` | DeleteToolUI | 高风险目标清单 + 快照/撤销状态 |
@@ -85,7 +84,7 @@ Assistant Transport 的 state converter 每次接收完整快照；同一 `toolC
 3. 复用当前 `Thread` 的 `GroupedParts` 通用折叠能力；官方 elements 只作为实现参考或明确纳入项目的本地组件，不假设存在可直接 import 的独立包。
 4. renderer 只负责展示，不新增工具执行、数据库写入或本地事实存储。
 5. turn 级失败使用 `ErrorPrimitive` + `ActionBarPrimitive.Reload`；工具级失败由工具 renderer 展示。
-6. 大文件、Diff、CodeGraph 使用折叠、延迟渲染和 Canvas split，避免一次挂载大量 DOM。
+6. 大文件和 Diff 使用折叠与延迟渲染，避免一次挂载大量 DOM。
 
 ## 前端验收
 
