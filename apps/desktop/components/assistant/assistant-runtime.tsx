@@ -53,7 +53,7 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TransportStatus issue={issue} />
+      <TransportStatus issue={issue} onRetry={handleRetry} />
       <div className="min-h-0 flex-1">
         <AssistantRuntimeErrorBoundary
           key={runtimeGeneration}

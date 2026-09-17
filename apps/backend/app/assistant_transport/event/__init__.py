@@ -40,6 +40,10 @@ from app.assistant_transport.event.tool_call_event import (
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
 )
+from app.assistant_transport.event.tool_runtime_event import (
+    DelegationRefData,
+    ToolCallRuntimeUpdateEvent,
+)
 from app.assistant_transport.event.usage_event import (
     ContextUsageUpdatedEvent,
 )
@@ -51,10 +55,12 @@ __all__ = [
     "ContextUsageUpdatedEvent",
     "ConversationEvent",
     "ConversationEventEnvelope",
+    "DelegationRefData",
     "RunInitializedEvent",
     "RunStatusChangedEvent",
     "ToolCallCreatedEvent",
     "ToolCallEventStatus",
+    "ToolCallRuntimeUpdateEvent",
     "ToolCallStatusChangedEvent",
     "ToolCallsSettledEvent",
     "UserInputAppendedEvent",

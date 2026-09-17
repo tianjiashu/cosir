@@ -137,11 +137,15 @@ class ChildAgentRunner:
             终态原因（委派场景中子 Agent 复用同一工作流，缺少 final_output 主 Agent 无法判断结果）。
 
         异常:
-            无。run_agent 或事件消费异常会被转换为 failed DelegationResult。
+            无。认领失败（child run 非 ``pending``）、run_agent 或事件消费异常都会被转换为
+            failed DelegationResult。
 
         副作用:
-            执行 AgentRuntime.run_agent；不消费运行时事件；必要时经 _build_cancelled_result /
-            _build_failed_result 原子收口未终态化的 run 并写入 final_output。
+            先把 child run 认领为 ``running``（``claim_pending_run``，成功时发布一次 RUNNING
+            状态事件，该认领是 ``ConversationRunExecutor.start`` 前置断言的必要条件）；
+            随后执行 AgentRuntime.run_agent；不消费运行时事件；必要时经
+            _build_cancelled_result / _build_failed_result 原子收口未终态化的 run 并写入
+            final_output。
         """
 
         run_id = child_profile.run.id
@@ -151,6 +155,16 @@ class ChildAgentRunner:
             child_run = child_profile.run
             if child_run is None:
                 raise RuntimeError("child profile has no conversation run")
+            # 认领 child run（pending→running）。主链路在 ConversationRunCommandService
+            # 的 new/edit 阶段认领，而本桥接器是 child run 的唯一启动入口：``create_run``
+            # 建成的是 pending，而 ``ConversationRunExecutor.start`` 只接受 running，
+            # 因此认领必须发生在其前置断言之前（否则每次委派都以「run N is not running」
+            # 失败——2026-09-17 线上缺陷）。
+            claimed_run = get_conversation_run_state_service().claim_pending_run(child_run.id)
+            if claimed_run is None:
+                raise RuntimeError(
+                    f"child run {child_run.id} is not claimable: its status is not pending"
+                )
             execution = await self._run_executor.start(
                 child_run.id,
                 lambda _run: self._run_agent(child_profile),

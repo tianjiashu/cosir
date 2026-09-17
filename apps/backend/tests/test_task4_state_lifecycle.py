@@ -59,6 +59,26 @@ def _reset_task_runtime_spaces() -> None:
     ConversationTaskStateService.clear_process_state()
 
 
+@pytest.fixture(autouse=True)
+def _stub_delegation_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """冷读 rebuild 会解析进程级委派 service；本文件只验证状态生命周期，注入空替身。
+
+    ``ConversationTaskStateService._rebuild`` 会按 Run 查询该 Run 的委派记录，而解析出的
+    委派 service 依赖已初始化的主库会话。本文件用替身来源构造状态服务（不走
+    ``init_storage``），因此预置一个「无委派」替身，保持本文件不涉及委派的既有前提。
+    """
+
+    class _NoDelegationService:
+        """返回空委派集合的最小替身。"""
+
+        def list_by_parent_turn(self, run_id: int) -> list[object]:
+            return []
+
+    monkeypatch.setattr(
+        "app.service.depends.get_delegation_service", lambda: _NoDelegationService()
+    )
+
+
 def _make_state_service(
     task_source: object, run_source: object, context_source: object
 ) -> ConversationTaskStateService:

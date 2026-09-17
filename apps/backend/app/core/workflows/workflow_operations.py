@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -359,8 +360,10 @@ class WorkflowOperations:
         执行线程：串行工具调用经 ``asyncio.to_thread`` 移出事件循环线程（避免同步阻塞
         的 thread 模式 handler 占死 loop，连带卡死 SSE 与并发请求）；``to_thread`` 内部以
         ``copy_context().run`` 提交，保留父 turn 的 OTel/trace 上下文，语义与并行分支的
-        ``ThreadPoolExecutor`` 提交一致。并行工具调用组仍由 ``_run_calls_with_parallel_modes``
-        的线程池执行。
+        ``ThreadPoolExecutor`` 提交一致。并行工具调用组由 ``_run_calls_with_parallel_modes``
+        的线程池执行，其**等待同样不占用事件循环线程**（futures 经 ``asyncio.wrap_future``
+        回到 loop 上 ``await``）：长并行工具（如 ``delegate_task``）执行期间 loop 仍能服务
+        HTTP 与 SSE，取消也不会被 worker 收尾阻塞。
 
         参数:
             task_id: 当前任务标识符。
@@ -378,7 +381,7 @@ class WorkflowOperations:
 
         副作用:
             实际执行工具（文件、终端、搜索、委派等）；串行调用逐个 ``await``，并行调用进入临时
-            线程池；状态写入 **run**。
+            线程池并同样以 ``await`` 等待，两条分支都不占用事件循环线程等待；状态写入 **run**。
         """
 
         serial_calls: list[tuple[int, ToolCall]] = []
@@ -400,13 +403,13 @@ class WorkflowOperations:
 
         if parallel_calls:
             indexed_observations.extend(
-                self._run_calls_with_parallel_modes(task_id, parallel_calls, step_id)
+                await self._run_calls_with_parallel_modes(task_id, parallel_calls, step_id)
             )
 
         executed_observations = [observation for _, observation in indexed_observations]
         return ToolRunResult(observations=executed_observations)
 
-    def _run_calls_with_parallel_modes(
+    async def _run_calls_with_parallel_modes(
         self,
         task_id: int,
         calls: list[tuple[int, ToolCall]],
@@ -420,6 +423,13 @@ class WorkflowOperations:
         使 worker 线程在捕获的 context 里执行工具——并行工具（尤其 ``delegate_task``）的
         tool observation 与子 turn 由此正确嵌套在父 turn trace 下。
 
+        **等待必须在事件循环上 ``await``**：本方法是 ``async``，只等 ``asyncio.wrap_future``
+        包装后的 futures，绝不在 loop 线程上同步等待。历史实现直接在协程内调用同步
+        ``concurrent.futures.wait``，于是并行批次里只要有一个长工具（``delegate_task`` 可跑
+        数分钟），整个后端事件循环就被占死：HTTP 全部无响应（用户点「停止运行」的
+        ``POST /runs/{id}/cancel`` 根本到不了后端）、SSE 快照推送停摆（前端停在半更新状态）、
+        custom stream 事件（委派引用）排不到队。
+
         参数:
             task_id: 当前任务标识符，仅用于日志与追踪。
             calls: 带原始位置的并行工具调用列表（元组 ``(index, call)``）。
@@ -430,56 +440,67 @@ class WorkflowOperations:
             调用都会产出条观察。
 
         异常:
-            无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。
+            无。worker 抛出的意外异常会被收口为对应 call 的 error 观察。协程被取消时
+            ``CancelledError`` 立即向调用方传播：已提交到线程池的 worker 不会被强杀（与串行
+            分支 ``asyncio.to_thread`` 的取消语义一致），尚未启动的排队调用经
+            ``cancel_futures=True`` 丢弃。
 
         副作用:
             启动临时线程池执行工具；每次提交前复制一份 contextvars 快照，不引入跨线程可变状态。
+            ``finally`` 以 ``shutdown(wait=False)`` 收尾，不在事件循环线程上等 worker 结束。
         """
         if not calls:
             return []
 
         completed: list[tuple[int, ToolObservation]] = []
         max_workers = min(len(calls), Settings.MAX_PARALLEL_TOOL_CALLS)
-        with ThreadPoolExecutor(
-            max_workers=max_workers,
-            thread_name_prefix="tool-parallel",
-        ) as pool:
-            pending_calls = list(calls)
-            future_by_call: dict[Future[ToolObservation], tuple[int, ToolCall]] = {}
+        pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="tool-parallel")
+        try:
+            # 待提交队列用 FIFO：额度满时剩余调用按入参顺序排队提交（历史实现用 list.pop()
+            # 取队尾，超出额度的调用会被逆序提交）。
+            pending_calls = deque(calls)
+            in_flight: dict[Future[ToolObservation], tuple[int, ToolCall]] = {}
+            # 同一批 concurrent Future 的 asyncio 包装：等它们才不会占用事件循环线程。
+            awaitable_by_future: dict[asyncio.Future[ToolObservation], Future[ToolObservation]] = {}
 
             def _submit_until_full() -> None:
                 """提交待执行调用，直到在途任务数达到 worker 上限或没有待提交调用。
 
                 副作用:
-                    向线程池提交任务并登记 ``future -> (index, call)`` 映射；不改动工具调用本身。
+                    向线程池提交任务并登记 ``future -> (index, call)`` 与
+                    ``asyncio future -> concurrent future`` 两份映射；不改动工具调用本身。
                 """
-                while (
-                    pending_calls
-                    and len(future_by_call) < max_workers
-                ):
-                    batch_index, batch_call = pending_calls.pop()
+                while pending_calls and len(in_flight) < max_workers:
+                    batch_index, batch_call = pending_calls.popleft()
                     run_ctx = contextvars.copy_context()
-                    future_by_call[
-                        pool.submit(  # pyright: ignore
-                            run_ctx.run,
-                            self._execute_tool_call,
-                            task_id,
-                            batch_call,
-                            step_id,
-                        )
-                    ] = (batch_index, batch_call)
+                    future = pool.submit(  # pyright: ignore
+                        run_ctx.run,
+                        self._execute_tool_call,
+                        task_id,
+                        batch_call,
+                        step_id,
+                    )
+                    in_flight[future] = (batch_index, batch_call)
+                    awaitable_by_future[asyncio.wrap_future(future)] = future
 
             _submit_until_full()
-            while future_by_call:
-                done_futures, _ = wait(future_by_call, return_when=FIRST_COMPLETED)
-                for future in done_futures:
-                    index, call = future_by_call.pop(future)
+            while in_flight:
+                done_awaitables, _ = await asyncio.wait(
+                    set(awaitable_by_future), return_when=asyncio.FIRST_COMPLETED
+                )
+                for awaitable in done_awaitables:
+                    future = awaitable_by_future.pop(awaitable)
+                    index, call = in_flight.pop(future)
                     try:
                         observation = future.result()
                     except Exception as exc:  # pragma: no cover - 防御性收口
                         observation = self._internal_error_observation(task_id, call, exc, step_id)
                     completed.append((index, observation))
                 _submit_until_full()
+        finally:
+            # 绝不在事件循环线程上等 worker 收尾：``with`` 语义的 ``shutdown(wait=True)``
+            # 会把取消路径阻塞到工具跑完，等于把本方法的去阻塞修复原地抵消。
+            pool.shutdown(wait=False, cancel_futures=True)
         return completed
 
     def _execute_tool_call(
@@ -506,9 +527,14 @@ class WorkflowOperations:
         """
         try:
             with self._trace_recorder.span(call, step_id or "") as tool_span:
+                execution_context = (
+                    replace(self._execution_context, tool_call_id=call.call_id)
+                    if self._execution_context is not None
+                    else None
+                )
                 observation = self._executor.execute(
                     call,
-                    execution_context=self._execution_context,
+                    execution_context=execution_context,
                     allowed_tool_names=self._allowed_tool_names,
                 )
                 tool_span.record(observation)

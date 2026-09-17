@@ -21,10 +21,11 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
-from app.config.configuration import get_tool_registry
+from app.config.configuration import get_agent_registry, get_tool_registry
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.delegation_record import DelegationRecord
 from app.models.task_record import TaskRecord
 from app.utils.message_content import content_to_text
 
@@ -35,6 +36,7 @@ class ConversationTaskStateRebuilder:
     @staticmethod
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
+        delegations: Sequence[DelegationRecord] = (),
     ) -> dict[str, ConversationStateToolCallPart]:
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
         for row in rows:
@@ -43,21 +45,72 @@ class ConversationTaskStateRebuilder:
                 ai_message = cast(AIMessage, message)
                 calls: list[ToolCall] = ai_message.tool_calls
                 for call in calls:
-                    tool_parts[call.get("id")] = ConversationStateToolCallPart(
+                    tool_part = ConversationStateToolCallPart(
                         type="tool-call",
                         toolCallId=call.get("id"),
                         toolName=call.get("name"),
                         args=call.get("args"),
-                        presentation=ConversationTaskStateRebuilder.get_tool_display(call.get("name")),
+                        presentation=ConversationTaskStateRebuilder.get_tool_display(
+                            call.get("name")
+                        ),
                         status="cancelled",
                     )
+                    if call.get("name") == "delegate_task":
+                        args = call.get("args") or {}
+                        candidates = [
+                            record
+                            for record in delegations
+                            if isinstance(record.child_task_id, int)
+                            and record.child_task_id > 0
+                            and record.child_agent_id == args.get("child_agent_id")
+                            and record.prompt == args.get("prompt")
+                        ]
+                        if len(candidates) == 1:
+                            record = candidates[0]
+                            child_task_id = record.child_task_id
+                            if child_task_id is not None and child_task_id > 0:
+                                tool_part["child_task_id"] = child_task_id
+                                tool_part["display_data"] = {
+                                    "kind": "delegation-result",
+                                    "title": args.get("title") or "子 Agent",
+                                    "child_task_id": child_task_id,
+                                }
+                                try:
+                                    profile = get_agent_registry().resolve(record.child_agent_id)
+                                except RuntimeError:
+                                    profile = None
+                                if profile is not None and profile.role.strip():
+                                    tool_part["agent_role"] = profile.role
+                                    display_data = tool_part.get("display_data")
+                                    if display_data is not None:
+                                        display_data["role"] = profile.role
+                    tool_parts[call.get("id")] = tool_part
             if isinstance(message, ToolMessage):
                 tool_message = cast(ToolMessage, message)
                 tool_part: ConversationStateToolCallPart = tool_parts.get(tool_message.tool_call_id)
                 if tool_part is None:
                     raise RuntimeError("未闭合tool")
                 tool_part["status"] = row.transport_metadata.get("status")
-                tool_part["display_data"] = row.transport_metadata.get("display_data")
+                display_data = row.transport_metadata.get("display_data")
+                tool_part["display_data"] = display_data
+                if (
+                    isinstance(display_data, dict)
+                    and display_data.get("kind") == "delegation-result"
+                ):
+                    child_task_id = display_data.get("child_task_id")
+                    if isinstance(child_task_id, int) and child_task_id > 0:
+                        tool_part["child_task_id"] = child_task_id
+                    child_agent_id = display_data.get("child_agent_id")
+                    if isinstance(child_agent_id, str) and child_agent_id:
+                        try:
+                            profile = get_agent_registry().resolve(child_agent_id)
+                        except RuntimeError:
+                            profile = None
+                        if profile is not None and profile.role.strip():
+                            tool_part["agent_role"] = profile.role
+                            display_data = dict(display_data)
+                            display_data["role"] = profile.role
+                            tool_part["display_data"] = display_data
                 if tool_part["status"] == "failed":
                     tool_part["isError"] = True
                     tool_part["error"] = row.transport_metadata.get("error")
@@ -118,9 +171,10 @@ class ConversationTaskStateRebuilder:
 
     @staticmethod
     def rebuild(
-            task: TaskRecord,
-            runs: Sequence[ConversationRunRecord],
-            context_rows: Sequence[ConversationTaskContextRecord],
+        task: TaskRecord,
+        runs: Sequence[ConversationRunRecord],
+        context_rows: Sequence[ConversationTaskContextRecord],
+        delegations: Sequence[DelegationRecord] = (),
     ) -> ConversationStateSnapshot:
         """Return a validated snapshot assembled from the three canonical record types.
 
@@ -161,7 +215,10 @@ class ConversationTaskStateRebuilder:
                 run_groups.get(run.id, []), key=lambda row: row.sequence
             )
 
-            tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+            tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(
+                rows,
+                [record for record in delegations if record.parent_run_id == run.id],
+            )
 
             snapshot_messages: list[ConversationStateMessage] = []
             assistant_message = ConversationStateMessage(
@@ -201,9 +258,7 @@ class ConversationTaskStateRebuilder:
                     if ai_message.tool_calls is not None and len(ai_message.tool_calls) > 0:
                         calls: list[ToolCall] = ai_message.tool_calls
                         for call in calls:
-                            assistant_message["parts"].append(
-                                tool_parts_dict[call.get("id")]
-                            )
+                            assistant_message["parts"].append(tool_parts_dict[call.get("id")])
             run_extra: ConversationRunExtra | None = getattr(run, "extra", None)
             if not has_user_message and (
                 getattr(run, "input_text", "").strip()
@@ -212,13 +267,15 @@ class ConversationTaskStateRebuilder:
             ):
                 snapshot_messages.append(ConversationTaskStateRebuilder.build_user_message(run))
             snapshot_messages.append(assistant_message)
-            snapshot_runs.append(ConversationRunSnapshot(
-                runId=run.id,
-                status=run.status,
-                endReason=run.end_reason,
-                messages=snapshot_messages,
-                usage=run.usage
-            ))
+            snapshot_runs.append(
+                ConversationRunSnapshot(
+                    runId=run.id,
+                    status=run.status,
+                    endReason=run.end_reason,
+                    messages=snapshot_messages,
+                    usage=run.usage,
+                )
+            )
         used = task.context_usage_used
         total = task.context_window_total
         ratio = None if used is None or total is None or total == 0 else used / total
@@ -229,7 +286,7 @@ class ConversationTaskStateRebuilder:
             context_window_total=total,
             error=None,
             context_usage_ratio=ratio,
-            approvals={}
+            approvals={},
         )
 
 

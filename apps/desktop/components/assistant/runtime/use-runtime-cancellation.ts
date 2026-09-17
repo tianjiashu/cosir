@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
+import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 
 type RuntimeCancellation = {
@@ -18,13 +19,20 @@ const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
  * Coordinate the cancellation signal with the local Assistant UI runtime.
  *
  * The signal acknowledgement is deliberately not projected as a terminal Run
- * state. `cancellingRunId` remains set until a canonical snapshot shows that
- * the requested Run is no longer active.
+ * state. `cancellingRunId` remains set until a canonical snapshot confirms the
+ * requested Run is no longer active, or bounded confirmation expires and the
+ * UI offers an explicit state resync.
  */
 export function useRuntimeCancellation(
   context: RuntimeSessionContext,
+  recovery: RuntimeRecovery,
 ): RuntimeCancellation {
   const [cancellingRunId, setCancellingRunId] = useState<number | null>(null);
+  const {
+    cancellationSettled,
+    confirmCancellation,
+    reconcileAfterTransportFinish,
+  } = recovery;
 
   const onRequested = useCallback((runId: number) => {
     if (context.latestStateRef.current.current_run_id !== runId) return;
@@ -35,20 +43,32 @@ export function useRuntimeCancellation(
 
   const onResult = useCallback((runId: number, accepted: boolean) => {
     if (accepted) {
-      if (context.latestStateRef.current.current_run_id !== runId) return;
+      if (context.latestStateRef.current.current_run_id !== runId) {
+        if (context.cancelRequestedRunIdRef.current === runId) {
+          context.cancelRequestedRunIdRef.current = null;
+        }
+        cancellationSettled(runId);
+        setCancellingRunId((current) => current === runId ? null : current);
+        void reconcileAfterTransportFinish();
+        return;
+      }
       // The endpoint only acknowledges the process-local cancellation signal.
       // The workflow owns the eventual Run transition and publishes it through
       // the canonical snapshot projector.
       context.lastTransportErrorRef.current = null;
       setCancellingRunId(runId);
       context.setIssue(null);
+      confirmCancellation(runId, () => {
+        setCancellingRunId((current) => current === runId ? null : current);
+      });
       return;
     }
 
     if (context.cancelRequestedRunIdRef.current !== runId) return;
     context.cancelRequestedRunIdRef.current = null;
     setCancellingRunId((current) => current === runId ? null : current);
-  }, [context]);
+    void reconcileAfterTransportFinish();
+  }, [cancellationSettled, confirmCancellation, context, reconcileAfterTransportFinish]);
 
   const onStateCommitted = useCallback((state: TransportState) => {
     const requestedRunId = context.cancelRequestedRunIdRef.current;
@@ -56,15 +76,16 @@ export function useRuntimeCancellation(
 
     const currentRun = currentTransportRun(state);
     const requestedRun = state.runs.find((run) => run.runId === requestedRunId);
-    const cancellationSettled = currentRun?.runId !== requestedRunId
+    const isCancellationSettled = currentRun?.runId !== requestedRunId
       || requestedRun === undefined
       || !ACTIVE_RUN_STATUSES.has(requestedRun.status);
-    if (!cancellationSettled) return;
+    if (!isCancellationSettled) return;
 
     context.cancelRequestedRunIdRef.current = null;
     context.lastTransportErrorRef.current = null;
+    cancellationSettled(requestedRunId);
     setCancellingRunId((current) => current === requestedRunId ? null : current);
-  }, [context]);
+  }, [cancellationSettled, context]);
 
   return { cancellingRunId, onRequested, onResult, onStateCommitted };
 }

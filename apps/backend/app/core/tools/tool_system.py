@@ -83,20 +83,15 @@ class ToolSystem:
             无（注册过程不抛预期异常；子 Agent 摘要若尚未注入则降级为空串）。
 
         副作用:
-            创建内存工具注册表并注册全部内置工具；创建 ToolExecutor 实例；
-            向 ``delegate_task`` 工具描述注入已投影的子 Agent 能力摘要（未注入时降级空串）。
+            创建内存工具注册表并注册全部内置工具；创建 ToolExecutor 实例。``delegate_task``
+            的子 Agent 清单与候选集由运行期投影钩子在下发模型时读取注册表，本方法不固化。
         """
 
-        # configuration.py 也持有 ToolSystem；只能在模块已完成导入后读取
-        # registry，不能让 delegate_task handler 在模块级反向导入配置层。
-        try:
-            from app.config.configuration import get_agent_registry
-
-            delegate_summary = get_agent_registry().child_agent_summary()
-        except RuntimeError:
-            # 应用首次装配时工具系统先于 agent registry 注入；此时使用通用描述。
-            delegate_summary = ""
-
+        # delegate_task 的子 Agent 能力摘要与 child_agent_id 候选集依赖 agent 注册表，
+        # 而注册表在启动序列中晚于本方法注入（且 build_agent_registry 又反向依赖
+        # get_tool_registry，二者构成循环依赖）。故此处**不做注册期快照**，交由
+        # delegate_task 的运行期投影钩子在每次下发模型时实时读取（见 ToolDefinition
+        # 的 schema_provider / description_provider）。
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
         registry.register(build_write_file_definition())
@@ -110,7 +105,7 @@ class ToolSystem:
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
-        registry.register(build_delegate_task_definition(agent_summary=delegate_summary))
+        registry.register(build_delegate_task_definition())
         # CodeGraph 查询工具（client 可为 None，execute 降级）。总开关关闭时不注册，
         # 模型侧完全无 codegraph 工具入口；开关开启时注册 6 个只读查询工具。
         if Settings.CODEGRAPH_ENABLED:

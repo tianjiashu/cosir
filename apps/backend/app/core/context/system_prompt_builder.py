@@ -2,17 +2,19 @@
 
 系统提示词重构为三层，每层一块，边界清晰：
 
-1. ``<runtime_context>`` 动态变量层：运行期才确定的事实（角色、工作区、日期、工具集合、
-   语言、CodeGraph 开关等），直接由 ``AgentProfile`` / ``Settings`` / 系统状态注入，不读取任何文件。
+1. ``<runtime_context>`` 动态变量层：运行期才确定的事实（身份与角色、操作系统、工作区根目录
+   与写入边界、工具集合、用户语言），直接由 ``AgentProfile`` / ``Settings`` / 系统状态注入，
+   不读取任何文件。
 2. ``<agent_layer>`` Agent 系统预设层：来源唯一为 ``AgentProfile.prompt_file_path`` 指向的
    md/txt 文件全文（系统预设，与用户无关）；该字段为 ``None`` 或文件读取失败时使用空的
    规则层，加载后不做变量替换。
-3. ``<workspace_layer>`` Workspace 项目层：按文件名优先级（``WORKSPACE_INSTRUCTION_FILE_NAMES``
-   的配置顺序，如 ``AGENTS.md`` 优先于 ``CLAUDE.md``）与目录层级优先级（顶层优先）选出
-   **唯一**一个项目指令文件，受预算闸门约束，避免上下文爆炸。
+3. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``（唯一候选文件名，见
+   ``_WORKSPACE_INSTRUCTION_FILE_NAME``），按目录层级择优（顶层优先）选出**唯一**一个项目
+   指令文件，受预算闸门约束，避免上下文爆炸。
 
-预算控制仅在 Layer 2（单文件上限）与 Layer 3（单文件字节 / 单文件 token / 总量 token + 窗口
-比例）生效；Layer 1 内容小且固定，仅给字节硬上限防御。
+预算控制仅在 Layer 2（单文件上限）与 Layer 3（单文件字节安全兜底 / 单文件 token 上限）生效；
+Layer 1 内容小且固定，仅给字节硬上限防御。Layer 3 的 token 上限为唯一可配置闸门，字节上限为
+模块内固定安全兜底（非配置项）。
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from __future__ import annotations
 import logging
 import os
 from collections import deque
-from collections.abc import Sequence
 from pathlib import Path
 from platform import system
 
@@ -52,6 +53,14 @@ _IGNORED_DIRS: frozenset[str] = frozenset(
         ".hg",
     }
 )
+
+# Workspace 项目指令文件名（唯一候选）。只有一个候选名，故不存在"文件名优先级"维度，
+# 择优只剩目录层级一条；其它常见指令文件（如 CLAUDE.md）一律不参与择优、不会被加载。
+_WORKSPACE_INSTRUCTION_FILE_NAME = "AGENTS.md"
+
+# Workspace 项目指令单文件字节安全兜底（固定上限、非配置项）：在 token 估算二分查找前先做廉价
+# 字节截断，避免异常大文件进入 O(n) token 估算；同时防止上下文被超大 ``AGENTS.md`` 撑爆。
+_WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
 
 
 class SystemPromptBuilder:
@@ -86,7 +95,10 @@ class SystemPromptBuilder:
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
     @staticmethod
     def _build_runtime_context(agent_profile: AgentProfile, workspace_root: str) -> str:
-        """构建动态变量层：角色、工作区、日期、工具集合、语言、CodeGraph 开关等。
+        """构建动态变量层：身份与角色、操作系统、工作区根目录与写入边界、工具集合、用户语言。
+
+        文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层不承载
+        日期与 CodeGraph 开关——它们不在当前实现的事实集合内，不要按旧文档在此处查找。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
@@ -99,25 +111,31 @@ class SystemPromptBuilder:
             无。
 
         副作用:
-            读取系统日期与 ``Settings``；不读任何用户/workspace 文件。
+            读取 ``Settings``（语言、字节上限）与 ``platform.system()``；不读任何
+            用户/workspace 文件。
         """
         language = Settings.DEFAULT_LANGUAGE
         allowed = ", ".join(agent_profile.allowed_tools) or "none"
         lines = [
             "<runtime_context>",
-            f"你是一个运行在用户本机的 {agent_profile.role}。",
-            f"当前所处于的操作系统: {system()}",
             (
-                f"当前工作区根目录: {workspace_root}，你所有的代码都在这个目录下，"
-                f"且写、编辑、删除操作将被系统限制在这个目录下，"
-                f"超出这个目录范围的操作将被系统拒绝"
+                "You are cosir, an agent running on the user's local machine "
+                f"(role: {agent_profile.role}). Your input consists of the user's messages, "
+                "your own earlier messages, and system notices."
             ),
-            f"所拥有的工具集合: {allowed}",
+            f"- OS: {system()}",
+            f"- Workspace root: {workspace_root}",
             (
-                f"你所面向的用户所使用的语言: {language}，"
-                f"请使用友好的语言和用户交流。除非用户要求，不要使用emjio表情回复。"
+                "- Workspace rules: all code lives under the workspace root. File edits and "
+                "deletions are allowed only inside it; anything outside is rejected by the "
+                "system. .cosir/ holds runtime metadata: do not read or modify it."
             ),
-            "</runtime_context>"
+            f"- Tools available: {allowed}",
+            (
+                f"- User language: {language}. Reply in that language in a friendly tone; do "
+                "not use emoji unless the user asks."
+            ),
+            "</runtime_context>",
         ]
         text = "\n".join(lines)
         return SystemPromptBuilder._enforce_bytes(text, Settings.RUNTIME_CONTEXT_MAX_BYTES)
@@ -177,10 +195,10 @@ class SystemPromptBuilder:
     # --- Layer 3: Workspace 项目指令层（定位唯一文件 + 预算闸门） ---
     @staticmethod
     def _build_workspace_layer(workspace_root: str) -> str:
-        """构建 Workspace 项目指令层：选取优先级最高的唯一指令文件并施加预算闸门。
+        """构建 Workspace 项目指令层：定位唯一的 ``AGENTS.md`` 并施加预算闸门。
 
-        优先级的唯一事实源是 ``WORKSPACE_INSTRUCTION_FILE_NAMES`` 的配置顺序（越靠前越优先）
-        叠加目录层级（越浅越优先），故最多加载一个文件；没有任何命中时返回空字符串。
+        候选文件名唯一（``_WORKSPACE_INSTRUCTION_FILE_NAME``，不再经配置注入），择优只剩
+        目录层级一条（越浅越优先），故最多加载一个文件；没有任何命中时返回空字符串。
 
         参数:
             workspace_root: 当前工作区根目录。
@@ -195,9 +213,7 @@ class SystemPromptBuilder:
             遍历工作区目录，并读取命中的唯一指令文件。
         """
         found = SystemPromptBuilder._find_instruction_file(
-            Path(workspace_root),
-            Settings.WORKSPACE_INSTRUCTION_FILE_NAMES,
-            Settings.WORKSPACE_INSTRUCTION_MAX_DEPTH,
+            Path(workspace_root)
         )
         if found is None:
             return ""
@@ -207,46 +223,36 @@ class SystemPromptBuilder:
         except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
             logger.warning(f"workspace_instruction_read_failed path={abs_path} error={exc}")
             return ""
-        # 窗口比例闸门：0 表示仅用固定上限；否则与窗口比例上限取 min。
-        max_total = Settings.WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS
-        if Settings.WORKSPACE_INSTRUCTION_WINDOW_RATIO > 0:
-            window_cap = int(
-                Settings.CONTEXT_WINDOW_TOKENS * Settings.WORKSPACE_INSTRUCTION_WINDOW_RATIO
-            )
-            max_total = min(max_total, window_cap)
+        # 单文件预算：token 上限由配置 ``WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS`` 约束；字节上限
+        # 为模块内固定安全兜底 ``_WORKSPACE_INSTRUCTION_MAX_FILE_BYTES``（非配置项，先于 token
+        # 估算做廉价截断，避免超大文件进入二分查找、也防止上下文被撑爆）。
         content = SystemPromptBuilder._enforce_budget(
             raw,
-            Settings.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES,
-            min(Settings.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS, max_total),
+            _WORKSPACE_INSTRUCTION_MAX_FILE_BYTES,
+            Settings.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS,
         )
         return f"<workspace_layer>\n# ./{rel.as_posix()}\n{content}\n</workspace_layer>"
 
     @staticmethod
-    def _find_instruction_file(
-        root: Path, file_names: Sequence[str], max_depth: int
-    ) -> tuple[Path, Path] | None:
-        """定位优先级最高的唯一项目指令文件（只定位，不读取内容）。
+    def _find_instruction_file(root: Path) -> tuple[Path, Path] | None:
+        """定位唯一的 Workspace 项目指令文件 ``AGENTS.md``（只定位，不读取内容）。
 
-        优先级键（升序取最小）：
-            1. ``file_names`` 下标：越靠前越优先（``AGENTS.md`` 优先于 ``CLAUDE.md``）；
-            2. 文件所在目录层级：根目录文件最优先，越浅越优先；
-            3. 相对路径字典序：同层级多命中时的确定性兜底。
-        文件名比较不区分大小写。
+        候选文件名唯一（``_WORKSPACE_INSTRUCTION_FILE_NAME``），因此不存在"文件名优先级"
+        维度，择优键只有一个：**目录所在层级越浅越优先**；同层级多命中时以相对路径字典序
+        兜底，保证结果确定。文件名比较不区分大小写。
 
         采用 BFS 逐层扫描 + 在线维护最优项 + 逐层剪枝：
             - 不收集全部命中、不排序、不读取文件内容；
-            - 每处理完一个完整目录层级再判定收工：一旦最优项的文件名下标为 0，更深层
-              不可能更优，立即结束（根目录命中时只需扫描根目录一层）；
-            - 跳过 ``_IGNORED_DIRS`` 与超过 ``max_depth`` 的目录，不跟随符号链接；
+            - 每处理完一个完整目录层级再判定收工：本层只要命中，更深层不可能更优，立即结束
+              （根目录命中时只需扫描根目录一层）；
+            - 跳过 ``_IGNORED_DIRS`` 与超过固定最大深度（4 层）的目录，不跟随符号链接；
             - 相对路径由绝对路径做纯字符串换算得到，避免逐候选 ``resolve()`` 的额外系统调用。
 
         参数:
             root: 工作区根目录（内部解析为绝对路径）。
-            file_names: 目标文件名序列，**顺序即优先级**。
-            max_depth: 最大扫描深度（0 表示仅根目录直接文件）。
 
         返回:
-            最优文件的 ``(相对路径, 绝对路径)``；工作区内无任何命中时返回 ``None``。
+            命中文件的 ``(相对路径, 绝对路径)``；工作区内无任何命中时返回 ``None``。
 
         异常:
             无（目录不可读、路径异常均静默跳过）。
@@ -254,15 +260,15 @@ class SystemPromptBuilder:
         副作用:
             无（仅遍历目录，不读取文件内容）。
         """
-        priority = {name.lower(): index for index, name in enumerate(file_names)}
+        target = _WORKSPACE_INSTRUCTION_FILE_NAME.lower()
         try:
             root = root.resolve()
         except OSError:
             return None
-        if not priority or not root.is_dir():
+        if not root.is_dir():
             return None
 
-        best_key: tuple[int, int, str] | None = None
+        best_key: tuple[int, str] | None = None
         best_rel: Path | None = None
         best_abs: Path | None = None
         queue: deque[tuple[Path, int]] = deque([(root, 0)])
@@ -273,27 +279,26 @@ class SystemPromptBuilder:
                 try:
                     with os.scandir(directory) as entries:
                         for e in entries:
-                            index = priority.get(e.name.lower())
-                            if index is not None:
+                            if e.name.lower() == target:
                                 try:
                                     rel = Path(e.path).relative_to(root)
                                 except ValueError:
                                     continue
-                                key = (index, len(rel.parts), rel.as_posix())
+                                key = (len(rel.parts), rel.as_posix())
                                 if best_key is None or key < best_key:
                                     best_key = key
                                     best_rel = rel
                                     best_abs = Path(e.path)
                             elif (
-                                depth + 1 <= max_depth
-                                and e.name not in _IGNORED_DIRS
-                                and e.is_dir(follow_symlinks=False)
+                                    depth + 1 <= 4
+                                    and e.name not in _IGNORED_DIRS
+                                    and e.is_dir(follow_symlinks=False)
                             ):
                                 queue.append((Path(e.path), depth + 1))
                 except (PermissionError, OSError):
                     continue
-            if best_key is not None and best_key[0] == 0:
-                break  # 已选中最优先文件名，更深层不可能更优
+            if best_key is not None:
+                break  # 本层已命中，更深层不可能更优
 
         if best_rel is None or best_abs is None:
             return None

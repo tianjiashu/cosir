@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from app.config.configuration import get_tool_registry
-from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
 
@@ -10,20 +9,6 @@ def _all_tool_names() -> list[str]:
     """调用期读取实时工具注册表全量工具名。"""
 
     return list(get_tool_registry().get_all_tool_names())
-
-
-def _codegraph_tool_names() -> list[str]:
-    """CodeGraph 启用时返回 6 个查询工具名，关闭时返回空（供 agent 白名单条件裁剪）。"""
-    if not Settings.CODEGRAPH_ENABLED:
-        return []
-    return [
-        "codegraph_explore",
-        "codegraph_search",
-        "codegraph_node",
-        "codegraph_callers",
-        "codegraph_callees",
-        "codegraph_impact",
-    ]
 
 
 def _system_prompt_path(filename: str) -> Path:
@@ -43,6 +28,15 @@ def _system_prompt_path(filename: str) -> Path:
     """
 
     return Path(__file__).resolve().parent.parent / "context" / "system_prompt" / filename
+
+
+# 子 Agent 的 description 契约（面向父 Agent 的「选择指南」，不是执行协议）：
+# - 读者只有父 Agent（经 child_agent_summary 投影进 delegate_task 工具描述），故统一英文；
+# - 只写「何时该选它 / 何时不该选它（含该改选谁）/ 硬边界」，每条 ≤ 260 字符；
+# - **不写**：agent_id（清单已渲染）、工具清单（由 allowed_tools 表达）、输出格式与报告字段、
+#   以及「必须遵守 workspace 指令」这类对所有子 Agent 都成立的通用纪律——它们分别属于
+#   prompt_file_path 里的执行协议与 delegate_task.prompt 里的具体工作单。
+
 
 # 主 Agent
 def main_agent() -> AgentProfile:
@@ -72,6 +66,7 @@ def main_agent() -> AgentProfile:
         model_settings=ModelSettings(thinking=True, stream=True, reasoning_effort="high"),
     )
 
+
 # 代码 reviewer Agent（子 Agent）
 def reviewer_agent() -> AgentProfile:
     """构建只读的代码审查 Agent profile。
@@ -97,21 +92,21 @@ def reviewer_agent() -> AgentProfile:
         role="delegate-reviewer",
         agent_type=AgentProfileType.CHILD,
         description=(
-            "委派给 delegate_reviewer，用于对指定代码、变更或设计进行只读审查，"
-            "重点检查正确性、边界条件、安全性、并发、持久化、契约和测试遗漏。"
-            "仅读取和分析，不修改文件、不执行命令、不运行测试；按严重性输出带文件路径、"
-            "行号、证据、影响和修复方向的确认问题。"
+            "Read-only review of a given change or design: correctness, edge cases, security, "
+            "concurrency, contracts, test gaps. Use for: critiquing a concrete diff. Not for: "
+            "open-ended exploration (use code-explorer). Limits: no file edits, no commands, "
+            "no test runs."
         ),
         allowed_tools=[
             "read_file",
             "list_directory",
             "search_content",
             "find_files",
-            *_codegraph_tool_names(),
         ],
-        max_steps=50,
+        max_steps=100,
         prompt_file_path=_system_prompt_path("delegate_reviewer.md"),
     )
+
 
 # 代码 explorer Agent（子 Agent）
 def explorer_agent() -> AgentProfile:
@@ -138,9 +133,10 @@ def explorer_agent() -> AgentProfile:
         role="code-explorer",
         agent_type=AgentProfileType.CHILD,
         description=(
-            "委派给 code-explorer，用于探索不熟悉的代码库，定位入口、调用链、数据流、"
-            "配置、契约和改动影响范围。只做只读调查，优先使用本地代码；仅在需要外部官方"
-            "文档或用户明确要求时使用 Web。输出应区分已确认事实、推断、证据路径和待确认问题。"
+            "Read-only exploration of unfamiliar code: entry points, call chains, data flow, "
+            'config, contracts, blast radius. Use for: "how/where does X work". Not for: '
+            "critiquing a known diff (use delegate_reviewer) or edits. Local code first; web "
+            "only if needed."
         ),
         allowed_tools=[
             "read_file",
@@ -149,11 +145,11 @@ def explorer_agent() -> AgentProfile:
             "find_files",
             "web_search",
             "web_extract",
-            *_codegraph_tool_names(),
         ],
-        max_steps=80,
+        max_steps=100,
         prompt_file_path=_system_prompt_path("code_explorer.md"),
     )
+
 
 # 代码 test Agent（子 Agent）
 def test_agent() -> AgentProfile:
@@ -179,15 +175,15 @@ def test_agent() -> AgentProfile:
         role="unit-test-engineer",
         agent_type=AgentProfileType.CHILD,
         description=(
-            "委派给 unit-test-engineer，用于为已有实现补充或改进测试并运行针对性验证，"
-            "覆盖正常路径、边界、失败、并发和生命周期行为。可以修改测试文件、fixture 和"
-            "必要的测试配置，但不得修改生产代码；发现生产缺陷时返回可复现用例。最终报告"
-            "新增测试、执行命令、结果、覆盖盲区和未解决失败。"
+            "Adds or improves tests and runs scoped verification: happy path, edge cases, "
+            "failures, concurrency. Use for: covering existing code, or reproducing a suspected "
+            "bug. Limits: edits test files, fixtures and test config only; never production code."
         ),
         allowed_tools=_all_tool_names(),
-        max_steps=80,
+        max_steps=100,
         prompt_file_path=_system_prompt_path("unit_test_engineer.md"),
     )
+
 
 # 代码 coder Agent（子 Agent）
 def coder_agent() -> AgentProfile:
@@ -213,10 +209,9 @@ def coder_agent() -> AgentProfile:
         role="code-developer",
         agent_type=AgentProfileType.CHILD,
         description=(
-            "委派给 code-developer，用于实现范围明确的新功能、缺陷修复或结构性重构，并"
-            "完成相关测试和静态检查。适合已有明确目标、参考路径和验收标准的编码任务，"
-            "不适合仅做探索或只读审查。必须遵守 workspace 指令和项目架构边界，避免范围"
-            "扩张；完成后报告修改文件、验证命令、结果、风险和未完成事项。"
+            "Implements well-scoped features, bug fixes or refactors, with their tests and "
+            "static checks. Use for: tasks whose goal, reference paths and acceptance criteria "
+            "are clear. Not for: exploration or review. Can edit files and run commands."
         ),
         allowed_tools=[
             "read_file",
@@ -228,7 +223,6 @@ def coder_agent() -> AgentProfile:
             "apply_patch",
             "delete",
             "execute_terminal",
-            *_codegraph_tool_names(),
         ],
         max_steps=120,
         prompt_file_path=_system_prompt_path("code_developer.md"),

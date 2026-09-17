@@ -5,9 +5,10 @@ import { DiffTool } from "./diff-tool";
 import { DeleteTool } from "./delete-tool";
 import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
+import { DelegationToolRow } from "./delegation-tool-row";
 import { readToolArtifact } from "./types";
 
-export type ToolPartRoute = "delete" | "diff" | "terminal" | "details" | "fallback";
+export type ToolPartRoute = "delete" | "diff" | "terminal" | "delegation" | "details" | "fallback";
 
 const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
 const KNOWN_DISPLAY_KINDS = new Set([
@@ -33,6 +34,7 @@ export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartR
   const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : undefined;
   if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return "fallback";
   if (DELETE_TOOL_NAMES.has(toolName) || kind === "delete-result") return "delete";
+  if (kind === "delegation-result" || toolName === "delegate_task") return "delegation";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
   if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";
   if (
@@ -58,6 +60,8 @@ const ToolPartImpl: ToolCallMessagePartComponent = (props) => {
       return <DiffTool {...props} />;
     case "terminal":
       return <TerminalTool {...props} />;
+    case "delegation":
+      return <DelegationToolRow {...props} />;
     case "details":
       return <DetailsTool {...props} />;
     case "fallback":

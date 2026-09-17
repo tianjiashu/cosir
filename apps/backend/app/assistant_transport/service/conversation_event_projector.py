@@ -26,6 +26,7 @@ _KNOWN_EVENT_TYPES = {
     "tool_call_status_changed",
     "tool_calls_settled",
     "context_usage_updated",
+    "tool_call_runtime_update",
 }
 
 
@@ -80,7 +81,7 @@ class ConversationEventProjector:
             只更新进程内 Transport state 并通知订阅者；不写入数据库。
         """
 
-        event:ConversationEvent = self._parse(raw_event)
+        event = self._parse(raw_event)
         if event is None:
             return None
         with self._lock:

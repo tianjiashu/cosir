@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
+from app.assistant_transport.event import DelegationRefData, ToolCallRuntimeUpdateEvent
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.config.settings import Settings
@@ -18,7 +19,7 @@ from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_models import DelegateTaskArgs
-from app.models import ConversationRunRecord, TaskRecord
+from app.models import ConversationRunCommand, ConversationRunRecord, TaskRecord
 from app.models.result.delegation_result import DelegationResult
 from app.service.delegation.delegation_context import DelegationPolicyDecision
 from app.service.delegation.delegation_service import DelegationService
@@ -199,11 +200,11 @@ class DelegationExecutor(DelegateTaskExecutor):
             try:
                 child_run = conversation_run_service.create_run(
                     task_id=child_task.id,
-                    input_text=agent_input_text,
                     agent_id=args.child_agent_id,
                     provider_id=child_provider_id,
                     model_name=child_model_name,
                     reasoning_effort=child_reasoning_effort,
+                    run_command=ConversationRunCommand(display_text=agent_input_text),
                 )
             except Exception as exc:
                 log.exception(
@@ -229,14 +230,51 @@ class DelegationExecutor(DelegateTaskExecutor):
                     f"child model resolve failed: {exc}",
                 )
 
-            # 标记 child run 已进入执行提交阶段；pending→running 由统一 executor
-            # 在取得 child task runtime space 后完成。
+            # 标记 delegation 进入执行阶段并绑定 child run。注意：本次调用只更新
+            # ``delegations`` 表，**不代表 child run 已进入 running**——child run 的
+            # pending→running 由 ``ChildAgentRunner`` 在启动执行前认领
+            # （``child_agent_runner._run_child``），且必须发生在
+            # ``ConversationRunExecutor.start`` 的前置断言之前。
             delegation_service.mark_child_started(
                 delegation_id,
                 child_run.id,
                 child_task_id=child_task.id,
                 runtime_event_loop=runtime_event_loop,
             )
+
+            if execution_context.tool_call_id:
+                from app.assistant_transport.event.dispatch import dispatch_conversation_event
+
+                try:
+                    dispatch_conversation_event(
+                        ToolCallRuntimeUpdateEvent(
+                            task_id=self._parent_task.id,
+                            run_id=self._parent_run.id,
+                            tool_call_id=execution_context.tool_call_id,
+                            kind="delegation_ref",
+                            seq=0,
+                            data=DelegationRefData(
+                                child_task_id=child_task.id,
+                                title=args.title,
+                                role=child_agent_profile.role,
+                            ),
+                        )
+                    )
+                except Exception:
+                    # Transport projection is a UI side effect. A subscriber or
+                    # projection failure must not fail an otherwise valid child run.
+                    log.exception(
+                        "delegation_ref_event_failed",
+                        extra={
+                            "msg": "委派引用事件投影失败，继续执行 child Agent",
+                            "data": {
+                                "delegation_id": delegation_id,
+                                "parent_run_id": self._parent_run.id,
+                                "child_task_id": child_task.id,
+                                "tool_call_id": execution_context.tool_call_id,
+                            },
+                        },
+                    )
 
             # 构建child agent profile
             child_profile = child_agent_profile.derive_for_run(
@@ -277,6 +315,7 @@ class DelegationExecutor(DelegateTaskExecutor):
             child_task_id=child_task.id,
             title=args.title,
             child_agent_id=args.child_agent_id,
+            role=child_agent_profile.role,
         )
 
     def _resolve_child_model_config(
@@ -499,6 +538,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         child_task_id: int | None = None,
         title: str = "",
         child_agent_id: str = "",
+        role: str = "",
     ) -> ToolObservation:
         """根据 child 终态更新 delegation 并返回父工具 observation。
 
@@ -539,6 +579,7 @@ class DelegationExecutor(DelegateTaskExecutor):
                     child_task_id=child_task_id,
                     child_run_id=result.child_run_id,
                     status="completed",
+                    role=role,
                 ),
             )
         if result.status == "cancelled":

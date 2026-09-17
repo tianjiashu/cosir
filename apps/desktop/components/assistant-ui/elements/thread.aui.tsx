@@ -222,7 +222,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const { cancellingRunId, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
   const runId = useAuiState((state) => getTransportRunId(state.thread.state));
   const canResume = useAuiState((state) => isResumableCancelledRun(state.thread.state as unknown as TransportState));
-  const isCancelling = cancellingRunId === runId;
+  const isCancelling = cancellingRunId !== null && cancellingRunId === runId;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);

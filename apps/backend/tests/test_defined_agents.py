@@ -54,9 +54,7 @@ def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
     assert all(profile.prompt_file_path is not None for profile in profiles)
     assert all(isinstance(profile.prompt_file_path, Path) for profile in profiles)
     assert all(
-        profile.prompt_file_path.is_file()
-        for profile in profiles
-        if profile.prompt_file_path
+        profile.prompt_file_path.is_file() for profile in profiles if profile.prompt_file_path
     )
     assert all(profile.agent_type is AgentProfileType.CHILD for profile in profiles)
 
@@ -110,14 +108,21 @@ def test_registry_exposes_non_main_profiles_as_delegation_targets(monkeypatch) -
 
     registry = AgentProfileRegistry()
     children = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
-    for profile in [*children, main_agent()]:
+    main_profile = main_agent()
+    for profile in [*children, main_profile]:
         registry.register(profile)
 
     child_ids = {profile.agent_id for profile in children}
     assert registry.child_agent_ids() == child_ids
     summary = registry.child_agent_summary()
     assert all(agent_id in summary for agent_id in child_ids)
-    assert "agent_id: main_agent" not in summary
+    # 「主 Agent 不得进入子 Agent 清单」这一不变量的断言必须与渲染格式无关：旧格式
+    # （``agent_id: X ==> role: Y ==> ...``）与新格式（``agent_id: X | description: ...``）
+    # 下都要能抓到越界投影，避免格式变更把断言变成永远成立的空转。
+    assert main_profile.agent_id not in summary
+    # 正向兜底：条目数必须等于 CHILD 数（多渲染一行即说明越界投影）。每个条目单行由
+    # ``child_agent_summary`` 的渲染契约保证（描述与工具清单都不得含换行）。
+    assert len(summary.splitlines()) - 1 == len(child_ids)
 
 
 def test_builtin_child_profiles_leave_model_route_to_parent_run(monkeypatch) -> None:

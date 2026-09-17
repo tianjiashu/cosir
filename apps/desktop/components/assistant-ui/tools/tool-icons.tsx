@@ -4,6 +4,7 @@ import {
   GitCompareIcon,
   GlobeIcon,
   NetworkIcon,
+  UsersIcon,
   SearchIcon,
   TerminalIcon,
   WrenchIcon,
@@ -19,6 +20,7 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   search: SearchIcon,
   terminal: TerminalIcon,
   wrench: WrenchIcon,
+  users: UsersIcon,
 };
 
 export function ToolIcon({

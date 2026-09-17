@@ -20,6 +20,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.core.workflows.workflow_operations import WorkflowOperations
+from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -197,7 +198,9 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._session_factory = None
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
 
-    service.create_run(7, "hello", agent_id="child_agent")
+    service.create_run(
+        7, run_command=ConversationRunCommand(display_text="hello"), agent_id="child_agent"
+    )
 
     assert [getattr(event, "type", None) for event in events] == ["run_initialized"]
 

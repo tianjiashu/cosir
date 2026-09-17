@@ -29,6 +29,7 @@ from app.core.workflows.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
+from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.task.conversation_run_service import ConversationRunService
 from app.service.task.conversation_run_state_service import ConversationRunStateService
@@ -479,9 +480,11 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
         "app.service.depends.get_conversation_event_projector", lambda: _Projector()
     )
 
-    result = service.create_run(7, "hello")
+    result = service.create_run(7, run_command=ConversationRunCommand(display_text="hello"))
 
     assert result is run
+    # create_run 只落 Run/Task 事实与 run_initialized 事件：用户消息由 canonical 写入路径
+    # 的调用方（ConversationRunCommandService）负责，不在此处 append。
     assert order == ["run", "task", "event"]
 
 
@@ -516,7 +519,9 @@ def test_create_run_with_external_session_defers_initialization_events_to_owner(
         "app.service.depends.get_conversation_event_projector", lambda: _Projector()
     )
 
-    result = service.create_run(7, "hello", session=object())
+    result = service.create_run(
+        7, run_command=ConversationRunCommand(display_text="hello"), session=object()
+    )
 
     assert result is run
     assert events == []

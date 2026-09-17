@@ -33,6 +33,9 @@ class ToolExecutionContext:
     workspace_id: int
     workspace_root: Path
     run_id: int = 0
+    # Runtime-only locator for the currently executing tool. It is intentionally
+    # not persisted and is cleared from process-isolated copies.
+    tool_call_id: str = ""
     runtime_dependencies: ToolRuntimeDependencies = field(default_factory=ToolRuntimeDependencies)
 
     def for_process_execution(self) -> "ToolExecutionContext":

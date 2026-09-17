@@ -119,17 +119,25 @@ class ToolRegistry:
             name: 工具名称。
 
         返回:
-            命中时返回该工具的 ``parameters_schema``；未命中时返回 None。
+            命中时返回该工具**模型可见**的参数 schema（经
+            ``to_model_tool_definition`` 投影，与下发给模型的 schema 同源，静态显式
+            schema、运行期 schema_provider、``args_model`` 三级取值）；未命中时返回
+            None。
 
         异常:
             无。
 
         副作用:
-            无（经 get_tool_definition 只读查询）。
+            无（经 get_tool_definition 只读查询）。声明了运行期投影钩子（如
+            delegate_task）的工具会在每次查询时实时生成 schema。
         """
 
         tool_definition = self.get_tool_definition(name)
-        return tool_definition.parameters_schema if tool_definition else None
+        if tool_definition is None:
+            return None
+        projection = tool_definition.to_model_tool_definition()
+        parameters = projection["parameters"]
+        return parameters if isinstance(parameters, Mapping) else None
 
     def get_all_tool_names(self) -> list[str]:
         """返回全部已注册工具名称。

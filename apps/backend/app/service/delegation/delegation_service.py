@@ -69,7 +69,25 @@ class DelegationService:
         child_task_id: int | None = None,
         **_unused_options: object,
     ) -> None:
-        """把 delegation 标记为 running。"""
+        """把 delegation 标记为 running（仅 ``delegations`` 表，不改变 child run 状态）。
+
+        参数:
+            delegation_id: 委派标识。
+            child_run_id: 本次委派绑定的 child Conversation Run。
+            child_task_id: 可选，本次委派创建的 child task。
+
+        返回:
+            无。
+
+        异常:
+            无（底层 CRUD 异常向上抛出）。
+
+        副作用:
+            更新 ``delegations.status`` 为 ``running`` 并写入 ``child_run_id`` /
+            ``child_task_id``。**不改变 child run 自身状态**：child run 的
+            pending→running 由 ``ChildAgentRunner`` 在启动执行前认领，避免委托方误以为
+            本调用已把 run 置为 running。
+        """
 
         self._delegation_crud.update_status(
             delegation_id,

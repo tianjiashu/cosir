@@ -28,7 +28,7 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunError, ConversationRunStatus
+from app.models import ConversationRunCommand, ConversationRunError, ConversationRunStatus
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.service.task.conversation_run_service import ConversationRunService
@@ -43,6 +43,27 @@ from app.storage.engine_cache import create_sqlite_engine
 from app.storage.init_schema import APP_MODELS, initialize_app_schema
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+
+@pytest.fixture(autouse=True)
+def _stub_delegation_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """冷读 rebuild 会解析进程级委派 service；本文件不验证委派，注入空替身。
+
+    ``ConversationTaskStateService._rebuild`` 会按 Run 查询该 Run 的委派记录，而解析出的
+    委派 service 依赖已初始化主库会话；本文件用独立临时 SQLite（``canonical_store``）装配，
+    不经 ``init_storage``，故预置「无委派」替身，保持本文件「不涉及委派」的既有前提。
+    """
+
+    class _NoDelegationService:
+        """返回空委派集合的最小替身。"""
+
+        def list_by_parent_turn(self, run_id: int) -> list[object]:
+            return []
+
+    monkeypatch.setattr(
+        "app.service.depends.get_delegation_service", lambda: _NoDelegationService()
+    )
+
 
 _USAGE = {
     "input_tokens": 10,
@@ -261,7 +282,9 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
         f"user-{completed.id}",
         f"assistant-{completed.id}",
     ]
-    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
+    # 冷读的 user 文本以 Run 输入事实为准（``build_user_message`` 取 extra.display_text
+    # 或 run.input_text），context 里的 HumanMessage 只用于判定「该 Run 有用户消息」。
+    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == completed.input_text
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
@@ -338,7 +361,8 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
     assert state["runs"][0]["status"] == "completed"
-    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == "durable user"
+    # 同上：冷读 user 文本取 Run 输入事实，而非 context 行正文。
+    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == run.input_text
 
 
 @pytest.mark.asyncio
@@ -414,14 +438,14 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
         *(
             asyncio.to_thread(
                 service.start_or_attach,
-                "same-command",
-                "new",
-                "same-payload",
-                "hello",
-                None,
-                None,
-                None,
-                store.task.id,
+                command_id="same-command",
+                command_type="new",
+                payload_hash="same-payload",
+                provider_id=None,
+                model_name=None,
+                reasoning_effort=None,
+                task_id=store.task.id,
+                run_command=ConversationRunCommand(display_text="hello"),
             )
             for _ in range(2)
         )
@@ -431,40 +455,45 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
     # 幂等只体现在 Run 行：user 消息由 workflow 在 graph 启动前写入，命令服务不写 context。
     assert store.contexts.get(store.task.id, include_in_context=False) == []
     first_run = store.runs.list_by_task(store.task.id)[0]
-    completed = store.runs.update_status_if_in(
+    # 第一个 Run 必须经状态 service 收口，而不是直接改 CRUD：Run 终态要靠事件投影同步到
+    # 快照，否则快照里上一个 Run 仍是 running，后续 Run 的初始化投影会被 ``RunInitializedEvent``
+    # 的「仅在上一个 Run 已终态时才追加」规则合法拒绝，进而令状态事件找不到目标 Run。
+    completed = service._run_state.complete_run_if_running(
         first_run.id,
-        ConversationRunStatus.COMPLETED.value,
-        (ConversationRunStatus.PENDING.value,),
-        end_reason="test_complete",
-        usage=_USAGE,
+        final_output="test_complete",
+        usage_stats=ConversationRunUsageStats(**_USAGE),
     )
     assert completed is not None
+    assert completed.status == ConversationRunStatus.COMPLETED.value
 
     second_task = store.tasks.create(store.workspace.id, "second task")
-    other_results = await asyncio.gather(
-        asyncio.to_thread(
+    # 不同 task 之间本无互斥/幂等关系，故这两次调用串行执行：本用例要验证的「同 task 互斥 +
+    # 同 command 幂等」已由上方并发段落覆盖，而进程级 TaskRuntimeSpace 注册表与文件级 SQLite
+    # 在「多个 task 的首次 Run 创建」同时进入冷读装载时会互相争用，串行可让断言只反映语义。
+    other_results = [
+        await asyncio.to_thread(
             service.start_or_attach,
-            "task-one-command",
-            "new",
-            "payload-one",
-            "one",
-            None,
-            None,
-            None,
-            store.task.id,
+            command_id="task-one-command",
+            command_type="new",
+            payload_hash="payload-one",
+            provider_id=None,
+            model_name=None,
+            reasoning_effort=None,
+            task_id=store.task.id,
+            run_command=ConversationRunCommand(display_text="one"),
         ),
-        asyncio.to_thread(
+        await asyncio.to_thread(
             service.start_or_attach,
-            "task-two-command",
-            "new",
-            "payload-two",
-            "two",
-            None,
-            None,
-            None,
-            second_task.id,
+            command_id="task-two-command",
+            command_type="new",
+            payload_hash="payload-two",
+            provider_id=None,
+            model_name=None,
+            reasoning_effort=None,
+            task_id=second_task.id,
+            run_command=ConversationRunCommand(display_text="two"),
         ),
-    )
+    ]
     assert all(result.created for result in other_results)
     assert len(store.runs.list_by_task(store.task.id)) == 2
     assert len(store.runs.list_by_task(second_task.id)) == 1

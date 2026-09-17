@@ -39,6 +39,16 @@ describe("tool renderer routing", () => {
     })).toBe("details");
   });
 
+  it("routes delegation refs to the dedicated activity row", () => {
+    expect(routeToolPart("delegate_task", {
+      backendStatus: "running",
+      presentation: { surface: "standalone", expand_layout: "none" },
+      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
+      child_task_id: 501,
+      agent_role: "Reviewer",
+    })).toBe("delegation");
+  });
+
   it("allows only http(s) URLs from tool display data", () => {
     expect(safeExternalUrl("https://example.com/a")).toBe("https://example.com/a");
     expect(safeExternalUrl("javascript:alert(1)")).toBeNull();

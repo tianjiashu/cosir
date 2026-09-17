@@ -22,6 +22,9 @@ import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ResourceActionMenu } from "@/components/resource-action-menu";
 import { TaskTree } from "@/components/task-tree/task-tree";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
+import { Workbench } from "@/components/workbench";
+import { WorkbenchProvider } from "@/lib/workbench/context";
+import { useWorkbenchStore } from "@/lib/workbench/store";
 import {
   deleteTask,
   deleteWorkspace,
@@ -45,6 +48,7 @@ const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
 export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments }: { routeTaskId: number | null; initialMessage?: string; initialAttachments?: InitialConversationAttachment[] }) {
   const navigate = useNavigate();
+  const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
   const [collapsed, setCollapsed] = useState(() => (
     typeof window !== "undefined" && window.matchMedia(NARROW_VIEWPORT_QUERY).matches
   ));
@@ -296,6 +300,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
       if (deleteTarget.kind === "workspace") {
         const deletingCurrentWorkspace = selectedWorkspaceId === deleteTarget.id || workspaces.some((workspace) => workspace.workspace_id === deleteTarget.id && workspace.tasks.some((task) => task.task_id === activeTaskId));
         await deleteWorkspace(deleteTarget.id);
+        closeWorkspaceTabs(deleteTarget.id);
         if (deletingCurrentWorkspace) {
           setSelectedWorkspaceId(null);
           navigate("/");
@@ -316,6 +321,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   };
 
   return (
+    <WorkbenchProvider workspaceId={activeTaskWorkspaceId}>
     <div className="bg-background flex h-dvh min-h-0 overflow-hidden">
       <BackendStatusBanner />
       <aside className={`bg-muted/20 flex min-h-0 shrink-0 flex-col border-r transition-[width] duration-200 max-[1024px]:transition-none ${collapsed ? "w-14" : "w-72"}`}>
@@ -383,7 +389,9 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
           /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText, attachments) => { navigate(`/tasks/${conversation.task_id}`, { state: { initialMessage: initialText, initialAttachments: attachments } }); void load(); }} />}
         </div>
       </main>
+      <Workbench workspaceId={activeTaskWorkspaceId} />
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
     </div>
+    </WorkbenchProvider>
   );
 }

@@ -101,6 +101,11 @@ export type TransportToolCallPart = {
   display_data?: TransportToolDisplayData | null;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
+  /** Runtime-only child task locator for Workbench; never rendered as text. */
+  child_task_id?: number;
+  /** Current AgentProfile.role resolved by the backend. */
+  agent_role?: string;
+  delegation_ref_seq?: number;
 };
 
 /** 用户图片 part：只携带后端生成的稳定 locator。 */

@@ -24,6 +24,8 @@ let nextRunId = 1;
 let nextResumeRunId = 900;
 let testGeneration = 0;
 const cancelledRuns = new Set();
+const dropCancelledStreams = new Set();
+let dropNextCancelledStream = false;
 const telemetry = {
   clientCancelCount: 0,
   completedStreamCount: 0,
@@ -35,6 +37,8 @@ function resetTestState() {
   tasks.clear();
   states.clear();
   cancelledRuns.clear();
+  dropCancelledStreams.clear();
+  dropNextCancelledStream = false;
   lastStreamBody = "";
   nextRunId = 1;
   nextResumeRunId = 900;
@@ -231,6 +235,54 @@ function webSearchState() {
   };
 }
 
+function delegationState() {
+  return {
+    runs: [{
+      runId: 500,
+      status: "completed",
+      endReason: "stop",
+      messages: [
+        {
+          id: "user-delegation",
+          role: "user",
+          parts: [{ type: "text", text: "请委派一个审查任务", status: "completed" }],
+        },
+        {
+          id: "assistant-delegation",
+          role: "assistant",
+          parts: [
+            {
+              type: "tool-call",
+              toolCallId: "delegate-ref-500",
+              toolName: "delegate_task",
+              args: { child_agent_id: "delegate_reviewer", title: "审查代码", prompt: "请审查当前改动" },
+              status: "completed",
+              presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
+              display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
+              child_task_id: 501,
+              agent_role: "Reviewer",
+              delegation_ref_seq: 0,
+              isError: false,
+            },
+            { type: "text", text: "子 Agent 已开始工作。", status: "completed" },
+          ],
+        },
+      ],
+      usage: null,
+    }],
+    current_run_id: 500,
+    approvals: {},
+    context_usage_ratio: null,
+    context_usage_used: null,
+    context_window_total: null,
+    error: null,
+  };
+}
+
+function childDelegationState() {
+  return stateWithExchange(emptyState(), "请审查当前改动", 501, "", "running");
+}
+
 function jsonResponse(res, status, value) {
   res.writeHead(status, {
     "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
@@ -285,6 +337,10 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     res.end();
     return;
   }
+  if (dropCancelledStreams.delete(runId)) {
+    res.destroy();
+    return;
+  }
   if (cancelledRuns.has(runId)) {
     const cancelledState = structuredClone(initialState);
     cancelledState.runs[runIndex].status = "cancelled";
@@ -302,6 +358,10 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
   for (const chunk of chunks) {
     if (closed || generation !== testGeneration) {
       res.end();
+      return;
+    }
+    if (dropCancelledStreams.delete(runId)) {
+      res.destroy();
       return;
     }
     if (cancelledRuns.has(runId)) {
@@ -673,9 +733,32 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/__test__/drop-next-cancel-stream") {
+    dropNextCancelledStream = true;
+    jsonResponse(res, 200, { enabled: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-delegation") {
+    tasks.set(TASK_ID, {
+      task_id: TASK_ID,
+      workspace_id: WORKSPACE_ID,
+      title: "委派主任务",
+      execution_status: "completed",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    states.set(TASK_ID, delegationState());
+    states.set(501, childDelegationState());
+    jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501 });
+    return;
+  }
   if (req.method === "POST" && url.pathname.startsWith("/runs/") && url.pathname.endsWith("/cancel")) {
     const runId = Number(url.pathname.split("/")[2]);
     cancelledRuns.add(runId);
+    if (dropNextCancelledStream) {
+      dropCancelledStreams.add(runId);
+      dropNextCancelledStream = false;
+    }
     for (const [taskId, state] of states) {
       const runIndex = state.runs.findIndex((run) => run.runId === runId);
       if (runIndex < 0) continue;

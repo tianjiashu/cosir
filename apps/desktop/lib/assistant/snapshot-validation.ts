@@ -101,7 +101,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "isError", "approvalRequestId"];
+  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "isError", "approvalRequestId", "child_task_id", "agent_role", "delegation_ref_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -115,6 +115,9 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "presentation") && !isRecord(part.presentation)) throw new TransportSnapshotValidationError(`${path}.presentation`, "对象");
   if (hasOwn(part, "display_data") && part.display_data !== null && !isRecord(part.display_data)) throw new TransportSnapshotValidationError(`${path}.display_data`, "对象或 null");
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
+  if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
+  if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
+  if (hasOwn(part, "delegation_ref_seq") && (!Number.isInteger(part.delegation_ref_seq) || (part.delegation_ref_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.delegation_ref_seq`, "非负整数");
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");
 }
 

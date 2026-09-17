@@ -99,15 +99,12 @@ class Settings:
     # ``CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES`` 覆盖。
     RUNTIME_CONTEXT_MAX_BYTES: ClassVar[int] = 4_000
 
-    # Layer 3：Workspace 项目指令定位配置与预算闸门；经 ``CODING_AGENT_WORKSPACE_INSTRUCTION_*``
-    # 覆盖。``WORKSPACE_INSTRUCTION_FILE_NAMES`` 的顺序即文件名优先级，最终只加载唯一一个
-    # 指令文件，因此不存在文件数闸门；总量 token 上限另受窗口比例闸门（0 表示仅用固定上限）。
-    WORKSPACE_INSTRUCTION_FILE_NAMES: ClassVar[tuple[str, ...]] = ("AGENTS.md", "CLAUDE.md")
-    WORKSPACE_INSTRUCTION_MAX_DEPTH: ClassVar[int] = 2
-    WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: ClassVar[int] = 200_000
+    # Layer 3：Workspace 项目指令预算闸门；经 ``CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS``
+    # 覆盖。候选文件名唯一（``AGENTS.md``，硬编码在 ``system_prompt_builder`` 内、不经配置注入），
+    # 最终只加载唯一一个指令文件，因此不存在文件数闸门；单文件注入上下文的 token 上限由
+    # ``WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS`` 约束，字节上限为 ``system_prompt_builder`` 模块内
+    # 固定安全兜底（非配置项，先于 token 估算做廉价截断，防止超大文件撑爆上下文）。
     WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
-    WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS: ClassVar[int] = 4_000
-    WORKSPACE_INSTRUCTION_WINDOW_RATIO: ClassVar[float] = 0.05
 
     # --- 委派子Agent并发执行（见 docs/委派子Agent并发执行技术方案.md §6.1） ---
     # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
@@ -285,16 +282,8 @@ class Settings:
             raise ValueError("AGENT_PERSONA_MAX_TOKENS must be greater than zero")
         if cls.RUNTIME_CONTEXT_MAX_BYTES < 1:
             raise ValueError("RUNTIME_CONTEXT_MAX_BYTES must be greater than zero")
-        if cls.WORKSPACE_INSTRUCTION_MAX_DEPTH < 1:
-            raise ValueError("WORKSPACE_INSTRUCTION_MAX_DEPTH must be greater than zero")
-        if cls.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES < 1:
-            raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_BYTES must be greater than zero")
         if cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS < 1:
             raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS must be greater than zero")
-        if cls.WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS < 1:
-            raise ValueError("WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS must be greater than zero")
-        if cls.WORKSPACE_INSTRUCTION_WINDOW_RATIO < 0:
-            raise ValueError("WORKSPACE_INSTRUCTION_WINDOW_RATIO must not be negative")
 
     @classmethod
     def load(cls, repository_root: Path | None = None) -> None:
@@ -401,27 +390,8 @@ class Settings:
         cls.RUNTIME_CONTEXT_MAX_BYTES = int(
             os.environ.get("CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES", "4000")
         )
-        cls.WORKSPACE_INSTRUCTION_FILE_NAMES = tuple(
-            p.strip()
-            for p in os.environ.get(
-                "CODING_AGENT_WORKSPACE_INSTRUCTION_FILE_NAMES", "AGENTS.md,CLAUDE.md"
-            ).split(",")
-            if p.strip()
-        )
-        cls.WORKSPACE_INSTRUCTION_MAX_DEPTH = int(
-            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_DEPTH", "2")
-        )
-        cls.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES = int(
-            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_BYTES", "200000")
-        )
         cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS = int(
             os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS", "1200")
-        )
-        cls.WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS = int(
-            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_TOTAL_TOKENS", "4000")
-        )
-        cls.WORKSPACE_INSTRUCTION_WINDOW_RATIO = float(
-            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_WINDOW_RATIO", "0.05")
         )
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。

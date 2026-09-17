@@ -21,7 +21,7 @@ vi.mock("@/lib/assistant/cancel-run", () => ({
 }));
 
 describe("StopButton", () => {
-  it("composes assistant-ui cancel with backend cancellation", async () => {
+  it("sends backend cancellation without aborting the Assistant Transport subscription", async () => {
     const { StopButton } = await import("@/components/assistant/stop-button");
     const assistantCancel = vi.fn();
     const onCancelRequested = vi.fn();
@@ -40,14 +40,13 @@ describe("StopButton", () => {
     expect(onClick).toEqual(expect.any(Function));
 
     (onClick as (event: React.MouseEvent<HTMLButtonElement>) => void)(event);
-    await vi.waitFor(() => expect(assistantCancel).toHaveBeenCalledWith(event));
+    await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42, 7));
 
-    expect(assistantCancel).toHaveBeenCalledWith(event);
-    expect(captured.cancelRun).toHaveBeenCalledWith(42, 7);
+    expect(assistantCancel).not.toHaveBeenCalled();
     expect(onCancelRequested).toHaveBeenCalledWith(7);
     expect(onCancelResult).toHaveBeenCalledWith(7, true);
-    expect(onCancelRequested.mock.invocationCallOrder[0]).toBeLessThan(onCancelResult.mock.invocationCallOrder[0]);
-    expect(onCancelResult.mock.invocationCallOrder[0]).toBeLessThan(assistantCancel.mock.invocationCallOrder[0]);
+    expect(onCancelRequested.mock.invocationCallOrder[0]).toBeLessThan(captured.cancelRun.mock.invocationCallOrder.at(-1)!);
+    expect(captured.cancelRun.mock.invocationCallOrder.at(-1)!).toBeLessThan(onCancelResult.mock.invocationCallOrder[0]);
   });
 
   it("does not invoke assistant-ui Cancel when backend cancellation is rejected", async () => {

@@ -526,11 +526,42 @@ impl BackendSupervisor {
         );
     }
 
+    /// 显示并聚焦主窗口，用于托盘、macOS Dock 重开和单实例唤醒。
+    ///
+    /// 参数:
+    ///     app: 提供标签为 ``main`` 的 Tauri WebView 窗口。
+    ///
+    /// 返回:
+    ///     无。窗口不存在或窗口操作失败时记生命周期日志并返回。
+    ///
+    /// 副作用:
+    ///     解除最小化、显示并聚焦主窗口；不启动、停止或重启后端。
     pub fn show_main_window(&self, app: &AppHandle) {
         if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
+            self.log("main_window_shown");
+        } else {
+            self.log("main_window_missing");
         }
+    }
+
+    /// 记录桌面生命周期事件到现有结构化日志。
+    ///
+    /// 参数:
+    ///     event: 稳定的 snake_case 事件名称。
+    ///
+    /// 返回:
+    ///     无。
+    ///
+    /// 异常:
+    ///     无；日志写入失败由日志边界吞并，不影响桌面生命周期。
+    ///
+    /// 副作用:
+    ///     尝试写入当前桌面日志文件。
+    pub fn log_lifecycle_event(&self, event: &str) {
+        self.log(event);
     }
 }
 

@@ -4,27 +4,30 @@ from pathlib import Path
 
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 
-# 与 Settings.WORKSPACE_INSTRUCTION_FILE_NAMES 默认值一致，显式传入以固定优先级语义。
-FILE_NAMES = ("AGENTS.md", "CLAUDE.md")
-MAX_DEPTH = 2
+# 候选文件名硬编码在被测模块内（不再经 Settings 配置注入），故用例不再传文件名。
+INSTRUCTION_FILE_NAME = "AGENTS.md"
+IGNORED_FILE_NAME = "CLAUDE.md"
 
 
-def _find(root: Path, file_names: tuple[str, ...] = FILE_NAMES) -> tuple[Path, Path] | None:
-    """以默认深度调用被测方法，便于各用例只关注文件布局。"""
-    return SystemPromptBuilder._find_instruction_file(root, file_names, MAX_DEPTH)
+def _find(root: Path) -> tuple[Path, Path] | None:
+    """调用被测方法定位唯一指令文件，便于各用例只关注文件布局。
+
+    扫描深度上限为被测模块内硬编码的固定值（4 层），不接收深度参数。
+    """
+    return SystemPromptBuilder._find_instruction_file(root)
 
 
-def test_file_name_priority_outranks_directory_depth(tmp_path: Path) -> None:
-    """文件名优先级高于目录层级：深层 AGENTS.md 应击败根目录 CLAUDE.md。"""
+def test_other_instruction_files_are_not_candidates(tmp_path: Path) -> None:
+    """只认 AGENTS.md：CLAUDE.md 不是候选，深层 AGENTS.md 仍然胜出。"""
 
-    (tmp_path / "CLAUDE.md").write_text("ROOT-CLAUDE", encoding="utf-8")
+    (tmp_path / IGNORED_FILE_NAME).write_text("ROOT-CLAUDE", encoding="utf-8")
     (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "AGENTS.md").write_text("DEEP-AGENTS", encoding="utf-8")
+    (tmp_path / "pkg" / INSTRUCTION_FILE_NAME).write_text("DEEP-AGENTS", encoding="utf-8")
 
     found = _find(tmp_path)
 
     assert found is not None
-    assert found[0] == Path("pkg") / "AGENTS.md"
+    assert found[0] == Path("pkg") / INSTRUCTION_FILE_NAME
 
 
 def test_same_name_prefers_shallowest_directory(tmp_path: Path) -> None:
@@ -53,28 +56,32 @@ def test_same_depth_breaks_tie_by_path_order(tmp_path: Path) -> None:
     assert found[0] == Path("a") / "AGENTS.md"
 
 
-def test_falls_back_to_second_configured_name(tmp_path: Path) -> None:
-    """扫描范围内没有任何 AGENTS.md 时才回退到 CLAUDE.md。"""
+def test_no_agents_md_returns_none_even_with_other_instruction_file(tmp_path: Path) -> None:
+    """扫描范围内没有 AGENTS.md 时不回退到其它指令文件：定位返回 None、层为空字符串。"""
 
-    (tmp_path / "CLAUDE.md").write_text("ROOT-CLAUDE", encoding="utf-8")
-    (tmp_path / "pkg" / "sub" / "deep").mkdir(parents=True)
-    (tmp_path / "pkg" / "sub" / "deep" / "AGENTS.md").write_text(
-        "OUT-OF-RANGE", encoding="utf-8"
-    )
+    (tmp_path / IGNORED_FILE_NAME).write_text("ROOT-CLAUDE", encoding="utf-8")
+    # 唯一 AGENTS.md 放在固定最大深度（4 层）之外，属于扫描范围之外的越界文件。
+    out_of_range = tmp_path
+    for name in ("pkg", "sub", "deep", "deeper", "deepest"):
+        out_of_range = out_of_range / name
+    out_of_range.mkdir(parents=True)
+    (out_of_range / INSTRUCTION_FILE_NAME).write_text("OUT-OF-RANGE", encoding="utf-8")
 
-    found = _find(tmp_path)
-
-    assert found is not None
-    assert found[0] == Path("CLAUDE.md")
+    assert _find(tmp_path) is None
+    assert SystemPromptBuilder._build_workspace_layer(str(tmp_path)) == ""
 
 
 def test_ignores_dirs_in_skip_list_and_depth_limit(tmp_path: Path) -> None:
-    """跳过忽略目录，且超过 max_depth 的文件不参与择优。"""
+    """跳过忽略目录，且超过固定最大深度（4 层）的文件不参与择优。"""
 
     (tmp_path / "node_modules").mkdir()
     (tmp_path / "node_modules" / "AGENTS.md").write_text("IGNORED", encoding="utf-8")
-    (tmp_path / "pkg" / "sub" / "deep").mkdir(parents=True)
-    (tmp_path / "pkg" / "sub" / "deep" / "AGENTS.md").write_text("TOO-DEEP", encoding="utf-8")
+    # 越界 AGENTS.md：放到固定最大深度（4 层）之外，确认不参与择优。
+    too_deep = tmp_path
+    for name in ("pkg", "sub", "deep", "deeper", "deepest"):
+        too_deep = too_deep / name
+    too_deep.mkdir(parents=True)
+    (too_deep / "AGENTS.md").write_text("TOO-DEEP", encoding="utf-8")
 
     assert _find(tmp_path) is None
 
@@ -89,9 +96,9 @@ def test_returns_empty_layer_without_any_candidate(tmp_path: Path) -> None:
 def test_workspace_layer_contains_only_selected_file(tmp_path: Path) -> None:
     """项目指令层只包含选中的那一个文件，并带相对路径标题。"""
 
-    (tmp_path / "AGENTS.md").write_text("ROOT-AGENTS", encoding="utf-8")
+    (tmp_path / INSTRUCTION_FILE_NAME).write_text("ROOT-AGENTS", encoding="utf-8")
     (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "CLAUDE.md").write_text("DEEP-CLAUDE", encoding="utf-8")
+    (tmp_path / "pkg" / IGNORED_FILE_NAME).write_text("DEEP-CLAUDE", encoding="utf-8")
 
     layer = SystemPromptBuilder._build_workspace_layer(str(tmp_path))
 

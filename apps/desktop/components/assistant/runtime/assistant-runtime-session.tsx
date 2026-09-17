@@ -106,12 +106,12 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   ]);
 
   useRuntimeDiagnostics(context);
-  const cancellation = useRuntimeCancellation(context);
+  const recovery = useRuntimeRecovery(context);
+  const cancellation = useRuntimeCancellation(context, recovery);
   const commitTransportState = useCallback((state: typeof sessionInitialState) => {
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);
   }, [cancellation.onStateCommitted, sessionInitialState]);
-  const recovery = useRuntimeRecovery(context);
   const runtime = useRuntimeTransport(context, recovery);
 
   return (

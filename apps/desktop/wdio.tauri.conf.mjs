@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 
 const desktopRoot = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-const appBinaryPath = path.resolve(desktopRoot, "src-tauri", "target", "debug", "cosir-desktop.exe");
+const appBinaryName = process.platform === "win32" ? "cosir-desktop.exe" : "cosir-desktop";
+const appBinaryPath = path.resolve(repositoryRoot, "target", "debug", appBinaryName);
 
 /**
  * Real desktop E2E configuration.

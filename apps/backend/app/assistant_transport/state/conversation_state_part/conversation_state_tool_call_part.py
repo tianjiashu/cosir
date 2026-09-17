@@ -28,3 +28,7 @@ class ConversationStateToolCallPart(TypedDict):
     display_data: NotRequired[dict[str, object] | None]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]
+    # Runtime delegation locator. It is not rendered as text by the frontend.
+    child_task_id: NotRequired[int]
+    agent_role: NotRequired[str]
+    delegation_ref_seq: NotRequired[int]

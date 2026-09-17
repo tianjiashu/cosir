@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 time = { version = "0.3", features = ["formatting", "parsing", "local-offset"] }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "=2.7.3"
 tauri-plugin-single-instance = "2"
 tauri-plugin-wdio = { version = "1.4.0", optional = true }

@@ -247,6 +247,41 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   expect(telemetry.clientCancelCount).toBeGreaterThan(0);
 });
 
+test("取消 ACK 后 SSE 断开时，前端独立读取快照并解除停止状态", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 103, title: "取消流断开" } });
+  await request.post("http://127.0.0.1:8000/__test__/drop-next-cancel-stream");
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      "cosir:model-selection:task:103",
+      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+    );
+  });
+
+  const stateReads: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/assistant/state")) stateReads.push(request.url());
+  });
+
+  await page.goto("/tasks/103");
+  await expect(page.getByLabel("消息输入")).toBeVisible();
+  await page.getByLabel("消息输入").fill("cancel-with-dropped-stream");
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(page.getByText("stream", { exact: true })).toBeVisible();
+  const stateReadsBeforeCancel = stateReads.length;
+  const cancelResponse = page.waitForResponse((response) => (
+    response.url().includes("/runs/")
+    && response.url().endsWith("/cancel")
+    && response.request().method() === "POST"
+  ));
+  await page.getByRole("button", { name: "停止" }).click();
+  await expect((await cancelResponse).status()).toBe(200);
+
+  await expect.poll(() => stateReads.length).toBeGreaterThan(stateReadsBeforeCancel);
+  await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "正在停止" })).toHaveCount(0);
+});
+
 test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 103, title: "任务103" } });
   await page.addInitScript(() => {

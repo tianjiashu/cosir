@@ -36,6 +36,9 @@ _TOOL_PART_KEYS = {
     "display_data",
     "isError",
     "approvalRequestId",
+    "child_task_id",
+    "agent_role",
+    "delegation_ref_seq",
 }
 _USAGE_KEYS = {
     "input_tokens",
@@ -259,5 +262,17 @@ def _validate_part(part: object) -> None:
             raise ValueError("snapshot tool presentation must be an object")
         if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
             raise ValueError("snapshot tool display_data must be an object or null")
+        if part.get("child_task_id") is not None and (
+            not isinstance(part.get("child_task_id"), int) or part["child_task_id"] < 1
+        ):
+            raise ValueError("snapshot child_task_id must be a positive integer")
+        if part.get("agent_role") is not None and (
+            not isinstance(part.get("agent_role"), str) or not part["agent_role"].strip()
+        ):
+            raise ValueError("snapshot agent_role must be a non-empty string")
+        if part.get("delegation_ref_seq") is not None and (
+            not isinstance(part.get("delegation_ref_seq"), int) or part["delegation_ref_seq"] < 0
+        ):
+            raise ValueError("snapshot delegation_ref_seq must be a non-negative integer")
         return
     raise ValueError("snapshot contains an unknown message part")

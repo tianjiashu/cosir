@@ -15,6 +15,7 @@ from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
+    ToolCallRuntimeUpdateEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
     UserInputAppendedEvent,
@@ -112,6 +113,81 @@ def test_run_initialized_and_user_input(
     assert current["status"] == "pending"
     assert current["messages"][0]["parts"][0]["text"] == "你好"
     assert current["messages"][1]["parts"] == []
+
+
+def test_delegation_ref_projects_locator_title_and_role_only_to_target_tool(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(
+        ToolCallCreatedEvent(
+            task_id=1,
+            run_id=1,
+            tool_call_id="delegate-1",
+            tool_name="delegate_task",
+        )
+    )
+    event = ToolCallRuntimeUpdateEvent(
+        task_id=1,
+        run_id=1,
+        tool_call_id="delegate-1",
+        kind="delegation_ref",
+        seq=0,
+        data={"child_task_id": 22, "title": "审查前端", "role": "Reviewer"},
+    )
+
+    change = event_projector.process(event)
+    part = _run(snapshots.states[1], 1)["messages"][1]["parts"][0]
+
+    assert change is not None
+    assert part["child_task_id"] == 22
+    assert part["agent_role"] == "Reviewer"
+    assert part["display_data"] == {
+        "kind": "delegation-result",
+        "title": "审查前端",
+        "role": "Reviewer",
+        "child_task_id": 22,
+    }
+
+
+def test_delegation_ref_rejects_wrong_target_and_old_sequence(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(
+        ToolCallCreatedEvent(
+            task_id=1,
+            run_id=1,
+            tool_call_id="delegate-1",
+            tool_name="delegate_task",
+        )
+    )
+    current = ToolCallRuntimeUpdateEvent(
+        task_id=1,
+        run_id=1,
+        tool_call_id="delegate-1",
+        kind="delegation_ref",
+        seq=2,
+        data={"child_task_id": 22, "title": "新标题", "role": "New Role"},
+    )
+    old = ToolCallRuntimeUpdateEvent(
+        task_id=1,
+        run_id=1,
+        tool_call_id="delegate-1",
+        kind="delegation_ref",
+        seq=1,
+        data={"child_task_id": 23, "title": "旧标题", "role": "Old Role"},
+    )
+    event_projector.process(current)
+    change = event_projector.process(old)
+    part = _run(snapshots.states[1], 1)["messages"][1]["parts"][0]
+
+    assert change is not None
+    assert change.mutations == ()
+    assert part["child_task_id"] == 22
+    assert part["display_data"]["title"] == "新标题"
 
 
 def test_user_input_projects_ordered_text_image_and_file_parts(
@@ -297,9 +373,7 @@ def test_tool_lifecycle_and_settlement(
         )
     )
     event_projector.process(
-        ToolCallCreatedEvent(
-            task_id=1, run_id=1, tool_call_id="call-2", tool_name="write_file"
-        )
+        ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="call-2", tool_name="write_file")
     )
     event_projector.process(
         ToolCallsSettledEvent(task_id=1, run_id=1, status="failed", reason="runtime_failed")
@@ -515,17 +589,23 @@ def test_historical_run_status_event_updates_its_own_run(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
-    event_projector.process(RunStatusChangedEvent(
-        task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED,
-    ))
+    event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            status=ConversationRunStatus.COMPLETED,
+        )
+    )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
-    change = event_projector.process(RunStatusChangedEvent(
-        task_id=1,
-        run_id=1,
-        status=ConversationRunStatus.COMPLETED,
-        end_reason="late_failure",
-        usage_stats=ConversationRunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
-    ))
+    change = event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=1,
+            status=ConversationRunStatus.COMPLETED,
+            end_reason="late_failure",
+            usage_stats=ConversationRunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
+        )
+    )
     assert change is not None and change.mutations
     state = snapshots.states[1]
     assert _run(state, 1)["status"] == "completed"

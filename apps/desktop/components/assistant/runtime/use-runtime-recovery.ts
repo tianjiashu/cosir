@@ -11,16 +11,21 @@ import type { RuntimeSessionContext } from "@/components/assistant/runtime/runti
 
 type RuntimeRecovery = {
   reconcileAfterTransportFinish: () => Promise<void>;
+  confirmCancellation: (runId: number, onConfirmationEnded?: () => void) => void;
+  cancellationSettled: (runId: number) => void;
   resumeBusinessRun: () => Promise<void>;
   resetRecovery: () => void;
 };
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAYS_MS = [0, 250, 500, 1_000, 2_000] as const;
+const MAX_CANCELLATION_CHECKS = 7;
+const CANCELLATION_CHECK_DELAYS_MS = [0, 250, 500, 1_000, 2_000, 4_000, 8_000] as const;
+const CANCELLATION_CONFIRMATION_TIMEOUT_MS = 30_000;
 const RECONCILE_TIMEOUT_MS = 15_000;
 const BUSINESS_RESUME_TIMEOUT_MS = 15_000;
 
-/** Own backend instance changes, bounded transport reconciliation, and business resume. */
+/** Own backend changes, bounded transport recovery, cancellation confirmation, and business resume. */
 export function useRuntimeRecovery(
   context: RuntimeSessionContext,
 ): RuntimeRecovery {
@@ -31,6 +36,14 @@ export function useRuntimeRecovery(
   const reconcileAbortControllerRef = useRef<AbortController | null>(null);
   const recoveryGenerationRef = useRef(0);
   const disposedRef = useRef(false);
+  const cancellationCheckGenerationRef = useRef(0);
+  const cancellationCheckAttemptRef = useRef(0);
+  const cancellationCheckRunIdRef = useRef<number | null>(null);
+  const cancellationCheckTimerRef = useRef<number | null>(null);
+  const cancellationCheckDeadlineRef = useRef<number | null>(null);
+  const cancellationCheckAbortControllerRef = useRef<AbortController | null>(null);
+  const cancellationCheckInFlightRef = useRef(false);
+  const cancellationCheckOnEndedRef = useRef<(() => void) | undefined>(undefined);
 
   const resetRecovery = useCallback(() => {
     recoveryGenerationRef.current += 1;
@@ -43,13 +56,64 @@ export function useRuntimeRecovery(
     reconcileInFlightRef.current = false;
   }, []);
 
-  useEffect(() => () => {
-    disposedRef.current = true;
-    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
-    reconcileAbortControllerRef.current?.abort();
+  const stopCancellationConfirmation = useCallback((runId?: number) => {
+    if (runId !== undefined && cancellationCheckRunIdRef.current !== runId) return;
+    cancellationCheckGenerationRef.current += 1;
+    cancellationCheckRunIdRef.current = null;
+    cancellationCheckAttemptRef.current = 0;
+    cancellationCheckInFlightRef.current = false;
+    cancellationCheckOnEndedRef.current = undefined;
+    if (cancellationCheckTimerRef.current !== null) {
+      window.clearTimeout(cancellationCheckTimerRef.current);
+      cancellationCheckTimerRef.current = null;
+    }
+    if (cancellationCheckDeadlineRef.current !== null) {
+      window.clearTimeout(cancellationCheckDeadlineRef.current);
+      cancellationCheckDeadlineRef.current = null;
+    }
+    cancellationCheckAbortControllerRef.current?.abort();
+    cancellationCheckAbortControllerRef.current = null;
   }, []);
 
+  const finishCancellationUnconfirmed = useCallback((runId: number) => {
+    if (cancellationCheckRunIdRef.current !== runId) return;
+    cancellationCheckGenerationRef.current += 1;
+    cancellationCheckRunIdRef.current = null;
+    cancellationCheckInFlightRef.current = false;
+    if (cancellationCheckTimerRef.current !== null) {
+      window.clearTimeout(cancellationCheckTimerRef.current);
+      cancellationCheckTimerRef.current = null;
+    }
+    if (cancellationCheckDeadlineRef.current !== null) {
+      window.clearTimeout(cancellationCheckDeadlineRef.current);
+      cancellationCheckDeadlineRef.current = null;
+    }
+    cancellationCheckAbortControllerRef.current?.abort();
+    cancellationCheckAbortControllerRef.current = null;
+    context.cancelRequestedRunIdRef.current = null;
+    const onConfirmationEnded = cancellationCheckOnEndedRef.current;
+    cancellationCheckOnEndedRef.current = undefined;
+    onConfirmationEnded?.();
+    context.setIssue({
+      message: "已请求停止，但暂时无法确认运行状态。请重新同步后再操作。",
+      retryable: true,
+    });
+  }, [context]);
+
+  useEffect(() => {
+    // React StrictMode replays effects on the mounted hook instance in
+    // development. Restore the live flag in every setup, not only on mount.
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconcileAbortControllerRef.current?.abort();
+      stopCancellationConfirmation();
+    };
+  }, [stopCancellationConfirmation]);
+
   const reconcileAfterTransportFinish = useCallback(async () => {
+    if (cancellationCheckRunIdRef.current !== null) return;
     if (disposedRef.current || reconcileInFlightRef.current || reconnectTimerRef.current !== null) return;
     if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
       context.setIssue({ message: "本机后端连接多次中断，请重试恢复对话。", retryable: true });
@@ -128,6 +192,157 @@ export function useRuntimeRecovery(
     }
   }, [context, resetRecovery]);
 
+  const reconcileCancellation = useCallback(async function reconcileCancellation(
+    runId: number,
+    generation: number,
+  ): Promise<void> {
+    if (
+      disposedRef.current
+      || generation !== cancellationCheckGenerationRef.current
+      || cancellationCheckRunIdRef.current !== runId
+      || cancellationCheckInFlightRef.current
+    ) return;
+
+    if (cancellationCheckAttemptRef.current >= MAX_CANCELLATION_CHECKS) {
+      finishCancellationUnconfirmed(runId);
+      return;
+    }
+
+    const attempt = cancellationCheckAttemptRef.current;
+    cancellationCheckAttemptRef.current += 1;
+    cancellationCheckInFlightRef.current = true;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, RECONCILE_TIMEOUT_MS);
+    cancellationCheckAbortControllerRef.current = controller;
+
+    const scheduleNextCheck = () => {
+      if (cancellationCheckAttemptRef.current >= MAX_CANCELLATION_CHECKS) {
+        finishCancellationUnconfirmed(runId);
+        return;
+      }
+      const delay = CANCELLATION_CHECK_DELAYS_MS[
+        Math.min(attempt + 1, CANCELLATION_CHECK_DELAYS_MS.length - 1)
+      ] ?? 8_000;
+      cancellationCheckTimerRef.current = window.setTimeout(() => {
+        cancellationCheckTimerRef.current = null;
+        void reconcileCancellation(runId, generation);
+      }, delay);
+    };
+
+    try {
+      void frontendLog("INFO", "assistant_cancel_reconcile_started", "停止请求已接受，读取权威运行状态", {
+        traceId: context.traceId,
+        data: { taskId: context.taskId, runId, attempt: attempt + 1 },
+      });
+      const snapshot = parseTransportState(await requestJson<unknown>(
+        `/tasks/${context.taskId}/assistant/state`,
+        { signal: controller.signal, traceId: context.traceId },
+      ));
+      if (
+        disposedRef.current
+        || generation !== cancellationCheckGenerationRef.current
+        || controller.signal.aborted
+        || cancellationCheckRunIdRef.current !== runId
+      ) return;
+
+      const requestedRun = snapshot.runs.find((run) => run.runId === runId);
+      const status = requestedRun?.status;
+      context.latestStateRef.current = snapshot;
+      void frontendLog("INFO", "assistant_cancel_reconcile_snapshot", "已读取停止请求对应的权威运行状态", {
+        traceId: context.traceId,
+        data: { taskId: context.taskId, runId, runStatus: status ?? null, attempt: attempt + 1 },
+      });
+
+      if (status === "pending" || status === "running") {
+        scheduleNextCheck();
+        return;
+      }
+
+      context.cancelRequestedRunIdRef.current = null;
+      context.runtimeControlsRef.current?.importState(snapshot);
+      context.setIssue(null);
+      context.onTaskStateChanged?.();
+      const onConfirmationEnded = cancellationCheckOnEndedRef.current;
+      cancellationCheckOnEndedRef.current = undefined;
+      stopCancellationConfirmation(runId);
+      onConfirmationEnded?.();
+
+      // A newer Run can become current after this cancellation was accepted.
+      // The old Run is settled, but the imported snapshot may still need an
+      // attach so its active stream is not silently left without a subscriber.
+      const currentRun = currentTransportRun(snapshot);
+      if (
+        currentRun
+        && currentRun.runId !== runId
+        && (currentRun.status === "pending" || currentRun.status === "running")
+      ) {
+        const settledGeneration = cancellationCheckGenerationRef.current;
+        window.setTimeout(() => {
+          if (
+            disposedRef.current
+            || settledGeneration !== cancellationCheckGenerationRef.current
+          ) return;
+          const latestRun = currentTransportRun(context.latestStateRef.current);
+          if (
+            latestRun?.runId === currentRun.runId
+            && (latestRun.status === "pending" || latestRun.status === "running")
+          ) context.runtimeControlsRef.current?.resume();
+        }, 0);
+      }
+    } catch (error) {
+      if (
+        disposedRef.current
+        || generation !== cancellationCheckGenerationRef.current
+        || cancellationCheckRunIdRef.current !== runId
+      ) return;
+      if (!timedOut && controller.signal.aborted) return;
+      if (cancellationCheckAttemptRef.current < MAX_CANCELLATION_CHECKS) {
+        scheduleNextCheck();
+      } else {
+        finishCancellationUnconfirmed(runId);
+        void frontendLog("WARNING", "assistant_cancel_reconcile_exhausted", "停止请求状态确认达到重试上限", {
+          traceId: context.traceId,
+          data: { taskId: context.taskId, runId, attempt: cancellationCheckAttemptRef.current },
+          error,
+        });
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      if (cancellationCheckAbortControllerRef.current === controller) {
+        cancellationCheckAbortControllerRef.current = null;
+      }
+      if (generation === cancellationCheckGenerationRef.current) {
+        cancellationCheckInFlightRef.current = false;
+      }
+    }
+  }, [context, finishCancellationUnconfirmed, stopCancellationConfirmation]);
+
+  const confirmCancellation = useCallback((runId: number, onConfirmationEnded?: () => void) => {
+    stopCancellationConfirmation();
+    if (disposedRef.current) return;
+    cancellationCheckRunIdRef.current = runId;
+    cancellationCheckOnEndedRef.current = onConfirmationEnded;
+    const generation = cancellationCheckGenerationRef.current;
+    cancellationCheckDeadlineRef.current = window.setTimeout(() => {
+      cancellationCheckDeadlineRef.current = null;
+      finishCancellationUnconfirmed(runId);
+      void frontendLog("WARNING", "assistant_cancel_reconcile_deadline_reached", "停止请求状态确认超过总时限", {
+        traceId: context.traceId,
+        data: { taskId: context.taskId, runId, timeoutMs: CANCELLATION_CONFIRMATION_TIMEOUT_MS },
+      });
+    }, CANCELLATION_CONFIRMATION_TIMEOUT_MS);
+    void reconcileCancellation(runId, generation);
+  }, [context, finishCancellationUnconfirmed, reconcileCancellation, stopCancellationConfirmation]);
+
+  const cancellationSettled = useCallback((runId: number) => {
+    if (cancellationCheckRunIdRef.current !== runId) return;
+    stopCancellationConfirmation(runId);
+  }, [stopCancellationConfirmation]);
+
   useEffect(() => {
     const previousGeneration = previousBackendRuntimeGenerationRef.current;
     previousBackendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
@@ -182,7 +397,13 @@ export function useRuntimeRecovery(
     context.runtimeControlsRef.current?.resume();
   }, [context, resetRecovery]);
 
-  return { reconcileAfterTransportFinish, resumeBusinessRun, resetRecovery };
+  return {
+    reconcileAfterTransportFinish,
+    confirmCancellation,
+    cancellationSettled,
+    resumeBusinessRun,
+    resetRecovery,
+  };
 }
 
 export type { RuntimeRecovery };

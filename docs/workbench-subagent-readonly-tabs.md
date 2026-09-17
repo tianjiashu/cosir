@@ -1,6 +1,6 @@
 # Workbench 子 Agent 只读标签页技术方案
 
-> 状态：方案草案（v1）  
+> 状态：v1 已实现，独立验收通过
 > 日期：2026-09-16  
 > 范围：主 task 委派子 Agent 后，主对话只显示紧凑状态；用户点击后，在右侧 Workbench 的独立标签页查看子 Agent 的只读运行。
 
@@ -23,9 +23,11 @@ WorkspaceShell
 
 主对话中的 `delegate_task` 只负责渲染一个可点击的紧凑条目：图标、状态、title 和打开 Workbench 的动作；子 Agent 的消息、工具过程和长文本不再嵌入主消息流。
 
+本版已落地：`delegation_ref` 严格运行期事件、canonical 冷读恢复、通用 `ToolActivityRow`、Agent surface registry、workspace 级 Workbench、active-only SSE、有限重同步和 stale 关闭态。终端输出、ChangeSet 和回退仍只保留协议预留，不属于本版。
+
 Workbench 是一个前端展示编排层，不拥有 Agent、Run、终端或文件变更事实。标签页只保存“打开哪个 surface”的引用，内容通过既有领域 API / Transport 读取。关闭标签页只关闭视图，不取消后端运行。
 
-本轮仍只更新方案文档，不修改后端代码。实现阶段允许增加一条通用的工具运行期事件链；第一版只实现 `delegation_ref`，终端输出和文件变更通知仅预留契约，不纳入第一版交付。
+当前实现已完成 v1 的 delegation ref、Workbench Agent Tab 和只读 child Assistant Transport；终端输出和文件变更通知仍只预留契约，不纳入第一版交付。
 
 ## 2. 当前项目基线
 
@@ -407,11 +409,11 @@ DelegationToolRow ── click ──▶ WorkbenchStore.open({
 **第一版：`delegation_ref` 运行期事件**
 
 - `DelegationExecutor` 创建 child task 后，`child_task.id` 就是子 Agent 的 `taskId`；随后现有流程继续创建 child run，并把该 id 写入 `DelegationRecord.child_task_id`；
-- child run 创建完成后，后端发送一条 `ToolCallRuntimeUpdateEvent(kind="delegation_ref")`，事件携带 `child_task_id` 和 `AgentProfile.role`；
+- child run 创建完成后，后端发送一条 `ToolCallRuntimeUpdateEvent(kind="delegation_ref")`，事件的严格 `data` 携带 `child_task_id`、`title` 和当前 `AgentProfile.role`；
 - 父 tool part 的可见投影仍只包含 `status`、`title` 和 `AgentProfile.role`；`child_task_id` 只是随事件/投影传输的机器字段，不显示为文案，也不参与状态推断；
 - 事件通过当前父 task 的 Assistant Transport snapshot/SSE 发给前端；前端收到后启用点击打开，并直接请求 `/tasks/{child_task_id}/assistant/state`；
 - state 返回当前 `current_run_id` 后，若仍为 `pending/running`，再以 `commands: []`、目标 `runId` 请求 `/tasks/{child_task_id}/assistant/attach`；这是纯订阅已有 Run，不得调用 `/assistant`，也不属于业务 resume；子 Agent 内容继续复用现有 converter 和只读 runtime；
-- 不新增 `DelegationRecord.tool_call_id`，不新增 delegation locator resolver，不改变 delegation 状态机，也不把完整 child transcript 塞回父 tool part。
+- 不新增 `DelegationRecord.tool_call_id`，不建立独立 resolver/table，不改变 delegation 状态机，也不把完整 child transcript 塞回父 tool part；冷读由现有 snapshot rebuilder 在同一父 Run 内按完整 `child_agent_id + prompt` 唯一匹配 canonical `DelegationRecord.child_task_id`，歧义时安全跳过。
 
 事件中的 `tool_call_id` 仍然需要存在，但只用于父 task 当前 snapshot 内的事件定向；它可以通过当前工具调用的运行时上下文传入，不作为数据库字段持久化。
 
@@ -446,22 +448,22 @@ DelegationToolRow ── click ──▶ WorkbenchStore.open({
 - 已确认：只有当前激活的 Agent Tab 保持完整 SSE，其他 Tab 切回时重新同步；
 - 已确认：应用重启后不恢复已打开的 Workbench Tab；
 - 先验证现有 Assistant attach/state 是否能作为只读 adapter；
-- 已确认第一版允许第 8 节所述的后端动态投影增量：子 task 创建后通过 `delegation_ref` 向父 tool part 补充不渲染的 `child_task_id`；本方案文档阶段仍不改后端。
+- 已实现第 8 节所述的后端动态投影增量：子 task 创建后通过 `delegation_ref` 向父 tool part 补充不渲染的 `child_task_id`、运行期 role 和 title。
 
-### Phase 1：前端 Workbench 基础设施（无后端改动）
+### Phase 1：前端 Workbench 基础设施（已完成）
 
 - 建立 `lib/workbench` 类型、store、registry；
 - 建立可调整右侧 panel、受控 Tabs、空态、关闭/聚焦/键盘交互；
 - 用 fixture 或已有稳定引用验证多 Tab、去重、切换主 task、不误取消；
 - 增加 store、registry、布局和可访问性测试。
 
-### Phase 2：接入现有可读 surface（优先无后端改动）
+### Phase 2：接入现有可读 surface（已完成 v1 Agent 部分）
 
 - 建立 Diff/Terminal/Web surface 的 registry definition 和受控占位边界；本阶段不实现 terminal output/change-set 运行期事件，也不把这些 surface 计入 v1 功能交付；
 - 将 `delegate_task` 改成专用紧凑 renderer；父 tool part 可见只展示 `status`、`title`、`AgentProfile.role`，点击目标直接使用不渲染的 `child_task_id`；
 - 不修改后端状态机和数据库；终端输出和 ChangeSet 运行期事件仍只保留预留接口。
 
-### Phase 3：接入运行中的子 Agent（第一版后端事件增量）
+### Phase 3：接入运行中的子 Agent（已完成）
 
 - 新增 `ToolCallRuntimeUpdateEvent` 及其 `conversation_event` 联合类型 / projector / 前端 transport converter 接线；第一版只允许 `kind="delegation_ref"`；
 - 在 `DelegationExecutor` 创建 child task/run 后发布 `delegation_ref`，将 `child_task.id` 作为不渲染的 `child_task_id` 传给父 tool part；不增加 `DelegationRecord.tool_call_id` 或独立 resolver；
@@ -475,7 +477,7 @@ DelegationToolRow ── click ──▶ WorkbenchStore.open({
 - 接入 `change_set_updated` 事件，前端查询现有 ChangeSet API，并通过现有 revert API 提供回退按钮；
 - 两项能力不属于第一版，不阻塞 `delegation_ref` 和子 Agent 只读流式查看。
 
-### Phase 5：稳定性和体验收口
+### Phase 5：稳定性和体验收口（v1 已完成）
 
 - 多并行 delegation、父 task 切换、Tab 重复打开、关闭后重开、后端重启、child 删除等场景；
 - 日志和 trace 检查；
@@ -544,15 +546,17 @@ DelegationToolRow ── click ──▶ WorkbenchStore.open({
 - 实现完成前通过项目现有的 TypeScript build、ESLint、前端 unit test，以及后端针对性 pytest/ruff/mypy 门禁；新增依赖必须进入锁文件并验证 Windows 桌面打包路径。
 - 关键打开、关闭、attach、detach、resync、stale、未知事件和未知 surface 都有结构化日志；日志不包含 prompt、token、凭据、完整 transcript 或大段 terminal output。
 
+本次验收结果：独立只读验收 Agent 判定 PASS。前端相关 Vitest 34 项、后端定向 pytest 44 项、变更文件 ESLint/Ruff、TypeScript/Vite build 通过；真实 Playwright 主路径已通过，测试 harness 的 plugin teardown 存在独立超时，但业务测试本身报告为 `1 passed`。
+
 ### 10.2 当前仍需明确的产品/实现决策
 
 - “应用重启不恢复 Tab”已确认，但 Workbench panel 的宽度、收起/展开状态是否作为用户偏好持久化尚未定义。建议 v1 先恢复默认 panel 状态，不恢复 Tab 内容。
 
-已确认：`AgentProfile.role` 使用当前 profile registry 解析；profile 改名后，历史 delegation row 在重新投影或冷读时允许显示新角色。workspace 删除时统一关闭相关 Workbench Tab；单个 child task 删除时仍进入 stale/fallback。
+已确认：`AgentProfile.role` 使用当前 profile registry 解析；profile 改名后，历史 delegation row 在冷读重建时允许显示新角色。workspace 删除时统一关闭相关 Workbench Tab；单个 child task 删除时仍进入 stale/fallback。
 
 ## 11. 已确认决策与后续范围
 
-已确认：Workbench 为 workspace 级临时 UI；父 tool part 可见只展示 `status`、`title`、`AgentProfile.role`，其中 role 使用当前 profile registry；并可携带不渲染的 `child_task_id`；第一版只实现 `ToolCallRuntimeUpdateEvent(kind="delegation_ref")`；只有 active Agent Tab 保持完整 SSE；应用重启不恢复 Workbench Tab；workspace 删除时统一关闭相关 Workbench Tab。
+已确认并已实现：Workbench 为 workspace 级临时 UI；父 tool part 可见只展示 `status`、`title`、`AgentProfile.role`，其中 role 使用当前 profile registry；并可携带不渲染的 `child_task_id`；第一版只实现 `ToolCallRuntimeUpdateEvent(kind="delegation_ref")`；只有 active Agent Tab 保持完整 SSE；应用重启不恢复 Workbench Tab；workspace 删除时统一关闭相关 Workbench Tab。
 
 已确认暂缓：`terminal_output`（包括 `LocalExecutionBackend.output_sink` 接线）和
 `change_set_updated`（包括 ChangeSet 刷新与回退按钮）只做协议预留，不进入第一版实现和验收。

@@ -98,7 +98,7 @@ class AgentProfileRegistry:
             无（方法消费实例自身的 ``list`` 接口返回全部已注册 profile）。
 
         返回:
-            形如 ``"Available child agents:\\n- agent_id (role): description | tools: ...\\n..."``
+            形如 ``"Available child agents:\\nagent_id: <id> | description: <desc> | tools: ..."``
             的摘要文本；若注册表中无任何委派子 Agent，返回空字符串。
 
         异常:
@@ -112,10 +112,9 @@ class AgentProfileRegistry:
         for profile in self.list():
             if profile.agent_type is not AgentProfileType.CHILD:
                 continue
-            tool_capability_summary = "tools: " + ", ".join(profile.allowed_tools)
+            # 只渲染摘要读者（父 Agent）只需要的两项：id（取值）、description（能力边界）
             blocks.append(
-                f"agent_id: {profile.agent_id} ==> role: {profile.role} ==> "
-                f"description: {profile.description or ''} | {tool_capability_summary}"
+                f"agent_id: {profile.agent_id} | description: {profile.description or ''} "
             )
 
         if not blocks:
