@@ -32,3 +32,5 @@ class ConversationStateToolCallPart(TypedDict):
     child_task_id: NotRequired[int]
     agent_role: NotRequired[str]
     delegation_ref_seq: NotRequired[int]
+    # Runtime terminal output sequence; it guards against stale delta events.
+    terminal_output_seq: NotRequired[int]

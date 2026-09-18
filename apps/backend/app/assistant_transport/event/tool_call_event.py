@@ -213,11 +213,26 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
                 ConversationStateMutation("set", (*base, "args"), copy.deepcopy(self.args)),
             )
         if self.display_data is not None:
+            display_data = copy.deepcopy(self.display_data)
+            current_display_data = part.get("display_data")
+            has_streamed_terminal_output = (
+                display_data.get("kind") == "terminal-result"
+                and isinstance(current_display_data, dict)
+                and current_display_data.get("kind") == "terminal-result"
+                and isinstance(current_display_data.get("output"), str)
+                and "terminal_output_seq" in part
+            )
+            if has_streamed_terminal_output:
+                # The final ToolObservation carries the bounded/model-facing output.
+                # Keep the complete UI stream already projected into the snapshot.
+                display_data["output"] = current_display_data["output"]
+                stream_truncated = current_display_data.get("stream_truncated") is True
+                display_data["stream_truncated"] = stream_truncated
+                if not stream_truncated:
+                    display_data["truncated"] = False
             mutations.insert(
                 2,
-                ConversationStateMutation(
-                    "set", (*base, "display_data"), copy.deepcopy(self.display_data)
-                ),
+                ConversationStateMutation("set", (*base, "display_data"), display_data),
             )
         return mutations
 

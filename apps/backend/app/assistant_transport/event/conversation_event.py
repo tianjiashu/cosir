@@ -2,8 +2,8 @@
 
 本模块只承载「把所有域事件收成一个可判别、可校验的类型」这一单一职责，不含任何事件定义本身。
 各域事件按职责分布在其域模块中（``run_event`` / ``message_event`` / ``tool_call_event`` /
-``usage_event``），每个事件类自行实现 ``plan``（继承自 ``ConversationEventEnvelope`` 的抽象
-方法），因此 projector 无需按类型分派。
+``tool_runtime_event`` / ``usage_event``），每个事件类自行实现 ``plan``（继承自
+``ConversationEventEnvelope`` 的抽象方法），因此 projector 无需按类型分派。
 
 判别式联合的价值：
 

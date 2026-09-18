@@ -42,6 +42,7 @@ from app.assistant_transport.event.tool_call_event import (
 )
 from app.assistant_transport.event.tool_runtime_event import (
     DelegationRefData,
+    TerminalOutputDeltaData,
     ToolCallRuntimeUpdateEvent,
 )
 from app.assistant_transport.event.usage_event import (
@@ -58,6 +59,7 @@ __all__ = [
     "DelegationRefData",
     "RunInitializedEvent",
     "RunStatusChangedEvent",
+    "TerminalOutputDeltaData",
     "ToolCallCreatedEvent",
     "ToolCallEventStatus",
     "ToolCallRuntimeUpdateEvent",
