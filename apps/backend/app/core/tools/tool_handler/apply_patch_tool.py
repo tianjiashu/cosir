@@ -18,10 +18,7 @@ import errno
 import os
 
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.tools.display.file_change_display import (
-    build_file_change_artifact_data,
-    build_file_change_display_data,
-)
+from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import (
     SyntaxDiagnostic,
     check_source_syntax,
@@ -209,7 +206,6 @@ class ApplyPatchTool(HandlerBase):
             return self._patch_apply_error_observation(exc)
         # 展示数据先基于文件变更事实构造；语法检查只作为模型侧诊断，不改变 UI 成功状态。
         display_data = build_file_change_display_data(results)
-        artifact_data = build_file_change_artifact_data(results)
         diagnostics_all: list[SyntaxDiagnostic] = []
         # 仅对产生新内容的文件（modified/added）做语法检查；deleted/moved 无新内容可查。
         for r in results:
@@ -230,14 +226,12 @@ class ApplyPatchTool(HandlerBase):
                     + self._format_multi_file_syntax_reason(diagnostics_all)
                 ),
                 display_data=display_data,
-                artifact_data=artifact_data,
             )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=None,
             display_data=display_data,
-            artifact_data=artifact_data,
         )
 
     def _patch_apply_error_observation(self, error: PatchApplyError) -> ToolObservation:

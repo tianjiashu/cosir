@@ -16,6 +16,7 @@ from pathlib import Path
 from app.config.logging.logger import log
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.schemas import (
+    OutputSink,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -25,7 +26,6 @@ from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.terminal import (
     DangerousCommandVerdict,
-    OutputSink,
     create_backend,
     detect_dangerous_command,
 )
@@ -35,7 +35,6 @@ from app.core.tools.tool_models.execute_terminal_args import (
     ExecuteTerminalArgs,
     ExecuteTerminalShell,
 )
-from app.utils.trace_infra.redaction import redact_terminal_output
 
 # workdir 字符白名单：挡住命令注入式 workdir（含 ;|&$() 等注入字符直接拒绝）。
 _WORKDIR_SAFE_RE = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
@@ -182,9 +181,7 @@ class ExecuteTerminalTool(HandlerBase):
         shell_schema = properties.get("shell")
         if isinstance(shell_schema, dict):
             shell_schema["enum"] = list(self._available_shells)
-            shell_schema[
-                "description"
-            ] = self._build_shell_description(self._available_shells)
+            shell_schema["description"] = self._build_shell_description(self._available_shells)
         return schema
 
     @staticmethod
@@ -225,7 +222,7 @@ class ExecuteTerminalTool(HandlerBase):
                 共同约束，而非仅靠 cwd 宣称。
             output_sink: 可选实时输出回调；由 ``ToolHandlerRunner`` 在子进程内注入，
                 透传给执行后端，使命令输出可在运行期回传父进程做实时展示。
-                为 None 时行为与流式接入前完全一致。
+                为 None 时只省略实时增量，不影响命令执行和终态结果。
 
         返回:
             ``ToolObservation``。灾难级命令/工作目录不存在/后端异常为
@@ -239,13 +236,13 @@ class ExecuteTerminalTool(HandlerBase):
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
 
         副作用:
-            经后端派生子进程执行命令；命令输出经凭据脱敏后写入 ``content``。
+            经后端派生子进程执行命令；命令输出以解码后的原文写入 ``content`` 和展示数据。
         """
         log.info(
             "terminal_command_started",
             extra={
                 "msg": "终端命令开始执行",
-                "data": {"command_preview": redact_terminal_output(command[:200])},
+                "data": {"command_preview": command[:200]},
             },
         )
 
@@ -299,8 +296,7 @@ class ExecuteTerminalTool(HandlerBase):
             },
         )
 
-        redacted_output = redact_terminal_output(result.output)
-        content = self._render_content(redacted_output, result)
+        content = self._render_content(result.output, result)
         # 超时强杀意味着命令未正常结束，模型无法从退出码判断成败，按瞬态故障
         # 返回 error（retryable=True），避免把被截断的半截输出误判为成功结果。
         if result.timed_out:
@@ -322,7 +318,7 @@ class ExecuteTerminalTool(HandlerBase):
             display_data=build_terminal_display_data(
                 command=command,
                 workdir=cwd,
-                output=redacted_output,
+                output=result.output,
                 exit_code=result.exit_code,
                 timed_out=result.timed_out,
                 truncated=result.truncated,
@@ -414,7 +410,7 @@ class ExecuteTerminalTool(HandlerBase):
         """把命令输出与机器可读的执行元数据拼成模型可见文本。
 
         参数:
-            output: 已脱敏的命令输出文本。
+            命令输出的原始解码文本，保留 ANSI 控制序列和敏感文本。
             result: 后端归一化的执行结果（含退出码 / 超时 / 截断标记）。
 
         返回:

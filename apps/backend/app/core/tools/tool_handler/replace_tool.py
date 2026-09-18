@@ -1,7 +1,7 @@
 """replace 工具实现（从原合并 patch_tool 的 replace 模式平移）。
 
 本模块只承载 patch_write（replace 模式）这一个工具：单文件模糊查找替换，复刻原
-edit_file 逻辑。成功后的文件变更由 display_data/artifact_data 提供给 UI 和审计，
+edit_file 逻辑。成功后的文件变更展示由 display_data 提供，ChangeSet 由 FileMutationService 持久化，
 不把 diff 回显给模型。落盘后的语法检查只在发现问题时通过 success content 提供
 简短警告，不改变替换成功状态。
 
@@ -15,10 +15,7 @@ edit_file 逻辑。成功后的文件变更由 display_data/artifact_data 提供
 from pathlib import Path
 
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.tools.display.file_change_display import (
-    build_file_change_artifact_data,
-    build_file_change_display_data,
-)
+from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
     ToolDefinition,
@@ -116,7 +113,7 @@ class ReplaceTool(HandlerBase):
 
         返回:
             ``ToolObservation``：成功时 content 为空，除非语法检查发现问题并返回
-            简短警告；文件变更通过 display_data/artifact_data 提供。失败时
+            简短警告；文件变更通过 display_data 提供。失败时
             ``error`` 描述事实，``reason`` 提供下一步动作。
 
         异常:
@@ -224,7 +221,6 @@ class ReplaceTool(HandlerBase):
         # 经 reason 引导 Agent 二次编辑覆盖自修复。
         snapshot = FileDiffResult(path=path, status="modified", before=original, after=new_content)
         display_data = build_file_change_display_data([snapshot])
-        artifact_data = build_file_change_artifact_data([snapshot])
         result = check_source_syntax(str(resolved), new_content)
         if result.has_error:
             return tool_success(
@@ -235,14 +231,12 @@ class ReplaceTool(HandlerBase):
                     + format_syntax_reason(result)
                 ),
                 display_data=display_data,
-                artifact_data=artifact_data,
             )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=None,
             display_data=display_data,
-            artifact_data=artifact_data,
         )
 
     def to_definition(self) -> ToolDefinition:
