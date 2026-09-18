@@ -159,4 +159,4 @@ context是由app/core/context/runtime_context_manager.py维护，snapshot由Task
 - 涉及生命周期时的初始化、关闭、取消、重试或恢复条件；
 - 涉及边界转换时，从输入契约到输出契约的转换规则。
 
-docstring 必须随代码事实更新；算法、字
+docstring 必须随代码事实更新；
