@@ -157,67 +157,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
         )
         _runtime_context().load_message()
 
-    # 2. 统一结算未执行的调用：参数非法的调用（invalid_detail）与流式期创建但模型最终丢弃的
-    #    孤儿 pending。二者都从未真正执行，不发 ToolMessage，仅闭合前端 pending part；
-    #    合法调用已写 ToolMessage，修复提示在步骤 4 统一以 SystemMessage 注入。
-    invalid_tools = lifecycle.invalid_tools
-    repair_datas: list[dict[str, Any]] = []
-    for record in invalid_tools:
-        if record.status != "pending":
-            continue
-        lifecycle = lifecycle.fail_invalid(
-            task_id=task_id,
-            run_id=run_id,
-            step_id=step_id,
-            call_id=record.tool_call_id,
-            status_hint="参数无效",
-        )
-        repair_datas.append(
-            {"tool_name": record.tool_name, "invalid_tool_call": record.invalid_detail}
-        )
 
-    # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后，维持
-    #    AIMessage(tool_calls) -> ToolMessage × N -> SystemMessage 顺序。
-    if repair_datas:
-        repair_message = build_invalid_tool_call_repair_message(repair_datas)
-        if not observations:
-            # 正常 tools 节点会为每个 approved call 产出观察；空批次属于异常恢复路径。
-            # 先让 RuntimeContextManager 闭合悬空 tool call，再追加修复提示，避免把非法
-            # SystemMessage 插到仍未闭合的 AIMessage(tool_calls) 后面。
-            log.error(
-                "observe_node_deferred_repair_without_results",
-                extra={
-                    "msg": "延迟修复提示缺少工具结果，先补齐悬空工具调用占位",
-                    "data": {
-                        "step_id": step_id,
-                        "repair_message_length": len(repair_message),
-                    },
-                },
-            )
-            _runtime_context().load_message()
-        _runtime_context().add_message(SystemMessage(content=repair_message))
-        log.warning(
-            "observe_node_deferred_repair_appended",
-            extra={
-                "msg": "工具结果之后已追加延迟修复提示",
-                "data": {
-                    "step_id": step_id,
-                    "result_count": len(observations),
-                    "repair_count": len(repair_datas),
-                },
-            },
-        )
-
-    if not observations and not repair_datas:
-        # 无本批工具结果且无修复提示：不计数也不判定，保留继承计数。
-        log.info(
-            "observe_node_no_results",
-            extra={
-                "msg": (f"无本批工具结果，跳过观察判定，保留继承计数，" f"step_id={step_id}"),
-                "data": {"step_id": step_id, "tool_error_count": state.tool_error_count},
-            },
-        )
-        return {"tool_call_lifecycle": lifecycle}
 
     if not observations:
         # 仅修复提示（全非法调用）：不计数，交给 graph 回到 model 重试。

@@ -28,7 +28,6 @@ from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_con
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.utils.trace_infra.redaction import redact_terminal_output
 
 # 非法工具调用参数预览截断长度
 INVALID_TOOL_ARGS_PREVIEW_CHARS = 500
@@ -164,7 +163,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
 
 
 def build_invalid_tool_call_repair_message(
-    repair_datas: list[dict[str, Any]],
+        repair_datas: list[dict[str, Any]],
 ) -> str:
     """构造要求模型修复非法工具调用的结构化英文提示文本。
 
@@ -172,10 +171,8 @@ def build_invalid_tool_call_repair_message(
     ``SystemMessage`` 写进 ``RuntimeContextManager``。结构：
 
     - 顶部一句总领：说明上次非法工具调用未执行、请重试、只发严格合法 tool_calls。
-    - 每个 repair 条目输出：``## <tool_name>`` + ``name`` / ``args`` 预览（经
-      ``redact_terminal_output`` 脱敏后截断到 ``INVALID_TOOL_ARGS_PREVIEW_CHARS``、超出加
-      ``...[truncated]``）/ ``error``（若有）。``args`` 预览在脱敏后再截断，确保 secret
-      不进上下文。
+    - 每个 repair 条目输出：``## <tool_name>`` + ``name`` / ``args`` 预览（截断到
+      ``INVALID_TOOL_ARGS_PREVIEW_CHARS``、超出加 ``...[truncated]``）/ ``error``（若有）。
     - 整体字符预算受 ``INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS`` 约束：逐条拼接，累计超预算即
       停止追加并加末尾截断说明；随后从后往前**整条**丢弃已输出条目（而不是字符切片），
       直至 header 与说明也在预算内，保证保留的每条仍含可定位的 ``tool_name`` 与 ``error``。
@@ -192,7 +189,7 @@ def build_invalid_tool_call_repair_message(
         无（对所有字段做 ``get`` / ``str`` 容错，解析失败的非 JSON 片段也能安全处理）。
 
     副作用:
-        无（只读入参；脱敏与截断均为纯函数式处理，不改外部状态）。
+        无（只读入参；预览截断为纯函数式处理，不改外部状态）。
     """
     header = (
         "The previous assistant message contained invalid tool call output that "
@@ -213,17 +210,15 @@ def build_invalid_tool_call_repair_message(
         if not isinstance(invalid_tc, dict):
             invalid_tc = {}
 
-        # args 预览：先脱敏再截断，防止 secret 进上下文。
-        raw_args = str(invalid_tc.get("args", ""))
-        redacted_args = redact_terminal_output(raw_args)
-        if len(redacted_args) > INVALID_TOOL_ARGS_PREVIEW_CHARS:
-            redacted_args = redacted_args[:INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
+        args_preview = str(invalid_tc.get("args", ""))
+        if len(args_preview) > INVALID_TOOL_ARGS_PREVIEW_CHARS:
+            args_preview = args_preview[:INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
 
         error = invalid_tc.get("error")
         error_line = f"error: {error}\n" if error else ""
 
         section = (
-            f"## {tool_name}\n" f"name: {tool_name}\n" f"args: {redacted_args}\n" f"{error_line}"
+            f"## {tool_name}\n" f"name: {tool_name}\n" f"args: {args_preview}\n" f"{error_line}"
         )
 
         # 整体预算约束：加上本段与段间换行后若超预算则停止并加末尾说明。
@@ -313,12 +308,12 @@ class ToolCallLifecycleManager(BaseModel):
         return {}
 
     def create(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        raw_tool_calls: list[dict[str, Any]],
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            raw_tool_calls: list[dict[str, Any]],
     ) -> ToolCallLifecycleManager:
         """为已确认身份的模型工具调用发出创建事件并初始化为 pending。
 
@@ -343,10 +338,10 @@ class ToolCallLifecycleManager(BaseModel):
             call_id = raw_call.get("id")
             tool_name = raw_call.get("name")
             if (
-                not isinstance(call_id, str)
-                or not call_id
-                or not self._valid_tool_name(tool_name)
-                or call_id in updated.calls
+                    not isinstance(call_id, str)
+                    or not call_id
+                    or not self._valid_tool_name(tool_name)
+                    or call_id in updated.calls
             ):
                 continue
             assert isinstance(tool_name, str)
@@ -369,16 +364,16 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def _emit_status(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        call_id: str,
-        to_status: ToolCallEventStatus,
-        args: dict[str, object] | None = None,
-        error: str | None = None,
-        display_data: dict[str, object] | None = None,
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            call_id: str,
+            to_status: ToolCallEventStatus,
+            args: dict[str, object] | None = None,
+            error: str | None = None,
+            display_data: dict[str, object] | None = None,
     ) -> None:
         """发射一条工具调用状态迁移事件。
 
@@ -412,12 +407,12 @@ class ToolCallLifecycleManager(BaseModel):
         )
 
     def begin(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        tool_calls: list[ToolCall],
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            tool_calls: list[ToolCall],
     ) -> ToolCallLifecycleManager:
         """把 pending 调用迁移到 running，并写入完整解析后的参数。
 
@@ -461,13 +456,13 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def classify(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        tool_calls: list[ToolCall],
-        invalid_tool_calls: list[dict[str, Any]],
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            tool_calls: list[ToolCall],
+            invalid_tool_calls: list[dict[str, Any]],
     ) -> ToolCallLifecycleManager:
         """把模型输出拆解为生命周期记录：合法调用置 running，命中非法 id 的调用挂 invalid_detail。
 
@@ -548,12 +543,12 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def cancel(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        tool_calls: list[ToolCall] | None = None,
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            tool_calls: list[ToolCall] | None = None,
     ) -> ToolCallLifecycleManager:
         """把尚未结束的调用迁移到 cancelled，并为每条发出终态事件。
 
@@ -597,14 +592,36 @@ class ToolCallLifecycleManager(BaseModel):
             updated.calls[call_id].status = "cancelled"
         return updated
 
-    def fail_invalid(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        call_id: str,
-        status_hint: str,
+    def fail_invalid_tools(self, task_id, run_id, step_id):
+        invalid_tools = self.invalid_tools
+        repair_datas: list[dict[str, Any]] = []
+        for record in invalid_tools:
+            if record.status != "pending":
+                continue
+            self._fail_invalid(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                call_id=record.tool_call_id,
+                status_hint="参数无效",
+            )
+            repair_datas.append(
+                {"tool_name": record.tool_name, "invalid_tool_call": record.invalid_detail}
+            )
+
+        # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后.
+        if repair_datas:
+            return build_invalid_tool_call_repair_message(repair_datas)
+        return None
+
+    def _fail_invalid(
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            call_id: str,
+            status_hint: str,
     ) -> ToolCallLifecycleManager:
         """收口参数非法的调用：置 failed 并发终态事件，但不写回模型上下文 ToolMessage。
 
@@ -640,17 +657,24 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def settle(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        summary: dict[str, Any],
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            summary: dict[str, Any],
     ) -> tuple[ToolCallLifecycleManager, Literal["completed", "failed", "cancelled"]]:
         """结算单条观察：写回模型上下文、更新 state 并发出终态事件。
 
         顺序是刻意的：先把 ``ToolMessage`` 写入 canonical context，再发终态 Transport 事件，
         使 projector 不会发布一个无法从 context 重建的终态工具状态。
+
+        **已知且有意的例外**：取消路径不受该顺序约束。工具执行层检出取消时会立刻把该
+        ``cancelled`` 终态直投到进程内 snapshot（见 ``tool_handler_runner`` 的
+        ``_cancelled_observation``），使用户不必等整批工具跑完就能看到结果。该例外不会产生
+        无法重建的状态：冷重建对「没有 ``ToolMessage`` 行的 tool-call part」本来就默认投影为
+        ``cancelled``（``ConversationTaskStateRebuilder.build_pair_tool_part``）。本方法随后
+        写 ``ToolMessage`` 并再发一次同值终态，投影按自迁移幂等吸收。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
@@ -743,13 +767,13 @@ class ToolCallLifecycleManager(BaseModel):
         return updated, event_status
 
     def settle_batch(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        step_id: str,
-        summaries: list[dict[str, Any]],
-        inherited_error_count: int,
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            summaries: list[dict[str, Any]],
+            inherited_error_count: int,
     ) -> SettlementResult:
         """结算一批观察摘要，返回错误计数和更新后的 lifecycle。
 

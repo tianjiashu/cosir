@@ -19,8 +19,9 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 """
 
 import asyncio
+from typing import Deque, Any
 
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, BaseMessage
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
@@ -37,7 +38,8 @@ from app.core.workflows.nodes.helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.nodes.helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
-from app.core.workflows.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager, \
+    build_invalid_tool_call_repair_message
 from app.core.workflows.vision_input import resolve_messages_for_model
 from app.utils.message_content import content_to_text
 
@@ -48,6 +50,8 @@ from ..react.state import ReactGraphState
 # 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
 _NORMAL_FINISH_REASONS = frozenset({"stop", "end", "end_turn"})
 _CONTINUATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+system_queue: Deque[SystemMessage] = Deque()
 
 
 def _build_continuation_prompt(finish_reason: str | None) -> str:
@@ -149,9 +153,15 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
-        interrupt({"reason":"user_cancelled"})
+        interrupt({"reason": "user_cancelled"})
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
-    messages = _runtime_context().load_message()
+    messages: list[BaseMessage] = _runtime_context().load_message()
+
+    while len(system_queue) > 0:
+        system_message = system_queue.pop()
+        _runtime_context().add_message(system_message)
+        messages.append(system_message)
+
     messages = await asyncio.to_thread(
         resolve_messages_for_model,
         messages,
@@ -159,6 +169,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         model_name=getattr(rc.run, "model_name", None) or "",
         vision_input_format=getattr(rc, "vision_input_format", "openai_url"),
     )
+
     log.info(
         "model_node_started",
         extra={
@@ -272,6 +283,11 @@ async def _model_node(state: ReactGraphState) -> dict:
         invalid_tool_calls=invalid_tool_calls,
     )
 
+    repair_message = lifecycle.fail_invalid_tools(task_id=task_id, run_id=run_id, step_id=step_id)
+    # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
+    if repair_message:
+        system_queue.append(SystemMessage(content=repair_message))
+
     log.info(
         "model_node_completed",
         extra={
@@ -301,7 +317,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if operations.is_current_run_cancelled():
-
         operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
         interrupt({"reason": "user_cancelled"})
 
@@ -349,6 +364,17 @@ async def _model_node(state: ReactGraphState) -> dict:
                 },
             },
         )
+        return {
+            "step_count": step_count,
+            "requested_tool": False,
+            "continue_model": True,
+            "final_response": False,
+            "terminal": False,
+            "instruction": "",
+        }
+
+    #如果存在系统修复提示，重新进入model
+    if len(system_queue) > 0:
         return {
             "step_count": step_count,
             "requested_tool": False,
