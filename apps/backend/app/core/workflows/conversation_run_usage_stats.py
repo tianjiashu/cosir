@@ -8,10 +8,10 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-# LangChain UsageMetadata 契约中缓存/推理细节的键名（实测自 langchain_litellm 的
+# LangChain UsageMetadata 契约中缓存/推理细节的键名（以 provider 返回的
 # _create_usage_metadata：usage_metadata["input_token_details"]["cache_read"]、
 # usage_metadata["output_token_details"]["reasoning"]）。旧 OpenAI 兼容扁平键
-# prompt_cache_hit_tokens / reasoning_tokens 在 litellm 链路下不会被填充，勿再用。
+# prompt_cache_hit_tokens / reasoning_tokens 等旧版扁平键不再作为兼容分支，勿再用。
 _INPUT_CACHE_READ_KEY = "cache_read"
 _OUTPUT_REASONING_KEY = "reasoning"
 

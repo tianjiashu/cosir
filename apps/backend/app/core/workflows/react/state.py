@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.core.workflows.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.react.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
 
 
 class ReactGraphState(BaseModel):

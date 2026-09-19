@@ -9,7 +9,7 @@
 from typing import Any
 
 from app.config.logging.logger import log
-from app.core.workflows.nodes.helper.common import (
+from app.core.workflows.react.nodes.helper.common import (
     _runtime_config,
     terminal_state,
 )

@@ -27,29 +27,29 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     # 仅为静态分析（IDE / mypy）提供名称声明：``__all__`` 中的名字由下方 ``__getattr__``
     # 惰性返回，静态分析看不到 ⇒ 会报「未解析的引用」。本分支运行时不执行，惰性加载语义不变。
-    from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
-    from app.core.workflows.nodes.model_node import _model_node
-    from app.core.workflows.nodes.observation_node import _observe_node
-    from app.core.workflows.nodes.tools_node import _tools_node
+    from app.core.workflows.react.nodes.helper.finalize_max_steps import _finalize_max_steps
+    from app.core.workflows.react.nodes.model_node import _model_node
+    from app.core.workflows.react.nodes.observation_node import _observe_node
+    from app.core.workflows.react.nodes.tools_node import _tools_node
 
 
 def __getattr__(name: str) -> Any:
     """按需加载节点，避免 state 类型导入触发节点包级循环。"""
 
     if name == "_finalize_max_steps":
-        from app.core.workflows.nodes.helper.finalize_max_steps import _finalize_max_steps
+        from app.core.workflows.react.nodes.helper.finalize_max_steps import _finalize_max_steps
 
         return _finalize_max_steps
     if name == "_model_node":
-        from app.core.workflows.nodes.model_node import _model_node
+        from app.core.workflows.react.nodes.model_node import _model_node
 
         return _model_node
     if name == "_observe_node":
-        from app.core.workflows.nodes.observation_node import _observe_node
+        from app.core.workflows.react.nodes.observation_node import _observe_node
 
         return _observe_node
     if name == "_tools_node":
-        from app.core.workflows.nodes.tools_node import _tools_node
+        from app.core.workflows.react.nodes.tools_node import _tools_node
 
         return _tools_node
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -28,7 +28,7 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
     terminal_error_hint,
     terminal_status,
 )
-from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_context
+from app.core.workflows.react.nodes.helper.common import _runtime_config, _runtime_context
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
