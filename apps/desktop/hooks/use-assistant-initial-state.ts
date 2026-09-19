@@ -1,8 +1,8 @@
-import { requestJson } from "@/lib/http/client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
-import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 
 /** hook 返回的首屏历史加载结果。 */
 export type AssistantInitialStateResult = {
@@ -38,6 +38,11 @@ export type AssistantInitialStateResult = {
 export function useAssistantInitialState(
   taskId: number,
 ): AssistantInitialStateResult {
+  const backendRuntime = useSyncExternalStore(
+    subscribeBackendRuntime,
+    getBackendRuntimeSnapshot,
+    getBackendRuntimeSnapshot,
+  );
   const [loadedState, setLoadedState] = useState<{
     taskId: number;
     state: TransportState;
@@ -55,14 +60,16 @@ export function useAssistantInitialState(
   useEffect(() => {
     // 切换 task 时重置状态，并复位守卫，避免旧 task 的历史/错误态残留到新 task。
     cancelledRef.current = false;
-    load();
+    setLoadedState(null);
+    setLoadError(null);
+    if (backendRuntime.available) load();
     return () => {
       // 卸载或 task 变化：标记本轮拉取作废，后续回调不再写状态。
       cancelledRef.current = true;
       controllerRef.current?.abort();
     };
     // 仅在 taskId 变化时重新拉取；load 以最新 taskId 闭包捕获，见下方定义。
-  }, [taskId]);
+  }, [backendRuntime.available, backendRuntime.generation, taskId]);
 
   /**
    * 向服务端拉取首屏 state 并写入状态。
@@ -72,20 +79,24 @@ export function useAssistantInitialState(
    * 旧请求不会覆盖新状态。
    */
   function load() {
+    const backendSnapshot = getBackendRuntimeSnapshot();
+    if (!backendSnapshot.available) return;
+    const requestBackendGeneration = backendSnapshot.generation;
     const requestGeneration = ++requestGenerationRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    void requestJson<unknown>(`/tasks/${taskId}/assistant/state`, { signal: controller.signal })
-      .then((data) => {
+    void requestAssistantSnapshot(taskId, { signal: controller.signal })
+      .then((state) => {
         if (
           controller.signal.aborted ||
           cancelledRef.current ||
           requestGeneration !== requestGenerationRef.current
+          || !getBackendRuntimeSnapshot().available
+          || requestBackendGeneration !== getBackendRuntimeSnapshot().generation
         ) {
           return;
         }
-        const state = parseTransportState(data);
         void frontendLog("INFO", "assistant_initial_state_loaded", "加载对话历史成功", {
           data: {
             taskId,
@@ -106,6 +117,8 @@ export function useAssistantInitialState(
           controller.signal.aborted ||
           cancelledRef.current ||
           requestGeneration !== requestGenerationRef.current
+          || !getBackendRuntimeSnapshot().available
+          || requestBackendGeneration !== getBackendRuntimeSnapshot().generation
         ) {
           return;
         }

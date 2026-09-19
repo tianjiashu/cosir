@@ -2,6 +2,7 @@
 
 from app.core.tools.guard.file_state.file_path_lock_registry import (
     FilePathLockRegistry,
+    get_shared_file_path_lock_registry,
 )
 from app.core.tools.guard.file_state.file_revision_registry import (
     FileFingerprint,
@@ -18,4 +19,5 @@ __all__ = [
     "FileRevisionRegistry",
     "RepeatedCallAction",
     "RepeatedCallRegistry",
+    "get_shared_file_path_lock_registry",
 ]

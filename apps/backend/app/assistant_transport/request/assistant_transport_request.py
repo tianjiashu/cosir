@@ -196,7 +196,9 @@ class TransportRequestError(Exception):
     commandId 唯一性、thread/task 一致性、add-message 数量上限与未支持命令类型。
     API 适配层（``app/app.py`` 的全局 exception_handler）负责把它映射为统一的 Assistant
     Transport HTTP 错误体，保持与 ``_raise_transport_error`` 相同的 ``code`` / ``message`` /
-    ``retryable`` 形状，使前端 ``TransportError`` 契约零改动。
+    ``retryable`` 形状，使前端 HTTP 错误契约（``lib/http/errors.ts`` 的
+    ``StructuredHttpError``）零改动。注意它**不是** Transport snapshot 的
+    ``ConversationStateError`` 契约（后者只有 ``code`` / ``message``）。
     """
 
     def __init__(

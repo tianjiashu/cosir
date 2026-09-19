@@ -110,7 +110,8 @@ Tauri 桌面应用
 - 状态唯一来源：工具生命周期 `pending`/`running`/`completed`/`failed`/`cancelled` 由 `ToolObservation.status` 投影；前端不得建立第二套状态机，也不得从 `args`/`result` 反推展示结果。
 - 前端路由：`components/assistant-ui/tools/tool-part.tsx` 的 `routeToolPart` 依据 `data.kind` 与 `presentation.expand_layout` 选择只读布局（`details`/`list`/`diff`/`terminal`/`none`）；禁止按工具名编写专用渲染分支，未知 `kind` 走 `ToolFallback`，不导致消息流崩溃。
 - 错误三通道隔离：模型诊断走 `error`/`reason`；UI 短提示走受控 `display_data.status_hint`（约 5 字，来自后端分类映射，不得复制原始异常或 provider 响应）；生命周期走 Transport status。前端绝不展示堆栈、原始异常、原始 prompt、凭据或大段模型正文；失败 `display_data` 不得携带成功态的目标、结果或输出字段。
-- 当前工具 `kind` 与布局（汇总，完整字段见契约文档）：`read_file`→`read-file-meta`(`none`)、`search_files`→`file-list`(`list`)、`list_directory`→`directory-list`(`list`)、`write_file`/`replace`/`apply_patch`→`file-changes`(`diff`)、`execute_terminal`→`terminal-result`(`terminal`)、`delete`→`delete-result`(`none`)、`web_search`→`web-search-results`(`list`)、`web_extract`→`web-extract-urls`(`list`)、`delegate_task`→`delegation-result`(`details`)。
+- 当前工具 `kind` 与布局（完整字段见契约文档）：`read_file`→`read-file-meta`(`none`)、`search_files`→`file-list`(`list`)、`list_directory`→`directory-list`(`list`)、`write_file`/`replace`/`apply_patch`/`delete_file`/`move_file`→`file-changes`(`diff`)、`execute_terminal`→`terminal-result`(`terminal`)、`web_search`→`web-search-results`(`list`)、`web_extract`→`web-extract-urls`(`list`)、`delegate_task`→`delegation-result`(`details`)。
+- 文件变更职责：`apply_patch` 只修改已有文件内容；新建、删除和移动分别由 `write_file`、`delete_file`、`move_file` 负责。
 - 展示数据不是后端事实源：`display_data` 只服务 UI 渲染与重连恢复；`artifact_data` 只服务文件快照、ChangeSet、回退与审计，不得进入 Assistant Transport；`ToolObservation.content` 不被当作通用 UI 展示数据来源。
 
 ## 后端架构

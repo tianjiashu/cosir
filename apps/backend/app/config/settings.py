@@ -11,8 +11,9 @@
   不可变；需要按环境覆盖时经环境变量或 ``Settings.override``（测试）注入。单轮最大步数
   ``max_steps`` 不再在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
   ``workflow.py`` 初始化 input_state 注入）。
-- 路径类配置（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）由仓库根目录推导，受
-  ``.env`` 覆盖；测试可将临时目录经 ``Settings.override`` 注入以隔离副作用。
+- 路径类配置（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）默认由仓库根目录推导；
+  桌面发布版可经 ``CODING_AGENT_DATA_DIR`` 将 SQLite 数据放在用户数据目录。
+  测试可将临时目录经 ``Settings.override`` 注入以隔离副作用。
 """
 
 import os
@@ -292,23 +293,30 @@ class Settings:
 
         副作用:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性。
+            ``CODING_AGENT_DATA_DIR`` 存在时，SQLite 文件改存到该目录下的 ``storage`` 子目录。
         """
 
         root = repository_root or cls.repository_root()
         cls._load_local_env(root)
 
+        # 发布版由 Tauri 显式指定用户数据目录，避免把 SQLite 写入只读的安装资源目录。
+        # 开发环境未设置该变量时仍沿用仓库根目录，保持既有本地数据位置。
+        data_root = Path(os.environ.get("CODING_AGENT_DATA_DIR", str(root)))
+        storage_root = data_root / "storage"
         cls.LOG_DIR = Path(os.environ.get("CODING_AGENT_LOG_DIR", str(root / "logs")))
-        cls.DATABASE_FILE = root / "storage" / "app.sqlite3"
+        cls.DATABASE_FILE = Path(
+            os.environ.get("CODING_AGENT_DATABASE_FILE", str(storage_root / "app.sqlite3"))
+        )
         cls.LOG_DATABASE_FILE = Path(
             os.environ.get(
                 "CODING_AGENT_LOG_DATABASE_FILE",
-                str(root / "storage" / "logs.sqlite3"),
+                str(storage_root / "logs.sqlite3"),
             )
         )
         cls.CHECKPOINT_FILE = Path(
             os.environ.get(
                 "CODING_AGENT_CHECKPOINT_FILE",
-                str(root / "storage" / "langgraph_checkpoints.sqlite"),
+                str(storage_root / "langgraph_checkpoints.sqlite"),
             )
         )
         cls.SQLITE_LOGGING_ENABLED = cls._env_bool("CODING_AGENT_SQLITE_LOGGING_ENABLED", True)

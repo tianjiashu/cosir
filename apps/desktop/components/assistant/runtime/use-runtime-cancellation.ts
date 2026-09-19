@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
+import type { CancellationConfirmation } from "@/components/assistant/runtime/use-cancellation-confirmation";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 
@@ -12,6 +13,9 @@ type RuntimeCancellation = {
   onResult: (runId: number, accepted: boolean) => void;
   onStateCommitted: (state: TransportState) => void;
 };
+
+type RuntimeCancellationDependencies = Pick<RuntimeRecovery, "reconcileAfterTransportFinish">
+  & Pick<CancellationConfirmation, "confirmCancellation" | "cancellationSettled">;
 
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
 
@@ -25,7 +29,7 @@ const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
  */
 export function useRuntimeCancellation(
   context: RuntimeSessionContext,
-  recovery: RuntimeRecovery,
+  recovery: RuntimeCancellationDependencies,
 ): RuntimeCancellation {
   const [cancellingRunId, setCancellingRunId] = useState<number | null>(null);
   const {

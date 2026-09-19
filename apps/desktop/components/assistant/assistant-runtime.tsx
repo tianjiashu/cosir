@@ -6,8 +6,8 @@ import { TransportStatus, type TransportIssue } from "@/components/assistant/tra
 import { AssistantRuntimeErrorBoundary } from "@/components/assistant/runtime/assistant-runtime-error-boundary";
 import { AssistantRuntimeSession } from "@/components/assistant/runtime/assistant-runtime-session";
 import type { AssistantRuntimeProps } from "@/components/assistant/runtime/runtime-types";
-import { requestJson } from "@/lib/http/client";
-import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { createTimeoutAbort } from "@/lib/async/abort-timeout";
+import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import type { TransportState } from "@/lib/assistant/contract";
 import { safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 
@@ -26,13 +26,12 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
 
   const handleRetry = () => {
     retryAbortControllerRef.current?.abort();
-    const controller = new AbortController();
-    const timeout = globalThis.setTimeout(() => controller.abort(), RETRY_STATE_TIMEOUT_MS);
+    const { controller, signal, clear } = createTimeoutAbort(RETRY_STATE_TIMEOUT_MS);
     retryAbortControllerRef.current = controller;
-    void requestJson<unknown>(`/tasks/${props.taskId}/assistant/state`, { signal: controller.signal })
-      .then((value) => {
+    void requestAssistantSnapshot(props.taskId, { signal })
+      .then((state) => {
         if (controller.signal.aborted) return;
-        setRetryState(parseTransportState(value));
+        setRetryState(state);
         setIssue(null);
         setRuntimeGeneration((generation) => generation + 1);
       })
@@ -40,11 +39,11 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
         if (controller.signal.aborted) return;
         setIssue({
           message: safeFrontendErrorMessage(error, "无法读取本机后端的最新对话状态"),
-          retryable: true,
+          canResync: true,
         });
       })
       .finally(() => {
-        globalThis.clearTimeout(timeout);
+        clear();
         if (retryAbortControllerRef.current === controller) retryAbortControllerRef.current = null;
       });
   };

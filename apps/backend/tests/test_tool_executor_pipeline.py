@@ -3,7 +3,7 @@
 覆盖调度层合并（单一执行入口收口）后的执行管线核心行为：
 - ``ToolAccessGate`` 四段准入（注册表命中 / Agent profile 门禁 / 参数校验 / PreToolUse Hook 短路）
 - ``ToolExecutor`` 编排（成功执行 / 拒绝归一化 / 缺 execution_context 抛 ValueError / list_tools）
-- 拒绝观察一律经 ``ToolObservationBudget`` 治理（模型通道脱敏 + 截断口径与成功路径一致）
+- 拒绝观察一律经 ``ToolObservationBudget`` 治理（模型通道长度限制与截断口径和成功路径一致）
 """
 
 from pathlib import Path
@@ -22,6 +22,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_execute.tool_observation_budget import ToolObservationBudget
 from app.core.tools.tool_handler.read_file import ReadFileTool
+from app.core.tools.tool_handler.write_file import WriteFileTool
 from app.core.tools.tool_registry import ToolRegistry
 
 
@@ -83,6 +84,20 @@ def test_output_budget_normalizes_nullable_observation_content() -> None:
     result = ToolOutputBudget().apply(observation, execution_context=None)
 
     assert result.content == ""
+
+
+def test_output_budget_preserves_content_verbatim() -> None:
+    """输出预算只限制长度，不改写工具正文。"""
+
+    observation = ToolObservation(
+        tool_name="read_file",
+        status="success",
+        content="api_key=raw-secret",
+    )
+
+    result = ToolOutputBudget().apply(observation, execution_context=None)
+
+    assert result.content == "api_key=raw-secret"
 
 
 def test_observation_budget_keeps_display_data_complete() -> None:
@@ -156,6 +171,26 @@ def test_execute_success_returns_budgeted_observation(tmp_path: Path) -> None:
     assert observation.status == "success"
     assert observation.tool_call_id == "call-4"
     assert "hello world" in observation.content
+
+
+def test_file_write_is_rejected_when_mutation_service_is_missing(tmp_path: Path) -> None:
+    """File editors must not mutate files without the service that records changes."""
+
+    target = tmp_path / "created.txt"
+    executor = ToolExecutor(registry=ToolRegistry([WriteFileTool().to_definition()]))
+
+    observation = executor.execute(
+        ToolCall(
+            tool_name="write_file",
+            arguments={"path": "created.txt", "content": "untracked"},
+            call_id="call-write-without-service",
+        ),
+        execution_context=_make_context(tmp_path),
+    )
+
+    assert observation.status == "error"
+    assert "file mutation service is unavailable" in observation.error
+    assert not target.exists()
 
 
 def test_missing_execution_context_raises(tmp_path: Path) -> None:

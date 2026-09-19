@@ -13,6 +13,8 @@ import {
 } from "@/components/assistant/runtime/assistant-runtime-bridges";
 import { useRuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
 import { useRuntimeDiagnostics } from "@/components/assistant/runtime/use-runtime-diagnostics";
+import { useBusinessResume } from "@/components/assistant/runtime/use-business-resume";
+import { useCancellationConfirmation } from "@/components/assistant/runtime/use-cancellation-confirmation";
 import { useRuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
 import type {
@@ -52,7 +54,11 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     getBackendRuntimeSnapshot,
     getBackendRuntimeSnapshot,
   );
-  const { backendBaseUrl, generation: backendRuntimeGeneration } = backendRuntime;
+  const {
+    backendBaseUrl,
+    generation: backendRuntimeGeneration,
+    available: backendRuntimeAvailable,
+  } = backendRuntime;
   const [traceId] = useState(() => newTraceId());
   const initialStateRef = useRef(initialState);
   const sessionInitialState = initialStateRef.current;
@@ -72,7 +78,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     composerRestoreRef.current = restore;
   }, []);
   const handleInitialMessageError = useCallback((message: string) => {
-    setIssue({ message, retryable: true });
+    setIssue({ message, canResync: true });
   }, [setIssue]);
   const notifyTaskStateChanged = useCallback(() => {
     onTaskStateChangedRef.current?.();
@@ -85,6 +91,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     initialState: sessionInitialState,
     backendBaseUrl,
     backendRuntimeGeneration,
+    backendRuntimeAvailable,
     traceId,
     setIssue,
     onTaskStateChanged: notifyTaskStateChanged,
@@ -96,6 +103,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   }), [
     backendBaseUrl,
     backendRuntimeGeneration,
+    backendRuntimeAvailable,
     notifyTaskStateChanged,
     sessionInitialState,
     setIssue,
@@ -106,8 +114,17 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   ]);
 
   useRuntimeDiagnostics(context);
-  const recovery = useRuntimeRecovery(context);
-  const cancellation = useRuntimeCancellation(context, recovery);
+  const cancellationConfirmation = useCancellationConfirmation(context);
+  const recovery = useRuntimeRecovery(context, cancellationConfirmation.hasActiveConfirmation);
+  const finishBusinessResume = useCallback((stage: "business-started" | "attach-only") => {
+    if (stage === "business-started") recovery.resetTransportRecoveryBudget();
+    runtimeControlsRef.current?.resume();
+  }, [recovery.resetTransportRecoveryBudget]);
+  const businessResume = useBusinessResume(context, finishBusinessResume);
+  const cancellation = useRuntimeCancellation(context, {
+    ...cancellationConfirmation,
+    reconcileAfterTransportFinish: recovery.reconcileAfterTransportFinish,
+  });
   const commitTransportState = useCallback((state: typeof sessionInitialState) => {
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);
@@ -118,6 +135,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     <AssistantRuntimeProvider runtime={runtime}>
       <RuntimeControlBridge
         register={registerRuntimeControls}
+        backendAvailable={backendRuntimeAvailable}
+        backendGeneration={backendRuntimeGeneration}
         resumeOnMount={currentTransportRun(sessionInitialState)?.status === "pending" || currentTransportRun(sessionInitialState)?.status === "running"}
         taskId={taskId}
       />
@@ -132,7 +151,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
           forkAvailable={forkAvailable}
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
-          onResumeBusiness={recovery.resumeBusinessRun}
+          onResumeBusiness={businessResume.resumeBusinessRun}
           onCancelRequested={cancellation.onRequested}
           onCancelResult={cancellation.onResult}
           cancellingRunId={cancellation.cancellingRunId}

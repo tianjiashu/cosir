@@ -28,10 +28,11 @@ class _ToolRegistryStub:
             "write_file",
             "patch_write",
             "apply_patch",
+            "delete_file",
+            "move_file",
             "search_content",
             "find_files",
             "list_directory",
-            "delete",
             "execute_terminal",
             "web_search",
             "web_extract",
@@ -55,6 +56,8 @@ def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
         profile.prompt_file_path.is_file() for profile in profiles if profile.prompt_file_path
     )
     assert all(profile.agent_type is AgentProfileType.CHILD for profile in profiles)
+    coder = next(profile for profile in profiles if profile.agent_id == "code-developer")
+    assert {"apply_patch", "delete_file", "move_file"} <= set(coder.allowed_tools or [])
 
     expected_prompt_markers = [
         ("delegate_reviewer", "不得写入、删除或修改任何文件"),

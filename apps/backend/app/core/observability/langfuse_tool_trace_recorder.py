@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from app.config.logging.logger import log
-from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_payload
+from app.core.observability.langfuse_payload_limits import limit_langfuse_payload
 from app.core.observability.langfuse_tracing import _build_langfuse_client, tracing_enabled
 from app.core.observability.tool_trace_recorder import (
     ToolTraceRecorder,
@@ -78,26 +78,26 @@ class _LangfuseToolSpan:
         if observation is None:
             return
         output = {
-            "content": sanitize_langfuse_payload(observation.content),
-            "data": sanitize_langfuse_payload(observation.display_data or {}),
-            "error": sanitize_langfuse_payload(observation.error),
+            "content": limit_langfuse_payload(observation.content),
+            "data": limit_langfuse_payload(observation.display_data or {}),
+            "error": limit_langfuse_payload(observation.error),
             "reason": observation.reason,
             "retryable": observation.retryable,
         }
         self._span.update(
             output=output,
             level="ERROR" if observation.status == "error" else "DEFAULT",
-            metadata=sanitize_langfuse_payload({"permission": observation.permission}),
+            metadata=limit_langfuse_payload({"permission": observation.permission}),
         )
         if observation.status == "error" and observation.error:
-            self._span.update(status_message=sanitize_langfuse_payload(observation.error))
+            self._span.update(status_message=limit_langfuse_payload(observation.error))
 
 
 class LangfuseToolTraceRecorder:
     """把每次工具调用记录为 Langfuse tool observation（实现 ``ToolTraceRecorder`` 协议）。
 
     职责边界：
-    - 负责：observation 开闭、输入输出映射、错误级别标注、输出脱敏、进程级客户端复用与 flush。
+    - 负责：observation 开闭、输入输出映射、错误级别标注、payload 长度限制、进程级客户端复用与 flush。
     - 不负责：工具执行本身、事件发出、trace 根上下文（由 ``conversation_run_trace`` 建立）。
     """
 
@@ -143,8 +143,8 @@ class LangfuseToolTraceRecorder:
             span_cm = self._client.start_as_current_observation(
                 as_type="tool",
                 name=call.tool_name,
-                input=sanitize_langfuse_payload({"arguments": arguments, "call_id": call.call_id}),
-                metadata=sanitize_langfuse_payload(
+                input=limit_langfuse_payload({"arguments": arguments, "call_id": call.call_id}),
+                metadata=limit_langfuse_payload(
                     {"step_id": step_id, "tool_call_id": call.call_id}
                 ),
             )

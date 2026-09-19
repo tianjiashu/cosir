@@ -274,6 +274,11 @@ describe("assistant transport converter", () => {
     const completed = toToolCallPart(tool("completed", { display_data: { kind: "terminal-result" } }));
     const failed = toToolCallPart(tool("failed", { error: "full diagnostic", display_data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
     const cancelled = toToolCallPart(tool("cancelled"));
+    const delegation = toToolCallPart(tool("running", {
+      toolName: "delegate_task",
+      child_task_id: 22,
+      child_run_id: 220,
+    }));
 
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: { backendStatus: "pending" } });
     expect(running).toMatchObject({ artifact: { backendStatus: "running" } });
@@ -283,6 +288,7 @@ describe("assistant transport converter", () => {
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
+    expect(delegation).toMatchObject({ artifact: { child_task_id: 22, child_run_id: 220 } });
   });
 
   it("让后端终态覆盖 transport 的 sending 标记", () => {
@@ -343,7 +349,7 @@ describe("assistant transport converter", () => {
 
   it("keeps canonical errors visible and shows pending user commands optimistically", () => {
     const state = emptyState();
-    state.error = { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型", retryable: false };
+    state.error = { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型" };
     const command = { type: "add-message", message: { role: "user", parts: [{ type: "text", text: "你好" }] } };
     const result = toTransportThreadView(state, {
       isSending: true,

@@ -5,11 +5,12 @@
 契约一致）。``create_backend`` 是模块级纯函数工厂，不引入 Manager/Factory 类。
 """
 
+from app.core.tools.schemas.tool_output import OutputSink
 from app.core.tools.tool_handler.terminal.dangerous_command import (
     DangerousCommandVerdict,
     detect_dangerous_command,
 )
-from app.core.tools.tool_handler.terminal.execution_backend import ExecutionBackend, OutputSink
+from app.core.tools.tool_handler.terminal.execution_backend import ExecutionBackend
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
 

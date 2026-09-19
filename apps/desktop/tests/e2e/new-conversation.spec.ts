@@ -181,8 +181,10 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
 
   const assistantRequests: Array<{ body: Record<string, unknown>; status: number }> = [];
   const assistantStateRequests: string[] = [];
+  const attachRequests: string[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/assistant/state")) assistantStateRequests.push(request.url());
+    if (request.url().endsWith("/assistant/attach") && request.method() === "POST") attachRequests.push(request.url());
   });
   page.on("response", (response) => {
     if (!response.url().endsWith("/assistant")) return;
@@ -214,6 +216,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.reload();
   await expect(page.getByText("cancel-me", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
+  await request.post("http://127.0.0.1:8000/__test__/fail-next-attach");
 
   const resumeResponse = page.waitForResponse((response) => (
     response.url().endsWith("/assistant") && response.request().method() === "POST"
@@ -221,6 +224,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect((await resumeResponse).status()).toBe(200);
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
+  await expect.poll(() => attachRequests.length).toBe(2);
   await expect.poll(() => assistantRequests.length).toBe(2);
   expect(assistantRequests[1]?.body.runId).toBe(1);
   expect(assistantRequests[1]?.body.commands).toHaveLength(0);

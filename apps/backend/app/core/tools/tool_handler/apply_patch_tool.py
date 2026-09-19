@@ -1,17 +1,7 @@
-"""apply_patch 工具实现（从原合并 patch_tool 的 patch_write 模式平移）。
+"""把 Git 风格 unified diff 应用到工作区内已有的 UTF-8 文本文件。
 
-本模块只承载 apply_patch（V4A 多文件补丁）这一个工具：解析并应用 V4A 补丁，复刻
-原 apply_patch 逻辑。成功后返回 unified diff 回显（``content``）与结构化 diff 统计
-（``display_data["diff_stats"]``），对齐 Hermes ``patch_tool`` 的 patch_write 分支。落盘后逐文件
-经 ``guard.syntax_check`` 做多语言语法检查；语法诊断作为成功结果中的模型侧后续
-修复提示，不改变已经落盘的文件变更展示状态。应用阶段的异常按瞬态文件系统错误、
-确定性失败和部分落盘失败分类，分别填充 ``retryable``、``error`` 与 ``reason``。
-
-设计边界：
-- 路径安全委托 ``security.ProjectPathResolver``。
-- patch_write 的解析/应用复用 ``patch_write.patch_parser`` / ``patch_write.patch_apply``。
-- 成功/失败观察统一经 ``tool_execute.tool_success`` / ``tool_error`` 工厂构造。
-- 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
+本模块只承载 ``apply_patch`` 工具：diff 解析、路径与内容校验、补丁落盘由 ``patch_write``
+各协作者完成，本模块负责编排、取消检查、写后语法检查与观察归一化。
 """
 
 import errno
@@ -19,10 +9,7 @@ import os
 
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
-from app.core.tools.guard.syntax_check import (
-    SyntaxDiagnostic,
-    check_source_syntax,
-)
+from app.core.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -32,44 +19,42 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_handler.patch_write.atomic_write import looks_like_line_numbered
-from app.core.tools.tool_handler.patch_write import (
+from app.core.tools.tool_handler.patch_write.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
-    parse_v4a_patch,
     validate_all,
 )
+from app.core.tools.tool_handler.patch_write.patch_parser import parse_git_unified_diff
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 APPLY_PATCH_DESCRIPTION = (
-    "Apply V4A multi-file patches for bulk changes. "
-    "REQUIRED PARAMETER: patch_write (V4A patch_write content). "
-    "Auto-runs syntax checks after editing.\n\n"
-    "PATCH MODE: apply a V4A patch_write that can update, add, delete, or move multiple files "
-    "in one call. Each operation references a file path and a diff/hunk block."
+    "Apply a Git-style unified diff to modify one or more existing UTF-8 text files inside the "
+    "active workspace. Every diff section must target an existing file, and its 'a/' and 'b/' "
+    "paths must resolve to the same workspace-relative path. This tool only modifies file "
+    "contents; it cannot create, delete, or move files. Use 'write_file' to create or replace a "
+    "complete file, 'delete_file' to delete a file, and 'move_file' to move a file. All target "
+    "paths must remain inside the active workspace."
 )
 
 
 def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
-    """判断 patch_write 失败后是否允许模型修正或处理后再次调用。
-
-    ``retryable`` 只是模型提示，不触发执行器自动重试，也不要求使用完全相同的
-    patch_write。内容/路径竞态需要重新读取并生成新 patch_write，因此属于可修正后重试；已经
-    部分落盘的失败始终不允许模型直接重放。
+    """判断「非部分写入」的文件系统失败在修正后是否可重试。
 
     参数:
-        error: patch_write 应用阶段归一化后的异常。
+        error: 应用补丁时抛出的 ``PatchApplyError``；真实底层异常挂在 ``__cause__`` 上。
 
     返回:
-        未发生部分落盘且失败可以通过等待或修正当前状态后再次调用时返回 ``True``。
+        已发生部分写入时恒为 ``False``（必须按文件当前内容重新生成补丁，不能重放原补丁）；
+        ``RuntimeError`` 起因视为可修正后重试；Windows 的文件共享冲突（``winerror`` 为
+        32/33）以及 ``EAGAIN`` / ``EBUSY`` / ``ETXTBSY`` 视为瞬时故障可重试；其余不可重试。
 
     异常:
         无。
 
     副作用:
-        无。
+        无（纯判断，只读 ``error`` 及其 ``__cause__``）。
     """
 
     if error.partial_applied:
@@ -81,27 +66,19 @@ def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
         return False
     if os.name == "nt" and getattr(cause, "winerror", None) in {32, 33}:
         return True
-    return cause.errno in {
-        errno.EAGAIN,
-        errno.EBUSY,
-        getattr(errno, "ETXTBSY", -1),
-    }
+    return cause.errno in {errno.EAGAIN, errno.EBUSY, getattr(errno, "ETXTBSY", -1)}
 
 
 class ApplyPatchTool(HandlerBase):
-    """解析并应用 V4A 多文件补丁的工具类（原 patch_write 工具的 patch_write 模式）。
+    """校验、应用 Git unified diff，并产出文件变更展示载荷。
 
-    参数:
-        无。
+    单一职责：把一次 ``apply_patch`` 调用编排为「解析 → 路径与内容校验 → 取消检查 → 落盘应用
+    → 写后语法检查 → 观察归一化」。
 
-    返回:
-        ``ApplyPatchTool`` 实例。
-
-    异常:
-        初始化阶段不主动抛出业务异常。
-
-    副作用:
-        仅保存工具元数据；不读取、不写入文件。
+    职责边界：
+    - 负责：编排上述步骤，并把每条失败路径归一化为 :func:`tool_error`。
+    - 不负责：diff 语法（``patch_parser``）、补丁算法（``patch_apply``）、路径边界
+      （``PathResolver``）、展示载荷构造（``build_file_change_display_data``）。
     """
 
     name = "apply_patch"
@@ -111,232 +88,148 @@ class ApplyPatchTool(HandlerBase):
     timeout_seconds = 30.0
     risk_level = "medium"
 
-    def __init__(self) -> None:
-        """初始化 apply_patch 工具实例。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            仅保存工具元数据，不执行文件系统操作。
-        """
-
     def execute(
         self,
         execution_context: ToolExecutionContext,
         patch: str,
     ) -> ToolObservation:
-        """解析并应用 V4A 补丁，统一收口成功/失败观察。
+        """完成格式、路径与内容校验后应用补丁 hunk。
 
         参数:
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
-                由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
-                破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
-            patch_write: V4A 格式 patch_write 文本（必填，输入仅 V4A）。
+            execution_context: 本次执行的运行时边界；``workspace_root`` 决定全部目标的路径
+                边界，``run_id`` 用于应用前的取消检查。
+            patch: Git 风格 unified diff 文本；每个 section 只能修改一个已存在的文件。
 
         返回:
-            ``ToolObservation``；成功经 :func:`tool_success` 返回 unified diff 回显
-            与 diff 统计，失败经 :func:`tool_error` 返回（reason 见本方法内各分支）。
+            成功为 ``status="success"``，携带 ``file-changes`` 展示载荷；写后语法检查发现问题
+            时把诊断写入 ``content``。解析失败、校验失败、部分写入、应用失败均为
+            ``status="error"``；应用前检出取消为 ``status="cancelled"``。
 
         异常:
-            不主动向上抛出。
+            无：全部失败都归一化为 :func:`tool_error` 或 :func:`tool_cancelled`，不向上抛出。
 
         副作用:
-            校验通过后逐文件修改文件系统。
+            可能改写工作区内的目标文件；落盘前先查 ``cancellation_registry`` 的 run 级取消。
         """
-        resolver = PathResolver(execution_context.workspace_root)
-        if not patch:
-            return tool_error(
-                tool_name=self.name,
-                error="missing patch_write input",
-                reason="provide a non-empty V4A patch_write in the 'patch_write' argument.",
-                retryable=True,
-                permission=self.permission,
-            )
-        text = patch.strip()
-        if looks_like_line_numbered(text):
-            return tool_error(
-                tool_name=self.name,
-                error="patch_write contains line-number prefixes",
-                reason="remove the 'N| ' display prefixes and provide the actual V4A patch_write.",
-                retryable=True,
-                permission=self.permission,
-            )
-        operations, parse_error = parse_v4a_patch(patch)
+
+        operations, parse_error = parse_git_unified_diff(patch)
         if parse_error:
             return tool_error(
                 tool_name=self.name,
-                error=f"invalid V4A patch_write: {parse_error}",
-                reason="fix the V4A headers and hunk ranges, then submit a new patch_write.",
+                error=f"invalid Git unified diff: {parse_error}",
+                reason=(
+                    "provide a valid Git unified diff with 'diff --git', '---', '+++', and '@@' "
+                    "sections. Use write_file, delete_file, or move_file for whole-file operations."
+                ),
                 retryable=True,
                 permission=self.permission,
             )
-        if not operations:
-            return tool_error(
-                tool_name=self.name,
-                error="patch_write contains no file operations",
-                reason="add at least one update, add, delete, or move operation.",
-                retryable=True,
-                permission=self.permission,
-            )
+        resolver = PathResolver(execution_context.workspace_root)
         validation_errors = validate_all(operations, resolver)
         if validation_errors:
             return tool_error(
                 tool_name=self.name,
-                error="patch_write validation failed (no files were modified):\n"
-                + "\n".join(f"  • {e}" for e in validation_errors),
-                reason="fix the listed operations before submitting a new patch_write.",
+                error="unified diff validation failed (no files were modified):\n"
+                + "\n".join(f"  • {error}" for error in validation_errors),
+                reason=(
+                    "fix the listed existing-file paths or hunk context, then submit a new Git "
+                    "unified diff. This tool cannot create, delete, or move files."
+                ),
                 retryable=True,
                 permission=self.permission,
             )
+        if cancellation_registry.is_cancelled(execution_context.run_id):
+            return tool_cancelled(tool_name=self.name, permission=self.permission)
         try:
-            if cancellation_registry.is_cancelled(execution_context.run_id):
-                return tool_cancelled(
-                    tool_name=self.name,
-                    permission=self.permission,
-                )
             results = apply_all_with_diff(operations, resolver)
         except PatchApplyError as exc:
-            return self._patch_apply_error_observation(exc)
-        # 展示数据先基于文件变更事实构造；语法检查只作为模型侧诊断，不改变 UI 成功状态。
-        display_data = build_file_change_display_data(results)
-        diagnostics_all: list[SyntaxDiagnostic] = []
-        # 仅对产生新内容的文件（modified/added）做语法检查；deleted/moved 无新内容可查。
-        for r in results:
-            if r.status not in ("modified", "added"):
-                continue
-            resolved_path, _ = resolver.resolve_within_workspace(r.path)
-            if resolved_path is None:
-                continue
-            check = check_source_syntax(str(resolved_path), r.after)
-            if check.has_error:
-                diagnostics_all.extend(check.diagnostics)
-        if diagnostics_all:
-            return tool_success(
+            if exc.partial_applied:
+                return tool_error(
+                    tool_name=self.name,
+                    error="unified diff application stopped after partial changes",
+                    reason=(
+                        "inspect the changed files and generate a new unified diff from their "
+                        "current contents; do not replay this diff unchanged."
+                    ),
+                    retryable=False,
+                    permission=self.permission,
+                )
+            return tool_error(
                 tool_name=self.name,
-                permission=self.permission,
-                content=(
-                    "success\nPost-write syntax check reported issues:\n"
-                    + self._format_multi_file_syntax_reason(diagnostics_all)
+                error=f"unified diff apply failed: {exc}",
+                reason=(
+                    "re-read the affected files and generate a new unified diff for their current "
+                    "contents before retrying."
                 ),
-                display_data=display_data,
+                retryable=_is_patch_retryable_after_correction(exc),
+                permission=self.permission,
+            )
+
+        display_data = build_file_change_display_data(results)
+        diagnostics: list[SyntaxDiagnostic] = []
+        for result in results:
+            resolved, error = resolver.resolve_within_workspace(result.path)
+            if resolved is None or error:
+                continue
+            check = check_source_syntax(str(resolved), result.after)
+            if check.has_error:
+                diagnostics.extend(check.diagnostics)
+        content = None
+        if diagnostics:
+            content = (
+                "success\nPost-write syntax check reported issues:\n"
+                + self._format_syntax_reason(diagnostics)
             )
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=None,
+            content=content,
             display_data=display_data,
         )
 
-    def _patch_apply_error_observation(self, error: PatchApplyError) -> ToolObservation:
-        """把 patch_write 应用异常转换为不重复诊断信息的工具错误观察。
-
-        ``error`` 只描述已经发生的事实；``reason`` 只描述模型下一步应采取的动作。
-        未落盘的文件锁/忙碌状态，以及可通过重新读取状态修正的内容竞态，允许模型
-        处理后再次调用。部分落盘失败必须先检查当前文件状态，禁止模型盲目重放。
+    @staticmethod
+    def _format_syntax_reason(diagnostics: list[SyntaxDiagnostic]) -> str:
+        """把写后语法诊断的位置渲染成面向模型的后续建议。
 
         参数:
-            error: patch_write 应用阶段异常，可能携带底层异常 cause 和部分落盘标记。
+            diagnostics: 写后语法检查产出的诊断列表；由上游按语法树全量收集，本函数不设额外
+                截断，`content` 的总长度由全局输出预算约束。
 
         返回:
-            ``status="error"`` 的 ``ToolObservation``，并正确填充 ``retryable``。
+            面向模型的**英文**建议句（模型通道，保持英文）：诊断为空时给出通用修正提示，
+            否则逐条列出 ``line <行> col <列>`` 以及缺失或意外的 token。
 
         异常:
             无。
 
         副作用:
-            无。
+            无（纯字符串拼接，不读取文件）。
         """
 
-        if error.partial_applied:
-            return tool_error(
-                tool_name=self.name,
-                error="patch_write application stopped after partial changes",
-                reason=(
-                    "inspect the changed files and create a new patch_write from the current "
-                    "contents; do not replay this patch_write unchanged."
-                ),
-                retryable=False,
-                permission=self.permission,
-            )
-        if _is_patch_retryable_after_correction(error):
-            return tool_error(
-                tool_name=self.name,
-                error=f"patch_write apply failed: {error}",
-                reason=(
-                    "resolve the reported condition or regenerate the patch_write from current "
-                    "file contents before retrying."
-                ),
-                retryable=True,
-                permission=self.permission,
-            )
-        return tool_error(
-            tool_name=self.name,
-            error=f"patch_write apply failed: {error}",
-            reason=(
-                "re-read the affected files and create a new patch_write for the current contents; "
-                "do not retry this patch_write unchanged."
-            ),
-            retryable=False,
-            permission=self.permission,
-        )
-
-    def _format_multi_file_syntax_reason(self, diagnostics: list[SyntaxDiagnostic]) -> str:
-        """聚合多个文件的语法诊断为英文后续修复提示。
-
-        参数:
-            diagnostics: 各文件语法诊断的扁平集合（含 ``language`` / ``row`` /
-                ``column`` / ``expected`` 字段）。
-
-        返回:
-            面向模型的英文 ``reason``：列出每个语法错误的位置与缺失 token，引导
-            Agent 逐文件二次编辑覆盖修复。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
         if not diagnostics:
-            return (
-                "the patched file(s) have syntax errors; fix them with follow-up edits "
-                "(write_file or patch_write or apply_patch)."
-            )
-        parts = [
-            f"line {d.row} col {d.column}"
-            + (f" missing '{d.expected}'" if d.expected else " unexpected token")
-            for d in diagnostics
-        ]
+            return "the patched files have syntax errors; fix them with write_file or apply_patch."
+        locations = "; ".join(
+            f"line {item.row} col {item.column}"
+            + (f" missing '{item.expected}'" if item.expected else " unexpected token")
+            for item in diagnostics
+        )
         return (
-            "the patched file(s) have syntax errors ("
-            + "; ".join(parts)
-            + "); the files have been written but are not valid. "
-            "Fix each with a follow-up edit "
-            "(write_file or patch_write or apply_patch) that corrects the "
-            "syntax at the reported location."
+            f"the patched files have syntax errors ({locations}); fix them with a new "
+            "apply_patch or write_file call."
         )
 
     def to_definition(self) -> ToolDefinition:
-        """把工具实例转换成 ``ToolDefinition``。
-
-        参数:
-            无。
+        """返回该工具的注册表定义与静态 diff 展示声明。
 
         返回:
-            可直接注册到 ``ToolRegistry`` 的工具定义（含 display 展示元数据）。
+            以 ``self.execute`` 为 handler、携带 ``diff`` 展开布局展示声明的
+            :class:`ToolDefinition`。
 
         异常:
             无。
 
         副作用:
-            无。
+            无（不访问文件系统）。
         """
 
         return ToolDefinition(
@@ -360,19 +253,16 @@ class ApplyPatchTool(HandlerBase):
 
 
 def build_apply_patch_definition() -> ToolDefinition:
-    """构造 apply_patch 工具定义。
-
-    参数:
-        无。
+    """构造 ``apply_patch`` 的注册表定义（不访问文件系统）。
 
     返回:
-        ``ToolDefinition``，供 ``ToolRegistry`` 注册。
+        由 :class:`ApplyPatchTool` 产出的 :class:`ToolDefinition`。
 
     异常:
         无。
 
     副作用:
-        创建 ``ApplyPatchTool`` 实例和定义对象，不执行文件操作。
+        无。
     """
 
     return ApplyPatchTool().to_definition()

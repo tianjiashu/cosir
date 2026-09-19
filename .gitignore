@@ -10,6 +10,7 @@ __pycache__/
 .coverage
 apps/backend/.coverage
 
+
 logs/*.log
 logs/*.pid
 storage/*.sqlite
@@ -38,6 +39,13 @@ apps/desktop/src-tauri/gen/
 /target/
 # Tauri bundle staging（由 build:bundle 按当前平台生成）
 apps/desktop/src-tauri/resources/terminal-worker/
+!apps/desktop/src-tauri/resources/backend/
+apps/desktop/src-tauri/resources/backend/*
+!apps/desktop/src-tauri/resources/backend/.gitkeep
+apps/backend/.venv-packaging/
+apps/backend/build/
+apps/backend/dist/
+/apps/desktop/artifacts/
 
 # 临时调试脚本（环境可能重建为空文件，避免误提交）
 apps/backend/tests/_tmp_*.py
@@ -104,7 +112,9 @@ temp_gen_out.txt
 
 # 本地 IDE 配置（Trae）
 .trae/
-/.uv-cache/
+/.uv-cache*
 /.tauri-target-terminal/
 /.cargo/
-/.superpowers/
+.superpowers
+/apps/backend/.pytest*
+.pytest*

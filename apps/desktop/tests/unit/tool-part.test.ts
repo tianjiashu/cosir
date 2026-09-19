@@ -16,10 +16,6 @@ describe("tool renderer routing", () => {
     expect(routeToolPart("read_file", { presentation: { expand_layout: "none" }, display_data: null })).toBe("details");
   });
 
-  it("requires delete semantics for the delete renderer", () => {
-    expect(routeToolPart("delete", { presentation: { expand_layout: "none" }, display_data: null })).toBe("delete");
-  });
-
   it("uses an explicit safe fallback for unknown tools", () => {
     expect(routeToolPart("future_tool", { presentation: {}, display_data: null })).toBe("fallback");
   });
@@ -43,8 +39,9 @@ describe("tool renderer routing", () => {
     expect(routeToolPart("delegate_task", {
       backendStatus: "running",
       presentation: { surface: "standalone", expand_layout: "none" },
-      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
+      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501, child_run_id: 902 },
       child_task_id: 501,
+      child_run_id: 902,
       agent_role: "Reviewer",
     })).toBe("delegation");
   });

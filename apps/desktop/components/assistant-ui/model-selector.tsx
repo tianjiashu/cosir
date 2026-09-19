@@ -12,12 +12,13 @@ import {
   ModelSelectorSearch as OfficialModelSelectorSearch,
   ModelSelectorTrigger as OfficialModelSelectorTrigger,
   ModelSelectorValue as OfficialModelSelectorValue,
+  DEFAULT_EFFORT_OPTIONS as BACKEND_REASONING_EFFORTS,
   type ModelOption,
-  type ModelSelectorEffortOption,
 } from "@/components/model-selector";
 import { ProviderConfigPanel } from "@/components/assistant-ui/provider-config-panel";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
+  scopeSuffix,
   type ModelSelection,
   type ModelSelectionScope,
   getStoredSelectionSnapshot,
@@ -25,12 +26,6 @@ import {
   writeStoredSelection,
 } from "@/lib/model-selection-storage";
 import { cn } from "@/lib/utils";
-
-const BACKEND_REASONING_EFFORTS: readonly ModelSelectorEffortOption[] = [
-  { id: "low", name: "Low" },
-  { id: "high", name: "High" },
-  { id: "max", name: "Max" },
-];
 
 type ModelSelectorProps = {
   scope?: ModelSelectionScope;
@@ -45,7 +40,7 @@ type SelectionState = {
 };
 
 function scopeKey(scope?: ModelSelectionScope): string {
-  return scope ? `${scope.kind}:${scope.id}` : "none";
+  return scope ? scopeSuffix(scope) : "none";
 }
 
 function getSelection(

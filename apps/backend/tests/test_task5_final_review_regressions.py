@@ -341,7 +341,7 @@ def test_resume_cancelled_run_clears_usage_and_error_and_reuses_checkpoint_threa
         "cache_miss_tokens": 1,
         "reasoning_tokens": 0,
     }
-    error = {"code": "old_failure", "message": "old", "retryable": False}
+    error = {"code": "old_failure", "message": "old"}
     run = run_crud.create(
         task.id,
         "input",

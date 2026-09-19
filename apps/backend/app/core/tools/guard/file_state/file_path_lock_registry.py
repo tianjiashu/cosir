@@ -13,6 +13,23 @@ from app.core.tools.guard.file_state.file_revision_registry import (
     FileRevisionRegistry,
 )
 
+_SHARED_REGISTRY: FilePathLockRegistry | None = None
+_SHARED_REGISTRY_GUARD = threading.Lock()
+
+
+def get_shared_file_path_lock_registry() -> FilePathLockRegistry:
+    """Return the process-wide physical workspace-path lock registry.
+
+    Structured file tools and task ChangeSet reads/writes must use the same locks so
+    a baseline restore cannot race an Agent write from another task in the workspace.
+    """
+
+    global _SHARED_REGISTRY
+    with _SHARED_REGISTRY_GUARD:
+        if _SHARED_REGISTRY is None:
+            _SHARED_REGISTRY = FilePathLockRegistry()
+        return _SHARED_REGISTRY
+
 
 @dataclass
 class _PathLockEntry:
@@ -38,7 +55,7 @@ class FilePathLockRegistry:
 
         参数:
             max_tasks: 最多保留的 task 数。
-            max_paths_per_task: 每个 task 最多创建的路径锁数。
+            max_paths_per_task: 每个 task 最多缓存的空闲路径锁数；活跃调用可临时超出。
 
         返回:
             无。
@@ -69,7 +86,7 @@ class FilePathLockRegistry:
             上下文管理器；进入后调用方独占这些 task/path 锁。
 
         异常:
-            RuntimeError: 单 task 路径锁容量耗尽时抛出。
+            RuntimeError: task 锁容量耗尽时抛出。
 
         副作用:
             创建、获取并释放进程内 ``RLock``。
@@ -124,7 +141,7 @@ class FilePathLockRegistry:
             与输入顺序一致的锁列表。
 
         异常:
-            RuntimeError: 没有可安全淘汰的空闲 task/path 时抛出。
+            RuntimeError: task registry 满载且没有空闲 task 可淘汰时抛出。
 
         副作用:
             创建或复用 task/path 锁，增加活跃引用并执行空闲项 LRU 淘汰。
@@ -158,9 +175,7 @@ class FilePathLockRegistry:
                 for canonical, entry in state.paths.items()
                 if entry.users == 0 and canonical not in canonical_paths
             ]
-            if len(idle_paths) < required_evictions:
-                raise RuntimeError("path lock capacity exceeded for task")
-            for canonical in idle_paths[:required_evictions]:
+            for canonical in idle_paths[: min(required_evictions, len(idle_paths))]:
                 state.paths.pop(canonical)
             for canonical in missing:
                 state.paths[canonical] = _PathLockEntry()
@@ -197,3 +212,11 @@ class FilePathLockRegistry:
             for entry in entries:
                 entry.users = max(0, entry.users - 1)
             state.users = max(0, state.users - 1)
+            excess = max(0, len(state.paths) - self._max_paths_per_task)
+            if excess:
+                for canonical, entry in tuple(state.paths.items()):
+                    if excess == 0:
+                        break
+                    if entry.users == 0:
+                        state.paths.pop(canonical)
+                        excess -= 1

@@ -1,4 +1,5 @@
 import type { ModelCatalog } from "@/lib/model-catalog";
+import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
 import type { ModelSelection } from "@/lib/model-selection-storage";
 
 export type ModelContextConfig = {
@@ -6,7 +7,7 @@ export type ModelContextConfig = {
   reasoningEffort?: unknown;
 };
 
-const BACKEND_REASONING_EFFORTS = new Set(["low", "high", "max"]);
+const BACKEND_REASONING_EFFORTS = new Set<string>(REASONING_EFFORT_VALUES);
 
 export function selectionToTransportFields(
   selection: ModelSelection | null | undefined,

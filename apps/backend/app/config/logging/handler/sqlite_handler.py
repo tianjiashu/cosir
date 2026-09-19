@@ -295,7 +295,7 @@ def entry_from_log_record(record: logging.LogRecord) -> LogEntryRecord:
         可写入 SQLite 的 LogEntryRecord。
 
     异常:
-        TypeError: 如果 data 无法脱敏或 JSON 化。
+        TypeError: 如果 data 无法 JSON 化。
 
     副作用:
         无。

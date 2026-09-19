@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Assistant } from "@/app/assistant";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
+import { TaskChangesPanel } from "@/components/task-changes/task-changes-panel";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
@@ -40,16 +41,22 @@ export function TaskPage({
   onTaskStateChanged,
   onRunStateChange,
 }: TaskSessionProps) {
+  const initialTaskId = initialTask?.task_id ?? null;
   const [loadedTask, setLoadedTask] = useState<WorkspaceTask | null>(
-    initialTask?.task_id === taskId ? initialTask : null,
+    initialTaskId === taskId ? initialTask ?? null : null,
   );
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const [isRunActive, setIsRunActive] = useState(false);
   const requestGenerationRef = useRef(0);
+  const handleRunStateChange = useCallback((active: boolean) => {
+    setIsRunActive(active);
+    onRunStateChange?.(active);
+  }, [onRunStateChange]);
 
   useEffect(() => {
     const requestGeneration = ++requestGenerationRef.current;
-    const taskFromSidebar = initialTask?.task_id === taskId ? initialTask : null;
+    const taskFromSidebar = initialTaskId === taskId ? initialTask ?? null : null;
     void frontendLog("DEBUG", "task_session_load_started", "Task session 开始解析任务身份", {
       data: {
         taskId,
@@ -104,7 +111,9 @@ export function TaskPage({
         data: { taskId, requestGeneration },
       });
     };
-  }, [initialTask, onTaskLoaded, retryToken, taskId]);
+  // 依赖 initialTaskId（原始 task_id）而非 initialTask 对象引用：父组件在 run 状态
+  // 切换等无关更新时会重建 activeTask 对象引用，若依赖整对象会触发冗余重渲染链。
+  }, [initialTaskId, onTaskLoaded, retryToken, taskId]);
 
   if (error) return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-sm">
@@ -115,17 +124,22 @@ export function TaskPage({
   if (!loadedTask || loadedTask.task_id !== taskId) return <div className="flex h-full items-center justify-center text-sm">正在加载任务工作区…</div>;
 
   return (
-    <Assistant
-      taskId={taskId}
-      workspaceId={loadedTask.workspace_id}
-      workspaceRoot={workspaceRoot}
-      initialMessage={initialMessage}
-      initialAttachments={initialAttachments}
-      forkAvailable={forkAvailable ?? loadedTask.fork_available}
-      forkingRunId={forkingRunId}
-      onForkRun={onForkRun}
-      onTaskStateChanged={onTaskStateChanged}
-      onRunStateChange={onRunStateChange}
-    />
+    <div className="relative flex h-full min-h-0 min-w-0 overflow-hidden">
+      <div className="min-h-0 min-w-0 flex-1">
+        <Assistant
+          taskId={taskId}
+          workspaceId={loadedTask.workspace_id}
+          workspaceRoot={workspaceRoot}
+          initialMessage={initialMessage}
+          initialAttachments={initialAttachments}
+          forkAvailable={forkAvailable ?? loadedTask.fork_available}
+          forkingRunId={forkingRunId}
+          onForkRun={onForkRun}
+          onTaskStateChanged={onTaskStateChanged}
+          onRunStateChange={handleRunStateChange}
+        />
+      </div>
+      <TaskChangesPanel taskId={taskId} isRunActive={isRunActive} />
+    </div>
   );
 }

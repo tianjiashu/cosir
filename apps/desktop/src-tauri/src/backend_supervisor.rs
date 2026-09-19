@@ -132,11 +132,11 @@ impl BackendSupervisor {
         {
             return Ok(());
         }
-        let runtime_dir = app
+        let app_data_dir = app
             .path()
             .app_data_dir()
-            .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?
-            .join("runtime");
+            .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?;
+        let runtime_dir = app_data_dir.join("runtime");
         std::fs::create_dir_all(&runtime_dir)
             .map_err(|error| format!("无法创建运行时目录：{error}"))?;
         let bootstate = runtime_dir.join("backend.bootstate.json");
@@ -176,7 +176,11 @@ impl BackendSupervisor {
                 backend_dir: backend_runtime.backend_dir(),
                 port,
                 bootstate_file: &bootstate,
+                launch_mode: backend_runtime.launch_mode(),
                 uv_cache_dir: backend_runtime.uv_cache_dir(),
+                data_dir: backend_runtime
+                    .uses_packaged_data_dir()
+                    .then_some(app_data_dir.as_path()),
                 terminal_worker: backend_runtime.terminal_worker(),
                 log_file: &log_file,
                 structured_log_dir: &runtime_dir,

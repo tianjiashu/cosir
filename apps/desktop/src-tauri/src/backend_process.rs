@@ -5,6 +5,13 @@ use std::thread;
 
 use crate::desktop_log::append_console_line;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendLaunchMode {
+    UvProject,
+    PythonModule,
+    FrozenExecutable,
+}
+
 pub struct BackendProcess {
     pub child: Child,
     #[cfg(windows)]
@@ -16,7 +23,9 @@ pub struct BackendLaunchConfig<'a> {
     pub backend_dir: &'a Path,
     pub port: u16,
     pub bootstate_file: &'a Path,
+    pub launch_mode: BackendLaunchMode,
     pub uv_cache_dir: Option<&'a Path>,
+    pub data_dir: Option<&'a Path>,
     pub terminal_worker: Option<&'a Path>,
     pub log_file: &'a Path,
     pub structured_log_dir: &'a Path,
@@ -41,18 +50,25 @@ impl Drop for WindowsJob {
 pub fn spawn_backend(config: &BackendLaunchConfig<'_>) -> Result<BackendProcess, String> {
     let mut command = Command::new(config.launcher);
     command.current_dir(config.backend_dir);
-    if config.uv_cache_dir.is_some() {
-        command.args(["run", "--directory"]);
-        command.arg(config.backend_dir);
-        command.args(["python", "-m", "app"]);
-    } else {
-        command.args(["-m", "app"]);
+    match config.launch_mode {
+        BackendLaunchMode::UvProject => {
+            command.args(["run", "--directory"]);
+            command.arg(config.backend_dir);
+            command.args(["python", "-m", "app"]);
+        }
+        BackendLaunchMode::PythonModule => {
+            command.args(["-m", "app"]);
+        }
+        BackendLaunchMode::FrozenExecutable => {}
     }
     if let Some(cache_dir) = config.uv_cache_dir {
         command.env("UV_CACHE_DIR", cache_dir);
     }
     if let Some(worker) = config.terminal_worker {
         command.env("CODING_AGENT_TERMINAL_WORKER", worker);
+    }
+    if let Some(data_dir) = config.data_dir {
+        command.env("CODING_AGENT_DATA_DIR", data_dir);
     }
     let mut child = command
         .env("CODING_AGENT_PORT", config.port.to_string())

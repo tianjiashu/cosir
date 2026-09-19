@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import { requestJson } from "@/lib/http/client";
+import { createTimeoutAbort } from "@/lib/async/abort-timeout";
 import {
   extractUserAddMessageAttachments,
   extractUserAddMessageText,
@@ -12,7 +12,7 @@ import {
   type TransportViewConverter,
 } from "@/lib/assistant/transport-view-converter";
 import { modelContextToTransportFields, selectionToTransportFields } from "@/lib/assistant/model-request-adapter";
-import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import { parseTransportError } from "@/lib/assistant/transport-error";
 import { getModelCatalogSnapshot } from "@/lib/model-catalog";
 import { readStoredSelection } from "@/lib/model-selection-storage";
@@ -52,6 +52,10 @@ export function useRuntimeTransport(
   const recoveryIssueTimerRef = useRef<number | null>(null);
   const errorSnapshotAbortControllerRef = useRef<AbortController | null>(null);
   const errorSnapshotGenerationRef = useRef(0);
+  const backendRuntimeGenerationRef = useRef(context.backendRuntimeGeneration);
+  const backendRuntimeAvailableRef = useRef(context.backendRuntimeAvailable);
+  backendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
+  backendRuntimeAvailableRef.current = context.backendRuntimeAvailable;
   const transportViewConverterRef = useRef<{
     taskId: number;
     converter: TransportViewConverter;
@@ -76,7 +80,7 @@ export function useRuntimeTransport(
       recoveryIssueTimerRef.current = null;
       const status = currentTransportRun(context.latestStateRef.current)?.status;
       if (status !== "completed" && status !== "failed" && status !== "cancelled" && status !== "interrupted") {
-        context.setIssue({ message: "连接暂时中断，正在从本机后端恢复最新状态…", retryable: true });
+        context.setIssue({ message: "连接暂时中断，正在从本机后端恢复最新状态…", canResync: true });
       }
     }, RECOVERY_FEEDBACK_DELAY_MS);
   }, [clearRecoveryIssueTimer, context]);
@@ -125,7 +129,7 @@ export function useRuntimeTransport(
       const restored = sourceId !== null
         && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
       if (!restored) {
-        context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", retryable: true });
+        context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
       }
     } else if (failedCommand && (failedText.trim() || failedAttachments.length > 0)) {
       context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
@@ -134,50 +138,68 @@ export function useRuntimeTransport(
     const transportError = parseTransportError(error);
     const nextIssue: TransportIssue = {
       message: transportError?.message ?? safeFrontendErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
-      retryable: transportError?.retryable ?? true,
+      // HTTP 错误体的 retryable 表示“修正条件后能否重试”，这里映射为能否重新同步。
+      canResync: transportError?.retryable ?? true,
     };
     context.lastTransportErrorRef.current = nextIssue;
     context.setIssue(nextIssue);
 
     errorSnapshotAbortControllerRef.current?.abort();
-    const controller = new AbortController();
     const generation = ++errorSnapshotGenerationRef.current;
-    const timeout = globalThis.setTimeout(() => controller.abort(), ERROR_SNAPSHOT_TIMEOUT_MS);
+    const backendGeneration = backendRuntimeGenerationRef.current;
+    const { controller, signal, clear } = createTimeoutAbort(ERROR_SNAPSHOT_TIMEOUT_MS);
     errorSnapshotAbortControllerRef.current = controller;
     try {
-      const snapshot = parseTransportState(await requestJson<unknown>(`/tasks/${context.taskId}/assistant/state`, {
-        signal: controller.signal,
+      const snapshot = await requestAssistantSnapshot(context.taskId, {
+        signal,
         traceId: context.traceId,
-      }));
-      if (controller.signal.aborted || generation !== errorSnapshotGenerationRef.current) return;
+      });
+      if (
+        controller.signal.aborted
+        || generation !== errorSnapshotGenerationRef.current
+        || !backendRuntimeAvailableRef.current
+        || backendGeneration !== backendRuntimeGenerationRef.current
+      ) return;
+      context.latestStateRef.current = snapshot;
       params.updateState(() => snapshot);
+      // An attach-only resume failure must recover through the existing bounded
+      // transport recovery path. It must never re-enter the business-resume
+      // POST /assistant path.
+      if (params.commands.length === 0) void recovery.reconcileAfterTransportFinish();
     } catch {
       // Preserve the original transport issue when recovery also fails.
     } finally {
-      globalThis.clearTimeout(timeout);
+      clear();
       if (errorSnapshotAbortControllerRef.current === controller) {
         errorSnapshotAbortControllerRef.current = null;
       }
     }
-  }, [context]);
+  }, [context, recovery]);
 
   const reconcileTerminalSnapshot = useCallback(async (expectedRunId: number): Promise<boolean> => {
     const currentRun = currentTransportRun(context.latestStateRef.current);
-    if (currentRun?.runId !== expectedRunId || isTerminalRunStatus(currentRun.status)) return false;
+    if (
+      currentRun?.runId !== expectedRunId
+      || isTerminalRunStatus(currentRun.status)
+      || context.cancelRequestedRunIdRef.current === expectedRunId
+    ) return false;
 
-    const controller = new AbortController();
-    const timeout = globalThis.setTimeout(() => controller.abort(), TERMINAL_SNAPSHOT_TIMEOUT_MS);
+    const { signal, clear } = createTimeoutAbort(TERMINAL_SNAPSHOT_TIMEOUT_MS);
+    const backendGeneration = backendRuntimeGenerationRef.current;
     try {
-      const snapshot = parseTransportState(await requestJson<unknown>(`/tasks/${context.taskId}/assistant/state`, {
-        signal: controller.signal,
+      const snapshot = await requestAssistantSnapshot(context.taskId, {
+        signal,
         traceId: context.traceId,
-      }));
+      });
       const snapshotRun = currentTransportRun(snapshot);
       const latestRun = currentTransportRun(context.latestStateRef.current);
       if (
-        controller.signal.aborted
+        signal.aborted
+        || !backendRuntimeAvailableRef.current
+        || backendGeneration !== backendRuntimeGenerationRef.current
         || snapshotRun?.runId !== expectedRunId
         || latestRun?.runId !== expectedRunId
+        || context.cancelRequestedRunIdRef.current === expectedRunId
         || !isTerminalRunStatus(snapshotRun.status)
       ) return false;
 
@@ -195,7 +217,7 @@ export function useRuntimeTransport(
     } catch {
       return false;
     } finally {
-      globalThis.clearTimeout(timeout);
+      clear();
     }
   }, [context]);
 
@@ -260,7 +282,7 @@ export function useRuntimeTransport(
       // A new user command starts a fresh transport recovery budget. Empty
       // command batches are attach/resume operations and must not reset the
       // bounded EOF protection.
-      if (commands.length > 0) recovery.resetRecovery();
+      if (commands.length > 0) recovery.resetTransportRecoveryBudget();
       const hasEditCommand = commands.some((command) => getUserAddMessageSourceId(command) !== null);
       const requestRunId = commands.length === 0 || hasEditCommand
         ? context.latestStateRef.current.current_run_id
@@ -378,7 +400,7 @@ export function useRuntimeTransport(
         if (context.cancelRequestedRunIdRef.current === currentRunId && currentRunId !== null) return;
         context.setIssue({
           message: safeFrontendErrorMessage(error, "发送已取消，后端仍在确认运行状态"),
-          retryable: true,
+          canResync: true,
         });
       }
     },

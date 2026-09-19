@@ -118,7 +118,7 @@ describe("transport view converter cache", () => {
   it("caches and invalidates snapshot error messages without touching canonical messages", () => {
     const convert = createTransportViewConverter();
     const canonical = message("m-1", "assistant", "stable");
-    const error = { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型", retryable: false };
+    const error = { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型" };
     const first = convert(state([run(1, [canonical])], error), metadata());
     const second = convert(state([run(1, [canonical])], error), metadata());
 
@@ -186,7 +186,6 @@ describe("transport view converter cache", () => {
     const fixture = state([run(1, [toolMessage("failed")], "failed")], {
       code: "MODEL_SELECTION_REQUIRED",
       message: "请先选择模型",
-      retryable: false,
     });
     const connectionMetadata = metadata([command], true);
     const expected = toTransportThreadView(fixture, connectionMetadata);

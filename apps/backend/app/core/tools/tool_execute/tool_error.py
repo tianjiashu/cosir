@@ -23,7 +23,8 @@ _DEFAULT_STATUS_HINTS = {
     "replace": "替换失败",
     "patch_write": "替换失败",
     "apply_patch": "补丁失败",
-    "delete": "删除失败",
+    "delete_file": "删除失败",
+    "move_file": "移动失败",
     "search_content": "搜索失败",
     "find_files": "搜索失败",
     "list_directory": "列举失败",
@@ -53,7 +54,7 @@ def normalize_status_hint(tool_name: str, status_hint: object) -> str:
 def os_error_message(exc: OSError, action: str) -> str:
     """把 ``OSError`` 转成面向模型友好的可读错误描述（共享助手）。
 
-    该助手是文件类工具（read / write / patch_write / delete 等）构造失败观察时
+    该助手是文件类工具（read_file / replace / apply_patch 等）构造失败观察时
     复用的唯一收口：把原始异常噪声（``[WinError 32] ...`` / ``[Errno 2] ...``）
     包成「动作 + 人读原因」的英文短句，便于模型一次理解并自行修正。
 

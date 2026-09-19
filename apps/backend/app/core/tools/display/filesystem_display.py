@@ -139,19 +139,6 @@ def build_directory_display_data(
     }
 
 
-def build_delete_display_data(
-    *, path: str, target_type: str, recursive: bool
-) -> dict[str, Any]:
-    """构造 delete 成功结果的最小展示数据。"""
-
-    return {
-        "kind": "delete-result",
-        "path": path,
-        "target_type": target_type,
-        "recursive": recursive,
-    }
-
-
 def build_repeated_call_display_data(*, unchanged: bool = False) -> dict[str, Any]:
     """构造文件工具重复调用的短展示标记。"""
 

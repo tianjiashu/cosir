@@ -357,3 +357,86 @@ async def cancel_run(
             "cancelled": result,
         }
     )
+
+
+@app.post("/runs/{run_id}/tool-calls/{tool_call_id}/cancel")
+async def cancel_tool_call(
+    run_id: int,
+    tool_call_id: str,
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+) -> Response:
+    """显式取消一个正在执行的工具调用（工具级取消）。
+
+    表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内工具级取消
+    信号源标记该工具调用」已收口到 ``ConversationRunExecutor.cancel_tool_call`` 单一入口。
+
+    与 ``POST /runs/{run_id}/cancel`` 的差别是取消范围：run 级取消要求整个 Conversation
+    Run 停止执行，run 终态由 workflow 落定；本端点只中止**一次**工具调用，run 与 Agent
+    在其后继续执行。因此本端点只表示**取消信号已被接受**，不表示工具调用已经结束：被
+    点名的工具在执行层检出信号后返回取消观察，其终态与模型侧 ``ToolMessage`` 由 workflow
+    落定，前端需继续以 canonical snapshot 为准。HTTP 断连不会调用本端点。
+
+    响应码的语义边界：信号随该工具调用执行结束被释放，run 收尾时按 run_id 兜底清理，
+    因此 409 只表示「此刻信号已存在」，200 也不保证该调用尚未结束——**调用方不得把
+    200/409 当作幂等去重或执行进度依据**，只能以 404（run 不存在）作为确定性失败。
+
+    参数:
+        run_id: 目标工具调用所属的 Conversation Run 标识。
+        tool_call_id: 目标工具调用标识（模型工具调用 id）。
+        run_executor: 进程内取消信号标记的唯一入口。
+
+    返回:
+        包含 ``run_id``、``tool_call_id`` 与 ``cancelled`` 的 JSON 对象。
+
+    异常:
+        HTTPException: run 不存在时返回 404；该工具调用此前已标记过取消（信号已存在）时
+        返回 409；标记内部失败时返回 500。
+
+    副作用:
+        向进程内工具级取消信号源写入 ``(run_id, tool_call_id)``；不落库 run 或工具调用
+        状态、不取消后台执行 task。工具执行层在本次调用结束时释放该信号，run 收尾时按
+        run_id 兜底清理。
+    """
+    try:
+        result = await run_executor.cancel_tool_call(run_id, tool_call_id)
+    except KeyError as exc:
+        log.warning(
+            "tool_call_cancel_run_not_found",
+            extra={
+                "msg": "工具级取消请求未找到 Conversation Run",
+                "data": {"run_id": run_id, "tool_call_id": tool_call_id},
+            },
+        )
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    except Exception as exc:
+        log.exception(
+            "tool_call_cancel_failed",
+            extra={
+                "msg": "取消工具调用失败",
+                "data": {"run_id": run_id, "tool_call_id": tool_call_id},
+            },
+        )
+        raise HTTPException(status_code=500, detail="failed to cancel tool call") from exc
+    if not result:
+        log.info(
+            "tool_call_cancel_rejected",
+            extra={
+                "msg": "工具调用已存在取消信号，重复取消被拒绝",
+                "data": {"run_id": run_id, "tool_call_id": tool_call_id},
+            },
+        )
+        raise HTTPException(status_code=409, detail="tool call is already cancelled")
+    log.info(
+        "tool_call_cancelled",
+        extra={
+            "msg": "工具调用取消信号已接受",
+            "data": {"run_id": run_id, "tool_call_id": tool_call_id},
+        },
+    )
+    return JSONResponse(
+        content={
+            "run_id": run_id,
+            "tool_call_id": tool_call_id,
+            "cancelled": result,
+        }
+    )

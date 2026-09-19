@@ -70,11 +70,20 @@ class ConversationTaskStateRebuilder:
                             child_task_id = record.child_task_id
                             if child_task_id is not None and child_task_id > 0:
                                 tool_part["child_task_id"] = child_task_id
+                                child_run_id = record.child_run_id
+                                if (
+                                    isinstance(child_run_id, int)
+                                    and not isinstance(child_run_id, bool)
+                                    and child_run_id > 0
+                                ):
+                                    tool_part["child_run_id"] = child_run_id
                                 tool_part["display_data"] = {
                                     "kind": "delegation-result",
                                     "title": args.get("title") or "子 Agent",
                                     "child_task_id": child_task_id,
                                 }
+                                if "child_run_id" in tool_part:
+                                    tool_part["display_data"]["child_run_id"] = child_run_id
                                 try:
                                     profile = get_agent_registry().resolve(record.child_agent_id)
                                 except RuntimeError:
@@ -100,6 +109,13 @@ class ConversationTaskStateRebuilder:
                     child_task_id = display_data.get("child_task_id")
                     if isinstance(child_task_id, int) and child_task_id > 0:
                         tool_part["child_task_id"] = child_task_id
+                    child_run_id = display_data.get("child_run_id")
+                    if (
+                        isinstance(child_run_id, int)
+                        and not isinstance(child_run_id, bool)
+                        and child_run_id > 0
+                    ):
+                        tool_part["child_run_id"] = child_run_id
                     child_agent_id = display_data.get("child_agent_id")
                     if isinstance(child_agent_id, str) and child_agent_id:
                         try:

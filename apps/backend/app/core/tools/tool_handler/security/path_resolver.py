@@ -5,11 +5,9 @@
 
 设计边界：
 - 只解析与拦截路径，不读不写文件。
-- 提供三种作用域解析策略，均返回 ``(Path | None, str)`` 二元组：
+- 提供两种作用域解析策略，均返回 ``(Path | None, str)`` 二元组：
   - ``resolve_within_workspace``：解析并强制项目根 containment（写/改/删等
     破坏性工具，越界即拒绝）。
-  - ``resolve_entry_within_workspace``：解析目录项自身、不跟随末级符号链接
-    （删除符号链接自身时用，防借链接逃逸项目根）。
   - ``resolve_without_boundary``：解析但不强制 containment（只读工具，允许
     访问项目根外）。
 - ``blocked_device_reason`` 返回空串表示允许。
@@ -23,10 +21,8 @@ class PathResolver:
     """将用户传入的路径解析到项目根目录内的安全解析器。
 
     单一职责：解析路径并拦截 Windows 设备名与 POSIX 敏感设备/伪文件路径，并提供
-    三种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment
-    （供 write / delete / patch_write 等破坏性工具，越界即拒绝）；
-    :meth:`resolve_entry_within_workspace` 解析目录项自身、不跟随末级符号链接
-    （供 delete 删除符号链接本身，防越界逃逸）；
+    两种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment
+    （供 write / patch_write 等文件变更工具，越界即拒绝）；
     :meth:`resolve_without_boundary` 不强制 containment
     （供 read / list 等只读工具，允许访问项目根外）。所有文件工具共用同一套设备
     拦截与解析规则，避免规则漂移。
@@ -167,40 +163,6 @@ class PathResolver:
         except (OSError, RuntimeError, ValueError) as exc:
             return None, f"path escapes project root: {path} ({exc})"
         return resolved, ""
-
-    def resolve_entry_within_workspace(self, path: str) -> tuple[Path | None, str]:
-        """解析目录项自身，并确认其父目录仍位于项目根内。
-
-        与 :meth:`resolve_within_workspace` 不同，本方法不会跟随最后一级符号链接。
-        它只用于删除符号链接本身等必须区分“目录项”和“链接目标”的场景；中间目录
-        仍会解析，因而无法借助父级符号链接逃逸项目根。
-
-        参数:
-            path: 模型传入的路径字符串。
-
-        返回:
-            ``(entry_path, "")`` 表示成功；``(None, error)`` 表示路径非法或越界。
-
-        异常:
-            不向上抛出。解析失败会被转换成错误字符串。
-
-        副作用:
-            无。
-        """
-
-        input_error = self._validate_path(path)
-        if input_error:
-            return None, input_error
-        try:
-            root = self.workspace_root.resolve()
-            raw = Path(path)
-            target = raw if raw.is_absolute() else root / raw
-            parent = target.parent.resolve()
-            entry = parent / target.name
-            entry.relative_to(root)
-        except (OSError, RuntimeError, ValueError) as exc:
-            return None, f"path escapes project root: {path} ({exc})"
-        return entry, ""
 
     def resolve_without_boundary(self, path: str) -> tuple[Path | None, str]:
         """解析用户路径但不强制项目根 containment（供只读工具使用）。

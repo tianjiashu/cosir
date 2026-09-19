@@ -1,23 +1,19 @@
 import { memo } from "react";
-import type { ToolCallMessagePartComponent } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { DetailsTool } from "./details-tool";
 import { DiffTool } from "./diff-tool";
-import { DeleteTool } from "./delete-tool";
 import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
 import { DelegationToolRow } from "./delegation-tool-row";
 import { readToolArtifact } from "./types";
 
-export type ToolPartRoute = "delete" | "diff" | "terminal" | "delegation" | "details" | "fallback";
-
-const DELETE_TOOL_NAMES = new Set(["delete", "delete_file"]);
+export type ToolPartRoute = "diff" | "terminal" | "delegation" | "details" | "fallback";
 const KNOWN_DISPLAY_KINDS = new Set([
   "read-file-meta",
   "file-list",
   "content-search-results",
   "directory-list",
   "file-changes",
-  "delete-result",
   "web-search-results",
   "web-extract-urls",
   "terminal-result",
@@ -27,13 +23,12 @@ const KNOWN_DISPLAY_KINDS = new Set([
 
 /**
  * 依据后端稳定工具名、data.kind 和 presentation 语义选择只读 renderer。
- * `expand_layout=none` 仅表示不可展开，绝不意味着删除。
+ * `expand_layout=none` 只决定紧凑展示，不决定工具语义。
  */
 export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
   const artifact = readToolArtifact(rawArtifact);
   const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : undefined;
   if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return "fallback";
-  if (DELETE_TOOL_NAMES.has(toolName) || kind === "delete-result") return "delete";
   if (kind === "delegation-result" || toolName === "delegate_task") return "delegation";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
   if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";
@@ -52,10 +47,15 @@ export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartR
   return "fallback";
 }
 
-const ToolPartImpl: ToolCallMessagePartComponent = (props) => {
+type ToolPartProps = ToolCallMessagePartProps & {
+  /** Run owning the message; absent in read-only surfaces that cannot cancel tools. */
+  runId?: number | null;
+  /** Whole-run cancellation is already in progress. */
+  runCancelling?: boolean;
+};
+
+const ToolPartImpl = (props: ToolPartProps) => {
   switch (routeToolPart(props.toolName, props.artifact)) {
-    case "delete":
-      return <DeleteTool {...props} />;
     case "diff":
       return <DiffTool {...props} />;
     case "terminal":

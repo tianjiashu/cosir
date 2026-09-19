@@ -103,9 +103,12 @@ export type TransportToolCallPart = {
   isError?: boolean | null;
   /** Runtime-only child task locator for Workbench; never rendered as text. */
   child_task_id?: number;
+  /** Runtime-only child Run locator for cancellation; never rendered as text. */
+  child_run_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
   delegation_ref_seq?: number;
+  terminal_output_seq?: number;
 };
 
 /** 用户图片 part：只携带后端生成的稳定 locator。 */
@@ -146,11 +149,15 @@ export type TransportRun = {
   usage: ConversationStateUsage | null;
 };
 
-/** 运行错误：与后端 `ConversationStateError` 对齐的稳定结构。 */
+/**
+ * 运行错误：与后端 `ConversationStateError` 对齐的稳定结构。
+ *
+ * 只有稳定 `code` 与面向用户的安全 `message`；`retryable` 属于工具观察（仅面向模型），
+ * 不在 Transport 错误契约内。
+ */
 export type TransportError = {
   code: string;
   message: string;
-  retryable: boolean;
 };
 
 /** Task 级 Transport state；Run 事实全部按 Run 保存在 `runs` 中。 */

@@ -11,15 +11,17 @@ from app.models.workspace_record import WorkspaceRecord
 class ToolExecutionContext:
     """工具执行所在的运行时边界。
 
-    ``ToolExecutionContext`` 只表达一次工具调用所处的任务、工作区、根路径与
-    turn 边界。``runtime_dependencies`` 承载仅供同进程工具使用的运行期能力，
-    例如 ``delegate_task`` 需要的委派执行器、实时事件 loop 等。这些依赖可能
-    间接持有数据库引擎、事件循环、服务对象或其他不可 pickle 状态。
+    ``ToolExecutionContext`` 表达一次工具调用所处的任务、工作区、根路径与
+    turn 边界。``runtime_dependencies`` 承载父进程执行层和同进程工具使用的运行期
+    能力，例如委派执行器、输出事件通道工厂和事件 loop。这些依赖可能间接持有
+    数据库引擎、事件循环、服务对象或其他不可 pickle 状态。
 
     process 隔离工具（例如 ``execute_terminal``）启动子进程前必须调用
     :meth:`for_process_execution` 取得跨进程安全副本，避免把
-    ``runtime_dependencies`` 一起序列化到子进程。process 工具若未来确实需要
-    额外运行期能力，应显式设计可序列化 DTO，而不是复用同进程依赖对象。
+    ``runtime_dependencies`` 一起序列化到子进程。process handler 通过显式注入的
+    output sink 将原始输出写入父进程队列；父进程 runner 再使用 runtime channel
+    将其投递为运行期事件。process handler 若未来确实需要额外运行期能力，应显式
+    设计可序列化 DTO，而不是复用父进程依赖对象。
 
     Attributes:
         task_id: 当前工具调用所属任务标识。

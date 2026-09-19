@@ -7,10 +7,11 @@ from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
-from app.core.tools.tool_handler.delete import build_delete_definition
+from app.core.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.core.tools.tool_handler.find_files import build_find_files_definition
 from app.core.tools.tool_handler.list_directory import build_list_directory_definition
+from app.core.tools.tool_handler.move_tool import build_move_file_definition
 from app.core.tools.tool_handler.read_file import build_read_file_definition
 from app.core.tools.tool_handler.replace_tool import build_replace_definition
 from app.core.tools.tool_handler.search_content import build_search_content_definition
@@ -49,8 +50,9 @@ class ToolSystem:
     def build_tool_system(cls) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-        按内置清单注册 12 个工具定义（包含 ``delegate_task``）。其中原 patch_write
-        工具已拆分为 replace(patch_write) 与 apply_patch(V4A)，
+            按内置清单注册 13 个工具定义（包含 ``delegate_task``）。其中原 patch_write
+        工具已拆分为 replace(patch_write) 与 apply_patch(Git unified diff)，另有独立的
+        delete_file / move_file，
         搜索工具已拆分为 find_files 与 search_content。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
         构造输出预算上限，装配执行管线（``ToolExecutor``）。工具拦截（Pre/PostToolUse）通过
@@ -76,13 +78,14 @@ class ToolSystem:
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
         registry.register(build_write_file_definition())
-        # patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(V4A) 两个独立工具
+        # patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(Git unified diff)。
         registry.register(build_replace_definition())
         registry.register(build_apply_patch_definition())
+        registry.register(build_delete_file_definition())
+        registry.register(build_move_file_definition())
         registry.register(build_search_content_definition())
         registry.register(build_find_files_definition())
         registry.register(build_list_directory_definition())
-        registry.register(build_delete_definition())
         registry.register(build_execute_terminal_definition())
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())

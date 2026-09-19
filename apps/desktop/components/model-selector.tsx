@@ -14,6 +14,7 @@ import {
 import { cva, type VariantProps } from "class-variance-authority";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
 import {
   Popover,
   PopoverContent,
@@ -35,11 +36,11 @@ export type ModelSelectorEffortOption = {
   name: string;
 };
 
-export const DEFAULT_EFFORT_OPTIONS: readonly ModelSelectorEffortOption[] = [
-  { id: "low", name: "Low" },
-  { id: "medium", name: "Med" },
-  { id: "high", name: "High" },
-];
+const EFFORT_OPTION_LABELS: Record<string, string> = { low: "Low", high: "High", max: "Max" };
+
+export const DEFAULT_EFFORT_OPTIONS: readonly ModelSelectorEffortOption[] = REASONING_EFFORT_VALUES.map(
+  (id) => ({ id, name: EFFORT_OPTION_LABELS[id] }),
+);
 
 export type ModelOption = {
   id: string;
@@ -51,7 +52,7 @@ export type ModelOption = {
   keywords?: readonly string[];
   /**
    * Reasoning effort levels the model supports. Pass `true` for the default
-   * low/medium/high levels, or a custom list. Omit for models without
+   * low/high/max levels, or a custom list. Omit for models without
    * configurable reasoning.
    */
   efforts?: boolean | readonly ModelSelectorEffortOption[];

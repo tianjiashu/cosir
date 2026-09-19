@@ -28,7 +28,7 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.observability.langfuse_payload_sanitizer import sanitize_langfuse_payload
+from app.core.observability.langfuse_payload_limits import limit_langfuse_payload
 
 _TRACING_WARNING_EVENTS: set[str] = set()
 
@@ -149,40 +149,40 @@ def _build_langfuse_client() -> Any:
         public_key=Settings.LANGFUSE_PUBLIC_KEY,
         secret_key=Settings.LANGFUSE_SECRET_KEY,
         base_url=Settings.LANGFUSE_BASE_URL,
-        mask=_mask_langfuse_data,
-        mask_otel_spans=_mask_langfuse_otel_spans,
+        mask=_limit_langfuse_data,
+        mask_otel_spans=_limit_langfuse_otel_spans,
     )
 
 
-def _mask_langfuse_data(*, data: Any, **kwargs: Any) -> Any:
-    """Mask payloads set through Langfuse SDK APIs.
+def _limit_langfuse_data(*, data: Any, **kwargs: Any) -> Any:
+    """Bound payload text set through Langfuse SDK APIs.
 
     参数:
         data: Langfuse SDK 传入的 input/output/metadata 数据。
         **kwargs: Langfuse SDK 未来可能传入的上下文字段。
 
     返回:
-        已脱敏数据。
+        字符串受长度限制的数据；内容保持原样。
 
     异常:
-        无。脱敏失败时返回保守占位，避免异常影响 SDK 主流程。
+        无。长度处理失败时返回原始数据，避免异常影响 SDK 主流程。
 
     副作用:
         无。
     """
 
     try:
-        return sanitize_langfuse_payload(data)
+        return limit_langfuse_payload(data)
     except Exception:
         log.exception(
-            "langfuse_payload_mask_failed",
-            extra={"msg": "Langfuse payload 脱敏失败，使用保守占位"},
+            "langfuse_payload_limit_failed",
+            extra={"msg": "Langfuse payload 长度限制失败，保留原始数据"},
         )
-        return "[REDACTED]"
+        return data
 
 
-def _mask_langfuse_otel_spans(*, params: Any) -> Any:
-    """Mask OpenTelemetry span attributes before Langfuse exports them.
+def _limit_langfuse_otel_spans(*, params: Any) -> Any:
+    """Bound OpenTelemetry span attribute text before Langfuse exports it.
 
     参数:
         params: Langfuse SDK 传入的 ``MaskOtelSpansParams``。
@@ -191,7 +191,7 @@ def _mask_langfuse_otel_spans(*, params: Any) -> Any:
         ``MaskOtelSpansResult`` 或 ``None``。
 
     异常:
-        无。脱敏失败时返回 ``None``，避免阻断 OTel 导出线程。
+        无。长度处理失败时返回 ``None``，避免阻断 OTel 导出线程。
 
     副作用:
         无。
@@ -205,17 +205,17 @@ def _mask_langfuse_otel_spans(*, params: Any) -> Any:
             replacements: dict[str, str | bool | int | float | list[str]] = {}
             for key, value in getattr(span, "attributes", {}).items():
                 if isinstance(value, str):
-                    masked = sanitize_langfuse_payload({key: value})[key]
-                    if isinstance(masked, str) and masked != value:
-                        replacements[key] = masked
+                    limited = limit_langfuse_payload(value)
+                    if isinstance(limited, str) and limited != value:
+                        replacements[key] = limited
                 elif isinstance(value, int | float | bool):
                     continue
                 elif isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
-                    masked_sequence = sanitize_langfuse_payload(list(value))
-                    if masked_sequence != value and all(
-                        isinstance(item, str) for item in masked_sequence
+                    limited_sequence = limit_langfuse_payload(list(value))
+                    if limited_sequence != value and all(
+                        isinstance(item, str) for item in limited_sequence
                     ):
-                        replacements[key] = masked_sequence
+                        replacements[key] = limited_sequence
             if replacements:
                 patches[identifier] = OtelSpanPatch(set_attributes=replacements)
         if not patches:
@@ -223,8 +223,8 @@ def _mask_langfuse_otel_spans(*, params: Any) -> Any:
         return MaskOtelSpansResult(span_patches=patches)
     except Exception:
         log.exception(
-            "langfuse_otel_mask_failed",
-            extra={"msg": "Langfuse OTel span 脱敏失败，跳过本批次 masking"},
+            "langfuse_otel_payload_limit_failed",
+            extra={"msg": "Langfuse OTel span 长度限制失败，跳过本批次处理"},
         )
         return None
 

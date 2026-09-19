@@ -1,243 +1,270 @@
-"""patch_write 格式解析（仅 V4A）。
+"""Parse Git unified diffs into existing-file update hunks.
 
-把 V4A 格式 patch_write 文本解析为 ``PatchOperation``（Add/Update/Delete/Move），
-供 ``patch_apply`` 做两阶段校验与应用。hunk 上下文匹配复用
-``fuzzy_match.fuzzy_find_and_replace``，不自写行邻接匹配。
-
-设计边界：
-- 只解析，不做任何文件读写或落盘。
-- V4A 解析逻辑移植自 Hermes ``patch_parser.parse_v4a_patch``。
-- 输入仅支持 V4A（Hermes 风格）；git unified diff 输入解析已移除（对齐 Hermes）。
+This module accepts only one-file-per-section Git unified diffs. It rejects file
+creation, deletion, rename, copy, binary, and mode-change metadata before callers
+resolve paths or touch the workspace.
 """
 
+from __future__ import annotations
+
+import codecs
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+
+from unidiff import PatchSet
+from unidiff.errors import UnidiffParseError
 
 
-class OperationType(Enum):
-    """patch_write 操作类型。"""
-
-    ADD = "add"
-    UPDATE = "update"
-    DELETE = "delete"
-    MOVE = "move"
-
-
-@dataclass
+@dataclass(frozen=True)
 class HunkLine:
-    """patch_write hunk 中的单行。"""
+    """One context, removed, or added line from a unified-diff hunk."""
 
-    prefix: str  # ' '（上下文）/ '-'（删除）/ '+'（新增）
+    prefix: str
     content: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class Hunk:
-    """patch_write 中一组相邻变更。"""
+    """A parsed text hunk, with the original lines used for content matching."""
 
     context_hint: str | None = None
     lines: list[HunkLine] = field(default_factory=list)
+    source_start: int = 0
+    target_start: int = 0
+    source_length: int = 0
+    target_length: int = 0
+    new_no_newline_at_eof: bool = False
 
 
-@dataclass
+@dataclass(frozen=True)
 class PatchOperation:
-    """一个统一的 patch_write 操作。"""
+    """One content-only update to an existing workspace-relative file."""
 
-    operation: OperationType
     file_path: str
-    new_path: str | None = None  # Move 操作的目标路径
-    hunks: list[Hunk] = field(default_factory=list)
-    content: str | None = None  # 反向/整文件操作的目标完整内容（精确还原用）
-    reverse_content: str | None = None  # 正向 UPDATE 携带的 before 原文，仅供 reverse 读取
+    hunks: list[Hunk]
 
 
-def hunk_content(hunks: list[Hunk], prefix: str) -> str:
-    """从 Hunk 列表提取指定前缀行的内容拼接为文本。
+def _split_sections(patch: str) -> tuple[list[str], str | None]:
+    """Split a patch at Git file headers and reject ambiguous preambles."""
 
-    用于从采集/反向操作的 hunks 恢复目标全文（'*' 新增、'-' 删除行），
-    ``v4a_reverse`` 与变更集（change_set）共用，避免重复实现。
+    lines = patch.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.startswith("diff --git ")]
+    if not starts or starts[0] != 0:
+        return [], "expected a Git 'diff --git' header at the start of the patch"
+    if any(
+        line.startswith(("diff --cc ", "diff --combined "))
+        for line in lines
+        if line.startswith("diff --") and not line.startswith("diff --git ")
+    ):
+        return [], "combined diffs are not supported"
+    return [
+        "".join(lines[start : starts[index + 1] if index + 1 < len(starts) else len(lines)])
+        for index, start in enumerate(starts)
+    ], None
 
-    参数:
-        hunks: Hunk 列表。
-        prefix: 要提取的行前缀（``+`` 或 ``-``）。
 
-    返回:
-        按顺序拼接、以换行连接的行内容文本；无匹配行时返回空串。
+def _decode_git_path(value: str, prefix: str) -> str:
+    """Decode a Git C-quoted path and return its workspace-relative path."""
 
-    异常:
-        无。
+    value = value.strip()
+    if value.startswith('"'):
+        if not value.endswith('"') or len(value) < 2:
+            raise ValueError("malformed quoted path")
+        try:
+            raw = codecs.escape_decode(value[1:-1].encode("utf-8"))[0]
+            value = raw.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("quoted path is not valid UTF-8") from exc
+    if not value.startswith(prefix):
+        raise ValueError(f"expected a {prefix!r} workspace-relative path")
+    path = value[len(prefix) :]
+    if (
+        not path
+        or "\x00" in path
+        or "\\" in path
+        or path.startswith("/")
+        or re.match(r"^[A-Za-z]:", path)
+        or any(part in {"", ".", ".."} for part in path.split("/"))
+    ):
+        raise ValueError("path must be a normalized workspace-relative file path")
+    return path
 
-    副作用:
-        无。
+
+def _diff_header_paths(section: str, section_index: int) -> tuple[str, str, str | None]:
+    """Read two Git header paths, including C-quoted names with spaces."""
+
+    header = section.splitlines()[0]
+    tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^ \t]+', header[len("diff --git ") :])
+    if len(tokens) != 2:
+        return "", "", f"file section {section_index + 1} has a malformed Git header"
+    try:
+        source = _decode_git_path(tokens[0], "a/")
+        target = _decode_git_path(tokens[1], "b/")
+    except ValueError as exc:
+        return "", "", f"file section {section_index + 1}: {exc}"
+    if source != target:
+        return "", "", "each diff section must modify one existing file without renaming it"
+    return source, target, None
+
+
+def _validate_section_headers(section: str) -> str | None:
+    """Validate the Git metadata and required unified-diff file headers."""
+
+    lines = section.splitlines()
+    if not lines or not lines[0].startswith("diff --git "):
+        return "each file section must begin with 'diff --git'"
+    if any(
+        line.startswith(
+            (
+                "new file mode ",
+                "deleted file mode ",
+                "rename from ",
+                "rename to ",
+                "copy from ",
+                "copy to ",
+                "old mode ",
+                "new mode ",
+                "GIT binary patch",
+                "Binary files ",
+            )
+        )
+        for line in lines
+    ):
+        return (
+            "file creation, deletion, move, copy, mode changes, and binary patches "
+            "are not supported"
+        )
+    if any(line.startswith("diff --") and not line.startswith("diff --git ") for line in lines):
+        return "only Git file diffs are supported; combined diffs are not supported"
+
+    hunks = [index for index, line in enumerate(lines) if line.startswith("@@ ")]
+    first_hunk = hunks[0] if hunks else len(lines)
+    old_headers = [
+        index for index, line in enumerate(lines[:first_hunk]) if line.startswith("--- ")
+    ]
+    new_headers = [
+        index for index, line in enumerate(lines[:first_hunk]) if line.startswith("+++ ")
+    ]
+    if len(old_headers) != 1 or len(new_headers) != 1 or not hunks:
+        return (
+            "each file section must contain exactly one '---', one '+++', and at least one "
+            "'@@' hunk"
+        )
+    if not (1 <= old_headers[0] < new_headers[0] < hunks[0]):
+        return "unified-diff file headers must appear before the hunks"
+
+    # Git's index line is the only extended metadata accepted. Reject unknown metadata
+    # instead of allowing the parser to silently ignore file operations.
+    for line in lines[1 : old_headers[0]]:
+        if line and not line.startswith("index "):
+            return f"unsupported Git diff metadata: {line}"
+    for line in lines[hunks[0] + 1 :]:
+        if line and line[0] not in {" ", "+", "-", "\\", "@"}:
+            return "unexpected text outside a unified-diff hunk"
+    return None
+
+
+def _normalize_parser_paths(
+    sections: list[str],
+) -> tuple[list[str], list[str], str | None]:
+    """Replace variable Git paths with safe parser labels after validating headers."""
+
+    normalized: list[str] = []
+    paths: list[str] = []
+    for index, section in enumerate(sections):
+        source, _, error = _diff_header_paths(section, index)
+        if error:
+            return [], [], error
+        lines = section.splitlines(keepends=True)
+        old_index = next(i for i, line in enumerate(lines) if line.startswith("--- "))
+        new_index = next(i for i, line in enumerate(lines) if line.startswith("+++ "))
+        old_value = lines[old_index][4:].rstrip("\r\n").split("\t", 1)[0]
+        new_value = lines[new_index][4:].rstrip("\r\n").split("\t", 1)[0]
+        try:
+            old_path = _decode_git_path(old_value, "a/")
+            new_path = _decode_git_path(new_value, "b/")
+        except ValueError as exc:
+            return [], [], f"file section {index + 1}: {exc}"
+        if old_path != source or new_path != source:
+            return [], [], "the Git, '---', and '+++' headers must name the same existing file"
+
+        label = f"codex_patch_file_{index}"
+        lines[0] = f"diff --git a/{label} b/{label}\n"
+        lines[old_index] = f"--- a/{label}\n"
+        lines[new_index] = f"+++ b/{label}\n"
+        normalized.append("".join(lines))
+        paths.append(source)
+    return normalized, paths, None
+
+
+def parse_git_unified_diff(patch: str) -> tuple[list[PatchOperation], str | None]:
+    """Parse a Git unified diff without performing filesystem access.
+
+    The parser validates Git file sections and hunk lengths. It returns only UPDATE
+    operations; callers remain responsible for workspace containment and file checks.
     """
-    return "\n".join(line.content for hunk in hunks for line in hunk.lines if line.prefix == prefix)
 
+    if not isinstance(patch, str) or not patch.strip():
+        return [], "patch must be a non-empty Git unified diff"
+    normalized_input = patch if patch.endswith("\n") else patch + "\n"
+    sections, error = _split_sections(normalized_input)
+    if error:
+        return [], error
+    for section in sections:
+        error = _validate_section_headers(section)
+        if error:
+            return [], error
+    normalized_sections, paths, error = _normalize_parser_paths(sections)
+    if error:
+        return [], error
+    try:
+        parsed = PatchSet.from_string("".join(normalized_sections))
+    except (UnidiffParseError, ValueError, IndexError) as exc:
+        return [], f"invalid unified diff: {exc}"
+    if len(parsed) != len(sections):
+        return [], "unified diff contains an incomplete or ambiguous file section"
 
-def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], str | None]:
-    """解析 V4A 格式 patch_write。
-
-    参数:
-        patch_content: V4A 格式 patch_write 文本。
-
-    返回:
-        ``(operations, None)`` 表示成功；``([], error)`` 表示解析失败。空 patch_write
-        返回 ``([], None)``（由调用方决定如何处理）。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    lines = patch_content.splitlines()
     operations: list[PatchOperation] = []
+    seen_paths: set[str] = set()
+    for file, path in zip(parsed, paths, strict=True):
+        if file.is_binary_file or not file:
+            return [], "binary patches and file sections without text hunks are not supported"
+        if file.source_file == "/dev/null" or file.target_file == "/dev/null":
+            return [], "file creation and deletion are not supported by apply_patch"
+        if path in seen_paths:
+            return [], f"duplicate diff section for {path!r}"
+        seen_paths.add(path)
 
-    start_idx: int | None = None
-    end_idx: int | None = None
-
-    for i, line in enumerate(lines):
-        if "*** Begin Patch" in line or "***Begin Patch" in line:
-            start_idx = i
-        elif "*** End Patch" in line or "***End Patch" in line:
-            end_idx = i
-            break
-
-    if start_idx is None:
-        start_idx = -1
-    if end_idx is None:
-        end_idx = len(lines)
-
-    i = start_idx + 1
-    current_op: PatchOperation | None = None
-    current_hunk: Hunk | None = None
-
-    while i < end_idx:
-        line = lines[i]
-
-        update_match = re.match(r"\*\*\*\s*Update\s+File:\s*(.+)", line)
-        add_match = re.match(r"\*\*\*\s*Add\s+File:\s*(.+)", line)
-        delete_match = re.match(r"\*\*\*\s*Delete\s+File:\s*(.+)", line)
-        move_match = re.match(r"\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)", line)
-
-        if update_match:
-            if current_op is not None:
-                if current_hunk is not None and current_hunk.lines:
-                    current_op.hunks.append(current_hunk)
-                operations.append(current_op)
-
-            current_op = PatchOperation(
-                operation=OperationType.UPDATE,
-                file_path=update_match.group(1).strip(),
+        converted_hunks: list[Hunk] = []
+        for parsed_hunk in file:
+            converted: list[HunkLine] = []
+            new_no_newline = False
+            previous_line_type: str | None = None
+            for line in parsed_hunk:
+                if line.line_type == "\\":
+                    if previous_line_type in {" ", "+"}:
+                        new_no_newline = True
+                elif line.line_type in {" ", "+", "-"}:
+                    value = line.value[:-1] if line.value.endswith("\n") else line.value
+                    converted.append(HunkLine(line.line_type, value))
+                    previous_line_type = line.line_type
+            if not converted:
+                return [], f"{path}: hunk has no context or changed lines"
+            if not any(line.prefix in {"+", "-"} for line in converted):
+                return [], f"{path}: hunk does not change file contents"
+            converted_hunks.append(
+                Hunk(
+                    context_hint=parsed_hunk.section_header or None,
+                    lines=converted,
+                    source_start=parsed_hunk.source_start,
+                    target_start=parsed_hunk.target_start,
+                    source_length=parsed_hunk.source_length,
+                    target_length=parsed_hunk.target_length,
+                    new_no_newline_at_eof=new_no_newline,
+                )
             )
-            current_hunk = None
-
-        elif add_match:
-            if current_op is not None:
-                if current_hunk is not None and current_hunk.lines:
-                    current_op.hunks.append(current_hunk)
-                operations.append(current_op)
-
-            current_op = PatchOperation(
-                operation=OperationType.ADD,
-                file_path=add_match.group(1).strip(),
-            )
-            current_hunk = Hunk()
-
-        elif delete_match:
-            if current_op is not None:
-                if current_hunk is not None and current_hunk.lines:
-                    current_op.hunks.append(current_hunk)
-                operations.append(current_op)
-
-            current_op = PatchOperation(
-                operation=OperationType.DELETE,
-                file_path=delete_match.group(1).strip(),
-            )
-            operations.append(current_op)
-            current_op = None
-            current_hunk = None
-
-        elif move_match:
-            if current_op is not None:
-                if current_hunk is not None and current_hunk.lines:
-                    current_op.hunks.append(current_hunk)
-                operations.append(current_op)
-
-            current_op = PatchOperation(
-                operation=OperationType.MOVE,
-                file_path=move_match.group(1).strip(),
-                new_path=move_match.group(2).strip(),
-            )
-            operations.append(current_op)
-            current_op = None
-            current_hunk = None
-
-        elif re.match(r"\*\*\*\s*Move\s+File:", line):
-            # Move 缺目标路径（无 "-> dst"）：仍进入 MOVE 解析并置 new_path=None，
-            # 交由下方 parse_errors 分支给出精确的 "missing destination path" 错误，
-            # 避免被当作普通文本行忽略而降级为 empty_patch。
-            if current_op is not None:
-                if current_hunk is not None and current_hunk.lines:
-                    current_op.hunks.append(current_hunk)
-                operations.append(current_op)
-            src = line.split("Move File:", 1)[1].strip()
-            current_op = PatchOperation(
-                operation=OperationType.MOVE,
-                file_path=src,
-                new_path=None,
-            )
-            operations.append(current_op)
-            current_op = None
-            current_hunk = None
-
-        elif line.startswith("@@"):
-            if current_op is not None:
-                if current_hunk is not None and current_hunk.lines:
-                    current_op.hunks.append(current_hunk)
-
-                hint_match = re.match(r"@@\s*(.+?)\s*@@", line)
-                hint = hint_match.group(1) if hint_match else None
-                current_hunk = Hunk(context_hint=hint)
-
-        elif current_op is not None and line:
-            if current_hunk is None:
-                current_hunk = Hunk()
-
-            if line.startswith("+"):
-                current_hunk.lines.append(HunkLine("+", line[1:]))
-            elif line.startswith("-"):
-                current_hunk.lines.append(HunkLine("-", line[1:]))
-            elif line.startswith(" "):
-                current_hunk.lines.append(HunkLine(" ", line[1:]))
-            elif line.startswith("\\"):
-                pass
-            else:
-                current_hunk.lines.append(HunkLine(" ", line))
-
-        i += 1
-
-    if current_op is not None:
-        if current_hunk is not None and current_hunk.lines:
-            current_op.hunks.append(current_hunk)
-        operations.append(current_op)
+        operations.append(PatchOperation(file_path=path, hunks=converted_hunks))
 
     if not operations:
-        return operations, None
-
-    parse_errors: list[str] = []
-    for op in operations:
-        if not op.file_path:
-            parse_errors.append("Operation with empty file path")
-        if op.operation == OperationType.UPDATE and not op.hunks:
-            parse_errors.append(f"UPDATE {op.file_path!r}: no hunks found")
-        if op.operation == OperationType.MOVE and not op.new_path:
-            parse_errors.append(
-                f"MOVE {op.file_path!r}: missing destination path (expected 'src -> dst')"
-            )
-
-    if parse_errors:
-        return [], "Parse error: " + "; ".join(parse_errors)
-
+        return [], "patch contains no file updates"
     return operations, None

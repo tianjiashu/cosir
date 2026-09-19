@@ -1,7 +1,8 @@
 """多语言语法检查内核（tree-sitter 驱动，error 驱动前置守卫）。
 
 本模块承载「按扩展名分发到 tree-sitter grammar 做语法检查」的唯一共享实现：
-把 ``write_file`` / ``patch_write`` / ``apply_patch`` 中对 ``.py`` 的 ``ast.parse`` 软校验，升级为多语言、
+把 ``write_file`` / ``patch_write`` / ``apply_patch`` 中对 ``.py`` 的 ``ast.parse`` 软校验，
+升级为多语言、
 单一来源的语法检查守卫，消除各 handler 的重复实现（Rule of Three）。
 
 职责边界：
@@ -379,7 +380,7 @@ def format_syntax_reason(result: SyntaxCheckResult) -> str:
     return (
         f"the written file has a {first.language} syntax error ({detail}); the file has "
         f"been written but is not valid. Fix it with a follow-up edit (write_file or "
-        f"patch_write or apply_patch) that corrects the syntax at that location."
+        f"apply_patch) that corrects the syntax at that location."
     )
 
 

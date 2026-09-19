@@ -206,10 +206,7 @@ class ConversationRunService:
             attachment_service.finalize(task_id, asset_id, model_name or "")
             for asset_id in image_asset_ids
         ]
-        return [
-            attachment_service.relative_path(task_id, result.path)
-            for result in finalized
-        ]
+        return [attachment_service.relative_path(task_id, result.path) for result in finalized]
 
     def create_run(
         self,
@@ -410,7 +407,7 @@ class ConversationRunService:
 
         副作用:
             每个 Run 一个事务：更新 ``conversation_runs`` 终态并追加缺失的占位 ``ToolMessage``
-            行；每个 Run 与每个占位各写一条结构化日志。
+            行。文件快照直接关联 Run，其生命周期状态不另行复制。
         """
 
         recovered: list[ConversationRunRecord] = []
@@ -463,5 +460,3 @@ class ConversationRunService:
                     },
                 )
         return recovered
-
-

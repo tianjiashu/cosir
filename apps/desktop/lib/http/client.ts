@@ -12,13 +12,18 @@ declare global {
 
 export type HttpRequestInit = RequestInit & { traceId?: TraceId };
 
+/** 去掉 URL 末尾的斜杠，避免拼接路径时产生双斜杠。 */
+export function stripTrailingSlash(url: string): string {
+  return url.replace(/\/$/, "");
+}
+
 export function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
     const runtimeBaseUrl = window.__COSIR_RUNTIME_CONFIG__?.backendBaseUrl;
-    if (runtimeBaseUrl) return runtimeBaseUrl.replace(/\/$/, "");
+    if (runtimeBaseUrl) return stripTrailingSlash(runtimeBaseUrl);
   }
   const developmentUrl = import.meta.env.VITE_BACKEND_URL;
-  if (developmentUrl) return developmentUrl.replace(/\/$/, "");
+  if (developmentUrl) return stripTrailingSlash(developmentUrl);
   return "http://127.0.0.1:8000";
 }
 
@@ -88,4 +93,28 @@ export async function requestJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+/** 构造带 JSON 请求体的请求 init（设置 Content-Type 并序列化 body）。 */
+export function jsonRequestInit(body: unknown, init?: HttpRequestInit): HttpRequestInit {
+  return {
+    ...(init ?? {}),
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    body: JSON.stringify(body),
+  };
+}
+
+/** 发送 JSON 请求并解析 JSON 响应（自动注入 traceId 与 Content-Type）。 */
+export async function sendJson<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH",
+  body: unknown,
+  init?: HttpRequestInit,
+): Promise<T> {
+  return requestJson<T>(path, jsonRequestInit(body, { ...(init ?? {}), method }));
+}
+
+/** 发送 JSON POST 请求并解析 JSON 响应。 */
+export async function postJson<T>(path: string, body: unknown, init?: HttpRequestInit): Promise<T> {
+  return sendJson<T>(path, "POST", body, init);
 }

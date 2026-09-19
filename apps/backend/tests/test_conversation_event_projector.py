@@ -132,9 +132,14 @@ def test_delegation_ref_projects_locator_title_and_role_only_to_target_tool(
         task_id=1,
         run_id=1,
         tool_call_id="delegate-1",
-        kind="delegation_ref",
         seq=0,
-        data={"child_task_id": 22, "title": "审查前端", "role": "Reviewer"},
+        data={
+            "kind": "delegation_ref",
+            "child_task_id": 22,
+            "child_run_id": 220,
+            "title": "审查前端",
+            "role": "Reviewer",
+        },
     )
 
     change = event_projector.process(event)
@@ -142,12 +147,14 @@ def test_delegation_ref_projects_locator_title_and_role_only_to_target_tool(
 
     assert change is not None
     assert part["child_task_id"] == 22
+    assert part["child_run_id"] == 220
     assert part["agent_role"] == "Reviewer"
     assert part["display_data"] == {
         "kind": "delegation-result",
         "title": "审查前端",
         "role": "Reviewer",
         "child_task_id": 22,
+        "child_run_id": 220,
     }
 
 
@@ -168,17 +175,27 @@ def test_delegation_ref_rejects_wrong_target_and_old_sequence(
         task_id=1,
         run_id=1,
         tool_call_id="delegate-1",
-        kind="delegation_ref",
         seq=2,
-        data={"child_task_id": 22, "title": "新标题", "role": "New Role"},
+        data={
+            "kind": "delegation_ref",
+            "child_task_id": 22,
+            "child_run_id": 220,
+            "title": "新标题",
+            "role": "New Role",
+        },
     )
     old = ToolCallRuntimeUpdateEvent(
         task_id=1,
         run_id=1,
         tool_call_id="delegate-1",
-        kind="delegation_ref",
         seq=1,
-        data={"child_task_id": 23, "title": "旧标题", "role": "Old Role"},
+        data={
+            "kind": "delegation_ref",
+            "child_task_id": 23,
+            "child_run_id": 230,
+            "title": "旧标题",
+            "role": "Old Role",
+        },
     )
     event_projector.process(current)
     change = event_projector.process(old)

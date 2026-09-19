@@ -15,12 +15,13 @@ from app.config.logging.logger import log
 
 
 class DelegationRefData(BaseModel):
-    """Runtime locator for the child task created by a delegation tool call."""
+    """Runtime locators for the child task and run created by a delegation call."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: Literal["delegation_ref"]
     child_task_id: int = Field(ge=1)
+    child_run_id: int = Field(ge=1)
     title: str = Field(min_length=1, pattern=r".*\S.*")
     role: str = Field(min_length=1, pattern=r".*\S.*")
 
@@ -132,10 +133,14 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
         if old_child_task_id is not None:
             if old_child_task_id != data.child_task_id:
                 return []
-            if part.get("agent_role") == data.role:
+            old_child_run_id = part.get("child_run_id")
+            if old_child_run_id is not None and old_child_run_id != data.child_run_id:
+                return []
+            if old_child_run_id == data.child_run_id and part.get("agent_role") == data.role:
                 return []
         return [
             ConversationStateMutation("set", (*base, "child_task_id"), data.child_task_id),
+            ConversationStateMutation("set", (*base, "child_run_id"), data.child_run_id),
             ConversationStateMutation("set", (*base, "agent_role"), data.role),
             ConversationStateMutation("set", (*base, "delegation_ref_seq"), self.seq),
             ConversationStateMutation(
@@ -146,6 +151,7 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
                     "title": data.title,
                     "role": data.role,
                     "child_task_id": data.child_task_id,
+                    "child_run_id": data.child_run_id,
                 },
             ),
         ]

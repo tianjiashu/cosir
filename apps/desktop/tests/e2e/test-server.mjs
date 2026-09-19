@@ -26,6 +26,7 @@ let testGeneration = 0;
 const cancelledRuns = new Set();
 const dropCancelledStreams = new Set();
 let dropNextCancelledStream = false;
+let failNextAttach = false;
 const telemetry = {
   clientCancelCount: 0,
   completedStreamCount: 0,
@@ -39,6 +40,7 @@ function resetTestState() {
   cancelledRuns.clear();
   dropCancelledStreams.clear();
   dropNextCancelledStream = false;
+  failNextAttach = false;
   lastStreamBody = "";
   nextRunId = 1;
   nextResumeRunId = 900;
@@ -738,6 +740,11 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { enabled: true });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/__test__/fail-next-attach") {
+    failNextAttach = true;
+    jsonResponse(res, 200, { enabled: true });
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/__test__/seed-delegation") {
     tasks.set(TASK_ID, {
       task_id: TASK_ID,
@@ -796,6 +803,11 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && /^\/tasks\/\d+\/assistant\/attach$/.test(url.pathname)) {
     try {
       const body = await readJson(req);
+      if (failNextAttach) {
+        failNextAttach = false;
+        jsonResponse(res, 503, { error: { code: "ATTACH_TEMPORARY_FAILURE", message: "attach temporarily unavailable", retryable: true } });
+        return;
+      }
       // The fixture models an already-running local executor. In production
       // this endpoint only attaches the UI stream; it must not be confused
       // with the user-triggered business resume on /assistant.

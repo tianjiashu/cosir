@@ -1,7 +1,7 @@
 """后端应用启动入口。
 
-通过 ``python -m app`` 从 ``apps/backend`` 目录启动本地开发服务器。
-仅作为开发期启动约定；生产部署应使用外部进程管理器拉起 ``app.app:app``。
+开发环境通过 ``python -m app`` 从 ``apps/backend`` 目录启动；桌面发布版由 PyInstaller
+冻结入口调用本模块，后端进程的创建、监控和清理仍由 Tauri Rust 宿主负责。
 
 可通过环境变量覆盖运行参数：
 

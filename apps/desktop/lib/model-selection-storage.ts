@@ -6,10 +6,12 @@
  * （assistant.tsx）都必须引用本模块，禁止各自重写 key 构造或解析逻辑。
  */
 
+import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
+
 export type ModelSelection = {
   providerId: number;
   modelName: string;
-  reasoningEffort: "low" | "high" | "max" | null;
+  reasoningEffort: (typeof REASONING_EFFORT_VALUES)[number] | null;
 };
 
 export type ModelSelectionScope =
@@ -24,13 +26,9 @@ const selectionSnapshotCache = new Map<string, {
 }>();
 const selectionSubscribers = new Map<string, Set<() => void>>();
 
-function selectionKey(scope?: ModelSelectionScope): string {
-  return selectionStorageKey(scope);
-}
-
 function getCachedSelection(scope?: ModelSelectionScope): Partial<ModelSelection> | null {
   if (typeof window === "undefined") return null;
-  const key = selectionKey(scope);
+  const key = selectionStorageKey(scope);
   let raw: string | null;
   try {
     raw = window.localStorage.getItem(key);
@@ -45,16 +43,20 @@ function getCachedSelection(scope?: ModelSelectionScope): Partial<ModelSelection
 }
 
 function notifySelection(scope?: ModelSelectionScope): void {
-  for (const listener of selectionSubscribers.get(selectionKey(scope)) ?? []) listener();
+  for (const listener of selectionSubscribers.get(selectionStorageKey(scope)) ?? []) listener();
 }
 
 /**
  * 构造 localStorage 中模型选择项的 key。工作区与任务即使使用同一个数字
  * ID，也必须生成不同的 key，避免页面级选择污染任务级选择。
  */
+export function scopeSuffix(scope?: ModelSelectionScope): string {
+  return scope ? `${scope.kind}:${scope.id}` : "";
+}
+
 export function selectionStorageKey(scope?: ModelSelectionScope): string {
-  if (!scope) return `${STORAGE_KEY_PREFIX}${DEFAULT_TASK_KEY}`;
-  return `${STORAGE_KEY_PREFIX}${scope.kind}:${scope.id}`;
+  const suffix = scopeSuffix(scope);
+  return `${STORAGE_KEY_PREFIX}${suffix || DEFAULT_TASK_KEY}`;
 }
 
 /**
@@ -69,7 +71,7 @@ export function selectionStorageKey(scope?: ModelSelectionScope): string {
 function isReasoningEffort(
   value: unknown,
 ): value is ModelSelection["reasoningEffort"] {
-  return value === null || value === "low" || value === "high" || value === "max";
+  return value === null || REASONING_EFFORT_VALUES.includes(value as "low" | "high" | "max");
 }
 
 /**
@@ -110,23 +112,23 @@ export function parseStoredSelection(
  * 任何失败路径（window 不存在、localStorage 被禁用、JSON.parse 失败、字段
  * 缺失或类型不符）均返回 null，不抛异常。
  */
-export function readStoredSelection(
-  scope?: ModelSelectionScope,
-): Partial<ModelSelection> | null {
-  return getCachedSelection(scope);
-}
-
 export function getStoredSelectionSnapshot(
   scope?: ModelSelectionScope,
 ): Partial<ModelSelection> | null {
   return getCachedSelection(scope);
 }
 
+export function readStoredSelection(
+  scope?: ModelSelectionScope,
+): Partial<ModelSelection> | null {
+  return getStoredSelectionSnapshot(scope);
+}
+
 export function subscribeStoredSelection(
   scope: ModelSelectionScope,
   listener: () => void,
 ): () => void {
-  const key = selectionKey(scope);
+  const key = selectionStorageKey(scope);
   const listeners = selectionSubscribers.get(key) ?? new Set<() => void>();
   listeners.add(listener);
   selectionSubscribers.set(key, listeners);
@@ -149,7 +151,7 @@ export function writeStoredSelection(
   selection: ModelSelection,
 ): void {
   if (typeof window === "undefined") return;
-  const key = selectionKey(scope);
+  const key = selectionStorageKey(scope);
   const raw = JSON.stringify(selection);
   try {
     if (window.localStorage.getItem(key) === raw) return;

@@ -12,6 +12,7 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.delegation_record import DelegationRecord
 from app.models.task_record import TaskRecord
 
 
@@ -179,6 +180,60 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
     assert state["runs"][0]["messages"][0]["parts"] == [
         {"type": "text", "text": "输出到一半", "status": "completed"}
     ]
+
+
+def test_rebuild_restores_child_run_locator_from_delegation_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ToolRegistry:
+        def get_tool_definition(self, _name: str):
+            return None
+
+    monkeypatch.setattr(
+        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
+        lambda: _ToolRegistry(),
+    )
+    monkeypatch.setattr(
+        "app.assistant_transport.service.conversation_task_state_rebuilder.get_agent_registry",
+        lambda: (_ for _ in ()).throw(RuntimeError("registry unavailable")),
+    )
+    row = ConversationTaskContextRecord(
+        id=1,
+        task_id=7,
+        run_id=1,
+        message=AIMessage(
+            content="",
+            tool_calls=[{
+                "id": "delegate-1",
+                "name": "delegate_task",
+                "args": {"child_agent_id": "reviewer", "prompt": "review", "title": "审查代码"},
+            }],
+        ),
+        include_in_context=False,
+        sequence=1,
+    )
+    delegation = DelegationRecord(
+        id=1,
+        task_id=7,
+        parent_run_id=1,
+        child_run_id=220,
+        parent_agent_id="parent",
+        child_agent_id="reviewer",
+        status="running",
+        prompt="review",
+        summary="",
+        error="",
+        effective_tools=(),
+        child_task_id=22,
+    )
+
+    tool_part = ConversationTaskStateRebuilder.build_pair_tool_part([row], [delegation])[
+        "delegate-1"
+    ]
+
+    assert tool_part["child_task_id"] == 22
+    assert tool_part["child_run_id"] == 220
+    assert tool_part["display_data"]["child_run_id"] == 220
 
 
 def test_rebuild_restores_ordinary_file_from_run_extra() -> None:

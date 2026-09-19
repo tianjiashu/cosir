@@ -13,7 +13,8 @@ class ExecutionResult:
     """一条 shell 命令的归一化执行结果。
 
     参数:
-        output: 合并 stdout+stderr（按到达顺序）后的文本，已做有界截断与 ANSI 剥离。
+        output: 合并 stdout+stderr（按到达顺序）后的原始解码文本；ANSI 控制序列原样保留，
+            超过输出上限时以首尾保留和截断标记限制长度。
         exit_code: 进程退出码；因超时被强杀时为 -1。
         truncated: 输出是否因超过 ``MAX_OUTPUT_CHARS`` 被截断。
         timed_out: 是否因超过命令级超时被强杀。

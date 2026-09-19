@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::backend_process::BackendLaunchMode;
 use tauri::{AppHandle, Manager};
 
 /// 后端的启动方式。运行时解析与进程创建分离，避免 supervisor 了解环境变量细节。
@@ -16,12 +17,19 @@ pub enum BackendRuntime {
         backend_dir: PathBuf,
         terminal_worker: Option<PathBuf>,
     },
+    FrozenExecutable {
+        launcher: PathBuf,
+        backend_dir: PathBuf,
+        terminal_worker: Option<PathBuf>,
+    },
 }
 
 impl BackendRuntime {
     pub fn backend_dir(&self) -> &Path {
         match self {
-            Self::UvProject { backend_dir, .. } | Self::Interpreter { backend_dir, .. } => {
+            Self::UvProject { backend_dir, .. }
+            | Self::Interpreter { backend_dir, .. }
+            | Self::FrozenExecutable { backend_dir, .. } => {
                 backend_dir
             }
         }
@@ -29,14 +37,28 @@ impl BackendRuntime {
 
     pub fn launcher(&self) -> &Path {
         match self {
-            Self::UvProject { launcher, .. } | Self::Interpreter { launcher, .. } => launcher,
+            Self::UvProject { launcher, .. }
+            | Self::Interpreter { launcher, .. }
+            | Self::FrozenExecutable { launcher, .. } => launcher,
         }
+    }
+
+    pub fn launch_mode(&self) -> BackendLaunchMode {
+        match self {
+            Self::UvProject { .. } => BackendLaunchMode::UvProject,
+            Self::Interpreter { .. } => BackendLaunchMode::PythonModule,
+            Self::FrozenExecutable { .. } => BackendLaunchMode::FrozenExecutable,
+        }
+    }
+
+    pub fn uses_packaged_data_dir(&self) -> bool {
+        matches!(self, Self::FrozenExecutable { .. })
     }
 
     pub fn uv_cache_dir(&self) -> Option<&Path> {
         match self {
             Self::UvProject { cache_dir, .. } => Some(cache_dir),
-            Self::Interpreter { .. } => None,
+            Self::Interpreter { .. } | Self::FrozenExecutable { .. } => None,
         }
     }
 
@@ -46,6 +68,9 @@ impl BackendRuntime {
                 terminal_worker, ..
             }
             | Self::Interpreter {
+                terminal_worker, ..
+            }
+            | Self::FrozenExecutable {
                 terminal_worker, ..
             } => terminal_worker.as_deref(),
         }
@@ -102,15 +127,14 @@ pub fn resolve_backend_runtime(
     let backend_dir = resource_dir.join("backend");
     if !backend_dir.is_dir() {
         return Err(format!(
-            "随应用交付的后端代码目录不存在：{}",
+            "随应用交付的后端运行目录不存在：{}",
             backend_dir.display()
         ));
     }
-    let runtime_root = resource_dir.join("backend-runtime");
-    let launcher = packaged_python(&runtime_root);
+    let launcher = packaged_backend_executable(&backend_dir);
     if !launcher.is_file() {
         return Err(format!(
-            "随应用交付的后端 Python 运行时不存在：{}",
+            "随应用交付的本地后端可执行文件不存在：{}",
             launcher.display()
         ));
     }
@@ -121,7 +145,7 @@ pub fn resolve_backend_runtime(
             terminal_worker.display()
         ));
     }
-    Ok(BackendRuntime::Interpreter {
+    Ok(BackendRuntime::FrozenExecutable {
         launcher,
         backend_dir,
         terminal_worker: Some(terminal_worker),
@@ -139,14 +163,14 @@ fn default_backend_dir() -> PathBuf {
     }
 }
 
-fn packaged_python(runtime_root: &Path) -> PathBuf {
+fn packaged_backend_executable(backend_dir: &Path) -> PathBuf {
     #[cfg(windows)]
     {
-        runtime_root.join("python.exe")
+        backend_dir.join("cosir-backend.exe")
     }
     #[cfg(not(windows))]
     {
-        runtime_root.join("bin").join("python")
+        backend_dir.join("cosir-backend")
     }
 }
 
@@ -188,7 +212,7 @@ fn packaged_terminal_worker(resource_dir: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{packaged_python, BackendRuntime};
+    use super::{packaged_backend_executable, BackendRuntime};
     use std::path::PathBuf;
 
     #[test]
@@ -206,12 +230,27 @@ mod tests {
     }
 
     #[test]
-    fn packaged_python_has_platform_specific_location() {
-        let path = packaged_python(std::path::Path::new("resources/backend-runtime"));
+    fn packaged_backend_executable_has_platform_specific_name() {
+        let path = packaged_backend_executable(std::path::Path::new("resources/backend"));
         assert!(path.ends_with(if cfg!(windows) {
-            "python.exe"
+            "cosir-backend.exe"
         } else {
-            "bin/python"
+            "cosir-backend"
         }));
+    }
+
+    #[test]
+    fn frozen_runtime_uses_standalone_executable_and_user_data_directory() {
+        let runtime = BackendRuntime::FrozenExecutable {
+            launcher: PathBuf::from("resources/backend/cosir-backend.exe"),
+            backend_dir: PathBuf::from("resources/backend"),
+            terminal_worker: None,
+        };
+        assert_eq!(
+            runtime.launch_mode(),
+            crate::backend_process::BackendLaunchMode::FrozenExecutable
+        );
+        assert!(runtime.uses_packaged_data_dir());
+        assert_eq!(runtime.uv_cache_dir(), None);
     }
 }

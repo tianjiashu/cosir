@@ -83,7 +83,6 @@ def terminal_error(
     return ConversationRunError(
         code=code,
         message="运行已取消" if status is ConversationRunStatus.CANCELLED else "运行失败",
-        retryable=False,
     )
 
 

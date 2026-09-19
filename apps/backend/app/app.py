@@ -23,8 +23,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.middleware.api_logging import install_http_exception_logging, install_request_logging
+from app.api.middleware.api_logging import (
+    install_http_exception_logging,
+    install_request_logging,
+)
 from app.api.middleware.transport_error import install_transport_request_error_handler
+from app.assistant_transport.event.tool_runtime_output_adapter import (
+    ToolRuntimeOutputChannelFactory,
+)
 from app.bootstate import (
     BOOT_PHASE_FAILED,
     BOOT_PHASE_READY,
@@ -50,6 +56,8 @@ from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_run_service,
     get_delegation_service,
+    get_file_mutation_service,
+    get_task_change_set_service,
     get_terminal_session_service,
     initialize_service_dependencies,
     set_runtime,
@@ -112,6 +120,19 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "data": {"run_ids": [run.id for run in recovered_runs]},
             },
         )
+    unresolved_mutations = get_file_mutation_service().reconcile_prepared_snapshots()
+    unresolved_reverts = get_task_change_set_service().reconcile_interrupted_reverts()
+    if unresolved_mutations or unresolved_reverts:
+        log.warning(
+            "file_snapshot_reconcile_incomplete",
+            extra={
+                "msg": "启动时有文件快照暂时无法与工作区对账，将在下次启动重试",
+                "data": {
+                    "unresolved_mutation_count": len(unresolved_mutations),
+                    "unresolved_revert_count": len(unresolved_reverts),
+                },
+            },
+        )
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
     get_terminal_session_service().initialize()
 
@@ -124,7 +145,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     tool_system = ToolSystem.build_tool_system()
     set_tool_system(tool_system)
     set_agent_registry(build_agent_registry())
-    set_runtime(AgentRuntime())
+    set_runtime(
+        AgentRuntime(
+            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),
+        )
+    )
     # 当前产品只启动新鲜 ConversationRun；旧 run 不在启动期隐式重放。
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。

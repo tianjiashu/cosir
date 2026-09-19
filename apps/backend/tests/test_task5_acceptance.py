@@ -213,9 +213,7 @@ def _settle_run(store, run, status: str, end_reason: str) -> None:
     """Persist terminal Run facts through the real Run CRUD conditional update."""
 
     error: ConversationRunError | None = (
-        None
-        if status == "completed"
-        else {"code": end_reason, "message": "运行失败", "retryable": False}
+        None if status == "completed" else {"code": end_reason, "message": "运行失败"}
     )
     updated = store.runs.update_status_if_in(
         run.id,

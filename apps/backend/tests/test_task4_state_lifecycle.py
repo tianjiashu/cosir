@@ -15,6 +15,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.models import ConversationRunStatus
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -388,3 +389,27 @@ async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
     assert first.state["runs"][0]["status"] == "completed"
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+
+
+# retryable 只属于工具观察（告诉模型能否重试某次工具调用）；Run 级错误契约的键集精确锁定为
+# code + message，任何把 retryable 加回来的改动都必须让本用例变红。
+def test_terminal_error_contract_carries_only_code_and_message() -> None:
+    failed = conversation_run_state_service_module.terminal_error(
+        ConversationRunStatus.FAILED,
+        "tool_error_limit_reached",
+    )
+    cancelled = conversation_run_state_service_module.terminal_error(
+        ConversationRunStatus.CANCELLED,
+        "user cancelled mid-run",  # 非合法标识符 -> 回退固定 code
+    )
+
+    assert failed == {"code": "tool_error_limit_reached", "message": "运行失败"}
+    assert set(failed or {}) == {"code", "message"}
+    assert cancelled == {"code": "run_cancelled", "message": "运行已取消"}
+    assert (
+        conversation_run_state_service_module.terminal_error(
+            ConversationRunStatus.COMPLETED,
+            None,
+        )
+        is None
+    )

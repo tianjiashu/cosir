@@ -3,7 +3,8 @@ import { cn } from "@/lib/utils";
 
 export type TransportIssue = {
   message: string;
-  retryable: boolean;
+  /** 该连接问题是否可以由用户点击“重新同步”恢复；与 Agent 的工具 retryable 无关。 */
+  canResync: boolean;
 };
 
 export function TransportStatus({ issue, onRetry }: {
@@ -12,11 +13,11 @@ export function TransportStatus({ issue, onRetry }: {
 }) {
   if (!issue) return null;
   return (
-    <div role="status" className={cn("border-b px-4 py-2 text-xs", issue.retryable ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-destructive/30 bg-destructive/10 text-destructive")}>
+    <div role="status" className={cn("border-b px-4 py-2 text-xs", issue.canResync ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-destructive/30 bg-destructive/10 text-destructive")}>
       <div className="mx-auto flex max-w-3xl items-center gap-2">
         <WifiOffIcon className="size-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1">{issue.message}</span>
-        {issue.retryable && onRetry ? (
+        {issue.canResync && onRetry ? (
           <button
             type="button"
             className="shrink-0 font-medium underline underline-offset-2 hover:no-underline"

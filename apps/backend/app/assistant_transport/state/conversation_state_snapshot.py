@@ -37,6 +37,7 @@ _TOOL_PART_KEYS = {
     "isError",
     "approvalRequestId",
     "child_task_id",
+    "child_run_id",
     "agent_role",
     "delegation_ref_seq",
     "terminal_output_seq",
@@ -196,12 +197,12 @@ def _validate_usage(usage: object) -> None:
 
 
 def _validate_error(error: object) -> None:
+    # 错误契约只允许 code + message；``retryable`` 属于工具观察，不进 Transport。
     if (
         not isinstance(error, dict)
-        or set(error) != {"code", "message", "retryable"}
+        or set(error) != {"code", "message"}
         or not isinstance(error["code"], str)
         or not isinstance(error["message"], str)
-        or not isinstance(error["retryable"], bool)
     ):
         raise ValueError("snapshot error is malformed")
 
@@ -264,9 +265,17 @@ def _validate_part(part: object) -> None:
         if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
             raise ValueError("snapshot tool display_data must be an object or null")
         if part.get("child_task_id") is not None and (
-            not isinstance(part.get("child_task_id"), int) or part["child_task_id"] < 1
+            not isinstance(part.get("child_task_id"), int)
+            or isinstance(part.get("child_task_id"), bool)
+            or part["child_task_id"] < 1
         ):
             raise ValueError("snapshot child_task_id must be a positive integer")
+        if part.get("child_run_id") is not None and (
+            not isinstance(part.get("child_run_id"), int)
+            or isinstance(part.get("child_run_id"), bool)
+            or part["child_run_id"] < 1
+        ):
+            raise ValueError("snapshot child_run_id must be a positive integer")
         if part.get("agent_role") is not None and (
             not isinstance(part.get("agent_role"), str) or not part["agent_role"].strip()
         ):

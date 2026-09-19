@@ -15,19 +15,26 @@ Windows 上 multiprocessing 为 spawn：自定义 handler 必须是**模块级�
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import BaseModel
 
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
+from app.core.tools.schemas.tool_output import (
+    ProcessToolOutputChannel,
+    ProcessToolOutputChannelFactory,
+)
+from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_cancelled import CANCELLED_REASON
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
-
 
 # ---------------------------------------------------------------------------
 # 最小参数校验契约模型（args_model 在执行路径上不被消费，仅需为 pydantic BaseModel）
@@ -49,7 +56,17 @@ def _handler_returns_string(execution_context=None, **_kwargs):
     return "hello-from-process"
 
 
-def _handler_sleeps_then_writes(marker_path: str, sleep_seconds: float, execution_context=None, **_kwargs):
+def _handler_emits_output(execution_context=None, output_sink=None, **_kwargs):
+    """在真实隔离子进程中发送数个实时片段并返回结果。"""
+    if output_sink is not None:
+        output_sink("first chunk", False)
+        output_sink("last chunk", False)
+    return "done"
+
+
+def _handler_sleeps_then_writes(
+    marker_path: str, sleep_seconds: float, execution_context=None, **_kwargs
+):
     """取消路径：先长睡，再写标记文件，用于证明子进程被强杀（未跑完）。"""
 
     time.sleep(sleep_seconds)
@@ -185,6 +202,62 @@ def test_process_mode_normal_execution_returns_success() -> None:
     assert observation.tool_call_id == "call-1"
 
 
+def test_process_mode_flushes_terminal_output_before_return() -> None:
+    """真实 multiprocessing 队列在工具返回前 flush 通用输出通道。"""
+    received: list[tuple[str, bool]] = []
+    finished: list[bool] = []
+
+    class Channel(ProcessToolOutputChannel):
+        def emit(self, text: str) -> None:
+            received.append((text, False))
+
+        def finish(self) -> None:
+            finished.append(True)
+
+    class Factory(ProcessToolOutputChannelFactory):
+        def create(
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            tool_call_id: str,
+            tool_name: str,
+            loop: asyncio.AbstractEventLoop,
+        ) -> ProcessToolOutputChannel | None:
+            return Channel()
+
+    loop = asyncio.new_event_loop()
+    tool = _make_tool(
+        _handler_emits_output,
+        name="proc_output",
+        execution_mode="process",
+        timeout_seconds=10.0,
+    )
+
+    context = replace(
+        _make_context(0),
+        tool_call_id="call-output",
+        runtime_dependencies=ToolRuntimeDependencies(
+            runtime_event_loop=loop,
+            process_tool_output_channel_factory=Factory(),
+        ),
+    )
+    try:
+        observation = ToolHandlerRunner().execute(
+            tool,
+            {},
+            context,
+            tool_call_id="call-output",
+        )
+    finally:
+        loop.close()
+
+    assert observation.status == "success"
+    assert observation.content == "done"
+    assert received == [("first chunk", False), ("last chunk", False)]
+    assert finished == [True]
+
+
 # ---------------------------------------------------------------------------
 # 用例 3: process 模式执行途中取消
 # ---------------------------------------------------------------------------
@@ -292,7 +365,9 @@ def test_thread_mode_normal_execution_returns_success() -> None:
     """thread 模式正常执行 -> status="success"。"""
 
     tool = _make_tool(_handler_returns_string, name="thread_norm", execution_mode="thread")
-    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0), tool_call_id="call-thread")
+    observation = ToolHandlerRunner().execute(
+        tool, {}, _make_context(0), tool_call_id="call-thread"
+    )
 
     assert observation.status == "success"
     assert observation.content == "hello-from-process"
@@ -377,7 +452,9 @@ def test_process_mode_non_positive_timeout_returns_error() -> None:
 
 
 def test_normalize_result_wraps_scalar_and_structured_payloads() -> None:
-    """_normalize_result：标量走 str()，dict/list 走 json.dumps，ToolObservation 透传并补 tool_call_id。
+    """_normalize_result：标量走 str()，dict/list 走 json.dumps。
+
+    ToolObservation 透传并补 tool_call_id。
 
     潜在缺陷：结构化数据被 str() 化为 Python repr（含单引号），模型无法解析。
     """
@@ -415,8 +492,9 @@ def test_drain_output_queue_sink_failure_is_swallowed() -> None:
     import queue as _queue
 
     q = _queue.Queue()
-    q.put(("a", False))
-    q.put(("b", True))
+    q.put(("delta", "a", False))
+    q.put(("delta", "b", True))
+    q.put(("complete", False))
     seen: list[tuple[str, bool]] = []
 
     def _bad_sink(text, truncated):
@@ -424,8 +502,9 @@ def test_drain_output_queue_sink_failure_is_swallowed() -> None:
         raise RuntimeError("sink down")
 
     # 不应抛出。
-    ToolHandlerRunner._drain_output_queue(q, _bad_sink)
+    completed = ToolHandlerRunner._drain_output_queue(q, _bad_sink)
     assert seen == [("a", False)]  # 首个片段触发异常后停止推送
+    assert completed is True
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +519,7 @@ class _FakeProcess:
     target 完成后线程结束，``is_alive`` 返回 False；用于覆盖父进程侧等待/归一化分支。
     """
 
-    instances: list["_FakeProcess"] = []
+    instances: ClassVar[list[_FakeProcess]] = []
 
     def __init__(self, *, target, args, daemon=True):
         self._target = target
@@ -479,8 +558,6 @@ def test_execute_in_process_with_fake_process_success(monkeypatch) -> None:
     潜在缺陷：父进程拿到 ("success", payload) 后未正确归一化（如误判 error）。
     """
 
-    import multiprocessing
-
     from app.core.tools.tool_execute import tool_handler_runner as mod
 
     monkeypatch.setattr(mod.multiprocessing, "Process", _FakeProcess)
@@ -498,7 +575,7 @@ def test_execute_in_process_with_fake_process_success(monkeypatch) -> None:
 
 
 def test_execute_in_process_with_fake_process_handler_error(monkeypatch) -> None:
-    """fake 子进程内 handler 抛异常 -> ("error", payload) -> 归一化为 error（handler_failed 分支）。"""
+    """fake 子进程 handler 抛错 -> error payload -> 归一化为 handler_failed。"""
 
     from app.core.tools.tool_execute import tool_handler_runner as mod
 
@@ -574,7 +651,7 @@ def test_wait_for_result_raises_cancelled_when_should_cancel_true() -> None:
 
 
 def _make_fake_queue_factory():
-    """返回一个 multiprocessing.Queue 的进程内替代工厂（支持 maxsize / get / get_nowait / cancel_join_thread）。"""
+    """返回具备进程队列接口的进程内替代工厂。"""
 
     import queue as _queue
 
@@ -760,8 +837,8 @@ def test_thread_mode_post_cancel_discards_result() -> None:
     assert observation.reason == CANCELLED_REASON
 
 
-def test_execute_in_process_with_output_sink_uses_fake(monkeypatch) -> None:
-    """带 output_sink 的 process 执行：建 output_queue 且 drain 回调 sink（实时通道分支）。"""
+def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> None:
+    """运行期 factory 返回通道后，process 路径建立输出队列并收尾通道。"""
 
     from app.core.tools.tool_execute import tool_handler_runner as mod
 
@@ -769,6 +846,26 @@ def test_execute_in_process_with_output_sink_uses_fake(monkeypatch) -> None:
     monkeypatch.setattr(mod.multiprocessing, "Queue", _make_fake_queue_factory())
 
     seen: list[tuple[str, bool]] = []
+    finished = threading.Event()
+
+    class Channel(ProcessToolOutputChannel):
+        def emit(self, text: str) -> None:
+            seen.append((text, False))
+
+        def finish(self) -> None:
+            finished.set()
+
+    class Factory(ProcessToolOutputChannelFactory):
+        def create(
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            tool_call_id: str,
+            tool_name: str,
+            loop: asyncio.AbstractEventLoop,
+        ) -> ProcessToolOutputChannel | None:
+            return Channel()
 
     def _handler_emits(execution_context=None, output_sink=None, **_kwargs):
         # 子进程入口会把 output_sink 注入 handler（本 fake 在同线程运行）。
@@ -779,10 +876,23 @@ def test_execute_in_process_with_output_sink_uses_fake(monkeypatch) -> None:
     tool = _make_tool(
         _handler_emits, name="sink_tool", execution_mode="process", timeout_seconds=5.0
     )
-    observation = ToolHandlerRunner().execute(
-        tool, {}, _make_context(0), output_sink=lambda text, truncated: seen.append((text, truncated))
+    loop = asyncio.new_event_loop()
+    context = replace(
+        _make_context(0),
+        tool_call_id="call-output",
+        runtime_dependencies=ToolRuntimeDependencies(
+            runtime_event_loop=loop,
+            process_tool_output_channel_factory=Factory(),
+        ),
     )
+    observation = ToolHandlerRunner().execute(
+        tool,
+        {},
+        context,
+    )
+    loop.close()
 
     assert observation.status == "success"
     assert observation.content == "done"
-
+    assert seen == [("chunk-1", False)]
+    assert finished.is_set()

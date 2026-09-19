@@ -71,8 +71,8 @@ delta；它在重启后丢弃，并按持久化事实重新开始，而不是隐
   response metadata 等字段；不能把当前实现误写成“完整原生消息已保存”。
 - 当前流式状态机允许 text/reasoning 交错，并可能产生多个 part；仅从最终
   `AIMessage.content` 和 `reasoning_content` 无法恢复原始 part 顺序。
-- `ToolObservation.display_data` 是 UI 展示数据，`artifact_data` 是文件快照/ChangeSet/
-  审计旁路数据；二者不能混为模型消息，也不能把 `artifact_data` 暴露给 Assistant Transport。
+- `ToolObservation.display_data` 是 UI 展示数据；`artifact_data` 是不进入 Transport 的工具内部产物。
+  文件快照、ChangeSet 与审计事实由 `FileMutationService` 直接持久化。
 - 当前 fork 会复制 context 和 snapshot；snapshot 中存在 source message id 被保留的情况，
   因此不能假设 message id 仅由新 Run id 确定性生成。
 - 本方案按绿地项目落地：新数据库直接按目标 schema 初始化，不设计旧数据库兼容迁移。

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-from collections.abc import Mapping
 from typing import Any, Literal
 
 from langgraph.config import get_stream_writer
@@ -24,6 +23,11 @@ from app.assistant_transport.event import ToolCallCreatedEvent, ToolCallStatusCh
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.core.tools.schemas import ToolCall, ToolObservation
+from app.core.tools.tool_execute.tool_terminal_projection import (
+    normalize_display_data,
+    terminal_error_hint,
+    terminal_status,
+)
 from app.core.workflows.nodes.helper.common import _runtime_config, _runtime_context
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_task_context import TransportMetadata
@@ -68,6 +72,9 @@ class SettlementResult:
 def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
     """把观察摘要的 ``status`` 映射为事件契约的终态状态。
 
+    映射规则收口在 ``app.core.tools.tool_execute.tool_terminal_projection``：执行层的提前
+    投影与本结算兜底必须给出同一终态，故本函数只做委托，不维护第二份映射。
+
     参数:
         status: ``ToolObservation.status``（``success`` / ``cancelled`` / 其它错误态）。
 
@@ -78,55 +85,54 @@ def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
         无。
     """
 
-    if status == "success":
-        return "completed"
-    if status == "cancelled":
-        return "cancelled"
-    return "failed"
+    return terminal_status(status)
 
 
 def _ui_data(summary: dict[str, Any]) -> dict[str, object] | None:
     """取出终态事件需要更新的 ``display_data``（深拷贝，避免共享摘要结构）。
 
+    形状判定、深拷贝与「载荷被丢弃」的日志留痕都收口在
+    ``app.core.tools.tool_execute.tool_terminal_projection`` 的 ``normalize_display_data``：
+    提前投影与结算兜底必须对畸形展示数据给出同一种降级与同一种可观测性，故本函数只做摘要
+    适配与委托。摘要自带 ``tool_call_id``，作为丢弃日志的定位标识传入。
+
     参数:
         summary: 单条观察摘要。
 
     返回:
-        摘要中的 ``display_data`` 深拷贝；缺失或不是映射时返回 ``None``。
+        摘要中的 ``display_data`` 深拷贝；缺失、不是映射或不可深拷贝时返回 ``None``
+        （调用方据此跳过展示字段更新，而不是伪造载荷）。
 
     副作用:
-        无。
+        委托调用：展示数据存在但归一失败时写 `warning` 级 ``tool_display_data_dropped``。
     """
 
-    display_data = summary.get("display_data")
-    if not isinstance(display_data, Mapping):
-        return None
-    return copy.deepcopy(dict(display_data))
+    return normalize_display_data(
+        summary.get("display_data"),
+        tool_call_id=str(summary.get("tool_call_id") or ""),
+    )
 
 
 def _ui_error(summary: dict[str, Any], event_status: str) -> str | None:
     """生成事件层的短错误提示（完整诊断保留在模型消息里）。
+
+    提示选择规则收口在 ``app.core.tools.tool_execute.tool_terminal_projection``：执行层的提前
+    投影与本结算兜底必须给出同一提示，故本函数只做摘要适配与委托。行为与既有实现一致：
+    取消返回「已取消」；失败优先返回后端分类映射的 ``display_data.status_hint``（含空串），
+    缺失时回退「执行失败」；``completed`` 返回 ``None``。
 
     参数:
         summary: 单条观察摘要。
         event_status: 事件终态（``completed`` / ``failed`` / ``cancelled``）。
 
     返回:
-        取消返回「已取消」；失败优先返回后端分类映射的 ``display_data.status_hint``，缺失时
-        回退「执行失败」；``completed`` 返回 ``None``。
+        面向前端的短提示；``completed`` 时返回 ``None``。
 
     副作用:
         无。
     """
 
-    if event_status == "cancelled":
-        return "已取消"
-    if event_status != "failed":
-        return None
-    display_data = summary.get("display_data")
-    if isinstance(display_data, Mapping) and isinstance(display_data.get("status_hint"), str):
-        return display_data["status_hint"]
-    return "执行失败"
+    return terminal_error_hint(event_status, summary.get("display_data"))
 
 
 def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
@@ -163,7 +169,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
 
 
 def build_invalid_tool_call_repair_message(
-        repair_datas: list[dict[str, Any]],
+    repair_datas: list[dict[str, Any]],
 ) -> str:
     """构造要求模型修复非法工具调用的结构化英文提示文本。
 
@@ -272,9 +278,7 @@ class ToolCallLifecycleManager(BaseModel):
     def invalid_count(self) -> int:
         """返回已挂 ``invalid_detail`` 的非法调用数量。"""
 
-        return sum(
-            1 for record in self.calls.values() if record.invalid_detail is not None
-        )
+        return sum(1 for record in self.calls.values() if record.invalid_detail is not None)
 
     @property
     def has_call(self) -> bool:
@@ -308,12 +312,12 @@ class ToolCallLifecycleManager(BaseModel):
         return {}
 
     def create(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            raw_tool_calls: list[dict[str, Any]],
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        raw_tool_calls: list[dict[str, Any]],
     ) -> ToolCallLifecycleManager:
         """为已确认身份的模型工具调用发出创建事件并初始化为 pending。
 
@@ -338,10 +342,10 @@ class ToolCallLifecycleManager(BaseModel):
             call_id = raw_call.get("id")
             tool_name = raw_call.get("name")
             if (
-                    not isinstance(call_id, str)
-                    or not call_id
-                    or not self._valid_tool_name(tool_name)
-                    or call_id in updated.calls
+                not isinstance(call_id, str)
+                or not call_id
+                or not self._valid_tool_name(tool_name)
+                or call_id in updated.calls
             ):
                 continue
             assert isinstance(tool_name, str)
@@ -364,16 +368,16 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def _emit_status(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            call_id: str,
-            to_status: ToolCallEventStatus,
-            args: dict[str, object] | None = None,
-            error: str | None = None,
-            display_data: dict[str, object] | None = None,
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        call_id: str,
+        to_status: ToolCallEventStatus,
+        args: dict[str, object] | None = None,
+        error: str | None = None,
+        display_data: dict[str, object] | None = None,
     ) -> None:
         """发射一条工具调用状态迁移事件。
 
@@ -407,12 +411,12 @@ class ToolCallLifecycleManager(BaseModel):
         )
 
     def begin(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            tool_calls: list[ToolCall],
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        tool_calls: list[ToolCall],
     ) -> ToolCallLifecycleManager:
         """把 pending 调用迁移到 running，并写入完整解析后的参数。
 
@@ -456,13 +460,13 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def classify(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            tool_calls: list[ToolCall],
-            invalid_tool_calls: list[dict[str, Any]],
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        tool_calls: list[ToolCall],
+        invalid_tool_calls: list[dict[str, Any]],
     ) -> ToolCallLifecycleManager:
         """把模型输出拆解为生命周期记录：合法调用置 running，命中非法 id 的调用挂 invalid_detail。
 
@@ -543,12 +547,12 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def cancel(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            tool_calls: list[ToolCall] | None = None,
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        tool_calls: list[ToolCall] | None = None,
     ) -> ToolCallLifecycleManager:
         """把尚未结束的调用迁移到 cancelled，并为每条发出终态事件。
 
@@ -615,13 +619,13 @@ class ToolCallLifecycleManager(BaseModel):
         return None
 
     def _fail_invalid(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            call_id: str,
-            status_hint: str,
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        call_id: str,
+        status_hint: str,
     ) -> ToolCallLifecycleManager:
         """收口参数非法的调用：置 failed 并发终态事件，但不写回模型上下文 ToolMessage。
 
@@ -657,24 +661,28 @@ class ToolCallLifecycleManager(BaseModel):
         return updated
 
     def settle(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            summary: dict[str, Any],
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        summary: dict[str, Any],
     ) -> tuple[ToolCallLifecycleManager, Literal["completed", "failed", "cancelled"]]:
         """结算单条观察：写回模型上下文、更新 state 并发出终态事件。
 
         顺序是刻意的：先把 ``ToolMessage`` 写入 canonical context，再发终态 Transport 事件，
         使 projector 不会发布一个无法从 context 重建的终态工具状态。
 
-        **已知且有意的例外**：取消路径不受该顺序约束。工具执行层检出取消时会立刻把该
-        ``cancelled`` 终态直投到进程内 snapshot（见 ``tool_handler_runner`` 的
-        ``_cancelled_observation``），使用户不必等整批工具跑完就能看到结果。该例外不会产生
-        无法重建的状态：冷重建对「没有 ``ToolMessage`` 行的 tool-call part」本来就默认投影为
-        ``cancelled``（``ConversationTaskStateRebuilder.build_pair_tool_part``）。本方法随后
-        写 ``ToolMessage`` 并再发一次同值终态，投影按自迁移幂等吸收。
+        **已知且有意的例外：全部终态都可能早于本方法**。执行层在工具跑完（process 路径为进程
+        强杀与输出排空完成）之后，就把 ``completed`` / ``failed`` / ``cancelled`` 投影进进程内
+        snapshot（执行出口投影，见 ``tool_terminal_projection.project_tool_terminal_state``），
+        使用户不必等整批工具跑完就能看到结果。该例外不会产生无法重建的状态：快照是进程内
+        ephemeral working copy，进程终止后由冷重建从数据库重建，而冷重建对「没有
+        ``ToolMessage`` 行的 tool-call part」本来就默认投影为 ``cancelled``
+        （``ConversationTaskStateRebuilder.build_pair_tool_part``），与「结果丢失且 run 已收敛」
+        的事实一致；代价是进程在写 ``ToolMessage`` 之前终止时，该 part 会从 ``completed`` /
+        ``failed`` 回退为 ``cancelled``。本方法随后写 ``ToolMessage`` 并再发一次同值终态，投影按
+        自迁移幂等吸收。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
@@ -767,13 +775,13 @@ class ToolCallLifecycleManager(BaseModel):
         return updated, event_status
 
     def settle_batch(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            summaries: list[dict[str, Any]],
-            inherited_error_count: int,
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        summaries: list[dict[str, Any]],
+        inherited_error_count: int,
     ) -> SettlementResult:
         """结算一批观察摘要，返回错误计数和更新后的 lifecycle。
 

@@ -3,9 +3,10 @@
 工具观察有两条互不替代的消费通道，各自需要独立预算：
 
 - 模型通道 ``content``：受 ``ToolOutputBudget`` 约束（``Settings.MAX_TOOL_OUTPUT_CHARS``），
-  超限截断并在 workspace 内落盘完整 artifact，同时做终端输出脱敏；
+  超限截断并在 workspace 内落盘完整 artifact；工具内容保持原文；
 客户端展示通道 ``display_data`` 仅用于前端渲染，不经过模型输出预算；其字段安全投影由
-各展示构造器负责，完整内容通过现有 Transport 返回前端。
+各展示构造器负责，内容预算通过现有守卫处理后由 Transport 返回前端。execute_terminal
+的终端输出在模型通道、artifact 和展示通道都保持原文。
 """
 
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
@@ -52,13 +53,14 @@ class ToolObservationBudget:
                 退化为纯截断。
 
         返回:
-            已脱敏并受模型内容预算约束的观察；展示数据保持完整。
+            受模型内容预算约束的观察；工具内容保持原文。
+            展示数据不在本预算器中修改。
 
         异常:
             无。artifact 写入失败由 :class:`ToolOutputBudget` 内部退化处理。
 
         副作用:
-            超限且有 workspace 时可能写入脱敏 artifact。
+            超限且有 workspace 时可能写入 artifact；execute_terminal artifact 保存原始输出。
         """
 
         return self._output_budget.apply(observation, execution_context)

@@ -39,6 +39,7 @@ from app.core.tools.guard.file_state import (
     FilePathLockRegistry,
     FileRevisionRegistry,
     RepeatedCallRegistry,
+    get_shared_file_path_lock_registry,
 )
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute.tool_error import tool_error
@@ -88,7 +89,7 @@ def normalize_repeated_call_arguments(
         非路径字段原样保留，保证等价路径（相对 / 绝对 / 双斜杠）产生相同签名。
         其中 ``mode`` 字段为**工具语义标记**，用于区分 ``patch_write`` 工具（值
         ``"replace"``，replace 语义）与 ``apply_patch`` 工具（值 ``"apply_patch"``，
-        V4A 语义）。该 ``mode`` 是内部生成的语义标记，**并非**模型传入的
+        Git unified-diff 语义）。该 ``mode`` 是内部生成的语义标记，**并非**模型传入的
         ``arguments["mode"]`` 入参——拆分后的工具已不再接收 ``mode`` 入参。
 
     异常:
@@ -103,9 +104,9 @@ def normalize_repeated_call_arguments(
         # 以 path 作为重复调用签名键。
         return {"mode": "replace", "path": _canonical_path(root, arguments.get("path"))}
     if tool_name == "apply_patch":
-        # apply_patch 工具：固定 V4A 语义（mode 为工具语义标记，非用户入参），
-        # 以 patch_write 文本作为重复调用签名键。
-        return {"mode": "apply_patch", "patch_write": arguments.get("patch_write")}
+        # apply_patch 工具：固定 Git unified-diff 语义（mode 为内部标记），
+        # 以实际 schema 参数 patch 的文本作为重复调用签名键。
+        return {"mode": "apply_patch", "patch": arguments.get("patch")}
     if tool_name in {"search_content", "find_files"}:
         # 搜索结果由 path/pattern/file_glob/分页等全部参数共同决定，
         # 仅归一 path 会导致「不同检索词搜索同一范围」被误判为重复而拦截。
@@ -177,7 +178,7 @@ class FileToolStateCoordinator:
         if max_scope_paths < 1:
             raise ValueError("max_scope_paths must be greater than zero")
         self._revisions = revisions or FileRevisionRegistry()
-        self._path_locks = path_locks or FilePathLockRegistry()
+        self._path_locks = path_locks or get_shared_file_path_lock_registry()
         self._repeated_calls = repeated_calls or RepeatedCallRegistry()
         self._max_scope_paths = max_scope_paths
 
@@ -300,8 +301,8 @@ class FileToolStateCoordinator:
         )
         if not stale_paths:
             return None
-        # patch_write / apply_patch 对文本敏感用 stale_patch 语义（patch_write=replace 语义、
-        # apply_patch=V4A 语义），其余写工具统一 stale_file。
+        # patch_write / apply_patch 对文本敏感用 stale_patch 语义；Delete/Move 按文件状态
+        # 使用 stale_file。
         reason = "stale_patch" if tool.name in ("patch_write", "apply_patch") else "stale_file"
         path_text = ", ".join(str(path) for path in stale_paths)
         return tool_error(
@@ -341,7 +342,7 @@ class FileToolStateCoordinator:
         # 对本次写路径（含 workspace 祖先链）按稳定顺序获取进程内 RLock，保证同一
         # task 下对相同路径的并发写被串行化；退出 with 块时逆序释放。
         with self._path_locks.acquire(
-            str(execution_context.task_id),
+            str(execution_context.workspace_root.resolve()),
             plan.resources.lock_paths,
         ):
             yield
@@ -414,7 +415,9 @@ class FileToolStateCoordinator:
 
         key = str(task_id)
         self._revisions.clear_task(key)
-        self._path_locks.clear_task(key)
+        # Physical file locks are scoped by canonical workspace, not task: multiple
+        # tasks may share one workspace. Keep the bounded registry entries so clearing
+        # one task cannot invalidate locks currently used by another task.
         self._repeated_calls.clear_task(key)
 
     @property

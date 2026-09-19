@@ -438,6 +438,25 @@ class ConversationRunCrud:
             )
         return [ConversationRunRecord.from_model(row) for row in rows]
 
+    def has_active_for_task(self, task_id: int) -> bool:
+        """Return whether the task has a canonical pending or running Run."""
+
+        with self._session_factory() as session:
+            row_id = session.execute(
+                select(ConversationRunModel.id)
+                .where(ConversationRunModel.task_id == task_id)
+                .where(
+                    ConversationRunModel.status.in_(
+                        (
+                            ConversationRunStatus.PENDING.value,
+                            ConversationRunStatus.RUNNING.value,
+                        )
+                    )
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+        return row_id is not None
+
     def update_status_if_in(
         self,
         run_id: int,

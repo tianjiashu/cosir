@@ -36,12 +36,12 @@ class ToolObservation:
           诊断。它是**模型唯一直接消费的文本通道**。
         - ``display_data`` 是「面向客户端的结构化机读字典」：只给前端渲染消费的结果与
           展示治理标记，类型恒为 ``dict``。它不进入模型，也不应被后端持久化逻辑当作事实源。
-        - ``artifact_data`` 是工具执行产出的内部结构化事实（产物数据），不进入 Transport，
-          也不到模型。例如文件变更的反向快照作为工具产物放在这里，避免 UI 展示数据成为
-          ChangeSet 的隐式接口。
+        - ``artifact_data`` 是工具执行产出的内部产物数据，不进入 Transport，也不到模型，
+          例如终端输出超限后落盘的 artifact 路径。文件变更事实由
+          ``FileMutationService`` 根据实际写入前后状态持久化，不从本字段读取。
         - 三者互不替代：Agent 只依赖 ``content`` / ``error`` / ``reason``；UI 只依赖
-          ``ToolDisplayHints`` 与 ``display_data``；后端恢复/审计逻辑只依赖明确的产物数据
-          ``artifact_data``。
+          ``ToolDisplayHints`` 与 ``display_data``；后端恢复/审计逻辑使用各自明确的持久化
+          边界。
 
     字段:
         tool_name: 触发本次观察的工具名称（与 :class:`ToolDefinition.name` 对应）。
@@ -72,8 +72,8 @@ class ToolObservation:
             用于把观察回绑到具体的模型请求，缺失时为空。
         display_data: 面向客户端的结构化机读字典，仅供前端渲染。UI 不应通过本字段之外的
             Observation 字段推导展示结果。
-        artifact_data: 工具执行产出的内部结构化事实（产物数据）；不进入事件、快照或
-            模型上下文，仅用于文件快照、ChangeSet 等后端恢复/审计能力。
+        artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
+            文件快照与 ChangeSet 由 ``FileMutationService`` 持久化。
     """
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。

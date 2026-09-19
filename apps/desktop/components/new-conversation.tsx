@@ -159,6 +159,7 @@ export function NewConversation({
         trimmedText,
         attachments,
       );
+      setSubmitting(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "创建对话失败，请重试");
       setSubmitting(false);

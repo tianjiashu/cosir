@@ -4,12 +4,14 @@ import { describe, expect, it } from "vitest";
 import { TerminalTool } from "@/components/assistant-ui/tools/terminal-tool";
 
 type RenderOptions = {
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   args?: Record<string, string>;
   display_data?: Record<string, unknown> | null;
+  runId?: number | null;
+  runCancelling?: boolean;
 };
 
-function renderTerminal({ status, args = {}, display_data = null }: RenderOptions): string {
+function renderTerminal({ status, args = {}, display_data = null, runId = null, runCancelling = false }: RenderOptions): string {
   return renderToStaticMarkup(
     <TerminalTool
       type="tool-call"
@@ -21,6 +23,8 @@ function renderTerminal({ status, args = {}, display_data = null }: RenderOption
       addResult={() => undefined}
       resume={() => undefined}
       respondToApproval={() => undefined}
+      runId={runId}
+      runCancelling={runCancelling}
       artifact={{
         backendStatus: status,
         presentation: { verb: "运行命令", surface: "standalone", expandable: true, expand_layout: "terminal" },
@@ -66,5 +70,41 @@ describe("TerminalTool", () => {
 
     expect(html).toContain("exit 2");
     expect(html).not.toContain("exit 0");
+  });
+
+  it("renders live terminal output and reports the streaming display budget", () => {
+    const html = renderTerminal({
+      status: "running",
+      args: { command: "pnpm test" },
+      display_data: {
+        kind: "terminal-result",
+        output: "first chunk",
+        stream_truncated: true,
+      },
+    });
+
+    expect(html).toContain("first chunk");
+    expect(html).toContain("实时输出已达到展示上限");
+    expect(html).not.toContain("exit ");
+  });
+
+  it("shows a separate stop action only for a running terminal call with its run identity", () => {
+    const running = renderTerminal({ status: "running", runId: 24 });
+    const pending = renderTerminal({ status: "pending", runId: 24 });
+    const missingRun = renderTerminal({ status: "running" });
+    const wholeRunCancelling = renderTerminal({ status: "running", runId: 24, runCancelling: true });
+
+    expect(running).toContain('aria-label="停止终端命令"');
+    expect(running).toContain("停止</span>");
+    expect(pending).not.toContain('aria-label="停止终端命令"');
+    expect(missingRun).not.toContain('aria-label="停止终端命令"');
+    expect(wholeRunCancelling).not.toContain('aria-label="停止终端命令"');
+  });
+
+  it("hides the stop action after the tool reaches a terminal status", () => {
+    for (const status of ["completed", "failed", "cancelled"] as const) {
+      const html = renderTerminal({ status, runId: 24 });
+      expect(html).not.toContain('aria-label="停止终端命令"');
+    }
   });
 });

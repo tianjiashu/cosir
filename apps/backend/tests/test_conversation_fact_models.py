@@ -106,7 +106,7 @@ def test_run_record_round_trips_usage_and_error() -> None:
         "cache_miss_tokens": 8,
         "reasoning_tokens": 1,
     }
-    error = {"code": "provider_error", "message": "provider unavailable", "retryable": True}
+    error = {"code": "provider_error", "message": "provider unavailable"}
     record = ConversationRunRecord(
         id=11,
         task_id=7,
@@ -266,7 +266,7 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
         updated_at=_timestamp(),
         checkpoint_thread_id="thread-11",
         usage=usage,
-        error={"code": "provider_error", "message": "provider unavailable", "retryable": True},
+        error={"code": "provider_error", "message": "provider unavailable"},
     )
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
@@ -279,7 +279,6 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
         assert cloned.error == {
             "code": "provider_error",
             "message": "provider unavailable",
-            "retryable": True,
         }
         assert cloned.checkpoint_thread_id != source.checkpoint_thread_id
     finally:

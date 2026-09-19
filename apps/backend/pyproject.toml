@@ -47,6 +47,7 @@ dependencies = [
     # T6（F3）：从宽松下界 >=0.0.36 锁定为精确版本 ==0.0.36，
     # 与 Assistant Transport 链路直接相关；版本取当前环境实际安装版本（uv run 核实为 0.0.36）。
     "assistant-stream==0.0.36",
+    "unidiff==0.7.5",
 ]
 
 [dependency-groups]
@@ -58,6 +59,11 @@ dev = [
     "pytest-asyncio==0.25.2",
     "pre-commit==4.1.0",
     "pytest-cov>=7.1.0",
+]
+
+# 桌面发布构建工具。该组只安装进独立的打包虚拟环境，不进入后端运行依赖。
+build = [
+    "pyinstaller==6.22.3",
 ]
 
 [tool.uv]

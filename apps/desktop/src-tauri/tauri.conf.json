@@ -28,7 +28,8 @@
   "bundle": {
     "active": true,
     "resources": {
-      "resources/terminal-worker/": "terminal-worker/"
+      "resources/terminal-worker/": "terminal-worker/",
+      "resources/backend/": "backend/"
     }
   }
 }

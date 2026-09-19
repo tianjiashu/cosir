@@ -37,6 +37,42 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(snapshot)).toThrow("runs[0].messages[0].parts[0].status");
   });
 
+  it("accepts a positive child Run locator and rejects invalid locators", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, messages: [{
+      id: "m1",
+      role: "assistant",
+      parts: [{
+        type: "tool-call",
+        toolCallId: "delegate-1",
+        toolName: "delegate_task",
+        status: "running",
+        args: {},
+        child_task_id: 501,
+        child_run_id: 902,
+      }],
+    }] }];
+    snapshot.current_run_id = 1;
+
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+    const invalidSnapshot = structuredClone(snapshot);
+    const toolPart = invalidSnapshot.runs[0].messages[0].parts[0] as { child_run_id: number };
+    toolPart.child_run_id = 0;
+    expect(() => parseTransportState(invalidSnapshot)).toThrow("child_run_id");
+  });
+
+  it("accepts a code+message snapshot error and rejects the legacy retryable field", () => {
+    const snapshot = validSnapshot();
+    snapshot.error = { code: "run_failed", message: "运行失败" };
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+
+    // retryable 只属于工具观察（面向模型），不属于 Transport 错误契约。
+    const legacy = structuredClone(snapshot) as unknown as { error: Record<string, unknown> };
+    legacy.error = { code: "run_failed", message: "运行失败", retryable: false };
+    expect(() => parseTransportState(legacy)).toThrow(TransportSnapshotValidationError);
+    expect(() => parseTransportState(legacy)).toThrow("error");
+  });
+
   it("rejects an active run that is not the current run", () => {
     const snapshot = validSnapshot();
     snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, messages: [] }];

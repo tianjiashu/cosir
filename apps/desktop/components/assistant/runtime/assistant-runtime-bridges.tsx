@@ -105,34 +105,54 @@ function readRuntimeRun(value: unknown): RuntimeRunDiagnostic | undefined {
 
 export function RuntimeControlBridge({
   register,
+  backendAvailable,
+  backendGeneration,
   resumeOnMount,
   taskId,
 }: {
   register: (controls: RuntimeControls | null) => void;
+  backendAvailable: boolean;
+  backendGeneration: number;
   resumeOnMount: boolean;
   taskId: number;
 }) {
   const aui = useAui();
   const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
   const initialResumeIssuedRef = useRef(false);
+  const backendAvailableRef = useRef(backendAvailable);
+  const backendGenerationRef = useRef(backendGeneration);
+  backendAvailableRef.current = backendAvailable;
+  backendGenerationRef.current = backendGeneration;
 
   useEffect(() => {
     register({
-      resume: () => aui.thread.resumeRun({ parentId: null }),
+      resume: () => {
+        if (backendAvailableRef.current) aui.thread.resumeRun({ parentId: null });
+      },
       importState: (state) => aui.thread.importExternalState(state),
     });
     return () => register(null);
   }, [aui, register]);
 
   useEffect(() => {
-    if (!resumeOnMount || initialResumeIssuedRef.current || remoteThreadId !== `task-${taskId}`) return;
+    if (!backendAvailable || !resumeOnMount || initialResumeIssuedRef.current || remoteThreadId !== `task-${taskId}`) return;
+    let cancelled = false;
+    const scheduledBackendGeneration = backendGeneration;
     const timer = window.setTimeout(() => {
-      if (initialResumeIssuedRef.current) return;
+      if (
+        cancelled
+        || !backendAvailableRef.current
+        || backendGenerationRef.current !== scheduledBackendGeneration
+        || initialResumeIssuedRef.current
+      ) return;
       initialResumeIssuedRef.current = true;
       void aui.thread.resumeRun({ parentId: null });
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [aui, remoteThreadId, resumeOnMount, taskId]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [aui, backendAvailable, backendGeneration, remoteThreadId, resumeOnMount, taskId]);
 
   return null;
 }

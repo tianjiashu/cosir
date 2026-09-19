@@ -41,7 +41,7 @@ class DateSizeRotatingFileHandler(RotatingFileHandler):
 
     ``baseFilename`` 是逻辑文件名，实际写入文件为带日期的文件；同一天内
     达到 ``maxBytes`` 后使用 ``.1``、``.2`` 等后缀保留历史分片。该 handler
-    仅负责文件日志，不负责 SQLite 日志副本或日志内容脱敏。
+    仅负责文件日志，不负责 SQLite 日志副本。
 
     参数:
         filename: 逻辑日志文件路径。

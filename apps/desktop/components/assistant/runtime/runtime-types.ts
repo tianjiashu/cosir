@@ -36,6 +36,7 @@ export type RuntimeSessionContext = {
   initialState: TransportState;
   backendBaseUrl: string;
   backendRuntimeGeneration: number;
+  backendRuntimeAvailable: boolean;
   traceId: string;
   setIssue: (issue: TransportIssue | null) => void;
   onTaskStateChanged?: () => void;

@@ -1,4 +1,4 @@
-import { requestJson } from "@/lib/http/client";
+import { postJson, requestJson, sendJson } from "@/lib/http/client";
 
 export type Provider = {
   provider_id: number;
@@ -48,19 +48,10 @@ export const getProviders = () => requestJson<Provider[]>("/providers");
 export const getProviderCatalog = () =>
   requestJson<ProviderCatalogItem[]>("/providers/catalog");
 
-export const createProvider = (input: ProviderCreateInput) =>
-  requestJson<Provider>("/providers", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+export const createProvider = (input: ProviderCreateInput) => postJson<Provider>("/providers", input);
 
 export const updateProvider = (providerId: number, input: ProviderUpdateInput) =>
-  requestJson<Provider>(`/providers/${providerId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+  sendJson<Provider>(`/providers/${providerId}`, "PUT", input);
 
 export const deleteProvider = (providerId: number) =>
   requestJson<{ provider_id: number; deleted: boolean }>(

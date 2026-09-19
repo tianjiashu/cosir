@@ -251,10 +251,11 @@ class DelegationExecutor(DelegateTaskExecutor):
                             task_id=self._parent_task.id,
                             run_id=self._parent_run.id,
                             tool_call_id=execution_context.tool_call_id,
-                            kind="delegation_ref",
                             seq=0,
                             data=DelegationRefData(
+                                kind="delegation_ref",
                                 child_task_id=child_task.id,
+                                child_run_id=child_run.id,
                                 title=args.title,
                                 role=child_agent_profile.role,
                             ),

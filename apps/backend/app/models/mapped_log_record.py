@@ -8,13 +8,12 @@
 import logging
 import re
 import traceback
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from app.config.logging.filter.caller_filter import compute_caller
-from app.utils.trace_infra.redaction import redact_terminal_output, redact_value
-
 MAX_LOG_TEXT_LENGTH = 2000
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -200,7 +199,7 @@ class MappedLogRecord:
             record: Python logging 记录。
 
         返回:
-            已脱敏的业务字段字典；显式 ``data`` 与散落 extra 字段合并。
+            显式 ``data`` 与散落 extra 字段合并，并递归限制文本长度后的业务字段字典。
 
         异常:
             无。
@@ -231,7 +230,7 @@ class MappedLogRecord:
             if key in ignored:
                 continue
             data[key] = value
-        return redact_value(data, max_text_length=MAX_LOG_TEXT_LENGTH)
+        return MappedLogRecord._limit_data_text(data)
 
     @staticmethod
     def _extract_error(record: logging.LogRecord) -> LogError | None:
@@ -256,35 +255,36 @@ class MappedLogRecord:
             stack = "".join(traceback.format_exception(*record.exc_info))
             return LogError(
                 type=type(exc).__name__,
-                message=MappedLogRecord._sanitize_error_text(str(exc)),
-                stack=MappedLogRecord._sanitize_error_text(stack),
+                message=MappedLogRecord._truncate_text(str(exc)),
+                stack=MappedLogRecord._truncate_text(stack),
             )
         error_type = str(getattr(record, "error_type", "") or "")
         if error_type:
             return LogError(
                 type=error_type,
-                message=MappedLogRecord._sanitize_error_text(
+                message=MappedLogRecord._truncate_text(
                     str(getattr(record, "error_message", "") or "")
                 ),
-                stack=MappedLogRecord._sanitize_error_text(str(getattr(record, "stack", "") or "")),
+                stack=MappedLogRecord._truncate_text(str(getattr(record, "stack", "") or "")),
             )
         return None
 
     @staticmethod
-    def _sanitize_error_text(value: str) -> str:
-        """把异常详情收敛为安全占位，避免响应正文进入持久化日志。
+    def _limit_data_text(value: Any) -> Any:
+        """递归限制结构化日志数据中的文本长度并归一化容器。"""
 
-        异常类型、event、trace_id 和 caller 已经足够把失败链路定位到具体阶段；
-        原始异常 message/stack 可能携带 provider 响应、用户输入或密钥，不能作为
-        通用结构化日志字段落盘。
-        """
-
-        if not value:
-            return ""
-        # 仍先执行统一脱敏，保持该函数与自由文本日志的安全策略一致；结果只用于
-        # 判断是否存在详情，不把任何原文或截断片段写入持久化日志。
-        sanitized = redact_terminal_output(value)
-        return "异常详情已省略" if sanitized else ""
+        if isinstance(value, str):
+            return MappedLogRecord._truncate_text(value)
+        if isinstance(value, Mapping):
+            return {
+                str(key): MappedLogRecord._limit_data_text(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
+            return [MappedLogRecord._limit_data_text(item) for item in value]
+        if isinstance(value, int | float | bool) or value is None:
+            return value
+        return MappedLogRecord._truncate_text(str(value))
 
     @staticmethod
     def _truncate_text(value: str) -> str:

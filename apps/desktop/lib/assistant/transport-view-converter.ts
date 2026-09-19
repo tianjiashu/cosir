@@ -101,11 +101,7 @@ function pendingCommandSignature(command: UserAddMessageCommand): string {
 }
 
 function snapshotErrorSignature(error: TransportError): string {
-  return [
-    signaturePart(error.code),
-    signaturePart(error.message),
-    error.retryable ? "retryable" : "terminal",
-  ].join(SIGNATURE_SEPARATOR);
+  return [signaturePart(error.code), signaturePart(error.message)].join(SIGNATURE_SEPARATOR);
 }
 
 function lastAssistantMessageId(run: TransportRun): string | null {

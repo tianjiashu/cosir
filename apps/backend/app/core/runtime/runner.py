@@ -11,9 +11,15 @@ from app.core.observability import (
     conversation_run_trace,
 )
 from app.core.observability.tool_trace_recorder import ToolTraceRecorder
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.runtime.conversation_run_cancellation_registry import (
+    cancellation_registry,
+)
 from app.core.runtime.execution_mode import ExecutionMode
+from app.core.runtime.tool_call_cancellation_registry import (
+    tool_call_cancellation_registry,
+)
 from app.core.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.hook import HookContext
@@ -21,11 +27,11 @@ from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
+    get_file_mutation_service,
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
 )
-from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
 
 
 class AgentRuntime:
@@ -45,14 +51,20 @@ class AgentRuntime:
       service 仅作为本引擎的私有协作者。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
+    ) -> None:
         """Initialize the execution engine with its private collaborators.
 
         私有协作者（任务编排、轮次编排、工具调度、agent 目录、工作区解析）全部经
-        进程级依赖入口解析，构造时不再逐个传参。
+        进程级依赖入口解析；进程工具输出通道工厂由应用装配入口注入，避免核心 runtime
+        依赖 Assistant Transport。
 
         参数:
-            无。
+            process_tool_output_channel_factory: 可选的进程工具输出通道工厂，由应用装配层
+                注入；缺省时不投递进程工具的运行期输出事件。
 
         返回:
             无。
@@ -68,6 +80,7 @@ class AgentRuntime:
         self._tool_executor = get_tool_system().executor
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
+        self._process_tool_output_channel_factory = process_tool_output_channel_factory
 
     async def execute_run(
         self,
@@ -168,7 +181,6 @@ class AgentRuntime:
             # Langfuse recorder 使用 SDK 自带的后台批量上报。不能在对话收尾路径
             # 主动调用同步 flush：网络不可用时 SDK 会等待重试，导致 run 无法及时
             # 进入 completed/failed 终态，前端会一直显示运行中。
-            # await self._publish_stable_file_changes(run_id)
             # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
             # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
             await HookInterceptor.async_safe_fire(
@@ -186,50 +198,9 @@ class AgentRuntime:
             raise
         finally:
             cancellation_registry.clear(run_id)
-
-
-    def _mark_stable_file_changes(self, run_id: int) -> None:
-        """把某 run 运行中（``stable=0``）的文件快照收口为已稳定（``stable=1``）。
-
-        抽离为同步方法，以便终态路径（成功/失败/取消/客户端断开）无论是否处于
-        async 上下文都能调用：失败与取消分支在同步方法内无法 ``await`` 广播，
-        故本方法只做落库标记，广播交由 ``_publish_stable_file_changes``（仅成功路径）。
-
-        参数:
-            run_id: 刚结束的轮次标识。
-
-        返回:
-            无。
-
-        异常:
-            无。快照收口属展示侧增强，失败不应影响 run 主流程，故整体捕获并记 warning。
-
-        副作用:
-            把该 run 的 file_snapshots 行置 stable=1。
-        """
-        try:
-            FileSnapshotCrud().mark_stable_by_turn(run_id)
-        except Exception:
-            log.warning(
-                "file_change_mark_stable_failed",
-                extra={
-                    "msg": "运行中快照收口为稳定失败，不影响 run 结果",
-                    "data": {"run_id": run_id},
-                },
-            )
-
-    async def _publish_stable_file_changes(self, run_id: int) -> None:
-        """把本 run 的文件快照收口为稳定事实。"""
-        try:
-            self._mark_stable_file_changes(run_id)
-        except Exception:
-            log.warning(
-                "file_change_stable_mark_failed",
-                extra={
-                    "msg": "变更集稳定标记失败，不影响 run 结果",
-                    "data": {"run_id": run_id},
-                },
-            )
+            # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
+            # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
+            tool_call_cancellation_registry.clear_run(run_id)
 
     def _resolve_execution_context(
         self,
@@ -312,6 +283,8 @@ class AgentRuntime:
                 delegate_task_executor=delegate_task_executor,
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,
+                process_tool_output_channel_factory=self._process_tool_output_channel_factory,
+                file_mutation_service=get_file_mutation_service(),
             )
         return WorkflowOperations(
             tool_executor=self._tool_executor,

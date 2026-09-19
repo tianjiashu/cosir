@@ -111,8 +111,8 @@ def format_git_diff(result: FileDiffResult) -> str:
         无。
 
     说明:
-        该结果只用于 UI 展示。回退与审计仍使用 ``artifact_data`` 中的完整快照，
-        不依赖这个可能受展示预算限制的 patch_write。
+        该结果只用于 UI 展示。回退与审计使用 ``FileMutationService`` 持久化的完整
+        before-image，不依赖这个可能受展示预算限制的 patch_write。
     """
 
     old_path = result.path
@@ -143,32 +143,6 @@ def format_git_diff(result: FileDiffResult) -> str:
         )
     )
     return f"{git_header}\n{body}" if body else git_header
-
-
-def format_patch_diff(results: list[FileDiffResult]) -> str:
-    """把多个文件的 diff 快照拼成模型侧统一回显文本。
-
-    参数:
-        results: 各文件的 before/after 快照与状态（含 Move 的 ``new_path``）。
-
-    返回:
-        以换行连接的 unified diff 文本；Move 以 ``# Moved: src -> dst`` 标记行呈现
-        （不做逐行 diff，与 Hermes 一致）。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    parts: list[str] = []
-    for result in results:
-        if result.status == "moved":
-            parts.append(f"# Moved: {result.path} -> {result.new_path}")
-        else:
-            parts.append(format_unified_diff(result.before, result.after, result.path))
-    return "\n".join(parts)
 
 
 def _count_added(diff: str) -> int:
@@ -210,7 +184,11 @@ def build_diff_stats(results: list[FileDiffResult]) -> dict:
     total_insertions = 0
     total_deletions = 0
     for result in results:
-        if result.status == "moved":
+        if result.status == "deleted":
+            # 整文件删除计 1 次删除；不依赖回退正文行数，避免大文件/二进制删除读盘。
+            insertions = 0
+            deletions = 1
+        elif result.status == "moved":
             insertions = 0
             deletions = 0
         else:

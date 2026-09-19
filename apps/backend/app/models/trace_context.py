@@ -1,12 +1,12 @@
 """Trace 运行态上下文值对象。
 
 单一职责：承载一次任务运行中的 trace 关联字段，并支持派生子 span 上下文。
-不负责 ID 生成算法（由 ``app.trace_infra.ids`` 负责）。
+不负责 ID 生成算法（由 ``app.utils.ids`` 负责）。
 """
 
 from dataclasses import dataclass
 
-from app.utils.trace_infra import new_span_id
+from app.utils.ids import new_span_id
 
 
 @dataclass(frozen=True)

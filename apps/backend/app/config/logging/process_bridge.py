@@ -4,7 +4,7 @@
 - 子进程通过 SubprocessQueueHandler 把 LogRecord 放入 multiprocessing.Queue，
   发送前会把不可 pickle 的 exc_info（traceback 对象）转换为 stack 文本，避免跨进程失败。
 - 父进程 QueueListener 在已配置的 handler（JSONL 文件 + 可选 SQLite）上消费，
-  复用父进程已配置的脱敏、截断与上下文关联，不重复创建写入管线。
+  复用父进程已配置的截断与上下文关联，不重复创建写入管线。
 - 子进程日志建议通过 extra 携带 run_id，父进程 LogContextFilter 会据此关联 trace/task。
 
 契约：

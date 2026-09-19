@@ -556,7 +556,6 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
             assert kwargs["error"] == {
                 "code": "tool_error_limit_reached",
                 "message": "运行失败",
-                "retryable": False,
             }
             run.status = "failed"
             return run

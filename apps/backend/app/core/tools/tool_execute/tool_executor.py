@@ -7,11 +7,16 @@
         → FileToolStateCoordinator（prepare / lock / check_stale / complete）
         → ToolHandlerRunner（thread 直跑 或 process 隔离 + 硬超时强杀）
         → PostToolUse Hook
-        → ToolObservationBudget（模型通道脱敏截断落盘）
+        → ToolObservationBudget（模型通道预算与超限落盘）
+        → 工具终态提前投影（``project_tool_terminal_state``，展示旁路）
 
 管线只做编排：每个阶段的实现各自收口在对应协作者中，本模块不含隔离执行细节、
 权限文案或预算算法。上层（``WorkflowOperations``）只依赖 ``execute`` 一个入口，
 拿到的始终是已治理、可落库、可回传的 :class:`ToolObservation`。
+
+本模块还承载「一次工具调用跑完就立刻把终态推给前端」的唯一落点：投影只写在
+``execute`` 的单一出口，不在十几条 early return 上各加一次调用，使门禁拒绝、路径非法、
+stale、协调器异常等分支自动覆盖，将来新增分支也不会漏。
 """
 
 from collections.abc import Collection
@@ -31,7 +36,10 @@ from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
 from app.core.tools.tool_execute.tool_observation_budget import ToolObservationBudget
-from app.core.tools.tool_handler.terminal import OutputSink
+from app.core.tools.tool_execute.tool_terminal_projection import (
+    project_tool_terminal_state,
+    project_unhandled_tool_failure,
+)
 from app.core.tools.tool_registry import ToolRegistry
 from app.hook import HookContext
 from app.hook.hook_event import HookEvent
@@ -46,12 +54,14 @@ class ToolExecutor:
     :class:`ToolObservation`，使上层（workflow / 运行时）无需关心失败原因细节。
 
     职责边界：
-    - 负责：按固定时序编排五个阶段，并保证**每条**返回路径（含门禁拒绝、状态协调
-      提前返回、执行失败）都过同一道输出预算。
+    - 负责：按固定时序编排五个阶段，保证**每条**返回路径（含门禁拒绝、状态协调
+      提前返回、执行失败）都过同一道输出预算，并在单一出口对**每条**返回路径、以及
+      管线自身抛出的未归一化异常，各做一次工具终态提前投影。
     - 不负责：门禁判定规则（``ToolAccessGate``）、文件 revision/stale/锁机制
       （``FileToolStateCoordinator``）、子进程隔离与超时强杀
       （``ToolHandlerRunner``）、预算算法（``ToolObservationBudget``）、
-      handler 业务逻辑、模型可见性之外的运行策略。
+      终态映射与投影实现（``tool_terminal_projection``）、handler 业务逻辑、
+      模型可见性之外的运行策略。
     """
 
     def __init__(
@@ -144,15 +154,71 @@ class ToolExecutor:
         call: ToolCall,
         execution_context: ToolExecutionContext | None = None,
         allowed_tool_names: Collection[str] | None = None,
-        output_sink: OutputSink | None = None,
     ) -> ToolObservation:
-        """执行单次工具调用并返回归一化观察结果。
+        """执行单次工具调用、投影其终态，并返回归一化观察结果。
+
+        这是执行管线的唯一出口：先经 :meth:`_execute_inner` 完成五阶段编排，再把该观察的
+        终态提前投影到进程内 Transport snapshot（``completed`` / ``failed`` /
+        ``cancelled``），最后原样返回观察。投影写在唯一出口而非各 early return 处，门禁
+        拒绝、路径非法、stale、协调器异常等分支自动覆盖。
+
+        参数:
+            call: 模型请求的工具调用，含工具名、参数与调用 id。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；为 None 时
+                由 :meth:`_execute_inner` 判定为装配错误并抛出。
+            allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
+                调用方不增加 Agent 级门禁。
+
+        返回:
+            与 :meth:`_execute_inner` 相同的归一化 :class:`ToolObservation`（投影只读它，
+            不修改任何字段）。
+
+        异常:
+            ValueError: ``execution_context`` 为 None 时抛出（见 :meth:`_execute_inner`），
+                该路径不产生观察因而不触发终态投影。
+            Exception: :meth:`_execute_inner` 抛出的任何其它异常都会原样上抛；上抛前已把该
+                调用投影为 ``failed`` 终态，避免前端停留在 ``running``。上游
+                ``WorkflowOperations`` 随后自行把该异常归一化为内部错误观察。
+
+        副作用:
+            除 :meth:`_execute_inner` 的副作用外，额外把工具终态直投进进程内 snapshot；
+            投影失败只记日志、不改写观察（展示层缺口不得中断工具执行链路）。
+        """
+
+        try:
+            observation = self._execute_inner(call, execution_context, allowed_tool_names)
+        except Exception:
+            # 管线自身异常：该调用已确定性结束且失败。先投终态再上抛，投影失败也不遮蔽原异常。
+            if execution_context is not None:
+                project_unhandled_tool_failure(
+                    task_id=execution_context.task_id,
+                    run_id=execution_context.run_id,
+                    tool_call_id=call.call_id or execution_context.tool_call_id,
+                )
+            raise
+        if execution_context is not None:
+            project_tool_terminal_state(
+                task_id=execution_context.task_id,
+                run_id=execution_context.run_id,
+                # 与取消通知同口径：归一化后的 call_id 才可能命中事件契约，空串由投影内部跳过。
+                tool_call_id=call.call_id or execution_context.tool_call_id,
+                observation=observation,
+            )
+        return observation
+
+    def _execute_inner(
+        self,
+        call: ToolCall,
+        execution_context: ToolExecutionContext | None = None,
+        allowed_tool_names: Collection[str] | None = None,
+    ) -> ToolObservation:
+        """执行单次工具调用并返回归一化观察结果（不含 Transport 终态投影）。
 
         编排顺序：准入门禁（注册表命中 → 权限门禁 → 参数校验 → PreToolUse Hook）
         → 文件工具经状态协调（revision/stale/锁）后委派隔离执行器，非文件工具由
         协调器短路为空计划直接执行 → PostToolUse Hook → 输出预算；
-        任一前置环节失败都直接返回带 ``reason`` 的 :class:`ToolObservation`，
-        绝不抛出，使上层始终拿到可落库/可回传的结果。
+        任一前置环节失败都直接返回带 ``reason`` 的 :class:`ToolObservation`，使上层始终拿到
+        可落库/可回传的结果；除 ``execution_context`` 缺失这一装配错误外不抛出。
 
         参数:
             call: 模型请求的工具调用，含工具名、参数与调用 id。
@@ -160,13 +226,6 @@ class ToolExecutor:
                 透传给执行器并由 handler 在执行期消费，便于后续扩展更多执行参数。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
-            should_cancel: 可选取消检查回调；透传给工具执行器，由 process 模式在等待
-                结果时轮询、thread 模式在 handler 执行前后边界检查，命中即返回取消观察。
-            output_sink: 可选实时输出回调；透传给执行器，使 process 工具（当前仅
-                ``execute_terminal``）的运行期输出可增量回传上层做实时展示。
-                **当前接线状态**：``should_cancel`` 已由 workflow 链路
-                （``WorkflowOperations``）下穿，但 ``output_sink`` 尚未接入，
-                终端实时流式展示仍未接通；目前仅直接调用方（单测 / 未来事件桥）注入。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"；
@@ -181,7 +240,8 @@ class ToolExecutor:
 
         副作用:
             委派 :class:`ToolHandlerRunner` 启动子进程执行；可能因权限或参数
-            校验失败而短路返回，不进入执行阶段。
+            校验失败而短路返回，不进入执行阶段。本方法不动 Transport snapshot；
+            终态投影由 :meth:`execute` 的单一出口负责。
         """
         if execution_context is None:
             raise ValueError("execution_context is required")
@@ -247,13 +307,43 @@ class ToolExecutor:
                 )
                 if stale_observation is not None:
                     return self._budget.apply(stale_observation, execution_context)
-                observation = self._runner.execute(
-                    tool,
-                    gate_outcome.arguments,
-                    execution_context=execution_context,
-                    tool_call_id=call.call_id,
-                    output_sink=output_sink,
+
+                def run_handler() -> ToolObservation:
+                    return self._runner.execute(
+                        tool,
+                        gate_outcome.arguments,
+                        execution_context=execution_context,
+                        tool_call_id=call.call_id,
+                    )
+
+                mutation_service = (
+                    execution_context.runtime_dependencies.file_mutation_service
+                    if execution_context is not None
+                    else None
                 )
+                if plan.resources.write_paths:
+                    if mutation_service is None:
+                        observation = tool_error(
+                            tool.name,
+                            "the file mutation service is unavailable; the write was not executed",
+                            reason=(
+                                "the runtime is not configured to persist structured file changes; "
+                                "do not retry this write until the backend runtime is repaired."
+                            ),
+                            permission=tool.permission,
+                            tool_call_id=call.call_id,
+                        )
+                    else:
+                        observation = mutation_service.execute_tool_mutation(
+                            tool_name=tool.name,
+                            arguments=gate_outcome.arguments,
+                            execution_context=execution_context,
+                            tool_call_id=call.call_id,
+                            write_paths=plan.resources.write_paths,
+                            execute=run_handler,
+                        )
+                else:
+                    observation = run_handler()
                 self._state_coordinator.complete(
                     plan,
                     observation,

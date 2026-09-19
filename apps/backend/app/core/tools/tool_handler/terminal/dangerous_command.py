@@ -4,10 +4,9 @@
 解析。检测为纯函数、零 I/O，供 ``execute_terminal`` 与未来 ``execute_code``
 复用。deny-list 覆盖不可逆、全局破坏、远程注入执行类灾难级命令；其中删除类
 命令（``rm`` / ``del`` / ``erase`` / ``rd`` / ``rmdir`` / ``Remove-Item`` /
-``find -delete`` / ``xargs rm`` 等）一律硬拒，强制模型走受控的
-``delete`` 工具（workspace 作用域、不审批、含
-路径防逃逸与仅空目录/显式递归两道闸），与"终端是原始 shell 通道、命令可逃逸
-workspace、静态判定作用域不可靠"的前次决策一致。不可逆 git 操作（``reset --hard`` /
+``find -delete`` / ``xargs rm`` 等）一律硬拒。workspace 文本文件通过受控的
+``delete_file`` 删除；目录删除不受 Agent 文件工具支持。该约束来自"终端是原始 shell
+通道、命令可逃逸 workspace、静态判定作用域不可靠"的安全边界。不可逆 git 操作（``reset --hard`` /
 ``push --force`` / ``clean -f`` / ``checkout --`` 丢弃未提交 / ``branch -D`` /
 ``config --global`` / ``commit --amend``）同样纳入 deny-list（见
 ``_GIT_DESTRUCTIVE_PATTERNS``），与删除类命令一致强制拦截；其余普通危险
@@ -21,8 +20,8 @@ workspace、静态判定作用域不可靠"的前次决策一致。不可逆 git
 
 **能力边界（重要）**：deny-list 是终端通道的纵深防御层而非完整防线。它只做
 静态文本匹配，挡不住所有间接路径（如「下载 + 执行」拆两条命令、编码执行等），
-也无法可靠判定命令作用域。删除类操作的安全保证依赖更外层：权限审批 +
-workspace 路径边界 + 受控 ``delete`` 工具。本模块**不承诺**能拦截全部危险
+也无法可靠判定命令作用域。文件删除的安全保证依赖更外层：workspace 路径边界 +
+受控 ``delete_file`` 文件操作；目录删除不受 Agent 文件工具支持。本模块**不承诺**能拦截全部危险
 命令，只负责提高攻击成本；被放行的命令仍受审批与隔离约束。
 """
 
@@ -34,22 +33,22 @@ from dataclasses import dataclass
 # key 为稳定分类键（英文 snake_case），供日志 event/data 使用；description 拼进
 # 返回给模型的 error。正则经 re.IGNORECASE 编译一次缓存（见 _COMPILED）。
 # 删除类命令一律硬拒：原始 shell 通道无法静态可靠判定命令作用域（可 cd / 绝对路径
-# 逃逸 workspace），故统一拒绝、强制走受控 delete 工具。
+# 逃逸 workspace），故统一拒绝；workspace 文本文件应走 delete_file，目录删除不支持。
 _DANGEROUS_PATTERNS: tuple[tuple[str, str, str], ...] = (
     (
         r"\b(?:del|erase)\b",
         "windows_del",
-        "del/erase 命令已被禁用，请改用 delete 工具删除文件",
+        "del/erase 命令已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\b(?:rd|rmdir)\b",
         "windows_rd",
-        "rd/rmdir 命令已被禁用，请改用 delete 工具删除目录",
+        "rd/rmdir 命令已被禁用，Agent 文件工具不支持删除目录",
     ),
     (
         r"\b(?:powershell|pwsh)\b[^|]*-Command|Remove-Item|-rm",
         "powershell_remove_item",
-        "PowerShell Remove-Item 删除已被禁用，请改用 delete 工具",
+        "PowerShell Remove-Item 删除已被禁用，请用 delete_file 删除 workspace 文本文件；目录删除不支持",
     ),
     (
         r"\b(?:powershell|pwsh)\b[^|]*-enc(?:odedcommand)?\b",
@@ -174,27 +173,27 @@ _DANGEROUS_PATTERNS: tuple[tuple[str, str, str], ...] = (
     (
         r"\bfind\b[^|]*-exec(?:dir)?\b[^|]*rm\b",
         "find_exec_rm",
-        "find -exec[dir] rm 删除已被禁用，请改用 delete 工具",
+        "find -exec[dir] rm 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\bfind\b[^|]*-delete\b",
         "find_delete",
-        "find -delete 删除已被禁用，请改用 delete 工具",
+        "find -delete 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\b(?:xargs|xargs -0)\b[^|]*\brm\b",
         "xargs_rm",
-        "xargs rm 删除已被禁用，请改用 delete 工具",
+        "xargs rm 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\brm\b",
         "rm_disabled",
-        "rm 命令已被禁用，请改用 delete 工具删除文件",
+        "rm 命令已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\bunlink\b",
         "unlink_disabled",
-        "unlink 命令已被禁用，请改用 delete 工具删除文件",
+        "unlink 命令已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
 )
 
@@ -252,42 +251,42 @@ _CODE_DANGEROUS_CALLS: tuple[tuple[str, str, str], ...] = (
     (
         r"\brmtree\b",
         "code_rmtree",
-        "代码内 rmtree 递归删除已被禁用，请改用 delete 工具",
+        "代码内 rmtree 递归删除已被禁用，Agent 文件工具不支持删除目录",
     ),
     (
         r"\brmSync\b",
         "code_rm_sync",
-        "代码内 fs.rmSync 递归删除已被禁用，请改用 delete 工具",
+        "代码内 fs.rmSync 递归删除已被禁用，Agent 文件工具不支持删除目录",
     ),
     (
         r"\brmdirSync\b",
         "code_rmdir_sync",
-        "代码内 fs.rmdirSync 删除已被禁用，请改用 delete 工具",
+        "代码内 fs.rmdirSync 删除已被禁用，Agent 文件工具不支持删除目录",
     ),
     (
         r"\bunlinkSync\b",
         "code_unlink_sync",
-        "代码内 fs.unlinkSync 删除已被禁用，请改用 delete 工具",
+        "代码内 fs.unlinkSync 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\bunlink\b",
         "code_unlink",
-        "代码内 unlink 删除已被禁用，请改用 delete 工具",
+        "代码内 unlink 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\bremove\b",
         "code_remove",
-        "代码内 remove 删除已被禁用，请改用 delete 工具",
+        "代码内 remove 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\bdelete\b",
         "code_delete",
-        "代码内 delete 删除已被禁用，请改用 delete 工具",
+        "代码内 delete 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
     (
         r"\bRemove-Item\b",
         "code_remove_item",
-        "代码内 Remove-Item 删除已被禁用，请改用 delete 工具",
+        "代码内 Remove-Item 删除已被禁用，请用 delete_file 删除 workspace 文本文件",
     ),
 )
 

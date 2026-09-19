@@ -3,32 +3,47 @@
 import { AssistantRuntimeProvider, useAui, useAuiState, useAssistantTransportRuntime } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
-import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import { createTransportViewConverter } from "@/lib/assistant/transport-view-converter";
 import type { TransportState } from "@/lib/assistant/contract";
-import { requestJson } from "@/lib/http/client";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { getActiveTraceId, newTraceId } from "@/lib/trace";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 
 const MAX_AUTOMATIC_RESYNCS = 2;
 const RESYNC_DELAYS_MS = [300, 900];
 
-function AttachBridge({ runId }: { runId: number | null }) {
+function AttachBridge({ runId, backendAvailable, backendGeneration }: { runId: number | null; backendAvailable: boolean; backendGeneration: number }) {
   const aui = useAui();
+  const backendAvailableRef = useRef(backendAvailable);
+  const backendGenerationRef = useRef(backendGeneration);
+  backendAvailableRef.current = backendAvailable;
+  backendGenerationRef.current = backendGeneration;
   useEffect(() => {
-    if (runId === null) return;
+    if (runId === null || !backendAvailable) return;
+    let cancelled = false;
+    const scheduledBackendGeneration = backendGeneration;
     const timer = window.setTimeout(() => {
+      if (
+        cancelled
+        || !backendAvailableRef.current
+        || backendGenerationRef.current !== scheduledBackendGeneration
+      ) return;
       void frontendLog("INFO", "workbench_agent_attach", "Workbench 子 Agent 开始只读订阅", { data: { runId } });
       aui.thread.resumeRun({ parentId: null });
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [aui, runId]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [aui, backendAvailable, backendGeneration, runId]);
   return null;
 }
 
 function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; initialState: TransportState; onError: (error: unknown) => void }) {
   const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const [traceId] = useState(() => getActiveTraceId() ?? newTraceId());
   const converter = useMemo(() => createTransportViewConverter(), []);
   const runId = initialState.current_run_id;
   const currentRun = initialState.runs.find((run) => run.runId === runId);
@@ -39,14 +54,22 @@ function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; 
     capabilities: {},
     api: `${backendRuntime.backendBaseUrl}/assistant`,
     resumeApi: `${backendRuntime.backendBaseUrl}/tasks/${taskId}/assistant/attach`,
-    headers: async () => ({ Accept: "text/event-stream", "Content-Type": "application/json" }),
+    headers: async () => ({
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "X-Trace-Id": traceId,
+    }),
     body: async () => ({ taskId, threadId: `task-${taskId}`, runId }),
     converter,
     onError: async (error) => onError(error),
   });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <AttachBridge runId={shouldAttach ? runId : null} />
+      <AttachBridge
+        runId={shouldAttach ? runId : null}
+        backendAvailable={backendRuntime.available}
+        backendGeneration={backendRuntime.generation}
+      />
       <AgentReadonlyMessages />
     </AssistantRuntimeProvider>
   );
@@ -59,6 +82,7 @@ function AgentReadonlyMessages() {
 
 /** Load a canonical child snapshot, then mount one active readonly transport. */
 export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; onClose: () => void }) {
+  const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
   const [state, setState] = useState<TransportState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
@@ -83,7 +107,7 @@ export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; 
       retryTimerRef.current = null;
       setSyncToken((token) => token + 1);
     }, delay);
-  }, []);
+  }, [taskId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -99,15 +123,24 @@ export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; 
     }
     setState(null);
     setError(null);
-    void requestJson<unknown>(`/tasks/${taskId}/assistant/state`, { signal: controller.signal })
-      .then((value) => {
-        if (controller.signal.aborted) return;
+    if (!backendRuntime.available) {
+      setError("本机后端暂不可用，正在等待恢复…");
+      return;
+    }
+    const requestBackendGeneration = backendRuntime.generation;
+    const isCurrentBackend = () => {
+      const latestBackendRuntime = getBackendRuntimeSnapshot();
+      return latestBackendRuntime.available && latestBackendRuntime.generation === requestBackendGeneration;
+    };
+    void requestAssistantSnapshot(taskId, { signal: controller.signal })
+      .then((snapshot) => {
+        if (controller.signal.aborted || !isCurrentBackend()) return;
         setStale(false);
         setError(null);
-        setState(parseTransportState(value));
+        setState(snapshot);
       })
       .catch((cause: unknown) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || !isCurrentBackend()) return;
         if (cause instanceof HttpError && cause.status === 404) {
           void frontendLog("WARNING", "workbench_agent_stale", "Workbench 子 Agent 进入 stale 状态", {
             data: { taskId, status: cause.status },
@@ -124,7 +157,7 @@ export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; 
         setError(safeFrontendErrorMessage(cause, "无法读取子 Agent 状态"));
       });
     return () => controller.abort();
-  }, [scheduleResync, syncToken, taskId]);
+  }, [backendRuntime.available, backendRuntime.generation, scheduleResync, syncToken, taskId]);
 
   useEffect(() => () => {
     if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current);

@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.config.logging import merge_log_context, reset_log_context
-from app.utils.trace_infra import is_trace_id, new_trace_id
+from app.utils.ids import is_trace_id, new_trace_id
 
 
 def install_request_logging(app, logger: logging.Logger) -> None:
@@ -179,7 +179,7 @@ async def _request_log_extra(request) -> dict:
         body_value = await _request_body_value(request)
         if body_value is not None:
             # 只记录结构摘要，不记录请求正文。Assistant Transport 的 commands
-            # 包含用户消息，不能依赖通用字段名脱敏后再落盘。
+            # 包含用户消息，因此不把正文写入日志。
             data["body_summary"] = _request_body_summary(body_value)
     return extra
 
@@ -224,11 +224,11 @@ def _request_body_summary(value: object) -> dict[str, Any]:
 
 
 async def _request_body_value(request) -> object | None:
-    """读取并解析 JSON 请求体，供结构化日志脱敏。
+    """读取并解析 JSON 请求体，供结构化日志摘要构造。
 
     仅处理 ``application/json`` 请求体；其他类型（表单、上传、流）不记录，
     避免消耗大文件流或二进制内容。读取或解析失败时返回 ``None``，
-    不记录原始文本，防止 body 内明文 secret 绕过脱敏落盘。
+    不记录原始文本，避免把完整业务请求写入日志。
 
     参数:
         request: Starlette 请求对象。

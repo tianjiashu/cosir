@@ -12,7 +12,7 @@
 - WorkflowOperations._to_model_message 统一根据不同状态，构建最终llm可见结果。根据retryable true or false,添加hint: <可以重试并由模型结合上下文判断，或不要重试当前调用>。
   - `retryable=True` 的错误可以是参数修正、状态修正或暂态故障；`retryable=False` 时，模型应停止、换方案或请求用户介入。已经产生部分副作用但结果不确定时，不应允许原样重放。
 - ToolObservation.display_data 仅承担对llm不可见的UI所需数据
-- ToolObservation.artifact_data 仅承担对llm不可见的系统所需数据，如供 文件变更回退的diff快照。
+- ToolObservation.artifact_data 仅承担对 llm 不可见的工具内部产物；文件变更与回退事实由 FileMutationService 在 handler 执行前后采集并持久化，不从此字段传递。
 
 ### `success`
 - `status="success"`；

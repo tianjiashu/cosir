@@ -30,7 +30,12 @@ from app.core.runtime.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
 from app.core.runtime.run_result import ToolRunResult
-from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
+from app.core.tools.schemas import (
+    ToolCall,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_error import (
     internal_execution_error_reason,
@@ -369,8 +374,8 @@ class WorkflowOperations:
             task_id: 当前任务标识符。
             calls: 模型请求的工具调用列表。
             step_id: 请求这些工具调用的步骤标识符。
-            running_loop: 兼容历史签名的保留参数，**当前实现不使用**（工具执行期输出桥接已由
-                执行层 handler 自行处理）。
+            running_loop: 可选事件循环；提供时将其登记为当前 Run 工具运行期依赖，
+                供进程工具输出通道在父进程中按序投递事件。未提供时使用当前事件循环。
 
         返回:
             ``ToolRunResult``；其 ``observations`` 由「串行组按传入顺序」与「并行组按实际完成
@@ -397,8 +402,21 @@ class WorkflowOperations:
         # （如大仓库 search_files、重 CPU/IO handler）会连带卡死 SSE 推送与并发请求。
         # to_thread 内部以 copy_context().run 提交，保留父 turn 的 OTel/trace 上下文，
         # 与并行分支 copy_context().run 语义一致；逐调用 await 让取消可在工具间被观察到。
+        loop = running_loop or asyncio.get_running_loop()
+        if self._execution_context is not None:
+            dependencies = self._execution_context.runtime_dependencies
+            if dependencies.runtime_event_loop is not loop:
+                self._execution_context = replace(
+                    self._execution_context,
+                    runtime_dependencies=replace(dependencies, runtime_event_loop=loop),
+                )
         for index, call in serial_calls:
-            observation = await asyncio.to_thread(self._execute_tool_call, task_id, call, step_id)
+            observation = await asyncio.to_thread(
+                self._execute_tool_call,
+                task_id,
+                call,
+                step_id,
+            )
             indexed_observations.append((index, observation))
 
         if parallel_calls:
@@ -523,7 +541,7 @@ class WorkflowOperations:
             无。内部异常在本方法内转为 ``ToolObservation``。
 
         副作用:
-            调用底层 ``ToolExecutor``，并记录可选 trace span。
+            调用底层 ``ToolExecutor``，并记录 trace span。
         """
         try:
             with self._trace_recorder.span(call, step_id or "") as tool_span:

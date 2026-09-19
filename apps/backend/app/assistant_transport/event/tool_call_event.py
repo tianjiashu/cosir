@@ -123,6 +123,13 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     （均不进入模型上下文）。
     所有非终态与终态迁移统一由本类型表达，不为每个目标状态单开事件类型。
 
+    时序：终态由两处发出——**执行出口投影**（``ToolExecutor.execute`` 的单一出口，早于
+    ``ToolMessage`` 落 canonical context，使前端不必等整批工具结束）与**结算兜底**
+    （``ToolCallLifecycleManager.settle``，在写 ``ToolMessage`` 之后）。取消不得早于执行层的
+    强杀与输出排空：执行层在检出取消的瞬间只产出观察与日志，不发状态事件，避免断言一个尚未
+    成立的事实（见 ``tool_terminal_projection`` 的时序说明）。两处对同一调用产生相同终态，
+    按自迁移幂等吸收。
+
     Attributes:
         tool_call_id: 目标工具调用标识。
         status: 迁移后的状态。

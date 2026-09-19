@@ -15,8 +15,7 @@ from app.config.logging.logger import log
 from app.hook.hook_base import HookBase
 from app.hook.hook_event import HookEvent
 
-# 进程级单例。运行期只读（注册只在启动期单线程播种，见 bootstrap_hooks），
-# 因此无需加锁；__init__ 也保持无锁，避免运行期初始化竞态（AGENTS.md 约定）。
+# 进程级单例。Hook 应在开始处理请求前注册；运行期只读，因此无需加锁。
 _registry: HookRegistry | None = None
 
 
@@ -47,11 +46,9 @@ class HookRegistry:
             无。
 
         副作用:
-            初始化 ``_subs``（按事件分组的 Hook 列表）与 ``_seeded`` 标记。
-            不加锁——单例在启动期单线程播种，运行期只读（见模块级 ``_registry``）。
+            初始化按事件分组的空 Hook 列表。不加锁——单例在启动期创建，运行期只读。
         """
         self._subs: dict[HookEvent, list[HookBase]] = {}
-        self._seeded = False
 
     def register(self, hook: HookBase) -> None:
         """注册一个 Hook（按 ``hook.event`` 分组 append，同事件按注册顺序）。
@@ -67,8 +64,7 @@ class HookRegistry:
             此处不再重复校验）。
 
         副作用:
-            向 ``self._subs[hook.event]`` 追加该 Hook。运行期调用会扩大订阅列表，
-            当前机制约定只在启动期播种，运行期只读（见 ``bootstrap_hooks``）。
+            向 ``self._subs[hook.event]`` 追加该 Hook。调用方应在开始处理请求前完成注册。
         """
         self._subs.setdefault(hook.event, []).append(hook)
 
@@ -112,29 +108,25 @@ class HookRegistry:
 
 
 def initialize_hook_registry() -> HookRegistry:
-    """播种进程级单例。
+    """创建并发布进程级空注册表单例。
 
-    必须在应用启动期（单线程）调用一次：构造空注册表、播种内置 Hook，
-    再赋给模块级 ``_registry``。运行期不得再次调用（会重置订阅）。
+    必须在应用启动期（单线程）调用一次，再赋给模块级 ``_registry``。运行期不得再次
+    调用（会重置订阅）；新增 Hook 应在运行请求前显式注册。
 
     参数:
         无。
 
     返回:
-        已播种的 ``HookRegistry`` 单例。
+        已初始化的 ``HookRegistry`` 单例。
 
     异常:
         无。
 
     副作用:
-        覆盖模块级 ``_registry``（启动期仅一次）；调用 ``bootstrap_hooks`` 注册
-        内置 Hook。日志同时落 app 日志与（若已装备）sqlite 日志库。
+        覆盖模块级 ``_registry``（启动期仅一次），并记录初始化日志。
     """
     global _registry
     reg = HookRegistry()
-    from app.hook.builtins.bootstrap_hooks import bootstrap_hooks
-
-    bootstrap_hooks(reg)
     _registry = reg
     log.info(
         "hook_registry_initialized",

@@ -1,0 +1,214 @@
+.backend-startup-screen {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 47%, color-mix(in oklab, #22d3ee 7%, transparent), transparent 33rem),
+    var(--background);
+  color: var(--foreground);
+  animation: backend-startup-enter 650ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.backend-startup-screen[data-state="exiting"] {
+  pointer-events: none;
+  animation: backend-startup-exit 280ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.backend-startup-screen__glow {
+  position: absolute;
+  inset: auto;
+  width: min(72vw, 46rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in oklab, #22d3ee 5%, transparent), transparent 68%);
+  filter: blur(18px);
+  opacity: 0.7;
+  animation: backend-startup-ambient 5s ease-in-out infinite alternate;
+}
+
+.backend-startup-screen__content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem;
+  animation: backend-startup-content-in 750ms 100ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+}
+
+.backend-startup-screen__mark-wrap {
+  position: relative;
+  display: grid;
+  width: 7.5rem;
+  height: 7.5rem;
+  place-items: center;
+  margin-bottom: 1rem;
+}
+
+.backend-startup-screen__halo {
+  position: absolute;
+  inset: 0.35rem;
+  border: 1px solid color-mix(in oklab, #22d3ee 20%, transparent);
+  border-radius: 50%;
+  opacity: 0;
+  animation: backend-startup-halo 2.8s 2.15s ease-out infinite;
+}
+
+.backend-startup-screen__mark {
+  position: relative;
+  width: 5.25rem;
+  height: 5.25rem;
+  overflow: visible;
+  filter: drop-shadow(0 8px 22px color-mix(in oklab, #22d3ee 12%, transparent));
+}
+
+.cosir-mark-animated__stroke {
+  stroke-dasharray: 140;
+  stroke-dashoffset: 140;
+  animation: cosir-mark-draw 1s 180ms cubic-bezier(0.22, 0.72, 0.18, 1) forwards;
+}
+
+.cosir-mark-animated__arrow {
+  stroke-dasharray: 28;
+  stroke-dashoffset: 28;
+  animation:
+    cosir-arrow-draw 420ms 700ms ease-out forwards,
+    cosir-arrow-glow 2.8s 2.15s ease-in-out infinite;
+}
+
+.cosir-mark-animated__static-dot {
+  display: none;
+}
+
+.cosir-mark-animated__runner {
+  filter: drop-shadow(0 0 5px #22d3eeaa);
+}
+
+.backend-startup-screen__wordmark {
+  margin: 0;
+  padding-left: 0.3em;
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: 0.3em;
+  line-height: 1.3;
+}
+
+.backend-startup-screen__status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  letter-spacing: 0.015em;
+}
+
+.backend-startup-screen__status-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 50%;
+  background: #22d3ee;
+  box-shadow: 0 0 0 0 color-mix(in oklab, #22d3ee 30%, transparent);
+  animation: backend-startup-status-pulse 1.8s ease-out infinite;
+}
+
+.backend-startup-screen__status-pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.05rem;
+}
+
+.backend-startup-screen__status-pulse i {
+  width: 0.18rem;
+  height: 0.18rem;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: backend-startup-dot 1.2s ease-in-out infinite;
+}
+
+.backend-startup-screen__status-pulse i:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.backend-startup-screen__status-pulse i:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+@keyframes backend-startup-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes backend-startup-exit {
+  to { opacity: 0; transform: scale(1.015); }
+}
+
+@keyframes backend-startup-content-in {
+  from { opacity: 0; transform: translateY(9px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes backend-startup-ambient {
+  from { transform: scale(0.94); opacity: 0.45; }
+  to { transform: scale(1.06); opacity: 0.85; }
+}
+
+@keyframes backend-startup-halo {
+  0% { opacity: 0; transform: scale(0.72); }
+  22% { opacity: 0.7; }
+  100% { opacity: 0; transform: scale(1.22); }
+}
+
+@keyframes backend-startup-status-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, #22d3ee 30%, transparent); }
+  75%, 100% { box-shadow: 0 0 0 0.42rem transparent; }
+}
+
+@keyframes backend-startup-dot {
+  0%, 65%, 100% { opacity: 0.25; transform: translateY(0); }
+  32% { opacity: 0.9; transform: translateY(-2px); }
+}
+
+@keyframes cosir-mark-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes cosir-arrow-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes cosir-arrow-glow {
+  0%, 100% { filter: drop-shadow(0 0 0 transparent); opacity: 0.78; }
+  45% { filter: drop-shadow(0 0 5px #22d3ee99); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backend-startup-screen,
+  .backend-startup-screen__glow,
+  .backend-startup-screen__content,
+  .backend-startup-screen__halo,
+  .backend-startup-screen__status-dot,
+  .backend-startup-screen__status-pulse i,
+  .cosir-mark-animated__stroke,
+  .cosir-mark-animated__arrow {
+    animation: none;
+  }
+
+  .cosir-mark-animated__stroke,
+  .cosir-mark-animated__arrow {
+    stroke-dashoffset: 0;
+  }
+
+  .cosir-mark-animated__static-dot {
+    display: initial;
+  }
+
+  .cosir-mark-animated__runner {
+    display: none;
+  }
+}

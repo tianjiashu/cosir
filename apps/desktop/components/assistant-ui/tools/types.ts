@@ -7,6 +7,7 @@ export type ToolArtifact = {
   error: string | null;
   errorCode: string | null;
   child_task_id?: number;
+  child_run_id?: number;
   agent_role?: string;
   delegation_ref_seq?: number;
 };
@@ -33,6 +34,7 @@ export function readToolArtifact(value: unknown): ToolArtifact {
         : null,
     errorCode: typeof candidate.errorCode === "string" ? candidate.errorCode : null,
     child_task_id: typeof candidate.child_task_id === "number" && Number.isInteger(candidate.child_task_id) && candidate.child_task_id > 0 ? candidate.child_task_id : undefined,
+    child_run_id: typeof candidate.child_run_id === "number" && Number.isInteger(candidate.child_run_id) && candidate.child_run_id > 0 ? candidate.child_run_id : undefined,
     agent_role: typeof candidate.agent_role === "string" && candidate.agent_role.trim() ? candidate.agent_role : undefined,
     delegation_ref_seq: typeof candidate.delegation_ref_seq === "number" && Number.isInteger(candidate.delegation_ref_seq) && candidate.delegation_ref_seq >= 0 ? candidate.delegation_ref_seq : undefined,
   };
