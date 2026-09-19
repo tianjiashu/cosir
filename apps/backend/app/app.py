@@ -2,7 +2,8 @@
 
 本模块只负责应用装配：创建 ``app`` 单例、定义 ``lifespan``、安装请求日志中间件、
 触发各域路由模块级装饰器注册，以及暴露 ``create_app`` 工厂。所有端点逻辑都拆分到
-同目录下的域路由文件（``tasks_api`` / ``logs_api`` /
+同目录下的域路由文件（``tasks_api`` / ``workspaces_api`` /
+``providers_api`` 等）。
 
 ``app`` 是模块级单例，各域路由文件通过 ``from app.api.app import app`` 复用同一实例，
 因此必须在 ``app`` 定义之后再导入这些模块，否则会产生未初始化引用。
@@ -16,9 +17,11 @@
 import asyncio
 import importlib
 import json
+import os
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,7 +46,7 @@ from app.config.configuration import (
     set_agent_registry,
     set_tool_system,
 )
-from app.config.logging.configuration import install_logging_for_current_process
+from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.observability import flush_langfuse
@@ -71,6 +74,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _mark_boot_failed(exc)
         raise
+    finally:
+        # Startup can fail before _lifespan_impl reaches its normal shutdown block.
+        # Close any file/queue handlers created before that failure as well.
+        shutdown_logging()
 
 
 @asynccontextmanager
@@ -92,20 +99,17 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         关闭前统一清理。
     """
 
-    # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）初始化存储并配置日志。
-    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py，因此日志配置必须放在此处，
-    # 否则运行期日志既不落文件也不落 SQLite；同时必须先 init_storage 再挂载 SQLite 日志
-    # handler，避免 LogStore 因 session 工厂未就绪而抛 RuntimeError 被降级为仅文件日志。
-    # 此处重建 handler 也会在 fork 子进程里重新拉起 SQLite 写入线程，规避 fork 后写线程死亡的隐患。
+    # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）尽早配置日志。
+    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先使用环境变量/默认目录
+    # 建立文件管线，确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
+    install_logging_for_current_process(
+        log_dir=Path(os.environ.get("CODING_AGENT_LOG_DIR", str(Settings.LOG_DIR)))
+    )
     Settings.load()
     initialize_service_dependencies()
+    # Settings.load 可能解析出发布版数据目录或轮转参数，因此按最终配置重建一次管线。
     install_logging_for_current_process(
         log_dir=Settings.LOG_DIR,
-        log_database_file=Settings.LOG_DATABASE_FILE,
-        sqlite_logging_enabled=Settings.SQLITE_LOGGING_ENABLED,
-        queue_size=Settings.LOG_QUEUE_SIZE,
-        batch_size=Settings.LOG_BATCH_SIZE,
-        flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
         max_bytes=Settings.LOG_MAX_BYTES,
         backup_count=Settings.LOG_BACKUP_COUNT,
     )
@@ -144,14 +148,17 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
-        HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-        await get_conversation_run_executor().close()
-        await asyncio.to_thread(get_terminal_session_service().shutdown)
-        flush_langfuse()
-        close_service_dependencies()
-        # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
-        _mark_boot_stopped()
+        try:
+            # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
+            HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
+            await get_conversation_run_executor().close()
+            await asyncio.to_thread(get_terminal_session_service().shutdown)
+            flush_langfuse()
+            close_service_dependencies()
+            # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
+            _mark_boot_stopped()
+        finally:
+            shutdown_logging()
 
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
@@ -188,7 +195,6 @@ install_transport_request_error_handler(app)
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
-importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")
 importlib.import_module("app.api.terminal_api")

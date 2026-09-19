@@ -12,14 +12,10 @@ from app.models.conversation_run_file_attachment import ConversationRunFileAttac
 from app.models.conversation_run_record import ConversationRunError, ConversationRunRecord
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.models.log_entry_record import LogEntryRecord
-from app.models.log_query import LogQuery, LogSortOrder
-from app.models.log_query_result import LogQueryResult
 from app.models.model_entry_record import ModelEntryRecord
 from app.models.provider_record import ProviderRecord
 from app.models.task_record import TaskRecord
 from app.models.terminal_session_record import TerminalSessionRecord
-from app.models.trace_context import TraceContext
 from app.models.workspace_record import WorkspaceRecord
 
 __all__ = [
@@ -32,14 +28,9 @@ __all__ = [
     "ConversationRunRecord",
     "ConversationRunStatus",
     "ConversationRunUsage",
-    "LogEntryRecord",
-    "LogQuery",
-    "LogQueryResult",
-    "LogSortOrder",
     "ModelEntryRecord",
     "ProviderRecord",
     "TaskRecord",
     "TerminalSessionRecord",
-    "TraceContext",
     "WorkspaceRecord",
 ]

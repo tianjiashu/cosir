@@ -1,11 +1,12 @@
-"""跨进程日志桥接：让 spawn 子进程日志汇入父进程统一管线。
+"""跨进程日志桥接：让 spawn 子进程日志汇入父进程文件管线。
 
 设计要点：
 - 子进程通过 SubprocessQueueHandler 把 LogRecord 放入 multiprocessing.Queue，
   发送前会把不可 pickle 的 exc_info（traceback 对象）转换为 stack 文本，避免跨进程失败。
-- 父进程 QueueListener 在已配置的 handler（JSONL 文件 + 可选 SQLite）上消费，
-  复用父进程已配置的截断与上下文关联，不重复创建写入管线。
-- 子进程日志建议通过 extra 携带 run_id，父进程 LogContextFilter 会据此关联 trace/task。
+- 父进程 QueueListener 在固定 JSONL 文件 handler 上消费，复用父进程已配置的
+  截断与上下文关联，不重复创建写入管线。
+- 子进程创建日志记录时，当前上下文中的 trace_id 会随 LogRecord 跨队列传递；
+  业务实体 ID（如 run_id、task_id）应放在 extra.data 中，不由日志层反查。
 
 契约：
 - 子进程侧调用 install_logging_for_current_process(log_queue=queue)，把日志导向队列；
@@ -62,6 +63,8 @@ def install_queue_handler(queue: Queue) -> None:
     """
     logger = logging.getLogger("coding_agent.backend")
     logger.propagate = False
+    if any(isinstance(handler, SubprocessQueueHandler) for handler in logger.handlers):
+        return
     logger.addHandler(SubprocessQueueHandler(queue))
 
 
@@ -69,7 +72,7 @@ def install_log_queue_bridge(logger: logging.Logger) -> None:
     """在父进程侧启动队列监听器，复用已有 handler 消费子进程日志。
 
     参数:
-        logger: 已挂载文件/SQLite handler 的后端主日志器。
+        logger: 已挂载固定 JSONL 文件 handler 的后端主日志器。
 
     返回:
         无。
@@ -95,7 +98,7 @@ def start_queue_listener(queue: Queue, handlers: list[logging.Handler]) -> Queue
 
     参数:
         queue: 日志队列。
-        handlers: 父进程已配置好的 handler 列表（JSONL + SQLite）。
+        handlers: 父进程已配置好的 JSONL 文件 handler 列表。
 
     返回:
         已启动的 QueueListener。
@@ -171,29 +174,31 @@ class SubprocessQueueHandler(QueueHandler):
         副作用:
             无；不修改原始 record。
         """
-        if not record.exc_info:
-            return record
         cloned = logging.makeLogRecord(record.__dict__.copy())
-        exc_type, exc_value, exc_tb = record.exc_info
-        try:
-            stack_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-        except Exception:
-            # traceback 格式化失败时降级为可读占位，避免静默丢失堆栈
-            stack_text = (
-                f"<stack unavailable: {exc_type.__name__}: {exc_value}>"
-                if exc_type
-                else "<stack unavailable>"
-            )
-        _set_log_field(cloned, "stack", stack_text)
-        _set_log_field(cloned, "error_type", exc_type.__name__ if exc_type else "")
-        _set_log_field(cloned, "error_message", str(exc_value) if exc_value is not None else "")
+        if record.exc_info:
+            exc_type, exc_value, exc_tb = record.exc_info
+            try:
+                stack_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            except Exception:
+                # traceback 格式化失败时降级为可读占位，避免静默丢失堆栈
+                stack_text = (
+                    f"<stack unavailable: {exc_type.__name__}: {exc_value}>"
+                    if exc_type
+                    else "<stack unavailable>"
+                )
+            _set_log_field(cloned, "stack", stack_text)
+            _set_log_field(cloned, "error_type", exc_type.__name__ if exc_type else "")
+            _set_log_field(cloned, "error_message", str(exc_value) if exc_value is not None else "")
         cloned.exc_info = None
         cloned.exc_text = None
+        # The JSONL formatter reads record.msg directly. Keep the event key while
+        # dropping arbitrary args that may not be pickleable across spawn.
+        cloned.args = ()
         return cloned
 
 
 def _set_log_field(record: logging.LogRecord, name: str, value: str) -> None:
-    """把结构化错误字段写入 record，供父进程 mapper 回退读取。
+    """把结构化错误字段写入 record，供父进程 formatter 回退读取。
 
     参数:
         record: 待写入的日志记录。

@@ -3,8 +3,8 @@
 本模块只承载「调试落盘」单一职责：把模型流式产出的原始 chunk（``_dump_raw_chunk_debug``，
 由 ``model_node`` 逐 chunk 调用）与合并后的完整 chunk（``_dump_merged_chunk_debug``，当前无
 生产调用方，保留供本地排查）追加写入 ``logs/debug_raw_chunks.jsonl`` /
-``logs/debug_merged_chunks.jsonl``，供本地逐 chunk 排查完整字段。常规结构化日志通道
-（JSONL 文件 + SQLite 日志库）对所有 ``data`` 字符串施加 ``MAX_LOG_TEXT_LENGTH`` 截断，
+``logs/debug_merged_chunks.jsonl``，供本地逐 chunk 排查完整字段。常规结构化日志通道（固定
+JSONL 文件）对所有 ``data`` 字符串施加 ``MAX_LOG_TEXT_LENGTH`` 截断，
 无法承载完整消息 JSON；本模块绕过该预算，以单行 JSON 落盘，使开发者能在不被截断的前提下
 查看 chunk 结构。
 

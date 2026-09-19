@@ -17,6 +17,7 @@ from functools import partial
 from threading import Event
 from typing import Any
 from app.config.logging.logger import log
+from app.config.logging.context.log_context_store import current_log_context
 from app.config.logging.process_bridge import get_log_queue
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
@@ -234,7 +235,12 @@ class ToolHandlerRunner:
             output_queue = multiprocessing.Queue(maxsize=_OUTPUT_QUEUE_MAXSIZE)
             output_queue.cancel_join_thread()
         process_execution_context = (
-            execution_context.for_process_execution() if execution_context is not None else None
+            execution_context.for_process_execution()
+            if execution_context is None
+            else replace(
+                execution_context,
+                trace_id=execution_context.trace_id or current_log_context(),
+            ).for_process_execution()
         )
         process = multiprocessing.Process(
             target=ToolHandlerRunner._execute_handler,
@@ -1023,7 +1029,8 @@ class ToolHandlerRunner:
                 ``("success"|"error", payload)`` 元组。
             log_queue: 父进程跨进程日志队列；为 None 时子进程退化为默认 logging。
             execution_context: 本次执行的运行时边界；随 ``arguments`` 一同跨进程序列化，
-                作为关键字参数 ``execution_context`` 注入 handler。
+                作为关键字参数 ``execution_context`` 注入 handler。其 ``trace_id`` 用于
+                恢复子进程日志的链路上下文。
             output_queue: 可选实时输出队列；非 None 时以关键字参数 ``output_sink``
                 注入 handler，handler 可在运行期回传 ``(text, truncated)`` 片段；子进程
                 完成前会追加带丢弃状态的完成控制项，父进程据此排空队列并提示截断。
@@ -1059,12 +1066,15 @@ class ToolHandlerRunner:
             # spawn 子进程是全新解释器：导入 configuration 会触发
             # ``app.config.logging`` 包的 ``install_msg_relocation()``，
             # 使规范约定的 ``extra["msg"]`` 在子进程同样生效；随后将日志
-            # 导向父进程队列，复用父进程已配好的截断/上下文关联。
+            # 导向父进程队列，复用父进程已配好的截断管线。
             from app.config.logging.configuration import (
                 install_logging_for_current_process,
             )
+            from app.config.logging.context.log_context_store import merge_log_context
 
             install_logging_for_current_process(log_queue=log_queue)
+            if execution_context is not None and execution_context.trace_id:
+                merge_log_context(trace_id=execution_context.trace_id)
 
         extra_kwargs: dict[str, Any] = {}
         if output_queue is not None:

@@ -510,7 +510,7 @@ database locked”，应通过并发测试验证锁等待和重试是否足够�
 - 重启后不会隐式重放旧 workflow；
 - 新数据库初始化可重复，schema 检查失败时不会启动业务 Run；
 - LangGraph checkpoint 只在显式 continuation 流程被读取，不参与冷启动 context/snapshot 重建；
-- 运行日志和 SQLite 日志仍可用于定位启动、锁等待、重建和恢复问题。
+- 运行日志文件仍可用于定位启动、锁等待、重建和恢复问题。
 
 ## 10. 实施顺序
 

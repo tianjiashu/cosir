@@ -48,7 +48,7 @@ Tauri 桌面应用
 - React 正式诊断日志使用 `frontendLog(level, event, msg, { traceId, data, error })`；后端使用 `log.info`、`log.warning`、`log.error` 或 `log.exception`，通过 `extra={"msg": "...", "data": {...}}` 附带说明和业务字段。
 - `event` 使用稳定的 snake_case 名称；`task_id`、`run_id` 等标识放入 `data`。同一请求或执行链路复用同一个 `trace_id`；前端 HTTP 请求通过 `X-Trace-Id` 传入后端，后端绑定日志上下文。
 - 前端 Tauri 日志查看 `app_data_dir()/runtime/frontend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式查看 WebView/浏览器控制台。
-- 后端运行日志查看 `logs/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）和 `storage/logs.sqlite3`；启动、停止或崩溃问题查看 `app_data_dir()/runtime/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片和 `backend.bootstate.json`。
+- 后端运行日志查看 `app_data_dir()/runtime/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；启动、停止或崩溃问题查看 `app_data_dir()/runtime/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片和 `backend.bootstate.json`。
 - 日志和观测是诊断旁路，不是业务事实。不得记录未经脱敏的密钥、Token、密码、完整请求正文或大段模型/工具内容；日志或观测失败不得阻断 Agent 主流程。
 
 ## 进程生命周期边界
@@ -85,7 +85,7 @@ Tauri 桌面应用
 ## 数据与事实所有权
 
 - 后端拥有 task、workspace、Run、command、Agent context、Transport snapshot、delegation、文件变更记录和 provider/model 配置等持久化事实；前端状态只负责交互和渲染。
-- 主业务库默认是 `storage/app.sqlite3`；日志库是 `storage/logs.sqlite3`；LangGraph checkpoint 使用独立的 `storage/langgraph_checkpoints.sqlite`。三者职责和访问路径分离，不得跨层复用 session 或事实模型。
+- 主业务库默认是 `storage/app.sqlite3`；后端运行日志是固定格式的本地 JSONL 文件；LangGraph checkpoint 使用独立的 `storage/langgraph_checkpoints.sqlite`。业务库、日志文件和 checkpoint 职责与访问路径分离，不得跨层复用 session 或事实模型。
 - `ConversationRunModel.status` 是 Run 生命周期状态的唯一事实源。Transport snapshot、Agent context 和 LangGraph checkpoint 都不能演化成第二套 Run 状态机。
 - Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
 - `ConversationTaskStateService` 负责 Transport snapshot 的重建与投影编排；`TaskRuntimeSpace` 按 taskId 持有 snapshot working copy，首次读取时懒加载重建，后续复用内存对象。`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。

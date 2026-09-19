@@ -34,7 +34,6 @@ def storage(tmp_path: Path) -> Iterator[None]:
     db_dir.mkdir()
     Settings.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
-        LOG_DATABASE_FILE=db_dir / "log.sqlite3",
         CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
     )

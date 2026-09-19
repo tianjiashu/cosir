@@ -13,7 +13,6 @@ from app.storage.model.conversation_command_model import ConversationCommandMode
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.delegation_model import DelegationModel
-from app.storage.model.log_model import LogEntryModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.task_model import TaskModel
@@ -31,9 +30,6 @@ APP_MODELS = (
     DelegationModel,
     TerminalSessionModel,
 )
-LOG_MODELS = (LogEntryModel,)
-
-
 def initialize_app_schema(engine: Engine) -> None:
     """创建当前应用 metadata 声明的全部业务表。
 
@@ -243,13 +239,3 @@ def _remove_legacy_checkpoint_unique_constraint(engine: Engine) -> None:
             connection.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             connection.commit()
-
-
-def initialize_log_schema(engine: Engine) -> None:
-    """创建日志库当前 metadata 声明的表。"""
-
-    for model in LOG_MODELS:
-        table = cast(Table, model.__table__)
-        table.create(bind=engine, checkfirst=True)
-        for table_index in table.indexes:
-            table_index.create(bind=engine, checkfirst=True)

@@ -12,6 +12,7 @@
 
 import os
 import traceback
+from pathlib import Path
 
 import uvicorn
 
@@ -45,9 +46,8 @@ def main() -> None:
         其余启动期异常：捕获后写入 ``failed`` 启动状态并原样向上抛出。
 
     副作用:
-        初始化 SQLite 存储引擎（含日志库 schema）；向 ``logs/backend-YYYY-MM-DD.log``
-        挂载按日期和 5MB 大小轮转的文件日志处理器，并向 SQLite 日志库挂载异步写入
-        handler；同步系统代理
+        初始化主 SQLite 存储引擎；向 ``logs/backend-YYYY-MM-DD.log`` 挂载按日期和
+        5MB 大小轮转的固定 JSONL 文件日志处理器；同步系统代理
         环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
         uvicorn 进程；按环境决定是否写入 ``storage/backend.bootstate.json``
         启动状态文件。
@@ -57,18 +57,14 @@ def main() -> None:
         if boot_state_file is not None:
             write_bootstate(boot_state_file, BOOT_PHASE_BOOTING, step="start")
 
-        # 存储引擎（含日志库 session 工厂）必须在日志配置之前初始化，
-        # 否则 SQLiteLogHandler 内部构造 LogStore 时会因 log_session_factory()
-        # 不可用而抛 RuntimeError，导致日志仅落文件、SQLite 库永远为空。
+        # 先用环境变量/默认目录安装最小日志管线，覆盖 Settings.load 和依赖初始化失败窗口。
+        install_logging_for_current_process(
+            log_dir=Path(os.environ.get("CODING_AGENT_LOG_DIR", str(Settings.LOG_DIR)))
+        )
         Settings.load()
         initialize_service_dependencies()
         install_logging_for_current_process(
             log_dir=Settings.LOG_DIR,
-            log_database_file=Settings.LOG_DATABASE_FILE,
-            sqlite_logging_enabled=Settings.SQLITE_LOGGING_ENABLED,
-            queue_size=Settings.LOG_QUEUE_SIZE,
-            batch_size=Settings.LOG_BATCH_SIZE,
-            flush_interval_ms=Settings.LOG_FLUSH_INTERVAL_MS,
             max_bytes=Settings.LOG_MAX_BYTES,
             backup_count=Settings.LOG_BACKUP_COUNT,
         )
@@ -82,6 +78,8 @@ def main() -> None:
             port=port,
             reload=reload_enabled,
             log_level=log_level,
+            log_config=None,
+            access_log=False,
             ws_ping_interval=30,
             ws_ping_timeout=90,
         )

@@ -157,95 +157,60 @@ class TestAppDbCli:
         assert "中文任务" in captured.out
 
 
-def _build_log_db(path: Path) -> None:
-    con = sqlite3.connect(path)
-    con.execute(
-        "CREATE TABLE log_entries (id INTEGER PRIMARY KEY, ts TEXT, level TEXT, logger TEXT,"
-        " trace_id TEXT, caller TEXT, event TEXT, msg TEXT, data_json TEXT, error_json TEXT, truncated BOOLEAN)"
-    )
-    rows = [
-        (
-            1,
-            "2026-09-13T10:00:00.000Z",
-            "INFO",
-            "l",
-            "t1",
-            "c",
-            "evt_a",
-            "msg 中文😀",
-            '{"k":1}',
-            None,
-            0,
-        ),
-        (
-            2,
-            "2026-09-13T10:01:00.000Z",
-            "ERROR",
-            "l",
-            "t1",
-            "c",
-            "evt_b",
-            "boom",
-            "{}",
-            '{"type":"X"}',
-            1,
-        ),
-        (3, "2026-09-13T10:02:00.000Z", "WARNING", "l", "t2", "c", "evt_c", "warn", "{}", None, 0),
-    ]
-    con.executemany("INSERT INTO log_entries VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
-    con.commit()
-    con.close()
-
-
 @pytest.fixture()
-def log_db(tmp_path: Path) -> str:
-    p = tmp_path / "logs.sqlite3"
-    _build_log_db(p)
+def log_file(tmp_path: Path) -> str:
+    p = tmp_path / "backend-2026-09-13.log"
+    rows = [
+        {"ts": "2026-09-13T10:00:00.000Z", "level": "INFO", "logger": "l", "trace_id": "t1", "caller": "c", "event": "evt_a", "msg": "msg 中文😀", "data": {"k": 1}, "error": None, "truncated": False},
+        {"ts": "2026-09-13T10:01:00.000Z", "level": "ERROR", "logger": "l", "trace_id": "t1", "caller": "c", "event": "evt_b", "msg": "boom", "data": {}, "error": {"type": "X"}, "truncated": True},
+        {"ts": "2026-09-13T10:02:00.000Z", "level": "WARNING", "logger": "l", "trace_id": "t2", "caller": "c", "event": "evt_c", "msg": "warn", "data": {}, "error": None, "truncated": False},
+    ]
+    p.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
     return str(p)
 
 
 class TestLogCli:
     # 目的：trace 子命令返回该 trace 的全部条目并退出 0。潜在缺陷：trace 过滤失效。
-    def test_trace(self, log_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["trace", "t1", "--db", log_db, "--format", "json"])
+    def test_trace(self, log_file: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = ql.main(["trace", "t1", "--log-file", log_file, "--format", "json"])
         assert rc == 0
         entries = json.loads(capsys.readouterr().out)
         assert {e["event"] for e in entries} == {"evt_a", "evt_b"}
 
     # 目的：--errors-only 只返回 ERROR 及以上。潜在缺陷：级别过滤失效。
-    def test_errors_only(self, log_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["recent", "--errors-only", "--db", log_db, "--format", "json"])
+    def test_errors_only(self, log_file: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = ql.main(["recent", "--errors-only", "--log-file", log_file, "--format", "json"])
         assert rc == 0
         entries = json.loads(capsys.readouterr().out)
         assert [e["level"] for e in entries] == ["ERROR"]
 
     # 目的：无匹配时 recent 输出 (no entries) 且退出 0。潜在缺陷：空结果崩溃。
-    def test_no_entries(self, log_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["recent", "--contains", "zzzz-no-match", "--db", log_db])
+    def test_no_entries(self, log_file: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = ql.main(["recent", "--contains", "zzzz-no-match", "--log-file", log_file])
         assert rc == 0
         assert "(no entries)" in capsys.readouterr().out
 
     # 目的：多级别开关冲突返回码 1。潜在缺陷：冲突被忽略。
-    def test_conflicting_levels(self, log_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["recent", "--errors-only", "--warnings-up", "--db", log_db])
+    def test_conflicting_levels(self, log_file: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = ql.main(["recent", "--errors-only", "--warnings-up", "--log-file", log_file])
         assert rc == 1
 
     # 目的：中文与表情符号日志正常渲染。潜在缺陷：UnicodeEncodeError。
-    def test_unicode(self, log_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["recent", "--db", log_db])
+    def test_unicode(self, log_file: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = ql.main(["recent", "--log-file", log_file])
         assert rc == 0
         assert "中文😀" in capsys.readouterr().out
 
     # 目的：--save 写出文件；重复写未 --force 返回码 1。潜在缺陷：静默覆盖。
-    def test_save(self, log_db: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_save(self, log_file: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         out = tmp_path / "logs.json"
-        rc = ql.main(["recent", "--db", log_db, "--format", "json", "--save", str(out)])
+        rc = ql.main(["recent", "--log-file", log_file, "--format", "json", "--save", str(out)])
         assert rc == 0
         assert len(json.loads(out.read_text(encoding="utf-8"))) == 3
-        rc2 = ql.main(["recent", "--db", log_db, "--format", "json", "--save", str(out)])
+        rc2 = ql.main(["recent", "--log-file", log_file, "--format", "json", "--save", str(out)])
         assert rc2 == 1
 
     # 目的：非法 level 返回码 1。潜在缺陷：非法级别进入 SQL。
-    def test_invalid_level(self, log_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["recent", "--level", "TRACE", "--db", log_db])
+    def test_invalid_level(self, log_file: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = ql.main(["recent", "--level", "TRACE", "--log-file", log_file])
         assert rc == 1

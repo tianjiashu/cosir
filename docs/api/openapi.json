@@ -344,369 +344,6 @@
         }
       }
     },
-    "/tasks/{task_id}/changes": {
-      "get": {
-        "summary": "Get Changes",
-        "description": "查询某 task 的累积文件变更集。\n\n参数:\n    task_id: 任务标识。\n    checkpoint: 可选检查点 turn 标识，只返回到该 turn（含）为止的累积变更。\n    include_running: 是否纳入运行中（``stable=0``）变更；默认 True，使工具执行中\n        产生的变更可被实时展示与撤销。置 False 可回到「仅已稳定」的旧视图。\n\n返回:\n    ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当 checkpoint 不属于该 task 时。\n\n副作用:\n    只读查询。",
-        "operationId": "get_changes_tasks__task_id__changes_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          },
-          {
-            "name": "checkpoint",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Checkpoint"
-            }
-          },
-          {
-            "name": "include_running",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": true,
-              "title": "Include Running"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChangeSetResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/{task_id}/changes/keep": {
-      "post": {
-        "summary": "Keep Changes",
-        "description": "把一批文件的最新变更标记为「保留」。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``，供前端直接替换本地状态。\n\n异常:\n    HTTPException(404): 当任一路径没有任何变更快照（含运行中）时。\n    HTTPException(409): 当某快照 ``status`` 已被并发改态（CAS miss，lost update 防护）时。\n\n副作用:\n    改写 ``file_snapshots`` 的 status。",
-        "operationId": "keep_changes_tasks__task_id__changes_keep_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChangeSetActionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChangeSetResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/{task_id}/changes/revert": {
-      "post": {
-        "summary": "Revert Changes",
-        "description": "撤销一批文件的最新变更，把它们还原到变更之前。\n\n参数:\n    task_id: 任务标识。\n    request: 含 ``paths`` 的请求体。\n\n返回:\n    操作后的完整 ``ChangeSetResponse``。\n\n异常:\n    HTTPException(404): 当任一路径没有任何变更快照时。\n    HTTPException(409): 当反向操作应用失败（磁盘已被外部改动等）时。\n    HTTPException(409): 当某快照 ``status`` 已被并发改态（CAS miss，lost update 防护）时。\n\n副作用:\n    修改 workspace 内文件；改写 ``file_snapshots`` 的 status 与 reverted_at；\n    对每个成功撤销的文件广播 ``file_change_updated`` 事件。",
-        "operationId": "revert_changes_tasks__task_id__changes_revert_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChangeSetActionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChangeSetResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/logs/query": {
-      "get": {
-        "summary": "Query Logs",
-        "description": "按 trace_id 查询日志。\n\n参数:\n    req: 经依赖注入的查询参数（``trace_id`` / ``level`` / ``keyword`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n    前端直接使用text渲染即可\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
-        "operationId": "query_logs_logs_query_get",
-        "parameters": [
-          {
-            "name": "trace_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Trace Id"
-            }
-          },
-          {
-            "name": "level",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Level"
-            }
-          },
-          {
-            "name": "keyword",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Keyword"
-            }
-          },
-          {
-            "name": "start_time",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Start Time"
-            }
-          },
-          {
-            "name": "end_time",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "End Time"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 1000,
-              "minimum": 1,
-              "default": 200,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LogQueryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/logs/recent": {
-      "get": {
-        "summary": "Recent Logs",
-        "description": "查询最近日志。\n\n参数:\n    req: 经依赖注入的查询参数（``level`` / ``keyword`` / 时间区间 / ``limit``）。\n    query_service: 通过依赖注入的日志查询 service。\n\n返回:\n    ``LogQueryResponse``：包含 entries 和 text 的日志查询结果。\n\n异常:\n    HTTPException: 查询服务不可用、参数非法或底层查询失败时抛出。\n\n副作用:\n    读取日志 SQLite。",
-        "operationId": "recent_logs_logs_recent_get",
-        "parameters": [
-          {
-            "name": "level",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Level"
-            }
-          },
-          {
-            "name": "keyword",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Keyword"
-            }
-          },
-          {
-            "name": "start_time",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Start Time"
-            }
-          },
-          {
-            "name": "end_time",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "End Time"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 1000,
-              "minimum": 1,
-              "default": 200,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LogQueryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/providers/catalog": {
       "get": {
         "summary": "List Provider Catalog",
@@ -1243,6 +880,53 @@
           }
         }
       }
+    },
+    "/runs/{run_id}/tool-calls/{tool_call_id}/cancel": {
+      "post": {
+        "summary": "Cancel Tool Call",
+        "description": "显式取消一个正在执行的工具调用（工具级取消）。\n\n表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内工具级取消\n信号源标记该工具调用」已收口到 ``ConversationRunExecutor.cancel_tool_call`` 单一入口。\n\n与 ``POST /runs/{run_id}/cancel`` 的差别是取消范围：run 级取消要求整个 Conversation\nRun 停止执行，run 终态由 workflow 落定；本端点只中止**一次**工具调用，run 与 Agent\n在其后继续执行。因此本端点只表示**取消信号已被接受**，不表示工具调用已经结束：被\n点名的工具在执行层检出信号后返回取消观察，其终态与模型侧 ``ToolMessage`` 由 workflow\n落定，前端需继续以 canonical snapshot 为准。HTTP 断连不会调用本端点。\n\n响应码的语义边界：信号随该工具调用执行结束被释放，run 收尾时按 run_id 兜底清理，\n因此 409 只表示「此刻信号已存在」，200 也不保证该调用尚未结束——**调用方不得把\n200/409 当作幂等去重或执行进度依据**，只能以 404（run 不存在）作为确定性失败。\n\n参数:\n    run_id: 目标工具调用所属的 Conversation Run 标识。\n    tool_call_id: 目标工具调用标识（模型工具调用 id）。\n    run_executor: 进程内取消信号标记的唯一入口。\n\n返回:\n    包含 ``run_id``、``tool_call_id`` 与 ``cancelled`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；该工具调用此前已标记过取消（信号已存在）时\n    返回 409；标记内部失败时返回 500。\n\n副作用:\n    向进程内工具级取消信号源写入 ``(run_id, tool_call_id)``；不落库 run 或工具调用\n    状态、不取消后台执行 task。工具执行层在本次调用结束时释放该信号，run 收尾时按\n    run_id 兜底清理。",
+        "operationId": "cancel_tool_call_runs__run_id__tool_calls__tool_call_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "tool_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Call Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1659,122 +1343,6 @@
         ],
         "title": "Body_upload_attachment_tasks__task_id__attachments_post"
       },
-      "ChangeCheckpointResponse": {
-        "properties": {
-          "run_id": {
-            "type": "integer",
-            "title": "Run Id"
-          },
-          "turn_seq": {
-            "type": "integer",
-            "title": "Turn Seq"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          }
-        },
-        "type": "object",
-        "required": [
-          "run_id",
-          "turn_seq",
-          "label"
-        ],
-        "title": "ChangeCheckpointResponse",
-        "description": "检查点响应项。"
-      },
-      "ChangeFileResponse": {
-        "properties": {
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "action": {
-            "type": "string",
-            "title": "Action"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "last_tool_call_id": {
-            "type": "string",
-            "title": "Last Tool Call Id"
-          },
-          "last_run_id": {
-            "type": "integer",
-            "title": "Last Run Id"
-          },
-          "additions": {
-            "type": "integer",
-            "title": "Additions"
-          },
-          "deletions": {
-            "type": "integer",
-            "title": "Deletions"
-          }
-        },
-        "type": "object",
-        "required": [
-          "path",
-          "action",
-          "status",
-          "last_tool_call_id",
-          "last_run_id",
-          "additions",
-          "deletions"
-        ],
-        "title": "ChangeFileResponse",
-        "description": "文件变更响应项。"
-      },
-      "ChangeSetActionRequest": {
-        "properties": {
-          "paths": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "minItems": 1,
-            "title": "Paths"
-          }
-        },
-        "type": "object",
-        "required": [
-          "paths"
-        ],
-        "title": "ChangeSetActionRequest",
-        "description": "对一批文件执行撤销或保留的请求体。\n\n参数:\n    paths: 相对 workspace 的文件路径列表，至少一项；长度为 1 即单文件操作。"
-      },
-      "ChangeSetResponse": {
-        "properties": {
-          "task_id": {
-            "type": "integer",
-            "title": "Task Id"
-          },
-          "checkpoints": {
-            "items": {
-              "$ref": "#/components/schemas/ChangeCheckpointResponse"
-            },
-            "type": "array",
-            "title": "Checkpoints"
-          },
-          "files": {
-            "items": {
-              "$ref": "#/components/schemas/ChangeFileResponse"
-            },
-            "type": "array",
-            "title": "Files"
-          }
-        },
-        "type": "object",
-        "required": [
-          "task_id",
-          "checkpoints",
-          "files"
-        ],
-        "title": "ChangeSetResponse",
-        "description": "某 task 的累积变更集响应。"
-      },
       "ConversationRunSnapshot": {
         "properties": {
           "runId": {
@@ -1834,20 +1402,15 @@
           "message": {
             "type": "string",
             "title": "Message"
-          },
-          "retryable": {
-            "type": "boolean",
-            "title": "Retryable"
           }
         },
         "type": "object",
         "required": [
           "code",
-          "message",
-          "retryable"
+          "message"
         ],
         "title": "ConversationStateError",
-        "description": "面向 UI 的稳定错误结构。"
+        "description": "面向 UI 的稳定错误结构。\n\n只包含稳定的机器可读 ``code`` 与面向用户的安全 ``message``。``retryable`` 是工具观察的\n字段（仅面向模型），不属于 Transport 错误契约。"
       },
       "ConversationStateFilePart": {
         "properties": {
@@ -2123,6 +1686,10 @@
             "type": "integer",
             "title": "Child Task Id"
           },
+          "child_run_id": {
+            "type": "integer",
+            "title": "Child Run Id"
+          },
           "agent_role": {
             "type": "string",
             "title": "Agent Role"
@@ -2130,6 +1697,10 @@
           "delegation_ref_seq": {
             "type": "integer",
             "title": "Delegation Ref Seq"
+          },
+          "terminal_output_seq": {
+            "type": "integer",
+            "title": "Terminal Output Seq"
           }
         },
         "type": "object",
@@ -2336,111 +1907,6 @@
         ],
         "title": "HealthResponse",
         "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
-      },
-      "LogEntryResponse": {
-        "properties": {
-          "ts": {
-            "type": "string",
-            "title": "Ts"
-          },
-          "level": {
-            "type": "string",
-            "title": "Level"
-          },
-          "logger": {
-            "type": "string",
-            "title": "Logger"
-          },
-          "trace_id": {
-            "type": "string",
-            "title": "Trace Id"
-          },
-          "caller": {
-            "type": "string",
-            "title": "Caller"
-          },
-          "event": {
-            "type": "string",
-            "title": "Event"
-          },
-          "msg": {
-            "type": "string",
-            "title": "Msg"
-          },
-          "data": {
-            "type": "object",
-            "title": "Data",
-            "default": {}
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "truncated": {
-            "type": "boolean",
-            "title": "Truncated",
-            "default": false
-          }
-        },
-        "additionalProperties": true,
-        "type": "object",
-        "required": [
-          "ts",
-          "level",
-          "logger",
-          "trace_id",
-          "caller",
-          "event",
-          "msg"
-        ],
-        "title": "LogEntryResponse",
-        "description": "校验并序列化单条结构化日志（与 ``LogEntryRecord.to_dict()`` 对齐）。\n\n参数:\n    ts: UTC RFC3339 日志时间。\n    level: 日志级别。\n    logger: logger 名称。\n    trace_id: 链路关联键。\n    caller: 调用位置。\n    event: 稳定事件名。\n    msg: 中文可读消息。\n    data: 结构化业务字段。\n    error: 嵌套错误块，正常为 None。\n    truncated: 是否发生截断。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
-      },
-      "LogQueryResponse": {
-        "properties": {
-          "entries": {
-            "items": {
-              "$ref": "#/components/schemas/LogEntryResponse"
-            },
-            "type": "array",
-            "title": "Entries"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          },
-          "total": {
-            "type": "integer",
-            "title": "Total",
-            "default": 0
-          },
-          "has_more": {
-            "type": "boolean",
-            "title": "Has More",
-            "default": false
-          },
-          "level_counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Level Counts"
-          }
-        },
-        "type": "object",
-        "required": [
-          "entries",
-          "text"
-        ],
-        "title": "LogQueryResponse",
-        "description": "校验并序列化日志查询结果响应（与 ``LogQueryResult.to_dict()`` 对齐）。\n\n参数:\n    entries: 结构化日志记录列表。\n    text: 可直接展示的纯文本日志。\n    total: 满足过滤条件的总记录数（不受 limit/offset 影响）。\n    has_more: 当前页之后是否还有更多记录。\n    level_counts: 各级别日志计数（忽略 level 过滤、含其余过滤条件），供前端展示级别分布。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ModelListItemResponse": {
         "properties": {

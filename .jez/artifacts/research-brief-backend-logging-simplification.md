@@ -17,10 +17,10 @@
 | 业务调用入口 | 全后端大量模块使用 `app.config.logging.logger.log` | 应保持兼容，避免一次性改几十个调用点 |
 | 文件写入 | 自定义 `DateSizeRotatingFileHandler`，按日期和大小轮转 | 可用标准 `RotatingFileHandler` 或 `TimedRotatingFileHandler` 替代；若必须保留当前文件名，再保留这个窄 handler |
 | 文件格式 | `JsonlFormatter` + `MappedLogRecord`，当前实际输出 10 个键：`ts/level/logger/trace_id/caller/event/msg/data/error/truncated` | 固定 JSONL 是合理方向，但映射链可以压缩为一个 formatter/serializer |
-| 上下文 | `ContextVar` 保存 trace，并维护 run/task 到 trace 的进程内反查表 | 只需保留 `trace_id` 自动回填；run/task 直接放 `data` |
+| 上下文 | `ContextVar` 只保存 trace | 保留 `trace_id` 自动回填；run/task 直接放 `data` |
 | 跨进程 | `multiprocessing.Queue` + 自定义 `SubprocessQueueHandler` + 父进程 `QueueListener` | 建议保留，但只承担文件汇聚，不再同时服务 SQLite |
-| SQLite 日志 | 独立 `logs.sqlite3`、`LogEntryModel`、`LogCrud`、异步 handler、批量/丢弃策略 | 与“只写文件”目标冲突，应删除 |
-| 查询接口 | `/logs/query`、`/logs/recent` 及 service/schema/model | 删除；查看日志改为打开日志目录或由外部工具读取 JSONL |
+| SQLite 日志 | 独立日志数据库、ORM、异步 handler、批量/丢弃策略 | 与“只写文件”目标冲突，应删除 |
+| 查询接口 | 旧日志查询 API 及 service/schema/model | 删除；查看日志改为打开日志目录或由外部工具读取 JSONL |
 | 启动日志 | Tauri 另外捕获 backend stdout/stderr 到 `backend-console-*.log` | 若要求“严格只有一个后端日志文件”，应将 uvicorn 日志接入同一文件，或把 console 文件降为仅启动失败兜底 |
 
 ## 推荐的固定格式
@@ -31,9 +31,9 @@
 {"ts":"2026-09-19T10:20:30.123Z","level":"INFO","logger":"coding_agent.backend","trace_id":"...","caller":"app.service.foo:run:42","event":"run_started","msg":"运行开始","data":{"task_id":"..."},"error":null}
 ```
 
-建议顶层固定为 9 个键：
+当前实现顶层固定为 10 个键：
 
-`ts`、`level`、`logger`、`trace_id`、`caller`、`event`、`msg`、`data`、`error`。
+`ts`、`level`、`logger`、`trace_id`、`caller`、`event`、`msg`、`data`、`error`、`truncated`。
 
 `data` 只允许经过截断/脱敏的摘要字段；`error` 只包含 `type`、`message`、`stack`。如果确实需要保留截断信息，保留 `truncated` 作为第 10 个固定键也可以，但必须修正文档中“9 字段”和实现实际 10 字段不一致的问题。不要再根据某条日志临时增加顶层字段。
 
@@ -80,10 +80,10 @@ FastAPI 后端进程
 - `init_storage()` 中的日志数据库 engine/schema 初始化
 - `Settings` 中的 `LOG_DATABASE_FILE`、`SQLITE_LOGGING_ENABLED`、`LOG_QUEUE_SIZE`、`LOG_BATCH_SIZE`、`LOG_FLUSH_INTERVAL_MS`、`LOG_QUERY_LIMIT_MAX`
 
-收敛而不是立即删除：
+保留的日志基础设施：
 
 - `MappedLogRecord`：保留脱敏/截断规则，改为 formatter 内部的小型纯函数或单一模块。
-- `log_context_store`：只保留 `ContextVar[str]` 的 trace_id 绑定/恢复；如果现有业务不再需要 `TraceContext` 到日志 extra 的兼容 API，再删除其日志专用部分。
+- `log_context_store`：只保留 `ContextVar[str]` 的 trace_id 绑定/恢复；不维护旧上下文包装类或 run/task 反查表。
 - `process_bridge`：保留 QueueHandler/QueueListener，但删除 SQLite 相关说明和自定义字段映射。
 - `date_size_rotating`：若接受标准文件名，替换为标准库 handler；若桌面 UI/文档依赖 `backend-YYYY-MM-DD.log`，暂时保留并补齐测试。
 
@@ -99,7 +99,7 @@ FastAPI 后端进程
 
 ## 验收标准
 
-- 启动后只创建预期的后端日志文件，不创建 `logs.sqlite3`。
+- 启动后只创建预期的后端日志文件，不创建日志 SQLite 数据库。
 - 每行都能被 JSON 解析，顶层键集合完全一致，时间为 UTC RFC3339 毫秒格式。
 - 同一 HTTP 请求的日志共享 `trace_id`；工具子进程日志能回到父进程文件。
 - 连续启动/测试/重载不会重复写同一条日志。

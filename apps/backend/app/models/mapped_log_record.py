@@ -86,7 +86,7 @@ class MappedLogRecord:
 
     @classmethod
     def from_record(cls, record: logging.LogRecord) -> "MappedLogRecord":
-        """把 Python ``LogRecord`` 映射为文件日志和 SQLite 共用字段。
+        """把 Python ``LogRecord`` 映射为固定 JSONL 文件字段。
 
         参数:
             record: Python logging 框架传入的日志记录。

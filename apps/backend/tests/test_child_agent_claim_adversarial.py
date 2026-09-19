@@ -492,11 +492,9 @@ def real_state_service(monkeypatch: pytest.MonkeyPatch):
 
     tmpdir = Path(tempfile.mkdtemp(prefix="child_claim_it_"))
     original_db = Settings.DATABASE_FILE
-    original_log = Settings.LOG_DATABASE_FILE
     original_ckpt = Settings.CHECKPOINT_FILE
     Settings.override(
         DATABASE_FILE=tmpdir / "app.sqlite3",
-        LOG_DATABASE_FILE=tmpdir / "logs.sqlite3",
         CHECKPOINT_FILE=tmpdir / "ckpt.sqlite",
     )
     service_depends.initialize_service_dependencies()
@@ -510,7 +508,6 @@ def real_state_service(monkeypatch: pytest.MonkeyPatch):
         service_depends.close_service_dependencies()
         Settings.override(
             DATABASE_FILE=original_db,
-            LOG_DATABASE_FILE=original_log,
             CHECKPOINT_FILE=original_ckpt,
         )
         # close_service_dependencies 只关连接，不删文件。

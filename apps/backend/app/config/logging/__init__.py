@@ -8,12 +8,9 @@ import importlib
 
 from app.config.logging.common import current_log_file
 from app.config.logging.context.log_context_store import (
-    bind_log_context,
     current_log_context,
     merge_log_context,
     reset_log_context,
-    set_log_context,
-    trace_log_extra,
 )
 from app.config.logging.filter.caller_filter import CallerFilter, compute_caller
 from app.config.logging.filter.log_context_filter import LogContextFilter
@@ -46,9 +43,6 @@ def __getattr__(name: str) -> object:
     if name in {"configure_logging", "install_logging_for_current_process", "shutdown_logging"}:
         configuration = importlib.import_module("app.config.logging.configuration")
         return getattr(configuration, name)
-    if name in {"SQLiteLogHandler", "entry_from_log_record"}:
-        sqlite_handler = importlib.import_module("app.config.logging.handler.sqlite_handler")
-        return getattr(sqlite_handler, name)
     if name in {"get_log_queue", "stop_queue_listener"}:
         process_bridge = importlib.import_module("app.config.logging.process_bridge")
         return getattr(process_bridge, name)
@@ -60,20 +54,15 @@ __all__ = [
     "CallerFilter",
     "JsonlFormatter",
     "LogContextFilter",
-    "SQLiteLogHandler",
-    "bind_log_context",
     "compute_caller",
     "configure_logging",
     "current_log_context",
     "current_log_file",
-    "entry_from_log_record",
     "get_log_queue",
     "install_logging_for_current_process",
     "install_msg_relocation",
     "merge_log_context",
     "reset_log_context",
-    "set_log_context",
     "shutdown_logging",
     "stop_queue_listener",
-    "trace_log_extra",
 ]

@@ -48,12 +48,7 @@ def export_openapi(out_path: Path) -> Path:
         在 ``out_path`` 写入 OpenAPI JSON（UTF-8、缩进 2、保留非 ASCII）。
     """
 
-    # 预热日志门面包以打破 ``settings`` <-> ``storage`` 的循环导入：``settings`` 模块顶层
-    # ``from app.config.logging.common import current_log_file`` 会触发 ``logging`` 包
-    # ``__init__``，进而经 ``configuration -> sqlite_handler -> store_engines -> settings``
-    # 回引自身。只有当 ``logging`` 包先于 ``settings`` 被导入、且 ``common`` 子模块已就绪时，
-    # 回引的 ``settings`` 才能顺利完成（与 ``app.__main__`` 入口先 import logging 的顺序一致，
-    # 也与 ``runner.py`` 首行 ``from app.config.logging import ...`` 的导入顺序一致）。
+    # 先导入应用装配模块；日志路径等配置保持延迟导入，避免配置层与存储层互相回引。
 
     try:
         from app.app import app

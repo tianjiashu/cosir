@@ -37,13 +37,7 @@ class Settings:
     # --- 类级静态配置（进程启动后由 ``Settings.load`` 填充，之后只读） ---
     LOG_DIR: ClassVar[Path] = Path("logs")
     DATABASE_FILE: ClassVar[Path] = Path("storage/app.sqlite3")
-    LOG_DATABASE_FILE: ClassVar[Path | None] = None
     CHECKPOINT_FILE: ClassVar[Path | None] = None
-    SQLITE_LOGGING_ENABLED: ClassVar[bool] = True
-    LOG_QUEUE_SIZE: ClassVar[int] = 1000
-    LOG_BATCH_SIZE: ClassVar[int] = 50
-    LOG_FLUSH_INTERVAL_MS: ClassVar[int] = 1000
-    LOG_QUERY_LIMIT_MAX: ClassVar[int] = 1000
     LOG_MAX_BYTES: ClassVar[int] = 5 * 1024 * 1024
     LOG_BACKUP_COUNT: ClassVar[int] = 7
     TOOL_ERROR_LIMIT: ClassVar[int] = 10
@@ -244,14 +238,6 @@ class Settings:
             raise ValueError("MAX_TOOL_OUTPUT_CHARS must be greater than zero")
         if cls.CONTEXT_WINDOW_TOKENS < 0:
             raise ValueError("CONTEXT_WINDOW_TOKENS must not be negative")
-        if cls.LOG_QUEUE_SIZE < 1:
-            raise ValueError("LOG_QUEUE_SIZE must be greater than zero")
-        if cls.LOG_BATCH_SIZE < 1:
-            raise ValueError("LOG_BATCH_SIZE must be greater than zero")
-        if cls.LOG_FLUSH_INTERVAL_MS < 1:
-            raise ValueError("LOG_FLUSH_INTERVAL_MS must be greater than zero")
-        if cls.LOG_QUERY_LIMIT_MAX < 1:
-            raise ValueError("LOG_QUERY_LIMIT_MAX must be greater than zero")
         if cls.LOG_MAX_BYTES < 1:
             raise ValueError("LOG_MAX_BYTES must be greater than zero")
         if cls.LOG_BACKUP_COUNT < 1:
@@ -307,25 +293,12 @@ class Settings:
         cls.DATABASE_FILE = Path(
             os.environ.get("CODING_AGENT_DATABASE_FILE", str(storage_root / "app.sqlite3"))
         )
-        cls.LOG_DATABASE_FILE = Path(
-            os.environ.get(
-                "CODING_AGENT_LOG_DATABASE_FILE",
-                str(storage_root / "logs.sqlite3"),
-            )
-        )
         cls.CHECKPOINT_FILE = Path(
             os.environ.get(
                 "CODING_AGENT_CHECKPOINT_FILE",
                 str(storage_root / "langgraph_checkpoints.sqlite"),
             )
         )
-        cls.SQLITE_LOGGING_ENABLED = cls._env_bool("CODING_AGENT_SQLITE_LOGGING_ENABLED", True)
-        cls.LOG_QUEUE_SIZE = int(os.environ.get("CODING_AGENT_LOG_QUEUE_SIZE", "1000"))
-        cls.LOG_BATCH_SIZE = int(os.environ.get("CODING_AGENT_LOG_BATCH_SIZE", "50"))
-        cls.LOG_FLUSH_INTERVAL_MS = int(
-            os.environ.get("CODING_AGENT_LOG_FLUSH_INTERVAL_MS", "1000")
-        )
-        cls.LOG_QUERY_LIMIT_MAX = int(os.environ.get("CODING_AGENT_LOG_QUERY_LIMIT_MAX", "1000"))
         cls.LOG_MAX_BYTES = int(os.environ.get("CODING_AGENT_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
         cls.LOG_BACKUP_COUNT = int(os.environ.get("CODING_AGENT_LOG_BACKUP_COUNT", "7"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
@@ -466,8 +439,8 @@ class Settings:
         """
 
         # 延迟导入以避免模块级循环依赖：``settings`` 顶层若导入 ``logging.common``，
-        # 会触发 ``logging`` 包 ``__init__`` 经 ``configuration -> sqlite_handler ->
-        # store_engines -> settings`` 回引自身。改为函数内导入后，``settings`` 模块
+        # 会触发 ``logging`` 包 ``__init__`` 经 ``configuration -> store_engines ->
+        # settings`` 回引自身。改为函数内导入后，``settings`` 模块
         # 顶层零 app 依赖，无论谁先 import 都能立即完成，循环被根治。
         from app.config.logging.common import current_log_file
 

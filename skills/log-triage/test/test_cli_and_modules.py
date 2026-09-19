@@ -384,19 +384,20 @@ class TestQueryLogs:
         with pytest.raises(ValueError):
             ql.normalize_time("not-a-time")
 
-    # 目的：build_query 的 min_level 展开为级别 IN 且参数占位符数量匹配。潜在缺陷：SQL 与参数错位。
-    def test_build_query_min_level(self) -> None:
-        sql, params = ql.build_query(min_level="WARNING", limit=10)
-        assert "level IN (?, ?, ?)" in sql
-        assert "WARNING" in params and "CRITICAL" in params
-        assert params[-1] == 10
+    # 目的：JSONL 过滤器按最低级别筛选并保持排序契约。潜在缺陷：文件查询遗漏级别。
+    def test_filter_entries_min_level(self) -> None:
+        entries = [
+            {"ts": "1", "level": "INFO", "event": "a"},
+            {"ts": "2", "level": "WARNING", "event": "b"},
+            {"ts": "3", "level": "ERROR", "event": "c"},
+        ]
+        result = ql.filter_entries(entries, min_level="WARNING", limit=10)
+        assert [entry["event"] for entry in result] == ["b", "c"]
 
-    # 目的：build_query 非法 order/min_level 抛错。潜在缺陷：非法值进入 SQL。
-    def test_build_query_invalid(self) -> None:
+    # 目的：文件查询非法排序抛错。潜在缺陷：排序参数静默失效。
+    def test_filter_entries_invalid(self) -> None:
         with pytest.raises(ValueError):
-            ql.build_query(order="sideways")
-        with pytest.raises(ValueError):
-            ql.build_query(min_level="TRACE")
+            ql.filter_entries([], order="sideways")
 
     # 目的：limit 边界校验。潜在缺陷：0/超限被接受。
     @pytest.mark.parametrize("value", [0, -5, ql._MAX_LIMIT + 1])
@@ -404,36 +405,13 @@ class TestQueryLogs:
         with pytest.raises(ValueError):
             ql.normalize_limit(value)
 
-    # 目的：--around 与 --since/--until 互斥。潜在缺陷：组合被忽略。
-    def test_around_conflict(self) -> None:
-        parser = ql.build_parser()
-        args = parser.parse_args(
-            ["recent", "--around", "2026-01-01T00:00:00Z", "--since", "2026-01-01T00:00:00Z"]
-        )
-        with pytest.raises(ValueError):
-            ql.resolve_time_range(args)
-
     # 目的：trace 子命令空 trace_id 抛错。潜在缺陷：空 id 全表返回。
     def test_trace_blank_id(self, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = ql.main(["trace", "   "])
+        rc = ql.main(["trace", "   ", "--log-file", "missing.log"])
         assert rc == 1
 
-    # 目的：escape_like 与 contains_pattern 一致转义。潜在缺陷：转义遗漏。
-    def test_escape_like(self) -> None:
-        assert ql.escape_like("100%_\\") == "100\\%\\_\\\\"
-
-    # 目的：row_to_entry 处理 truncated 为 TEXT 'false' 时不误判为 True。潜在缺陷：bool('false') 陷阱。
-    def test_row_to_entry_truncated_text_false(self) -> None:
-        con = sqlite3.connect(":memory:")
-        con.row_factory = sqlite3.Row
-        con.execute(
-            "CREATE TABLE log_entries (id INTEGER PRIMARY KEY, ts TEXT, level TEXT, logger TEXT,"
-            " trace_id TEXT, caller TEXT, event TEXT, msg TEXT, data_json TEXT, error_json TEXT, truncated TEXT)"
-        )
-        con.execute(
-            "INSERT INTO log_entries VALUES (1,'ts','INFO','l','','c','e','m','{}',NULL,'false')"
-        )
-        row = con.execute("SELECT * FROM log_entries").fetchone()
-        entry = ql.row_to_entry(row)
-        assert entry["truncated"] is False
-        con.close()
+    # 目的：损坏 JSONL 行被跳过而不影响其他记录。潜在缺陷：单行损坏导致整份日志不可查。
+    def test_read_entries_skips_invalid_json(self, tmp_path: Path) -> None:
+        path = tmp_path / "backend-2026-09-13.log"
+        path.write_text('{"event":"ok"}\nnot-json\n', encoding="utf-8")
+        assert ql.read_entries([path]) == [{"event": "ok", "data": {}, "error": None, "trace_id": "", "caller": ""}]

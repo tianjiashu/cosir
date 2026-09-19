@@ -28,6 +28,7 @@ class ToolExecutionContext:
         workspace_id: 当前工作区标识。
         workspace_root: 当前工具调用允许访问的工作区根路径。
         run_id: 当前工具调用所属 turn 标识；缺省为空字符串。
+        trace_id: 当前请求的日志链路标识；进程隔离执行时显式传入子进程。
         runtime_dependencies: 同进程工具可用的运行期依赖，跨进程执行时必须清空。
     """
 
@@ -35,6 +36,7 @@ class ToolExecutionContext:
     workspace_id: int
     workspace_root: Path
     run_id: int = 0
+    trace_id: str = ""
     # Runtime-only locator for the currently executing tool. It is intentionally
     # not persisted and is cleared from process-isolated copies.
     tool_call_id: str = ""
@@ -46,7 +48,7 @@ class ToolExecutionContext:
         参数:
             无。
         返回:
-            与当前对象拥有相同任务、工作区、根路径和 turn 边界，但清空
+            与当前对象拥有相同任务、工作区、根路径、turn 和 trace 边界，但清空
             ``runtime_dependencies`` 的 ``ToolExecutionContext``。
         异常:
             无。
@@ -59,6 +61,7 @@ class ToolExecutionContext:
             workspace_id=self.workspace_id,
             workspace_root=self.workspace_root,
             run_id=self.run_id,
+            trace_id=self.trace_id,
         )
 
     @classmethod

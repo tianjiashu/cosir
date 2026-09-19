@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     )
     from app.core.runtime.runner import AgentRuntime
     from app.service.delegation.delegation_service import DelegationService
-    from app.service.log_query_service import LogQueryService
     from app.service.provider import ModelEntryService, ProviderService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
@@ -39,7 +38,6 @@ if TYPE_CHECKING:
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
     from app.storage.crud.delegation_crud import DelegationCrud
-    from app.storage.crud.log_crud import LogCrud
     from app.storage.crud.model_entry_crud import ModelEntryCrud
     from app.storage.crud.provider_crud import ProviderCrud
     from app.storage.crud.task_crud import TaskCrud
@@ -266,28 +264,6 @@ def get_terminal_session_service() -> TerminalSessionService:
 
 
 @lru_cache(maxsize=1)
-def get_log_crud() -> LogCrud:
-    """Return the process-local LogCrud singleton.
-
-    参数:
-        无。
-
-    返回:
-        LogCrud 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 LogCrud。
-    """
-
-    from app.storage.crud.log_crud import LogCrud
-
-    return LogCrud()
-
-
-@lru_cache(maxsize=1)
 def get_task_service() -> TaskService:
     """Return the process-local TaskService singleton.
 
@@ -349,28 +325,6 @@ def get_workspace_service() -> WorkspaceService:
     from app.service.task.workspace_service import WorkspaceService
 
     return WorkspaceService()
-
-
-@lru_cache(maxsize=1)
-def get_log_query_service() -> LogQueryService:
-    """Return the process-local LogQueryService singleton.
-
-    参数:
-        无。
-
-    返回:
-        LogQueryService 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 LogQueryService。
-    """
-
-    from app.service.log_query_service import LogQueryService
-
-    return LogQueryService()
 
 
 @lru_cache(maxsize=1)
@@ -593,12 +547,10 @@ def reset_service_dependencies() -> None:
     )
 
     ConversationTaskStateService.clear_process_state()
-    get_log_query_service.cache_clear()
     get_workspace_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
     get_task_service.cache_clear()
-    get_log_crud.cache_clear()
     get_delegation_service.cache_clear()
     get_delegation_crud.cache_clear()
     get_workspace_crud.cache_clear()
