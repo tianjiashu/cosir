@@ -18,8 +18,7 @@
 - ``to_definition() -> ToolDefinition``: 返回可注册到 ``ToolRegistry`` 的工具定义。
 
 后端不承载任何渲染职责：handler 只产出模型继续工作所需的 ``content``，以及客户端
-展示所需的 ``display_data`` 和必要的内部 ``artifact_data``。文件变更审计不由 handler
-构造，而由 ``FileMutationService`` 采集并持久化。成功结果应保持最小；错误
+展示所需的 ``display_data`` 和必要的内部 ``artifact_data``。成功结果应保持最小；错误
 通过 ``error`` 描述事实、``reason`` 描述下一步、``retryable`` 仅提示模型是否可在
 修正后再次调用，不触发自动重试。
 """

@@ -7,7 +7,7 @@
   （供 ``ModelResolverService`` 解析主路径）、``ModelEntryModel``↔
   ``ModelEntryRecord`` 转换。
 - 不负责：厂商归属校验（FK 约束兜底）、Key 配置状态（service 层）、
-  litellm 目录发现（``provider_discover_service``）。
+  Provider 目录发现（``provider_discover_service``）。
 
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，
 必须在 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
@@ -71,7 +71,7 @@ class ModelEntryCrud:
 
         参数:
             provider_id: 归属厂商整数 id（FK，指向 ``providers.id``）。
-            model_name: litellm 路由名（如 ``deepseek/deepseek-v4-flash``）；
+            model_name: Provider 使用的模型名；
                 不能为空白，厂商内唯一。
             display_name: 下拉展示名；不能为空白。
             max_context_window: 上下文窗口（token）；必须为正整数。
@@ -250,14 +250,14 @@ class ModelEntryCrud:
         return [ModelEntryRecord.from_model(row) for row in rows]
 
     def find_enabled_by_name(self, model_name: str) -> ModelEntryRecord | None:
-        """按 litellm 路由名查找启用中的模型条目（解析链主路径）。
+        """按模型名查找启用中的模型条目（解析链主路径）。
 
         同名条目跨厂商存在时取排序最靠前的启用行（``provider_id`` /
         ``sort_order`` / ``created_at`` 稳定排序）；是否归属启用厂商由
         service 层解析时判定，本方法只看模型行自身的 ``enabled``。
 
         参数:
-            model_name: litellm 路由名（如 ``deepseek/deepseek-v4-flash``）。
+            model_name: Provider 使用的模型名。
 
         返回:
             匹配的启用条目；无匹配时返回 None。

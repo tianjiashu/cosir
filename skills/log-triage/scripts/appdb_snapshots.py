@@ -3,7 +3,7 @@
 
 单一职责：把「一个任务」或「一次运行」在业务库中的全部相关事实聚合成单个快照对象，
 让排查者用一条命令拿到该实体的完整上下文（任务 / 运行 / 命令 / 消息 / 工具调用 /
-文件变更 / 委派 / 子任务）。
+委派 / 子任务）。
 
 职责边界：
 - 负责：编排既有查询模块并组织聚合结构。
@@ -19,7 +19,7 @@ from typing import Any
 from appdb_agent_facts import recent_commands, recent_runs
 from appdb_context import context_statistics, list_messages, summarize_tool_calls
 from appdb_readonly import get_one, query_rows, require_tables
-from appdb_side_effects import list_delegations, list_file_snapshots
+from appdb_side_effects import list_delegations
 
 
 def task_snapshot(connection: sqlite3.Connection, *, task_id: int, limit: int) -> dict[str, Any]:
@@ -31,8 +31,7 @@ def task_snapshot(connection: sqlite3.Connection, *, task_id: int, limit: int) -
         limit: 每类明细最大返回行数。
 
     返回:
-        ``{"task", "workspace", "runs", "commands", "child_tasks", "delegations",
-        "file_changes", "context"}``。
+        ``{"task", "workspace", "runs", "commands", "child_tasks", "delegations", "context"}``。
 
     异常:
         ValueError: 任务不存在，或必需表缺失。
@@ -63,7 +62,6 @@ def task_snapshot(connection: sqlite3.Connection, *, task_id: int, limit: int) -
             (task_id, limit),
         ),
         "delegations": list_delegations(connection, limit=limit, task_id=task_id),
-        "file_changes": list_file_snapshots(connection, limit=limit, task_id=task_id),
         "context": context_statistics(connection, task_id=task_id),
     }
 
@@ -77,8 +75,8 @@ def run_snapshot(connection: sqlite3.Connection, *, run_id: int, limit: int) -> 
         limit: 每类明细最大返回行数。
 
     返回:
-        ``{"run", "task", "workspace", "commands", "messages", "tool_calls",
-        "file_changes", "delegations"}``；``messages`` 按 sequence 升序回放该 run 的消息。
+        ``{"run", "task", "workspace", "commands", "messages", "tool_calls", "delegations"}``；
+        ``messages`` 按 sequence 升序回放该 run 的消息。
 
     异常:
         ValueError: 运行不存在，或必需表缺失。
@@ -106,6 +104,5 @@ def run_snapshot(connection: sqlite3.Connection, *, run_id: int, limit: int) -> 
         "commands": recent_commands(connection, limit=limit, run_id=run_id),
         "messages": list_messages(connection, task_id=task_id, run_id=run_id, limit=limit),
         "tool_calls": summarize_tool_calls(connection, task_id=task_id, run_id=run_id, limit=limit),
-        "file_changes": list_file_snapshots(connection, limit=limit, run_id=run_id),
         "delegations": list_delegations(connection, limit=limit, task_id=task_id),
     }

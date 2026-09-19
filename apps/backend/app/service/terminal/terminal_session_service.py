@@ -427,6 +427,15 @@ class TerminalSessionService:
             self._ensure_mutable(runtime)
             if runtime.worker is None:
                 raise TerminalSessionStateError("terminal session has no active worker")
+            required_capability = {
+                "interrupt": "signal_interrupt",
+                "eof": "signal_eof_canonical",
+                "suspend": "signal_suspend",
+            }[signal_name]
+            if required_capability not in runtime.worker.capabilities:
+                raise TerminalSessionStateError(
+                    f"terminal signal is unsupported by worker: {signal_name}"
+                )
             try:
                 runtime.worker.signal(signal_name)
             except TerminalWorkerUnavailableError:
@@ -694,7 +703,12 @@ class TerminalSessionService:
         """将 Worker 错误事件映射为失败或可记录的非致命运行态。"""
 
         code = event.get("code")
-        if code == "START_ALREADY_COMPLETE" or code == "PTY_SIGNAL_FAILED":
+        if code in {
+            "START_ALREADY_COMPLETE",
+            "PTY_SIGNAL_FAILED",
+            "PTY_SIGNAL_UNSUPPORTED",
+            "PTY_QUERY_RESPONSE_FAILED",
+        }:
             log.warning(
                 "terminal_session_worker_nonfatal_error",
                 extra={
@@ -959,6 +973,9 @@ _FATAL_WORKER_ERROR_REASONS = {
     "HEARTBEAT_TIMEOUT": "worker_heartbeat_timeout",
     "INVALID_INPUT": "worker_invalid_input",
     "PTY_WRITE_FAILED": "worker_pty_write_failed",
+    "PTY_OUTPUT_READ_FAILED": "worker_pty_output_read_failed",
+    "BACKEND_OUTPUT_FAILED": "worker_backend_output_failed",
+    "PTY_CLEANUP_FAILED": "worker_pty_cleanup_failed",
     "PTY_WAIT_FAILED": "worker_pty_wait_failed",
 }
 

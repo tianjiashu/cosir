@@ -45,11 +45,14 @@ class ShellResolver:
 
         if value == "custom":
             raise ShellResolutionError("custom shell requires an executable path")
-        if value not in {"auto", "powershell", "pwsh", "bash", "zsh", "fish"}:
+        if value not in {"auto", "cmd", "powershell", "pwsh", "bash", "zsh", "fish"}:
             path = self._resolve_executable(requested)
             return ShellSpec(kind="custom", executable=path, argv=(path,))
 
         if current_system == "Windows":
+            if value == "cmd":
+                executable = self._resolve_executable("cmd.exe")
+                return ShellSpec("cmd", executable, (executable, "/Q", "/D"))
             if value in {"auto", "powershell"}:
                 executable = self._resolve_executable("powershell.exe")
                 return ShellSpec("powershell", executable, (executable, "-NoLogo"))

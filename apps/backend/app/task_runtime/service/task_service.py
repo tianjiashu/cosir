@@ -5,7 +5,7 @@
 职责边界：
 - 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
   （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationCommandCrud``/
-  ``ConversationTaskContextCrud``/``FileSnapshotCrud``/
+  ``ConversationTaskContextCrud``/
   ``DelegationCrud`` 在单事务内逐个清理，孤儿 checkpoint 线程交 ``checkpoint_gc`` 回收）。
 - 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
   service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
@@ -72,7 +72,6 @@ class TaskService:
         self._state = service_depends.get_conversation_task_state_service()
         self._command = service_depends.get_conversation_command_crud()
         self._delegation = service_depends.get_delegation_crud()
-        self._file_snapshot = service_depends.get_file_snapshot_crud()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
         self._session_factory = main_session_factory()
 
@@ -411,8 +410,7 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``file_snapshots`` /
-            ``conversation_commands`` / ``conversation_runs`` /
+            从 ``conversation_task_contexts`` / ``conversation_commands`` / ``conversation_runs`` /
             ``delegations`` / ``tasks`` 表删除该任务树相关数据；并提交后清理已删任务遗留的
             孤儿 LangGraph checkpoint 线程、卸载进程内 runtime space。
         """
@@ -666,7 +664,7 @@ class TaskService:
         """删除单个任务及其全部产物，不递归删除其子任务。
 
         给定单个 task_id，在单一事务内清理该任务自身及其全部产物（run / command / context /
-        snapshot / 文件快照 / delegation），但不触碰子任务行。任务树的收集与级联删除由上层
+        snapshot / delegation），但不触碰子任务行。任务树的收集与级联删除由上层
         编排（见 ``delete_task``）：上层负责以「子任务先于父任务」的后序顺序逐个调用本方法，
         本方法只负责单任务粒度的删除，并在独立事务（无外部 session 时）提交后清理该任务
         遗留的孤儿 LangGraph checkpoint 线程。
@@ -708,7 +706,7 @@ class TaskService:
         """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
 
         顺序：先解除本任务行对 run / delegation 的引用（双向外键环），再按外键依赖逆序
-        删除 context / 文件快照 / delegation / command / run，最后删除 task 行。
+        删除 context / delegation / command / run，最后删除 task 行。
         delegation 同时按 ``task_id`` 与 ``child_task_id`` 删除，覆盖本任务发起的委派与
         创建本任务的委派记录。
 
@@ -736,7 +734,6 @@ class TaskService:
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)
-        self._file_snapshot.delete_by_task_ids([task_id], session)
         # delegation 同时覆盖 task_id / child_task_id 两个外键方向。
         self._delegation.delete_by_task_ids([task_id], session)
         # command.run_id 外键指向 run，必须先删 command 再删 run。

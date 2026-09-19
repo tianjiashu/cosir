@@ -278,7 +278,7 @@ class InteractiveTerminalBackend(Protocol):
 
 不手写一套 Python 伪终端兼容层，也不在第一阶段同时维护 `pywinpty`、`ptyprocess` 和 Rust 三条实现路线。
 
-sidecar 路径由桌面运行时解析：开发模式优先使用 `CODING_AGENT_TERMINAL_WORKER`，否则查找 `apps/terminal-worker/target/debug/terminal-worker[.exe]`；Tauri 启动 backend 时将路径注入同名环境变量。生产模式通过 `bundle.resources` 将 `src-tauri/resources/terminal-worker/` 映射到应用 resource 目录，`build:bundle` 会先按当前平台构建 release binary 并完成 staging；不采用 Tauri 直接拥有进程的 `externalBin` 语义，因为 Terminal Worker 的生命周期 owner 是 backend。macOS/Linux 发布前验证可执行权限，Windows 验证 `.exe` 路径和签名/杀毒软件兼容性。
+sidecar 路径由桌面运行时解析：开发模式优先使用 `CODING_AGENT_TERMINAL_WORKER`，否则查找仓库统一的 `target/debug/terminal-worker[.exe]`；Tauri 启动 backend 时将路径注入同名环境变量。生产模式通过 `bundle.resources` 将 `target/resources/terminal-worker/` 映射到应用 resource 目录，`build:bundle` 会先按当前平台构建 release binary 并完成 staging；不采用 Tauri 直接拥有进程的 `externalBin` 语义，因为 Terminal Worker 的生命周期 owner 是 backend。macOS/Linux 发布前验证可执行权限，Windows 验证 `.exe` 路径和签名/杀毒软件兼容性。
 
 无窗口约束由两层共同保证：Rust Worker 使用 `windows_subsystem = "windows"`，不创建可见控制台；Windows backend 使用 `CREATE_NO_WINDOW` 创建 Worker。PTY shell 仍运行在 ConPTY/Unix PTY 中，因此“无窗口”不等于退化为普通 pipe，也不影响交互程序接收 PTY 输入。
 

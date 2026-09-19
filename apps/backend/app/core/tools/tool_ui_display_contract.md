@@ -22,7 +22,7 @@ Tauri Rust 主进程
 - `ToolObservation.display_data` 承载工具终态 UI 结构化数据；运行中的 terminal snapshot 可以临时追加原样的 `output` 增量，供当前界面实时呈现。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列或改写文本；受输出预算限制时仍会显式标记截断。
 - Assistant Transport 可以把展示数据带入事件和 snapshot，以支持前端渲染与重连恢复；展示数据不是任务、Run、Agent context 或文件变更事实源。
 - terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
-- `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。文件快照、ChangeSet 与回退事实由 `FileMutationService` 直接持久化。
+- `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。文件变更展示数据只服务于工具结果渲染。
 - 后端重启后由已有 snapshot 恢复 UI，不隐式重放旧工具执行。
 
 ## 2. 两层契约
@@ -162,8 +162,8 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `write_file` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | `changes`、`diff_stats` |
 | `patch_write`（replace） | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 与 `write_file` 相同 |
 | `apply_patch` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 只含既有文件 `modified` 的多文件 `changes`、`diff_stats` |
-| `delete_file` | `standalone`、可展开、`diff`、`file-x` | `file-changes` | 一条 `deleted` 变更，只含 `path` 与 `status`（`patch` 为 `null`，**不携带被删内容**） |
-| `move_file` | `standalone`、可展开、`diff`、`file-symlink` | `file-changes` | 一条 `moved` 变更；同时提供源路径与目标路径 |
+| `delete_file` | `standalone`、不可展开、`none`、`file-x` | `file-changes` | 一条 `deleted` 变更，只含 `path` 与 `status`（`patch` 为 `null`，**不携带被删内容**）；前端以紧凑操作卡片展示 |
+| `move_file` | `standalone`、不可展开、`none`、`file-symlink` | `file-changes` | 一条 `moved` 变更；同时提供源路径与目标路径；前端以紧凑操作卡片展示 |
 | `search_content` | `trace`、可展开、`list`、`search` | `content-search-results` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
 | `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
@@ -233,9 +233,9 @@ worker 和跨平台集成验收后作为独立变更完成。
 
 ### 3.2 文件修改
 
-`write_file`、`replace`、`apply_patch`、`delete_file`、`move_file` 共用 `file-changes`。`apply_patch` 只返回既有文件的 `modified` 状态；`delete_file` 返回 `deleted`，`move_file` 返回 `moved` 与 `new_path`。`display_data.changes` 只携带可由客户端直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整文件正文；Diff patch 不因模型输出预算截断。`delete_file` 不携带 `patch`（恒为 `null`）、增删计数恒为 0：被删文件的正文属于回退事实，不是展示事实。`FileMutationService` 在操作前先持久化隐藏快照和 before-image，再按实际落盘状态收口 ChangeSet；这些事实不经过 `ToolObservation.artifact_data`。单条快照的展示描述符与任务级净差遵循同一规则：删除操作不携带内容——快照描述符为 `format="deleted"`、`text` 为空串，任务级净差 `patch` 为 `null`，被删正文只保留在 before-image 中供回退使用。
+`write_file`、`replace`、`apply_patch`、`delete_file`、`move_file` 共用 `file-changes`。`apply_patch` 只返回既有文件的 `modified` 状态；`delete_file` 返回 `deleted`，`move_file` 返回 `moved` 与 `new_path`。`display_data.changes` 只携带可由客户端直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整文件正文；Diff patch 不因模型输出预算截断。`delete_file` 不携带 `patch`（恒为 `null`）、增删计数恒为 0，因为删除展示只需表达路径与状态。
 
-UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"新增"，`deleted` 使用红色"已删除"，`moved` 使用蓝色"已移动"并显示 `source → destination`，`modified` 使用中性"修改"。摘要行只显示大于零的增删统计；纯移动与删除都不显示 `+0 / −0`。删除展开只显示目标路径与"已删除"状态（即使收到历史载荷里携带的删除 Diff 也不解析渲染），移动展开为路径移动摘要，两者都不显示"没有文本差异"。
+UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"新增"，`deleted` 使用红色"已删除"，`moved` 使用蓝色"已移动"并显示 `source → destination`，`modified` 使用中性"修改"。摘要行只显示大于零的增删统计；纯移动与删除都不显示 `+0 / −0`。移动和删除不进入 Diff 展开器，而是以不可展开的紧凑操作卡片展示路径、变更状态和执行状态；即使收到历史载荷里携带的删除 Diff 也不解析渲染，两者都不显示"没有文本差异"。
 
 ```json
 {
@@ -258,7 +258,7 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 }
 ```
 
-非删除变更的 `patch` 必须以 `diff --git` 开头，并包含标准 `---`、`+++` 和 hunk 头；客户端不得根据 `before`/`after` 重新拼接 patch。`delete_file` 除外：它不产生 `patch`，客户端按 `status` 渲染删除摘要，不解析 Diff。持久化状态与 `display_data` 是两个不同边界：展示预算只能影响 `display_data`，回退始终使用数据库中的完整 before-image。
+非删除变更的 `patch` 必须以 `diff --git` 开头，并包含标准 `---`、`+++` 和 hunk 头；客户端不得根据 `before`/`after` 重新拼接 patch。`delete_file` 除外：它不产生 `patch`，客户端按 `status` 渲染删除摘要，不解析 Diff。持久化状态与 `display_data` 是两个不同边界：展示预算只能影响 `display_data`，工具展示不得依赖未包含在展示契约中的持久化字段。
 
 文件写入后的语法检查属于后端和模型通道，不属于 UI 展示契约。无论语法检查是否通过，`display_data` 都只描述实际发生的文件变更，不得加入 `verification`、`syntax_errors` 或诊断正文。
 

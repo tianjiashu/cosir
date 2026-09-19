@@ -111,8 +111,7 @@ def format_git_diff(result: FileDiffResult) -> str:
         无。
 
     说明:
-        该结果只用于 UI 展示。回退与审计使用 ``FileMutationService`` 持久化的完整
-        before-image，不依赖这个可能受展示预算限制的 patch_write。
+        该结果只用于 UI 展示，不携带完整文件正文，也不承担回退或审计职责。
     """
 
     old_path = result.path

@@ -12,7 +12,6 @@
     "build:tauri:e2e": "npm run build:bundle && cargo tauri build --debug --no-bundle --features desktop-e2e",
     "stage:terminal-worker": "node scripts/stage-terminal-worker.mjs",
     "stage:backend": "node scripts/stage-backend.mjs",
-    "verify:backend-bundle": "node scripts/verify-backend-bundle.mjs",
     "test:terminal-worker-bundle": "node scripts/verify-terminal-worker-bundle.mjs",
     "start": "vite preview",
     "lint": "eslint",

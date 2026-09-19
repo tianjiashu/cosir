@@ -38,7 +38,7 @@ class ToolObservation:
           展示治理标记，类型恒为 ``dict``。它不进入模型，也不应被后端持久化逻辑当作事实源。
         - ``artifact_data`` 是工具执行产出的内部产物数据，不进入 Transport，也不到模型，
           例如终端输出超限后落盘的 artifact 路径。文件变更事实由
-          ``FileMutationService`` 根据实际写入前后状态持久化，不从本字段读取。
+          不承载文件变更持久化或回退数据。
         - 三者互不替代：Agent 只依赖 ``content`` / ``error`` / ``reason``；UI 只依赖
           ``ToolDisplayHints`` 与 ``display_data``；后端恢复/审计逻辑使用各自明确的持久化
           边界。
@@ -73,7 +73,7 @@ class ToolObservation:
         display_data: 面向客户端的结构化机读字典，仅供前端渲染。UI 不应通过本字段之外的
             Observation 字段推导展示结果。
         artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
-            文件快照与 ChangeSet 由 ``FileMutationService`` 持久化。
+            文件展示数据不代表持久化的变更事实。
     """
 
     # 工具名称：与 ToolDefinition.name 对应，用于上层回绑与审计。

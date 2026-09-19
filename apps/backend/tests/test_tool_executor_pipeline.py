@@ -173,8 +173,8 @@ def test_execute_success_returns_budgeted_observation(tmp_path: Path) -> None:
     assert "hello world" in observation.content
 
 
-def test_file_write_is_rejected_when_mutation_service_is_missing(tmp_path: Path) -> None:
-    """File editors must not mutate files without the service that records changes."""
+def test_file_write_executes_without_change_tracking_service(tmp_path: Path) -> None:
+    """File editors write normally when no optional change tracking is configured."""
 
     target = tmp_path / "created.txt"
     executor = ToolExecutor(registry=ToolRegistry([WriteFileTool().to_definition()]))
@@ -188,9 +188,8 @@ def test_file_write_is_rejected_when_mutation_service_is_missing(tmp_path: Path)
         execution_context=_make_context(tmp_path),
     )
 
-    assert observation.status == "error"
-    assert "file mutation service is unavailable" in observation.error
-    assert not target.exists()
+    assert observation.status == "success"
+    assert target.read_text(encoding="utf-8") == "untracked"
 
 
 def test_missing_execution_context_raises(tmp_path: Path) -> None:

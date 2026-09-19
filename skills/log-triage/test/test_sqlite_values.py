@@ -205,10 +205,6 @@ def _base_schema(con: sqlite3.Connection) -> None:
             run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
             sequence INTEGER, created_at TEXT, updated_at TEXT, is_streaming BOOLEAN);
-        CREATE TABLE file_snapshots (id INTEGER PRIMARY KEY, task_id INTEGER, run_id INTEGER,
-            tool_call_id TEXT, tool_name TEXT, path TEXT, action TEXT, seq INTEGER,
-            additions INTEGER, deletions INTEGER, stable BOOLEAN, status TEXT,
-            reverted_at TEXT, op_json TEXT, created_at TEXT, updated_at TEXT);
         CREATE TABLE delegations (id INTEGER PRIMARY KEY, task_id INTEGER, parent_run_id INTEGER,
             child_run_id INTEGER, child_task_id INTEGER, parent_agent_id TEXT,
             child_agent_id TEXT, status TEXT, prompt TEXT, summary TEXT, error TEXT,

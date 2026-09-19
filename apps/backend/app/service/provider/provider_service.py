@@ -7,7 +7,7 @@
 职责边界：
 - 负责：厂商读写、Key 配置状态判定（DB 是 Key 唯一事实来源，``providers.
   api_key`` 明文列，不做加密）。
-- 不负责：模型条目管理（``model_entry_service``）、litellm 目录发现
+- 不负责：模型条目管理（``model_entry_service``）、Provider 目录发现
   （``provider_discover_service``）、模型解析（``model_resolver_service``）。
 
 ``api_key_configured`` 语义（设计文档 §8.4）：不依赖 Key 的厂商类型
@@ -23,11 +23,13 @@
 from time import perf_counter
 
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.models import ProviderRecord
 from app.service import depends as service_depends
 from app.service.provider.connection_test_result import ConnectionTestResult
 from app.storage.crud.provider_crud import ProviderCrud
+from app.utils.http_proxy import build_proxy_async_client
 
 
 class ProviderService:
@@ -127,7 +129,7 @@ class ProviderService:
             name: 厂商显示名（全局唯一）。
             provider_type: 厂商类型（``deepseek`` / ``openai-compatible`` /
                 ``anthropic`` / ``ollama`` / ``custom``）。
-            base_url: 可选自定义接入地址；为空时交 litellm 内置解析。
+            base_url: 可选自定义接入地址；为空时使用 Provider 能力注册表中的默认地址。
             api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；
                 日志与响应不回传明文）。
             enabled: 启用开关，默认 True。
@@ -287,13 +289,14 @@ class ProviderService:
         capability = ProviderCapability.get_capability(provider.name)
 
         test_model = capability.models[0]
+        base_url = provider.base_url or capability.default_base_url
 
         start = perf_counter()
         try:
             # 与生产构建一致：显式透传 base_url / api_key 以验证
             await self._acompletion_ping(
                 model=test_model,
-                api_base=provider.base_url,
+                base_url=base_url,
                 api_key=provider.api_key,
             )
         except Exception:  # 连通性测试需捕获一切外部异常以归一为结果值对象
@@ -338,34 +341,42 @@ class ProviderService:
     async def _acompletion_ping(
         *,
         model: str,
-        api_base: str | None,
+        base_url: str | None,
         api_key: str | None,
     ) -> None:
-        """经 litellm 发起一次最小 chat 请求（连通性测试的内部封装）。
+        """经 OpenAI-compatible ``/chat/completions`` 发起最小请求。
 
         参数:
-            model: 测试用模型名（``capability.model_prefix + 占位模型``）。
-            api_base: 厂商自定义端点（None 时不传，由 litellm 按前缀解析）。
+            model: 测试用模型名。
+            base_url: OpenAI-compatible API 根地址。
             api_key: 厂商 Key 明文（None 时不传）。
 
         返回:
             无。
 
         异常:
-            litellm 异常透传（由调用方 ``test_connection`` 归一为错误码）。
+            HTTP 客户端异常透传（由调用方 ``test_connection`` 归一为错误码）。
 
         副作用:
             发起一次到厂商端点的网络请求；不写日志（日志统一在调用方收口）。
         """
-        from litellm import acompletion
+        if not base_url:
+            raise ValueError("Provider 未配置 OpenAI-compatible base_url")
 
-        kwargs: dict = {
-            "model": model,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-        if api_base:
-            kwargs["api_base"] = api_base
+        headers = {"Content-Type": "application/json"}
         if api_key:
-            kwargs["api_key"] = api_key
-        await acompletion(**kwargs)
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        async with build_proxy_async_client(
+            timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                },
+            )
+            response.raise_for_status()

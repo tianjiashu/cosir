@@ -1,9 +1,9 @@
-#![cfg_attr(windows, windows_subsystem = "windows")]
-
 mod io;
+mod lifecycle;
 mod process_tree;
 mod protocol;
 mod pty;
+mod terminal_emulator;
 mod worker;
 
 fn main() {

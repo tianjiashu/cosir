@@ -48,36 +48,90 @@ class WorkspaceService:
         self._task_service = service_depends.get_task_service()
 
     def create_workspace(self, name: str, root_path: str) -> WorkspaceRecord:
-        """创建工作区记录并在其根目录下初始化 ``.cosir`` 元数据区。
+        """创建或复用工作区：若数据库中已存在相同规范化路径的工作区则复用，否则新建。
 
         参数:
-            name: 工作区名称。
+            name: 工作区名称；为空白时新建分支回退为根目录名。复用分支忽略此值、保留既有名称。
             root_path: 工作区根目录的绝对路径。
 
         返回:
-            已持久化的 ``WorkspaceRecord``。
+            已持久化的 ``WorkspaceRecord``。路径已存在时返回既有记录；否则返回新建记录。
 
         异常:
-            ValueError: 当 ``name`` 或 ``root_path`` 去除首尾空白后为空时抛出。
-            sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
+            ValueError: 当 ``root_path`` 去除首尾空白后为空、非绝对路径、不存在或非目录时抛出。
+                注意 ``name`` 为空白不会抛错，新建分支会回退为根目录名。
 
         副作用:
-            向 ``workspaces`` 表插入一行记录；并在 ``<root_path>/.cosir/Attachment`` 处
-            创建元数据与图片附件目录（已存在则幂等跳过）。目录创建失败属于非致命降级：
-            不阻断工作区创建，仅记 error 日志，便于事后排查；附件上传会再以稳定错误提示
-            目录不可用。
+            新建分支：向 ``workspaces`` 表插入一行记录。
+            复用分支：不写入任何记录、保留既有名称。
+            两个分支都会确保根目录下的 ``.cosir`` 元数据区存在（见 ``_init_cosir_metadata``，
+            目录已存在则幂等跳过，失败降级不阻断创建）。
         """
         normalized_path = self._normalize_root_path(root_path)
-        if any(
-            self._same_path(workspace.root_path, normalized_path)
-            for workspace in self._workspace.list_all()
-        ):
-            raise ValueError("workspace root_path is already registered")
+        existing = self._find_by_path(normalized_path)
+        if existing is not None:
+            log.info(
+                "workspace_reused",
+                extra={
+                    "msg": "workspace reused by existing root_path",
+                    "data": {
+                        "workspace_id": existing.id,
+                        "name": existing.name,
+                        "root_path": normalized_path,
+                    },
+                },
+            )
+            self._init_cosir_metadata(existing.name, normalized_path)
+            return existing
+
         record = self._workspace.create(
             name.strip() or Path(normalized_path).name,
             normalized_path,
         )
+        self._init_cosir_metadata(name, normalized_path)
+        return record
 
+    def _find_by_path(self, normalized_path: str) -> WorkspaceRecord | None:
+        """在已注册工作区中按规范化路径查找等价记录。
+
+        等价判定使用操作系统感知的 ``_same_path``（resolve + casefold），以兼容 Windows /
+        macOS 默认大小写不敏感文件系统；不直接用 SQL 等值比较，避免漏判不同大小写拼写。
+
+        参数:
+            normalized_path: 经 ``_normalize_root_path`` 得到的绝对规范化路径。
+
+        返回:
+            首个路径等价的 ``WorkspaceRecord``；无匹配时返回 ``None``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
+
+        副作用:
+            无（仅读取）。
+        """
+
+        for workspace in self._workspace.list_all():
+            if self._same_path(workspace.root_path, normalized_path):
+                return workspace
+        return None
+
+    def _init_cosir_metadata(self, name: str, normalized_path: str) -> None:
+        """在工作区根目录初始化 ``.cosir`` 元数据区，失败降级不阻断创建。
+
+        参数:
+            name: 工作区名称，仅用于日志上下文。
+            normalized_path: 工作区根目录的规范化绝对路径。
+
+        返回:
+            无。
+
+        异常:
+            无；目录创建失败仅记 error 日志，不向上抛出。
+
+        副作用:
+            在 ``<root_path>/.cosir`` 与 ``<root_path>/.cosir/Attachment`` 创建目录
+            （已存在则幂等跳过）。
+        """
         cosir_dir = Path(normalized_path) / ".cosir"
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)
@@ -110,8 +164,6 @@ class WorkspaceService:
                     },
                 },
             )
-
-        return record
 
     @staticmethod
     def _normalize_root_path(root_path: str) -> str:
@@ -212,8 +264,8 @@ class WorkspaceService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            删除工作区下全部 task 树（task / turn / run / trace / delegation / file_snapshot /
-            context）及其孤儿 checkpoint；并删除 ``workspaces`` 表记录（旧 Runtime
+            删除工作区下全部 task 树（task / turn / run / trace / delegation / context）及其
+            孤儿 checkpoint；并删除 ``workspaces`` 表记录（旧 Runtime
             事件体系已删除，不再参与级联删除）。
         """
 

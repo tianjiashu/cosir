@@ -17,11 +17,6 @@ import re
 import tempfile
 from pathlib import Path
 
-from app.core.tools.guard.file_mutation_guard import (
-    after_file_parent_directories_created,
-    before_file_write,
-)
-
 UTF8_BOM = "\ufeff"
 UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 
@@ -78,10 +73,8 @@ def atomic_write_text(
 
     directory = target.parent
     _assert_existing_ancestor_contained(directory, containment_root)
-    before_file_write(target, content_out.encode("utf-8"))
     directory.mkdir(parents=True, exist_ok=True)
     _assert_contained(target, containment_root)
-    after_file_parent_directories_created(target)
     file_descriptor, temp_path = tempfile.mkstemp(dir=str(directory), prefix=".tmp_write_")
     try:
         with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="") as file:

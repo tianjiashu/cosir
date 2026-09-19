@@ -8,23 +8,19 @@ import { ToolStatus } from "./tool-status";
 import { ToolIcon } from "./tool-icons";
 import { DisclosureRow, DisclosureRowStatic } from "../elements/disclosure-row.aui";
 import { useToolDisclosure } from "./tool-disclosure";
-
-type Change = {
-  path: string;
-  new_path?: string | null;
-  status?: string;
-  patch?: string | null;
-  truncated?: boolean;
-  insertions?: number;
-  deletions?: number;
-};
+import {
+  FileOperationCard,
+  fileChangeStatusBadgeClass,
+  fileChangeStatusLabel,
+  type FileChange,
+} from "./file-operation-card";
 
 type ParsedFileDiff =
   | { kind: "ready"; file: FileData }
   | { kind: "empty" }
   | { kind: "unavailable"; reason: "truncated" | "invalid" | "missing" };
 
-function readChanges(value: unknown): Change[] {
+function readChanges(value: unknown): FileChange[] {
   if (!Array.isArray(value)) return [];
   return value.map(asRecord).filter((change) => typeof change.path === "string").map((change) => ({
     path: String(change.path),
@@ -37,7 +33,7 @@ function readChanges(value: unknown): Change[] {
   }));
 }
 
-export function parseFileDiff(change: Change): ParsedFileDiff {
+export function parseFileDiff(change: FileChange): ParsedFileDiff {
   if (change.truncated) return { kind: "unavailable", reason: "truncated" };
   if (!change.patch) return { kind: "unavailable", reason: "missing" };
   const isRenamePatch = change.patch.includes("\nsimilarity index ")
@@ -60,7 +56,7 @@ export function parseFileDiff(change: Change): ParsedFileDiff {
   }
 }
 
-function FileDiff({ change }: { change: Change }) {
+function FileDiff({ change }: { change: FileChange }) {
   const parsed = useMemo(() => parseFileDiff(change), [change]);
   if (change.status === "moved") {
     return (
@@ -73,8 +69,8 @@ function FileDiff({ change }: { change: Change }) {
     );
   }
 
-  // 删除只展示目标与状态：被删内容属于回退事实（变更集 before-image），不进入工具展示。
-  // 即使历史载荷里仍带有旧的删除 Diff，这里也不再解析渲染，保证展示口径一致。
+  // 删除只展示目标与状态，被删内容不进入工具展示。
+  // 即使载荷里带有删除 Diff，这里也不解析渲染，保证展示口径一致。
   if (change.status === "deleted") {
     return (
       <p className="px-3 py-2 text-xs text-muted-foreground">
@@ -138,6 +134,23 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
       trailing: <ToolStatus status={artifact.backendStatus} />,
   };
 
+  const isCompactFileOperation = hasDisplayData
+    && changes.length > 0
+    && changes.every((change) => change.status === "deleted" || change.status === "moved");
+
+  if (isCompactFileOperation) {
+    return (
+      <FileOperationCard
+        title={title}
+        icon={artifact.presentation.icon}
+        changes={changes}
+        totalFiles={totalFiles}
+        status={artifact.backendStatus}
+        error={artifact.error}
+      />
+    );
+  }
+
   if (!hasDisplayData || artifact.presentation.expandable === false) {
     return <DisclosureRowStatic {...rowProps} className="group/tool-call" />;
   }
@@ -155,7 +168,7 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
           <section key={`${change.path}:${change.new_path ?? ""}`} className="overflow-hidden">
             <header className="flex items-center justify-between gap-2 bg-muted/30 px-2.5 py-1.5 text-xs">
               <span className="flex min-w-0 items-center gap-2">
-                <span className={statusBadgeClass(change.status)}>{statusLabel(change.status)}</span>
+                <span className={fileChangeStatusBadgeClass(change.status)}>{fileChangeStatusLabel(change.status)}</span>
                 {change.status === "moved" ? (
                   <span className="truncate font-medium" title={`${change.path} → ${change.new_path ?? ""}`}>
                     {change.path}<span className="mx-1 text-muted-foreground" aria-hidden="true">→</span>{change.new_path ?? "目标路径不可用"}
@@ -180,24 +193,4 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
       </CollapsibleContent>
     </Collapsible>
   );
-}
-
-function statusLabel(status: string | undefined): string {
-  switch (status) {
-    case "added": return "新增";
-    case "deleted": return "已删除";
-    case "moved": return "已移动";
-    case "modified": return "修改";
-    default: return "文件变更";
-  }
-}
-
-function statusBadgeClass(status: string | undefined): string {
-  const base = "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium";
-  switch (status) {
-    case "added": return `${base} bg-emerald-500/10 text-emerald-700 dark:text-emerald-400`;
-    case "deleted": return `${base} bg-destructive/10 text-destructive`;
-    case "moved": return `${base} bg-blue-500/10 text-blue-700 dark:text-blue-400`;
-    default: return `${base} bg-muted text-muted-foreground`;
-  }
 }

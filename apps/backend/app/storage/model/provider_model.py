@@ -13,7 +13,7 @@ CRUD 收口在 ``app.storage.crud.provider_crud``，值对象在
   ``factory.build_chat_model``，本表是 Key 唯一落点。
 - ``provider_type`` 属性对应列名 ``type``（避免属性名遮蔽 Python 内置
   ``type``），取 ``deepseek`` / ``openai-compatible`` / ``anthropic`` /
-  ``ollama`` / ``custom`` 之一，决定 litellm 前缀与默认 base_url。
+  ``ollama`` / ``custom`` 之一，决定 Provider 能力注册表中的默认 base_url。
 """
 
 from sqlalchemy import Boolean, Integer, Text, text

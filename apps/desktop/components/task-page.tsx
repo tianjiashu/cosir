@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Assistant } from "@/app/assistant";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
-import { TaskChangesPanel } from "@/components/task-changes/task-changes-panel";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
@@ -47,12 +46,7 @@ export function TaskPage({
   );
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const [isRunActive, setIsRunActive] = useState(false);
   const requestGenerationRef = useRef(0);
-  const handleRunStateChange = useCallback((active: boolean) => {
-    setIsRunActive(active);
-    onRunStateChange?.(active);
-  }, [onRunStateChange]);
 
   useEffect(() => {
     const requestGeneration = ++requestGenerationRef.current;
@@ -136,10 +130,9 @@ export function TaskPage({
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
           onTaskStateChanged={onTaskStateChanged}
-          onRunStateChange={handleRunStateChange}
+          onRunStateChange={onRunStateChange}
         />
       </div>
-      <TaskChangesPanel taskId={taskId} isRunActive={isRunActive} />
     </div>
   );
 }

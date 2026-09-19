@@ -27,7 +27,6 @@ from app.hook.hook_event import HookEvent
 from app.hook.hook_interceptor import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
-    get_file_mutation_service,
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
@@ -211,8 +210,7 @@ class AgentRuntime:
 
         参数:
             task: 当前执行的任务记录；提供 ``workspace_id`` 与 ``task_id``。
-            run_id: 当前执行所属轮次标识；用于在工具执行时把文件操作快照关联到
-                具体 run，供文件快照回退精准还原。缺省为空字符串。
+            run_id: 当前执行所属轮次标识，供工具执行上下文和取消边界使用。缺省为空字符串。
 
         返回:
             命中 workspace 时返回 ToolExecutionContext；workspace 缺失或
@@ -284,7 +282,6 @@ class AgentRuntime:
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,
                 process_tool_output_channel_factory=self._process_tool_output_channel_factory,
-                file_mutation_service=get_file_mutation_service(),
             )
         return WorkflowOperations(
             tool_executor=self._tool_executor,

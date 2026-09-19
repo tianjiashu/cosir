@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """业务库副作用事实查询（log-triage skill 内置）。
 
-单一职责：只读查询 Agent 执行留下的「磁盘与外部资源副作用」事实行：``file_snapshots``
-（文件变更反向快照与保留/回退态）、``delegations``（子 Agent 委派）、
+单一职责：只读查询 Agent 执行留下的「外部资源副作用」事实行：``delegations``
+（子 Agent 委派）、
 ``terminal_sessions``（终端会话元数据）、``attachment_assets``（附件资产）。
 
 职责边界：
 - 负责：按 task / run 过滤并返回原始行字典。
 - 不负责：会话消息（见 ``appdb_context``）、run 生命周期（见 ``appdb_agent_facts``）、
   渲染。
-- 数据裁剪：``file_snapshots.op_json`` 是完整 V4A 反向操作载荷，体量大且排查不需要，
-  一律不返回（只返回 ``op_chars`` 体量提示）。
 """
 
 from __future__ import annotations
@@ -21,55 +19,6 @@ from typing import Any
 from appdb_readonly import query_rows, require_tables
 
 _TERMINAL_STATUSES = ("starting", "running", "exited", "interrupted", "failed", "closed")
-
-
-def list_file_snapshots(
-    connection: sqlite3.Connection,
-    *,
-    limit: int,
-    task_id: int | None = None,
-    run_id: int | None = None,
-) -> list[dict[str, Any]]:
-    """查询文件变更快照。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        limit: 最大返回行数。
-        task_id: 可选任务过滤。
-        run_id: 可选运行过滤（单轮回放）。
-
-    返回:
-        快照行列表（按 task_id、seq 升序），含 ``path`` / ``action`` / ``additions`` /
-        ``deletions`` / ``stable`` / ``status`` / ``reverted_at`` / ``op_chars``；
-        不含 ``op_json`` 原文。
-
-    异常:
-        ValueError: ``file_snapshots`` 表缺失。
-        sqlite3.Error: 查询失败。
-
-    副作用:
-        无。
-    """
-
-    require_tables(connection, "file_snapshots")
-    where: list[str] = []
-    params: list[Any] = []
-    if task_id is not None:
-        where.append("task_id = ?")
-        params.append(task_id)
-    if run_id is not None:
-        where.append("run_id = ?")
-        params.append(run_id)
-    sql = (
-        "SELECT id, task_id, run_id, tool_call_id, tool_name, path, action, seq, "
-        "additions, deletions, stable, status, reverted_at, "
-        "length(op_json) AS op_chars, created_at, updated_at FROM file_snapshots"
-    )
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY task_id ASC, seq ASC LIMIT ?"
-    params.append(limit)
-    return query_rows(connection, sql, tuple(params))
 
 
 def list_delegations(

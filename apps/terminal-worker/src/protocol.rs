@@ -35,6 +35,7 @@ pub enum WorkerEvent {
         instance_id: String,
         pid: u32,
         pty_kind: &'static str,
+        capabilities: Vec<&'static str>,
     },
     Output {
         data_base64: String,

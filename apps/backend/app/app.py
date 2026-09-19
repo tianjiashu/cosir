@@ -56,8 +56,6 @@ from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_run_service,
     get_delegation_service,
-    get_file_mutation_service,
-    get_task_change_set_service,
     get_terminal_session_service,
     initialize_service_dependencies,
     set_runtime,
@@ -120,19 +118,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "data": {"run_ids": [run.id for run in recovered_runs]},
             },
         )
-    unresolved_mutations = get_file_mutation_service().reconcile_prepared_snapshots()
-    unresolved_reverts = get_task_change_set_service().reconcile_interrupted_reverts()
-    if unresolved_mutations or unresolved_reverts:
-        log.warning(
-            "file_snapshot_reconcile_incomplete",
-            extra={
-                "msg": "启动时有文件快照暂时无法与工作区对账，将在下次启动重试",
-                "data": {
-                    "unresolved_mutation_count": len(unresolved_mutations),
-                    "unresolved_revert_count": len(unresolved_reverts),
-                },
-            },
-        )
     get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
     get_terminal_session_service().initialize()
 
@@ -165,7 +150,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(get_terminal_session_service().shutdown)
         flush_langfuse()
         close_service_dependencies()
-        # 模型 HTTP 连接由 litellm 内部管理，无需进程级显式释放。
+        # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
         _mark_boot_stopped()
 
 
@@ -203,7 +188,6 @@ install_transport_request_error_handler(app)
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
-importlib.import_module("app.api.changes_api")
 importlib.import_module("app.api.logs_api")
 importlib.import_module("app.api.providers_api")
 importlib.import_module("app.api.models_api")

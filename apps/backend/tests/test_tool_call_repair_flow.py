@@ -14,13 +14,11 @@ from typing import Any
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
 
 from app.core.context.runtime_context_manager import _as_ai_message
-from app.core.workflows.nodes import model_node as model_module
-from app.core.workflows.nodes import observation_node as observe_module
-from app.core.workflows.nodes import tools_node as tools_module
-from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.nodes import model_node as model_module, tools_node as tools_module, \
+    observation_node as observe_module
+from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
+    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
 )
 from app.core.workflows.react.state import ReactGraphState
 

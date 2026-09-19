@@ -316,34 +316,7 @@ class ToolExecutor:
                         tool_call_id=call.call_id,
                     )
 
-                mutation_service = (
-                    execution_context.runtime_dependencies.file_mutation_service
-                    if execution_context is not None
-                    else None
-                )
-                if plan.resources.write_paths:
-                    if mutation_service is None:
-                        observation = tool_error(
-                            tool.name,
-                            "the file mutation service is unavailable; the write was not executed",
-                            reason=(
-                                "the runtime is not configured to persist structured file changes; "
-                                "do not retry this write until the backend runtime is repaired."
-                            ),
-                            permission=tool.permission,
-                            tool_call_id=call.call_id,
-                        )
-                    else:
-                        observation = mutation_service.execute_tool_mutation(
-                            tool_name=tool.name,
-                            arguments=gate_outcome.arguments,
-                            execution_context=execution_context,
-                            tool_call_id=call.call_id,
-                            write_paths=plan.resources.write_paths,
-                            execute=run_handler,
-                        )
-                else:
-                    observation = run_handler()
+                observation = run_handler()
                 self._state_coordinator.complete(
                     plan,
                     observation,

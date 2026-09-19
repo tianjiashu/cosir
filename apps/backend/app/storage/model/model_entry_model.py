@@ -5,10 +5,10 @@ CRUD 收口在 ``app.storage.crud.model_entry_crud``，值对象在
 ``app.models.model_entry_record``。
 
 设计要点：
-- ``model_name`` 为 litellm 路由名（如 ``deepseek/deepseek-v4-flash``），
+- ``model_name`` 为 Provider 使用的模型名（如 ``deepseek-chat``），
   同一厂商内唯一（``uq_models_provider_model_name``），是模型解析链按名查启用的主路径。
 - ``max_context_window`` NOT NULL：DB 是模型唯一事实来源，窗口不允许落空；
-  discover 导入时预填 litellm 已知值，用户可改。
+  discover 导入时预填 Provider 目录中的已知值，用户可改。
 - 随 provider 级联删除（``ON DELETE CASCADE``，引擎已开 foreign_keys）。
 """
 

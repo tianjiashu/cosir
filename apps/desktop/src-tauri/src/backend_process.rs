@@ -70,6 +70,14 @@ pub fn spawn_backend(config: &BackendLaunchConfig<'_>) -> Result<BackendProcess,
     if let Some(data_dir) = config.data_dir {
         command.env("CODING_AGENT_DATA_DIR", data_dir);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // Keep development launches quiet too; the frozen backend is built with
+        // PyInstaller's --windowed mode, while uv/python still need this flag.
+        command.creation_flags(0x08000000);
+    }
     let mut child = command
         .env("CODING_AGENT_PORT", config.port.to_string())
         .env("CODING_AGENT_RELOAD", "false")

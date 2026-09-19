@@ -9,12 +9,6 @@ dependencies = [
     "python-multipart==0.0.20",
     "httpx==0.28.1",
     "jsonschema==4.23.0",
-    "langchain-litellm==0.7.0 ; python_version >= '3.11'",
-    # litellm 精确锁 ==1.97.0：规避 pytest-cov 对 litellm/pydantic 动态属性插桩偶发的
-    # import 冲突（range 约束会解析到行为不同的补丁版，破坏插桩时序）。
-    # 注意：不可锁 1.83.14——它硬依赖 python-dotenv==1.2.2，与下方锁定的
-    # python-dotenv==1.0.1 冲突导致 uv 无法解析。1.97.0 为当前实际解析并运行验证过的版本。
-    "litellm==1.97.0",
     "langgraph==1.2.10 ; python_version >= '3.11'",
     "langgraph-checkpoint-sqlite==3.1.0 ; python_version >= '3.11'",
     # Langfuse 可观测性（LLM/工具调用 trace；基于 OpenTelemetry，v4 客户端 API）。
@@ -131,7 +125,7 @@ quote-style = "double"  # 与现有代码双引号约定一致
 python_version = "3.11"
 strict = true
 warn_unreachable = true   # strict 未含，显式补充
-ignore_missing_imports = true  # 第三方动态库（litellm/langfuse/pydantic）类型不可靠，整包忽略
+ignore_missing_imports = true  # 第三方动态库（langfuse/pydantic）类型不可靠，整包忽略
 
 # 存量豁免：仅关闭下方列出的宽松项（strict 的 11 项强约束 + extra_checks +
 # 显式补充的 warn_unreachable），其余 strict 项对存量仍生效——warn_redundant_casts /
@@ -165,7 +159,7 @@ markers = [
 
 [tool.coverage.run]
 # 覆盖率仅聚焦业务代码 app/，排除测试、草稿、虚拟环境与第三方依赖。
-# 排除第三方可规避 pytest-cov 对 litellm/pydantic 等动态属性插桩时偶发的 import 冲突。
+# 排除第三方可规避 pytest-cov 对动态属性插桩时偶发的 import 冲突。
 # 覆盖率默认不随 pytest 自动启用（未配 addopts --cov），仅 CI / 显式 `pytest --cov` 时统计，
 # 避免每次本地测试都触发上述插桩竞态。
 source = ["app"]

@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
 const manifestPath = path.join(desktopRoot, "src-tauri", "Cargo.toml");
-const resourcesRoot = path.join(desktopRoot, "src-tauri", "resources");
-const artifactsRoot = path.join(desktopRoot, "artifacts");
+const artifactsRoot = path.join(repositoryRoot, "target");
+const resourcesRoot = path.join(artifactsRoot, "resources");
 const portableRoot = path.join(artifactsRoot, "Cosir-portable");
 const appExecutable = process.platform === "win32" ? "Cosir.exe" : "Cosir";
 const sourceExecutableName = process.platform === "win32" ? "cosir-desktop.exe" : "cosir-desktop";
@@ -50,7 +50,7 @@ if (!fs.existsSync(sourceExecutable)) {
   throw new Error(`未找到 Tauri 发布版程序：${sourceExecutable}`);
 }
 
-assertWithin(desktopRoot, artifactsRoot, "便携包输出目录");
+assertWithin(repositoryRoot, artifactsRoot, "便携包输出目录");
 assertWithin(artifactsRoot, portableRoot, "便携包目录");
 fs.rmSync(portableRoot, { recursive: true, force: true });
 fs.mkdirSync(portableRoot, { recursive: true });

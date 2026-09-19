@@ -30,8 +30,6 @@ if TYPE_CHECKING:
     from app.service.delegation.delegation_service import DelegationService
     from app.service.log_query_service import LogQueryService
     from app.service.provider import ModelEntryService, ProviderService
-    from app.service.task.change_set.file_mutation_service import FileMutationService
-    from app.service.task.change_set.task_change_set_service import TaskChangeSetService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -41,7 +39,6 @@ if TYPE_CHECKING:
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
     from app.storage.crud.delegation_crud import DelegationCrud
-    from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
     from app.storage.crud.log_crud import LogCrud
     from app.storage.crud.model_entry_crud import ModelEntryCrud
     from app.storage.crud.provider_crud import ProviderCrud
@@ -415,31 +412,6 @@ def get_conversation_task_context_crud() -> ConversationTaskContextCrud:
 
 
 @lru_cache(maxsize=1)
-def get_file_snapshot_crud() -> FileSnapshotCrud:
-    """返回进程级 FileSnapshotCrud 单例。"""
-    from app.storage.crud.file_snapshot_crud import FileSnapshotCrud
-
-    return FileSnapshotCrud()
-
-
-@lru_cache(maxsize=1)
-def get_file_mutation_service() -> FileMutationService:
-    """返回进程级 durable file mutation coordinator。"""
-    from app.service.task.change_set.file_mutation_service import FileMutationService
-
-    return FileMutationService()
-
-
-@lru_cache(maxsize=1)
-def get_task_change_set_service() -> TaskChangeSetService:
-    """Return the process-local task ChangeSet query/action service."""
-
-    from app.service.task.change_set.task_change_set_service import TaskChangeSetService
-
-    return TaskChangeSetService()
-
-
-@lru_cache(maxsize=1)
 def get_transport_assistant_service() -> TransportAssistantService:
     """返回进程级 Assistant Transport snapshot 订阅 service 单例。"""
     from app.assistant_transport.service.transport_assistant_service import (
@@ -636,9 +608,6 @@ def reset_service_dependencies() -> None:
     get_model_entry_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
-    get_file_snapshot_crud.cache_clear()
-    get_file_mutation_service.cache_clear()
-    get_task_change_set_service.cache_clear()
     get_conversation_run_command_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
     get_transport_assistant_service.cache_clear()

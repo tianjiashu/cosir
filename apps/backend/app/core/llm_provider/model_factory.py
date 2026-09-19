@@ -1,7 +1,7 @@
 """模型工厂：按模型名称构建 LangChain chat model（ChatOpenAI 单一收口）。
 
 工厂经 ``langchain_openai.ChatOpenAI`` 实例化并透传采样参数与思考配置，对 DeepSeek / GLM /
-qwen / kimi 等国内厂商的 OpenAI 兼容端点契合度优于 litellm 多厂商路由。返回的模型对象天然
+qwen / kimi 等国内厂商的 OpenAI 兼容端点契合度较高。返回的模型对象天然
 同时支持流式（``.astream()``）与非流式（``.ainvoke()``）调用——工厂本身只负责「按名取模型
 + 透传参数」，不掺入编排、工具绑定或事件翻译（留在 ``workflow`` / ``langchain_bridge``）。
 缺 Key 拦截在构建期之前的解析链完成，构建期不读环境变量、不抛缺 Key 错误。
@@ -24,11 +24,11 @@ from app.core.llm_provider.capability.model_capability import (
 from app.core.llm_provider.capability.provider_capability import (
     ProviderCapability,
 )
-from app.utils.http_proxy import build_proxy_async_client, build_proxy_client
 from app.core.llm_provider.reasoning_chat_openai import ReasoningChatOpenAI
 from app.models import ConversationRunRecord
 from app.service.depends import get_provider_service
 from app.service.provider.capability_service import CapabilityService
+from app.utils.http_proxy import build_proxy_async_client, build_proxy_client
 
 __all__ = [
     "build_chat_model",

@@ -21,6 +21,13 @@ pub struct SpawnedPty {
     pub reader: Box<dyn Read + Send>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalControlResult {
+    #[allow(dead_code)]
+    Applied,
+    Unsupported(&'static str),
+}
+
 impl PtyRuntime {
     pub fn spawn(
         shell: Vec<String>,
@@ -44,11 +51,20 @@ impl PtyRuntime {
         let mut command =
             CommandBuilder::from_argv(shell.into_iter().map(OsString::from).collect::<Vec<_>>());
         command.cwd(cwd);
-        let child = pair.slave.spawn_command(command)?;
-        child
-            .process_id()
-            .ok_or_else(|| anyhow::anyhow!("terminal shell pid unavailable"))?;
-        let process_tree = ProcessTreeGuard::attach(pair.master.as_ref(), child.as_ref())?;
+        let mut child = pair.slave.spawn_command(command)?;
+        if child.process_id().is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("terminal shell pid unavailable");
+        }
+        let process_tree = match ProcessTreeGuard::attach(pair.master.as_ref(), child.as_ref()) {
+            Ok(process_tree) => process_tree,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
@@ -71,22 +87,78 @@ impl PtyRuntime {
         Ok(())
     }
 
-    pub fn signal(&self, signal: &str) -> anyhow::Result<()> {
+    pub fn signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
         match signal {
-            "interrupt" => self.write(&[0x03]),
-            "eof" => self.write(&[0x04]),
-            "suspend" => {
-                #[cfg(windows)]
-                {
-                    anyhow::bail!("suspend is not supported on Windows")
-                }
-                #[cfg(not(windows))]
-                {
-                    self.write(&[0x1a])
-                }
-            }
+            "interrupt" => self.send_foreground_signal("interrupt"),
+            "eof" => self.send_eof(),
+            "suspend" => self.send_foreground_signal("suspend"),
             _ => anyhow::bail!("unsupported terminal signal"),
         }
+    }
+
+    #[cfg(unix)]
+    fn send_foreground_signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
+        let fd = self.master_fd()?;
+        let foreground = unsafe { libc::tcgetpgrp(fd) };
+        if foreground <= 0 {
+            anyhow::bail!("terminal foreground process group unavailable")
+        }
+        let signal_number = match signal {
+            "interrupt" => libc::SIGINT,
+            "suspend" => libc::SIGTSTP,
+            _ => anyhow::bail!("unsupported foreground signal"),
+        };
+        if unsafe { libc::kill(-foreground, signal_number) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(TerminalControlResult::Applied)
+    }
+
+    #[cfg(not(unix))]
+    fn send_foreground_signal(&self, _signal: &str) -> anyhow::Result<TerminalControlResult> {
+        Ok(TerminalControlResult::Unsupported(
+            "platform_signal_unavailable",
+        ))
+    }
+
+    #[cfg(unix)]
+    fn send_eof(&self) -> anyhow::Result<TerminalControlResult> {
+        let fd = self.master_fd()?;
+        let mut attributes = unsafe { std::mem::zeroed::<libc::termios>() };
+        if unsafe { libc::tcgetattr(fd, &mut attributes) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if attributes.c_lflag & libc::ICANON == 0 {
+            return Ok(TerminalControlResult::Unsupported(
+                "eof_requires_canonical_mode",
+            ));
+        }
+        let eof = attributes.c_cc[libc::VEOF] as i64;
+        if eof == libc::_POSIX_VDISABLE as i64 {
+            return Ok(TerminalControlResult::Unsupported(
+                "eof_disabled_by_termios",
+            ));
+        }
+        self.write(&[eof as u8])?;
+        Ok(TerminalControlResult::Applied)
+    }
+
+    #[cfg(not(unix))]
+    fn send_eof(&self) -> anyhow::Result<TerminalControlResult> {
+        Ok(TerminalControlResult::Unsupported(
+            "platform_eof_unavailable",
+        ))
+    }
+
+    #[cfg(unix)]
+    fn master_fd(&self) -> anyhow::Result<libc::c_int> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
+        master
+            .as_raw_fd()
+            .ok_or_else(|| anyhow::anyhow!("pty master file descriptor unavailable"))
     }
 
     pub fn try_wait(&self) -> anyhow::Result<Option<u32>> {
@@ -106,6 +178,10 @@ impl PtyRuntime {
             .process_tree
             .lock()
             .map_err(|_| anyhow::anyhow!("process tree lock poisoned"))?;
-        process_tree.terminate(child.as_mut())
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
+        process_tree.terminate(child.as_mut(), master.as_ref())
     }
 }

@@ -60,7 +60,7 @@ class ProviderCrud:
             name: 厂商显示名（如 "DeepSeek "）；不能为空白，对应 ``providers.name``
                 唯一约束。
             provider_type: Provider 能力注册表中的接入类型。
-            base_url: 可选自定义接入地址；为空时交 litellm 按前缀内置解析，落库到
+            base_url: 可选自定义接入地址；为空时使用 Provider 能力注册表默认地址，落库到
                 ``providers.base_url``。
             api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储）；
                 日志与响应不回传明文，落库到 ``providers.api_key``。

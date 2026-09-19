@@ -26,7 +26,7 @@ class ErrorKind(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     CANCELLED = "cancelled"
     MODEL_NOT_CONFIGURED = "model_not_configured"
-    # 模型调用错误细分（设计文档阶段 4，由 ``model_error_mapper`` 从 litellm
+    # 模型调用错误细分（设计文档阶段 4，由 ``model_error_mapper`` 从 provider 响应
     # 异常归一，供前端按 error_code 给出修复引导）。
     MODEL_AUTH_FAILED = "model_auth_failed"
     MODEL_RATE_LIMITED = "model_rate_limited"

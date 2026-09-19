@@ -1,8 +1,8 @@
 """replace 工具实现（从原合并 patch_tool 的 replace 模式平移）。
 
 本模块只承载 patch_write（replace 模式）这一个工具：单文件模糊查找替换，复刻原
-edit_file 逻辑。成功后的文件变更展示由 display_data 提供，ChangeSet 由 FileMutationService 持久化，
-不把 diff 回显给模型。落盘后的语法检查只在发现问题时通过 success content 提供
+edit_file 逻辑。成功后的文件变更展示由 display_data 提供，不把 diff 回显给模型。落盘后的
+语法检查只在发现问题时通过 success content 提供
 简短警告，不改变替换成功状态。
 
 设计边界：

@@ -18,6 +18,7 @@ from app.utils.datetime_utils import utc_now
 
 class FakeWorker:
     pid = 4321
+    capabilities = frozenset({"signal_interrupt", "signal_eof_canonical", "signal_suspend"})
 
     def __init__(self) -> None:
         self._callback = None
@@ -229,10 +230,16 @@ def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.Monke
     monkeypatch.setattr("app.service.terminal.shell_resolver.shutil.which", lambda value: value)
 
     windows = resolver.resolve("auto", system="Windows")
+    cmd = resolver.resolve("cmd", system="Windows")
+    pwsh = resolver.resolve("pwsh", system="Windows")
     posix = resolver.resolve("auto", system="Linux", environ={"SHELL": "/bin/bash"})
 
     assert windows.kind == "powershell"
     assert windows.argv[-1] == "-NoLogo"
+    assert cmd.kind == "cmd"
+    assert cmd.argv[-2:] == ("/Q", "/D")
+    assert pwsh.kind == "pwsh"
+    assert pwsh.argv[-1] == "-NoLogo"
     assert posix.kind == "bash"
 
 

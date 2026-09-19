@@ -40,7 +40,6 @@ from appdb_schema import database_overview, table_detail
 from appdb_side_effects import (
     list_attachment_assets,
     list_delegations,
-    list_file_snapshots,
     list_terminal_sessions,
 )
 from appdb_snapshots import run_snapshot, task_snapshot
@@ -126,12 +125,6 @@ def build_parser() -> argparse.ArgumentParser:
     tools.add_argument("--run-id", type=int, default=None)
     tools.add_argument("--contains", default="", help="按工具名/参数/结果模糊搜索。")
     tools.add_argument("--failures-only", action="store_true", help="只显示失败调用。")
-
-    changes = subparsers.add_parser("changes", help="列出文件变更快照。")
-    _add_common_options(changes)
-    _add_limit(changes)
-    changes.add_argument("--task-id", type=int, default=None)
-    changes.add_argument("--run-id", type=int, default=None)
 
     delegations = subparsers.add_parser("delegations", help="列出子 Agent 委派。")
     _add_common_options(delegations)
@@ -285,9 +278,6 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
             contains=args.contains.strip(),
             failures_only=args.failures_only,
             limit=limit,
-        ),
-        "changes": lambda: list_file_snapshots(
-            connection, limit=limit, task_id=args.task_id, run_id=args.run_id
         ),
         "delegations": lambda: list_delegations(connection, limit=limit, task_id=args.task_id),
         "sessions": lambda: list_terminal_sessions(

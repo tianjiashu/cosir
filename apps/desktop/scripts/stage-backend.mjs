@@ -7,11 +7,12 @@ const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
 const backendRoot = path.join(repositoryRoot, "apps", "backend");
 const packagingEnvironment = path.join(backendRoot, ".venv-packaging");
-const distributionRoot = path.join(backendRoot, "dist");
-const buildRoot = path.join(backendRoot, "build", "pyinstaller");
+const buildArtifactsRoot = path.join(repositoryRoot, "target");
+const distributionRoot = path.join(buildArtifactsRoot, "backend");
+const buildRoot = path.join(buildArtifactsRoot, "pyinstaller");
 const appName = "cosir-backend";
 const sourceRoot = path.join(distributionRoot, appName);
-const stagingRoot = path.join(desktopRoot, "src-tauri", "resources", "backend");
+const stagingRoot = path.join(buildArtifactsRoot, "resources", "backend");
 const executableName = process.platform === "win32" ? `${appName}.exe` : appName;
 const pyinstallerExecutable = process.platform === "win32" ? "pyinstaller.exe" : "pyinstaller";
 const uvExecutable = process.platform === "win32" ? "uv.exe" : "uv";
@@ -99,6 +100,7 @@ const pyinstallerArgs = [
   "--noconfirm",
   "--clean",
   "--onedir",
+  "--windowed",
   "--name",
   appName,
   "--contents-directory",
@@ -111,10 +113,6 @@ const pyinstallerArgs = [
   buildRoot,
   "--collect-submodules",
   "app",
-  "--collect-submodules",
-  "litellm",
-  "--collect-data",
-  "litellm",
   entrypoint,
 ];
 run(actualPyinstallerPath, pyinstallerArgs, {
@@ -130,8 +128,8 @@ if (!fs.existsSync(packagedExecutable)) {
   throw new Error(`PyInstaller 未生成后端可执行文件：${packagedExecutable}`);
 }
 
-assertWithin(path.join(repositoryRoot, "apps", "backend"), sourceRoot, "后端构建产物");
-assertWithin(path.join(desktopRoot, "src-tauri", "resources"), stagingRoot, "Tauri 后端资源目录");
+assertWithin(buildArtifactsRoot, sourceRoot, "后端构建产物");
+assertWithin(buildArtifactsRoot, stagingRoot, "Tauri 后端资源目录");
 fs.mkdirSync(path.dirname(stagingRoot), { recursive: true });
 fs.mkdirSync(stagingRoot, { recursive: true });
 for (const entry of fs.readdirSync(stagingRoot)) {
@@ -146,10 +144,6 @@ for (const entry of fs.readdirSync(sourceRoot)) {
 if (process.platform !== "win32") {
   fs.chmodSync(path.join(stagingRoot, executableName), 0o755);
 }
-
-run(process.execPath, [path.join(desktopRoot, "scripts", "verify-backend-bundle.mjs")], {
-  cwd: desktopRoot,
-});
 
 const executableBytes = fs.statSync(path.join(stagingRoot, executableName)).size;
 const bundleBytes = fs.readdirSync(stagingRoot, { recursive: true }).reduce((total, entry) => {

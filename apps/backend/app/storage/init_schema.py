@@ -4,8 +4,7 @@
 用于移除本机开发库遗留的 checkpoint 全局唯一约束。
 """
 
-import json
-from typing import Any, cast
+from typing import cast
 
 from sqlalchemy import Engine, Table, inspect, text
 
@@ -14,7 +13,6 @@ from app.storage.model.conversation_command_model import ConversationCommandMode
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.delegation_model import DelegationModel
-from app.storage.model.file_snapshot_model import FileSnapshotModel
 from app.storage.model.log_model import LogEntryModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
@@ -30,7 +28,6 @@ APP_MODELS = (
     ConversationRunModel,
     ConversationCommandModel,
     ConversationTaskContextModel,
-    FileSnapshotModel,
     DelegationModel,
     TerminalSessionModel,
 )
@@ -56,130 +53,20 @@ def initialize_app_schema(engine: Engine) -> None:
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
-    _ensure_file_snapshot_schema(engine)
+    _drop_legacy_file_snapshot_table(engine)
     _ensure_context_tool_call_id_schema(engine)
     _ensure_context_streaming_schema(engine)
     _ensure_tasks_sqlite_autoincrement(engine)
     _remove_legacy_checkpoint_unique_constraint(engine)
 
 
-def _ensure_file_snapshot_schema(engine: Engine) -> None:
-    """重建旧版快照表，移除重复的状态列并把旧动作信息并入 JSON。"""
+def _drop_legacy_file_snapshot_table(engine: Engine) -> None:
+    """Remove the obsolete file changes table from existing local databases."""
 
     if engine.dialect.name != "sqlite":
         return
-
-    table_name = FileSnapshotModel.__tablename__
-    removed_columns = {
-        "operation_id",
-        "tool_name",
-        "action",
-        "additions",
-        "deletions",
-        "stable",
-        "reverted_at",
-    }
-    existing_columns = {column["name"] for column in inspect(engine).get_columns(table_name)}
-    if not removed_columns & existing_columns:
-        return
-
-    table = cast(Table, FileSnapshotModel.__table__)
-    legacy_table_name = f"{table_name}__legacy_redundant_columns"
-    quoted_table = _quote_sqlite_identifier(table_name)
-    quoted_legacy_table = _quote_sqlite_identifier(legacy_table_name)
-    target_columns = {column.name for column in table.columns}
-
-    with engine.connect() as connection:
-        old_rows = (
-            connection.exec_driver_sql(
-                f"SELECT * FROM {quoted_table}"  # noqa: S608 - table name is quoted by our helper
-            )
-            .mappings()
-            .all()
-        )
-        rows = [dict(row) for row in old_rows]
-        for row in rows:
-            row["mutation_json"] = _migrate_snapshot_manifest(
-                row.get("mutation_json", ""),
-                mutation_state=row.get("mutation_state", "applied"),
-            )
-        _retain_one_prepared_manifest(rows)
-        rows = [{key: value for key, value in row.items() if key in target_columns} for row in rows]
-
-        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        connection.exec_driver_sql("PRAGMA legacy_alter_table=ON")
-        connection.commit()
-        try:
-            with connection.begin():
-                for reflected_index in inspect(connection).get_indexes(table_name):
-                    index_name = reflected_index.get("name")
-                    if index_name:
-                        connection.exec_driver_sql(
-                            f"DROP INDEX IF EXISTS {_quote_sqlite_identifier(index_name)}"
-                        )
-                connection.exec_driver_sql(
-                    f"ALTER TABLE {quoted_table} RENAME TO {quoted_legacy_table}"
-                )
-                table.create(bind=connection, checkfirst=False)
-                if rows:
-                    connection.execute(table.insert(), rows)
-                connection.exec_driver_sql(f"DROP TABLE {quoted_legacy_table}")
-                for table_index in table.indexes:
-                    table_index.create(bind=connection, checkfirst=True)
-        finally:
-            connection.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
-            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-            connection.commit()
-
-
-def _migrate_snapshot_manifest(value: object, *, mutation_state: object) -> str:
-    """Keep only recovery data unique to a prepared operation manifest."""
-
-    if mutation_state != "prepared" or not isinstance(value, str) or not value:
-        return ""
-    try:
-        manifest = json.loads(value)
-    except json.JSONDecodeError:
-        return value
-    if not isinstance(manifest, dict) or manifest.get("kind") != "agent_mutation":
-        return value
-    retained = (
-        "kind",
-        "workspace_id",
-        "snapshot_paths",
-        "implicit_directory_paths",
-        "move_pairs",
-        "staging",
-    )
-    return json.dumps(
-        {key: manifest[key] for key in retained if key in manifest},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _retain_one_prepared_manifest(rows: list[dict[str, Any]]) -> None:
-    """Keep one durable operation manifest per prepared mutation group."""
-
-    groups: dict[tuple[str, object], list[dict[str, Any]]] = {}
-    for row in rows:
-        if row.get("mutation_state") != "prepared":
-            row["mutation_json"] = ""
-            continue
-        mutation_id = row.get("mutation_id")
-        key = ("mutation", mutation_id) if mutation_id else ("row", row.get("id"))
-        groups.setdefault(key, []).append(row)
-    for group in groups.values():
-        group.sort(key=lambda row: (row.get("seq", 0), row.get("id", 0)))
-        manifest = next(
-            (row.get("mutation_json", "") for row in group if row.get("mutation_json")),
-            "",
-        )
-        for row in group:
-            row["mutation_json"] = ""
-        if manifest:
-            group[0]["mutation_json"] = manifest
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS file_snapshots"))
 
 
 def _ensure_context_tool_call_id_schema(engine: Engine) -> None:

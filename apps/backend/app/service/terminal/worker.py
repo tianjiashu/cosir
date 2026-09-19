@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import platform
 import queue
 import struct
 import subprocess
@@ -40,6 +41,9 @@ class TerminalWorker(Protocol):
 
     @property
     def pid(self) -> int | None: ...
+
+    @property
+    def capabilities(self) -> frozenset[str]: ...
 
     def start(
         self,
@@ -109,12 +113,19 @@ class ProcessTerminalWorker:
         self._exit_lock = threading.Lock()
         self._exit_emitted = False
         self._handshake_valid = False
+        self._capabilities = frozenset[str]()
 
     @property
     def pid(self) -> int | None:
         """返回当前 sidecar PID。"""
 
         return self._process.pid if self._process is not None else None
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        """返回最近一次 handshake 声明的静态 worker 能力。"""
+
+        return self._capabilities
 
     def start(
         self,
@@ -146,6 +157,7 @@ class ProcessTerminalWorker:
         self._on_event = on_event
         self._exit_emitted = False
         self._handshake_valid = False
+        self._capabilities = frozenset()
         self._stop_event.clear()
         self._writer_stop.clear()
         self._reader_thread = threading.Thread(
@@ -309,6 +321,11 @@ class ProcessTerminalWorker:
                     raise TerminalWorkerUnavailableError("terminal worker event is not an object")
                 if event.get("type") == "handshake":
                     self._handshake_valid = self._validate_handshake(event, process.pid)
+                    raw_capabilities = event.get("capabilities")
+                    if isinstance(raw_capabilities, list):
+                        self._capabilities = frozenset(
+                            value for value in raw_capabilities if isinstance(value, str)
+                        )
                     self._handshake_event.set()
                 callback = self._on_event
                 if callback is not None:
@@ -354,14 +371,27 @@ class ProcessTerminalWorker:
         )
 
     def _drain_stderr(self) -> None:
-        """消费 worker stderr，防止诊断管道阻塞；不把原始内容写入业务日志。"""
+        """消费并限长记录 worker stderr，防止诊断管道阻塞。"""
 
         process = self._process
         if process is None or process.stderr is None:
             return
-        for _ in process.stderr:
-            if self._stop_event.is_set():
-                break
+        for raw_line in process.stderr:
+            line = _sanitize_worker_stderr(raw_line)
+            if line:
+                log.warning(
+                    "terminal_worker_stderr",
+                    extra={
+                        "msg": "Terminal Worker stderr",
+                        "data": {
+                            "worker_instance_id": self.instance_id,
+                            "worker_pid": process.pid,
+                            "platform": platform.system().lower(),
+                            "error_category": "worker_stderr",
+                            "line": line,
+                        },
+                    },
+                )
 
     def _heartbeat_loop(self) -> None:
         """按协议向 worker 发送 heartbeat。"""
@@ -398,6 +428,14 @@ def _payload_data_bytes(payload: bytes) -> int:
         return len(base64.b64decode(encoded, validate=True)) if isinstance(encoded, str) else 0
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
         return 0
+
+
+def _sanitize_worker_stderr(raw_line: bytes, *, max_length: int = 4096) -> str:
+    """将 worker 诊断行转换为受限、可落盘的日志文本。"""
+
+    text = raw_line.decode("utf-8", errors="replace").strip()
+    sanitized = "".join(character for character in text if character >= " " or character == "\t")
+    return sanitized[:max_length]
 
 
 def new_worker_instance_id() -> str:

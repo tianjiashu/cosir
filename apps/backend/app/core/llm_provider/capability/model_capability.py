@@ -12,7 +12,7 @@
 
 与 ``model_catalog.ModelCatalog`` 的关系：本包是模型「静态能力」（含上下文窗口）
 的**唯一事实源**；``ModelCatalog`` 是窗口的**解析策略**，其首选一步即经本包的
-``ModelCapability.context_window`` 读 JSON，未收录时才退到 litellm 目录与兜底值。
+``ModelCapability.context_window`` 读 JSON，未收录时才退到 Provider 目录与兜底值。
 即二者是「事实」与「策略」的上下游关系，不是两条独立链路——ModelCatalog 不再自带
 任何模型名 → 窗口的硬编码字典。
 

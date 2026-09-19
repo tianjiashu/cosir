@@ -239,7 +239,7 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
             {"conversation_task_snapshots"}
         )
         assert "conversation_task_contexts" in table_names
-        assert "file_snapshots" in table_names
+        assert "file_snapshots" not in table_names
         backend_app = Path(__file__).parents[1] / "app"
         assert not list(backend_app.rglob("conversation_task_snapshot*.py"))
         forbidden = (
@@ -252,6 +252,21 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
             any(token in path.read_text(encoding="utf-8") for token in forbidden)
             for path in backend_app.rglob("*.py")
         )
+    finally:
+        engine.dispose()
+
+
+def test_schema_removes_legacy_file_snapshot_table(tmp_path: Path) -> None:
+    """Existing local databases no longer retain the removed file changes table."""
+
+    engine = create_sqlite_engine(tmp_path / "legacy.sqlite3")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE file_snapshots (id INTEGER PRIMARY KEY, task_id INTEGER)"
+            )
+        initialize_app_schema(engine)
+        assert "file_snapshots" not in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 

@@ -7,7 +7,7 @@ info 审计日志（``models_imported`` 等，设计文档 §7.1）。
 职责边界：
 - 负责：模型条目读写、批量导入的同厂商去重（已存在同名模型跳过而非报错）、
   导入结果值对象组装。
-- 不负责：厂商读写与 Key 状态（``provider_service``）、litellm 目录发现
+- 不负责：厂商读写与 Key 状态（``provider_service``）、Provider 目录发现
   （``provider_discover_service``）、解析链（``model_resolver_service``）。
 """
 

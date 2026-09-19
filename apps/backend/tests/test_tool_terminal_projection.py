@@ -56,10 +56,9 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
 )
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
+    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
 )
 
 # ---------------------------------------------------------------------------
@@ -1196,7 +1195,7 @@ def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str
 def test_lifecycle_event_status_delegates_to_projection(status: str) -> None:
     """judged: lifecycle ``_event_status`` 逐分支等于投影模块 ``terminal_status``（无第二份映射）。"""
 
-    from app.core.workflows.nodes.helper.tool_call_lifecycle import _event_status
+    from app.core.workflows.react.nodes.helper.tool_call_lifecycle import _event_status
 
     assert _event_status(status) == terminal_status(status)
 
@@ -1218,7 +1217,7 @@ def test_lifecycle_ui_error_delegates_to_projection(
 ) -> None:
     """judged: lifecycle ``_ui_error`` 逐分支等于投影模块 ``terminal_error_hint``。"""
 
-    from app.core.workflows.nodes.helper.tool_call_lifecycle import _ui_error
+    from app.core.workflows.react.nodes.helper.tool_call_lifecycle import _ui_error
 
     summary = {"display_data": display_data}
     assert _ui_error(summary, event_status) == terminal_error_hint(event_status, display_data)
@@ -1520,7 +1519,7 @@ def test_two_paths_agree_on_malformed_display_data(
 def test_lifecycle_ui_data_delegates_to_normalize_display_data() -> None:
     """judged: lifecycle ``_ui_data`` 逐分支等于投影模块 ``normalize_display_data``（无第二份归一）。"""
 
-    from app.core.workflows.nodes.helper.tool_call_lifecycle import _ui_data
+    from app.core.workflows.react.nodes.helper.tool_call_lifecycle import _ui_data
 
     class _Undeepcopyable:
         def __deepcopy__(self, _memo: Any) -> Any:

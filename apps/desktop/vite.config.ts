@@ -105,7 +105,7 @@ export default defineConfig(({ command }) => {
       strictPort: true,
     },
     build: {
-      outDir: "dist",
+      outDir: path.resolve(__dirname, "..", "..", "target", "frontend"),
       emptyOutDir: true,
       rollupOptions: {
         output: {

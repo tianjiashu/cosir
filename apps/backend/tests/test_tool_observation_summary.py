@@ -18,12 +18,10 @@ from langchain_core.messages import ToolMessage
 
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
-from app.core.workflows.nodes import observation_node as observe_module
-from app.core.workflows.nodes import tools_node as tools_module
-from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.nodes import observation_node as observe_module, tools_node as tools_module
+from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
+    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
 )
 from app.core.workflows.react.state import ReactGraphState
 

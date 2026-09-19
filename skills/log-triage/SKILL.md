@@ -138,7 +138,6 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 | `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / provider+model / `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
 | `conversation_commands` | Transport 命令幂等占用：`(task_id, command_id)` 唯一、`payload_hash`、`error_code` | 重复提交被拒、幂等冲突、命令失败码 |
 | `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `tool_call_id` / `is_streaming` / `include_in_context` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
-| `file_snapshots` | 文件变更反向 V4A 快照：`seq`（task 内递增）/ `stable` / `status` | 改动没展示、不能回退、变更集缺失 |
 | `delegations` | 子 Agent 委派：父子 run/task/agent、`status`、`summary`、`error` | 委派卡住、子任务结果丢失 |
 | `terminal_sessions` | 终端会话元数据（PTY 与输出缓存不落库） | 终端断连、worker 崩溃、会话未收口 |
 | `attachment_assets` | 附件资产：`content_sha256`、`idempotency_key`、`storage_state`、尺寸 | 图片上传失败、去重异常 |
@@ -224,11 +223,10 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 - **同一时间两种坐标对齐**：日志 `ts`（UTC RFC3339 毫秒）与业务库 `created_at` / `updated_at` /
   `sequence` 对齐；`conversation_task_contexts.sequence` 是 task 内全局插入序，用它排列执行时间线，而不是靠时间戳猜测顺序。
 - **状态不要只看日志**：日志显示请求成功 ≠ 业务状态正确。以 `conversation_runs.status` / `end_reason` /
-  `error_json`、`conversation_task_contexts` 的 `transport_metadata_json.status`、`file_snapshots.status`
-  为准；日志是旁路，不是事实源。
-- **工具结局三处对齐**：Transport 侧生命周期（`transport_metadata_json.status`）、执行结果
-  （tool 消息 `data.status` / content 是否以 `error:` 开头）、业务副作用（`file_snapshots` 是否落库）
-  ——三者不一致本身就是重要线索（如「已成功但快照缺失」「显示 running 但已有结果」）。
+  `error_json`、`conversation_task_contexts` 的 `transport_metadata_json.status` 为准；日志是旁路，
+  不是事实源。
+- **工具结局两处对齐**：Transport 侧生命周期（`transport_metadata_json.status`）与执行结果
+  （tool 消息 `data.status` / content 是否以 `error:` 开头）应一致；不一致本身就是重要线索。
 
 ### 阶段 D — 证据不足：补日志 + 复现
 
@@ -293,7 +291,6 @@ task        <TASK_ID> [--limit N]                             # task 排障快�
 commands    [--task-id I] [--run-id I] [--limit N]
 messages    <TASK_ID> [--run-id I] [--order asc|desc] [--exclude-streaming] [--limit N]
 tools       <TASK_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
-changes     [--task-id I] [--run-id I] [--limit N]
 delegations [--task-id I] [--limit N]
 sessions    [--task-id I] [--status S] [--limit N]
 attachments [--task-id I] [--limit N]

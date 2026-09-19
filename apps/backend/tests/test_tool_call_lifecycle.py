@@ -4,11 +4,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     SettlementResult,
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
+    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
 )
 from app.core.workflows.react.state import ReactGraphState
 

@@ -234,7 +234,7 @@ class ConversationRunService:
                 与 ``model_name`` 配对出现：两者皆非 None 时按厂商能力校验模型；
                 仅 ``model_name`` 非 None 而 ``provider_id`` 为 None 视为契约不完整，
                 抛 ``ValueError``。
-            model_name: 可选，本次请求的模型名（litellm 路由名）；None 表示用户
+            model_name: 可选，本次请求使用的模型名；None 表示用户
                 未选择模型（前端优先校验、后端兜底报错）。
             image_paths: 已按最终模型 capability 归一化后的 workspace-relative 图片路径。
             reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
@@ -407,7 +407,7 @@ class ConversationRunService:
 
         副作用:
             每个 Run 一个事务：更新 ``conversation_runs`` 终态并追加缺失的占位 ``ToolMessage``
-            行。文件快照直接关联 Run，其生命周期状态不另行复制。
+            行。工具观察结果随 Run 一并收敛，其生命周期状态不另行复制。
         """
 
         recovered: list[ConversationRunRecord] = []

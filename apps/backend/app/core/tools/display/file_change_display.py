@@ -7,8 +7,7 @@
 - 负责：``file-changes`` 这一个展示 ``kind`` 的全部投影——内容修改类（``write_file`` /
   ``patch_write`` / ``apply_patch`` 的 ``modified`` / ``added``）与删除类
   （``delete_file`` 的「目标 + 状态」摘要）。
-- 不负责：读取文件内容（内容由各 handler 或 ``FileMutationService`` 的 before-image 提供）、
-  回退事实（由 ``FileMutationService`` 持久化）、渲染规则。
+- 不负责：读取文件内容、回退业务事实或渲染规则。
 """
 
 from typing import Any
@@ -56,9 +55,8 @@ def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, A
 def build_file_delete_display_data(path: str) -> dict[str, Any]:
     """构造 ``delete_file`` 的「目标 + 状态」展示数据（不携带被删内容）。
 
-    删除不需要内容就能表达完整事实：客户端只需知道哪个路径被删除。被删文件的正文属于
-    回退事实，由 ``FileMutationService`` 的 before-image 承载，不进入 UI 展示通道，
-    也不从模型通道回显，因此本函数不读取文件、不生成 Diff。
+    删除不需要内容就能表达完整展示事实：客户端只需知道哪个路径被删除，因此本函数不读取
+    文件、不生成 Diff。
 
     参数:
         path: 被删除文件的工作区相对路径（POSIX 分隔符）。

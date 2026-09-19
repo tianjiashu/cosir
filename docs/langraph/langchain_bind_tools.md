@@ -8,7 +8,7 @@
 >
 > 本文与具体业务项目解耦，可作为通用技术参考。
 >
-> 注意：本项目现已改用 `ChatLiteLLM`/`litellm` 作为 LLM 收口，不再使用 `langchain-openai`；本文仅作 `bind_tools` 通用机制参考，文中行号与依赖版本为历史状态。
+> 注意：本文仅作 `bind_tools` 通用机制参考，文中行号与依赖版本为历史状态。当前项目使用 `langchain-openai` 的 OpenAI-compatible 客户端路径。
 
 ## 1. 一句话定位
 

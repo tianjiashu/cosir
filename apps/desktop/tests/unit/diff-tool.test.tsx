@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DiffTool, parseFileDiff } from "@/components/assistant-ui/tools/diff-tool";
 
 function renderDiff(
-  status: "pending" | "running" | "completed",
+  status: "pending" | "running" | "completed" | "failed",
   display_data: Record<string, unknown> | null,
   options: { verb?: string; defaultOpen?: boolean } = {},
 ): string {
@@ -118,6 +118,7 @@ describe("DiffTool", () => {
     expect(html).not.toContain("+0");
     expect(html).not.toContain("−0");
     expect(html).not.toContain("没有文本差异");
+    expect(html).not.toContain("disclosure-row-chevron");
   });
 
   it("labels a deleted file and renders no diff even when a legacy patch is present", () => {
@@ -140,6 +141,7 @@ describe("DiffTool", () => {
     expect(html).not.toContain("−1");
     expect(html).not.toContain("没有文本差异");
     expect(html).not.toContain("Diff 解析失败");
+    expect(html).not.toContain("disclosure-row-chevron");
   });
 
   it("renders the current delete payload as target plus status without statistics", () => {
@@ -158,10 +160,47 @@ describe("DiffTool", () => {
 
     expect(html).toContain("删除文件");
     expect(html).toContain("1 个文件");
-    expect(html).toContain("已删除：");
+    expect(html).toContain("已删除");
     expect(html).toContain("logs/old.log");
     expect(html).not.toContain("−");
     expect(html).not.toContain("+0");
     expect(html).not.toContain("Diff 数据不可用");
+    expect(html).not.toContain("disclosure-row-chevron");
+  });
+
+  it("compresses multiple move/delete results into one non-expandable card", () => {
+    const html = renderDiff("completed", {
+      kind: "file-changes",
+      changes: [
+        { path: "src/a.ts", status: "deleted", patch: null },
+        { path: "src/b.ts", new_path: "archive/b.ts", status: "moved", patch: null },
+        { path: "src/c.ts", status: "deleted", patch: null },
+        { path: "src/d.ts", status: "deleted", patch: null },
+      ],
+      diff_stats: { total_files: 4, total_insertions: 0, total_deletions: 0 },
+    }, { verb: "处理文件" });
+
+    expect(html).toContain("4 个文件");
+    expect(html).toContain("src/a.ts");
+    expect(html).toContain("archive/b.ts");
+    expect(html).toContain("另有 1 个文件");
+    expect(html).not.toContain("disclosure-row-chevron");
+  });
+
+  it("shows the backend-controlled failure hint in the operation card", () => {
+    const html = renderDiff("failed", {
+      kind: "file-changes",
+      status_hint: "目标已存在",
+      changes: [{
+        path: "src/old.ts",
+        new_path: "src/new.ts",
+        status: "moved",
+        patch: null,
+      }],
+    }, { verb: "移动文件" });
+
+    expect(html).toContain("目标已存在");
+    expect(html).toContain("失败");
+    expect(html).not.toContain("disclosure-row-chevron");
   });
 });

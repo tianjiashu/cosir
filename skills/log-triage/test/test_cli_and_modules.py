@@ -37,7 +37,6 @@ from appdb_schema import database_overview, table_detail  # noqa: E402
 from appdb_side_effects import (  # noqa: E402
     list_attachment_assets,
     list_delegations,
-    list_file_snapshots,
     list_terminal_sessions,
 )
 from appdb_snapshots import run_snapshot, task_snapshot  # noqa: E402
@@ -64,10 +63,6 @@ def _schema(con: sqlite3.Connection) -> None:
             run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
             sequence INTEGER, created_at TEXT, updated_at TEXT, is_streaming BOOLEAN);
-        CREATE TABLE file_snapshots (id INTEGER PRIMARY KEY, task_id INTEGER, run_id INTEGER,
-            tool_call_id TEXT, tool_name TEXT, path TEXT, action TEXT, seq INTEGER,
-            additions INTEGER, deletions INTEGER, stable BOOLEAN, status TEXT,
-            reverted_at TEXT, op_json TEXT, created_at TEXT, updated_at TEXT);
         CREATE TABLE delegations (id INTEGER PRIMARY KEY, task_id INTEGER, parent_run_id INTEGER,
             child_run_id INTEGER, child_task_id INTEGER, parent_agent_id TEXT,
             child_agent_id TEXT, status TEXT, prompt TEXT, summary TEXT, error TEXT,
@@ -280,16 +275,6 @@ class TestAgentFacts:
 
 
 class TestSideEffects:
-    # 目的：file_snapshots 不返回 op_json 原文，只返回长度提示 op_chars。潜在缺陷：大载荷泄漏。
-    def test_file_snapshots_hides_op_json(self, con: sqlite3.Connection) -> None:
-        con.execute(
-            "INSERT INTO file_snapshots VALUES (1,1,1,'tc','w','/f','mod',1,1,1,1,'ok',NULL,'PAYLOAD',  't','t')"
-        )
-        con.commit()
-        rows = list_file_snapshots(con, limit=10)
-        assert "op_json" not in rows[0]
-        assert rows[0]["op_chars"] == len("PAYLOAD")
-
     # 目的：terminal_sessions 非法 status 抛 ValueError。潜在缺陷：非法状态静默返回空列表。
     def test_terminal_invalid_status(self, con: sqlite3.Connection) -> None:
         with pytest.raises(ValueError):
@@ -338,7 +323,6 @@ class TestSnapshots:
             "commands",
             "child_tasks",
             "delegations",
-            "file_changes",
             "context",
         }
 

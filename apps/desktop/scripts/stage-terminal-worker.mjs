@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
+const buildArtifactsRoot = path.join(repositoryRoot, "target");
 const workerRoot = path.join(repositoryRoot, "apps", "terminal-worker");
 const manifestPath = path.join(workerRoot, "Cargo.toml");
 const targetTriple = (
@@ -47,7 +48,7 @@ const releaseRoot = targetTriple
   ? path.join(cargoTargetRoot, targetTriple, "release")
   : path.join(cargoTargetRoot, "release");
 const sourcePath = path.join(releaseRoot, executableName);
-const stagingRoot = path.join(desktopRoot, "src-tauri", "resources", "terminal-worker");
+const stagingRoot = path.join(buildArtifactsRoot, "resources", "terminal-worker");
 const destinationPath = path.join(stagingRoot, executableName);
 
 function runCargoBuild() {

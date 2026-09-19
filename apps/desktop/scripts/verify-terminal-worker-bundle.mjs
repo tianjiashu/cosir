@@ -12,20 +12,18 @@ const verifyPackaged = process.env.COSIR_TERMINAL_VERIFY_PACKAGED === "true";
 
 const packagedResourceRoots = [
   process.env.COSIR_TERMINAL_RESOURCE_DIR,
-  path.join(desktopRoot, "src-tauri", "target", "debug"),
-  path.join(desktopRoot, "src-tauri", "target", "release"),
+  path.join(repositoryRoot, "target", "resources"),
+  path.join(repositoryRoot, "target"),
   process.env.COSIR_TERMINAL_WORKER_TARGET &&
     path.join(
-      desktopRoot,
-      "src-tauri",
+      repositoryRoot,
       "target",
       process.env.COSIR_TERMINAL_WORKER_TARGET,
       "debug",
     ),
   process.env.COSIR_TERMINAL_WORKER_TARGET &&
     path.join(
-      desktopRoot,
-      "src-tauri",
+      repositoryRoot,
       "target",
       process.env.COSIR_TERMINAL_WORKER_TARGET,
       "release",
@@ -33,7 +31,7 @@ const packagedResourceRoots = [
 ];
 const candidateResourceRoots = (verifyPackaged
   ? packagedResourceRoots
-  : [process.env.COSIR_TERMINAL_RESOURCE_DIR, path.join(desktopRoot, "src-tauri", "resources")]
+  : [process.env.COSIR_TERMINAL_RESOURCE_DIR, path.join(repositoryRoot, "target", "resources")]
 ).filter(Boolean).map((candidate) => path.resolve(candidate));
 const resourceRoot = findResourceRoot(candidateResourceRoots);
 assert.ok(resourceRoot, `未找到 Tauri Terminal Worker resource，检查路径：${candidateResourceRoots.join(", ")}`);

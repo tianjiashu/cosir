@@ -24,10 +24,9 @@ from app.core.context.context_listener.listener_event import ContextEventType, L
 from app.core.context.context_listener.listener_result import ListenerResult
 from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.nodes.helper import tool_call_lifecycle as lifecycle_module
-from app.core.workflows.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
+    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
 )
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.conversation_run_status import ConversationRunStatus

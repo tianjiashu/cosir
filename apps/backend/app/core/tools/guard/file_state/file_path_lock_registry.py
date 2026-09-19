@@ -20,8 +20,8 @@ _SHARED_REGISTRY_GUARD = threading.Lock()
 def get_shared_file_path_lock_registry() -> FilePathLockRegistry:
     """Return the process-wide physical workspace-path lock registry.
 
-    Structured file tools and task ChangeSet reads/writes must use the same locks so
-    a baseline restore cannot race an Agent write from another task in the workspace.
+    Structured file tools use the same locks so concurrent workspace mutations cannot
+    race with one another.
     """
 
     global _SHARED_REGISTRY

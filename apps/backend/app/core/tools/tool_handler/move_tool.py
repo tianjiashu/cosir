@@ -5,15 +5,13 @@
 
 设计边界：移动不改变内容，展示载荷只描述「源路径 → 目标路径」。被移动文件的内容既不进入
 UI 展示通道也不进入模型通道，因此本模块只对源文件做**有界采样**的文本性校验
-（``ensure_utf8_text_file``），不整读文件；内容快照由 ``FileMutationService`` 在 handler
-之外捕获。
+（``ensure_utf8_text_file``），不整读文件。
 """
 
 import os
 
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
-from app.core.tools.guard.file_mutation_guard import before_file_move
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -87,7 +85,7 @@ class MoveTool(HandlerBase):
       目标前置检查 → 取消检查 → 移动前复检 → 落盘移动 → 观察归一化」。
     - 不负责：路径边界与设备路径判定（``resolve_workspace_relative_path`` /
       ``PathResolver``）、源文本性采样（``ensure_utf8_text_file``）、移动前守卫
-      （``before_file_move``）、展示载荷构造（``build_file_change_display_data``）。
+      展示载荷构造（``build_file_change_display_data``）。
     """
 
     name = "move_file"
@@ -121,8 +119,8 @@ class MoveTool(HandlerBase):
             无：``OSError`` 与路径变更都归一化为 :func:`tool_error`。
 
         副作用:
-            把源文件移动到目标路径（不覆盖语义）；移动前先经 ``before_file_move`` 守卫，并复检
-            两侧解析结果未被并发改动。源内容只做有界文本性采样，不整读文件。
+            把源文件移动到目标路径（不覆盖语义）；移动前复检两侧解析结果未被并发改动。
+            源内容只做有界文本性采样，不整读文件。
         """
 
         resolver = PathResolver(execution_context.workspace_root)
@@ -180,7 +178,6 @@ class MoveTool(HandlerBase):
                 or not destination.parent.is_dir()
             ):
                 raise RuntimeError("move paths changed before mutation")
-            before_file_move(source, destination)
             _move_without_overwriting(source, destination)
         except OSError as exc:
             return tool_error(
@@ -271,8 +268,8 @@ class MoveTool(HandlerBase):
                 verb="移动文件",
                 icon="file-symlink",
                 surface="standalone",
-                expandable=True,
-                expand_layout="diff",
+                expandable=False,
+                expand_layout="none",
                 show_result=False,
             ),
         )

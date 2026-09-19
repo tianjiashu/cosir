@@ -97,17 +97,6 @@ def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypat
     target.write_bytes(b"data\n")
     other = tmp_path / "other.txt"
     other.write_bytes(b"other\n")
-    # Patch the guard hook so nothing depends on an active ChangeSet snapshot; the
-    # point of this test is the re-resolution comparison, not the guard itself.
-    monkeypatch.setattr(delete_module, "before_file_delete", lambda _resolved: None)
-
-    guard_calls: list[Path] = []
-
-    def spy_before_file_delete(resolved):
-        guard_calls.append(resolved)
-
-    monkeypatch.setattr(delete_module, "before_file_delete", spy_before_file_delete)
-
     real_resolve = delete_module.PathResolver.resolve_within_workspace
     calls = {"n": 0}
 
@@ -129,10 +118,9 @@ def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypat
     assert observation.error == "delete target changed before mutation"
     assert observation.error.isascii()
     assert observation.reason.isascii()
-    # Neither file was removed, and the mutation guard was never reached.
+    # Neither file was removed.
     assert target.exists()
     assert other.exists()
-    assert guard_calls == []
 
 
 # The registry description is model-facing and must remain English ASCII prose.
@@ -143,7 +131,7 @@ def test_delete_description_is_english_ascii() -> None:
 
 
 # A successful delete must emit a ``deleted`` file-changes payload that carries only the
-# target and its status: the deleted content is a revert fact, never display data.
+# target and its status; deleted content is not part of the display payload.
 def test_delete_success_payload(tmp_path: Path) -> None:
     target = tmp_path / "gone.txt"
     target.write_bytes(b"bye\n")
