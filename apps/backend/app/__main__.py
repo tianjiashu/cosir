@@ -49,7 +49,7 @@ def main() -> None:
         初始化主 SQLite 存储引擎；向 ``logs/backend-YYYY-MM-DD.log`` 挂载按日期和
         5MB 大小轮转的固定 JSONL 文件日志处理器；同步系统代理
         环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
-        uvicorn 进程；按环境决定是否写入 ``storage/backend.bootstate.json``
+        uvicorn 进程；按环境决定是否写入 ``app_data_dir()/runtime/backend.bootstate.json``
         启动状态文件。
     """
     boot_state_file = boot_state_file_from_env()

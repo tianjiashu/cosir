@@ -12,6 +12,7 @@ use crate::backend_process::{
 use crate::backend_readiness::wait_for_backend;
 use crate::backend_runtime::resolve_backend_runtime;
 use crate::desktop_log::append_json_line;
+use crate::log_paths::app_log_dir;
 
 const HOST: &str = "127.0.0.1";
 const READY_TIMEOUT: Duration = Duration::from_secs(90);
@@ -137,14 +138,16 @@ impl BackendSupervisor {
             .app_data_dir()
             .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?;
         let runtime_dir = app_data_dir.join("runtime");
+        let log_dir = app_log_dir(app)?;
         std::fs::create_dir_all(&runtime_dir)
             .map_err(|error| format!("无法创建运行时目录：{error}"))?;
+        std::fs::create_dir_all(&log_dir).map_err(|error| format!("无法创建日志目录：{error}"))?;
         let bootstate = runtime_dir.join("backend.bootstate.json");
         *self
             .inner
             .log_file
             .lock()
-            .map_err(|_| "日志锁已损坏".to_string())? = Some(runtime_dir.join("desktop.log"));
+            .map_err(|_| "日志锁已损坏".to_string())? = Some(log_dir.join("desktop.log"));
         self.set_status(BackendStatus::Starting);
         let backend_runtime = match resolve_backend_runtime(app, &runtime_dir) {
             Ok(runtime) => runtime,
@@ -155,7 +158,7 @@ impl BackendSupervisor {
                 return Err(error);
             }
         };
-        let log_file = runtime_dir.join("backend-console.log");
+        let log_file = log_dir.join("backend-console.log");
         let mut last_error = "本地 Agent 后端启动失败".to_string();
         for attempt in 0..3 {
             if attempt > 0 {
@@ -183,7 +186,7 @@ impl BackendSupervisor {
                     .then_some(app_data_dir.as_path()),
                 terminal_worker: backend_runtime.terminal_worker(),
                 log_file: &log_file,
-                structured_log_dir: &runtime_dir,
+                structured_log_dir: &log_dir,
             }) {
                 Ok(child) => child,
                 Err(error) => {
@@ -657,12 +660,7 @@ pub fn write_frontend_log(app: AppHandle, entry: FrontendLogEntry) -> Result<(),
     {
         return Err("日志字段不符合统一契约".to_string());
     }
-    let path = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?
-        .join("runtime")
-        .join("frontend.log");
+    let path = app_log_dir(&app)?.join("frontend.log");
     append_json_line(
         &path,
         serde_json::to_value(entry).map_err(|error| format!("日志序列化失败：{error}"))?,

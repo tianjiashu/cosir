@@ -47,8 +47,9 @@ Tauri 桌面应用
 
 - React 正式诊断日志使用 `frontendLog(level, event, msg, { traceId, data, error })`；后端使用 `log.info`、`log.warning`、`log.error` 或 `log.exception`，通过 `extra={"msg": "...", "data": {...}}` 附带说明和业务字段。
 - `event` 使用稳定的 snake_case 名称；`task_id`、`run_id` 等标识放入 `data`。同一请求或执行链路复用同一个 `trace_id`；前端 HTTP 请求通过 `X-Trace-Id` 传入后端，后端绑定日志上下文。
-- 前端 Tauri 日志查看 `app_data_dir()/runtime/frontend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式查看 WebView/浏览器控制台。
-- 后端运行日志查看 `app_data_dir()/runtime/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；启动、停止或崩溃问题查看 `app_data_dir()/runtime/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片和 `backend.bootstate.json`。
+- 前端 Tauri 日志查看 `app_data_dir()/logs/frontend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式查看 WebView/浏览器控制台。
+- 后端运行日志查看 `app_data_dir()/logs/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；启动、停止或崩溃问题查看 `app_data_dir()/logs/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片；`backend.bootstate.json` 仍位于 `app_data_dir()/runtime/`。
+- `app_data_dir()` 由 Tauri 按平台解析：Windows 通常为 `%LOCALAPPDATA%\\com.cosir.desktop`，macOS 通常为 `~/Library/Application Support/com.cosir.desktop`；两端日志目录都统一为其下的 `logs/`。
 - 日志和观测是诊断旁路，不是业务事实。不得记录未经脱敏的密钥、Token、密码、完整请求正文或大段模型/工具内容；日志或观测失败不得阻断 Agent 主流程。
 
 ## 进程生命周期边界

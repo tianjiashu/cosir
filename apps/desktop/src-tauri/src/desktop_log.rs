@@ -140,10 +140,10 @@ mod tests {
 
     #[test]
     fn dated_log_path_keeps_name_and_extension() {
-        let path = PathBuf::from("runtime/backend-console.log");
+        let path = PathBuf::from("logs/backend-console.log");
         assert_eq!(
             dated_log_path(&path, "2026-09-13").expect("日期路径生成失败"),
-            PathBuf::from("runtime/backend-console-2026-09-13.log")
+            PathBuf::from("logs/backend-console-2026-09-13.log")
         );
     }
 

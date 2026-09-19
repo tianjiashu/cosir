@@ -4,6 +4,7 @@ mod backend_runtime;
 mod backend_supervisor;
 mod desktop_log;
 mod file_access;
+mod log_paths;
 mod tray;
 #[cfg(windows)]
 mod webview_diagnostics;
@@ -92,23 +93,22 @@ pub fn run() {
             tray::install(app)?;
             #[cfg(windows)]
             if let Err(error) = webview_diagnostics::install(app.handle()) {
-                let _ = desktop_log::append_json_line(
-                    &app.path()
-                        .app_data_dir()
-                        .map(|path| path.join("runtime").join("desktop.log"))
-                        .unwrap_or_else(|_| std::path::PathBuf::from("desktop.log")),
-                    serde_json::json!({
-                        "level": "WARNING",
-                        "logger": "coding_agent.desktop",
-                        "trace_id": "",
-                        "caller": "webview_diagnostics",
-                        "event": "webview_diagnostics_install_failed",
-                        "msg": "webview_diagnostics_install_failed",
-                        "data": {},
-                        "error": {"message": error},
-                        "truncated": false
-                    }),
-                );
+                if let Ok(log_dir) = log_paths::app_log_dir(app.handle()) {
+                    let _ = desktop_log::append_json_line(
+                        &log_dir.join("desktop.log"),
+                        serde_json::json!({
+                            "level": "WARNING",
+                            "logger": "coding_agent.desktop",
+                            "trace_id": "",
+                            "caller": "webview_diagnostics",
+                            "event": "webview_diagnostics_install_failed",
+                            "msg": "webview_diagnostics_install_failed",
+                            "data": {},
+                            "error": {"message": error},
+                            "truncated": false
+                        }),
+                    );
+                }
             }
             supervisor.prepare_start();
             // 窗口生命周期不依赖后端健康检查；前端负责展示 starting/failed/ready 状态。

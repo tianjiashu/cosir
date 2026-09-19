@@ -11,18 +11,14 @@ use webview2_com::{
 use windows::core::{Interface, BOOL};
 
 use crate::desktop_log::append_json_line;
+use crate::log_paths::app_log_dir;
 
 /// Attach low-level WebView2 lifecycle diagnostics without changing page behavior.
 pub fn install(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "主 WebView 不存在".to_string())?;
-    let log_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?
-        .join("runtime")
-        .join("desktop.log");
+    let log_path = app_log_dir(app)?.join("desktop.log");
 
     window
         .with_webview(move |webview| {

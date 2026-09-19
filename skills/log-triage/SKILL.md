@@ -50,11 +50,10 @@ macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/
 
 | 源 | 位置 | 形态 | 查询方式 |
 |----|------|------|----------|
-| 前端日志 | `<data_dir>/runtime/frontend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated（`logger=coding_agent.frontend`） | 直接 `Read`/grep；trace_id 可反查后端 |
-| 桌面宿主日志 | `<data_dir>/runtime/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；WebView2 进程失败等宿主级诊断 | 直接 `Read` |
-| 后端控制台原文 | `<data_dir>/runtime/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（Rust 侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
-| 后端结构化文件日志 | 桌面模式 `<data_dir>/runtime/backend-YYYY-MM-DD.log`；纯后端模式 `<repo>/logs/backend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated | 直接 `Read`/grep |
-| 后端结构化日志 | `<data_dir>/runtime/backend-YYYY-MM-DD.log` 或 `<repo>/logs/backend-YYYY-MM-DD.log` | 固定 JSONL：ts/level/logger/trace_id/caller/event/msg/data/error/truncated | `query_logs.py`（只读扫描，支持 trace/级别/时间窗过滤） |
+| 前端日志 | `<data_dir>/logs/frontend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated（`logger=coding_agent.frontend`） | 直接 `Read`/grep；trace_id 可反查后端 |
+| 桌面宿主日志 | `<data_dir>/logs/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；WebView2 进程失败等宿主级诊断 | 直接 `Read` |
+| 后端控制台原文 | `<data_dir>/logs/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（Rust 侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
+| 后端结构化日志 | `<data_dir>/logs/backend-YYYY-MM-DD.log` 或 `<repo>/logs/backend-YYYY-MM-DD.log` | 固定 JSONL：ts/level/logger/trace_id/caller/event/msg/data/error/truncated | `query_logs.py`（只读扫描，支持 trace/级别/时间窗过滤） |
 | 业务库 / Agent 回放 | `<repo>/storage/app.sqlite3` | 见 §3 表清单 | `query_app_db.py`（只读直连，不启动服务） |
 | LangGraph checkpoint | `<repo>/storage/langgraph_checkpoints.sqlite` | `checkpoints` / `writes`，按 `thread_id` 分片 | `sqlite3` 直连；`thread_id` = `conversation_runs.checkpoint_thread_id` |
 | 后端启动状态 | `<data_dir>/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；Tauri 据此判定启动失败 |
@@ -172,7 +171,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 > 从**仓库根**执行。所有 Python 脚本一律 `uv run --project apps/backend python <script>`（Python 3.11，uv 托管）。
 > 输出若含中文/表情符号，脚本已自行把 stdout 切到 UTF-8，Windows GBK 控制台不会再崩。
 
-- **前端相关**（UI 卡死/报错/不更新/白屏）：直接 `Read <data_dir>/runtime/frontend-YYYY-MM-DD.log`，
+- **前端相关**（UI 卡死/报错/不更新/白屏）：直接 `Read <data_dir>/logs/frontend-YYYY-MM-DD.log`，
   按时间倒序看 ERROR/WARNING，关注 `context.trace_id`、`event`、`data`；宿主级问题看 `desktop-*.log`。
 
 - **后端相关**（API 报错/任务失败/工具执行异常）：
@@ -186,7 +185,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_logs.py rec
 uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --event-prefix "tool_" --since 2026-09-13T10:00:00Z
 # 崩溃/起不来：看启动状态与控制台原文
 #   Read <data_dir>/runtime/backend.bootstate.json
-#   Read <data_dir>/runtime/backend-console-YYYY-MM-DD.log
+#   Read <data_dir>/logs/backend-console-YYYY-MM-DD.log
 ```
 
 - **业务状态相关**（不启动服务，直连业务库）：
@@ -245,7 +244,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
    - 可端到端触发：起后端（`uv run --project apps/backend python -m app`）后调 API（curl 等），
      确认日志落盘与 `app.sqlite3` 状态变化。
    - 前端纯 UI 交互（点击流、视觉、白屏）：**只能请用户复现** —— 明确要求「在 `tauri dev` 下操作复现，
-     并把 `<data_dir>/runtime/frontend-YYYY-MM-DD.log` 的最近片段贴给你」。纯浏览器 `vite dev` 不落盘。
+     并把 `<data_dir>/logs/frontend-YYYY-MM-DD.log` 的最近片段贴给你」。纯浏览器 `vite dev` 不落盘。
    - 复现后必须能定位到具体 `run_id`：`query_app_db.py runs --limit 5` 找到新 run，再用 `run <RUN_ID>` 看全貌。
 3. 复现后回到阶段 B，用新证据重新定位；不要停在「可能是 X」。
 
@@ -299,9 +298,9 @@ stuck       [--limit N]
 # 日志共享选项：--log-file PATH  --format text|json  --save FILE  --force
 
 # ---------- 文件与 HTTP ----------
-# Read <data_dir>/runtime/frontend-YYYY-MM-DD.log        # 前端日志
-# Read <data_dir>/runtime/desktop-YYYY-MM-DD.log          # 宿主日志
-# Read <data_dir>/runtime/backend-console-YYYY-MM-DD.log  # 后端 stdout/stderr 原文
+# Read <data_dir>/logs/frontend-YYYY-MM-DD.log        # 前端日志
+# Read <data_dir>/logs/desktop-YYYY-MM-DD.log          # 宿主日志
+# Read <data_dir>/logs/backend-console-YYYY-MM-DD.log  # 后端 stdout/stderr 原文
 # Read <data_dir>/runtime/backend.bootstate.json          # 启动状态
 # 日志查询不经过后端 HTTP；直接读取 backend-*.log 文件
 ```
