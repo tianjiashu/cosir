@@ -10,6 +10,7 @@ export type ToolArtifact = {
   child_run_id?: number;
   agent_role?: string;
   delegation_ref_seq?: number;
+  terminal_output_seq?: number;
 };
 
 export function readToolArtifact(value: unknown): ToolArtifact {
@@ -37,6 +38,7 @@ export function readToolArtifact(value: unknown): ToolArtifact {
     child_run_id: typeof candidate.child_run_id === "number" && Number.isInteger(candidate.child_run_id) && candidate.child_run_id > 0 ? candidate.child_run_id : undefined,
     agent_role: typeof candidate.agent_role === "string" && candidate.agent_role.trim() ? candidate.agent_role : undefined,
     delegation_ref_seq: typeof candidate.delegation_ref_seq === "number" && Number.isInteger(candidate.delegation_ref_seq) && candidate.delegation_ref_seq >= 0 ? candidate.delegation_ref_seq : undefined,
+    terminal_output_seq: typeof candidate.terminal_output_seq === "number" && Number.isInteger(candidate.terminal_output_seq) && candidate.terminal_output_seq >= 0 ? candidate.terminal_output_seq : undefined,
   };
 }
 

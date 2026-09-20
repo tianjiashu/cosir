@@ -9,6 +9,7 @@ import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
 import { useToolDisclosure } from "./tool-disclosure";
 import { cancelToolCall } from "@/lib/assistant/cancel-tool-call";
+import { TerminalViewport } from "./terminal-viewport";
 
 /** 显式 shell 的徽标文案；`auto` 沿用宿主默认 shell，不展示徽标。 */
 const SHELL_LABELS: Record<string, string> = {
@@ -150,16 +151,11 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
           <div className="max-h-72 overflow-auto px-3 py-2 font-mono text-xs leading-relaxed">
             {workdir && <p className="mb-1 text-[11px] text-zinc-500">cwd {workdir}</p>}
             {cancellationError && <p className="mb-1 text-amber-300" role="alert">{cancellationError}</p>}
-            {artifact.error && <p className="mb-1 text-red-300">{artifact.error}</p>}
-            {output
-              ? <pre className="whitespace-pre-wrap break-words text-zinc-300">{output}</pre>
-              : !artifact.error && <p className="text-zinc-500">{isActive ? "等待输出…" : "无输出"}</p>}
-            {isActive && (
-              <span
-                className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-zinc-400 align-middle motion-reduce:animate-none"
-                aria-hidden="true"
-              />
-            )}
+            {artifact.error
+              ? <p className="mb-1 text-red-300">{artifact.error}</p>
+              : output
+                ? <TerminalViewport output={output} outputSeq={artifact.terminal_output_seq} />
+                : <p className="px-3 py-2 text-zinc-500">{isActive ? "等待输出…" : "无输出"}</p>}
           </div>
           {(truncated || timedOut || streamTruncated) && (
             <p className="flex items-center gap-1.5 border-t border-amber-400/20 bg-amber-400/5 px-3 py-1.5 text-[11px] text-amber-300">

@@ -25,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import triage_paths as paths
 from appdb_agent_facts import (
     list_models,
     list_providers,
@@ -37,11 +38,7 @@ from appdb_context import list_messages, summarize_tool_calls
 from appdb_health import find_unsettled
 from appdb_readonly import list_tables, open_readonly, resolve_db_path
 from appdb_schema import database_overview, table_detail
-from appdb_side_effects import (
-    list_attachment_assets,
-    list_delegations,
-    list_terminal_sessions,
-)
+from appdb_side_effects import list_delegations, list_terminal_sessions
 from appdb_snapshots import run_snapshot, task_snapshot
 
 _DEFAULT_LIMIT = 50
@@ -136,11 +133,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_limit(sessions)
     sessions.add_argument("--task-id", type=int, default=None)
     sessions.add_argument("--status", default="")
-
-    attachments = subparsers.add_parser("attachments", help="列出附件资产。")
-    _add_common_options(attachments)
-    _add_limit(attachments)
-    attachments.add_argument("--task-id", type=int, default=None)
 
     providers = subparsers.add_parser("providers", help="列出模型厂商（不含明文 Key）。")
     _add_common_options(providers)
@@ -282,9 +274,6 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
         "delegations": lambda: list_delegations(connection, limit=limit, task_id=args.task_id),
         "sessions": lambda: list_terminal_sessions(
             connection, limit=limit, task_id=args.task_id, status=args.status.strip()
-        ),
-        "attachments": lambda: list_attachment_assets(
-            connection, limit=limit, task_id=args.task_id
         ),
         "providers": lambda: list_providers(connection, limit=limit),
         "models": lambda: list_models(connection, limit=limit, provider_id=args.provider_id),
@@ -467,6 +456,34 @@ def force_utf8_streams() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def _announce_db_path(db_path: Path, *, explicit: bool) -> None:
+    """把本次查询的数据根与业务库路径写到 stderr。
+
+    排查时最常见的事故是「查了错的那份 ``.cosir``」（桌面应用与直跑后端各有一份
+    ``<数据根>/.cosir/storage/app.sqlite3``），故每次运行都明确告知来源；写 stderr 以免
+    污染 stdout 的机器可读输出。
+
+    参数:
+        db_path: 本次实际使用的业务库路径。
+        explicit: 是否由 ``--db`` 显式指定。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        写一至两行到 stderr。
+    """
+
+    if explicit:
+        print(f"[log-triage] db (explicit): {db_path}", file=sys.stderr)
+        return
+    print(f"[log-triage] {paths.describe_path_choice()}", file=sys.stderr)
+    print(f"[log-triage] db: {db_path}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口。
 
@@ -488,6 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     connection: sqlite3.Connection | None = None
     try:
         db_path = resolve_db_path(args.db)
+        _announce_db_path(db_path, explicit=bool(args.db.strip()))
         connection = open_readonly(db_path)
         result = dispatch(connection, args)
         if args.save.strip():

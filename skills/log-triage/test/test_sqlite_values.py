@@ -214,10 +214,6 @@ def _base_schema(con: sqlite3.Connection) -> None:
             shell_executable TEXT, worker_instance_id TEXT, worker_pid INTEGER, status TEXT,
             end_reason TEXT, exit_code INTEGER, cols INTEGER, rows INTEGER,
             last_activity_at TEXT, ended_at TEXT, created_at TEXT);
-        CREATE TABLE attachment_assets (id INTEGER PRIMARY KEY, task_id INTEGER, asset_id TEXT,
-            kind TEXT, content_sha256 TEXT, idempotency_key TEXT, name TEXT, content_type TEXT,
-            byte_size INTEGER, width INTEGER, height INTEGER, storage_state TEXT,
-            created_at TEXT, updated_at TEXT);
         CREATE TABLE providers (id INTEGER PRIMARY KEY, name TEXT, type TEXT, base_url TEXT,
             api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
         CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,

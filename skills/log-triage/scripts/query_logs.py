@@ -10,24 +10,23 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import triage_paths as paths
+
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _LEVEL_RANK = {level: index for index, level in enumerate(_LEVELS)}
 _DEFAULT_LIMIT = 200
 _MAX_LIMIT = 10000
 
 
-def repository_root() -> Path:
-    """向上查找包含 ``apps/backend`` 的仓库根目录。"""
-    for start in (Path(__file__).resolve().parent, Path.cwd()):
-        for candidate in (start, *start.parents):
-            if (candidate / "apps" / "backend").exists():
-                return candidate
-    raise ValueError("cannot locate repository root; pass --log-file explicitly")
-
-
 def default_log_dir() -> Path:
-    """返回纯后端开发模式的默认日志目录。"""
-    return repository_root() / "logs"
+    """返回默认日志目录：``<数据根>/.cosir/logs``。
+
+    数据根按与后端一致的规则解析（见 :mod:`triage_paths`）：显式 ``CODING_AGENT_DATA_DIR``
+    → 已存在的桌面数据根（Windows ``%APPDATA%\\com.cosir.desktop``）→ 仓库根。桌面应用正在
+    运行时日志落在桌面数据根下，不在仓库内。
+    """
+
+    return paths.log_dir()
 
 
 def normalize_level(level: str) -> str:
@@ -72,9 +71,12 @@ def normalize_duration(value: str) -> timedelta:
         raise ValueError("window amount must be an integer") from exc
     if amount < 1:
         raise ValueError("window amount must be greater than zero")
-    return {"s": timedelta(seconds=amount), "m": timedelta(minutes=amount), "h": timedelta(hours=amount)}[
-        raw[-1]
-    ]
+    windows = {
+        "s": timedelta(seconds=amount),
+        "m": timedelta(minutes=amount),
+        "h": timedelta(hours=amount),
+    }
+    return windows[raw[-1]]
 
 
 def normalize_around_window(around: str, window: str) -> tuple[str, str]:
@@ -100,9 +102,24 @@ def resolve_log_files(raw: str) -> list[Path]:
     if target.is_file():
         return [target]
     if target.is_dir():
-        files = sorted(target.glob("backend-*.log"), key=lambda path: path.stat().st_mtime)
+        # 目录模式只取结构化后端日志。``backend-console-*.log`` 是后端进程 stdout/stderr 原文
+        # （``logger=coding_agent.backend_console``、``trace_id`` 恒为空、字段语义不同），混进来会
+        # 污染 trace 与级别查询；需要看它时用 ``--log-file`` 显式指定该文件。
+        files = sorted(
+            (
+                path
+                for path in target.glob("backend-*.log")
+                if not path.name.startswith("backend-console-")
+            ),
+            key=lambda path: path.stat().st_mtime,
+        )
         if files:
             return files
+        # 目录存在但没有结构化分片：与「目录不存在」是两回事，指向的下一步动作不同。
+        raise FileNotFoundError(
+            f"no structured backend log in directory: {target}; only backend-console-*.log may "
+            "be present (inspect it via --log-file <path>), or confirm the data root printed above"
+        )
     raise FileNotFoundError(f"log file or directory not found: {target}")
 
 
@@ -164,9 +181,11 @@ def filter_entries(
             continue
         if event_prefix and not str(entry.get("event", "")).startswith(event_prefix):
             continue
-        if caller_contains and caller_contains.casefold() not in str(entry.get("caller", "")).casefold():
+        caller = str(entry.get("caller", "")).casefold()
+        if caller_contains and caller_contains.casefold() not in caller:
             continue
-        if logger_contains and logger_contains.casefold() not in str(entry.get("logger", "")).casefold():
+        logger_name = str(entry.get("logger", "")).casefold()
+        if logger_contains and logger_contains.casefold() not in logger_name:
             continue
         if start_time and str(entry.get("ts", "")) < start_time:
             continue
@@ -216,17 +235,29 @@ def _flatten_kv(prefix: str, value: Any) -> list[str]:
     return [f"{prefix}={value}"]
 
 
-def write_output_file(output_path: Path, entries: list[dict[str, Any]], *, output_format: str, force: bool) -> None:
+def write_output_file(
+    output_path: Path,
+    entries: list[dict[str, Any]],
+    *,
+    output_format: str,
+    force: bool,
+) -> None:
     """将查询结果保存为 JSON 数组或可读文本。"""
     if output_path.exists() and not force:
         raise FileExistsError(f"output file already exists: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(entries, ensure_ascii=False, indent=2) if output_format == "json" else render_text(entries)
+    if output_format == "json":
+        content = json.dumps(entries, ensure_ascii=False, indent=2)
+    else:
+        content = render_text(entries)
     output_path.write_text(content + "\n", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="query_logs", description="只读查询本地固定格式 JSONL 日志。")
+    parser = argparse.ArgumentParser(
+        prog="query_logs",
+        description="只读查询本地固定格式 JSONL 日志。",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     recent = subparsers.add_parser("recent", help="按时间倒序查询最近日志。")
     _add_shared_options(recent)
@@ -257,6 +288,34 @@ def _add_shared_options(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--force", action="store_true", help="允许 --save 覆盖已有文件。")
 
 
+def _announce_log_files(files: list[Path], *, explicit: bool) -> None:
+    """把本次读取的日志文件与数据根来源写到 stderr。
+
+    排查时最常见的事故是「查了错的那份 ``.cosir``」（桌面应用与直跑后端各有一份
+    ``<数据根>/.cosir/logs``），故每次运行都明确告知来源；写 stderr 以免污染 stdout
+    的机器可读输出。
+
+    参数:
+        files: 本次实际读取的日志分片。
+        explicit: 是否由 ``--log-file`` 显式指定。
+
+    返回:
+        无。
+
+    异常:
+        无。
+
+    副作用:
+        写一至两行到 stderr。
+    """
+
+    if not explicit:
+        print(f"[log-triage] {paths.describe_path_choice()}", file=sys.stderr)
+    label = "explicit" if explicit else "auto"
+    joined = ", ".join(str(path) for path in files)
+    print(f"[log-triage] log files ({label}): {joined}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口；读取 JSONL、过滤记录并输出结果。"""
     force_utf8_streams()
@@ -270,7 +329,11 @@ def main(argv: list[str] | None = None) -> int:
             start_time, end_time = normalize_around_window(args.around, args.window)
         filters = {
             "level": normalize_level(args.level),
-            "min_level": normalize_min_level(args.min_level, errors_only=args.errors_only, warnings_up=args.warnings_up),
+            "min_level": normalize_min_level(
+                args.min_level,
+                errors_only=args.errors_only,
+                warnings_up=args.warnings_up,
+            ),
             "event_prefix": args.event_prefix.strip(),
             "caller_contains": args.caller_contains.strip(),
             "logger_contains": args.logger_contains.strip(),
@@ -279,7 +342,9 @@ def main(argv: list[str] | None = None) -> int:
             "end_time": end_time,
             "limit": normalize_limit(args.limit),
         }
-        entries = read_entries(resolve_log_files(args.log_file))
+        log_files = resolve_log_files(args.log_file)
+        _announce_log_files(log_files, explicit=bool(args.log_file.strip()))
+        entries = read_entries(log_files)
         if args.command == "trace":
             trace_id = args.trace_id.strip()
             if not trace_id:
@@ -288,7 +353,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             entries = filter_entries(entries, event=args.event.strip(), order="desc", **filters)
         if args.save.strip():
-            write_output_file(Path(args.save).expanduser(), entries, output_format=args.format, force=args.force)
+            write_output_file(
+                Path(args.save).expanduser(),
+                entries,
+                output_format=args.format,
+                force=args.force,
+            )
     except (ValueError, FileNotFoundError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

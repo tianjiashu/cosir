@@ -1,25 +1,19 @@
 """后端 FastAPI 应用装配入口。
 
-本模块只负责应用装配：创建 ``app`` 单例、定义 ``lifespan``、安装请求日志中间件、
-触发各域路由模块级装饰器注册，以及暴露 ``create_app`` 工厂。所有端点逻辑都拆分到
-同目录下的域路由文件（``tasks_api`` / ``workspaces_api`` /
-``providers_api`` 等）。
+本模块只负责应用装配：创建并导出 ``app`` 单例、注册 CORS 与请求/异常日志中间件、
+触发各域路由模块级装饰器注册。启动与关闭的生命周期编排（启动顺序、资源释放、
+启动状态上报）在 ``app.lifespan`` 中定义，本模块只把 ``lifespan`` 交给 FastAPI。
 
-``app`` 是模块级单例，各域路由文件通过 ``from app.api.app import app`` 复用同一实例，
+``app`` 是模块级单例，各域路由文件通过 ``from app.app import app`` 复用同一实例，
 因此必须在 ``app`` 定义之后再导入这些模块，否则会产生未初始化引用。
 
 注意：触发域路由注册时**必须**使用 ``importlib.import_module`` 而非
 ``import app.api.tasks_api`` 这类语句。后者会把顶层包名 ``app`` 绑定到当前模块的全局
-命名空间，覆盖掉本模块在第 48 行创建的 FastAPI 实例，导致后续域路由文件通过
-``from app.api.app import app`` 取到的是包模块而非 FastAPI 实例。
+命名空间，覆盖掉本模块创建的 FastAPI 实例，导致后续域路由文件通过
+``from app.app import app`` 取到的是包模块而非 FastAPI 实例。
 """
 
-import asyncio
 import importlib
-import json
-import traceback
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,136 +23,8 @@ from app.api.middleware.api_logging import (
     install_request_logging,
 )
 from app.api.middleware.transport_error import install_transport_request_error_handler
-from app.assistant_transport.event.tool_runtime_output_adapter import (
-    ToolRuntimeOutputChannelFactory,
-)
-from app.bootstate import (
-    BOOT_PHASE_FAILED,
-    BOOT_PHASE_READY,
-    BOOT_PHASE_STOPPED,
-    boot_state_file_from_env,
-    write_bootstate,
-)
-from app.utils import paths
-from app.config.configuration import (
-    build_agent_registry,
-    set_agent_registry,
-    set_tool_system,
-)
-from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
 from app.config.logging.logger import log
-from app.config.settings import Settings
-from app.core.observability import flush_langfuse
-from app.core.runtime.runner import AgentRuntime
-from app.core.tools import ToolSystem
-from app.hook import HookContext, HookEvent
-from app.hook.hook_interceptor import HookInterceptor
-from app.service.depends import (
-    close_service_dependencies,
-    get_conversation_run_executor,
-    get_conversation_run_service,
-    get_delegation_service,
-    get_terminal_session_service,
-    initialize_service_dependencies,
-    set_runtime,
-)
-from app.utils.cosir_paths import system_cosir_dir
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """包装生命周期，使 yield 前的启动异常也能写入 bootstate。"""
-    try:
-        async with _lifespan_impl(_app):
-            yield
-    except Exception as exc:
-        _mark_boot_failed(exc)
-        raise
-    finally:
-        # Startup can fail before _lifespan_impl reaches its normal shutdown block.
-        # Close any file/queue handlers created before that failure as well.
-        shutdown_logging()
-
-
-@asynccontextmanager
-async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
-    """管理 FastAPI 应用生命周期并在关闭时释放运行时资源。
-
-    参数:
-        _app: FastAPI 应用实例，仅用于满足 lifespan 协议。
-
-    生成:
-        应用运行期间的控制权。
-
-    异常:
-        无。Runtime 内部会记录关闭失败。
-
-    副作用:
-        启动早期同步系统代理环境变量到当前进程；关闭 SQLite 存储等运行时资源
-        （经 ``close_storage``）；Terminal Worker 由 ``TerminalSessionService`` 在 SQLite
-        关闭前统一清理。
-    """
-
-    # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）尽早配置日志。
-    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先按固定路径建立文件管线，
-    # 确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
-    install_logging_for_current_process(log_dir=paths.LOG_DIR)
-    Settings.load()
-    initialize_service_dependencies()
-    # Settings.load 可能解析出轮转参数，因此按最终配置重建一次管线。
-    install_logging_for_current_process(
-        log_dir=paths.LOG_DIR,
-        max_bytes=Settings.LOG_MAX_BYTES,
-        backup_count=Settings.LOG_BACKUP_COUNT,
-    )
-    _ensure_system_cosir_dir()
-    recovered_runs = get_conversation_run_service().recover_orphaned_runs()
-    if recovered_runs:
-        log.info(
-            "conversation_runs_recovered_after_restart",
-            extra={
-                "msg": "后端启动时已将遗留 active run 收敛为 cancelled",
-                "data": {"run_ids": [run.id for run in recovered_runs]},
-            },
-        )
-    get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
-    get_terminal_session_service().initialize()
-
-    # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
-    # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
-    from app.hook.hook_registry import initialize_hook_registry
-
-    initialize_hook_registry()
-
-    tool_system = ToolSystem.build_tool_system()
-    set_tool_system(tool_system)
-    set_agent_registry(build_agent_registry())
-    set_runtime(
-        AgentRuntime(
-            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),
-        )
-    )
-    # 当前产品只启动新鲜 ConversationRun；旧 run 不在启动期隐式重放。
-
-    # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
-    # 统一经 HookInterceptor 收口。
-    HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_START))
-    _mark_boot_ready()
-    try:
-        yield
-    finally:
-        try:
-            # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
-            HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-            await get_conversation_run_executor().close()
-            await asyncio.to_thread(get_terminal_session_service().shutdown)
-            flush_langfuse()
-            close_service_dependencies()
-            # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
-            _mark_boot_stopped()
-        finally:
-            shutdown_logging()
-
+from app.lifespan import lifespan
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
@@ -187,7 +53,7 @@ install_http_exception_logging(app, log)
 install_transport_request_error_handler(app)
 
 # 触发各域路由的模块级装饰器注册到真实 app 上。
-# 这些模块通过 ``from app.api.app import app`` 复用同一单例，因此必须在本模块
+# 这些模块通过 ``from app.app import app`` 复用同一单例，因此必须在本模块
 # 已定义 ``app`` 之后再导入，否则会产生未初始化引用。
 #
 # 必须使用 importlib.import_module 而非 ``import app.api.xxx``：后者会把顶层包名
@@ -199,115 +65,3 @@ importlib.import_module("app.api.models_api")
 importlib.import_module("app.api.terminal_api")
 importlib.import_module("app.api.attachments_api")
 importlib.import_module("app.assistant_transport.assistant_api")
-
-
-def _mark_boot_ready() -> None:
-    """在应用装配成功后写入 ``ready`` 启动状态。
-
-    仅在启用了启动状态文件（环境变量 ``CODING_AGENT_BOOT_STATE_FILE``）时生效，
-    标记导入与运行时构建已通过，桌面端 supervisor 可据此提前结束等待。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        可能原子写入启动状态文件。
-    """
-    boot_state_file = boot_state_file_from_env()
-    if boot_state_file is not None:
-        write_bootstate(boot_state_file, BOOT_PHASE_READY, step="app_ready")
-
-
-def _mark_boot_failed(exc: Exception) -> None:
-    """在应用生命周期进入 yield 前失败时写入结构化启动错误。"""
-    boot_state_file = boot_state_file_from_env()
-    if boot_state_file is None:
-        return
-    try:
-        current = json.loads(boot_state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        current = {}
-    if current.get("phase") != "booting":
-        return
-    write_bootstate(
-        boot_state_file,
-        BOOT_PHASE_FAILED,
-        step="lifespan",
-        error_type=type(exc).__name__,
-        error_message=str(exc),
-        traceback_text=traceback.format_exc(),
-    )
-
-
-def _mark_boot_stopped() -> None:
-    """在应用优雅关闭时写入 ``stopped`` 启动状态。
-
-    仅在启用了启动状态文件（环境变量 ``CODING_AGENT_BOOT_STATE_FILE``）时生效。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        可能原子写入启动状态文件。
-    """
-    boot_state_file = boot_state_file_from_env()
-    if boot_state_file is not None:
-        write_bootstate(boot_state_file, BOOT_PHASE_STOPPED)
-
-
-def _ensure_system_cosir_dir() -> None:
-    """幂等创建系统级 ``.cosir`` 目录，失败降级不阻断启动。
-
-    系统级 ``.cosir`` 用于承载跨 workspace 的系统级配置：**目录名固定为 ``.cosir``**，数据根来自
-    ``paths.SYSTEM_COSIR_DIR``（桌面版为 ``app_data_dir()/.cosir``，直接运行时为仓库根
-    ``.cosir``）。workspace 级 ``.cosir`` 由 ``WorkspaceService`` 在创建工作区时创建，
-    与本函数无关。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无：目录创建失败只记 error 日志，不向上抛出，避免元数据目录不可用阻断后端启动。
-
-    副作用:
-        在 ``paths.SYSTEM_COSIR_DIR`` 创建目录（已存在则幂等跳过）；失败时写结构化 error 日志。
-    """
-
-    cosir_dir = system_cosir_dir()
-    try:
-        cosir_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        log.error(
-            "system_cosir_init_failed",
-            extra={
-                "msg": "failed to initialize system metadata dir, skipped",
-                "data": {
-                    "cosir_dir": str(cosir_dir),
-                    "error": str(exc),
-                    "errno": getattr(exc, "errno", None),
-                },
-            },
-        )
-        return
-    log.info(
-        "system_cosir_initialized",
-        extra={
-            "msg": "system metadata dir initialized",
-            "data": {"cosir_dir": str(cosir_dir)},
-        },
-    )

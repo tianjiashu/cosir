@@ -2,8 +2,11 @@
 """业务库副作用事实查询（log-triage skill 内置）。
 
 单一职责：只读查询 Agent 执行留下的「外部资源副作用」事实行：``delegations``
-（子 Agent 委派）、
-``terminal_sessions``（终端会话元数据）、``attachment_assets``（附件资产）。
+（子 Agent 委派）与 ``terminal_sessions``（终端会话元数据）。
+
+数据库演进备忘：附件表 ``attachment_assets`` 已从 backend schema 移除（附件改为纯文件系统，
+落 workspace 的 ``.cosir/Attachment/``），本模块不再提供附件查询；若将来重新引入附件表，
+需同步恢复查询与 CLI 子命令。
 
 职责边界：
 - 负责：按 task / run 过滤并返回原始行字典。
@@ -106,43 +109,4 @@ def list_terminal_sessions(
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
-    return query_rows(connection, sql, tuple(params))
-
-
-def list_attachment_assets(
-    connection: sqlite3.Connection,
-    *,
-    limit: int,
-    task_id: int | None = None,
-) -> list[dict[str, Any]]:
-    """查询附件资产元数据。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        limit: 最大返回行数。
-        task_id: 可选任务过滤。
-
-    返回:
-        附件行列表（id 降序），含资产 id、类型、内容指纹、幂等键与存储状态。
-
-    异常:
-        ValueError: ``attachment_assets`` 表缺失。
-        sqlite3.Error: 查询失败。
-
-    副作用:
-        无。
-    """
-
-    require_tables(connection, "attachment_assets")
-    where = ""
-    params: list[Any] = []
-    if task_id is not None:
-        where = " WHERE task_id = ?"
-        params.append(task_id)
-    params.append(limit)
-    sql = (
-        "SELECT id, task_id, asset_id, kind, content_sha256, idempotency_key, name, "  # noqa: S608
-        "content_type, byte_size, width, height, storage_state, created_at, updated_at "
-        f"FROM attachment_assets{where} ORDER BY id DESC LIMIT ?"
-    )
     return query_rows(connection, sql, tuple(params))

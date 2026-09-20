@@ -21,56 +21,47 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-_APP_DB_RELATIVE = ("storage", "app.sqlite3")
+from triage_paths import app_db_path
 
-
-def repository_root() -> Path:
-    """向上查找真正的仓库根目录。
-
-    查找顺序：先按**脚本所在目录**向上找，再按**当前工作目录**向上找。后者用于 skill 被
-    安装到用户级目录（如 ``~/.codebuddy/skills/``）后仍从仓库根调用的场景——此时仅靠脚本
-    路径永远找不到仓库。
-
-    参数:
-        无。
-
-    返回:
-        包含 ``apps/backend`` 的仓库根绝对路径。
-
-    异常:
-        ValueError: 两条路径向上都找不到仓库根；调用方应改用 ``--db`` 显式指定数据库路径。
-
-    副作用:
-        解析当前脚本路径与当前工作目录。
-    """
-
-    for start in (Path(__file__).resolve().parent, Path.cwd()):
-        for candidate in (start, *start.parents):
-            if (candidate / "apps" / "backend").exists():
-                return candidate
-    raise ValueError(
-        "cannot locate repository root (no 'apps/backend' found from the script path or the "
-        "current working directory); pass --db <path> to point at the database explicitly"
-    )
+__all__ = [
+    "contains_pattern",
+    "count_rows",
+    "default_db_path",
+    "escape_like",
+    "get_one",
+    "list_tables",
+    "open_readonly",
+    "query_rows",
+    "require_tables",
+    "resolve_db_path",
+    "row_to_dict",
+    "safe_json",
+    "table_columns",
+    "table_exists",
+]
 
 
 def default_db_path() -> Path:
     """推导默认业务数据库路径。
 
+    路径规则与后端 ``app/utils/paths.py`` 一致：``<数据根>/.cosir/storage/app.sqlite3``，
+    数据根按 :func:`triage_paths.data_root` 解析（显式 ``CODING_AGENT_DATA_DIR`` → 已存在的
+    桌面数据根 → 仓库根）。桌面应用在跑时，真实业务库在桌面数据根下，不在仓库内。
+
     参数:
         无。
 
     返回:
-        仓库根目录下 ``storage/app.sqlite3`` 的路径。
+        业务数据库文件路径。
 
     异常:
-        无。
+        ValueError: 数据根与仓库根都无法解析时抛出。
 
     副作用:
-        解析当前脚本路径。
+        读取 ``CODING_AGENT_DATA_DIR`` 环境变量并探测 ``.cosir`` 是否存在。
     """
 
-    return repository_root().joinpath(*_APP_DB_RELATIVE)
+    return app_db_path()
 
 
 def resolve_db_path(raw: str) -> Path:

@@ -34,11 +34,7 @@ from appdb_agent_facts import (  # noqa: E402
     recent_workspaces,
 )
 from appdb_schema import database_overview, table_detail  # noqa: E402
-from appdb_side_effects import (  # noqa: E402
-    list_attachment_assets,
-    list_delegations,
-    list_terminal_sessions,
-)
+from appdb_side_effects import list_delegations, list_terminal_sessions  # noqa: E402
 from appdb_snapshots import run_snapshot, task_snapshot  # noqa: E402
 
 
@@ -72,10 +68,6 @@ def _schema(con: sqlite3.Connection) -> None:
             shell_executable TEXT, worker_instance_id TEXT, worker_pid INTEGER, status TEXT,
             end_reason TEXT, exit_code INTEGER, cols INTEGER, rows INTEGER,
             last_activity_at TEXT, ended_at TEXT, created_at TEXT);
-        CREATE TABLE attachment_assets (id INTEGER PRIMARY KEY, task_id INTEGER, asset_id TEXT,
-            kind TEXT, content_sha256 TEXT, idempotency_key TEXT, name TEXT, content_type TEXT,
-            byte_size INTEGER, width INTEGER, height INTEGER, storage_state TEXT,
-            created_at TEXT, updated_at TEXT);
         CREATE TABLE providers (id INTEGER PRIMARY KEY, name TEXT, type TEXT, base_url TEXT,
             api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
         CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,
@@ -291,15 +283,6 @@ class TestSideEffects:
         con.commit()
         ids = sorted(r["id"] for r in list_delegations(con, limit=10, task_id=5))
         assert ids == [1, 2]
-
-    # 目的：attachments task_id 过滤生效。潜在缺陷：过滤被忽略。
-    def test_attachments_filter(self, con: sqlite3.Connection) -> None:
-        con.execute(
-            "INSERT INTO attachment_assets VALUES (1,1,'a','image','sha','ik','n','png',1,1,1,'stored','t','t')"
-        )
-        con.commit()
-        assert len(list_attachment_assets(con, limit=10, task_id=1)) == 1
-        assert list_attachment_assets(con, limit=10, task_id=2) == []
 
 
 # --------------------------------------------------------------------------- #

@@ -24,7 +24,7 @@ allowed-tools: Read,Write,Bash
 |------|--------|--------|----------------|----------|
 | **链路 trace_id**（32 位小写 hex） | 唯一能**跨前端与后端日志**串起一条请求的键 | 前端 `apps/desktop/lib/trace.ts:newTraceId()`（`crypto.getRandomValues` 128-bit）；后端缺失时由 `new_trace_id()`（`uuid4().hex`）补生成 | 后端固定 JSONL 文件日志 `backend-*.log` 的 `trace_id`；前端 `frontend-*.log` 的 `trace_id` | `query_logs.py trace <ID>` |
 | **Langfuse trace_id**（32 位小写 hex） | LLM/工具调用的可观测 trace，仅用于 Langfuse 平台 | `conversation_run_trace()`（`core/observability/langfuse_tracing.py`）用 `start_as_current_observation(as_type="span")` 建根 span，Langfuse `CallbackHandler` 经 OTel current context 生成该 trace_id，再经 `ConversationRunTraceResult.trace_id` 回读 | 终态 SSE 事件 payload；Langfuse UI。**不落 `app.sqlite3`，也不落后端日志文件** | Langfuse 平台 |
-| **run_id / task_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run | `conversation_runs.id` / `tasks.id` | `storage/app.sqlite3` | `query_app_db.py` |
+| **run_id / task_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run | `conversation_runs.id` / `tasks.id` | `<数据根>/.cosir/storage/app.sqlite3` | `query_app_db.py` |
 
 **链路 trace_id 的前后端同源链路（照此反查）**：
 `frontendLog(..., { traceId })` 把同一 id 写进前端日志 → `lib/http/client.ts:requestRaw` 以
@@ -45,28 +45,43 @@ allowed-tools: Read,Write,Bash
 
 ## 1. 证据源与落盘位置（唯一事实清单）
 
-`<repo>` = 仓库根；`<data_dir>` = 桌面应用数据目录：Windows `%APPDATA%\com.cosir.desktop`、
+`<repo>` = 仓库根；`<数据根>` = 桌面应用数据根（Tauri `app_data_dir()`）：Windows 实测
+`%APPDATA%\com.cosir.desktop`（**Roaming，不是 LocalAppData**）、
 macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/com.cosir.desktop`。
+
+**所有运行期数据都在 `<数据根>/.cosir/` 下**（日志、业务库、checkpoint、runtime）。
 
 | 源 | 位置 | 形态 | 查询方式 |
 |----|------|------|----------|
-| 前端日志 | `<data_dir>/logs/frontend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated（`logger=coding_agent.frontend`） | 直接 `Read`/grep；trace_id 可反查后端 |
-| 桌面宿主日志 | `<data_dir>/logs/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；WebView2 进程失败等宿主级诊断 | 直接 `Read` |
-| 后端控制台原文 | `<data_dir>/logs/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（Rust 侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
-| 后端结构化日志 | `<data_dir>/logs/backend-YYYY-MM-DD.log` 或 `<repo>/logs/backend-YYYY-MM-DD.log` | 固定 JSONL：ts/level/logger/trace_id/caller/event/msg/data/error/truncated | `query_logs.py`（只读扫描，支持 trace/级别/时间窗过滤） |
-| 业务库 / Agent 回放 | `<repo>/storage/app.sqlite3` | 见 §3 表清单 | `query_app_db.py`（只读直连，不启动服务） |
-| LangGraph checkpoint | `<repo>/storage/langgraph_checkpoints.sqlite` | `checkpoints` / `writes`，按 `thread_id` 分片 | `sqlite3` 直连；`thread_id` = `conversation_runs.checkpoint_thread_id` |
-| 后端启动状态 | `<data_dir>/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；Tauri 据此判定启动失败 |
+| 前端日志 | `<数据根>/.cosir/logs/frontend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated（`logger=coding_agent.frontend`） | 直接 `Read`/grep；trace_id 可反查后端 |
+| 桌面宿主日志 | `<数据根>/.cosir/logs/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；WebView2 进程失败等宿主级诊断 | 直接 `Read` |
+| 后端控制台原文 | `<数据根>/.cosir/logs/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（Rust 侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
+| 后端结构化日志 | `<数据根>/.cosir/logs/backend-YYYY-MM-DD.log` | 固定 JSONL：ts/level/logger/trace_id/caller/event/msg/data/error/truncated | `query_logs.py`（只读扫描，支持 trace/级别/时间窗过滤） |
+| 业务库 / Agent 回放 | `<数据根>/.cosir/storage/app.sqlite3` | 见 §3 表清单 | `query_app_db.py`（只读直连，不启动服务） |
+| LangGraph checkpoint | `<数据根>/.cosir/storage/langgraph_checkpoints.sqlite` | `checkpoints` / `writes`，按 `thread_id` 分片 | `sqlite3` 直连；`thread_id` = `conversation_runs.checkpoint_thread_id` |
+| 后端启动状态 | `<数据根>/.cosir/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；Tauri 据此判定启动失败 |
 
-**为什么后端文件日志有两个可能目录（关键）**：桌面模式下 Rust 宿主 spawn 后端时注入
-`CODING_AGENT_LOG_DIR=<data_dir>/runtime`，因此后端结构化日志、控制台日志、前端日志、宿主日志
-**同目录**；而 `uv run --project apps/backend python -m app` / `pytest` 不注入该变量，回落
-`paths.LOG_DIR`（见 `apps/backend/app/config/paths.py`）默认值 `<repo>/logs`。排查前先确认后端是**怎么起的**，别只看一个目录。
+**数据根怎么定（唯一事实源：`apps/backend/app/utils/paths.py`）**：
+`DATA_DIR = CODING_AGENT_DATA_DIR or 仓库根`，其余路径**全部**由它派生到 `<DATA_DIR>/.cosir/` 下。
 
-**分片规则**：单文件上限 5MB，同日历史分片为 `.1.log` … `.7.log`（保留 7 个）。日期切分与大小
-分片叠加：跨日自动换新日期文件，但 `.1`…`.7` 序号在**当日**内累计，不跨日延续。日志目录与库路径
-可被覆盖：`CODING_AGENT_LOG_DIR`（日志目录）与 `CODING_AGENT_DATA_DIR`（数据根，DB/checkpoint/logs
-默认由其推导，不再单独覆盖）（见 `apps/backend/app/config/paths.py`）。
+- **经桌面宿主启动（含 `tauri dev`）**：Rust `spawn_backend` **无条件**注入
+  `CODING_AGENT_DATA_DIR = app_data_dir()`（`backend_supervisor.rs`，**没有 dev/prod 分支**）
+  ⇒ 数据根 = `%APPDATA%\com.cosir.desktop`，日志/库/checkpoint 全在这份 `.cosir` 里。
+  **用户报 bug 时通常要看的就是这一份。**
+- **绕过 Tauri 直跑后端**（`uv run --project apps/backend python -m app`、pytest）：不注入该变量
+  ⇒ 数据根回落仓库根 ⇒ `<repo>/.cosir/`。
+
+> ⚠️ `CODING_AGENT_LOG_DIR` / `CODING_AGENT_DATABASE_FILE` / `CODING_AGENT_CHECKPOINT_FILE`
+> **均已废弃**，入口只剩 `CODING_AGENT_DATA_DIR`。若发现日志落在
+> `%APPDATA%\com.cosir.desktop\logs\`（**没有** `.cosir` 那层），那是布局变更前的历史残留。
+
+**排查前先定位数据根**：两个脚本会自动判定（显式 `CODING_AGENT_DATA_DIR` → 已存在的桌面数据根
+→ 仓库根），输出里的 `data root:` 一行说明用的是哪一份；需要指定另一份时用 `--log-file` / `--db`
+显式覆盖。
+
+**分片规则**：单文件上限 5MB（`configure_logging(max_bytes=5*1024*1024)`），同日历史分片为
+`.1.log` … `.7.log`（`backup_count=7`）。日期切分与大小分片叠加：跨日自动换新日期文件，但
+`.1`…`.7` 序号在**当日**内累计，不跨日延续。
 
 **HTTP 日志查询通道已移除**：日志只通过本地固定 JSONL 文件读取，避免为诊断旁路维护第二套 API 和存储事实。
 
@@ -127,7 +142,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 
 ## 3. 业务库表 → 承载事实 → 典型症状
 
-`storage/app.sqlite3` 的表结构以 `apps/backend/app/storage/model` 为事实源（`schema` 子命令会从在线库读真实结构）。
+`<数据根>/.cosir/storage/app.sqlite3`（桌面态位置见 §1）的表结构以 `apps/backend/app/storage/model` 为事实源（`schema` 子命令会从在线库读真实结构）。
 
 | 表 | 承载事实 | 典型症状 / 排查点 |
 |----|----------|-------------------|
@@ -138,8 +153,12 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 | `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `tool_call_id` / `is_streaming` / `include_in_context` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
 | `delegations` | 子 Agent 委派：父子 run/task/agent、`status`、`summary`、`error` | 委派卡住、子任务结果丢失 |
 | `terminal_sessions` | 终端会话元数据（PTY 与输出缓存不落库） | 终端断连、worker 崩溃、会话未收口 |
-| `attachment_assets` | 附件资产：`content_sha256`、`idempotency_key`、`storage_state`、尺寸 | 图片上传失败、去重异常 |
 | `providers` / `models` | 模型厂商与模型条目（`api_key` 为**明文 secret，任何输出都不得包含**） | 模型解析失败、窗口/能力标志错 |
+
+**已从 schema 移除、不要再查**：`attachment_assets`（附件改为纯文件系统，落 workspace 的
+`.cosir/Attachment/`，`storage` 层已无 attachment 模型）；更早的 `turn_id` / `turns` /
+`turn_messages` / `runtime_events`。查这些表会直接报 `table not found`（`require_tables` 会连带
+列出库内真实表名，是判断「schema 漂移」还是「查询写错」的快捷信号）。
 
 **状态词表（唯一事实源）**：
 
@@ -168,10 +187,11 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 ### 阶段 B — 拉取证据
 
 > 脚本位置：本 skill 内置 `scripts/query_logs.py`、`scripts/query_app_db.py`（及其 `appdb_*.py` 查询模块），
-> 从**仓库根**执行。所有 Python 脚本一律 `uv run --project apps/backend python <script>`（Python 3.11，uv 托管）。
+> **从仓库根**执行命令即可；脚本不依赖 CWD 定位数据（优先命中桌面数据根，仓库根只作兜底）。
+> 所有 Python 脚本一律 `uv run --project apps/backend python <script>`（Python 3.11，uv 托管）。
 > 输出若含中文/表情符号，脚本已自行把 stdout 切到 UTF-8，Windows GBK 控制台不会再崩。
 
-- **前端相关**（UI 卡死/报错/不更新/白屏）：直接 `Read <data_dir>/logs/frontend-YYYY-MM-DD.log`，
+- **前端相关**（UI 卡死/报错/不更新/白屏）：直接 `Read <数据根>/.cosir/logs/frontend-YYYY-MM-DD.log`，
   按时间倒序看 ERROR/WARNING，关注 `context.trace_id`、`event`、`data`；宿主级问题看 `desktop-*.log`。
 
 - **后端相关**（API 报错/任务失败/工具执行异常）：
@@ -184,8 +204,8 @@ uv run --project apps/backend python skills/log-triage/scripts/query_logs.py rec
 uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --contains "<关键词>" --caller-contains "tools_node"
 uv run --project apps/backend python skills/log-triage/scripts/query_logs.py recent --event-prefix "tool_" --since 2026-09-13T10:00:00Z
 # 崩溃/起不来：看启动状态与控制台原文
-#   Read <data_dir>/runtime/backend.bootstate.json
-#   Read <data_dir>/logs/backend-console-YYYY-MM-DD.log
+#   Read <数据根>/.cosir/runtime/backend.bootstate.json
+#   Read <数据根>/.cosir/logs/backend-console-YYYY-MM-DD.log
 ```
 
 - **业务状态相关**（不启动服务，直连业务库）：
@@ -196,7 +216,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py s
 # 任务 / 运行
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tasks --limit 20
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py runs --limit 20 --status running
-# 单个 task / run 完整排障快照（任务/运行/命令/消息/工具/变更/委派一次拿全）
+# 单个 task / run 完整排障快照（任务/运行/命令/消息/工具/委派一次拿全）
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py task <TASK_ID> --limit 30
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py run <RUN_ID> --format json
 # 未收敛体检（活跃 run / 指向活跃 run 的 task / 残留流式草稿）
@@ -239,12 +259,12 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
    - 补日志改动需同步更新对应函数 docstring，遵循项目「单一职责 / 不重复造轮子」铁律。
 2. **复现问题（优先自己复现）**：
    - 后端逻辑 bug：写/跑 pytest 复现（`uv run --project apps/backend pytest <test>`）；新日志会落
-     `<repo>/logs/backend-*.log`（pytest 未注入 `CODING_AGENT_LOG_DIR` 时文件日志落 `<repo>/logs`），
+     `<repo>/.cosir/logs/backend-*.log`（pytest 不注入 `CODING_AGENT_DATA_DIR`，数据根回落仓库根），
      业务状态落临时库。
    - 可端到端触发：起后端（`uv run --project apps/backend python -m app`）后调 API（curl 等），
      确认日志落盘与 `app.sqlite3` 状态变化。
    - 前端纯 UI 交互（点击流、视觉、白屏）：**只能请用户复现** —— 明确要求「在 `tauri dev` 下操作复现，
-     并把 `<data_dir>/logs/frontend-YYYY-MM-DD.log` 的最近片段贴给你」。纯浏览器 `vite dev` 不落盘。
+     并把 `<数据根>/.cosir/logs/frontend-YYYY-MM-DD.log` 的最近片段贴给你」。纯浏览器 `vite dev` 不落盘。
    - 复现后必须能定位到具体 `run_id`：`query_app_db.py runs --limit 5` 找到新 run，再用 `run <RUN_ID>` 看全貌。
 3. 复现后回到阶段 B，用新证据重新定位；不要停在「可能是 X」。
 
@@ -261,7 +281,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 
 - **日志优先于猜想**：任何「可能是 X」的假设，先去日志/业务库里找证据。
 - **三套标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；Langfuse trace 只在 Langfuse；业务排查用 run_id/task_id。拿错标识查错通道 = 白查。
-- **日志不是事实源**：Run/Tool/文件变更的权威状态在业务库；日志只做旁路印证。
+- **日志不是事实源**：Run / 工具调用等权威状态在业务库（文件变更集能力已整体移除，勿再按该心智排查）；日志只做旁路印证。
 - **复现优先自己来**：pytest > 起后端调 API > 请用户前端复现。能自己复现就别打扰用户。
 - **补日志要合规**：上下文 + 分级 + 不泄密、禁止空 catch；记住**堆栈不落盘**，因果要写进 `data`。
 - **落盘可查**：自己复现时必须确认证据已落盘（`backend-*.log` / `app.sqlite3` / `frontend-*.log`），否则复现无效。
@@ -291,17 +311,16 @@ messages    <TASK_ID> [--run-id I] [--order asc|desc] [--exclude-streaming] [--l
 tools       <TASK_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
 delegations [--task-id I] [--limit N]
 sessions    [--task-id I] [--status S] [--limit N]
-attachments [--task-id I] [--limit N]
 providers   [--limit N]                                       # 不含明文 api_key
 models      [--provider-id I] [--limit N]
 stuck       [--limit N]
 # 日志共享选项：--log-file PATH  --format text|json  --save FILE  --force
 
 # ---------- 文件与 HTTP ----------
-# Read <data_dir>/logs/frontend-YYYY-MM-DD.log        # 前端日志
-# Read <data_dir>/logs/desktop-YYYY-MM-DD.log          # 宿主日志
-# Read <data_dir>/logs/backend-console-YYYY-MM-DD.log  # 后端 stdout/stderr 原文
-# Read <data_dir>/runtime/backend.bootstate.json          # 启动状态
+# Read <数据根>/.cosir/logs/frontend-YYYY-MM-DD.log        # 前端日志
+# Read <数据根>/.cosir/logs/desktop-YYYY-MM-DD.log          # 宿主日志
+# Read <数据根>/.cosir/logs/backend-console-YYYY-MM-DD.log  # 后端 stdout/stderr 原文
+# Read <数据根>/.cosir/runtime/backend.bootstate.json          # 启动状态
 # 日志查询不经过后端 HTTP；直接读取 backend-*.log 文件
 ```
 
@@ -318,16 +337,19 @@ stuck       [--limit N]
 > `test/` 只服务仓库内回归，运行时不需要，**不随安装副本同步**。
 > `appdb_*.py` 各查询模块必须随 `apps/backend/app/storage/model` 的表结构演进同步更新。
 >
-> **回归测试（改脚本后必跑）**：`skills/log-triage/test/` 下有 200+ 用例，覆盖布尔归一的
+> **回归测试（改脚本后必跑）**：`skills/log-triage/test/` 下有 269 用例，覆盖布尔归一的
 > Python/SQL 双侧一致性、消息回放流式过滤口径、工具调用配对（含跨 run 复用 `tool_call_id`）、
-> 未收敛体检、缺表可诊断性、CLI 参数面与 `--save`。从仓库根执行：
+> 未收敛体检、缺表可诊断性、CLI 参数面、`--save`，以及数据根推导（`triage_paths` 三级回退
+> 与来源文案，见 `test_triage_paths_adversarial.py`）。从仓库根执行：
 > `uv run --project apps/backend pytest -c apps/backend/pyproject.toml skills/log-triage/test -q`
 > 改动 `sqlite_values.py` 或任一过滤条件时，务必确认该套件全绿——口径分叉类缺陷不会报错，只会
 > 静默给出错误结论。
 > 脚本与测试同时受项目 ruff 规则约束：
 > `uv run --project apps/backend ruff check --config apps/backend/pyproject.toml skills/log-triage/scripts skills/log-triage/test`。
 >
-> **路径解析约定**：两个脚本的默认库路径都先按「脚本所在目录」、再按「当前工作目录」向上查找
-> 含 `apps/backend` 的目录作为仓库根。因此**只要 cwd 在仓库根**，用仓库内相对路径或用户级
-> 安装路径调用都能正确定位 `storage/app.sqlite3`；日志脚本则定位 `<repo>/logs` 或通过
-> `--log-file` 显式指定文件/目录。
+> **路径解析约定**（实现见 `scripts/triage_paths.py`，规则与 `apps/backend/app/utils/paths.py`
+> 同源）：数据根按「`CODING_AGENT_DATA_DIR` → 已存在的桌面数据根（`%APPDATA%\com.cosir.desktop`）
+> → 仓库根（向上查找含 `apps/backend` 的目录）」顺序判定，因此桌面应用在跑时默认查的就是它那份
+> `.cosir`；业务库 = `<数据根>/.cosir/storage/app.sqlite3`，日志目录 = `<数据根>/.cosir/logs`。
+> 需要查另一份时用 `--db` / `--log-file` 显式覆盖（输出里的 `data root:` 一行会说明本次用的是
+> 哪一份）。仓库定位失败且未显式指定时会直接报错，而不是静默查空目录。

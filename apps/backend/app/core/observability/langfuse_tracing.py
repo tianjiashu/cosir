@@ -389,7 +389,7 @@ def _safe_exit_langfuse_context(
 def flush_langfuse() -> None:
     """尽力 flush 缓冲的 Langfuse trace。
 
-    进程退出前调用（``api/app.py`` lifespan ``finally``）。未启用或客户端创建/上报失败时
+    进程退出前调用（``app/lifespan.py`` 关闭编排）。未启用或客户端创建/上报失败时
     仅记日志，不抛出（绝不因可观测性失败影响主流程关闭）。
 
     参数:

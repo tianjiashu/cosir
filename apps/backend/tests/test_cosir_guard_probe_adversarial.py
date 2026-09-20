@@ -706,7 +706,7 @@ def test_system_cosir_dir_reads_data_dir(tmp_path: Path) -> None:
 def test_ensure_system_cosir_dir_is_idempotent(tmp_path: Path) -> None:
     """_ensure_system_cosir_dir() 幂等：重复调用不抛异常、目录存在。"""
 
-    from app.app import _ensure_system_cosir_dir
+    from app.lifespan import _ensure_system_cosir_dir
 
     paths.override(DATA_DIR=tmp_path / "sys")
     try:
@@ -726,8 +726,8 @@ def test_ensure_system_cosir_dir_degrades_when_name_is_file(tmp_path: Path) -> N
 
     import logging
 
-    from app.app import _ensure_system_cosir_dir
     from app.config.logging.logger import log as backend_log
+    from app.lifespan import _ensure_system_cosir_dir
 
     records: list[logging.LogRecord] = []
 
