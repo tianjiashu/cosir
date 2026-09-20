@@ -41,9 +41,9 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
     project_unhandled_tool_failure,
 )
 from app.core.tools.tool_registry import ToolRegistry
-from app.hook import HookContext
-from app.hook.hook_event import HookEvent
-from app.hook.hook_interceptor import HookInterceptor
+from app.core.hook import HookContext
+from app.core.hook import HookEvent
+from app.core.hook import HookInterceptor
 
 
 class ToolExecutor:

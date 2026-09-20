@@ -45,8 +45,8 @@ from app.config.settings import Settings
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
-from app.hook import HookContext, HookEvent
-from app.hook.hook_interceptor import HookInterceptor
+from app.core.hook import HookContext, HookEvent
+from app.core.hook import HookInterceptor
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_executor,
@@ -123,7 +123,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
     # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
-    from app.hook.hook_registry import initialize_hook_registry
+    from app.core.hook import initialize_hook_registry
 
     initialize_hook_registry()
 

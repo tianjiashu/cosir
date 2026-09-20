@@ -29,10 +29,10 @@ from app.core.tools.validation.arguments import (
     ToolArgumentValidation,
     validate_tool_arguments,
 )
-from app.hook import HookContext
-from app.hook.hook_event import HookDecision, HookEvent
-from app.hook.hook_interceptor import HookInterceptor
-from app.hook.hook_result import HookResult
+from app.core.hook import HookContext
+from app.core.hook import HookDecision, HookEvent
+from app.core.hook import HookInterceptor
+from app.core.hook import HookResult
 
 
 @dataclass(frozen=True)

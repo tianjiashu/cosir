@@ -22,9 +22,9 @@ from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.hook import HookContext
-from app.hook.hook_event import HookEvent
-from app.hook.hook_interceptor import HookInterceptor
+from app.core.hook import HookContext
+from app.core.hook import HookEvent
+from app.core.hook import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
     get_task_service,

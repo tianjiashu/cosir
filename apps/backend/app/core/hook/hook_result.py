@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.hook.hook_event import HookDecision
+from app.core.hook.hook_event import HookDecision
 
 
 @dataclass(frozen=True)

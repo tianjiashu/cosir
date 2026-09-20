@@ -6,10 +6,10 @@ import asyncio
 import json
 
 from app.config.logging.logger import log
-from app.hook.hook_context import HookContext
-from app.hook.hook_event import HookDecision
-from app.hook.hook_registry import HookRegistry, get_hook_registry
-from app.hook.hook_result import HookResult
+from app.core.hook.hook_context import HookContext
+from app.core.hook.hook_event import HookDecision
+from app.core.hook.hook_registry import HookRegistry, get_hook_registry
+from app.core.hook.hook_result import HookResult
 
 
 class HookInterceptor:

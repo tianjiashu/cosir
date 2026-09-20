@@ -11,9 +11,9 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 
-from app.hook.hook_context import HookContext
-from app.hook.hook_event import HookEvent
-from app.hook.hook_result import HookResult
+from app.core.hook.hook_context import HookContext
+from app.core.hook.hook_event import HookEvent
+from app.core.hook.hook_result import HookResult
 
 
 class HookBase(ABC):

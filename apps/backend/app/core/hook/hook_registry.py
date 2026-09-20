@@ -12,8 +12,8 @@
 from __future__ import annotations
 
 from app.config.logging.logger import log
-from app.hook.hook_base import HookBase
-from app.hook.hook_event import HookEvent
+from app.core.hook.hook_base import HookBase
+from app.core.hook.hook_event import HookEvent
 
 # 进程级单例。Hook 应在开始处理请求前注册；运行期只读，因此无需加锁。
 _registry: HookRegistry | None = None

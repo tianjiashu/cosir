@@ -246,7 +246,7 @@ def test_denial_observation_passes_through_budget(
 def test_gate_modified_arguments_flow_to_handler(tmp_path: Path) -> None:
     """PreToolUse Hook 改写参数后，隔离执行器应使用改写后的参数。"""
 
-    from app.hook import hook_interceptor
+    from app.core.hook import hook_interceptor
 
     def _fake_fire(context: Any, *_args: Any, **_kwargs: Any):
         decision = SimpleNamespace(

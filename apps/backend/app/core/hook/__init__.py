@@ -5,16 +5,16 @@
 工具 Pre/PostToolUse、运行期事件、会话事件）。无配置层（决策 D3）。
 """
 
-from app.hook.hook_base import HookBase
-from app.hook.hook_context import HookContext
-from app.hook.hook_event import HookDecision, HookEvent
-from app.hook.hook_interceptor import HookInterceptor
-from app.hook.hook_registry import (
+from app.core.hook.hook_base import HookBase
+from app.core.hook.hook_context import HookContext
+from app.core.hook.hook_event import HookDecision, HookEvent
+from app.core.hook.hook_interceptor import HookInterceptor
+from app.core.hook.hook_registry import (
     HookRegistry,
     get_hook_registry,
     initialize_hook_registry,
 )
-from app.hook.hook_result import HookResult
+from app.core.hook.hook_result import HookResult
 
 __all__ = [
     "HookBase",
