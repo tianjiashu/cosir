@@ -18,7 +18,7 @@ _OUTPUT_REASONING_KEY = "reasoning"
 
 @dataclass
 class ConversationRunUsageStats:
-    """run 级 token 与耗时累加器。
+    """run 级 token 与耗时快照（覆盖更新）。
 
     字段语义与 LangChain ``UsageMetadata`` 对齐（见 langchain_core.messages.ai）：
     - ``input_tokens``：输入 token 数（含历史、工具结果等）。
@@ -31,15 +31,15 @@ class ConversationRunUsageStats:
       （usage_metadata.output_token_details.reasoning）。
 
     Attributes:
-        input_tokens: 累计输入 token 数。
-        output_tokens: 累计输出 token 数。
-        total_tokens: 累计总 token 数。
-        cache_hit_tokens: 累计缓存命中 token 数。
-        cache_miss_tokens: 累计缓存未命中 token 数。
-        reasoning_tokens: 累计推理 token 数。
+        input_tokens: 最近一次模型调用覆盖后的输入 token 数。
+        output_tokens: 最近一次模型调用覆盖后的输出 token 数。
+        total_tokens: 最近一次模型调用覆盖后的总 token 数。
+        cache_hit_tokens: 最近一次模型调用覆盖后的缓存命中 token 数。
+        cache_miss_tokens: 最近一次模型调用覆盖后的缓存未命中 token 数。
+        reasoning_tokens: 最近一次模型调用覆盖后的推理 token 数。
 
-    另有一个**非 dataclass 字段**的实例状态 ``_cache_details_complete``：记录历史模型调用是否
-    每次都给出了缓存明细。它只用于决定 ``cache_miss_tokens`` 能否由累计值推导，因此不进字段表、
+    另有一个**非 dataclass 字段**的实例状态 ``_cache_details_complete``：记录最近一次模型调用是否
+    给出了缓存明细。它只用于决定 ``cache_miss_tokens`` 能否由本次值推导，因此不进字段表、
     也不参与 ``to_dict``。
     """
 
@@ -87,11 +87,13 @@ class ConversationRunUsageStats:
         )
 
     def add_usage_metadata(self, usage_metadata: dict[str, Any] | None) -> None:
-        """按 LangChain ``UsageMetadata`` 标准契约累加一次模型调用的 token 统计。
+        """按 LangChain ``UsageMetadata`` 标准契约覆盖更新一次模型调用的 token 统计。
 
         单一事实来源：模型节点在每次模型调用产出 ``ai_message`` 后调用本方法，
-        从 ``ai_message.usage_metadata``（LangChain 已对各流式 chunk 求和无重复）取数，
-        不再逐 chunk 解析，消除双重口径。
+        从 ``ai_message.usage_metadata`` 取数。实测表明 provider 返回的
+        ``usage_metadata`` 已是该次 run 的累计值，因此本方法采用「覆盖更新」语义：
+        每次调用都用最新一次的用量**替换**既有值，而非逐次相加，避免多轮 / 多子调用
+        回流时重复累加导致总量虚高。最终生效的是最后一次有效 ``usage_metadata`` 的快照。
 
         参数:
             usage_metadata: ``AIMessage.usage_metadata``（dict 或 None）；None / 空字典时安全忽略。
@@ -103,28 +105,32 @@ class ConversationRunUsageStats:
             不抛出异常；字段缺失或类型异常时仅跳过该字段。
 
         副作用:
-            就地累加本对象各字段。本对象是 run 级共享累加器，同一 run 的多次模型调用（含输出
-            不完整时的续写回流）会依次累加，不会相互覆盖。
+            就地用最新一次用量覆盖本对象各字段。本对象是 run 级共享状态，以最后一次
+            有效 ``usage_metadata`` 的快照为准，不跨调用累加。
         """
         if not usage_metadata:
             return
 
-        self.input_tokens += self._safe_int(usage_metadata.get("input_tokens"))
-        self.output_tokens += self._safe_int(usage_metadata.get("output_tokens"))
-        self.total_tokens += self._safe_int(usage_metadata.get("total_tokens"))
+        self.input_tokens = self._safe_int(usage_metadata.get("input_tokens"))
+        self.output_tokens = self._safe_int(usage_metadata.get("output_tokens"))
+        self.total_tokens = self._safe_int(usage_metadata.get("total_tokens"))
 
-        cache_details_complete = getattr(self, "_cache_details_complete", True)
+        cache_details_complete = False
+        cache_hit = 0
         input_details = usage_metadata.get("input_token_details")
         if isinstance(input_details, dict) and _INPUT_CACHE_READ_KEY in input_details:
-            self.cache_hit_tokens += self._safe_int(input_details.get(_INPUT_CACHE_READ_KEY))
-        else:
-            cache_details_complete = False
+            cache_hit = self._safe_int(input_details.get(_INPUT_CACHE_READ_KEY))
+            cache_details_complete = True
+        self.cache_hit_tokens = cache_hit
+
         output_details = usage_metadata.get("output_token_details") or {}
         if isinstance(output_details, dict):
-            self.reasoning_tokens += self._safe_int(output_details.get(_OUTPUT_REASONING_KEY))
+            self.reasoning_tokens = self._safe_int(output_details.get(_OUTPUT_REASONING_KEY))
+        else:
+            self.reasoning_tokens = 0
 
-        # cache_read 是 input_tokens 的子集。未命中值不再保持永久 0，按累计输入减
-        # 累计命中推导，并对 provider 异常的 cache_read > input 做下限保护。
+        # cache_read 是 input_tokens 的子集。未命中值仅在本次 provider 给出缓存明细时
+        # 按 input - cache_hit 推导，并对 cache_read > input 做下限保护；否则置 None。
         self.cache_miss_tokens = (
             max(0, self.input_tokens - self.cache_hit_tokens)
             if cache_details_complete
