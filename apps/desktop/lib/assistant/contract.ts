@@ -147,6 +147,12 @@ export type TransportRun = {
   endReason: string | null;
   messages: TransportMessage[];
   usage: ConversationStateUsage | null;
+  /**
+   * Run 进入失败/取消终态时后端给出的受控错误；运行中与正常结束为 null。
+   *
+   * `message` 是后端受控的 provider 无关文案，前端直接展示，不得自行拼接 provider 报文。
+   */
+  error: TransportError | null;
 };
 
 /**

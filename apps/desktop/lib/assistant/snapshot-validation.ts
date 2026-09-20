@@ -50,6 +50,19 @@ function requireExactKeys(value: Record<string, unknown>, keys: readonly string[
   }
 }
 
+function validateError(value: unknown, path: string): void {
+  const error = requireRecord(value, path);
+  requireExactKeys(error, ["code", "message"], path);
+  // 与后端 ``_validate_error`` 同口径：code 与 message 都必须是非空白字符串，空白文案会让
+  // 界面渲染出没有内容的错误提示。
+  if (requireString(error.code, `${path}.code`).trim() === "") {
+    throw new TransportSnapshotValidationError(`${path}.code`, "非空白字符串");
+  }
+  if (requireString(error.message, `${path}.message`).trim() === "") {
+    throw new TransportSnapshotValidationError(`${path}.message`, "非空白字符串");
+  }
+}
+
 function validateUsage(value: unknown, path: string): void {
   const usage = requireRecord(value, path);
   requireExactKeys(usage, USAGE_KEYS, path);
@@ -142,7 +155,7 @@ export function parseTransportState(value: unknown): TransportState {
   const activeRunIds: number[] = [];
   for (const [index, rawRun] of state.runs.entries()) {
     const run = requireRecord(rawRun, `runs[${index}]`);
-    requireExactKeys(run, ["runId", "status", "endReason", "messages", "usage"], `runs[${index}]`);
+    requireExactKeys(run, ["runId", "status", "endReason", "messages", "usage", "error"], `runs[${index}]`);
     const runId = requireNullableNonNegativeInteger(run.runId, `runs[${index}].runId`);
     if (runId === null || runIds.has(runId)) throw new TransportSnapshotValidationError(`runs[${index}].runId`, "唯一的非负整数");
     runIds.add(runId);
@@ -154,6 +167,7 @@ export function parseTransportState(value: unknown): TransportState {
     const messageIds = new Set<string>();
     run.messages.forEach((message, messageIndex) => validateMessage(message, `runs[${index}].messages[${messageIndex}]`, messageIds));
     if (run.usage !== null) validateUsage(run.usage, `runs[${index}].usage`);
+    if (run.error !== null) validateError(run.error, `runs[${index}].error`);
   }
   const currentRunId = requireNullableNonNegativeInteger(state.current_run_id, "current_run_id");
   if (currentRunId !== null && !runIds.has(currentRunId)) throw new TransportSnapshotValidationError("current_run_id", "已存在的 Run ID 或 null");
@@ -166,11 +180,6 @@ export function parseTransportState(value: unknown): TransportState {
   if (ratio !== null && (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0)) throw new TransportSnapshotValidationError("context_usage_ratio", "非负有限数字或 null");
   requireNullableNonNegativeInteger(state.context_usage_used, "context_usage_used");
   requireNullableNonNegativeInteger(state.context_window_total, "context_window_total");
-  if (state.error !== null) {
-    const error = requireRecord(state.error, "error");
-    requireExactKeys(error, ["code", "message"], "error");
-    requireString(error.code, "error.code");
-    requireString(error.message, "error.message");
-  }
+  if (state.error !== null) validateError(state.error, "error");
   return state as unknown as TransportState;
 }

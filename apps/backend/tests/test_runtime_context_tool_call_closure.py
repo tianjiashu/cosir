@@ -117,6 +117,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
             status=status,
             end_reason=None,
             usage=None,
+            # 快照重建会投影 Run 级受控错误；桩必须与真实记录的字段集保持同形。
+            error=None,
         )
 
     store = SimpleNamespace(

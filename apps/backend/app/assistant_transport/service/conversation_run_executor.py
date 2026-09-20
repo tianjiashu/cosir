@@ -83,16 +83,60 @@ class ConversationRunExecutor:
                 调用方应视为启动失败并收敛该 run，不得静默继续。
 
         副作用:
-            在当前事件循环创建后台 task 并写入进程内 ``_executions`` 注册；不读取或
-            写入 run 状态列。
+            在当前事件循环创建后台 task、为其挂异常记录回调并写入进程内 ``_executions``
+            注册；不读取或写入 run 状态列。
         """
 
         run = self._run_service.get_run(run_id)
         if run.status != ConversationRunStatus.RUNNING:
             raise ValueError(f"run {run_id} is not running")
         thread_task = asyncio.create_task(self._execute(run_id, runner))
+        # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
+        thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
         self._executions[run_id] = _Execution(thread_task=thread_task)
         return thread_task
+
+    @staticmethod
+    def _log_execution_result(run_id: int, task: asyncio.Task[None]) -> None:
+        """记录后台执行 task 的异常结束，避免异常在事件循环里无痕消失。
+
+        本方法只做「取回并记录 task 结果」这件事：它不改变 run 状态、不重试、不重新抛出，
+        也不替换 workflow 已经落定的终态。
+
+        参数:
+            run_id: 本次后台执行对应的 Conversation Run 标识。
+            task: ``start`` 创建的后台 task。
+
+        返回:
+            无。
+
+        异常:
+            无。task 已被取消或正常结束时直接返回；异常 inspection 自身失败按静默返回处理。
+
+        副作用:
+            异常结束时写 ``conversation_run_execution_failed``（ERROR，含异常类型与异常文本）
+            日志；正常结束或取消不写日志。
+        """
+
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except Exception:  # 结果取回失败不能反过来打断事件循环回调
+            return
+        if error is None:
+            return
+        log.error(
+            "conversation_run_execution_failed",
+            extra={
+                "msg": "后台 Run 执行 task 以异常结束（终态由 workflow 落定）",
+                "data": {
+                    "run_id": run_id,
+                    "error_type": type(error).__name__,
+                    "error": str(error)[:500],
+                },
+            },
+        )
 
     async def close(self) -> None:
         """优雅关闭执行器并取消活动执行。"""

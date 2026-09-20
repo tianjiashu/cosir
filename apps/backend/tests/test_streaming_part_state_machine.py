@@ -6,7 +6,7 @@ from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
 )
-from app.core.workflows.react.nodes import (
+from app.core.workflows.react.nodes.helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
 

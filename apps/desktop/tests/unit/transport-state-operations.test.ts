@@ -22,6 +22,7 @@ function state(): TransportState {
           ],
         }],
         usage: null,
+        error: null,
       },
       {
         runId: 2,
@@ -29,6 +30,7 @@ function state(): TransportState {
         endReason: null,
         messages: [{ id: "assistant-2", role: "assistant", parts: [] }],
         usage: null,
+        error: null,
       },
     ],
     current_run_id: 1,

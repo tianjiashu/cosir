@@ -764,7 +764,14 @@ async def test_stream_delivers_queued_terminal_change_before_exit() -> None:
 
     initial = empty_snapshot()
     initial["runs"] = [
-        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+        {
+            "runId": 1,
+            "status": "running",
+            "endReason": None,
+            "messages": [],
+            "usage": None,
+            "error": None,
+        }
     ]
     initial["current_run_id"] = 1
     terminal = copy.deepcopy(initial)
@@ -802,7 +809,14 @@ async def test_stream_waits_for_terminal_snapshot_projection() -> None:
 
     initial = empty_snapshot()
     initial["runs"] = [
-        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+        {
+            "runId": 1,
+            "status": "running",
+            "endReason": None,
+            "messages": [],
+            "usage": None,
+            "error": None,
+        }
     ]
     initial["current_run_id"] = 1
     terminal = copy.deepcopy(initial)
@@ -843,7 +857,14 @@ async def test_stream_does_not_close_while_run_is_still_active() -> None:
 
     initial = empty_snapshot()
     initial["runs"] = [
-        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+        {
+            "runId": 1,
+            "status": "running",
+            "endReason": None,
+            "messages": [],
+            "usage": None,
+            "error": None,
+        }
     ]
     initial["current_run_id"] = 1
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
@@ -892,7 +913,14 @@ async def test_stream_disconnect_only_unsubscribes_and_does_not_cancel_run() -> 
 
     initial = empty_snapshot()
     initial["runs"] = [
-        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+        {
+            "runId": 1,
+            "status": "running",
+            "endReason": None,
+            "messages": [],
+            "usage": None,
+            "error": None,
+        }
     ]
     initial["current_run_id"] = 1
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
@@ -936,12 +964,26 @@ async def test_stream_fallback_sends_terminal_snapshot() -> None:
 
     initial = empty_snapshot()
     initial["runs"] = [
-        {"runId": 1, "status": "running", "endReason": None, "messages": [], "usage": None}
+        {
+            "runId": 1,
+            "status": "running",
+            "endReason": None,
+            "messages": [],
+            "usage": None,
+            "error": None,
+        }
     ]
     initial["current_run_id"] = 1
     terminal = empty_snapshot()
     terminal["runs"] = [
-        {"runId": 1, "status": "completed", "endReason": None, "messages": [], "usage": None}
+        {
+            "runId": 1,
+            "status": "completed",
+            "endReason": None,
+            "messages": [],
+            "usage": None,
+            "error": None,
+        }
     ]
     terminal["current_run_id"] = 1
     queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()

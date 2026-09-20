@@ -920,6 +920,69 @@ def test_url_safety_allows_public() -> None:
     assert reason == ""
 
 
+def test_url_safety_allows_proxy_fake_ip_resolution(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """主机名解析到代理 fake-ip 占位段（198.18.0.0/15）时放行，并写 web_url_fake_ip_allowed。
+
+    潜在缺陷：把 fake-ip 占位地址当成内网 ⇒ 开启系统代理（Clash 系）的环境下所有域名
+    都被拦，web_extract 完全不可用。放行必须留下可见日志，供事后审计这次的放宽。
+    """
+
+    caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
+
+    safe, reason = is_safe_public_url(
+        "https://example.com/", resolver=lambda h: ["198.18.0.67"]
+    )
+
+    assert safe is True
+    assert reason == ""
+    allowed = [r for r in caplog.records if r.msg == "web_url_fake_ip_allowed"]
+    assert allowed, "fake-ip 放行必须落 web_url_fake_ip_allowed 日志"
+    assert allowed[0].data["host"] == "example.com"
+    assert allowed[0].data["matched_address"] == "198.18.0.67"
+    # 放行路径不得同时产生拦截日志（否则两者语义自相矛盾）。
+    assert not [r for r in caplog.records if r.msg == "web_url_address_blocked"]
+
+
+def test_url_safety_blocks_fake_ip_address_literal() -> None:
+    """URL 主机名本身是 fake-ip 段的 IP 字面量时仍被拦截（字面量不经 DNS，判定可信）。"""
+
+    safe, reason = is_safe_public_url(
+        "http://198.18.0.67/", resolver=lambda h: ["198.18.0.67"]
+    )
+
+    assert safe is False
+    assert reason.startswith("Blocked:")
+
+
+def test_url_safety_blocks_when_fake_ip_mixed_with_private_address() -> None:
+    """同一主机名既有 fake-ip 占位又有真实内网地址时，按保守方向拦截。"""
+
+    safe, reason = is_safe_public_url(
+        "https://example.com/", resolver=lambda h: ["198.18.0.67", "10.0.0.5"]
+    )
+
+    assert safe is False
+    assert "private" in reason or "internal" in reason
+
+
+def test_web_extract_succeeds_behind_fake_ip_proxy() -> None:
+    """fake-ip 代理环境下 web_extract 能真正走到 provider（潜在缺陷：全域名被拦）。
+
+    这是本次缺陷的端到端回归：解析结果为 fake-ip 占位段时必须照常提取，而不是在
+    安全检查阶段就返回 Blocked。
+    """
+
+    provider = FakeProvider()
+    tool = WebExtractTool(_registry_with(provider), resolver=lambda h: ["198.18.0.67"])
+
+    obs = tool.execute(urls=["https://example.com/page"])
+
+    assert obs.status == "success"
+    assert len(provider.extract_calls) == 1
+
+
 def test_url_safety_blocks_non_http_scheme() -> None:
     """非 http/https 协议被拦截。"""
 

@@ -3,11 +3,12 @@
 from types import SimpleNamespace
 from typing import Any
 
+import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
 from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     SettlementResult,
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
+    ToolCallLifecycleRecord,
 )
 from app.core.workflows.react.state import ReactGraphState
 

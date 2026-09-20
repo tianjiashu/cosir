@@ -87,6 +87,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
                 "status": "completed",
                 "endReason": None,
                 "usage": None,
+                "error": None,
                 "messages": [
                     {
                         "id": "m1",
@@ -128,6 +129,7 @@ def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
             "status": "running",
             "end_reason": None,
             "usage": None,
+            "error": None,
             "created_at": timestamp,
         },
     )()
@@ -162,6 +164,7 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
             "status": "cancelled",
             "end_reason": "backend_restarted",
             "usage": None,
+            "error": None,
             "created_at": timestamp,
         },
     )()

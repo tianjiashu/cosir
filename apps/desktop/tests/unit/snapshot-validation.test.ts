@@ -28,7 +28,7 @@ describe("Transport snapshot validation", () => {
 
   it("rejects invalid tool lifecycle state with a diagnostic path", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{ type: "tool-call", toolCallId: "t1", toolName: "read_file", status: "future", args: {} }],
@@ -39,7 +39,7 @@ describe("Transport snapshot validation", () => {
 
   it("accepts a positive child Run locator and rejects invalid locators", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{
@@ -75,17 +75,61 @@ describe("Transport snapshot validation", () => {
 
   it("rejects an active run that is not the current run", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, messages: [] }];
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, usage: null, error: null, messages: [] }];
     expect(() => parseTransportState(snapshot)).toThrow("current_run_id");
   });
 
   it("rejects multiple active runs instead of silently choosing one to attach", () => {
     const snapshot = validSnapshot();
     snapshot.runs = [
-      { runId: 1, status: "running", endReason: null, usage: null, messages: [] },
-      { runId: 2, status: "pending", endReason: null, usage: null, messages: [] },
+      { runId: 1, status: "running", endReason: null, usage: null, error: null, messages: [] },
+      { runId: 2, status: "pending", endReason: null, usage: null, error: null, messages: [] },
     ];
     snapshot.current_run_id = 1;
     expect(() => parseTransportState(snapshot)).toThrow("最多一个 active Run");
+  });
+
+  it("accepts a controlled run error payload", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{
+      runId: 1,
+      status: "failed",
+      endReason: "model_insufficient_quota",
+      usage: null,
+      error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足，请充值或更换模型" },
+      messages: [],
+    }];
+    snapshot.current_run_id = 1;
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
+  it("rejects a run error that is missing its message", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{
+      runId: 1,
+      status: "failed",
+      endReason: "model_insufficient_quota",
+      usage: null,
+      error: null,
+      messages: [],
+    }];
+    snapshot.current_run_id = 1;
+    (snapshot.runs[0] as { error: unknown }).error = { code: "model_insufficient_quota" };
+    expect(() => parseTransportState(snapshot)).toThrow("runs[0].error");
+  });
+
+  it("rejects a run without the error field instead of tolerating a partial snapshot", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{
+      runId: 1,
+      status: "running",
+      endReason: null,
+      usage: null,
+      error: null,
+      messages: [],
+    }];
+    snapshot.current_run_id = 1;
+    delete (snapshot.runs[0] as { error?: unknown }).error;
+    expect(() => parseTransportState(snapshot)).toThrow("runs[0]");
   });
 });

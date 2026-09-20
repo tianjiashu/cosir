@@ -16,6 +16,7 @@ const run = (runId: number, messages: TransportMessage[], status = "running"): T
   endReason: null,
   messages,
   usage: null,
+  error: null,
 });
 
 const state = (runs: TransportRun[], error: TransportState["error"] = null): TransportState => ({

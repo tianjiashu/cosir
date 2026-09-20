@@ -16,6 +16,7 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.models import ConversationRunStatus
+from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -290,6 +291,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     },
                 ],
                 "usage": None,
+                "error": None,
             }
         ],
         "current_run_id": 2,
@@ -403,9 +405,17 @@ def test_terminal_error_contract_carries_only_code_and_message() -> None:
         "user cancelled mid-run",  # 非合法标识符 -> 回退固定 code
     )
 
-    assert failed == {"code": "tool_error_limit_reached", "message": "运行失败"}
+    # message 由失败 code 目录统一产出（provider 无关文案）；这里同时锁定 code 与「message
+    # 只来自目录」这一契约，避免有人把文案抄回调用点。
+    assert failed == {
+        "code": "tool_error_limit_reached",
+        "message": run_failure_message("tool_error_limit_reached"),
+    }
     assert set(failed or {}) == {"code", "message"}
-    assert cancelled == {"code": "run_cancelled", "message": "运行已取消"}
+    assert cancelled == {
+        "code": "run_cancelled",
+        "message": run_failure_message("run_cancelled"),
+    }
     assert (
         conversation_run_state_service_module.terminal_error(
             ConversationRunStatus.COMPLETED,

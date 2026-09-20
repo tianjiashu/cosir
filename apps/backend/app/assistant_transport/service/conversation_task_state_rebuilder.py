@@ -12,6 +12,7 @@ from langchain_core.messages.tool import ToolCall
 
 from app.assistant_transport.event import build_user_input_parts
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
+from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStatePart,
@@ -32,6 +33,44 @@ from app.utils.message_content import content_to_text
 
 class ConversationTaskStateRebuilder:
     """Rebuild a Task Transport snapshot from Task, Run, and context records only."""
+
+    @staticmethod
+    def build_run_error(run: ConversationRunRecord) -> ConversationStateError | None:
+        """把持久化的 Run 错误契约投影为 Transport 错误契约。
+
+        参数:
+            run: 已落库的 Run 记录；其 ``error`` 来自 ``error_json``，由
+                ``ConversationRunStateService.terminal_error`` 写入。
+
+        返回:
+            ``{"code", "message"}`` 形状的 Transport 错误；Run 未失败或没有错误契约时返回
+            ``None``。
+
+        异常:
+            ValueError: 持久化错误契约不是映射，或不是恰好 ``{code, message}`` 两个**非空白**
+                字符串——受控字段被污染时显式失败，而不是把非法数据投影成面向用户的文案
+                （空白文案会让前端渲染出没有内容的错误气泡）。
+
+        副作用:
+            无（纯函数，不访问数据库或进程内状态）。
+        """
+
+        error = run.error
+        if error is None:
+            return None
+        if not isinstance(error, dict):
+            raise ValueError(f"run {run.id} carries a non-mapping error contract")
+        code = error.get("code")
+        message = error.get("message")
+        if (
+            set(error) != {"code", "message"}
+            or not isinstance(code, str)
+            or not code.strip()
+            or not isinstance(message, str)
+            or not message.strip()
+        ):
+            raise ValueError(f"run {run.id} carries a malformed error contract")
+        return ConversationStateError(code=code, message=message)
 
     @staticmethod
     def build_pair_tool_part(
@@ -290,6 +329,7 @@ class ConversationTaskStateRebuilder:
                     endReason=run.end_reason,
                     messages=snapshot_messages,
                     usage=run.usage,
+                    error=ConversationTaskStateRebuilder.build_run_error(run),
                 )
             )
         used = task.context_usage_used

@@ -75,6 +75,11 @@ function messageRenderSignature(context: TransportMessageRenderContext): string 
     signaturePart(String(context.runId)),
     signaturePart(context.runStatus),
     signaturePart(context.endReason),
+    // 受控错误参与签名：同一 failed 状态下 message 变化（例如重连后重新分类）必须让缓存
+    // 失效，否则界面会一直显示旧的失败提示。
+    signaturePart(
+      context.error === null ? null : `${context.error.code}|${context.error.message}`,
+    ),
     context.isLastRunMessage ? "last" : "not-last",
   ].join(SIGNATURE_SEPARATOR);
 }
@@ -174,6 +179,7 @@ export function createTransportViewConverter(
         runId: run.runId,
         runStatus: run.status,
         endReason: run.endReason,
+        error: run.error,
         isLastRunMessage: source.id === lastMessageId,
       }));
     });

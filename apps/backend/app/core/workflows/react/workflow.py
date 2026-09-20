@@ -20,10 +20,17 @@ from langgraph.types import Command
 
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
+from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.runtime.checkpointer import build_checkpointer
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.workflow_operations import WorkflowOperations
+from app.models.conversation_run_failure import (
+    RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED,
+    RUN_FAILURE_CODE_GRAPH_FAILED,
+    RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
+    run_failure_message,
+)
 from app.service.provider.capability_service import CapabilityService
 
 from ...context.runtime_context_manager import RuntimeContextManager
@@ -111,6 +118,121 @@ class ReactLikeWorkflow(AgentWorkflow):
             return
         operations.process_event(value)
 
+    @staticmethod
+    def _failure_code_for(exc: BaseException) -> str:
+        """把异常归类为失败 code；识别不出模型调用错误时用中性兜底 code。
+
+        参数:
+            exc: 待归类的异常。既可能是从 graph 逃逸的异常，也可能是本工作流构建期
+                （模型解析、运行期配置构造）抛出并就地收口的异常。
+
+        返回:
+            ``ErrorKind`` 的模型错误分类值，或 ``RUN_FAILURE_CODE_GRAPH_FAILED``（无法判定时）。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return classify_model_failure(exc) or RUN_FAILURE_CODE_GRAPH_FAILED
+
+    @staticmethod
+    def _current_run_id(operations: WorkflowOperations) -> int | None:
+        """读取当前 Run 标识用于日志；门面不可用时返回 ``None``。
+
+        收口日志必须在**任何**情况下都写得出来：异常收尾路径上 ``operations`` 可能已不可用
+        （例如落定失败后门面解绑）。此处把读取本身降级为 ``None``，避免日志语句反过来抛出
+        新异常、把原始失败掩盖掉。
+
+        参数:
+            operations: 当前 Conversation Run 的运行时操作门面。
+
+        返回:
+            Run 标识；读取失败时返回 ``None``。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        try:
+            return operations.get_current_run().id
+        except Exception:  # 日志字段读取失败按「不知道」处理
+            return None
+
+    @staticmethod
+    def _settle_failed_run(
+        operations: WorkflowOperations,
+        end_reason: str,
+        *,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
+    ) -> None:
+        """把本轮的 running Run 落定为 failed 终态。
+
+        本方法是「graph 构建期与执行期异常逃逸」的唯一终态收口点：调用方负责在调用它之后
+        继续向上抛出原异常，而 Run 终态必须先在此落定——否则异常逃逸到 runner / executor 后
+        无人落终态，Run 会永久停留在 ``running``，前端既收不到失败原因也无法开始新轮次。
+
+        参数:
+            operations: 当前 Conversation Run 的运行时操作门面，提供 run 状态迁移入口。
+            end_reason: 稳定失败 code（同时作为 ``conversation_runs.end_reason`` 与受控错误的
+                ``code``）；模型调用异常请传 ``classify_model_failure`` 的结果。
+            usage_stats: 可选累计用量；异常发生前已消耗的 token 随终态一并落库。
+            final_output: 可选失败说明文本；为 ``None`` 时使用该 code 对应的受控用户文案，
+                使委派场景的主 Agent 也能感知子 run 的失败原因。
+
+        返回:
+            无。
+
+        异常:
+            无。落终态失败（如数据库写入异常）只记 error 日志并返回——收尾失败不得替换调用方
+            正在向上抛出的原始异常；Run 已由其它路径落终态时记 info 日志并返回。
+
+        副作用:
+            更新 ``conversation_runs`` 行（failed 终态、end_reason、受控错误、用量与 final_output）
+            并发布 Run 状态事件；写 ``run_failure_settled`` / ``run_failure_settle_failed`` /
+            ``run_failure_settle_race_lost`` 日志。
+        """
+
+        run_id = ReactLikeWorkflow._current_run_id(operations)
+        resolved_output = run_failure_message(end_reason) if final_output is None else final_output
+        try:
+            failed_run = operations.fail_run_if_running(
+                end_reason=end_reason,
+                usage_stats=usage_stats,
+                final_output=resolved_output,
+            )
+        except Exception:
+            log.exception(
+                "run_failure_settle_failed",
+                extra={
+                    "msg": "异常收尾时落定 failed 终态失败，run 可能仍为 running",
+                    "data": {"run_id": run_id, "end_reason": end_reason},
+                },
+            )
+            return
+        if failed_run is None:
+            log.info(
+                "run_failure_settle_race_lost",
+                extra={
+                    "msg": "异常收尾落定 failed 时 run 已非 running，跳过终态写入",
+                    "data": {"run_id": run_id, "end_reason": end_reason},
+                },
+            )
+            return
+        log.info(
+            "run_failure_settled",
+            extra={
+                "msg": "异常已将 run 落定为 failed 终态",
+                "data": {"run_id": failed_run.id, "end_reason": end_reason},
+            },
+        )
+
     async def run(
         self,
         operations: WorkflowOperations,
@@ -118,7 +240,47 @@ class ReactLikeWorkflow(AgentWorkflow):
         langfuse_trace_id: str | None = None,
         execution_mode: ExecutionMode = "fresh",
     ) -> None:
-        """执行一个任务，直到完成、失败、取消或达到最大步骤数。
+        """执行一个任务，并在异常逃逸时把 Run 落定为 failed 终态。
+
+        本方法只做「调用图执行 + 异常兜底收口」两件事：正常终态由节点内的
+        ``WorkflowOperations`` 落定；任何逃逸出 ``_run_graph`` 的异常都在此处先落 failed 终态
+        再原样抛出——runner 与 executor 都刻意不写终态，异常若直接逃逸，Run 会永久停留在
+        ``running``，前端既收不到失败原因也无法开始新轮次。
+
+        参数:
+            operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
+            callbacks: 可选 LangChain callbacks（如 Langfuse ``CallbackHandler``）。
+            langfuse_trace_id: 可选 Langfuse trace 标识；未启用 Langfuse 时为 None。
+            execution_mode: 本次执行是 ``fresh`` 还是 ``resume``。
+
+        返回:
+            无（协程）。
+
+        异常:
+            Exception: 原样重新抛出 ``_run_graph`` 的异常；抛出前 Run 已落 failed 终态。
+
+        副作用:
+            异常路径下把 Run 更新为 failed（含受控错误契约）并发布状态事件；其余副作用见
+            ``_run_graph``。
+        """
+
+        try:
+            await self._run_graph(operations, callbacks, langfuse_trace_id, execution_mode)
+        except Exception as exc:
+            # 兜底收口：图构建、resume 状态检查等路径的异常不经过 graph.astream 的 except
+            # 分支，必须在这里补落终态。已在内部落定过的 run 只会命中 fail_run_if_running 的
+            # 「已非 running」分支，记 info 日志后放行。
+            self._settle_failed_run(operations, self._failure_code_for(exc))
+            raise
+
+    async def _run_graph(
+        self,
+        operations: WorkflowOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
+    ) -> None:
+        """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
 
         以 LangGraph 状态流驱动已编译 graph。工作流不再生产或透传 RuntimeEvent；模型、
         工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state，
@@ -142,9 +304,10 @@ class ReactLikeWorkflow(AgentWorkflow):
             state 订阅事实变更。
 
         异常:
-            ValueError: Conversation Run 缺少 ``provider_id``。
+            ValueError: Conversation Run 缺少 ``provider_id``——run 已先落 failed 终态。
             Exception: 模型解析失败或 graph 执行失败时，记 ``workflow_graph_failed`` /
-                ``model_resolve_failed`` 后原样向上抛出，由 runner 收敛 run 终态。
+                ``model_resolve_failed``，经 ``_settle_failed_run`` 落定 failed 终态后原样向上
+                抛出；未被这些分支覆盖的异常再由外层 ``run`` 兜底落定。
         """
 
         run = operations.get_current_run()
@@ -175,6 +338,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     },
                 },
             )
+            self._settle_failed_run(operations, RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE)
             raise
         # 构建工具
         tool_schemas = [
@@ -197,6 +361,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             bound_model = base_model
 
         if run.provider_id is None:
+            # 配置缺失也属于「本轮无法开始」的失败：先落 failed 终态再抛出，避免异常逃逸后
+            # run 永久停留在 running。
+            self._settle_failed_run(operations, RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE)
             raise ValueError("Conversation Run provider_id is required")
         thinking_channel = CapabilityService.get_thinking_channel(run.provider_id)
         vision_input_format = CapabilityService.get_vision_input_format(run.provider_id)
@@ -287,10 +454,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                             "data": {"task_id": current_task.id, "run_id": run_id},
                         },
                     )
-                    operations.fail_run_if_running(
-                        end_reason="graph_already_finished",
-                        final_output="该轮次的工作流已结束，无法继续续跑，请新建轮次",
-                    )
+                    self._settle_failed_run(operations, RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED)
                     return
                 # 图停在带 interrupt 的任务上（当前唯一来源是 ``model_node`` 的协作取消）
                 # 时必须用 ``Command(resume=...)`` 恢复；其余情况传 ``None``，语义为
@@ -309,15 +473,24 @@ class ReactLikeWorkflow(AgentWorkflow):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
                     self._write_stream_item(operations, mode, value)
-            except Exception:
+            except Exception as exc:
                 log.exception(
                     "workflow_graph_failed",
                     extra={
                         "msg": "langgraph execution failed during workflow run",
                         "data": {
                             "task_id": current_task.id,
-                            "run_id": operations.get_current_run().id,
+                            # 经 _current_run_id 读取：日志语句本身不得在收尾路径上抛出。
+                            "run_id": ReactLikeWorkflow._current_run_id(operations),
                         },
                     },
+                )
+                # 图执行异常（模型调用报错、provider 不可用、节点内部硬错等）必须先落 failed
+                # 终态再向上抛：本层是唯一知道异常形状的地方，而 runner / executor 都刻意不落
+                # 终态，异常逃逸后 run 会永久停留在 running 且无法取消。
+                self._settle_failed_run(
+                    operations,
+                    self._failure_code_for(exc),
+                    usage_stats=runtime_config.usage_stats,
                 )
                 raise

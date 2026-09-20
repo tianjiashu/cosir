@@ -122,3 +122,4 @@ temp_gen_out.txt
 .superpowers
 /apps/backend/.pytest*
 .pytest*
+/.jez/

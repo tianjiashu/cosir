@@ -15,6 +15,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_usage_compute_listener import (
@@ -26,9 +27,10 @@ from app.core.context.runtime_context_manager import RuntimeContextManager, _as_
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
+    ToolCallLifecycleRecord,
 )
 from app.models.conversation_run_command import ConversationRunCommand
+from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.task.conversation_run_service import ConversationRunService
 from app.service.task.conversation_run_state_service import ConversationRunStateService
@@ -554,7 +556,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
             }
             assert kwargs["error"] == {
                 "code": "tool_error_limit_reached",
-                "message": "运行失败",
+                "message": run_failure_message("tool_error_limit_reached"),
             }
             run.status = "failed"
             return run

@@ -27,6 +27,7 @@ const completedRun = (runId: number, messages: TransportMessage[] = []): Transpo
   endReason: null,
   messages,
   usage: null,
+  error: null,
 });
 
 const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportToolCallPart> = {}): TransportToolCallPart => ({
@@ -330,6 +331,44 @@ describe("assistant transport converter", () => {
 
   it("does not treat unknown message status as success", () => {
     expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, { ...completedRun(1), status: "future-status" })).toEqual({ type: "incomplete", reason: "other" });
+  });
+
+  it("prefers the backend controlled failure message over the local fallback", () => {
+    const failedRun: TransportState["runs"][number] = {
+      ...completedRun(1),
+      status: "failed",
+      error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足，请充值或更换模型" },
+    };
+
+    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, failedRun)).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: "模型服务配额或余额不足，请充值或更换模型",
+    });
+  });
+
+  it("falls back to the local failure message when the run carries no error contract", () => {
+    const failedRun: TransportState["runs"][number] = { ...completedRun(1), status: "failed" };
+
+    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, failedRun)).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: "对话运行失败，请检查模型配置或后端状态。",
+    });
+  });
+
+  it("keeps disconnected failures rendered as cancelled instead of an error", () => {
+    const disconnectedRun: TransportState["runs"][number] = {
+      ...completedRun(1),
+      status: "failed",
+      endReason: "client_disconnected",
+      error: { code: "client_disconnected", message: "连接已断开，本轮对话被中断，请重新发送" },
+    };
+
+    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, disconnectedRun)).toEqual({
+      type: "incomplete",
+      reason: "cancelled",
+    });
   });
 
   it("keeps unknown tool and run states explicitly non-success", () => {

@@ -30,9 +30,11 @@ class ErrorKind(str, Enum):
     # 异常归一，供前端按 error_code 给出修复引导）。
     MODEL_AUTH_FAILED = "model_auth_failed"
     MODEL_RATE_LIMITED = "model_rate_limited"
+    MODEL_TIMEOUT = "model_timeout"
     MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
     MODEL_INVALID_REQUEST = "model_invalid_request"
     MODEL_NETWORK_ERROR = "model_network_error"
+    MODEL_SERVICE_ERROR = "model_service_error"
     MODEL_NOT_FOUND = "model_not_found"
     MODEL_INSUFFICIENT_QUOTA = "model_insufficient_quota"
     MODEL_CONTENT_BLOCKED = "model_content_blocked"

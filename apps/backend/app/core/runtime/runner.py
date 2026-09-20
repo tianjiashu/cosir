@@ -132,11 +132,11 @@ class AgentRuntime:
             RuntimeError: 当 ``agent.run`` 为 None 时抛出。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT/STOP hook；run 的终态（completed / cancelled /
-            failed）**由 workflow 节点经 ``WorkflowOperations`` 落定**，本方法不落任何
-            终态；本轮消息落库、canonical conversation facts 与快照收口由
-            ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责；执行异常记
-            ``task_failed`` 后向上传播，并清理进程内取消信号。
+            触发 USER_PROMPT_SUBMIT/STOP hook；run 的终态（completed / cancelled / failed）
+            **由 workflow 落定**——正常路径经节点内的 ``WorkflowOperations``，异常路径经
+            ``ReactLikeWorkflow._settle_failed_run``；本方法不写任何终态，异常按原文传播并
+            记 ``task_failed``，仅清理进程内取消信号。本轮消息落库、canonical conversation
+            facts 与快照收口由 ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责。
         """
 
         if agent.run is None:
@@ -190,7 +190,7 @@ class AgentRuntime:
             log.exception(
                 "task_failed",
                 extra={
-                    "msg": "task execution failed; executor owns terminal settlement",
+                    "msg": "run 执行失败，异常向上传播（终态已由 workflow 在抛出前落定）",
                     "data": {"task_id": task_id, "run_id": run_id, "error": str(exc)},
                 },
             )

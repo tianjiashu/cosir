@@ -17,7 +17,7 @@ _SNAPSHOT_KEYS = {
     "context_window_total",
     "error",
 }
-_RUN_KEYS = {"runId", "status", "endReason", "messages", "usage"}
+_RUN_KEYS = {"runId", "status", "endReason", "messages", "usage", "error"}
 _MESSAGE_KEYS = {"id", "role", "parts"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
@@ -164,6 +164,8 @@ def _validate_run(run: object, seen_run_ids: set[int]) -> None:
         raise ValueError("snapshot run messages must be an array")
     if run["usage"] is not None:
         _validate_usage(run["usage"])
+    if run["error"] is not None:
+        _validate_error(run["error"])
     seen_message_ids: set[str] = set()
     for message in run["messages"]:
         _validate_message(message, seen_message_ids)
@@ -198,11 +200,14 @@ def _validate_usage(usage: object) -> None:
 
 def _validate_error(error: object) -> None:
     # 错误契约只允许 code + message；``retryable`` 属于工具观察，不进 Transport。
+    # 两者都必须是**非空白**字符串：空白文案会让前端渲染出没有内容的错误气泡。
     if (
         not isinstance(error, dict)
         or set(error) != {"code", "message"}
         or not isinstance(error["code"], str)
+        or not error["code"].strip()
         or not isinstance(error["message"], str)
+        or not error["message"].strip()
     ):
         raise ValueError("snapshot error is malformed")
 

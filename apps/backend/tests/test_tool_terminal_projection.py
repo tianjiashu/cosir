@@ -1588,11 +1588,11 @@ def test_settle_degrades_when_event_emission_fails(
 
 
 def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
-    """缺陷类型：非法调用收口路径不关闭前端 pending part / 不发修复提示。
+    """非法调用收口：补发恰一次 failed 终态事件，返回**状态已前进**的新快照与修复提示。
 
-    注：``fail_invalid_tools`` 丢弃 ``_fail_invalid`` 返回的新 manager，故内部 state 不前进
-    （详见结论报告的既有观察项）；本用例只断言该方法**对外可观测契约**：向前端补发恰一次
-    failed 终态事件、并返回修复提示文本。
+    ``fail_invalid_tools`` 遵循本类的 copy-on-write 约定，必须在返回值里交出迁移后的 manager；
+    调用方丢弃该返回值会让记录停在 ``pending``（历史缺陷），故本用例同时锁定「返回的新快照中
+    该调用已为 failed」这一契约。
     """
 
     harness = _LifecycleHarness()
@@ -1603,7 +1603,9 @@ def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
     )
 
     with harness._patch_runtime():
-        repair = harness.manager.fail_invalid_tools(task_id=1, run_id=2, step_id="step-3")
+        updated, repair = harness.manager.fail_invalid_tools(
+            task_id=1, run_id=2, step_id="step-3"
+        )
 
     events = [e for e in harness.events if isinstance(e, ToolCallStatusChangedEvent)]
     assert len(events) == 1
@@ -1611,6 +1613,10 @@ def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
     assert events[0].status == "failed"
     assert events[0].error == "参数无效"
     assert repair is not None and "read_file" in repair
+    assert updated.calls["bad"].status == "failed"
+    # 原快照不被就地改写（copy-on-write）：状态与对象身份都必须不同，浅共享的伪实现会在此失败。
+    assert harness.manager.calls["bad"].status == "pending"
+    assert harness.manager.calls["bad"] is not updated.calls["bad"]
 
 
 def test_fail_invalid_tools_no_repair_for_non_pending() -> None:
@@ -1625,10 +1631,13 @@ def test_fail_invalid_tools_no_repair_for_non_pending() -> None:
     )
 
     with harness._patch_runtime():
-        repair = harness.manager.fail_invalid_tools(task_id=1, run_id=2, step_id="step-3")
+        updated, repair = harness.manager.fail_invalid_tools(
+            task_id=1, run_id=2, step_id="step-3"
+        )
 
     assert repair is None
     assert harness.events == []
+    assert updated.calls["bad"].status == "failed"
 
 
 def test_cancel_moves_pending_and_running_only() -> None:

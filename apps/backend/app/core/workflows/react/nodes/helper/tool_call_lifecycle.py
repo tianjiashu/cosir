@@ -410,6 +410,69 @@ class ToolCallLifecycleManager(BaseModel):
             )
         )
 
+    def _emit_status_safe(
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        call_id: str,
+        to_status: ToolCallEventStatus,
+        args: dict[str, object] | None = None,
+        error: str | None = None,
+        display_data: dict[str, object] | None = None,
+    ) -> None:
+        """发射状态迁移事件；失败只降级记日志，绝不阻断调用方的状态迁移。
+
+        状态事件是「通知前端」的旁路：它失败不能让已经确定的状态迁移半途而废，否则快照会出现
+        「事件已发、状态未落」的不一致（非法调用会退回「pending 且无终态」）。本方法把该降级
+        收口在一处，供 ``begin`` / ``cancel`` / ``_fail_invalid`` / ``settle`` 共用。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            call_id: 目标工具调用 id。
+            to_status: 目标状态（``running`` / ``completed`` / ``failed`` / ``cancelled``）。
+            args: 可选，完整参数（仅合法调用迁移到 ``running`` 时携带）。
+            error: 可选，面向前端的短错误提示。
+            display_data: 可选，终态事件的展示数据。
+
+        返回:
+            无。
+
+        异常:
+            无。``BaseException``（如 ``KeyboardInterrupt``）仍照常上抛，不被本方法吞掉。
+
+        副作用:
+            成功时经 :meth:`_emit_status` 发出一次 ``ToolCallStatusChangedEvent``；失败时写
+            ``tool_terminal_event_failed`` ERROR 日志（含 ``task_id`` / ``run_id`` /
+            ``tool_call_id`` / ``status`` 等定位字段）后返回，调用方的状态迁移照常完成。
+        """
+
+        try:
+            self._emit_status(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                call_id=call_id,
+                to_status=to_status,
+                args=args,
+                error=error,
+                display_data=display_data,
+            )
+        except Exception:
+            log.exception(
+                "tool_terminal_event_failed",
+                extra={
+                    "msg": "工具调用状态事件发送失败并被降级",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "tool_call_id": call_id,
+                        "status": to_status,
+                    },
+                },
+            )
+
     def begin(
         self,
         *,
@@ -428,13 +491,16 @@ class ToolCallLifecycleManager(BaseModel):
             tool_calls: 模型解析成功的工具调用（``ai_message.tool_calls``）。
 
         返回:
-            更新后的 manager：被迁移的调用状态为 ``running`` 且带完整 ``args``。
+            更新后的 manager（**恒为新快照**）：被迁移的调用状态为 ``running`` 且带完整 ``args``。
 
         副作用:
-            每条迁移经 stream writer 发出一次 ``running`` 状态事件。
+            每条迁移经 stream writer 发出一次 ``running`` 状态事件；事件发送失败只记
+            ``tool_terminal_event_failed`` 并降级继续，状态迁移照常完成。
         """
 
-        updated = self
+        # 与 ``cancel`` / ``fail_invalid_tools`` 同口径：恒以新快照起手，返回值身份可预期；
+        # 起手即复制后，迁移过程直接在该快照上推进即可，无需逐步复制。
+        updated = self._copy()
         for tool_call in tool_calls:
             if tool_call.call_id not in updated.calls:
                 updated = updated.create(
@@ -446,7 +512,7 @@ class ToolCallLifecycleManager(BaseModel):
             record = updated.calls.get(tool_call.call_id)
             if record is None or record.status != "pending":
                 continue
-            updated._emit_status(
+            updated._emit_status_safe(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
@@ -454,7 +520,6 @@ class ToolCallLifecycleManager(BaseModel):
                 to_status="running",
                 args=tool_call.arguments,
             )
-            updated = updated._copy()
             updated.calls[tool_call.call_id].status = "running"
             updated.calls[tool_call.call_id].args = copy.deepcopy(tool_call.arguments)
         return updated
@@ -573,7 +638,8 @@ class ToolCallLifecycleManager(BaseModel):
             更新后的 manager；已终态的调用不受影响。
 
         副作用:
-            经 stream writer 为每条被收口的调用发出一次 ``cancelled`` 终态事件。
+            经 stream writer 为每条被收口的调用发出一次 ``cancelled`` 终态事件；事件发送失败
+            只记 ``tool_terminal_event_failed`` 并降级继续，状态迁移照常完成。
         """
 
         updated = self._copy()
@@ -586,7 +652,7 @@ class ToolCallLifecycleManager(BaseModel):
             record = updated.calls.get(call_id)
             if record is None or record.status not in {"pending", "running"}:
                 continue
-            updated._emit_status(
+            updated._emit_status_safe(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
@@ -596,13 +662,47 @@ class ToolCallLifecycleManager(BaseModel):
             updated.calls[call_id].status = "cancelled"
         return updated
 
-    def fail_invalid_tools(self, task_id, run_id, step_id):
-        invalid_tools = self.invalid_tools
+    def fail_invalid_tools(
+        self,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+    ) -> tuple[ToolCallLifecycleManager, str | None]:
+        """收口全部参数非法的调用，并产出面向模型的修复提示文本。
+
+        本方法是「非法调用批量收口」的唯一入口：逐条把仍为 ``pending`` 的非法调用交给
+        :meth:`_fail_invalid` 置 ``failed`` 并补发终态事件，同时收集可修复明细。
+
+        ``_fail_invalid`` 遵循本类的 copy-on-write 约定（在 ``_copy()`` 出的新快照上迁移状态），
+        因此**必须把它的返回值逐次累积并返回给调用方**；丢弃返回值会让 ``self`` 上的记录永远停在
+        ``pending``，而调用方写回 graph state 的又是这份未迁移的快照，导致后续按状态判定的逻辑
+        （观察节点结算、快照重建、二次收口）读到错误的生命周期。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+
+        返回:
+            ``(更新后的 manager, 修复提示或 None)``。manager **恒为新的快照**（与本类其它迁移
+            方法一致，避免调用方依赖「有时是新对象、有时是原对象」的隐式差异），调用方**必须**
+            把它写回 graph state；提示为 ``None`` 表示本批没有可修复的非法调用。
+
+        异常:
+            无。单条收口内部不做额外校验，状态非 ``pending`` 的调用按原样跳过。
+
+        副作用:
+            对每条被收口的调用经 stream writer 发出一次 ``failed`` 终态事件；事件发送失败只记
+            ``tool_terminal_event_failed`` 并降级继续，不写模型上下文（非法调用从未执行，不产生
+            ``ToolMessage``）。
+        """
+
+        # 与 ``settle`` / ``cancel_pending`` 同口径：无论本批是否有待收口调用，都交出新的快照，
+        # 让调用方拿到的生命周期对象身份是可预期的。
+        updated = self._copy()
         repair_datas: list[dict[str, Any]] = []
-        for record in invalid_tools:
+        for record in self.invalid_tools:
             if record.status != "pending":
                 continue
-            self._fail_invalid(
+            updated = updated._fail_invalid(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
@@ -613,10 +713,10 @@ class ToolCallLifecycleManager(BaseModel):
                 {"tool_name": record.tool_name, "invalid_tool_call": record.invalid_detail}
             )
 
-        # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后.
-        if repair_datas:
-            return build_invalid_tool_call_repair_message(repair_datas)
-        return None
+        # 修复提示必须排在全部 ToolMessage 之后注入，故由调用方经延迟队列下发。
+        if not repair_datas:
+            return updated, None
+        return updated, build_invalid_tool_call_repair_message(repair_datas)
 
     def _fail_invalid(
         self,
@@ -642,14 +742,15 @@ class ToolCallLifecycleManager(BaseModel):
             更新后的 manager；目标记录不存在或不是 ``pending`` 时按原样返回新快照。
 
         副作用:
-            经 stream writer 发出一次 ``failed`` 终态事件（``error`` 即 ``status_hint``）。
+            经 stream writer 发出一次 ``failed`` 终态事件（``error`` 即 ``status_hint``）；
+            事件发送失败只记 ``tool_terminal_event_failed`` 并降级继续，状态迁移照常完成。
         """
 
         updated = self._copy()
         record = updated.calls.get(call_id)
         if record is None or record.status != "pending":
             return updated
-        updated._emit_status(
+        updated._emit_status_safe(
             task_id=task_id,
             run_id=run_id,
             step_id=step_id,
@@ -749,29 +850,15 @@ class ToolCallLifecycleManager(BaseModel):
         )
         # 刻意先落库上下文、再发终态事件：否则 projector 可能发布一个无法从 context
         # 重建的终态工具状态。
-        try:
-            updated._emit_status(
-                task_id=task_id,
-                run_id=run_id,
-                step_id=step_id,
-                call_id=call_id,
-                to_status=event_status,
-                error=status_hint,
-                display_data=copy.deepcopy(result_display_data),
-            )
-        except Exception:
-            log.exception(
-                "tool_terminal_event_failed",
-                extra={
-                    "msg": "工具结果已落库，终态 Transport 事件发送失败并被降级",
-                    "data": {
-                        "task_id": task_id,
-                        "run_id": run_id,
-                        "tool_call_id": call_id,
-                        "status": event_status,
-                    },
-                },
-            )
+        updated._emit_status_safe(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            call_id=call_id,
+            to_status=event_status,
+            error=status_hint,
+            display_data=copy.deepcopy(result_display_data),
+        )
         return updated, event_status
 
     def settle_batch(

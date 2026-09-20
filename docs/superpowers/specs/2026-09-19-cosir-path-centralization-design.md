@@ -95,6 +95,8 @@ DATA_DIR = _env_path("CODING_AGENT_DATA_DIR") or repository_root()
 - 打包版：数据根 = `app_data_dir()`，系统 `.cosir` = `app_data_dir()/.cosir`（Windows 为 `%LOCALAPPDATA%\com.cosir.desktop\.cosir`）。
 - 开发态（含桌面 dev 与 `uv run -m app`）：数据根回落仓库根，系统 `.cosir` = `<repo>/.cosir`，与 `storage/` 同源。
 
+> **修订（2026-09-20 晚，以代码为准）**：上面这段已被 `44b19a0c chore(cosir): 统一并保护系统级和工作区级 .cosir 路径策略` 推翻——`backend_supervisor.rs` 把 `data_dir: backend_runtime.uses_packaged_data_dir().then_some(app_data_dir.as_path())` 改为**无条件** `data_dir: Some(app_data_dir.as_path())`。因此**经桌面宿主启动（含 `tauri dev`）时数据根恒为 `app_data_dir()`（Windows 实测 `%APPDATA%\com.cosir.desktop`，Roaming）**；只有绕过 Tauri 直跑后端（`uv run -m app` / pytest）才回落仓库根。相应地，桌面态下 `<repo>/.cosir/.env` 与 `apps/backend/.env` 均**不被读取**（`env_files()` 只认 `<DATA_DIR>/.cosir/.env` 与 `.env.local`）。
+
 - `DATA_DIR` 可经 `paths.override(DATA_DIR=...)` 供测试隔离（用例收尾必须 `paths.reset()` 还原）。
 - **已确认（2026-09-20）**：采用本锚点。开发态落仓库根属接受范围；「仓库本身被当作 workspace 打开」时系统 `.cosir` 与 workspace `.cosir` 重合，一并接受（见「风险与取舍」）。
 - **禁止**把系统 `.cosir` 改成相对 `Path(".cosir")`：后端进程 cwd 是 `apps/backend`（Tauri `current_dir(backend_dir)`），会落到 `apps/backend/.cosir`，打包版甚至可能落入只读资源目录导致创建失败。

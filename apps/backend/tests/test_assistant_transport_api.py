@@ -41,6 +41,7 @@ def _snapshot(
                 "endReason": end_reason,
                 "messages": [{"id": f"user-{run_id}", "role": "user", "parts": []}],
                 "usage": None,
+                "error": None,
             }
         ]
     )

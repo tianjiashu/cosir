@@ -27,6 +27,11 @@ from app.models import (
     ConversationRunRecord,
     ConversationRunStatus,
 )
+from app.models.conversation_run_failure import (
+    RUN_FAILURE_CODE_CANCELLED,
+    RUN_FAILURE_CODE_UNKNOWN,
+    run_failure_message,
+)
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -67,6 +72,8 @@ def terminal_error(
 
     返回:
         非 ``completed`` 终态返回受控的 ``ConversationRunError``；``completed`` 返回 ``None``。
+        ``message`` 由失败 code 目录统一产出（provider 无关的通用文案），未登记的 code
+        回退通用失败文案，保证 UI 始终拿得到可展示文本。
 
     异常:
         无。
@@ -79,11 +86,12 @@ def terminal_error(
         return None
     code = end_reason if isinstance(end_reason, str) and end_reason.isidentifier() else None
     if code is None:
-        code = "run_cancelled" if status is ConversationRunStatus.CANCELLED else "run_failed"
-    return ConversationRunError(
-        code=code,
-        message="运行已取消" if status is ConversationRunStatus.CANCELLED else "运行失败",
-    )
+        code = (
+            RUN_FAILURE_CODE_CANCELLED
+            if status is ConversationRunStatus.CANCELLED
+            else RUN_FAILURE_CODE_UNKNOWN
+        )
+    return ConversationRunError(code=code, message=run_failure_message(code))
 
 
 class ConversationRunStateService:
@@ -326,9 +334,11 @@ class ConversationRunStateService:
 
         副作用:
             条件满足时更新 run 状态为 failed（并可选写入 end_reason 与 final_output），
-            随后发布 FAILED 状态事件。
+            随后发布 FAILED 状态事件；事件同时携带同一份受控错误契约，使前端无需额外
+            查询即可展示失败原因。
         """
 
+        error = terminal_error(ConversationRunStatus.FAILED, end_reason)
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.FAILED.value,
@@ -336,7 +346,7 @@ class ConversationRunStateService:
             end_reason,
             final_output=final_output,
             usage=usage_payload(usage_stats),
-            error=terminal_error(ConversationRunStatus.FAILED, end_reason),
+            error=error,
         )
         if record is None:
             return None
@@ -347,6 +357,7 @@ class ConversationRunStateService:
                 status=ConversationRunStatus.FAILED,
                 end_reason=end_reason,
                 usage_stats=usage_stats,
+                error=error,
             ),
         )
         return self._run.get(run_id)
@@ -378,9 +389,11 @@ class ConversationRunStateService:
 
         副作用:
             条件满足时将 ``pending`` / ``running`` 更新为 ``cancelled``（并可选写入
-            end_reason、final_output 与用量），随后发布 CANCELLED 状态事件。
+            end_reason、final_output 与用量），随后发布 CANCELLED 状态事件；事件同时携带
+            同一份受控错误契约，使前端无需额外查询即可展示终止原因。
         """
 
+        error = terminal_error(ConversationRunStatus.CANCELLED, end_reason)
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.CANCELLED.value,
@@ -388,7 +401,7 @@ class ConversationRunStateService:
             end_reason,
             final_output=final_output,
             usage=usage_payload(usage_stats),
-            error=terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+            error=error,
         )
         if record is None:
             return None
@@ -399,6 +412,7 @@ class ConversationRunStateService:
                 status=ConversationRunStatus.CANCELLED,
                 end_reason=end_reason,
                 usage_stats=usage_stats,
+                error=error,
             ),
         )
         return self._run.get(run_id)

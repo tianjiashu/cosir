@@ -1,0 +1,14 @@
+        Info BeforeDevCommand (`npm run dev -- --host 127.0.0.1 --port 3000`)
+        Info DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching H:\coding-agent\apps\desktop\src-tauri for changes...
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 0.82s
+[1m[92m     Running[0m `H:\coding-agent\target\debug\cosir-desktop.exe`
+´íÎó: ÎŞ·¨ÖÕÖ¹ PID 26992 (ÊôÓÚ PID 52768 ×Ó½ø³Ì)µÄ½ø³Ì¡£
+Ô­Òò: Ö»ÄÜÇ¿ĞĞÖÕÖ¹Õâ¸ö½ø³Ì(´ø /F Ñ¡Ïî)¡£
+´íÎó: ÎŞ·¨ÖÕÖ¹ PID 26260 (ÊôÓÚ PID 48944 ×Ó½ø³Ì)µÄ½ø³Ì¡£
+Ô­Òò: Ö»ÄÜÇ¿ĞĞÖÕÖ¹Õâ¸ö½ø³Ì(´ø /F Ñ¡Ïî)¡£
+´íÎó: ÎŞ·¨ÖÕÖ¹ PID 52768 (ÊôÓÚ PID 48944 ×Ó½ø³Ì)µÄ½ø³Ì¡£
+Ô­Òò: Ò»¸ö»ò¶à¸ö´Ë½ø³ÌµÄ×Ó½ø³ÌÈÔÈ»ÔÚÔËĞĞ¡£
+´íÎó: ÎŞ·¨ÖÕÖ¹ PID 48944 (ÊôÓÚ PID 35332 ×Ó½ø³Ì)µÄ½ø³Ì¡£
+Ô­Òò: Ò»¸ö»ò¶à¸ö´Ë½ø³ÌµÄ×Ó½ø³ÌÈÔÈ»ÔÚÔËĞĞ¡£
+[0920/135325.938:ERROR:ui\gfx\win\window_impl.cc:172] Failed to unregister class Chrome_WidgetWin_0. Error = 1412

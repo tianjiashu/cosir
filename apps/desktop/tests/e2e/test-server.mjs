@@ -82,6 +82,7 @@ function stateWithExchange(previous, text, runId, assistantText, status) {
       textMessage(`assistant-${runId}`, "assistant", assistantText, status),
     ],
     usage: null,
+    error: null,
   });
   next.current_run_id = runId;
   return next;
@@ -172,6 +173,7 @@ function toolTraceState() {
       },
       ],
       usage: null,
+      error: null,
     }],
     current_run_id: 77,
     approvals: {},
@@ -227,6 +229,7 @@ function webSearchState() {
       },
       ],
       usage: null,
+      error: null,
     }],
     current_run_id: 78,
     approvals: {},
@@ -271,6 +274,7 @@ function delegationState() {
         },
       ],
       usage: null,
+      error: null,
     }],
     current_run_id: 500,
     approvals: {},

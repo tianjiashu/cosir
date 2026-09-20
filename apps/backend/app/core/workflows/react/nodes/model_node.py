@@ -276,7 +276,11 @@ async def _model_node(state: ReactGraphState) -> dict:
         invalid_tool_calls=invalid_tool_calls,
     )
 
-    repair_message = lifecycle.fail_invalid_tools(task_id=task_id, run_id=run_id, step_id=step_id)
+    # 非法调用就地收口为 failed：返回的是新的生命周期快照（copy-on-write），必须写回局部
+    # ``lifecycle`` 才能随返回值进入 graph state；丢弃它会让记录停在 pending。
+    lifecycle, repair_message = lifecycle.fail_invalid_tools(
+        task_id=task_id, run_id=run_id, step_id=step_id
+    )
     # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
     if repair_message:
         system_queue.append(SystemMessage(content=repair_message))

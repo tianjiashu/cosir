@@ -27,6 +27,7 @@ const run = (runId: number, status: string = "completed", messages: TransportMes
   endReason: null,
   messages,
   usage: null,
+  error: null,
 });
 
 describe("conversation actions", () => {

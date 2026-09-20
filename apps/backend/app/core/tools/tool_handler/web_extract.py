@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import json
+import time
 from collections.abc import Callable, Iterable
 from typing import Any, ClassVar, Literal, cast
 
@@ -109,10 +110,12 @@ class WebExtractTool(HandlerBase):
             不向上抛出；所有 URL、Provider 与结果构造错误都归一化为错误观察结果。
 
         副作用:
-            在全部 URL 通过安全检查后调用 Provider，可能发起网络请求；Provider 不可用、
-            全部页面失败、结果构造失败分别写 ``web_extract_provider_unavailable``、
-            ``web_extract_all_pages_failed``、``web_extract_result_build_failed``
-            结构化日志（单页失败日志由 Provider 侧记录）。
+            在全部 URL 通过安全检查后调用 Provider，可能发起网络请求；失败路径写
+            ``web_extract_provider_unavailable``、``web_extract_provider_failed``、
+            ``web_extract_all_pages_failed``、``web_extract_result_build_failed``。
+            日志只记录数量、耗时与失败原因，不记录 URL 原文与网页正文（单页失败由
+            Provider 侧记 ``web_extract_page_failed``；URL 地址层面的拦截与 fake-ip
+            放宽由 :func:`is_safe_public_url` 记录）。
         """
 
         if len(urls) > Settings.WEB_EXTRACT_URL_LIMIT_MAX:
@@ -151,6 +154,7 @@ class WebExtractTool(HandlerBase):
                 reason="configure the selected extraction provider locally before calling again.",
                 permission=self.permission,
             )
+        started = time.monotonic()
         try:
             extracted_items = self._execute_provider_extract(
                 provider,
@@ -213,7 +217,11 @@ class WebExtractTool(HandlerBase):
                 "web_extract_all_pages_failed",
                 extra={
                     "msg": "网页正文提取全部页面失败",
-                    "data": {"provider": provider.name, "failed_count": len(failures)},
+                    "data": {
+                        "provider": provider.name,
+                        "failed_count": len(failures),
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+                    },
                 },
             )
             return tool_error(
@@ -227,10 +235,11 @@ class WebExtractTool(HandlerBase):
         if failures:
             payload["partial"] = True
             payload["failed_count"] = len(failures)
+        content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
-            content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            content=content,
             display_data=build_web_extract_display_data(
                 urls=[
                     item["url"]

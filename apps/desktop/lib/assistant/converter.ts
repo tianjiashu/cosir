@@ -53,6 +53,8 @@ export type TransportMessageRenderContext = {
   runId: TransportRun["runId"];
   runStatus: TransportRun["status"];
   endReason: TransportRun["endReason"];
+  /** 后端受控的 Run 终态错误；用于把失败原因渲染成消息级错误提示。 */
+  error: TransportRun["error"];
   isLastRunMessage: boolean;
 };
 
@@ -369,7 +371,11 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
   };
 }
 
-function toMessageStatusForRun(status: TransportRun["status"], endReason: TransportRun["endReason"]): MessageStatus {
+function toMessageStatusForRun(
+  status: TransportRun["status"],
+  endReason: TransportRun["endReason"],
+  error: TransportRun["error"],
+): MessageStatus {
   switch (status) {
     case "pending":
     case "running":
@@ -391,7 +397,10 @@ function toMessageStatusForRun(status: TransportRun["status"], endReason: Transp
       return {
         type: "incomplete",
         reason: "error",
-        error: "对话运行失败，请检查模型配置或后端状态。",
+        // 后端受控文案优先：它按失败类别给出 provider 无关的说明（鉴权/配额/限流/超时/
+        // 连接等）。没有 error 契约或文案为空白时回退到本地通用文案——否则会渲染出空白的
+        // 错误气泡，用户看不到任何原因。
+        error: error?.message?.trim() ? error.message : "对话运行失败，请检查模型配置或后端状态。",
       };
     default:
       return { type: "incomplete", reason: "other" };
@@ -399,7 +408,7 @@ function toMessageStatusForRun(status: TransportRun["status"], endReason: Transp
 }
 
 export function toMessageStatus(message: TransportMessage, run: TransportRun): MessageStatus {
-  return toMessageStatusForRun(run.status, run.endReason);
+  return toMessageStatusForRun(run.status, run.endReason, run.error);
 }
 
 function toThreadMessageWithContext(
@@ -464,7 +473,7 @@ function toThreadMessageWithContext(
     id: message.id,
     role: "assistant",
     content: content as ThreadAssistantMessage["content"],
-    status: toMessageStatusForRun(context.runStatus, context.endReason),
+    status: toMessageStatusForRun(context.runStatus, context.endReason, context.error),
     createdAt: new Date(),
     metadata: {
       unstable_state: null,
@@ -489,6 +498,7 @@ export function toThreadMessage(
     runId: run.runId,
     runStatus: run.status,
     endReason: run.endReason,
+    error: run.error,
     isLastRunMessage: options.isLastRunMessage ?? false,
   });
 }
@@ -544,6 +554,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     endReason: null,
     messages: [],
     usage: null,
+    error: null,
   });
   // The optimistic message follows the same single-source shape as the
   // canonical projection. The content parts already carry all attachments.
