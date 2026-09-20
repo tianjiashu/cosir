@@ -1,6 +1,6 @@
-"""构建面向模型的系统提示词（三层结构）。
+"""构建面向模型的系统提示词（四层结构）。
 
-系统提示词重构为三层，每层一块，边界清晰：
+系统提示词重构为四层，每层一块，边界清晰：
 
 1. ``<runtime_context>`` 动态变量层：运行期才确定的事实（身份与角色、操作系统、工作区根目录
    与写入边界、工具集合、用户语言），直接由 ``AgentProfile`` / ``Settings`` / 系统状态注入，
@@ -8,13 +8,18 @@
 2. ``<agent_layer>`` Agent 系统预设层：来源唯一为 ``AgentProfile.prompt_file_path`` 指向的
    md/txt 文件全文（系统预设，与用户无关）；该字段为 ``None`` 或文件读取失败时使用空的
    规则层，加载后不做变量替换。
-3. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``（唯一候选文件名，见
+3. ``<global_layer>`` 系统级全局指令层：来源唯一、路径固定为 ``<system_cosir_dir>/AGENTS.md``
+   （由 ``app.utils.cosir_paths.system_instruction_file`` 计算），作为跨所有 workspace 生效的
+   全局提示词；文件缺失时创建空白文件供用户编辑并降级为空，读取失败（权限/编码/IO）时同样降级为空，
+   空白内容不生成该层标签；不参与目录层级择优。
+4. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``（唯一候选文件名，见
    ``_WORKSPACE_INSTRUCTION_FILE_NAME``），按目录层级择优（顶层优先）选出**唯一**一个项目
    指令文件，受预算闸门约束，避免上下文爆炸。
 
-预算控制仅在 Layer 2（单文件上限）与 Layer 3（单文件字节安全兜底 / 单文件 token 上限）生效；
-Layer 1 内容小且固定，仅给字节硬上限防御。Layer 3 的 token 上限为唯一可配置闸门，字节上限为
-模块内固定安全兜底（非配置项）。
+预算控制仅在 Layer 2（单文件上限）、Layer G（单文件字节安全兜底 / 单文件 token 上限）与
+Layer 3（单文件字节安全兜底 / 单文件 token 上限）生效；Layer 1 内容小且固定，仅给字节硬上限
+防御。Layer G / Layer 3 的 token 上限为唯一可配置闸门，字节上限为模块内固定安全兜底
+（非配置项）。
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from platform import system
 
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
+from app.utils.cosir_paths import system_instruction_file
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
 
@@ -61,6 +67,10 @@ _WORKSPACE_INSTRUCTION_FILE_NAME = "AGENTS.md"
 # 字节截断，避免异常大文件进入 O(n) token 估算；同时防止上下文被超大 ``AGENTS.md`` 撑爆。
 _WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
 
+# 系统级全局指令单文件字节安全兜底（固定上限、非配置项）：与 Workspace 层同源的廉价字节截断，
+# 避免异常大文件进入 O(n) token 估算、也防止上下文被超大全局指令撑爆。
+_GLOBAL_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
+
 
 class SystemPromptBuilder:
     """按三层结构构建本地 coding-agent 的系统提示词。
@@ -70,26 +80,28 @@ class SystemPromptBuilder:
 
     @staticmethod
     def build(agent_profile: AgentProfile, workspace_root: str) -> str:
-        """构建完整系统提示词文本（三层）。
+        """构建完整系统提示词文本（四层）。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
             workspace_root: 当前工作区根目录。
 
         返回:
-            由三层层块拼接出的系统提示词；Layer 1 动态变量 + Layer 2 系统预设
-            + Layer 3 workspace 项目指令。
+            由四层层块拼接出的系统提示词；Layer 1 动态变量 + Layer 2 系统预设
+            + Layer G 系统级全局指令 + Layer 3 workspace 项目指令。
 
         异常:
             无。
 
         副作用:
-            可能读取 ``prompt_file_path`` 与 workspace 指令文件（失败均容错）。
+            可能读取 ``prompt_file_path``、系统级全局指令文件与 workspace 指令文件
+            （失败均容错）。
         """
         layer1 = SystemPromptBuilder._build_runtime_context(agent_profile, workspace_root)
         layer2 = SystemPromptBuilder._build_agent_layer(agent_profile)
+        global_layer = SystemPromptBuilder._build_global_layer()
         layer3 = SystemPromptBuilder._build_workspace_layer(workspace_root)
-        return "\n\n".join([layer1, layer2, layer3])
+        return "\n\n".join([layer1, layer2, global_layer, layer3])
 
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
     @staticmethod
@@ -192,6 +204,49 @@ class SystemPromptBuilder:
             except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
                 logger.warning(f"agent_preset_load_failed path={path} error={exc}")
         return None
+
+    # --- Layer G: 系统级全局指令层（system_cosir_dir/AGENTS.md，跨 workspace 生效） ---
+    @staticmethod
+    def _build_global_layer() -> str:
+        """构建系统级全局指令层：加载 ``<system_cosir_dir>/AGENTS.md`` 作为全局提示词。
+
+        与 Workspace 层（按目录层级择优、仅一个文件）不同，本层来源唯一、路径固定
+        （由 ``app.utils.cosir_paths.system_instruction_file`` 计算），作为跨所有 workspace
+        生效的全局指令。文件缺失时先创建空白文件（便于用户就地编辑），再降级为空字符串；
+        读取失败（权限/编码/IO）时同样降级为空字符串，不中断构建。空白内容（文件存在但无
+        实质内容）不生成 ``<global_layer>`` 块，避免向模型注入空标签噪声。
+
+        返回:
+            包裹在 ``<global_layer>`` 标签内的全局指令文本；无有效内容时返回 ``""``。
+
+        异常:
+            无（创建与读取失败均容错，记日志并降级为空字符串）。
+
+        副作用:
+            若 ``<system_cosir_dir>/AGENTS.md`` 不存在则创建空白文件（含父目录）；不修改
+            已有文件内容。
+        """
+        path = system_instruction_file()
+        if not path.is_file():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("", encoding="utf-8")
+            except OSError as exc:
+                logger.warning(f"global_instruction_create_failed path={path} error={exc}")
+                return ""
+        try:
+            raw = read_text_file(path)
+        except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
+            logger.warning(f"global_instruction_read_failed path={path} error={exc}")
+            return ""
+        content = SystemPromptBuilder._enforce_budget(
+            raw,
+            _GLOBAL_INSTRUCTION_MAX_FILE_BYTES,
+            Settings.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS,
+        )
+        if not content.strip():
+            return ""
+        return "<global_layer>\n" + content + "\n</global_layer>"
 
     # --- Layer 3: Workspace 项目指令层（定位唯一文件 + 预算闸门） ---
     @staticmethod

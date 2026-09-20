@@ -83,6 +83,12 @@ class Settings:
     # ``WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS`` 约束，字节上限为 ``system_prompt_builder`` 模块内
     # 固定安全兜底（非配置项，先于 token 估算做廉价截断，防止超大文件撑爆上下文）。
     WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
+    # Layer G：系统级全局指令预算闸门；经 ``CODING_AGENT_GLOBAL_INSTRUCTION_MAX_FILE_TOKENS``
+    # 覆盖。来源唯一、路径固定（``<system_cosir_dir>/AGENTS.md``，由 ``cosir_paths
+    # .system_instruction_file`` 计算），作为跨所有 workspace 生效的全局提示词；单文件注入
+    # 上下文的 token 上限由本配置约束，字节上限为 ``system_prompt_builder`` 模块内固定安全
+    # 兜底（非配置项）。
+    GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
 
     # --- 委派子Agent并发执行（见 docs/委派子Agent并发执行技术方案.md §6.1） ---
     # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
@@ -249,6 +255,8 @@ class Settings:
             raise ValueError("RUNTIME_CONTEXT_MAX_BYTES must be greater than zero")
         if cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS < 1:
             raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS must be greater than zero")
+        if cls.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS < 1:
+            raise ValueError("GLOBAL_INSTRUCTION_MAX_FILE_TOKENS must be greater than zero")
 
     @classmethod
     def load(cls, repository_root: Path | None = None) -> None:
@@ -335,6 +343,9 @@ class Settings:
         )
         cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS = int(
             os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS", "1200")
+        )
+        cls.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS = int(
+            os.environ.get("CODING_AGENT_GLOBAL_INSTRUCTION_MAX_FILE_TOKENS", "1200")
         )
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。

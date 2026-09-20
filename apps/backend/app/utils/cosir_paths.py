@@ -24,6 +24,7 @@ COSIR_DIR_NAME: str = ".cosir"
 COSIR_ATTACHMENT_DIR_NAME: str = "Attachment"
 COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
+COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
 
 
 def workspace_cosir_dir(workspace_root: str | Path) -> Path:
@@ -155,3 +156,23 @@ def system_cosir_dir() -> Path:
     from app.utils import paths
 
     return paths.SYSTEM_COSIR_DIR
+
+
+def system_instruction_file() -> Path:
+    """返回系统级全局指令文件路径（``<system_cosir_dir>/AGENTS.md``）。
+
+    该文件作为跨所有 workspace 生效的全局提示词来源；文件可能不存在（此时调用方应
+    降级为空），本函数只做路径拼接，不校验存在性、不读写文件。文件名固定为
+    ``COSIR_INSTRUCTION_FILE_NAME``，与 Workspace 项目指令文件同名但来源与定位语义不同
+    （此处路径固定，无需目录扫描择优）。
+
+    返回:
+        系统级全局指令文件的 ``Path``。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯路径拼接，可安全顶层导入）。
+    """
+    return system_cosir_dir() / COSIR_INSTRUCTION_FILE_NAME
