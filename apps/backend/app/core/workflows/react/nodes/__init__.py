@@ -18,7 +18,6 @@
 - ``streaming_part_state_machine``：text / reasoning 增量合并与 part 收口。
 - ``tool_call_lifecycle``：工具调用生命周期快照、终态分发与非法调用修复提示构造。
 - ``finalize_max_steps``：超步数终态收口（被 ``model_node`` 直接调用的函数，非图节点）。
-- ``debug_dump``：模型 chunk 调试落盘（``logs/debug_raw_chunks.jsonl`` 等）。
 - ``common``：节点共享的运行时原语（runtime config / context 取出、``terminal_state``）。
 """
 

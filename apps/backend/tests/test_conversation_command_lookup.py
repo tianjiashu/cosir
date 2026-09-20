@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config.settings import Settings
+from app.utils import paths
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_command_crud,
@@ -32,7 +32,7 @@ def storage(tmp_path: Path) -> Iterator[None]:
     close_service_dependencies()
     db_dir = tmp_path / "storage"
     db_dir.mkdir()
-    Settings.override(
+    paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
         CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
@@ -42,6 +42,7 @@ def storage(tmp_path: Path) -> Iterator[None]:
     yield
     task_runtime_spaces.close()
     close_service_dependencies()
+    paths.reset()
 
 
 def _new_task() -> int:

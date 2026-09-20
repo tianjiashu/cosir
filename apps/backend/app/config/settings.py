@@ -2,18 +2,17 @@
 
 这些运行期配置作为 ``Settings`` 类的类级静态属性存在，由 ``Settings.load`` 在进程启动时
 填充一次，之后所有模块通过 ``from app.config.settings import Settings`` 后静态读取
-（如 ``Settings.LOG_DIR``），配置对象不再被到处传递。
+（如 ``Settings.TOOL_ERROR_LIMIT``），配置对象不再被到处传递。
 
 设计边界：
-- 本模块只承载进程级运行配置（日志路径、SQLite 路径、各类数值上限）。模型相关配置不在
+- 本模块只承载进程级运行配置（各类数值上限、功能开关与外部集成参数）。模型相关配置不在
   此处，统一收敛到 ``app.core.llm.model_settings``。
+- 进程固定路径（数据根 / 日志目录 / 主库与 checkpoint 文件）不在此定义，唯一事实源为
+  ``app.utils.paths``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
 - 数值上限类配置（如 ``Settings.TOOL_ERROR_LIMIT``）为全进程共享的静态值，运行时不确、
   不可变；需要按环境覆盖时经环境变量或 ``Settings.override``（测试）注入。单轮最大步数
   ``max_steps`` 不再在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
   ``workflow.py`` 初始化 input_state 注入）。
-- 路径类配置（``Settings.LOG_DIR`` / ``Settings.DATABASE_FILE`` 等）默认由仓库根目录推导；
-  桌面发布版可经 ``CODING_AGENT_DATA_DIR`` 将 SQLite 数据放在用户数据目录。
-  测试可将临时目录经 ``Settings.override`` 注入以隔离副作用。
 """
 
 import os
@@ -22,22 +21,22 @@ from typing import Any, ClassVar
 
 from dotenv import dotenv_values
 
+from app.utils import paths
+
 
 class Settings:
     """后端运行时配置（类级静态属性，进程级单例命名空间）。
 
     配置作为类级静态属性存在，由 ``Settings.load`` 在进程启动时填充一次，之后所有模块通过
-    ``Settings.LOG_DIR`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
+    ``Settings.TOOL_ERROR_LIMIT`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
 
     职责边界：
         - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）、校验与按测试注入。
-        - 不负责：模型相关配置（见 ``app.core.llm.model_settings``）、任何业务读写。
+        - 不负责：模型相关配置（见 ``app.core.llm.model_settings``）、进程固定路径
+          （见 ``app.utils.paths``）、任何业务读写。
     """
 
     # --- 类级静态配置（进程启动后由 ``Settings.load`` 填充，之后只读） ---
-    LOG_DIR: ClassVar[Path] = Path("logs")
-    DATABASE_FILE: ClassVar[Path] = Path("storage/app.sqlite3")
-    CHECKPOINT_FILE: ClassVar[Path | None] = None
     LOG_MAX_BYTES: ClassVar[int] = 5 * 1024 * 1024
     LOG_BACKUP_COUNT: ClassVar[int] = 7
     TOOL_ERROR_LIMIT: ClassVar[int] = 10
@@ -64,11 +63,6 @@ class Settings:
     WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
     WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
 
-    # 模型流式 chunk 调试落盘开关：默认关闭。开启后 ``debug_dump`` 会逐 chunk / 合并后
-    # 把完整消息 JSON 追加到 ``logs/debug_*_chunks.jsonl``，用于本地排查 chunk 结构。
-    # 该通道绕过常规日志预算截断，且每 turn 写盘量较大，常驻生产会损害稳定迭代，故默认关闭，
-    # 仅在需要排查流式 chunk 结构时经环境变量 ``CODING_AGENT_DEBUG_DUMP_CHUNKS=true`` 显式开启。
-    DEBUG_DUMP_CHUNKS: ClassVar[bool] = False
     # 模型生成种子：调试阶段用于让模型输出可复现（相同输入 + 相同 seed 尽量得到一致结果）。
     # 经 ``CODING_AGENT_LLM_SEED`` 覆盖；空串/未设置时取 None（不固定种子，由 API 随机）。
     # 生产环境应保持 None，避免每次回答高度一致导致体验僵化。
@@ -127,8 +121,7 @@ class Settings:
             无。
 
         返回:
-            仓库根目录绝对路径（本文件位于 ``<repo>/apps/backend/app/config/settings.py``，
-            上溯四级即仓库根）。
+            仓库根目录绝对路径；实现委托给 ``app.config.paths.repository_root``。
 
         异常:
             无。
@@ -137,14 +130,14 @@ class Settings:
             无。
         """
 
-        return Path(__file__).resolve().parents[4]
+        return paths.repository_root()
 
     @staticmethod
     def _load_local_env(repository_root: Path) -> None:
-        """从约定的本地 env 文件加载未显式设置的环境变量。
+        """从系统级 ``.cosir`` 配置文件加载未显式设置的环境变量。
 
         参数:
-            repository_root: 仓库根目录绝对路径。
+            repository_root: 保留参数以维持启动调用契约；路径实际由 ``app.utils.paths`` 决定。
 
         返回:
             无。
@@ -153,17 +146,13 @@ class Settings:
             OSError: 当 env 文件存在但无法读取时抛出。
 
         副作用:
-            将 `.env` / `.env.local` 中的键值对写入当前进程环境，但不会覆盖已存在的环境变量。
+            将系统级 ``.cosir/.env`` / ``.env.local`` 中的键值对写入当前进程环境，但不会覆盖已存在的
+            环境变量。
         """
 
-        backend_root = repository_root / "apps" / "backend"
         merged_values: dict[str, str] = {}
-        for env_file in (
-            repository_root / ".env",
-            backend_root / ".env",
-            repository_root / ".env.local",
-            backend_root / ".env.local",
-        ):
+        del repository_root
+        for env_file in paths.env_files():
             if not env_file.exists():
                 continue
             file_values = dotenv_values(env_file)
@@ -278,27 +267,15 @@ class Settings:
             ValueError: 如果数值配置非法（数值上限小于 1，或超时秒数不大于 0）。
 
         副作用:
-            加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性。
-            ``CODING_AGENT_DATA_DIR`` 存在时，SQLite 文件改存到该目录下的 ``storage`` 子目录。
+            加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
+            按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与 checkpoint 文件）。
         """
 
         root = repository_root or cls.repository_root()
         cls._load_local_env(root)
-
-        # 发布版由 Tauri 显式指定用户数据目录，避免把 SQLite 写入只读的安装资源目录。
-        # 开发环境未设置该变量时仍沿用仓库根目录，保持既有本地数据位置。
-        data_root = Path(os.environ.get("CODING_AGENT_DATA_DIR", str(root)))
-        storage_root = data_root / "storage"
-        cls.LOG_DIR = Path(os.environ.get("CODING_AGENT_LOG_DIR", str(root / "logs")))
-        cls.DATABASE_FILE = Path(
-            os.environ.get("CODING_AGENT_DATABASE_FILE", str(storage_root / "app.sqlite3"))
-        )
-        cls.CHECKPOINT_FILE = Path(
-            os.environ.get(
-                "CODING_AGENT_CHECKPOINT_FILE",
-                str(storage_root / "langgraph_checkpoints.sqlite"),
-            )
-        )
+        # 固定路径唯一事实源在 ``app.utils.paths``：加载 .env 后按环境重新对齐，使
+        # 系统 ``.cosir/.env`` 中的运行配置在此阶段生效；路径根由桌面宿主注入。
+        paths.reset()
         cls.LOG_MAX_BYTES = int(os.environ.get("CODING_AGENT_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
         cls.LOG_BACKUP_COUNT = int(os.environ.get("CODING_AGENT_LOG_BACKUP_COUNT", "7"))
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
@@ -345,7 +322,6 @@ class Settings:
         cls.WEB_EXTRACT_CHAR_LIMIT = int(
             os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
         )
-        cls.DEBUG_DUMP_CHUNKS = cls._env_bool("CODING_AGENT_DEBUG_DUMP_CHUNKS", False)
 
         # 系统提示词三层构建配置（动态变量 / Agent 预设 / Workspace 项目指令）。
         cls.AGENT_PERSONA_MAX_BYTES = int(
@@ -420,34 +396,8 @@ class Settings:
 
         cls._OVERRIDABLE = frozenset(cls.__annotations__) - {"_OVERRIDABLE"}
 
-    @classmethod
-    def log_file(cls) -> Path:
-        """返回当前日期日志文件路径。
 
-        参数:
-            无。
-
-            返回:
-                ``Settings.LOG_DIR / backend-YYYY-MM-DD.log``；同日大小分片使用
-                ``backend-YYYY-MM-DD.1.log`` 等后缀。
-
-        异常:
-            无。
-
-        副作用:
-            读取系统日期，但不创建目录或文件。
-        """
-
-        # 延迟导入以避免模块级循环依赖：``settings`` 顶层若导入 ``logging.common``，
-        # 会触发 ``logging`` 包 ``__init__`` 经 ``configuration -> store_engines ->
-        # settings`` 回引自身。改为函数内导入后，``settings`` 模块
-        # 顶层零 app 依赖，无论谁先 import 都能立即完成，循环被根治。
-        from app.config.logging.common import current_log_file
-
-        return current_log_file(cls.LOG_DIR)
-
-
-# 类定义结束后推导可覆盖字段集合，再按仓库根推导默认配置，使未显式调用 ``Settings.load``
-# 的单元测试也能拿到合法绝对路径；生产启动时再次调用为幂等覆盖（含 env 覆盖与环境差异）。
+# 类定义结束后推导可覆盖字段集合，再加载一次默认配置（含 ``.env`` 与环境变量覆盖，并触发
+# ``paths.reset()`` 使固定路径与环境对齐）；生产启动时再次调用为幂等覆盖。
 Settings._finalize_overridable()
 Settings.load()

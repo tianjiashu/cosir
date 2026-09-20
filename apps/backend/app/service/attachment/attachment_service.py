@@ -26,6 +26,11 @@ from app.service.attachment.image_normalizer import (
     NormalizedImage,
     normalize_image,
 )
+from app.utils.cosir_paths import (
+    workspace_attachment_dir,
+    workspace_attachment_staging_dir,
+    workspace_cosir_dir,
+)
 
 _ASSET_ID = re.compile(r"^[0-9a-f]{64}$")
 _ASSET_FILE = re.compile(
@@ -73,14 +78,15 @@ def _attachment_directory(root_path: str | Path, *, create: bool) -> Path:
     """Return the real workspace attachment directory."""
 
     root = Path(root_path).resolve()
-    cosir = root / ".cosir"
-    directory = cosir / "Attachment"
+    cosir = workspace_cosir_dir(root)
+    directory = workspace_attachment_dir(root)
+    staging = workspace_attachment_staging_dir(root)
     if create:
         _assert_real_directory(cosir, create=True)
         _assert_real_directory(directory, create=True)
-        _assert_real_directory(directory / ".uploading", create=True)
+        _assert_real_directory(staging, create=True)
     else:
-        for candidate in (cosir, directory, directory / ".uploading"):
+        for candidate in (cosir, directory, staging):
             if candidate.exists() or _is_reparse_point(candidate):
                 _assert_real_directory(candidate, create=False)
     return directory
@@ -103,7 +109,7 @@ def collect_workspace_orphans(root_path: str | Path, referenced_paths: Iterable[
         if (asset_id := _asset_id_from_name(Path(str(path)).name)) is not None
     }
     removed = 0
-    for candidate_dir in (directory, directory / ".uploading"):
+    for candidate_dir in (directory, workspace_attachment_staging_dir(root_path)):
         if not candidate_dir.is_dir() or _is_reparse_point(candidate_dir):
             continue
         for candidate in candidate_dir.iterdir():
@@ -135,6 +141,14 @@ class AttachmentDescriptor:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class _TaskAttachmentDirs:
+    """一次 task 所属 workspace 的根目录与附件落盘目录（仅本模块内部使用）。"""
+
+    workspace_root: Path
+    attachment_dir: Path
+
+
 class AttachmentService:
     """Own local image bytes, deduplicated by their SHA-256 digest.
 
@@ -148,10 +162,34 @@ class AttachmentService:
         self._workspaces = service_depends.get_workspace_service()
         self._runs = service_depends.get_conversation_run_state_service()
 
-    def _directory(self, task_id: int) -> Path:
+    def _dirs(self, task_id: int) -> _TaskAttachmentDirs:
+        """返回该 task 所属 workspace 的根目录与附件落盘目录。
+
+        ``workspace_root`` 直接取自 workspace 记录，**不**由附件目录反推——避免把 ``.cosir``
+        的目录层级知识散落到本模块（层级规则由 ``app.utils.cosir_paths`` 独占）。
+
+        参数:
+            task_id: 任务标识。
+
+        返回:
+            ``_TaskAttachmentDirs``：``workspace_root`` 为解析后的 workspace 根，
+            ``attachment_dir`` 为 ``<root>/.cosir/Attachment``。
+
+        异常:
+            KeyError: task 或 workspace 不存在（由依赖 service 抛出）。
+            ImageNormalizationError: 附件目录不可用（reparse point / 创建失败）。
+
+        副作用:
+            可能按需创建 ``<root>/.cosir``、``<root>/.cosir/Attachment`` 与
+            ``<root>/.cosir/Attachment/.uploading``。
+        """
+
         task = self._tasks.get_task(task_id)
         workspace = self._workspaces.get_workspace(task.workspace_id)
-        return _attachment_directory(workspace.root_path, create=True)
+        return _TaskAttachmentDirs(
+            workspace_root=Path(workspace.root_path).resolve(),
+            attachment_dir=_attachment_directory(workspace.root_path, create=True),
+        )
 
     @staticmethod
     def _safe_asset_id(asset_id: str) -> str:
@@ -200,7 +238,7 @@ class AttachmentService:
         if expected_kind not in (None, "image"):
             raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "附件类型不匹配")
         safe_asset_id = self._safe_asset_id(asset_id)
-        directory = self._directory(task_id)
+        directory = self._dirs(task_id).attachment_dir
         files = self._files(directory, safe_asset_id)
         if not files:
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
@@ -218,8 +256,9 @@ class AttachmentService:
     async def upload(self, task_id: int, file: UploadFile) -> AttachmentDescriptor:
         """Stream an image, hash its exact bytes, and atomically deduplicate it."""
 
-        directory = self._directory(task_id)
-        staging_dir = directory / ".uploading"
+        dirs = self._dirs(task_id)
+        directory = dirs.attachment_dir
+        staging_dir = workspace_attachment_staging_dir(dirs.workspace_root)
         _assert_real_directory(staging_dir, create=True)
         temp_path = staging_dir / f".{uuid4().hex}.part"
         total = 0
@@ -283,7 +322,7 @@ class AttachmentService:
     def finalize(self, task_id: int, asset_id: str, model_name: str) -> NormalizedImage:
         """Normalize a digest-named image and return its workspace-relative path."""
 
-        directory = self._directory(task_id)
+        directory = self._dirs(task_id).attachment_dir
         asset_id = self._safe_asset_id(asset_id)
         files = self._files(directory, asset_id)
         source = next((path for path in files if ".source." in path.name), None)
@@ -323,7 +362,7 @@ class AttachmentService:
         """Return an existing image file and its MIME type for local content reads."""
 
         descriptor = self.get_descriptor(task_id, asset_id, expected_kind=expected_kind)
-        directory = self._directory(task_id)
+        directory = self._dirs(task_id).attachment_dir
         files = self._files(directory, descriptor.asset_id)
         path = next((item for item in files if ".uploading" not in item.parts and ".source." not in item.name), None)
         path = path or next((item for item in files if ".uploading" in item.parts), None)
@@ -334,9 +373,9 @@ class AttachmentService:
     def resolve_for_model(self, task_id: int, image_path: str, model_name: str) -> NormalizedImage:
         """Validate a Run image path and normalize the digest it names."""
 
-        directory = self._directory(task_id)
-        root = directory.parent.parent
-        candidate = self._inside(directory, root / image_path)
+        dirs = self._dirs(task_id)
+        directory = dirs.attachment_dir
+        candidate = self._inside(directory, dirs.workspace_root / image_path)
         if candidate.parent != directory or not candidate.is_file():
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "运行引用的图片不存在")
         asset_id = _asset_id_from_name(candidate.name)
@@ -347,14 +386,14 @@ class AttachmentService:
     def relative_path(self, task_id: int, path: Path) -> str:
         """Convert a checked attachment path to a stable workspace-relative path."""
 
-        directory = self._directory(task_id)
-        checked = self._inside(directory, path)
-        return checked.relative_to(directory.parent.parent).as_posix()
+        dirs = self._dirs(task_id)
+        checked = self._inside(dirs.attachment_dir, path)
+        return checked.relative_to(dirs.workspace_root).as_posix()
 
     def delete(self, task_id: int, asset_id: str) -> None:
         """Delete a digest asset only when no task in its workspace references it."""
 
-        directory = self._directory(task_id)
+        directory = self._dirs(task_id).attachment_dir
         asset_id = self._safe_asset_id(asset_id)
         task = self._tasks.get_task(task_id)
         for sibling in self._tasks.list_tasks_for_workspace(task.workspace_id):

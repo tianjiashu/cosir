@@ -14,7 +14,7 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 落库进历史上下文，并随 state ``instruction`` 字段下传给 ``tools`` / ``observe`` 节点，
 使下游执行与错误排查能看到模型当时的意图。
 
-模型侧数据处理辅助（流式 chunk 解析 ``ModelChunkProcessor``、chunk debug 落盘、流式 part 生命周期）
+模型侧数据处理辅助（流式 chunk 解析 ``ModelChunkProcessor``、流式 part 生命周期）
 已拆为独立模块，本模块仅 import 使用；节点共享运行时原语见 ``common``。
 """
 
@@ -32,7 +32,6 @@ from app.core.workflows.react.nodes.helper.common import (
     _runtime_context,
     terminal_state,
 )
-from app.core.workflows.react.nodes.helper.debug_dump import _dump_raw_chunk_debug
 from app.core.workflows.react.nodes.helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.react.nodes.helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.react.nodes.helper.streaming_part_state_machine import (
@@ -182,7 +181,6 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
     # chunks 攒结构化分块合并成 AIMessage 供解析 tool_calls 与提取最终正文。
     chunks: list[AIMessageChunk] = []
-    chunk_index = 0
 
     log.info(
         "model_node_model_requested",
@@ -207,10 +205,6 @@ async def _model_node(state: ReactGraphState) -> dict:
     ai_message: AIMessage | None = None
 
     async for chunk in model.astream(messages):
-        # 先于取消检查落盘，确保取消场景也能看到已产出的 chunk。
-        _dump_raw_chunk_debug(chunk, chunk_index)
-        chunk_index += 1
-
         chunks.append(chunk)
         message_chunk = _runtime_context().add_message_chunk(
             chunk, stream_id=step_id, run_id=run_id

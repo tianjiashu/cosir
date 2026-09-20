@@ -2,6 +2,7 @@ mod backend_process;
 mod backend_readiness;
 mod backend_runtime;
 mod backend_supervisor;
+mod data_paths;
 mod desktop_log;
 mod file_access;
 mod log_paths;

@@ -230,13 +230,11 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
                 and "terminal_output_seq" in part
             )
             if has_streamed_terminal_output:
-                # The final ToolObservation carries the bounded/model-facing output.
-                # Keep the complete UI stream already projected into the snapshot.
-                display_data["output"] = current_display_data["output"]
-                stream_truncated = current_display_data.get("stream_truncated") is True
-                display_data["stream_truncated"] = stream_truncated
-                if not stream_truncated:
-                    display_data["truncated"] = False
+                # The model-facing content may be budgeted separately. Keep the complete UI
+                # stream already projected into the snapshot.
+                streamed_output = current_display_data.get("output")
+                if isinstance(streamed_output, str):
+                    display_data["output"] = streamed_output
             mutations.insert(
                 2,
                 ConversationStateMutation("set", (*base, "display_data"), display_data),

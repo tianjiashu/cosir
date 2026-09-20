@@ -227,9 +227,9 @@ class ExecuteTerminalTool(HandlerBase):
         返回:
             ``ToolObservation``。灾难级命令/工作目录不存在/后端异常为
             ``status="error"``；命令正常执行（含非零退出码）为 ``status="success"``。
-            退出码、超时、截断等结构性事实经 ``_render_content`` 并入 ``content``
-            的 ``[exit_code=N]`` / ``[output truncated]`` 标记，供模型消费（``data``
-            通道仅供前端展示，会在序列化前被清除，不回传模型）。命令因超时强杀时
+            退出码、超时等结构性事实经 ``_render_content`` 并入 ``content`` 的
+            ``[exit_code=N]`` 标记，供模型消费（``data`` 通道仅供前端展示，会在
+            序列化前被清除，不回传模型）。命令因超时强杀时
             返回 ``status="error"`` 且 ``retryable=True``，明确告知命令未正常结束。
 
         异常:
@@ -291,14 +291,13 @@ class ExecuteTerminalTool(HandlerBase):
                 "data": {
                     "exit_code": result.exit_code,
                     "timed_out": result.timed_out,
-                    "truncated": result.truncated,
                 },
             },
         )
 
         content = self._render_content(result.output, result)
         # 超时强杀意味着命令未正常结束，模型无法从退出码判断成败，按瞬态故障
-        # 返回 error（retryable=True），避免把被截断的半截输出误判为成功结果。
+        # 返回 error（retryable=True），避免把超时命令的部分输出误判为成功结果。
         if result.timed_out:
             return tool_error(
                 self.name,
@@ -321,7 +320,6 @@ class ExecuteTerminalTool(HandlerBase):
                 output=result.output,
                 exit_code=result.exit_code,
                 timed_out=result.timed_out,
-                truncated=result.truncated,
             ),
         )
 
@@ -411,12 +409,12 @@ class ExecuteTerminalTool(HandlerBase):
 
         参数:
             命令输出的原始解码文本，保留 ANSI 控制序列和敏感文本。
-            result: 后端归一化的执行结果（含退出码 / 超时 / 截断标记）。
+            result: 后端归一化的执行结果（含退出码 / 超时）。
 
         返回:
             前缀了 ``[exit_code=N]`` 等机器可读标记的文本。``content`` 是模型
             唯一可消费文本通道（``data`` 会在序列化前被清除，仅供前端），因此
-            退出码、超时、截断这些结构性事实必须并入 ``content``，否则模型无法
+            退出码、超时这些结构性事实必须并入 ``content``，否则模型无法
             区分「命令成功但无输出」与「命令失败但无 stderr」。
 
         异常:
@@ -426,8 +424,6 @@ class ExecuteTerminalTool(HandlerBase):
             无（纯字符串拼接）。
         """
         markers = [f"[exit_code={result.exit_code}]"]
-        if result.truncated:
-            markers.append("[output truncated]")
         prefix = "".join(markers)
         return f"{prefix}\n{output}" if output else prefix
 

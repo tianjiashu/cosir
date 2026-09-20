@@ -21,13 +21,13 @@ from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    tool_runtime_output_adapter,
+)
+from app.assistant_transport.event.tool_runtime_output_adapter import (
+    ToolRuntimeOutputChannelFactory,
 )
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
-)
-from app.assistant_transport.event import tool_runtime_output_adapter
-from app.assistant_transport.event.tool_runtime_output_adapter import (
-    ToolRuntimeOutputChannelFactory,
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
@@ -85,8 +85,6 @@ class PausingStream:
 def _terminal_output_update(
     seq: int,
     text: str,
-    *,
-    truncated: bool = False,
 ) -> ToolCallRuntimeUpdateEvent:
     """Construct one typed terminal-output payload carried by the runtime-update event."""
     return ToolCallRuntimeUpdateEvent(
@@ -97,23 +95,22 @@ def _terminal_output_update(
         data=TerminalOutputDeltaData(
             kind="terminal_output_delta",
             text=text,
-            truncated=truncated,
         ),
     )
 
 
 def test_output_collector_emits_before_process_output_eof() -> None:
     stream = PausingStream()
-    emitted: list[tuple[str, bool]] = []
+    emitted: list[str] = []
     collector = _OutputCollector(
-        stream, sink=lambda text, truncated: emitted.append((text, truncated))
+        stream, sink=lambda text: emitted.append(text)
     )
     reader = threading.Thread(target=collector.run)
     reader.start()
 
     try:
         assert stream.next_read_started.wait(timeout=1)
-        assert "".join(text for text, _ in emitted) == "starting now\n"
+        assert "".join(emitted) == "starting now\n"
     finally:
         stream.release.set()
         reader.join(timeout=2)
@@ -123,26 +120,24 @@ def test_output_collector_emits_before_process_output_eof() -> None:
 
 
 def test_output_collector_stream_does_not_apply_character_budget() -> None:
-    expected = "x" * (Settings.MAX_TOOL_OUTPUT_CHARS + 1)
+    expected = "x" * 200_001
     emitted: list[str] = []
     collector = _OutputCollector(
         ChunkStream([expected.encode("utf-8")]),
-        sink=lambda text, _truncated: emitted.append(text),
-        stream_budget=0,
+        sink=lambda text: emitted.append(text),
     )
 
     collector.run()
 
     assert "".join(emitted) == expected
     assert collector.get() == expected
-    assert collector.truncated is False
 
 
 def test_sealed_output_collector_freezes_snapshot_and_closes_live_sink() -> None:
     stream = PausingStream()
-    emitted: list[tuple[str, bool]] = []
+    emitted: list[str] = []
     collector = _OutputCollector(
-        stream, sink=lambda text, cut: emitted.append((text, cut))
+        stream, sink=lambda text: emitted.append(text)
     )
     reader = threading.Thread(target=collector.run)
     reader.start()
@@ -153,11 +148,10 @@ def test_sealed_output_collector_freezes_snapshot_and_closes_live_sink() -> None
     reader.join(timeout=2)
 
     assert not reader.is_alive()
-    assert emitted == [("starting now\n", False), ("", True)]
-    assert collector.truncated is True
+    assert emitted == ["starting now\n"]
     assert "starting now\n" in collector.get()
     assert "finished" not in collector.get()
-    assert "additional output unavailable" in collector.get()
+    assert "truncated" not in collector.get()
 
 
 def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_output() -> (
@@ -173,7 +167,7 @@ def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_
                 b"super-secret-value \x1b[0m done\n",
             ]
         ),
-        sink=lambda text, _truncated: emitted.append(text),
+        sink=lambda text: emitted.append(text),
     )
 
     collector.run()
@@ -196,7 +190,6 @@ def test_terminal_display_preserves_raw_command_and_output() -> None:
         output=raw_output,
         exit_code=0,
         timed_out=False,
-        truncated=False,
     )
 
     assert display_data["output"] == raw_output
@@ -215,7 +208,6 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
                 output=raw_output,
                 exit_code=0,
                 timed_out=False,
-                truncated=False,
             )
 
     monkeypatch.setattr(
@@ -229,6 +221,8 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
     assert raw_output in observation.content
     assert observation.display_data is not None
     assert observation.display_data["output"] == raw_output
+    assert "truncated" not in observation.display_data
+    assert "stream_truncated" not in observation.display_data
 
 
 def test_terminal_output_budget_preserves_raw_content_and_artifact(
@@ -248,6 +242,8 @@ def test_terminal_output_budget_preserves_raw_content_and_artifact(
     assert result.artifact_data is not None
     artifact_path = result.artifact_data["artifact_path"]
     assert isinstance(artifact_path, str) and artifact_path
+    # artifact 落盘位置必须统一在 workspace 的 `.cosir/tool-artifacts` 下。
+    assert artifact_path.startswith(".cosir/tool-artifacts/")
     assert (tmp_path / artifact_path).read_text(encoding="utf-8") == raw_output
 
 
@@ -261,12 +257,12 @@ def test_runtime_update_event_uses_a_strict_payload_discriminator() -> None:
             "data": {
                 "kind": "terminal_output_delta",
                 "text": "output",
-                "truncated": False,
             },
         }
     )
 
     assert isinstance(event.data, TerminalOutputDeltaData)
+    assert "truncated" not in event.data.model_dump()
     with pytest.raises(ValidationError):
         ToolCallRuntimeUpdateEvent.model_validate(
             {
@@ -324,11 +320,6 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
         for event in events
         if isinstance(event.data, TerminalOutputDeltaData)
     )
-    assert all(
-        not event.data.truncated
-        for event in events
-        if isinstance(event.data, TerminalOutputDeltaData)
-    )
     assert dispatch_threads == [loop_thread] * len(events)
 
 
@@ -378,22 +369,22 @@ async def test_workflow_places_event_loop_in_run_scoped_tool_dependencies(
     assert operations._execution_context.runtime_dependencies.runtime_event_loop is loop
 
 
-def test_output_queue_completion_waits_for_tail_and_reports_dropped_chunks() -> None:
+def test_output_queue_completion_waits_for_tail_without_dropping_chunks() -> None:
     result_queue: queue.Queue[tuple[str, dict[str, object]]] = queue.Queue()
     result_queue.put(("success", {"result": "done"}))
     output_queue: queue.Queue[tuple[object, ...]] = queue.Queue()
-    output_queue.put(("delta", "last chunk", False))
+    output_queue.put(("delta", "last chunk"))
     release_completion = threading.Event()
-    received: list[tuple[str, bool]] = []
+    received: list[str] = []
 
-    def sink(text: str, truncated: bool) -> None:
-        received.append((text, truncated))
+    def sink(text: str) -> None:
+        received.append(text)
         if text == "last chunk":
             release_completion.set()
 
     def produce_completion() -> None:
         assert release_completion.wait(timeout=1)
-        output_queue.put(("complete", True))
+        output_queue.put(("complete",))
 
     producer = threading.Thread(target=produce_completion)
     producer.start()
@@ -413,7 +404,7 @@ def test_output_queue_completion_waits_for_tail_and_reports_dropped_chunks() -> 
 
     assert result == ("success", {"result": "done"})
     assert not producer.is_alive()
-    assert received == [("last chunk", False), ("", True)]
+    assert received == ["last chunk"]
 
 
 def test_handler_process_backpressures_full_queue_without_dropping_output(
@@ -436,8 +427,8 @@ def test_handler_process_backpressures_full_queue_without_dropping_output(
             return None
 
     def handler(*, output_sink: Any, execution_context: Any) -> str:
-        output_sink("accepted", False)
-        output_sink("second chunk", False)
+        output_sink("accepted")
+        output_sink("second chunk")
         emitted.set()
         assert release.wait(timeout=2)
         return "done"
@@ -457,9 +448,9 @@ def test_handler_process_backpressures_full_queue_without_dropping_output(
     completion_item = output_queue.get(timeout=1)
 
     assert not worker.is_alive()
-    assert first_item == ("delta", "accepted", False)
-    assert second_item == ("delta", "second chunk", False)
-    assert completion_item == ("complete", False)
+    assert first_item == ("delta", "accepted")
+    assert second_item == ("delta", "second chunk")
+    assert completion_item == ("complete",)
 
 
 def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() -> None:
@@ -487,13 +478,12 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
 
     projector.process(_terminal_output_update(1, "new"))
     projector.process(_terminal_output_update(0, "stale"))
-    projector.process(_terminal_output_update(2, "", truncated=True))
+    projector.process(_terminal_output_update(2, "tail"))
 
     part = state["runs"][0]["messages"][1]["parts"][0]
     assert part["display_data"] == {
         "kind": "terminal-result",
-        "output": "new",
-        "stream_truncated": True,
+        "output": "newtail",
     }
     assert part["terminal_output_seq"] == 2
 
@@ -535,7 +525,6 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
             display_data={
                 "kind": "terminal-result",
                 "output": "bounded final observation",
-                "truncated": True,
                 "exit_code": 0,
             },
         )
@@ -545,8 +534,6 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
     assert part["display_data"] == {
         "kind": "terminal-result",
         "output": streamed_output,
-        "truncated": False,
-        "stream_truncated": False,
         "exit_code": 0,
     }
 

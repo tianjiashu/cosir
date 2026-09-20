@@ -10,6 +10,7 @@ from app.config.logging.logger import log
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.utils.cosir_paths import workspace_tool_artifact_dir
 
 
 class ToolOutputBudget:
@@ -53,7 +54,7 @@ class ToolOutputBudget:
             无。artifact 写入失败仅记日志并退化为纯截断。
 
         副作用:
-            超限且有 workspace 时在 ``.coding-agent/tool-artifacts`` 写入完整输出。
+            超限且有 workspace 时在 ``<workspace_root>/.cosir/tool-artifacts`` 写入完整输出。
         """
 
         content = observation.content or ""
@@ -108,24 +109,27 @@ class ToolOutputBudget:
 
         返回:
             相对 workspace 根、POSIX 风格（``/`` 分隔）的 artifact 路径；当上下文
-            缺失、路径解析失败或写入异常时返回空字符串，主流程降级为“不落盘”。
+            缺失、路径解析失败或写入异常时返回空字符串，主流程降级为"不落盘"。
 
         异常:
             不向上抛出。路径解析与写入阶段捕获 ``OSError`` / ``RuntimeError`` /
             ``ValueError``，记日志后返回空串。
 
         副作用:
-            在 ``{workspace_root}/.coding-agent/tool-artifacts/`` 下以 UUID 命名原子
+            在 ``{workspace_root}/.cosir/tool-artifacts/`` 下以 UUID 命名原子
             写入文本文件（先写临时文件再 rename），工具内容保持原文。落盘路径受 ``PathResolver`` 与
-            ``containment_root`` 双重约束，不会写到 workspace 之外；失败时记录异常/错误日志。
+            ``containment_root`` 双重约束，不会写到 workspace 之外；``.cosir`` 只读保留区对本
+            内部子系统显式豁免；失败时记录异常/错误日志。
         """
 
         if execution_context is None:
             return ""
-        relative = Path(".coding-agent") / "tool-artifacts" / f"{uuid4().hex}.txt"
-        resolver = PathResolver(execution_context.workspace_root)
+        root = Path(execution_context.workspace_root).resolve()
+        target = workspace_tool_artifact_dir(root) / f"{uuid4().hex}.txt"
+        resolver = PathResolver(root)
         try:
-            resolved, error = resolver.resolve_within_workspace(str(relative))
+            # 工具输出 artifact 属内部子系统，显式豁免 `.cosir` 只读保留区。
+            resolved, error = resolver.resolve_within_workspace(str(target), allow_reserved=True)
         except (OSError, RuntimeError, ValueError):
             log.exception(
                 "tool_artifact_path_resolution_failed",
@@ -149,7 +153,7 @@ class ToolOutputBudget:
                 resolved,
                 observation.content or "",
                 preserve_eol=False,
-                containment_root=execution_context.workspace_root,
+                containment_root=root,
             )
         except (OSError, RuntimeError, ValueError):
             log.exception(
@@ -158,9 +162,9 @@ class ToolOutputBudget:
                     "msg": "工具输出 artifact 写入失败",
                     "data": {
                         "tool_name": observation.tool_name,
-                        "path": str(relative),
+                        "path": str(target),
                     },
                 },
             )
             return ""
-        return relative.as_posix()
+        return resolved.relative_to(root).as_posix()

@@ -21,7 +21,7 @@ import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import pytest
 from pydantic import BaseModel
@@ -33,7 +33,6 @@ from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannelFactory,
 )
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.tools.tool_execute.tool_cancelled import CANCELLED_REASON
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
 
 # ---------------------------------------------------------------------------
@@ -56,11 +55,19 @@ def _handler_returns_string(execution_context=None, **_kwargs):
     return "hello-from-process"
 
 
+def _assert_runtime_cancelled(observation) -> None:
+    """断言执行器取消路径使用当前的运行期取消诊断文案。"""
+
+    assert observation.status == "cancelled"
+    assert observation.reason is not None
+    assert observation.reason.startswith("the user stopped this tool call mid-execution")
+
+
 def _handler_emits_output(execution_context=None, output_sink=None, **_kwargs):
     """在真实隔离子进程中发送数个实时片段并返回结果。"""
     if output_sink is not None:
-        output_sink("first chunk", False)
-        output_sink("last chunk", False)
+        output_sink("first chunk")
+        output_sink("last chunk")
     return "done"
 
 
@@ -204,12 +211,12 @@ def test_process_mode_normal_execution_returns_success() -> None:
 
 def test_process_mode_flushes_terminal_output_before_return() -> None:
     """真实 multiprocessing 队列在工具返回前 flush 通用输出通道。"""
-    received: list[tuple[str, bool]] = []
+    received: list[str] = []
     finished: list[bool] = []
 
     class Channel(ProcessToolOutputChannel):
         def emit(self, text: str) -> None:
-            received.append((text, False))
+            received.append(text)
 
         def finish(self) -> None:
             finished.append(True)
@@ -254,7 +261,7 @@ def test_process_mode_flushes_terminal_output_before_return() -> None:
 
     assert observation.status == "success"
     assert observation.content == "done"
-    assert received == [("first chunk", False), ("last chunk", False)]
+    assert received == ["first chunk", "last chunk"]
     assert finished == [True]
 
 
@@ -294,8 +301,7 @@ def test_process_mode_cancelled_mid_execution_kills_child(tmp_path: Path) -> Non
         timer.cancel()
         cancellation_registry.clear(run_id)
 
-    assert observation.status == "cancelled"
-    assert observation.reason == CANCELLED_REASON
+    _assert_runtime_cancelled(observation)
     # 耗时必须远小于 handler 自身睡眠时间（证明是被强杀，而非跑完）。
     assert elapsed < sleep_seconds / 2, f"耗时 {elapsed:.2f}s 未体现强杀（睡眠 {sleep_seconds}s）"
     # 充分等待后标记文件仍不存在：证明子进程未跑完写文件。
@@ -332,8 +338,7 @@ def test_process_mode_cancelled_before_start_does_not_spawn() -> None:
     finally:
         cancellation_registry.clear(run_id)
 
-    assert observation.status == "cancelled"
-    assert observation.reason == CANCELLED_REASON
+    _assert_runtime_cancelled(observation)
     # 不派生进程：远小于一次 spawn 的启动成本。
     assert elapsed < 0.5, f"启动前取消耗时 {elapsed:.3f}s 过长，疑似仍派生了子进程"
 
@@ -357,8 +362,7 @@ def test_thread_mode_cancelled_before_execution() -> None:
     finally:
         cancellation_registry.clear(run_id)
 
-    assert observation.status == "cancelled"
-    assert observation.reason == CANCELLED_REASON
+    _assert_runtime_cancelled(observation)
 
 
 def test_thread_mode_normal_execution_returns_success() -> None:
@@ -492,18 +496,18 @@ def test_drain_output_queue_sink_failure_is_swallowed() -> None:
     import queue as _queue
 
     q = _queue.Queue()
-    q.put(("delta", "a", False))
-    q.put(("delta", "b", True))
-    q.put(("complete", False))
-    seen: list[tuple[str, bool]] = []
+    q.put(("delta", "a"))
+    q.put(("delta", "b"))
+    q.put(("complete",))
+    seen: list[str] = []
 
-    def _bad_sink(text, truncated):
-        seen.append((text, truncated))
+    def _bad_sink(text):
+        seen.append(text)
         raise RuntimeError("sink down")
 
     # 不应抛出。
     completed = ToolHandlerRunner._drain_output_queue(q, _bad_sink)
-    assert seen == [("a", False)]  # 首个片段触发异常后停止推送
+    assert seen == ["a"]  # 首个片段触发异常后停止推送
     assert completed is True
 
 
@@ -746,8 +750,7 @@ def test_process_cancel_path_force_kills_and_returns_cancelled(monkeypatch) -> N
     )
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
-    assert observation.status == "cancelled"
-    assert observation.reason == CANCELLED_REASON
+    _assert_runtime_cancelled(observation)
     assert proc.terminate_called is True or proc.kill_called is True
 
 
@@ -833,8 +836,7 @@ def test_thread_mode_post_cancel_discards_result() -> None:
     finally:
         cancellation_registry.clear(run_id)
 
-    assert observation.status == "cancelled"
-    assert observation.reason == CANCELLED_REASON
+    _assert_runtime_cancelled(observation)
 
 
 def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> None:
@@ -870,7 +872,7 @@ def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> 
     def _handler_emits(execution_context=None, output_sink=None, **_kwargs):
         # 子进程入口会把 output_sink 注入 handler（本 fake 在同线程运行）。
         if output_sink is not None:
-            output_sink("chunk-1", False)
+            output_sink("chunk-1")
         return "done"
 
     tool = _make_tool(

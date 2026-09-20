@@ -83,7 +83,7 @@ def _probe_sleeps_then_writes_and_streams(
         if output_sink is not None:
             # 实时通道在父进程强杀/排空后会拒绝写入；探针只负责持续产出，写失败无需处理。
             with contextlib.suppress(Exception):
-                output_sink("tick\n", False)
+                output_sink("tick\n")
         time.sleep(0.05)
     if marker_path:
         Path(marker_path).write_text("finished", encoding="utf-8")
@@ -333,7 +333,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
                 tool_call_id="call-cancel",
                 seq=seq,
                 data=TerminalOutputDeltaData(
-                    kind="terminal_output_delta", text=text, truncated=False
+                    kind="terminal_output_delta", text=text
                 ),
             )
         )
@@ -630,7 +630,6 @@ def test_cancel_event_without_display_data_preserves_streamed_output() -> None:
                 data=TerminalOutputDeltaData(
                     kind="terminal_output_delta",
                     text=streamed[start : start + 4096],
-                    truncated=False,
                 ),
             )
         )
@@ -680,7 +679,7 @@ def test_real_cancel_projection_wipes_streamed_output_preexisting_defect(
             tool_call_id="call-t",
             seq=0,
             data=TerminalOutputDeltaData(
-                kind="terminal_output_delta", text=streamed, truncated=False
+                kind="terminal_output_delta", text=streamed
             ),
         )
     )

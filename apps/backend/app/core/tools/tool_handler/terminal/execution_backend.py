@@ -40,7 +40,7 @@ class ExecutionBackend(ABC):
                 解析并在不可用时返回启动失败结果。
 
         返回:
-            ``ExecutionResult``，含合并输出、退出码、截断与超时标记。
+            ``ExecutionResult``，含合并输出、退出码与超时标记。
 
             异常:
             实现方应避免向上抛出；启动失败等异常应转换为带错误文本的

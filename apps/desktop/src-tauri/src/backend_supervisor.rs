@@ -11,6 +11,7 @@ use crate::backend_process::{
 };
 use crate::backend_readiness::wait_for_backend;
 use crate::backend_runtime::resolve_backend_runtime;
+use crate::data_paths::system_cosir_dir as resolve_system_cosir_dir;
 use crate::desktop_log::append_json_line;
 use crate::log_paths::app_log_dir;
 
@@ -137,7 +138,8 @@ impl BackendSupervisor {
             .path()
             .app_data_dir()
             .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?;
-        let runtime_dir = app_data_dir.join("runtime");
+        let system_cosir_dir = resolve_system_cosir_dir(app)?;
+        let runtime_dir = system_cosir_dir.join("runtime");
         let log_dir = app_log_dir(app)?;
         std::fs::create_dir_all(&runtime_dir)
             .map_err(|error| format!("无法创建运行时目录：{error}"))?;
@@ -181,12 +183,9 @@ impl BackendSupervisor {
                 bootstate_file: &bootstate,
                 launch_mode: backend_runtime.launch_mode(),
                 uv_cache_dir: backend_runtime.uv_cache_dir(),
-                data_dir: backend_runtime
-                    .uses_packaged_data_dir()
-                    .then_some(app_data_dir.as_path()),
+                data_dir: Some(app_data_dir.as_path()),
                 terminal_worker: backend_runtime.terminal_worker(),
                 log_file: &log_file,
-                structured_log_dir: &log_dir,
             }) {
                 Ok(child) => child,
                 Err(error) => {

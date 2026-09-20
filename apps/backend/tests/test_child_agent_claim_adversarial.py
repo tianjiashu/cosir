@@ -486,14 +486,13 @@ def test_child_runner_claims_before_start_in_source() -> None:
 def real_state_service(monkeypatch: pytest.MonkeyPatch):
     """用临时 SQLite 初始化真实存储，返回真实 ``ConversationRunStateService`` 与其 CRUD。"""
 
-
-    from app.config.settings import Settings
+    from app.utils import paths
     from app.service import depends as service_depends
 
     tmpdir = Path(tempfile.mkdtemp(prefix="child_claim_it_"))
-    original_db = Settings.DATABASE_FILE
-    original_ckpt = Settings.CHECKPOINT_FILE
-    Settings.override(
+    original_db = paths.DATABASE_FILE
+    original_ckpt = paths.CHECKPOINT_FILE
+    paths.override(
         DATABASE_FILE=tmpdir / "app.sqlite3",
         CHECKPOINT_FILE=tmpdir / "ckpt.sqlite",
     )
@@ -506,7 +505,7 @@ def real_state_service(monkeypatch: pytest.MonkeyPatch):
     finally:
         service_depends.reset_service_dependencies()
         service_depends.close_service_dependencies()
-        Settings.override(
+        paths.override(
             DATABASE_FILE=original_db,
             CHECKPOINT_FILE=original_ckpt,
         )

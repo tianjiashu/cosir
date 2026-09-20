@@ -13,7 +13,7 @@ from threading import RLock
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config.settings import Settings
+from app.utils import paths
 from app.storage.engine_cache import _engine_cache, create_session_factory
 from app.storage.init_schema import initialize_app_schema
 
@@ -45,7 +45,7 @@ def init_storage() -> None:
     """初始化主业务 SQLite 引擎和 checkpoint 父目录。
 
     参数:
-        无。路径来自 ``Settings``。
+        无。路径来自 ``app.config.paths``。
 
     异常:
         OSError: 数据库或 checkpoint 父目录无法创建。
@@ -55,20 +55,20 @@ def init_storage() -> None:
         创建或复用主库引擎并初始化业务 schema；路径变化时先释放旧引擎。
     """
 
-    checkpoint_file = _require(Settings.CHECKPOINT_FILE, "checkpoint_file")
+    checkpoint_file = _require(paths.CHECKPOINT_FILE, "checkpoint_file")
     with _INIT_LOCK:
         if (
             _state.main_engine is not None
-            and _state.db_file == Settings.DATABASE_FILE
+            and _state.db_file == paths.DATABASE_FILE
             and _state.checkpoint_file == checkpoint_file
         ):
             return
         if _state.main_engine is not None:
             close_storage()
 
-        _state.db_file = Settings.DATABASE_FILE
+        _state.db_file = paths.DATABASE_FILE
         _state.checkpoint_file = checkpoint_file
-        _state.main_engine = _engine_cache.get(Settings.DATABASE_FILE)
+        _state.main_engine = _engine_cache.get(paths.DATABASE_FILE)
         initialize_app_schema(_state.main_engine)
         _state.main_session_factory = create_session_factory(_state.main_engine)
         checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
@@ -89,7 +89,7 @@ def main_session_factory() -> sessionmaker[Session]:
 def checkpoint_path() -> str:
     """返回 checkpoint SQLite 文件路径。"""
 
-    return str(_require(Settings.CHECKPOINT_FILE, "checkpoint_file"))
+    return str(_require(paths.CHECKPOINT_FILE, "checkpoint_file"))
 
 
 def close_storage() -> None:

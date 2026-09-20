@@ -19,7 +19,7 @@ Tauri Rust 主进程
 - 工具在 FastAPI 后端进程执行。
 - `apps/backend/app/core/tools/display/` 内的纯函数负责把执行结果投影成 UI 展示数据。
 - `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，描述工具的静态展示方式。
-- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；运行中的 terminal snapshot 可以临时追加原样的 `output` 增量，供当前界面实时呈现。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列或改写文本；受输出预算限制时仍会显式标记截断。
+- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；运行中的 terminal snapshot 可以临时追加原样的 `output` 增量，供当前界面实时呈现。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列、不改写文本、不按字符数截断，也不携带 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算属于另一条边界，不改变 UI 展示数据。
 - Assistant Transport 可以把展示数据带入事件和 snapshot，以支持前端渲染与重连恢复；展示数据不是任务、Run、Agent context 或文件变更事实源。
 - terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
 - `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。文件变更展示数据只服务于工具结果渲染。
@@ -167,7 +167,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `search_content` | `trace`、可展开、`list`、`search` | `content-search-results` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
 | `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
-| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output` 与 `stream_truncated`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out`、`truncated` |
+| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `trace`、可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
@@ -292,8 +292,8 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 
 ### 3.4 终端
 
-终端 UI 展示原始命令、工作目录和有界输出。终端输出按原样呈现，保留 ANSI 控制序列和敏感文本。终端输出会进入模型上下文与 UI，超出预算时仍按现有规则显式截断；日志与可观测性旁路保留各自的长度限制。
-运行期间，后端以有界批次更新当前 Transport snapshot，`stream_truncated` 表示实时展示预算到顶；该增量不持久化，terminal 终态的 `display_data` 会完整替换临时展示内容。
+终端 UI 展示原始命令、工作目录和完整输出。终端输出按原样呈现，保留 ANSI 控制序列和敏感文本；后端不设置终端 UI 字符预算，不插入截断标记，也不发送 `truncated` / `stream_truncated`。模型 `content` 仍由统一 `ToolOutputBudget` 独立控制，该预算不会改写 `display_data`。日志与可观测性旁路保留各自的长度限制。
+运行期间，后端以有界批次更新当前 Transport snapshot；批次大小只用于事件分帧和调度，不丢弃或改写输出。该增量不持久化，terminal 终态的 `display_data` 会完整替换临时展示内容。
 
 ```json
 {
@@ -302,8 +302,7 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
   "workdir": "H:/coding-agent",
   "output": "...",
   "exit_code": 0,
-  "timed_out": false,
-  "truncated": false
+  "timed_out": false
 }
 ```
 

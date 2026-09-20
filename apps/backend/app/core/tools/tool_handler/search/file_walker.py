@@ -19,7 +19,6 @@ from app.core.tools.tool_handler.security.windows_reparse_point import (
 IGNORED_DIRS: frozenset[str] = frozenset(
     {
         ".git",
-        ".coding-agent",
         "node_modules",
         "__pycache__",
         "dist",

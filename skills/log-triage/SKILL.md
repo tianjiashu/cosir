@@ -61,12 +61,12 @@ macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/
 **为什么后端文件日志有两个可能目录（关键）**：桌面模式下 Rust 宿主 spawn 后端时注入
 `CODING_AGENT_LOG_DIR=<data_dir>/runtime`，因此后端结构化日志、控制台日志、前端日志、宿主日志
 **同目录**；而 `uv run --project apps/backend python -m app` / `pytest` 不注入该变量，回落
-`Settings.LOG_DIR` 默认值 `<repo>/logs`。排查前先确认后端是**怎么起的**，别只看一个目录。
+`paths.LOG_DIR`（见 `apps/backend/app/config/paths.py`）默认值 `<repo>/logs`。排查前先确认后端是**怎么起的**，别只看一个目录。
 
 **分片规则**：单文件上限 5MB，同日历史分片为 `.1.log` … `.7.log`（保留 7 个）。日期切分与大小
 分片叠加：跨日自动换新日期文件，但 `.1`…`.7` 序号在**当日**内累计，不跨日延续。日志目录与库路径
-可被覆盖：`CODING_AGENT_LOG_DIR` / `CODING_AGENT_CHECKPOINT_FILE`
-（见 `apps/backend/app/config/settings.py:Settings.load`）。
+可被覆盖：`CODING_AGENT_LOG_DIR`（日志目录）与 `CODING_AGENT_DATA_DIR`（数据根，DB/checkpoint/logs
+默认由其推导，不再单独覆盖）（见 `apps/backend/app/config/paths.py`）。
 
 **HTTP 日志查询通道已移除**：日志只通过本地固定 JSONL 文件读取，避免为诊断旁路维护第二套 API 和存储事实。
 

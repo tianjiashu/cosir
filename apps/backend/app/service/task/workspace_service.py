@@ -22,6 +22,7 @@ from app.storage.write_transaction import begin_immediate
 from app.task_runtime.service.task_service import TaskDeletionResult
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
+from app.utils.cosir_paths import workspace_attachment_dir, workspace_cosir_dir
 
 
 class WorkspaceService:
@@ -132,10 +133,10 @@ class WorkspaceService:
             在 ``<root_path>/.cosir`` 与 ``<root_path>/.cosir/Attachment`` 创建目录
             （已存在则幂等跳过）。
         """
-        cosir_dir = Path(normalized_path) / ".cosir"
+        cosir_dir = workspace_cosir_dir(normalized_path)
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)
-            attachment_dir = cosir_dir / "Attachment"
+            attachment_dir = workspace_attachment_dir(normalized_path)
             attachment_dir.mkdir(parents=True, exist_ok=True)
             log.info(
                 "workspace_cosir_initialized",

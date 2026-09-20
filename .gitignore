@@ -26,6 +26,10 @@ storage/backend.bootstate.json
 .codebuddy/
 apps/backend/.env
 apps/backend/.env.local
+.env
+.env.local
+!.env.example
+!apps/backend/.env.example
 
 # 本地 workspace 索引数据（保留已有数据，不提交）
 .codegraph/
@@ -91,8 +95,8 @@ apps/desktop/src-tauri/verify_stem.rs
 apps/desktop/src-tauri/verify_stem.exe
 apps/desktop/src-tauri/verify_stem.pdb
 
-# Agent 运行时产物
-.coding-agent/
+# Agent 运行时产物（workspace 级与系统级 `.cosir`）
+.cosir/
 
 # 桌面端临时调试产物（vitest/tsc 输出、覆盖率缓存、日志转储）
 apps/desktop/coverage-tmp/

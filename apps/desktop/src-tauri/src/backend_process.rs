@@ -28,7 +28,6 @@ pub struct BackendLaunchConfig<'a> {
     pub data_dir: Option<&'a Path>,
     pub terminal_worker: Option<&'a Path>,
     pub log_file: &'a Path,
-    pub structured_log_dir: &'a Path,
 }
 
 #[cfg(windows)]
@@ -82,7 +81,6 @@ pub fn spawn_backend(config: &BackendLaunchConfig<'_>) -> Result<BackendProcess,
         .env("CODING_AGENT_PORT", config.port.to_string())
         .env("CODING_AGENT_RELOAD", "false")
         .env("CODING_AGENT_BOOT_STATE_FILE", config.bootstate_file)
-        .env("CODING_AGENT_LOG_DIR", config.structured_log_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

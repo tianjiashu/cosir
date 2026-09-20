@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.config.settings import Settings
+from app.utils import paths
 from app.service.depends import (
     close_service_dependencies,
     get_task_crud,
@@ -30,7 +30,7 @@ def storage(tmp_path: Path):
     close_service_dependencies()
     db_dir = tmp_path / "storage"
     db_dir.mkdir()
-    Settings.override(
+    paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
         CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
@@ -40,6 +40,7 @@ def storage(tmp_path: Path):
     yield
     task_runtime_spaces.close()
     close_service_dependencies()
+    paths.reset()
 
 
 def _count() -> int:

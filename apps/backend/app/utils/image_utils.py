@@ -7,8 +7,8 @@
 - 这两类判断被多处复用：附件类型推断、运行期视觉预筛
   （``core/workflows/.../vision_content_blocks`` 编排层）、workflow 图片路径过滤。
   放在编排层会导致其它层跨层引用其私有函数，违反分层依赖。
-- 它们只依赖标准库 ``mimetypes`` / ``os`` 与 ``app.utils.constants.IMAGE_EXTENSIONS``
-  （标准库未覆盖时的业务补充白名单），无循环依赖风险，符合 leaf 层定位。
+- 它们只依赖标准库 ``mimetypes`` 与同属 ``app.utils`` 的 ``constants`` / ``cosir_paths``，
+  无循环依赖风险，符合 leaf 层定位。
 
 不负责：图片真实格式/尺寸/体积校验（属运行期 Pillow 校验，在 vision_content_blocks）、
 图片 base64 编码（同处）、模型视觉能力查询（属 llm_provider 层）。
@@ -17,13 +17,10 @@
 from __future__ import annotations
 
 import mimetypes
-import os
 from pathlib import Path
 
 from app.utils.constants import IMAGE_EXTENSIONS
-
-# workspace 内前端图片落盘目录名；视觉通道仅对此目录做受信归属比较。
-_COSIR_DIR_NAME = ".cosir"
+from app.utils.cosir_paths import is_within_cosir
 
 
 def is_image_path(ref: str) -> bool:
@@ -74,31 +71,15 @@ def is_trusted_cosir_path(image_path: str, workspace_root: str | None) -> bool:
     返回:
         ``True`` 表示路径落在 ``.cosir`` 受信目录内（含子目录）；否则 ``False``。
 
+    异常:
+        无：底层 :func:`app.utils.cosir_paths.is_within_cosir` 将 ``OSError`` 归一化为 ``False``。
+
     副作用:
         无。
+
+    说明:
+        判定委托 :func:`app.utils.cosir_paths.is_within_cosir`，使 ``.cosir`` 归属规则保持
+        单一来源，避免本模块与其它调用点各自实现而漂移。
     """
-    cosir_root = _normalize_cosir_root(workspace_root)
-    if not cosir_root:
-        return False
-    try:
-        norm_path = os.path.normcase(os.path.realpath(image_path))
-    except OSError:
-        return False
-    return norm_path == cosir_root or norm_path.startswith(cosir_root + os.sep)
 
-
-def _normalize_cosir_root(workspace_root: str | None) -> str | None:
-    """返回 workspace 内 ``.cosir`` 目录的规范化绝对路径（用于受信归属比较）。
-
-    参数:
-        workspace_root: workspace 根路径；为空/非法时返回 ``None``。
-
-    返回:
-        规范化（realpath + normcase）后的 ``.cosir`` 目录绝对路径；无法规范化时返回 ``None``。
-    """
-    if not workspace_root:
-        return None
-    try:
-        return os.path.normcase(os.path.realpath(os.path.join(workspace_root, _COSIR_DIR_NAME)))
-    except OSError:
-        return None
+    return is_within_cosir(image_path, workspace_root)

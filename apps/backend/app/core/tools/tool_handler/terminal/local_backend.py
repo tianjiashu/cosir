@@ -1,6 +1,6 @@
 """宿主机 shell 执行后端（LOCAL）。
 
-本模块只负责在宿主机跑一条命令并回收有界输出，不做危险命令判定、不做权限
+本模块只负责在宿主机跑一条命令并回收完整输出，不做危险命令判定、不做权限
 校验、不组装 ``ToolObservation``（这些由 ``ExecuteTerminalTool`` 负责）。
 ``shell="auto"`` 用系统默认（``shell=True`` 复用 Windows ``cmd.exe`` / POSIX
 ``/bin/sh``）；显式 shell 使用 argv 直接启动（``shell=False``）。Windows 树杀用系统
@@ -40,7 +40,7 @@ class LocalExecutionBackend(ExecutionBackend):
         output_sink: OutputSink | None = None,
         shell: str = "auto",
     ) -> ExecutionResult:
-        """在宿主机同步执行一条命令并回收有界输出。
+        """在宿主机同步执行一条命令并回收完整输出。
 
         参数:
             command: 待执行命令。
@@ -77,7 +77,6 @@ class LocalExecutionBackend(ExecutionBackend):
             return ExecutionResult(
                 output=f"failed to start command: {exc}",
                 exit_code=-1,
-                truncated=False,
                 timed_out=False,
             )
 
@@ -107,7 +106,6 @@ class LocalExecutionBackend(ExecutionBackend):
         return ExecutionResult(
             output=raw,
             exit_code=exit_code,
-            truncated=collector.truncated,
             timed_out=timed_out,
         )
 

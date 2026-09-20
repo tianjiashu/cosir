@@ -773,11 +773,31 @@ class TerminalSessionService:
         with self._registry_lock:
             return self._registry.setdefault(session_id, runtime)
 
-    def _resolve_cwd(self, workspace_root: str, cwd: str | None) -> Path:
-        """解析并限制初始 cwd 到 workspace 内。"""
+    @staticmethod
+    def _resolve_cwd(workspace_root: str, cwd: str | None) -> Path:
+        """解析并限制初始 cwd 到 workspace 内。
+
+        参数:
+            workspace_root: workspace 根目录。
+            cwd: 初始工作目录；为 ``None`` 时使用 workspace 根。
+
+        返回:
+            解析后的绝对目录路径。
+
+        异常:
+            TerminalSessionError: 解析失败、越界或目标不是目录时抛出。
+
+        副作用:
+            无（只解析路径、读取目录元信息）。
+
+        说明:
+            显式传 ``allow_reserved=True``：终端是原始 shell 通道（用户在会话内可自由
+            ``cd`` 到 ``.cosir``），故不把 ``.cosir`` 只读保留区叠加到终端 cwd 解析上，
+            与「``.cosir`` 只读保护，终端除外」的产品约定一致。
+        """
 
         resolver = PathResolver(workspace_root)
-        resolved, error = resolver.resolve_within_workspace(cwd or ".")
+        resolved, error = resolver.resolve_within_workspace(cwd or ".", allow_reserved=True)
         if resolved is None or not resolved.is_dir():
             raise TerminalSessionError(f"invalid terminal cwd: {error or cwd}")
         return resolved

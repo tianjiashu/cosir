@@ -12,7 +12,6 @@
 
 import os
 import traceback
-from pathlib import Path
 
 import uvicorn
 
@@ -22,8 +21,8 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
+from app.utils import paths
 from app.config.logging.configuration import install_logging_for_current_process
-from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.service.depends import initialize_service_dependencies
 
@@ -49,7 +48,7 @@ def main() -> None:
         初始化主 SQLite 存储引擎；向 ``logs/backend-YYYY-MM-DD.log`` 挂载按日期和
         5MB 大小轮转的固定 JSONL 文件日志处理器；同步系统代理
         环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
-        uvicorn 进程；按环境决定是否写入 ``app_data_dir()/runtime/backend.bootstate.json``
+        uvicorn 进程；按环境决定是否写入 ``app_data_dir()/.cosir/runtime/backend.bootstate.json``
         启动状态文件。
     """
     boot_state_file = boot_state_file_from_env()
@@ -57,14 +56,12 @@ def main() -> None:
         if boot_state_file is not None:
             write_bootstate(boot_state_file, BOOT_PHASE_BOOTING, step="start")
 
-        # 先用环境变量/默认目录安装最小日志管线，覆盖 Settings.load 和依赖初始化失败窗口。
-        install_logging_for_current_process(
-            log_dir=Path(os.environ.get("CODING_AGENT_LOG_DIR", str(Settings.LOG_DIR)))
-        )
+        # 先按固定路径安装最小日志管线，覆盖 Settings.load 和依赖初始化失败窗口。
+        install_logging_for_current_process(log_dir=paths.LOG_DIR)
         Settings.load()
         initialize_service_dependencies()
         install_logging_for_current_process(
-            log_dir=Settings.LOG_DIR,
+            log_dir=paths.LOG_DIR,
             max_bytes=Settings.LOG_MAX_BYTES,
             backup_count=Settings.LOG_BACKUP_COUNT,
         )

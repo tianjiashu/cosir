@@ -29,9 +29,7 @@ impl BackendRuntime {
         match self {
             Self::UvProject { backend_dir, .. }
             | Self::Interpreter { backend_dir, .. }
-            | Self::FrozenExecutable { backend_dir, .. } => {
-                backend_dir
-            }
+            | Self::FrozenExecutable { backend_dir, .. } => backend_dir,
         }
     }
 
@@ -49,10 +47,6 @@ impl BackendRuntime {
             Self::Interpreter { .. } => BackendLaunchMode::PythonModule,
             Self::FrozenExecutable { .. } => BackendLaunchMode::FrozenExecutable,
         }
-    }
-
-    pub fn uses_packaged_data_dir(&self) -> bool {
-        matches!(self, Self::FrozenExecutable { .. })
     }
 
     pub fn uv_cache_dir(&self) -> Option<&Path> {
@@ -250,7 +244,6 @@ mod tests {
             runtime.launch_mode(),
             crate::backend_process::BackendLaunchMode::FrozenExecutable
         );
-        assert!(runtime.uses_packaged_data_dir());
         assert_eq!(runtime.uv_cache_dir(), None);
     }
 }

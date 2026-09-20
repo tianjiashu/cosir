@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 _IGNORED_DIRS: frozenset[str] = frozenset(
     {
         ".git",
-        ".coding-agent",
         "node_modules",
         ".venv",
         "venv",
@@ -128,7 +127,9 @@ class SystemPromptBuilder:
             (
                 "- Workspace rules: all code lives under the workspace root. File edits and "
                 "deletions are allowed only inside it; anything outside is rejected by the "
-                "system. .cosir/ holds runtime metadata: do not read or modify it."
+                "system. .cosir/ is a reserved read-only area holding runtime metadata: you "
+                "may read it, but writing, editing, deleting, or moving anything inside it "
+                "is rejected."
             ),
             f"- Tools available: {allowed}",
             (

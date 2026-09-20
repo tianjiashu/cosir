@@ -10,8 +10,7 @@
 
 只承载「模型 chunk → 结构化产物」单一职责：不触达运行时上下文、不写日志、不落外部状态，
 全部为纯转换，便于独立测试。chunk 累积与 ``AIMessage`` 收口由
-``RuntimeContextManager.add_message_chunk`` 负责（本处理器不参与）；原始 chunk 的调试落盘由
-``model_node`` 经 ``debug_dump`` 完成，属调试旁路。
+``RuntimeContextManager.add_message_chunk`` 负责（本处理器不参与）。
 
 构造时持有 per-run 的 ``thinking_channel``（``RuntimeConfig.thinking_channel``，由 provider 能力
 目录解析得到），免去调用方每次传通道；思考字段的回传 / 剥离策略不在本处理器处置，由下游持久化

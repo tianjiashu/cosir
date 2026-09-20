@@ -17,11 +17,9 @@
 import asyncio
 import importlib
 import json
-import os
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +39,7 @@ from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
 )
+from app.utils import paths
 from app.config.configuration import (
     build_agent_registry,
     set_agent_registry,
@@ -63,6 +62,7 @@ from app.service.depends import (
     initialize_service_dependencies,
     set_runtime,
 )
+from app.utils.cosir_paths import system_cosir_dir
 
 
 @asynccontextmanager
@@ -100,19 +100,18 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     """
 
     # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）尽早配置日志。
-    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先使用环境变量/默认目录
-    # 建立文件管线，确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
-    install_logging_for_current_process(
-        log_dir=Path(os.environ.get("CODING_AGENT_LOG_DIR", str(Settings.LOG_DIR)))
-    )
+    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先按固定路径建立文件管线，
+    # 确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
+    install_logging_for_current_process(log_dir=paths.LOG_DIR)
     Settings.load()
     initialize_service_dependencies()
-    # Settings.load 可能解析出发布版数据目录或轮转参数，因此按最终配置重建一次管线。
+    # Settings.load 可能解析出轮转参数，因此按最终配置重建一次管线。
     install_logging_for_current_process(
-        log_dir=Settings.LOG_DIR,
+        log_dir=paths.LOG_DIR,
         max_bytes=Settings.LOG_MAX_BYTES,
         backup_count=Settings.LOG_BACKUP_COUNT,
     )
+    _ensure_system_cosir_dir()
     recovered_runs = get_conversation_run_service().recover_orphaned_runs()
     if recovered_runs:
         log.info(
@@ -266,3 +265,49 @@ def _mark_boot_stopped() -> None:
     boot_state_file = boot_state_file_from_env()
     if boot_state_file is not None:
         write_bootstate(boot_state_file, BOOT_PHASE_STOPPED)
+
+
+def _ensure_system_cosir_dir() -> None:
+    """幂等创建系统级 ``.cosir`` 目录，失败降级不阻断启动。
+
+    系统级 ``.cosir`` 用于承载跨 workspace 的系统级配置：**目录名固定为 ``.cosir``**，数据根来自
+    ``paths.SYSTEM_COSIR_DIR``（桌面版为 ``app_data_dir()/.cosir``，直接运行时为仓库根
+    ``.cosir``）。workspace 级 ``.cosir`` 由 ``WorkspaceService`` 在创建工作区时创建，
+    与本函数无关。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无：目录创建失败只记 error 日志，不向上抛出，避免元数据目录不可用阻断后端启动。
+
+    副作用:
+        在 ``paths.SYSTEM_COSIR_DIR`` 创建目录（已存在则幂等跳过）；失败时写结构化 error 日志。
+    """
+
+    cosir_dir = system_cosir_dir()
+    try:
+        cosir_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log.error(
+            "system_cosir_init_failed",
+            extra={
+                "msg": "failed to initialize system metadata dir, skipped",
+                "data": {
+                    "cosir_dir": str(cosir_dir),
+                    "error": str(exc),
+                    "errno": getattr(exc, "errno", None),
+                },
+            },
+        )
+        return
+    log.info(
+        "system_cosir_initialized",
+        extra={
+            "msg": "system metadata dir initialized",
+            "data": {"cosir_dir": str(cosir_dir)},
+        },
+    )

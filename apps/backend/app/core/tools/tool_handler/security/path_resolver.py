@@ -11,18 +11,24 @@
   - ``resolve_without_boundary``：解析但不强制 containment（只读工具，允许
     访问项目根外）。
 - ``blocked_device_reason`` 返回空串表示允许。
+- ``resolve_within_workspace`` 同时拒绝落在 workspace ``.cosir`` 保留子树内的路径
+  （``.cosir`` 是只读保留区）；仅当调用方显式传 ``allow_reserved=True`` 时放行，
+  供终端 cwd 与内部 artifact 落盘等子系统使用。
 """
 
 from pathlib import Path
 from typing import ClassVar
+
+from app.utils.cosir_paths import is_within_cosir
 
 
 class PathResolver:
     """将用户传入的路径解析到项目根目录内的安全解析器。
 
     单一职责：解析路径并拦截 Windows 设备名与 POSIX 敏感设备/伪文件路径，并提供
-    两种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment
-    （供 write / patch_write 等文件变更工具，越界即拒绝）；
+    两种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment 且拒绝
+    workspace ``.cosir`` 只读保留区（供 write / patch_write 等文件变更工具，越界或落入
+    保留区即拒绝）；
     :meth:`resolve_without_boundary` 不强制 containment
     （供 read / list 等只读工具，允许访问项目根外）。所有文件工具共用同一套设备
     拦截与解析规则，避免规则漂移。
@@ -125,14 +131,23 @@ class PathResolver:
 
         self.workspace_root = Path(workspace_root)
 
-    def resolve_within_workspace(self, path: str) -> tuple[Path | None, str]:
-        """解析用户路径，并确认最终路径仍在项目根目录内。
+    def resolve_within_workspace(
+        self,
+        path: str,
+        *,
+        allow_reserved: bool = False,
+    ) -> tuple[Path | None, str]:
+        """解析用户路径，确认仍在项目根目录内，并拒绝 workspace ``.cosir`` 保留区。
 
         参数:
             path: 模型传入的路径字符串。
+            allow_reserved: 是否允许落在 workspace ``.cosir`` 保留子树内。默认 ``False``
+                （写/改/删/移动等文件工具一律拒绝）；仅内部子系统（终端 cwd、工具输出
+                artifact 落盘）显式传 ``True``。
 
         返回:
-            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径非法。
+            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径非法（越界或落入
+            ``.cosir`` 保留区）。``error`` 为面向模型的英文短句。
 
         异常:
             不向上抛出。解析失败会被转换成错误字符串。
@@ -162,6 +177,12 @@ class PathResolver:
             resolved.relative_to(root)
         except (OSError, RuntimeError, ValueError) as exc:
             return None, f"path escapes project root: {path} ({exc})"
+        if not allow_reserved and is_within_cosir(resolved, self.workspace_root):
+            return None, (
+                f"path is inside the reserved '.cosir' metadata area: {path}. That area is "
+                "read-only; write, edit, delete, and move operations must target files "
+                "outside '.cosir'."
+            )
         return resolved, ""
 
     def resolve_without_boundary(self, path: str) -> tuple[Path | None, str]:

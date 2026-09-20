@@ -4,8 +4,8 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-OutputSink = Callable[[str, bool], None]
-"""接收原始输出片段及其不完整标志的 handler 回调。"""
+OutputSink = Callable[[str], None]
+"""接收原始输出片段的 handler 回调。"""
 
 
 class ProcessToolOutputChannel(ABC):

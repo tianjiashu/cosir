@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
-from app.config.settings import Settings
+from app.utils import paths
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
@@ -35,7 +35,7 @@ def storage(tmp_path: Path):
     close_service_dependencies()
     db_dir = tmp_path / "storage"
     db_dir.mkdir()
-    Settings.override(
+    paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
         CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
@@ -45,6 +45,7 @@ def storage(tmp_path: Path):
     yield
     task_runtime_spaces.close()
     close_service_dependencies()
+    paths.reset()
 
 
 def _new_workspace_and_task():

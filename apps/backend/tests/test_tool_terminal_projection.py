@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
@@ -58,7 +59,7 @@ from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
-    ToolCallLifecycleRecord, tool_call_lifecycle as lifecycle_module,
+    ToolCallLifecycleRecord,
 )
 
 # ---------------------------------------------------------------------------
@@ -975,7 +976,7 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
                 tool_call_id="call-t",
                 seq=seq,
                 data=TerminalOutputDeltaData(
-                    kind="terminal_output_delta", text=streamed[start : start + 4096], truncated=False
+                    kind="terminal_output_delta", text=streamed[start : start + 4096]
                 ),
             )
         )
@@ -1099,9 +1100,7 @@ def test_parallel_batch_distinct_statuses_do_not_cross_talk(
 def test_module_reads_projector_from_service_depends() -> None:
     """判据 E 加强：投影模块的 projector 取自 ``app.service.depends``（进程级唯一收口）。"""
 
-    assert projection_module.get_conversation_event_projector is getattr(
-        __import__("app.service.depends", fromlist=["x"]), "get_conversation_event_projector"
-    )
+    assert projection_module.get_conversation_event_projector is __import__("app.service.depends", fromlist=["x"]).get_conversation_event_projector
 
 
 def test_real_storage_backed_projection_updates_snapshot(
@@ -1158,6 +1157,7 @@ def test_real_storage_backed_projection_updates_snapshot(
                 },
             ],
             "usage": None,
+            "error": None,
         }
     ]
     state["current_run_id"] = 5

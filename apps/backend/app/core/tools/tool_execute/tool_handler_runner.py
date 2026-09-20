@@ -16,8 +16,9 @@ from dataclasses import replace
 from functools import partial
 from threading import Event
 from typing import Any
-from app.config.logging.logger import log
+
 from app.config.logging.context.log_context_store import current_log_context
+from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
@@ -224,7 +225,7 @@ class ToolHandlerRunner:
         output_sink: OutputSink | None = None
         if output_channel is not None:
 
-            def _forward_output(text: str, _truncated: bool) -> None:
+            def _forward_output(text: str) -> None:
                 """将执行器回调的文本转交给只消费文本的运行期通道。"""
                 output_channel.emit(text)
 
@@ -493,21 +494,19 @@ class ToolHandlerRunner:
                     extra={"msg": "忽略格式错误的实时输出队列项", "data": {}},
                 )
                 continue
-            if item[0] == _OUTPUT_COMPLETE and len(item) == 2:
-                if item[1] and sink is not None:
-                    ToolHandlerRunner._signal_output_truncated(sink)
+            if item[0] == _OUTPUT_COMPLETE and len(item) == 1:
                 return True
-            if item[0] != _OUTPUT_DELTA or len(item) != 3:
+            if item[0] != _OUTPUT_DELTA or len(item) != 2:
                 log.warning(
                     "tool_output_queue_item_invalid",
                     extra={"msg": "忽略未知的实时输出队列项", "data": {}},
                 )
                 continue
-            _, text, truncated = item
+            _, text = item
             if sink is None:
                 continue
             try:
-                sink(text, truncated)
+                sink(text)
             except Exception:
                 # sink 自身故障不影响工具结果获取；仍须继续 drain，避免子进程在
                 # 写入完成标记时因有界队列已满而被挂住。
@@ -516,12 +515,10 @@ class ToolHandlerRunner:
                     extra={"msg": "实时输出回调异常，停止推送", "data": {}},
                 )
                 sink = None
-        if wait_for_completion and sink is not None:
-            ToolHandlerRunner._signal_output_truncated(sink)
         if wait_for_completion:
             log.warning(
                 "tool_output_queue_completion_missing",
-                extra={"msg": "等待实时输出完成标记超时，已将展示标记为截断", "data": {}},
+                extra={"msg": "等待实时输出完成标记超时，实时通道提前结束", "data": {}},
             )
         return False
 
@@ -570,8 +567,6 @@ class ToolHandlerRunner:
                     ToolHandlerRunner._drain_output_queue(output_queue, output_sink)
                     or output_complete
                 )
-                if output_queue is not None and not output_complete:
-                    ToolHandlerRunner._signal_output_truncated(output_sink)
                 raise _ToolExecutionCancelled()
             remaining = deadline - time.monotonic()
             try:
@@ -618,31 +613,14 @@ class ToolHandlerRunner:
             output_complete = (
                 ToolHandlerRunner._drain_output_queue(output_queue, output_sink) or output_complete
             )
-            if output_queue is not None and not output_complete:
-                ToolHandlerRunner._signal_output_truncated(output_sink)
             raise TimeoutError()
         output_complete = (
             ToolHandlerRunner._drain_output_queue(output_queue, output_sink) or output_complete
         )
-        if output_queue is not None and not output_complete:
-            ToolHandlerRunner._signal_output_truncated(output_sink)
         return "error", {
             "message": "tool process exited without a result",
             "traceback": "",
         }
-
-    @staticmethod
-    def _signal_output_truncated(output_sink: OutputSink | None) -> None:
-        """Notify the live UI that the bounded output channel lost its tail."""
-        if output_sink is None:
-            return
-        try:
-            output_sink("", True)
-        except Exception:
-            log.debug(
-                "tool_output_truncation_callback_failed",
-                extra={"msg": "实时输出截断标记回调失败", "data": {}},
-            )
 
     # ------------------------------------------------------------------
     # In-thread execution (no subprocess, no hard timeout kill)
@@ -1032,8 +1010,8 @@ class ToolHandlerRunner:
                 作为关键字参数 ``execution_context`` 注入 handler。其 ``trace_id`` 用于
                 恢复子进程日志的链路上下文。
             output_queue: 可选实时输出队列；非 None 时以关键字参数 ``output_sink``
-                注入 handler，handler 可在运行期回传 ``(text, truncated)`` 片段；子进程
-                完成前会追加带丢弃状态的完成控制项，父进程据此排空队列并提示截断。
+                注入 handler，handler 可在运行期回传原始文本片段；子进程完成前会追加
+                完成控制项，父进程据此排空队列。
 
         返回:
             无（结果通过 ``result_queue`` 回传）。
@@ -1080,12 +1058,11 @@ class ToolHandlerRunner:
         if output_queue is not None:
             output_incomplete = Event()
 
-            def _output_sink(text: str, truncated: bool) -> None:
+            def _output_sink(text: str) -> None:
                 """无损回传一段输出片段；队列满时等待父进程 drain。
 
                 参数:
                     text: 原样的增量输出片段。
-                    truncated: 输出源已报告不完整时为 True。
 
                 返回:
                     无。
@@ -1101,7 +1078,7 @@ class ToolHandlerRunner:
                 if output_incomplete.is_set():
                     return
                 try:
-                    output_queue.put((_OUTPUT_DELTA, text, truncated))
+                    output_queue.put((_OUTPUT_DELTA, text))
                 except Exception:
                     output_incomplete.set()
 
@@ -1130,7 +1107,7 @@ class ToolHandlerRunner:
                 # 实时队列，直到读到完成控制项。队列满时数据写入反压 handler，避免丢片段。
                 try:
                     output_queue.put(
-                        (_OUTPUT_COMPLETE, output_incomplete.is_set()),
+                        (_OUTPUT_COMPLETE,),
                         timeout=_OUTPUT_QUEUE_DRAIN_TIMEOUT_SECONDS,
                     )
                 except Exception as exc:

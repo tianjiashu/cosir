@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant_transport.event.conversation_event_envelope import ConversationEventEnvelope
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
@@ -32,15 +32,7 @@ class TerminalOutputDeltaData(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: Literal["terminal_output_delta"]
-    text: str = Field(max_length=4096)
-    truncated: bool = False
-
-    @model_validator(mode="after")
-    def require_content_or_truncation(self) -> TerminalOutputDeltaData:
-        """Require visible content or an explicit stream-truncation signal."""
-        if not self.text and not self.truncated:
-            raise ValueError("terminal output update must contain text or mark truncation")
-        return self
+    text: str = Field(min_length=1, max_length=4096)
 
 
 ToolCallRuntimeUpdateData = Annotated[
@@ -182,7 +174,6 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
                     {
                         "kind": "terminal-result",
                         "output": data.text,
-                        "stream_truncated": data.truncated,
                     },
                 )
             ]
@@ -201,13 +192,6 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
                         "append-text", (*base, "display_data", "output"), data.text
                     )
                 )
-            if data.truncated and display_data.get("stream_truncated") is not True:
-                mutations.append(
-                    ConversationStateMutation(
-                        "set", (*base, "display_data", "stream_truncated"), True
-                    )
-                )
-
         mutations.append(ConversationStateMutation("set", (*base, "terminal_output_seq"), self.seq))
         return mutations
 
