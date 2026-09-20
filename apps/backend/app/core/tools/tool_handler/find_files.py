@@ -161,4 +161,4 @@ class FindFilesTool(HandlerBase):
 def build_find_files_definition() -> ToolDefinition:
     """构造 find_files 的注册定义。"""
 
-    return FindFilesTool().to_definition()
+    return FindFilesTool().to_definition_if_avaliable()

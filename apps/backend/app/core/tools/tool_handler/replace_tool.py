@@ -291,4 +291,4 @@ def build_replace_definition() -> ToolDefinition:
         创建 ``ReplaceTool`` 实例和定义对象，不执行文件操作。
     """
 
-    return ReplaceTool().to_definition()
+    return ReplaceTool().to_definition_if_avaliable()

@@ -147,13 +147,6 @@ class WebExtractTool(HandlerBase):
                 retryable=True,
                 permission=self.permission,
             )
-        if not provider.is_available():
-            return tool_error(
-                self.name,
-                provider.missing_configuration_message(),
-                reason="configure the selected extraction provider locally before calling again.",
-                permission=self.permission,
-            )
         started = time.monotonic()
         try:
             extracted_items = self._execute_provider_extract(
@@ -494,6 +487,13 @@ class WebExtractTool(HandlerBase):
             ),
         )
 
+    def avaliable(self) ->bool:
+        backend = Settings.WEB_EXTRACT_BACKEND or Settings.WEB_BACKEND
+        provider = self._resolve_extract_provider(backend)
+        if not provider.is_available():
+            return False
+        return True
+
 
 def build_web_extract_definition(
     provider_registry: WebProviderRegistry | None = None,
@@ -520,4 +520,4 @@ def build_web_extract_definition(
             WebProviderRegistry(),
             default_web_providers(),
         )
-    return WebExtractTool(provider_registry).to_definition()
+    return WebExtractTool(provider_registry).to_definition_if_avaliable()

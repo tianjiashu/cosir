@@ -90,44 +90,6 @@ class WebSearchTool(HandlerBase):
         provider = None
         try:
             provider = self._provider_registry.active_search_provider(backend)
-            if provider is None:
-                if backend:
-                    return tool_error(
-                        self.name,
-                        f"Web search backend '{backend}' is not registered.",
-                        reason=(
-                            "configure WEB_SEARCH_BACKEND or WEB_BACKEND with a registered "
-                            "search-capable provider before continuing."
-                        ),
-                        permission=self.permission,
-                    )
-                return tool_error(
-                    self.name,
-                    "No web search provider configured.",
-                    reason=(
-                        "configure a supported web search provider before continuing."
-                    ),
-                    permission=self.permission,
-                )
-            if not provider.supports_search():
-                return tool_error(
-                    self.name,
-                    f"Web search provider '{provider.name}' does not support search.",
-                    reason=(
-                        "select a provider with search capability through WEB_SEARCH_BACKEND "
-                        "or WEB_BACKEND before continuing."
-                    ),
-                    permission=self.permission,
-                )
-            if not provider.is_available():
-                return tool_error(
-                    self.name,
-                    provider.missing_configuration_message(),
-                    reason=(
-                        "configure the selected web search provider locally before continuing."
-                    ),
-                    permission=self.permission,
-                )
             results = provider.search(query, effective_limit)
         except WebProviderUnavailableError as exc:
             log.error(
@@ -219,6 +181,19 @@ class WebSearchTool(HandlerBase):
             ),
         )
 
+    def avaliable(self) -> bool:
+        backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
+        provider = self._provider_registry.active_search_provider(backend)
+        if provider is None:
+            if backend:
+                return False
+            return False
+        if not provider.supports_search():
+            return False
+        if not provider.is_available():
+            return False
+        return True
+
 
 def build_web_search_definition(
     provider_registry: WebProviderRegistry | None = None,
@@ -245,4 +220,4 @@ def build_web_search_definition(
             WebProviderRegistry(),
             default_web_providers(),
         )
-    return WebSearchTool(provider_registry).to_definition()
+    return WebSearchTool(provider_registry).to_definition_if_avaliable()

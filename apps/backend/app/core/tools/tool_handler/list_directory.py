@@ -310,4 +310,4 @@ def build_list_directory_definition() -> ToolDefinition:
         创建 ``ListDirectoryTool`` 实例和定义对象，不执行文件系统操作。
     """
 
-    return ListDirectoryTool().to_definition()
+    return ListDirectoryTool().to_definition_if_avaliable()

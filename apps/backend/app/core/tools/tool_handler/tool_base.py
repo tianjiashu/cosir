@@ -93,6 +93,11 @@ class HandlerBase(ABC):
         """
         ...
 
+    def to_definition_if_avaliable(self) -> ToolDefinition | None:
+        if self.avaliable():
+            return self.to_definition()
+        return None
+
     @abstractmethod
     def to_definition(self) -> ToolDefinition:
         """返回当前工具的可注册定义。
@@ -114,3 +119,6 @@ class HandlerBase(ABC):
             无。
         """
         ...
+
+    def avaliable(self) -> bool:
+        return True

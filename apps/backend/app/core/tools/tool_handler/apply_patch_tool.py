@@ -265,4 +265,4 @@ def build_apply_patch_definition() -> ToolDefinition:
         无。
     """
 
-    return ApplyPatchTool().to_definition()
+    return ApplyPatchTool().to_definition_if_avaliable()

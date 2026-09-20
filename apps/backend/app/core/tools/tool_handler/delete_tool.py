@@ -174,4 +174,4 @@ def build_delete_file_definition() -> ToolDefinition:
         无。
     """
 
-    return DeleteTool().to_definition()
+    return DeleteTool().to_definition_if_avaliable()

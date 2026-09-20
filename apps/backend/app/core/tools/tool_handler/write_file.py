@@ -251,4 +251,4 @@ def build_write_file_definition() -> ToolDefinition:
         创建 ``WriteFileTool`` 实例和定义对象，不执行文件写入。
     """
 
-    return WriteFileTool().to_definition()
+    return WriteFileTool().to_definition_if_avaliable()

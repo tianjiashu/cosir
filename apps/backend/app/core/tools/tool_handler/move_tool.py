@@ -288,4 +288,4 @@ def build_move_file_definition() -> ToolDefinition:
         无。
     """
 
-    return MoveTool().to_definition()
+    return MoveTool().to_definition_if_avaliable()

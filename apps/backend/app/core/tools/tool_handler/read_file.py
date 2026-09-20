@@ -506,4 +506,4 @@ def build_read_file_definition() -> ToolDefinition:
         创建 ``ReadFileTool`` 实例和定义对象，不执行文件读取。
     """
 
-    return ReadFileTool().to_definition()
+    return ReadFileTool().to_definition_if_avaliable()

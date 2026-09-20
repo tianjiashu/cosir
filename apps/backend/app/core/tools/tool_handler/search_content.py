@@ -170,7 +170,7 @@ class SearchContentTool(HandlerBase):
 def build_search_content_definition() -> ToolDefinition:
     """构造 search_content 的注册定义。"""
 
-    return SearchContentTool().to_definition()
+    return SearchContentTool().to_definition_if_avaliable()
 
 
 def _format_content(matches: tuple[Any, ...]) -> str:

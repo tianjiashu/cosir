@@ -58,6 +58,8 @@ class ToolRegistry:
             同名工具已存在时记录警告日志并跳过，不改变 generation；
             否则写入定义并使 generation 自增 1。
         """
+        if definition is None:
+            return
 
         if not isinstance(definition, ToolDefinition):
             raise TypeError(f"expected ToolDefinition, got {type(definition).__name__}")

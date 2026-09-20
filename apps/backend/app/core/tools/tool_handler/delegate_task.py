@@ -124,11 +124,11 @@ class DelegateTaskTool(HandlerBase):
         self.description = description if description is not None else _compose_description("")
 
     def execute(
-        self,
-        child_agent_id: str,
-        title: str,
-        prompt: str,
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            child_agent_id: str,
+            title: str,
+            prompt: str,
+            execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """通过执行上下文中的运行时执行器委派自由文本任务。
 
@@ -268,7 +268,7 @@ def _runtime_child_agent_summary() -> str:
         return ""
 
 
-def build_delegate_task_definition() -> ToolDefinition:
+def build_delegate_task_definition() -> ToolDefinition | None:
     """构建 delegate_task 工具定义（子 Agent 清单与候选集在投影期实时解析）。
 
     子 Agent 清单与 ``child_agent_id`` 候选集均依赖 agent 注册表，而注册表在启动序列中
@@ -298,7 +298,9 @@ def build_delegate_task_definition() -> ToolDefinition:
     def _description_provider() -> str:
         return _compose_description(_runtime_child_agent_summary())
 
-    definition = DelegateTaskTool(description=static_description).to_definition()
+    definition = DelegateTaskTool(description=static_description).to_definition_if_avaliable()
+    if definition is None:
+        return None
     return replace(
         definition,
         description=static_description,

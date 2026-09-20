@@ -453,4 +453,4 @@ def build_execute_terminal_definition() -> ToolDefinition:
     副作用:
         创建 ``ExecuteTerminalTool`` 实例与定义对象，不执行命令。
     """
-    return ExecuteTerminalTool().to_definition()
+    return ExecuteTerminalTool().to_definition_if_avaliable()
